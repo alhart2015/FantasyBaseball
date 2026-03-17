@@ -6,6 +6,17 @@ league:
 
 draft:
   position: 8  # Snake draft pick position (1-indexed)
+  teams:
+    1: "Send in the Cavalli"
+    2: "SkeleThor"
+    3: "Work in Progress"
+    4: "Jon's Underdogs"
+    5: "Boston Estrellas"
+    6: "Spacemen"
+    7: "Springfield Isotopes"
+    8: "Hart of the Order"
+    9: "Tortured Baseball Department"
+    10: "Hello Peanuts!"
 
 keepers:
   # Hello Peanuts!
@@ -97,9 +108,11 @@ projections:
   systems:
     - steamer
     - zips
+    - atc
   weights:
-    steamer: 0.5
-    zips: 0.5
+    steamer: 0.33
+    zips: 0.33
+    atc: 0.34
 
 sgp_denominators:
   R: 20

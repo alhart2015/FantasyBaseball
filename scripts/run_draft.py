@@ -19,7 +19,7 @@ from fantasy_baseball.config import load_config
 from fantasy_baseball.draft.board import build_draft_board, apply_keepers
 from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.draft.balance import CategoryBalance
-from fantasy_baseball.draft.search import find_player
+from fantasy_baseball.draft.search import find_player, split_team_and_player
 from fantasy_baseball.draft.recommender import (
     get_recommendations,
     get_filled_positions,
@@ -107,8 +107,8 @@ def main():
     # Start Flask dashboard server
     _start_flask_server(STATE_PATH)
 
-    # Write initial state
-    filled = get_filled_positions(tracker.user_roster, board)
+    # Write initial state (use full_board for roster lookups so keepers are found)
+    filled = get_filled_positions(tracker.user_roster, full_board)
     recs = get_recommendations(board, tracker.drafted_players, tracker.user_roster,
                                n=5, filled_positions=filled)
     _write_dashboard_state(tracker, balance, board, recs, filled)
@@ -120,11 +120,16 @@ def main():
     _show_top_players(board, tracker.drafted_players, 25)
     print()
 
+    # Build team name list for input parsing
+    team_names = list(config.teams.values()) if config.teams else []
+
     # Main draft loop
     while tracker.current_pick <= tracker.total_picks:
+        team_num = tracker.picking_team
+        team_label = config.teams.get(team_num, f"Team {team_num}")
         print("=" * 70)
         print(f"ROUND {tracker.current_round} | Pick {tracker.current_pick} "
-              f"| Team {tracker.picking_team}", end="")
+              f"| {team_label}", end="")
         if tracker.is_user_pick:
             print(" *** YOUR PICK ***")
         else:
@@ -132,12 +137,12 @@ def main():
         print("=" * 70)
 
         if tracker.is_user_pick:
-            _handle_user_pick(board, tracker, balance)
+            _handle_user_pick(board, full_board, tracker, balance)
         else:
-            _handle_other_pick(board, tracker)
+            _handle_other_pick(board, tracker, team_names)
 
         # Write updated state for the dashboard after every pick
-        filled = get_filled_positions(tracker.user_roster, board)
+        filled = get_filled_positions(tracker.user_roster, full_board)
         recs = get_recommendations(board, tracker.drafted_players, tracker.user_roster,
                                    n=5, filled_positions=filled)
         _write_dashboard_state(tracker, balance, board, recs, filled)
@@ -155,9 +160,9 @@ def main():
         print(f"  {name}")
 
 
-def _handle_user_pick(board, tracker, balance):
+def _handle_user_pick(board, full_board, tracker, balance):
     """Handle the user's draft pick with recommendations."""
-    filled = get_filled_positions(tracker.user_roster, board)
+    filled = get_filled_positions(tracker.user_roster, full_board)
     # Calculate gap to NEXT user turn after this one
     save = tracker.current_pick
     tracker.current_pick += 1
@@ -203,16 +208,21 @@ def _handle_user_pick(board, tracker, balance):
         print(f"  -> Drafted: {name}")
 
 
-def _handle_other_pick(board, tracker):
+def _handle_other_pick(board, tracker, team_names=None):
     """Handle another team's pick."""
-    name = _get_player_input(board, tracker)
+    name = _get_player_input(board, tracker, team_names=team_names)
     if name:
         tracker.draft_player(name, is_user=False)
         print(f"  -> Drafted: {name}")
 
 
-def _get_player_input(board, tracker):
-    """Get and fuzzy-match a player name from user input."""
+def _get_player_input(board, tracker, team_names=None):
+    """Get and fuzzy-match a player name from user input.
+
+    If *team_names* is provided, the input may optionally start with a team
+    name prefix (e.g. "hello peanuts logan webb").  The team prefix is
+    stripped before the player fuzzy search.
+    """
     available_names = board[~board["name"].isin(tracker.drafted_players)]["name"].tolist()
     while True:
         raw = input("\nEnter player name (or 'skip' to skip): ").strip()
@@ -230,14 +240,22 @@ def _get_player_input(board, tracker):
             if 0 <= idx < len(recs):
                 return recs[idx]["name"]
 
+        # Try to split off a team-name prefix
+        player_query = raw
+        if team_names:
+            team, remainder = split_team_and_player(raw, team_names)
+            if team:
+                print(f"  (team: {team})")
+                player_query = remainder
+
         # Fuzzy search
-        match = find_player(raw, available_names)
+        match = find_player(player_query, available_names)
         if match:
             confirm = input(f"  -> {match}? (y/n): ").strip().lower()
             if confirm in ("y", "yes", ""):
                 return match
             # Show alternatives
-            alts = find_player(raw, available_names, return_top_n=5)
+            alts = find_player(player_query, available_names, return_top_n=5)
             if alts:
                 print("  Alternatives:")
                 for i, alt in enumerate(alts, 1):

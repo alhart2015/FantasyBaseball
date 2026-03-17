@@ -15,6 +15,7 @@ class LeagueConfig:
     projection_systems: list[str]
     projection_weights: dict[str, float]
     sgp_overrides: dict[str, float] = field(default_factory=dict)
+    teams: dict[int, str] = field(default_factory=dict)
 
 
 def load_config(config_path: Path) -> LeagueConfig:
@@ -40,4 +41,5 @@ def load_config(config_path: Path) -> LeagueConfig:
         projection_systems=projections.get("systems", []),
         projection_weights=projections.get("weights", {}),
         sgp_overrides=raw.get("sgp_denominators", {}),
+        teams={int(k): v for k, v in draft.get("teams", {}).items()},
     )

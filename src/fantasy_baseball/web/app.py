@@ -4,6 +4,7 @@ Serves a read-only browser dashboard that visualises the current draft
 state.  State is read from a JSON file written atomically by the CLI
 loop in ``run_draft.py``.
 """
+import logging
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template
@@ -31,6 +32,9 @@ def create_app(state_path: Path | None = None) -> Flask:
         static_folder=str(Path(__file__).parent / "static"),
     )
     app.config["STATE_PATH"] = state_path
+
+    # Suppress Flask/werkzeug request logging (htmx polls every 2s)
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
     @app.route("/")
     def index():
