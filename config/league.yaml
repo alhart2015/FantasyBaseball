@@ -1,0 +1,113 @@
+league:
+  id: 5652
+  num_teams: 10
+  game_code: mlb
+
+draft:
+  position: 8  # Snake draft pick position (1-indexed)
+
+keepers:
+  # Hello Peanuts!
+  - name: "Elly De La Cruz"
+    team: "Hello Peanuts!"
+  - name: "Corbin Carroll"
+    team: "Hello Peanuts!"
+  - name: "James Wood"
+    team: "Hello Peanuts!"
+  # Boston Estrellas
+  - name: "Tarik Skubal"
+    team: "Boston Estrellas"
+  - name: "Paul Skenes"
+    team: "Boston Estrellas"
+  - name: "Pete Crow-Armstrong"
+    team: "Boston Estrellas"
+  # Send in the Cavalli
+  - name: "Jazz Chisholm Jr."
+    team: "Send in the Cavalli"
+  - name: "Rafael Devers"
+    team: "Send in the Cavalli"
+  - name: "Pete Fairbanks"
+    team: "Send in the Cavalli"
+  # Hart of the Order
+  - name: "Juan Soto"
+    team: "Hart of the Order"
+  - name: "Julio Rodriguez"
+    team: "Hart of the Order"
+  - name: "Junior Caminero"
+    team: "Hart of the Order"
+  # Jon's Underdogs
+  - name: "Bobby Witt Jr."
+    team: "Jon's Underdogs"
+  - name: "Nick Kurtz"
+    team: "Jon's Underdogs"
+  - name: "Garrett Crochet"
+    team: "Jon's Underdogs"
+  # SkeleThor
+  - name: "Kyle Tucker"
+    team: "SkeleThor"
+  - name: "Gunnar Henderson"
+    team: "SkeleThor"
+  - name: "Ronald Acuna Jr."
+    team: "SkeleThor"
+  # Spacemen
+  - name: "Aaron Judge"
+    team: "Spacemen"
+  - name: "Bryce Harper"
+    team: "Spacemen"
+  - name: "Max Fried"
+    team: "Spacemen"
+  # Springfield Isotopes
+  - name: "Fernando Tatis Jr."
+    team: "Springfield Isotopes"
+  - name: "Jackson Chourio"
+    team: "Springfield Isotopes"
+  - name: "Francisco Lindor"
+    team: "Springfield Isotopes"
+  # Tortured Baseball Department
+  - name: "Jose Ramirez"
+    team: "Tortured Baseball Department"
+  - name: "Vladimir Guerrero Jr."
+    team: "Tortured Baseball Department"
+  - name: "Cal Raleigh"
+    team: "Tortured Baseball Department"
+  # Work in Progress
+  - name: "Shohei Ohtani"
+    team: "Work in Progress"
+    note: "batter only"
+  - name: "Trea Turner"
+    team: "Work in Progress"
+  - name: "Freddy Peralta"
+    team: "Work in Progress"
+
+roster_slots:
+  C: 1
+  1B: 1
+  2B: 1
+  3B: 1
+  SS: 1
+  IF: 1
+  OF: 4
+  UTIL: 2
+  P: 9
+  BN: 2
+  IL: 2
+
+projections:
+  systems:
+    - steamer
+    - zips
+  weights:
+    steamer: 0.5
+    zips: 0.5
+
+sgp_denominators:
+  R: 20
+  HR: 9
+  RBI: 20
+  SB: 8
+  AVG: 0.005
+  W: 3
+  K: 30
+  ERA: 0.15
+  WHIP: 0.015
+  SV: 7
