@@ -1136,6 +1136,63 @@ git commit -m "feat: add in-season lineup optimizer CLI"
 
 ---
 
+## Known Issues to Fix Before Execution
+
+These gaps were identified in plan review and must be addressed during implementation:
+
+### Gap 1: Missing waiver wire scanning (`waivers.py` / `run_lineup.py`)
+
+`evaluate_pickup()` exists in `waivers.py` but nothing calls `fetch_free_agents()` to find candidates. The CLI just outputs a lineup with no waiver recommendations.
+
+**Fix:** Add a `scan_waivers()` function to `waivers.py` that:
+1. Iterates over needed positions (`_get_unfilled_positions` style)
+2. Calls `fetch_free_agents(league, position)` for each
+3. Looks up projections for each free agent
+4. Calls `evaluate_pickup(free_agent, worst_roster_player_at_pos, leverage)`
+5. Returns ranked list of `(add, drop, sgp_gain)` tuples
+
+Then call it from `run_lineup.py` and print the top 3–5 recommendations.
+
+### Gap 2: No reasoning in lineup output (`run_lineup.py`)
+
+The CLI prints `OF  Juan Soto` with no explanation. The spec asks for "Start X over Y at UTIL — you're close to gaining a point in SB."
+
+**Fix:** For each flex slot (IF, UTIL), print the benched alternative and the per-category delta. Example output:
+```
+  UTIL     Junior Caminero   (over Bench Guy: +1.2 wSGP — gains you HR, RBI)
+```
+Compute `calculate_weighted_sgp(starter) - calculate_weighted_sgp(benched)` and show the top 1–2 categories driving the decision.
+
+### Gap 3: No schedule-based projections (`run_lineup.py`)
+
+Full-season projections are used as-is. The spec calls for scaling by weekly games played (a team playing 7 games vs. 5 gives more counting stats).
+
+**Fix:** Add a `scale_by_schedule(proj_row, games_this_week, games_per_season=162)` utility that multiplies counting stats (R, HR, RBI, SB, W, K, SV) by `games_this_week / (games_per_season / 30)`. Apply this to each player's projection before passing to the optimizer. Weekly game counts can be fetched from Yahoo's schedule or hardcoded as a prompt to the user (`--games player_name:7`).
+
+### Gap 4: `projection_weights` empty dict bug (`run_lineup.py`, line ~1040)
+
+```python
+# Current (buggy):
+blend_projections(PROJECTIONS_DIR, config.projection_systems, config.projection_weights or None)
+# `config.projection_weights or None` returns {} when weights is an empty dict,
+# which evaluates as falsy — so this actually works. BUT in run_draft.py the
+# same pattern is used and the config now always has weights, so this is fine.
+```
+
+Wait — re-checking: `{} or None` → `None` (empty dict is falsy in Python), so this actually **does** work correctly. The real bug is the inverse case: if `projection_weights` is a **non-empty dict**, `config.projection_weights or None` returns the dict, which is correct. The bug only manifests if something downstream passes `{}` explicitly. **No code change needed** — the `or None` guard handles it.
+
+### Gap 5: Pitcher slots hardcoded (`run_lineup.py`, line ~1102)
+
+```python
+# Current (hardcoded):
+optimize_pitcher_lineup(roster_pitchers, leverage, slots=9)
+
+# Fix:
+optimize_pitcher_lineup(roster_pitchers, leverage, slots=config.roster_slots.get("P", 9))
+```
+
+---
+
 ## Summary
 
 After completing all 6 tasks, the lineup optimizer provides:
