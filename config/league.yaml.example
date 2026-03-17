@@ -1,0 +1,44 @@
+league:
+  id: 5652
+  num_teams: 10
+  game_code: mlb
+
+draft:
+  position: 8  # Snake draft pick position (1-indexed)
+
+keepers: []
+  # - name: "Player Name"
+  #   team: "Fantasy Team Name"
+
+roster_slots:
+  C: 1
+  1B: 1
+  2B: 1
+  3B: 1
+  SS: 1
+  IF: 1
+  OF: 4
+  UTIL: 2
+  P: 9
+  BN: 2
+  IL: 2
+
+projections:
+  systems:
+    - steamer
+    - zips
+  weights:  # Optional, defaults to equal weighting
+    steamer: 0.5
+    zips: 0.5
+
+sgp_denominators:  # Override defaults if desired
+  R: 20
+  HR: 9
+  RBI: 20
+  SB: 8
+  AVG: 0.005
+  W: 3
+  K: 30
+  ERA: 0.15
+  WHIP: 0.015
+  SV: 7
