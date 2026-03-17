@@ -1,11 +1,284 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Draft Dashboard</title>
     <link rel="stylesheet" href="/static/style.css">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
 </head>
 <body>
-    <h1>Draft Dashboard</h1>
+    <div id="dashboard" hx-get="/api/state" hx-trigger="every 2s"
+         hx-swap="none" hx-on::after-request="updateDashboard(event)">
+
+        <!-- Left column: Draft Board -->
+        <div class="col-left">
+            <div class="panel">
+                <div class="panel-header">
+                    <h2>Draft Board</h2>
+                    <div class="filters">
+                        <button class="filter-btn active" data-pos="All">All</button>
+                        <button class="filter-btn" data-pos="C">C</button>
+                        <button class="filter-btn" data-pos="1B">1B</button>
+                        <button class="filter-btn" data-pos="2B">2B</button>
+                        <button class="filter-btn" data-pos="3B">3B</button>
+                        <button class="filter-btn" data-pos="SS">SS</button>
+                        <button class="filter-btn" data-pos="OF">OF</button>
+                        <button class="filter-btn" data-pos="P">P</button>
+                        <label class="toggle-label">
+                            <input type="checkbox" id="hide-drafted" checked> Hide drafted
+                        </label>
+                    </div>
+                </div>
+                <div class="table-scroll">
+                    <table id="board-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Name</th>
+                                <th>Pos</th>
+                                <th>VAR</th>
+                                <th class="stat-col hitter-col">HR</th>
+                                <th class="stat-col hitter-col">R</th>
+                                <th class="stat-col hitter-col">RBI</th>
+                                <th class="stat-col hitter-col">SB</th>
+                                <th class="stat-col hitter-col">AVG</th>
+                                <th class="stat-col pitcher-col">W</th>
+                                <th class="stat-col pitcher-col">K</th>
+                                <th class="stat-col pitcher-col">SV</th>
+                                <th class="stat-col pitcher-col">ERA</th>
+                                <th class="stat-col pitcher-col">WHIP</th>
+                            </tr>
+                        </thead>
+                        <tbody id="board-body">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right column: Panels -->
+        <div class="col-right">
+
+            <!-- Status Bar -->
+            <div class="panel" id="status-panel">
+                <div class="panel-header"><h2>Status</h2></div>
+                <div class="status-grid">
+                    <div class="status-item">
+                        <span class="status-label">Round</span>
+                        <span class="status-value" id="status-round">--</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Pick</span>
+                        <span class="status-value" id="status-pick">--</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Team</span>
+                        <span class="status-value" id="status-team">--</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Next turn in</span>
+                        <span class="status-value" id="status-until">--</span>
+                    </div>
+                </div>
+                <div id="your-pick-banner" class="your-pick-banner hidden">YOUR PICK</div>
+            </div>
+
+            <!-- Recommendations -->
+            <div class="panel">
+                <div class="panel-header"><h2>Recommendations</h2></div>
+                <div id="recs-list" class="recs-list"></div>
+            </div>
+
+            <!-- Your Roster -->
+            <div class="panel">
+                <div class="panel-header"><h2>Your Roster</h2></div>
+                <div id="roster-grid" class="roster-grid"></div>
+            </div>
+
+            <!-- Category Balance -->
+            <div class="panel">
+                <div class="panel-header"><h2>Category Balance</h2></div>
+                <div id="balance-bars" class="balance-bars"></div>
+                <div id="balance-warnings" class="balance-warnings"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // --- State & Config ---
+    const ROSTER_SLOTS = {
+        "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1,
+        "OF": 4, "UTIL": 2, "P": 9, "BN": 2, "IL": 2
+    };
+    const TARGETS = {
+        "R": 850, "HR": 220, "RBI": 830, "SB": 100, "AVG": 0.265,
+        "W": 75, "K": 1200, "SV": 80, "ERA": 3.80, "WHIP": 1.20
+    };
+    const INVERSE = new Set(["ERA", "WHIP"]);
+    let currentFilter = "All";
+    let hideDrafted = true;
+
+    // --- htmx callback ---
+    function updateDashboard(event) {
+        if (event.detail.xhr.status !== 200) return;
+        let state;
+        try {
+            state = JSON.parse(event.detail.xhr.responseText);
+        } catch (e) { return; }
+        if (!state || !state.current_pick) return;
+        renderStatus(state);
+        renderBoard(state);
+        renderRecs(state);
+        renderRoster(state);
+        renderBalance(state);
+    }
+
+    // --- Status Panel ---
+    function renderStatus(state) {
+        document.getElementById("status-round").textContent = state.current_round;
+        document.getElementById("status-pick").textContent = state.current_pick;
+        document.getElementById("status-team").textContent = state.picking_team;
+        document.getElementById("status-until").textContent =
+            state.is_user_pick ? "NOW" : state.picks_until_user_turn + " picks";
+        const banner = document.getElementById("your-pick-banner");
+        const panel = document.getElementById("status-panel");
+        if (state.is_user_pick) {
+            banner.classList.remove("hidden");
+            panel.classList.add("user-pick-glow");
+        } else {
+            banner.classList.add("hidden");
+            panel.classList.remove("user-pick-glow");
+        }
+    }
+
+    // --- Draft Board ---
+    function renderBoard(state) {
+        const tbody = document.getElementById("board-body");
+        const userRoster = new Set(state.user_roster || []);
+        const drafted = new Set(state.drafted_players || []);
+        let rows = "";
+        let rank = 0;
+        for (const p of (state.available_players || [])) {
+            const isDrafted = drafted.has(p.name);
+            if (hideDrafted && isDrafted) continue;
+            // Position filter
+            if (currentFilter !== "All") {
+                let match = false;
+                for (const pos of p.positions) {
+                    if (currentFilter === "P" && (pos === "SP" || pos === "RP")) { match = true; break; }
+                    if (pos === currentFilter) { match = true; break; }
+                }
+                if (!match) continue;
+            }
+            rank++;
+            const isUser = userRoster.has(p.name);
+            const cls = isUser ? "user-player" : (isDrafted ? "drafted-player" : "");
+            const posStr = p.positions.slice(0, 3).join("/");
+            rows += `<tr class="${cls}">`;
+            rows += `<td>${rank}</td>`;
+            rows += `<td>${p.name}</td>`;
+            rows += `<td>${posStr}</td>`;
+            rows += `<td>${p.var.toFixed(1)}</td>`;
+            if (p.player_type === "hitter") {
+                rows += `<td>${p.hr}</td><td>${p.r}</td><td>${p.rbi}</td><td>${p.sb}</td><td>${p.avg.toFixed(3)}</td>`;
+                rows += `<td></td><td></td><td></td><td></td><td></td>`;
+            } else {
+                rows += `<td></td><td></td><td></td><td></td><td></td>`;
+                rows += `<td>${p.w}</td><td>${p.k}</td><td>${p.sv}</td><td>${p.era.toFixed(2)}</td><td>${p.whip.toFixed(2)}</td>`;
+            }
+            rows += `</tr>`;
+        }
+        tbody.innerHTML = rows;
+    }
+
+    // --- Recommendations ---
+    function renderRecs(state) {
+        const container = document.getElementById("recs-list");
+        let html = "";
+        for (const [i, rec] of (state.recommendations || []).entries()) {
+            const flag = rec.need_flag ? `<span class="need-flag">[NEED]</span>` : "";
+            const note = rec.note ? `<span class="rec-note">${rec.note}</span>` : "";
+            html += `<div class="rec-item">
+                <span class="rec-rank">${i + 1}.</span>
+                <span class="rec-name">${rec.name}</span>
+                <span class="rec-pos">${rec.positions.join("/")}</span>
+                <span class="rec-var">VAR ${rec.var.toFixed(1)}</span>
+                ${flag} ${note}
+            </div>`;
+        }
+        container.innerHTML = html;
+    }
+
+    // --- Roster Grid ---
+    function renderRoster(state) {
+        const container = document.getElementById("roster-grid");
+        const filled = state.filled_positions || {};
+        const roster = state.user_roster || [];
+        let html = "";
+        for (const [pos, count] of Object.entries(ROSTER_SLOTS)) {
+            const filledCount = filled[pos] || 0;
+            html += `<div class="roster-pos">`;
+            html += `<div class="roster-pos-label">${pos}</div>`;
+            for (let i = 0; i < count; i++) {
+                const isFilled = i < filledCount;
+                const cls = isFilled ? "slot-filled" : "slot-empty";
+                const text = isFilled ? (i < roster.length ? "" : "") : "---";
+                html += `<div class="roster-slot ${cls}">${isFilled ? "Filled" : "---"}</div>`;
+            }
+            html += `</div>`;
+        }
+        container.innerHTML = html;
+    }
+
+    // --- Category Balance ---
+    function renderBalance(state) {
+        const container = document.getElementById("balance-bars");
+        const warnings = document.getElementById("balance-warnings");
+        const totals = (state.balance && state.balance.totals) || {};
+        let html = "";
+        for (const [cat, target] of Object.entries(TARGETS)) {
+            const val = totals[cat] || 0;
+            let pct;
+            if (INVERSE.has(cat)) {
+                // For ERA/WHIP, lower is better. 100% = at target, >100% if below target (good)
+                pct = target === 0 ? 0 : Math.min((val === 0 ? 0 : (target / val)) * 100, 150);
+            } else {
+                pct = target === 0 ? 0 : Math.min((val / target) * 100, 150);
+            }
+            const isWarning = (state.balance && state.balance.warnings || [])
+                .some(w => w.includes(cat));
+            const barCls = isWarning ? "bar-warning" : (pct >= 80 ? "bar-good" : "bar-normal");
+            let displayVal = cat === "AVG" ? val.toFixed(3)
+                : (cat === "ERA" || cat === "WHIP") ? val.toFixed(2)
+                : Math.round(val);
+            html += `<div class="balance-row">
+                <span class="balance-label">${cat}</span>
+                <div class="balance-track">
+                    <div class="balance-fill ${barCls}" style="width: ${Math.min(pct, 100)}%"></div>
+                </div>
+                <span class="balance-value">${displayVal}</span>
+            </div>`;
+        }
+        container.innerHTML = html;
+        // Warnings
+        const warnList = (state.balance && state.balance.warnings) || [];
+        warnings.innerHTML = warnList.map(w => `<div class="warning-item">${w}</div>`).join("");
+    }
+
+    // --- Filter buttons ---
+    document.addEventListener("DOMContentLoaded", function() {
+        document.querySelectorAll(".filter-btn").forEach(btn => {
+            btn.addEventListener("click", function() {
+                document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+                this.classList.add("active");
+                currentFilter = this.dataset.pos;
+            });
+        });
+        document.getElementById("hide-drafted").addEventListener("change", function() {
+            hideDrafted = this.checked;
+        });
+    });
+    </script>
 </body>
 </html>
