@@ -13,6 +13,7 @@ HITTING_COLUMN_MAP: dict[str, str] = {
     "SB": "sb",
     "AVG": "avg",
     "playerid": "fg_id",
+    "PlayerId": "fg_id",
 }
 
 PITCHING_COLUMN_MAP: dict[str, str] = {
@@ -28,6 +29,7 @@ PITCHING_COLUMN_MAP: dict[str, str] = {
     "BB": "bb",
     "H": "h_allowed",
     "playerid": "fg_id",
+    "PlayerId": "fg_id",
 }
 
 REQUIRED_HITTING_COLS: list[str] = ["name", "ab", "h", "hr", "r", "rbi", "sb", "avg"]
@@ -63,10 +65,24 @@ def load_projection_set(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load a named projection system from the projections directory.
 
-    Expects files named like: steamer_hitters.csv, steamer_pitchers.csv
+    Tries multiple naming conventions:
+    - steamer_hitters.csv (simple)
+    - fangraphs-leaderboard-projections-steamer-hitters.csv (FanGraphs export)
     """
-    hitting_file = projections_dir / f"{system_name}_hitters.csv"
-    pitching_file = projections_dir / f"{system_name}_pitchers.csv"
-    hitters = parse_hitting_csv(hitting_file) if hitting_file.exists() else pd.DataFrame()
-    pitchers = parse_pitching_csv(pitching_file) if pitching_file.exists() else pd.DataFrame()
+    hitting_file = _find_file(projections_dir, system_name, "hitters")
+    pitching_file = _find_file(projections_dir, system_name, "pitchers")
+    hitters = parse_hitting_csv(hitting_file) if hitting_file else pd.DataFrame()
+    pitchers = parse_pitching_csv(pitching_file) if pitching_file else pd.DataFrame()
     return hitters, pitchers
+
+
+def _find_file(directory: Path, system: str, player_type: str) -> Path | None:
+    """Find a projection CSV file, trying multiple naming conventions."""
+    candidates = [
+        directory / f"{system}_{player_type}.csv",
+        directory / f"fangraphs-leaderboard-projections-{system}-{player_type}.csv",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
