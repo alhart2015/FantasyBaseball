@@ -1,0 +1,84 @@
+"""Fetch roster, standings, and free agents from Yahoo Fantasy API."""
+
+
+# Yahoo stat IDs for 5x5 roto categories
+YAHOO_STAT_ID_MAP: dict[str, str] = {
+    "60": "R",
+    "7": "HR",
+    "13": "RBI",
+    "16": "SB",
+    "3": "AVG",
+    "28": "W",
+    "32": "SV",
+    "42": "K",
+    "26": "ERA",
+    "27": "WHIP",
+}
+
+
+def fetch_roster(league, team_key: str) -> list[dict]:
+    """Fetch a team's current roster from Yahoo."""
+    team = league.to_team(team_key)
+    raw_roster = team.roster()
+    return parse_roster(raw_roster)
+
+
+def parse_roster(raw_roster: list[dict]) -> list[dict]:
+    """Normalize raw Yahoo roster data."""
+    players = []
+    for p in raw_roster:
+        players.append({
+            "name": p["name"],
+            "positions": p.get("eligible_positions", []),
+            "selected_position": p.get("selected_position", ""),
+            "player_id": p.get("player_id", ""),
+        })
+    return players
+
+
+def fetch_standings(league) -> list[dict]:
+    """Fetch league standings with cumulative team stats."""
+    raw = league.standings()
+    return parse_standings(raw, stat_id_map=YAHOO_STAT_ID_MAP)
+
+
+def parse_standings(raw: dict, stat_id_map: dict[str, str]) -> list[dict]:
+    """Normalize raw Yahoo standings data."""
+    teams = []
+    for team_data in raw.get("teams", []):
+        stats = {}
+        team_stats = team_data.get("team_stats", {})
+        for stat_entry in team_stats.get("stats", []):
+            stat = stat_entry.get("stat", {})
+            sid = str(stat.get("stat_id", ""))
+            if sid in stat_id_map:
+                cat = stat_id_map[sid]
+                try:
+                    stats[cat] = float(stat.get("value", 0))
+                except (ValueError, TypeError):
+                    stats[cat] = 0.0
+
+        team_standings = team_data.get("team_standings", {})
+        teams.append({
+            "name": team_data.get("name", ""),
+            "team_key": team_data.get("team_key", ""),
+            "rank": team_standings.get("rank", 0),
+            "stats": stats,
+        })
+    return teams
+
+
+def fetch_free_agents(league, position: str, count: int = 50) -> list[dict]:
+    """Fetch top free agents at a position."""
+    try:
+        agents = league.free_agents(position)
+        result = []
+        for p in agents[:count]:
+            result.append({
+                "name": p["name"],
+                "positions": p.get("eligible_positions", [position]),
+                "player_id": p.get("player_id", ""),
+            })
+        return result
+    except Exception:
+        return []
