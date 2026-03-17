@@ -24,13 +24,14 @@ from fantasy_baseball.draft.recommender import (
     get_recommendations,
     get_filled_positions,
 )
-from fantasy_baseball.draft.state import serialize_state, write_state
+from fantasy_baseball.draft.state import serialize_state, serialize_board, write_state, write_board
 from fantasy_baseball.web.app import create_app
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
+BOARD_PATH = PROJECT_ROOT / "data" / "draft_state_board.json"
 
 FLASK_PORT = 5000
 
@@ -52,7 +53,7 @@ def _start_flask_server(state_path: Path) -> None:
     print(f"Dashboard running at http://127.0.0.1:{FLASK_PORT}")
 
 
-def _write_dashboard_state(tracker, balance, board, recs, filled):
+def _write_dashboard_state(tracker, balance, board, recs, filled, roster_slots=None):
     """Serialize and atomically write dashboard state to disk."""
     state = serialize_state(
         tracker=tracker,
@@ -60,6 +61,7 @@ def _write_dashboard_state(tracker, balance, board, recs, filled):
         board=board,
         recommendations=recs,
         filled_positions=filled,
+        roster_slots=roster_slots,
     )
     write_state(state, STATE_PATH)
 
@@ -104,14 +106,21 @@ def main():
                 balance.add_player(rows.iloc[0])
         tracker.draft_player(keeper["name"], is_user=is_user)
 
+    # Write the full board once (clients fetch via /api/board on page load)
+    board_data = serialize_board(board)
+    write_board(board_data, BOARD_PATH)
+    print(f"Board snapshot written ({len(board_data)} players)")
+
     # Start Flask dashboard server
     _start_flask_server(STATE_PATH)
 
     # Write initial state (use full_board for roster lookups so keepers are found)
     filled = get_filled_positions(tracker.user_roster, full_board)
     recs = get_recommendations(board, tracker.drafted_players, tracker.user_roster,
-                               n=5, filled_positions=filled)
-    _write_dashboard_state(tracker, balance, board, recs, filled)
+                               n=5, filled_positions=filled,
+                               roster_slots=config.roster_slots)
+    _write_dashboard_state(tracker, balance, board, recs, filled,
+                           roster_slots=config.roster_slots)
 
     # Show pre-draft rankings
     print("=" * 70)
@@ -137,15 +146,18 @@ def main():
         print("=" * 70)
 
         if tracker.is_user_pick:
-            _handle_user_pick(board, full_board, tracker, balance)
+            _handle_user_pick(board, full_board, tracker, balance,
+                              roster_slots=config.roster_slots)
         else:
             _handle_other_pick(board, tracker, team_names)
 
         # Write updated state for the dashboard after every pick
         filled = get_filled_positions(tracker.user_roster, full_board)
         recs = get_recommendations(board, tracker.drafted_players, tracker.user_roster,
-                                   n=5, filled_positions=filled)
-        _write_dashboard_state(tracker, balance, board, recs, filled)
+                                   n=5, filled_positions=filled,
+                                   roster_slots=config.roster_slots)
+        _write_dashboard_state(tracker, balance, board, recs, filled,
+                               roster_slots=config.roster_slots)
 
         # Show updated top 10
         print()
@@ -160,7 +172,7 @@ def main():
         print(f"  {name}")
 
 
-def _handle_user_pick(board, full_board, tracker, balance):
+def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None):
     """Handle the user's draft pick with recommendations."""
     filled = get_filled_positions(tracker.user_roster, full_board)
     # Calculate gap to NEXT user turn after this one.
@@ -187,6 +199,7 @@ def _handle_user_pick(board, full_board, tracker, balance):
         n=5,
         filled_positions=filled,
         picks_until_next=picks_gap,
+        roster_slots=roster_slots,
     )
 
     # Show recommendations

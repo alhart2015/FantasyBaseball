@@ -5,7 +5,7 @@ ALL_CATEGORIES: list[str] = HITTING_CATEGORIES + PITCHING_CATEGORIES
 RATE_STATS: set[str] = {"AVG", "ERA", "WHIP"}
 INVERSE_STATS: set[str] = {"ERA", "WHIP"}  # Lower is better
 
-ROSTER_SLOTS: dict[str, int] = {
+DEFAULT_ROSTER_SLOTS: dict[str, int] = {
     "C": 1,
     "1B": 1,
     "2B": 1,
@@ -19,17 +19,36 @@ ROSTER_SLOTS: dict[str, int] = {
     "IL": 2,
 }
 
-STARTERS_PER_POSITION: dict[str, int] = {
-    "C": 10,
-    "1B": 10,
-    "2B": 10,
-    "3B": 10,
-    "SS": 10,
-    "IF": 10,
-    "OF": 40,
-    "UTIL": 20,
-    "P": 90,
-}
+# Backward-compatible alias so existing imports keep working.
+ROSTER_SLOTS: dict[str, int] = DEFAULT_ROSTER_SLOTS
+
+DEFAULT_NUM_TEAMS: int = 10
+
+# Backward-compatible alias.
+NUM_TEAMS: int = DEFAULT_NUM_TEAMS
+
+
+def compute_starters_per_position(
+    roster_slots: dict[str, int] | None = None,
+    num_teams: int | None = None,
+) -> dict[str, int]:
+    """Derive starters-per-position from roster slots and league size.
+
+    ``starters = slots * num_teams`` for every non-bench/IL position.
+    """
+    if roster_slots is None:
+        roster_slots = DEFAULT_ROSTER_SLOTS
+    if num_teams is None:
+        num_teams = DEFAULT_NUM_TEAMS
+    return {
+        pos: count * num_teams
+        for pos, count in roster_slots.items()
+        if pos not in ("BN", "IL")
+    }
+
+
+# Default value kept for backward compatibility.
+STARTERS_PER_POSITION: dict[str, int] = compute_starters_per_position()
 
 IF_ELIGIBLE: set[str] = {"1B", "2B", "3B", "SS"}
 
@@ -45,5 +64,3 @@ DEFAULT_SGP_DENOMINATORS: dict[str, float] = {
     "WHIP": 0.015,
     "SV": 7.0,
 }
-
-NUM_TEAMS: int = 10

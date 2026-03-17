@@ -1,5 +1,8 @@
 import json
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 YAHOO_POSITIONS = ["C", "1B", "2B", "3B", "SS", "OF", "SP", "RP"]
 
@@ -16,7 +19,17 @@ def fetch_positions_from_yahoo(league) -> dict[str, list[str]]:
                 eligible = player.get("eligible_positions", [pos])
                 pos_map[name] = eligible
             position_maps.append(pos_map)
+        except (PermissionError, OSError) as exc:
+            # Auth failures and critical OS-level errors should not be hidden
+            logger.exception(
+                "Critical error fetching free agents for position %s", pos
+            )
+            raise
         except Exception:
+            # Transient network errors, rate limits, etc. — log and skip
+            logger.exception(
+                "Failed to fetch free agents for position %s; skipping", pos
+            )
             continue
     return merge_position_maps(position_maps)
 

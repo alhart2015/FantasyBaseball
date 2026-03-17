@@ -1,10 +1,79 @@
 import pandas as pd
 from pathlib import Path
-from .fangraphs import load_projection_set
+from .fangraphs import load_projection_set, _find_file
 
 # Counting stats to blend directly (weighted average)
 HITTING_COUNTING_COLS: list[str] = ["r", "hr", "rbi", "sb", "h", "ab", "pa"]
 PITCHING_COUNTING_COLS: list[str] = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
+
+
+def validate_projections_dir(
+    projections_dir: Path, systems: list[str]
+) -> None:
+    """Validate that the projections directory exists and contains expected CSV files.
+
+    Raises FileNotFoundError with an actionable message if the directory is
+    missing or if no projection files can be found for the requested systems.
+    """
+    if not projections_dir.exists():
+        raise FileNotFoundError(
+            f"Projections directory not found: {projections_dir}\n"
+            f"\n"
+            f"To fix this:\n"
+            f"  1. Create the directory: mkdir -p {projections_dir}\n"
+            f"  2. Download projection CSVs from FanGraphs:\n"
+            f"     https://www.fangraphs.com/projections\n"
+            f"  3. Export hitter and pitcher CSVs for each system ({', '.join(systems)})\n"
+            f"  4. Save them as e.g. steamer_hitters.csv, steamer_pitchers.csv"
+        )
+
+    if not projections_dir.is_dir():
+        raise FileNotFoundError(
+            f"Projections path exists but is not a directory: {projections_dir}"
+        )
+
+    csv_files = list(projections_dir.glob("*.csv"))
+    if not csv_files:
+        raise FileNotFoundError(
+            f"No CSV files found in {projections_dir}\n"
+            f"\n"
+            f"To fix this:\n"
+            f"  1. Download projection CSVs from FanGraphs:\n"
+            f"     https://www.fangraphs.com/projections\n"
+            f"  2. Export hitter and pitcher CSVs for each system ({', '.join(systems)})\n"
+            f"  3. Save them as e.g. steamer_hitters.csv, steamer_pitchers.csv\n"
+            f"     (or the FanGraphs export name like "
+            f"fangraphs-leaderboard-projections-steamer-hitters.csv)"
+        )
+
+    # Check each requested system has at least one file (hitters or pitchers)
+    missing_systems = []
+    for system in systems:
+        hit_file = _find_file(projections_dir, system, "hitters")
+        pit_file = _find_file(projections_dir, system, "pitchers")
+        if hit_file is None and pit_file is None:
+            missing_systems.append(system)
+
+    if missing_systems:
+        found_files = [f.name for f in csv_files]
+        raise FileNotFoundError(
+            f"No projection files found for system(s): {', '.join(missing_systems)}\n"
+            f"\n"
+            f"Directory {projections_dir} contains: {', '.join(found_files)}\n"
+            f"\n"
+            f"Expected files like:\n"
+            + "\n".join(
+                f"  - {s}_hitters.csv / {s}_pitchers.csv"
+                for s in missing_systems
+            )
+            + f"\n"
+            f"\n"
+            f"To fix this:\n"
+            f"  1. Download the missing projections from FanGraphs:\n"
+            f"     https://www.fangraphs.com/projections\n"
+            f"  2. Select each system and export hitter + pitcher CSVs\n"
+            f"  3. Save them in {projections_dir}"
+        )
 
 
 def blend_projections(
@@ -17,6 +86,8 @@ def blend_projections(
     Counting stats are blended directly. Rate stats (AVG, ERA, WHIP)
     are recomputed from blended component stats.
     """
+    validate_projections_dir(projections_dir, systems)
+
     if weights is None:
         weights = {s: 1.0 / len(systems) for s in systems}
 

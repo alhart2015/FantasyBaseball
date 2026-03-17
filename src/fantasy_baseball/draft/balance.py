@@ -22,8 +22,8 @@ class CategoryBalance:
         elif player.get("player_type") == "pitcher":
             self._pitchers.append(player)
 
-    def get_totals(self) -> dict[str, float]:
-        totals: dict[str, float] = {}
+    def get_totals(self) -> dict[str, float | None]:
+        totals: dict[str, float | None] = {}
         for stat, col in [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")]:
             totals[stat] = sum(h.get(col, 0) for h in self._hitters)
         total_h = sum(h.get("h", 0) for h in self._hitters)
@@ -39,8 +39,8 @@ class CategoryBalance:
             total_ha = sum(p.get("h_allowed", 0) for p in self._pitchers)
             totals["WHIP"] = (total_bb + total_ha) / total_ip
         else:
-            totals["ERA"] = 0.0
-            totals["WHIP"] = 0.0
+            totals["ERA"] = None
+            totals["WHIP"] = None
         return totals
 
     def get_warnings(self) -> list[str]:
@@ -62,6 +62,8 @@ class CategoryBalance:
                     warnings.append(f"{cat} is low ({totals[cat]:.0f}, target ~{target:.0f})")
         for cat in PITCHING_CATEGORIES:
             target = TEAM_TARGETS[cat]
+            if totals[cat] is None:
+                continue
             if cat in ("ERA", "WHIP"):
                 if num_pitchers >= min_pitchers and totals[cat] > target / WARNING_THRESHOLD:
                     warnings.append(f"{cat} is high ({totals[cat]:.2f}, target ~{target:.2f})")

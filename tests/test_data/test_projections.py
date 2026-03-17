@@ -76,9 +76,20 @@ class TestBlendProjections:
         judge = hitters[hitters["name"] == "Aaron Judge"].iloc[0]
         assert judge["hr"] == 45
 
-    def test_missing_system_ignored(self, fixtures_dir):
-        hitters, pitchers = blend_projections(
-            fixtures_dir,
-            systems=["steamer", "nonexistent"],
-        )
-        assert len(hitters) == 4
+    def test_missing_system_raises_error(self, fixtures_dir):
+        with pytest.raises(FileNotFoundError, match="No projection files found for system"):
+            blend_projections(
+                fixtures_dir,
+                systems=["steamer", "nonexistent"],
+            )
+
+    def test_missing_directory_raises_error(self, tmp_path):
+        missing = tmp_path / "does_not_exist"
+        with pytest.raises(FileNotFoundError, match="Projections directory not found"):
+            blend_projections(missing, systems=["steamer"])
+
+    def test_empty_directory_raises_error(self, tmp_path):
+        empty_dir = tmp_path / "empty_projections"
+        empty_dir.mkdir()
+        with pytest.raises(FileNotFoundError, match="No CSV files found"):
+            blend_projections(empty_dir, systems=["steamer"])

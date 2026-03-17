@@ -14,10 +14,10 @@
 
 ## Design Flaws
 
-- [ ] **Leverage only looks at team above** (`leverage.py:29-32`) — Ignores teams below that could catch you. Should consider both neighbors for attack/defense leverage.
-- [ ] **Silent exception swallowing in Yahoo API calls** (`yahoo_players.py:19`, `yahoo_roster.py:83`) — Network errors, auth failures, rate limits all disappear silently. Should at minimum log.
-- [ ] **Hardcoded constants that should come from config** — `STARTERS_PER_POSITION`, `ROSTER_SLOTS` in recommender, and dashboard JS `ROSTER_SLOTS` are all hardcoded instead of derived from league config.
-- [ ] **State JSON includes ALL available players on every 2s poll** (`state.py:25-46`) — Large payload for 300+ player pools. Board data is mostly static; should send once and use deltas.
-- [ ] **No SRI hash on CDN-loaded htmx** (`dashboard.html:8`) — Missing `integrity` and `crossorigin` attributes on the unpkg script tag.
-- [ ] **No validation on projection directory existence** — Neither script checks if `data/projections/` exists before building the board. Errors surface as opaque pandas exceptions.
-- [ ] **`CategoryBalance` defaults ERA/WHIP to 0.0 with no pitchers** (`balance.py:42-43`) — Shows "perfect" 0.00 ERA during early draft rounds. Should display N/A or be visually distinguished.
+- [x] **Leverage only looks at team above** (`leverage.py:29-32`) — Ignores teams below that could catch you. Should consider both neighbors for attack/defense leverage.
+- [x] **Silent exception swallowing in Yahoo API calls** (`yahoo_players.py:19`, `yahoo_roster.py:83`) — Network errors, auth failures, rate limits all disappear silently. Should at minimum log.
+- [x] **Hardcoded constants that should come from config** — `STARTERS_PER_POSITION`, `ROSTER_SLOTS` in recommender, and dashboard JS `ROSTER_SLOTS` are all hardcoded instead of derived from league config.
+- [x] **State JSON includes ALL available players on every 2s poll** (`state.py:25-46`) — Large payload for 300+ player pools. Board data is mostly static; should send once and use deltas.
+- [x] **No SRI hash on CDN-loaded htmx** (`dashboard.html:8`) — Missing `integrity` and `crossorigin` attributes on the unpkg script tag.
+- [x] **No validation on projection directory existence** — Neither script checks if `data/projections/` exists before building the board. Errors surface as opaque pandas exceptions.
+- [x] **`CategoryBalance` defaults ERA/WHIP to 0.0 with no pitchers** (`balance.py:42-43`) — Shows "perfect" 0.00 ERA during early draft rounds. Should display N/A or be visually distinguished.

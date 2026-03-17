@@ -1,5 +1,5 @@
 import pandas as pd
-from fantasy_baseball.utils.constants import ROSTER_SLOTS
+from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 
@@ -13,12 +13,15 @@ def get_recommendations(
     n: int = 5,
     filled_positions: dict[str, int] | None = None,
     picks_until_next: int | None = None,
+    roster_slots: dict[str, int] | None = None,
 ) -> list[dict]:
     """Get top draft pick recommendations."""
+    if roster_slots is None:
+        roster_slots = DEFAULT_ROSTER_SLOTS
     available = board[~board["name"].isin(drafted)].head(n * 3)
     if filled_positions is None:
         filled_positions = {}
-    unfilled = _get_unfilled_positions(filled_positions)
+    unfilled = _get_unfilled_positions(filled_positions, roster_slots)
     recs = []
     for _, player in available.iterrows():
         rec = {
@@ -46,9 +49,12 @@ def get_recommendations(
     return recs[:n]
 
 
-def _get_unfilled_positions(filled: dict[str, int]) -> set[str]:
+def _get_unfilled_positions(
+    filled: dict[str, int],
+    roster_slots: dict[str, int],
+) -> set[str]:
     unfilled = set()
-    for pos, slots in ROSTER_SLOTS.items():
+    for pos, slots in roster_slots.items():
         if pos in ("BN", "IL", "UTIL", "IF"):
             continue
         current = filled.get(pos, 0)

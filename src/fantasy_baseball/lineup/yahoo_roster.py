@@ -1,5 +1,8 @@
 """Fetch roster, standings, and free agents from Yahoo Fantasy API."""
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Yahoo stat IDs for 5x5 roto categories
 YAHOO_STAT_ID_MAP: dict[str, str] = {
@@ -80,5 +83,16 @@ def fetch_free_agents(league, position: str, count: int = 50) -> list[dict]:
                 "player_id": p.get("player_id", ""),
             })
         return result
+    except (PermissionError, OSError) as exc:
+        # Auth failures and critical OS-level errors must surface
+        logger.exception(
+            "Critical error fetching free agents at position %s", position
+        )
+        raise
     except Exception:
+        # Transient network errors, rate limits, etc. — log and degrade
+        logger.exception(
+            "Failed to fetch free agents at position %s; returning empty list",
+            position,
+        )
         return []

@@ -5,11 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Draft Dashboard</title>
     <link rel="stylesheet" href="/static/style.css">
-    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://unpkg.com/htmx.org@2.0.4"
+            integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
+            crossorigin="anonymous"></script>
 </head>
 <body>
-    <div id="dashboard" hx-get="/api/state" hx-trigger="every 2s"
-         hx-swap="none" hx-on::after-request="updateDashboard(event)">
+    <div id="dashboard">
 
         <!-- Left column: Draft Board -->
         <div class="col-left">
@@ -106,11 +107,8 @@
     </div>
 
     <script>
-    // --- State & Config ---
-    const ROSTER_SLOTS = {
-        "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1,
-        "OF": 4, "UTIL": 2, "P": 9, "BN": 2, "IL": 2
-    };
+    // --- State & Config (injected from server-side league config) ---
+    const ROSTER_SLOTS = {{ roster_slots | tojson }};
     const TARGETS = {
         "R": 850, "HR": 220, "RBI": 830, "SB": 100, "AVG": 0.265,
         "W": 75, "K": 1200, "SV": 80, "ERA": 3.80, "WHIP": 1.20
@@ -119,19 +117,84 @@
     let currentFilter = "All";
     let hideDrafted = true;
 
-    // --- htmx callback ---
-    function updateDashboard(event) {
-        if (event.detail.xhr.status !== 200) return;
-        let state;
+    // --- Delta protocol state ---
+    // The full player board, fetched once from /api/board.
+    let cachedBoard = null;
+    // Accumulated state from polls (starts empty, filled on first response).
+    let currentState = null;
+    // Last version we received (0 = never fetched).
+    let knownVersion = 0;
+    // Polling interval handle.
+    let pollTimer = null;
+    const POLL_MS = 2000;
+
+    // --- Initialization ---
+    async function initDashboard() {
+        // Fetch the full board once (static player data).
         try {
-            state = JSON.parse(event.detail.xhr.responseText);
-        } catch (e) { return; }
-        if (!state || !state.current_pick) return;
-        renderStatus(state);
-        renderBoard(state);
-        renderRecs(state);
-        renderRoster(state);
-        renderBalance(state);
+            const boardResp = await fetch("/api/board");
+            if (boardResp.ok) {
+                const boardData = await boardResp.json();
+                if (Array.isArray(boardData) && boardData.length > 0) {
+                    cachedBoard = boardData;
+                }
+            }
+        } catch (e) {
+            console.warn("Board fetch failed, will fall back to full state", e);
+        }
+
+        // If board fetch failed or returned empty, the first full-state
+        // response will include available_players as a fallback.
+
+        // Do an initial full-state fetch (no ?since= param).
+        await pollState();
+
+        // Start periodic polling.
+        pollTimer = setInterval(pollState, POLL_MS);
+    }
+
+    async function pollState() {
+        try {
+            const url = knownVersion > 0
+                ? "/api/state?since=" + knownVersion
+                : "/api/state";
+            const resp = await fetch(url);
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (!data || typeof data !== "object") return;
+
+            // Server says nothing changed.
+            if (data.no_change) return;
+
+            // Apply the response to our local state.
+            if (data.full_state || !currentState || data.available_players) {
+                // Full state response (initial load, or client was too far behind).
+                currentState = data;
+            } else {
+                // Delta response: merge changed fields into currentState.
+                for (const key of Object.keys(data)) {
+                    if (key === "no_change") continue;
+                    currentState[key] = data[key];
+                }
+            }
+
+            // Update our version watermark.
+            if (data.version !== undefined) {
+                knownVersion = data.version;
+                currentState.version = data.version;
+            }
+
+            // Render everything that we have data for.
+            if (currentState.current_pick) {
+                renderStatus(currentState);
+                renderBoard(currentState);
+                renderRecs(currentState);
+                renderRoster(currentState);
+                renderBalance(currentState);
+            }
+        } catch (e) {
+            // Network error; skip this cycle.
+        }
     }
 
     // --- Status Panel ---
@@ -157,14 +220,26 @@
         const tbody = document.getElementById("board-body");
         const userRoster = new Set(state.user_roster || []);
         const drafted = new Set(state.drafted_players || []);
-        // Build combined player list: available (not drafted) + drafted stubs
-        const availableNames = new Set((state.available_players || []).map(p => p.name));
-        const allPlayers = (state.available_players || []).map(p => Object.assign({_drafted: false}, p));
-        for (const name of (state.drafted_players || [])) {
-            if (!availableNames.has(name)) {
-                allPlayers.push({name, positions: [], var: 0, player_type: "unknown", _drafted: true});
+
+        // Use the cached board if available; fall back to available_players
+        // from a legacy full-state response.
+        let allPlayers;
+        if (cachedBoard) {
+            // Board is the complete player list. Mark each as drafted or not.
+            allPlayers = cachedBoard.map(p =>
+                Object.assign({_drafted: drafted.has(p.name)}, p)
+            );
+        } else {
+            // Fallback: use available_players from the full state response.
+            const availableNames = new Set((state.available_players || []).map(p => p.name));
+            allPlayers = (state.available_players || []).map(p => Object.assign({_drafted: false}, p));
+            for (const name of (state.drafted_players || [])) {
+                if (!availableNames.has(name)) {
+                    allPlayers.push({name, positions: [], var: 0, player_type: "unknown", _drafted: true});
+                }
             }
         }
+
         let rows = "";
         let rank = 0;
         for (const p of allPlayers) {
@@ -173,7 +248,7 @@
             // Position filter
             if (currentFilter !== "All") {
                 let match = false;
-                for (const pos of p.positions) {
+                for (const pos of (p.positions || [])) {
                     if (currentFilter === "P" && (pos === "SP" || pos === "RP")) { match = true; break; }
                     if (pos === currentFilter) { match = true; break; }
                 }
@@ -182,12 +257,12 @@
             rank++;
             const isUser = userRoster.has(p.name);
             const cls = isUser ? "user-player" : (isDrafted ? "drafted-player" : "");
-            const posStr = p.positions.slice(0, 3).join("/");
+            const posStr = (p.positions || []).slice(0, 3).join("/");
             rows += `<tr class="${cls}">`;
             rows += `<td>${rank}</td>`;
             rows += `<td>${p.name}</td>`;
             rows += `<td>${posStr}</td>`;
-            rows += `<td>${p.var.toFixed(1)}</td>`;
+            rows += `<td>${(p.var || 0).toFixed(1)}</td>`;
             if (p.player_type === "hitter") {
                 rows += `<td>${p.hr}</td><td>${p.r}</td><td>${p.rbi}</td><td>${p.sb}</td><td>${p.avg.toFixed(3)}</td>`;
                 rows += `<td></td><td></td><td></td><td></td><td></td>`;
@@ -292,11 +367,22 @@
                 document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
                 this.classList.add("active");
                 currentFilter = this.dataset.pos;
+                // Re-render board immediately with new filter.
+                if (currentState && currentState.current_pick) {
+                    renderBoard(currentState);
+                }
             });
         });
         document.getElementById("hide-drafted").addEventListener("change", function() {
             hideDrafted = this.checked;
+            // Re-render board immediately with new toggle.
+            if (currentState && currentState.current_pick) {
+                renderBoard(currentState);
+            }
         });
+
+        // Kick off the delta-based polling.
+        initDashboard();
     });
     </script>
 </body>
