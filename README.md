@@ -15,10 +15,13 @@ An interactive CLI + live web dashboard for snake drafts:
 - **Snake draft awareness** — knows your pick position and calculates the gap to your next turn
 - **Live web dashboard** — Flask + htmx browser view that updates in real-time as you enter picks in the terminal
 
-### In-Season Lineup Optimizer *(coming soon)*
-- Weekly start/sit recommendations based on standings position
-- Waiver wire suggestions targeting your weakest categories
-- Standings-aware strategy that shifts focus as the season progresses
+### In-Season Lineup Optimizer
+A CLI tool that connects to Yahoo, analyzes your standings position, and recommends the optimal lineup + waiver moves:
+- **Standings leverage** — identifies which categories are closest to gaining (or losing) a standings point, then weights player value accordingly
+- **Optimal hitter lineup** — uses the Hungarian algorithm to assign hitters to roster slots, maximizing leverage-weighted SGP
+- **Pitcher ranking** — ranks pitchers by leverage-weighted SGP and recommends who to start
+- **Per-decision reasoning** — explains flex slot choices (e.g., "Start X over Y at UTIL — gains HR, RBI")
+- **Waiver wire scanner** — scans free agents at every position, evaluates add/drop swaps, and ranks the top pickups by SGP gain with category breakdowns
 
 ## Setup
 
@@ -113,10 +116,22 @@ This starts the CLI in your terminal and a web dashboard at `http://localhost:50
 ### 3. During the draft
 
 - **Your pick:** The assistant shows top 5 recommendations with VAR scores, positional need flags, and category balance. Type a player name or enter a number (1-5) to select a recommendation.
-- **Other teams' picks:** Type the drafted player's name. Fuzzy matching handles misspellings.
+- **Other teams' picks:** Type the drafted player's name, optionally prefixed with the team name (e.g., `hello peanuts logan webb`). Fuzzy matching handles misspellings and partial team names.
 - **Commands:** `skip` to skip a pick, `quit` to exit.
 
 The web dashboard updates automatically after each pick.
+
+## In-Season Usage
+
+```bash
+python scripts/run_lineup.py
+```
+
+Connects to Yahoo, fetches your roster and standings, then prints:
+1. **Category leverage** — which stats are most valuable to target this week
+2. **Optimal hitter lineup** — slot assignments with reasoning on flex decisions
+3. **Optimal pitcher lineup** — ranked by leverage-weighted SGP
+4. **Waiver recommendations** — top 5 add/drop swaps with category impact
 
 ## How It Works
 
@@ -146,12 +161,14 @@ FantasyBaseball/
 │   ├── auth/           # Yahoo OAuth2 authentication
 │   ├── data/           # FanGraphs CSV parsing, projection blending, Yahoo player data
 │   ├── draft/          # Draft board, tracker, balance, recommender, search
+│   ├── lineup/         # In-season optimizer: leverage, weighted SGP, optimizer, waivers
 │   ├── sgp/            # SGP engine: denominators, player values, replacement levels, VAR
 │   ├── utils/          # Constants, position helpers, name normalization
 │   ├── web/            # Flask dashboard for draft visualization
 │   └── config.py       # YAML config loading
 ├── scripts/
 │   ├── run_draft.py    # Interactive draft assistant CLI
+│   ├── run_lineup.py   # In-season lineup optimizer CLI
 │   └── fetch_positions.py  # Cache Yahoo position data
 ├── data/
 │   ├── projections/    # FanGraphs CSV files (not committed)
@@ -159,7 +176,7 @@ FantasyBaseball/
 ├── config/
 │   ├── league.yaml     # League settings + keepers
 │   └── oauth.json      # Yahoo credentials (gitignored)
-└── tests/              # 127+ tests
+└── tests/              # 180 tests
 ```
 
 ## Running Tests
