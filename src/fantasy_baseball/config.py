@@ -8,6 +8,7 @@ class LeagueConfig:
     league_id: int
     num_teams: int
     game_code: str
+    team_name: str
     draft_position: int
     keepers: list[dict]
     roster_slots: dict[str, int]
@@ -32,6 +33,7 @@ def load_config(config_path: Path) -> LeagueConfig:
         league_id=league.get("id", 0),
         num_teams=league.get("num_teams", 10),
         game_code=league.get("game_code", "mlb"),
+        team_name=league.get("team_name", ""),
         draft_position=draft.get("position", 1),
         keepers=raw.get("keepers", []),
         roster_slots=raw.get("roster_slots", {}),

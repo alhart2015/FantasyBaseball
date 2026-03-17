@@ -2,6 +2,7 @@ league:
   id: 5652
   num_teams: 10
   game_code: mlb
+  team_name: "Hart of the Order"
 
 draft:
   position: 8  # Snake draft pick position (1-indexed)

@@ -11,6 +11,7 @@ league:
   id: 5652
   num_teams: 10
   game_code: mlb
+  team_name: "My Team"
 
 draft:
   position: 8
@@ -52,6 +53,7 @@ def test_load_config_basic(sample_config):
     config = load_config(sample_config)
     assert config.league_id == 5652
     assert config.num_teams == 10
+    assert config.team_name == "My Team"
     assert config.draft_position == 8
 
 
