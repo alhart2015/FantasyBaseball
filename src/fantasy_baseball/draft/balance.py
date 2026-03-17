@@ -53,15 +53,19 @@ class CategoryBalance:
         min_hitters = 5
         min_pitchers = 3
         for cat in HITTING_CATEGORIES:
+            target = TEAM_TARGETS[cat]
             if cat == "AVG":
-                continue
-            target = TEAM_TARGETS[cat]
-            if num_hitters >= min_hitters and totals[cat] < target * WARNING_THRESHOLD:
-                warnings.append(f"{cat} is low ({totals[cat]:.0f}, target ~{target:.0f})")
+                if num_hitters >= min_hitters and totals[cat] < target * WARNING_THRESHOLD:
+                    warnings.append(f"{cat} is low ({totals[cat]:.3f}, target ~{target:.3f})")
+            else:
+                if num_hitters >= min_hitters and totals[cat] < target * WARNING_THRESHOLD:
+                    warnings.append(f"{cat} is low ({totals[cat]:.0f}, target ~{target:.0f})")
         for cat in PITCHING_CATEGORIES:
-            if cat in ("ERA", "WHIP"):
-                continue
             target = TEAM_TARGETS[cat]
-            if num_pitchers >= min_pitchers and totals[cat] < target * WARNING_THRESHOLD:
-                warnings.append(f"{cat} is low ({totals[cat]:.0f}, target ~{target:.0f})")
+            if cat in ("ERA", "WHIP"):
+                if num_pitchers >= min_pitchers and totals[cat] > target / WARNING_THRESHOLD:
+                    warnings.append(f"{cat} is high ({totals[cat]:.2f}, target ~{target:.2f})")
+            else:
+                if num_pitchers >= min_pitchers and totals[cat] < target * WARNING_THRESHOLD:
+                    warnings.append(f"{cat} is low ({totals[cat]:.0f}, target ~{target:.0f})")
         return warnings
