@@ -1,0 +1,71 @@
+import pandas as pd
+from fantasy_baseball.utils.constants import ROSTER_SLOTS
+from fantasy_baseball.utils.positions import can_fill_slot
+
+REQUIRED_POSITIONS = ["C", "1B", "2B", "3B", "SS", "OF", "P"]
+
+
+def get_recommendations(
+    board: pd.DataFrame,
+    drafted: list[str],
+    user_roster: list[str],
+    n: int = 5,
+    filled_positions: dict[str, int] | None = None,
+    picks_until_next: int | None = None,
+) -> list[dict]:
+    """Get top draft pick recommendations."""
+    available = board[~board["name"].isin(drafted)].head(n * 3)
+    if filled_positions is None:
+        filled_positions = {}
+    unfilled = _get_unfilled_positions(filled_positions)
+    recs = []
+    for _, player in available.iterrows():
+        rec = {
+            "name": player["name"],
+            "var": player["var"],
+            "best_position": player["best_position"],
+            "positions": player["positions"],
+            "player_type": player["player_type"],
+            "need_flag": False,
+            "note": "",
+        }
+        for pos in player["positions"]:
+            slot_pos = "P" if pos in ("SP", "RP") else pos
+            if slot_pos in unfilled:
+                rec["need_flag"] = True
+                rec["note"] = f"fills {slot_pos} need"
+                break
+        if picks_until_next and picks_until_next > 8:
+            pos = player["best_position"]
+            remaining_at_pos = len(available[available["best_position"] == pos])
+            if remaining_at_pos <= 3:
+                rec["note"] = f"scarce position — only {remaining_at_pos} left in top tier"
+        recs.append(rec)
+    recs.sort(key=lambda r: r["var"], reverse=True)
+    return recs[:n]
+
+
+def _get_unfilled_positions(filled: dict[str, int]) -> set[str]:
+    unfilled = set()
+    for pos, slots in ROSTER_SLOTS.items():
+        if pos in ("BN", "IL", "UTIL", "IF"):
+            continue
+        current = filled.get(pos, 0)
+        if current < slots:
+            unfilled.add(pos)
+    return unfilled
+
+
+def get_filled_positions(
+    user_roster_names: list[str], board: pd.DataFrame
+) -> dict[str, int]:
+    """Count how many of each position the user has filled."""
+    filled: dict[str, int] = {}
+    for name in user_roster_names:
+        rows = board[board["name"] == name]
+        if rows.empty:
+            continue
+        player = rows.iloc[0]
+        pos = player["best_position"]
+        filled[pos] = filled.get(pos, 0) + 1
+    return filled
