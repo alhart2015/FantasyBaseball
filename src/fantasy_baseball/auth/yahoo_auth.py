@@ -43,7 +43,7 @@ def get_league(session: OAuth2, league_id: int, game_key: str = "mlb"):
     # Find the league key matching our league_id
     league_key = None
     for lid in league_ids:
-        if str(league_id) in lid:
+        if lid.split(".l.")[-1] == str(league_id):
             league_key = lid
             break
     if league_key is None:

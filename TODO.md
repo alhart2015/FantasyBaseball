@@ -2,7 +2,7 @@
 
 ## Bugs
 
-- [ ] **League key substring match** (`yahoo_auth.py:46`) — `str(league_id) in lid` falsely matches partial IDs. Should split on `.l.` and compare exactly.
+- [x] **League key substring match** (`yahoo_auth.py:46`) — `str(league_id) in lid` falsely matches partial IDs. Should split on `.l.` and compare exactly.
 - [ ] **No warnings for ERA/WHIP/AVG** (`balance.py:56-63`) — `get_warnings()` skips all rate stats. A 5.50 ERA or .220 AVG produces no warning.
 - [ ] **Dashboard "Hide drafted" toggle is dead** (`dashboard.html:163`) — `available_players` already excludes drafted players in the state JSON, so the JS filter never matches.
 - [ ] **Roster grid shows "Filled" not player names** (`dashboard.html:226`) — The `text` variable is computed but unused; every slot just says "Filled".
