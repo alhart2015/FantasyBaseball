@@ -1,5 +1,6 @@
 import pandas as pd
 from fantasy_baseball.utils.constants import ROSTER_SLOTS
+from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 
 REQUIRED_POSITIONS = ["C", "1B", "2B", "3B", "SS", "OF", "P"]
@@ -62,7 +63,7 @@ def get_filled_positions(
     """Count how many of each position the user has filled."""
     filled: dict[str, int] = {}
     for name in user_roster_names:
-        rows = board[board["name"] == name]
+        rows = board[board["name_normalized"] == normalize_name(name)]
         if rows.empty:
             continue
         player = rows.iloc[0]

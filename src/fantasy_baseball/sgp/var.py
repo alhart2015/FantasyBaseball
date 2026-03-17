@@ -23,8 +23,10 @@ def calculate_var(
                 best_pos = lookup_pos
 
     if best_pos is None:
-        best_var = total_sgp
-        best_pos = positions[0] if positions else "UTIL"
+        # Fall back to UTIL replacement level (e.g. DH-only players).
+        util_repl = replacement_levels.get("UTIL", 0.0)
+        best_var = total_sgp - util_repl
+        best_pos = "UTIL"
 
     if return_position:
         return best_var, best_pos

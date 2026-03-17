@@ -163,11 +163,22 @@ def main():
 def _handle_user_pick(board, full_board, tracker, balance):
     """Handle the user's draft pick with recommendations."""
     filled = get_filled_positions(tracker.user_roster, full_board)
-    # Calculate gap to NEXT user turn after this one
-    save = tracker.current_pick
-    tracker.current_pick += 1
-    picks_gap = tracker.picks_until_user_turn + 1
-    tracker.current_pick = save
+    # Calculate gap to NEXT user turn after this one.
+    # Use a local variable instead of mutating tracker.current_pick so that
+    # an exception cannot leave the tracker in a corrupted state.
+    peek_pick = tracker.current_pick + 1
+    picks_gap = 1  # count the peek step itself
+    while peek_pick <= tracker.total_picks:
+        peek_round = (peek_pick - 1) // tracker.num_teams + 1
+        peek_pos = (peek_pick - 1) % tracker.num_teams + 1
+        if peek_round % 2 == 1:
+            peek_team = peek_pos
+        else:
+            peek_team = tracker.num_teams - peek_pos + 1
+        if peek_team == tracker.user_position:
+            break
+        peek_pick += 1
+        picks_gap += 1
 
     recs = get_recommendations(
         board,

@@ -157,10 +157,18 @@
         const tbody = document.getElementById("board-body");
         const userRoster = new Set(state.user_roster || []);
         const drafted = new Set(state.drafted_players || []);
+        // Build combined player list: available (not drafted) + drafted stubs
+        const availableNames = new Set((state.available_players || []).map(p => p.name));
+        const allPlayers = (state.available_players || []).map(p => Object.assign({_drafted: false}, p));
+        for (const name of (state.drafted_players || [])) {
+            if (!availableNames.has(name)) {
+                allPlayers.push({name, positions: [], var: 0, player_type: "unknown", _drafted: true});
+            }
+        }
         let rows = "";
         let rank = 0;
-        for (const p of (state.available_players || [])) {
-            const isDrafted = drafted.has(p.name);
+        for (const p of allPlayers) {
+            const isDrafted = p._drafted || drafted.has(p.name);
             if (hideDrafted && isDrafted) continue;
             // Position filter
             if (currentFilter !== "All") {
@@ -183,9 +191,12 @@
             if (p.player_type === "hitter") {
                 rows += `<td>${p.hr}</td><td>${p.r}</td><td>${p.rbi}</td><td>${p.sb}</td><td>${p.avg.toFixed(3)}</td>`;
                 rows += `<td></td><td></td><td></td><td></td><td></td>`;
-            } else {
+            } else if (p.player_type === "pitcher") {
                 rows += `<td></td><td></td><td></td><td></td><td></td>`;
                 rows += `<td>${p.w}</td><td>${p.k}</td><td>${p.sv}</td><td>${p.era.toFixed(2)}</td><td>${p.whip.toFixed(2)}</td>`;
+            } else {
+                rows += `<td></td><td></td><td></td><td></td><td></td>`;
+                rows += `<td></td><td></td><td></td><td></td><td></td>`;
             }
             rows += `</tr>`;
         }
@@ -215,6 +226,14 @@
         const container = document.getElementById("roster-grid");
         const filled = state.filled_positions || {};
         const roster = state.user_roster || [];
+        // Build per-position name lists by distributing roster names
+        // across positions in ROSTER_SLOTS order using filled counts.
+        const namesByPos = {};
+        const nameQueue = [...roster];
+        for (const pos of Object.keys(ROSTER_SLOTS)) {
+            const n = filled[pos] || 0;
+            namesByPos[pos] = nameQueue.splice(0, n);
+        }
         let html = "";
         for (const [pos, count] of Object.entries(ROSTER_SLOTS)) {
             const filledCount = filled[pos] || 0;
@@ -223,8 +242,8 @@
             for (let i = 0; i < count; i++) {
                 const isFilled = i < filledCount;
                 const cls = isFilled ? "slot-filled" : "slot-empty";
-                const text = isFilled ? (i < roster.length ? "" : "") : "---";
-                html += `<div class="roster-slot ${cls}">${isFilled ? "Filled" : "---"}</div>`;
+                const text = isFilled ? (namesByPos[pos][i] || "Filled") : "---";
+                html += `<div class="roster-slot ${cls}">${text}</div>`;
             }
             html += `</div>`;
         }

@@ -113,25 +113,41 @@ def main():
         name = player["name"]
         name_norm = normalize_name(name)
         positions = player["positions"]
+        games_this_week = player.get("games_this_week", DEFAULT_GAMES_PER_WEEK)
 
-        proj_row = None
-        for df in [hitters_proj, pitchers_proj]:
-            if df.empty:
-                continue
-            matches = df[df["name"].apply(normalize_name) == name_norm]
+        # Look up hitting and pitching projections separately so two-way
+        # players get the correct projection for each role.
+        hit_proj = None
+        if is_hitter(positions) and not hitters_proj.empty:
+            matches = hitters_proj[hitters_proj["name"].apply(normalize_name) == name_norm]
             if not matches.empty:
-                proj_row = matches.iloc[0].copy()
-                break
+                hit_proj = matches.iloc[0].copy()
+                hit_proj["positions"] = positions
+                hit_proj["player_type"] = "hitter"
+                hit_proj = scale_by_schedule(hit_proj, games_this_week)
+                roster_hitters.append(hit_proj)
 
-        if proj_row is None:
-            continue
+        pit_proj = None
+        if is_pitcher(positions) and not pitchers_proj.empty:
+            matches = pitchers_proj[pitchers_proj["name"].apply(normalize_name) == name_norm]
+            if not matches.empty:
+                pit_proj = matches.iloc[0].copy()
+                pit_proj["positions"] = positions
+                pit_proj["player_type"] = "pitcher"
+                pit_proj = scale_by_schedule(pit_proj, games_this_week)
+                roster_pitchers.append(pit_proj)
 
-        proj_row["positions"] = positions
-
-        if is_hitter(positions):
-            roster_hitters.append(proj_row)
-        if is_pitcher(positions):
-            roster_pitchers.append(proj_row)
+        if hit_proj is None and pit_proj is None:
+            # Fallback: try either projection source for players whose
+            # position list doesn't clearly indicate hitter vs pitcher.
+            for df in [hitters_proj, pitchers_proj]:
+                if df.empty:
+                    continue
+                matches = df[df["name"].apply(normalize_name) == name_norm]
+                if not matches.empty:
+                    proj_row = matches.iloc[0].copy()
+                    proj_row["positions"] = positions
+                    break
 
     print(f"Matched: {len(roster_hitters)} hitters, {len(roster_pitchers)} pitchers")
     print()
