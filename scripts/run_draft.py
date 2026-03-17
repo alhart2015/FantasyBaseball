@@ -9,6 +9,7 @@ Pre-requisites:
     3. config/league.yaml with keepers and settings
 """
 import sys
+import threading
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -23,10 +24,44 @@ from fantasy_baseball.draft.recommender import (
     get_recommendations,
     get_filled_positions,
 )
+from fantasy_baseball.draft.state import serialize_state, write_state
+from fantasy_baseball.web.app import create_app
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
+STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
+
+FLASK_PORT = 5000
+
+
+def _start_flask_server(state_path: Path) -> None:
+    """Start the Flask dashboard server in a background daemon thread."""
+    app = create_app(state_path=state_path)
+    server_thread = threading.Thread(
+        target=lambda: app.run(
+            host="127.0.0.1",
+            port=FLASK_PORT,
+            use_reloader=False,
+            debug=False,
+        ),
+        daemon=True,
+        name="flask-dashboard",
+    )
+    server_thread.start()
+    print(f"Dashboard running at http://127.0.0.1:{FLASK_PORT}")
+
+
+def _write_dashboard_state(tracker, balance, board, recs, filled):
+    """Serialize and atomically write dashboard state to disk."""
+    state = serialize_state(
+        tracker=tracker,
+        balance=balance,
+        board=board,
+        recommendations=recs,
+        filled_positions=filled,
+    )
+    write_state(state, STATE_PATH)
 
 
 def main():
@@ -69,6 +104,15 @@ def main():
                 balance.add_player(rows.iloc[0])
         tracker.draft_player(keeper["name"], is_user=is_user)
 
+    # Start Flask dashboard server
+    _start_flask_server(STATE_PATH)
+
+    # Write initial state
+    filled = get_filled_positions(tracker.user_roster, board)
+    recs = get_recommendations(board, tracker.drafted_players, tracker.user_roster,
+                               n=5, filled_positions=filled)
+    _write_dashboard_state(tracker, balance, board, recs, filled)
+
     # Show pre-draft rankings
     print("=" * 70)
     print("TOP 25 AVAILABLE PLAYERS")
@@ -91,6 +135,12 @@ def main():
             _handle_user_pick(board, tracker, balance)
         else:
             _handle_other_pick(board, tracker)
+
+        # Write updated state for the dashboard after every pick
+        filled = get_filled_positions(tracker.user_roster, board)
+        recs = get_recommendations(board, tracker.drafted_players, tracker.user_roster,
+                                   n=5, filled_positions=filled)
+        _write_dashboard_state(tracker, balance, board, recs, filled)
 
         # Show updated top 10
         print()
