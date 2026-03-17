@@ -1,1 +1,378 @@
-/* placeholder - replaced in Task 5 */
+/* Draft Dashboard - Dark Theme */
+:root {
+    --bg: #0f0f1a;
+    --panel-bg: #1a1a2e;
+    --panel-border: #16213e;
+    --accent: #e94560;
+    --text: #eee;
+    --text-secondary: #888;
+    --warning: #ff6b6b;
+    --success: #4ecca3;
+    --glow: 0 0 15px rgba(233, 69, 96, 0.5);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.4;
+}
+
+/* Layout */
+#dashboard {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 16px;
+    padding: 16px;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.col-left {
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.col-right {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow-y: auto;
+}
+
+/* Panels */
+.panel {
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 12px 16px;
+}
+
+.col-left .panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.panel-header h2 {
+    font-size: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--accent);
+}
+
+/* Filter Buttons */
+.filters {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.filter-btn {
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--text-secondary);
+    padding: 3px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: all 0.15s;
+}
+
+.filter-btn:hover {
+    border-color: var(--accent);
+    color: var(--text);
+}
+
+.filter-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+}
+
+.toggle-label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-left: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* Table */
+.table-scroll {
+    flex: 1;
+    overflow-y: auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+thead {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+th {
+    background: var(--bg);
+    color: var(--text-secondary);
+    text-align: left;
+    padding: 6px 8px;
+    font-weight: 600;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    border-bottom: 2px solid var(--panel-border);
+}
+
+td {
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--panel-border);
+    white-space: nowrap;
+}
+
+tr:hover {
+    background: rgba(233, 69, 96, 0.05);
+}
+
+tr.user-player {
+    background: rgba(233, 69, 96, 0.12);
+    font-weight: 600;
+}
+
+tr.drafted-player {
+    opacity: 0.35;
+}
+
+/* Status Panel */
+.status-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    text-align: center;
+}
+
+.status-item {
+    display: flex;
+    flex-direction: column;
+}
+
+.status-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.status-value {
+    font-size: 1.4rem;
+    font-weight: 700;
+}
+
+.your-pick-banner {
+    margin-top: 10px;
+    text-align: center;
+    font-size: 1.2rem;
+    font-weight: 800;
+    color: var(--accent);
+    letter-spacing: 0.15em;
+    padding: 6px;
+    border: 2px solid var(--accent);
+    border-radius: 6px;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+.your-pick-banner.hidden {
+    display: none;
+}
+
+.user-pick-glow {
+    box-shadow: var(--glow);
+    border-color: var(--accent);
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* Recommendations */
+.rec-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--panel-border);
+    font-size: 0.85rem;
+}
+
+.rec-item:last-child {
+    border-bottom: none;
+}
+
+.rec-rank {
+    color: var(--text-secondary);
+    width: 20px;
+}
+
+.rec-name {
+    font-weight: 600;
+    flex: 1;
+}
+
+.rec-pos {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+.rec-var {
+    color: var(--success);
+    font-weight: 600;
+    font-size: 0.8rem;
+}
+
+.need-flag {
+    color: var(--warning);
+    font-weight: 700;
+    font-size: 0.75rem;
+}
+
+.rec-note {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-style: italic;
+}
+
+/* Roster Grid */
+.roster-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+}
+
+.roster-pos {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.roster-pos-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+
+.roster-slot {
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.slot-filled {
+    color: var(--success);
+}
+
+.slot-empty {
+    color: var(--text-secondary);
+}
+
+/* Category Balance */
+.balance-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.balance-label {
+    width: 42px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.balance-track {
+    flex: 1;
+    height: 14px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 7px;
+    overflow: hidden;
+}
+
+.balance-fill {
+    height: 100%;
+    border-radius: 7px;
+    transition: width 0.3s ease;
+}
+
+.bar-normal {
+    background: var(--text-secondary);
+}
+
+.bar-good {
+    background: var(--success);
+}
+
+.bar-warning {
+    background: var(--warning);
+}
+
+.balance-value {
+    width: 50px;
+    font-size: 0.75rem;
+    text-align: right;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.balance-warnings {
+    margin-top: 6px;
+}
+
+.warning-item {
+    font-size: 0.75rem;
+    color: var(--warning);
+    padding: 2px 0;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--panel-border);
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-secondary);
+}
