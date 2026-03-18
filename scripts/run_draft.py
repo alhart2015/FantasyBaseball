@@ -135,7 +135,8 @@ def main():
                                     roster_slots=config.roster_slots)
     recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
                                n=5, filled_positions=filled,
-                               roster_slots=config.roster_slots)
+                               roster_slots=config.roster_slots,
+                               num_teams=config.num_teams)
     _write_dashboard_state(tracker, balance, board, recs, filled,
                            roster_slots=config.roster_slots,
                            roster_by_pos=by_pos,
@@ -167,7 +168,8 @@ def main():
 
             if tracker.is_user_pick:
                 _handle_user_pick(board, full_board, tracker, balance,
-                                  roster_slots=config.roster_slots)
+                                  roster_slots=config.roster_slots,
+                                  num_teams=config.num_teams)
             else:
                 _handle_other_pick(board, full_board, tracker, balance,
                                    team_names, config.team_name)
@@ -182,7 +184,8 @@ def main():
                                             roster_slots=config.roster_slots)
             recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
                                        n=5, filled_positions=filled,
-                                       roster_slots=config.roster_slots)
+                                       roster_slots=config.roster_slots,
+                                       num_teams=config.num_teams)
             _write_dashboard_state(tracker, balance, board, recs, filled,
                                    roster_slots=config.roster_slots,
                                    roster_by_pos=by_pos,
@@ -201,7 +204,8 @@ def main():
         print(f"  {name}")
 
 
-def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None):
+def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
+                      num_teams=None):
     """Handle the user's draft pick with recommendations."""
     filled = get_filled_positions(tracker.user_roster, full_board,
                                   roster_slots=roster_slots)
@@ -230,6 +234,7 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None):
         filled_positions=filled,
         picks_until_next=picks_gap,
         roster_slots=roster_slots,
+        num_teams=num_teams,
     )
 
     # Show recommendations

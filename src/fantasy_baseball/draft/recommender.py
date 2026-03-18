@@ -2,6 +2,9 @@ import pandas as pd
 from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS, IF_ELIGIBLE
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot, is_hitter
+from fantasy_baseball.sgp.replacement import calculate_replacement_levels
+from fantasy_baseball.sgp.var import calculate_var
+from fantasy_baseball.utils.constants import compute_starters_per_position
 
 REQUIRED_POSITIONS = ["C", "1B", "2B", "3B", "SS", "OF", "P"]
 
@@ -14,19 +17,41 @@ def get_recommendations(
     filled_positions: dict[str, int] | None = None,
     picks_until_next: int | None = None,
     roster_slots: dict[str, int] | None = None,
+    num_teams: int | None = None,
 ) -> list[dict]:
-    """Get top draft pick recommendations."""
+    """Get top draft pick recommendations.
+
+    Recalculates replacement levels from the undrafted pool so that
+    positional scarcity (e.g. a run on catchers) is reflected in VAR.
+    """
     if roster_slots is None:
         roster_slots = DEFAULT_ROSTER_SLOTS
     available = board[~board["player_id"].isin(drafted)]
+
+    # Recalculate replacement levels from the remaining pool so
+    # positional scarcity is properly reflected in rankings.
+    starters = compute_starters_per_position(roster_slots, num_teams)
+    repl_levels = calculate_replacement_levels(available, starters)
+    # Recompute VAR for available players using live replacement levels
+    live_var = {}
+    live_pos = {}
+    for idx, row in available.iterrows():
+        var, pos = calculate_var(row, repl_levels, return_position=True)
+        live_var[idx] = var
+        live_pos[idx] = pos
+    available = available.copy()
+    available["var"] = available.index.map(live_var)
+    available["best_position"] = available.index.map(live_pos)
+    available = available.sort_values("var", ascending=False)
+
     # Use a wider window for scarcity checks, narrower for rec candidates
     scarcity_pool = available.head(50)
-    available = available.head(n * 3)
+    candidates = available.head(n * 3)
     if filled_positions is None:
         filled_positions = {}
     unfilled = _get_unfilled_positions(filled_positions, roster_slots)
     recs = []
-    for _, player in available.iterrows():
+    for _, player in candidates.iterrows():
         rec = {
             "name": player["name"],
             "var": player["var"],
