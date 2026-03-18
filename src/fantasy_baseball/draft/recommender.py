@@ -188,22 +188,23 @@ def get_filled_positions(
     # Build capacity: how many of each slot are available
     capacity: dict[str, int] = {
         pos: count for pos, count in roster_slots.items()
-        if pos not in ("BN", "IL")
+        if pos != "IL"
     }
     filled: dict[str, int] = {pos: 0 for pos in capacity}
 
     players = _collect_roster_entries(user_roster_ids, board)
 
-    # Sort: assign players with fewer eligible slots first (most constrained)
+    # Sort: assign players with fewer eligible active slots first (most constrained)
+    active_slots = {k: v for k, v in capacity.items() if k != "BN"}
     players.sort(key=lambda p: sum(
-        1 for s in capacity if can_fill_slot(p["positions"], s)
+        1 for s in active_slots if can_fill_slot(p["positions"], s)
     ))
 
     for player in players:
         positions = player["positions"]
         assigned = False
         # Try specific slots first (C, 1B, 2B, etc.), then flex (IF, UTIL)
-        for slot in list(capacity.keys()):
+        for slot in list(active_slots.keys()):
             if slot in ("IF", "UTIL"):
                 continue
             if filled[slot] < capacity[slot] and can_fill_slot(positions, slot):
@@ -211,12 +212,13 @@ def get_filled_positions(
                 assigned = True
                 break
         if not assigned:
-            # Try flex slots
             for slot in ("IF", "UTIL"):
-                if slot in capacity and filled[slot] < capacity[slot] and can_fill_slot(positions, slot):
+                if slot in active_slots and filled[slot] < capacity[slot] and can_fill_slot(positions, slot):
                     filled[slot] += 1
                     assigned = True
                     break
+        if not assigned:
+            filled["BN"] = filled.get("BN", 0) + 1
 
     # Remove zero entries for cleaner output
     return {pos: count for pos, count in filled.items() if count > 0}
@@ -236,20 +238,23 @@ def get_roster_by_position(
 
     capacity: dict[str, int] = {
         pos: count for pos, count in roster_slots.items()
-        if pos not in ("BN", "IL")
+        if pos != "IL"
     }
     by_pos: dict[str, list[str]] = {pos: [] for pos in capacity}
 
     players = _collect_roster_entries(user_roster_ids, board)
 
+    # Sort: assign players with fewer eligible active slots first (most constrained)
+    active_slots = {k: v for k, v in capacity.items() if k != "BN"}
     players.sort(key=lambda p: sum(
-        1 for s in capacity if can_fill_slot(p["positions"], s)
+        1 for s in active_slots if can_fill_slot(p["positions"], s)
     ))
 
     for player in players:
         positions = player["positions"]
         assigned = False
-        for slot in list(capacity.keys()):
+        # Try specific slots first (C, 1B, 2B, etc.), then flex (IF, UTIL)
+        for slot in list(active_slots.keys()):
             if slot in ("IF", "UTIL"):
                 continue
             if len(by_pos[slot]) < capacity[slot] and can_fill_slot(positions, slot):
@@ -258,9 +263,11 @@ def get_roster_by_position(
                 break
         if not assigned:
             for slot in ("IF", "UTIL"):
-                if slot in capacity and len(by_pos[slot]) < capacity[slot] and can_fill_slot(positions, slot):
+                if slot in active_slots and len(by_pos[slot]) < capacity[slot] and can_fill_slot(positions, slot):
                     by_pos[slot].append(player["name"])
                     assigned = True
                     break
+        if not assigned:
+            by_pos.setdefault("BN", []).append(player["name"])
 
     return {pos: names for pos, names in by_pos.items() if names}
