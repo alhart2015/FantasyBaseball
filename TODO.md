@@ -61,3 +61,5 @@
 - [ ] **Pitcher matchup quality adjustments** — Factor opponent team batting stats into pitcher valuations. Pull opponent stats and adjust projected ERA/WHIP/K up or down based on matchup quality. Builds on the probable pitcher data from the schedule module.
 
 - [ ] **Recent performance weighting** — Blend ROS projections with a player's last-30-day actual stats to capture hot/cold streaks. Weight recent performance ~20-30% against the ROS projection baseline. Yahoo API has season stats; could also pull splits from FanGraphs.
+
+- [ ] **Trade recommender** — Propose trades that improve Hart's team AND are realistic for the other side to accept. For each league opponent, compare their roster's category strengths/weaknesses against ours using leverage. Find swaps where we send surplus in their weak categories and receive help in ours — both sides gain standings points. Rank proposals by net SGP gain for us, filtered to only include trades where the other team also gains net SGP (or at worst breaks even). Use Yahoo API to pull all team rosters and standings for the analysis.
