@@ -92,6 +92,12 @@
                 <div id="recs-list" class="recs-list"></div>
             </div>
 
+            <!-- Projected Standings -->
+            <div class="panel">
+                <div class="panel-header"><h2>Projected Standings</h2></div>
+                <div id="projections-table" class="projections-table"></div>
+            </div>
+
             <!-- Your Roster -->
             <div class="panel">
                 <div class="panel-header"><h2>Your Roster</h2></div>
@@ -200,6 +206,7 @@
                 renderStatus(currentState);
                 renderBoard(currentState);
                 renderRecs(currentState);
+                renderProjections(currentState);
                 renderRoster(currentState);
                 renderBalance(currentState);
             }
@@ -321,6 +328,37 @@
                 ${flag} ${note}
             </div>`;
         }
+        container.innerHTML = html;
+    }
+
+    // --- Projected Standings ---
+    function renderProjections(state) {
+        const container = document.getElementById("projections-table");
+        const proj = state.projections;
+        if (!proj || !proj.standings || proj.standings.length === 0) {
+            container.innerHTML = `<div class="proj-empty">Projections appear after round 1</div>`;
+            return;
+        }
+        const userRoster = state.user_roster || [];
+        // We need to identify user team — match by checking roster_slots presence
+        // The state includes picking_team for user identification
+        let html = `<table class="proj-standings">
+            <thead><tr>
+                <th>#</th><th>Team</th><th>Med</th><th>Win%</th><th>Top3</th>
+            </tr></thead><tbody>`;
+        for (const [i, s] of proj.standings.entries()) {
+            const tname = esc(s.team_name || ("Team " + s.team_num));
+            const isUser = s.is_user;
+            const cls = isUser ? "proj-user" : "";
+            html += `<tr class="${cls}">
+                <td>${i + 1}</td>
+                <td>${tname}</td>
+                <td>${s.median}</td>
+                <td>${s.win_pct}%</td>
+                <td>${s.top3_pct}%</td>
+            </tr>`;
+        }
+        html += `</tbody></table>`;
         container.innerHTML = html;
     }
 

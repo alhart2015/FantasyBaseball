@@ -27,7 +27,7 @@ body {
 /* Layout */
 #dashboard {
     display: grid;
-    grid-template-columns: 2fr 1fr;
+    grid-template-columns: 3fr 2fr;
     gap: 16px;
     padding: 16px;
     height: 100vh;
@@ -302,6 +302,35 @@ tr.drafted-player {
     color: var(--text-secondary);
     font-size: 0.75rem;
     font-style: italic;
+}
+
+/* Projected Standings */
+.proj-standings {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+
+.proj-standings th {
+    font-size: 0.7rem;
+    padding: 4px 6px;
+}
+
+.proj-standings td {
+    padding: 3px 6px;
+    border-bottom: 1px solid var(--panel-border);
+}
+
+.proj-standings tr.proj-user {
+    background: rgba(233, 69, 96, 0.15);
+    font-weight: 700;
+}
+
+.proj-empty {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    text-align: center;
+    padding: 12px 0;
 }
 
 /* Roster Grid */

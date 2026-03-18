@@ -204,6 +204,7 @@ _DELTA_KEYS = {
     "balance",
     "filled_positions",
     "roster_by_position",
+    "projections",
 }
 
 
