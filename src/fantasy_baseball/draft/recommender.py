@@ -50,6 +50,21 @@ def get_recommendations(
     if filled_positions is None:
         filled_positions = {}
     unfilled = _get_unfilled_positions(filled_positions, roster_slots)
+
+    # Ensure the best available player at each unfilled position is included
+    # so the user always sees their positional options, not just raw VAR.
+    candidate_ids = set(candidates["player_id"])
+    for slot in unfilled:
+        for _, row in available.iterrows():
+            if row["player_id"] in candidate_ids:
+                continue
+            if can_fill_slot(row["positions"], slot):
+                candidates = pd.concat(
+                    [candidates, row.to_frame().T], ignore_index=True
+                )
+                candidate_ids.add(row["player_id"])
+                break  # only need the best one per slot
+
     recs = []
     for _, player in candidates.iterrows():
         rec = {
@@ -74,8 +89,22 @@ def get_recommendations(
                 scarcity = f"scarce position — only {remaining_at_pos} left in top tier"
                 rec["note"] = f"{rec['note']}; {scarcity}" if rec["note"] else scarcity
         recs.append(rec)
+    # Guarantee at least one player per unfilled position makes the final list.
+    # Split into need-fills and pure-VAR, then merge.
+    need_recs = []
+    other_recs = []
+    seen_need_slots: set[str] = set()
+    # Sort all by VAR first
     recs.sort(key=lambda r: r["var"], reverse=True)
-    return recs[:n]
+    for rec in recs:
+        if rec["need_flag"] and rec["best_position"] not in seen_need_slots:
+            need_recs.append(rec)
+            seen_need_slots.add(rec["best_position"])
+        else:
+            other_recs.append(rec)
+    # Fill remaining slots with best-VAR players
+    result = need_recs + other_recs
+    return result[:n]
 
 
 def _get_unfilled_positions(
