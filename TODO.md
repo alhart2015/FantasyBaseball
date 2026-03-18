@@ -52,9 +52,9 @@
 
 ## High
 
-- [ ] **Weekly schedule data via MLB Stats API** — Populate `games_this_week` from real schedule data so `scale_by_schedule()` actually works. Use `MLB-StatsAPI` package (`pip install MLB-StatsAPI`) to query `statsapi.schedule(start_date, end_date)` and count games per team for the current scoring week.
+- [x] **Weekly schedule data via MLB Stats API** — Populate `games_this_week` from real schedule data so `scale_by_schedule()` actually works. Use `MLB-StatsAPI` package (`pip install MLB-StatsAPI`) to query `statsapi.schedule(start_date, end_date)` and count games per team for the current scoring week.
 
-- [ ] **Probable pitcher matchups** — Pull probable starters from the MLB Stats API schedule endpoint (`away_probable_pitcher` / `home_probable_pitcher` fields). Display matchups and flag two-start pitchers.
+- [x] **Probable pitcher matchups** — Pull probable starters from the MLB Stats API schedule endpoint (`away_probable_pitcher` / `home_probable_pitcher` fields). Display matchups and flag two-start pitchers.
 
 ## Medium
 
