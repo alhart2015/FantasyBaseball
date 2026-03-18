@@ -22,6 +22,7 @@ from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter, is_pitcher
 from fantasy_baseball.data.mlb_schedule import get_week_schedule
 
+from datetime import datetime as dt
 import pandas as pd
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
@@ -58,6 +59,80 @@ def scale_by_schedule(player: pd.Series, games_this_week: int) -> pd.Series:
                 scaled[col] = scaled[col] * scale_factor
 
     return scaled
+
+
+def print_probable_starters(
+    roster_pitchers: list[pd.Series],
+    schedule: dict | None,
+) -> None:
+    """Print probable starter matchups, flagging two-start pitchers."""
+    if not schedule or not roster_pitchers:
+        return
+
+    probable = schedule.get("probable_pitchers", [])
+    if not probable:
+        print("  No probable pitcher data available.")
+        return
+
+    # Build pitcher name -> list of starts
+    pitcher_starts: dict[str, list[dict]] = {}
+    roster_names = {normalize_name(p["name"]) for p in roster_pitchers}
+
+    for game in probable:
+        for side, team_key in [("away", "away_team"), ("home", "home_team")]:
+            pitcher_name = game.get(f"{side}_pitcher", "TBD")
+            if pitcher_name == "TBD":
+                continue
+            if normalize_name(pitcher_name) not in roster_names:
+                continue
+
+            opponent_key = "home_team" if side == "away" else "away_team"
+            indicator = "@" if side == "away" else "vs"
+            try:
+                day = dt.strptime(game["date"], "%Y-%m-%d").strftime("%a")
+            except (ValueError, KeyError):
+                day = "?"
+
+            if pitcher_name not in pitcher_starts:
+                pitcher_starts[pitcher_name] = []
+            pitcher_starts[pitcher_name].append({
+                "day": day,
+                "indicator": indicator,
+                "opponent": game[opponent_key],
+            })
+
+    if not pitcher_starts:
+        print("  No roster pitchers found in probable starters.")
+        return
+
+    two_start = {k: v for k, v in pitcher_starts.items() if len(v) >= 2}
+    one_start = {k: v for k, v in pitcher_starts.items() if len(v) == 1}
+
+    if two_start:
+        print("  ** TWO-START PITCHERS **")
+        for name, starts in sorted(two_start.items()):
+            matchups = ", ".join(
+                f"{s['day']} {s['indicator']} {s['opponent']}" for s in starts
+            )
+            print(f"    {name:<25} {matchups}")
+
+    if one_start:
+        print("  SINGLE START")
+        for name, starts in sorted(one_start.items()):
+            s = starts[0]
+            print(f"    {name:<25} {s['day']} {s['indicator']} {s['opponent']}")
+
+    # Roster pitchers with no announced start
+    announced = {normalize_name(k) for k in pitcher_starts.keys()}
+    unannounced = [
+        p["name"] for p in roster_pitchers
+        if normalize_name(p["name"]) not in announced
+        and p.get("player_type") == "pitcher"
+    ]
+    if unannounced:
+        print("  NO START ANNOUNCED")
+        for name in sorted(unannounced):
+            print(f"    {name:<25} TBD")
 
 
 def main():
@@ -235,6 +310,15 @@ def main():
             print("  BENCH:")
             for p in bench:
                 print(f"    {p['name']:<25} wSGP: {p['wsgp']:.2f}")
+        print()
+
+    # Probable starters display
+    if roster_pitchers:
+        period_label = f"{period_start} to {period_end}" if schedule else ""
+        print("=" * 60)
+        print(f"PROBABLE STARTERS THIS WEEK ({period_label})")
+        print("=" * 60)
+        print_probable_starters(roster_pitchers, schedule)
         print()
 
     # Waiver wire recommendations (Gap 1 fix)
