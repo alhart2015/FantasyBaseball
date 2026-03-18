@@ -1,14 +1,15 @@
 """Simulate a full draft to evaluate strategy.
 
 Usage:
-    python scripts/simulate_draft.py
+    python scripts/simulate_draft.py [--strategy default|nonzero_sv|avg_hedge]
 
-- Your team: always takes the top leverage-weighted recommendation.
+- Your team: picks according to the selected strategy (default: 'default').
 - Other teams: take the highest-ADP available player they can legally roster.
 - Roster limits are enforced for all teams.
 
 Outputs projected roto standings at the end.
 """
+import argparse
 import sys
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from fantasy_baseball.draft.recommender import (
     get_recommendations,
     get_filled_positions,
 )
+from fantasy_baseball.draft.strategy import STRATEGIES
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 
@@ -55,8 +57,19 @@ def _assign_slot(player_positions, filled, roster_slots):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Simulate a fantasy baseball draft")
+    parser.add_argument(
+        "--strategy", "-s", choices=list(STRATEGIES.keys()),
+        default="default",
+        help="Draft strategy for your team (default: %(default)s)",
+    )
+    args = parser.parse_args()
+
+    strategy_fn = STRATEGIES[args.strategy]
+
     config = load_config(CONFIG_PATH)
     print(f"Simulating draft | {config.team_name} at position {config.draft_position}")
+    print(f"Strategy: {args.strategy}")
     print(f"League: {config.num_teams} teams, {sum(config.roster_slots.values())} roster slots")
     print()
 
@@ -123,43 +136,25 @@ def main():
         is_user = tracker.is_user_pick
 
         if is_user:
-            # Use the full recommendation engine
-            filled = get_filled_positions(
-                tracker.user_roster_ids, full_board,
-                roster_slots=config.roster_slots,
+            # Use the selected strategy
+            pick_name, pid = strategy_fn(
+                board, full_board, tracker, balance, config, team_filled,
+                total_rounds=rounds,
             )
-            leverage = calculate_draft_leverage(
-                balance.get_totals(),
-                picks_made=len(tracker.user_roster),
-                total_picks=rounds,
-            )
-            recs = get_recommendations(
-                board, drafted=tracker.drafted_ids,
-                user_roster=tracker.user_roster,
-                n=5, filled_positions=filled,
-                roster_slots=config.roster_slots,
-                num_teams=config.num_teams,
-                draft_leverage=leverage,
-            )
-            if recs:
-                pick_name = recs[0]["name"]
-                pick_pos = recs[0]["best_position"]
-                # Find the player_id
-                rows = board[board["name"] == pick_name]
-                if not rows.empty:
-                    pid = rows.iloc[0]["player_id"]
-                else:
-                    pid = pick_name + "::unknown"
-            else:
-                # Fallback: pick best available by ADP that can be rostered anywhere
+            if pick_name is None:
+                # Fallback: pick best available by ADP
                 available_ids = set(tracker.drafted_ids)
-                pick_name, pid, pick_pos = None, "", ""
                 for _, row in adp_board.iterrows():
                     if row["player_id"] not in available_ids:
                         pick_name = row["name"]
                         pid = row["player_id"]
-                        pick_pos = row.get("best_position", "")
                         break
+
+            pick_pos = ""
+            if pid:
+                rows = board[board["player_id"] == pid]
+                if not rows.empty:
+                    pick_pos = rows.iloc[0].get("best_position", "")
 
             if pick_name:
                 tracker.draft_player(pick_name, is_user=True, player_id=pid)
