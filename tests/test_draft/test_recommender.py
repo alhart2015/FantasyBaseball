@@ -6,16 +6,21 @@ from fantasy_baseball.draft.recommender import get_recommendations
 def _make_board():
     players = [
         {"name": "Player A", "var": 15.0, "best_position": "OF", "positions": ["OF"],
-         "player_type": "hitter", "r": 100, "hr": 35, "rbi": 100, "sb": 20, "avg": .280, "ab": 550, "h": 154},
+         "player_type": "hitter", "player_id": "Player A::hitter",
+         "r": 100, "hr": 35, "rbi": 100, "sb": 20, "avg": .280, "ab": 550, "h": 154},
         {"name": "Player B", "var": 14.0, "best_position": "SS", "positions": ["SS"],
-         "player_type": "hitter", "r": 90, "hr": 25, "rbi": 80, "sb": 30, "avg": .275, "ab": 530, "h": 146},
+         "player_type": "hitter", "player_id": "Player B::hitter",
+         "r": 90, "hr": 25, "rbi": 80, "sb": 30, "avg": .275, "ab": 530, "h": 146},
         {"name": "Player C", "var": 13.0, "best_position": "C", "positions": ["C"],
-         "player_type": "hitter", "r": 70, "hr": 22, "rbi": 75, "sb": 2, "avg": .260, "ab": 480, "h": 125},
+         "player_type": "hitter", "player_id": "Player C::hitter",
+         "r": 70, "hr": 22, "rbi": 75, "sb": 2, "avg": .260, "ab": 480, "h": 125},
         {"name": "Player D", "var": 12.0, "best_position": "P", "positions": ["SP"],
-         "player_type": "pitcher", "w": 14, "k": 210, "sv": 0, "era": 3.20, "whip": 1.10, "ip": 195,
+         "player_type": "pitcher", "player_id": "Player D::pitcher",
+         "w": 14, "k": 210, "sv": 0, "era": 3.20, "whip": 1.10, "ip": 195,
          "er": 69, "bb": 50, "h_allowed": 165},
         {"name": "Player E", "var": 11.0, "best_position": "OF", "positions": ["OF"],
-         "player_type": "hitter", "r": 80, "hr": 20, "rbi": 70, "sb": 15, "avg": .270, "ab": 500, "h": 135},
+         "player_type": "hitter", "player_id": "Player E::hitter",
+         "r": 80, "hr": 20, "rbi": 70, "sb": 15, "avg": .270, "ab": 500, "h": 135},
     ]
     return pd.DataFrame(players)
 
@@ -28,7 +33,7 @@ class TestGetRecommendations:
 
     def test_excludes_drafted_players(self):
         board = _make_board()
-        recs = get_recommendations(board, drafted=["Player A"], user_roster=[], n=3)
+        recs = get_recommendations(board, drafted=["Player A::hitter"], user_roster=[], n=3)
         names = [r["name"] for r in recs]
         assert "Player A" not in names
 

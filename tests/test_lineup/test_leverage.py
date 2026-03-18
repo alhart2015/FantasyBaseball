@@ -40,9 +40,13 @@ class TestCalculateLeverage:
         assert total == pytest.approx(1.0, abs=0.01)
 
     def test_small_gap_gets_high_leverage(self):
+        """SB has a tiny defensive gap (5) vs R's attack gap (10).
+        The small SB defense gap dominates, so SB leverage > R."""
         standings = _make_standings()
         leverage = calculate_leverage(standings, "User Team")
-        assert leverage["R"] > leverage["SB"]
+        # SB defense gap (50-45=5) is smaller than R attack gap (460-450=10),
+        # so SB correctly gets higher leverage from defensive pressure.
+        assert leverage["SB"] > leverage["R"]
 
     def test_inverse_stats_correct_direction(self):
         standings = _make_standings()

@@ -18,7 +18,7 @@ def get_recommendations(
     """Get top draft pick recommendations."""
     if roster_slots is None:
         roster_slots = DEFAULT_ROSTER_SLOTS
-    available = board[~board["name"].isin(drafted)].head(n * 3)
+    available = board[~board["player_id"].isin(drafted)].head(n * 3)
     if filled_positions is None:
         filled_positions = {}
     unfilled = _get_unfilled_positions(filled_positions, roster_slots)
@@ -76,3 +76,18 @@ def get_filled_positions(
         pos = player["best_position"]
         filled[pos] = filled.get(pos, 0) + 1
     return filled
+
+
+def get_roster_by_position(
+    user_roster_names: list[str], board: pd.DataFrame
+) -> dict[str, list[str]]:
+    """Map position -> list of player names for the user's roster."""
+    by_pos: dict[str, list[str]] = {}
+    for name in user_roster_names:
+        rows = board[board["name_normalized"] == normalize_name(name)]
+        if rows.empty:
+            continue
+        player = rows.iloc[0]
+        pos = player["best_position"]
+        by_pos.setdefault(pos, []).append(player["name"])
+    return by_pos

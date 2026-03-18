@@ -43,6 +43,9 @@ def build_draft_board(
     # Add normalized name column for matching
     pool["name_normalized"] = pool["name"].apply(normalize_name)
 
+    # Unique player ID to disambiguate same-name players (e.g. Juan Soto OF vs SP)
+    pool["player_id"] = pool["name"] + "::" + pool["player_type"]
+
     return pool.sort_values("var", ascending=False).reset_index(drop=True)
 
 
@@ -50,9 +53,19 @@ def apply_keepers(board: pd.DataFrame, keepers: list[dict]) -> pd.DataFrame:
     """Remove keeper players from the draft board.
 
     Uses normalized name matching to handle accented characters.
+    When multiple board entries share a name (e.g. two different players
+    named 'Juan Soto'), only the highest-VAR entry per keeper is removed.
     """
-    keeper_names_norm = {normalize_name(k["name"]) for k in keepers}
-    return board[~board["name_normalized"].isin(keeper_names_norm)].reset_index(drop=True)
+    ids_to_remove: set[str] = set()
+    for keeper in keepers:
+        norm = normalize_name(keeper["name"])
+        matches = board[board["name_normalized"] == norm]
+        if matches.empty:
+            continue
+        # Remove only the best-VAR match (the one you'd actually keep)
+        best_idx = matches["var"].idxmax()
+        ids_to_remove.add(board.at[best_idx, "player_id"])
+    return board[~board["player_id"].isin(ids_to_remove)].reset_index(drop=True)
 
 
 def _attach_positions(df, norm_positions, default_type):

@@ -8,6 +8,9 @@ class DraftTracker:
         self.current_pick = 1
         self.drafted_players: list[str] = []
         self.user_roster: list[str] = []
+        # Parallel ID lists for filtering (disambiguates same-name players)
+        self.drafted_ids: list[str] = []
+        self.user_roster_ids: list[str] = []
 
     @property
     def total_picks(self) -> int:
@@ -55,7 +58,10 @@ class DraftTracker:
     def advance(self) -> None:
         self.current_pick += 1
 
-    def draft_player(self, name: str, is_user: bool = False) -> None:
+    def draft_player(self, name: str, is_user: bool = False,
+                     player_id: str | None = None) -> None:
         self.drafted_players.append(name)
+        self.drafted_ids.append(player_id or name)
         if is_user:
             self.user_roster.append(name)
+            self.user_roster_ids.append(player_id or name)

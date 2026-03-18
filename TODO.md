@@ -1,23 +1,47 @@
-# TODO — Bugs, Flaws & Improvements
+# TODO — Code Audit Findings (2026-03-18)
 
-## Bugs
+## Critical (will break draft day)
 
-- [x] **League key substring match** (`yahoo_auth.py:46`) — `str(league_id) in lid` falsely matches partial IDs. Should split on `.l.` and compare exactly.
-- [x] **No warnings for ERA/WHIP/AVG** (`balance.py:56-63`) — `get_warnings()` skips all rate stats. A 5.50 ERA or .220 AVG produces no warning.
-- [x] **Dashboard "Hide drafted" toggle is dead** (`dashboard.html:163`) — `available_players` already excludes drafted players in the state JSON, so the JS filter never matches.
-- [x] **Roster grid shows "Filled" not player names** (`dashboard.html:226`) — The `text` variable is computed but unused; every slot just says "Filled".
-- [x] **`scale_by_schedule()` defined but never called** (`run_lineup.py:36-58`) — Dead code. Lineup optimizer uses raw full-season projections with no weekly adjustment.
-- [x] **Two-way player projections broken** (`run_lineup.py:117-134`) — Players with hitter+pitcher positions get added to both lists with the same (first-matched) projection. Pitching value is lost.
-- [x] **DH-only players have inflated VAR** (`var.py:25-28`, `replacement.py:17-18`) — No replacement level for UTIL/DH, so `best_var = total_sgp` with nothing subtracted.
-- [x] **`_handle_user_pick` temporarily corrupts tracker state** (`run_draft.py:167-170`) — Mutates `current_pick` to peek ahead, then restores. An exception between mutation and restore permanently breaks the tracker.
-- [x] **`get_filled_positions` uses exact name match** (`recommender.py:65`) — Uses raw `name` instead of `name_normalized`. Accented names (José Ramírez) can fail to match.
+- [x] **Crash on ERA/WHIP display before pitchers drafted** — `run_draft.py:221` does `f'ERA:{totals["ERA"]:.2f}'` but `balance.get_totals()` returns `None` for ERA/WHIP when no pitchers are drafted yet. Crashes on first hitter pick.
 
-## Design Flaws
+- [x] **Failing test has wrong assertion** — `test_leverage.py:45` asserts `leverage["R"] > leverage["SB"]` but the test data has a tiny SB defense gap (5) which correctly produces higher SB leverage. Fix the test, not the code.
 
-- [x] **Leverage only looks at team above** (`leverage.py:29-32`) — Ignores teams below that could catch you. Should consider both neighbors for attack/defense leverage.
-- [x] **Silent exception swallowing in Yahoo API calls** (`yahoo_players.py:19`, `yahoo_roster.py:83`) — Network errors, auth failures, rate limits all disappear silently. Should at minimum log.
-- [x] **Hardcoded constants that should come from config** — `STARTERS_PER_POSITION`, `ROSTER_SLOTS` in recommender, and dashboard JS `ROSTER_SLOTS` are all hardcoded instead of derived from league config.
-- [x] **State JSON includes ALL available players on every 2s poll** (`state.py:25-46`) — Large payload for 300+ player pools. Board data is mostly static; should send once and use deltas.
-- [x] **No SRI hash on CDN-loaded htmx** (`dashboard.html:8`) — Missing `integrity` and `crossorigin` attributes on the unpkg script tag.
-- [x] **No validation on projection directory existence** — Neither script checks if `data/projections/` exists before building the board. Errors surface as opaque pandas exceptions.
-- [x] **`CategoryBalance` defaults ERA/WHIP to 0.0 with no pitchers** (`balance.py:42-43`) — Shows "perfect" 0.00 ERA during early draft rounds. Should display N/A or be visually distinguished.
+- [x] **Dashboard roster grid shows players in wrong positions** — `dashboard.html` `renderRoster` splices the flat `user_roster` list (draft order) across positions using filled counts. Names end up under wrong position labels.
+
+- [x] **Duplicate name collisions remove wrong players** — 68 names appear twice on the board (e.g., "Juan Soto" OF and "Juan Soto" SP are different people). `apply_keepers` and `board[~board["name"].isin(drafted)]` remove both. Same issue during draft when filtering available players.
+
+## High (will give wrong advice)
+
+- [ ] **`build_draft_board` ignores custom roster slots for replacement levels** — `board.py:35` calls `calculate_replacement_levels(pool)` without passing `starters_per_position` from config. Uses hardcoded 10-team defaults. Player VAR rankings may be wrong.
+
+- [ ] **Lineup optimizer ignores custom roster slots** — `optimizer.py:9-14` builds `HITTER_SLOTS` at module import from `DEFAULT_ROSTER_SLOTS`. `optimize_hitter_lineup` doesn't accept roster slots as a parameter.
+
+- [ ] **Dead fallback code in `run_lineup.py:141-150`** — Fallback loop finds a projection match for unmatched roster players but never appends to `roster_hitters` or `roster_pitchers`. Players silently dropped from lineup optimization.
+
+- [ ] **Recommender never flags IF or UTIL as position needs** — `recommender.py:58` `_get_unfilled_positions` skips IF and UTIL. Empty IF/UTIL slots never get `[NEED]` flags. That's 3 slots (1 IF + 2 UTIL) invisible to the need detector.
+
+- [ ] **Number selection picks from stale recommendations** — `run_draft.py:260-264` regenerates recs without `picks_until_next` when user types a number. Order can differ from what was displayed, causing wrong player selection.
+
+- [ ] **Scarcity note overwrites position need note** — `recommender.py:42-46` overwrites `note` when scarcity condition is met, losing the position need explanation while `need_flag` stays True.
+
+## Medium
+
+- [ ] **Projection dilution for players in fewer systems** — Blending weights stats by system weight even when a player appears in only 1 of 3 systems. Their counting stats get multiplied by ~0.33. Affects 2,265 hitters (mostly fringe, none with AB > 200).
+
+- [ ] **`get_filled_positions` uses VAR-optimal position, not actual roster slot** — `recommender.py:77` counts a SS/2B player as filling SS (their best VAR position) even if you'd roster them at 2B. Can misidentify which positions are filled.
+
+- [ ] **Scarcity check uses tiny window** — `recommender.py:44` counts `remaining_at_pos` in top `n * 3 = 15` players only. Produces false scarcity warnings when depth exists further down the board.
+
+- [ ] **Dashboard shows team number instead of team name** — `dashboard.html:204` `renderStatus` shows `state.picking_team` (integer) instead of the team name from config. User sees "8" instead of "Hart of the Order".
+
+- [ ] **No graceful Ctrl+C/EOF handling during draft** — Accidental Ctrl+C or Ctrl+D crashes the script with no recovery path. State is preserved in JSON but restart requires manual context recovery.
+
+- [ ] **9,278-player board is excessive** — Board includes every player from all projection systems, including minor leaguers with 0 AB. Consider filtering to meaningful projections (AB > 50 or IP > 10).
+
+## Low
+
+- [ ] **Dashboard XSS via innerHTML** — Player names inserted via `innerHTML` with template literals. Low risk (names from CSV) but not sanitized.
+
+- [ ] **No board search/sort in dashboard** — Position filters exist but no search box or column sorting. Hard to find specific players during a live draft.
+
+- [ ] **Flask dev server for dashboard** — Uses `app.run()` (single-threaded dev server). Fine for one user but could lag under rapid polling.

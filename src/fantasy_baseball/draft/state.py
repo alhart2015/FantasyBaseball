@@ -63,6 +63,7 @@ def serialize_board(board: pd.DataFrame) -> list[dict]:
     for _, row in board.iterrows():
         player: dict = {
             "name": row["name"],
+            "player_id": row.get("player_id", row["name"]),
             "positions": row["positions"] if isinstance(row["positions"], list) else [row["positions"]],
             "var": round(float(row["var"]), 1),
             "player_type": row["player_type"],
@@ -94,6 +95,7 @@ def serialize_state(
     recommendations: list[dict],
     filled_positions: dict[str, int],
     roster_slots: dict[str, int] | None = None,
+    roster_by_position: dict[str, list[str]] | None = None,
     *,
     include_available: bool = True,
 ) -> dict:
@@ -126,6 +128,7 @@ def serialize_state(
         "picks_until_user_turn": tracker.picks_until_user_turn,
         "user_roster": list(tracker.user_roster),
         "drafted_players": list(tracker.drafted_players),
+        "drafted_ids": list(tracker.drafted_ids),
         "recommendations": [
             {
                 "name": r["name"],
@@ -142,13 +145,14 @@ def serialize_state(
             "warnings": balance.get_warnings(),
         },
         "filled_positions": dict(filled_positions),
+        "roster_by_position": dict(roster_by_position) if roster_by_position else {},
     }
 
     if roster_slots is not None:
         state["roster_slots"] = dict(roster_slots)
 
     if include_available:
-        available = board[~board["name"].isin(tracker.drafted_players)]
+        available = board[~board["player_id"].isin(tracker.drafted_ids)]
         available_players = []
         for _, row in available.iterrows():
             player: dict = {
@@ -191,9 +195,11 @@ _DELTA_KEYS = {
     "picks_until_user_turn",
     "user_roster",
     "drafted_players",
+    "drafted_ids",
     "recommendations",
     "balance",
     "filled_positions",
+    "roster_by_position",
 }
 
 

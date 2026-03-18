@@ -219,7 +219,7 @@
     function renderBoard(state) {
         const tbody = document.getElementById("board-body");
         const userRoster = new Set(state.user_roster || []);
-        const drafted = new Set(state.drafted_players || []);
+        const draftedIds = new Set(state.drafted_ids || state.drafted_players || []);
 
         // Use the cached board if available; fall back to available_players
         // from a legacy full-state response.
@@ -227,23 +227,20 @@
         if (cachedBoard) {
             // Board is the complete player list. Mark each as drafted or not.
             allPlayers = cachedBoard.map(p =>
-                Object.assign({_drafted: drafted.has(p.name)}, p)
+                Object.assign({_drafted: draftedIds.has(p.player_id || p.name)}, p)
             );
         } else {
             // Fallback: use available_players from the full state response.
-            const availableNames = new Set((state.available_players || []).map(p => p.name));
             allPlayers = (state.available_players || []).map(p => Object.assign({_drafted: false}, p));
             for (const name of (state.drafted_players || [])) {
-                if (!availableNames.has(name)) {
-                    allPlayers.push({name, positions: [], var: 0, player_type: "unknown", _drafted: true});
-                }
+                allPlayers.push({name, positions: [], var: 0, player_type: "unknown", _drafted: true});
             }
         }
 
         let rows = "";
         let rank = 0;
         for (const p of allPlayers) {
-            const isDrafted = p._drafted || drafted.has(p.name);
+            const isDrafted = p._drafted || draftedIds.has(p.player_id || p.name);
             if (hideDrafted && isDrafted) continue;
             // Position filter
             if (currentFilter !== "All") {
@@ -299,25 +296,16 @@
     // --- Roster Grid ---
     function renderRoster(state) {
         const container = document.getElementById("roster-grid");
-        const filled = state.filled_positions || {};
-        const roster = state.user_roster || [];
-        // Build per-position name lists by distributing roster names
-        // across positions in ROSTER_SLOTS order using filled counts.
-        const namesByPos = {};
-        const nameQueue = [...roster];
-        for (const pos of Object.keys(ROSTER_SLOTS)) {
-            const n = filled[pos] || 0;
-            namesByPos[pos] = nameQueue.splice(0, n);
-        }
+        const byPos = state.roster_by_position || {};
         let html = "";
         for (const [pos, count] of Object.entries(ROSTER_SLOTS)) {
-            const filledCount = filled[pos] || 0;
+            const names = byPos[pos] || [];
             html += `<div class="roster-pos">`;
             html += `<div class="roster-pos-label">${pos}</div>`;
             for (let i = 0; i < count; i++) {
-                const isFilled = i < filledCount;
+                const isFilled = i < names.length;
                 const cls = isFilled ? "slot-filled" : "slot-empty";
-                const text = isFilled ? (namesByPos[pos][i] || "Filled") : "---";
+                const text = isFilled ? names[i] : "---";
                 html += `<div class="roster-slot ${cls}">${text}</div>`;
             }
             html += `</div>`;

@@ -16,6 +16,7 @@ def _make_hitter(name, positions, var, best_position, r, hr, rbi, sb, avg, ab):
         "var": var,
         "best_position": best_position,
         "player_type": "hitter",
+        "player_id": f"{name}::hitter",
         "r": r, "hr": hr, "rbi": rbi, "sb": sb, "avg": avg,
         "ab": ab, "h": int(avg * ab),
     })
@@ -28,6 +29,7 @@ def _make_pitcher(name, positions, var, best_position, w, k, sv, era, whip, ip):
         "var": var,
         "best_position": best_position,
         "player_type": "pitcher",
+        "player_id": f"{name}::pitcher",
         "w": w, "k": k, "sv": sv, "era": era, "whip": whip,
         "ip": ip, "er": era * ip / 9,
         "bb": int(whip * ip * 0.3),
@@ -49,10 +51,10 @@ class TestEndToEndSmoke:
         ])
 
         # Simulate a pick: team 1 drafts Soto
-        tracker.draft_player("Juan Soto", is_user=False)
+        tracker.draft_player("Juan Soto", is_user=False, player_id="Juan Soto::hitter")
 
         # User has Julio (pretend)
-        tracker.draft_player("Julio Rodriguez", is_user=True)
+        tracker.draft_player("Julio Rodriguez", is_user=True, player_id="Julio Rodriguez::hitter")
         balance.add_player(board.iloc[1])  # Julio
 
         recs = [{"name": "Gerrit Cole", "var": 8.2, "best_position": "P",

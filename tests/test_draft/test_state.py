@@ -14,6 +14,7 @@ def _make_hitter(name, positions, var, best_position, r, hr, rbi, sb, avg, ab):
         "var": var,
         "best_position": best_position,
         "player_type": "hitter",
+        "player_id": f"{name}::hitter",
         "r": r, "hr": hr, "rbi": rbi, "sb": sb, "avg": avg,
         "ab": ab, "h": int(avg * ab),
     })
@@ -26,6 +27,7 @@ def _make_pitcher(name, positions, var, best_position, w, k, sv, era, whip, ip):
         "var": var,
         "best_position": best_position,
         "player_type": "pitcher",
+        "player_id": f"{name}::pitcher",
         "w": w, "k": k, "sv": sv, "era": era, "whip": whip,
         "ip": ip, "er": era * ip / 9,
         "bb": int(whip * ip * 0.3),
@@ -43,8 +45,8 @@ def sample_board():
 @pytest.fixture
 def sample_tracker():
     t = DraftTracker(num_teams=10, user_position=8, rounds=22)
-    t.draft_player("Elly De La Cruz", is_user=False)
-    t.draft_player("Juan Soto", is_user=True)
+    t.draft_player("Elly De La Cruz", is_user=False, player_id="Elly De La Cruz::hitter")
+    t.draft_player("Juan Soto", is_user=True, player_id="Juan Soto::hitter")
     return t
 
 

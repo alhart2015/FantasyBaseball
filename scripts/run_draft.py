@@ -23,6 +23,7 @@ from fantasy_baseball.draft.search import find_player, split_team_and_player
 from fantasy_baseball.draft.recommender import (
     get_recommendations,
     get_filled_positions,
+    get_roster_by_position,
 )
 from fantasy_baseball.draft.state import serialize_state, serialize_board, write_state, write_board
 from fantasy_baseball.web.app import create_app
@@ -53,7 +54,8 @@ def _start_flask_server(state_path: Path) -> None:
     print(f"Dashboard running at http://127.0.0.1:{FLASK_PORT}")
 
 
-def _write_dashboard_state(tracker, balance, board, recs, filled, roster_slots=None):
+def _write_dashboard_state(tracker, balance, board, recs, filled,
+                           roster_slots=None, roster_by_pos=None):
     """Serialize and atomically write dashboard state to disk."""
     state = serialize_state(
         tracker=tracker,
@@ -62,6 +64,7 @@ def _write_dashboard_state(tracker, balance, board, recs, filled, roster_slots=N
         recommendations=recs,
         filled_positions=filled,
         roster_slots=roster_slots,
+        roster_by_position=roster_by_pos,
     )
     write_state(state, STATE_PATH)
 
@@ -98,13 +101,20 @@ def main():
     balance = CategoryBalance()
 
     # Add keeper projections to balance and mark all keepers as drafted
+    from fantasy_baseball.utils.name_utils import normalize_name
     for keeper in config.keepers:
         is_user = keeper.get("team") == config.team_name
-        if is_user:
-            rows = full_board[full_board["name"] == keeper["name"]]
-            if not rows.empty:
-                balance.add_player(rows.iloc[0])
-        tracker.draft_player(keeper["name"], is_user=is_user)
+        norm = normalize_name(keeper["name"])
+        matches = full_board[full_board["name_normalized"] == norm]
+        if not matches.empty:
+            # Pick the highest-VAR match (the real keeper, not a namesake)
+            best = matches.loc[matches["var"].idxmax()]
+            if is_user:
+                balance.add_player(best)
+            tracker.draft_player(best["name"], is_user=is_user,
+                                 player_id=best["player_id"])
+        else:
+            tracker.draft_player(keeper["name"], is_user=is_user)
 
     # Write the full board once (clients fetch via /api/board on page load)
     board_data = serialize_board(board)
@@ -116,17 +126,19 @@ def main():
 
     # Write initial state (use full_board for roster lookups so keepers are found)
     filled = get_filled_positions(tracker.user_roster, full_board)
-    recs = get_recommendations(board, tracker.drafted_players, tracker.user_roster,
+    by_pos = get_roster_by_position(tracker.user_roster, full_board)
+    recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
                                n=5, filled_positions=filled,
                                roster_slots=config.roster_slots)
     _write_dashboard_state(tracker, balance, board, recs, filled,
-                           roster_slots=config.roster_slots)
+                           roster_slots=config.roster_slots,
+                           roster_by_pos=by_pos)
 
     # Show pre-draft rankings
     print("=" * 70)
     print("TOP 25 AVAILABLE PLAYERS")
     print("=" * 70)
-    _show_top_players(board, tracker.drafted_players, 25)
+    _show_top_players(board, tracker.drafted_ids, 25)
     print()
 
     # Build team name list for input parsing
@@ -153,15 +165,17 @@ def main():
 
         # Write updated state for the dashboard after every pick
         filled = get_filled_positions(tracker.user_roster, full_board)
-        recs = get_recommendations(board, tracker.drafted_players, tracker.user_roster,
+        by_pos = get_roster_by_position(tracker.user_roster, full_board)
+        recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
                                    n=5, filled_positions=filled,
                                    roster_slots=config.roster_slots)
         _write_dashboard_state(tracker, balance, board, recs, filled,
-                               roster_slots=config.roster_slots)
+                               roster_slots=config.roster_slots,
+                               roster_by_pos=by_pos)
 
         # Show updated top 10
         print()
-        _show_top_players(board, tracker.drafted_players, 10)
+        _show_top_players(board, tracker.drafted_ids, 10)
         print()
 
         tracker.advance()
@@ -194,7 +208,7 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None):
 
     recs = get_recommendations(
         board,
-        drafted=tracker.drafted_players,
+        drafted=tracker.drafted_ids,
         user_roster=tracker.user_roster,
         n=5,
         filled_positions=filled,
@@ -217,16 +231,18 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None):
     print(f"\nROSTER BALANCE:")
     print(f"  R:{totals['R']:.0f} HR:{totals['HR']:.0f} RBI:{totals['RBI']:.0f} "
           f"SB:{totals['SB']:.0f} AVG:{totals['AVG']:.3f}")
+    era_str = f"{totals['ERA']:.2f}" if totals["ERA"] is not None else "N/A"
+    whip_str = f"{totals['WHIP']:.3f}" if totals["WHIP"] is not None else "N/A"
     print(f"  W:{totals['W']:.0f} K:{totals['K']:.0f} SV:{totals['SV']:.0f} "
-          f"ERA:{totals['ERA']:.2f} WHIP:{totals['WHIP']:.3f}")
+          f"ERA:{era_str} WHIP:{whip_str}")
     if warnings:
         print(f"  Warnings: {', '.join(warnings)}")
 
     # Get user input
-    name = _get_player_input(board, tracker)
+    name, pid = _get_player_input(board, tracker)
     if name:
-        tracker.draft_player(name, is_user=True)
-        rows = board[board["name"] == name]
+        tracker.draft_player(name, is_user=True, player_id=pid)
+        rows = board[board["player_id"] == pid] if pid else board[board["name"] == name]
         if not rows.empty:
             balance.add_player(rows.iloc[0])
         print(f"  -> Drafted: {name}")
@@ -234,24 +250,35 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None):
 
 def _handle_other_pick(board, tracker, team_names=None):
     """Handle another team's pick."""
-    name = _get_player_input(board, tracker, team_names=team_names)
+    name, pid = _get_player_input(board, tracker, team_names=team_names)
     if name:
-        tracker.draft_player(name, is_user=False)
+        tracker.draft_player(name, is_user=False, player_id=pid)
         print(f"  -> Drafted: {name}")
 
 
 def _get_player_input(board, tracker, team_names=None):
     """Get and fuzzy-match a player name from user input.
 
+    Returns (name, player_id) or (None, None).
+
     If *team_names* is provided, the input may optionally start with a team
     name prefix (e.g. "hello peanuts logan webb").  The team prefix is
     stripped before the player fuzzy search.
     """
-    available_names = board[~board["name"].isin(tracker.drafted_players)]["name"].tolist()
+    available = board[~board["player_id"].isin(tracker.drafted_ids)]
+    available_names = available["name"].tolist()
+
+    def _lookup_id(name):
+        """Find the player_id for a matched name."""
+        rows = available[available["name"] == name]
+        if not rows.empty:
+            return rows.iloc[0]["player_id"]
+        return name + "::unknown"
+
     while True:
         raw = input("\nEnter player name (or 'skip' to skip): ").strip()
         if raw.lower() == "skip":
-            return None
+            return None, None
         if raw.lower() == "quit":
             sys.exit(0)
 
@@ -259,10 +286,10 @@ def _get_player_input(board, tracker, team_names=None):
         if raw.isdigit():
             idx = int(raw) - 1
             filled = get_filled_positions(tracker.user_roster, board)
-            recs = get_recommendations(board, tracker.drafted_players, tracker.user_roster,
+            recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
                                        n=5, filled_positions=filled)
             if 0 <= idx < len(recs):
-                return recs[idx]["name"]
+                return recs[idx]["name"], _lookup_id(recs[idx]["name"])
 
         # Try to split off a team-name prefix
         player_query = raw
@@ -277,7 +304,7 @@ def _get_player_input(board, tracker, team_names=None):
         if match:
             confirm = input(f"  -> {match}? (y/n): ").strip().lower()
             if confirm in ("y", "yes", ""):
-                return match
+                return match, _lookup_id(match)
             # Show alternatives
             alts = find_player(player_query, available_names, return_top_n=5)
             if alts:
@@ -286,14 +313,15 @@ def _get_player_input(board, tracker, team_names=None):
                     print(f"    {i}. {alt}")
                 choice = input("  Pick # (or type again): ").strip()
                 if choice.isdigit() and 1 <= int(choice) <= len(alts):
-                    return alts[int(choice) - 1]
+                    picked = alts[int(choice) - 1]
+                    return picked, _lookup_id(picked)
         else:
             print("  No match found. Try again.")
 
 
-def _show_top_players(board, drafted, n):
+def _show_top_players(board, drafted_ids, n):
     """Display top N available players."""
-    available = board[~board["name"].isin(drafted)]
+    available = board[~board["player_id"].isin(drafted_ids)]
     for i, (_, p) in enumerate(available.head(n).iterrows(), 1):
         pos_str = "/".join(p["positions"][:3]) if isinstance(p["positions"], list) else p["best_position"]
         print(f"  {i:>3}. {p['name']:<25} {pos_str:<12} VAR: {p['var']:>6.1f}")
