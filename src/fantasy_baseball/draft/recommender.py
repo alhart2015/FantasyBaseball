@@ -44,11 +44,17 @@ def get_recommendations(
     available["best_position"] = available.index.map(live_pos)
     available = available.sort_values("var", ascending=False)
 
+    if filled_positions is None:
+        filled_positions = {}
+
+    # Filter out players who have no open roster slot (including BN).
+    # E.g. if all OF, UTIL, and BN spots are full, don't suggest more OFs.
+    available = _filter_rosterable(available, filled_positions, roster_slots)
+    available = available.sort_values("var", ascending=False)
+
     # Use a wider window for scarcity checks, narrower for rec candidates
     scarcity_pool = available.head(50)
     candidates = available.head(n * 3)
-    if filled_positions is None:
-        filled_positions = {}
     unfilled = _get_unfilled_positions(filled_positions, roster_slots)
 
     # Ensure the best available player at each unfilled position is included
@@ -105,6 +111,34 @@ def get_recommendations(
     # Fill remaining slots with best-VAR players
     result = need_recs + other_recs
     return result[:n]
+
+
+def _filter_rosterable(
+    available: pd.DataFrame,
+    filled: dict[str, int],
+    roster_slots: dict[str, int],
+) -> pd.DataFrame:
+    """Remove players who cannot fit in any open roster slot (including BN)."""
+    # Build open-slot counts (exclude IL — you don't draft to IL)
+    open_slots: dict[str, int] = {}
+    for pos, total in roster_slots.items():
+        if pos == "IL":
+            continue
+        current = filled.get(pos, 0)
+        if current < total:
+            open_slots[pos] = total - current
+
+    if not open_slots:
+        return available.iloc[0:0]  # no room at all
+
+    def has_open_slot(positions):
+        for slot in open_slots:
+            if can_fill_slot(positions, slot):
+                return True
+        return False
+
+    mask = available["positions"].apply(has_open_slot)
+    return available[mask]
 
 
 def _get_unfilled_positions(
