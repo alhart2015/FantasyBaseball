@@ -13,19 +13,21 @@ from fantasy_baseball.auth.yahoo_auth import get_yahoo_session, get_league
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.projections import blend_projections
 from fantasy_baseball.data.yahoo_players import load_positions_cache
-from fantasy_baseball.lineup.yahoo_roster import fetch_roster, fetch_standings, fetch_free_agents
+from fantasy_baseball.lineup.yahoo_roster import fetch_roster, fetch_standings, fetch_free_agents, fetch_scoring_period
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.lineup.waivers import scan_waivers
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter, is_pitcher
+from fantasy_baseball.data.mlb_schedule import get_week_schedule
 
 import pandas as pd
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
+SCHEDULE_PATH = PROJECT_ROOT / "data" / "weekly_schedule.json"
 
 # Default games per week if not specified
 DEFAULT_GAMES_PER_WEEK = 6
@@ -88,6 +90,18 @@ def main():
     print(f"Standings: {len(standings)} teams")
     print()
 
+    # Fetch scoring period and MLB schedule
+    print("Fetching weekly schedule...")
+    period_start, period_end = fetch_scoring_period(league)
+    schedule = get_week_schedule(period_start, period_end, SCHEDULE_PATH)
+    games_per_team = schedule["games_per_team"] if schedule else {}
+    if schedule:
+        print(f"Scoring period: {period_start} to {period_end}")
+        print(f"Schedule loaded for {len(games_per_team)} teams")
+    else:
+        print("Schedule unavailable — using default 6 games/week")
+    print()
+
     # Calculate leverage
     leverage = calculate_leverage(standings, config.team_name)
     print("CATEGORY LEVERAGE (higher = more valuable to target):")
@@ -113,7 +127,7 @@ def main():
         name = player["name"]
         name_norm = normalize_name(name)
         positions = player["positions"]
-        games_this_week = player.get("games_this_week", DEFAULT_GAMES_PER_WEEK)
+        games_this_week = DEFAULT_GAMES_PER_WEEK  # updated after projection match
 
         # Look up hitting and pitching projections separately so two-way
         # players get the correct projection for each role.
@@ -124,6 +138,8 @@ def main():
                 hit_proj = matches.iloc[0].copy()
                 hit_proj["positions"] = positions
                 hit_proj["player_type"] = "hitter"
+                team = hit_proj.get("team", "")
+                games_this_week = games_per_team.get(team, DEFAULT_GAMES_PER_WEEK)
                 hit_proj = scale_by_schedule(hit_proj, games_this_week)
                 roster_hitters.append(hit_proj)
 
@@ -134,6 +150,8 @@ def main():
                 pit_proj = matches.iloc[0].copy()
                 pit_proj["positions"] = positions
                 pit_proj["player_type"] = "pitcher"
+                team = pit_proj.get("team", "")
+                games_this_week = games_per_team.get(team, DEFAULT_GAMES_PER_WEEK)
                 pit_proj = scale_by_schedule(pit_proj, games_this_week)
                 roster_pitchers.append(pit_proj)
 
@@ -151,6 +169,8 @@ def main():
                     proj_row = matches.iloc[0].copy()
                     proj_row["positions"] = positions
                     proj_row["player_type"] = ptype
+                    team = proj_row.get("team", "")
+                    games_this_week = games_per_team.get(team, DEFAULT_GAMES_PER_WEEK)
                     proj_row = scale_by_schedule(proj_row, games_this_week)
                     dest.append(proj_row)
                     break
@@ -241,6 +261,9 @@ def main():
                         break
                 if proj_row is not None:
                     proj_row["positions"] = fa["positions"]
+                    team = proj_row.get("team", "")
+                    fa_games = games_per_team.get(team, DEFAULT_GAMES_PER_WEEK)
+                    proj_row = scale_by_schedule(proj_row, fa_games)
                     fa_players.append(proj_row)
 
         recommendations = scan_waivers(all_roster, fa_players, leverage, max_results=5)
