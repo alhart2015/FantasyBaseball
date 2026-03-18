@@ -12,6 +12,7 @@ HITTING_COLUMN_MAP: dict[str, str] = {
     "RBI": "rbi",
     "SB": "sb",
     "AVG": "avg",
+    "ADP": "adp",
     "playerid": "fg_id",
     "PlayerId": "fg_id",
 }
@@ -25,6 +26,7 @@ PITCHING_COLUMN_MAP: dict[str, str] = {
     "ERA": "era",
     "WHIP": "whip",
     "SV": "sv",
+    "ADP": "adp",
     "ER": "er",
     "BB": "bb",
     "H": "h_allowed",

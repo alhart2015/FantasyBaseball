@@ -140,6 +140,9 @@ def _blend_hitters(dfs: list[pd.DataFrame]) -> pd.DataFrame:
             row["team"] = group.loc[group["_weight"].idxmax(), "team"]
         if "fg_id" in group.columns:
             row["fg_id"] = group.iloc[0]["fg_id"]
+        if "adp" in group.columns:
+            adp_vals = group["adp"].dropna()
+            row["adp"] = adp_vals.min() if not adp_vals.empty else float("inf")
         results.append(row)
     return pd.DataFrame(results)
 
@@ -175,5 +178,8 @@ def _blend_pitchers(dfs: list[pd.DataFrame]) -> pd.DataFrame:
             row["team"] = group.loc[group["_weight"].idxmax(), "team"]
         if "fg_id" in group.columns:
             row["fg_id"] = group.iloc[0]["fg_id"]
+        if "adp" in group.columns:
+            adp_vals = group["adp"].dropna()
+            row["adp"] = adp_vals.min() if not adp_vals.empty else float("inf")
         results.append(row)
     return pd.DataFrame(results)

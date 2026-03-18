@@ -120,9 +120,8 @@ def calculate_draft_leverage(
             continue
 
         if cat in INVERSE_STATS:
-            # ERA/WHIP: lower is better. If current > target, that's bad
-            # but these are rate stats — having no pitchers doesn't mean
-            # you're "behind". Use a moderate default weight.
+            # ERA/WHIP: rate stats where lower is better.
+            # Use moderate default weight — direction is handled by SGP calc.
             raw[cat] = 1.0
         else:
             # How far behind pace? Expected = target * progress
@@ -132,9 +131,13 @@ def calculate_draft_leverage(
                 continue
             # Ratio < 1 means behind pace, > 1 means ahead
             ratio = current / expected
-            # Invert: behind pace -> high weight, ahead -> low weight
-            # Clamp to avoid extreme swings
-            raw[cat] = 1.0 / max(ratio, 0.1)
+            # Zero in a counting category is an emergency — you're punting
+            # an entire roto category. Give it a massive boost.
+            if current < epsilon and progress > 0.15:
+                raw[cat] = 1.0 / (epsilon * 0.01)
+            else:
+                # Invert: behind pace -> high weight, ahead -> low weight
+                raw[cat] = 1.0 / max(ratio, 0.1)
 
     total = sum(raw.values())
     if total > 0:
