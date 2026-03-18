@@ -206,12 +206,14 @@ def main():
                                        num_teams=config.num_teams,
                                        draft_leverage=leverage)
 
-            # Run projections at the end of each completed round
-            current_round = tracker.current_round
-            prev_round = (tracker.current_pick - 2) // config.num_teams + 1
-            if prev_round > last_projected_round and prev_round >= 1:
-                last_projected_round = prev_round
-                print(f"\n  Running projected standings (round {prev_round} complete)...")
+            # Run projections at the end of each completed round.
+            # After advance(), current_pick points to the NEXT pick.
+            # A round just completed if the previous pick was the last in its round,
+            # i.e. (current_pick - 1) is exactly divisible by num_teams.
+            just_finished_round = (tracker.current_pick - 1) // config.num_teams
+            if just_finished_round > last_projected_round and just_finished_round >= 1:
+                last_projected_round = just_finished_round
+                print(f"\n  Running projected standings (round {just_finished_round} complete)...")
                 team_rosters = reconstruct_rosters_from_draft(
                     config, full_board, tracker)
                 projection_data = run_projections(
