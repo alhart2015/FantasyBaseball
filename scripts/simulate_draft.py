@@ -213,6 +213,23 @@ def main():
 
         tracker.advance()
 
+    # Save state so monte_carlo.py can read it
+    state_path = PROJECT_ROOT / "data" / "draft_state.json"
+    state_data = {
+        "current_pick": tracker.current_pick,
+        "current_round": tracker.current_round,
+        "drafted_players": list(tracker.drafted_players),
+        "drafted_ids": list(tracker.drafted_ids),
+        "user_roster": list(tracker.user_roster),
+        "user_roster_ids": list(tracker.user_roster_ids),
+        "roster_slots": dict(config.roster_slots),
+    }
+    import json as _json
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(state_path, "w") as f:
+        _json.dump(state_data, f, indent=2)
+    print(f"\nState saved to {state_path}")
+
     # === Results ===
     print()
     print("=" * 80)
