@@ -16,6 +16,7 @@ dependencies = [
     "pyyaml>=6.0",
     "flask>=3.0",
     "waitress>=3.0",
+    "MLB-StatsAPI>=1.7",
 ]
 
 [project.optional-dependencies]
