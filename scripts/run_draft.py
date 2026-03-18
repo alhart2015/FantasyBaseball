@@ -55,7 +55,7 @@ def _start_flask_server(state_path: Path) -> None:
 
 
 def _write_dashboard_state(tracker, balance, board, recs, filled,
-                           roster_slots=None, roster_by_pos=None):
+                           roster_slots=None, roster_by_pos=None, teams=None):
     """Serialize and atomically write dashboard state to disk."""
     state = serialize_state(
         tracker=tracker,
@@ -65,6 +65,7 @@ def _write_dashboard_state(tracker, balance, board, recs, filled,
         filled_positions=filled,
         roster_slots=roster_slots,
         roster_by_position=roster_by_pos,
+        teams=teams,
     )
     write_state(state, STATE_PATH)
 
@@ -127,14 +128,17 @@ def main():
     _start_flask_server(STATE_PATH)
 
     # Write initial state (use full_board for roster lookups so keepers are found)
-    filled = get_filled_positions(tracker.user_roster, full_board)
-    by_pos = get_roster_by_position(tracker.user_roster, full_board)
+    filled = get_filled_positions(tracker.user_roster, full_board,
+                                  roster_slots=config.roster_slots)
+    by_pos = get_roster_by_position(tracker.user_roster, full_board,
+                                    roster_slots=config.roster_slots)
     recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
                                n=5, filled_positions=filled,
                                roster_slots=config.roster_slots)
     _write_dashboard_state(tracker, balance, board, recs, filled,
                            roster_slots=config.roster_slots,
-                           roster_by_pos=by_pos)
+                           roster_by_pos=by_pos,
+                           teams=config.teams)
 
     # Show pre-draft rankings
     print("=" * 70)
@@ -147,42 +151,48 @@ def main():
     team_names = list(config.teams.values()) if config.teams else []
 
     # Main draft loop
-    while tracker.current_pick <= tracker.total_picks:
-        team_num = tracker.picking_team
-        team_label = config.teams.get(team_num, f"Team {team_num}")
-        print("=" * 70)
-        print(f"ROUND {tracker.current_round} | Pick {tracker.current_pick} "
-              f"| {team_label}", end="")
-        if tracker.is_user_pick:
-            print(" *** YOUR PICK ***")
-        else:
+    try:
+        while tracker.current_pick <= tracker.total_picks:
+            team_num = tracker.picking_team
+            team_label = config.teams.get(team_num, f"Team {team_num}")
+            print("=" * 70)
+            print(f"ROUND {tracker.current_round} | Pick {tracker.current_pick} "
+                  f"| {team_label}", end="")
+            if tracker.is_user_pick:
+                print(" *** YOUR PICK ***")
+            else:
+                print()
+            print("=" * 70)
+
+            if tracker.is_user_pick:
+                _handle_user_pick(board, full_board, tracker, balance,
+                                  roster_slots=config.roster_slots)
+            else:
+                _handle_other_pick(board, tracker, team_names)
+
+            # Write updated state for the dashboard after every pick
+            filled = get_filled_positions(tracker.user_roster, full_board,
+                                          roster_slots=config.roster_slots)
+            by_pos = get_roster_by_position(tracker.user_roster, full_board,
+                                            roster_slots=config.roster_slots)
+            recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
+                                       n=5, filled_positions=filled,
+                                       roster_slots=config.roster_slots)
+            _write_dashboard_state(tracker, balance, board, recs, filled,
+                                   roster_slots=config.roster_slots,
+                                   roster_by_pos=by_pos,
+                                   teams=config.teams)
+
+            # Show updated top 10
             print()
-        print("=" * 70)
+            _show_top_players(board, tracker.drafted_ids, 10)
+            print()
 
-        if tracker.is_user_pick:
-            _handle_user_pick(board, full_board, tracker, balance,
-                              roster_slots=config.roster_slots)
-        else:
-            _handle_other_pick(board, tracker, team_names)
+            tracker.advance()
 
-        # Write updated state for the dashboard after every pick
-        filled = get_filled_positions(tracker.user_roster, full_board)
-        by_pos = get_roster_by_position(tracker.user_roster, full_board)
-        recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
-                                   n=5, filled_positions=filled,
-                                   roster_slots=config.roster_slots)
-        _write_dashboard_state(tracker, balance, board, recs, filled,
-                               roster_slots=config.roster_slots,
-                               roster_by_pos=by_pos)
-
-        # Show updated top 10
-        print()
-        _show_top_players(board, tracker.drafted_ids, 10)
-        print()
-
-        tracker.advance()
-
-    print("\nDraft complete!")
+        print("\nDraft complete!")
+    except (KeyboardInterrupt, EOFError):
+        print("\n\nDraft paused. State saved. Re-run to resume.")
     print("\nYour roster:")
     for name in tracker.user_roster:
         print(f"  {name}")
@@ -190,7 +200,8 @@ def main():
 
 def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None):
     """Handle the user's draft pick with recommendations."""
-    filled = get_filled_positions(tracker.user_roster, full_board)
+    filled = get_filled_positions(tracker.user_roster, full_board,
+                                  roster_slots=roster_slots)
     # Calculate gap to NEXT user turn after this one.
     # Use a local variable instead of mutating tracker.current_pick so that
     # an exception cannot leave the tracker in a corrupted state.

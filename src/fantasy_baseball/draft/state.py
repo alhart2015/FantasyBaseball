@@ -96,6 +96,7 @@ def serialize_state(
     filled_positions: dict[str, int],
     roster_slots: dict[str, int] | None = None,
     roster_by_position: dict[str, list[str]] | None = None,
+    teams: dict[int, str] | None = None,
     *,
     include_available: bool = True,
 ) -> dict:
@@ -124,6 +125,7 @@ def serialize_state(
         "current_pick": tracker.current_pick,
         "current_round": tracker.current_round,
         "picking_team": tracker.picking_team,
+        "picking_team_name": (teams or {}).get(tracker.picking_team, f"Team {tracker.picking_team}"),
         "is_user_pick": tracker.is_user_pick,
         "picks_until_user_turn": tracker.picks_until_user_turn,
         "user_roster": list(tracker.user_roster),
@@ -191,6 +193,7 @@ _DELTA_KEYS = {
     "current_pick",
     "current_round",
     "picking_team",
+    "picking_team_name",
     "is_user_pick",
     "picks_until_user_turn",
     "user_roster",

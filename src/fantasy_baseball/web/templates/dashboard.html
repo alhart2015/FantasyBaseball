@@ -201,7 +201,7 @@
     function renderStatus(state) {
         document.getElementById("status-round").textContent = state.current_round;
         document.getElementById("status-pick").textContent = state.current_pick;
-        document.getElementById("status-team").textContent = state.picking_team;
+        document.getElementById("status-team").textContent = state.picking_team_name || ("Team " + state.picking_team);
         document.getElementById("status-until").textContent =
             state.is_user_pick ? "NOW" : state.picks_until_user_turn + " picks";
         const banner = document.getElementById("your-pick-banner");

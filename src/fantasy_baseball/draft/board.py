@@ -26,6 +26,12 @@ def build_draft_board(
     # Build normalized lookup for positions
     norm_positions = {normalize_name(k): v for k, v in positions.items()}
 
+    # Filter to players with meaningful projections
+    if not hitters.empty:
+        hitters = hitters[hitters.get("ab", pd.Series(dtype=float)).fillna(0) >= 50]
+    if not pitchers.empty:
+        pitchers = pitchers[pitchers.get("ip", pd.Series(dtype=float)).fillna(0) >= 10]
+
     hitters = _attach_positions(hitters, norm_positions, default_type="hitter")
     pitchers = _attach_positions(pitchers, norm_positions, default_type="pitcher")
 

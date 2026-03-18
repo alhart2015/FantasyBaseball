@@ -26,17 +26,17 @@
 
 ## Medium
 
-- [ ] **Projection dilution for players in fewer systems** — Blending weights stats by system weight even when a player appears in only 1 of 3 systems. Their counting stats get multiplied by ~0.33. Affects 2,265 hitters (mostly fringe, none with AB > 200).
+- [x] **Projection dilution for players in fewer systems** — Blending weights stats by system weight even when a player appears in only 1 of 3 systems. Their counting stats get multiplied by ~0.33. Affects 2,265 hitters (mostly fringe, none with AB > 200).
 
-- [ ] **`get_filled_positions` uses VAR-optimal position, not actual roster slot** — `recommender.py:77` counts a SS/2B player as filling SS (their best VAR position) even if you'd roster them at 2B. Can misidentify which positions are filled.
+- [x] **`get_filled_positions` uses VAR-optimal position, not actual roster slot** — `recommender.py:77` counts a SS/2B player as filling SS (their best VAR position) even if you'd roster them at 2B. Can misidentify which positions are filled.
 
-- [ ] **Scarcity check uses tiny window** — `recommender.py:44` counts `remaining_at_pos` in top `n * 3 = 15` players only. Produces false scarcity warnings when depth exists further down the board.
+- [x] **Scarcity check uses tiny window** — `recommender.py:44` counts `remaining_at_pos` in top `n * 3 = 15` players only. Produces false scarcity warnings when depth exists further down the board.
 
-- [ ] **Dashboard shows team number instead of team name** — `dashboard.html:204` `renderStatus` shows `state.picking_team` (integer) instead of the team name from config. User sees "8" instead of "Hart of the Order".
+- [x] **Dashboard shows team number instead of team name** — `dashboard.html:204` `renderStatus` shows `state.picking_team` (integer) instead of the team name from config. User sees "8" instead of "Hart of the Order".
 
-- [ ] **No graceful Ctrl+C/EOF handling during draft** — Accidental Ctrl+C or Ctrl+D crashes the script with no recovery path. State is preserved in JSON but restart requires manual context recovery.
+- [x] **No graceful Ctrl+C/EOF handling during draft** — Accidental Ctrl+C or Ctrl+D crashes the script with no recovery path. State is preserved in JSON but restart requires manual context recovery.
 
-- [ ] **9,278-player board is excessive** — Board includes every player from all projection systems, including minor leaguers with 0 AB. Consider filtering to meaningful projections (AB > 50 or IP > 10).
+- [x] **9,278-player board is excessive** — Board includes every player from all projection systems, including minor leaguers with 0 AB. Consider filtering to meaningful projections (AB > 50 or IP > 10).
 
 ## Low
 

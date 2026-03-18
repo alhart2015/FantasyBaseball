@@ -18,7 +18,10 @@ def get_recommendations(
     """Get top draft pick recommendations."""
     if roster_slots is None:
         roster_slots = DEFAULT_ROSTER_SLOTS
-    available = board[~board["player_id"].isin(drafted)].head(n * 3)
+    available = board[~board["player_id"].isin(drafted)]
+    # Use a wider window for scarcity checks, narrower for rec candidates
+    scarcity_pool = available.head(50)
+    available = available.head(n * 3)
     if filled_positions is None:
         filled_positions = {}
     unfilled = _get_unfilled_positions(filled_positions, roster_slots)
@@ -41,7 +44,7 @@ def get_recommendations(
                 break
         if picks_until_next and picks_until_next > 8:
             pos = player["best_position"]
-            remaining_at_pos = len(available[available["best_position"] == pos])
+            remaining_at_pos = len(scarcity_pool[scarcity_pool["best_position"] == pos])
             if remaining_at_pos <= 3:
                 scarcity = f"scarce position — only {remaining_at_pos} left in top tier"
                 rec["note"] = f"{rec['note']}; {scarcity}" if rec["note"] else scarcity
@@ -65,30 +68,107 @@ def _get_unfilled_positions(
 
 
 def get_filled_positions(
-    user_roster_names: list[str], board: pd.DataFrame
+    user_roster_names: list[str],
+    board: pd.DataFrame,
+    roster_slots: dict[str, int] | None = None,
 ) -> dict[str, int]:
-    """Count how many of each position the user has filled."""
-    filled: dict[str, int] = {}
+    """Count how many of each roster slot the user has filled.
+
+    Greedily assigns each drafted player to their most specific open slot
+    before falling back to flex slots (IF, UTIL), so multi-position players
+    don't over-count a single position.
+    """
+    if roster_slots is None:
+        roster_slots = DEFAULT_ROSTER_SLOTS
+
+    # Build capacity: how many of each slot are available
+    capacity: dict[str, int] = {
+        pos: count for pos, count in roster_slots.items()
+        if pos not in ("BN", "IL")
+    }
+    filled: dict[str, int] = {pos: 0 for pos in capacity}
+
+    # Collect players with their positions
+    players = []
     for name in user_roster_names:
         rows = board[board["name_normalized"] == normalize_name(name)]
         if rows.empty:
             continue
         player = rows.iloc[0]
-        pos = player["best_position"]
-        filled[pos] = filled.get(pos, 0) + 1
-    return filled
+        players.append(player)
+
+    # Sort: assign players with fewer eligible slots first (most constrained)
+    players.sort(key=lambda p: sum(
+        1 for s in capacity if can_fill_slot(p["positions"], s)
+    ))
+
+    for player in players:
+        positions = player["positions"]
+        assigned = False
+        # Try specific slots first (C, 1B, 2B, etc.), then flex (IF, UTIL)
+        for slot in list(capacity.keys()):
+            if slot in ("IF", "UTIL"):
+                continue
+            if filled[slot] < capacity[slot] and can_fill_slot(positions, slot):
+                filled[slot] += 1
+                assigned = True
+                break
+        if not assigned:
+            # Try flex slots
+            for slot in ("IF", "UTIL"):
+                if slot in capacity and filled[slot] < capacity[slot] and can_fill_slot(positions, slot):
+                    filled[slot] += 1
+                    assigned = True
+                    break
+
+    # Remove zero entries for cleaner output
+    return {pos: count for pos, count in filled.items() if count > 0}
 
 
 def get_roster_by_position(
-    user_roster_names: list[str], board: pd.DataFrame
+    user_roster_names: list[str],
+    board: pd.DataFrame,
+    roster_slots: dict[str, int] | None = None,
 ) -> dict[str, list[str]]:
-    """Map position -> list of player names for the user's roster."""
-    by_pos: dict[str, list[str]] = {}
+    """Map roster slot -> list of player names for the user's roster.
+
+    Uses the same greedy slot assignment as get_filled_positions.
+    """
+    if roster_slots is None:
+        roster_slots = DEFAULT_ROSTER_SLOTS
+
+    capacity: dict[str, int] = {
+        pos: count for pos, count in roster_slots.items()
+        if pos not in ("BN", "IL")
+    }
+    by_pos: dict[str, list[str]] = {pos: [] for pos in capacity}
+
+    players = []
     for name in user_roster_names:
         rows = board[board["name_normalized"] == normalize_name(name)]
         if rows.empty:
             continue
-        player = rows.iloc[0]
-        pos = player["best_position"]
-        by_pos.setdefault(pos, []).append(player["name"])
-    return by_pos
+        players.append(rows.iloc[0])
+
+    players.sort(key=lambda p: sum(
+        1 for s in capacity if can_fill_slot(p["positions"], s)
+    ))
+
+    for player in players:
+        positions = player["positions"]
+        assigned = False
+        for slot in list(capacity.keys()):
+            if slot in ("IF", "UTIL"):
+                continue
+            if len(by_pos[slot]) < capacity[slot] and can_fill_slot(positions, slot):
+                by_pos[slot].append(player["name"])
+                assigned = True
+                break
+        if not assigned:
+            for slot in ("IF", "UTIL"):
+                if slot in capacity and len(by_pos[slot]) < capacity[slot] and can_fill_slot(positions, slot):
+                    by_pos[slot].append(player["name"])
+                    assigned = True
+                    break
+
+    return {pos: names for pos, names in by_pos.items() if names}

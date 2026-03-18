@@ -123,6 +123,10 @@ def _blend_hitters(dfs: list[pd.DataFrame]) -> pd.DataFrame:
     results = []
     for name, group in combined.groupby("name"):
         w = group["_weight"].values
+        # Renormalize weights so players in fewer systems aren't diluted
+        w_sum = w.sum()
+        if w_sum > 0:
+            w = w / w_sum
         row: dict = {"name": name, "player_type": "hitter"}
         for col in HITTING_COUNTING_COLS:
             if col in group.columns:
@@ -149,6 +153,10 @@ def _blend_pitchers(dfs: list[pd.DataFrame]) -> pd.DataFrame:
     results = []
     for name, group in combined.groupby("name"):
         w = group["_weight"].values
+        # Renormalize weights so players in fewer systems aren't diluted
+        w_sum = w.sum()
+        if w_sum > 0:
+            w = w / w_sum
         row: dict = {"name": name, "player_type": "pitcher"}
         for col in PITCHING_COUNTING_COLS:
             if col in group.columns:
