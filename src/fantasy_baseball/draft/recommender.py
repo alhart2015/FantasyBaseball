@@ -5,6 +5,7 @@ from fantasy_baseball.utils.positions import can_fill_slot, is_hitter
 from fantasy_baseball.sgp.replacement import calculate_replacement_levels
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import compute_starters_per_position
+from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 
 REQUIRED_POSITIONS = ["C", "1B", "2B", "3B", "SS", "OF", "P"]
 
@@ -18,11 +19,16 @@ def get_recommendations(
     picks_until_next: int | None = None,
     roster_slots: dict[str, int] | None = None,
     num_teams: int | None = None,
+    draft_leverage: dict[str, float] | None = None,
 ) -> list[dict]:
     """Get top draft pick recommendations.
 
     Recalculates replacement levels from the undrafted pool so that
     positional scarcity (e.g. a run on catchers) is reflected in VAR.
+
+    If *draft_leverage* is provided (category weights from balance
+    analysis), candidates are scored by leverage-weighted SGP instead
+    of raw VAR, steering picks toward categories the team needs most.
     """
     if roster_slots is None:
         roster_slots = DEFAULT_ROSTER_SLOTS
@@ -73,9 +79,15 @@ def get_recommendations(
 
     recs = []
     for _, player in candidates.iterrows():
+        # Use leverage-weighted SGP if available, otherwise raw VAR
+        if draft_leverage:
+            score = calculate_weighted_sgp(player, draft_leverage)
+        else:
+            score = player["var"]
         rec = {
             "name": player["name"],
             "var": player["var"],
+            "score": round(score, 2),
             "best_position": player["best_position"],
             "positions": player["positions"],
             "player_type": player["player_type"],
@@ -96,19 +108,19 @@ def get_recommendations(
                 rec["note"] = f"{rec['note']}; {scarcity}" if rec["note"] else scarcity
         recs.append(rec)
     # Guarantee at least one player per unfilled position makes the final list.
-    # Split into need-fills and pure-VAR, then merge.
+    # Split into need-fills and pure-score, then merge.
     need_recs = []
     other_recs = []
     seen_need_slots: set[str] = set()
-    # Sort all by VAR first
-    recs.sort(key=lambda r: r["var"], reverse=True)
+    # Sort all by score (leverage-weighted if available, else VAR)
+    recs.sort(key=lambda r: r["score"], reverse=True)
     for rec in recs:
         if rec["need_flag"] and rec["best_position"] not in seen_need_slots:
             need_recs.append(rec)
             seen_need_slots.add(rec["best_position"])
         else:
             other_recs.append(rec)
-    # Fill remaining slots with best-VAR players
+    # Fill remaining slots with best-score players
     result = need_recs + other_recs
     return result[:n]
 

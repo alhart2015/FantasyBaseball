@@ -1,5 +1,7 @@
 import pandas as pd
-from fantasy_baseball.utils.constants import HITTING_CATEGORIES, PITCHING_CATEGORIES
+from fantasy_baseball.utils.constants import (
+    HITTING_CATEGORIES, PITCHING_CATEGORIES, ALL_CATEGORIES, INVERSE_STATS,
+)
 
 TEAM_TARGETS: dict[str, float] = {
     "R": 850, "HR": 220, "RBI": 830, "SB": 100, "AVG": 0.265,
@@ -71,3 +73,70 @@ class CategoryBalance:
                 if num_pitchers >= min_pitchers and totals[cat] < target * WARNING_THRESHOLD:
                     warnings.append(f"{cat} is low ({totals[cat]:.0f}, target ~{target:.0f})")
         return warnings
+
+
+def calculate_draft_leverage(
+    totals: dict[str, float | None],
+    picks_made: int,
+    total_picks: int,
+    targets: dict[str, float] | None = None,
+) -> dict[str, float]:
+    """Calculate category leverage weights for draft recommendations.
+
+    Categories where the team is behind pace get higher weight, so the
+    recommender steers toward balanced rosters instead of stacking one
+    player type.
+
+    The weight is based on how far behind target pace the team is in
+    each category.  Early in the draft (few picks made), weights are
+    nearly equal.  As the draft progresses and imbalances grow, the
+    weights diverge.
+
+    Returns weights normalized to sum to 1.0.
+    """
+    if targets is None:
+        targets = TEAM_TARGETS
+
+    if total_picks <= 0 or picks_made <= 0:
+        # No data yet — equal weights
+        return {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
+
+    # What fraction of the draft is complete?
+    progress = min(picks_made / total_picks, 1.0)
+
+    epsilon = 0.001
+    raw: dict[str, float] = {}
+
+    for cat in ALL_CATEGORIES:
+        target = targets.get(cat, 0)
+        current = totals.get(cat)
+        if current is None:
+            # No pitchers yet — pitching cats are maximally behind
+            raw[cat] = 1.0 / epsilon
+            continue
+
+        if target == 0:
+            raw[cat] = 1.0
+            continue
+
+        if cat in INVERSE_STATS:
+            # ERA/WHIP: lower is better. If current > target, that's bad
+            # but these are rate stats — having no pitchers doesn't mean
+            # you're "behind". Use a moderate default weight.
+            raw[cat] = 1.0
+        else:
+            # How far behind pace? Expected = target * progress
+            expected = target * progress
+            if expected < epsilon:
+                raw[cat] = 1.0
+                continue
+            # Ratio < 1 means behind pace, > 1 means ahead
+            ratio = current / expected
+            # Invert: behind pace -> high weight, ahead -> low weight
+            # Clamp to avoid extreme swings
+            raw[cat] = 1.0 / max(ratio, 0.1)
+
+    total = sum(raw.values())
+    if total > 0:
+        return {cat: val / total for cat, val in raw.items()}
+    return {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}

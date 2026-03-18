@@ -18,7 +18,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from fantasy_baseball.config import load_config
 from fantasy_baseball.draft.board import build_draft_board, apply_keepers
 from fantasy_baseball.draft.tracker import DraftTracker
-from fantasy_baseball.draft.balance import CategoryBalance
+from fantasy_baseball.draft.balance import CategoryBalance, calculate_draft_leverage
 from fantasy_baseball.draft.search import find_player, split_team_and_player
 from fantasy_baseball.draft.recommender import (
     get_recommendations,
@@ -53,6 +53,14 @@ def _start_flask_server(state_path: Path) -> None:
     )
     server_thread.start()
     print(f"Dashboard running at http://127.0.0.1:{FLASK_PORT}")
+
+
+def _get_draft_leverage(balance, tracker):
+    """Compute category leverage weights from the user's current roster balance."""
+    totals = balance.get_totals()
+    picks_made = len(tracker.user_roster)
+    total_picks = tracker.rounds
+    return calculate_draft_leverage(totals, picks_made, total_picks)
 
 
 def _write_dashboard_state(tracker, balance, board, recs, filled,
@@ -133,10 +141,12 @@ def main():
                                   roster_slots=config.roster_slots)
     by_pos = get_roster_by_position(tracker.user_roster_ids, full_board,
                                     roster_slots=config.roster_slots)
+    leverage = _get_draft_leverage(balance, tracker)
     recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
                                n=5, filled_positions=filled,
                                roster_slots=config.roster_slots,
-                               num_teams=config.num_teams)
+                               num_teams=config.num_teams,
+                               draft_leverage=leverage)
     _write_dashboard_state(tracker, balance, board, recs, filled,
                            roster_slots=config.roster_slots,
                            roster_by_pos=by_pos,
@@ -182,10 +192,12 @@ def main():
                                           roster_slots=config.roster_slots)
             by_pos = get_roster_by_position(tracker.user_roster_ids, full_board,
                                             roster_slots=config.roster_slots)
+            leverage = _get_draft_leverage(balance, tracker)
             recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
                                        n=5, filled_positions=filled,
                                        roster_slots=config.roster_slots,
-                                       num_teams=config.num_teams)
+                                       num_teams=config.num_teams,
+                                       draft_leverage=leverage)
             _write_dashboard_state(tracker, balance, board, recs, filled,
                                    roster_slots=config.roster_slots,
                                    roster_by_pos=by_pos,
@@ -226,6 +238,7 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
         peek_pick += 1
         picks_gap += 1
 
+    leverage = _get_draft_leverage(balance, tracker)
     recs = get_recommendations(
         board,
         drafted=tracker.drafted_ids,
@@ -235,6 +248,7 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
         picks_until_next=picks_gap,
         roster_slots=roster_slots,
         num_teams=num_teams,
+        draft_leverage=leverage,
     )
 
     # Show recommendations
@@ -243,8 +257,9 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
     for i, rec in enumerate(recs, 1):
         flag = " [NEED]" if rec["need_flag"] else ""
         note = f" ({rec['note']})" if rec["note"] else ""
+        score_str = f" score: {rec['score']:.1f}" if rec.get("score") is not None else ""
         print(f"  {i}. {rec['name']} ({rec['best_position']}) "
-              f"VAR: {rec['var']:.1f}{flag}{note}")
+              f"VAR: {rec['var']:.1f}{score_str}{flag}{note}")
 
     # Show category balance
     totals = balance.get_totals()
