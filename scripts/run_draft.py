@@ -172,6 +172,9 @@ def main():
                 _handle_other_pick(board, full_board, tracker, balance,
                                    team_names, config.team_name)
 
+            # Advance to next pick so dashboard shows upcoming pick, not the one just made
+            tracker.advance()
+
             # Write updated state for the dashboard after every pick
             filled = get_filled_positions(tracker.user_roster, full_board,
                                           roster_slots=config.roster_slots)
@@ -189,8 +192,6 @@ def main():
             print()
             _show_top_players(board, tracker.drafted_ids, 10)
             print()
-
-            tracker.advance()
 
         print("\nDraft complete!")
     except (KeyboardInterrupt, EOFError):
