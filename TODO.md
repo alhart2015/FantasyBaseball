@@ -12,17 +12,17 @@
 
 ## High (will give wrong advice)
 
-- [ ] **`build_draft_board` ignores custom roster slots for replacement levels** — `board.py:35` calls `calculate_replacement_levels(pool)` without passing `starters_per_position` from config. Uses hardcoded 10-team defaults. Player VAR rankings may be wrong.
+- [x] **`build_draft_board` ignores custom roster slots for replacement levels** — `board.py:35` calls `calculate_replacement_levels(pool)` without passing `starters_per_position` from config. Uses hardcoded 10-team defaults. Player VAR rankings may be wrong.
 
-- [ ] **Lineup optimizer ignores custom roster slots** — `optimizer.py:9-14` builds `HITTER_SLOTS` at module import from `DEFAULT_ROSTER_SLOTS`. `optimize_hitter_lineup` doesn't accept roster slots as a parameter.
+- [x] **Lineup optimizer ignores custom roster slots** — `optimizer.py:9-14` builds `HITTER_SLOTS` at module import from `DEFAULT_ROSTER_SLOTS`. `optimize_hitter_lineup` doesn't accept roster slots as a parameter.
 
-- [ ] **Dead fallback code in `run_lineup.py:141-150`** — Fallback loop finds a projection match for unmatched roster players but never appends to `roster_hitters` or `roster_pitchers`. Players silently dropped from lineup optimization.
+- [x] **Dead fallback code in `run_lineup.py:141-150`** — Fallback loop finds a projection match for unmatched roster players but never appends to `roster_hitters` or `roster_pitchers`. Players silently dropped from lineup optimization.
 
-- [ ] **Recommender never flags IF or UTIL as position needs** — `recommender.py:58` `_get_unfilled_positions` skips IF and UTIL. Empty IF/UTIL slots never get `[NEED]` flags. That's 3 slots (1 IF + 2 UTIL) invisible to the need detector.
+- [x] **Recommender never flags IF or UTIL as position needs** — `recommender.py:58` `_get_unfilled_positions` skips IF and UTIL. Empty IF/UTIL slots never get `[NEED]` flags. That's 3 slots (1 IF + 2 UTIL) invisible to the need detector.
 
-- [ ] **Number selection picks from stale recommendations** — `run_draft.py:260-264` regenerates recs without `picks_until_next` when user types a number. Order can differ from what was displayed, causing wrong player selection.
+- [x] **Number selection picks from stale recommendations** — `run_draft.py:260-264` regenerates recs without `picks_until_next` when user types a number. Order can differ from what was displayed, causing wrong player selection.
 
-- [ ] **Scarcity note overwrites position need note** — `recommender.py:42-46` overwrites `note` when scarcity condition is met, losing the position need explanation while `need_flag` stays True.
+- [x] **Scarcity note overwrites position need note** — `recommender.py:42-46` overwrites `note` when scarcity condition is met, losing the position need explanation while `need_flag` stays True.
 
 ## Medium
 

@@ -1,23 +1,30 @@
 import numpy as np
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
-from fantasy_baseball.utils.constants import ROSTER_SLOTS
+from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS
 from fantasy_baseball.utils.positions import can_fill_slot
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 
-# Active hitter slots (excludes BN and IL)
-HITTER_SLOTS: list[str] = []
-for pos, count in ROSTER_SLOTS.items():
-    if pos in ("P", "BN", "IL"):
-        continue
-    for i in range(count):
-        HITTER_SLOTS.append(pos)
-# Result: ["C", "1B", "2B", "3B", "SS", "IF", "OF", "OF", "OF", "OF", "UTIL", "UTIL"]
+
+def _build_hitter_slots(roster_slots: dict[str, int]) -> list[str]:
+    """Build the list of active hitter slot labels from roster config."""
+    slots: list[str] = []
+    for pos, count in roster_slots.items():
+        if pos in ("P", "BN", "IL"):
+            continue
+        for _ in range(count):
+            slots.append(pos)
+    return slots
+
+
+# Default for backward compatibility
+HITTER_SLOTS: list[str] = _build_hitter_slots(DEFAULT_ROSTER_SLOTS)
 
 
 def optimize_hitter_lineup(
     hitters: list[pd.Series],
     leverage: dict[str, float],
+    roster_slots: dict[str, int] | None = None,
 ) -> dict[str, str]:
     """Assign hitters to roster slots to maximize leverage-weighted SGP.
 
@@ -29,8 +36,9 @@ def optimize_hitter_lineup(
     if not hitters:
         return {}
 
+    hitter_slots = _build_hitter_slots(roster_slots) if roster_slots else HITTER_SLOTS
     n_players = len(hitters)
-    n_slots = len(HITTER_SLOTS)
+    n_slots = len(hitter_slots)
 
     values = []
     for h in hitters:
@@ -42,7 +50,7 @@ def optimize_hitter_lineup(
 
     for i, hitter in enumerate(hitters):
         positions = hitter.get("positions", [])
-        for j, slot in enumerate(HITTER_SLOTS):
+        for j, slot in enumerate(hitter_slots):
             if can_fill_slot(positions, slot):
                 cost[i][j] = -values[i]
 
@@ -52,7 +60,7 @@ def optimize_hitter_lineup(
     assigned_slots: dict[str, int] = {}
     for r, c in zip(row_idx, col_idx):
         if r < n_players and c < n_slots and cost[r][c] < 1e8:
-            slot = HITTER_SLOTS[c]
+            slot = hitter_slots[c]
             player_name = hitters[r]["name"]
             slot_key = slot
             count = assigned_slots.get(slot, 0)

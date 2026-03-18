@@ -140,13 +140,19 @@ def main():
         if hit_proj is None and pit_proj is None:
             # Fallback: try either projection source for players whose
             # position list doesn't clearly indicate hitter vs pitcher.
-            for df in [hitters_proj, pitchers_proj]:
+            for df, ptype, dest in [
+                (hitters_proj, "hitter", roster_hitters),
+                (pitchers_proj, "pitcher", roster_pitchers),
+            ]:
                 if df.empty:
                     continue
                 matches = df[df["name"].apply(normalize_name) == name_norm]
                 if not matches.empty:
                     proj_row = matches.iloc[0].copy()
                     proj_row["positions"] = positions
+                    proj_row["player_type"] = ptype
+                    proj_row = scale_by_schedule(proj_row, games_this_week)
+                    dest.append(proj_row)
                     break
 
     print(f"Matched: {len(roster_hitters)} hitters, {len(roster_pitchers)} pitchers")
@@ -157,7 +163,8 @@ def main():
         print("=" * 60)
         print("OPTIMAL HITTER LINEUP")
         print("=" * 60)
-        lineup = optimize_hitter_lineup(roster_hitters, leverage)
+        lineup = optimize_hitter_lineup(roster_hitters, leverage,
+                                        roster_slots=config.roster_slots)
 
         # Build lookup for reasoning (Gap 2 fix)
         hitter_wsgp = {}

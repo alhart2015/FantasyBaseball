@@ -85,6 +85,8 @@ def main():
         systems=config.projection_systems,
         weights=config.projection_weights or None,
         sgp_overrides=config.sgp_overrides or None,
+        roster_slots=config.roster_slots or None,
+        num_teams=config.num_teams,
     )
     board = apply_keepers(full_board, config.keepers)
     print(f"Draft pool: {len(board)} players (after removing {len(config.keepers)} keepers)")
@@ -239,7 +241,7 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None):
         print(f"  Warnings: {', '.join(warnings)}")
 
     # Get user input
-    name, pid = _get_player_input(board, tracker)
+    name, pid = _get_player_input(board, tracker, current_recs=recs)
     if name:
         tracker.draft_player(name, is_user=True, player_id=pid)
         rows = board[board["player_id"] == pid] if pid else board[board["name"] == name]
@@ -256,10 +258,13 @@ def _handle_other_pick(board, tracker, team_names=None):
         print(f"  -> Drafted: {name}")
 
 
-def _get_player_input(board, tracker, team_names=None):
+def _get_player_input(board, tracker, team_names=None, current_recs=None):
     """Get and fuzzy-match a player name from user input.
 
     Returns (name, player_id) or (None, None).
+
+    If *current_recs* is provided, number selection uses those recs directly
+    (matching what was displayed) instead of regenerating them.
 
     If *team_names* is provided, the input may optionally start with a team
     name prefix (e.g. "hello peanuts logan webb").  The team prefix is
@@ -285,9 +290,12 @@ def _get_player_input(board, tracker, team_names=None):
         # Try number selection (for recommendations)
         if raw.isdigit():
             idx = int(raw) - 1
-            filled = get_filled_positions(tracker.user_roster, board)
-            recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
-                                       n=5, filled_positions=filled)
+            recs = current_recs
+            if recs is None:
+                filled = get_filled_positions(tracker.user_roster, board)
+                recs = get_recommendations(board, tracker.drafted_ids,
+                                           tracker.user_roster, n=5,
+                                           filled_positions=filled)
             if 0 <= idx < len(recs):
                 return recs[idx]["name"], _lookup_id(recs[idx]["name"])
 

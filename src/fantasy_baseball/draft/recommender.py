@@ -1,7 +1,7 @@
 import pandas as pd
-from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS
+from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS, IF_ELIGIBLE
 from fantasy_baseball.utils.name_utils import normalize_name
-from fantasy_baseball.utils.positions import can_fill_slot
+from fantasy_baseball.utils.positions import can_fill_slot, is_hitter
 
 REQUIRED_POSITIONS = ["C", "1B", "2B", "3B", "SS", "OF", "P"]
 
@@ -33,17 +33,18 @@ def get_recommendations(
             "need_flag": False,
             "note": "",
         }
-        for pos in player["positions"]:
-            slot_pos = "P" if pos in ("SP", "RP") else pos
-            if slot_pos in unfilled:
+        positions = player["positions"]
+        for slot in unfilled:
+            if can_fill_slot(positions, slot):
                 rec["need_flag"] = True
-                rec["note"] = f"fills {slot_pos} need"
+                rec["note"] = f"fills {slot} need"
                 break
         if picks_until_next and picks_until_next > 8:
             pos = player["best_position"]
             remaining_at_pos = len(available[available["best_position"] == pos])
             if remaining_at_pos <= 3:
-                rec["note"] = f"scarce position — only {remaining_at_pos} left in top tier"
+                scarcity = f"scarce position — only {remaining_at_pos} left in top tier"
+                rec["note"] = f"{rec['note']}; {scarcity}" if rec["note"] else scarcity
         recs.append(rec)
     recs.sort(key=lambda r: r["var"], reverse=True)
     return recs[:n]
@@ -55,7 +56,7 @@ def _get_unfilled_positions(
 ) -> set[str]:
     unfilled = set()
     for pos, slots in roster_slots.items():
-        if pos in ("BN", "IL", "UTIL", "IF"):
+        if pos in ("BN", "IL"):
             continue
         current = filled.get(pos, 0)
         if current < slots:
