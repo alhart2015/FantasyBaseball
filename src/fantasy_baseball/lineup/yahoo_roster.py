@@ -1,5 +1,6 @@
 """Fetch roster, standings, and free agents from Yahoo Fantasy API."""
 
+import datetime
 import logging
 
 logger = logging.getLogger(__name__)
@@ -96,3 +97,24 @@ def fetch_free_agents(league, position: str, count: int = 50) -> list[dict]:
             position,
         )
         return []
+
+
+def fetch_scoring_period(league) -> tuple[str, str]:
+    """Get the current Yahoo scoring period date range.
+
+    Returns (start_date, end_date) as "YYYY-MM-DD" strings.
+    Falls back to Monday-Sunday of the current week on error.
+    """
+    try:
+        week = league.current_week()
+        start, end = league.week_date_range(week)
+        return start.isoformat(), end.isoformat()
+    except Exception:
+        logger.warning(
+            "Failed to get Yahoo scoring period; using Mon-Sun fallback",
+            exc_info=True,
+        )
+        today = datetime.date.today()
+        monday = today - datetime.timedelta(days=today.weekday())
+        sunday = monday + datetime.timedelta(days=6)
+        return monday.isoformat(), sunday.isoformat()
