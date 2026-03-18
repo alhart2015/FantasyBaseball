@@ -129,6 +129,7 @@ def serialize_state(
         "is_user_pick": tracker.is_user_pick,
         "picks_until_user_turn": tracker.picks_until_user_turn,
         "user_roster": list(tracker.user_roster),
+        "user_roster_ids": list(tracker.user_roster_ids),
         "drafted_players": list(tracker.drafted_players),
         "drafted_ids": list(tracker.drafted_ids),
         "recommendations": [

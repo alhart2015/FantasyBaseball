@@ -129,9 +129,9 @@ def main():
     _start_flask_server(STATE_PATH)
 
     # Write initial state (use full_board for roster lookups so keepers are found)
-    filled = get_filled_positions(tracker.user_roster, full_board,
+    filled = get_filled_positions(tracker.user_roster_ids, full_board,
                                   roster_slots=config.roster_slots)
-    by_pos = get_roster_by_position(tracker.user_roster, full_board,
+    by_pos = get_roster_by_position(tracker.user_roster_ids, full_board,
                                     roster_slots=config.roster_slots)
     recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
                                n=5, filled_positions=filled,
@@ -178,9 +178,9 @@ def main():
             tracker.advance()
 
             # Write updated state for the dashboard after every pick
-            filled = get_filled_positions(tracker.user_roster, full_board,
+            filled = get_filled_positions(tracker.user_roster_ids, full_board,
                                           roster_slots=config.roster_slots)
-            by_pos = get_roster_by_position(tracker.user_roster, full_board,
+            by_pos = get_roster_by_position(tracker.user_roster_ids, full_board,
                                             roster_slots=config.roster_slots)
             recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
                                        n=5, filled_positions=filled,
@@ -207,7 +207,7 @@ def main():
 def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
                       num_teams=None):
     """Handle the user's draft pick with recommendations."""
-    filled = get_filled_positions(tracker.user_roster, full_board,
+    filled = get_filled_positions(tracker.user_roster_ids, full_board,
                                   roster_slots=roster_slots)
     # Calculate gap to NEXT user turn after this one.
     # Use a local variable instead of mutating tracker.current_pick so that
@@ -327,7 +327,7 @@ def _get_player_input(board, tracker, team_names=None, current_recs=None):
             idx = int(raw) - 1
             recs = current_recs
             if recs is None:
-                filled = get_filled_positions(tracker.user_roster, board)
+                filled = get_filled_positions(tracker.user_roster_ids, board)
                 recs = get_recommendations(board, tracker.drafted_ids,
                                            tracker.user_roster, n=5,
                                            filled_positions=filled)

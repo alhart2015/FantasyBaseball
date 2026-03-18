@@ -155,8 +155,24 @@ def _get_unfilled_positions(
     return unfilled
 
 
+def _collect_roster_entries(
+    user_roster_ids: list[str], board: pd.DataFrame,
+) -> list[pd.Series]:
+    """Look up board entries for each roster player by player_id."""
+    players: list[pd.Series] = []
+    for pid in user_roster_ids:
+        rows = board[board["player_id"] == pid]
+        if rows.empty:
+            # Fallback: try name match (for entries without player_id)
+            name = pid.split("::")[0] if "::" in pid else pid
+            rows = board[board["name_normalized"] == normalize_name(name)]
+        if not rows.empty:
+            players.append(rows.iloc[0])
+    return players
+
+
 def get_filled_positions(
-    user_roster_names: list[str],
+    user_roster_ids: list[str],
     board: pd.DataFrame,
     roster_slots: dict[str, int] | None = None,
 ) -> dict[str, int]:
@@ -176,14 +192,7 @@ def get_filled_positions(
     }
     filled: dict[str, int] = {pos: 0 for pos in capacity}
 
-    # Collect players with their positions
-    players = []
-    for name in user_roster_names:
-        rows = board[board["name_normalized"] == normalize_name(name)]
-        if rows.empty:
-            continue
-        player = rows.iloc[0]
-        players.append(player)
+    players = _collect_roster_entries(user_roster_ids, board)
 
     # Sort: assign players with fewer eligible slots first (most constrained)
     players.sort(key=lambda p: sum(
@@ -214,7 +223,7 @@ def get_filled_positions(
 
 
 def get_roster_by_position(
-    user_roster_names: list[str],
+    user_roster_ids: list[str],
     board: pd.DataFrame,
     roster_slots: dict[str, int] | None = None,
 ) -> dict[str, list[str]]:
@@ -231,12 +240,7 @@ def get_roster_by_position(
     }
     by_pos: dict[str, list[str]] = {pos: [] for pos in capacity}
 
-    players = []
-    for name in user_roster_names:
-        rows = board[board["name_normalized"] == normalize_name(name)]
-        if rows.empty:
-            continue
-        players.append(rows.iloc[0])
+    players = _collect_roster_entries(user_roster_ids, board)
 
     players.sort(key=lambda p: sum(
         1 for s in capacity if can_fill_slot(p["positions"], s)
