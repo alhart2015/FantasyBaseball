@@ -36,6 +36,23 @@ STAT_VARIANCE = 0.12  # 12% std dev around projection
 
 HITTING_COUNTING = ["r", "hr", "rbi", "sb", "h", "ab"]
 PITCHING_COUNTING = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
+
+# Replacement-level full-season stats for waiver pickups.
+# Derived from typical replacement-level player in a 10-team league.
+# Hitter: ~500 AB, .250 AVG, modest counting stats
+REPLACEMENT_HITTER = {
+    "r": 55, "hr": 12, "rbi": 50, "sb": 5, "h": 125, "ab": 500,
+}
+# Pitcher (SP): ~140 IP, 4.50 ERA, 1.35 WHIP, ~7 W, ~120 K
+REPLACEMENT_SP = {
+    "w": 7, "k": 120, "sv": 0, "ip": 140,
+    "er": 70, "bb": 50, "h_allowed": 139,
+}
+# Pitcher (RP/closer): ~60 IP, 4.50 ERA, 1.35 WHIP, ~2 W, ~55 K, ~5 SV
+REPLACEMENT_RP = {
+    "w": 2, "k": 55, "sv": 5, "ip": 60,
+    "er": 30, "bb": 21, "h_allowed": 60,
+}
 ALL_CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
 INVERSE = {"ERA", "WHIP"}
 
@@ -92,19 +109,22 @@ def simulate_season(team_players, rng):
         # Apply injuries and variance to hitters
         adj_hitters = []
         for h in hitters:
-            scale = 1.0
+            frac_missed = 0.0
             if rng.random() < INJURY_PROB["hitter"]:
                 lo, hi = INJURY_SEVERITY["hitter"]
                 frac_missed = rng.uniform(lo, hi)
-                scale = 1.0 - frac_missed
                 team_injuries.append((h["name"], frac_missed))
 
             row = {}
+            scale = 1.0 - frac_missed
             for col in HITTING_COUNTING:
                 base = h.get(col, 0)
-                # Apply variance then injury scaling
+                # Player's contribution (variance + injury scaling)
                 varied = max(0, base * (1.0 + rng.normal(0, STAT_VARIANCE)))
-                row[col] = varied * scale
+                player_contrib = varied * scale
+                # Replacement player fills in for missed time
+                repl_contrib = REPLACEMENT_HITTER.get(col, 0) * frac_missed
+                row[col] = player_contrib + repl_contrib
             row["player_type"] = "hitter"
             row["name"] = h["name"]
             adj_hitters.append(row)
@@ -112,18 +132,24 @@ def simulate_season(team_players, rng):
         # Apply injuries and variance to pitchers
         adj_pitchers = []
         for p in pitchers:
-            scale = 1.0
+            frac_missed = 0.0
             if rng.random() < INJURY_PROB["pitcher"]:
                 lo, hi = INJURY_SEVERITY["pitcher"]
                 frac_missed = rng.uniform(lo, hi)
-                scale = 1.0 - frac_missed
                 team_injuries.append((p["name"], frac_missed))
 
+            # Choose replacement profile based on whether this is a closer
+            is_closer = p.get("sv", 0) >= 15
+            repl_profile = REPLACEMENT_RP if is_closer else REPLACEMENT_SP
+
             row = {}
+            scale = 1.0 - frac_missed
             for col in PITCHING_COUNTING:
                 base = p.get(col, 0)
                 varied = max(0, base * (1.0 + rng.normal(0, STAT_VARIANCE)))
-                row[col] = varied * scale
+                player_contrib = varied * scale
+                repl_contrib = repl_profile.get(col, 0) * frac_missed
+                row[col] = player_contrib + repl_contrib
             row["player_type"] = "pitcher"
             row["name"] = p["name"]
             adj_pitchers.append(row)
