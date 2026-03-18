@@ -45,3 +45,19 @@
 - [x] **No board search/sort in dashboard** — Position filters exist but no search box or column sorting. Hard to find specific players during a live draft.
 
 - [x] **Flask dev server for dashboard** — Uses `app.run()` (single-threaded dev server). Fine for one user but could lag under rapid polling.
+
+---
+
+# TODO — In-Season Enhancements
+
+## High
+
+- [ ] **Weekly schedule data via MLB Stats API** — Populate `games_this_week` from real schedule data so `scale_by_schedule()` actually works. Use `MLB-StatsAPI` package (`pip install MLB-StatsAPI`) to query `statsapi.schedule(start_date, end_date)` and count games per team for the current scoring week.
+
+- [ ] **Probable pitcher matchups** — Pull probable starters from the MLB Stats API schedule endpoint (`away_probable_pitcher` / `home_probable_pitcher` fields). Display matchups and flag two-start pitchers.
+
+## Medium
+
+- [ ] **Pitcher matchup quality adjustments** — Factor opponent team batting stats into pitcher valuations. Pull opponent stats and adjust projected ERA/WHIP/K up or down based on matchup quality. Builds on the probable pitcher data from the schedule module.
+
+- [ ] **Recent performance weighting** — Blend ROS projections with a player's last-30-day actual stats to capture hot/cold streaks. Weight recent performance ~20-30% against the ROS projection baseline. Yahoo API has season stats; could also pull splits from FanGraphs.
