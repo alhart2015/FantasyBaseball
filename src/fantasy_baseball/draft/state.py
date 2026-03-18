@@ -282,14 +282,29 @@ def write_board(board_data: list[dict], path: Path) -> None:
 
 
 def _atomic_write(data, path: Path) -> None:
-    """Write *data* as JSON to *path* using atomic tmp+rename."""
+    """Write *data* as JSON to *path* using atomic tmp+rename.
+
+    On Windows, os.replace can fail with PermissionError if another
+    process has the target file open.  Retry a few times with a short
+    delay before giving up.
+    """
+    import time
+
     fd, tmp_path = tempfile.mkstemp(
         dir=path.parent, suffix=".tmp", prefix="draft_state_"
     )
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(data, f, indent=2)
-        os.replace(tmp_path, path)
+        for attempt in range(5):
+            try:
+                os.replace(tmp_path, path)
+                return
+            except PermissionError:
+                if attempt < 4:
+                    time.sleep(0.1)
+                else:
+                    raise
     except BaseException:
         try:
             os.unlink(tmp_path)
