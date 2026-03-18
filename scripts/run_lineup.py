@@ -74,9 +74,10 @@ def print_probable_starters(
         print("  No probable pitcher data available.")
         return
 
-    # Build pitcher name -> list of starts
+    # Build pitcher name -> list of starts, and name -> team lookup
     pitcher_starts: dict[str, list[dict]] = {}
     roster_names = {normalize_name(p["name"]) for p in roster_pitchers}
+    pitcher_teams = {p["name"]: p.get("team", "") for p in roster_pitchers}
 
     for game in probable:
         for side, team_key in [("away", "away_team"), ("home", "home_team")]:
@@ -111,23 +112,24 @@ def print_probable_starters(
     if two_start:
         print("  ** TWO-START PITCHERS **")
         for name, starts in sorted(two_start.items()):
+            team = pitcher_teams.get(name, "")
             matchups = ", ".join(
                 f"{s['day']} {s['indicator']} {s['opponent']}" for s in starts
             )
-            print(f"    {name:<25} {matchups}")
+            print(f"    {name:<25} {team:<5} {matchups}")
 
     if one_start:
         print("  SINGLE START")
         for name, starts in sorted(one_start.items()):
+            team = pitcher_teams.get(name, "")
             s = starts[0]
-            print(f"    {name:<25} {s['day']} {s['indicator']} {s['opponent']}")
+            print(f"    {name:<25} {team:<5} {s['day']} {s['indicator']} {s['opponent']}")
 
     # Roster pitchers with no announced start
     announced = {normalize_name(k) for k in pitcher_starts.keys()}
     unannounced = [
         p["name"] for p in roster_pitchers
         if normalize_name(p["name"]) not in announced
-        and p.get("player_type") == "pitcher"
     ]
     if unannounced:
         print("  NO START ANNOUNCED")
