@@ -169,7 +169,8 @@ def main():
                 _handle_user_pick(board, full_board, tracker, balance,
                                   roster_slots=config.roster_slots)
             else:
-                _handle_other_pick(board, tracker, team_names)
+                _handle_other_pick(board, full_board, tracker, balance,
+                                   team_names, config.team_name)
 
             # Write updated state for the dashboard after every pick
             filled = get_filled_positions(tracker.user_roster, full_board,
@@ -253,7 +254,7 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None):
         print(f"  Warnings: {', '.join(warnings)}")
 
     # Get user input
-    name, pid = _get_player_input(board, tracker, current_recs=recs)
+    name, pid, _team = _get_player_input(board, tracker, current_recs=recs)
     if name:
         tracker.draft_player(name, is_user=True, player_id=pid)
         rows = board[board["player_id"] == pid] if pid else board[board["name"] == name]
@@ -262,18 +263,34 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None):
         print(f"  -> Drafted: {name}")
 
 
-def _handle_other_pick(board, tracker, team_names=None):
-    """Handle another team's pick."""
-    name, pid = _get_player_input(board, tracker, team_names=team_names)
+def _handle_other_pick(board, full_board, tracker, balance,
+                       team_names=None, user_team_name=None):
+    """Handle another team's pick (or a traded pick for the user's team)."""
+    name, pid, matched_team = _get_player_input(board, tracker,
+                                                team_names=team_names)
     if name:
-        tracker.draft_player(name, is_user=False, player_id=pid)
-        print(f"  -> Drafted: {name}")
+        is_user = (matched_team is not None
+                   and user_team_name is not None
+                   and matched_team == user_team_name)
+        tracker.draft_player(name, is_user=is_user, player_id=pid)
+        if is_user:
+            rows = board[board["player_id"] == pid] if pid else board[board["name"] == name]
+            if rows.empty and pid:
+                rows = full_board[full_board["player_id"] == pid]
+            if not rows.empty:
+                balance.add_player(rows.iloc[0])
+            print(f"  -> Drafted: {name} (YOUR PICK via trade)")
+        else:
+            print(f"  -> Drafted: {name}")
 
 
 def _get_player_input(board, tracker, team_names=None, current_recs=None):
     """Get and fuzzy-match a player name from user input.
 
-    Returns (name, player_id) or (None, None).
+    Returns (name, player_id, team) or (None, None, None).
+
+    *team* is the matched team-name prefix (e.g. "Hart of the Order") if
+    the user typed one, otherwise None.
 
     If *current_recs* is provided, number selection uses those recs directly
     (matching what was displayed) instead of regenerating them.
@@ -295,7 +312,7 @@ def _get_player_input(board, tracker, team_names=None, current_recs=None):
     while True:
         raw = input("\nEnter player name (or 'skip' to skip): ").strip()
         if raw.lower() == "skip":
-            return None, None
+            return None, None, None
         if raw.lower() == "quit":
             sys.exit(0)
 
@@ -309,22 +326,24 @@ def _get_player_input(board, tracker, team_names=None, current_recs=None):
                                            tracker.user_roster, n=5,
                                            filled_positions=filled)
             if 0 <= idx < len(recs):
-                return recs[idx]["name"], _lookup_id(recs[idx]["name"])
+                return recs[idx]["name"], _lookup_id(recs[idx]["name"]), None
 
         # Try to split off a team-name prefix
         player_query = raw
+        matched_team = None
         if team_names:
             team, remainder = split_team_and_player(raw, team_names)
             if team:
                 print(f"  (team: {team})")
                 player_query = remainder
+                matched_team = team
 
         # Fuzzy search
         match = find_player(player_query, available_names)
         if match:
             confirm = input(f"  -> {match}? (y/n): ").strip().lower()
             if confirm in ("y", "yes", ""):
-                return match, _lookup_id(match)
+                return match, _lookup_id(match), matched_team
             # Show alternatives
             alts = find_player(player_query, available_names, return_top_n=5)
             if alts:
@@ -334,7 +353,7 @@ def _get_player_input(board, tracker, team_names=None, current_recs=None):
                 choice = input("  Pick # (or type again): ").strip()
                 if choice.isdigit() and 1 <= int(choice) <= len(alts):
                     picked = alts[int(choice) - 1]
-                    return picked, _lookup_id(picked)
+                    return picked, _lookup_id(picked), matched_team
         else:
             print("  No match found. Try again.")
 
