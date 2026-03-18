@@ -39,13 +39,14 @@ FLASK_PORT = 5000
 
 def _start_flask_server(state_path: Path) -> None:
     """Start the Flask dashboard server in a background daemon thread."""
+    from waitress import serve
     app = create_app(state_path=state_path)
     server_thread = threading.Thread(
-        target=lambda: app.run(
+        target=lambda: serve(
+            app,
             host="127.0.0.1",
             port=FLASK_PORT,
-            use_reloader=False,
-            debug=False,
+            _quiet=True,
         ),
         daemon=True,
         name="flask-dashboard",

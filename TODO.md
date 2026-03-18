@@ -40,8 +40,8 @@
 
 ## Low
 
-- [ ] **Dashboard XSS via innerHTML** — Player names inserted via `innerHTML` with template literals. Low risk (names from CSV) but not sanitized.
+- [x] **Dashboard XSS via innerHTML** — Player names inserted via `innerHTML` with template literals. Low risk (names from CSV) but not sanitized.
 
-- [ ] **No board search/sort in dashboard** — Position filters exist but no search box or column sorting. Hard to find specific players during a live draft.
+- [x] **No board search/sort in dashboard** — Position filters exist but no search box or column sorting. Hard to find specific players during a live draft.
 
-- [ ] **Flask dev server for dashboard** — Uses `app.run()` (single-threaded dev server). Fine for one user but could lag under rapid polling.
+- [x] **Flask dev server for dashboard** — Uses `app.run()` (single-threaded dev server). Fine for one user but could lag under rapid polling.

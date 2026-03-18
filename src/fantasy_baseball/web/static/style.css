@@ -118,6 +118,27 @@ body {
     gap: 4px;
 }
 
+/* Search */
+.board-search {
+    background: var(--bg);
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    width: 160px;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.board-search:focus {
+    border-color: var(--accent);
+}
+
+.board-search::placeholder {
+    color: var(--text-secondary);
+}
+
 /* Table */
 .table-scroll {
     flex: 1;
@@ -145,6 +166,25 @@ th {
     font-size: 0.75rem;
     text-transform: uppercase;
     border-bottom: 2px solid var(--panel-border);
+}
+
+th.sortable {
+    cursor: pointer;
+    user-select: none;
+}
+
+th.sortable:hover {
+    color: var(--text);
+}
+
+th.sort-asc::after {
+    content: " \25B2";
+    font-size: 0.6rem;
+}
+
+th.sort-desc::after {
+    content: " \25BC";
+    font-size: 0.6rem;
 }
 
 td {

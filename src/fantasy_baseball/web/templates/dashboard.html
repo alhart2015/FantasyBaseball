@@ -29,6 +29,7 @@
                         <label class="toggle-label">
                             <input type="checkbox" id="hide-drafted" checked> Hide drafted
                         </label>
+                        <input type="text" id="board-search" class="board-search" placeholder="Search players..." />
                     </div>
                 </div>
                 <div class="table-scroll">
@@ -36,19 +37,19 @@
                         <thead>
                             <tr>
                                 <th>#</th>
-                                <th>Name</th>
+                                <th class="sortable" data-sort="name">Name</th>
                                 <th>Pos</th>
-                                <th>VAR</th>
-                                <th class="stat-col hitter-col">HR</th>
-                                <th class="stat-col hitter-col">R</th>
-                                <th class="stat-col hitter-col">RBI</th>
-                                <th class="stat-col hitter-col">SB</th>
-                                <th class="stat-col hitter-col">AVG</th>
-                                <th class="stat-col pitcher-col">W</th>
-                                <th class="stat-col pitcher-col">K</th>
-                                <th class="stat-col pitcher-col">SV</th>
-                                <th class="stat-col pitcher-col">ERA</th>
-                                <th class="stat-col pitcher-col">WHIP</th>
+                                <th class="sortable" data-sort="var">VAR</th>
+                                <th class="stat-col hitter-col sortable" data-sort="hr">HR</th>
+                                <th class="stat-col hitter-col sortable" data-sort="r">R</th>
+                                <th class="stat-col hitter-col sortable" data-sort="rbi">RBI</th>
+                                <th class="stat-col hitter-col sortable" data-sort="sb">SB</th>
+                                <th class="stat-col hitter-col sortable" data-sort="avg">AVG</th>
+                                <th class="stat-col pitcher-col sortable" data-sort="w">W</th>
+                                <th class="stat-col pitcher-col sortable" data-sort="k">K</th>
+                                <th class="stat-col pitcher-col sortable" data-sort="sv">SV</th>
+                                <th class="stat-col pitcher-col sortable" data-sort="era">ERA</th>
+                                <th class="stat-col pitcher-col sortable" data-sort="whip">WHIP</th>
                             </tr>
                         </thead>
                         <tbody id="board-body">
@@ -116,6 +117,16 @@
     const INVERSE = new Set(["ERA", "WHIP"]);
     let currentFilter = "All";
     let hideDrafted = true;
+    let searchQuery = "";
+    let sortCol = null;   // null = default VAR desc
+    let sortAsc = false;
+
+    // --- XSS-safe text escaping ---
+    const _esc_el = document.createElement("span");
+    function esc(str) {
+        _esc_el.textContent = str;
+        return _esc_el.innerHTML;
+    }
 
     // --- Delta protocol state ---
     // The full player board, fetched once from /api/board.
@@ -237,12 +248,14 @@
             }
         }
 
-        let rows = "";
-        let rank = 0;
+        // Apply search filter
+        const q = searchQuery.toLowerCase();
+
+        // Filter
+        let filtered = [];
         for (const p of allPlayers) {
             const isDrafted = p._drafted || draftedIds.has(p.player_id || p.name);
             if (hideDrafted && isDrafted) continue;
-            // Position filter
             if (currentFilter !== "All") {
                 let match = false;
                 for (const pos of (p.positions || [])) {
@@ -251,13 +264,31 @@
                 }
                 if (!match) continue;
             }
+            if (q && !p.name.toLowerCase().includes(q)) continue;
+            filtered.push({p, isDrafted});
+        }
+
+        // Sort
+        if (sortCol) {
+            filtered.sort((a, b) => {
+                let va = sortCol === "name" ? a.p.name.toLowerCase() : (a.p[sortCol] || 0);
+                let vb = sortCol === "name" ? b.p.name.toLowerCase() : (b.p[sortCol] || 0);
+                if (va < vb) return sortAsc ? -1 : 1;
+                if (va > vb) return sortAsc ? 1 : -1;
+                return 0;
+            });
+        }
+
+        let rows = "";
+        let rank = 0;
+        for (const {p, isDrafted} of filtered) {
             rank++;
             const isUser = userRoster.has(p.name);
             const cls = isUser ? "user-player" : (isDrafted ? "drafted-player" : "");
-            const posStr = (p.positions || []).slice(0, 3).join("/");
+            const posStr = esc((p.positions || []).slice(0, 3).join("/"));
             rows += `<tr class="${cls}">`;
             rows += `<td>${rank}</td>`;
-            rows += `<td>${p.name}</td>`;
+            rows += `<td>${esc(p.name)}</td>`;
             rows += `<td>${posStr}</td>`;
             rows += `<td>${(p.var || 0).toFixed(1)}</td>`;
             if (p.player_type === "hitter") {
@@ -281,11 +312,11 @@
         let html = "";
         for (const [i, rec] of (state.recommendations || []).entries()) {
             const flag = rec.need_flag ? `<span class="need-flag">[NEED]</span>` : "";
-            const note = rec.note ? `<span class="rec-note">${rec.note}</span>` : "";
+            const note = rec.note ? `<span class="rec-note">${esc(rec.note)}</span>` : "";
             html += `<div class="rec-item">
                 <span class="rec-rank">${i + 1}.</span>
-                <span class="rec-name">${rec.name}</span>
-                <span class="rec-pos">${rec.positions.join("/")}</span>
+                <span class="rec-name">${esc(rec.name)}</span>
+                <span class="rec-pos">${esc(rec.positions.join("/"))}</span>
                 <span class="rec-var">VAR ${rec.var.toFixed(1)}</span>
                 ${flag} ${note}
             </div>`;
@@ -305,7 +336,7 @@
             for (let i = 0; i < count; i++) {
                 const isFilled = i < names.length;
                 const cls = isFilled ? "slot-filled" : "slot-empty";
-                const text = isFilled ? names[i] : "---";
+                const text = isFilled ? esc(names[i]) : "---";
                 html += `<div class="roster-slot ${cls}">${text}</div>`;
             }
             html += `</div>`;
@@ -345,7 +376,7 @@
         container.innerHTML = html;
         // Warnings
         const warnList = (state.balance && state.balance.warnings) || [];
-        warnings.innerHTML = warnList.map(w => `<div class="warning-item">${w}</div>`).join("");
+        warnings.innerHTML = warnList.map(w => `<div class="warning-item">${esc(w)}</div>`).join("");
     }
 
     // --- Filter buttons ---
@@ -367,6 +398,33 @@
             if (currentState && currentState.current_pick) {
                 renderBoard(currentState);
             }
+        });
+
+        // Search input
+        document.getElementById("board-search").addEventListener("input", function() {
+            searchQuery = this.value;
+            if (currentState && currentState.current_pick) {
+                renderBoard(currentState);
+            }
+        });
+
+        // Sortable column headers
+        document.querySelectorAll(".sortable").forEach(th => {
+            th.addEventListener("click", function() {
+                const col = this.dataset.sort;
+                if (sortCol === col) {
+                    sortAsc = !sortAsc;
+                } else {
+                    sortCol = col;
+                    sortAsc = col === "name";  // name defaults ascending, stats descending
+                }
+                // Update header indicators
+                document.querySelectorAll(".sortable").forEach(h => h.classList.remove("sort-asc", "sort-desc"));
+                this.classList.add(sortAsc ? "sort-asc" : "sort-desc");
+                if (currentState && currentState.current_pick) {
+                    renderBoard(currentState);
+                }
+            });
         });
 
         // Kick off the delta-based polling.
