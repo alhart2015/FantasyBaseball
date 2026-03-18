@@ -331,9 +331,10 @@
         let html = "";
         for (const [pos, count] of Object.entries(ROSTER_SLOTS)) {
             const names = byPos[pos] || [];
+            const slots = Math.max(count, names.length);
             html += `<div class="roster-pos">`;
             html += `<div class="roster-pos-label">${pos}</div>`;
-            for (let i = 0; i < count; i++) {
+            for (let i = 0; i < slots; i++) {
                 const isFilled = i < names.length;
                 const cls = isFilled ? "slot-filled" : "slot-empty";
                 const text = isFilled ? esc(names[i]) : "---";
