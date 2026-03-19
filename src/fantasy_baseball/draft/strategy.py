@@ -33,9 +33,9 @@ THREE_CLOSERS_DEADLINES = [5, 9, 13]
 # no_punt: force a closer by this round if SV == 0, and AVG floor
 NO_PUNT_SV_DEADLINE = 8
 NO_PUNT_AVG_FLOOR = 0.250
-# opportunistic: grab a closer if their ADP says they're a steal
-# (ADP < current overall pick number = they "should" already be gone)
-OPP_CLOSER_ADP_BUFFER = 10  # grab if ADP is within 10 picks of current pick
+# opportunistic: grab a closer if they've fallen past their ADP
+# (current_pick >= ADP = they "should" already be gone, someone else will grab them)
+OPP_CLOSER_ADP_BUFFER = 5  # trigger if ADP is within 5 picks of being "overdue"
 # avg_anchor: minimum AVG to qualify as an anchor, and deadline
 AVG_ANCHOR_MIN = 0.285
 AVG_ANCHOR_DEADLINE_HITTER = 3  # must draft anchor within first 3 hitter picks
@@ -183,7 +183,7 @@ def pick_no_punt_opp(
         ]
         if not closers.empty:
             # Find closers whose ADP says they should be gone by now
-            falling = closers[closers["adp"] <= current_pick + OPP_CLOSER_ADP_BUFFER]
+            falling = closers[current_pick >= closers["adp"] - OPP_CLOSER_ADP_BUFFER]
             if not falling.empty:
                 # Take the best one by VAR
                 falling = falling.sort_values("var", ascending=False)

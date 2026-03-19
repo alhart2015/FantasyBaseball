@@ -321,7 +321,7 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
             closer_adp = best_closer.get("adp", 999)
             current_pick = tracker.current_pick
 
-            if closer_adp <= current_pick + OPP_CLOSER_ADP_BUFFER:
+            if current_pick >= closer_adp - OPP_CLOSER_ADP_BUFFER:
                 # Closer is falling past their ADP — opportunity
                 closer_rec = {
                     "name": best_closer["name"],
