@@ -215,7 +215,9 @@ def main():
             if tracker.is_user_pick:
                 _handle_user_pick(board, full_board, tracker, balance,
                                   roster_slots=config.roster_slots,
-                                  num_teams=num_teams)
+                                  num_teams=num_teams,
+                                  team_names=team_names,
+                                  user_team_name=config.team_name)
             else:
                 # Peek at input — if "mine", treat as user pick (traded pick)
                 raw = input("\nPick (player, 'team player', or 'mine'): ").strip()
@@ -295,7 +297,7 @@ def main():
 
 
 def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
-                      num_teams=None):
+                      num_teams=None, team_names=None, user_team_name=None):
     """Handle the user's draft pick with recommendations."""
     filled = get_filled_positions(tracker.user_roster_ids, full_board,
                                   roster_slots=roster_slots)
@@ -449,14 +451,24 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
     if warnings:
         print(f"  Warnings: {', '.join(warnings)}")
 
-    # Get user input
-    name, pid, _team = _get_player_input(board, tracker, current_recs=recs)
+    # Get user input — pass team_names so "spacemen gausman" is recognized as traded away
+    name, pid, matched_team = _get_player_input(
+        board, tracker, current_recs=recs, team_names=team_names,
+    )
     if name:
-        tracker.draft_player(name, is_user=True, player_id=pid)
-        rows = board[board["player_id"] == pid] if pid else board[board["name"] == name]
-        if not rows.empty:
-            balance.add_player(rows.iloc[0])
-        print(f"  -> Drafted: {name}")
+        # If a different team was specified, this pick was traded away
+        traded_away = (matched_team is not None
+                       and user_team_name is not None
+                       and matched_team != user_team_name)
+        if traded_away:
+            tracker.draft_player(name, is_user=False, player_id=pid)
+            print(f"  -> Drafted: {name} ({matched_team} via trade)")
+        else:
+            tracker.draft_player(name, is_user=True, player_id=pid)
+            rows = board[board["player_id"] == pid] if pid else board[board["name"] == name]
+            if not rows.empty:
+                balance.add_player(rows.iloc[0])
+            print(f"  -> Drafted: {name}")
 
 
 def _handle_other_pick(board, full_board, tracker, balance,
