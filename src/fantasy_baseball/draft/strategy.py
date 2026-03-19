@@ -31,7 +31,7 @@ THREE_CLOSERS_TARGET = 3
 # Draft first closer by round 5, second by round 9, third by round 13
 THREE_CLOSERS_DEADLINES = [5, 9, 13]
 # no_punt: force a closer by this round if SV == 0, and AVG floor
-NO_PUNT_SV_DEADLINE = 8
+NO_PUNT_SV_DEADLINE = 9
 NO_PUNT_AVG_FLOOR = 0.250
 # opportunistic: grab a closer if they've fallen past their ADP
 # (effective_pick >= ADP = they "should" already be gone, someone else will grab them)
