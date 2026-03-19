@@ -65,8 +65,12 @@ def pad_roster_to_full(
     return padded
 
 
-def simulate_season(team_players, rng):
-    """Run one simulated season with injuries and stat variance."""
+def simulate_season(team_players, rng, h_slots=None, p_slots=None):
+    """Run one simulated season with injuries and stat variance.
+
+    Only counts stats from active-roster players (top h_slots hitters,
+    top p_slots pitchers by value). Bench players are excluded.
+    """
     team_stats = {}
 
     for team_num, players in team_players.items():
@@ -107,6 +111,20 @@ def simulate_season(team_players, rng):
                 varied = max(0, base * (1.0 + rng.normal(0, STAT_VARIANCE)))
                 row[col] = varied * scale + repl.get(col, 0) * frac_missed
             adj_pitchers.append(row)
+
+        # Select active roster only (bench players don't contribute stats)
+        if h_slots is not None:
+            adj_hitters.sort(
+                key=lambda h: h["r"] + h["hr"] + h["rbi"] + h["sb"],
+                reverse=True,
+            )
+            adj_hitters = adj_hitters[:h_slots]
+        if p_slots is not None:
+            adj_pitchers.sort(
+                key=lambda p: p["w"] + p["k"] + p["sv"],
+                reverse=True,
+            )
+            adj_pitchers = adj_pitchers[:p_slots]
 
         # Aggregate
         r = sum(h["r"] for h in adj_hitters)
@@ -168,6 +186,12 @@ def run_projections(
     """
     rng = np.random.default_rng(seed)
 
+    # Compute active roster slot counts
+    h_slots = sum(
+        v for k, v in roster_slots.items() if k not in ("P", "BN", "IL")
+    )
+    p_slots = roster_slots.get("P", 9)
+
     # Pad all rosters
     padded = {}
     for tn, players in team_players.items():
@@ -178,7 +202,7 @@ def run_projections(
     all_finishes = {tn: [] for tn in padded}
 
     for _ in range(iterations):
-        stats = simulate_season(padded, rng)
+        stats = simulate_season(padded, rng, h_slots=h_slots, p_slots=p_slots)
         roto = score_roto(stats, num_teams)
         for tn in padded:
             total = roto[tn]["total"]
