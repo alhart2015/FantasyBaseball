@@ -27,6 +27,10 @@ from fantasy_baseball.draft.recommender import (
 )
 from fantasy_baseball.draft.state import serialize_state, serialize_board, write_state, write_board
 from fantasy_baseball.draft.projections import run_projections, reconstruct_rosters_from_draft
+from fantasy_baseball.draft.strategy import (
+    CLOSER_SV_THRESHOLD, NO_PUNT_SV_DEADLINE, NO_PUNT_AVG_FLOOR,
+    OPP_CLOSER_ADP_BUFFER,
+)
 from fantasy_baseball.web.app import create_app
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
@@ -293,15 +297,103 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
         draft_leverage=leverage,
     )
 
+    # --- No-punt strategy logic ---
+    strategy_alerts = []
+
+    # Check if we have a closer
+    has_closer = False
+    for pid in tracker.user_roster_ids:
+        rows = board[board["player_id"] == pid]
+        if rows.empty:
+            rows = full_board[full_board["player_id"] == pid]
+        if not rows.empty and rows.iloc[0].get("sv", 0) >= CLOSER_SV_THRESHOLD:
+            has_closer = True
+            break
+
+    closer_rec = None
+    if not has_closer:
+        available = board[~board["player_id"].isin(tracker.drafted_ids)]
+        closers = available[
+            available.apply(lambda r: r.get("sv", 0) >= CLOSER_SV_THRESHOLD, axis=1)
+        ]
+        if not closers.empty:
+            best_closer = closers.sort_values("var", ascending=False).iloc[0]
+            closer_adp = best_closer.get("adp", 999)
+            current_pick = tracker.current_pick
+
+            if closer_adp <= current_pick + OPP_CLOSER_ADP_BUFFER:
+                # Closer is falling past their ADP — opportunity
+                closer_rec = {
+                    "name": best_closer["name"],
+                    "best_position": "RP",
+                    "var": best_closer.get("var", 0),
+                    "score": None,
+                    "need_flag": True,
+                    "note": f"FALLING closer — ADP {closer_adp:.0f}, pick {current_pick}",
+                    "player_type": "pitcher",
+                }
+                strategy_alerts.append(
+                    f"CLOSER OPPORTUNITY: {best_closer['name']} "
+                    f"(ADP {closer_adp:.0f}) is falling — grab before someone else does"
+                )
+            elif tracker.current_round >= NO_PUNT_SV_DEADLINE:
+                # Deadline: must draft a closer now
+                closer_rec = {
+                    "name": best_closer["name"],
+                    "best_position": "RP",
+                    "var": best_closer.get("var", 0),
+                    "score": None,
+                    "need_flag": True,
+                    "note": f"DEADLINE — no closer by round {NO_PUNT_SV_DEADLINE}",
+                    "player_type": "pitcher",
+                }
+                strategy_alerts.append(
+                    f"CLOSER DEADLINE: Draft {best_closer['name']} now — "
+                    f"round {NO_PUNT_SV_DEADLINE} backstop reached"
+                )
+
+    # Check AVG floor and flag low-AVG hitters
+    current_h = sum(h.get("h", 0) for h in balance._hitters)
+    current_ab = sum(h.get("ab", 0) for h in balance._hitters)
+    avg_warnings = []
+    if current_ab > 0:
+        for rec in recs:
+            if rec["player_type"] != "hitter":
+                continue
+            rows = board[board["name"] == rec["name"]]
+            if rows.empty:
+                continue
+            player = rows.iloc[0]
+            new_h = current_h + player.get("h", 0)
+            new_ab = current_ab + player.get("ab", 0)
+            projected_avg = new_h / new_ab if new_ab > 0 else 0
+            if projected_avg < NO_PUNT_AVG_FLOOR:
+                avg_warnings.append(rec["name"])
+
+    # Build final recommendation list: closer on top if triggered
+    if closer_rec:
+        # Check if the closer is already in recs
+        closer_in_recs = any(r["name"] == closer_rec["name"] for r in recs)
+        if closer_in_recs:
+            recs = [r for r in recs if r["name"] != closer_rec["name"]]
+        recs = [closer_rec] + recs[:4]
+
     # Show recommendations
     print(f"\nPicks until next turn: {picks_gap}")
+
+    if strategy_alerts:
+        print()
+        for alert in strategy_alerts:
+            print(f"  >>> {alert}")
+
     print("\nRECOMMENDATIONS:")
     for i, rec in enumerate(recs, 1):
         flag = " [NEED]" if rec["need_flag"] else ""
         note = f" ({rec['note']})" if rec["note"] else ""
         score_str = f" score: {rec['score']:.1f}" if rec.get("score") is not None else ""
+        avg_warn = " [LOW AVG]" if rec["name"] in avg_warnings else ""
         print(f"  {i}. {rec['name']} ({rec['best_position']}) "
-              f"VAR: {rec['var']:.1f}{score_str}{flag}{note}")
+              f"VAR: {rec['var']:.1f}{score_str}{flag}{avg_warn}{note}")
 
     # Show category balance
     totals = balance.get_totals()
