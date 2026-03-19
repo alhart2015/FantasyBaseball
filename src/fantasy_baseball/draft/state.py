@@ -61,11 +61,13 @@ def serialize_board(board: pd.DataFrame) -> list[dict]:
     """
     players = []
     for _, row in board.iterrows():
+        adp_val = row.get("adp", None)
         player: dict = {
             "name": row["name"],
             "player_id": row.get("player_id", row["name"]),
             "positions": row["positions"] if isinstance(row["positions"], list) else [row["positions"]],
             "var": round(float(row["var"]), 1),
+            "adp": round(float(adp_val), 1) if adp_val is not None and adp_val != float("inf") else None,
             "player_type": row["player_type"],
         }
         if row["player_type"] == "hitter":

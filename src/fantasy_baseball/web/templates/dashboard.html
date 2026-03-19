@@ -40,6 +40,7 @@
                                 <th class="sortable" data-sort="name">Name</th>
                                 <th>Pos</th>
                                 <th class="sortable" data-sort="var">VAR</th>
+                                <th class="sortable" data-sort="adp">ADP</th>
                                 <th class="stat-col hitter-col sortable" data-sort="hr">HR</th>
                                 <th class="stat-col hitter-col sortable" data-sort="r">R</th>
                                 <th class="stat-col hitter-col sortable" data-sort="rbi">RBI</th>
@@ -278,8 +279,18 @@
         // Sort
         if (sortCol) {
             filtered.sort((a, b) => {
-                let va = sortCol === "name" ? a.p.name.toLowerCase() : (a.p[sortCol] || 0);
-                let vb = sortCol === "name" ? b.p.name.toLowerCase() : (b.p[sortCol] || 0);
+                let va, vb;
+                if (sortCol === "name") {
+                    va = a.p.name.toLowerCase();
+                    vb = b.p.name.toLowerCase();
+                } else {
+                    va = a.p[sortCol];
+                    vb = b.p[sortCol];
+                    // Null/undefined sort to bottom regardless of direction
+                    if (va == null && vb == null) return 0;
+                    if (va == null) return 1;
+                    if (vb == null) return -1;
+                }
                 if (va < vb) return sortAsc ? -1 : 1;
                 if (va > vb) return sortAsc ? 1 : -1;
                 return 0;
@@ -298,6 +309,7 @@
             rows += `<td>${esc(p.name)}</td>`;
             rows += `<td>${posStr}</td>`;
             rows += `<td>${(p.var || 0).toFixed(1)}</td>`;
+            rows += `<td>${p.adp != null ? Math.round(p.adp) : '—'}</td>`;
             if (p.player_type === "hitter") {
                 rows += `<td>${p.hr}</td><td>${p.r}</td><td>${p.rbi}</td><td>${p.sb}</td><td>${p.avg.toFixed(3)}</td>`;
                 rows += `<td></td><td></td><td></td><td></td><td></td>`;
