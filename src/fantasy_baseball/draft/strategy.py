@@ -4,11 +4,15 @@ Each strategy is a function that receives the current draft state and
 returns the name + player_id of the player to pick.
 
 Strategies:
-    default     — Pure leverage-weighted recommendation (current behavior).
-    nonzero_sv  — Same as default, but forces a closer (SV >= 20) by a
-                  configurable round if none has been drafted yet.
-    avg_hedge   — Same as default, but applies a penalty to hitters whose
-                  AVG would drag the team below a configurable floor.
+    default          — Pure leverage-weighted recommendation (current behavior).
+    nonzero_sv       — Forces a closer (SV >= 20) by a configurable round.
+    avg_hedge        — Penalizes hitters whose AVG would drag team below floor.
+    three_closers    — Drafts exactly 3 closers at configurable deadline rounds.
+    no_punt          — Ensures no category finishes last (SV + AVG floors).
+    avg_anchor       — Targets a high-AVG hitter (.285+) in first 3 hitter picks.
+    closers_avg      — Combines three_closers + avg_anchor.
+    balanced         — Alternates hitter/pitcher picks to diversify risk.
+    anti_fragile     — Discounts high-IP pitchers, prefers durable mid-tier arms.
 """
 import pandas as pd
 from fantasy_baseball.draft.balance import CategoryBalance, calculate_draft_leverage
@@ -26,6 +30,17 @@ AVG_FLOOR = 0.255
 THREE_CLOSERS_TARGET = 3
 # Draft first closer by round 5, second by round 9, third by round 13
 THREE_CLOSERS_DEADLINES = [5, 9, 13]
+# no_punt: force a closer by this round if SV == 0, and AVG floor
+NO_PUNT_SV_DEADLINE = 8
+NO_PUNT_AVG_FLOOR = 0.250
+# avg_anchor: minimum AVG to qualify as an anchor, and deadline
+AVG_ANCHOR_MIN = 0.285
+AVG_ANCHOR_DEADLINE_HITTER = 3  # must draft anchor within first 3 hitter picks
+# balanced: max allowed imbalance between hitters and pitchers
+BALANCED_MAX_SKEW = 2
+# anti_fragile: IP threshold above which pitchers get discounted
+ANTI_FRAGILE_IP_THRESHOLD = 170
+ANTI_FRAGILE_DISCOUNT = 0.25  # 25% VAR penalty per 30 IP above threshold
 
 
 def pick_default(
@@ -197,6 +212,264 @@ def pick_three_closers(
                         team_filled, **kwargs)
 
 
+def _count_closers(tracker, board, full_board):
+    """Count how many closers are on the user's roster."""
+    count = 0
+    for pid in tracker.user_roster_ids:
+        rows = board[board["player_id"] == pid]
+        if rows.empty:
+            rows = full_board[full_board["player_id"] == pid]
+        if not rows.empty and rows.iloc[0].get("sv", 0) >= CLOSER_SV_THRESHOLD:
+            count += 1
+    return count
+
+
+def _count_hitters(tracker, board, full_board):
+    """Count hitters on the user's roster."""
+    count = 0
+    for pid in tracker.user_roster_ids:
+        rows = board[board["player_id"] == pid]
+        if rows.empty:
+            rows = full_board[full_board["player_id"] == pid]
+        if not rows.empty and rows.iloc[0].get("player_type") == "hitter":
+            count += 1
+    return count
+
+
+def _count_pitchers(tracker, board, full_board):
+    """Count pitchers on the user's roster."""
+    return len(tracker.user_roster) - _count_hitters(tracker, board, full_board)
+
+
+def _force_closer(board, tracker, full_board, config):
+    """Pick the best available closer by VAR. Returns (name, pid) or None."""
+    available = board[~board["player_id"].isin(tracker.drafted_ids)]
+    closers = available[
+        available.apply(lambda r: r.get("sv", 0) >= CLOSER_SV_THRESHOLD, axis=1)
+    ]
+    if closers.empty:
+        return None
+    closers = closers.sort_values("var", ascending=False)
+    filled = get_filled_positions(
+        tracker.user_roster_ids, full_board,
+        roster_slots=config.roster_slots,
+    )
+    for _, best in closers.iterrows():
+        if _can_roster_player(best, filled, config.roster_slots):
+            return best["name"], best["player_id"]
+    return None
+
+
+def _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs):
+    """Get leverage-weighted recommendations (shared helper)."""
+    filled = get_filled_positions(
+        tracker.user_roster_ids, full_board,
+        roster_slots=config.roster_slots,
+    )
+    leverage = calculate_draft_leverage(
+        balance.get_totals(),
+        picks_made=len(tracker.user_roster),
+        total_picks=kwargs.get("total_rounds", 22),
+    )
+    return get_recommendations(
+        board, drafted=tracker.drafted_ids,
+        user_roster=tracker.user_roster,
+        n=n, filled_positions=filled,
+        roster_slots=config.roster_slots,
+        num_teams=config.num_teams,
+        draft_leverage=leverage,
+    )
+
+
+def pick_no_punt(
+    board, full_board, tracker, balance, config, team_filled, **kwargs,
+):
+    """Ensure no category finishes dead last.
+
+    Forces a closer by round 8 if SV == 0.
+    Skips low-AVG hitters if team AVG is below the floor.
+    """
+    closer_count = _count_closers(tracker, board, full_board)
+    current_round = tracker.current_round
+
+    # Force at least one closer by deadline
+    if closer_count == 0 and current_round >= NO_PUNT_SV_DEADLINE:
+        result = _force_closer(board, tracker, full_board, config)
+        if result:
+            return result
+
+    # Get recommendations, then filter for AVG floor
+    recs = _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs)
+    if not recs:
+        return None, None
+
+    current_h = sum(h.get("h", 0) for h in balance._hitters)
+    current_ab = sum(h.get("ab", 0) for h in balance._hitters)
+
+    for rec in recs:
+        if rec["player_type"] != "hitter":
+            return rec["name"], _lookup_pid(board, rec["name"])
+
+        rows = board[board["name"] == rec["name"]]
+        if rows.empty:
+            continue
+        player = rows.iloc[0]
+        new_h = current_h + player.get("h", 0)
+        new_ab = current_ab + player.get("ab", 0)
+        projected_avg = new_h / new_ab if new_ab > 0 else 0
+
+        if projected_avg >= NO_PUNT_AVG_FLOOR or current_ab == 0:
+            return rec["name"], _lookup_pid(board, rec["name"])
+
+    return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
+
+
+def pick_avg_anchor(
+    board, full_board, tracker, balance, config, team_filled, **kwargs,
+):
+    """Target a high-AVG hitter (.285+) in the first 3 hitter picks.
+
+    Once the anchor is secured, falls back to default.
+    """
+    hitter_count = _count_hitters(tracker, board, full_board)
+
+    # Check if we already have an AVG anchor
+    has_anchor = False
+    for pid in tracker.user_roster_ids:
+        rows = board[board["player_id"] == pid]
+        if rows.empty:
+            rows = full_board[full_board["player_id"] == pid]
+        if not rows.empty:
+            p = rows.iloc[0]
+            if p.get("player_type") == "hitter" and p.get("avg", 0) >= AVG_ANCHOR_MIN:
+                has_anchor = True
+                break
+
+    # If no anchor and we're within the hitter deadline, prefer high-AVG hitters
+    if not has_anchor and hitter_count < AVG_ANCHOR_DEADLINE_HITTER:
+        recs = _get_recs(board, full_board, tracker, balance, config, n=15, **kwargs)
+        if recs:
+            # Try to find a high-AVG hitter in the recommendations
+            for rec in recs:
+                if rec["player_type"] != "hitter":
+                    continue
+                rows = board[board["name"] == rec["name"]]
+                if rows.empty:
+                    continue
+                if rows.iloc[0].get("avg", 0) >= AVG_ANCHOR_MIN:
+                    return rec["name"], _lookup_pid(board, rec["name"])
+
+            # If none in recs, search the board for the best high-AVG hitter
+            available = board[~board["player_id"].isin(tracker.drafted_ids)]
+            anchors = available[
+                (available["player_type"] == "hitter") &
+                (available["avg"] >= AVG_ANCHOR_MIN)
+            ].sort_values("var", ascending=False)
+            filled = get_filled_positions(
+                tracker.user_roster_ids, full_board,
+                roster_slots=config.roster_slots,
+            )
+            for _, best in anchors.head(5).iterrows():
+                if _can_roster_player(best, filled, config.roster_slots):
+                    return best["name"], best["player_id"]
+
+    # Fall back to default
+    return pick_default(board, full_board, tracker, balance, config,
+                        team_filled, **kwargs)
+
+
+def pick_closers_avg(
+    board, full_board, tracker, balance, config, team_filled, **kwargs,
+):
+    """Combine three_closers + avg_anchor.
+
+    Closer deadlines take priority. Between deadlines, try to land an
+    AVG anchor in the first 3 hitter picks. Otherwise, default.
+    """
+    # Check closer deadlines first (highest priority)
+    closer_count = _count_closers(tracker, board, full_board)
+    current_round = tracker.current_round
+
+    if closer_count < THREE_CLOSERS_TARGET:
+        deadline_idx = closer_count
+        if deadline_idx < len(THREE_CLOSERS_DEADLINES):
+            deadline = THREE_CLOSERS_DEADLINES[deadline_idx]
+            if current_round >= deadline:
+                result = _force_closer(board, tracker, full_board, config)
+                if result:
+                    return result
+
+    # Then try AVG anchor
+    return pick_avg_anchor(board, full_board, tracker, balance, config,
+                           team_filled, **kwargs)
+
+
+def pick_balanced(
+    board, full_board, tracker, balance, config, team_filled, **kwargs,
+):
+    """Alternate hitter/pitcher picks to diversify risk.
+
+    If pitchers lead hitters by more than BALANCED_MAX_SKEW, force a hitter.
+    If hitters lead pitchers by more than BALANCED_MAX_SKEW, force a pitcher.
+    """
+    n_hitters = _count_hitters(tracker, board, full_board)
+    n_pitchers = _count_pitchers(tracker, board, full_board)
+
+    recs = _get_recs(board, full_board, tracker, balance, config, n=15, **kwargs)
+    if not recs:
+        return None, None
+
+    force_type = None
+    if n_pitchers - n_hitters > BALANCED_MAX_SKEW:
+        force_type = "hitter"
+    elif n_hitters - n_pitchers > BALANCED_MAX_SKEW:
+        force_type = "pitcher"
+
+    if force_type:
+        for rec in recs:
+            if rec["player_type"] == force_type:
+                return rec["name"], _lookup_pid(board, rec["name"])
+
+    # No imbalance — take the best recommendation
+    return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
+
+
+def pick_anti_fragile(
+    board, full_board, tracker, balance, config, team_filled, **kwargs,
+):
+    """Prefer durable mid-tier pitchers over fragile aces.
+
+    Applies a VAR discount to pitchers with high IP projections,
+    then re-ranks recommendations.
+    """
+    recs = _get_recs(board, full_board, tracker, balance, config, n=15, **kwargs)
+    if not recs:
+        return None, None
+
+    # Re-score recommendations with durability discount
+    scored = []
+    for rec in recs:
+        rows = board[board["name"] == rec["name"]]
+        if rows.empty:
+            scored.append((rec, rec.get("var", 0)))
+            continue
+        player = rows.iloc[0]
+        var = player.get("var", 0)
+
+        if player.get("player_type") == "pitcher":
+            ip = player.get("ip", 0)
+            if ip > ANTI_FRAGILE_IP_THRESHOLD:
+                excess_ip = ip - ANTI_FRAGILE_IP_THRESHOLD
+                penalty = (excess_ip / 30.0) * ANTI_FRAGILE_DISCOUNT
+                var = var * (1.0 - penalty)
+
+        scored.append((rec, var))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    best = scored[0][0]
+    return best["name"], _lookup_pid(board, best["name"])
+
+
 def _lookup_pid(board, name):
     rows = board[board["name"] == name]
     if not rows.empty:
@@ -219,4 +492,9 @@ STRATEGIES = {
     "nonzero_sv": pick_nonzero_sv,
     "avg_hedge": pick_avg_hedge,
     "three_closers": pick_three_closers,
+    "no_punt": pick_no_punt,
+    "avg_anchor": pick_avg_anchor,
+    "closers_avg": pick_closers_avg,
+    "balanced": pick_balanced,
+    "anti_fragile": pick_anti_fragile,
 }
