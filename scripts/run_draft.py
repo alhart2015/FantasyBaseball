@@ -555,7 +555,28 @@ def _get_player_input(board, tracker, team_names=None, current_recs=None,
         # Try to split off a team-name prefix
         player_query = raw
         matched_team = None
-        if team_names:
+
+        # Quoted team name: "crews control" chris sale
+        if raw.startswith('"') and '"' in raw[1:]:
+            closing = raw.index('"', 1)
+            quoted_team = raw[1:closing].strip()
+            remainder = raw[closing + 1:].strip()
+            if remainder:
+                # Match quoted text against team names (case-insensitive)
+                for tn in (team_names or []):
+                    if tn.lower() == quoted_team.lower():
+                        matched_team = tn
+                        player_query = remainder
+                        print(f"  (team: {tn})")
+                        break
+                if matched_team is None:
+                    # Quoted text didn't match a known team — treat as new/unknown team
+                    matched_team = quoted_team
+                    player_query = remainder
+                    print(f"  (team: {quoted_team})")
+
+        # Unquoted: try fuzzy team prefix matching
+        if matched_team is None and team_names:
             team, remainder = split_team_and_player(raw, team_names)
             if team:
                 print(f"  (team: {team})")
