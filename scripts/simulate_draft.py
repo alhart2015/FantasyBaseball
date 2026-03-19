@@ -33,6 +33,36 @@ POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 
 
+def _active_slot_counts(roster_slots):
+    """Return (active_hitter_slots, active_pitcher_slots) from config."""
+    hitter_slots = sum(
+        v for k, v in roster_slots.items() if k not in ("P", "BN", "IL")
+    )
+    pitcher_slots = roster_slots.get("P", 9)
+    return hitter_slots, pitcher_slots
+
+
+def _select_active_players(hitters, pitchers, roster_slots):
+    """Return only the active-roster hitters and pitchers.
+
+    Ranks hitters by (R + HR + RBI + SB) and pitchers by (W + K + SV),
+    then takes the top N to fill active slots. Bench players are excluded.
+    """
+    h_slots, p_slots = _active_slot_counts(roster_slots)
+
+    ranked_h = sorted(
+        hitters,
+        key=lambda h: h.get("r", 0) + h.get("hr", 0) + h.get("rbi", 0) + h.get("sb", 0),
+        reverse=True,
+    )
+    ranked_p = sorted(
+        pitchers,
+        key=lambda p: p.get("w", 0) + p.get("k", 0) + p.get("sv", 0),
+        reverse=True,
+    )
+    return ranked_h[:h_slots], ranked_p[:p_slots]
+
+
 def _can_roster(player_positions, filled, roster_slots):
     """Check if a player can fit in any open slot."""
     for pos, total in roster_slots.items():
@@ -277,12 +307,15 @@ def main():
         if not rows.empty:
             team_players[team].append(rows.iloc[0])
 
-    # Project stats
+    # Project stats (active roster only — bench players don't count)
     results = []
     for tn in range(1, config.num_teams + 1):
         tname = config.teams.get(tn, f"Team {tn}")
-        hitters = [p for p in team_players[tn] if p["player_type"] == "hitter"]
-        pitchers = [p for p in team_players[tn] if p["player_type"] == "pitcher"]
+        all_hitters = [p for p in team_players[tn] if p["player_type"] == "hitter"]
+        all_pitchers = [p for p in team_players[tn] if p["player_type"] == "pitcher"]
+        hitters, pitchers = _select_active_players(
+            all_hitters, all_pitchers, config.roster_slots,
+        )
         r = sum(h.get("r", 0) for h in hitters)
         hr = sum(h.get("hr", 0) for h in hitters)
         rbi = sum(h.get("rbi", 0) for h in hitters)

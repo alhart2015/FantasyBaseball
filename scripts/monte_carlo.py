@@ -26,6 +26,10 @@ POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
 
+# Active roster slot counts (set from config in main)
+ACTIVE_HITTER_SLOTS = 13
+ACTIVE_PITCHER_SLOTS = 9
+
 # Injury model parameters
 INJURY_PROB = {"pitcher": 0.45, "hitter": 0.18}
 # Fraction of season missed if injured: (min, max) uniform
@@ -92,12 +96,19 @@ def reconstruct_rosters(config, board, state):
     return team_players
 
 
-def simulate_season(team_players, rng):
+def simulate_season(team_players, rng, h_slots=None, p_slots=None):
     """Run one simulated season with injuries and stat variance.
+
+    Only counts stats from active-roster players (top h_slots hitters,
+    top p_slots pitchers by value). Bench players are excluded.
 
     Returns dict of team_num -> {cat: value} for all roto categories,
     plus an injuries dict of team_num -> list of (name, frac_missed).
     """
+    if h_slots is None:
+        h_slots = ACTIVE_HITTER_SLOTS
+    if p_slots is None:
+        p_slots = ACTIVE_PITCHER_SLOTS
     team_stats = {}
     injuries = {}
 
@@ -154,22 +165,34 @@ def simulate_season(team_players, rng):
             row["name"] = p["name"]
             adj_pitchers.append(row)
 
-        # Aggregate team stats
-        r = sum(h["r"] for h in adj_hitters)
-        hr = sum(h["hr"] for h in adj_hitters)
-        rbi = sum(h["rbi"] for h in adj_hitters)
-        sb = sum(h["sb"] for h in adj_hitters)
-        total_h = sum(h["h"] for h in adj_hitters)
-        total_ab = sum(h["ab"] for h in adj_hitters)
+        # Select active roster only (bench players don't contribute stats)
+        adj_hitters.sort(
+            key=lambda h: h["r"] + h["hr"] + h["rbi"] + h["sb"],
+            reverse=True,
+        )
+        adj_pitchers.sort(
+            key=lambda p: p["w"] + p["k"] + p["sv"],
+            reverse=True,
+        )
+        active_h = adj_hitters[:h_slots]
+        active_p = adj_pitchers[:p_slots]
+
+        # Aggregate team stats from active players only
+        r = sum(h["r"] for h in active_h)
+        hr = sum(h["hr"] for h in active_h)
+        rbi = sum(h["rbi"] for h in active_h)
+        sb = sum(h["sb"] for h in active_h)
+        total_h = sum(h["h"] for h in active_h)
+        total_ab = sum(h["ab"] for h in active_h)
         avg = total_h / total_ab if total_ab > 0 else 0
 
-        w = sum(p["w"] for p in adj_pitchers)
-        k = sum(p["k"] for p in adj_pitchers)
-        sv = sum(p["sv"] for p in adj_pitchers)
-        total_ip = sum(p["ip"] for p in adj_pitchers)
-        total_er = sum(p["er"] for p in adj_pitchers)
-        total_bb = sum(p["bb"] for p in adj_pitchers)
-        total_ha = sum(p["h_allowed"] for p in adj_pitchers)
+        w = sum(p["w"] for p in active_p)
+        k = sum(p["k"] for p in active_p)
+        sv = sum(p["sv"] for p in active_p)
+        total_ip = sum(p["ip"] for p in active_p)
+        total_er = sum(p["er"] for p in active_p)
+        total_bb = sum(p["bb"] for p in active_p)
+        total_ha = sum(p["h_allowed"] for p in active_p)
         era = total_er * 9 / total_ip if total_ip > 0 else 99.0
         whip = (total_bb + total_ha) / total_ip if total_ip > 0 else 99.0
 
@@ -204,6 +227,14 @@ def main():
     args = parser.parse_args()
 
     config = load_config(CONFIG_PATH)
+
+    # Compute active roster slot counts from config
+    global ACTIVE_HITTER_SLOTS, ACTIVE_PITCHER_SLOTS
+    ACTIVE_HITTER_SLOTS = sum(
+        v for k, v in config.roster_slots.items() if k not in ("P", "BN", "IL")
+    )
+    ACTIVE_PITCHER_SLOTS = config.roster_slots.get("P", 9)
+
     user_team_num = None
     for num, name in config.teams.items():
         if name == config.team_name:
