@@ -2,37 +2,47 @@
 
 A data-driven Fantasy Baseball toolkit for Yahoo 5x5 roto leagues. Combines multiple projection systems, calculates Standings Gain Points (SGP), and recommends optimal draft picks and weekly lineups.
 
-Built for the **Phantoms of the Outfield** league (Yahoo league 5652).
+Built for Yahoo league 5652 (10-team, keeper league).
 
 ## Features
 
 ### Draft Assistant
 An interactive CLI + live web dashboard for snake drafts:
+- **no_punt strategy** — leverage-weighted recommendations with AVG floor protection and closer deadline (R9 backstop), validated at ~18% win rate against realistic opponents (1.8x base rate)
 - **SGP-based player rankings** — blends Steamer, ZiPS, and ATC projections, then ranks players by Value Above Replacement (VAR)
-- **Positional scarcity** — flags when scarce positions (C, SS) are running thin
 - **Category balance tracking** — monitors your roster's projected stats across all 10 categories and warns when you're falling behind
+- **Closer alerts** — flags falling closers and enforces a deadline so you never punt saves
+- **AVG floor** — demotes hitters that would tank your team batting average below .250
+- **Positional scarcity** — flags when scarce positions (C, SS) are running thin
+- **Traded pick support** — type `mine` on other teams' turns for picks traded to you, or `spacemen gausman` on your turn for picks traded away
+- **Quoted team names** — `"crews control" chris sale` for ambiguous team names
+- **Mock draft mode** — `--mock --position 6 --teams 10` for practice drafts
+- **Live web dashboard** — Flask + htmx browser view with draft board (sortable by VAR or ADP), recommendations, projected standings, roster grid, and category balance bars
 - **Fuzzy name search** — type partial or misspelled names and it finds the right player
-- **Snake draft awareness** — knows your pick position and calculates the gap to your next turn
-- **Live web dashboard** — Flask + htmx browser view that updates in real-time as you enter picks in the terminal
+
+### Draft Strategy Engine
+Simulate and compare draft strategies with Monte Carlo analysis:
+- **10 strategies** — default, no_punt, no_punt_opp, three_closers, avg_hedge, avg_anchor, closers_avg, balanced, nonzero_sv, anti_fragile
+- **Opponent modeling** — assign strategies to specific opponents based on historical draft tendencies
+- **ADP noise** — randomize opponent draft order to test robustness
+- **Active roster modeling** — only counts stats from starting lineup, not bench
+- **Monte Carlo projections** — injury model, stat variance, and roto scoring across 1000 simulated seasons
 
 ### In-Season Lineup Optimizer
 A CLI tool that connects to Yahoo, analyzes your standings position, and recommends the optimal lineup + waiver moves:
-- **Standings leverage** — identifies which categories are closest to gaining (or losing) a standings point, then weights player value accordingly
+- **Standings leverage** — identifies which categories are closest to gaining (or losing) a standings point
 - **Optimal hitter lineup** — uses the Hungarian algorithm to assign hitters to roster slots, maximizing leverage-weighted SGP
 - **Pitcher ranking** — ranks pitchers by leverage-weighted SGP and recommends who to start
 - **Per-decision reasoning** — explains flex slot choices (e.g., "Start X over Y at UTIL — gains HR, RBI")
-- **Waiver wire scanner** — scans free agents at every position, evaluates add/drop swaps, and ranks the top pickups by SGP gain with category breakdowns
+- **Waiver wire scanner** — scans free agents at every position, evaluates add/drop swaps, and ranks the top pickups by SGP gain
+- **MLB schedule integration** — fetches weekly game counts and probable pitchers from the MLB Stats API, flags two-start pitchers
+- **Schedule-aware projections** — scales counting stats by actual games per week (not a flat average)
 
 ## Setup
 
-### Prerequisites
-- Python 3.11+
-- A Yahoo Developer app ([register here](https://developer.yahoo.com/apps/))
-  - Select "Confidential Client"
-  - Enable "Fantasy Sports" with Read access
-  - Redirect URI: `oob`
+See [SETUP.md](SETUP.md) for detailed step-by-step instructions (including for non-technical users).
 
-### Installation
+### Quick Start
 
 ```bash
 git clone https://github.com/alhart2015/FantasyBaseball.git
@@ -40,60 +50,7 @@ cd FantasyBaseball
 pip install -e ".[dev]"
 ```
 
-### Yahoo Authentication
-
-Create `config/oauth.json` with your Yahoo app credentials:
-
-```json
-{
-    "consumer_key": "your-key-here",
-    "consumer_secret": "your-secret-here"
-}
-```
-
-Run any script that uses Yahoo's API — on first run, it will open a browser window for authorization. Paste the verification code back into the terminal. The token is cached for future use.
-
-### Projection Data
-
-Download projection CSVs from [FanGraphs](https://www.fangraphs.com/projections):
-
-1. Select a projection system (Steamer, ZiPS, or ATC)
-2. Export Hitters CSV → save to `data/projections/`
-3. Export Pitchers CSV → save to `data/projections/`
-
-Supported file naming:
-- `steamer_hitters.csv` / `steamer_pitchers.csv`
-- `fangraphs-leaderboard-projections-steamer-hitters.csv` (FanGraphs default export name)
-
-Configure which systems to blend in `config/league.yaml`:
-
-```yaml
-projections:
-  systems:
-    - steamer
-    - zips
-    - atc
-  weights:
-    steamer: 0.33
-    zips: 0.33
-    atc: 0.34
-```
-
-### League Configuration
-
-Copy the example config and customize:
-
-```bash
-cp config/league.yaml.example config/league.yaml
-```
-
-Key settings in `config/league.yaml`:
-- `league.id` — your Yahoo league ID
-- `league.team_name` — your team name (for keeper matching)
-- `draft.position` — your snake draft pick position (1-indexed)
-- `keepers` — all 30 keepers across the league
-- `roster_slots` — your league's roster configuration
-- `sgp_denominators` — tune these if default values don't match your league
+Create `config/oauth.json` with Yahoo app credentials, download FanGraphs projection CSVs to `data/projections/`, and configure `config/league.yaml`.
 
 ## Draft Day
 
@@ -103,23 +60,33 @@ Key settings in `config/league.yaml`:
 python scripts/fetch_positions.py
 ```
 
-This caches Yahoo position eligibility data to `data/player_positions.json`.
-
 ### 2. Launch the draft assistant
 
 ```bash
 python scripts/run_draft.py
 ```
 
-This starts the CLI in your terminal and a web dashboard at `http://localhost:5000`.
+For mock drafts:
+
+```bash
+python scripts/run_draft.py --mock --position 8 --teams 10
+```
 
 ### 3. During the draft
 
-- **Your pick:** The assistant shows top 5 recommendations with VAR scores, positional need flags, and category balance. Type a player name or enter a number (1-5) to select a recommendation.
-- **Other teams' picks:** Type the drafted player's name, optionally prefixed with the team name (e.g., `hello peanuts logan webb`). Fuzzy matching handles misspellings and partial team names.
-- **Commands:** `skip` to skip a pick, `quit` to exit.
+- **Your pick:** Top 5 recommendations with VAR scores, closer alerts, and AVG warnings. Type a number (1-5) or player name.
+- **Other teams' picks:** Type player name, optionally prefixed with team: `peanuts logan webb` or `"crews control" chris sale`
+- **Traded picks to you:** Type `mine` on another team's turn to get your recommendations
+- **Traded picks away:** Type `spacemen gausman` on your turn to assign to another team
+- **Commands:** `skip` to skip, `quit` to exit
 
-The web dashboard updates automatically after each pick.
+### 4. Simulate and compare strategies
+
+```bash
+python scripts/simulate_draft.py -s no_punt
+python scripts/simulate_draft.py -s no_punt --opponent-strategies "1:three_closers,5:three_closers"
+python scripts/monte_carlo.py -n 1000
+```
 
 ## In-Season Usage
 
@@ -127,11 +94,12 @@ The web dashboard updates automatically after each pick.
 python scripts/run_lineup.py
 ```
 
-Connects to Yahoo, fetches your roster and standings, then prints:
+Connects to Yahoo, fetches your roster, standings, and the MLB schedule, then prints:
 1. **Category leverage** — which stats are most valuable to target this week
 2. **Optimal hitter lineup** — slot assignments with reasoning on flex decisions
 3. **Optimal pitcher lineup** — ranked by leverage-weighted SGP
-4. **Waiver recommendations** — top 5 add/drop swaps with category impact
+4. **Probable starters** — matchups for your pitchers, flagging two-start pitchers
+5. **Waiver recommendations** — top 5 add/drop swaps with category impact
 
 ## How It Works
 
@@ -139,19 +107,17 @@ Connects to Yahoo, fetches your roster and standings, then prints:
 
 In roto leagues, each stat category earns 1-10 standings points. SGP measures how many raw stats it takes to move up one place in the standings. Players are valued by how many standings points they contribute across all 10 categories.
 
-**Counting stats** (R, HR, RBI, SB, W, K, SV): SGP = stat / denominator
-
-**Rate stats** (AVG, ERA, WHIP): Converted to "marginal" counting stats weighted by playing time, so a part-timer with a high average isn't overvalued vs. an everyday player with a slightly lower average.
-
 ### Value Above Replacement (VAR)
 
-VAR = Player's total SGP − replacement-level SGP at their position
+VAR = Player's total SGP - replacement-level SGP at their position. Scarce positions like C and SS have lower replacement levels, which naturally inflates the value of good players at those positions.
 
-Replacement level is the SGP of the best freely available player at each position (the first player who goes undrafted). Scarce positions like C and SS have lower replacement levels, which naturally inflates the value of good players at those positions.
+### no_punt Strategy
 
-### Projection Blending
+The winning strategy: use leverage-weighted drafting to build a balanced roster, enforce an AVG floor of .250 to avoid punting batting average, and draft a closer by round 9 if the leverage engine hasn't already grabbed one. Validated through simulation against realistic opponent models based on 2024-2025 draft history.
 
-Multiple projection systems are combined via weighted average. Counting stats are averaged directly. Rate stats (AVG, ERA, WHIP) are recomputed from blended component stats (H/AB for AVG, ER/IP for ERA) to maintain mathematical consistency.
+### Monte Carlo Season Simulation
+
+Each simulated season applies random injuries (45% of pitchers, 18% of hitters) and stat variance (12% std dev) to all players. Injured players are replaced proportionally by replacement-level waiver pickups. Only active roster players (13 hitters, 9 pitchers) contribute stats. Roto standings are scored across 1000 iterations to produce win probabilities and category risk profiles.
 
 ## Project Structure
 
@@ -159,24 +125,33 @@ Multiple projection systems are combined via weighted average. Counting stats ar
 FantasyBaseball/
 ├── src/fantasy_baseball/
 │   ├── auth/           # Yahoo OAuth2 authentication
-│   ├── data/           # FanGraphs CSV parsing, projection blending, Yahoo player data
-│   ├── draft/          # Draft board, tracker, balance, recommender, search
+│   ├── data/           # FanGraphs CSV parsing, projection blending, MLB schedule
+│   ├── draft/          # Draft board, tracker, balance, recommender, strategies, search
 │   ├── lineup/         # In-season optimizer: leverage, weighted SGP, optimizer, waivers
 │   ├── sgp/            # SGP engine: denominators, player values, replacement levels, VAR
 │   ├── utils/          # Constants, position helpers, name normalization
 │   ├── web/            # Flask dashboard for draft visualization
 │   └── config.py       # YAML config loading
 ├── scripts/
-│   ├── run_draft.py    # Interactive draft assistant CLI
-│   ├── run_lineup.py   # In-season lineup optimizer CLI
-│   └── fetch_positions.py  # Cache Yahoo position data
+│   ├── run_draft.py        # Interactive draft assistant CLI (+ mock mode)
+│   ├── run_lineup.py       # In-season lineup optimizer CLI
+│   ├── simulate_draft.py   # Draft simulation with configurable strategies
+│   ├── monte_carlo.py      # Monte Carlo season projection
+│   ├── fetch_positions.py  # Cache Yahoo position data
+│   ├── analyze_history.py  # Historical draft tendency analysis
+│   ├── analyze_mock.py     # Post-mock-draft projection analysis
+│   └── backtest_2025.py    # Backtest simulation against 2025 actual results
 ├── data/
 │   ├── projections/    # FanGraphs CSV files (not committed)
 │   └── player_positions.json  # Cached Yahoo positions (not committed)
 ├── config/
 │   ├── league.yaml     # League settings + keepers
 │   └── oauth.json      # Yahoo credentials (gitignored)
-└── tests/              # 180 tests
+├── docs/
+│   └── superpowers/    # Design specs and implementation plans
+├── SETUP.md            # Setup guide for new users
+├── TODO.md             # In-season enhancement roadmap
+└── tests/              # 208 tests
 ```
 
 ## Running Tests
@@ -189,5 +164,6 @@ pytest -v
 
 - **Python 3.11+** with pandas, numpy, scipy
 - **yahoo-fantasy-api** + **yahoo-oauth** for Yahoo Fantasy API access
+- **MLB-StatsAPI** for weekly schedule and probable pitcher data
 - **Flask** + **htmx** for the draft dashboard
 - **pytest** for testing
