@@ -87,12 +87,37 @@ def _write_dashboard_state(tracker, balance, board, recs, filled,
     write_state(state, STATE_PATH)
 
 
+def _parse_args():
+    import argparse
+    parser = argparse.ArgumentParser(description="Fantasy Baseball Draft Assistant")
+    parser.add_argument("--mock", action="store_true",
+                        help="Mock draft mode: no keepers, override position/teams")
+    parser.add_argument("--position", "-p", type=int, default=None,
+                        help="Draft position (mock mode, default: from config)")
+    parser.add_argument("--teams", "-t", type=int, default=None,
+                        help="Number of teams (mock mode, default: from config)")
+    return parser.parse_args()
+
+
 def main():
+    args = _parse_args()
+
     # Load config
     config = load_config(CONFIG_PATH)
-    print(f"League {config.league_id} | Draft position: {config.draft_position}")
-    print(f"Team: {config.team_name}")
-    print(f"Keepers: {len(config.keepers)} players across {config.num_teams} teams")
+
+    # Mock mode overrides
+    mock = args.mock
+    num_teams = args.teams or config.num_teams
+    draft_position = args.position or config.draft_position
+    keepers = [] if mock else config.keepers
+
+    if mock:
+        print(f"MOCK DRAFT | Position {draft_position} of {num_teams}")
+        print(f"Strategy: no_punt | No keepers")
+    else:
+        print(f"League {config.league_id} | Draft position: {draft_position}")
+        print(f"Team: {config.team_name}")
+        print(f"Keepers: {len(keepers)} players across {num_teams} teams")
     print()
 
     # Build draft board (keep full board for keeper lookups)
@@ -104,25 +129,25 @@ def main():
         weights=config.projection_weights or None,
         sgp_overrides=config.sgp_overrides or None,
         roster_slots=config.roster_slots or None,
-        num_teams=config.num_teams,
+        num_teams=num_teams,
     )
-    board = apply_keepers(full_board, config.keepers)
-    print(f"Draft pool: {len(board)} players (after removing {len(config.keepers)} keepers)")
+    board = apply_keepers(full_board, keepers)
+    print(f"Draft pool: {len(board)} players (after removing {len(keepers)} keepers)")
     print()
 
     # Initialize tracker and balance
-    user_keepers = [k for k in config.keepers if k.get("team") == config.team_name]
+    user_keepers = [k for k in keepers if k.get("team") == config.team_name]
     rounds = sum(config.roster_slots.values()) - len(user_keepers)
     tracker = DraftTracker(
-        num_teams=config.num_teams,
-        user_position=config.draft_position,
+        num_teams=num_teams,
+        user_position=draft_position,
         rounds=rounds,
     )
     balance = CategoryBalance()
 
     # Add keeper projections to balance and mark all keepers as drafted
     from fantasy_baseball.utils.name_utils import normalize_name
-    for keeper in config.keepers:
+    for keeper in keepers:
         is_user = keeper.get("team") == config.team_name
         norm = normalize_name(keeper["name"])
         matches = full_board[full_board["name_normalized"] == norm]
@@ -153,7 +178,7 @@ def main():
     recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
                                n=5, filled_positions=filled,
                                roster_slots=config.roster_slots,
-                               num_teams=config.num_teams,
+                               num_teams=num_teams,
                                draft_leverage=leverage)
     _write_dashboard_state(tracker, balance, board, recs, filled,
                            roster_slots=config.roster_slots,
@@ -190,7 +215,7 @@ def main():
             if tracker.is_user_pick:
                 _handle_user_pick(board, full_board, tracker, balance,
                                   roster_slots=config.roster_slots,
-                                  num_teams=config.num_teams)
+                                  num_teams=num_teams)
             else:
                 _handle_other_pick(board, full_board, tracker, balance,
                                    team_names, config.team_name)
@@ -207,14 +232,14 @@ def main():
             recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
                                        n=5, filled_positions=filled,
                                        roster_slots=config.roster_slots,
-                                       num_teams=config.num_teams,
+                                       num_teams=num_teams,
                                        draft_leverage=leverage)
 
             # Run projections at the end of each completed round.
             # After advance(), current_pick points to the NEXT pick.
             # A round just completed if the previous pick was the last in its round,
             # i.e. (current_pick - 1) is exactly divisible by num_teams.
-            just_finished_round = (tracker.current_pick - 1) // config.num_teams
+            just_finished_round = (tracker.current_pick - 1) // num_teams
             if just_finished_round > last_projected_round and just_finished_round >= 1:
                 last_projected_round = just_finished_round
                 print(f"\n  Running projected standings (round {just_finished_round} complete)...")
@@ -222,7 +247,7 @@ def main():
                     config, full_board, tracker)
                 projection_data = run_projections(
                     team_rosters, config.roster_slots, full_board,
-                    config.num_teams, iterations=1000,
+                    num_teams, iterations=1000,
                 )
                 # Annotate with team names and user flag for dashboard
                 user_num = None
