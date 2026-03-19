@@ -33,6 +33,36 @@ POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 
 
+class TeamTrackerProxy:
+    """Lightweight proxy that makes strategy functions work for any team.
+
+    Strategy functions access tracker.user_roster_ids, tracker.user_roster,
+    tracker.drafted_ids, tracker.current_pick, tracker.current_round, etc.
+    This proxy redirects "user" fields to the specified team's roster.
+    """
+
+    def __init__(self, real_tracker, team_roster, team_roster_ids):
+        self._real = real_tracker
+        self.user_roster = team_roster
+        self.user_roster_ids = team_roster_ids
+        self.drafted_players = real_tracker.drafted_players
+        self.drafted_ids = real_tracker.drafted_ids
+        self.num_teams = real_tracker.num_teams
+        self.rounds = real_tracker.rounds
+
+    @property
+    def current_pick(self):
+        return self._real.current_pick
+
+    @property
+    def current_round(self):
+        return self._real.current_round
+
+    @property
+    def total_picks(self):
+        return self._real.total_picks
+
+
 def _active_slot_counts(roster_slots):
     """Return (active_hitter_slots, active_pitcher_slots) from config."""
     hitter_slots = sum(
@@ -107,6 +137,18 @@ def main():
         "--closer-deadlines", type=str, default=None,
         help="Comma-separated closer deadline rounds for three_closers strategy (e.g. 4,8,12)",
     )
+    parser.add_argument(
+        "--adp-noise", type=float, default=0.0,
+        help="Std dev of noise added to opponent ADP (e.g. 20 = +/- ~20 ADP spots)",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=None,
+        help="Random seed for ADP noise",
+    )
+    parser.add_argument(
+        "--opponent-strategies", type=str, default=None,
+        help="Assign strategies to opponents: '3:default,5:three_closers' (team_num:strategy)",
+    )
     args = parser.parse_args()
 
     # Apply custom closer deadlines if provided
@@ -142,6 +184,15 @@ def main():
     if "adp" not in adp_board.columns:
         print("WARNING: No ADP data found. Other teams will use VAR ranking.")
         adp_board["adp"] = range(len(adp_board))
+
+    # Add noise to simulate unpredictable opponents
+    if args.adp_noise > 0:
+        import numpy as np
+        rng = np.random.default_rng(args.seed)
+        noise = rng.normal(0, args.adp_noise, size=len(adp_board))
+        adp_board = adp_board.copy()
+        adp_board["adp"] = adp_board["adp"] + noise
+
     adp_board = adp_board.sort_values("adp", ascending=True)
 
     # Initialize tracker
@@ -174,8 +225,43 @@ def main():
                                  config.roster_slots)
                 break
 
+    # Parse opponent strategies
+    opp_strategies = {}  # team_num -> strategy_fn
+    opp_balances = {}    # team_num -> CategoryBalance
+    opp_rosters = {}     # team_num -> [player_ids]
+    opp_roster_names = {}  # team_num -> [names]
+    if args.opponent_strategies:
+        for pair in args.opponent_strategies.split(","):
+            tn_str, strat_name = pair.strip().split(":")
+            tn = int(tn_str)
+            if strat_name not in STRATEGIES:
+                print(f"WARNING: Unknown strategy '{strat_name}' for team {tn}, using ADP")
+                continue
+            opp_strategies[tn] = STRATEGIES[strat_name]
+            opp_balances[tn] = CategoryBalance()
+            opp_rosters[tn] = []
+            opp_roster_names[tn] = []
+
+    # Add keeper projections to opponent balance trackers
+    for keeper in config.keepers:
+        for num, name in config.teams.items():
+            if name == keeper["team"] and num in opp_balances:
+                norm = normalize_name(keeper["name"])
+                matches = full_board[full_board["name_normalized"] == norm]
+                if not matches.empty:
+                    best = matches.loc[matches["var"].idxmax()]
+                    opp_balances[num].add_player(best)
+                    opp_rosters[num].append(best["player_id"])
+                    opp_roster_names[num].append(best["name"])
+            break
+
     print(f"Draft pool: {len(board)} players")
     print(f"Keepers registered: {len(config.keepers)}")
+    if opp_strategies:
+        for tn, fn in opp_strategies.items():
+            tname = config.teams.get(tn, f"Team {tn}")
+            sname = [k for k, v in STRATEGIES.items() if v is fn][0]
+            print(f"  {tname}: {sname}")
     print()
 
     # Run draft
@@ -211,6 +297,43 @@ def main():
                 row = board[board["player_id"] == pid]
                 if not row.empty:
                     balance.add_player(row.iloc[0])
+                    _assign_slot(row.iloc[0]["positions"],
+                                 team_filled[team_num], config.roster_slots)
+            else:
+                pick_name = "(no pick)"
+                pick_pos = ""
+        elif team_num in opp_strategies:
+            # This opponent uses a named strategy
+            opp_fn = opp_strategies[team_num]
+            proxy = TeamTrackerProxy(
+                tracker, opp_roster_names[team_num], opp_rosters[team_num],
+            )
+            pick_name, pid = opp_fn(
+                board, full_board, proxy, opp_balances[team_num],
+                config, team_filled, total_rounds=rounds,
+            )
+            if pick_name is None:
+                # Fallback to ADP
+                available_ids = set(tracker.drafted_ids)
+                for _, row in adp_board.iterrows():
+                    if row["player_id"] not in available_ids:
+                        pick_name = row["name"]
+                        pid = row["player_id"]
+                        break
+
+            pick_pos = ""
+            if pid:
+                rows = board[board["player_id"] == pid]
+                if not rows.empty:
+                    pick_pos = rows.iloc[0].get("best_position", "")
+
+            if pick_name:
+                tracker.draft_player(pick_name, is_user=False, player_id=pid)
+                row = board[board["player_id"] == pid]
+                if not row.empty:
+                    opp_balances[team_num].add_player(row.iloc[0])
+                    opp_rosters[team_num].append(pid)
+                    opp_roster_names[team_num].append(pick_name)
                     _assign_slot(row.iloc[0]["positions"],
                                  team_filled[team_num], config.roster_slots)
             else:
