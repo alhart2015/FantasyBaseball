@@ -217,8 +217,18 @@ def main():
                                   roster_slots=config.roster_slots,
                                   num_teams=num_teams)
             else:
-                _handle_other_pick(board, full_board, tracker, balance,
-                                   team_names, config.team_name)
+                # Peek at input — if "mine", treat as user pick (traded pick)
+                raw = input("\nPick (player, 'team player', or 'mine'): ").strip()
+                if raw.lower() == "mine":
+                    print(f"  >>> YOUR PICK (traded to you)")
+                    _handle_user_pick(board, full_board, tracker, balance,
+                                      roster_slots=config.roster_slots,
+                                      num_teams=num_teams)
+                else:
+                    # Process the input that was already typed
+                    _handle_other_pick(board, full_board, tracker, balance,
+                                       team_names, config.team_name,
+                                       prefilled_input=raw)
 
             # Advance to next pick so dashboard shows upcoming pick, not the one just made
             tracker.advance()
@@ -450,10 +460,17 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
 
 
 def _handle_other_pick(board, full_board, tracker, balance,
-                       team_names=None, user_team_name=None):
-    """Handle another team's pick (or a traded pick for the user's team)."""
+                       team_names=None, user_team_name=None,
+                       prefilled_input=None):
+    """Handle another team's pick (or a traded pick for the user's team).
+
+    If prefilled_input is provided, it's used as the first input line
+    instead of prompting (for when the main loop already read input to
+    check for 'mine').
+    """
     name, pid, matched_team = _get_player_input(board, tracker,
-                                                team_names=team_names)
+                                                team_names=team_names,
+                                                prefilled_input=prefilled_input)
     if name:
         is_user = (matched_team is not None
                    and user_team_name is not None
@@ -470,7 +487,8 @@ def _handle_other_pick(board, full_board, tracker, balance,
             print(f"  -> Drafted: {name}")
 
 
-def _get_player_input(board, tracker, team_names=None, current_recs=None):
+def _get_player_input(board, tracker, team_names=None, current_recs=None,
+                      prefilled_input=None):
     """Get and fuzzy-match a player name from user input.
 
     Returns (name, player_id, team) or (None, None, None).
@@ -484,6 +502,9 @@ def _get_player_input(board, tracker, team_names=None, current_recs=None):
     If *team_names* is provided, the input may optionally start with a team
     name prefix (e.g. "hello peanuts logan webb").  The team prefix is
     stripped before the player fuzzy search.
+
+    If *prefilled_input* is provided, it's used as the first input line
+    instead of prompting.
     """
     available = board[~board["player_id"].isin(tracker.drafted_ids)]
     available_names = available["name"].tolist()
@@ -495,8 +516,13 @@ def _get_player_input(board, tracker, team_names=None, current_recs=None):
             return rows.iloc[0]["player_id"]
         return name + "::unknown"
 
+    first_loop = True
     while True:
-        raw = input("\nEnter player name (or 'skip' to skip): ").strip()
+        if first_loop and prefilled_input is not None:
+            raw = prefilled_input
+            first_loop = False
+        else:
+            raw = input("\nEnter player name (or 'skip' to skip): ").strip()
         if raw.lower() == "skip":
             return None, None, None
         if raw.lower() == "quit":
