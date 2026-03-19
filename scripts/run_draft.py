@@ -373,6 +373,12 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
             if projected_avg < NO_PUNT_AVG_FLOOR:
                 avg_warnings.append(rec["name"])
 
+    # Reorder: push low-AVG hitters below non-flagged recs
+    if avg_warnings:
+        safe_recs = [r for r in recs if r["name"] not in avg_warnings]
+        risky_recs = [r for r in recs if r["name"] in avg_warnings]
+        recs = safe_recs + risky_recs
+
     # Build final recommendation list: closer on top if triggered
     if closer_rec:
         # Check if the closer is already in recs
