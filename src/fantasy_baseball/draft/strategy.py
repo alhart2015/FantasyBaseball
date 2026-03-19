@@ -182,8 +182,11 @@ def pick_no_punt_opp(
             available.apply(lambda r: r.get("sv", 0) >= CLOSER_SV_THRESHOLD, axis=1)
         ]
         if not closers.empty:
+            # Effective pick in ADP terms = draft pick + keepers already off the board
+            num_keepers = len(tracker.drafted_players) - (current_pick - 1)
+            effective_pick = current_pick + num_keepers
             # Find closers whose ADP says they should be gone by now
-            falling = closers[current_pick >= closers["adp"] - OPP_CLOSER_ADP_BUFFER]
+            falling = closers[effective_pick >= closers["adp"] - OPP_CLOSER_ADP_BUFFER]
             if not falling.empty:
                 # Take the best one by VAR
                 falling = falling.sort_values("var", ascending=False)

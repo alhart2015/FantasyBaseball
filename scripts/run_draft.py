@@ -320,8 +320,11 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
             best_closer = closers.sort_values("var", ascending=False).iloc[0]
             closer_adp = best_closer.get("adp", 999)
             current_pick = tracker.current_pick
+            # Effective pick in ADP terms = draft pick + keepers already off the board
+            num_keepers = len(tracker.drafted_players) - (current_pick - 1)
+            effective_pick = current_pick + num_keepers
 
-            if current_pick >= closer_adp - OPP_CLOSER_ADP_BUFFER:
+            if effective_pick >= closer_adp - OPP_CLOSER_ADP_BUFFER:
                 # Closer is falling past their ADP — opportunity
                 closer_rec = {
                     "name": best_closer["name"],
@@ -329,7 +332,7 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
                     "var": best_closer.get("var", 0),
                     "score": None,
                     "need_flag": True,
-                    "note": f"FALLING closer — ADP {closer_adp:.0f}, pick {current_pick}",
+                    "note": f"FALLING closer — ADP {closer_adp:.0f}, effective pick {effective_pick}",
                     "player_type": "pitcher",
                 }
                 strategy_alerts.append(
