@@ -34,8 +34,8 @@ THREE_CLOSERS_DEADLINES = [5, 9, 13]
 NO_PUNT_SV_DEADLINE = 8
 NO_PUNT_AVG_FLOOR = 0.250
 # opportunistic: grab a closer if they've fallen past their ADP
-# (current_pick >= ADP = they "should" already be gone, someone else will grab them)
-OPP_CLOSER_ADP_BUFFER = 5  # trigger if ADP is within 5 picks of being "overdue"
+# (effective_pick >= ADP = they "should" already be gone, someone else will grab them)
+OPP_CLOSER_ADP_BUFFER = 0  # trigger only when actually past ADP
 # avg_anchor: minimum AVG to qualify as an anchor, and deadline
 AVG_ANCHOR_MIN = 0.285
 AVG_ANCHOR_DEADLINE_HITTER = 3  # must draft anchor within first 3 hitter picks
