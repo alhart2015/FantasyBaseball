@@ -205,9 +205,9 @@ def run_projections(
     return {"standings": standings}
 
 
-def reconstruct_rosters_from_draft(config, board, tracker):
+def reconstruct_rosters_from_draft(config, board, tracker, num_teams_override=None):
     """Build per-team player lists from in-progress draft tracker."""
-    num_teams = config.num_teams
+    num_teams = num_teams_override or config.num_teams
     team_players = {i: [] for i in range(1, num_teams + 1)}
 
     # Keepers

@@ -244,17 +244,14 @@ def main():
                 last_projected_round = just_finished_round
                 print(f"\n  Running projected standings (round {just_finished_round} complete)...")
                 team_rosters = reconstruct_rosters_from_draft(
-                    config, full_board, tracker)
+                    config, full_board, tracker,
+                    num_teams_override=num_teams)
                 projection_data = run_projections(
                     team_rosters, config.roster_slots, full_board,
                     num_teams, iterations=1000,
                 )
                 # Annotate with team names and user flag for dashboard
-                user_num = None
-                for num, name in config.teams.items():
-                    if name == config.team_name:
-                        user_num = num
-                        break
+                user_num = draft_position
                 for s in projection_data["standings"]:
                     s["team_name"] = config.teams.get(
                         s["team_num"], f"Team {s['team_num']}")
