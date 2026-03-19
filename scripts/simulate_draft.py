@@ -63,8 +63,18 @@ def _select_active_players(hitters, pitchers, roster_slots):
     return ranked_h[:h_slots], ranked_p[:p_slots]
 
 
+def _can_fill_active_slot(player_positions, filled, roster_slots):
+    """Check if a player can fill an active (non-bench/IL) slot."""
+    for pos, total in roster_slots.items():
+        if pos in ("BN", "IL"):
+            continue
+        if filled.get(pos, 0) < total and can_fill_slot(player_positions, pos):
+            return True
+    return False
+
+
 def _can_roster(player_positions, filled, roster_slots):
-    """Check if a player can fit in any open slot."""
+    """Check if a player can fit in any open slot (including bench/IL)."""
     for pos, total in roster_slots.items():
         if filled.get(pos, 0) < total and can_fill_slot(player_positions, pos):
             return True
@@ -207,17 +217,20 @@ def main():
                 pick_name = "(no pick)"
                 pick_pos = ""
         else:
-            # Other teams: pick best available by ADP that they can roster
+            # Other teams: pick best available by ADP, preferring players
+            # who fill an active roster slot over bench/IL.
             available_ids = set(tracker.drafted_ids)
             pick_name = None
             pick_pos = ""
             pid = ""
+
+            # First pass: find the best ADP player who fills an ACTIVE slot
             for _, row in adp_board.iterrows():
                 if row["player_id"] in available_ids:
                     continue
                 positions = row["positions"]
-                if _can_roster(positions, team_filled[team_num],
-                               config.roster_slots):
+                if _can_fill_active_slot(positions, team_filled[team_num],
+                                         config.roster_slots):
                     pick_name = row["name"]
                     pid = row["player_id"]
                     pick_pos = row.get("best_position", "")
@@ -226,6 +239,23 @@ def main():
                     _assign_slot(positions, team_filled[team_num],
                                  config.roster_slots)
                     break
+
+            # Second pass: if all active slots are full, fill bench
+            if pick_name is None:
+                for _, row in adp_board.iterrows():
+                    if row["player_id"] in available_ids:
+                        continue
+                    positions = row["positions"]
+                    if _can_roster(positions, team_filled[team_num],
+                                   config.roster_slots):
+                        pick_name = row["name"]
+                        pid = row["player_id"]
+                        pick_pos = row.get("best_position", "")
+                        tracker.draft_player(pick_name, is_user=False,
+                                             player_id=pid)
+                        _assign_slot(positions, team_filled[team_num],
+                                     config.roster_slots)
+                        break
 
             if pick_name is None:
                 pick_name = "(no pick)"
