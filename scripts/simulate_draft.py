@@ -63,7 +63,17 @@ def main():
         default="default",
         help="Draft strategy for your team (default: %(default)s)",
     )
+    parser.add_argument(
+        "--closer-deadlines", type=str, default=None,
+        help="Comma-separated closer deadline rounds for three_closers strategy (e.g. 4,8,12)",
+    )
     args = parser.parse_args()
+
+    # Apply custom closer deadlines if provided
+    if args.closer_deadlines:
+        import fantasy_baseball.draft.strategy as strat_mod
+        deadlines = [int(r.strip()) for r in args.closer_deadlines.split(",")]
+        strat_mod.THREE_CLOSERS_DEADLINES = deadlines
 
     strategy_fn = STRATEGIES[args.strategy]
 

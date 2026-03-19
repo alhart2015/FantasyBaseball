@@ -24,8 +24,8 @@ CLOSER_DEADLINE_ROUND = 10
 AVG_FLOOR = 0.255
 # three_closers strategy: how many closers and spacing
 THREE_CLOSERS_TARGET = 3
-# Draft first closer by round 6, second by round 10, third by round 14
-THREE_CLOSERS_DEADLINES = [6, 10, 14]
+# Draft first closer by round 5, second by round 9, third by round 13
+THREE_CLOSERS_DEADLINES = [5, 9, 13]
 
 
 def pick_default(
