@@ -33,6 +33,9 @@ THREE_CLOSERS_DEADLINES = [5, 9, 13]
 # no_punt: force a closer by this round if SV == 0, and AVG floor
 NO_PUNT_SV_DEADLINE = 8
 NO_PUNT_AVG_FLOOR = 0.250
+# opportunistic: grab a closer if their ADP says they're a steal
+# (ADP < current overall pick number = they "should" already be gone)
+OPP_CLOSER_ADP_BUFFER = 10  # grab if ADP is within 10 picks of current pick
 # avg_anchor: minimum AVG to qualify as an anchor, and deadline
 AVG_ANCHOR_MIN = 0.285
 AVG_ANCHOR_DEADLINE_HITTER = 3  # must draft anchor within first 3 hitter picks
@@ -155,6 +158,72 @@ def pick_avg_hedge(
         # else: skip this low-AVG hitter and try the next rec
 
     # If all hitters would tank AVG, take the best one anyway
+    return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
+
+
+def pick_no_punt_opp(
+    board, full_board, tracker, balance, config, team_filled, **kwargs,
+):
+    """No-punt with opportunistic closer acquisition.
+
+    Like no_punt, but also grabs a closer early if one is available
+    past their ADP (i.e., they're a bargain that could get sniped).
+    Still enforces the round 8 deadline as a backstop.
+    """
+    closer_count = _count_closers(tracker, board, full_board)
+    current_round = tracker.current_round
+    current_pick = tracker.current_pick
+
+    # Opportunistic: if we don't have a closer yet, check if a good one
+    # is available past their ADP (they're falling and could get sniped)
+    if closer_count == 0:
+        available = board[~board["player_id"].isin(tracker.drafted_ids)]
+        closers = available[
+            available.apply(lambda r: r.get("sv", 0) >= CLOSER_SV_THRESHOLD, axis=1)
+        ]
+        if not closers.empty:
+            # Find closers whose ADP says they should be gone by now
+            falling = closers[closers["adp"] <= current_pick + OPP_CLOSER_ADP_BUFFER]
+            if not falling.empty:
+                # Take the best one by VAR
+                falling = falling.sort_values("var", ascending=False)
+                filled = get_filled_positions(
+                    tracker.user_roster_ids, full_board,
+                    roster_slots=config.roster_slots,
+                )
+                for _, best in falling.iterrows():
+                    if _can_roster_player(best, filled, config.roster_slots):
+                        return best["name"], best["player_id"]
+
+    # Deadline backstop: force a closer by round 8
+    if closer_count == 0 and current_round >= NO_PUNT_SV_DEADLINE:
+        result = _force_closer(board, tracker, full_board, config)
+        if result:
+            return result
+
+    # Otherwise: default with AVG floor (same as no_punt)
+    recs = _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs)
+    if not recs:
+        return None, None
+
+    current_h = sum(h.get("h", 0) for h in balance._hitters)
+    current_ab = sum(h.get("ab", 0) for h in balance._hitters)
+
+    for rec in recs:
+        if rec["player_type"] != "hitter":
+            return rec["name"], _lookup_pid(board, rec["name"])
+
+        rows = board[board["name"] == rec["name"]]
+        if rows.empty:
+            continue
+        player = rows.iloc[0]
+        new_h = current_h + player.get("h", 0)
+        new_ab = current_ab + player.get("ab", 0)
+        projected_avg = new_h / new_ab if new_ab > 0 else 0
+
+        if projected_avg >= NO_PUNT_AVG_FLOOR or current_ab == 0:
+            return rec["name"], _lookup_pid(board, rec["name"])
+
     return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
 
 
@@ -493,6 +562,7 @@ STRATEGIES = {
     "avg_hedge": pick_avg_hedge,
     "three_closers": pick_three_closers,
     "no_punt": pick_no_punt,
+    "no_punt_opp": pick_no_punt_opp,
     "avg_anchor": pick_avg_anchor,
     "closers_avg": pick_closers_avg,
     "balanced": pick_balanced,
