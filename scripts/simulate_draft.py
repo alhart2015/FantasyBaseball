@@ -138,6 +138,10 @@ def main():
         help="Comma-separated closer deadline rounds for three_closers strategy (e.g. 4,8,12)",
     )
     parser.add_argument(
+        "--no-punt-deadline", type=int, default=None,
+        help="Override the no_punt closer deadline round (default: 8)",
+    )
+    parser.add_argument(
         "--adp-noise", type=float, default=0.0,
         help="Std dev of noise added to opponent ADP (e.g. 20 = +/- ~20 ADP spots)",
     )
@@ -152,10 +156,12 @@ def main():
     args = parser.parse_args()
 
     # Apply custom closer deadlines if provided
+    import fantasy_baseball.draft.strategy as strat_mod
     if args.closer_deadlines:
-        import fantasy_baseball.draft.strategy as strat_mod
         deadlines = [int(r.strip()) for r in args.closer_deadlines.split(",")]
         strat_mod.THREE_CLOSERS_DEADLINES = deadlines
+    if args.no_punt_deadline is not None:
+        strat_mod.NO_PUNT_SV_DEADLINE = args.no_punt_deadline
 
     strategy_fn = STRATEGIES[args.strategy]
 
