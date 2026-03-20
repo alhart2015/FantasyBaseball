@@ -153,6 +153,10 @@ def main():
         "--opponent-strategies", type=str, default=None,
         help="Assign strategies to opponents: '3:default,5:three_closers' (team_num:strategy)",
     )
+    parser.add_argument(
+        "--scoring", choices=["var", "vona"], default="var",
+        help="Scoring mode: 'var' (Value Above Replacement) or 'vona' (Value Over Next Available)",
+    )
     args = parser.parse_args()
 
     # Apply custom closer deadlines if provided
@@ -167,7 +171,7 @@ def main():
 
     config = load_config(CONFIG_PATH)
     print(f"Simulating draft | {config.team_name} at position {config.draft_position}")
-    print(f"Strategy: {args.strategy}")
+    print(f"Strategy: {args.strategy} | Scoring: {args.scoring}")
     print(f"League: {config.num_teams} teams, {sum(config.roster_slots.values())} roster slots")
     print()
 
@@ -282,6 +286,7 @@ def main():
             pick_name, pid = strategy_fn(
                 board, full_board, tracker, balance, config, team_filled,
                 total_rounds=rounds,
+                scoring_mode=args.scoring,
             )
             if pick_name is None:
                 # Fallback: pick best available by ADP

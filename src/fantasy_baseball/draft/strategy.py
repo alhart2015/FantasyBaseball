@@ -50,23 +50,7 @@ def pick_default(
     board, full_board, tracker, balance, config, team_filled, **kwargs,
 ):
     """Default strategy: take the #1 leverage-weighted recommendation."""
-    filled = get_filled_positions(
-        tracker.user_roster_ids, full_board,
-        roster_slots=config.roster_slots,
-    )
-    leverage = calculate_draft_leverage(
-        balance.get_totals(),
-        picks_made=len(tracker.user_roster),
-        total_picks=kwargs.get("total_rounds", 22),
-    )
-    recs = get_recommendations(
-        board, drafted=tracker.drafted_ids,
-        user_roster=tracker.user_roster,
-        n=5, filled_positions=filled,
-        roster_slots=config.roster_slots,
-        num_teams=config.num_teams,
-        draft_leverage=leverage,
-    )
+    recs = _get_recs(board, full_board, tracker, balance, config, n=5, **kwargs)
     if recs:
         return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
     return None, None
@@ -350,6 +334,7 @@ def _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs):
         roster_slots=config.roster_slots,
         num_teams=config.num_teams,
         draft_leverage=leverage,
+        scoring_mode=kwargs.get("scoring_mode", "var"),
     )
 
 

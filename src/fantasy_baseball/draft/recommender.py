@@ -9,6 +9,60 @@ from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 
 REQUIRED_POSITIONS = ["C", "1B", "2B", "3B", "SS", "OF", "P"]
 
+# Closer threshold for VONA bucketing (matches strategy.py)
+_CLOSER_SV_THRESHOLD = 20
+
+
+def _player_bucket(player) -> str:
+    """Classify a player into hitter / sp / closer for VONA."""
+    if player.get("player_type") == "hitter":
+        return "hitter"
+    if player.get("sv", 0) >= _CLOSER_SV_THRESHOLD:
+        return "closer"
+    return "sp"
+
+
+def calculate_vona_scores(
+    available: pd.DataFrame,
+    picks_until_next: int | None = None,
+) -> dict:
+    """Compute Value Over Next Available for each player.
+
+    For each player, estimates what the best player of the same bucket
+    (hitter / SP / closer) will still be available after opponents make
+    ``picks_until_next`` picks, drafting by ADP.
+
+    Returns dict of player_id -> VONA score.
+    """
+    if picks_until_next is None or picks_until_next < 1:
+        picks_until_next = 10  # sensible default
+
+    # Sort the full pool by ADP — opponents draft roughly by ADP
+    adp_sorted = available.sort_values("adp", ascending=True)
+
+    # The next N picks (by ADP) are the ones opponents will take
+    gone_ids = set(adp_sorted.head(picks_until_next)["player_id"])
+
+    # What remains after opponents pick
+    remaining = available[~available["player_id"].isin(gone_ids)]
+
+    # Best remaining SGP per bucket
+    best_remaining: dict[str, float] = {"hitter": 0, "sp": 0, "closer": 0}
+    for _, row in remaining.iterrows():
+        bucket = _player_bucket(row)
+        sgp = row.get("total_sgp", 0)
+        if sgp > best_remaining[bucket]:
+            best_remaining[bucket] = sgp
+
+    # VONA = player SGP - best remaining in same bucket
+    vona_scores = {}
+    for idx, row in available.iterrows():
+        bucket = _player_bucket(row)
+        sgp = row.get("total_sgp", 0)
+        vona_scores[row["player_id"]] = sgp - best_remaining[bucket]
+
+    return vona_scores
+
 
 def get_recommendations(
     board: pd.DataFrame,
@@ -20,6 +74,7 @@ def get_recommendations(
     roster_slots: dict[str, int] | None = None,
     num_teams: int | None = None,
     draft_leverage: dict[str, float] | None = None,
+    scoring_mode: str = "var",
 ) -> list[dict]:
     """Get top draft pick recommendations.
 
@@ -29,6 +84,10 @@ def get_recommendations(
     If *draft_leverage* is provided (category weights from balance
     analysis), candidates are scored by leverage-weighted SGP instead
     of raw VAR, steering picks toward categories the team needs most.
+
+    *scoring_mode*: "var" (default) uses Value Above Replacement for
+    ranking; "vona" uses Value Over Next Available, which accounts for
+    talent depth at each player type (hitter/SP/closer).
     """
     if roster_slots is None:
         roster_slots = DEFAULT_ROSTER_SLOTS
@@ -48,7 +107,16 @@ def get_recommendations(
     available = available.copy()
     available["var"] = available.index.map(live_var)
     available["best_position"] = available.index.map(live_pos)
-    available = available.sort_values("var", ascending=False)
+
+    # Compute VONA if requested
+    vona_scores = None
+    if scoring_mode == "vona":
+        vona_scores = calculate_vona_scores(available, picks_until_next)
+        available["vona"] = available["player_id"].map(vona_scores).fillna(0)
+
+    # Sort by the active scoring mode
+    sort_col = "vona" if scoring_mode == "vona" else "var"
+    available = available.sort_values(sort_col, ascending=False)
 
     if filled_positions is None:
         filled_positions = {}
@@ -56,7 +124,7 @@ def get_recommendations(
     # Filter out players who have no open roster slot (including BN).
     # E.g. if all OF, UTIL, and BN spots are full, don't suggest more OFs.
     available = _filter_rosterable(available, filled_positions, roster_slots)
-    available = available.sort_values("var", ascending=False)
+    available = available.sort_values(sort_col, ascending=False)
 
     # Use a wider window for scarcity checks, narrower for rec candidates
     scarcity_pool = available.head(50)
@@ -79,11 +147,18 @@ def get_recommendations(
 
     recs = []
     for _, player in candidates.iterrows():
-        # Use leverage-weighted SGP if available, otherwise raw VAR
+        # Use leverage-weighted SGP if available, otherwise base score
         if draft_leverage:
             score = calculate_weighted_sgp(player, draft_leverage)
+            # In VONA mode, blend urgency into the score: players whose
+            # value disappears fastest get boosted.  VONA is in SGP units
+            # so we scale it relative to the leverage score to keep both
+            # components meaningful.
+            if scoring_mode == "vona" and vona_scores is not None:
+                vona = vona_scores.get(player["player_id"], 0)
+                score = score + vona
         else:
-            score = player["var"]
+            score = player.get("vona", 0) if scoring_mode == "vona" else player["var"]
         rec = {
             "name": player["name"],
             "var": player["var"],
