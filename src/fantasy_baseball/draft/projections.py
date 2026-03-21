@@ -121,7 +121,7 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
             adj_hitters = adj_hitters[:h_slots]
         if p_slots is not None:
             adj_pitchers.sort(
-                key=lambda p: p["w"] + p["k"] + p["sv"],
+                key=lambda p: (p.get("sv", 0) >= 15, p["w"] + p["k"] + p["sv"]),
                 reverse=True,
             )
             adj_pitchers = adj_pitchers[:p_slots]

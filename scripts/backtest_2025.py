@@ -306,7 +306,7 @@ def sim_season(rosters, rng, h_slots=13, p_slots=9):
                 row[col] = varied * (1 - frac) + repl.get(col, 0) * frac
             ap.append(row)
         ah.sort(key=lambda x: x["r"] + x["hr"] + x["rbi"] + x["sb"], reverse=True)
-        ap.sort(key=lambda x: x["w"] + x["k"] + x["sv"], reverse=True)
+        ap.sort(key=lambda x: (x.get("sv", 0) >= 15, x["w"] + x["k"] + x["sv"]), reverse=True)
         ah, ap = ah[:h_slots], ap[:p_slots]
 
         r = sum(x["r"] for x in ah)

@@ -90,7 +90,7 @@ def _select_active_players(hitters, pitchers, roster_slots):
     )
     ranked_p = sorted(
         pitchers,
-        key=lambda p: p.get("w", 0) + p.get("k", 0) + p.get("sv", 0),
+        key=lambda p: (p.get("sv", 0) >= 15, p.get("w", 0) + p.get("k", 0) + p.get("sv", 0)),
         reverse=True,
     )
     return ranked_h[:h_slots], ranked_p[:p_slots]
