@@ -70,7 +70,7 @@ def _get_draft_leverage(balance, tracker):
 
 def _write_dashboard_state(tracker, balance, board, recs, filled,
                            roster_slots=None, roster_by_pos=None, teams=None,
-                           projection_data=None):
+                           projection_data=None, num_keepers=0):
     """Serialize and atomically write dashboard state to disk."""
     state = serialize_state(
         tracker=tracker,
@@ -82,6 +82,7 @@ def _write_dashboard_state(tracker, balance, board, recs, filled,
         roster_by_position=roster_by_pos,
         teams=teams,
     )
+    state["num_keepers"] = num_keepers
     if projection_data is not None:
         state["projections"] = projection_data
     write_state(state, STATE_PATH)
@@ -183,7 +184,8 @@ def main():
     _write_dashboard_state(tracker, balance, board, recs, filled,
                            roster_slots=config.roster_slots,
                            roster_by_pos=by_pos,
-                           teams=config.teams)
+                           teams=config.teams,
+                           num_keepers=len(keepers))
 
     # Show pre-draft rankings
     print("=" * 70)
@@ -257,7 +259,8 @@ def main():
                 print(f"\n  Running projected standings (round {just_finished_round} complete)...")
                 team_rosters = reconstruct_rosters_from_draft(
                     config, full_board, tracker,
-                    num_teams_override=num_teams)
+                    num_teams_override=num_teams,
+                    keepers=keepers)
                 projection_data = run_projections(
                     team_rosters, config.roster_slots, full_board,
                     num_teams, iterations=1000,
@@ -281,7 +284,8 @@ def main():
                                    roster_slots=config.roster_slots,
                                    roster_by_pos=by_pos,
                                    teams=config.teams,
-                                   projection_data=projection_data)
+                                   projection_data=projection_data,
+                                   num_keepers=len(keepers))
 
             # Show updated top 10
             print()

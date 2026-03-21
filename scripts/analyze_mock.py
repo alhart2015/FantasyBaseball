@@ -10,6 +10,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.config import load_config
 from fantasy_baseball.draft.board import build_draft_board
+from fantasy_baseball.utils.name_utils import normalize_name
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
@@ -83,11 +84,27 @@ def main():
     )
 
     num_teams = 10
+    num_keepers = state.get("num_keepers", 0)
     drafted = state["drafted_players"]
     drafted_ids = state["drafted_ids"]
 
     team_players = {i: [] for i in range(1, num_teams + 1)}
-    for pick_num, (name, pid) in enumerate(zip(drafted, drafted_ids), 1):
+
+    # Keepers are at the front of the drafted list — assign by config
+    if num_keepers > 0:
+        for keeper in config.keepers[:num_keepers]:
+            for num, name in config.teams.items():
+                if name == keeper["team"]:
+                    norm = normalize_name(keeper["name"])
+                    matches = board[board["name_normalized"] == norm]
+                    if not matches.empty:
+                        team_players[num].append(matches.loc[matches["var"].idxmax()])
+                    break
+
+    # Draft picks (after keepers) follow snake order
+    for pick_num, (name, pid) in enumerate(
+        zip(drafted[num_keepers:], drafted_ids[num_keepers:]), 1
+    ):
         rnd = (pick_num - 1) // num_teams + 1
         pos = (pick_num - 1) % num_teams + 1
         team = pos if rnd % 2 == 1 else num_teams - pos + 1
@@ -95,8 +112,9 @@ def main():
         if not rows.empty:
             team_players[team].append(rows.iloc[0])
 
-    # Find user team (team with Juan Soto)
-    user_team = None
+    # Find user team from draft position
+    user_team = config.draft_position if config.draft_position else None
+    if user_team is None:
     for tn, players in team_players.items():
         for p in players:
             if "Soto" in p["name"]:

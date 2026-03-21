@@ -229,13 +229,21 @@ def run_projections(
     return {"standings": standings}
 
 
-def reconstruct_rosters_from_draft(config, board, tracker, num_teams_override=None):
-    """Build per-team player lists from in-progress draft tracker."""
+def reconstruct_rosters_from_draft(config, board, tracker, num_teams_override=None,
+                                   keepers=None):
+    """Build per-team player lists from in-progress draft tracker.
+
+    *keepers* overrides ``config.keepers`` — pass an empty list for mock
+    drafts that don't use keepers.
+    """
     num_teams = num_teams_override or config.num_teams
     team_players = {i: [] for i in range(1, num_teams + 1)}
 
+    if keepers is None:
+        keepers = config.keepers
+
     # Keepers
-    for keeper in config.keepers:
+    for keeper in keepers:
         for num, name in config.teams.items():
             if name == keeper["team"]:
                 norm = normalize_name(keeper["name"])
@@ -246,7 +254,7 @@ def reconstruct_rosters_from_draft(config, board, tracker, num_teams_override=No
                 break
 
     # Draft picks (skip keepers at front of drafted list)
-    num_keepers = len(config.keepers)
+    num_keepers = len(keepers)
     drafted_names = tracker.drafted_players[num_keepers:]
     drafted_ids = tracker.drafted_ids[num_keepers:]
 

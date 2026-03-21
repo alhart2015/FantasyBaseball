@@ -156,6 +156,9 @@ def serialize_state(
     if roster_slots is not None:
         state["roster_slots"] = dict(roster_slots)
 
+    if teams is not None:
+        state["teams"] = {int(k): v for k, v in teams.items()}
+
     if include_available:
         available = board[~board["player_id"].isin(tracker.drafted_ids)]
         available_players = []
