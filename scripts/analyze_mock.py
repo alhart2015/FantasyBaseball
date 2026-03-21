@@ -112,16 +112,7 @@ def main():
         if not rows.empty:
             team_players[team].append(rows.iloc[0])
 
-    # Find user team from draft position
-    user_team = config.draft_position if config.draft_position else None
-    if user_team is None:
-        for tn, players in team_players.items():
-            for p in players:
-                if "Soto" in p["name"]:
-                    user_team = tn
-                    break
-            if user_team:
-                break
+    user_team = config.draft_position
     print(f"Your team: T{user_team}")
 
     h_slots = sum(v for k, v in config.roster_slots.items() if k not in ("P", "BN", "IL"))
