@@ -30,9 +30,13 @@ AVG_FLOOR = 0.255
 THREE_CLOSERS_TARGET = 3
 # Draft first closer by round 5, second by round 9, third by round 13
 THREE_CLOSERS_DEADLINES = [5, 9, 13]
-# no_punt: force a closer by this round if SV == 0, and AVG floor
-NO_PUNT_SV_DEADLINE = 9
+# no_punt: AVG floor and dynamic SV danger zone
+NO_PUNT_SV_DEADLINE = 9  # legacy fallback if team_rosters not available
 NO_PUNT_AVG_FLOOR = 0.250
+# How many teams with closers before we start worrying about SV rank
+NO_PUNT_SV_MIN_TEAMS_WITH_CLOSERS = 3
+# Bottom N in SV triggers a closer pick (2 = last or second-to-last)
+NO_PUNT_SV_DANGER_ZONE = 2
 # opportunistic: grab a closer if they've fallen past their ADP
 # (effective_pick >= ADP = they "should" already be gone, someone else will grab them)
 OPP_CLOSER_ADP_BUFFER = 0  # trigger only when actually past ADP
@@ -148,31 +152,50 @@ def pick_avg_hedge(
 def pick_no_punt_opp(
     board, full_board, tracker, balance, config, team_filled, **kwargs,
 ):
-    """No-punt with opportunistic closer acquisition.
+    """No-punt with dynamic SV monitoring and opportunistic closer grabs.
 
-    Like no_punt, but also grabs a closer early if one is available
-    past their ADP (i.e., they're a bargain that could get sniped).
-    Still enforces the round 8 deadline as a backstop.
+    Watches projected SV standings across all teams.  When our team
+    would finish in the bottom NO_PUNT_SV_DANGER_ZONE (default: last
+    or second-to-last), forces a closer pick.  Also grabs closers
+    opportunistically if they've fallen past their ADP.
+
+    Requires ``team_rosters`` in kwargs (dict of team_num -> [player_ids]).
+    Falls back to the legacy round-based deadline if not provided.
     """
-    closer_count = _count_closers(tracker, board, full_board)
     current_round = tracker.current_round
     current_pick = tracker.current_pick
+    team_rosters = kwargs.get("team_rosters")
 
-    # Opportunistic: if we don't have a closer yet, check if a good one
-    # is available past their ADP (they're falling and could get sniped)
-    if closer_count == 0:
+    # Dynamic SV check: are we in danger of finishing last in saves?
+    need_closer = False
+    if team_rosters:
+        need_closer = _sv_in_danger(
+            tracker, board, full_board, team_rosters, config.num_teams,
+        )
+    else:
+        # Legacy fallback: force at least 1 closer by deadline
+        closer_count = _count_closers(tracker, board, full_board)
+        if closer_count == 0 and current_round >= NO_PUNT_SV_DEADLINE:
+            need_closer = True
+
+    if need_closer:
+        result = _force_closer(board, tracker, full_board, config)
+        if result:
+            return result
+
+    # Opportunistic: grab a closer falling past ADP, but only if we're
+    # still in SV danger or haven't drafted any closers yet.
+    closer_count = _count_closers(tracker, board, full_board)
+    if need_closer or closer_count == 0:
         available = board[~board["player_id"].isin(tracker.drafted_ids)]
         closers = available[
             available.apply(lambda r: r.get("sv", 0) >= CLOSER_SV_THRESHOLD, axis=1)
         ]
         if not closers.empty:
-            # Effective pick in ADP terms = draft pick + keepers already off the board
             num_keepers = len(tracker.drafted_players) - (current_pick - 1)
             effective_pick = current_pick + num_keepers
-            # Find closers whose ADP says they should be gone by now
             falling = closers[effective_pick >= closers["adp"] - OPP_CLOSER_ADP_BUFFER]
             if not falling.empty:
-                # Take the best one by VAR
                 falling = falling.sort_values("var", ascending=False)
                 filled = get_filled_positions(
                     tracker.user_roster_ids, full_board,
@@ -182,13 +205,7 @@ def pick_no_punt_opp(
                     if _can_roster_player(best, filled, config.roster_slots):
                         return best["name"], best["player_id"]
 
-    # Deadline backstop: force a closer by round 8
-    if closer_count == 0 and current_round >= NO_PUNT_SV_DEADLINE:
-        result = _force_closer(board, tracker, full_board, config)
-        if result:
-            return result
-
-    # Otherwise: default with AVG floor (same as no_punt)
+    # Default with AVG floor
     recs = _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs)
     if not recs:
         return None, None
@@ -297,6 +314,54 @@ def _count_pitchers(tracker, board, full_board):
     return len(tracker.user_roster) - _count_hitters(tracker, board, full_board)
 
 
+def _sv_in_danger(tracker, board, full_board, team_rosters, num_teams):
+    """Check if our projected SV would finish in the danger zone.
+
+    Returns True if:
+    - At least NO_PUNT_SV_MIN_TEAMS_WITH_CLOSERS teams have drafted closers, AND
+    - Our team would finish in the bottom NO_PUNT_SV_DANGER_ZONE in SV.
+
+    This avoids panic-triggering early when nobody has closers yet.
+    """
+    if not team_rosters:
+        return False
+
+    # Project SV for each team from their current roster
+    team_sv = {}
+    teams_with_closers = 0
+    user_team = None
+    for tn, pids in team_rosters.items():
+        sv_total = 0
+        for pid in pids:
+            rows = board[board["player_id"] == pid]
+            if rows.empty:
+                rows = full_board[full_board["player_id"] == pid]
+            if not rows.empty:
+                sv_total += rows.iloc[0].get("sv", 0)
+        team_sv[tn] = sv_total
+        if sv_total >= CLOSER_SV_THRESHOLD:
+            teams_with_closers += 1
+        if pid in tracker.user_roster_ids:
+            user_team = tn
+
+    # Find user team if not found via pid matching
+    if user_team is None:
+        for tn, pids in team_rosters.items():
+            if set(pids) & set(tracker.user_roster_ids):
+                user_team = tn
+                break
+
+    if user_team is None or teams_with_closers < NO_PUNT_SV_MIN_TEAMS_WITH_CLOSERS:
+        return False
+
+    # Count how many teams have more SV than us
+    our_sv = team_sv.get(user_team, 0)
+    teams_above = sum(1 for tn, sv in team_sv.items() if sv > our_sv and tn != user_team)
+    our_rank = teams_above + 1  # 1 = most SV, num_teams = least
+
+    return our_rank > num_teams - NO_PUNT_SV_DANGER_ZONE
+
+
 def _force_closer(board, tracker, full_board, config):
     """Pick the best available closer by VAR. Returns (name, pid) or None."""
     available = board[~board["player_id"].isin(tracker.drafted_ids)]
@@ -343,14 +408,26 @@ def pick_no_punt(
 ):
     """Ensure no category finishes dead last.
 
-    Forces a closer by round 8 if SV == 0.
-    Skips low-AVG hitters if team AVG is below the floor.
-    """
-    closer_count = _count_closers(tracker, board, full_board)
-    current_round = tracker.current_round
+    Watches projected SV standings — forces a closer when our team
+    would finish in the danger zone.  Skips low-AVG hitters if team
+    AVG is below the floor.
 
-    # Force at least one closer by deadline
-    if closer_count == 0 and current_round >= NO_PUNT_SV_DEADLINE:
+    Requires ``team_rosters`` in kwargs for dynamic SV monitoring.
+    Falls back to the legacy round-based deadline if not provided.
+    """
+    team_rosters = kwargs.get("team_rosters")
+
+    need_closer = False
+    if team_rosters:
+        need_closer = _sv_in_danger(
+            tracker, board, full_board, team_rosters, config.num_teams,
+        )
+    else:
+        closer_count = _count_closers(tracker, board, full_board)
+        if closer_count == 0 and kwargs.get("current_round", tracker.current_round) >= NO_PUNT_SV_DEADLINE:
+            need_closer = True
+
+    if need_closer:
         result = _force_closer(board, tracker, full_board, config)
         if result:
             return result

@@ -9,6 +9,28 @@ from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 
 REQUIRED_POSITIONS = ["C", "1B", "2B", "3B", "SS", "OF", "P"]
 
+
+def compute_slot_scarcity_order(
+    board: pd.DataFrame,
+    roster_slots: dict[str, int] | None = None,
+) -> list[str]:
+    """Return roster slots ordered by positional scarcity (most scarce first).
+
+    Scarcity = sum(SGP of all eligible players) / number of roster slots.
+    Lower scarcity = fewer resources per slot = assign multi-eligible players
+    here first so flex slots stay open for less flexible players.
+    """
+    if roster_slots is None:
+        roster_slots = DEFAULT_ROSTER_SLOTS
+    scarcity: dict[str, float] = {}
+    for slot, n_slots in roster_slots.items():
+        if slot in ("BN", "IL"):
+            continue
+        eligible = board[board["positions"].apply(lambda p: can_fill_slot(p, slot))]
+        total_sgp = eligible["total_sgp"].sum() if "total_sgp" in eligible.columns else 0
+        scarcity[slot] = total_sgp / n_slots if n_slots > 0 else float("inf")
+    return sorted(scarcity.keys(), key=lambda s: scarcity[s])
+
 # Closer threshold for VONA bucketing (matches strategy.py)
 _CLOSER_SV_THRESHOLD = 20
 
@@ -33,6 +55,11 @@ def calculate_vona_scores(
     ``picks_until_next`` picks, drafting by ADP.
 
     Returns dict of player_id -> VONA score.
+
+    Note: position-level VONA (per-position hitter buckets) was tested
+    and regressed badly — it over-values positional scarcity, causing the
+    recommender to reach for scarce positions at the expense of overall
+    value.  The 3-bucket approach keeps hitter VONA balanced.
     """
     if picks_until_next is None or picks_until_next < 1:
         picks_until_next = 10  # sensible default
@@ -93,18 +120,23 @@ def get_recommendations(
         roster_slots = DEFAULT_ROSTER_SLOTS
     available = board[~board["player_id"].isin(drafted)]
 
-    # Recalculate replacement levels from the remaining pool so
-    # positional scarcity is properly reflected in rankings.
+    # Recalculate replacement levels from the full remaining pool so
+    # positional scarcity is properly reflected.
     starters = compute_starters_per_position(roster_slots, num_teams)
     repl_levels = calculate_replacement_levels(available, starters)
-    # Recompute VAR for available players using live replacement levels
+
+    # Only recompute VAR for top candidates (by pre-computed VAR).
+    # The full pool sets replacement levels accurately, but iterating
+    # all ~3000 players per pick is the main performance bottleneck.
+    _VAR_CANDIDATE_LIMIT = 150
+    candidates = available.nlargest(_VAR_CANDIDATE_LIMIT, "var")
     live_var = {}
     live_pos = {}
-    for idx, row in available.iterrows():
+    for idx, row in candidates.iterrows():
         var, pos = calculate_var(row, repl_levels, return_position=True)
         live_var[idx] = var
         live_pos[idx] = pos
-    available = available.copy()
+    available = candidates.copy()
     available["var"] = available.index.map(live_var)
     available["best_position"] = available.index.map(live_pos)
 
@@ -258,6 +290,9 @@ def _collect_roster_entries(
     return players
 
 
+_scarcity_cache: dict[int, list[str]] = {}
+
+
 def get_filled_positions(
     user_roster_ids: list[str],
     board: pd.DataFrame,
@@ -265,9 +300,10 @@ def get_filled_positions(
 ) -> dict[str, int]:
     """Count how many of each roster slot the user has filled.
 
-    Greedily assigns each drafted player to their most specific open slot
-    before falling back to flex slots (IF, UTIL), so multi-position players
-    don't over-count a single position.
+    Assigns each drafted player to the most *scarce* open slot they're
+    eligible for (by positional scarcity index), then falls back to flex
+    slots (IF, UTIL), then bench.  This ensures multi-position players
+    occupy their scarcest position so flex slots stay open.
     """
     if roster_slots is None:
         roster_slots = DEFAULT_ROSTER_SLOTS
@@ -287,19 +323,27 @@ def get_filled_positions(
         1 for s in active_slots if can_fill_slot(p["positions"], s)
     ))
 
+    # Slot assignment order: scarcity-based for specific slots, then flex.
+    # Cache the scarcity order since it depends only on the board and slots.
+    cache_key = id(board)
+    if cache_key not in _scarcity_cache:
+        _scarcity_cache.clear()  # keep only one entry
+        _scarcity_cache[cache_key] = compute_slot_scarcity_order(board, roster_slots)
+    scarcity_order = _scarcity_cache[cache_key]
+    specific_slots = [s for s in scarcity_order if s not in ("IF", "UTIL")]
+    flex_slots = [s for s in scarcity_order if s in ("IF", "UTIL")]
+
     for player in players:
         positions = player["positions"]
         assigned = False
-        # Try specific slots first (C, 1B, 2B, etc.), then flex (IF, UTIL)
-        for slot in list(active_slots.keys()):
-            if slot in ("IF", "UTIL"):
-                continue
+        # Try specific slots in scarcity order (most scarce first)
+        for slot in specific_slots:
             if filled[slot] < capacity[slot] and can_fill_slot(positions, slot):
                 filled[slot] += 1
                 assigned = True
                 break
         if not assigned:
-            for slot in ("IF", "UTIL"):
+            for slot in flex_slots:
                 if slot in active_slots and filled[slot] < capacity[slot] and can_fill_slot(positions, slot):
                     filled[slot] += 1
                     assigned = True
@@ -337,19 +381,25 @@ def get_roster_by_position(
         1 for s in active_slots if can_fill_slot(p["positions"], s)
     ))
 
+    # Slot assignment order: scarcity-based (cached)
+    cache_key = id(board)
+    if cache_key not in _scarcity_cache:
+        _scarcity_cache.clear()
+        _scarcity_cache[cache_key] = compute_slot_scarcity_order(board, roster_slots)
+    scarcity_order = _scarcity_cache[cache_key]
+    specific_slots = [s for s in scarcity_order if s not in ("IF", "UTIL")]
+    flex_slots = [s for s in scarcity_order if s in ("IF", "UTIL")]
+
     for player in players:
         positions = player["positions"]
         assigned = False
-        # Try specific slots first (C, 1B, 2B, etc.), then flex (IF, UTIL)
-        for slot in list(active_slots.keys()):
-            if slot in ("IF", "UTIL"):
-                continue
+        for slot in specific_slots:
             if len(by_pos[slot]) < capacity[slot] and can_fill_slot(positions, slot):
                 by_pos[slot].append(player["name"])
                 assigned = True
                 break
         if not assigned:
-            for slot in ("IF", "UTIL"):
+            for slot in flex_slots:
                 if slot in active_slots and len(by_pos[slot]) < capacity[slot] and can_fill_slot(positions, slot):
                     by_pos[slot].append(player["name"])
                     assigned = True
