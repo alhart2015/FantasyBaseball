@@ -26,7 +26,6 @@ from fantasy_baseball.draft.recommender import (
     get_roster_by_position,
 )
 from fantasy_baseball.draft.state import serialize_state, serialize_board, write_state, write_board
-from fantasy_baseball.draft.projections import run_projections, reconstruct_rosters_from_draft
 from fantasy_baseball.draft.strategy import (
     CLOSER_SV_THRESHOLD, NO_PUNT_AVG_FLOOR,
     NO_PUNT_CAP3_TARGET, NO_PUNT_STAGGER_DEADLINES,
@@ -70,7 +69,7 @@ def _get_draft_leverage(balance, tracker):
 
 def _write_dashboard_state(tracker, balance, board, recs, filled,
                            roster_slots=None, roster_by_pos=None, teams=None,
-                           projection_data=None, num_keepers=0):
+                           num_keepers=0):
     """Serialize and atomically write dashboard state to disk."""
     state = serialize_state(
         tracker=tracker,
@@ -83,8 +82,6 @@ def _write_dashboard_state(tracker, balance, board, recs, filled,
         teams=teams,
     )
     state["num_keepers"] = num_keepers
-    if projection_data is not None:
-        state["projections"] = projection_data
     write_state(state, STATE_PATH)
 
 
@@ -200,9 +197,6 @@ def main():
     team_names = list(config.teams.values()) if config.teams else []
 
     # Main draft loop
-    last_projected_round = 0
-    projection_data = None
-
     try:
         while tracker.current_pick <= tracker.total_picks:
             team_num = tracker.picking_team
@@ -252,42 +246,10 @@ def main():
                                        draft_leverage=leverage,
                                        scoring_mode="vona")
 
-            # Run projections at the end of each completed round.
-            # After advance(), current_pick points to the NEXT pick.
-            # A round just completed if the previous pick was the last in its round,
-            # i.e. (current_pick - 1) is exactly divisible by num_teams.
-            just_finished_round = (tracker.current_pick - 1) // num_teams
-            if just_finished_round > last_projected_round and just_finished_round >= 1:
-                last_projected_round = just_finished_round
-                print(f"\n  Running projected standings (round {just_finished_round} complete)...")
-                team_rosters = reconstruct_rosters_from_draft(
-                    config, full_board, tracker,
-                    num_teams_override=num_teams,
-                    keepers=keepers)
-                projection_data = run_projections(
-                    team_rosters, config.roster_slots, full_board,
-                    num_teams, iterations=1000,
-                )
-                # Annotate with team names and user flag for dashboard
-                user_num = draft_position
-                for s in projection_data["standings"]:
-                    s["team_name"] = config.teams.get(
-                        s["team_num"], f"Team {s['team_num']}")
-                    s["is_user"] = s["team_num"] == user_num
-
-                # Print compact standings
-                print(f"  {'Team':<28} {'Med':>4} {'Win%':>5} {'Top3':>5}")
-                print(f"  {'-'*46}")
-                for s in projection_data["standings"]:
-                    marker = " <<<" if s["is_user"] else ""
-                    print(f"  {s['team_name']:<28} {s['median']:>4} "
-                          f"{s['win_pct']:>4.1f}% {s['top3_pct']:>4.1f}%{marker}")
-
             _write_dashboard_state(tracker, balance, board, recs, filled,
                                    roster_slots=config.roster_slots,
                                    roster_by_pos=by_pos,
                                    teams=config.teams,
-                                   projection_data=projection_data,
                                    num_keepers=len(keepers))
 
             # Show updated top 10
