@@ -8,8 +8,10 @@ Pre-requisites:
     2. Run: python scripts/fetch_positions.py
     3. config/league.yaml with keepers and settings
 """
+import json
 import sys
 import threading
+from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +39,7 @@ POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
 BOARD_PATH = PROJECT_ROOT / "data" / "draft_state_board.json"
+DRAFTS_DIR = PROJECT_ROOT / "data" / "drafts"
 
 FLASK_PORT = 5000
 
@@ -65,6 +68,83 @@ def _get_draft_leverage(balance, tracker):
     picks_made = len(tracker.user_roster)
     total_picks = tracker.rounds
     return calculate_draft_leverage(totals, picks_made, total_picks)
+
+
+def _save_draft_log(tracker, balance, config, full_board, mock=False,
+                    draft_position=None, run_timestamp=None):
+    """Save a timestamped draft log to data/drafts/ for later analysis."""
+    if run_timestamp is None:
+        run_timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+
+    DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
+    prefix = "mock_" if mock else "draft_"
+    filename = f"{prefix}{run_timestamp}.json"
+    out_path = DRAFTS_DIR / filename
+
+    num_teams = config.num_teams
+    num_keepers = len(config.keepers) if not mock else 0
+
+    # Build draft log from tracker
+    draft_log = []
+    draft_entries = list(zip(
+        tracker.drafted_players[num_keepers:],
+        tracker.drafted_ids[num_keepers:],
+    ))
+    for pick_num, (name, pid) in enumerate(draft_entries, 1):
+        rnd = (pick_num - 1) // num_teams + 1
+        pos = (pick_num - 1) % num_teams + 1
+        team_num = pos if rnd % 2 == 1 else num_teams - pos + 1
+        team_name = config.teams.get(team_num, f"Team {team_num}")
+        draft_log.append({
+            "pick": pick_num,
+            "round": rnd,
+            "team_num": team_num,
+            "team": team_name,
+            "player": name,
+            "player_id": pid,
+        })
+
+    # User roster details
+    user_roster = []
+    for pid in tracker.user_roster_ids:
+        rows = full_board[full_board["player_id"] == pid]
+        if not rows.empty:
+            p = rows.iloc[0]
+            entry = {
+                "name": str(p.get("name", "")),
+                "player_id": str(p.get("player_id", "")),
+                "player_type": str(p.get("player_type", "")),
+                "positions": [str(x) for x in p.get("positions", [])],
+                "var": round(float(p.get("var", 0)), 2),
+            }
+            for stat in ["r", "hr", "rbi", "sb", "h", "ab", "avg",
+                          "w", "k", "sv", "ip", "er", "bb", "h_allowed"]:
+                val = p.get(stat, 0)
+                if val is not None and val != 0:
+                    entry[stat] = round(float(val), 4)
+            user_roster.append(entry)
+
+    output = {
+        "metadata": {
+            "timestamp": run_timestamp,
+            "mock": mock,
+            "draft_position": draft_position or config.draft_position,
+            "num_teams": num_teams,
+            "strategy": "no_punt_cap3",
+            "scoring_mode": "vona",
+            "picks_completed": len(draft_entries),
+            "total_picks": tracker.total_picks,
+            "complete": tracker.current_pick > tracker.total_picks,
+        },
+        "user_roster": user_roster,
+        "draft_log": draft_log,
+        "balance": balance.get_totals(),
+    }
+
+    with open(out_path, "w") as f:
+        json.dump(output, f, indent=2, default=str)
+
+    return str(out_path)
 
 
 def _write_dashboard_state(tracker, balance, board, recs, filled,
@@ -102,6 +182,9 @@ def main():
 
     # Load config
     config = load_config(CONFIG_PATH)
+
+    # Timestamp for this draft session (used for saving)
+    run_timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
     # Mock mode overrides
     mock = args.mock
@@ -259,7 +342,16 @@ def main():
 
         print("\nDraft complete!")
     except (KeyboardInterrupt, EOFError):
-        print("\n\nDraft paused. State saved. Re-run to resume.")
+        print("\n\nDraft paused.")
+
+    # Save timestamped draft log
+    log_path = _save_draft_log(
+        tracker, balance, config, full_board,
+        mock=mock, draft_position=draft_position,
+        run_timestamp=run_timestamp,
+    )
+    print(f"\nDraft log saved to {log_path}")
+
     print("\nYour roster:")
     for name in tracker.user_roster:
         print(f"  {name}")
