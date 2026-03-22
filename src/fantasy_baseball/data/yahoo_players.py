@@ -8,8 +8,36 @@ YAHOO_POSITIONS = ["C", "1B", "2B", "3B", "SS", "OF", "SP", "RP"]
 
 
 def fetch_positions_from_yahoo(league) -> dict[str, list[str]]:
-    """Fetch player position eligibility from Yahoo Fantasy API."""
+    """Fetch player position eligibility from Yahoo Fantasy API.
+
+    Queries both rostered players (via team rosters) and free agents
+    to build a comprehensive position map.
+    """
     position_maps = []
+
+    # Phase 1: Fetch rostered players from all teams
+    try:
+        teams = league.teams()
+        for team_key in teams:
+            try:
+                team = league.to_team(team_key)
+                roster = team.roster()
+                pos_map = {}
+                for player in roster:
+                    name = player["name"]
+                    eligible = player.get("eligible_positions", [])
+                    if eligible:
+                        pos_map[name] = eligible
+                position_maps.append(pos_map)
+            except Exception:
+                logger.exception(
+                    "Failed to fetch roster for team %s; skipping", team_key
+                )
+                continue
+    except Exception:
+        logger.exception("Failed to fetch teams; skipping rostered players")
+
+    # Phase 2: Fetch free agents by position
     for pos in YAHOO_POSITIONS:
         try:
             agents = league.free_agents(pos)

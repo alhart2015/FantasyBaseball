@@ -40,6 +40,11 @@ NO_PUNT_SV_DANGER_ZONE = 2
 # opportunistic: grab a closer if they've fallen past their ADP
 # (effective_pick >= ADP = they "should" already be gone, someone else will grab them)
 OPP_CLOSER_ADP_BUFFER = 0  # trigger only when actually past ADP
+# no_punt_stagger: staggered closer deadlines + no_punt category protection
+NO_PUNT_STAGGER_TARGET = 3
+NO_PUNT_STAGGER_DEADLINES = [7, 11, 15]
+# no_punt_cap3: staggered deadlines + hard cap at 3 closers
+NO_PUNT_CAP3_TARGET = 3
 # avg_anchor: minimum AVG to qualify as an anchor, and deadline
 AVG_ANCHOR_MIN = 0.285
 AVG_ANCHOR_DEADLINE_HITTER = 3  # must draft anchor within first 3 hitter picks
@@ -381,6 +386,38 @@ def _force_closer(board, tracker, full_board, config):
     return None
 
 
+def _fallback_non_closer(board, tracker, full_board, config):
+    """Pick the best available non-closer by VAR. Returns (name, pid) or (None, None).
+
+    Searches the full board (not just top recs) for a non-closer who can
+    fill an open roster slot.  This ensures the closer cap is respected
+    even when the recommendation engine returns empty.
+    """
+    available = board[~board["player_id"].isin(tracker.drafted_ids)]
+    non_closers = available[
+        available.apply(lambda r: r.get("sv", 0) < CLOSER_SV_THRESHOLD, axis=1)
+    ]
+    filled = get_filled_positions(
+        tracker.user_roster_ids, full_board,
+        roster_slots=config.roster_slots,
+    )
+    if not non_closers.empty:
+        for _, best in non_closers.sort_values("var", ascending=False).head(50).iterrows():
+            if _can_roster_player(best, filled, config.roster_slots):
+                return best["name"], best["player_id"]
+    # Also check full_board for players not on the draft board
+    # (e.g. low-projection players filtered during board construction)
+    avail_full = full_board[~full_board["player_id"].isin(tracker.drafted_ids)]
+    non_closers_full = avail_full[
+        avail_full.apply(lambda r: r.get("sv", 0) < CLOSER_SV_THRESHOLD, axis=1)
+    ]
+    if not non_closers_full.empty:
+        for _, best in non_closers_full.sort_values("var", ascending=False).head(50).iterrows():
+            if _can_roster_player(best, filled, config.roster_slots):
+                return best["name"], best["player_id"]
+    return None, None
+
+
 def _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs):
     """Get leverage-weighted recommendations (shared helper)."""
     filled = get_filled_positions(
@@ -455,6 +492,141 @@ def pick_no_punt(
         if projected_avg >= NO_PUNT_AVG_FLOOR or current_ab == 0:
             return rec["name"], _lookup_pid(board, rec["name"])
 
+    return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
+
+
+def pick_no_punt_stagger(
+    board, full_board, tracker, balance, config, team_filled, **kwargs,
+):
+    """No-punt with staggered closer deadlines.
+
+    Combines no_punt's category protection (AVG floor, dynamic SV monitoring)
+    with staggered closer deadlines to ensure adequate SV investment.
+    Fixes no_punt's "one and done" closer bug by requiring multiple closers
+    on a schedule, while also triggering early via SV danger monitoring.
+    """
+    current_round = tracker.current_round
+    team_rosters = kwargs.get("team_rosters")
+
+    # Count current closers
+    closer_count = _count_closers(tracker, board, full_board)
+
+    # Check staggered deadlines: force a closer if we're behind schedule
+    need_closer = False
+    if closer_count < NO_PUNT_STAGGER_TARGET:
+        deadline_idx = closer_count  # 0th closer -> deadline[0], etc.
+        if deadline_idx < len(NO_PUNT_STAGGER_DEADLINES):
+            deadline = NO_PUNT_STAGGER_DEADLINES[deadline_idx]
+            if current_round >= deadline:
+                need_closer = True
+
+    # Also check dynamic SV danger (if team_rosters available)
+    if not need_closer and team_rosters and closer_count < NO_PUNT_STAGGER_TARGET:
+        need_closer = _sv_in_danger(
+            tracker, board, full_board, team_rosters, config.num_teams,
+        )
+
+    if need_closer:
+        result = _force_closer(board, tracker, full_board, config)
+        if result:
+            return result
+
+    # Get recommendations with AVG floor protection
+    recs = _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs)
+    if not recs:
+        return None, None
+
+    current_h = sum(h.get("h", 0) for h in balance._hitters)
+    current_ab = sum(h.get("ab", 0) for h in balance._hitters)
+
+    for rec in recs:
+        if rec["player_type"] != "hitter":
+            return rec["name"], _lookup_pid(board, rec["name"])
+
+        rows = board[board["name"] == rec["name"]]
+        if rows.empty:
+            continue
+        player = rows.iloc[0]
+        new_h = current_h + player.get("h", 0)
+        new_ab = current_ab + player.get("ab", 0)
+        projected_avg = new_h / new_ab if new_ab > 0 else 0
+
+        if projected_avg >= NO_PUNT_AVG_FLOOR or current_ab == 0:
+            return rec["name"], _lookup_pid(board, rec["name"])
+
+    return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
+
+
+def pick_no_punt_cap3(
+    board, full_board, tracker, balance, config, team_filled, **kwargs,
+):
+    """No-punt with staggered closer deadlines and a hard 3-closer cap.
+
+    Uses staggered deadlines to ensure we draft up to 3 closers, then
+    filters closers from recommendations so the VONA engine can't
+    over-draft them.  Keeps AVG floor and dynamic SV monitoring.
+    """
+    closer_count = _count_closers(tracker, board, full_board)
+    current_round = tracker.current_round
+    team_rosters = kwargs.get("team_rosters")
+
+    # Force closers via staggered deadlines, up to the cap
+    need_closer = False
+    if closer_count < NO_PUNT_CAP3_TARGET:
+        deadline_idx = closer_count
+        if deadline_idx < len(NO_PUNT_STAGGER_DEADLINES):
+            deadline = NO_PUNT_STAGGER_DEADLINES[deadline_idx]
+            if current_round >= deadline:
+                need_closer = True
+
+        # Dynamic SV danger check
+        if not need_closer and team_rosters:
+            need_closer = _sv_in_danger(
+                tracker, board, full_board, team_rosters, config.num_teams,
+            )
+
+    if need_closer:
+        result = _force_closer(board, tracker, full_board, config)
+        if result:
+            return result
+
+    # Get recommendations
+    recs = _get_recs(board, full_board, tracker, balance, config, n=15, **kwargs)
+
+    # If recs is empty (late-draft roster nearly full), fall back to
+    # board search that respects the closer cap.
+    if not recs:
+        return _fallback_non_closer(
+            board, tracker, full_board, config,
+        ) if closer_count >= NO_PUNT_CAP3_TARGET else (None, None)
+
+    current_h = sum(h.get("h", 0) for h in balance._hitters)
+    current_ab = sum(h.get("ab", 0) for h in balance._hitters)
+
+    for rec in recs:
+        # Hard cap: skip closers once we have enough
+        if closer_count >= NO_PUNT_CAP3_TARGET:
+            rows = board[board["name"] == rec["name"]]
+            if not rows.empty and rows.iloc[0].get("sv", 0) >= CLOSER_SV_THRESHOLD:
+                continue
+
+        if rec["player_type"] != "hitter":
+            return rec["name"], _lookup_pid(board, rec["name"])
+
+        rows = board[board["name"] == rec["name"]]
+        if rows.empty:
+            continue
+        player = rows.iloc[0]
+        new_h = current_h + player.get("h", 0)
+        new_ab = current_ab + player.get("ab", 0)
+        projected_avg = new_h / new_ab if new_ab > 0 else 0
+
+        if projected_avg >= NO_PUNT_AVG_FLOOR or current_ab == 0:
+            return rec["name"], _lookup_pid(board, rec["name"])
+
+    # All recs filtered — respect closer cap in fallback
+    if closer_count >= NO_PUNT_CAP3_TARGET:
+        return _fallback_non_closer(board, tracker, full_board, config)
     return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
 
 
@@ -628,6 +800,8 @@ STRATEGIES = {
     "three_closers": pick_three_closers,
     "no_punt": pick_no_punt,
     "no_punt_opp": pick_no_punt_opp,
+    "no_punt_stagger": pick_no_punt_stagger,
+    "no_punt_cap3": pick_no_punt_cap3,
     "avg_anchor": pick_avg_anchor,
     "closers_avg": pick_closers_avg,
     "balanced": pick_balanced,

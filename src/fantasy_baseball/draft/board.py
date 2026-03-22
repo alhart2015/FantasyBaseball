@@ -23,8 +23,16 @@ def build_draft_board(
     hitters, pitchers = blend_projections(projections_dir, systems, weights)
     positions = load_positions_cache(positions_path)
 
-    # Build normalized lookup for positions
-    norm_positions = {normalize_name(k): v for k, v in positions.items()}
+    # Build normalized lookup for positions.
+    # When names collide after normalization (e.g. 'José Ramírez' the 3B
+    # vs 'Jose Ramirez' the minor-league P), keep the entry with more
+    # eligible positions — the MLB player will have real positions while
+    # the prospect typically only has a generic 'P' or 'OF'.
+    norm_positions: dict[str, list[str]] = {}
+    for k, v in positions.items():
+        norm = normalize_name(k)
+        if norm not in norm_positions or len(v) > len(norm_positions[norm]):
+            norm_positions[norm] = v
 
     # Filter to players with meaningful projections
     if not hitters.empty:

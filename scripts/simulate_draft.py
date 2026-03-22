@@ -10,7 +10,9 @@ Usage:
 Outputs projected roto standings at the end.
 """
 import argparse
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -260,9 +262,10 @@ def run_simulation(
 
     adp_board = adp_board.sort_values("adp", ascending=True)
 
-    # Initialize tracker
+    # Initialize tracker — IL is not a draftable slot
     user_keepers = [k for k in config.keepers if k.get("team") == config.team_name]
-    rounds = sum(config.roster_slots.values()) - len(user_keepers)
+    draftable_slots = sum(v for k, v in config.roster_slots.items() if k != "IL")
+    rounds = draftable_slots - len(user_keepers)
     tracker = DraftTracker(
         num_teams=config.num_teams,
         user_position=config.draft_position,
@@ -455,14 +458,118 @@ def run_simulation(
         "user_roster": list(tracker.user_roster),
         "user_roster_ids": list(tracker.user_roster_ids),
         "tracker": tracker,
+        "team_players": team_players,
+        "config": config,
     }
+
+
+def save_simulation_output(result, strategy_name, scoring_mode,
+                           opponent_strategies_str=None, run_timestamp=None):
+    """Save complete simulation output for later re-analysis.
+
+    Writes all team rosters, standings, and draft log to a JSON file
+    in data/sim_results/ with a timestamped filename.
+    """
+    if run_timestamp is None:
+        run_timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+
+    out_dir = PROJECT_ROOT / "data" / "sim_results"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = f"{run_timestamp}_{strategy_name}_{scoring_mode}.json"
+    out_path = out_dir / filename
+
+    config = result["config"]
+    team_players = result["team_players"]
+
+    # Build rosters dict keyed by team name
+    rosters = {}
+    for team_num, players in team_players.items():
+        team_name = config.teams.get(team_num, f"Team {team_num}")
+        roster = []
+        for p in players:
+            entry = {
+                "name": str(p.get("name", "")),
+                "player_id": str(p.get("player_id", "")),
+                "player_type": str(p.get("player_type", "")),
+                "positions": [str(x) for x in p.get("positions", [])],
+                "var": round(float(p.get("var", 0)), 2),
+                "total_sgp": round(float(p.get("total_sgp", 0)), 2),
+            }
+            for stat in ["r", "hr", "rbi", "sb", "h", "ab", "avg",
+                          "w", "k", "sv", "ip", "er", "bb", "h_allowed"]:
+                val = p.get(stat, 0)
+                if val is not None and val != 0:
+                    entry[stat] = round(float(val), 4)
+            if "adp" in p.index if hasattr(p, "index") else "adp" in p:
+                entry["adp"] = round(float(p.get("adp", 0)), 1)
+            roster.append(entry)
+        rosters[team_name] = roster
+
+    # Build standings
+    standings = []
+    all_cats = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
+    for i, t in enumerate(result["results"], 1):
+        entry = {
+            "rank": i,
+            "team": t["team"],
+            "total_pts": int(t["tot"]),
+            "categories": {},
+        }
+        for cat in all_cats:
+            entry["categories"][cat] = {
+                "value": round(float(t[cat]), 4),
+                "points": int(t[f"{cat}_p"]),
+            }
+        standings.append(entry)
+
+    # Build draft log from tracker
+    tracker = result["tracker"]
+    num_keepers = len(config.keepers)
+    draft_log = []
+    draft_entries = list(zip(
+        tracker.drafted_players[num_keepers:],
+        tracker.drafted_ids[num_keepers:],
+    ))
+    for pick_num, (name, pid) in enumerate(draft_entries, 1):
+        rnd = (pick_num - 1) // config.num_teams + 1
+        pos = (pick_num - 1) % config.num_teams + 1
+        team_num = pos if rnd % 2 == 1 else config.num_teams - pos + 1
+        team_name = config.teams.get(team_num, f"Team {team_num}")
+        draft_log.append({
+            "pick": pick_num,
+            "round": rnd,
+            "team_num": team_num,
+            "team": team_name,
+            "player": name,
+            "player_id": pid,
+        })
+
+    output = {
+        "metadata": {
+            "timestamp": run_timestamp,
+            "strategy": strategy_name,
+            "scoring_mode": scoring_mode,
+            "opponent_strategies": opponent_strategies_str or "",
+            "pts": int(result["pts"]),
+            "rank": int(result["rank"]),
+        },
+        "standings": standings,
+        "rosters": rosters,
+        "draft_log": draft_log,
+    }
+
+    with open(out_path, "w") as f:
+        json.dump(output, f, indent=2)
+
+    return str(out_path)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Simulate a fantasy baseball draft")
     parser.add_argument(
         "--strategy", "-s", choices=list(STRATEGIES.keys()),
-        default="default",
+        default="no_punt_cap3",
         help="Draft strategy for your team (default: %(default)s)",
     )
     parser.add_argument(
@@ -486,7 +593,7 @@ def main():
         help="Assign strategies to opponents: '3:default,5:three_closers' (team_num:strategy)",
     )
     parser.add_argument(
-        "--scoring", choices=["var", "vona"], default="var",
+        "--scoring", choices=["var", "vona"], default="vona",
         help="Scoring mode: 'var' (Value Above Replacement) or 'vona' (Value Over Next Available)",
     )
     args = parser.parse_args()
@@ -519,7 +626,6 @@ def main():
     )
 
     # Save state so monte_carlo.py can read it
-    import json as _json
     tracker = result["tracker"]
     state_path = PROJECT_ROOT / "data" / "draft_state.json"
     state_data = {
@@ -533,8 +639,14 @@ def main():
     }
     state_path.parent.mkdir(parents=True, exist_ok=True)
     with open(state_path, "w") as f:
-        _json.dump(state_data, f, indent=2)
+        json.dump(state_data, f, indent=2)
     print(f"State saved to {state_path}")
+
+    # Save full simulation output for re-analysis
+    sim_path = save_simulation_output(
+        result, args.strategy, args.scoring, args.opponent_strategies,
+    )
+    print(f"Full sim output saved to {sim_path}")
 
     # === Results ===
     print()
