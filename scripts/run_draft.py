@@ -28,8 +28,8 @@ from fantasy_baseball.draft.recommender import (
 from fantasy_baseball.draft.state import serialize_state, serialize_board, write_state, write_board
 from fantasy_baseball.draft.projections import run_projections, reconstruct_rosters_from_draft
 from fantasy_baseball.draft.strategy import (
-    CLOSER_SV_THRESHOLD, NO_PUNT_SV_DEADLINE, NO_PUNT_AVG_FLOOR,
-    OPP_CLOSER_ADP_BUFFER,
+    CLOSER_SV_THRESHOLD, NO_PUNT_AVG_FLOOR,
+    NO_PUNT_CAP3_TARGET, NO_PUNT_STAGGER_DEADLINES,
 )
 from fantasy_baseball.web.app import create_app
 
@@ -114,7 +114,7 @@ def main():
 
     if mock:
         print(f"MOCK DRAFT | Position {draft_position} of {num_teams}")
-        print(f"Strategy: no_punt | No keepers")
+        print(f"Strategy: no_punt_cap3 + vona | No keepers")
     else:
         print(f"League {config.league_id} | Draft position: {draft_position}")
         print(f"Team: {config.team_name}")
@@ -138,7 +138,8 @@ def main():
 
     # Initialize tracker and balance
     user_keepers = [k for k in keepers if k.get("team") == config.team_name]
-    rounds = sum(config.roster_slots.values()) - len(user_keepers)
+    draftable_slots = sum(v for k, v in config.roster_slots.items() if k != "IL")
+    rounds = draftable_slots - len(user_keepers)
     tracker = DraftTracker(
         num_teams=num_teams,
         user_position=draft_position,
@@ -180,7 +181,8 @@ def main():
                                n=5, filled_positions=filled,
                                roster_slots=config.roster_slots,
                                num_teams=num_teams,
-                               draft_leverage=leverage)
+                               draft_leverage=leverage,
+                               scoring_mode="vona")
     _write_dashboard_state(tracker, balance, board, recs, filled,
                            roster_slots=config.roster_slots,
                            roster_by_pos=by_pos,
@@ -247,7 +249,8 @@ def main():
                                        n=5, filled_positions=filled,
                                        roster_slots=config.roster_slots,
                                        num_teams=num_teams,
-                                       draft_leverage=leverage)
+                                       draft_leverage=leverage,
+                                       scoring_mode="vona")
 
             # Run projections at the end of each completed round.
             # After advance(), current_pick points to the NEXT pick.
@@ -333,65 +336,61 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
         roster_slots=roster_slots,
         num_teams=num_teams,
         draft_leverage=leverage,
+        scoring_mode="vona",
     )
 
-    # --- No-punt strategy logic ---
+    # --- no_punt_cap3 strategy alerts ---
     strategy_alerts = []
 
-    # Check if we have a closer
-    has_closer = False
+    # Count closers on roster
+    closer_count = 0
     for pid in tracker.user_roster_ids:
         rows = board[board["player_id"] == pid]
         if rows.empty:
             rows = full_board[full_board["player_id"] == pid]
         if not rows.empty and rows.iloc[0].get("sv", 0) >= CLOSER_SV_THRESHOLD:
-            has_closer = True
-            break
+            closer_count += 1
 
+    # Staggered closer deadlines (from no_punt_cap3)
     closer_rec = None
-    if not has_closer:
-        available = board[~board["player_id"].isin(tracker.drafted_ids)]
-        closers = available[
-            available.apply(lambda r: r.get("sv", 0) >= CLOSER_SV_THRESHOLD, axis=1)
-        ]
-        if not closers.empty:
-            best_closer = closers.sort_values("var", ascending=False).iloc[0]
-            closer_adp = best_closer.get("adp", 999)
-            current_pick = tracker.current_pick
-            # Effective pick in ADP terms = draft pick + keepers already off the board
-            num_keepers = len(tracker.drafted_players) - (current_pick - 1)
-            effective_pick = current_pick + num_keepers
+    if closer_count < NO_PUNT_CAP3_TARGET:
+        deadline_idx = closer_count
+        if deadline_idx < len(NO_PUNT_STAGGER_DEADLINES):
+            deadline = NO_PUNT_STAGGER_DEADLINES[deadline_idx]
+            if tracker.current_round >= deadline:
+                available = board[~board["player_id"].isin(tracker.drafted_ids)]
+                closers = available[
+                    available.apply(lambda r: r.get("sv", 0) >= CLOSER_SV_THRESHOLD, axis=1)
+                ]
+                if not closers.empty:
+                    best_closer = closers.sort_values("var", ascending=False).iloc[0]
+                    closer_rec = {
+                        "name": best_closer["name"],
+                        "best_position": "RP",
+                        "var": best_closer.get("var", 0),
+                        "score": None,
+                        "need_flag": True,
+                        "note": f"DEADLINE — closer {closer_count+1}/{NO_PUNT_CAP3_TARGET} by round {deadline}",
+                        "player_type": "pitcher",
+                    }
+                    strategy_alerts.append(
+                        f"CLOSER DEADLINE: Draft {best_closer['name']} now — "
+                        f"closer {closer_count+1}/{NO_PUNT_CAP3_TARGET}, round {deadline} backstop"
+                    )
 
-            if effective_pick >= closer_adp - OPP_CLOSER_ADP_BUFFER:
-                # Closer is falling past their ADP — opportunity
-                closer_rec = {
-                    "name": best_closer["name"],
-                    "best_position": "RP",
-                    "var": best_closer.get("var", 0),
-                    "score": None,
-                    "need_flag": True,
-                    "note": f"FALLING closer — ADP {closer_adp:.0f}, effective pick {effective_pick}",
-                    "player_type": "pitcher",
-                }
-                strategy_alerts.append(
-                    f"CLOSER OPPORTUNITY: {best_closer['name']} "
-                    f"(ADP {closer_adp:.0f}) is falling — grab before someone else does"
-                )
-            elif tracker.current_round >= NO_PUNT_SV_DEADLINE:
-                # Deadline: must draft a closer now
-                closer_rec = {
-                    "name": best_closer["name"],
-                    "best_position": "RP",
-                    "var": best_closer.get("var", 0),
-                    "score": None,
-                    "need_flag": True,
-                    "note": f"DEADLINE — no closer by round {NO_PUNT_SV_DEADLINE}",
-                    "player_type": "pitcher",
-                }
-                strategy_alerts.append(
-                    f"CLOSER DEADLINE: Draft {best_closer['name']} now — "
-                    f"round {NO_PUNT_SV_DEADLINE} backstop reached"
-                )
+    # Hard cap: filter closers from recs if at cap
+    if closer_count >= NO_PUNT_CAP3_TARGET:
+        filtered = []
+        for r in recs:
+            if r["player_type"] == "hitter":
+                filtered.append(r)
+                continue
+            rows = board[board["name"] == r["name"]]
+            if not rows.empty and rows.iloc[0].get("sv", 0) >= CLOSER_SV_THRESHOLD:
+                continue  # skip this closer
+            filtered.append(r)
+        recs = filtered
+        strategy_alerts.append(f"CLOSER CAP: {closer_count}/{NO_PUNT_CAP3_TARGET} closers — no more closers will be recommended")
 
     # Check AVG floor and flag low-AVG hitters
     current_h = sum(h.get("h", 0) for h in balance._hitters)
@@ -419,7 +418,6 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
 
     # Build final recommendation list: closer on top if triggered
     if closer_rec:
-        # Check if the closer is already in recs
         closer_in_recs = any(r["name"] == closer_rec["name"] for r in recs)
         if closer_in_recs:
             recs = [r for r in recs if r["name"] != closer_rec["name"]]
