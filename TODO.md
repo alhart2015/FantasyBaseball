@@ -48,6 +48,14 @@
 
 ---
 
+# TODO — Draft Day Fixes
+
+- [ ] **End-of-round simulation still running in draft CLI** — The mid-draft Monte Carlo simulation at the end of each round is still happening in `run_draft.py` despite supposedly being removed. Investigate and remove — it slows down the draft CLI.
+
+- [ ] **Incorrect position data for players** — Yahoo position data is wrong or incomplete for some players. Elly De La Cruz shows as OF but should be SS-eligible. Jose Ramirez shows as OF only but should have 3B eligibility. Investigate `player_positions.json` / `fetch_positions.py` / Yahoo API source. May need manual overrides or a cross-reference with another data source.
+
+---
+
 # TODO — In-Season Enhancements
 
 ## High

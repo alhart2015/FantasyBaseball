@@ -1,0 +1,53 @@
+Strategy Category Breakdown (2026-03-21, post closer-active-roster fix)
+=======================================================================
+
+closers_avg+vona (mean 66.3 pts)
+  Cat  Mean  Med  Min  Max
+-------------------------
+    R   8.0    8    8    8
+   HR   6.0    6    6    6
+  RBI   9.0    9    9    9
+   SB   5.0    5    5    5
+  AVG  10.0   10   10   10
+    W   1.2    1    1    2
+    K   1.2    1    1    2
+   SV  10.0   10   10   10
+  ERA   9.0    9    9    9
+ WHIP   6.9    7    6    8
+  TOT  66.3   66   65   68
+
+no_punt+vona (mean 64.8 pts)
+  Cat  Mean  Med  Min  Max
+-------------------------
+    R   9.0    9    9    9
+   HR   6.0    6    6    6
+  RBI   9.0    9    9    9
+   SB   4.4    4    4    5
+  AVG   8.0    8    8    8
+    W   1.0    1    1    1
+    K   1.2    1    1    2
+   SV  10.0   10   10   10
+  ERA   9.0    9    9    9
+ WHIP   7.2    8    6    8
+  TOT  64.8   65   63   67
+
+no_punt+var (mean 65.4 pts)
+  Cat  Mean  Med  Min  Max
+-------------------------
+    R   6.5    6    6    7
+   HR   7.7    8    7    9
+  RBI   9.0    9    9    9
+   SB   3.0    1    1    6
+  AVG  10.0   10   10   10
+    W   2.4    3    1    4
+    K   3.4    5    1    5
+   SV   9.8   10    9   10
+  ERA   6.4    6    6    7
+ WHIP   7.2    7    7    8
+  TOT  65.4   65   60   71
+
+NOTES:
+- All VONA strategies are punting W/K (1-1.2 pts) while dominating SV (10).
+  VONA may be over-weighting closers now that they make the active roster.
+- VAR produces more balanced profiles but slightly lower ceiling.
+- These results need further investigation before trusting for draft day.

@@ -3,6 +3,7 @@
 Builds the draft board ONCE, then runs all combinations against it.
 """
 import csv
+import gc
 import statistics
 import sys
 import time
@@ -58,6 +59,7 @@ def main():
                     )
                     pts = r["pts"]
                     rank = r["rank"]
+                    del r
                 except Exception as e:
                     pts = -1
                     rank = -1
@@ -69,6 +71,9 @@ def main():
                     "pts": pts,
                     "rank": rank,
                 })
+
+            # Free memory between combos
+            gc.collect()
 
             # Progress after each strategy+scoring combo (every 10 sims)
             elapsed = time.time() - sim_start
