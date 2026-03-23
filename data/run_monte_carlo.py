@@ -306,7 +306,7 @@ def main():
     sim_dir = project_root / "data" / "sim_results"
 
     # Find all 24 files from the latest sweep
-    prefix = "2026-03-22_082450_"
+    prefix = "2026-03-22_142614_"
     sim_files = sorted(sim_dir.glob(f"{prefix}*.json"))
     print(f"Found {len(sim_files)} simulation result files")
 

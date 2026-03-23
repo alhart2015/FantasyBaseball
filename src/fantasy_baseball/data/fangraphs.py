@@ -68,7 +68,8 @@ def load_projection_set(
     """Load a named projection system from the projections directory.
 
     Tries multiple naming conventions:
-    - steamer_hitters.csv (simple)
+    - steamer-hitters.csv (preferred)
+    - steamer_hitters.csv
     - fangraphs-leaderboard-projections-steamer-hitters.csv (FanGraphs export)
     """
     hitting_file = _find_file(projections_dir, system_name, "hitters")
@@ -81,6 +82,7 @@ def load_projection_set(
 def _find_file(directory: Path, system: str, player_type: str) -> Path | None:
     """Find a projection CSV file, trying multiple naming conventions."""
     candidates = [
+        directory / f"{system}-{player_type}.csv",
         directory / f"{system}_{player_type}.csv",
         directory / f"fangraphs-leaderboard-projections-{system}-{player_type}.csv",
     ]

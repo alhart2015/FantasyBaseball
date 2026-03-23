@@ -42,8 +42,10 @@ NO_PUNT_SV_DANGER_ZONE = 2
 OPP_CLOSER_ADP_BUFFER = 0  # trigger only when actually past ADP
 # no_punt_stagger: staggered closer deadlines + no_punt category protection
 NO_PUNT_STAGGER_TARGET = 3
-NO_PUNT_STAGGER_DEADLINES = [7, 11, 15]
+NO_PUNT_STAGGER_DEADLINES = [13, 17, 20]
 # no_punt_cap3: staggered deadlines + hard cap at 3 closers
+# Deadlines are late backstops — VONA handles urgency timing.
+# These only fire if VONA somehow misses a closer run.
 NO_PUNT_CAP3_TARGET = 3
 # avg_anchor: minimum AVG to qualify as an anchor, and deadline
 AVG_ANCHOR_MIN = 0.285

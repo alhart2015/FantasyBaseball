@@ -130,6 +130,9 @@ def _save_draft_log(tracker, balance, config, full_board, mock=False,
             "mock": mock,
             "draft_position": draft_position or config.draft_position,
             "num_teams": num_teams,
+            "user_team": config.teams.get(
+                draft_position or config.draft_position, f"Team {draft_position}"
+            ),
             "strategy": "no_punt_cap3",
             "scoring_mode": "vona",
             "picks_completed": len(draft_entries),

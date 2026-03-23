@@ -24,7 +24,7 @@ def validate_projections_dir(
             f"  2. Download projection CSVs from FanGraphs:\n"
             f"     https://www.fangraphs.com/projections\n"
             f"  3. Export hitter and pitcher CSVs for each system ({', '.join(systems)})\n"
-            f"  4. Save them as e.g. steamer_hitters.csv, steamer_pitchers.csv"
+            f"  4. Save them as e.g. steamer-hitters.csv, steamer-pitchers.csv"
         )
 
     if not projections_dir.is_dir():
@@ -41,9 +41,7 @@ def validate_projections_dir(
             f"  1. Download projection CSVs from FanGraphs:\n"
             f"     https://www.fangraphs.com/projections\n"
             f"  2. Export hitter and pitcher CSVs for each system ({', '.join(systems)})\n"
-            f"  3. Save them as e.g. steamer_hitters.csv, steamer_pitchers.csv\n"
-            f"     (or the FanGraphs export name like "
-            f"fangraphs-leaderboard-projections-steamer-hitters.csv)"
+            f"  3. Save them as e.g. steamer-hitters.csv, steamer-pitchers.csv"
         )
 
     # Check each requested system has at least one file (hitters or pitchers)
@@ -63,7 +61,7 @@ def validate_projections_dir(
             f"\n"
             f"Expected files like:\n"
             + "\n".join(
-                f"  - {s}_hitters.csv / {s}_pitchers.csv"
+                f"  - {s}-hitters.csv / {s}-pitchers.csv"
                 for s in missing_systems
             )
             + f"\n"
