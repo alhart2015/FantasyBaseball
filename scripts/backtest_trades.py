@@ -341,32 +341,59 @@ def main():
 
         current_ranks = compute_roto_points_by_cat(standings)
 
-        # Build roster dicts for trade finder (using projected ROS stats)
-        hart_roster_for_trades = []
-        for p in team_rosters[HART_TEAM]:
-            entry = dict(p)
-            # Scale projection to ROS
-            ros = compute_player_projected_ros(p, checkpoint)
-            entry.update(ros)
-            hart_roster_for_trades.append(entry)
+        # Build roster dicts for trade finder using availability-adjusted
+        # projections: if a player has minimal games through the checkpoint,
+        # scale down their ROS projection (simulates recency blend for injured
+        # players). This prevents proposing trades for injured players.
+        def build_adjusted_roster(roster):
+            adjusted = []
+            for p in roster:
+                entry = dict(p)
+                ros = compute_player_projected_ros(p, checkpoint)
+
+                # Check actual games played through checkpoint
+                mid = p["mlbam_id"]
+                log_entry = game_logs.get(mid, {})
+                games_before = [g for g in log_entry.get("games", []) if g["date"] < checkpoint]
+
+                if p["player_type"] == "hitter":
+                    actual_pa = sum(g.get("pa", 0) for g in games_before)
+                    # If less than 50 PA by this point, they're likely injured
+                    # Scale ROS projection by availability fraction
+                    season_start = "2025-03-27"
+                    days_elapsed = (datetime.strptime(checkpoint, "%Y-%m-%d") - datetime.strptime(season_start, "%Y-%m-%d")).days
+                    expected_pa = p.get("pa", 500) * days_elapsed / 185  # rough pro-rate
+                    avail_frac = min(1.0, actual_pa / expected_pa) if expected_pa > 0 else 0
+                    for col in ["r", "hr", "rbi", "sb", "h", "ab", "pa"]:
+                        ros[col] = ros.get(col, 0) * avail_frac
+                    if avail_frac < 0.3:
+                        ros["avg"] = ros.get("avg", 0) * avail_frac
+                else:
+                    actual_ip = sum(g.get("ip", 0) for g in games_before)
+                    season_start = "2025-03-27"
+                    days_elapsed = (datetime.strptime(checkpoint, "%Y-%m-%d") - datetime.strptime(season_start, "%Y-%m-%d")).days
+                    expected_ip = p.get("ip", 150) * days_elapsed / 185
+                    avail_frac = min(1.0, actual_ip / expected_ip) if expected_ip > 0 else 0
+                    for col in ["w", "k", "sv", "ip"]:
+                        ros[col] = ros.get(col, 0) * avail_frac
+                    if avail_frac < 0.3:
+                        ros["era"] = ros.get("era", 0) + (1 - avail_frac) * 5  # degrade toward bad
+                        ros["whip"] = ros.get("whip", 0) + (1 - avail_frac) * 0.5
+                    ros["er"] = ros.get("era", 0) * ros.get("ip", 0) / 9 if ros.get("ip", 0) > 0 else 0
+                    ros["bb"] = ros.get("whip", 0) * ros.get("ip", 0) * 0.4 if ros.get("ip", 0) > 0 else 0
+                    ros["h_allowed"] = ros.get("whip", 0) * ros.get("ip", 0) * 0.6 if ros.get("ip", 0) > 0 else 0
+
+                entry.update(ros)
+                adjusted.append(entry)
+            return adjusted
+
+        hart_roster_for_trades = build_adjusted_roster(team_rosters[HART_TEAM])
 
         opp_rosters_for_trades = {}
         for team_name in team_names:
             if team_name == HART_TEAM:
                 continue
-            opp_roster = []
-            for p in team_rosters[team_name]:
-                entry = dict(p)
-                ros = compute_player_projected_ros(p, checkpoint)
-                entry.update(ros)
-                opp_roster.append(entry)
-            opp_rosters_for_trades[team_name] = opp_roster
-
-        # Build full-season (unscaled) rosters for fairness check
-        full_season_rosters = {HART_TEAM: team_rosters[HART_TEAM]}
-        for tn in team_names:
-            if tn != HART_TEAM:
-                full_season_rosters[tn] = team_rosters[tn]
+            opp_rosters_for_trades[team_name] = build_adjusted_roster(team_rosters[team_name])
 
         # Find trades
         trades = find_trades(
@@ -377,7 +404,6 @@ def main():
             leverage_by_team=leverage_by_team,
             roster_slots=ROSTER_SLOTS,
             max_results=5,
-            full_season_rosters=full_season_rosters,
         )
 
         if not trades:
