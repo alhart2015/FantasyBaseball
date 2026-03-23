@@ -362,6 +362,12 @@ def main():
                 opp_roster.append(entry)
             opp_rosters_for_trades[team_name] = opp_roster
 
+        # Build full-season (unscaled) rosters for fairness check
+        full_season_rosters = {HART_TEAM: team_rosters[HART_TEAM]}
+        for tn in team_names:
+            if tn != HART_TEAM:
+                full_season_rosters[tn] = team_rosters[tn]
+
         # Find trades
         trades = find_trades(
             hart_name=HART_TEAM,
@@ -371,6 +377,7 @@ def main():
             leverage_by_team=leverage_by_team,
             roster_slots=ROSTER_SLOTS,
             max_results=5,
+            full_season_rosters=full_season_rosters,
         )
 
         if not trades:

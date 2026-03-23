@@ -13,6 +13,14 @@ from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.utils.positions import can_fill_slot
 
 COUNTING_CATS = ["R", "HR", "RBI", "SB", "W", "K", "SV"]
+
+# Equal leverage weights for computing raw (unweighted) player value
+EQUAL_LEVERAGE = {cat: 0.1 for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
+
+# Maximum raw SGP gap between traded players. Prevents lopsided trades
+# like Aaron Judge for Chris Sale that no human would accept.
+# Computed on full-season projections (not ROS-scaled) to reflect true caliber.
+MAX_SGP_GAP = 0.35
 INVERSE_CATS = {"ERA", "WHIP"}  # lower is better
 ALL_CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
 
@@ -216,6 +224,15 @@ def _player_ros_stats(player: dict) -> dict:
         }
 
 
+def _find_player_by_name(name: str, roster: list[dict]) -> dict | None:
+    """Find a player in a roster by name (case-insensitive)."""
+    name_lower = name.lower()
+    for p in roster:
+        if p.get("name", "").lower() == name_lower:
+            return p
+    return None
+
+
 def _can_roster_without(roster: list[dict], remove: dict, add: dict,
                         roster_slots: dict) -> bool:
     """Check if a roster remains legal after swapping one player.
@@ -240,12 +257,19 @@ def find_trades(
     leverage_by_team: dict[str, dict],
     roster_slots: dict[str, int],
     max_results: int = 5,
+    full_season_rosters: dict[str, list[dict]] | None = None,
 ) -> list[dict]:
     """Find and rank the best 1-for-1 trades for Hart.
 
     Evaluates every possible swap between Hart and each opponent.
     Filters to trades where both sides gain wSGP (opponent can break even).
+    Rejects lopsided trades where players' full-season SGP differs too much.
     Ranks by Hart's projected roto point gain.
+
+    Args:
+        full_season_rosters: Optional dict of {team_name: [player_dicts]} with
+            full-season (unscaled) projections for the fairness check. If None,
+            the ROS-scaled roster values are used instead.
 
     Returns list of trade dicts with: send, receive, opponent, hart_delta,
     opp_delta, hart_cat_deltas, opp_cat_deltas, hart_wsgp_gain, opp_wsgp_gain,
@@ -269,6 +293,30 @@ def find_trades(
                     continue
 
                 opp_p_series = pd.Series(opp_player)
+
+                # Fairness guardrail: reject lopsided trades where raw
+                # player values are too far apart. Use full-season projections
+                # (not ROS-scaled) to reflect true player caliber.
+                if full_season_rosters:
+                    hart_fs = _find_player_by_name(
+                        hart_player["name"],
+                        full_season_rosters.get(hart_name, []),
+                    )
+                    opp_fs = _find_player_by_name(
+                        opp_player["name"],
+                        full_season_rosters.get(opp_name, []),
+                    )
+                    if hart_fs and opp_fs:
+                        hart_raw = calculate_weighted_sgp(pd.Series(hart_fs), EQUAL_LEVERAGE)
+                        opp_raw = calculate_weighted_sgp(pd.Series(opp_fs), EQUAL_LEVERAGE)
+                    else:
+                        hart_raw = calculate_weighted_sgp(hart_p_series, EQUAL_LEVERAGE)
+                        opp_raw = calculate_weighted_sgp(opp_p_series, EQUAL_LEVERAGE)
+                else:
+                    hart_raw = calculate_weighted_sgp(hart_p_series, EQUAL_LEVERAGE)
+                    opp_raw = calculate_weighted_sgp(opp_p_series, EQUAL_LEVERAGE)
+                if abs(hart_raw - opp_raw) > MAX_SGP_GAP:
+                    continue
 
                 # wSGP from each side's perspective
                 gain_wsgp = calculate_weighted_sgp(opp_p_series, hart_leverage)
