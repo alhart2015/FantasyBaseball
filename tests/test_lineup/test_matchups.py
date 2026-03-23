@@ -1,6 +1,12 @@
 import pytest
 import pandas as pd
-from fantasy_baseball.lineup.matchups import normalize_team_batting_stats, calculate_matchup_factors, adjust_pitcher_projection
+from unittest.mock import patch
+from fantasy_baseball.lineup.matchups import (
+    normalize_team_batting_stats,
+    calculate_matchup_factors,
+    adjust_pitcher_projection,
+    fetch_team_batting_stats,
+)
 
 
 def test_normalize_team_batting_stats():
@@ -106,3 +112,27 @@ def test_two_start_blended_factors():
     adjusted = adjust_pitcher_projection(pitcher, matchup_list)
     assert abs(adjusted["era"] - 3.50) < 0.05
     assert abs(adjusted["k"] - 200) < 1.0
+
+
+@patch("fantasy_baseball.lineup.matchups.statsapi")
+def test_fetch_team_batting_stats(mock_api):
+    """fetch_team_batting_stats calls MLB API per team and returns normalized data."""
+    mock_api.get.side_effect = [
+        # First call: get teams
+        {"teams": [
+            {"id": 147, "name": "New York Yankees", "abbreviation": "NYY"},
+            {"id": 119, "name": "Los Angeles Dodgers", "abbreviation": "LAD"},
+        ]},
+        # Per-team stat calls
+        {"stats": [{"splits": [{"stat": {
+            "ops": ".787", "strikeOuts": 1463, "plateAppearances": 6235,
+        }}]}]},
+        {"stats": [{"splits": [{"stat": {
+            "ops": ".820", "strikeOuts": 1300, "plateAppearances": 6100,
+        }}]}]},
+    ]
+
+    result = fetch_team_batting_stats(season=2025)
+    assert "NYY" in result
+    assert "LAD" in result
+    assert abs(result["NYY"]["ops"] - 0.787) < 0.001
