@@ -272,7 +272,11 @@ def get_recommendations(
             "note": "",
         }
         positions = player["positions"]
-        for slot in unfilled:
+        # Check specific positional slots before flex (IF/UTIL) so the note
+        # shows "fills 3B need" rather than "fills IF need" when both are open.
+        specific_unfilled = [s for s in unfilled if s not in ("IF", "UTIL")]
+        flex_unfilled = [s for s in unfilled if s in ("IF", "UTIL")]
+        for slot in specific_unfilled + flex_unfilled:
             if can_fill_slot(positions, slot):
                 rec["need_flag"] = True
                 rec["note"] = f"fills {slot} need"
