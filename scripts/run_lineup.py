@@ -18,6 +18,11 @@ from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.lineup.waivers import scan_waivers
+from fantasy_baseball.lineup.matchups import (
+    get_team_batting_stats,
+    calculate_matchup_factors,
+    adjust_pitcher_projection,
+)
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter, is_pitcher
 from fantasy_baseball.data.mlb_schedule import get_week_schedule
@@ -29,6 +34,7 @@ CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 SCHEDULE_PATH = PROJECT_ROOT / "data" / "weekly_schedule.json"
+BATTING_STATS_PATH = PROJECT_ROOT / "data" / "team_batting_stats.json"
 
 # Default games per week if not specified
 DEFAULT_GAMES_PER_WEEK = 6
@@ -64,6 +70,7 @@ def scale_by_schedule(player: pd.Series, games_this_week: int) -> pd.Series:
 def print_probable_starters(
     roster_pitchers: list[pd.Series],
     schedule: dict | None,
+    matchup_factors: dict[str, dict] | None = None,
 ) -> None:
     """Print probable starter matchups, flagging two-start pitchers."""
     if not schedule or not roster_pitchers:
@@ -94,12 +101,25 @@ def print_probable_starters(
             except (ValueError, KeyError):
                 day = "?"
 
+            quality = ""
+            if matchup_factors and game[opponent_key] in matchup_factors:
+                f = matchup_factors[game[opponent_key]]["era_whip_factor"]
+                if f <= 0.93:
+                    quality = " (easy)"
+                elif f <= 0.97:
+                    quality = " (lean)"
+                elif f >= 1.07:
+                    quality = " (tough)"
+                elif f >= 1.03:
+                    quality = " (hard)"
+
             if pitcher_name not in pitcher_starts:
                 pitcher_starts[pitcher_name] = []
             pitcher_starts[pitcher_name].append({
                 "day": day,
                 "indicator": indicator,
                 "opponent": game[opponent_key],
+                "quality": quality,
             })
 
     if not pitcher_starts:
@@ -114,7 +134,7 @@ def print_probable_starters(
         for name, starts in sorted(two_start.items()):
             team = pitcher_teams.get(name, "")
             matchups = ", ".join(
-                f"{s['day']} {s['indicator']} {s['opponent']}" for s in starts
+                f"{s['day']} {s['indicator']} {s['opponent']}{s.get('quality', '')}" for s in starts
             )
             print(f"    {name:<25} {team:<5} {matchups}")
 
@@ -123,7 +143,7 @@ def print_probable_starters(
         for name, starts in sorted(one_start.items()):
             team = pitcher_teams.get(name, "")
             s = starts[0]
-            print(f"    {name:<25} {team:<5} {s['day']} {s['indicator']} {s['opponent']}")
+            print(f"    {name:<25} {team:<5} {s['day']} {s['indicator']} {s['opponent']}{s.get('quality', '')}")
 
     # Roster pitchers with no announced start
     announced = {normalize_name(k) for k in pitcher_starts.keys()}
@@ -177,6 +197,16 @@ def main():
         print(f"Schedule loaded for {len(games_per_team)} teams")
     else:
         print("Schedule unavailable — using default 6 games/week")
+    print()
+
+    # Fetch team batting stats for matchup adjustments
+    print("Fetching team batting stats...")
+    team_batting = get_team_batting_stats(BATTING_STATS_PATH)
+    matchup_factors = calculate_matchup_factors(team_batting) if team_batting else {}
+    if matchup_factors:
+        print(f"Matchup factors loaded for {len(matchup_factors)} teams")
+    else:
+        print("Team batting stats unavailable — no matchup adjustments")
     print()
 
     # Calculate leverage
@@ -255,6 +285,34 @@ def main():
     print(f"Matched: {len(roster_hitters)} hitters, {len(roster_pitchers)} pitchers")
     print()
 
+    # Map roster pitchers to their weekly opponents using probable starters
+    pitcher_matchups: dict[str, list[dict]] = {}
+    if schedule and matchup_factors:
+        probable = schedule.get("probable_pitchers", [])
+        for game in probable:
+            for side, opp_key in [("away", "home_team"), ("home", "away_team")]:
+                pitcher_name = game.get(f"{side}_pitcher", "TBD")
+                if pitcher_name == "TBD":
+                    continue
+                opp_abbrev = game[opp_key]
+                if opp_abbrev in matchup_factors:
+                    pitcher_matchups.setdefault(pitcher_name, []).append(
+                        matchup_factors[opp_abbrev]
+                    )
+
+    # Apply matchup adjustments to roster pitchers
+    adjusted_count = 0
+    for i, p in enumerate(roster_pitchers):
+        name_norm = normalize_name(p["name"])
+        for prob_name, factors in pitcher_matchups.items():
+            if normalize_name(prob_name) == name_norm:
+                roster_pitchers[i] = adjust_pitcher_projection(p, factors)
+                adjusted_count += 1
+                break
+    if adjusted_count:
+        print(f"Applied matchup adjustments to {adjusted_count} pitchers")
+        print()
+
     # Optimize hitter lineup
     if roster_hitters:
         print("=" * 60)
@@ -320,7 +378,7 @@ def main():
         print("=" * 60)
         print(f"PROBABLE STARTERS THIS WEEK ({period_label})")
         print("=" * 60)
-        print_probable_starters(roster_pitchers, schedule)
+        print_probable_starters(roster_pitchers, schedule, matchup_factors)
         print()
 
     # Waiver wire recommendations (Gap 1 fix)
