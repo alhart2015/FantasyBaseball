@@ -136,3 +136,33 @@ def test_fetch_team_batting_stats(mock_api):
     assert "NYY" in result
     assert "LAD" in result
     assert abs(result["NYY"]["ops"] - 0.787) < 0.001
+
+
+def test_full_pipeline():
+    """End-to-end: raw stats -> factors -> adjusted pitcher projection."""
+    raw = [
+        {"abbreviation": "COL", "ops": ".650", "strikeouts": 1600, "plate_appearances": 6000,
+         "team_id": 115, "team_name": "Colorado Rockies"},
+        {"abbreviation": "LAD", "ops": ".820", "strikeouts": 1200, "plate_appearances": 6100,
+         "team_id": 119, "team_name": "Los Angeles Dodgers"},
+        {"abbreviation": "MIL", "ops": ".740", "strikeouts": 1400, "plate_appearances": 6050,
+         "team_id": 158, "team_name": "Milwaukee Brewers"},
+    ]
+    stats = normalize_team_batting_stats(raw)
+    factors = calculate_matchup_factors(stats, dampening=0.5)
+
+    pitcher = _make_pitcher("Ace", "NYY", 3.50, 1.15, 200, 12, 0, 180)
+
+    # Facing COL (weak offense, high K%) should be favorable
+    adj_easy = adjust_pitcher_projection(pitcher, factors["COL"])
+    assert adj_easy["era"] < 3.50
+    assert adj_easy["k"] > 200
+
+    # Facing LAD (strong offense, low K%) should be tough
+    adj_hard = adjust_pitcher_projection(pitcher, factors["LAD"])
+    assert adj_hard["era"] > 3.50
+    assert adj_hard["k"] < 200
+
+    # Two-start pitcher facing both -> blended
+    adj_both = adjust_pitcher_projection(pitcher, [factors["COL"], factors["LAD"]])
+    assert adj_easy["era"] < adj_both["era"] < adj_hard["era"]
