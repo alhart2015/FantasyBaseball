@@ -8,6 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import pandas as pd
+from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
+from fantasy_baseball.utils.positions import can_fill_slot
+
 COUNTING_CATS = ["R", "HR", "RBI", "SB", "W", "K", "SV"]
 INVERSE_CATS = {"ERA", "WHIP"}  # lower is better
 ALL_CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
@@ -186,3 +190,122 @@ def compute_trade_impact(
         "hart_cat_deltas": hart_cat_deltas,
         "opp_cat_deltas": opp_cat_deltas,
     }
+
+
+def _player_ros_stats(player: dict) -> dict:
+    """Extract ROS stats from a player dict for trade projection.
+
+    Returns dict with R, HR, RBI, SB, AVG, W, K, SV, ERA, WHIP, ab, ip.
+    """
+    ptype = player.get("player_type", "hitter")
+    if ptype == "hitter":
+        return {
+            "R": player.get("r", 0), "HR": player.get("hr", 0),
+            "RBI": player.get("rbi", 0), "SB": player.get("sb", 0),
+            "AVG": player.get("avg", 0),
+            "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0,
+            "ab": player.get("ab", 0), "ip": 0,
+        }
+    else:
+        return {
+            "R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
+            "W": player.get("w", 0), "K": player.get("k", 0),
+            "SV": player.get("sv", 0), "ERA": player.get("era", 0),
+            "WHIP": player.get("whip", 0),
+            "ab": 0, "ip": player.get("ip", 0),
+        }
+
+
+def _can_roster_without(roster: list[dict], remove: dict, add: dict,
+                        roster_slots: dict) -> bool:
+    """Check if a roster remains legal after swapping one player.
+
+    Simple check: the incoming player must be able to fill at least one
+    non-bench active slot.
+    """
+    positions = add.get("positions", [])
+    for slot in roster_slots:
+        if slot in ("BN", "IL"):
+            continue
+        if can_fill_slot(positions, slot):
+            return True
+    return False
+
+
+def find_trades(
+    hart_name: str,
+    hart_roster: list[dict],
+    opp_rosters: dict[str, list[dict]],
+    standings: list[dict],
+    leverage_by_team: dict[str, dict],
+    roster_slots: dict[str, int],
+    max_results: int = 5,
+) -> list[dict]:
+    """Find and rank the best 1-for-1 trades for Hart.
+
+    Evaluates every possible swap between Hart and each opponent.
+    Filters to trades where both sides gain wSGP (opponent can break even).
+    Ranks by Hart's projected roto point gain.
+
+    Returns list of trade dicts with: send, receive, opponent, hart_delta,
+    opp_delta, hart_cat_deltas, opp_cat_deltas, hart_wsgp_gain, opp_wsgp_gain,
+    send_positions, receive_positions.
+    """
+    hart_leverage = leverage_by_team.get(hart_name, {})
+    proposals = []
+
+    for opp_name, opp_roster in opp_rosters.items():
+        opp_leverage = leverage_by_team.get(opp_name, {})
+
+        for hart_player in hart_roster:
+            hart_p_series = pd.Series(hart_player)
+            hart_wsgp = calculate_weighted_sgp(hart_p_series, hart_leverage)
+
+            for opp_player in opp_roster:
+                # Roster legality
+                if not _can_roster_without(hart_roster, hart_player, opp_player, roster_slots):
+                    continue
+                if not _can_roster_without(opp_roster, opp_player, hart_player, roster_slots):
+                    continue
+
+                opp_p_series = pd.Series(opp_player)
+
+                # wSGP from each side's perspective
+                gain_wsgp = calculate_weighted_sgp(opp_p_series, hart_leverage)
+                hart_wsgp_gain = gain_wsgp - hart_wsgp
+
+                opp_current_wsgp = calculate_weighted_sgp(opp_p_series, opp_leverage)
+                opp_gain_wsgp = calculate_weighted_sgp(hart_p_series, opp_leverage)
+                opp_wsgp_gain = opp_gain_wsgp - opp_current_wsgp
+
+                # Both sides must benefit
+                if hart_wsgp_gain <= 0 or opp_wsgp_gain < 0:
+                    continue
+
+                # Roto point impact
+                hart_loses = _player_ros_stats(hart_player)
+                hart_gains = _player_ros_stats(opp_player)
+                opp_loses = _player_ros_stats(opp_player)
+                opp_gains = _player_ros_stats(hart_player)
+
+                impact = compute_trade_impact(
+                    standings, hart_name, opp_name,
+                    hart_loses, hart_gains, opp_loses, opp_gains,
+                )
+
+                proposals.append({
+                    "send": hart_player["name"],
+                    "send_positions": hart_player.get("positions", []),
+                    "receive": opp_player["name"],
+                    "receive_positions": opp_player.get("positions", []),
+                    "opponent": opp_name,
+                    "hart_delta": impact["hart_delta"],
+                    "opp_delta": impact["opp_delta"],
+                    "hart_cat_deltas": impact["hart_cat_deltas"],
+                    "opp_cat_deltas": impact["opp_cat_deltas"],
+                    "hart_wsgp_gain": round(hart_wsgp_gain, 2),
+                    "opp_wsgp_gain": round(opp_wsgp_gain, 2),
+                })
+
+    proposals.sort(key=lambda t: (t["hart_delta"], t["opp_delta"]), reverse=True)
+    return proposals[:max_results]
