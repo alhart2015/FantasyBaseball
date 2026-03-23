@@ -67,3 +67,36 @@ def calculate_matchup_factors(
             "k_factor": k_factor,
         }
     return factors
+
+
+def adjust_pitcher_projection(
+    pitcher: pd.Series,
+    factors: dict | list[dict],
+) -> pd.Series:
+    """Adjust a pitcher's projected stats based on matchup factors.
+
+    Args:
+        pitcher: Pitcher projection Series with era, whip, k, w, sv, ip, er, bb, h_allowed.
+        factors: Single matchup factor dict, or list of dicts for multi-start
+                 pitchers (factors are averaged).
+
+    Returns:
+        Copy of pitcher with adjusted era, whip, k, er, bb, h_allowed.
+        w and sv are left unchanged.
+    """
+    if isinstance(factors, list):
+        era_whip = sum(f["era_whip_factor"] for f in factors) / len(factors)
+        k_fac = sum(f["k_factor"] for f in factors) / len(factors)
+    else:
+        era_whip = factors["era_whip_factor"]
+        k_fac = factors["k_factor"]
+
+    adjusted = pitcher.copy()
+    adjusted["era"] = pitcher["era"] * era_whip
+    adjusted["whip"] = pitcher["whip"] * era_whip
+    adjusted["k"] = pitcher["k"] * k_fac
+    adjusted["er"] = pitcher.get("er", 0) * era_whip
+    adjusted["bb"] = pitcher.get("bb", 0) * era_whip
+    adjusted["h_allowed"] = pitcher.get("h_allowed", 0) * era_whip
+
+    return adjusted

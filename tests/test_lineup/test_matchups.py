@@ -1,5 +1,6 @@
 import pytest
-from fantasy_baseball.lineup.matchups import normalize_team_batting_stats, calculate_matchup_factors
+import pandas as pd
+from fantasy_baseball.lineup.matchups import normalize_team_batting_stats, calculate_matchup_factors, adjust_pitcher_projection
 
 
 def test_normalize_team_batting_stats():
@@ -52,3 +53,56 @@ def test_dampening_limits_adjustment():
     factors = calculate_matchup_factors(extreme, dampening=0.5)
     assert factors["GOOD"]["era_whip_factor"] < 1.15
     assert factors["GOOD"]["era_whip_factor"] > 1.05
+
+
+def _make_pitcher(name, team, era, whip, k, w, sv, ip):
+    return pd.Series({
+        "name": name, "team": team, "player_type": "pitcher",
+        "era": era, "whip": whip, "k": k, "w": w, "sv": sv,
+        "ip": ip, "er": era * ip / 9, "bb": 40, "h_allowed": 140,
+    })
+
+
+def test_easy_matchup_lowers_era():
+    pitcher = _make_pitcher("Ace", "NYY", 3.50, 1.15, 200, 12, 0, 180)
+    factors = {"era_whip_factor": 0.90, "k_factor": 1.10}
+    adjusted = adjust_pitcher_projection(pitcher, factors)
+    assert adjusted["era"] < 3.50
+    assert adjusted["whip"] < 1.15
+    assert adjusted["k"] > 200
+
+
+def test_hard_matchup_raises_era():
+    pitcher = _make_pitcher("Ace", "NYY", 3.50, 1.15, 200, 12, 0, 180)
+    factors = {"era_whip_factor": 1.10, "k_factor": 0.90}
+    adjusted = adjust_pitcher_projection(pitcher, factors)
+    assert adjusted["era"] > 3.50
+    assert adjusted["whip"] > 1.15
+    assert adjusted["k"] < 200
+
+
+def test_neutral_matchup_unchanged():
+    pitcher = _make_pitcher("Ace", "NYY", 3.50, 1.15, 200, 12, 0, 180)
+    factors = {"era_whip_factor": 1.0, "k_factor": 1.0}
+    adjusted = adjust_pitcher_projection(pitcher, factors)
+    assert abs(adjusted["era"] - 3.50) < 0.001
+    assert abs(adjusted["k"] - 200) < 0.1
+
+
+def test_wins_and_saves_unchanged():
+    pitcher = _make_pitcher("Closer", "NYY", 2.50, 1.00, 60, 3, 35, 65)
+    factors = {"era_whip_factor": 1.15, "k_factor": 0.85}
+    adjusted = adjust_pitcher_projection(pitcher, factors)
+    assert adjusted["w"] == 3
+    assert adjusted["sv"] == 35
+
+
+def test_two_start_blended_factors():
+    pitcher = _make_pitcher("Horse", "NYY", 3.50, 1.15, 200, 12, 0, 180)
+    matchup_list = [
+        {"era_whip_factor": 0.90, "k_factor": 1.10},
+        {"era_whip_factor": 1.10, "k_factor": 0.90},
+    ]
+    adjusted = adjust_pitcher_projection(pitcher, matchup_list)
+    assert abs(adjusted["era"] - 3.50) < 0.05
+    assert abs(adjusted["k"] - 200) < 1.0
