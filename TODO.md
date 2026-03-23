@@ -50,9 +50,9 @@
 
 # TODO — Draft Day Fixes
 
-- [ ] **End-of-round simulation still running in draft CLI** — The mid-draft Monte Carlo simulation at the end of each round is still happening in `run_draft.py` despite supposedly being removed. Investigate and remove — it slows down the draft CLI.
+- [x] **End-of-round simulation still running in draft CLI** — The mid-draft Monte Carlo simulation at the end of each round is still happening in `run_draft.py` despite supposedly being removed. Investigate and remove — it slows down the draft CLI.
 
-- [ ] **Incorrect position data for players** — Yahoo position data is wrong or incomplete for some players. Elly De La Cruz shows as OF but should be SS-eligible. Jose Ramirez shows as OF only but should have 3B eligibility. Investigate `player_positions.json` / `fetch_positions.py` / Yahoo API source. May need manual overrides or a cross-reference with another data source.
+- [x] **Incorrect position data for players** — Yahoo position data is wrong or incomplete for some players. Elly De La Cruz shows as OF but should be SS-eligible. Jose Ramirez shows as OF only but should have 3B eligibility. Investigate `player_positions.json` / `fetch_positions.py` / Yahoo API source. May need manual overrides or a cross-reference with another data source.
 
 ---
 
@@ -66,8 +66,16 @@
 
 ## Medium
 
-- [ ] **Pitcher matchup quality adjustments** — Factor opponent team batting stats into pitcher valuations. Pull opponent stats and adjust projected ERA/WHIP/K up or down based on matchup quality. Builds on the probable pitcher data from the schedule module.
+- [x] **Pitcher matchup quality adjustments** — Factor opponent team batting stats into pitcher valuations. Pull opponent stats and adjust projected ERA/WHIP/K up or down based on matchup quality. Builds on the probable pitcher data from the schedule module.
 
-- [ ] **Recent performance weighting** — Blend ROS projections with a player's last-30-day actual stats to capture hot/cold streaks. Weight recent performance ~20-30% against the ROS projection baseline. Yahoo API has season stats; could also pull splits from FanGraphs.
+- [x] **ROS projection refresh** — Periodically download updated Steamer/ZiPS ROS projections from FanGraphs and drop into data/projections/. These already incorporate actual performance, giving immediate accuracy improvement over stale preseason projections with zero modeling work. Manual steps documented in `data/projections/README.md`.
+
+- [ ] **Recency weighting backtest** — Using 2025 data, test whether layering a last-30-day recency blend on top of projections improves predictions. At monthly checkpoints (May–Aug), compare three approaches against two targets: (1) preseason projection, (2) ROS projection, (3) recency-weighted blend — measured against both next-week performance (start/sit value) and rest-of-season performance (trade/waiver value). Requires game-log-level 2025 data from FanGraphs or MLB API. If recency blend wins at predicting next-week, use it for start/sit; if ROS wins for season-long, use it for trades/waivers.
+
+- [ ] **Recent performance weighting (if backtest validates)** — Blend ROS projections with last-30-day actual stats for start/sit decisions. Per-stat reliability constants scale with sample size (K% trusts actuals faster than AVG/ERA). Only build if the recency backtest shows meaningful alpha over pure ROS projections for next-week prediction.
+
+- [ ] **Pitcher streaming tool** — Score free agent SPs by matchup quality to identify streamers (pick up a mediocre pitcher facing a terrible offense for one start, then drop). Builds on the matchup adjustment system.
+
+- [ ] **Automate ROS projection download** — If the manual FanGraphs CSV download gets tedious, automate it. FanGraphs doesn't have a public API so this would require browser automation (Playwright) or finding an unofficial data source. Low priority unless the manual process is a pain.
 
 - [ ] **Trade recommender** — Propose trades that improve Hart's team AND are realistic for the other side to accept. For each league opponent, compare their roster's category strengths/weaknesses against ours using leverage. Find swaps where we send surplus in their weak categories and receive help in ours — both sides gain standings points. Rank proposals by net SGP gain for us, filtered to only include trades where the other team also gains net SGP (or at worst breaks even). Use Yahoo API to pull all team rosters and standings for the analysis.
