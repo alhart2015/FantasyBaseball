@@ -207,10 +207,14 @@ def get_recommendations(
     available["var"] = available.index.map(live_var)
     available["best_position"] = available.index.map(live_pos)
 
-    # Compute VONA if requested
+    # Compute VONA if requested.  Use the full undrafted pool (not the
+    # top-150 VAR candidates) so that "best remaining in bucket" reflects
+    # true talent depth.  VONA only needs total_sgp and adp, both static
+    # columns, so iterating the full pool is cheap (~O(n)).
     vona_scores = None
     if scoring_mode == "vona":
-        vona_scores = calculate_vona_scores(available, picks_until_next)
+        full_available = board[~board["player_id"].isin(drafted)]
+        vona_scores = calculate_vona_scores(full_available, picks_until_next)
         available["vona"] = available["player_id"].map(vona_scores).fillna(0)
 
     # Sort by the active scoring mode
