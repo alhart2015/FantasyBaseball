@@ -139,8 +139,16 @@ def _blend_hitters(dfs: list[pd.DataFrame]) -> pd.DataFrame:
         if "fg_id" in group.columns:
             row["fg_id"] = group.iloc[0]["fg_id"]
         if "adp" in group.columns:
-            adp_vals = group["adp"].dropna()
-            row["adp"] = adp_vals.min() if not adp_vals.empty else float("inf")
+            adp_mask = group["adp"].notna()
+            if adp_mask.any():
+                adp_w = w[adp_mask.values]
+                adp_w_sum = adp_w.sum()
+                if adp_w_sum > 0:
+                    row["adp"] = float((group.loc[adp_mask, "adp"].values * adp_w).sum() / adp_w_sum)
+                else:
+                    row["adp"] = float("inf")
+            else:
+                row["adp"] = float("inf")
         results.append(row)
     return pd.DataFrame(results)
 
@@ -177,7 +185,15 @@ def _blend_pitchers(dfs: list[pd.DataFrame]) -> pd.DataFrame:
         if "fg_id" in group.columns:
             row["fg_id"] = group.iloc[0]["fg_id"]
         if "adp" in group.columns:
-            adp_vals = group["adp"].dropna()
-            row["adp"] = adp_vals.min() if not adp_vals.empty else float("inf")
+            adp_mask = group["adp"].notna()
+            if adp_mask.any():
+                adp_w = w[adp_mask.values]
+                adp_w_sum = adp_w.sum()
+                if adp_w_sum > 0:
+                    row["adp"] = float((group.loc[adp_mask, "adp"].values * adp_w).sum() / adp_w_sum)
+                else:
+                    row["adp"] = float("inf")
+            else:
+                row["adp"] = float("inf")
         results.append(row)
     return pd.DataFrame(results)

@@ -177,8 +177,16 @@ def _score_roto(team_players, config, full_board, board):
     for cat in all_cats:
         rev = cat not in inverse
         st = sorted(results, key=lambda x: x[cat], reverse=rev)
-        for i, t in enumerate(st):
-            t[f"{cat}_p"] = config.num_teams - i
+        # Fractional tie-breaking: tied teams share the average of their points
+        i = 0
+        while i < len(st):
+            j = i + 1
+            while j < len(st) and st[j][cat] == st[i][cat]:
+                j += 1
+            avg_pts = sum(config.num_teams - k for k in range(i, j)) / (j - i)
+            for k in range(i, j):
+                st[k][f"{cat}_p"] = avg_pts
+            i = j
 
     for t in results:
         t["tot"] = sum(t[f"{c}_p"] for c in all_cats)
@@ -315,7 +323,7 @@ def run_simulation(
                     opp_balances[num].add_player(best)
                     opp_rosters[num].append(best["player_id"])
                     opp_roster_names[num].append(best["name"])
-            break
+                break
 
     # Run draft
     while tracker.current_pick <= tracker.total_picks:

@@ -23,9 +23,11 @@ STRATEGY_NAMES = list(STRATEGIES.keys())
 SCORING_MODES = ["var", "vona"]
 
 # Historical opponent mapping (see analyze_history.py STRATEGY CLASSIFICATION)
+# Closer targets based on 2024-2025 avg: Spacemen=4, Jon/HelloP=3,
+# Boston/WIP=2, SkeleThor/Springfield=1-2 (took 2 in 2024), TBD=1, Cavalli=new(2)
 OPP_STRATEGIES = (
-    "1:three_closers,2:default,3:nonzero_sv,4:three_closers,"
-    "5:nonzero_sv,6:nonzero_sv,7:default,9:nonzero_sv,10:three_closers"
+    "1:two_closers,2:two_closers,3:two_closers,4:three_closers,"
+    "5:two_closers,6:four_closers,7:two_closers,9:nonzero_sv,10:three_closers"
 )
 
 OUT_PATH = PROJECT_ROOT / "data" / "batch_sweep_results.csv"

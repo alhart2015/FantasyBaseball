@@ -18,18 +18,19 @@ import pandas as pd
 from fantasy_baseball.draft.balance import CategoryBalance, calculate_draft_leverage
 from fantasy_baseball.draft.recommender import get_recommendations, get_filled_positions
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
+from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.positions import can_fill_slot
-
-# Minimum projected SV to count as a closer
-CLOSER_SV_THRESHOLD = 20
 # Draft a closer by this round if you have none
 CLOSER_DEADLINE_ROUND = 10
 # Don't let team AVG fall below this
 AVG_FLOOR = 0.255
-# three_closers strategy: how many closers and spacing
+# n-closers strategies: target counts and spaced deadlines
+TWO_CLOSERS_TARGET = 2
+TWO_CLOSERS_DEADLINES = [8, 14]
 THREE_CLOSERS_TARGET = 3
-# Draft first closer by round 5, second by round 9, third by round 13
 THREE_CLOSERS_DEADLINES = [5, 9, 13]
+FOUR_CLOSERS_TARGET = 4
+FOUR_CLOSERS_DEADLINES = [5, 8, 12, 16]
 # no_punt: AVG floor and dynamic SV danger zone
 NO_PUNT_SV_DEADLINE = 9  # legacy fallback if team_rosters not available
 NO_PUNT_AVG_FLOOR = 0.250
@@ -238,58 +239,46 @@ def pick_no_punt_opp(
     return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
 
 
-def pick_three_closers(
-    board, full_board, tracker, balance, config, team_filled, **kwargs,
-):
-    """Draft exactly 3 closers, spaced across the draft.
+def _make_n_closers_strategy(target, deadlines):
+    """Factory: create a strategy that drafts exactly N closers at spaced deadlines."""
+    def pick_n_closers(
+        board, full_board, tracker, balance, config, team_filled, **kwargs,
+    ):
+        closer_count = _count_closers(tracker, board, full_board)
+        current_round = tracker.current_round
 
-    Uses deadlines to ensure closers are drafted by rounds 6, 10, and 14.
-    Between deadlines, falls back to default leverage-weighted picks.
-    When a closer is needed, picks the best available closer by VAR
-    (not ADP), so we get the highest-value closer remaining.
-    """
-    # Count how many closers we already have
-    closer_count = 0
-    for pid in tracker.user_roster_ids:
-        rows = board[board["player_id"] == pid]
-        if rows.empty:
-            rows = full_board[full_board["player_id"] == pid]
-        if not rows.empty and rows.iloc[0].get("sv", 0) >= CLOSER_SV_THRESHOLD:
-            closer_count += 1
+        need_closer = False
+        if closer_count < target:
+            deadline_idx = closer_count
+            if deadline_idx < len(deadlines):
+                deadline = deadlines[deadline_idx]
+                if current_round >= deadline:
+                    need_closer = True
 
-    current_round = tracker.current_round
+        if need_closer:
+            available = board[~board["player_id"].isin(tracker.drafted_ids)]
+            closers = available[
+                available.apply(lambda r: r.get("sv", 0) >= CLOSER_SV_THRESHOLD, axis=1)
+            ]
+            if not closers.empty:
+                closers = closers.sort_values("var", ascending=False)
+                filled = get_filled_positions(
+                    tracker.user_roster_ids, full_board,
+                    roster_slots=config.roster_slots,
+                )
+                for _, best in closers.iterrows():
+                    if _can_roster_player(best, filled, config.roster_slots):
+                        return best["name"], best["player_id"]
 
-    # Check if we need to force a closer this pick
-    need_closer = False
-    if closer_count < THREE_CLOSERS_TARGET:
-        # Which deadline applies?
-        deadline_idx = closer_count  # 0th closer -> deadline[0], etc.
-        if deadline_idx < len(THREE_CLOSERS_DEADLINES):
-            deadline = THREE_CLOSERS_DEADLINES[deadline_idx]
-            if current_round >= deadline:
-                need_closer = True
+        return pick_default(board, full_board, tracker, balance, config,
+                            team_filled, **kwargs)
+    pick_n_closers.__doc__ = f"Draft exactly {target} closers at deadlines {deadlines}."
+    return pick_n_closers
 
-    if need_closer:
-        available = board[~board["player_id"].isin(tracker.drafted_ids)]
-        closers = available[
-            available.apply(lambda r: r.get("sv", 0) >= CLOSER_SV_THRESHOLD, axis=1)
-        ]
-        if not closers.empty:
-            # Pick by best VAR (value above replacement)
-            closers = closers.sort_values("var", ascending=False)
-            filled = get_filled_positions(
-                tracker.user_roster_ids, full_board,
-                roster_slots=config.roster_slots,
-            )
-            for _, best in closers.iterrows():
-                if _can_roster_player(best, filled, config.roster_slots):
-                    return best["name"], best["player_id"]
 
-    # Otherwise, use the default recommendation engine.
-    # But also let the default engine pick a closer naturally if it wants —
-    # we only force when deadlines hit.
-    return pick_default(board, full_board, tracker, balance, config,
-                        team_filled, **kwargs)
+pick_two_closers = _make_n_closers_strategy(TWO_CLOSERS_TARGET, TWO_CLOSERS_DEADLINES)
+pick_three_closers = _make_n_closers_strategy(THREE_CLOSERS_TARGET, THREE_CLOSERS_DEADLINES)
+pick_four_closers = _make_n_closers_strategy(FOUR_CLOSERS_TARGET, FOUR_CLOSERS_DEADLINES)
 
 
 def _count_closers(tracker, board, full_board):
@@ -799,7 +788,9 @@ STRATEGIES = {
     "default": pick_default,
     "nonzero_sv": pick_nonzero_sv,
     "avg_hedge": pick_avg_hedge,
+    "two_closers": pick_two_closers,
     "three_closers": pick_three_closers,
+    "four_closers": pick_four_closers,
     "no_punt": pick_no_punt,
     "no_punt_opp": pick_no_punt_opp,
     "no_punt_stagger": pick_no_punt_stagger,

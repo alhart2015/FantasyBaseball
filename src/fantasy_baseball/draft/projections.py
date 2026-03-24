@@ -6,6 +6,7 @@ and the standalone monte_carlo.py script.
 """
 import numpy as np
 import pandas as pd
+from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.name_utils import normalize_name
 
 # Injury model parameters
@@ -101,7 +102,7 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
                 lo, hi = INJURY_SEVERITY["pitcher"]
                 frac_missed = rng.uniform(lo, hi)
 
-            is_closer = p.get("sv", 0) >= 15
+            is_closer = p.get("sv", 0) >= CLOSER_SV_THRESHOLD
             repl = REPLACEMENT_RP if is_closer else REPLACEMENT_SP
 
             row = {}

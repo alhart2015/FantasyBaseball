@@ -19,6 +19,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.config import load_config
 from fantasy_baseball.draft.board import build_draft_board, apply_keepers
+from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.name_utils import normalize_name
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
@@ -150,7 +151,7 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
                 team_injuries.append((p["name"], frac_missed))
 
             # Choose replacement profile based on whether this is a closer
-            is_closer = p.get("sv", 0) >= 15
+            is_closer = p.get("sv", 0) >= CLOSER_SV_THRESHOLD
             repl_profile = REPLACEMENT_RP if is_closer else REPLACEMENT_SP
 
             row = {}
@@ -171,7 +172,7 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
             reverse=True,
         )
         adj_pitchers.sort(
-            key=lambda p: (p.get("sv", 0) >= 15, p["w"] + p["k"] + p["sv"]),
+            key=lambda p: (p.get("sv", 0) >= CLOSER_SV_THRESHOLD, p["w"] + p["k"] + p["sv"]),
             reverse=True,
         )
         active_h = adj_hitters[:h_slots]
@@ -211,8 +212,16 @@ def score_roto(team_stats, num_teams):
     for cat in ALL_CATS:
         rev = cat not in INVERSE
         ranked = sorted(team_stats.keys(), key=lambda tn: team_stats[tn][cat], reverse=rev)
-        for i, tn in enumerate(ranked):
-            results[tn][f"{cat}_pts"] = num_teams - i
+        # Fractional tie-breaking: tied teams share the average of their points
+        i = 0
+        while i < len(ranked):
+            j = i + 1
+            while j < len(ranked) and team_stats[ranked[j]][cat] == team_stats[ranked[i]][cat]:
+                j += 1
+            avg_pts = sum(num_teams - k for k in range(i, j)) / (j - i)
+            for k in range(i, j):
+                results[ranked[k]][f"{cat}_pts"] = avg_pts
+            i = j
 
     for tn in results:
         results[tn]["total"] = sum(results[tn][f"{c}_pts"] for c in ALL_CATS)

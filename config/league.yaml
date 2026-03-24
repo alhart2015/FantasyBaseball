@@ -5,6 +5,8 @@ league:
   team_name: "Hart of the Order"
 
 draft:
+  strategy: two_closers
+  scoring_mode: var
   position: 8  # Snake draft pick position (1-indexed)
   teams:
     1: "Send in the Cavalli"

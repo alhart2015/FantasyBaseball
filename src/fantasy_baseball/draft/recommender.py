@@ -42,15 +42,14 @@ def compute_slot_scarcity_order(
         scarcity[slot] = total_sgp / n_slots if n_slots > 0 else float("inf")
     return sorted(scarcity.keys(), key=lambda s: scarcity[s])
 
-# Closer threshold for VONA bucketing (matches strategy.py)
-_CLOSER_SV_THRESHOLD = 20
+from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 
 
 def _player_bucket(player) -> str:
     """Classify a player into hitter / sp / closer for VONA."""
     if player.get("player_type") == "hitter":
         return "hitter"
-    if player.get("sv", 0) >= _CLOSER_SV_THRESHOLD:
+    if player.get("sv", 0) >= CLOSER_SV_THRESHOLD:
         return "closer"
     return "sp"
 

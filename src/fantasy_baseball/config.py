@@ -16,6 +16,8 @@ class LeagueConfig:
     projection_weights: dict[str, float]
     sgp_overrides: dict[str, float] = field(default_factory=dict)
     teams: dict[int, str] = field(default_factory=dict)
+    strategy: str = "no_punt_opp"
+    scoring_mode: str = "var"
 
 
 def load_config(config_path: Path) -> LeagueConfig:
@@ -42,4 +44,6 @@ def load_config(config_path: Path) -> LeagueConfig:
         projection_weights=projections.get("weights", {}),
         sgp_overrides=raw.get("sgp_denominators", {}),
         teams={int(k): v for k, v in draft.get("teams", {}).items()},
+        strategy=draft.get("strategy", "no_punt_opp"),
+        scoring_mode=draft.get("scoring_mode", "var"),
     )

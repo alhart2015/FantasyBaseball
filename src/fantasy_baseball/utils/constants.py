@@ -52,6 +52,9 @@ STARTERS_PER_POSITION: dict[str, int] = compute_starters_per_position()
 
 IF_ELIGIBLE: set[str] = {"1B", "2B", "3B", "SS"}
 
+# Minimum projected SV to classify a pitcher as a closer.
+CLOSER_SV_THRESHOLD: int = 20
+
 DEFAULT_SGP_DENOMINATORS: dict[str, float] = {
     "R": 20.0,
     "HR": 9.0,

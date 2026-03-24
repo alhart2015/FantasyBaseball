@@ -43,14 +43,22 @@ def compute_roto_points_by_cat(
         N (best) for N teams.  ERA and WHIP are inverse (lower is better).
     """
     n = len(standings)
-    result: dict[str, dict[str, int]] = {t["name"]: {} for t in standings}
+    result: dict[str, dict[str, float]] = {t["name"]: {} for t in standings}
 
     for cat in ALL_CATS:
         inverse = cat in INVERSE_CATS
         # Sort: for inverse cats lowest value → rank n (best)
         ranked = sorted(standings, key=lambda t: t["stats"][cat], reverse=inverse)
-        for rank, team in enumerate(ranked, start=1):
-            result[team["name"]][cat] = rank
+        # Fractional tie-breaking: tied teams share the average of their ranks
+        i = 0
+        while i < n:
+            j = i + 1
+            while j < n and ranked[j]["stats"][cat] == ranked[i]["stats"][cat]:
+                j += 1
+            avg_rank = sum(range(i + 1, j + 1)) / (j - i)
+            for k in range(i, j):
+                result[ranked[k]["name"]][cat] = avg_rank
+            i = j
 
     return result
 
