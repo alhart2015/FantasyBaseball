@@ -204,7 +204,9 @@ def get_recommendations(
     # Only recompute VAR for top candidates (by pre-computed VAR).
     # The full pool sets replacement levels accurately, but iterating
     # all ~3000 players per pick is the main performance bottleneck.
-    _VAR_CANDIDATE_LIMIT = 150
+    # 300 covers all draftable players (10 teams × 23 slots = 230) plus
+    # padding for positional scarcity shifts at C/SS/1B.
+    _VAR_CANDIDATE_LIMIT = 300
     candidates = available.nlargest(_VAR_CANDIDATE_LIMIT, "var")
     live_var = {}
     live_pos = {}
