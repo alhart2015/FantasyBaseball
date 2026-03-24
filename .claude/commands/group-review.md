@@ -1,5 +1,6 @@
 ---
 name: group-review
+user_invocable: true
 description: Use when you want a comprehensive codebase review from three specialist perspectives - baseball expertise, data pipeline quality, and software engineering. Spawns baseball-scout, data-scientist, and software-engineer agents in parallel, then consolidates findings into a severity-ranked report.
 ---
 
