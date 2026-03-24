@@ -279,6 +279,7 @@ def run_simulation(
     strategy_name="default",
     scoring_mode="var",
     adp_noise=0.0,
+    strategy_noise=0.0,
     seed=None,
     opponent_strategies_str=None,
     verbose=False,
@@ -302,8 +303,9 @@ def run_simulation(
     if "adp" not in adp_board.columns:
         adp_board["adp"] = range(len(adp_board))
 
+    rng = np.random.default_rng(seed)
+
     if adp_noise > 0:
-        rng = np.random.default_rng(seed)
         noise = rng.normal(0, adp_noise, size=len(adp_board))
         adp_board = adp_board.copy()
         adp_board["adp"] = adp_board["adp"] + noise
@@ -385,6 +387,40 @@ def run_simulation(
                 team_rosters=team_rosters,
                 player_lookup=player_lookup,
             )
+
+            # Strategy noise: sometimes take the 2nd or 3rd rec instead.
+            # Normal distribution: ~68% take #1, ~27% take #2, ~4% take #3.
+            if strategy_noise > 0 and pick_name is not None:
+                skip = min(abs(int(round(rng.normal(0, strategy_noise)))),
+                           4)  # cap at 5th-best
+                if skip > 0:
+                    filled = get_filled_positions(
+                        tracker.user_roster_ids, full_board,
+                        roster_slots=config.roster_slots,
+                    )
+                    leverage = calculate_draft_leverage(
+                        balance.get_totals(),
+                        picks_made=len(tracker.user_roster),
+                        total_picks=rounds,
+                    )
+                    recs = get_recommendations(
+                        board, drafted=tracker.drafted_ids,
+                        user_roster=tracker.user_roster,
+                        n=skip + 3, filled_positions=filled,
+                        picks_until_next=getattr(
+                            tracker, "picks_until_next_turn", None),
+                        roster_slots=config.roster_slots,
+                        num_teams=config.num_teams,
+                        draft_leverage=leverage,
+                        scoring_mode=scoring_mode,
+                    )
+                    if len(recs) > skip:
+                        alt = recs[skip]
+                        rows = board[board["name"] == alt["name"]]
+                        if not rows.empty:
+                            pick_name = alt["name"]
+                            pid = rows.iloc[0]["player_id"]
+
             if pick_name is None:
                 for _, row in adp_board.iterrows():
                     if row["player_id"] not in drafted_set:
@@ -646,6 +682,10 @@ def main():
         help="Std dev of noise added to opponent ADP (e.g. 20 = +/- ~20 ADP spots)",
     )
     parser.add_argument(
+        "--strategy-noise", type=float, default=0.0,
+        help="Pick uncertainty: ~68%% take #1 rec, ~27%% take #2, ~4%% take #3 (default: 0 = always #1)",
+    )
+    parser.add_argument(
         "--seed", type=int, default=None,
         help="Random seed for ADP noise",
     )
@@ -682,6 +722,7 @@ def main():
         strategy_name=args.strategy,
         scoring_mode=args.scoring,
         adp_noise=args.adp_noise,
+        strategy_noise=args.strategy_noise,
         seed=args.seed,
         opponent_strategies_str=args.opponent_strategies,
     )

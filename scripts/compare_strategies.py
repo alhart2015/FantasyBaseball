@@ -1,10 +1,10 @@
-"""Definitive strategy comparison — all 14 strategies × 2 scoring modes.
+"""Strategy comparison — all strategies × 2 scoring modes.
 
 Runs every strategy in a single process with a single shared context.
 No file I/O for results — everything printed directly.
 
-Part 1: Against strategic opponents (deterministic, single run each).
-Part 2: Against ADP opponents (50 iterations with jitter for stable averages).
+Part 1: Against strategic opponents (50 iterations with pick noise).
+Part 2: Against ADP opponents (50 iterations with ADP jitter).
 
 Usage:
     python scripts/compare_strategies.py
@@ -29,8 +29,10 @@ OPP_STRATEGIES = (
 )
 
 CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
-ADP_ITERATIONS = 50
+ADP_ITERATIONS = 20
 ADP_NOISE = 15.0
+STRATEGY_NOISE = 1.0  # ~68% take #1 rec, ~27% take #2, ~4% take #3
+STRATEGY_ITERATIONS = 20  # run Part 1 multiple times with pick noise
 
 
 def count_closers(user_roster_ids, board, full_board):
@@ -64,18 +66,17 @@ def main():
     scoring_modes = ["vona", "var"]
 
     # ---------------------------------------------------------------
-    # PART 1: Strategic opponents (deterministic)
+    # PART 1: Strategic opponents with pick noise
     # ---------------------------------------------------------------
     print()
     print("=" * 100)
-    print("PART 1: vs STRATEGIC OPPONENTS (deterministic, single run)")
+    print(f"PART 1: vs STRATEGIC OPPONENTS ({STRATEGY_ITERATIONS} iterations, "
+          f"pick_noise={STRATEGY_NOISE})")
     print("=" * 100)
     print(f"  Opponents: {OPP_STRATEGIES}")
     print()
 
-    header = f"{'Strategy':<30} {'Pts':>5} {'Rank':>4} {'CL':>3}"
-    for c in CATS:
-        header += f" {c:>5}"
+    header = f"{'Strategy':<30} {'Avg':>5} {'AvgRk':>6} {'Win%':>5} {'Floor':>5} {'Ceil':>5}"
     print(header)
     print("-" * len(header))
 
@@ -84,33 +85,56 @@ def main():
     for strat in strategy_names:
         for scoring in scoring_modes:
             label = f"{strat}+{scoring}"
+            pts_list = []
+            rank_list = []
+            wins = 0
             try:
-                r = run_simulation(
-                    ctx,
-                    strategy_name=strat,
-                    scoring_mode=scoring,
-                    opponent_strategies_str=OPP_STRATEGIES,
+                for i in range(STRATEGY_ITERATIONS):
+                    r = run_simulation(
+                        ctx,
+                        strategy_name=strat,
+                        scoring_mode=scoring,
+                        strategy_noise=STRATEGY_NOISE,
+                        seed=4000 + i,
+                        opponent_strategies_str=OPP_STRATEGIES,
+                    )
+                    hart = next(t for t in r["results"] if t["team"] == config.team_name)
+                    pts_list.append(hart["tot"])
+                    rank_list.append(r["rank"])
+                    if r["rank"] == 1:
+                        wins += 1
+                avg_pts = np.mean(pts_list)
+                avg_rank = np.mean(rank_list)
+                win_pct = wins / len(pts_list) * 100
+                done = len(strat_results) + 1
+                print(
+                    f"{label:<30} {avg_pts:>5.1f} {avg_rank:>6.2f} "
+                    f"{win_pct:>5.1f} {min(pts_list):>5.0f} {max(pts_list):>5.0f}"
+                    f"  [{done}/{len(strategy_names) * 2}]",
+                    flush=True,
                 )
-                hart = next(t for t in r["results"] if t["team"] == config.team_name)
-                n_cl = count_closers(r["user_roster_ids"], board, full_board)
-                row = f"{label:<30} {hart['tot']:>5.1f} {r['rank']:>4} {n_cl:>3}"
-                for c in CATS:
-                    row += f" {hart[f'{c}_p']:>5.1f}"
-                print(row, flush=True)
-                strat_results.append((label, hart["tot"], r["rank"], n_cl))
+                strat_results.append(
+                    (label, avg_pts, avg_rank, win_pct, min(pts_list), max(pts_list))
+                )
             except Exception as e:
                 print(f"{label:<30} ERROR: {e}", flush=True)
     t1 = time.perf_counter()
-    print(f"\nPart 1 completed in {t1 - t0:.1f}s ({len(strat_results)}/28 strategies)")
+    print(f"\nPart 1 completed in {t1 - t0:.1f}s")
 
     print()
     print("RANKING (strategic opponents):")
-    print(f"{'#':>3} {'Strategy':<30} {'Pts':>5} {'Rank':>4} {'CL':>3}")
-    print("-" * 50)
-    for i, (label, pts, rank, n_cl) in enumerate(
+    print(
+        f"{'#':>3} {'Strategy':<30} {'Avg':>5} {'AvgRk':>6} "
+        f"{'Win%':>5} {'Floor':>5} {'Ceil':>5}"
+    )
+    print("-" * 65)
+    for i, (label, avg, rank, win, mn, mx) in enumerate(
         sorted(strat_results, key=lambda x: -x[1]), 1
     ):
-        print(f"{i:>3} {label:<30} {pts:>5.1f} {rank:>4} {n_cl:>3}")
+        print(
+            f"{i:>3} {label:<30} {avg:>5.1f} {rank:>6.2f} "
+            f"{win:>5.1f} {mn:>5.0f} {mx:>5.0f}"
+        )
 
     # ---------------------------------------------------------------
     # PART 2: ADP opponents with jitter (50 iterations)
@@ -154,7 +178,7 @@ def main():
                 print(
                     f"{label:<30} {avg_pts:>5.1f} {avg_rank:>6.2f} "
                     f"{win_pct:>5.1f} {min(pts_list):>4.0f} {max(pts_list):>4.0f}"
-                    f"  [{done}/28]",
+                    f"  [{done}/{len(strategy_names) * 2}]",
                     flush=True,
                 )
                 adp_results.append(
