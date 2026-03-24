@@ -55,6 +55,36 @@ class DraftTracker:
                 return count
         return count
 
+    @property
+    def picks_until_next_turn(self) -> int:
+        """Count opponent picks between now and the user's next turn.
+
+        Unlike ``picks_until_user_turn`` (which returns 0 when it IS
+        the user's pick), this always looks *forward* from the current
+        pick to find the next user pick after this one.  This is the
+        value VONA needs: how many opponents pick before you pick again.
+
+        In a 10-team snake with user at position 8:
+        - During round 1 pick 8 (user's turn): opponents make picks
+          9, 10, 11, 12 before user picks again at 13 -> returns 4.
+        - During round 2 pick 13 (user's turn): opponents make 14
+          picks before user picks again at 28 -> returns 14.
+        """
+        count = 0
+        temp_pick = self.current_pick + 1
+        while temp_pick <= self.total_picks:
+            temp_round = (temp_pick - 1) // self.num_teams + 1
+            temp_pos = (temp_pick - 1) % self.num_teams + 1
+            if temp_round % 2 == 1:
+                team = temp_pos
+            else:
+                team = self.num_teams - temp_pos + 1
+            if team == self.user_position:
+                return count
+            count += 1
+            temp_pick += 1
+        return count
+
     def advance(self) -> None:
         self.current_pick += 1
 

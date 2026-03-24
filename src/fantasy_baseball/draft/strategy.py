@@ -120,10 +120,12 @@ def pick_avg_hedge(
         picks_made=len(tracker.user_roster),
         total_picks=kwargs.get("total_rounds", 22),
     )
+    picks_until_next = getattr(tracker, "picks_until_next_turn", None)
     recs = get_recommendations(
         board, drafted=tracker.drafted_ids,
         user_roster=tracker.user_roster,
         n=10, filled_positions=filled,
+        picks_until_next=picks_until_next,
         roster_slots=config.roster_slots,
         num_teams=config.num_teams,
         draft_leverage=leverage,
@@ -420,10 +422,13 @@ def _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs):
         picks_made=len(tracker.user_roster),
         total_picks=kwargs.get("total_rounds", 22),
     )
+    # Use the tracker's snake-draft calculation for picks until next turn
+    picks_until_next = getattr(tracker, "picks_until_next_turn", None)
     return get_recommendations(
         board, drafted=tracker.drafted_ids,
         user_roster=tracker.user_roster,
         n=n, filled_positions=filled,
+        picks_until_next=picks_until_next,
         roster_slots=config.roster_slots,
         num_teams=config.num_teams,
         draft_leverage=leverage,

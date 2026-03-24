@@ -317,6 +317,7 @@ def main():
     leverage = _get_draft_leverage(balance, tracker)
     recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
                                n=5, filled_positions=filled,
+                               picks_until_next=tracker.picks_until_next_turn,
                                roster_slots=config.roster_slots,
                                num_teams=num_teams,
                                draft_leverage=leverage,
@@ -414,6 +415,7 @@ def main():
             leverage = _get_draft_leverage(balance, tracker)
             recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
                                        n=5, filled_positions=filled,
+                                       picks_until_next=tracker.picks_until_next_turn,
                                        roster_slots=config.roster_slots,
                                        num_teams=num_teams,
                                        draft_leverage=leverage,
