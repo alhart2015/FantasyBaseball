@@ -6,7 +6,7 @@ league:
 
 draft:
   strategy: two_closers
-  scoring_mode: var
+  scoring_mode: vona
   position: 8  # Snake draft pick position (1-indexed)
   teams:
     1: "Send in the Cavalli"
