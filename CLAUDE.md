@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Correctness over speed
+
+This project makes real decisions (draft picks, lineup choices, trade evaluations) based on the numbers it produces. A wrong answer that looks plausible is worse than no answer — it will propagate into strategy recommendations, simulations, and memory files that mislead future sessions. Verify claims against the actual code and config before stating them. When summarizing simulation results or strategy conclusions, check that what you're saying matches what the code actually does and what the config actually says. If you're unsure, read the source — don't guess from memory.
+
 ## Commands
 
 ```bash
