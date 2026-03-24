@@ -133,7 +133,7 @@ def _blend_hitters(dfs: list[pd.DataFrame]) -> pd.DataFrame:
         row: dict = {"name": name, "player_type": "hitter"}
         for col in HITTING_COUNTING_COLS:
             if col in group.columns:
-                row[col] = (group[col] * w).sum()
+                row[col] = (group[col].fillna(0) * w).sum()
         # Recompute AVG from blended H and AB
         if row.get("ab", 0) > 0:
             row["avg"] = row["h"] / row["ab"]
@@ -176,7 +176,7 @@ def _blend_pitchers(dfs: list[pd.DataFrame]) -> pd.DataFrame:
         row: dict = {"name": name, "player_type": "pitcher"}
         for col in PITCHING_COUNTING_COLS:
             if col in group.columns:
-                row[col] = (group[col] * w).sum()
+                row[col] = (group[col].fillna(0) * w).sum()
         # Recompute ERA = ER * 9 / IP
         ip = row.get("ip", 0)
         if ip > 0:
