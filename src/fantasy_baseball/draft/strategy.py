@@ -339,15 +339,12 @@ def _sv_in_danger(tracker, board, full_board, team_rosters, num_teams):
         team_sv[tn] = sv_total
         if sv_total >= CLOSER_SV_THRESHOLD:
             teams_with_closers += 1
-        if pid in tracker.user_roster_ids:
-            user_team = tn
 
-    # Find user team if not found via pid matching
-    if user_team is None:
-        for tn, pids in team_rosters.items():
-            if set(pids) & set(tracker.user_roster_ids):
-                user_team = tn
-                break
+    # Identify user team via set intersection
+    for tn, pids in team_rosters.items():
+        if set(pids) & set(tracker.user_roster_ids):
+            user_team = tn
+            break
 
     if user_team is None or teams_with_closers < NO_PUNT_SV_MIN_TEAMS_WITH_CLOSERS:
         return False
