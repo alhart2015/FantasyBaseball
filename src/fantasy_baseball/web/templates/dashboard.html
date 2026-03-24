@@ -244,7 +244,7 @@
             // Board is the complete player list. Mark each as drafted or not.
             allPlayers = cachedBoard.map(p =>
                 Object.assign({_drafted: draftedIds.has(p.player_id || p.name),
-                               vona: vonaScores[p.player_id] || null}, p)
+                               vona: vonaScores.hasOwnProperty(p.player_id) ? vonaScores[p.player_id] : null}, p)
             );
         } else {
             // Fallback: use available_players from the full state response.

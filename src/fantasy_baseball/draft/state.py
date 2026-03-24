@@ -224,6 +224,7 @@ _DELTA_KEYS = {
     "filled_positions",
     "roster_by_position",
     "projections",
+    "vona_scores",
 }
 
 
