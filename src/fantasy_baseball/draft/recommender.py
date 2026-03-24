@@ -373,9 +373,13 @@ def _collect_roster_entries(
         if pid in pid_index:
             players.append(pid_index[pid])
         else:
-            # Fallback: try name match (for entries without player_id)
-            name = pid.split("::")[0] if "::" in pid else pid
-            rows = board[board["name_normalized"] == normalize_name(name)]
+            # Fallback: try name match (for entries without player_id).
+            # player_id may be fg_id::type or name::type, so try the
+            # prefix as a name only if it looks like one (not numeric).
+            prefix = pid.split("::")[0] if "::" in pid else pid
+            if prefix.isdigit() or prefix.startswith("sa"):
+                continue  # fg_id prefix, can't match by name
+            rows = board[board["name_normalized"] == normalize_name(prefix)]
             if not rows.empty:
                 players.append(rows.iloc[0])
     return players

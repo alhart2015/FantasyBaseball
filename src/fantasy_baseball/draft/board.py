@@ -64,8 +64,12 @@ def build_draft_board(
     # Add normalized name column for matching
     pool["name_normalized"] = pool["name"].apply(normalize_name)
 
-    # Unique player ID to disambiguate same-name players (e.g. Juan Soto OF vs SP)
-    pool["player_id"] = pool["name"] + "::" + pool["player_type"]
+    # Unique player ID — use fg_id when available (handles same-name players
+    # like Max Muncy LAD vs Max Muncy ATH), fall back to name::type.
+    if "fg_id" in pool.columns and pool["fg_id"].notna().all():
+        pool["player_id"] = pool["fg_id"].astype(str) + "::" + pool["player_type"]
+    else:
+        pool["player_id"] = pool["name"] + "::" + pool["player_type"]
 
     board = pool.sort_values("var", ascending=False).reset_index(drop=True)
     _validate_top_adp_players(board, hitters, pitchers)
