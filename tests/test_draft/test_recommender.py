@@ -1,7 +1,8 @@
 import pytest
 from unittest.mock import patch
 import pandas as pd
-from fantasy_baseball.draft.recommender import get_recommendations, calculate_vona_scores
+from fantasy_baseball.draft.recommender import get_recommendations, calculate_vona_scores, _vona_leverage_weight
+from fantasy_baseball.utils.constants import ALL_CATEGORIES
 
 
 def _make_board():
@@ -131,3 +132,130 @@ class TestVonaPicksUntilNext:
         # the remaining pool has 3 players. The top-ADP player (Player A)
         # should have positive VONA since they'd be gone if not picked now.
         assert scores["Player A::hitter"] > 0
+
+
+def _make_closer(name, sv=35, w=3, k=70, era=2.50, whip=1.00, ip=65):
+    """Helper to build a closer pd.Series for _vona_leverage_weight tests."""
+    return pd.Series({
+        "name": name, "player_type": "pitcher",
+        "w": w, "k": k, "sv": sv, "era": era, "whip": whip, "ip": ip,
+    })
+
+
+def _make_sp(name, w=14, k=210, sv=0, era=3.20, whip=1.10, ip=195):
+    """Helper to build a starting pitcher pd.Series."""
+    return pd.Series({
+        "name": name, "player_type": "pitcher",
+        "w": w, "k": k, "sv": sv, "era": era, "whip": whip, "ip": ip,
+    })
+
+
+def _make_test_hitter(name, r=90, hr=30, rbi=85, sb=15, avg=0.275, ab=530):
+    """Helper to build a hitter pd.Series for _vona_leverage_weight tests."""
+    return pd.Series({
+        "name": name, "player_type": "hitter",
+        "r": r, "hr": hr, "rbi": rbi, "sb": sb, "avg": avg, "ab": ab,
+    })
+
+
+def _uniform_leverage():
+    """Leverage dict where all categories have equal weight."""
+    return {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
+
+
+class TestVonaLeverageWeight:
+    """Tests for _vona_leverage_weight."""
+
+    def test_closer_high_sv_leverage(self):
+        """A closer when SV leverage is high should get a high multiplier."""
+        closer = _make_closer("Clase", sv=35)
+        # Heavily weight SV — team desperately needs saves
+        leverage = {cat: 0.02 for cat in ALL_CATEGORIES}
+        leverage["SV"] = 0.82  # dominating the leverage
+        result = _vona_leverage_weight(closer, leverage)
+        assert result > 1.3
+
+    def test_closer_low_sv_leverage(self):
+        """A closer when SV leverage is low should get a low multiplier."""
+        closer = _make_closer("Clase", sv=35)
+        # SV well-satisfied, other categories need help
+        leverage = {cat: 0.11 for cat in ALL_CATEGORIES}
+        leverage["SV"] = 0.01
+        result = _vona_leverage_weight(closer, leverage)
+        assert result < 0.7
+
+    def test_hitter_boosted_when_hitting_needed(self):
+        """A hitter when hitting categories are needed should get boosted."""
+        hitter = _make_test_hitter("Judge", r=110, hr=45, rbi=120, sb=5, avg=0.291, ab=550)
+        # Heavy hitting leverage, low pitching leverage
+        leverage = {
+            "R": 0.18, "HR": 0.18, "RBI": 0.18, "SB": 0.18, "AVG": 0.18,
+            "W": 0.02, "K": 0.02, "ERA": 0.02, "WHIP": 0.02, "SV": 0.02,
+        }
+        result = _vona_leverage_weight(hitter, leverage)
+        assert result > 1.3
+
+    def test_pitcher_boosted_when_pitching_needed(self):
+        """An SP when pitching categories are needed should get boosted."""
+        sp = _make_sp("Cole", w=15, k=240, sv=0, era=3.00, whip=1.05, ip=200)
+        # Heavy pitching leverage, low hitting leverage
+        leverage = {
+            "R": 0.02, "HR": 0.02, "RBI": 0.02, "SB": 0.02, "AVG": 0.02,
+            "W": 0.18, "K": 0.18, "ERA": 0.18, "WHIP": 0.18, "SV": 0.18,
+        }
+        result = _vona_leverage_weight(sp, leverage)
+        assert result > 1.3
+
+    def test_uniform_leverage_gives_roughly_one(self):
+        """When all categories are equally weighted, multiplier should be ~1.0."""
+        hitter = _make_test_hitter("Betts")
+        leverage = _uniform_leverage()
+        result = _vona_leverage_weight(hitter, leverage)
+        assert result == pytest.approx(1.0, abs=0.15)
+
+    def test_uniform_leverage_closer_roughly_one(self):
+        """Uniform leverage should also give ~1.0 for a closer."""
+        closer = _make_closer("Clase")
+        leverage = _uniform_leverage()
+        result = _vona_leverage_weight(closer, leverage)
+        assert result == pytest.approx(1.0, abs=0.15)
+
+    def test_uniform_leverage_sp_roughly_one(self):
+        """Uniform leverage should also give ~1.0 for an SP."""
+        sp = _make_sp("Cole")
+        leverage = _uniform_leverage()
+        result = _vona_leverage_weight(sp, leverage)
+        assert result == pytest.approx(1.0, abs=0.15)
+
+    def test_empty_leverage_returns_one(self):
+        """Empty leverage dict should return 1.0 gracefully."""
+        hitter = _make_test_hitter("Judge")
+        result = _vona_leverage_weight(hitter, {})
+        assert result == 1.0
+
+    def test_none_leverage_returns_one(self):
+        """None leverage should return 1.0 gracefully."""
+        hitter = _make_test_hitter("Judge")
+        result = _vona_leverage_weight(hitter, None)
+        assert result == 1.0
+
+    def test_zero_contribution_player_returns_one(self):
+        """A player with all-zero stats should return 1.0."""
+        zero_hitter = pd.Series({
+            "name": "Nobody", "player_type": "hitter",
+            "r": 0, "hr": 0, "rbi": 0, "sb": 0, "avg": 0.250, "ab": 0,
+        })
+        leverage = _uniform_leverage()
+        result = _vona_leverage_weight(zero_hitter, leverage)
+        assert result == 1.0
+
+    def test_result_is_positive(self):
+        """Multiplier should always be positive regardless of leverage distribution."""
+        closer = _make_closer("Clase", sv=35)
+        # Extreme leverage: only hitting matters
+        leverage = {
+            "R": 0.20, "HR": 0.20, "RBI": 0.20, "SB": 0.20, "AVG": 0.20,
+            "W": 0.0, "K": 0.0, "ERA": 0.0, "WHIP": 0.0, "SV": 0.0,
+        }
+        result = _vona_leverage_weight(closer, leverage)
+        assert result >= 0

@@ -36,8 +36,11 @@ INJURY_PROB = {"pitcher": 0.45, "hitter": 0.18}
 # Fraction of season missed if injured: (min, max) uniform
 INJURY_SEVERITY = {"pitcher": (0.20, 0.60), "hitter": (0.15, 0.40)}
 
-# Stat variance: per-player standard deviation as fraction of projected value
-STAT_VARIANCE = 0.12  # 12% std dev around projection
+# Stat variance: per-player standard deviation as fraction of projected value.
+# One multiplier per player applied to all counting stats so correlated stats
+# (H/AB, ER/IP) stay internally consistent. Rate stats (AVG, ERA, WHIP) are
+# then recomputed from team aggregates.
+STAT_VARIANCE = {"hitter": 0.10, "pitcher": 0.18}
 
 HITTING_COUNTING = ["r", "hr", "rbi", "sb", "h", "ab"]
 PITCHING_COUNTING = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
@@ -129,12 +132,12 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
 
             row = {}
             scale = 1.0 - frac_missed
+            # Single performance multiplier per player — all counting stats
+            # move together so H/AB stay correlated and AVG stays realistic.
+            perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["hitter"]))
             for col in HITTING_COUNTING:
                 base = h.get(col, 0)
-                # Player's contribution (variance + injury scaling)
-                varied = max(0, base * (1.0 + rng.normal(0, STAT_VARIANCE)))
-                player_contrib = varied * scale
-                # Replacement player fills in for missed time
+                player_contrib = base * perf * scale
                 repl_contrib = REPLACEMENT_HITTER.get(col, 0) * frac_missed
                 row[col] = player_contrib + repl_contrib
             row["player_type"] = "hitter"
@@ -156,10 +159,12 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
 
             row = {}
             scale = 1.0 - frac_missed
+            # Single performance multiplier — ER, IP, BB, H_allowed move
+            # together so ERA/WHIP stay internally consistent.
+            perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["pitcher"]))
             for col in PITCHING_COUNTING:
                 base = p.get(col, 0)
-                varied = max(0, base * (1.0 + rng.normal(0, STAT_VARIANCE)))
-                player_contrib = varied * scale
+                player_contrib = base * perf * scale
                 repl_contrib = repl_profile.get(col, 0) * frac_missed
                 row[col] = player_contrib + repl_contrib
             row["player_type"] = "pitcher"

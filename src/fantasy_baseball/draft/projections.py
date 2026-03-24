@@ -12,7 +12,7 @@ from fantasy_baseball.utils.name_utils import normalize_name
 # Injury model parameters
 INJURY_PROB = {"pitcher": 0.45, "hitter": 0.18}
 INJURY_SEVERITY = {"pitcher": (0.20, 0.60), "hitter": (0.15, 0.40)}
-STAT_VARIANCE = 0.12
+STAT_VARIANCE = {"hitter": 0.10, "pitcher": 0.18}
 
 HITTING_COUNTING = ["r", "hr", "rbi", "sb", "h", "ab"]
 PITCHING_COUNTING = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
@@ -88,10 +88,10 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
 
             row = {}
             scale = 1.0 - frac_missed
+            perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["hitter"]))
             for col in HITTING_COUNTING:
                 base = h.get(col, 0)
-                varied = max(0, base * (1.0 + rng.normal(0, STAT_VARIANCE)))
-                row[col] = varied * scale + REPLACEMENT_HITTER.get(col, 0) * frac_missed
+                row[col] = base * perf * scale + REPLACEMENT_HITTER.get(col, 0) * frac_missed
             adj_hitters.append(row)
 
         # Pitchers
@@ -107,10 +107,10 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
 
             row = {}
             scale = 1.0 - frac_missed
+            perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["pitcher"]))
             for col in PITCHING_COUNTING:
                 base = p.get(col, 0)
-                varied = max(0, base * (1.0 + rng.normal(0, STAT_VARIANCE)))
-                row[col] = varied * scale + repl.get(col, 0) * frac_missed
+                row[col] = base * perf * scale + repl.get(col, 0) * frac_missed
             adj_pitchers.append(row)
 
         # Select active roster only (bench players don't contribute stats)
