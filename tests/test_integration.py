@@ -19,9 +19,20 @@ def test_full_pipeline(fixtures_dir):
     assert len(pitchers) == 3
 
     # Step 2: Calculate SGP for each player
-    # Add mock position data (in real use, this comes from Yahoo API)
-    hitters["positions"] = [["OF"], ["OF"], ["C"], ["2B", "SS"]]
-    pitchers["positions"] = [["SP"], ["RP"], ["SP"]]
+    # Add mock position data by name (order may vary by groupby key)
+    hitter_positions = {
+        "Aaron Judge": ["OF"],
+        "Mookie Betts": ["OF"],
+        "Adley Rutschman": ["C"],
+        "Marcus Semien": ["2B", "SS"],
+    }
+    pitcher_positions = {
+        "Gerrit Cole": ["SP"],
+        "Emmanuel Clase": ["RP"],
+        "Corbin Burnes": ["SP"],
+    }
+    hitters["positions"] = hitters["name"].map(hitter_positions)
+    pitchers["positions"] = pitchers["name"].map(pitcher_positions)
 
     for idx, row in hitters.iterrows():
         hitters.loc[idx, "total_sgp"] = calculate_player_sgp(row)
@@ -55,9 +66,12 @@ def test_full_pipeline(fixtures_dir):
     assert rankings.iloc[0]["var"] > 0
     # Rankings should be sorted descending
     assert rankings.iloc[0]["var"] >= rankings.iloc[-1]["var"]
-    # Aaron Judge should be near the top (high HR, R, RBI)
-    judge_rank = rankings[rankings["name"] == "Aaron Judge"].index[0]
-    assert judge_rank <= 3  # Top 4 (7-player fixture pool)
+    # Aaron Judge should have the highest VAR among hitters
+    # (high HR, R, RBI in a 7-player pool)
+    hitter_rankings = rankings[rankings["name"].isin(
+        ["Aaron Judge", "Mookie Betts", "Adley Rutschman", "Marcus Semien"]
+    )]
+    assert hitter_rankings.iloc[0]["name"] == "Aaron Judge"
 
 
 def test_pipeline_with_keepers(fixtures_dir):
