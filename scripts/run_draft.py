@@ -513,8 +513,29 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
     # Count closers on roster
     closer_count = _count_closers(tracker, board, full_board)
 
+    # no_punt family: force a closer when none drafted past deadline
+    if strategy in ("no_punt", "no_punt_stagger", "no_punt_cap3", "avg_hedge"):
+        sv_deadline = 9  # force closer by round 9 if you have zero
+        if closer_count == 0 and tracker.current_round >= sv_deadline:
+            strategy_alerts.append(
+                "SV DANGER: You have zero closers — consider drafting one now"
+            )
+            available = board[~board["player_id"].isin(tracker.drafted_ids)]
+            closers_avail = available[available["sv"].fillna(0) >= CLOSER_SV_THRESHOLD]
+            if not closers_avail.empty:
+                best_closer = closers_avail.sort_values("var", ascending=False).iloc[0]
+                closer_rec = {
+                    "name": best_closer["name"],
+                    "best_position": "RP",
+                    "var": best_closer.get("var", 0),
+                    "score": None,
+                    "need_flag": True,
+                    "note": "SV DANGER — draft a closer",
+                    "player_type": "pitcher",
+                }
+
     # no_punt_opp: dynamic SV monitoring + opportunistic closer grabs
-    if strategy == "no_punt_opp":
+    elif strategy == "no_punt_opp":
         # Build team_rosters from tracker for SV danger check
         # (In the interactive draft we don't have full team_rosters,
         # so we check closer count as a simpler proxy)
