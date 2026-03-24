@@ -513,26 +513,41 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
     # Count closers on roster
     closer_count = _count_closers(tracker, board, full_board)
 
-    # no_punt family: force a closer when none drafted past deadline
-    if strategy in ("no_punt", "no_punt_stagger", "no_punt_cap3", "avg_hedge"):
-        sv_deadline = 9  # force closer by round 9 if you have zero
-        if closer_count == 0 and tracker.current_round >= sv_deadline:
-            strategy_alerts.append(
-                "SV DANGER: You have zero closers — consider drafting one now"
-            )
-            available = board[~board["player_id"].isin(tracker.drafted_ids)]
-            closers_avail = available[available["sv"].fillna(0) >= CLOSER_SV_THRESHOLD]
-            if not closers_avail.empty:
-                best_closer = closers_avail.sort_values("var", ascending=False).iloc[0]
-                closer_rec = {
-                    "name": best_closer["name"],
-                    "best_position": "RP",
-                    "var": best_closer.get("var", 0),
-                    "score": None,
-                    "need_flag": True,
-                    "note": "SV DANGER — draft a closer",
-                    "player_type": "pitcher",
-                }
+    # n-closers strategies: force closers at staggered deadlines
+    _closer_deadlines = {
+        "two_closers": ([8, 14], 2),
+        "three_closers": ([5, 9, 13], 3),
+        "four_closers": ([5, 8, 12, 16], 4),
+        "no_punt": ([9], 1),
+        "no_punt_stagger": ([13, 17, 20], 3),
+        "no_punt_cap3": ([13, 17, 20], 3),
+        "avg_hedge": ([9], 1),
+        "closers_avg": ([5, 9, 13], 3),
+    }
+    if strategy in _closer_deadlines:
+        deadlines, target = _closer_deadlines[strategy]
+        if closer_count < target:
+            deadline_idx = closer_count
+            if deadline_idx < len(deadlines):
+                deadline = deadlines[deadline_idx]
+                if tracker.current_round >= deadline:
+                    strategy_alerts.append(
+                        f"CLOSER DEADLINE: Round {deadline} — need closer "
+                        f"#{closer_count + 1} of {target}"
+                    )
+                    available = board[~board["player_id"].isin(tracker.drafted_ids)]
+                    closers_avail = available[available["sv"].fillna(0) >= CLOSER_SV_THRESHOLD]
+                    if not closers_avail.empty:
+                        best_closer = closers_avail.sort_values("var", ascending=False).iloc[0]
+                        closer_rec = {
+                            "name": best_closer["name"],
+                            "best_position": "RP",
+                            "var": best_closer.get("var", 0),
+                            "score": None,
+                            "need_flag": True,
+                            "note": f"CLOSER DEADLINE — draft closer #{closer_count + 1}",
+                            "player_type": "pitcher",
+                        }
 
     # no_punt_opp: dynamic SV monitoring + opportunistic closer grabs
     elif strategy == "no_punt_opp":
