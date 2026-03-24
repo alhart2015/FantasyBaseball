@@ -221,7 +221,7 @@ def score_roto(team_stats, num_teams):
         i = 0
         while i < len(ranked):
             j = i + 1
-            while j < len(ranked) and team_stats[ranked[j]][cat] == team_stats[ranked[i]][cat]:
+            while j < len(ranked) and abs(team_stats[ranked[j]][cat] - team_stats[ranked[i]][cat]) < 1e-9:
                 j += 1
             avg_pts = sum(num_teams - k for k in range(i, j)) / (j - i)
             for k in range(i, j):

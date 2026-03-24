@@ -181,7 +181,7 @@ def _score_roto(team_players, config, full_board, board):
         i = 0
         while i < len(st):
             j = i + 1
-            while j < len(st) and st[j][cat] == st[i][cat]:
+            while j < len(st) and abs(st[j][cat] - st[i][cat]) < 1e-9:
                 j += 1
             avg_pts = sum(config.num_teams - k for k in range(i, j)) / (j - i)
             for k in range(i, j):
