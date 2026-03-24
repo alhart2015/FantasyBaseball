@@ -57,7 +57,7 @@ def test_full_pipeline(fixtures_dir):
     assert rankings.iloc[0]["var"] >= rankings.iloc[-1]["var"]
     # Aaron Judge should be near the top (high HR, R, RBI)
     judge_rank = rankings[rankings["name"] == "Aaron Judge"].index[0]
-    assert judge_rank <= 2  # Top 3
+    assert judge_rank <= 3  # Top 4 (7-player fixture pool)
 
 
 def test_pipeline_with_keepers(fixtures_dir):

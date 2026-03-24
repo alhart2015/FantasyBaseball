@@ -118,13 +118,18 @@ def _blend_hitters(dfs: list[pd.DataFrame]) -> pd.DataFrame:
         return pd.DataFrame()
 
     combined = pd.concat(dfs, ignore_index=True)
+    # Group by fg_id when available (robust against name variations
+    # across systems, e.g. accented vs ASCII). Fall back to name.
+    group_col = "fg_id" if "fg_id" in combined.columns and combined["fg_id"].notna().all() else "name"
     results = []
-    for name, group in combined.groupby("name"):
+    for key, group in combined.groupby(group_col):
         w = group["_weight"].values
         # Renormalize weights so players in fewer systems aren't diluted
         w_sum = w.sum()
         if w_sum > 0:
             w = w / w_sum
+        # Use the name from the highest-weighted system
+        name = group.loc[group["_weight"].idxmax(), "name"]
         row: dict = {"name": name, "player_type": "hitter"}
         for col in HITTING_COUNTING_COLS:
             if col in group.columns:
@@ -159,13 +164,15 @@ def _blend_pitchers(dfs: list[pd.DataFrame]) -> pd.DataFrame:
         return pd.DataFrame()
 
     combined = pd.concat(dfs, ignore_index=True)
+    group_col = "fg_id" if "fg_id" in combined.columns and combined["fg_id"].notna().all() else "name"
     results = []
-    for name, group in combined.groupby("name"):
+    for key, group in combined.groupby(group_col):
         w = group["_weight"].values
         # Renormalize weights so players in fewer systems aren't diluted
         w_sum = w.sum()
         if w_sum > 0:
             w = w / w_sum
+        name = group.loc[group["_weight"].idxmax(), "name"]
         row: dict = {"name": name, "player_type": "pitcher"}
         for col in PITCHING_COUNTING_COLS:
             if col in group.columns:
