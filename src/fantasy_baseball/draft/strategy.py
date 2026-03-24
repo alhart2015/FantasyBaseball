@@ -108,9 +108,7 @@ def pick_nonzero_sv(
     # If no closer and we're at or past the deadline, force one
     if not has_closer and current_round >= CLOSER_DEADLINE_ROUND:
         available = board[~board["player_id"].isin(tracker.drafted_ids)]
-        closers = available[
-            available.apply(lambda r: r.get("sv", 0) >= CLOSER_SV_THRESHOLD, axis=1)
-        ]
+        closers = available[available["sv"].fillna(0) >= CLOSER_SV_THRESHOLD]
         if not closers.empty:
             # Pick the closer with the best ADP (most drafted consensus)
             closers = closers.sort_values("adp", ascending=True)
@@ -193,6 +191,7 @@ def pick_no_punt_opp(
     Requires ``team_rosters`` in kwargs (dict of team_num -> [player_ids]).
     Falls back to the legacy round-based deadline if not provided.
     """
+    player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
     current_round = tracker.current_round
     current_pick = tracker.current_pick
     team_rosters = kwargs.get("team_rosters")
@@ -202,26 +201,25 @@ def pick_no_punt_opp(
     if team_rosters:
         need_closer = _sv_in_danger(
             tracker, board, full_board, team_rosters, config.num_teams,
+            player_lookup=player_lookup,
         )
     else:
         # Legacy fallback: force at least 1 closer by deadline
-        closer_count = _count_closers(tracker, board, full_board)
+        closer_count = _count_closers(tracker, board, full_board, player_lookup)
         if closer_count == 0 and current_round >= NO_PUNT_SV_DEADLINE:
             need_closer = True
 
     if need_closer:
-        result = _force_closer(board, tracker, full_board, config)
+        result = _force_closer(board, tracker, full_board, config, player_lookup)
         if result:
             return result
 
     # Opportunistic: grab a closer falling past ADP, but only if we're
     # still in SV danger or haven't drafted any closers yet.
-    closer_count = _count_closers(tracker, board, full_board)
+    closer_count = _count_closers(tracker, board, full_board, player_lookup)
     if need_closer or closer_count == 0:
         available = board[~board["player_id"].isin(tracker.drafted_ids)]
-        closers = available[
-            available.apply(lambda r: r.get("sv", 0) >= CLOSER_SV_THRESHOLD, axis=1)
-        ]
+        closers = available[available["sv"].fillna(0) >= CLOSER_SV_THRESHOLD]
         if not closers.empty:
             num_keepers = len(tracker.drafted_players) - (current_pick - 1)
             effective_pick = current_pick + num_keepers
@@ -267,7 +265,9 @@ def _make_n_closers_strategy(target, deadlines):
     def pick_n_closers(
         board, full_board, tracker, balance, config, team_filled, **kwargs,
     ):
-        closer_count = _count_closers(tracker, board, full_board)
+        player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
+        kwargs["player_lookup"] = player_lookup
+        closer_count = _count_closers(tracker, board, full_board, player_lookup)
         current_round = tracker.current_round
 
         need_closer = False
@@ -280,9 +280,7 @@ def _make_n_closers_strategy(target, deadlines):
 
         if need_closer:
             available = board[~board["player_id"].isin(tracker.drafted_ids)]
-            closers = available[
-                available.apply(lambda r: r.get("sv", 0) >= CLOSER_SV_THRESHOLD, axis=1)
-            ]
+            closers = available[available["sv"].fillna(0) >= CLOSER_SV_THRESHOLD]
             if not closers.empty:
                 closers = closers.sort_values("var", ascending=False)
                 filled = get_filled_positions(
@@ -380,12 +378,10 @@ def _sv_in_danger(tracker, board, full_board, team_rosters, num_teams,
     return our_rank > num_teams - NO_PUNT_SV_DANGER_ZONE
 
 
-def _force_closer(board, tracker, full_board, config):
+def _force_closer(board, tracker, full_board, config, player_lookup=None):
     """Pick the best available closer by VAR. Returns (name, pid) or None."""
     available = board[~board["player_id"].isin(tracker.drafted_ids)]
-    closers = available[
-        available.apply(lambda r: r.get("sv", 0) >= CLOSER_SV_THRESHOLD, axis=1)
-    ]
+    closers = available[available["sv"].fillna(0) >= CLOSER_SV_THRESHOLD]
     if closers.empty:
         return None
     closers = closers.sort_values("var", ascending=False)
@@ -407,9 +403,7 @@ def _fallback_non_closer(board, tracker, full_board, config):
     even when the recommendation engine returns empty.
     """
     available = board[~board["player_id"].isin(tracker.drafted_ids)]
-    non_closers = available[
-        available.apply(lambda r: r.get("sv", 0) < CLOSER_SV_THRESHOLD, axis=1)
-    ]
+    non_closers = available[available["sv"].fillna(0) < CLOSER_SV_THRESHOLD]
     filled = get_filled_positions(
         tracker.user_roster_ids, full_board,
         roster_slots=config.roster_slots,
@@ -421,9 +415,7 @@ def _fallback_non_closer(board, tracker, full_board, config):
     # Also check full_board for players not on the draft board
     # (e.g. low-projection players filtered during board construction)
     avail_full = full_board[~full_board["player_id"].isin(tracker.drafted_ids)]
-    non_closers_full = avail_full[
-        avail_full.apply(lambda r: r.get("sv", 0) < CLOSER_SV_THRESHOLD, axis=1)
-    ]
+    non_closers_full = avail_full[avail_full["sv"].fillna(0) < CLOSER_SV_THRESHOLD]
     if not non_closers_full.empty:
         for _, best in non_closers_full.sort_values("var", ascending=False).head(50).iterrows():
             if _can_roster_player(best, filled, config.roster_slots):
@@ -468,20 +460,22 @@ def pick_no_punt(
     Requires ``team_rosters`` in kwargs for dynamic SV monitoring.
     Falls back to the legacy round-based deadline if not provided.
     """
+    player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
     team_rosters = kwargs.get("team_rosters")
 
     need_closer = False
     if team_rosters:
         need_closer = _sv_in_danger(
             tracker, board, full_board, team_rosters, config.num_teams,
+            player_lookup=player_lookup,
         )
     else:
-        closer_count = _count_closers(tracker, board, full_board)
+        closer_count = _count_closers(tracker, board, full_board, player_lookup)
         if closer_count == 0 and kwargs.get("current_round", tracker.current_round) >= NO_PUNT_SV_DEADLINE:
             need_closer = True
 
     if need_closer:
-        result = _force_closer(board, tracker, full_board, config)
+        result = _force_closer(board, tracker, full_board, config, player_lookup)
         if result:
             return result
 
@@ -521,11 +515,12 @@ def pick_no_punt_stagger(
     Fixes no_punt's "one and done" closer bug by requiring multiple closers
     on a schedule, while also triggering early via SV danger monitoring.
     """
+    player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
     current_round = tracker.current_round
     team_rosters = kwargs.get("team_rosters")
 
     # Count current closers
-    closer_count = _count_closers(tracker, board, full_board)
+    closer_count = _count_closers(tracker, board, full_board, player_lookup)
 
     # Check staggered deadlines: force a closer if we're behind schedule
     need_closer = False
@@ -540,10 +535,11 @@ def pick_no_punt_stagger(
     if not need_closer and team_rosters and closer_count < NO_PUNT_STAGGER_TARGET:
         need_closer = _sv_in_danger(
             tracker, board, full_board, team_rosters, config.num_teams,
+            player_lookup=player_lookup,
         )
 
     if need_closer:
-        result = _force_closer(board, tracker, full_board, config)
+        result = _force_closer(board, tracker, full_board, config, player_lookup)
         if result:
             return result
 
@@ -582,7 +578,8 @@ def pick_no_punt_cap3(
     filters closers from recommendations so the VONA engine can't
     over-draft them.  Keeps AVG floor and dynamic SV monitoring.
     """
-    closer_count = _count_closers(tracker, board, full_board)
+    player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
+    closer_count = _count_closers(tracker, board, full_board, player_lookup)
     current_round = tracker.current_round
     team_rosters = kwargs.get("team_rosters")
 
@@ -599,10 +596,11 @@ def pick_no_punt_cap3(
         if not need_closer and team_rosters:
             need_closer = _sv_in_danger(
                 tracker, board, full_board, team_rosters, config.num_teams,
+                player_lookup=player_lookup,
             )
 
     if need_closer:
-        result = _force_closer(board, tracker, full_board, config)
+        result = _force_closer(board, tracker, full_board, config, player_lookup)
         if result:
             return result
 
@@ -707,7 +705,9 @@ def pick_closers_avg(
     AVG anchor in the first 3 hitter picks. Otherwise, default.
     """
     # Check closer deadlines first (highest priority)
-    closer_count = _count_closers(tracker, board, full_board)
+    player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
+    kwargs["player_lookup"] = player_lookup
+    closer_count = _count_closers(tracker, board, full_board, player_lookup)
     current_round = tracker.current_round
 
     if closer_count < THREE_CLOSERS_TARGET:
@@ -715,11 +715,11 @@ def pick_closers_avg(
         if deadline_idx < len(THREE_CLOSERS_DEADLINES):
             deadline = THREE_CLOSERS_DEADLINES[deadline_idx]
             if current_round >= deadline:
-                result = _force_closer(board, tracker, full_board, config)
+                result = _force_closer(board, tracker, full_board, config, player_lookup)
                 if result:
                     return result
 
-    # Then try AVG anchor
+    # Then try AVG anchor (player_lookup already in kwargs)
     return pick_avg_anchor(board, full_board, tracker, balance, config,
                            team_filled, **kwargs)
 
@@ -732,8 +732,9 @@ def pick_balanced(
     If pitchers lead hitters by more than BALANCED_MAX_SKEW, force a hitter.
     If hitters lead pitchers by more than BALANCED_MAX_SKEW, force a pitcher.
     """
-    n_hitters = _count_hitters(tracker, board, full_board)
-    n_pitchers = _count_pitchers(tracker, board, full_board)
+    player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
+    n_hitters = _count_hitters(tracker, board, full_board, player_lookup)
+    n_pitchers = _count_pitchers(tracker, board, full_board, player_lookup)
 
     recs = _get_recs(board, full_board, tracker, balance, config, n=15, **kwargs)
     if not recs:

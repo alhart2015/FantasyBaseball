@@ -83,22 +83,31 @@ def calculate_vona_scores(
     # What remains after opponents pick
     remaining = available[~available["player_id"].isin(gone_ids)]
 
-    # Best remaining SGP per bucket
-    best_remaining: dict[str, float] = {"hitter": 0, "sp": 0, "closer": 0}
-    for _, row in remaining.iterrows():
-        bucket = _player_bucket(row)
-        sgp = row.get("total_sgp", 0)
-        if sgp > best_remaining[bucket]:
-            best_remaining[bucket] = sgp
+    # Assign buckets vectorized
+    is_hitter = remaining["player_type"] == "hitter"
+    sv = remaining["sv"].fillna(0) if "sv" in remaining.columns else pd.Series(0, index=remaining.index)
+    remaining_buckets = pd.Series("sp", index=remaining.index)
+    remaining_buckets[is_hitter] = "hitter"
+    remaining_buckets[(~is_hitter) & (sv >= CLOSER_SV_THRESHOLD)] = "closer"
 
-    # VONA = player SGP - best remaining in same bucket
-    vona_scores = {}
-    for idx, row in available.iterrows():
-        bucket = _player_bucket(row)
-        sgp = row.get("total_sgp", 0)
-        vona_scores[row["player_id"]] = sgp - best_remaining[bucket]
+    sgp = remaining["total_sgp"].fillna(0)
+    best_remaining = sgp.groupby(remaining_buckets).max().to_dict()
+    for b in ("hitter", "sp", "closer"):
+        best_remaining.setdefault(b, 0)
 
-    return vona_scores
+    # VONA = player SGP - best remaining in same bucket (vectorized)
+    is_hitter_a = available["player_type"] == "hitter"
+    sv_a = available["sv"].fillna(0) if "sv" in available.columns else pd.Series(0, index=available.index)
+    avail_buckets = pd.Series("sp", index=available.index)
+    avail_buckets[is_hitter_a] = "hitter"
+    avail_buckets[(~is_hitter_a) & (sv_a >= CLOSER_SV_THRESHOLD)] = "closer"
+
+    avail_sgp = available["total_sgp"].fillna(0)
+    best_for_bucket = avail_buckets.map(best_remaining)
+    vona_series = avail_sgp - best_for_bucket
+
+    return dict(zip(available["player_id"], vona_series))
+
 
 
 def _vona_leverage_weight(player, leverage, denoms=None):
