@@ -27,6 +27,7 @@ from fantasy_baseball.draft.recommender import (
     get_filled_positions,
     get_roster_by_position,
 )
+from fantasy_baseball.draft.recommender import calculate_vona_scores
 from fantasy_baseball.draft.state import serialize_state, serialize_board, write_state, write_board
 from fantasy_baseball.draft.strategy import (
     STRATEGIES, NO_PUNT_AVG_FLOOR, _sv_in_danger, _count_closers,
@@ -188,7 +189,7 @@ def _save_draft_log(tracker, balance, config, full_board, mock=False,
 
 def _write_dashboard_state(tracker, balance, board, recs, filled,
                            roster_slots=None, roster_by_pos=None, teams=None,
-                           num_keepers=0):
+                           num_keepers=0, vona_scores=None):
     """Serialize and atomically write dashboard state to disk."""
     state = serialize_state(
         tracker=tracker,
@@ -200,6 +201,7 @@ def _write_dashboard_state(tracker, balance, board, recs, filled,
         roster_by_position=roster_by_pos,
         teams=teams,
         num_keepers=num_keepers,
+        vona_scores=vona_scores,
     )
     write_state(state, STATE_PATH)
 
@@ -322,11 +324,14 @@ def main():
                                num_teams=num_teams,
                                draft_leverage=leverage,
                                scoring_mode=scoring_mode)
+    available = board[~board["player_id"].isin(tracker.drafted_ids)]
+    vona = calculate_vona_scores(available, tracker.picks_until_next_turn)
     _write_dashboard_state(tracker, balance, board, recs, filled,
                            roster_slots=config.roster_slots,
                            roster_by_pos=by_pos,
                            teams=config.teams,
-                           num_keepers=len(keepers))
+                           num_keepers=len(keepers),
+                           vona_scores=vona)
 
     # Show pre-draft rankings
     print("=" * 70)
@@ -421,11 +426,14 @@ def main():
                                        draft_leverage=leverage,
                                        scoring_mode=scoring_mode)
 
+            available = board[~board["player_id"].isin(tracker.drafted_ids)]
+            vona = calculate_vona_scores(available, tracker.picks_until_next_turn)
             _write_dashboard_state(tracker, balance, board, recs, filled,
                                    roster_slots=config.roster_slots,
                                    roster_by_pos=by_pos,
                                    teams=config.teams,
-                                   num_keepers=len(keepers))
+                                   num_keepers=len(keepers),
+                                   vona_scores=vona)
 
             # Show updated top 10
             print()

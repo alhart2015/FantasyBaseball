@@ -100,6 +100,7 @@ def serialize_state(
     roster_by_position: dict[str, list[str]] | None = None,
     teams: dict[int, str] | None = None,
     num_keepers: int = 0,
+    vona_scores: dict[str, float] | None = None,
     *,
     include_available: bool = True,
 ) -> dict:
@@ -159,6 +160,12 @@ def serialize_state(
         "filled_positions": dict(filled_positions),
         "roster_by_position": dict(roster_by_position) if roster_by_position else {},
     }
+
+    if vona_scores is not None:
+        # Round VONA to 1 decimal, keyed by player_id
+        state["vona_scores"] = {
+            pid: round(float(v), 1) for pid, v in vona_scores.items()
+        }
 
     if roster_slots is not None:
         state["roster_slots"] = dict(roster_slots)
