@@ -99,6 +99,7 @@ def serialize_state(
     roster_slots: dict[str, int] | None = None,
     roster_by_position: dict[str, list[str]] | None = None,
     teams: dict[int, str] | None = None,
+    num_keepers: int = 0,
     *,
     include_available: bool = True,
 ) -> dict:
@@ -122,10 +123,16 @@ def serialize_state(
         else:
             rounded_totals[cat] = round(float(val))
 
+    # Offset pick/round to account for keeper rounds so the UI shows
+    # the overall draft pick number (e.g. pick 59 not pick 29).
+    overall_pick = tracker.current_pick + num_keepers
+    keeper_rounds = num_keepers // tracker.num_teams if tracker.num_teams else 0
+    overall_round = tracker.current_round + keeper_rounds
+
     state: dict = {
         "version": get_current_version(),  # will be bumped by write_state
-        "current_pick": tracker.current_pick,
-        "current_round": tracker.current_round,
+        "current_pick": overall_pick,
+        "current_round": overall_round,
         "picking_team": tracker.picking_team,
         "picking_team_name": (teams or {}).get(tracker.picking_team, f"Team {tracker.picking_team}"),
         "is_user_pick": tracker.is_user_pick,

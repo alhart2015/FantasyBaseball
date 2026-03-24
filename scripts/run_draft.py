@@ -199,8 +199,8 @@ def _write_dashboard_state(tracker, balance, board, recs, filled,
         roster_slots=roster_slots,
         roster_by_position=roster_by_pos,
         teams=teams,
+        num_keepers=num_keepers,
     )
-    state["num_keepers"] = num_keepers
     write_state(state, STATE_PATH)
 
 
@@ -338,9 +338,14 @@ def main():
     team_names = list(config.teams.values()) if config.teams else []
 
     # Main draft loop
+    num_keeper_picks = len(keepers)
+    keeper_rounds = num_keeper_picks // num_teams
     pick_index = 0  # index into draft_picks (post-keeper picks)
     try:
         while tracker.current_pick <= tracker.total_picks:
+            # Overall pick number including keeper picks
+            overall_pick = tracker.current_pick + num_keeper_picks
+
             # Determine who's picking: custom order or standard snake
             if draft_picks and pick_index < len(draft_picks):
                 pick_info = draft_picks[pick_index]
@@ -354,7 +359,7 @@ def main():
                 team_label = config.teams.get(team_num, f"Team {team_num}")
                 is_user = tracker.is_user_pick
                 is_traded = False
-                pick_round = tracker.current_round
+                pick_round = tracker.current_round + keeper_rounds
                 pick_slot = None
 
             print("=" * 70)
@@ -363,7 +368,7 @@ def main():
                 print(f"  !!!!! TRADED PICK !!!!!")
                 print(f"  Originally {original}'s pick -> now {team_label}'s")
                 print(f"  !!!!! TRADED PICK !!!!!")
-            print(f"ROUND {pick_round} | Pick {tracker.current_pick} "
+            print(f"ROUND {pick_round} | Pick {overall_pick} "
                   f"| {team_label}", end="")
             if is_user:
                 print(" *** YOUR PICK ***")
