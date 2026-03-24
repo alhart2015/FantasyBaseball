@@ -355,15 +355,20 @@ def _collect_roster_entries(
     user_roster_ids: list[str], board: pd.DataFrame,
 ) -> list[pd.Series]:
     """Look up board entries for each roster player by player_id."""
+    # Build a pid lookup dict for O(1) lookups instead of O(n) per player
+    pid_index = {}
+    for idx, row in board.iterrows():
+        pid_index[row["player_id"]] = row
     players: list[pd.Series] = []
     for pid in user_roster_ids:
-        rows = board[board["player_id"] == pid]
-        if rows.empty:
+        if pid in pid_index:
+            players.append(pid_index[pid])
+        else:
             # Fallback: try name match (for entries without player_id)
             name = pid.split("::")[0] if "::" in pid else pid
             rows = board[board["name_normalized"] == normalize_name(name)]
-        if not rows.empty:
-            players.append(rows.iloc[0])
+            if not rows.empty:
+                players.append(rows.iloc[0])
     return players
 
 

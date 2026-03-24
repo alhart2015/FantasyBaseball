@@ -29,7 +29,7 @@ from fantasy_baseball.draft.recommender import (
     get_filled_positions,
     compute_slot_scarcity_order,
 )
-from fantasy_baseball.draft.strategy import STRATEGIES
+from fantasy_baseball.draft.strategy import STRATEGIES, build_player_lookup
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 
@@ -367,6 +367,8 @@ def run_simulation(
 
     # Run draft
     user_team_num = config.draft_position
+    player_lookup = build_player_lookup(board, full_board)
+    drafted_set = set(tracker.drafted_ids)
     while tracker.current_pick <= tracker.total_picks:
         pick_idx = tracker.current_pick - 1
         if pick_order and pick_idx < len(pick_order):
@@ -381,21 +383,22 @@ def run_simulation(
                 total_rounds=rounds,
                 scoring_mode=scoring_mode,
                 team_rosters=team_rosters,
+                player_lookup=player_lookup,
             )
             if pick_name is None:
-                available_ids = set(tracker.drafted_ids)
                 for _, row in adp_board.iterrows():
-                    if row["player_id"] not in available_ids:
+                    if row["player_id"] not in drafted_set:
                         pick_name = row["name"]
                         pid = row["player_id"]
                         break
 
             if pick_name:
                 tracker.draft_player(pick_name, is_user=True, player_id=pid)
-                row = board[board["player_id"] == pid]
-                if not row.empty:
-                    balance.add_player(row.iloc[0])
-                    _assign_slot(row.iloc[0]["positions"],
+                drafted_set.add(pid)
+                p = player_lookup.get(pid)
+                if p is not None:
+                    balance.add_player(p)
+                    _assign_slot(p["positions"],
                                  team_filled[team_num], config.roster_slots,
                                  scarcity_order)
                 team_rosters[team_num].append(pid)
@@ -412,33 +415,32 @@ def run_simulation(
                 config, team_filled, total_rounds=rounds,
             )
             if pick_name is None:
-                available_ids = set(tracker.drafted_ids)
                 for _, row in adp_board.iterrows():
-                    if row["player_id"] not in available_ids:
+                    if row["player_id"] not in drafted_set:
                         pick_name = row["name"]
                         pid = row["player_id"]
                         break
 
             if pick_name:
                 tracker.draft_player(pick_name, is_user=False, player_id=pid)
-                row = board[board["player_id"] == pid]
-                if not row.empty:
-                    opp_balances[team_num].add_player(row.iloc[0])
+                drafted_set.add(pid)
+                p = player_lookup.get(pid)
+                if p is not None:
+                    opp_balances[team_num].add_player(p)
                     opp_rosters[team_num].append(pid)
                     opp_roster_names[team_num].append(pick_name)
-                    _assign_slot(row.iloc[0]["positions"],
+                    _assign_slot(p["positions"],
                                  team_filled[team_num], config.roster_slots,
                                  scarcity_order)
                 team_rosters[team_num].append(pid)
             else:
                 pick_name = "(no pick)"
         else:
-            available_ids = set(tracker.drafted_ids)
             pick_name = None
             pid = ""
 
             for _, row in adp_board.iterrows():
-                if row["player_id"] in available_ids:
+                if row["player_id"] in drafted_set:
                     continue
                 positions = row["positions"]
                 if _can_fill_active_slot(positions, team_filled[team_num],
@@ -449,12 +451,13 @@ def run_simulation(
                                          player_id=pid)
                     _assign_slot(positions, team_filled[team_num],
                                  config.roster_slots, scarcity_order)
+                    drafted_set.add(pid)
                     team_rosters[team_num].append(pid)
                     break
 
             if pick_name is None:
                 for _, row in adp_board.iterrows():
-                    if row["player_id"] in available_ids:
+                    if row["player_id"] in drafted_set:
                         continue
                     positions = row["positions"]
                     if _can_roster(positions, team_filled[team_num],
@@ -463,6 +466,7 @@ def run_simulation(
                         pid = row["player_id"]
                         tracker.draft_player(pick_name, is_user=False,
                                              player_id=pid)
+                        drafted_set.add(pid)
                         _assign_slot(positions, team_filled[team_num],
                                      config.roster_slots, scarcity_order)
                         team_rosters[team_num].append(pid)
@@ -499,9 +503,9 @@ def run_simulation(
             rnd = pick_num // config.num_teams + 1
             pos = pick_num % config.num_teams + 1
             team = pos if rnd % 2 == 1 else config.num_teams - pos + 1
-        rows = board[board["player_id"] == pid]
-        if not rows.empty:
-            team_players[team].append(rows.iloc[0])
+        p = player_lookup.get(pid)
+        if p is not None:
+            team_players[team].append(p)
 
     results, all_cats = _score_roto(team_players, config, full_board, board)
 

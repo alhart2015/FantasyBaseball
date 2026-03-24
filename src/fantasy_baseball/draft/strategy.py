@@ -58,6 +58,28 @@ ANTI_FRAGILE_IP_THRESHOLD = 170
 ANTI_FRAGILE_DISCOUNT = 0.25  # 25% VAR penalty per 30 IP above threshold
 
 
+def build_player_lookup(
+    board: pd.DataFrame, full_board: pd.DataFrame,
+) -> dict[str, pd.Series]:
+    """Build a dict from player_id -> row for O(1) lookups.
+
+    Checks board first, then full_board for players not on the filtered
+    board (e.g. keepers removed by apply_keepers).
+    """
+    lookup: dict[str, pd.Series] = {}
+    for _, row in full_board.iterrows():
+        lookup[row["player_id"]] = row
+    # Board entries override full_board (they have live VAR)
+    for _, row in board.iterrows():
+        lookup[row["player_id"]] = row
+    return lookup
+
+
+def _lookup_player(pid: str, player_lookup: dict) -> pd.Series | None:
+    """Look up a player by ID. Returns None if not found."""
+    return player_lookup.get(pid)
+
+
 def pick_default(
     board, full_board, tracker, balance, config, team_filled, **kwargs,
 ):
@@ -72,13 +94,12 @@ def pick_nonzero_sv(
     board, full_board, tracker, balance, config, team_filled, **kwargs,
 ):
     """Force a closer by CLOSER_DEADLINE_ROUND if none has been drafted."""
+    player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
     # Check if we already have a closer
     has_closer = False
     for pid in tracker.user_roster_ids:
-        rows = board[board["player_id"] == pid]
-        if rows.empty:
-            rows = full_board[full_board["player_id"] == pid]
-        if not rows.empty and rows.iloc[0].get("sv", 0) >= CLOSER_SV_THRESHOLD:
+        row = player_lookup.get(pid)
+        if row is not None and row.get("sv", 0) >= CLOSER_SV_THRESHOLD:
             has_closer = True
             break
 
@@ -283,36 +304,37 @@ pick_three_closers = _make_n_closers_strategy(THREE_CLOSERS_TARGET, THREE_CLOSER
 pick_four_closers = _make_n_closers_strategy(FOUR_CLOSERS_TARGET, FOUR_CLOSERS_DEADLINES)
 
 
-def _count_closers(tracker, board, full_board):
+def _count_closers(tracker, board, full_board, player_lookup=None):
     """Count how many closers are on the user's roster."""
+    if player_lookup is None:
+        player_lookup = build_player_lookup(board, full_board)
     count = 0
     for pid in tracker.user_roster_ids:
-        rows = board[board["player_id"] == pid]
-        if rows.empty:
-            rows = full_board[full_board["player_id"] == pid]
-        if not rows.empty and rows.iloc[0].get("sv", 0) >= CLOSER_SV_THRESHOLD:
+        row = player_lookup.get(pid)
+        if row is not None and row.get("sv", 0) >= CLOSER_SV_THRESHOLD:
             count += 1
     return count
 
 
-def _count_hitters(tracker, board, full_board):
+def _count_hitters(tracker, board, full_board, player_lookup=None):
     """Count hitters on the user's roster."""
+    if player_lookup is None:
+        player_lookup = build_player_lookup(board, full_board)
     count = 0
     for pid in tracker.user_roster_ids:
-        rows = board[board["player_id"] == pid]
-        if rows.empty:
-            rows = full_board[full_board["player_id"] == pid]
-        if not rows.empty and rows.iloc[0].get("player_type") == "hitter":
+        row = player_lookup.get(pid)
+        if row is not None and row.get("player_type") == "hitter":
             count += 1
     return count
 
 
-def _count_pitchers(tracker, board, full_board):
+def _count_pitchers(tracker, board, full_board, player_lookup=None):
     """Count pitchers on the user's roster."""
-    return len(tracker.user_roster) - _count_hitters(tracker, board, full_board)
+    return len(tracker.user_roster) - _count_hitters(tracker, board, full_board, player_lookup)
 
 
-def _sv_in_danger(tracker, board, full_board, team_rosters, num_teams):
+def _sv_in_danger(tracker, board, full_board, team_rosters, num_teams,
+                  player_lookup=None):
     """Check if our projected SV would finish in the danger zone.
 
     Returns True if:
@@ -324,6 +346,9 @@ def _sv_in_danger(tracker, board, full_board, team_rosters, num_teams):
     if not team_rosters:
         return False
 
+    if player_lookup is None:
+        player_lookup = build_player_lookup(board, full_board)
+
     # Project SV for each team from their current roster
     team_sv = {}
     teams_with_closers = 0
@@ -331,11 +356,9 @@ def _sv_in_danger(tracker, board, full_board, team_rosters, num_teams):
     for tn, pids in team_rosters.items():
         sv_total = 0
         for pid in pids:
-            rows = board[board["player_id"] == pid]
-            if rows.empty:
-                rows = full_board[full_board["player_id"] == pid]
-            if not rows.empty:
-                sv_total += rows.iloc[0].get("sv", 0)
+            row = player_lookup.get(pid)
+            if row is not None:
+                sv_total += row.get("sv", 0)
         team_sv[tn] = sv_total
         if sv_total >= CLOSER_SV_THRESHOLD:
             teams_with_closers += 1
@@ -630,17 +653,15 @@ def pick_avg_anchor(
 
     Once the anchor is secured, falls back to default.
     """
-    hitter_count = _count_hitters(tracker, board, full_board)
+    player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
+    hitter_count = _count_hitters(tracker, board, full_board, player_lookup)
 
     # Check if we already have an AVG anchor
     has_anchor = False
     for pid in tracker.user_roster_ids:
-        rows = board[board["player_id"] == pid]
-        if rows.empty:
-            rows = full_board[full_board["player_id"] == pid]
-        if not rows.empty:
-            p = rows.iloc[0]
-            if p.get("player_type") == "hitter" and p.get("avg", 0) >= AVG_ANCHOR_MIN:
+        row = player_lookup.get(pid)
+        if row is not None:
+            if row.get("player_type") == "hitter" and row.get("avg", 0) >= AVG_ANCHOR_MIN:
                 has_anchor = True
                 break
 
@@ -769,7 +790,9 @@ def pick_anti_fragile(
     return best["name"], _lookup_pid(board, best["name"])
 
 
-def _lookup_pid(board, name):
+def _lookup_pid(board, name, name_to_pid=None):
+    if name_to_pid is not None and name in name_to_pid:
+        return name_to_pid[name]
     rows = board[board["name"] == name]
     if not rows.empty:
         return rows.iloc[0]["player_id"]
