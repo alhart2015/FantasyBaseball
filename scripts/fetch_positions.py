@@ -7,6 +7,7 @@ from pathlib import Path
 from fantasy_baseball.auth.yahoo_auth import get_yahoo_session, get_league
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.yahoo_players import (
+    fetch_missing_keepers,
     fetch_positions_from_yahoo,
     save_positions_cache,
 )
@@ -24,6 +25,25 @@ def main():
     print("Fetching player positions from team rosters + free agents...")
     print("  (this queries each team's roster, then free agents by position)")
     positions = fetch_positions_from_yahoo(league)
+    print(f"Fetched {len(positions)} players from rosters + free agents")
+
+    # Phase 3: Look up any keepers missing from the cache
+    keepers = config.keepers
+    missing = [k["name"] for k in keepers if k["name"] not in positions]
+    if missing:
+        print(f"  {len(missing)} keepers missing — looking up via player search...")
+        for name in missing:
+            print(f"    searching: {name}")
+        keeper_positions = fetch_missing_keepers(league, keepers, positions)
+        positions.update(keeper_positions)
+        found = len(keeper_positions)
+        still_missing = [k["name"] for k in keepers if k["name"] not in positions]
+        print(f"  Found {found}/{len(missing)} missing keepers")
+        if still_missing:
+            print(f"  WARNING: still missing: {still_missing}")
+    else:
+        print("  All keepers already in position cache")
+
     save_positions_cache(positions, CACHE_PATH)
     print(f"Cached {len(positions)} players to {CACHE_PATH}")
 

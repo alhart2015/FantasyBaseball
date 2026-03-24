@@ -62,6 +62,92 @@ def fetch_positions_from_yahoo(league) -> dict[str, list[str]]:
     return merge_position_maps(position_maps)
 
 
+def _extract_positions(player: dict) -> list[str]:
+    """Extract position list from a player_details result."""
+    raw = player.get("eligible_positions", [])
+    positions = []
+    for p in raw:
+        pos = p["position"] if isinstance(p, dict) else p
+        if pos not in positions:
+            positions.append(pos)
+    return positions
+
+
+def fetch_missing_keepers(
+    league,
+    keepers: list[dict],
+    existing: dict[str, list[str]],
+) -> dict[str, list[str]]:
+    """Look up position eligibility for keepers missing from the cache.
+
+    Uses league.player_details() to search by name. Keepers already
+    present in *existing* are skipped.
+
+    Results are stored under the keeper's config name (not Yahoo's
+    accented name) so that downstream name matching works.
+
+    Players split into batter/pitcher (e.g. Ohtani) produce two
+    entries: "Name" for the batter and "Name (Pitcher)" for the
+    pitcher half.
+    """
+    missing_positions: dict[str, list[str]] = {}
+    for keeper in keepers:
+        name = keeper["name"]
+        if name in existing:
+            continue
+        try:
+            results = league.player_details(name)
+            if not results:
+                logger.warning("No Yahoo results for keeper %r", name)
+                continue
+
+            if len(results) >= 2 and _is_batter_pitcher_split(results):
+                # Two-way player split (e.g. Ohtani Batter + Pitcher)
+                for player in results:
+                    positions = _extract_positions(player)
+                    if not positions:
+                        continue
+                    yahoo_name = _get_full_name(player, name)
+                    if "(Pitcher)" in yahoo_name or "(pitcher)" in yahoo_name:
+                        store_name = f"{name} (Pitcher)"
+                    else:
+                        store_name = name
+                    missing_positions[store_name] = positions
+                    logger.info("Found split player %s: %s", store_name, positions)
+            else:
+                player = results[0]
+                positions = _extract_positions(player)
+                if positions:
+                    # Store under the config name, not Yahoo's accented name
+                    missing_positions[name] = positions
+                    logger.info("Found keeper %s: %s", name, positions)
+                else:
+                    logger.warning("Keeper %r found but no positions listed", name)
+        except Exception:
+            logger.exception("Failed to look up keeper %r", name)
+            continue
+    return missing_positions
+
+
+def _get_full_name(player: dict, fallback: str) -> str:
+    """Extract the full name string from a player_details result."""
+    full_name = player.get("name", {})
+    if isinstance(full_name, dict):
+        return full_name.get("full", fallback)
+    return full_name if full_name else fallback
+
+
+def _is_batter_pitcher_split(results: list[dict]) -> bool:
+    """Check if results represent a batter/pitcher split (e.g. Ohtani)."""
+    names = []
+    for r in results:
+        n = _get_full_name(r, "")
+        names.append(n.lower())
+    has_batter = any("batter" in n or "hitter" in n for n in names)
+    has_pitcher = any("pitcher" in n for n in names)
+    return has_batter and has_pitcher
+
+
 def merge_position_maps(maps: list[dict[str, list[str]]]) -> dict[str, list[str]]:
     """Merge multiple position maps into one, deduplicating positions."""
     merged: dict[str, list[str]] = {}
