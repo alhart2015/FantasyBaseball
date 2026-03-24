@@ -1,0 +1,36 @@
+{
+  "description": "2026 draft pick order with traded picks. Rounds 1-3 are keepers.",
+  "trades": [
+    {"round": 5, "slot": 2, "from": "Tortured Baseball Department", "to": "Hart of the Order"},
+    {"round": 6, "slot": 4, "from": "Jon's Underdogs", "to": "Send in the Cavalli"},
+    {"round": 13, "slot": 7, "from": "Jon's Underdogs", "to": "Hello Peanuts!"},
+    {"round": 13, "slot": 10, "from": "Send in the Cavalli", "to": "Jon's Underdogs"},
+    {"round": 18, "slot": 8, "from": "Hart of the Order", "to": "Tortured Baseball Department"},
+    {"round": 23, "slot": 1, "from": "Hello Peanuts!", "to": "Jon's Underdogs"}
+  ],
+  "rounds": [
+    ["Hello Peanuts!", "Boston Estrellas", "Send in the Cavalli", "Hart of the Order", "Jon's Underdogs", "SkeleThor", "Spacemen", "Springfield Isotopes", "Tortured Baseball Department", "Work in Progress"],
+    ["Work in Progress", "Tortured Baseball Department", "Springfield Isotopes", "Spacemen", "SkeleThor", "Jon's Underdogs", "Hart of the Order", "Send in the Cavalli", "Boston Estrellas", "Hello Peanuts!"],
+    ["Hello Peanuts!", "Boston Estrellas", "Send in the Cavalli", "Hart of the Order", "Jon's Underdogs", "SkeleThor", "Spacemen", "Springfield Isotopes", "Tortured Baseball Department", "Work in Progress"],
+    ["Send in the Cavalli", "SkeleThor", "Work in Progress", "Jon's Underdogs", "Boston Estrellas", "Spacemen", "Springfield Isotopes", "Hart of the Order", "Tortured Baseball Department", "Hello Peanuts!"],
+    ["Hello Peanuts!", "Hart of the Order", "Hart of the Order", "Springfield Isotopes", "Spacemen", "Boston Estrellas", "Jon's Underdogs", "Work in Progress", "SkeleThor", "Send in the Cavalli"],
+    ["Send in the Cavalli", "SkeleThor", "Work in Progress", "Send in the Cavalli", "Boston Estrellas", "Spacemen", "Springfield Isotopes", "Hart of the Order", "Tortured Baseball Department", "Hello Peanuts!"],
+    ["Hello Peanuts!", "Tortured Baseball Department", "Hart of the Order", "Springfield Isotopes", "Spacemen", "Boston Estrellas", "Jon's Underdogs", "Work in Progress", "SkeleThor", "Send in the Cavalli"],
+    ["Send in the Cavalli", "SkeleThor", "Work in Progress", "Jon's Underdogs", "Boston Estrellas", "Spacemen", "Springfield Isotopes", "Hart of the Order", "Tortured Baseball Department", "Hello Peanuts!"],
+    ["Hello Peanuts!", "Tortured Baseball Department", "Hart of the Order", "Springfield Isotopes", "Spacemen", "Boston Estrellas", "Jon's Underdogs", "Work in Progress", "SkeleThor", "Send in the Cavalli"],
+    ["Send in the Cavalli", "SkeleThor", "Work in Progress", "Jon's Underdogs", "Boston Estrellas", "Spacemen", "Springfield Isotopes", "Hart of the Order", "Tortured Baseball Department", "Hello Peanuts!"],
+    ["Hello Peanuts!", "Tortured Baseball Department", "Hart of the Order", "Springfield Isotopes", "Spacemen", "Boston Estrellas", "Jon's Underdogs", "Work in Progress", "SkeleThor", "Send in the Cavalli"],
+    ["Send in the Cavalli", "SkeleThor", "Work in Progress", "Jon's Underdogs", "Boston Estrellas", "Spacemen", "Springfield Isotopes", "Hart of the Order", "Tortured Baseball Department", "Hello Peanuts!"],
+    ["Hello Peanuts!", "Tortured Baseball Department", "Hart of the Order", "Springfield Isotopes", "Spacemen", "Boston Estrellas", "Hello Peanuts!", "Work in Progress", "SkeleThor", "Jon's Underdogs"],
+    ["Send in the Cavalli", "SkeleThor", "Work in Progress", "Jon's Underdogs", "Boston Estrellas", "Spacemen", "Springfield Isotopes", "Hart of the Order", "Tortured Baseball Department", "Hello Peanuts!"],
+    ["Hello Peanuts!", "Tortured Baseball Department", "Hart of the Order", "Springfield Isotopes", "Spacemen", "Boston Estrellas", "Jon's Underdogs", "Work in Progress", "SkeleThor", "Send in the Cavalli"],
+    ["Send in the Cavalli", "SkeleThor", "Work in Progress", "Jon's Underdogs", "Boston Estrellas", "Spacemen", "Springfield Isotopes", "Hart of the Order", "Tortured Baseball Department", "Hello Peanuts!"],
+    ["Hello Peanuts!", "Tortured Baseball Department", "Hart of the Order", "Springfield Isotopes", "Spacemen", "Boston Estrellas", "Jon's Underdogs", "Work in Progress", "SkeleThor", "Send in the Cavalli"],
+    ["Send in the Cavalli", "SkeleThor", "Work in Progress", "Jon's Underdogs", "Boston Estrellas", "Spacemen", "Springfield Isotopes", "Tortured Baseball Department", "Tortured Baseball Department", "Hello Peanuts!"],
+    ["Hello Peanuts!", "Tortured Baseball Department", "Hart of the Order", "Springfield Isotopes", "Spacemen", "Boston Estrellas", "Jon's Underdogs", "Work in Progress", "SkeleThor", "Send in the Cavalli"],
+    ["Send in the Cavalli", "SkeleThor", "Work in Progress", "Jon's Underdogs", "Boston Estrellas", "Spacemen", "Springfield Isotopes", "Hart of the Order", "Tortured Baseball Department", "Hello Peanuts!"],
+    ["Hello Peanuts!", "Tortured Baseball Department", "Hart of the Order", "Springfield Isotopes", "Spacemen", "Boston Estrellas", "Jon's Underdogs", "Work in Progress", "SkeleThor", "Send in the Cavalli"],
+    ["Send in the Cavalli", "SkeleThor", "Work in Progress", "Jon's Underdogs", "Boston Estrellas", "Spacemen", "Springfield Isotopes", "Hart of the Order", "Tortured Baseball Department", "Hello Peanuts!"],
+    ["Jon's Underdogs", "Tortured Baseball Department", "Hart of the Order", "Springfield Isotopes", "Spacemen", "Boston Estrellas", "Jon's Underdogs", "Work in Progress", "SkeleThor", "Send in the Cavalli"]
+  ]
+}

@@ -36,6 +36,7 @@ from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.web.app import create_app
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
+DRAFT_ORDER_PATH = PROJECT_ROOT / "config" / "draft_order.json"
 POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
@@ -61,6 +62,40 @@ def _start_flask_server(state_path: Path) -> None:
     )
     server_thread.start()
     print(f"Dashboard running at http://127.0.0.1:{FLASK_PORT}")
+
+
+def _load_draft_order(path, num_teams):
+    """Load custom draft order with trade detection.
+
+    Returns a list of dicts, one per pick (0-indexed), with keys:
+        team: team name for this pick
+        round: 1-indexed round
+        slot: 1-indexed slot within round
+        traded: True if this pick was traded (team differs from standard snake)
+        original_team: the team that would have picked in standard snake (if traded)
+    """
+    if not path.exists():
+        return None
+
+    with open(path) as f:
+        data = json.load(f)
+
+    rounds = data["rounds"]
+    trades = {(t["round"], t["slot"]): t for t in data.get("trades", [])}
+    picks = []
+    for rnd_idx, round_teams in enumerate(rounds):
+        rnd = rnd_idx + 1
+        for slot_idx, team_name in enumerate(round_teams):
+            slot = slot_idx + 1
+            trade_info = trades.get((rnd, slot))
+            picks.append({
+                "team": team_name,
+                "round": rnd,
+                "slot": slot,
+                "traded": trade_info is not None,
+                "original_team": trade_info["from"] if trade_info else None,
+            })
+    return picks
 
 
 def _get_draft_leverage(balance, tracker):
@@ -251,6 +286,21 @@ def main():
         else:
             tracker.draft_player(keeper["name"], is_user=is_user)
 
+    # Load custom draft order (with traded picks)
+    draft_order = _load_draft_order(DRAFT_ORDER_PATH, num_teams)
+    if draft_order:
+        num_keepers = len(keepers)
+        # Only use picks after keepers
+        draft_picks = draft_order[num_keepers:]
+        user_pick_count = sum(1 for p in draft_picks if p["team"] == config.team_name)
+        trade_count = sum(1 for p in draft_picks if p["traded"])
+        print(f"Draft order loaded: {len(draft_picks)} picks, "
+              f"{user_pick_count} yours, {trade_count} traded picks")
+    else:
+        draft_picks = None
+        print("No custom draft order found — using standard snake")
+    print()
+
     # Write the full board once (clients fetch via /api/board on page load)
     board_data = serialize_board(board)
     write_board(board_data, BOARD_PATH)
@@ -288,26 +338,48 @@ def main():
     team_names = list(config.teams.values()) if config.teams else []
 
     # Main draft loop
+    pick_index = 0  # index into draft_picks (post-keeper picks)
     try:
         while tracker.current_pick <= tracker.total_picks:
-            team_num = tracker.picking_team
-            team_label = config.teams.get(team_num, f"Team {team_num}")
+            # Determine who's picking: custom order or standard snake
+            if draft_picks and pick_index < len(draft_picks):
+                pick_info = draft_picks[pick_index]
+                team_label = pick_info["team"]
+                is_user = (team_label == config.team_name)
+                is_traded = pick_info["traded"]
+                pick_round = pick_info["round"]
+                pick_slot = pick_info["slot"]
+            else:
+                team_num = tracker.picking_team
+                team_label = config.teams.get(team_num, f"Team {team_num}")
+                is_user = tracker.is_user_pick
+                is_traded = False
+                pick_round = tracker.current_round
+                pick_slot = None
+
             print("=" * 70)
-            print(f"ROUND {tracker.current_round} | Pick {tracker.current_pick} "
+            if is_traded:
+                original = pick_info.get("original_team", "???")
+                print(f"  !!!!! TRADED PICK !!!!!")
+                print(f"  Originally {original}'s pick -> now {team_label}'s")
+                print(f"  !!!!! TRADED PICK !!!!!")
+            print(f"ROUND {pick_round} | Pick {tracker.current_pick} "
                   f"| {team_label}", end="")
-            if tracker.is_user_pick:
+            if is_user:
                 print(" *** YOUR PICK ***")
             else:
                 print()
             print("=" * 70)
 
-            if tracker.is_user_pick:
+            if is_user:
                 _handle_user_pick(board, full_board, tracker, balance,
                                   roster_slots=config.roster_slots,
                                   num_teams=num_teams,
                                   team_names=team_names,
                                   user_team_name=config.team_name,
-                                  config=config)
+                                  config=config,
+                                  draft_picks=draft_picks,
+                                  pick_index=pick_index)
             else:
                 # Peek at input — if "mine", treat as user pick (traded pick)
                 raw = input("\nPick (player, 'team player', or 'mine'): ").strip()
@@ -316,7 +388,9 @@ def main():
                     _handle_user_pick(board, full_board, tracker, balance,
                                       roster_slots=config.roster_slots,
                                       num_teams=num_teams,
-                                      config=config)
+                                      config=config,
+                                      draft_picks=draft_picks,
+                                      pick_index=pick_index)
                 else:
                     # Process the input that was already typed
                     _handle_other_pick(board, full_board, tracker, balance,
@@ -325,6 +399,7 @@ def main():
 
             # Advance to next pick so dashboard shows upcoming pick, not the one just made
             tracker.advance()
+            pick_index += 1
 
             # Write updated state for the dashboard after every pick
             filled = get_filled_positions(tracker.user_roster_ids, full_board,
@@ -369,28 +444,38 @@ def main():
 
 def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
                       num_teams=None, team_names=None, user_team_name=None,
-                      config=None):
+                      config=None, draft_picks=None, pick_index=0):
     """Handle the user's draft pick with recommendations."""
     scoring_mode = config.scoring_mode if config else "var"
-    strategy = config.strategy if config else "no_punt_opp"
+    strategy = config.strategy if config else "two_closers"
+    team_name = config.team_name if config else "Hart of the Order"
     filled = get_filled_positions(tracker.user_roster_ids, full_board,
                                   roster_slots=roster_slots)
     # Calculate gap to NEXT user turn after this one.
-    # Use a local variable instead of mutating tracker.current_pick so that
-    # an exception cannot leave the tracker in a corrupted state.
-    peek_pick = tracker.current_pick + 1
-    picks_gap = 1  # count the peek step itself
-    while peek_pick <= tracker.total_picks:
-        peek_round = (peek_pick - 1) // tracker.num_teams + 1
-        peek_pos = (peek_pick - 1) % tracker.num_teams + 1
-        if peek_round % 2 == 1:
-            peek_team = peek_pos
-        else:
-            peek_team = tracker.num_teams - peek_pos + 1
-        if peek_team == tracker.user_position:
-            break
-        peek_pick += 1
-        picks_gap += 1
+    if draft_picks:
+        # Use custom draft order to find next user pick
+        picks_gap = 0
+        for future in draft_picks[pick_index + 1:]:
+            picks_gap += 1
+            if future["team"] == team_name:
+                break
+        if picks_gap == 0:
+            picks_gap = 1  # fallback
+    else:
+        # Standard snake fallback
+        peek_pick = tracker.current_pick + 1
+        picks_gap = 1
+        while peek_pick <= tracker.total_picks:
+            peek_round = (peek_pick - 1) // tracker.num_teams + 1
+            peek_pos = (peek_pick - 1) % tracker.num_teams + 1
+            if peek_round % 2 == 1:
+                peek_team = peek_pos
+            else:
+                peek_team = tracker.num_teams - peek_pos + 1
+            if peek_team == tracker.user_position:
+                break
+            peek_pick += 1
+            picks_gap += 1
 
     leverage = _get_draft_leverage(balance, tracker)
     recs = get_recommendations(
