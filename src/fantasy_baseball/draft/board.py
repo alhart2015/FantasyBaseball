@@ -1,3 +1,4 @@
+import logging
 import pandas as pd
 from pathlib import Path
 from fantasy_baseball.data.projections import blend_projections
@@ -8,6 +9,8 @@ from fantasy_baseball.sgp.replacement import calculate_replacement_levels
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import compute_starters_per_position
 from fantasy_baseball.utils.name_utils import normalize_name
+
+logger = logging.getLogger(__name__)
 
 
 def build_draft_board(
@@ -64,7 +67,9 @@ def build_draft_board(
     # Unique player ID to disambiguate same-name players (e.g. Juan Soto OF vs SP)
     pool["player_id"] = pool["name"] + "::" + pool["player_type"]
 
-    return pool.sort_values("var", ascending=False).reset_index(drop=True)
+    board = pool.sort_values("var", ascending=False).reset_index(drop=True)
+    _validate_top_adp_players(board, hitters, pitchers)
+    return board
 
 
 def apply_keepers(board: pd.DataFrame, keepers: list[dict]) -> pd.DataFrame:
@@ -84,6 +89,49 @@ def apply_keepers(board: pd.DataFrame, keepers: list[dict]) -> pd.DataFrame:
         best_idx = matches["var"].idxmax()
         ids_to_remove.add(board.at[best_idx, "player_id"])
     return board[~board["player_id"].isin(ids_to_remove)].reset_index(drop=True)
+
+
+def _validate_top_adp_players(
+    board: pd.DataFrame,
+    unfiltered_hitters: pd.DataFrame,
+    unfiltered_pitchers: pd.DataFrame,
+    adp_threshold: int = 150,
+) -> None:
+    """Warn about top-ADP players missing from the final board.
+
+    Compares the top *adp_threshold* players by ADP (from the unfiltered
+    blended projections) against the final board.  Players filtered out
+    by AB/IP minimums are logged as warnings so data problems are caught
+    before draft day.
+    """
+    if "adp" not in board.columns:
+        return
+
+    all_blended = pd.concat([unfiltered_hitters, unfiltered_pitchers], ignore_index=True)
+    if "adp" not in all_blended.columns:
+        return
+
+    top_adp = all_blended.nsmallest(adp_threshold, "adp")
+    board_names = set(board["name"])
+    missing = []
+    for _, player in top_adp.iterrows():
+        if player["name"] not in board_names:
+            ab = player.get("ab", 0) or 0
+            ip = player.get("ip", 0) or 0
+            adp = player.get("adp", 999)
+            missing.append((player["name"], player["player_type"], adp, ab, ip))
+
+    if missing:
+        logger.warning(
+            "Top-%d ADP players missing from board (%d found):",
+            adp_threshold, len(missing),
+        )
+        for name, ptype, adp, ab, ip in sorted(missing, key=lambda x: x[2]):
+            stat = f"AB={ab:.0f}" if ptype == "hitter" else f"IP={ip:.0f}"
+            logger.warning(
+                "  ADP %3.0f: %-25s [%s] %s (filtered by minimum threshold)",
+                adp, name, ptype, stat,
+            )
 
 
 def _attach_positions(df, norm_positions, default_type):
