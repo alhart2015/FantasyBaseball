@@ -823,5 +823,4 @@ STRATEGIES = {
     "avg_anchor": pick_avg_anchor,
     "closers_avg": pick_closers_avg,
     "balanced": pick_balanced,
-    "anti_fragile": pick_anti_fragile,
 }

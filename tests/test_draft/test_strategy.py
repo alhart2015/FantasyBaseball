@@ -24,7 +24,6 @@ from fantasy_baseball.draft.strategy import (
     pick_avg_anchor,
     pick_closers_avg,
     pick_balanced,
-    pick_anti_fragile,
     _count_closers,
     _count_hitters,
     _count_pitchers,
@@ -46,8 +45,6 @@ from fantasy_baseball.draft.strategy import (
     AVG_ANCHOR_MIN,
     AVG_ANCHOR_DEADLINE_HITTER,
     BALANCED_MAX_SKEW,
-    ANTI_FRAGILE_IP_THRESHOLD,
-    ANTI_FRAGILE_DISCOUNT,
     STRATEGIES,
 )
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD, DEFAULT_ROSTER_SLOTS
@@ -1263,73 +1260,6 @@ class TestPickBalanced:
         assert name is not None
 
 
-class TestPickAntiFragile:
-    def test_discounts_high_ip_pitcher(self):
-        """High-IP pitchers get penalized, preferring mid-tier arms."""
-        # Board where the top pitcher has very high IP
-        board = _make_board([
-            _make_sp("Fragile Ace", var=12.0, adp=1, ip=230),   # 230 IP -> big penalty
-            _make_sp("Durable Mid", var=11.5, adp=2, ip=160),   # Below threshold -> no penalty
-            _make_hitter("Hitter A", var=11.0, adp=3, avg=0.280, ab=550, positions=["OF"]),
-        ])
-        config = _make_config()
-        tracker = _make_tracker()
-        balance = CategoryBalance()
-        name, pid = pick_anti_fragile(board, board, tracker, balance, config, {})
-        # Durable Mid should be preferred due to penalty on Fragile Ace
-        # The penalty for 230 IP: excess = 60, penalty = (60/30) * 0.25 = 0.5
-        # Fragile Ace adjusted: 12.0 * 0.5 = 6.0
-        # Durable Mid stays at 11.5, so it should win
-        assert name is not None
-
-    def test_no_penalty_below_threshold(self):
-        """Pitchers below IP threshold get no penalty."""
-        board = _make_board([
-            _make_sp("Low IP", var=10.0, adp=1, ip=150),
-            _make_hitter("Hitter A", var=9.0, adp=2, avg=0.280, ab=550, positions=["OF"]),
-        ])
-        config = _make_config()
-        tracker = _make_tracker()
-        balance = CategoryBalance()
-        name, pid = pick_anti_fragile(board, board, tracker, balance, config, {})
-        # No penalty, so the pitcher with higher VAR should be picked
-        assert name == "Low IP"
-
-    def test_hitters_unaffected(self):
-        """Hitters should not be penalized regardless of other stats."""
-        board = _make_board([
-            _make_hitter("Best Hitter", var=15.0, adp=1, avg=0.290, ab=550, positions=["OF"]),
-            _make_sp("OK Pitcher", var=14.0, adp=2, ip=200),  # penalty reduces this
-        ])
-        config = _make_config()
-        tracker = _make_tracker()
-        balance = CategoryBalance()
-        name, pid = pick_anti_fragile(board, board, tracker, balance, config, {})
-        # Hitter VAR=15 is unpenalized; pitcher 14 * (1 - (30/30)*0.25) = 14*0.75 = 10.5
-        assert name == "Best Hitter"
-
-    def test_pitcher_at_threshold_no_penalty(self):
-        """Pitcher at exactly the IP threshold gets no penalty."""
-        board = _make_board([
-            _make_sp("At Threshold", var=10.0, adp=1, ip=ANTI_FRAGILE_IP_THRESHOLD),
-            _make_hitter("OK Hitter", var=9.0, adp=2, avg=0.270, ab=500, positions=["OF"]),
-        ])
-        config = _make_config()
-        tracker = _make_tracker()
-        balance = CategoryBalance()
-        name, pid = pick_anti_fragile(board, board, tracker, balance, config, {})
-        # At threshold exactly -> no excess IP -> no penalty -> pitcher wins
-        assert name == "At Threshold"
-
-    def test_penalty_math(self):
-        """Verify the exact penalty calculation."""
-        ip = 200  # 30 IP above threshold of 170
-        excess = ip - ANTI_FRAGILE_IP_THRESHOLD  # 30
-        penalty = (excess / 30.0) * ANTI_FRAGILE_DISCOUNT  # (30/30) * 0.25 = 0.25
-        adjusted = 10.0 * (1.0 - penalty)  # 10.0 * 0.75 = 7.5
-        assert adjusted == pytest.approx(7.5)
-
-
 # ---------------------------------------------------------------------------
 # STRATEGIES registry test
 # ---------------------------------------------------------------------------
@@ -1340,7 +1270,7 @@ class TestStrategiesRegistry:
             "default", "nonzero_sv", "avg_hedge", "two_closers",
             "three_closers", "four_closers", "no_punt", "no_punt_opp",
             "no_punt_stagger", "no_punt_cap3", "avg_anchor",
-            "closers_avg", "balanced", "anti_fragile",
+            "closers_avg", "balanced",
         }
         assert set(STRATEGIES.keys()) == expected
 
@@ -1439,14 +1369,6 @@ class TestEdgeCases:
         row = board[board["name"] == name]
         if not row.empty:
             assert row.iloc[0]["player_type"] == "hitter"
-
-    def test_anti_fragile_very_high_ip(self):
-        """Very high IP (260+) should receive severe penalty."""
-        ip = 260
-        excess = ip - ANTI_FRAGILE_IP_THRESHOLD  # 90
-        penalty = (excess / 30.0) * ANTI_FRAGILE_DISCOUNT  # 3 * 0.25 = 0.75
-        adjusted = 15.0 * (1.0 - penalty)  # 15.0 * 0.25 = 3.75
-        assert adjusted == pytest.approx(3.75)
 
     def test_sv_in_danger_boundary_rank(self):
         """User exactly at the boundary of danger zone."""
