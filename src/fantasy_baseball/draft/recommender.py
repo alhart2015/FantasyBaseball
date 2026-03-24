@@ -364,12 +364,16 @@ def _get_unfilled_positions(
 
 def _collect_roster_entries(
     user_roster_ids: list[str], board: pd.DataFrame,
+    player_lookup: dict | None = None,
 ) -> list[pd.Series]:
     """Look up board entries for each roster player by player_id."""
-    # Build a pid lookup dict for O(1) lookups instead of O(n) per player
-    pid_index = {}
-    for idx, row in board.iterrows():
-        pid_index[row["player_id"]] = row
+    if player_lookup is None:
+        # Build a pid lookup dict for O(1) lookups instead of O(n) per player
+        pid_index = {}
+        for idx, row in board.iterrows():
+            pid_index[row["player_id"]] = row
+    else:
+        pid_index = player_lookup
     players: list[pd.Series] = []
     for pid in user_roster_ids:
         if pid in pid_index:
@@ -394,6 +398,7 @@ def get_filled_positions(
     user_roster_ids: list[str],
     board: pd.DataFrame,
     roster_slots: dict[str, int] | None = None,
+    player_lookup: dict | None = None,
 ) -> dict[str, int]:
     """Count how many of each roster slot the user has filled.
 
@@ -412,7 +417,7 @@ def get_filled_positions(
     }
     filled: dict[str, int] = {pos: 0 for pos in capacity}
 
-    players = _collect_roster_entries(user_roster_ids, board)
+    players = _collect_roster_entries(user_roster_ids, board, player_lookup)
 
     # Sort: assign players with fewer eligible active slots first (most constrained)
     active_slots = {k: v for k, v in capacity.items() if k != "BN"}

@@ -139,10 +139,14 @@ def calculate_draft_leverage(
                 continue
             # Ratio < 1 means behind pace, > 1 means ahead
             ratio = current / expected
-            # Zero in a counting category is an emergency — you're punting
-            # an entire roto category. Give it a massive boost.
+            # Zero in a counting category past 15% is urgent, but capped
+            # to prevent any single group of categories from drowning out
+            # the rest.  Without this cap, starting with 3 hitter keepers
+            # and 0 pitchers makes W+K+SV+ERA+WHIP consume ~99.7% of
+            # leverage weight, causing the recommender to draft nothing
+            # but pitchers for 9+ rounds.
             if current < epsilon and progress > 0.15:
-                raw[cat] = 1.0 / (epsilon * 0.01)
+                raw[cat] = 10.0
             else:
                 # Invert: behind pace -> high weight, ahead -> low weight
                 raw[cat] = 1.0 / max(ratio, 0.1)

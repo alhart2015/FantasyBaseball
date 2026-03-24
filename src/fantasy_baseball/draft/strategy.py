@@ -66,12 +66,13 @@ def build_player_lookup(
     Checks board first, then full_board for players not on the filtered
     board (e.g. keepers removed by apply_keepers).
     """
-    lookup: dict[str, pd.Series] = {}
-    for _, row in full_board.iterrows():
-        lookup[row["player_id"]] = row
-    # Board entries override full_board (they have live VAR)
-    for _, row in board.iterrows():
-        lookup[row["player_id"]] = row
+    # full_board first, then board overrides (board has live VAR)
+    lookup: dict[str, pd.Series] = dict(zip(
+        full_board["player_id"], (row for _, row in full_board.iterrows())
+    ))
+    lookup.update(dict(zip(
+        board["player_id"], (row for _, row in board.iterrows())
+    )))
     return lookup
 
 
@@ -117,6 +118,7 @@ def pick_nonzero_sv(
             filled = get_filled_positions(
                 tracker.user_roster_ids, full_board,
                 roster_slots=config.roster_slots,
+                player_lookup=player_lookup,
             )
             if _can_roster_player(best, filled, config.roster_slots):
                 return best["name"], best["player_id"]
@@ -133,6 +135,7 @@ def pick_avg_hedge(
     filled = get_filled_positions(
         tracker.user_roster_ids, full_board,
         roster_slots=config.roster_slots,
+        player_lookup=kwargs.get("player_lookup"),
     )
     leverage = calculate_draft_leverage(
         balance.get_totals(),
@@ -229,6 +232,7 @@ def pick_no_punt_opp(
                 filled = get_filled_positions(
                     tracker.user_roster_ids, full_board,
                     roster_slots=config.roster_slots,
+                    player_lookup=player_lookup,
                 )
                 for _, best in falling.iterrows():
                     if _can_roster_player(best, filled, config.roster_slots):
@@ -286,6 +290,7 @@ def _make_n_closers_strategy(target, deadlines):
                 filled = get_filled_positions(
                     tracker.user_roster_ids, full_board,
                     roster_slots=config.roster_slots,
+                    player_lookup=player_lookup,
                 )
                 for _, best in closers.iterrows():
                     if _can_roster_player(best, filled, config.roster_slots):
@@ -388,6 +393,7 @@ def _force_closer(board, tracker, full_board, config, player_lookup=None):
     filled = get_filled_positions(
         tracker.user_roster_ids, full_board,
         roster_slots=config.roster_slots,
+        player_lookup=player_lookup,
     )
     for _, best in closers.iterrows():
         if _can_roster_player(best, filled, config.roster_slots):
@@ -428,6 +434,7 @@ def _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs):
     filled = get_filled_positions(
         tracker.user_roster_ids, full_board,
         roster_slots=config.roster_slots,
+        player_lookup=kwargs.get("player_lookup"),
     )
     leverage = calculate_draft_leverage(
         balance.get_totals(),
