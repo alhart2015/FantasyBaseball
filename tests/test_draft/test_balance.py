@@ -161,13 +161,11 @@ class TestCalculateDraftLeverage:
         assert weights["ERA"] == pytest.approx(weights["WHIP"])
 
     def test_all_counting_stats_at_target_gives_equal_counting_weights(self):
-        """When all counting stats are exactly on pace, their weights should be equal.
+        """When all counting stats are on pace and rate stats at target, weights are equal.
 
-        Note: AVG is treated as a counting stat by the function (scaled by
-        progress), so at 50% progress its expected is target*0.5=0.130 while
-        current is 0.260 — appearing "ahead of pace."  We test that the 8
-        true counting stats (R, HR, RBI, SB, W, K, SV) plus ERA/WHIP all
-        get raw=1.0 and therefore equal weight among themselves.
+        AVG is a rate stat (like ERA/WHIP) — it doesn't accumulate, so it
+        gets a fixed raw weight of 1.0.  Counting stats on pace also get
+        raw=1.0, so all 10 categories should be equal.
         """
         progress = 0.5
         totals = {
@@ -175,7 +173,7 @@ class TestCalculateDraftLeverage:
             "HR": 265 * progress,
             "RBI": 890 * progress,
             "SB": 145 * progress,
-            "AVG": 0.260 * progress,  # scale AVG too so it's "on pace"
+            "AVG": 0.260,  # rate stat — not scaled by progress
             "W": 78 * progress,
             "K": 1250 * progress,
             "ERA": 3.80,
@@ -183,10 +181,31 @@ class TestCalculateDraftLeverage:
             "SV": 55 * progress,
         }
         weights = calculate_draft_leverage(totals, picks_made=12, total_picks=24, targets=self.TARGETS)
-        # All stats on-pace -> ratio=1.0 -> raw=1.0, same as ERA/WHIP fixed at 1.0
         expected = 1.0 / len(ALL_CATEGORIES)
         for cat in ALL_CATEGORIES:
             assert weights[cat] == pytest.approx(expected, abs=0.02)
+
+    def test_avg_not_suppressed_at_mid_draft(self):
+        """AVG is a rate stat and should not be scaled by draft progress.
+
+        Regression: AVG was previously treated as a counting stat, so at 50%
+        progress a realistic .265 AVG looked 2× ahead of pace (.265 / .130),
+        halving its leverage weight relative to other on-pace categories.
+        """
+        totals = {
+            "R": 450, "HR": 132, "RBI": 445, "SB": 72, "AVG": 0.265,
+            "W": 39, "K": 625, "ERA": 3.80, "WHIP": 1.20, "SV": 27,
+        }
+        weights = calculate_draft_leverage(totals, picks_made=12, total_picks=24, targets=self.TARGETS)
+        # AVG should be in the same ballpark as other on-pace counting stats,
+        # not half their weight.  ERA and WHIP also get fixed 1.0.
+        counting_on_pace = [weights[c] for c in ("R", "HR", "RBI", "W", "K", "SV")]
+        avg_weight = weights["AVG"]
+        median_counting = sorted(counting_on_pace)[len(counting_on_pace) // 2]
+        assert avg_weight > median_counting * 0.5, (
+            f"AVG weight {avg_weight:.4f} is less than half the median "
+            f"counting-stat weight {median_counting:.4f}"
+        )
 
     def test_progress_clamping_no_crash(self):
         """picks_made > total_picks should not crash; progress is clamped to 1.0."""
