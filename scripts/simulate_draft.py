@@ -208,10 +208,47 @@ def _parse_opponent_strategies(opp_str):
     return opp_strategies
 
 
+DRAFT_ORDER_PATH = PROJECT_ROOT / "config" / "draft_order.json"
+
+
+def _load_pick_order(config):
+    """Load custom draft order and build a post-keeper pick-to-team-num mapping.
+
+    Returns a list of team numbers (1-indexed), one per post-keeper pick,
+    or None if no custom order file exists.
+    """
+    if not DRAFT_ORDER_PATH.exists():
+        return None
+
+    with open(DRAFT_ORDER_PATH) as f:
+        data = json.load(f)
+
+    # Build reverse mapping: team_name -> team_num
+    name_to_num = {v: k for k, v in config.teams.items()}
+
+    rounds = data["rounds"]
+    keeper_rounds = len(config.keepers) // config.num_teams
+    post_keeper_rounds = rounds[keeper_rounds:]
+
+    pick_order = []
+    for round_teams in post_keeper_rounds:
+        for team_name in round_teams:
+            team_num = name_to_num.get(team_name)
+            if team_num is None:
+                # Fuzzy match for truncated names
+                for full_name, num in name_to_num.items():
+                    if team_name in full_name or full_name in team_name:
+                        team_num = num
+                        break
+            pick_order.append(team_num or 0)
+    return pick_order
+
+
 def build_board_and_context(config_path=None):
     """Build the draft board and all reusable context. Call once.
 
-    Returns a dict with keys: config, full_board, board, scarcity_order.
+    Returns a dict with keys: config, full_board, board, scarcity_order,
+    pick_order.
     """
     if config_path is None:
         config_path = CONFIG_PATH
@@ -227,11 +264,13 @@ def build_board_and_context(config_path=None):
     )
     board = apply_keepers(full_board, config.keepers)
     scarcity_order = compute_slot_scarcity_order(full_board, config.roster_slots)
+    pick_order = _load_pick_order(config)
     return {
         "config": config,
         "full_board": full_board,
         "board": board,
         "scarcity_order": scarcity_order,
+        "pick_order": pick_order,
     }
 
 
@@ -254,6 +293,7 @@ def run_simulation(
     full_board = ctx["full_board"]
     board = ctx["board"]
     scarcity_order = ctx["scarcity_order"]
+    pick_order = ctx.get("pick_order")  # custom draft order (or None)
 
     strategy_fn = STRATEGIES[strategy_name]
 
@@ -326,9 +366,14 @@ def run_simulation(
                 break
 
     # Run draft
+    user_team_num = config.draft_position
     while tracker.current_pick <= tracker.total_picks:
-        team_num = tracker.picking_team
-        is_user = tracker.is_user_pick
+        pick_idx = tracker.current_pick - 1
+        if pick_order and pick_idx < len(pick_order):
+            team_num = pick_order[pick_idx]
+        else:
+            team_num = tracker.picking_team
+        is_user = (team_num == user_team_num)
 
         if is_user:
             pick_name, pid = strategy_fn(
@@ -446,10 +491,14 @@ def run_simulation(
         tracker.drafted_players[num_keepers:],
         tracker.drafted_ids[num_keepers:],
     ))
-    for pick_num, (name, pid) in enumerate(draft_entries, 1):
-        rnd = (pick_num - 1) // config.num_teams + 1
-        pos = (pick_num - 1) % config.num_teams + 1
-        team = pos if rnd % 2 == 1 else config.num_teams - pos + 1
+    for pick_num, (name, pid) in enumerate(draft_entries):
+        if pick_order and pick_num < len(pick_order):
+            team = pick_order[pick_num]
+        else:
+            # Standard snake fallback
+            rnd = pick_num // config.num_teams + 1
+            pos = pick_num % config.num_teams + 1
+            team = pos if rnd % 2 == 1 else config.num_teams - pos + 1
         rows = board[board["player_id"] == pid]
         if not rows.empty:
             team_players[team].append(rows.iloc[0])
