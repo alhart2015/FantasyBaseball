@@ -4,9 +4,15 @@ from fantasy_baseball.utils.constants import (
 )
 
 TEAM_TARGETS: dict[str, float] = {
-    "R": 850, "HR": 220, "RBI": 830, "SB": 100, "AVG": 0.265,
-    "W": 75, "K": 1200, "ERA": 3.80, "WHIP": 1.20, "SV": 80,
+    "R": 900, "HR": 265, "RBI": 890, "SB": 145, "AVG": 0.260,
+    "W": 78, "K": 1250, "ERA": 3.80, "WHIP": 1.20, "SV": 55,
 }
+# NOTE: Targets derived from 10-team simulation averages (2026-03-24).
+# SV=55 reflects a 2-closer team (~28 SV each).  The old SV=80 caused
+# leverage to perpetually see SV as "behind pace," over-weighting saves.
+# HR, RBI, SB old targets (220, 830, 100) were far below actual sim
+# averages (270, 899, 151), so hitting categories were always "ahead of
+# pace" — compounding the closer-heavy bias.
 
 WARNING_THRESHOLD: float = 0.6
 
