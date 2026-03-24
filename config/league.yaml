@@ -111,10 +111,14 @@ projections:
     - steamer
     - zips
     - atc
+    - the-bat-x
+    - oopsy
   weights:
-    steamer: 0.33
-    zips: 0.33
-    atc: 0.34
+    steamer: 0.20
+    zips: 0.20
+    atc: 0.20
+    the-bat-x: 0.20
+    oopsy: 0.20
 
 sgp_denominators:
   R: 20
