@@ -1,0 +1,885 @@
+{
+  "metadata": {
+    "timestamp": "2026-03-24_164453",
+    "mock": false,
+    "draft_position": 8,
+    "num_teams": 10,
+    "user_team": "Hart of the Order",
+    "strategy": "avg_hedge",
+    "scoring_mode": "var",
+    "picks_completed": 73,
+    "total_picks": 200,
+    "complete": false
+  },
+  "user_roster": [
+    {
+      "name": "Juan Soto",
+      "player_id": "20123::hitter",
+      "player_type": "hitter",
+      "positions": [
+        "OF",
+        "Util"
+      ],
+      "var": 6.95,
+      "r": 108.1588,
+      "hr": 37.3925,
+      "rbi": 99.5284,
+      "sb": 20.5667,
+      "h": 147.0786,
+      "ab": 536.1878,
+      "avg": 0.2743,
+      "w": NaN,
+      "k": NaN,
+      "sv": NaN,
+      "ip": NaN,
+      "er": NaN,
+      "bb": NaN,
+      "h_allowed": NaN
+    },
+    {
+      "name": "Julio Rodr\u00edguez",
+      "player_id": "23697::hitter",
+      "player_type": "hitter",
+      "positions": [
+        "OF",
+        "Util"
+      ],
+      "var": 5.72,
+      "r": 92.6865,
+      "hr": 29.1771,
+      "rbi": 93.0034,
+      "sb": 26.4915,
+      "h": 163.5066,
+      "ab": 597.7624,
+      "avg": 0.2735,
+      "w": NaN,
+      "k": NaN,
+      "sv": NaN,
+      "ip": NaN,
+      "er": NaN,
+      "bb": NaN,
+      "h_allowed": NaN
+    },
+    {
+      "name": "Junior Caminero",
+      "player_id": "28163::hitter",
+      "player_type": "hitter",
+      "positions": [
+        "3B",
+        "IF",
+        "Util"
+      ],
+      "var": 4.96,
+      "r": 83.1781,
+      "hr": 36.1483,
+      "rbi": 104.2749,
+      "sb": 5.4687,
+      "h": 156.7684,
+      "ab": 578.6772,
+      "avg": 0.2709,
+      "w": NaN,
+      "k": NaN,
+      "sv": NaN,
+      "ip": NaN,
+      "er": NaN,
+      "bb": NaN,
+      "h_allowed": NaN
+    },
+    {
+      "name": "Bryan Woo",
+      "player_id": "30279::pitcher",
+      "player_type": "pitcher",
+      "positions": [
+        "P"
+      ],
+      "var": 6.15,
+      "r": NaN,
+      "hr": NaN,
+      "rbi": NaN,
+      "sb": NaN,
+      "h": NaN,
+      "ab": NaN,
+      "avg": NaN,
+      "w": 12.7883,
+      "k": 188.63,
+      "ip": 184.2122,
+      "er": 69.1473,
+      "bb": 39.7008,
+      "h_allowed": 154.8552
+    },
+    {
+      "name": "Logan Webb",
+      "player_id": "17995::pitcher",
+      "player_type": "pitcher",
+      "positions": [
+        "P"
+      ],
+      "var": 5.9,
+      "r": NaN,
+      "hr": NaN,
+      "rbi": NaN,
+      "sb": NaN,
+      "h": NaN,
+      "ab": NaN,
+      "avg": NaN,
+      "w": 13.7264,
+      "k": 191.3984,
+      "ip": 199.0876,
+      "er": 71.512,
+      "bb": 45.882,
+      "h_allowed": 187.0742
+    },
+    {
+      "name": "Logan Gilbert",
+      "player_id": "22250::pitcher",
+      "player_type": "pitcher",
+      "positions": [
+        "P"
+      ],
+      "var": 5.02,
+      "r": NaN,
+      "hr": NaN,
+      "rbi": NaN,
+      "sb": NaN,
+      "h": NaN,
+      "ab": NaN,
+      "avg": NaN,
+      "w": 10.8797,
+      "k": 186.6356,
+      "ip": 165.2756,
+      "er": 62.1039,
+      "bb": 38.7854,
+      "h_allowed": 136.9448
+    },
+    {
+      "name": "Jes\u00fas Luzardo",
+      "player_id": "19959::pitcher",
+      "player_type": "pitcher",
+      "positions": [
+        "P"
+      ],
+      "var": 4.61,
+      "r": NaN,
+      "hr": NaN,
+      "rbi": NaN,
+      "sb": NaN,
+      "h": NaN,
+      "ab": NaN,
+      "avg": NaN,
+      "w": 12.0076,
+      "k": 193.1644,
+      "ip": 174.2766,
+      "er": 71.006,
+      "bb": 53.8516,
+      "h_allowed": 151.0654
+    },
+    {
+      "name": "Dylan Cease",
+      "player_id": "18525::pitcher",
+      "player_type": "pitcher",
+      "positions": [
+        "P"
+      ],
+      "var": 4.54,
+      "r": NaN,
+      "hr": NaN,
+      "rbi": NaN,
+      "sb": NaN,
+      "h": NaN,
+      "ab": NaN,
+      "avg": NaN,
+      "w": 11.5545,
+      "k": 199.9412,
+      "ip": 170.4838,
+      "er": 67.3295,
+      "bb": 64.7561,
+      "h_allowed": 139.6782
+    },
+    {
+      "name": "Framber Valdez",
+      "player_id": "17295::pitcher",
+      "player_type": "pitcher",
+      "positions": [
+        "P"
+      ],
+      "var": 4.25,
+      "r": NaN,
+      "hr": NaN,
+      "rbi": NaN,
+      "sb": NaN,
+      "h": NaN,
+      "ab": NaN,
+      "avg": NaN,
+      "w": 12.9031,
+      "k": 173.869,
+      "ip": 185.9344,
+      "er": 70.0549,
+      "bb": 61.3235,
+      "h_allowed": 165.722
+    },
+    {
+      "name": "Sonny Gray",
+      "player_id": "12768::pitcher",
+      "player_type": "pitcher",
+      "positions": [
+        "P"
+      ],
+      "var": 3.61,
+      "r": NaN,
+      "hr": NaN,
+      "rbi": NaN,
+      "sb": NaN,
+      "h": NaN,
+      "ab": NaN,
+      "avg": NaN,
+      "w": 11.4846,
+      "k": 177.2334,
+      "ip": 169.6094,
+      "er": 70.1709,
+      "bb": 45.5235,
+      "h_allowed": 158.0678
+    },
+    {
+      "name": "Nick Pivetta",
+      "player_id": "15454::pitcher",
+      "player_type": "pitcher",
+      "positions": [
+        "P"
+      ],
+      "var": 3.5,
+      "r": NaN,
+      "hr": NaN,
+      "rbi": NaN,
+      "sb": NaN,
+      "h": NaN,
+      "ab": NaN,
+      "avg": NaN,
+      "w": 10.3192,
+      "k": 179.8866,
+      "ip": 167.4162,
+      "er": 72.0721,
+      "bb": 50.7239,
+      "h_allowed": 143.1382
+    },
+    {
+      "name": "Zack Wheeler",
+      "player_id": "10310::pitcher",
+      "player_type": "pitcher",
+      "positions": [
+        "P"
+      ],
+      "var": 3.35,
+      "r": NaN,
+      "hr": NaN,
+      "rbi": NaN,
+      "sb": NaN,
+      "h": NaN,
+      "ab": NaN,
+      "avg": NaN,
+      "w": 10.1624,
+      "k": 160.2244,
+      "ip": 140.0438,
+      "er": 50.4879,
+      "bb": 37.9419,
+      "h_allowed": 114.4016
+    }
+  ],
+  "draft_log": [
+    {
+      "pick": 1,
+      "round": 1,
+      "team_num": 1,
+      "team": "Send in the Cavalli",
+      "player": "Pete Alonso",
+      "player_id": "19251::hitter"
+    },
+    {
+      "pick": 2,
+      "round": 1,
+      "team_num": 2,
+      "team": "SkeleThor",
+      "player": "Kyle Schwarber",
+      "player_id": "16478::hitter"
+    },
+    {
+      "pick": 3,
+      "round": 1,
+      "team_num": 3,
+      "team": "Work in Progress",
+      "player": "Cristopher S\u00e1nchez",
+      "player_id": "20778::pitcher"
+    },
+    {
+      "pick": 4,
+      "round": 1,
+      "team_num": 4,
+      "team": "Jon's Underdogs",
+      "player": "Yoshinobu Yamamoto",
+      "player_id": "33825::pitcher"
+    },
+    {
+      "pick": 5,
+      "round": 1,
+      "team_num": 5,
+      "team": "Boston Estrellas",
+      "player": "Mason Miller",
+      "player_id": "31757::pitcher"
+    },
+    {
+      "pick": 6,
+      "round": 1,
+      "team_num": 6,
+      "team": "Spacemen",
+      "player": "Zach Neto",
+      "player_id": "31347::hitter"
+    },
+    {
+      "pick": 7,
+      "round": 1,
+      "team_num": 7,
+      "team": "Springfield Isotopes",
+      "player": "Ketel Marte",
+      "player_id": "13613::hitter"
+    },
+    {
+      "pick": 8,
+      "round": 1,
+      "team_num": 8,
+      "team": "Hart of the Order",
+      "player": "Bryan Woo",
+      "player_id": "30279::pitcher"
+    },
+    {
+      "pick": 9,
+      "round": 1,
+      "team_num": 9,
+      "team": "Tortured Baseball Department",
+      "player": "Edwin D\u00edaz",
+      "player_id": "14710::pitcher"
+    },
+    {
+      "pick": 10,
+      "round": 1,
+      "team_num": 10,
+      "team": "Hello Peanuts!",
+      "player": "Yordan Alvarez",
+      "player_id": "19556::hitter"
+    },
+    {
+      "pick": 11,
+      "round": 2,
+      "team_num": 10,
+      "team": "Hello Peanuts!",
+      "player": "Hunter Brown",
+      "player_id": "25880::pitcher"
+    },
+    {
+      "pick": 12,
+      "round": 2,
+      "team_num": 9,
+      "team": "Tortured Baseball Department",
+      "player": "Logan Webb",
+      "player_id": "17995::pitcher"
+    },
+    {
+      "pick": 13,
+      "round": 2,
+      "team_num": 8,
+      "team": "Hart of the Order",
+      "player": "Logan Gilbert",
+      "player_id": "22250::pitcher"
+    },
+    {
+      "pick": 14,
+      "round": 2,
+      "team_num": 7,
+      "team": "Springfield Isotopes",
+      "player": "Manny Machado",
+      "player_id": "11493::hitter"
+    },
+    {
+      "pick": 15,
+      "round": 2,
+      "team_num": 6,
+      "team": "Spacemen",
+      "player": "Wyatt Langford",
+      "player_id": "33333::hitter"
+    },
+    {
+      "pick": 16,
+      "round": 2,
+      "team_num": 5,
+      "team": "Boston Estrellas",
+      "player": "Chris Sale",
+      "player_id": "10603::pitcher"
+    },
+    {
+      "pick": 17,
+      "round": 2,
+      "team_num": 4,
+      "team": "Jon's Underdogs",
+      "player": "Cade Smith",
+      "player_id": "27867::pitcher"
+    },
+    {
+      "pick": 18,
+      "round": 2,
+      "team_num": 3,
+      "team": "Work in Progress",
+      "player": "Andr\u00e9s Mu\u00f1oz",
+      "player_id": "20373::pitcher"
+    },
+    {
+      "pick": 19,
+      "round": 2,
+      "team_num": 2,
+      "team": "SkeleThor",
+      "player": "Jhoan Duran",
+      "player_id": "21029::pitcher"
+    },
+    {
+      "pick": 20,
+      "round": 2,
+      "team_num": 1,
+      "team": "Send in the Cavalli",
+      "player": "Brent Rooker",
+      "player_id": "19627::hitter"
+    },
+    {
+      "pick": 21,
+      "round": 3,
+      "team_num": 1,
+      "team": "Send in the Cavalli",
+      "player": "Cole Ragans",
+      "player_id": "21846::pitcher"
+    },
+    {
+      "pick": 22,
+      "round": 3,
+      "team_num": 2,
+      "team": "SkeleThor",
+      "player": "Matt Olson",
+      "player_id": "14344::hitter"
+    },
+    {
+      "pick": 23,
+      "round": 3,
+      "team_num": 3,
+      "team": "Work in Progress",
+      "player": "Brice Turang",
+      "player_id": "22186::hitter"
+    },
+    {
+      "pick": 24,
+      "round": 3,
+      "team_num": 4,
+      "team": "Jon's Underdogs",
+      "player": "Jacob deGrom",
+      "player_id": "10954::pitcher"
+    },
+    {
+      "pick": 25,
+      "round": 3,
+      "team_num": 5,
+      "team": "Boston Estrellas",
+      "player": "Roman Anthony",
+      "player_id": "31812::hitter"
+    },
+    {
+      "pick": 26,
+      "round": 3,
+      "team_num": 6,
+      "team": "Spacemen",
+      "player": "Ben Rice",
+      "player_id": "29576::hitter"
+    },
+    {
+      "pick": 27,
+      "round": 3,
+      "team_num": 7,
+      "team": "Springfield Isotopes",
+      "player": "Shea Langeliers",
+      "player_id": "25816::hitter"
+    },
+    {
+      "pick": 28,
+      "round": 3,
+      "team_num": 8,
+      "team": "Hart of the Order",
+      "player": "Jes\u00fas Luzardo",
+      "player_id": "19959::pitcher"
+    },
+    {
+      "pick": 29,
+      "round": 3,
+      "team_num": 9,
+      "team": "Tortured Baseball Department",
+      "player": "William Contreras",
+      "player_id": "20503::hitter"
+    },
+    {
+      "pick": 30,
+      "round": 3,
+      "team_num": 10,
+      "team": "Hello Peanuts!",
+      "player": "Devin Williams",
+      "player_id": "15816::pitcher"
+    },
+    {
+      "pick": 31,
+      "round": 4,
+      "team_num": 10,
+      "team": "Hello Peanuts!",
+      "player": "Mookie Betts",
+      "player_id": "13611::hitter"
+    },
+    {
+      "pick": 32,
+      "round": 4,
+      "team_num": 9,
+      "team": "Tortured Baseball Department",
+      "player": "Austin Riley",
+      "player_id": "18360::hitter"
+    },
+    {
+      "pick": 33,
+      "round": 4,
+      "team_num": 8,
+      "team": "Hart of the Order",
+      "player": "Dylan Cease",
+      "player_id": "18525::pitcher"
+    },
+    {
+      "pick": 34,
+      "round": 4,
+      "team_num": 7,
+      "team": "Springfield Isotopes",
+      "player": "Maikel Garcia",
+      "player_id": "22715::hitter"
+    },
+    {
+      "pick": 35,
+      "round": 4,
+      "team_num": 6,
+      "team": "Spacemen",
+      "player": "David Bednar",
+      "player_id": "19569::pitcher"
+    },
+    {
+      "pick": 36,
+      "round": 4,
+      "team_num": 5,
+      "team": "Boston Estrellas",
+      "player": "Matt Chapman",
+      "player_id": "16505::hitter"
+    },
+    {
+      "pick": 37,
+      "round": 4,
+      "team_num": 4,
+      "team": "Jon's Underdogs",
+      "player": "George Kirby",
+      "player_id": "25436::pitcher"
+    },
+    {
+      "pick": 38,
+      "round": 4,
+      "team_num": 3,
+      "team": "Work in Progress",
+      "player": "Aroldis Chapman",
+      "player_id": "10233::pitcher"
+    },
+    {
+      "pick": 39,
+      "round": 4,
+      "team_num": 2,
+      "team": "SkeleThor",
+      "player": "Jarren Duran",
+      "player_id": "24617::hitter"
+    },
+    {
+      "pick": 40,
+      "round": 4,
+      "team_num": 1,
+      "team": "Send in the Cavalli",
+      "player": "CJ Abrams",
+      "player_id": "25768::hitter"
+    },
+    {
+      "pick": 41,
+      "round": 5,
+      "team_num": 1,
+      "team": "Send in the Cavalli",
+      "player": "Hunter Goodman",
+      "player_id": "29715::hitter"
+    },
+    {
+      "pick": 42,
+      "round": 5,
+      "team_num": 2,
+      "team": "SkeleThor",
+      "player": "Josh Naylor",
+      "player_id": "18839::hitter"
+    },
+    {
+      "pick": 43,
+      "round": 5,
+      "team_num": 3,
+      "team": "Work in Progress",
+      "player": "Freddie Freeman",
+      "player_id": "5361::hitter"
+    },
+    {
+      "pick": 44,
+      "round": 5,
+      "team_num": 4,
+      "team": "Jon's Underdogs",
+      "player": "Jackson Merrill",
+      "player_id": "29490::hitter"
+    },
+    {
+      "pick": 45,
+      "round": 5,
+      "team_num": 5,
+      "team": "Boston Estrellas",
+      "player": "Kyle Bradish",
+      "player_id": "24586::pitcher"
+    },
+    {
+      "pick": 46,
+      "round": 5,
+      "team_num": 6,
+      "team": "Spacemen",
+      "player": "Byron Buxton",
+      "player_id": "14161::hitter"
+    },
+    {
+      "pick": 47,
+      "round": 5,
+      "team_num": 7,
+      "team": "Springfield Isotopes",
+      "player": "Vinnie Pasquantino",
+      "player_id": "27676::hitter"
+    },
+    {
+      "pick": 48,
+      "round": 5,
+      "team_num": 8,
+      "team": "Hart of the Order",
+      "player": "Framber Valdez",
+      "player_id": "17295::pitcher"
+    },
+    {
+      "pick": 49,
+      "round": 5,
+      "team_num": 9,
+      "team": "Tortured Baseball Department",
+      "player": "Geraldo Perdomo",
+      "player_id": "22799::hitter"
+    },
+    {
+      "pick": 50,
+      "round": 5,
+      "team_num": 10,
+      "team": "Hello Peanuts!",
+      "player": "Riley Greene",
+      "player_id": "25976::hitter"
+    },
+    {
+      "pick": 51,
+      "round": 6,
+      "team_num": 10,
+      "team": "Hello Peanuts!",
+      "player": "Joe Ryan",
+      "player_id": "21390::pitcher"
+    },
+    {
+      "pick": 52,
+      "round": 6,
+      "team_num": 9,
+      "team": "Tortured Baseball Department",
+      "player": "Eury P\u00e9rez",
+      "player_id": "27768::pitcher"
+    },
+    {
+      "pick": 53,
+      "round": 6,
+      "team_num": 8,
+      "team": "Hart of the Order",
+      "player": "Sonny Gray",
+      "player_id": "12768::pitcher"
+    },
+    {
+      "pick": 54,
+      "round": 6,
+      "team_num": 7,
+      "team": "Springfield Isotopes",
+      "player": "Drake Baldwin",
+      "player_id": "31539::hitter"
+    },
+    {
+      "pick": 55,
+      "round": 6,
+      "team_num": 6,
+      "team": "Spacemen",
+      "player": "Cody Bellinger",
+      "player_id": "15998::hitter"
+    },
+    {
+      "pick": 56,
+      "round": 6,
+      "team_num": 5,
+      "team": "Boston Estrellas",
+      "player": "Tyler Soderstrom",
+      "player_id": "27467::hitter"
+    },
+    {
+      "pick": 57,
+      "round": 6,
+      "team_num": 4,
+      "team": "Jon's Underdogs",
+      "player": "Ryan Helsley",
+      "player_id": "18138::pitcher"
+    },
+    {
+      "pick": 58,
+      "round": 6,
+      "team_num": 3,
+      "team": "Work in Progress",
+      "player": "Agust\u00edn Ram\u00edrez",
+      "player_id": "26546::hitter"
+    },
+    {
+      "pick": 59,
+      "round": 6,
+      "team_num": 2,
+      "team": "SkeleThor",
+      "player": "Nolan McLean",
+      "player_id": "33703::pitcher"
+    },
+    {
+      "pick": 60,
+      "round": 6,
+      "team_num": 1,
+      "team": "Send in the Cavalli",
+      "player": "Randy Arozarena",
+      "player_id": "19290::hitter"
+    },
+    {
+      "pick": 61,
+      "round": 7,
+      "team_num": 1,
+      "team": "Send in the Cavalli",
+      "player": "Salvador Perez",
+      "player_id": "7304::hitter"
+    },
+    {
+      "pick": 62,
+      "round": 7,
+      "team_num": 2,
+      "team": "SkeleThor",
+      "player": "Oneil Cruz",
+      "player_id": "21711::hitter"
+    },
+    {
+      "pick": 63,
+      "round": 7,
+      "team_num": 3,
+      "team": "Work in Progress",
+      "player": "Bo Bichette",
+      "player_id": "19612::hitter"
+    },
+    {
+      "pick": 64,
+      "round": 7,
+      "team_num": 4,
+      "team": "Jon's Underdogs",
+      "player": "Daniel Palencia",
+      "player_id": "27914::pitcher"
+    },
+    {
+      "pick": 65,
+      "round": 7,
+      "team_num": 5,
+      "team": "Boston Estrellas",
+      "player": "George Springer",
+      "player_id": "12856::hitter"
+    },
+    {
+      "pick": 66,
+      "round": 7,
+      "team_num": 6,
+      "team": "Spacemen",
+      "player": "Corey Seager",
+      "player_id": "13624::hitter"
+    },
+    {
+      "pick": 67,
+      "round": 7,
+      "team_num": 7,
+      "team": "Springfield Isotopes",
+      "player": "Will Smith",
+      "player_id": "19197::hitter"
+    },
+    {
+      "pick": 68,
+      "round": 7,
+      "team_num": 8,
+      "team": "Hart of the Order",
+      "player": "Nick Pivetta",
+      "player_id": "15454::pitcher"
+    },
+    {
+      "pick": 69,
+      "round": 7,
+      "team_num": 9,
+      "team": "Tortured Baseball Department",
+      "player": "Eugenio Su\u00e1rez",
+      "player_id": "12552::hitter"
+    },
+    {
+      "pick": 70,
+      "round": 7,
+      "team_num": 10,
+      "team": "Hello Peanuts!",
+      "player": "Michael Harris II",
+      "player_id": "25931::hitter"
+    },
+    {
+      "pick": 71,
+      "round": 8,
+      "team_num": 10,
+      "team": "Hello Peanuts!",
+      "player": "Jeff Hoffman",
+      "player_id": "17432::pitcher"
+    },
+    {
+      "pick": 72,
+      "round": 8,
+      "team_num": 9,
+      "team": "Tortured Baseball Department",
+      "player": "Raisel Iglesias",
+      "player_id": "17130::pitcher"
+    },
+    {
+      "pick": 73,
+      "round": 8,
+      "team_num": 8,
+      "team": "Hart of the Order",
+      "player": "Zack Wheeler",
+      "player_id": "10310::pitcher"
+    }
+  ],
+  "balance": {
+    "R": 284.02344000000005,
+    "HR": 102.71796,
+    "RBI": 296.80668000000003,
+    "SB": 52.52685399999999,
+    "AVG": 0.2728869104861921,
+    "W": 105.82580600000001,
+    "K": 1650.9830000000004,
+    "SV": 0.0,
+    "ERA": 3.492143385672381,
+    "WHIP": 1.1497721833975052
+  }
+}

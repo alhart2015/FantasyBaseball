@@ -1,0 +1,143 @@
+{
+  "metadata": {
+    "timestamp": "2026-03-24_163517",
+    "mock": false,
+    "draft_position": 8,
+    "num_teams": 10,
+    "user_team": "Hart of the Order",
+    "strategy": "two_closers",
+    "scoring_mode": "vona",
+    "picks_completed": 5,
+    "total_picks": 200,
+    "complete": false
+  },
+  "user_roster": [
+    {
+      "name": "Juan Soto",
+      "player_id": "20123::hitter",
+      "player_type": "hitter",
+      "positions": [
+        "OF",
+        "Util"
+      ],
+      "var": 6.95,
+      "r": 108.1588,
+      "hr": 37.3925,
+      "rbi": 99.5284,
+      "sb": 20.5667,
+      "h": 147.0786,
+      "ab": 536.1878,
+      "avg": 0.2743,
+      "w": NaN,
+      "k": NaN,
+      "sv": NaN,
+      "ip": NaN,
+      "er": NaN,
+      "bb": NaN,
+      "h_allowed": NaN
+    },
+    {
+      "name": "Julio Rodr\u00edguez",
+      "player_id": "23697::hitter",
+      "player_type": "hitter",
+      "positions": [
+        "OF",
+        "Util"
+      ],
+      "var": 5.72,
+      "r": 92.6865,
+      "hr": 29.1771,
+      "rbi": 93.0034,
+      "sb": 26.4915,
+      "h": 163.5066,
+      "ab": 597.7624,
+      "avg": 0.2735,
+      "w": NaN,
+      "k": NaN,
+      "sv": NaN,
+      "ip": NaN,
+      "er": NaN,
+      "bb": NaN,
+      "h_allowed": NaN
+    },
+    {
+      "name": "Junior Caminero",
+      "player_id": "28163::hitter",
+      "player_type": "hitter",
+      "positions": [
+        "3B",
+        "IF",
+        "Util"
+      ],
+      "var": 4.96,
+      "r": 83.1781,
+      "hr": 36.1483,
+      "rbi": 104.2749,
+      "sb": 5.4687,
+      "h": 156.7684,
+      "ab": 578.6772,
+      "avg": 0.2709,
+      "w": NaN,
+      "k": NaN,
+      "sv": NaN,
+      "ip": NaN,
+      "er": NaN,
+      "bb": NaN,
+      "h_allowed": NaN
+    }
+  ],
+  "draft_log": [
+    {
+      "pick": 1,
+      "round": 1,
+      "team_num": 1,
+      "team": "Send in the Cavalli",
+      "player": "Pete Alonso",
+      "player_id": "19251::hitter"
+    },
+    {
+      "pick": 2,
+      "round": 1,
+      "team_num": 2,
+      "team": "SkeleThor",
+      "player": "Kyle Schwarber",
+      "player_id": "16478::hitter"
+    },
+    {
+      "pick": 3,
+      "round": 1,
+      "team_num": 3,
+      "team": "Work in Progress",
+      "player": "Cristopher S\u00e1nchez",
+      "player_id": "20778::pitcher"
+    },
+    {
+      "pick": 4,
+      "round": 1,
+      "team_num": 4,
+      "team": "Jon's Underdogs",
+      "player": "Yoshinobu Yamamoto",
+      "player_id": "33825::pitcher"
+    },
+    {
+      "pick": 5,
+      "round": 1,
+      "team_num": 5,
+      "team": "Boston Estrellas",
+      "player": "Mason Miller",
+      "player_id": "31757::pitcher"
+    }
+  ],
+  "balance": {
+    "R": 284.02344000000005,
+    "HR": 102.71796,
+    "RBI": 296.80668000000003,
+    "SB": 52.52685399999999,
+    "AVG": 0.2728869104861921,
+    "W": 0,
+    "K": 0,
+    "SV": 0,
+    "ERA": null,
+    "WHIP": null
+  }
+}

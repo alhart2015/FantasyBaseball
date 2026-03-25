@@ -1,0 +1,290 @@
+{
+  "metadata": {
+    "timestamp": "2026-03-24_195356",
+    "mock": false,
+    "draft_position": 8,
+    "num_teams": 10,
+    "user_team": "Hart of the Order",
+    "strategy": "three_closers",
+    "scoring_mode": "var",
+    "picks_completed": 15,
+    "total_picks": 200,
+    "complete": false
+  },
+  "user_roster": [
+    {
+      "name": "Juan Soto",
+      "player_id": "20123::hitter",
+      "player_type": "hitter",
+      "positions": [
+        "OF",
+        "Util"
+      ],
+      "var": 6.95,
+      "r": 108.1588,
+      "hr": 37.3925,
+      "rbi": 99.5284,
+      "sb": 20.5667,
+      "h": 147.0786,
+      "ab": 536.1878,
+      "avg": 0.2743,
+      "w": NaN,
+      "k": NaN,
+      "sv": NaN,
+      "ip": NaN,
+      "er": NaN,
+      "bb": NaN,
+      "h_allowed": NaN
+    },
+    {
+      "name": "Julio Rodr\u00edguez",
+      "player_id": "23697::hitter",
+      "player_type": "hitter",
+      "positions": [
+        "OF",
+        "Util"
+      ],
+      "var": 5.72,
+      "r": 92.6865,
+      "hr": 29.1771,
+      "rbi": 93.0034,
+      "sb": 26.4915,
+      "h": 163.5066,
+      "ab": 597.7624,
+      "avg": 0.2735,
+      "w": NaN,
+      "k": NaN,
+      "sv": NaN,
+      "ip": NaN,
+      "er": NaN,
+      "bb": NaN,
+      "h_allowed": NaN
+    },
+    {
+      "name": "Junior Caminero",
+      "player_id": "28163::hitter",
+      "player_type": "hitter",
+      "positions": [
+        "3B",
+        "IF",
+        "Util"
+      ],
+      "var": 4.96,
+      "r": 83.1781,
+      "hr": 36.1483,
+      "rbi": 104.2749,
+      "sb": 5.4687,
+      "h": 156.7684,
+      "ab": 578.6772,
+      "avg": 0.2709,
+      "w": NaN,
+      "k": NaN,
+      "sv": NaN,
+      "ip": NaN,
+      "er": NaN,
+      "bb": NaN,
+      "h_allowed": NaN
+    },
+    {
+      "name": "Jacob deGrom",
+      "player_id": "10954::pitcher",
+      "player_type": "pitcher",
+      "positions": [
+        "P"
+      ],
+      "var": 4.49,
+      "r": NaN,
+      "hr": NaN,
+      "rbi": NaN,
+      "sb": NaN,
+      "h": NaN,
+      "ab": NaN,
+      "avg": NaN,
+      "w": 10.6767,
+      "k": 179.0378,
+      "ip": 161.0454,
+      "er": 61.8714,
+      "bb": 39.4917,
+      "h_allowed": 133.2244
+    },
+    {
+      "name": "Edwin D\u00edaz",
+      "player_id": "14710::pitcher",
+      "player_type": "pitcher",
+      "positions": [
+        "P"
+      ],
+      "var": 2.95,
+      "r": NaN,
+      "hr": NaN,
+      "rbi": NaN,
+      "sb": NaN,
+      "h": NaN,
+      "ab": NaN,
+      "avg": NaN,
+      "w": 4.6279,
+      "k": 88.6543,
+      "sv": 35.9743,
+      "ip": 64.0216,
+      "er": 21.593,
+      "bb": 22.7785,
+      "h_allowed": 46.1792
+    },
+    {
+      "name": "Framber Valdez",
+      "player_id": "17295::pitcher",
+      "player_type": "pitcher",
+      "positions": [
+        "P"
+      ],
+      "var": 4.25,
+      "r": NaN,
+      "hr": NaN,
+      "rbi": NaN,
+      "sb": NaN,
+      "h": NaN,
+      "ab": NaN,
+      "avg": NaN,
+      "w": 12.9031,
+      "k": 173.869,
+      "ip": 185.9344,
+      "er": 70.0549,
+      "bb": 61.3235,
+      "h_allowed": 165.722
+    }
+  ],
+  "draft_log": [
+    {
+      "pick": 1,
+      "round": 1,
+      "team_num": 1,
+      "team": "Send in the Cavalli",
+      "player": "Bryan Woo",
+      "player_id": "30279::pitcher"
+    },
+    {
+      "pick": 2,
+      "round": 1,
+      "team_num": 2,
+      "team": "SkeleThor",
+      "player": "Logan Webb",
+      "player_id": "17995::pitcher"
+    },
+    {
+      "pick": 3,
+      "round": 1,
+      "team_num": 3,
+      "team": "Work in Progress",
+      "player": "Cristopher S\u00e1nchez",
+      "player_id": "20778::pitcher"
+    },
+    {
+      "pick": 4,
+      "round": 1,
+      "team_num": 4,
+      "team": "Jon's Underdogs",
+      "player": "Logan Gilbert",
+      "player_id": "22250::pitcher"
+    },
+    {
+      "pick": 5,
+      "round": 1,
+      "team_num": 5,
+      "team": "Boston Estrellas",
+      "player": "Chris Sale",
+      "player_id": "10603::pitcher"
+    },
+    {
+      "pick": 6,
+      "round": 1,
+      "team_num": 6,
+      "team": "Spacemen",
+      "player": "Hunter Brown",
+      "player_id": "25880::pitcher"
+    },
+    {
+      "pick": 7,
+      "round": 1,
+      "team_num": 7,
+      "team": "Springfield Isotopes",
+      "player": "Yoshinobu Yamamoto",
+      "player_id": "33825::pitcher"
+    },
+    {
+      "pick": 8,
+      "round": 1,
+      "team_num": 8,
+      "team": "Hart of the Order",
+      "player": "Jacob deGrom",
+      "player_id": "10954::pitcher"
+    },
+    {
+      "pick": 9,
+      "round": 1,
+      "team_num": 9,
+      "team": "Tortured Baseball Department",
+      "player": "Jes\u00fas Luzardo",
+      "player_id": "19959::pitcher"
+    },
+    {
+      "pick": 10,
+      "round": 1,
+      "team_num": 10,
+      "team": "Hello Peanuts!",
+      "player": "Dylan Cease",
+      "player_id": "18525::pitcher"
+    },
+    {
+      "pick": 11,
+      "round": 2,
+      "team_num": 10,
+      "team": "Hello Peanuts!",
+      "player": "Kyle Schwarber",
+      "player_id": "16478::hitter"
+    },
+    {
+      "pick": 12,
+      "round": 2,
+      "team_num": 9,
+      "team": "Tortured Baseball Department",
+      "player": "Edwin D\u00edaz",
+      "player_id": "14710::pitcher"
+    },
+    {
+      "pick": 13,
+      "round": 2,
+      "team_num": 8,
+      "team": "Hart of the Order",
+      "player": "Framber Valdez",
+      "player_id": "17295::pitcher"
+    },
+    {
+      "pick": 14,
+      "round": 2,
+      "team_num": 7,
+      "team": "Springfield Isotopes",
+      "player": "Cole Ragans",
+      "player_id": "21846::pitcher"
+    },
+    {
+      "pick": 15,
+      "round": 2,
+      "team_num": 6,
+      "team": "Spacemen",
+      "player": "George Kirby",
+      "player_id": "25436::pitcher"
+    }
+  ],
+  "balance": {
+    "R": 284.02344000000005,
+    "HR": 102.71796,
+    "RBI": 296.80668000000003,
+    "SB": 52.52685399999999,
+    "AVG": 0.2728869104861921,
+    "W": 28.207672000000002,
+    "K": 441.5611200000001,
+    "SV": 35.9743,
+    "ERA": 3.3617254831735357,
+    "WHIP": 1.140432027725453
+  }
+}

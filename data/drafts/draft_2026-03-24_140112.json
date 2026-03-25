@@ -1,0 +1,274 @@
+{
+  "metadata": {
+    "timestamp": "2026-03-24_140112",
+    "mock": false,
+    "draft_position": 8,
+    "num_teams": 10,
+    "user_team": "Hart of the Order",
+    "strategy": "two_closers",
+    "scoring_mode": "vona",
+    "picks_completed": 13,
+    "total_picks": 200,
+    "complete": false
+  },
+  "user_roster": [
+    {
+      "name": "Juan Soto",
+      "player_id": "Juan Soto::hitter",
+      "player_type": "hitter",
+      "positions": [
+        "OF",
+        "Util"
+      ],
+      "var": 7.0,
+      "r": 107.7598,
+      "hr": 36.6405,
+      "rbi": 97.0507,
+      "sb": 21.3771,
+      "h": 143.2466,
+      "ab": 525.5948,
+      "avg": 0.2725,
+      "w": NaN,
+      "k": NaN,
+      "sv": NaN,
+      "ip": NaN,
+      "er": NaN,
+      "bb": NaN,
+      "h_allowed": NaN
+    },
+    {
+      "name": "Julio Rodr\u00edguez",
+      "player_id": "Julio Rodr\u00edguez::hitter",
+      "player_type": "hitter",
+      "positions": [
+        "OF",
+        "Util"
+      ],
+      "var": 5.8,
+      "r": 91.29,
+      "hr": 29.564,
+      "rbi": 93.5409,
+      "sb": 25.9267,
+      "h": 159.6642,
+      "ab": 589.8004,
+      "avg": 0.2707,
+      "w": NaN,
+      "k": NaN,
+      "sv": NaN,
+      "ip": NaN,
+      "er": NaN,
+      "bb": NaN,
+      "h_allowed": NaN
+    },
+    {
+      "name": "Junior Caminero",
+      "player_id": "Junior Caminero::hitter",
+      "player_type": "hitter",
+      "positions": [
+        "3B",
+        "IF",
+        "Util"
+      ],
+      "var": 5.16,
+      "r": 82.0012,
+      "hr": 36.1971,
+      "rbi": 105.1253,
+      "sb": 5.8237,
+      "h": 152.8178,
+      "ab": 565.9329,
+      "avg": 0.27,
+      "w": NaN,
+      "k": NaN,
+      "sv": NaN,
+      "ip": NaN,
+      "er": NaN,
+      "bb": NaN,
+      "h_allowed": NaN
+    },
+    {
+      "name": "Logan Webb",
+      "player_id": "Logan Webb::pitcher",
+      "player_type": "pitcher",
+      "positions": [
+        "P"
+      ],
+      "var": 5.95,
+      "r": NaN,
+      "hr": NaN,
+      "rbi": NaN,
+      "sb": NaN,
+      "h": NaN,
+      "ab": NaN,
+      "avg": NaN,
+      "w": 13.9949,
+      "k": 188.0672,
+      "ip": 198.3252,
+      "er": 70.934,
+      "bb": 44.5092,
+      "h_allowed": 188.4888
+    },
+    {
+      "name": "Jhoan Duran",
+      "player_id": "Jhoan Duran::pitcher",
+      "player_type": "pitcher",
+      "positions": [
+        "P"
+      ],
+      "var": 2.48,
+      "r": NaN,
+      "hr": NaN,
+      "rbi": NaN,
+      "sb": NaN,
+      "h": NaN,
+      "ab": NaN,
+      "avg": NaN,
+      "w": 5.9923,
+      "k": 79.9936,
+      "sv": 30.2169,
+      "ip": 67.4307,
+      "er": 20.5652,
+      "bb": 21.0187,
+      "h_allowed": 53.4561
+    },
+    {
+      "name": "Logan Gilbert",
+      "player_id": "Logan Gilbert::pitcher",
+      "player_type": "pitcher",
+      "positions": [
+        "P"
+      ],
+      "var": 4.64,
+      "r": NaN,
+      "hr": NaN,
+      "rbi": NaN,
+      "sb": NaN,
+      "h": NaN,
+      "ab": NaN,
+      "avg": NaN,
+      "w": 10.2458,
+      "k": 181.5558,
+      "ip": 164.89,
+      "er": 62.603,
+      "bb": 38.3909,
+      "h_allowed": 138.5167
+    }
+  ],
+  "draft_log": [
+    {
+      "pick": 1,
+      "round": 1,
+      "team_num": 1,
+      "team": "Send in the Cavalli",
+      "player": "Pete Alonso",
+      "player_id": "Pete Alonso::hitter"
+    },
+    {
+      "pick": 2,
+      "round": 1,
+      "team_num": 2,
+      "team": "SkeleThor",
+      "player": "Kyle Schwarber",
+      "player_id": "Kyle Schwarber::hitter"
+    },
+    {
+      "pick": 3,
+      "round": 1,
+      "team_num": 3,
+      "team": "Work in Progress",
+      "player": "Cristopher S\u00e1nchez",
+      "player_id": "Cristopher S\u00e1nchez::pitcher"
+    },
+    {
+      "pick": 4,
+      "round": 1,
+      "team_num": 4,
+      "team": "Jon's Underdogs",
+      "player": "Yoshinobu Yamamoto",
+      "player_id": "Yoshinobu Yamamoto::pitcher"
+    },
+    {
+      "pick": 5,
+      "round": 1,
+      "team_num": 5,
+      "team": "Boston Estrellas",
+      "player": "Zach Neto",
+      "player_id": "Zach Neto::hitter"
+    },
+    {
+      "pick": 6,
+      "round": 1,
+      "team_num": 6,
+      "team": "Spacemen",
+      "player": "Ketel Marte",
+      "player_id": "Ketel Marte::hitter"
+    },
+    {
+      "pick": 7,
+      "round": 1,
+      "team_num": 7,
+      "team": "Springfield Isotopes",
+      "player": "Edwin D\u00edaz",
+      "player_id": "Edwin D\u00edaz::pitcher"
+    },
+    {
+      "pick": 8,
+      "round": 1,
+      "team_num": 8,
+      "team": "Hart of the Order",
+      "player": "Logan Webb",
+      "player_id": "Logan Webb::pitcher"
+    },
+    {
+      "pick": 9,
+      "round": 1,
+      "team_num": 9,
+      "team": "Tortured Baseball Department",
+      "player": "Yordan Alvarez",
+      "player_id": "Yordan Alvarez::hitter"
+    },
+    {
+      "pick": 10,
+      "round": 1,
+      "team_num": 10,
+      "team": "Hello Peanuts!",
+      "player": "Bryan Woo",
+      "player_id": "Bryan Woo::pitcher"
+    },
+    {
+      "pick": 11,
+      "round": 2,
+      "team_num": 10,
+      "team": "Hello Peanuts!",
+      "player": "Hunter Brown",
+      "player_id": "Hunter Brown::pitcher"
+    },
+    {
+      "pick": 12,
+      "round": 2,
+      "team_num": 9,
+      "team": "Tortured Baseball Department",
+      "player": "Jhoan Duran",
+      "player_id": "Jhoan Duran::pitcher"
+    },
+    {
+      "pick": 13,
+      "round": 2,
+      "team_num": 8,
+      "team": "Hart of the Order",
+      "player": "Logan Gilbert",
+      "player_id": "Logan Gilbert::pitcher"
+    }
+  ],
+  "balance": {
+    "R": 281.05089399999997,
+    "HR": 102.40163000000001,
+    "RBI": 295.716835,
+    "SB": 53.1274892,
+    "AVG": 0.2710527755597395,
+    "W": 30.232973400000002,
+    "K": 449.616539,
+    "SV": 30.216884,
+    "ERA": 3.2205575223971605,
+    "WHIP": 1.1247764607632116
+  }
+}
