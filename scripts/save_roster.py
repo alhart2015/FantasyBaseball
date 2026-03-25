@@ -64,11 +64,20 @@ def main():
     print(f"Fetching roster for {team_name} (week {week_num})...")
     raw_roster = fetch_roster(league, user_team_key)
 
-    # Build snapshot
-    roster = []
+    # Build positional mapping: slot -> {name, positions}
+    roster = {}
     for p in raw_roster:
-        positions = p.get("positions", [])
-        roster.append({"name": p["name"], "positions": positions})
+        slot = p.get("selected_position", "BN")
+        entry = {"name": p["name"], "positions": p.get("positions", [])}
+
+        # Handle multiple players in the same slot (e.g., OF has 4 slots)
+        if slot in roster:
+            # Append a number to make the key unique: OF -> OF2, OF3, etc.
+            i = 2
+            while f"{slot}{i}" in roster:
+                i += 1
+            slot = f"{slot}{i}"
+        roster[slot] = entry
 
     snapshot = {
         "snapshot_date": date.today().isoformat(),
@@ -85,9 +94,10 @@ def main():
     with open(out_path, "w") as f:
         json.dump(snapshot, f, indent=2)
 
-    print(f"Saved {len(roster)} players to {out_path}")
-    n_p = sum(1 for p in roster if is_pitcher(p["positions"]))
-    print(f"  {len(roster) - n_p} hitters, {n_p} pitchers")
+    n_players = len(roster)
+    n_p = sum(1 for p in roster.values() if is_pitcher(p["positions"]))
+    print(f"Saved {n_players} players to {out_path}")
+    print(f"  {n_players - n_p} hitters, {n_p} pitchers")
 
 
 if __name__ == "__main__":
