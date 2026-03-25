@@ -1,0 +1,33 @@
+{
+  "snapshot_date": "2026-03-25",
+  "team": "Hart of the Order",
+  "league": 5652,
+  "notes": "Pre-season roster after draft. injury-projection branch active.",
+  "keepers": [
+    {"name": "Juan Soto", "player_type": "hitter", "positions": ["OF"]},
+    {"name": "Julio Rodriguez", "player_type": "hitter", "positions": ["OF"]},
+    {"name": "Junior Caminero", "player_type": "hitter", "positions": ["3B"]}
+  ],
+  "drafted": [
+    {"round": 1, "name": "Bryan Woo", "player_type": "pitcher"},
+    {"round": 2, "name": "Mason Miller", "player_type": "pitcher"},
+    {"round": 3, "name": "CJ Abrams", "player_type": "hitter"},
+    {"round": 4, "name": "Jesus Luzardo", "player_type": "pitcher"},
+    {"round": 5, "name": "Randy Arozarena", "player_type": "hitter"},
+    {"round": 6, "name": "Oneil Cruz", "player_type": "hitter"},
+    {"round": 7, "name": "Sonny Gray", "player_type": "pitcher"},
+    {"round": 8, "name": "Byron Buxton", "player_type": "hitter"},
+    {"round": 9, "name": "Josh Hader", "player_type": "pitcher"},
+    {"round": 10, "name": "Willy Adames", "player_type": "hitter"},
+    {"round": 11, "name": "Zack Wheeler", "player_type": "pitcher"},
+    {"round": 12, "name": "Andy Pages", "player_type": "hitter"},
+    {"round": 13, "name": "Ryan Walker", "player_type": "pitcher"},
+    {"round": 14, "name": "Munetaka Murakami", "player_type": "hitter"},
+    {"round": 15, "name": "Willson Contreras", "player_type": "hitter"},
+    {"round": 16, "name": "Spencer Strider", "player_type": "pitcher"},
+    {"round": 17, "name": "Marcus Semien", "player_type": "hitter"},
+    {"round": 18, "name": "Ivan Herrera", "player_type": "hitter"},
+    {"round": 19, "name": "Adolis Garcia", "player_type": "hitter"},
+    {"round": 20, "name": "Aaron Nola", "player_type": "pitcher"}
+  ]
+}

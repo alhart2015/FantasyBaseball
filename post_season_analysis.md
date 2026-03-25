@@ -25,3 +25,13 @@ The injury backfill model uses waiver-quality replacement stats for SPs (~4.20 E
 - Compute the average ERA, WHIP, and SV of closers picked up on waivers across the league
 - Update `WAIVER_RP` replacement stats in constants.py to match reality
 - Check whether the 60 IP baseline and 10 IP threshold for closer backfill produced reasonable VAR adjustments — did the model correctly identify which closers were injury risks vs full-season contributors?
+
+### 3. Reconsider hitter backfill threshold: AB vs PA
+
+The hitter backfill baseline is 600 AB, but this penalizes durable high-walk hitters like Juan Soto (projected 536 AB but ~640 PA — a full healthy season). Soto triggered backfill despite being one of the most durable players in baseball, because his walk rate converts PA to AB at a lower rate than average.
+
+**What to investigate:**
+- Should the baseline use PA (~650) instead of AB (~600)? PA better captures "this player played a full season" regardless of plate discipline
+- If switching to PA: need to verify that PA is available in blended projections (it's in `HITTING_COUNTING_COLS` but may not propagate through all paths)
+- Check which other durable hitters were incorrectly flagged as injury risks under the AB-based threshold
+- Compare: which produces better VAR rankings against actual outcomes — AB-based or PA-based backfill?
