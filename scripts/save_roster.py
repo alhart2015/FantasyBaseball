@@ -68,8 +68,7 @@ def main():
     roster = []
     for p in raw_roster:
         positions = p.get("positions", [])
-        player_type = "pitcher" if is_pitcher(positions) else "hitter"
-        roster.append({"name": p["name"], "player_type": player_type})
+        roster.append({"name": p["name"], "positions": positions})
 
     snapshot = {
         "snapshot_date": date.today().isoformat(),
@@ -87,9 +86,8 @@ def main():
         json.dump(snapshot, f, indent=2)
 
     print(f"Saved {len(roster)} players to {out_path}")
-    n_h = sum(1 for p in roster if p["player_type"] == "hitter")
-    n_p = sum(1 for p in roster if p["player_type"] == "pitcher")
-    print(f"  {n_h} hitters, {n_p} pitchers")
+    n_p = sum(1 for p in roster if is_pitcher(p["positions"]))
+    print(f"  {len(roster) - n_p} hitters, {n_p} pitchers")
 
 
 if __name__ == "__main__":
