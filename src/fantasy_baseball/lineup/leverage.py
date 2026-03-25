@@ -1,3 +1,5 @@
+import statistics
+
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS
 
 MAX_MEANINGFUL_GAP_MULTIPLIER: float = 3.0
@@ -88,6 +90,14 @@ def calculate_leverage(
             leverage += w_defense * (1.0 / (defense_gap + epsilon))
 
         raw_leverage[cat] = leverage
+
+    # Cap outliers: near-tied categories produce extreme leverage values
+    # that dominate all decisions. Clamp to MAX_MEANINGFUL_GAP_MULTIPLIER × median.
+    if raw_leverage:
+        med = statistics.median(raw_leverage.values())
+        cap = med * MAX_MEANINGFUL_GAP_MULTIPLIER
+        if cap > 0:
+            raw_leverage = {cat: min(val, cap) for cat, val in raw_leverage.items()}
 
     total = sum(raw_leverage.values())
     if total > 0:

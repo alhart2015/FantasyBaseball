@@ -53,6 +53,24 @@ class TestCalculateLeverage:
         leverage = calculate_leverage(standings, "User Team")
         assert leverage["ERA"] > 0
 
+    def test_tied_category_does_not_dominate(self):
+        """When one category is nearly tied, it should get high leverage
+        but NOT swamp all other categories combined."""
+        standings = _make_standings()
+        # Make SB nearly tied with team above (75 vs 50 → gap of 25,
+        # but override to make gap tiny: 50 vs 50.01)
+        standings[3]["stats"]["SB"] = 50.01  # Team 4 (above user)
+        standings[4]["stats"]["SB"] = 50.00  # User
+        leverage = calculate_leverage(standings, "User Team")
+        # SB should be high but not more than ~30% of total weight
+        # (with 10 categories, equal would be 10% each)
+        assert leverage["SB"] < 0.35, (
+            f"SB leverage {leverage['SB']:.3f} is too dominant for a single category"
+        )
+        # Other categories should still have meaningful weight
+        non_sb = sum(v for k, v in leverage.items() if k != "SB")
+        assert non_sb > 0.65
+
     def test_last_place_team_has_leverage(self):
         standings = _make_standings()
         leverage = calculate_leverage(standings, "Team 10")
