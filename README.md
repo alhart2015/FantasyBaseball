@@ -8,8 +8,8 @@ Built for Yahoo league 5652 (10-team, keeper league).
 
 ### Draft Assistant
 An interactive CLI + live web dashboard for snake drafts:
-- **two_closers + VONA strategy** — leverage-weighted recommendations with VONA (Value Over Next Available) scoring, AVG floor protection, and staggered closer deadlines at rounds 8 and 14
-- **SGP-based player rankings** — blends Steamer, ZiPS, and ATC projections, then ranks players by Value Above Replacement (VAR) or VONA
+- **two_closers + VONA strategy** — leverage-weighted recommendations with VONA (Value Over Next Available) scoring, responsive rate-stat leverage for AVG/ERA/WHIP, and staggered closer deadlines at rounds 8 and 14
+- **SGP-based player rankings** — blends 5 projection systems (Steamer, ZiPS, ATC, THE BAT X, Oopsy), then ranks players by Value Above Replacement (VAR) or VONA
 - **Category balance tracking** — monitors your roster's projected stats across all 10 categories and warns when you're falling behind
 - **Closer alerts** — flags falling closers and enforces deadlines so you never punt saves
 - **AVG floor** — demotes hitters that would tank your team batting average below .250
@@ -123,11 +123,11 @@ VONA measures urgency — how much value you lose by waiting. For each player, i
 
 ### two_closers Strategy
 
-The current strategy: use VONA + leverage-weighted drafting to build a balanced roster, enforce an AVG floor of .250, and draft 2 closers by rounds 8 and 14 if the VONA engine hasn't already grabbed them. Validated through simulation against realistic opponent models based on 2024-2025 draft history.
+The current strategy: use VONA + leverage-weighted drafting to build a balanced roster, with responsive rate-stat leverage that steers toward AVG/ERA/WHIP when the team falls behind target. Drafts 2 closers by rounds 8 and 14 if the VONA engine hasn't already grabbed them. Validated through simulation against realistic opponent models based on 2024-2025 draft history.
 
 ### Monte Carlo Season Simulation
 
-Each simulated season applies random injuries (45% of pitchers, 18% of hitters) and stat variance (12% std dev) to all players. Injured players are replaced proportionally by replacement-level waiver pickups. Only active roster players (13 hitters, 9 pitchers) contribute stats. Roto standings are scored across 1000 iterations to produce win probabilities and category risk profiles.
+Each simulated season applies random injuries (45% of pitchers, 18% of hitters) and stat variance (hitters: 10% std dev, pitchers: 18%) to all players. Performance variance affects rate stats realistically — worse performance lowers AVG and raises ERA/WHIP, rather than cancelling out. Injured players are replaced proportionally by replacement-level waiver pickups. Only active roster players (13 hitters, 9 pitchers) contribute stats. Roto standings are scored across 1000 iterations to produce win probabilities and category risk profiles.
 
 ## Project Structure
 
@@ -143,17 +143,20 @@ FantasyBaseball/
 │   ├── trades/        # Trade evaluation and pitch generation
 │   ├── utils/         # Constants, position helpers, name normalization
 │   ├── web/           # Flask dashboard for draft visualization
+│   ├── scoring.py     # Shared roto scoring and team stat projection
 │   └── config.py      # YAML config loading
 ├── scripts/
 │   ├── run_draft.py           # Interactive draft assistant CLI (+ mock mode)
 │   ├── run_lineup.py          # In-season lineup optimizer CLI
 │   ├── run_trades.py          # Trade recommender CLI
+│   ├── summary.py             # Weekly analysis: rosters, projections, lineup, waivers, trades
 │   ├── simulate_draft.py      # Draft simulation with configurable strategies
 │   ├── compare_strategies.py  # Side-by-side strategy comparison
 │   ├── monte_carlo.py         # Monte Carlo season projection
 │   ├── fetch_positions.py     # Cache Yahoo position data (including keepers)
-│   ├── analyze_history.py     # Historical draft tendency analysis
+│   ├── analyze_draft.py       # Post-draft projection + Monte Carlo analysis
 │   ├── analyze_mock.py        # Post-mock-draft projection analysis
+│   ├── analyze_history.py     # Historical draft tendency analysis
 │   ├── backtest_2025.py       # Backtest simulation against 2025 actual results
 │   └── backtest_recency.py    # Recency weighting backtest
 ├── data/
@@ -167,7 +170,7 @@ FantasyBaseball/
 ├── CLAUDE.md           # Claude Code guidance
 ├── SETUP.md            # Setup guide for new users
 ├── TODO.md             # In-season enhancement roadmap
-└── tests/              # 284 tests
+└── tests/              # 418 tests
 ```
 
 ## Running Tests
