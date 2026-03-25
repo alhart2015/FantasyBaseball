@@ -5,8 +5,18 @@ Provides two core functions:
 - score_roto: assign roto points (1-N) with fractional tie-breaking
 """
 
+import math
+
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS  # noqa: F401
 from fantasy_baseball.utils.constants import INVERSE_STATS as INVERSE_CATS  # noqa: F401
+
+
+def _safe(value) -> float:
+    """Coerce None/NaN to 0."""
+    if value is None:
+        return 0.0
+    f = float(value)
+    return 0.0 if math.isnan(f) else f
 
 
 def project_team_stats(roster: list[dict]) -> dict[str, float]:
@@ -23,20 +33,20 @@ def project_team_stats(roster: list[dict]) -> dict[str, float]:
 
     for p in roster:
         if p.get("player_type") == "hitter":
-            r += p.get("r", 0)
-            hr += p.get("hr", 0)
-            rbi += p.get("rbi", 0)
-            sb += p.get("sb", 0)
-            h_total += p.get("h", 0)
-            ab_total += p.get("ab", 0)
+            r += _safe(p.get("r", 0))
+            hr += _safe(p.get("hr", 0))
+            rbi += _safe(p.get("rbi", 0))
+            sb += _safe(p.get("sb", 0))
+            h_total += _safe(p.get("h", 0))
+            ab_total += _safe(p.get("ab", 0))
         elif p.get("player_type") == "pitcher":
-            w += p.get("w", 0)
-            k += p.get("k", 0)
-            sv += p.get("sv", 0)
-            ip_total += p.get("ip", 0)
-            er_total += p.get("er", 0)
-            bb_total += p.get("bb", 0)
-            ha_total += p.get("h_allowed", 0)
+            w += _safe(p.get("w", 0))
+            k += _safe(p.get("k", 0))
+            sv += _safe(p.get("sv", 0))
+            ip_total += _safe(p.get("ip", 0))
+            er_total += _safe(p.get("er", 0))
+            bb_total += _safe(p.get("bb", 0))
+            ha_total += _safe(p.get("h_allowed", 0))
 
     return {
         "R": r, "HR": hr, "RBI": rbi, "SB": sb,

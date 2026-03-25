@@ -67,6 +67,33 @@ class TestProjectTeamStats:
         assert stats["ERA"] == 99
         assert stats["R"] == 90
 
+    def test_nan_values_coerced_to_zero(self):
+        """NaN in player stats must not poison team totals."""
+        roster = [
+            {"name": "Bad Data", "player_type": "hitter",
+             "r": float("nan"), "hr": 20, "rbi": None, "sb": 5,
+             "h": float("nan"), "ab": 500},
+            {"name": "Good Hitter", "player_type": "hitter",
+             "r": 80, "hr": 25, "rbi": 70, "sb": 10, "h": 130, "ab": 500},
+        ]
+        stats = project_team_stats(roster)
+        assert stats["R"] == 80  # NaN treated as 0
+        assert stats["HR"] == 45
+        assert stats["RBI"] == 70  # None treated as 0
+        assert stats["AVG"] == pytest.approx(130 / 1000)
+
+    def test_nan_pitcher_stats_coerced(self):
+        roster = [
+            {"name": "Bad Pitcher", "player_type": "pitcher",
+             "w": float("nan"), "k": 100, "sv": None, "ip": 150,
+             "er": float("nan"), "bb": 40, "h_allowed": 130},
+        ]
+        stats = project_team_stats(roster)
+        assert stats["W"] == 0
+        assert stats["K"] == 100
+        assert stats["SV"] == 0
+        assert stats["ERA"] == pytest.approx(0 * 9 / 150)
+
 
 class TestScoreRoto:
     def test_two_teams_simple(self):
