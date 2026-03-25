@@ -111,14 +111,14 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
 
             row = {}
             scale = 1.0 - frac_missed
-            # Single performance multiplier per player — all counting stats
-            # move together so H/AB stay correlated and AVG stays realistic.
             perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["hitter"]))
             for col in HITTING_COUNTING:
                 base = h.get(col, 0)
-                player_contrib = base * perf * scale
                 repl_contrib = REPLACEMENT_HITTER.get(col, 0) * frac_missed
-                row[col] = player_contrib + repl_contrib
+                if col in ("ab", "pa"):
+                    row[col] = base * scale + repl_contrib
+                else:
+                    row[col] = base * perf * scale + repl_contrib
             row["player_type"] = "hitter"
             row["name"] = h["name"]
             adj_hitters.append(row)
@@ -138,14 +138,17 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
 
             row = {}
             scale = 1.0 - frac_missed
-            # Single performance multiplier — ER, IP, BB, H_allowed move
-            # together so ERA/WHIP stay internally consistent.
             perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["pitcher"]))
+            inv_perf = max(0, 2.0 - perf)
             for col in PITCHING_COUNTING:
                 base = p.get(col, 0)
-                player_contrib = base * perf * scale
                 repl_contrib = repl_profile.get(col, 0) * frac_missed
-                row[col] = player_contrib + repl_contrib
+                if col == "ip":
+                    row[col] = base * scale + repl_contrib
+                elif col in ("er", "bb", "h_allowed"):
+                    row[col] = base * inv_perf * scale + repl_contrib
+                else:
+                    row[col] = base * perf * scale + repl_contrib
             row["player_type"] = "pitcher"
             row["name"] = p["name"]
             adj_pitchers.append(row)
