@@ -1,16 +1,6 @@
-import math
-
 import pandas as pd
-from fantasy_baseball.utils.constants import DEFAULT_SGP_DENOMINATORS
+from fantasy_baseball.utils.constants import DEFAULT_SGP_DENOMINATORS, safe_float as _safe
 from .denominators import get_sgp_denominators
-
-
-def _safe(value) -> float:
-    """Coerce None/NaN to 0."""
-    if value is None:
-        return 0.0
-    f = float(value)
-    return 0.0 if math.isnan(f) else f
 
 DEFAULT_TEAM_AB: int = 5500
 DEFAULT_TEAM_IP: int = 1400

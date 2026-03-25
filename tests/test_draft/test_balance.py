@@ -168,9 +168,9 @@ class TestCalculateDraftLeverage:
     def test_all_counting_stats_at_target_gives_equal_counting_weights(self):
         """When all counting stats are on pace and rate stats at target, weights are equal.
 
-        AVG is a rate stat (like ERA/WHIP) — it doesn't accumulate, so it
-        gets a fixed raw weight of 1.0.  Counting stats on pace also get
-        raw=1.0, so all 10 categories should be equal.
+        Rate stats at target produce raw weight = target/current = 1.0.
+        Counting stats on pace also get raw=1.0, so all 10 categories
+        should be equal.
         """
         progress = 0.5
         totals = {

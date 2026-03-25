@@ -45,7 +45,7 @@ def sim_season(team_players, rng, h_slots, p_slots):
             for col in HITTING_COUNTING:
                 base = float(h.get(col, 0) or 0)
                 repl_val = REPLACEMENT_HITTER.get(col, 0) * frac
-                if col in ("ab", "pa"):
+                if col == "ab":
                     row[col] = base * scale + repl_val
                 else:
                     row[col] = base * perf * scale + repl_val

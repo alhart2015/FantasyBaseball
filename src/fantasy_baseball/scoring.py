@@ -5,18 +5,9 @@ Provides two core functions:
 - score_roto: assign roto points (1-N) with fractional tie-breaking
 """
 
-import math
-
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS  # noqa: F401
 from fantasy_baseball.utils.constants import INVERSE_STATS as INVERSE_CATS  # noqa: F401
-
-
-def _safe(value) -> float:
-    """Coerce None/NaN to 0."""
-    if value is None:
-        return 0.0
-    f = float(value)
-    return 0.0 if math.isnan(f) else f
+from fantasy_baseball.utils.constants import safe_float as _safe
 
 
 def project_team_stats(roster: list[dict]) -> dict[str, float]:

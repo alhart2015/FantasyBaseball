@@ -150,7 +150,7 @@ def _blend_players(
     idx_max = combined.groupby(group_col)["_weight"].idxmax()
     meta = combined.loc[idx_max].set_index(group_col)
 
-    result["name"] = meta["name"]
+    result["name"] = meta.index if group_col == "name" else meta["name"]
     result["player_type"] = player_type
     if "team" in combined.columns:
         result["team"] = meta["team"]

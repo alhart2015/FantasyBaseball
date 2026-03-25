@@ -128,7 +128,7 @@ def simulate_season(team_rosters, rng, h_slots=13, p_slots=9):
             for col in HITTING_COUNTING:
                 base = h.get(col, 0)
                 repl_val = REPLACEMENT_HITTER.get(col, 0) * frac_missed
-                if col in ("ab", "pa"):
+                if col == "ab":
                     row[col] = base * scale + repl_val
                 else:
                     row[col] = base * perf * scale + repl_val

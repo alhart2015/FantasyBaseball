@@ -224,7 +224,7 @@ def main():
                         row[s] = base * scale + repl_val
                     elif is_pitcher and s in ("er", "bb", "h_allowed"):
                         row[s] = base * inv_perf * scale + repl_val
-                    elif not is_pitcher and s in ("ab",):
+                    elif not is_pitcher and s == "ab":
                         row[s] = base * scale + repl_val
                     else:
                         row[s] = base * perf * scale + repl_val

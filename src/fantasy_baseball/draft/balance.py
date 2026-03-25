@@ -129,13 +129,18 @@ def calculate_draft_leverage(
             # Rate stats don't accumulate, so progress-based pacing
             # doesn't apply.  Instead, compare current value directly
             # to the target and boost weight when behind.
-            if cat == "AVG":
+            if current is None or current < epsilon:
+                # No data yet (e.g., no hitters or no pitchers) —
+                # use neutral weight to avoid degenerate leverage.
+                raw[cat] = 1.0
+            elif cat == "AVG":
                 # Lower AVG = worse.  Below target -> weight > 1.
-                gap = target / max(current, epsilon)
+                gap = target / current
+                raw[cat] = max(gap, 0.1)
             else:
                 # ERA/WHIP: higher = worse.  Above target -> weight > 1.
-                gap = max(current, epsilon) / target if target > 0 else 1.0
-            raw[cat] = max(gap, 0.1)
+                gap = current / target if target > 0 else 1.0
+                raw[cat] = max(gap, 0.1)
         else:
             # How far behind pace? Expected = target * progress
             expected = target * progress

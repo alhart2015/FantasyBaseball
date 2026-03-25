@@ -78,6 +78,14 @@ REPLACEMENT_RP: dict[str, int] = {
     "w": 2, "k": 55, "sv": 5, "ip": 60, "er": 30, "bb": 21, "h_allowed": 60,
 }
 
+def safe_float(value) -> float:
+    """Coerce None/NaN to 0. Used to guard against bad data in stat pipelines."""
+    if value is None:
+        return 0.0
+    f = float(value)
+    return 0.0 if f != f else f  # f != f is the NaN check
+
+
 DEFAULT_SGP_DENOMINATORS: dict[str, float] = {
     "R": 20.0,
     "HR": 9.0,
