@@ -1,5 +1,9 @@
+from typing import Callable
+
 import pandas as pd
+
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
+from fantasy_baseball.lineup.yahoo_roster import fetch_free_agents
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import (
     calculate_counting_sgp,
@@ -11,7 +15,108 @@ from fantasy_baseball.sgp.player_value import (
     REPLACEMENT_ERA,
     REPLACEMENT_WHIP,
 )
-from fantasy_baseball.utils.positions import can_cover_slots
+from fantasy_baseball.utils.name_utils import normalize_name
+from fantasy_baseball.utils.positions import can_cover_slots, is_pitcher
+
+
+def detect_open_slots(
+    yahoo_roster: list[dict],
+    roster_slots: dict[str, int],
+) -> tuple[int, int, int]:
+    """Count empty active roster slots by type from Yahoo selected_position.
+
+    Yahoo returns position names like "Util" (not "UTIL"), "SP"/"RP" (not "P"),
+    so values are normalized to lowercase for matching.
+
+    Returns:
+        Tuple of (open_hitter_slots, open_pitcher_slots, open_bench_slots).
+    """
+    il_positions = {"il", "il+", "dl", "dl+"}
+    bench_positions = {"bn"}
+
+    filled_hitter = filled_pitcher = filled_bench = 0
+    for p in yahoo_roster:
+        slot = (p.get("selected_position") or "").lower()
+        if slot in il_positions:
+            pass
+        elif slot in bench_positions:
+            filled_bench += 1
+        elif is_pitcher([slot.upper()]) or slot in ("sp", "rp", "p"):
+            filled_pitcher += 1
+        elif slot:
+            filled_hitter += 1
+
+    total_hitter_slots = sum(
+        v for k, v in roster_slots.items()
+        if k.lower() not in {"p", "bn", "il", "il+", "dl", "dl+"}
+    )
+    return (
+        max(0, total_hitter_slots - filled_hitter),
+        max(0, roster_slots.get("P", 0) - filled_pitcher),
+        max(0, roster_slots.get("BN", 0) - filled_bench),
+    )
+
+
+def fetch_and_match_free_agents(
+    league,
+    hitters_proj: pd.DataFrame,
+    pitchers_proj: pd.DataFrame,
+    fa_per_position: int = 100,
+    on_position_loaded: Callable[[str, int], None] | None = None,
+) -> tuple[list[pd.Series], int]:
+    """Fetch available players from Yahoo, match to projections.
+
+    Fetches FA + waiver players across 8 positions, deduplicates by
+    normalized name, and matches each to projections using position-aware
+    search order (pitcher positions check pitchers_proj first).
+
+    Projection DataFrames must have a ``_name_norm`` column precomputed
+    via ``df["_name_norm"] = df["name"].apply(normalize_name)``.
+
+    Args:
+        league: Yahoo league object.
+        hitters_proj: Blended hitter projections with _name_norm column.
+        pitchers_proj: Blended pitcher projections with _name_norm column.
+        fa_per_position: Number of players to fetch per position.
+        on_position_loaded: Optional callback(position, count) for progress.
+
+    Returns:
+        Tuple of (matched_fa_players as list[pd.Series], total_fetched_count).
+    """
+    fa_players: list[pd.Series] = []
+    fa_fetched = 0
+    seen_names: set[str] = set()
+
+    for pos in ["C", "1B", "2B", "3B", "SS", "OF", "SP", "RP"]:
+        fas = fetch_free_agents(league, pos, count=fa_per_position)
+        fa_fetched += len(fas)
+        if on_position_loaded:
+            on_position_loaded(pos, len(fas))
+
+        if pos in ("SP", "RP"):
+            search_order = [pitchers_proj, hitters_proj]
+        else:
+            search_order = [hitters_proj, pitchers_proj]
+
+        for fa in fas:
+            fa_name_norm = normalize_name(fa["name"])
+            if fa_name_norm in seen_names:
+                continue
+            seen_names.add(fa_name_norm)
+
+            proj_row = None
+            for df in search_order:
+                if df.empty:
+                    continue
+                matches = df[df["_name_norm"] == fa_name_norm]
+                if not matches.empty:
+                    proj_row = matches.iloc[0].copy()
+                    break
+            if proj_row is not None:
+                proj_row["positions"] = fa["positions"]
+                fa_players.append(proj_row)
+
+    return fa_players, fa_fetched
 
 
 def evaluate_pickup(

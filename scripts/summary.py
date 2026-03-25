@@ -21,13 +21,11 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from fantasy_baseball.auth.yahoo_auth import get_yahoo_session, get_league
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.projections import blend_projections
-from fantasy_baseball.lineup.yahoo_roster import (
-    fetch_roster, fetch_standings, fetch_free_agents,
-)
+from fantasy_baseball.lineup.yahoo_roster import fetch_roster, fetch_standings
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
-from fantasy_baseball.lineup.waivers import scan_waivers
+from fantasy_baseball.lineup.waivers import scan_waivers, detect_open_slots, fetch_and_match_free_agents
 from fantasy_baseball.trades.evaluate import find_trades, compute_roto_points_by_cat
 from fantasy_baseball.trades.pitch import generate_pitch
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -66,7 +64,10 @@ def load_injuries():
 
 
 def match_roster_to_projections(roster, hitters_proj, pitchers_proj):
-    """Match roster players to projections by name. Returns enriched dicts."""
+    """Match roster players to projections by name. Returns enriched dicts.
+
+    Expects _name_norm column precomputed on both DataFrames.
+    """
     matched = []
     for player in roster:
         name = player["name"].replace(" (Batter)", "").replace(" (Pitcher)", "")
@@ -76,12 +77,12 @@ def match_roster_to_projections(roster, hitters_proj, pitchers_proj):
         proj = None
         ptype = None
         if is_hitter(positions) and not hitters_proj.empty:
-            matches = hitters_proj[hitters_proj["name"].apply(normalize_name) == name_norm]
+            matches = hitters_proj[hitters_proj["_name_norm"] == name_norm]
             if not matches.empty:
                 proj = matches.iloc[0]
                 ptype = "hitter"
         if proj is None and is_pitcher(positions) and not pitchers_proj.empty:
-            matches = pitchers_proj[pitchers_proj["name"].apply(normalize_name) == name_norm]
+            matches = pitchers_proj[pitchers_proj["_name_norm"] == name_norm]
             if not matches.empty:
                 proj = matches.iloc[0]
                 ptype = "pitcher"
@@ -89,7 +90,7 @@ def match_roster_to_projections(roster, hitters_proj, pitchers_proj):
             for df, pt in [(hitters_proj, "hitter"), (pitchers_proj, "pitcher")]:
                 if df.empty:
                     continue
-                matches = df[df["name"].apply(normalize_name) == name_norm]
+                matches = df[df["_name_norm"] == name_norm]
                 if not matches.empty:
                     proj = matches.iloc[0]
                     ptype = pt
@@ -235,6 +236,12 @@ def main():
     hitters_proj, pitchers_proj = blend_projections(
         PROJECTIONS_DIR, config.projection_systems, weights,
     )
+
+    # Precompute normalized names for fast projection matching
+    if not hitters_proj.empty:
+        hitters_proj["_name_norm"] = hitters_proj["name"].apply(normalize_name)
+    if not pitchers_proj.empty:
+        pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
 
     # ── Match rosters to projections ──────────────────────────────────
     all_rosters = {}
@@ -479,37 +486,56 @@ def main():
     print("WAIVER WIRE")
     print("=" * 90)
 
-    free_agents = []
-    for pos in ["C", "1B", "2B", "3B", "SS", "OF", "SP", "RP"]:
-        try:
-            fa = fetch_free_agents(league, pos, count=25)
-            free_agents.extend(fa)
-        except Exception:
-            pass
+    yahoo_roster = all_rosters_raw[team_name]
+    open_hitter_slots, open_pitcher_slots, open_bench_slots = detect_open_slots(
+        yahoo_roster, config.roster_slots,
+    )
+    total_open = open_hitter_slots + open_pitcher_slots + open_bench_slots
+    if total_open:
+        parts = []
+        if open_hitter_slots:
+            parts.append(f"{open_hitter_slots} hitter")
+        if open_pitcher_slots:
+            parts.append(f"{open_pitcher_slots} pitcher")
+        if open_bench_slots:
+            parts.append(f"{open_bench_slots} bench")
+        print(f"\n  Empty slots: {', '.join(parts)}")
 
-    # Deduplicate by name
-    seen = set()
-    unique_fa = []
-    for fa in free_agents:
-        if fa["name"] not in seen:
-            seen.add(fa["name"])
-            unique_fa.append(fa)
+    print("  Scanning free agents...")
+    fa_players, fa_fetched = fetch_and_match_free_agents(
+        league, hitters_proj, pitchers_proj,
+    )
 
-    fa_matched = match_roster_to_projections(unique_fa, hitters_proj, pitchers_proj)
+    if fa_fetched == 0:
+        print("  No available players returned by Yahoo")
+    else:
+        print(f"  Found {fa_fetched} free agents, {len(fa_players)} matched projections")
 
-    waiver_recs = scan_waivers(user_roster, fa_matched, leverage, max_results=5)
+    user_roster_series = [pd.Series(p) for p in user_roster]
+    waiver_recs = scan_waivers(
+        user_roster_series, fa_players, leverage, max_results=5,
+        open_hitter_slots=open_hitter_slots,
+        open_pitcher_slots=open_pitcher_slots,
+        open_bench_slots=open_bench_slots,
+        roster_slots=config.roster_slots,
+    )
 
     if waiver_recs:
-        print(f"\nTop {len(waiver_recs)} waiver moves:")
+        print(f"\n  Top {len(waiver_recs)} waiver moves:")
         for i, rec in enumerate(waiver_recs, 1):
-            print(f"\n  {i}. ADD: {rec['add']:<25} DROP: {rec['drop']}")
-            print(f"     wSGP gain: {rec['sgp_gain']:+.2f}")
-            if rec.get("categories"):
-                parts = [f"{c}: {v:+.2f}" for c, v in rec["categories"].items() if abs(v) > 0.01]
-                if parts:
-                    print(f"     Categories: {', '.join(parts)}")
+            if rec["drop"].startswith("(empty"):
+                print(f"    {i}. ADD {rec['add']:<22} {rec['drop']}  "
+                      f"value: +{rec['sgp_gain']:.2f} wSGP")
+            else:
+                print(f"    {i}. ADD {rec['add']:<22} DROP {rec['drop']:<22} "
+                      f"gain: +{rec['sgp_gain']:.2f} wSGP")
+                if rec.get("categories"):
+                    gains = [f"+{c}" for c, v in rec["categories"].items() if v > 0.01]
+                    losses = [f"-{c}" for c, v in rec["categories"].items() if v < -0.01]
+                    if gains or losses:
+                        print(f"       gains {', '.join(gains)}  |  costs {', '.join(losses)}")
     else:
-        print("\nNo positive waiver moves found — your roster is solid.")
+        print("\n  No positive waiver moves found — your roster is solid.")
 
     # ── 6. TRADE RECOMMENDATIONS ──────────────────────────────────────
     print()

@@ -13,11 +13,11 @@ from fantasy_baseball.auth.yahoo_auth import get_yahoo_session, get_league
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.projections import blend_projections
 from fantasy_baseball.data.yahoo_players import load_positions_cache
-from fantasy_baseball.lineup.yahoo_roster import fetch_roster, fetch_standings, fetch_free_agents, fetch_scoring_period
+from fantasy_baseball.lineup.yahoo_roster import fetch_roster, fetch_standings, fetch_scoring_period
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
-from fantasy_baseball.lineup.waivers import scan_waivers
+from fantasy_baseball.lineup.waivers import scan_waivers, detect_open_slots, fetch_and_match_free_agents
 from fantasy_baseball.lineup.matchups import (
     get_team_batting_stats,
     calculate_matchup_factors,
@@ -520,45 +520,15 @@ def main():
         print_probable_starters(roster_pitchers, schedule, matchup_factors)
         print()
 
-    # Waiver wire recommendations (Gap 1 fix)
+    # Waiver wire recommendations
     print("=" * 60)
     print("WAIVER WIRE RECOMMENDATIONS")
     print("=" * 60)
 
-    # Detect empty active roster slots by type using selected_position.
-    # Yahoo returns position names like "Util" (not "UTIL"), "SP"/"RP" (not "P"),
-    # so we normalize to lowercase for matching.
-    il_positions = {"il", "il+", "dl", "dl+"}
-    bench_positions = {"bn"}
-
-    # Classify each roster player's slot
-    filled_hitter = 0
-    filled_pitcher = 0
-    filled_bench = 0
-    filled_il = 0
-    for p in roster:
-        slot = (p.get("selected_position") or "").lower()
-        if slot in il_positions:
-            filled_il += 1
-        elif slot in bench_positions:
-            filled_bench += 1
-        elif is_pitcher([slot.upper()]) or slot in ("sp", "rp", "p"):
-            filled_pitcher += 1
-        elif slot:  # any other non-empty slot is a hitter position
-            filled_hitter += 1
-
-    total_hitter_slots = sum(
-        v for k, v in config.roster_slots.items()
-        if k.lower() not in {"p", "bn", "il", "il+", "dl", "dl+"}
+    open_hitter_slots, open_pitcher_slots, open_bench_slots = detect_open_slots(
+        roster, config.roster_slots,
     )
-    total_pitcher_slots = config.roster_slots.get("P", 0)
-    total_bench_slots = config.roster_slots.get("BN", 0)
-
-    open_hitter_slots = max(0, total_hitter_slots - filled_hitter)
-    open_pitcher_slots = max(0, total_pitcher_slots - filled_pitcher)
-    open_bench_slots = max(0, total_bench_slots - filled_bench)
     open_slots = open_hitter_slots + open_pitcher_slots + open_bench_slots
-
     if open_slots:
         parts = []
         if open_hitter_slots:
@@ -571,60 +541,14 @@ def main():
 
     all_roster = roster_hitters + roster_pitchers
     if all_roster or open_slots > 0:
-        # Fetch free agents for key positions
         print("Scanning free agents...")
-        fa_players = []
-        fa_fetched = 0
-        fa_seen_names: set[str] = set()
-        FA_PER_POSITION = 100
-        for pos in ["C", "1B", "2B", "3B", "SS", "OF", "SP", "RP"]:
-            fas = fetch_free_agents(league, pos, count=FA_PER_POSITION)
-            print(f"    {pos}: loaded {len(fas)} players")
-            fa_fetched += len(fas)
-            for fa in fas:
-                fa_name_norm = normalize_name(fa["name"])
-                if fa_name_norm in fa_seen_names:
-                    continue
-                fa_seen_names.add(fa_name_norm)
-                # Match to projections — check the appropriate projection
-                # source first based on position to avoid name collisions
-                proj_row = None
-                if pos in ("SP", "RP"):
-                    search_order = [pitchers_proj, hitters_proj]
-                else:
-                    search_order = [hitters_proj, pitchers_proj]
-                for df in search_order:
-                    if df.empty:
-                        continue
-                    matches = df[df["_name_norm"] == fa_name_norm]
-                    if not matches.empty:
-                        proj_row = matches.iloc[0].copy()
-                        break
-                if proj_row is not None:
-                    proj_row["positions"] = fa["positions"]
-                    team = proj_row.get("team", "")
-                    fa_games = games_per_team.get(team, DEFAULT_GAMES_PER_WEEK)
-                    proj_row = scale_by_schedule(proj_row, fa_games)
-                    fa_players.append(proj_row)
+        fa_players, fa_fetched = fetch_and_match_free_agents(
+            league, hitters_proj, pitchers_proj,
+            on_position_loaded=lambda pos, n: print(f"    {pos}: loaded {n} players"),
+        )
 
         if fa_fetched == 0:
             print("  No available players returned by Yahoo")
-            # Fallback: use projections to find best unrostered players
-            print("  Falling back to projection-based recommendations...")
-            roster_names = {normalize_name(p["name"]) for p in roster}
-            for df in [hitters_proj, pitchers_proj]:
-                if df.empty:
-                    continue
-                for _, row in df.iterrows():
-                    if normalize_name(row["name"]) not in roster_names:
-                        candidate = row.copy()
-                        if "positions" not in candidate.index:
-                            candidate["positions"] = []
-                        team = candidate.get("team", "")
-                        fa_games = games_per_team.get(team, DEFAULT_GAMES_PER_WEEK)
-                        candidate = scale_by_schedule(candidate, fa_games)
-                        fa_players.append(candidate)
-            print(f"  {len(fa_players)} unrostered players found in projections")
         else:
             print(f"  Found {fa_fetched} free agents, {len(fa_players)} matched projections")
 
@@ -636,8 +560,6 @@ def main():
             roster_slots=config.roster_slots,
         )
         if recommendations:
-            if fa_fetched == 0:
-                print("  (based on projections — verify availability on Yahoo)")
             for i, rec in enumerate(recommendations, 1):
                 if rec["drop"].startswith("(empty"):
                     print(f"  {i}. ADD {rec['add']:<20} {rec['drop']}  "
@@ -645,7 +567,6 @@ def main():
                 else:
                     print(f"  {i}. ADD {rec['add']:<20} DROP {rec['drop']:<20} "
                           f"gain: +{rec['sgp_gain']:.2f} wSGP")
-                    # Show category impact
                     cats = rec.get("categories", {})
                     gains = [f"+{cat}" for cat, v in cats.items() if v > 0.01]
                     losses = [f"-{cat}" for cat, v in cats.items() if v < -0.01]
