@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:developer.yahoo.com)",
+      "WebFetch(domain:baseball.fantasysports.yahoo.com)",
+      "WebFetch(domain:pypi.org)",
+      "WebSearch",
+      "WebFetch(domain:pymlb-statsapi.readthedocs.io)",
+      "Read(//c/Users/HartAlden/AppData/Local/Programs/**)",
+      "Read(//c/Users/HartAlden/.claude/**)",
+      "Bash(python:*)",
+      "Bash(python -c:*)",
+      "Bash(python3:*)",
+      "Bash(python3 -c:*)",
+      "Bash(C:/Python312/python.exe:*)",
+      "Bash(C:/Python312/python.exe -c:*)",
+      "Bash(pip install:*)",
+      "Bash(pytest:*)",
+      "Bash(git:*)",
+      "Bash(ls:*)",
+      "Bash(cd:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(find:*)",
+      "Bash(wc:*)",
+      "Bash(sort:*)",
+      "Bash(xargs:*)",
+      "Bash(where:*)",
+      "Bash(cp:*)",
+      "Bash(for:*)",
+      "Bash(do:*)",
+      "Bash(done)"
+    ]
+  }
+}
