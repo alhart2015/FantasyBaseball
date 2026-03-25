@@ -20,17 +20,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from fantasy_baseball.config import load_config
 from fantasy_baseball.draft.board import build_draft_board, apply_keepers
 from fantasy_baseball.scoring import score_roto, ALL_CATS, INVERSE_CATS
-from fantasy_baseball.utils.constants import (
-    CLOSER_SV_THRESHOLD,
-    HITTING_COUNTING,
-    INJURY_PROB,
-    INJURY_SEVERITY,
-    PITCHING_COUNTING,
-    REPLACEMENT_HITTER,
-    REPLACEMENT_RP,
-    REPLACEMENT_SP,
-    STAT_VARIANCE,
-)
+from fantasy_baseball.simulation import simulate_season
 from fantasy_baseball.utils.name_utils import normalize_name
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
@@ -39,9 +29,6 @@ PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 SIM_STATE_PATH = PROJECT_ROOT / "data" / "sim_state.json"
 LIVE_STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
 
-# Active roster slot counts (set from config in main)
-ACTIVE_HITTER_SLOTS = 13
-ACTIVE_PITCHER_SLOTS = 9
 
 
 def reconstruct_rosters(config, board, state):
@@ -79,120 +66,6 @@ def reconstruct_rosters(config, board, state):
     return team_players
 
 
-def simulate_season(team_players, rng, h_slots=None, p_slots=None):
-    """Run one simulated season with injuries and stat variance.
-
-    Only counts stats from active-roster players (top h_slots hitters,
-    top p_slots pitchers by value). Bench players are excluded.
-
-    Returns dict of team_num -> {cat: value} for all roto categories,
-    plus an injuries dict of team_num -> list of (name, frac_missed).
-    """
-    if h_slots is None:
-        h_slots = ACTIVE_HITTER_SLOTS
-    if p_slots is None:
-        p_slots = ACTIVE_PITCHER_SLOTS
-    team_stats = {}
-    injuries = {}
-
-    for team_num, players in team_players.items():
-        hitters = [p for p in players if p["player_type"] == "hitter"]
-        pitchers = [p for p in players if p["player_type"] == "pitcher"]
-        team_injuries = []
-
-        # Apply injuries and variance to hitters
-        adj_hitters = []
-        for h in hitters:
-            frac_missed = 0.0
-            if rng.random() < INJURY_PROB["hitter"]:
-                lo, hi = INJURY_SEVERITY["hitter"]
-                frac_missed = rng.uniform(lo, hi)
-                team_injuries.append((h["name"], frac_missed))
-
-            row = {}
-            scale = 1.0 - frac_missed
-            perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["hitter"]))
-            for col in HITTING_COUNTING:
-                base = h.get(col, 0)
-                repl_contrib = REPLACEMENT_HITTER.get(col, 0) * frac_missed
-                if col == "ab":
-                    row[col] = base * scale + repl_contrib
-                else:
-                    row[col] = base * perf * scale + repl_contrib
-            row["player_type"] = "hitter"
-            row["name"] = h["name"]
-            adj_hitters.append(row)
-
-        # Apply injuries and variance to pitchers
-        adj_pitchers = []
-        for p in pitchers:
-            frac_missed = 0.0
-            if rng.random() < INJURY_PROB["pitcher"]:
-                lo, hi = INJURY_SEVERITY["pitcher"]
-                frac_missed = rng.uniform(lo, hi)
-                team_injuries.append((p["name"], frac_missed))
-
-            # Choose replacement profile based on whether this is a closer
-            is_closer = p.get("sv", 0) >= CLOSER_SV_THRESHOLD
-            repl_profile = REPLACEMENT_RP if is_closer else REPLACEMENT_SP
-
-            row = {}
-            scale = 1.0 - frac_missed
-            perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["pitcher"]))
-            inv_perf = max(0, 2.0 - perf)
-            for col in PITCHING_COUNTING:
-                base = p.get(col, 0)
-                repl_contrib = repl_profile.get(col, 0) * frac_missed
-                if col == "ip":
-                    row[col] = base * scale + repl_contrib
-                elif col in ("er", "bb", "h_allowed"):
-                    row[col] = base * inv_perf * scale + repl_contrib
-                else:
-                    row[col] = base * perf * scale + repl_contrib
-            row["player_type"] = "pitcher"
-            row["name"] = p["name"]
-            adj_pitchers.append(row)
-
-        # Select active roster only (bench players don't contribute stats)
-        adj_hitters.sort(
-            key=lambda h: h["r"] + h["hr"] + h["rbi"] + h["sb"],
-            reverse=True,
-        )
-        adj_pitchers.sort(
-            key=lambda p: (p.get("sv", 0) >= CLOSER_SV_THRESHOLD, p["w"] + p["k"] + p["sv"]),
-            reverse=True,
-        )
-        active_h = adj_hitters[:h_slots]
-        active_p = adj_pitchers[:p_slots]
-
-        # Aggregate team stats from active players only
-        r = sum(h["r"] for h in active_h)
-        hr = sum(h["hr"] for h in active_h)
-        rbi = sum(h["rbi"] for h in active_h)
-        sb = sum(h["sb"] for h in active_h)
-        total_h = sum(h["h"] for h in active_h)
-        total_ab = sum(h["ab"] for h in active_h)
-        avg = total_h / total_ab if total_ab > 0 else 0
-
-        w = sum(p["w"] for p in active_p)
-        k = sum(p["k"] for p in active_p)
-        sv = sum(p["sv"] for p in active_p)
-        total_ip = sum(p["ip"] for p in active_p)
-        total_er = sum(p["er"] for p in active_p)
-        total_bb = sum(p["bb"] for p in active_p)
-        total_ha = sum(p["h_allowed"] for p in active_p)
-        era = total_er * 9 / total_ip if total_ip > 0 else 99.0
-        whip = (total_bb + total_ha) / total_ip if total_ip > 0 else 99.0
-
-        team_stats[team_num] = {
-            "R": r, "HR": hr, "RBI": rbi, "SB": sb, "AVG": avg,
-            "W": w, "K": k, "SV": sv, "ERA": era, "WHIP": whip,
-        }
-        injuries[team_num] = team_injuries
-
-    return team_stats, injuries
-
-
 
 
 def main():
@@ -204,11 +77,10 @@ def main():
     config = load_config(CONFIG_PATH)
 
     # Compute active roster slot counts from config
-    global ACTIVE_HITTER_SLOTS, ACTIVE_PITCHER_SLOTS
-    ACTIVE_HITTER_SLOTS = sum(
+    h_slots = sum(
         v for k, v in config.roster_slots.items() if k not in ("P", "BN", "IL")
     )
-    ACTIVE_PITCHER_SLOTS = config.roster_slots.get("P", 9)
+    p_slots = config.roster_slots.get("P", 9)
 
     user_team_num = None
     for num, name in config.teams.items():
@@ -260,7 +132,7 @@ def main():
     user_seasons = []  # list of (total_pts, stats, injuries, roto_pts)
 
     for i in range(args.iterations):
-        team_stats, injuries = simulate_season(team_players, rng)
+        team_stats, injuries = simulate_season(team_players, rng, h_slots, p_slots)
         roto = score_roto(team_stats)
 
         for tn in team_players:

@@ -34,21 +34,11 @@ from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.scoring import project_team_stats, score_roto, ALL_CATS, INVERSE_CATS
+from fantasy_baseball.simulation import simulate_season
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 INJURIES_PATH = PROJECT_ROOT / "data" / "injuries.yaml"
-
-from fantasy_baseball.utils.constants import (
-    HITTING_COUNTING,
-    INJURY_PROB,
-    INJURY_SEVERITY,
-    PITCHING_COUNTING,
-    REPLACEMENT_HITTER,
-    REPLACEMENT_RP,
-    REPLACEMENT_SP,
-    STAT_VARIANCE,
-)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -109,83 +99,6 @@ def match_roster_to_projections(roster, hitters_proj, pitchers_proj):
                     entry[col] = float(proj.get(col, 0) or 0)
             matched.append(entry)
     return matched
-
-
-def simulate_season(team_rosters, rng, h_slots=13, p_slots=9):
-    """One monte carlo season with injuries + variance. Returns team_stats dict."""
-    team_stats = {}
-    for tname, roster in team_rosters.items():
-        hitters = [p for p in roster if p["player_type"] == "hitter"]
-        pitchers = [p for p in roster if p["player_type"] == "pitcher"]
-
-        adj_hitters = []
-        for h in hitters:
-            frac_missed = 0.0
-            if rng.random() < INJURY_PROB["hitter"]:
-                frac_missed = rng.uniform(*INJURY_SEVERITY["hitter"])
-            scale = 1.0 - frac_missed
-            perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["hitter"]))
-            row = {}
-            for col in HITTING_COUNTING:
-                base = h.get(col, 0)
-                repl_val = REPLACEMENT_HITTER.get(col, 0) * frac_missed
-                if col == "ab":
-                    row[col] = base * scale + repl_val
-                else:
-                    row[col] = base * perf * scale + repl_val
-            adj_hitters.append(row)
-
-        adj_pitchers = []
-        for p in pitchers:
-            frac_missed = 0.0
-            if rng.random() < INJURY_PROB["pitcher"]:
-                frac_missed = rng.uniform(*INJURY_SEVERITY["pitcher"])
-            scale = 1.0 - frac_missed
-            perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["pitcher"]))
-            inv_perf = max(0, 2.0 - perf)
-            is_closer = p.get("sv", 0) >= CLOSER_SV_THRESHOLD
-            repl = REPLACEMENT_RP if is_closer else REPLACEMENT_SP
-            row = {}
-            for col in PITCHING_COUNTING:
-                base = p.get(col, 0)
-                repl_val = repl.get(col, 0) * frac_missed
-                if col == "ip":
-                    row[col] = base * scale + repl_val
-                elif col in ("er", "bb", "h_allowed"):
-                    row[col] = base * inv_perf * scale + repl_val
-                else:
-                    row[col] = base * perf * scale + repl_val
-            row["sv_base"] = p.get("sv", 0)
-            adj_pitchers.append(row)
-
-        adj_hitters.sort(key=lambda h: h["r"] + h["hr"] + h["rbi"] + h["sb"], reverse=True)
-        adj_pitchers.sort(
-            key=lambda p: (p.get("sv_base", 0) >= CLOSER_SV_THRESHOLD, p["w"] + p["k"] + p.get("sv", 0)),
-            reverse=True,
-        )
-        ah = adj_hitters[:h_slots]
-        ap = adj_pitchers[:p_slots]
-
-        total_ab = sum(h["ab"] for h in ah)
-        total_h = sum(h["h"] for h in ah)
-        total_ip = sum(p["ip"] for p in ap)
-        total_er = sum(p["er"] for p in ap)
-        total_bb = sum(p["bb"] for p in ap)
-        total_ha = sum(p["h_allowed"] for p in ap)
-
-        team_stats[tname] = {
-            "R": sum(h["r"] for h in ah),
-            "HR": sum(h["hr"] for h in ah),
-            "RBI": sum(h["rbi"] for h in ah),
-            "SB": sum(h["sb"] for h in ah),
-            "AVG": total_h / total_ab if total_ab > 0 else 0,
-            "W": sum(p["w"] for p in ap),
-            "K": sum(p["k"] for p in ap),
-            "SV": sum(p["sv"] for p in ap),
-            "ERA": total_er * 9 / total_ip if total_ip > 0 else 99,
-            "WHIP": (total_bb + total_ha) / total_ip if total_ip > 0 else 99,
-        }
-    return team_stats
 
 
 # ── Main ──────────────────────────────────────────────────────────────
@@ -303,7 +216,7 @@ def main():
     mc_cat_pts = {name: {c: [] for c in ALL_CATS} for name in all_rosters}
 
     for _ in range(args.iterations):
-        sim_stats = simulate_season(all_rosters, rng, h_slots, p_slots)
+        sim_stats, _ = simulate_season(all_rosters, rng, h_slots, p_slots)
         sim_roto = score_roto(sim_stats)
         ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
         for rank, (name, pts) in enumerate(ranked, 1):
