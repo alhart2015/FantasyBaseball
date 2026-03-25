@@ -41,34 +41,80 @@ def parse_roster(raw_roster: list[dict]) -> list[dict]:
 
 
 def fetch_standings(league) -> list[dict]:
-    """Fetch league standings with cumulative team stats."""
-    raw = league.standings()
-    return parse_standings(raw, stat_id_map=YAHOO_STAT_ID_MAP)
+    """Fetch league standings with cumulative roto stats."""
+    raw = league.yhandler.get_standings_raw(league.league_id)
+    return parse_standings_raw(raw, YAHOO_STAT_ID_MAP)
 
 
-def parse_standings(raw: dict, stat_id_map: dict[str, str]) -> list[dict]:
-    """Normalize raw Yahoo standings data."""
+def parse_standings_raw(
+    raw: dict, stat_id_map: dict[str, str],
+) -> list[dict]:
+    """Parse raw Yahoo standings JSON into a list of team dicts.
+
+    The library's ``standings()`` method omits per-category stat totals,
+    so we parse the raw JSON directly.
+    """
+    # Navigate: fantasy_content.league[1].standings[0].teams
+    league_data = raw.get("fantasy_content", {}).get("league", [])
+    if len(league_data) < 2:
+        return []
+    standings_block = league_data[1].get("standings", [{}])
+    if not standings_block:
+        return []
+    raw_teams = standings_block[0].get("teams", {})
+
     teams = []
-    for team_data in raw.get("teams", []):
-        stats = {}
-        team_stats = team_data.get("team_stats", {})
-        for stat_entry in team_stats.get("stats", []):
-            stat = stat_entry.get("stat", {})
-            sid = str(stat.get("stat_id", ""))
-            if sid in stat_id_map:
-                cat = stat_id_map[sid]
-                try:
-                    stats[cat] = float(stat.get("value", 0))
-                except (ValueError, TypeError):
-                    stats[cat] = 0.0
+    for key in sorted(raw_teams.keys()):
+        if key == "count":
+            continue
+        team_entry = raw_teams[key].get("team", [])
+        if not team_entry or len(team_entry) < 2:
+            continue
 
-        team_standings = team_data.get("team_standings", {})
-        teams.append({
-            "name": team_data.get("name", ""),
-            "team_key": team_data.get("team_key", ""),
-            "rank": team_standings.get("rank", 0),
-            "stats": stats,
-        })
+        # First element is a list of metadata dicts
+        meta_list = team_entry[0] if isinstance(team_entry[0], list) else []
+        team: dict = {"name": "", "team_key": "", "rank": 0, "stats": {}}
+        for item in meta_list:
+            if isinstance(item, dict):
+                if "team_key" in item:
+                    team["team_key"] = item["team_key"]
+                if "name" in item:
+                    team["name"] = item["name"]
+
+        # Second element has team_stats and team_standings
+        detail = team_entry[1] if len(team_entry) > 1 else {}
+        if isinstance(detail, dict):
+            # Parse rank from team_standings
+            ts = detail.get("team_standings", {})
+            if ts:
+                try:
+                    team["rank"] = int(ts.get("rank", 0))
+                except (ValueError, TypeError):
+                    team["rank"] = 0
+
+            # Parse per-category stats from team_stats
+            team_stats = detail.get("team_stats", {})
+            for stat_entry in team_stats.get("stats", []):
+                stat = stat_entry.get("stat", {})
+                sid = str(stat.get("stat_id", ""))
+                val = stat.get("value", "")
+                if sid in YAHOO_STAT_ID_MAP and val != "":
+                    try:
+                        team["stats"][YAHOO_STAT_ID_MAP[sid]] = float(val)
+                    except (ValueError, TypeError):
+                        pass
+
+        # Third element (if present) may also have team_standings
+        if len(team_entry) > 2 and isinstance(team_entry[2], dict):
+            ts = team_entry[2].get("team_standings", {})
+            if ts and team["rank"] == 0:
+                try:
+                    team["rank"] = int(ts.get("rank", 0))
+                except (ValueError, TypeError):
+                    pass
+
+        teams.append(team)
+
     return teams
 
 

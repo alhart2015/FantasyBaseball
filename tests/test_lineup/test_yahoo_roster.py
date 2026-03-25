@@ -1,7 +1,7 @@
 import pytest
 from fantasy_baseball.lineup.yahoo_roster import (
     parse_roster,
-    parse_standings,
+    parse_standings_raw,
 )
 
 
@@ -30,24 +30,46 @@ class TestParseRoster:
         assert parse_roster([]) == []
 
 
-class TestParseStandings:
-    def test_extracts_team_stats(self):
-        raw = {
-            "teams": [
-                {
-                    "name": "Hart of the Order",
-                    "team_key": "469.l.5652.t.4",
-                    "team_standings": {"rank": 3},
-                    "team_stats": {
-                        "stats": [
-                            {"stat": {"stat_id": "60", "value": "450"}},  # R
-                            {"stat": {"stat_id": "7", "value": "120"}},   # HR
-                        ]
-                    },
-                },
+def _make_raw_standings(teams_data):
+    """Build a raw Yahoo standings JSON from simplified team data."""
+    teams = {}
+    for i, td in enumerate(teams_data):
+        meta = [
+            {"team_key": td.get("team_key", f"469.l.5652.t.{i+1}")},
+            {"name": td.get("name", f"Team {i+1}")},
+        ]
+        detail = {}
+        if "rank" in td or "stats" in td:
+            detail["team_standings"] = {"rank": td.get("rank", 0)}
+        if "stats" in td:
+            detail["team_stats"] = {
+                "coverage_type": "season",
+                "stats": [
+                    {"stat": {"stat_id": sid, "value": str(val)}}
+                    for sid, val in td["stats"].items()
+                ],
+            }
+        teams[str(i)] = {"team": [meta, detail]}
+    teams["count"] = len(teams_data)
+    return {
+        "fantasy_content": {
+            "league": [
+                {"league_id": "5652"},
+                {"standings": [{"teams": teams}]},
             ]
         }
-        standings = parse_standings(raw, stat_id_map={"60": "R", "7": "HR"})
+    }
+
+
+class TestParseStandings:
+    def test_extracts_team_stats(self):
+        raw = _make_raw_standings([{
+            "name": "Hart of the Order",
+            "team_key": "469.l.5652.t.4",
+            "rank": 3,
+            "stats": {"60": 450, "7": 120},
+        }])
+        standings = parse_standings_raw(raw, stat_id_map={"60": "R", "7": "HR"})
         assert len(standings) == 1
         assert standings[0]["name"] == "Hart of the Order"
         assert standings[0]["rank"] == 3
@@ -55,5 +77,15 @@ class TestParseStandings:
         assert standings[0]["stats"]["HR"] == 120.0
 
     def test_empty_standings(self):
-        raw = {"teams": []}
-        assert parse_standings(raw, stat_id_map={}) == []
+        raw = {"fantasy_content": {"league": [{}, {"standings": [{"teams": {"count": 0}}]}]}}
+        assert parse_standings_raw(raw, stat_id_map={}) == []
+
+    def test_empty_stat_values_skipped(self):
+        """Pre-season: stat values are empty strings, should produce empty stats dict."""
+        raw = _make_raw_standings([{
+            "name": "Team A",
+            "rank": 1,
+            "stats": {"60": "", "7": ""},
+        }])
+        standings = parse_standings_raw(raw, stat_id_map={"60": "R", "7": "HR"})
+        assert standings[0]["stats"] == {}
