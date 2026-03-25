@@ -33,12 +33,10 @@ from fantasy_baseball.utils.positions import is_hitter, is_pitcher
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.scoring import project_team_stats, score_roto, ALL_CATS, INVERSE_CATS
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
-
-ALL_CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
-INVERSE = {"ERA", "WHIP"}
 
 # Monte carlo parameters
 INJURY_PROB = {"pitcher": 0.45, "hitter": 0.18}
@@ -96,56 +94,6 @@ def match_roster_to_projections(roster, hitters_proj, pitchers_proj):
                     entry[col] = float(proj.get(col, 0) or 0)
             matched.append(entry)
     return matched
-
-
-def project_team_stats(roster):
-    """Sum projected stats for a roster. Returns dict of category totals."""
-    totals = {c: 0 for c in ALL_CATS}
-    h_total, ab_total = 0, 0
-    er_total, ip_total, bb_total, ha_total = 0, 0, 0, 0
-
-    for p in roster:
-        if p["player_type"] == "hitter":
-            totals["R"] += p.get("r", 0)
-            totals["HR"] += p.get("hr", 0)
-            totals["RBI"] += p.get("rbi", 0)
-            totals["SB"] += p.get("sb", 0)
-            h_total += p.get("h", 0)
-            ab_total += p.get("ab", 0)
-        else:
-            totals["W"] += p.get("w", 0)
-            totals["K"] += p.get("k", 0)
-            totals["SV"] += p.get("sv", 0)
-            ip_total += p.get("ip", 0)
-            er_total += p.get("er", 0)
-            bb_total += p.get("bb", 0)
-            ha_total += p.get("h_allowed", 0)
-
-    totals["AVG"] = h_total / ab_total if ab_total > 0 else 0
-    totals["ERA"] = er_total * 9 / ip_total if ip_total > 0 else 99
-    totals["WHIP"] = (bb_total + ha_total) / ip_total if ip_total > 0 else 99
-    return totals
-
-
-def score_roto(all_team_stats):
-    """Assign roto points (10 = 1st, 1 = last) with fractional tie-breaking."""
-    results = {t: {} for t in all_team_stats}
-    for cat in ALL_CATS:
-        rev = cat not in INVERSE
-        ranked = sorted(all_team_stats.keys(), key=lambda t: all_team_stats[t][cat], reverse=rev)
-        n = len(ranked)
-        i = 0
-        while i < n:
-            j = i + 1
-            while j < n and abs(all_team_stats[ranked[j]][cat] - all_team_stats[ranked[i]][cat]) < 1e-9:
-                j += 1
-            avg_pts = sum(n - k for k in range(i, j)) / (j - i)
-            for k in range(i, j):
-                results[ranked[k]][f"{cat}_pts"] = avg_pts
-            i = j
-    for t in results:
-        results[t]["total"] = sum(results[t].get(f"{c}_pts", 0) for c in ALL_CATS)
-    return results
 
 
 def simulate_season(team_rosters, rng, h_slots=13, p_slots=9):

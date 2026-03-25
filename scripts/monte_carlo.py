@@ -19,6 +19,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.config import load_config
 from fantasy_baseball.draft.board import build_draft_board, apply_keepers
+from fantasy_baseball.scoring import score_roto, ALL_CATS, INVERSE_CATS
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.name_utils import normalize_name
 
@@ -61,8 +62,6 @@ REPLACEMENT_RP = {
     "w": 2, "k": 55, "sv": 5, "ip": 60,
     "er": 30, "bb": 21, "h_allowed": 60,
 }
-ALL_CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
-INVERSE = {"ERA", "WHIP"}
 
 
 def reconstruct_rosters(config, board, state):
@@ -211,27 +210,6 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
     return team_stats, injuries
 
 
-def score_roto(team_stats, num_teams):
-    """Compute roto points for all teams. Returns dict of team_num -> {cat_pts, total}."""
-    results = {tn: {} for tn in team_stats}
-    for cat in ALL_CATS:
-        rev = cat not in INVERSE
-        ranked = sorted(team_stats.keys(), key=lambda tn: team_stats[tn][cat], reverse=rev)
-        # Fractional tie-breaking: tied teams share the average of their points
-        i = 0
-        while i < len(ranked):
-            j = i + 1
-            while j < len(ranked) and abs(team_stats[ranked[j]][cat] - team_stats[ranked[i]][cat]) < 1e-9:
-                j += 1
-            avg_pts = sum(num_teams - k for k in range(i, j)) / (j - i)
-            for k in range(i, j):
-                results[ranked[k]][f"{cat}_pts"] = avg_pts
-            i = j
-
-    for tn in results:
-        results[tn]["total"] = sum(results[tn][f"{c}_pts"] for c in ALL_CATS)
-
-    return results
 
 
 def main():
@@ -298,7 +276,7 @@ def main():
 
     for i in range(args.iterations):
         team_stats, injuries = simulate_season(team_players, rng)
-        roto = score_roto(team_stats, config.num_teams)
+        roto = score_roto(team_stats)
 
         for tn in team_players:
             total = roto[tn]["total"]

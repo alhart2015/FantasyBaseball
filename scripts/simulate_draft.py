@@ -30,6 +30,7 @@ from fantasy_baseball.draft.recommender import (
     compute_slot_scarcity_order,
 )
 from fantasy_baseball.draft.strategy import STRATEGIES, build_player_lookup
+from fantasy_baseball.scoring import project_team_stats, score_roto, ALL_CATS
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 
@@ -141,10 +142,9 @@ def _assign_slot(player_positions, filled, roster_slots, scarcity_order=None):
 
 def _score_roto(team_players, config, full_board, board):
     """Project roto standings from team rosters. Returns (results, all_cats)."""
-    all_cats = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
-    inverse = {"ERA", "WHIP"}
-
-    results = []
+    # Build per-team stats using active roster selection + shared projection
+    team_stats = {}
+    team_meta = {}
     for tn in range(1, config.num_teams + 1):
         tname = config.teams.get(tn, f"Team {tn}")
         all_hitters = [p for p in team_players[tn] if p["player_type"] == "hitter"]
@@ -152,47 +152,22 @@ def _score_roto(team_players, config, full_board, board):
         hitters, pitchers = _select_active_players(
             all_hitters, all_pitchers, config.roster_slots,
         )
-        r = sum(h.get("r", 0) for h in hitters)
-        hr = sum(h.get("hr", 0) for h in hitters)
-        rbi = sum(h.get("rbi", 0) for h in hitters)
-        sb = sum(h.get("sb", 0) for h in hitters)
-        th = sum(h.get("h", 0) for h in hitters)
-        tab = sum(h.get("ab", 0) for h in hitters)
-        avg = th / tab if tab > 0 else 0
-        w = sum(p.get("w", 0) for p in pitchers)
-        k = sum(p.get("k", 0) for p in pitchers)
-        sv = sum(p.get("sv", 0) for p in pitchers)
-        tip = sum(p.get("ip", 0) for p in pitchers)
-        ter = sum(p.get("er", 0) for p in pitchers)
-        tbb = sum(p.get("bb", 0) for p in pitchers)
-        tha = sum(p.get("h_allowed", 0) for p in pitchers)
-        era = ter * 9 / tip if tip > 0 else 0
-        whip = (tbb + tha) / tip if tip > 0 else 0
-        results.append({
-            "team": tname, "R": r, "HR": hr, "RBI": rbi, "SB": sb, "AVG": avg,
-            "W": w, "K": k, "SV": sv, "ERA": era, "WHIP": whip,
-            "nh": len(hitters), "np": len(pitchers),
-        })
+        team_stats[tname] = project_team_stats(list(hitters) + list(pitchers))
+        team_meta[tname] = {"nh": len(hitters), "np": len(pitchers)}
 
-    for cat in all_cats:
-        rev = cat not in inverse
-        st = sorted(results, key=lambda x: x[cat], reverse=rev)
-        # Fractional tie-breaking: tied teams share the average of their points
-        i = 0
-        while i < len(st):
-            j = i + 1
-            while j < len(st) and abs(st[j][cat] - st[i][cat]) < 1e-9:
-                j += 1
-            avg_pts = sum(config.num_teams - k for k in range(i, j)) / (j - i)
-            for k in range(i, j):
-                st[k][f"{cat}_p"] = avg_pts
-            i = j
+    roto = score_roto(team_stats)
 
-    for t in results:
-        t["tot"] = sum(t[f"{c}_p"] for c in all_cats)
+    # Convert to legacy list-of-dicts format expected by callers
+    results = []
+    for tname in team_stats:
+        entry = {"team": tname, **team_stats[tname], **team_meta[tname]}
+        for cat in ALL_CATS:
+            entry[f"{cat}_p"] = roto[tname].get(f"{cat}_pts", 0)
+        entry["tot"] = roto[tname]["total"]
+        results.append(entry)
 
     results.sort(key=lambda x: x["tot"], reverse=True)
-    return results, all_cats
+    return results, ALL_CATS
 
 
 def _parse_opponent_strategies(opp_str):
