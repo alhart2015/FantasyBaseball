@@ -78,6 +78,33 @@ REPLACEMENT_RP: dict[str, int] = {
     "w": 2, "k": 55, "sv": 5, "ip": 60, "er": 30, "bb": 21, "h_allowed": 60,
 }
 
+# Waiver-quality stats for injury backfill blending (10-team league).
+# Separate from REPLACEMENT_* (used by Monte Carlo) — these model what
+# you'd actually stream from waivers, which is slightly better quality.
+WAIVER_SP: dict[str, float] = {
+    "w": 7, "k": 120, "sv": 0, "ip": 140, "er": 65, "bb": 48, "h_allowed": 133,
+}
+WAIVER_RP: dict[str, float] = {
+    "w": 2, "k": 55, "sv": 5, "ip": 60, "er": 30, "bb": 21, "h_allowed": 60,
+}
+WAIVER_HITTER: dict[str, float] = {
+    "r": 55, "hr": 12, "rbi": 50, "sb": 5, "h": 150, "ab": 600,
+}
+
+# Healthy baselines for backfill blending
+HEALTHY_SP_IP: float = 178.0
+HEALTHY_CLOSER_IP: float = 60.0
+HEALTHY_HITTER_AB: float = 600.0
+
+# Gap thresholds — backfill only applies when gap exceeds these
+BACKFILL_SP_THRESHOLD: float = 15.0
+BACKFILL_CLOSER_THRESHOLD: float = 10.0
+BACKFILL_HITTER_THRESHOLD: float = 50.0
+
+# IP threshold to distinguish starters from middle relievers
+STARTER_IP_THRESHOLD: float = 100.0
+
+
 def safe_float(value) -> float:
     """Coerce None/NaN to 0. Used to guard against bad data in stat pipelines."""
     if value is None:
