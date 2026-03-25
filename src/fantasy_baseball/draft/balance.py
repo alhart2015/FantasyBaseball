@@ -126,11 +126,16 @@ def calculate_draft_leverage(
             continue
 
         if cat in INVERSE_STATS or cat == "AVG":
-            # Rate stats (ERA, WHIP, AVG) don't accumulate over time —
-            # a .260 AVG mid-draft is still .260 late-draft.  Scaling by
-            # progress makes AVG look "2× ahead of pace" at 50%, halving
-            # its leverage weight.  Use a fixed weight like ERA/WHIP.
-            raw[cat] = 1.0
+            # Rate stats don't accumulate, so progress-based pacing
+            # doesn't apply.  Instead, compare current value directly
+            # to the target and boost weight when behind.
+            if cat == "AVG":
+                # Lower AVG = worse.  Below target -> weight > 1.
+                gap = target / max(current, epsilon)
+            else:
+                # ERA/WHIP: higher = worse.  Above target -> weight > 1.
+                gap = max(current, epsilon) / target if target > 0 else 1.0
+            raw[cat] = max(gap, 0.1)
         else:
             # How far behind pace? Expected = target * progress
             expected = target * progress

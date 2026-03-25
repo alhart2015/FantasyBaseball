@@ -46,59 +46,49 @@ When all players are drafted, `.apply()` on an empty DataFrame drops columns, ca
 
 ---
 
-**8. [baseball-scout] Rate stat leverage fixed at 1.0 in draft balance**
-AVG/ERA/WHIP get constant leverage weight regardless of how far the team is from target. A team batting .220 gets no extra urgency toward high-AVG hitters. Strategy-level AVG floors partially compensate.
-
----
-
-**9. [software-engineer] AVG/ERA warning thresholds are useless**
+**8. [software-engineer] AVG/ERA warning thresholds are useless**
 AVG warning fires at `.260 * 0.6 = .156`. ERA warning fires at `3.60 * 1.67 = 6.0`. Neither will ever trigger during a real draft.
 
 ---
 
-**10. [baseball-scout, data-scientist] Pitcher Ohtani gets wrong positions**
+**9. [baseball-scout, data-scientist] Pitcher Ohtani gets wrong positions**
 Position cache maps "Shohei Ohtani" → ["Util"] (batter), but pitcher projection uses the same name. Pitcher Ohtani (VAR=-0.74) would never be drafted, so zero practical impact.
 
 ---
 
-**11. [baseball-scout] IF slots excluded from UTIL replacement calculation**
+**10. [baseball-scout] IF slots excluded from UTIL replacement calculation**
 `replacement.py` excludes IF from positional count. Shifts UTIL replacement by 0.167 SGP. Negligible impact.
 
 ---
 
-**12. [software-engineer] `read_state` has no retry on Windows `PermissionError`**
+**11. [software-engineer] `read_state` has no retry on Windows `PermissionError`**
 `_atomic_write` retries 5 times, but `read_state` returns `{}` immediately. Dashboard briefly shows empty state if read collides with write. Auto-recovers on next 2s poll.
 
 ---
 
 ### SUGGESTED FEATURES
 
-**13. [baseball-scout] Track projection system disagreements**
+**12. [baseball-scout] Track projection system disagreements**
 When Steamer and ZiPS disagree by >20% on a counting stat, flag in the dashboard. Large disagreements often signal stale projections or trajectory information.
 
 ---
 
-**14. [baseball-scout] Apply hitter/pitcher balance correction to VAR**
+**13. [baseball-scout] Apply hitter/pitcher balance correction to VAR**
 Either a `PITCHER_VAR_DISCOUNT` factor (~0.85) or separate SP/RP replacement levels to fix the systematic pitcher overvaluation.
 
 ---
 
-**15. [baseball-scout] Responsive rate stat leverage**
-Compare team rate stats to targets and scale leverage weight proportionally, instead of fixed 1.0.
-
----
-
-**16. [software-engineer] Add tests for delta protocol critical path**
+**14. [software-engineer] Add tests for delta protocol critical path**
 `compute_delta`, `serialize_board`, `read_board`, `write_board` are untested despite being draft-day critical.
 
 ---
 
-**17. [baseball-scout] Leverage cap in in-season optimizer**
+**15. [baseball-scout] Leverage cap in in-season optimizer**
 The defined `MAX_MEANINGFUL_GAP_MULTIPLIER = 3.0` is never used. Near-tied categories produce leverage values approaching 1000, dominating all lineup decisions.
 
 ---
 
-**18. [baseball-scout] Minimum IP enforcement in lineup optimizer**
+**16. [baseball-scout] Minimum IP enforcement in lineup optimizer**
 No check for league IP minimums. Extreme leverage scenarios could recommend benching all pitchers to protect ratios.
 
 ---
