@@ -102,6 +102,26 @@ class TestScanWaivers:
         assert len(results) >= 1
         assert results[0]["drop"].startswith("(empty")
 
+    def test_skips_drop_that_leaves_position_hole(self):
+        """Don't recommend dropping the only 1B if the add can't play 1B."""
+        roster = [
+            _make_player("Only1B", "hitter", r=40, hr=8, rbi=30, sb=2, avg=.230, ab=300, h=69,
+                         positions=["1B", "Util"]),
+            _make_player("GoodOF", "hitter", r=90, hr=30, rbi=80, sb=15, avg=.280, ab=540, h=151,
+                         positions=["OF", "Util"]),
+        ]
+        # Free agent SS is "better" than Only1B but can't play 1B
+        free_agents = [
+            _make_player("BetterSS", "hitter", r=70, hr=20, rbi=60, sb=10, avg=.270, ab=500, h=135,
+                         positions=["SS", "Util"]),
+        ]
+        roster_slots = {"1B": 1, "OF": 1, "UTIL": 1}
+        results = scan_waivers(roster, free_agents, EQUAL_LEVERAGE,
+                               roster_slots=roster_slots)
+        # Should NOT recommend dropping Only1B since BetterSS can't play 1B
+        drop_names = [r["drop"] for r in results]
+        assert "Only1B" not in drop_names
+
     def test_typed_slots_only_fill_matching_type(self):
         """Pitcher open slots should only be filled by pitchers, not hitters."""
         roster = [

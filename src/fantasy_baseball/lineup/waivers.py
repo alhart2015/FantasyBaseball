@@ -11,6 +11,7 @@ from fantasy_baseball.sgp.player_value import (
     REPLACEMENT_ERA,
     REPLACEMENT_WHIP,
 )
+from fantasy_baseball.utils.positions import can_cover_slots
 
 
 def evaluate_pickup(
@@ -51,6 +52,7 @@ def scan_waivers(
     open_hitter_slots: int = 0,
     open_pitcher_slots: int = 0,
     open_bench_slots: int = 0,
+    roster_slots: dict[str, int] | None = None,
 ) -> list[dict]:
     """Scan free agents and rank add/drop recommendations.
 
@@ -59,6 +61,11 @@ def scan_waivers(
     When open slots exist, also recommends pure adds (no drop required)
     matching the slot type (hitter slots filled by hitters, pitcher slots
     by pitchers, bench slots by either).
+
+    When roster_slots is provided, hitter swaps are checked for position
+    feasibility — a swap is skipped if the post-swap roster can't fill
+    all required position slots.
+
     Returns only positive-gain recommendations, sorted best-first.
 
     Args:
@@ -70,6 +77,7 @@ def scan_waivers(
         open_hitter_slots: Empty hitter-only active slots.
         open_pitcher_slots: Empty pitcher-only active slots.
         open_bench_slots: Empty bench slots (either type).
+        roster_slots: Config roster slots dict for position feasibility checks.
 
     Returns:
         List of evaluate_pickup result dicts, sorted by sgp_gain descending.
@@ -138,20 +146,34 @@ def scan_waivers(
             continue
         fa_type = fa.get("player_type", "hitter")
 
-        # Find worst roster player of same type
+        # Find worst roster player of same type, sorted weakest-first
         same_type = [rs for rs in roster_scores if rs["player"].get("player_type") == fa_type]
         if not same_type:
             continue
+        same_type_sorted = sorted(same_type, key=lambda x: x["wsgp"])
 
-        worst = min(same_type, key=lambda x: x["wsgp"])
-        pair_key = (fa["name"], worst["player"]["name"])
-        if pair_key in seen_adds:
-            continue
-        seen_adds.add(pair_key)
+        for candidate in same_type_sorted:
+            pair_key = (fa["name"], candidate["player"]["name"])
+            if pair_key in seen_adds:
+                continue
 
-        result = evaluate_pickup(fa, worst["player"], leverage)
-        if result["sgp_gain"] > 0:
-            recommendations.append(result)
+            # Position feasibility check for hitter swaps
+            if roster_slots and fa_type == "hitter":
+                post_swap_positions = [
+                    list(rs["player"].get("positions", []))
+                    for rs in roster_scores
+                    if rs["player"]["name"] != candidate["player"]["name"]
+                    and rs["player"].get("player_type") == "hitter"
+                ]
+                post_swap_positions.append(list(fa.get("positions", [])))
+                if not can_cover_slots(post_swap_positions, roster_slots):
+                    continue  # this drop leaves a position hole — try next
+
+            seen_adds.add(pair_key)
+            result = evaluate_pickup(fa, candidate["player"], leverage)
+            if result["sgp_gain"] > 0:
+                recommendations.append(result)
+            break  # found a valid drop candidate for this FA
 
     recommendations.sort(key=lambda x: x["sgp_gain"], reverse=True)
     return recommendations[:max_results]

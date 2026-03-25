@@ -1,5 +1,5 @@
 import pytest
-from fantasy_baseball.utils.positions import can_fill_slot, is_hitter, is_pitcher
+from fantasy_baseball.utils.positions import can_fill_slot, can_cover_slots, is_hitter, is_pitcher
 
 
 class TestCanFillSlot:
@@ -47,6 +47,41 @@ class TestCanFillSlot:
         assert can_fill_slot(["SP"], "BN") is True
         assert can_fill_slot(["OF"], "IL") is True
         assert can_fill_slot(["RP"], "IL") is True
+
+
+class TestCanCoverSlots:
+    def test_exact_coverage(self):
+        players = [["C"], ["1B"], ["OF"]]
+        slots = {"C": 1, "1B": 1, "OF": 1}
+        assert can_cover_slots(players, slots) is True
+
+    def test_missing_position(self):
+        """No one can play 1B — coverage fails."""
+        players = [["C"], ["SS"], ["OF"]]
+        slots = {"C": 1, "1B": 1, "OF": 1}
+        assert can_cover_slots(players, slots) is False
+
+    def test_multi_position_enables_coverage(self):
+        """Multi-position player can shift to let everyone fit."""
+        players = [["1B", "3B"], ["3B"], ["OF"]]
+        slots = {"1B": 1, "3B": 1, "OF": 1}
+        assert can_cover_slots(players, slots) is True
+
+    def test_util_absorbs_overflow(self):
+        players = [["C"], ["1B"], ["OF"], ["OF"]]
+        slots = {"C": 1, "1B": 1, "OF": 1, "UTIL": 1}
+        assert can_cover_slots(players, slots) is True
+
+    def test_too_few_players(self):
+        players = [["C"]]
+        slots = {"C": 1, "1B": 1}
+        assert can_cover_slots(players, slots) is False
+
+    def test_ignores_pitcher_slots(self):
+        """P, BN, IL slots are skipped — only hitter slots checked."""
+        players = [["C"]]
+        slots = {"C": 1, "P": 9, "BN": 2, "IL": 2}
+        assert can_cover_slots(players, slots) is True
 
 
 class TestIsHitter:

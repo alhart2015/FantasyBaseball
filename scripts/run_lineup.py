@@ -251,9 +251,20 @@ def main():
     period_start, period_end = fetch_scoring_period(league)
     schedule = get_week_schedule(period_start, period_end, SCHEDULE_PATH)
     games_per_team = schedule["games_per_team"] if schedule else {}
-    if schedule:
-        print(f"Scoring period: {period_start} to {period_end}")
-        print(f"Schedule loaded for {len(games_per_team)} teams")
+
+    # Validate schedule: if fewer than 28 teams or all teams have ≤ 2 games
+    # (opening week / partial data), skip scaling to avoid asymmetric comparisons
+    # where some players get scaled down while others default to 6.
+    if games_per_team:
+        max_games = max(games_per_team.values()) if games_per_team else 0
+        if len(games_per_team) < 28 or max_games <= 2:
+            print(f"Scoring period: {period_start} to {period_end}")
+            print(f"Schedule incomplete ({len(games_per_team)} teams, max {max_games} games) "
+                  f"— skipping schedule scaling")
+            games_per_team = {}
+        else:
+            print(f"Scoring period: {period_start} to {period_end}")
+            print(f"Schedule loaded for {len(games_per_team)} teams")
     else:
         print("Schedule unavailable — using default 6 games/week")
     print()
@@ -614,6 +625,7 @@ def main():
             open_hitter_slots=open_hitter_slots,
             open_pitcher_slots=open_pitcher_slots,
             open_bench_slots=open_bench_slots,
+            roster_slots=config.roster_slots,
         )
         if recommendations:
             if fa_fetched == 0:
