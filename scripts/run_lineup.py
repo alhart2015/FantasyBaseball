@@ -570,8 +570,10 @@ def main():
         fa_players = []
         fa_fetched = 0
         fa_seen_names: set[str] = set()
+        FA_PER_POSITION = 100
         for pos in ["C", "1B", "2B", "3B", "SS", "OF", "SP", "RP"]:
-            fas = fetch_free_agents(league, pos, count=25)
+            fas = fetch_free_agents(league, pos, count=FA_PER_POSITION)
+            print(f"    {pos}: loaded {len(fas)} players")
             fa_fetched += len(fas)
             for fa in fas:
                 fa_name_norm = normalize_name(fa["name"])
