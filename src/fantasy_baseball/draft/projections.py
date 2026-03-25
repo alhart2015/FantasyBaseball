@@ -6,23 +6,20 @@ and the standalone monte_carlo.py script.
 """
 import numpy as np
 import pandas as pd
-from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
+from fantasy_baseball.scoring import score_roto as _score_roto_canonical
+from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES as ALL_CATS,
+    CLOSER_SV_THRESHOLD,
+    HITTING_COUNTING,
+    INJURY_PROB,
+    INJURY_SEVERITY,
+    PITCHING_COUNTING,
+    REPLACEMENT_HITTER,
+    REPLACEMENT_RP,
+    REPLACEMENT_SP,
+    STAT_VARIANCE,
+)
 from fantasy_baseball.utils.name_utils import normalize_name
-
-# Injury model parameters
-INJURY_PROB = {"pitcher": 0.45, "hitter": 0.18}
-INJURY_SEVERITY = {"pitcher": (0.20, 0.60), "hitter": (0.15, 0.40)}
-STAT_VARIANCE = {"hitter": 0.10, "pitcher": 0.18}
-
-HITTING_COUNTING = ["r", "hr", "rbi", "sb", "h", "ab"]
-PITCHING_COUNTING = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
-ALL_CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
-INVERSE = {"ERA", "WHIP"}
-
-# Replacement-level full-season stats
-REPLACEMENT_HITTER = {"r": 55, "hr": 12, "rbi": 50, "sb": 5, "h": 125, "ab": 500}
-REPLACEMENT_SP = {"w": 7, "k": 120, "sv": 0, "ip": 140, "er": 70, "bb": 50, "h_allowed": 139}
-REPLACEMENT_RP = {"w": 2, "k": 55, "sv": 5, "ip": 60, "er": 30, "bb": 21, "h_allowed": 60}
 
 
 def pad_roster_to_full(
@@ -154,19 +151,14 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
     return team_stats
 
 
-def score_roto(team_stats, num_teams):
-    """Compute roto points. Returns dict of team_num -> {cat_pts, total}."""
-    results = {tn: {} for tn in team_stats}
-    for cat in ALL_CATS:
-        rev = cat not in INVERSE
-        ranked = sorted(team_stats.keys(), key=lambda tn: team_stats[tn][cat], reverse=rev)
-        for i, tn in enumerate(ranked):
-            results[tn][f"{cat}_pts"] = num_teams - i
+def score_roto(team_stats, num_teams=None):
+    """Compute roto points with fractional tie-breaking.
 
-    for tn in results:
-        results[tn]["total"] = sum(results[tn][f"{c}_pts"] for c in ALL_CATS)
-
-    return results
+    Delegates to ``scoring.score_roto`` which handles ties correctly.
+    The *num_teams* argument is accepted for backward compatibility but
+    ignored — team count is derived from the input dict.
+    """
+    return _score_roto_canonical(team_stats)
 
 
 def run_projections(

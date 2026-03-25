@@ -12,18 +12,21 @@ import pandas as pd
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.utils.positions import can_fill_slot
 
+from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES as ALL_CATS,
+    INVERSE_STATS as INVERSE_CATS,
+)
+
 COUNTING_CATS = ["R", "HR", "RBI", "SB", "W", "K", "SV"]
 
 # Equal leverage weights for computing raw (unweighted) player value
-EQUAL_LEVERAGE = {cat: 0.1 for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
+EQUAL_LEVERAGE = {cat: 0.1 for cat in ALL_CATS}
 
 # Maximum raw SGP gap between traded players. Prevents lopsided trades
 # like Aaron Judge for Chris Sale that no human would accept.
 # Applied to the roster data as-provided (should be recency-blended for
 # best accuracy — injured players with 0 stats will have near-zero SGP).
 MAX_SGP_GAP = 0.35
-INVERSE_CATS = {"ERA", "WHIP"}  # lower is better
-ALL_CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
 
 # Baseline estimates for AB and IP used to back out current totals
 _TEAM_AB = 5500

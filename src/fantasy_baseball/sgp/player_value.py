@@ -1,8 +1,5 @@
 import pandas as pd
-from fantasy_baseball.utils.constants import (
-    DEFAULT_SGP_DENOMINATORS,
-    INVERSE_STATS,
-)
+from fantasy_baseball.utils.constants import DEFAULT_SGP_DENOMINATORS
 from .denominators import get_sgp_denominators
 
 DEFAULT_TEAM_AB: int = 5500

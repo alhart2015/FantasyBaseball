@@ -18,16 +18,19 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from simulate_draft import build_board_and_context, _select_active_players, _active_slot_counts
 
-ALL_CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
-INVERSE = {"ERA", "WHIP"}
-HITTING_STATS = ["r", "hr", "rbi", "sb", "h", "ab"]
-PITCHING_STATS = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
-REPL_H = {"r": 55, "hr": 12, "rbi": 50, "sb": 5, "h": 125, "ab": 500}
-REPL_SP = {"w": 7, "k": 120, "sv": 0, "ip": 140, "er": 70, "bb": 50, "h_allowed": 139}
-REPL_RP = {"w": 2, "k": 55, "sv": 5, "ip": 60, "er": 30, "bb": 21, "h_allowed": 60}
-INJURY_PROB = {"pitcher": 0.45, "hitter": 0.18}
-INJURY_SEVERITY = {"pitcher": (0.20, 0.60), "hitter": (0.15, 0.40)}
-STAT_VARIANCE = 0.12
+from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES as ALL_CATS,
+    CLOSER_SV_THRESHOLD,
+    HITTING_COUNTING as HITTING_STATS,
+    INJURY_PROB,
+    INJURY_SEVERITY,
+    INVERSE_STATS as INVERSE,
+    PITCHING_COUNTING as PITCHING_STATS,
+    REPLACEMENT_HITTER as REPL_H,
+    REPLACEMENT_RP as REPL_RP,
+    REPLACEMENT_SP as REPL_SP,
+    STAT_VARIANCE,
+)
 ITERS = 1000
 
 
@@ -213,7 +216,8 @@ def main():
                 row = {}
                 for s in stats_list:
                     base = p.get(s, 0.0)
-                    varied = max(0, base * (1.0 + rng.normal(0, STAT_VARIANCE)))
+                    sv_key = "pitcher" if is_pitcher else "hitter"
+                    varied = max(0, base * (1.0 + rng.normal(0, STAT_VARIANCE[sv_key])))
                     row[s] = varied * scale + repl.get(s, 0) * frac
                 if is_pitcher:
                     adj_p.append(row)

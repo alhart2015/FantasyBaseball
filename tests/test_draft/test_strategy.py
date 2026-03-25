@@ -1270,7 +1270,7 @@ class TestStrategiesRegistry:
             "default", "nonzero_sv", "avg_hedge", "two_closers",
             "three_closers", "four_closers", "no_punt", "no_punt_opp",
             "no_punt_stagger", "no_punt_cap3", "avg_anchor",
-            "closers_avg", "balanced",
+            "closers_avg", "balanced", "anti_fragile",
         }
         assert set(STRATEGIES.keys()) == expected
 

@@ -31,7 +31,6 @@ from fantasy_baseball.draft.balance import CategoryBalance
 _version_lock = threading.Lock()
 _current_version: int = 0
 _previous_state: dict | None = None
-_board_written: bool = False
 
 
 def _next_version() -> int:
@@ -52,6 +51,22 @@ def get_current_version() -> int:
 # Board serialization (heavy, sent once)
 # ---------------------------------------------------------------------------
 
+def _serialize_player_stats(player: dict, row) -> None:
+    """Add stat fields to a player dict based on player type."""
+    if row["player_type"] == "hitter":
+        player["r"] = int(row.get("r", 0))
+        player["hr"] = int(row.get("hr", 0))
+        player["rbi"] = int(row.get("rbi", 0))
+        player["sb"] = int(row.get("sb", 0))
+        player["avg"] = round(float(row.get("avg", 0)), 3)
+    elif row["player_type"] == "pitcher":
+        player["w"] = int(row.get("w", 0))
+        player["k"] = int(row.get("k", 0))
+        player["sv"] = int(row.get("sv", 0))
+        player["era"] = round(float(row.get("era", 0)), 2)
+        player["whip"] = round(float(row.get("whip", 0)), 2)
+
+
 def serialize_board(board: pd.DataFrame) -> list[dict]:
     """Serialize the full draft board into a JSON-serializable list.
 
@@ -70,18 +85,7 @@ def serialize_board(board: pd.DataFrame) -> list[dict]:
             "adp": round(float(adp_val), 1) if adp_val is not None and adp_val != float("inf") else None,
             "player_type": row["player_type"],
         }
-        if row["player_type"] == "hitter":
-            player["r"] = int(row.get("r", 0))
-            player["hr"] = int(row.get("hr", 0))
-            player["rbi"] = int(row.get("rbi", 0))
-            player["sb"] = int(row.get("sb", 0))
-            player["avg"] = round(float(row.get("avg", 0)), 3)
-        elif row["player_type"] == "pitcher":
-            player["w"] = int(row.get("w", 0))
-            player["k"] = int(row.get("k", 0))
-            player["sv"] = int(row.get("sv", 0))
-            player["era"] = round(float(row.get("era", 0)), 2)
-            player["whip"] = round(float(row.get("whip", 0)), 2)
+        _serialize_player_stats(player, row)
         players.append(player)
     return players
 
@@ -183,18 +187,7 @@ def serialize_state(
                 "var": round(float(row["var"]), 1),
                 "player_type": row["player_type"],
             }
-            if row["player_type"] == "hitter":
-                player["r"] = int(row.get("r", 0))
-                player["hr"] = int(row.get("hr", 0))
-                player["rbi"] = int(row.get("rbi", 0))
-                player["sb"] = int(row.get("sb", 0))
-                player["avg"] = round(float(row.get("avg", 0)), 3)
-            elif row["player_type"] == "pitcher":
-                player["w"] = int(row.get("w", 0))
-                player["k"] = int(row.get("k", 0))
-                player["sv"] = int(row.get("sv", 0))
-                player["era"] = round(float(row.get("era", 0)), 2)
-                player["whip"] = round(float(row.get("whip", 0)), 2)
+            _serialize_player_stats(player, row)
             available_players.append(player)
         state["available_players"] = available_players
 
@@ -267,7 +260,7 @@ def write_state(state: dict, path: Path) -> None:
     Also writes a companion delta file (``*_delta.json``) containing only
     the fields that changed since the last write.
     """
-    global _previous_state, _board_written
+    global _previous_state
 
     # Bump the version for this write.
     version = _next_version()
@@ -362,8 +355,7 @@ def read_delta(path: Path) -> dict:
 
 def reset_version_state() -> None:
     """Reset module-level version state.  Intended for tests only."""
-    global _current_version, _previous_state, _board_written
+    global _current_version, _previous_state
     with _version_lock:
         _current_version = 0
         _previous_state = None
-        _board_written = False

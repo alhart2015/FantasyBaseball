@@ -15,16 +15,19 @@ from fantasy_baseball.utils.name_utils import normalize_name
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
 
-ALL_CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
-INVERSE = {"ERA", "WHIP"}
-INJURY_PROB = {"pitcher": 0.45, "hitter": 0.18}
-INJURY_SEVERITY = {"pitcher": (0.20, 0.60), "hitter": (0.15, 0.40)}
-STAT_VARIANCE = 0.12
-HITTING_COUNTING = ["r", "hr", "rbi", "sb", "h", "ab"]
-PITCHING_COUNTING = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
-REPLACEMENT_HITTER = {"r": 55, "hr": 12, "rbi": 50, "sb": 5, "h": 125, "ab": 500}
-REPLACEMENT_SP = {"w": 7, "k": 120, "sv": 0, "ip": 140, "er": 70, "bb": 50, "h_allowed": 139}
-REPLACEMENT_RP = {"w": 2, "k": 55, "sv": 5, "ip": 60, "er": 30, "bb": 21, "h_allowed": 60}
+from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES as ALL_CATS,
+    CLOSER_SV_THRESHOLD,
+    HITTING_COUNTING,
+    INJURY_PROB,
+    INJURY_SEVERITY,
+    INVERSE_STATS as INVERSE,
+    PITCHING_COUNTING,
+    REPLACEMENT_HITTER,
+    REPLACEMENT_RP,
+    REPLACEMENT_SP,
+    STAT_VARIANCE,
+)
 
 
 def sim_season(team_players, rng, h_slots, p_slots):
@@ -38,7 +41,7 @@ def sim_season(team_players, rng, h_slots, p_slots):
             row = {}
             for col in HITTING_COUNTING:
                 base = float(h.get(col, 0) or 0)
-                varied = max(0, base * (1 + rng.normal(0, STAT_VARIANCE)))
+                varied = max(0, base * (1 + rng.normal(0, STAT_VARIANCE["hitter"])))
                 row[col] = varied * (1 - frac) + REPLACEMENT_HITTER.get(col, 0) * frac
             ah.append(row)
         for p in pitchers:
@@ -47,7 +50,7 @@ def sim_season(team_players, rng, h_slots, p_slots):
             row = {}
             for col in PITCHING_COUNTING:
                 base = float(p.get(col, 0) or 0)
-                varied = max(0, base * (1 + rng.normal(0, STAT_VARIANCE)))
+                varied = max(0, base * (1 + rng.normal(0, STAT_VARIANCE["pitcher"])))
                 row[col] = varied * (1 - frac) + repl.get(col, 0) * frac
             ap.append(row)
         ah.sort(key=lambda x: x["r"] + x["hr"] + x["rbi"] + x["sb"], reverse=True)

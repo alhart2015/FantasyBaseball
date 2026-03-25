@@ -41,15 +41,16 @@ CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 INJURIES_PATH = PROJECT_ROOT / "data" / "injuries.yaml"
 
-# Monte carlo parameters
-INJURY_PROB = {"pitcher": 0.45, "hitter": 0.18}
-INJURY_SEVERITY = {"pitcher": (0.20, 0.60), "hitter": (0.15, 0.40)}
-STAT_VARIANCE = {"hitter": 0.10, "pitcher": 0.18}
-HITTING_COUNTING = ["r", "hr", "rbi", "sb", "h", "ab"]
-PITCHING_COUNTING = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
-REPLACEMENT_HITTER = {"r": 55, "hr": 12, "rbi": 50, "sb": 5, "h": 125, "ab": 500}
-REPLACEMENT_SP = {"w": 7, "k": 120, "sv": 0, "ip": 140, "er": 70, "bb": 50, "h_allowed": 139}
-REPLACEMENT_RP = {"w": 2, "k": 55, "sv": 5, "ip": 60, "er": 30, "bb": 21, "h_allowed": 60}
+from fantasy_baseball.utils.constants import (
+    HITTING_COUNTING,
+    INJURY_PROB,
+    INJURY_SEVERITY,
+    PITCHING_COUNTING,
+    REPLACEMENT_HITTER,
+    REPLACEMENT_RP,
+    REPLACEMENT_SP,
+    STAT_VARIANCE,
+)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────

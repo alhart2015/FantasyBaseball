@@ -132,53 +132,10 @@ def pick_avg_hedge(
     board, full_board, tracker, balance, config, team_filled, **kwargs,
 ):
     """Penalize hitters that would drag team AVG below the floor."""
-    filled = get_filled_positions(
-        tracker.user_roster_ids, full_board,
-        roster_slots=config.roster_slots,
-        player_lookup=kwargs.get("player_lookup"),
-    )
-    leverage = calculate_draft_leverage(
-        balance.get_totals(),
-        picks_made=len(tracker.user_roster),
-        total_picks=kwargs.get("total_rounds", 22),
-    )
-    picks_until_next = getattr(tracker, "picks_until_next_turn", None)
-    recs = get_recommendations(
-        board, drafted=tracker.drafted_ids,
-        user_roster=tracker.user_roster,
-        n=10, filled_positions=filled,
-        picks_until_next=picks_until_next,
-        roster_slots=config.roster_slots,
-        num_teams=config.num_teams,
-        draft_leverage=leverage,
-    )
+    recs = _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs)
     if not recs:
         return None, None
-
-    totals = balance.get_totals()
-    current_h = sum(h.get("h", 0) for h in balance._hitters)
-    current_ab = sum(h.get("ab", 0) for h in balance._hitters)
-
-    for rec in recs:
-        if rec["player_type"] != "hitter":
-            # Pitchers don't affect AVG — always acceptable
-            return rec["name"], _lookup_pid(board, rec["name"])
-
-        # Simulate what team AVG would be if we add this hitter
-        rows = board[board["name"] == rec["name"]]
-        if rows.empty:
-            continue
-        player = rows.iloc[0]
-        new_h = current_h + player.get("h", 0)
-        new_ab = current_ab + player.get("ab", 0)
-        projected_avg = new_h / new_ab if new_ab > 0 else 0
-
-        if projected_avg >= AVG_FLOOR or current_ab == 0:
-            return rec["name"], _lookup_pid(board, rec["name"])
-        # else: skip this low-AVG hitter and try the next rec
-
-    # If all hitters would tank AVG, take the best one anyway
-    return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
+    return _pick_with_avg_floor(recs, board, balance, AVG_FLOOR)
 
 
 def pick_no_punt_opp(
@@ -242,26 +199,7 @@ def pick_no_punt_opp(
     recs = _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs)
     if not recs:
         return None, None
-
-    current_h = sum(h.get("h", 0) for h in balance._hitters)
-    current_ab = sum(h.get("ab", 0) for h in balance._hitters)
-
-    for rec in recs:
-        if rec["player_type"] != "hitter":
-            return rec["name"], _lookup_pid(board, rec["name"])
-
-        rows = board[board["name"] == rec["name"]]
-        if rows.empty:
-            continue
-        player = rows.iloc[0]
-        new_h = current_h + player.get("h", 0)
-        new_ab = current_ab + player.get("ab", 0)
-        projected_avg = new_h / new_ab if new_ab > 0 else 0
-
-        if projected_avg >= NO_PUNT_AVG_FLOOR or current_ab == 0:
-            return rec["name"], _lookup_pid(board, rec["name"])
-
-    return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
+    return _pick_with_avg_floor(recs, board, balance, NO_PUNT_AVG_FLOOR)
 
 
 def _make_n_closers_strategy(target, deadlines):
@@ -486,30 +424,11 @@ def pick_no_punt(
         if result:
             return result
 
-    # Get recommendations, then filter for AVG floor
+    # Get recommendations with AVG floor
     recs = _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs)
     if not recs:
         return None, None
-
-    current_h = sum(h.get("h", 0) for h in balance._hitters)
-    current_ab = sum(h.get("ab", 0) for h in balance._hitters)
-
-    for rec in recs:
-        if rec["player_type"] != "hitter":
-            return rec["name"], _lookup_pid(board, rec["name"])
-
-        rows = board[board["name"] == rec["name"]]
-        if rows.empty:
-            continue
-        player = rows.iloc[0]
-        new_h = current_h + player.get("h", 0)
-        new_ab = current_ab + player.get("ab", 0)
-        projected_avg = new_h / new_ab if new_ab > 0 else 0
-
-        if projected_avg >= NO_PUNT_AVG_FLOOR or current_ab == 0:
-            return rec["name"], _lookup_pid(board, rec["name"])
-
-    return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
+    return _pick_with_avg_floor(recs, board, balance, NO_PUNT_AVG_FLOOR)
 
 
 def pick_no_punt_stagger(
@@ -554,26 +473,7 @@ def pick_no_punt_stagger(
     recs = _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs)
     if not recs:
         return None, None
-
-    current_h = sum(h.get("h", 0) for h in balance._hitters)
-    current_ab = sum(h.get("ab", 0) for h in balance._hitters)
-
-    for rec in recs:
-        if rec["player_type"] != "hitter":
-            return rec["name"], _lookup_pid(board, rec["name"])
-
-        rows = board[board["name"] == rec["name"]]
-        if rows.empty:
-            continue
-        player = rows.iloc[0]
-        new_h = current_h + player.get("h", 0)
-        new_ab = current_ab + player.get("ab", 0)
-        projected_avg = new_h / new_ab if new_ab > 0 else 0
-
-        if projected_avg >= NO_PUNT_AVG_FLOOR or current_ab == 0:
-            return rec["name"], _lookup_pid(board, rec["name"])
-
-    return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
+    return _pick_with_avg_floor(recs, board, balance, NO_PUNT_AVG_FLOOR)
 
 
 def pick_no_punt_cap3(
@@ -798,6 +698,33 @@ def pick_anti_fragile(
     return best["name"], _lookup_pid(board, best["name"])
 
 
+def _pick_with_avg_floor(recs, board, balance, avg_floor, player_lookup=None):
+    """Select the first rec that keeps team AVG above the floor.
+
+    Pitchers are always acceptable (they don't affect AVG).
+    Returns (name, player_id).
+    """
+    current_h = sum(h.get("h", 0) for h in balance._hitters)
+    current_ab = sum(h.get("ab", 0) for h in balance._hitters)
+
+    for rec in recs:
+        if rec["player_type"] != "hitter":
+            return rec["name"], _lookup_pid(board, rec["name"], player_lookup)
+
+        rows = board[board["name"] == rec["name"]]
+        if rows.empty:
+            continue
+        player = rows.iloc[0]
+        new_h = current_h + player.get("h", 0)
+        new_ab = current_ab + player.get("ab", 0)
+        projected_avg = new_h / new_ab if new_ab > 0 else 0
+
+        if projected_avg >= avg_floor or current_ab == 0:
+            return rec["name"], _lookup_pid(board, rec["name"], player_lookup)
+
+    return recs[0]["name"], _lookup_pid(board, recs[0]["name"], player_lookup)
+
+
 def _lookup_pid(board, name, name_to_pid=None):
     if name_to_pid is not None and name in name_to_pid:
         return name_to_pid[name]
@@ -831,4 +758,5 @@ STRATEGIES = {
     "avg_anchor": pick_avg_anchor,
     "closers_avg": pick_closers_avg,
     "balanced": pick_balanced,
+    "anti_fragile": pick_anti_fragile,
 }

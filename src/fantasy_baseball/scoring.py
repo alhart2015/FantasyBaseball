@@ -5,8 +5,8 @@ Provides two core functions:
 - score_roto: assign roto points (1-N) with fractional tie-breaking
 """
 
-ALL_CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
-INVERSE_CATS = {"ERA", "WHIP"}
+from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS  # noqa: F401
+from fantasy_baseball.utils.constants import INVERSE_STATS as INVERSE_CATS  # noqa: F401
 
 
 def project_team_stats(roster: list[dict]) -> dict[str, float]:

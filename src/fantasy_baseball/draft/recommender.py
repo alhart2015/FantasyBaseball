@@ -1,10 +1,14 @@
 import pandas as pd
-from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS, IF_ELIGIBLE
+from fantasy_baseball.utils.constants import (
+    CLOSER_SV_THRESHOLD,
+    DEFAULT_ROSTER_SLOTS,
+    IF_ELIGIBLE,
+    compute_starters_per_position,
+)
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot, is_hitter
 from fantasy_baseball.sgp.replacement import calculate_replacement_levels
 from fantasy_baseball.sgp.var import calculate_var
-from fantasy_baseball.utils.constants import compute_starters_per_position
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import (
@@ -17,9 +21,6 @@ from fantasy_baseball.sgp.player_value import (
     REPLACEMENT_ERA,
     REPLACEMENT_WHIP,
 )
-
-REQUIRED_POSITIONS = ["C", "1B", "2B", "3B", "SS", "OF", "P"]
-
 
 def compute_slot_scarcity_order(
     board: pd.DataFrame,
@@ -41,9 +42,6 @@ def compute_slot_scarcity_order(
         total_sgp = eligible["total_sgp"].sum() if "total_sgp" in eligible.columns else 0
         scarcity[slot] = total_sgp / n_slots if n_slots > 0 else float("inf")
     return sorted(scarcity.keys(), key=lambda s: scarcity[s])
-
-from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
-
 
 def _player_bucket(player) -> str:
     """Classify a player into hitter / sp / closer for VONA."""

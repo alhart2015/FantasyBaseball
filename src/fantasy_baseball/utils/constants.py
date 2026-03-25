@@ -55,6 +55,29 @@ IF_ELIGIBLE: set[str] = {"1B", "2B", "3B", "SS"}
 # Minimum projected SV to classify a pitcher as a closer.
 CLOSER_SV_THRESHOLD: int = 20
 
+# Stat column lists for counting stats (used by Monte Carlo, stat aggregation)
+HITTING_COUNTING: list[str] = ["r", "hr", "rbi", "sb", "h", "ab"]
+PITCHING_COUNTING: list[str] = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
+
+# Monte Carlo simulation parameters (single source of truth)
+INJURY_PROB: dict[str, float] = {"pitcher": 0.45, "hitter": 0.18}
+INJURY_SEVERITY: dict[str, tuple[float, float]] = {
+    "pitcher": (0.20, 0.60),
+    "hitter": (0.15, 0.40),
+}
+STAT_VARIANCE: dict[str, float] = {"hitter": 0.10, "pitcher": 0.18}
+
+# Replacement-level full-season stats for waiver pickups
+REPLACEMENT_HITTER: dict[str, int] = {
+    "r": 55, "hr": 12, "rbi": 50, "sb": 5, "h": 125, "ab": 500,
+}
+REPLACEMENT_SP: dict[str, int] = {
+    "w": 7, "k": 120, "sv": 0, "ip": 140, "er": 70, "bb": 50, "h_allowed": 139,
+}
+REPLACEMENT_RP: dict[str, int] = {
+    "w": 2, "k": 55, "sv": 5, "ip": 60, "er": 30, "bb": 21, "h_allowed": 60,
+}
+
 DEFAULT_SGP_DENOMINATORS: dict[str, float] = {
     "R": 20.0,
     "HR": 9.0,

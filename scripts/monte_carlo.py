@@ -20,7 +20,17 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from fantasy_baseball.config import load_config
 from fantasy_baseball.draft.board import build_draft_board, apply_keepers
 from fantasy_baseball.scoring import score_roto, ALL_CATS, INVERSE_CATS
-from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
+from fantasy_baseball.utils.constants import (
+    CLOSER_SV_THRESHOLD,
+    HITTING_COUNTING,
+    INJURY_PROB,
+    INJURY_SEVERITY,
+    PITCHING_COUNTING,
+    REPLACEMENT_HITTER,
+    REPLACEMENT_RP,
+    REPLACEMENT_SP,
+    STAT_VARIANCE,
+)
 from fantasy_baseball.utils.name_utils import normalize_name
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
@@ -31,37 +41,6 @@ STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
 # Active roster slot counts (set from config in main)
 ACTIVE_HITTER_SLOTS = 13
 ACTIVE_PITCHER_SLOTS = 9
-
-# Injury model parameters
-INJURY_PROB = {"pitcher": 0.45, "hitter": 0.18}
-# Fraction of season missed if injured: (min, max) uniform
-INJURY_SEVERITY = {"pitcher": (0.20, 0.60), "hitter": (0.15, 0.40)}
-
-# Stat variance: per-player standard deviation as fraction of projected value.
-# One multiplier per player applied to all counting stats so correlated stats
-# (H/AB, ER/IP) stay internally consistent. Rate stats (AVG, ERA, WHIP) are
-# then recomputed from team aggregates.
-STAT_VARIANCE = {"hitter": 0.10, "pitcher": 0.18}
-
-HITTING_COUNTING = ["r", "hr", "rbi", "sb", "h", "ab"]
-PITCHING_COUNTING = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
-
-# Replacement-level full-season stats for waiver pickups.
-# Derived from typical replacement-level player in a 10-team league.
-# Hitter: ~500 AB, .250 AVG, modest counting stats
-REPLACEMENT_HITTER = {
-    "r": 55, "hr": 12, "rbi": 50, "sb": 5, "h": 125, "ab": 500,
-}
-# Pitcher (SP): ~140 IP, 4.50 ERA, 1.35 WHIP, ~7 W, ~120 K
-REPLACEMENT_SP = {
-    "w": 7, "k": 120, "sv": 0, "ip": 140,
-    "er": 70, "bb": 50, "h_allowed": 139,
-}
-# Pitcher (RP/closer): ~60 IP, 4.50 ERA, 1.35 WHIP, ~2 W, ~55 K, ~5 SV
-REPLACEMENT_RP = {
-    "w": 2, "k": 55, "sv": 5, "ip": 60,
-    "er": 30, "bb": 21, "h_allowed": 60,
-}
 
 
 def reconstruct_rosters(config, board, state):
