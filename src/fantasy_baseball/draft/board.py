@@ -5,7 +5,7 @@ from fantasy_baseball.data.projections import blend_projections
 from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
-from fantasy_baseball.sgp.replacement import calculate_replacement_levels
+from fantasy_baseball.sgp.replacement import calculate_replacement_levels, calculate_replacement_rates
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
     compute_starters_per_position,
@@ -135,11 +135,29 @@ def build_draft_board(
 
     denoms = get_sgp_denominators(sgp_overrides)
     pool = pd.concat([hitters, pitchers], ignore_index=True)
+
+    # Apply injury backfill blending before SGP calculation
+    pool = apply_backfill_blending(pool)
+
+    # Two-pass SGP: first with defaults (for ordering), then with
+    # pool-derived replacement rates (for accurate values).
     pool["total_sgp"] = pool.apply(
         lambda row: calculate_player_sgp(row, denoms=denoms), axis=1
     )
 
     starters = compute_starters_per_position(roster_slots, num_teams)
+    repl_rates = calculate_replacement_rates(pool, starters)
+
+    pool["total_sgp"] = pool.apply(
+        lambda row: calculate_player_sgp(
+            row, denoms=denoms,
+            replacement_era=repl_rates["era"],
+            replacement_whip=repl_rates["whip"],
+            replacement_avg=repl_rates["avg"],
+        ),
+        axis=1,
+    )
+
     replacement_levels = calculate_replacement_levels(pool, starters)
     pool["var"] = 0.0
     pool["best_position"] = ""
