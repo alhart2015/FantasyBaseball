@@ -1,5 +1,9 @@
 # TODO — In-Season Enhancements
 
+- [ ] **Fix post-draft roster reconstruction for traded picks** — `monte_carlo.py` `reconstruct_rosters` uses a standard snake formula to assign drafted players to teams, which breaks when picks have been traded. In the 2026 draft, this put players on the wrong teams for every team in the league (e.g., Soto/J-Rod/Caminero missing from Hart's reconstructed roster). Fix: either pull actual rosters from Yahoo API via `fetch_roster`, or use the custom `pick_order` from `draft_state.json` (already stored by `run_draft.py`) instead of the snake formula. The Yahoo API approach is more reliable since it reflects post-draft adds/drops too.
+
+- [ ] **Validate ROS projections account for injuries** — Verify that FanGraphs ROS projections properly reduce stats for players on IL (e.g., Strider's ROS K projection should reflect missed time, not a full healthy season). If not, the injury management system should scale projections by expected games remaining.
+
 - [ ] **Pitcher streaming tool** — Score free agent SPs by matchup quality to identify streamers (pick up a mediocre pitcher facing a terrible offense for one start, then drop). Builds on the matchup adjustment system.
 
 - [ ] **Automate ROS projection download** — If the manual FanGraphs CSV download gets tedious, automate it. FanGraphs doesn't have a public API so this would require browser automation (Playwright) or finding an unofficial data source. Low priority unless the manual process is a pain.

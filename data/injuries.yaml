@@ -1,0 +1,21 @@
+# Injury tracker — manually maintained
+#
+# Add players when they go on IL. Remove when they return.
+# summary.py reads this file for IL status, return projections,
+# and replacement recommendations.
+#
+# Fields:
+#   name: player name (must match Yahoo roster)
+#   il_date: date placed on IL (YYYY-MM-DD)
+#   expected_return: anticipated return date (YYYY-MM-DD)
+#   replacement: name of waiver pickup filling the slot (null if none yet)
+#   notes: optional context
+
+injuries: []
+# Example:
+# injuries:
+#   - name: "Spencer Strider"
+#     il_date: 2026-03-28
+#     expected_return: 2026-05-15
+#     replacement: null
+#     notes: "UCL rehab, targeting mid-May return"

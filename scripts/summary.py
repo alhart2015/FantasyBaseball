@@ -8,10 +8,12 @@ Usage:
 """
 import argparse
 import sys
+from datetime import date, datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -37,6 +39,7 @@ from fantasy_baseball.scoring import project_team_stats, score_roto, ALL_CATS, I
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
+INJURIES_PATH = PROJECT_ROOT / "data" / "injuries.yaml"
 
 # Monte carlo parameters
 INJURY_PROB = {"pitcher": 0.45, "hitter": 0.18}
@@ -50,6 +53,16 @@ REPLACEMENT_RP = {"w": 2, "k": 55, "sv": 5, "ip": 60, "er": 30, "bb": 21, "h_all
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
+
+def load_injuries():
+    """Load injury tracker from data/injuries.yaml. Returns list of dicts."""
+    if not INJURIES_PATH.exists():
+        return []
+    with open(INJURIES_PATH) as f:
+        data = yaml.safe_load(f)
+    entries = data.get("injuries") if data else []
+    return entries or []
+
 
 def match_roster_to_projections(roster, hitters_proj, pitchers_proj):
     """Match roster players to projections by name. Returns enriched dicts."""
@@ -382,7 +395,73 @@ def main():
     else:
         print("\nNo start/sit changes needed — current lineup is optimal.")
 
-    # ── 4. WAIVER WIRE ────────────────────────────────────────────────
+    # ── 4. INJURY MANAGEMENT ──────────────────────────────────────────
+    print()
+    print("=" * 90)
+    print("INJURY MANAGEMENT")
+    print("=" * 90)
+
+    injuries = load_injuries()
+    today = date.today()
+
+    if injuries:
+        print(f"\n  {'Player':<25} {'IL Date':<12} {'Return':<12} {'Days Left':>9}  {'Replacement'}")
+        print("  " + "-" * 80)
+        returning_soon = []
+        needs_replacement = []
+        for inj in injuries:
+            name = inj["name"]
+            il_date = inj.get("il_date", "?")
+            ret = inj.get("expected_return")
+            replacement = inj.get("replacement")
+            notes = inj.get("notes", "")
+
+            if ret:
+                if isinstance(ret, str):
+                    ret_date = datetime.strptime(ret, "%Y-%m-%d").date()
+                else:
+                    ret_date = ret
+                days_left = (ret_date - today).days
+                days_str = f"{days_left:>6}d"
+                if days_left <= 7:
+                    returning_soon.append((name, days_left, replacement))
+            else:
+                days_str = "      ?"
+
+            repl_str = replacement or "(none)"
+            print(f"  {name:<25} {str(il_date):<12} {str(ret or '?'):<12} {days_str}  {repl_str}")
+            if notes:
+                print(f"  {'':>25} {notes}")
+            if not replacement:
+                needs_replacement.append(inj)
+
+        if returning_soon:
+            print("\n  RETURNING SOON:")
+            for name, days, repl in returning_soon:
+                if days <= 0:
+                    print(f"    {name} — eligible to return NOW")
+                    if repl:
+                        print(f"      -> Consider dropping {repl} to activate")
+                else:
+                    print(f"    {name} — returning in ~{days} days")
+                    if repl:
+                        print(f"      -> Plan to drop {repl} to activate")
+
+        if needs_replacement:
+            print("\n  NEEDS REPLACEMENT:")
+            for inj in needs_replacement:
+                name = inj["name"]
+                # Find the injured player's type to scope waiver search
+                player_entry = next((p for p in user_roster if p["name"] == name), None)
+                if player_entry:
+                    ptype = player_entry["player_type"]
+                    print(f"    {name} ({ptype}) — no replacement picked up yet")
+                else:
+                    print(f"    {name} — no replacement picked up yet")
+    else:
+        print("\nNo injuries tracked. Edit data/injuries.yaml to add IL players.")
+
+    # ── 5. WAIVER WIRE ────────────────────────────────────────────────
     print()
     print("=" * 90)
     print("WAIVER WIRE")
@@ -420,7 +499,7 @@ def main():
     else:
         print("\nNo positive waiver moves found — your roster is solid.")
 
-    # ── 5. TRADE RECOMMENDATIONS ──────────────────────────────────────
+    # ── 6. TRADE RECOMMENDATIONS ──────────────────────────────────────
     print()
     print("=" * 90)
     print("TRADE RECOMMENDATIONS")
