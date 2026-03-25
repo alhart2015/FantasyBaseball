@@ -75,7 +75,8 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
         hitters = [p for p in players if p.get("player_type") == "hitter"]
         pitchers = [p for p in players if p.get("player_type") == "pitcher"]
 
-        # Hitters
+        # Hitters — perf affects quality stats (H, R, HR, RBI, SB) but
+        # not volume stats (AB, PA) so rate stats like AVG actually vary.
         adj_hitters = []
         for h in hitters:
             frac_missed = 0.0
@@ -88,10 +89,17 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
             perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["hitter"]))
             for col in HITTING_COUNTING:
                 base = h.get(col, 0)
-                row[col] = base * perf * scale + REPLACEMENT_HITTER.get(col, 0) * frac_missed
+                repl_val = REPLACEMENT_HITTER.get(col, 0) * frac_missed
+                if col in ("ab", "pa"):
+                    row[col] = base * scale + repl_val
+                else:
+                    row[col] = base * perf * scale + repl_val
             adj_hitters.append(row)
 
-        # Pitchers
+        # Pitchers — perf affects quality stats but not volume (IP).
+        # Good outcomes (W, K, SV) scale with perf; bad outcomes
+        # (ER, BB, H_allowed) scale inversely so ERA/WHIP worsen
+        # when perf < 1.
         adj_pitchers = []
         for p in pitchers:
             frac_missed = 0.0
@@ -105,9 +113,16 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
             row = {}
             scale = 1.0 - frac_missed
             perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["pitcher"]))
+            inv_perf = max(0, 2.0 - perf)
             for col in PITCHING_COUNTING:
                 base = p.get(col, 0)
-                row[col] = base * perf * scale + repl.get(col, 0) * frac_missed
+                repl_val = repl.get(col, 0) * frac_missed
+                if col == "ip":
+                    row[col] = base * scale + repl_val
+                elif col in ("er", "bb", "h_allowed"):
+                    row[col] = base * inv_perf * scale + repl_val
+                else:
+                    row[col] = base * perf * scale + repl_val
             adj_pitchers.append(row)
 
         # Select active roster only (bench players don't contribute stats)

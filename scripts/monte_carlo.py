@@ -3,7 +3,7 @@
 Usage:
     python scripts/monte_carlo.py [--iterations N]
 
-Reads the draft result from data/draft_state.json, reconstructs all team
+Reads the draft result from data/sim_state.json (or draft_state.json), reconstructs all team
 rosters, then runs N simulations (default 1000) with random injuries and
 stat variance to estimate win probability and risk profile.
 """
@@ -36,7 +36,8 @@ from fantasy_baseball.utils.name_utils import normalize_name
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
-STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
+SIM_STATE_PATH = PROJECT_ROOT / "data" / "sim_state.json"
+LIVE_STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
 
 # Active roster slot counts (set from config in main)
 ACTIVE_HITTER_SLOTS = 13
@@ -110,14 +111,14 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
 
             row = {}
             scale = 1.0 - frac_missed
-            # Single performance multiplier per player — all counting stats
-            # move together so H/AB stay correlated and AVG stays realistic.
             perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["hitter"]))
             for col in HITTING_COUNTING:
                 base = h.get(col, 0)
-                player_contrib = base * perf * scale
                 repl_contrib = REPLACEMENT_HITTER.get(col, 0) * frac_missed
-                row[col] = player_contrib + repl_contrib
+                if col == "ab":
+                    row[col] = base * scale + repl_contrib
+                else:
+                    row[col] = base * perf * scale + repl_contrib
             row["player_type"] = "hitter"
             row["name"] = h["name"]
             adj_hitters.append(row)
@@ -137,14 +138,17 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
 
             row = {}
             scale = 1.0 - frac_missed
-            # Single performance multiplier — ER, IP, BB, H_allowed move
-            # together so ERA/WHIP stay internally consistent.
             perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["pitcher"]))
+            inv_perf = max(0, 2.0 - perf)
             for col in PITCHING_COUNTING:
                 base = p.get(col, 0)
-                player_contrib = base * perf * scale
                 repl_contrib = repl_profile.get(col, 0) * frac_missed
-                row[col] = player_contrib + repl_contrib
+                if col == "ip":
+                    row[col] = base * scale + repl_contrib
+                elif col in ("er", "bb", "h_allowed"):
+                    row[col] = base * inv_perf * scale + repl_contrib
+                else:
+                    row[col] = base * perf * scale + repl_contrib
             row["player_type"] = "pitcher"
             row["name"] = p["name"]
             adj_pitchers.append(row)
@@ -229,8 +233,10 @@ def main():
     )
     board_after_keepers = apply_keepers(board, config.keepers)
 
-    with open(STATE_PATH) as f:
+    state_path = SIM_STATE_PATH if SIM_STATE_PATH.exists() else LIVE_STATE_PATH
+    with open(state_path) as f:
         state = json.load(f)
+    print(f"Loaded state from {state_path.name}")
 
     print("Reconstructing rosters...")
     team_players = reconstruct_rosters(config, board_after_keepers, state)

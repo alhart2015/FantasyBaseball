@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 from pathlib import Path
 from .fangraphs import load_projection_set, _find_file
@@ -112,95 +113,85 @@ def blend_projections(
     return blended_hitters, blended_pitchers
 
 
-def _blend_hitters(dfs: list[pd.DataFrame]) -> pd.DataFrame:
-    """Blend hitter projections. Recomputes AVG from blended H and AB."""
+def _blend_players(
+    dfs: list[pd.DataFrame],
+    counting_cols: list[str],
+    player_type: str,
+) -> pd.DataFrame:
+    """Vectorized projection blending shared by hitters and pitchers.
+
+    Instead of iterating per group with pandas Series arithmetic,
+    this pre-multiplies all counting stats by their normalized weight
+    and uses a single groupby().sum() to aggregate.
+    """
     if not dfs:
         return pd.DataFrame()
 
     combined = pd.concat(dfs, ignore_index=True)
     # Group by fg_id when available (robust against name variations
     # across systems, e.g. accented vs ASCII). Fall back to name.
-    group_col = "fg_id" if "fg_id" in combined.columns and combined["fg_id"].notna().all() else "name"
-    results = []
-    for key, group in combined.groupby(group_col):
-        w = group["_weight"].values
-        # Renormalize weights so players in fewer systems aren't diluted
-        w_sum = w.sum()
-        if w_sum > 0:
-            w = w / w_sum
-        # Use the name from the highest-weighted system
-        name = group.loc[group["_weight"].idxmax(), "name"]
-        row: dict = {"name": name, "player_type": "hitter"}
-        for col in HITTING_COUNTING_COLS:
-            if col in group.columns:
-                row[col] = (group[col].fillna(0) * w).sum()
-        # Recompute AVG from blended H and AB
-        if row.get("ab", 0) > 0:
-            row["avg"] = row["h"] / row["ab"]
-        else:
-            row["avg"] = 0.0
-        if "team" in group.columns:
-            row["team"] = group.loc[group["_weight"].idxmax(), "team"]
-        if "fg_id" in group.columns:
-            row["fg_id"] = group.iloc[0]["fg_id"]
-        if "adp" in group.columns:
-            adp_mask = group["adp"].notna()
-            if adp_mask.any():
-                adp_w = w[adp_mask.values]
-                adp_w_sum = adp_w.sum()
-                if adp_w_sum > 0:
-                    row["adp"] = float((group.loc[adp_mask, "adp"].values * adp_w).sum() / adp_w_sum)
-                else:
-                    row["adp"] = float("inf")
-            else:
-                row["adp"] = float("inf")
-        results.append(row)
-    return pd.DataFrame(results)
+    group_col = (
+        "fg_id"
+        if "fg_id" in combined.columns and combined["fg_id"].notna().all()
+        else "name"
+    )
+
+    # Normalize weights within each group (vectorized)
+    group_w_sum = combined.groupby(group_col)["_weight"].transform("sum")
+    nw = (combined["_weight"] / group_w_sum).values
+
+    # Pre-multiply counting stats by normalized weight, then sum per group
+    stat_cols = [c for c in counting_cols if c in combined.columns]
+    weighted = combined[stat_cols].fillna(0).multiply(nw, axis=0)
+    weighted[group_col] = combined[group_col].values
+    result = weighted.groupby(group_col, sort=False)[stat_cols].sum()
+
+    # Metadata from highest-weight row per group
+    idx_max = combined.groupby(group_col)["_weight"].idxmax()
+    meta = combined.loc[idx_max].set_index(group_col)
+
+    result["name"] = meta.index if group_col == "name" else meta["name"]
+    result["player_type"] = player_type
+    if "team" in combined.columns:
+        result["team"] = meta["team"]
+    if "fg_id" in combined.columns and group_col != "fg_id":
+        result["fg_id"] = combined.groupby(group_col)["fg_id"].first()
+
+    # ADP: weighted average of non-null values only
+    if "adp" in combined.columns:
+        adp_vals = combined["adp"].values.astype(float).copy()
+        adp_nw = nw.copy()
+        mask = np.isnan(adp_vals)
+        adp_vals[mask] = 0.0
+        adp_nw[mask] = 0.0
+
+        adp_df = pd.DataFrame({
+            group_col: combined[group_col].values,
+            "_aw": adp_vals * adp_nw,
+            "_nw": adp_nw,
+        })
+        adp_agg = adp_df.groupby(group_col).sum()
+        adp_result = adp_agg["_aw"] / adp_agg["_nw"]
+        result["adp"] = adp_result.replace([np.inf, -np.inf, np.nan], float("inf"))
+
+    return result.reset_index()
+
+
+def _blend_hitters(dfs: list[pd.DataFrame]) -> pd.DataFrame:
+    """Blend hitter projections. Recomputes AVG from blended H and AB."""
+    result = _blend_players(dfs, HITTING_COUNTING_COLS, "hitter")
+    if result.empty:
+        return result
+    result["avg"] = np.where(result["ab"] > 0, result["h"] / result["ab"], 0.0)
+    return result
 
 
 def _blend_pitchers(dfs: list[pd.DataFrame]) -> pd.DataFrame:
     """Blend pitcher projections. Recomputes ERA and WHIP from components."""
-    if not dfs:
-        return pd.DataFrame()
-
-    combined = pd.concat(dfs, ignore_index=True)
-    group_col = "fg_id" if "fg_id" in combined.columns and combined["fg_id"].notna().all() else "name"
-    results = []
-    for key, group in combined.groupby(group_col):
-        w = group["_weight"].values
-        # Renormalize weights so players in fewer systems aren't diluted
-        w_sum = w.sum()
-        if w_sum > 0:
-            w = w / w_sum
-        name = group.loc[group["_weight"].idxmax(), "name"]
-        row: dict = {"name": name, "player_type": "pitcher"}
-        for col in PITCHING_COUNTING_COLS:
-            if col in group.columns:
-                row[col] = (group[col].fillna(0) * w).sum()
-        # Recompute ERA = ER * 9 / IP
-        ip = row.get("ip", 0)
-        if ip > 0:
-            row["era"] = row.get("er", 0) * 9 / ip
-            bb = row.get("bb", 0)
-            h_allowed = row.get("h_allowed", 0)
-            row["whip"] = (bb + h_allowed) / ip
-        else:
-            row["era"] = 0.0
-            row["whip"] = 0.0
-        if "team" in group.columns:
-            row["team"] = group.loc[group["_weight"].idxmax(), "team"]
-        if "fg_id" in group.columns:
-            row["fg_id"] = group.iloc[0]["fg_id"]
-        if "adp" in group.columns:
-            adp_mask = group["adp"].notna()
-            if adp_mask.any():
-                adp_w = w[adp_mask.values]
-                adp_w_sum = adp_w.sum()
-                if adp_w_sum > 0:
-                    row["adp"] = float((group.loc[adp_mask, "adp"].values * adp_w).sum() / adp_w_sum)
-                else:
-                    row["adp"] = float("inf")
-            else:
-                row["adp"] = float("inf")
-        results.append(row)
-    return pd.DataFrame(results)
+    result = _blend_players(dfs, PITCHING_COUNTING_COLS, "pitcher")
+    if result.empty:
+        return result
+    ip = result["ip"]
+    result["era"] = np.where(ip > 0, result["er"] * 9 / ip, 0.0)
+    result["whip"] = np.where(ip > 0, (result["bb"] + result["h_allowed"]) / ip, 0.0)
+    return result

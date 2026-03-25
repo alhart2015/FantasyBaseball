@@ -127,7 +127,11 @@ def simulate_season(team_rosters, rng, h_slots=13, p_slots=9):
             row = {}
             for col in HITTING_COUNTING:
                 base = h.get(col, 0)
-                row[col] = base * perf * scale + REPLACEMENT_HITTER.get(col, 0) * frac_missed
+                repl_val = REPLACEMENT_HITTER.get(col, 0) * frac_missed
+                if col == "ab":
+                    row[col] = base * scale + repl_val
+                else:
+                    row[col] = base * perf * scale + repl_val
             adj_hitters.append(row)
 
         adj_pitchers = []
@@ -137,12 +141,19 @@ def simulate_season(team_rosters, rng, h_slots=13, p_slots=9):
                 frac_missed = rng.uniform(*INJURY_SEVERITY["pitcher"])
             scale = 1.0 - frac_missed
             perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["pitcher"]))
+            inv_perf = max(0, 2.0 - perf)
             is_closer = p.get("sv", 0) >= CLOSER_SV_THRESHOLD
             repl = REPLACEMENT_RP if is_closer else REPLACEMENT_SP
             row = {}
             for col in PITCHING_COUNTING:
                 base = p.get(col, 0)
-                row[col] = base * perf * scale + repl.get(col, 0) * frac_missed
+                repl_val = repl.get(col, 0) * frac_missed
+                if col == "ip":
+                    row[col] = base * scale + repl_val
+                elif col in ("er", "bb", "h_allowed"):
+                    row[col] = base * inv_perf * scale + repl_val
+                else:
+                    row[col] = base * perf * scale + repl_val
             row["sv_base"] = p.get("sv", 0)
             adj_pitchers.append(row)
 

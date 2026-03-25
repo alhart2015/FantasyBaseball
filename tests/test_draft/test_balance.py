@@ -150,22 +150,27 @@ class TestCalculateDraftLeverage:
         assert "SB" in weights
         assert weights["SB"] > 0
 
-    def test_inverse_stats_get_fixed_weight(self):
-        """ERA and WHIP should always get raw weight of 1.0 (before normalization)."""
-        totals = {
+    def test_bad_rate_stats_get_higher_weight(self):
+        """ERA/WHIP above target should get higher leverage than at target."""
+        totals_bad = {
             "R": 200, "HR": 50, "RBI": 200, "SB": 30, "AVG": 0.260,
             "W": 20, "K": 300, "ERA": 5.50, "WHIP": 1.60, "SV": 10,
         }
-        weights = calculate_draft_leverage(totals, picks_made=6, total_picks=24, targets=self.TARGETS)
-        # ERA and WHIP should have the same weight (both get raw=1.0)
-        assert weights["ERA"] == pytest.approx(weights["WHIP"])
+        totals_good = {
+            "R": 200, "HR": 50, "RBI": 200, "SB": 30, "AVG": 0.260,
+            "W": 20, "K": 300, "ERA": 3.40, "WHIP": 1.10, "SV": 10,
+        }
+        w_bad = calculate_draft_leverage(totals_bad, picks_made=6, total_picks=24, targets=self.TARGETS)
+        w_good = calculate_draft_leverage(totals_good, picks_made=6, total_picks=24, targets=self.TARGETS)
+        assert w_bad["ERA"] > w_good["ERA"]
+        assert w_bad["WHIP"] > w_good["WHIP"]
 
     def test_all_counting_stats_at_target_gives_equal_counting_weights(self):
         """When all counting stats are on pace and rate stats at target, weights are equal.
 
-        AVG is a rate stat (like ERA/WHIP) — it doesn't accumulate, so it
-        gets a fixed raw weight of 1.0.  Counting stats on pace also get
-        raw=1.0, so all 10 categories should be equal.
+        Rate stats at target produce raw weight = target/current = 1.0.
+        Counting stats on pace also get raw=1.0, so all 10 categories
+        should be equal.
         """
         progress = 0.5
         totals = {

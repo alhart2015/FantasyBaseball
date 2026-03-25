@@ -84,3 +84,24 @@ class TestCalculatePlayerSgp:
         })
         sgp = calculate_player_sgp(player, team_ab=5500, team_ip=1400)
         assert sgp > 0
+
+    def test_nan_hitter_stats_produce_finite_sgp(self):
+        """NaN stats must not propagate — treat as 0."""
+        player = pd.Series({
+            "name": "Bad Data", "player_type": "hitter",
+            "r": float("nan"), "hr": 20, "rbi": None, "sb": 5,
+            "avg": float("nan"), "ab": 500, "h": 100,
+        })
+        sgp = calculate_player_sgp(player)
+        assert sgp == sgp  # not NaN
+        assert isinstance(sgp, float)
+
+    def test_nan_pitcher_stats_produce_finite_sgp(self):
+        player = pd.Series({
+            "name": "Bad Pitcher", "player_type": "pitcher",
+            "w": float("nan"), "k": 100, "sv": None,
+            "era": float("nan"), "whip": 1.20, "ip": 150,
+        })
+        sgp = calculate_player_sgp(player)
+        assert sgp == sgp  # not NaN
+        assert isinstance(sgp, float)

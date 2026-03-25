@@ -1,5 +1,5 @@
 import pandas as pd
-from fantasy_baseball.utils.constants import DEFAULT_SGP_DENOMINATORS
+from fantasy_baseball.utils.constants import DEFAULT_SGP_DENOMINATORS, safe_float as _safe
 from .denominators import get_sgp_denominators
 
 DEFAULT_TEAM_AB: int = 5500
@@ -51,11 +51,11 @@ def calculate_player_sgp(
 
     if player.get("player_type") == "hitter":
         for stat, col in [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")]:
-            val = player.get(col, 0)
+            val = _safe(player.get(col, 0))
             total_sgp += calculate_counting_sgp(val, denoms[stat])
         total_sgp += calculate_hitting_rate_sgp(
-            player_avg=player.get("avg", 0),
-            player_ab=int(player.get("ab", 0)),
+            player_avg=_safe(player.get("avg", 0)),
+            player_ab=int(_safe(player.get("ab", 0))),
             replacement_avg=replacement_avg,
             sgp_denominator=denoms["AVG"],
             team_ab=team_ab,
@@ -63,17 +63,17 @@ def calculate_player_sgp(
 
     elif player.get("player_type") == "pitcher":
         for stat, col in [("W", "w"), ("K", "k"), ("SV", "sv")]:
-            val = player.get(col, 0)
+            val = _safe(player.get(col, 0))
             total_sgp += calculate_counting_sgp(val, denoms[stat])
-        ip = player.get("ip", 0)
+        ip = _safe(player.get("ip", 0))
         if ip > 0:
             total_sgp += calculate_pitching_rate_sgp(
-                player_rate=player.get("era", 0), player_ip=ip,
+                player_rate=_safe(player.get("era", 0)), player_ip=ip,
                 replacement_rate=replacement_era,
                 sgp_denominator=denoms["ERA"], team_ip=team_ip, innings_divisor=9,
             )
             total_sgp += calculate_pitching_rate_sgp(
-                player_rate=player.get("whip", 0), player_ip=ip,
+                player_rate=_safe(player.get("whip", 0)), player_ip=ip,
                 replacement_rate=replacement_whip,
                 sgp_denominator=denoms["WHIP"], team_ip=team_ip, innings_divisor=1,
             )
