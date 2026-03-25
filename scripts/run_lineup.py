@@ -294,6 +294,12 @@ def main():
     hitters_proj, pitchers_proj = blend_projections(
         PROJECTIONS_DIR, config.projection_systems, weights,
     )
+    # Precompute normalized names for projection matching (avoids repeated
+    # apply(normalize_name) on every lookup — ~800x fewer calls).
+    if not hitters_proj.empty:
+        hitters_proj["_name_norm"] = hitters_proj["name"].apply(normalize_name)
+    if not pitchers_proj.empty:
+        pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
     positions_cache = load_positions_cache(POSITIONS_PATH)
     norm_positions = {normalize_name(k): v for k, v in positions_cache.items()}
 
@@ -310,7 +316,7 @@ def main():
         # players get the correct projection for each role.
         hit_proj = None
         if is_hitter(positions) and not hitters_proj.empty:
-            matches = hitters_proj[hitters_proj["name"].apply(normalize_name) == name_norm]
+            matches = hitters_proj[hitters_proj["_name_norm"] == name_norm]
             if not matches.empty:
                 hit_proj = matches.iloc[0].copy()
                 hit_proj["positions"] = positions
@@ -322,7 +328,7 @@ def main():
 
         pit_proj = None
         if is_pitcher(positions) and not pitchers_proj.empty:
-            matches = pitchers_proj[pitchers_proj["name"].apply(normalize_name) == name_norm]
+            matches = pitchers_proj[pitchers_proj["_name_norm"] == name_norm]
             if not matches.empty:
                 pit_proj = matches.iloc[0].copy()
                 pit_proj["positions"] = positions
@@ -341,7 +347,7 @@ def main():
             ]:
                 if df.empty:
                     continue
-                matches = df[df["name"].apply(normalize_name) == name_norm]
+                matches = df[df["_name_norm"] == name_norm]
                 if not matches.empty:
                     proj_row = matches.iloc[0].copy()
                     proj_row["positions"] = positions
@@ -590,7 +596,7 @@ def main():
                 for df in search_order:
                     if df.empty:
                         continue
-                    matches = df[df["name"].apply(normalize_name) == fa_name_norm]
+                    matches = df[df["_name_norm"] == fa_name_norm]
                     if not matches.empty:
                         proj_row = matches.iloc[0].copy()
                         break

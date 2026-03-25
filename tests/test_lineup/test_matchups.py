@@ -145,17 +145,13 @@ def test_fetch_falls_back_to_prior_season_when_preseason(mock_api, mock_dt):
     mock_dt.now.return_value.year = 2026
 
     mock_api.get.side_effect = [
-        # First call (2026): teams list
+        # Teams list (fetched once, reused for fallback)
         {"teams": [
             {"id": 147, "name": "New York Yankees", "abbreviation": "NYY"},
         ]},
         # 2026 per-team call: empty splits (no games played yet)
         {"stats": [{"splits": []}]},
-        # Fallback call (2025): teams list
-        {"teams": [
-            {"id": 147, "name": "New York Yankees", "abbreviation": "NYY"},
-        ]},
-        # 2025 per-team call: real data
+        # 2025 fallback per-team call: real data
         {"stats": [{"splits": [{"stat": {
             "ops": ".787", "strikeOuts": 1463, "plateAppearances": 6235,
         }}]}]},

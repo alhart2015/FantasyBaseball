@@ -72,6 +72,12 @@ def main():
         print(f"No available players found at {position}.")
         sys.exit(0)
 
+    # Precompute normalized names for projection matching
+    if not hitters_proj.empty:
+        hitters_proj["_name_norm"] = hitters_proj["name"].apply(normalize_name)
+    if not pitchers_proj.empty:
+        pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
+
     # Match to projections and score
     is_pitcher_pos = position in PITCHER_POSITIONS
     if is_pitcher_pos:
@@ -91,7 +97,7 @@ def main():
         for df in search_order:
             if df.empty:
                 continue
-            matches = df[df["name"].apply(normalize_name) == name_norm]
+            matches = df[df["_name_norm"] == name_norm]
             if not matches.empty:
                 proj_row = matches.iloc[0].copy()
                 break

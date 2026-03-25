@@ -48,7 +48,6 @@ def scan_waivers(
     free_agents: list[pd.Series],
     leverage: dict[str, float],
     max_results: int = 5,
-    open_slots: int = 0,
     open_hitter_slots: int = 0,
     open_pitcher_slots: int = 0,
     open_bench_slots: int = 0,
@@ -73,7 +72,6 @@ def scan_waivers(
         free_agents: List of free agent stat Series.
         leverage: Category leverage weights.
         max_results: Maximum number of recommendations to return.
-        open_slots: Total empty slots (legacy; used when typed counts not provided).
         open_hitter_slots: Empty hitter-only active slots.
         open_pitcher_slots: Empty pitcher-only active slots.
         open_bench_slots: Empty bench slots (either type).
@@ -82,12 +80,7 @@ def scan_waivers(
     Returns:
         List of evaluate_pickup result dicts, sorted by sgp_gain descending.
     """
-    # Support both legacy open_slots and typed slots
     total_open = open_hitter_slots + open_pitcher_slots + open_bench_slots
-    if total_open == 0 and open_slots > 0:
-        # Legacy caller — treat all as bench (any type)
-        open_bench_slots = open_slots
-        total_open = open_slots
 
     if not free_agents:
         return []
@@ -101,7 +94,8 @@ def scan_waivers(
         roster_scores.append({"player": p, "wsgp": wsgp})
 
     recommendations = []
-    seen_adds: set[str] = set()
+    recommended_adds: set[str] = set()
+    recommended_swaps: set[tuple[str, str]] = set()
 
     # Pure adds for empty slots — type-aware ranking
     if total_open > 0:
@@ -121,7 +115,7 @@ def scan_waivers(
         def _add_pure(pool, count, label):
             added = 0
             for fa, wsgp in pool:
-                if added >= count or fa["name"] in seen_adds:
+                if added >= count or fa["name"] in recommended_adds:
                     continue
                 recommendations.append({
                     "add": fa["name"],
@@ -129,20 +123,20 @@ def scan_waivers(
                     "sgp_gain": wsgp,
                     "categories": {},
                 })
-                seen_adds.add(fa["name"])
+                recommended_adds.add(fa["name"])
                 added += 1
 
         _add_pure(fa_hitters, open_hitter_slots, "hitter")
         _add_pure(fa_pitchers, open_pitcher_slots, "pitcher")
         # Bench slots: pick best remaining from either type
         remaining = [(fa, w) for fa, w in fa_hitters + fa_pitchers
-                     if fa["name"] not in seen_adds]
+                     if fa["name"] not in recommended_adds]
         remaining.sort(key=lambda x: x[1], reverse=True)
         _add_pure(remaining, open_bench_slots, "bench")
 
     # Drop/add swaps for remaining free agents
     for fa in free_agents:
-        if fa["name"] in seen_adds:
+        if fa["name"] in recommended_adds:
             continue
         fa_type = fa.get("player_type", "hitter")
 
@@ -154,7 +148,7 @@ def scan_waivers(
 
         for candidate in same_type_sorted:
             pair_key = (fa["name"], candidate["player"]["name"])
-            if pair_key in seen_adds:
+            if pair_key in recommended_swaps:
                 continue
 
             # Position feasibility check for hitter swaps
@@ -169,7 +163,7 @@ def scan_waivers(
                 if not can_cover_slots(post_swap_positions, roster_slots):
                     continue  # this drop leaves a position hole — try next
 
-            seen_adds.add(pair_key)
+            recommended_swaps.add(pair_key)
             result = evaluate_pickup(fa, candidate["player"], leverage)
             if result["sgp_gain"] > 0:
                 recommendations.append(result)
