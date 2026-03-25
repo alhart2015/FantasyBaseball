@@ -672,6 +672,14 @@ def main():
         "--scoring", choices=["var", "vona"], default="vona",
         help="Scoring mode: 'var' (Value Above Replacement) or 'vona' (Value Over Next Available)",
     )
+    parser.add_argument(
+        "--monte-carlo", type=int, default=0, metavar="N",
+        help="Run N Monte Carlo simulations on the drafted rosters (injuries + variance)",
+    )
+    parser.add_argument(
+        "--mc-seed", type=int, default=None,
+        help="Random seed for Monte Carlo simulations",
+    )
     args = parser.parse_args()
 
     # Apply custom closer deadlines if provided
@@ -702,7 +710,7 @@ def main():
         opponent_strategies_str=args.opponent_strategies,
     )
 
-    # Save state so monte_carlo.py can read it
+    # Save state for post-analysis
     tracker = result["tracker"]
     state_path = PROJECT_ROOT / "data" / "sim_state.json"
     state_data = {
@@ -803,6 +811,87 @@ def main():
         print("\nWeak categories (1-3 pts):")
         for c, p, v in sorted(bot, key=lambda x: x[1]):
             print(f"  {c:>4}: {fmt(c, v):>7} ({p} pts)")
+
+    # Monte Carlo simulation on drafted rosters
+    if args.monte_carlo > 0:
+        from fantasy_baseball.simulation import simulate_season
+
+        h_slots = sum(
+            v for k, v in config.roster_slots.items() if k not in ("P", "BN", "IL")
+        )
+        p_slots = config.roster_slots.get("P", 9)
+
+        team_players = result["team_players"]
+        mc_rng = np.random.default_rng(args.mc_seed)
+        n = args.monte_carlo
+
+        print()
+        print("=" * 80)
+        print(f"MONTE CARLO ({n} simulations)")
+        print("=" * 80)
+
+        mc_totals = {tn: [] for tn in team_players}
+        mc_wins = {tn: 0 for tn in team_players}
+        mc_cat_pts = {tn: {c: [] for c in all_cats} for tn in team_players}
+        user_best = None
+        user_worst = None
+
+        for _ in range(n):
+            sim_stats, sim_injuries = simulate_season(
+                team_players, mc_rng, h_slots, p_slots,
+            )
+            sim_roto = score_roto(sim_stats)
+            ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
+            for rk, (tn, pts) in enumerate(ranked, 1):
+                total = pts["total"]
+                mc_totals[tn].append(total)
+                if rk == 1:
+                    mc_wins[tn] += 1
+                for c in all_cats:
+                    mc_cat_pts[tn][c].append(pts.get(f"{c}_pts", 0))
+
+            # Track best/worst for user team
+            user_num = next(
+                (num for num, name in config.teams.items() if name == config.team_name),
+                None,
+            )
+            if user_num and user_num in sim_roto:
+                total = sim_roto[user_num]["total"]
+                if user_best is None or total > user_best:
+                    user_best = total
+                if user_worst is None or total < user_worst:
+                    user_worst = total
+
+        print(f"\n{'Team':<32} {'Med':>4} {'P10':>4} {'P90':>4}  {'Win%':>5}")
+        print("-" * 60)
+        team_order = sorted(
+            team_players.keys(),
+            key=lambda tn: np.median(mc_totals[tn]),
+            reverse=True,
+        )
+        for tn in team_order:
+            tname = config.teams.get(tn, f"Team {tn}")
+            totals = np.array(mc_totals[tn])
+            med = np.median(totals)
+            p10 = np.percentile(totals, 10)
+            p90 = np.percentile(totals, 90)
+            win_pct = mc_wins[tn] / n * 100
+            marker = " <<<" if tname == config.team_name else ""
+            print(f"{tname:<32} {med:>4.0f} {p10:>4.0f} {p90:>4.0f}  {win_pct:>4.1f}%{marker}")
+
+        # Category risk for user team
+        if user_num:
+            print(f"\nCategory risk — {config.team_name}:")
+            print(f"  {'Cat':>4} {'Med':>4} {'P10':>4} {'P90':>4}")
+            print("  " + "-" * 20)
+            for c in all_cats:
+                pts = mc_cat_pts[user_num][c]
+                med = np.median(pts)
+                p10 = np.percentile(pts, 10)
+                p90 = np.percentile(pts, 90)
+                print(f"  {c:>4} {med:>4.0f} {p10:>4.0f} {p90:>4.0f}")
+            if user_best is not None:
+                print(f"\n  Best sim: {user_best:.0f} pts  |  Worst sim: {user_worst:.0f} pts")
 
 
 if __name__ == "__main__":

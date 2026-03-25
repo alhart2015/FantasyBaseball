@@ -1,6 +1,6 @@
 """Monte Carlo season simulation with injuries and stat variance.
 
-Shared by scripts/monte_carlo.py (post-draft analysis) and
+Shared by scripts/simulate_draft.py (post-draft --monte-carlo) and
 scripts/summary.py (in-season weekly projections).
 """
 

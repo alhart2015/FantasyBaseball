@@ -2,7 +2,7 @@
 
 Provides reusable simulation functions for projecting roto standings
 from partial or complete rosters. Used by both the live draft predictor
-and the standalone monte_carlo.py script.
+and the simulate_draft.py --monte-carlo mode.
 """
 import numpy as np
 import pandas as pd
