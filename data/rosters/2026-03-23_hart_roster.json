@@ -1,0 +1,168 @@
+{
+  "snapshot_date": "2026-03-23",
+  "week_num": 1,
+  "team": "Hart of the Order",
+  "league": 5652,
+  "roster": {
+    "C": {
+      "name": "Ivan Herrera",
+      "positions": [
+        "C",
+        "Util"
+      ]
+    },
+    "1B": {
+      "name": "Munetaka Murakami",
+      "positions": [
+        "1B",
+        "3B",
+        "IF",
+        "Util"
+      ]
+    },
+    "2B": {
+      "name": "Marcus Semien",
+      "positions": [
+        "2B",
+        "IF",
+        "Util"
+      ]
+    },
+    "3B": {
+      "name": "Junior Caminero",
+      "positions": [
+        "3B",
+        "IF",
+        "Util"
+      ]
+    },
+    "SS": {
+      "name": "CJ Abrams",
+      "positions": [
+        "SS",
+        "IF",
+        "Util"
+      ]
+    },
+    "IF": {
+      "name": "Willy Adames",
+      "positions": [
+        "SS",
+        "IF",
+        "Util"
+      ]
+    },
+    "OF": {
+      "name": "Juan Soto",
+      "positions": [
+        "OF",
+        "Util"
+      ]
+    },
+    "OF2": {
+      "name": "Julio Rodr\u00edguez",
+      "positions": [
+        "OF",
+        "Util"
+      ]
+    },
+    "OF3": {
+      "name": "Randy Arozarena",
+      "positions": [
+        "OF",
+        "Util"
+      ]
+    },
+    "OF4": {
+      "name": "Oneil Cruz",
+      "positions": [
+        "OF",
+        "Util"
+      ]
+    },
+    "Util": {
+      "name": "Byron Buxton",
+      "positions": [
+        "OF",
+        "Util"
+      ]
+    },
+    "Util2": {
+      "name": "Andy Pages",
+      "positions": [
+        "OF",
+        "Util"
+      ]
+    },
+    "BN": {
+      "name": "Adolis Garc\u00eda",
+      "positions": [
+        "OF",
+        "Util"
+      ]
+    },
+    "P": {
+      "name": "Bryan Woo",
+      "positions": [
+        "P"
+      ]
+    },
+    "P2": {
+      "name": "Logan Webb",
+      "positions": [
+        "P"
+      ]
+    },
+    "P3": {
+      "name": "Mason Miller",
+      "positions": [
+        "P"
+      ]
+    },
+    "P4": {
+      "name": "Jes\u00fas Luzardo",
+      "positions": [
+        "P"
+      ]
+    },
+    "P5": {
+      "name": "Sonny Gray",
+      "positions": [
+        "P"
+      ]
+    },
+    "P6": {
+      "name": "Ryan Walker",
+      "positions": [
+        "P"
+      ]
+    },
+    "P7": {
+      "name": "Aaron Nola",
+      "positions": [
+        "P"
+      ]
+    },
+    "BN2": {
+      "name": "Josh Hader",
+      "positions": [
+        "P",
+        "IL"
+      ]
+    },
+    "IL": {
+      "name": "Zack Wheeler",
+      "positions": [
+        "P",
+        "IL"
+      ]
+    },
+    "IL2": {
+      "name": "Spencer Strider",
+      "positions": [
+        "P",
+        "IL"
+      ]
+    }
+  }
+}

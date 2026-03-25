@@ -6,12 +6,13 @@ Usage:
     python scripts/save_roster.py --week 0       # pre-season snapshot
 
 Connects to Yahoo, fetches the current roster for the user's team,
-and saves it to data/rosters/<date>_hart_roster.json.
+and saves it to data/rosters/<monday>_hart_roster.json (keyed to Monday
+of the current week so each week gets one file).
 """
 import argparse
 import json
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -79,8 +80,12 @@ def main():
             slot = f"{slot}{i}"
         roster[slot] = entry
 
+    # Use Monday of the current week as the snapshot date
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+
     snapshot = {
-        "snapshot_date": date.today().isoformat(),
+        "snapshot_date": monday.isoformat(),
         "week_num": week_num,
         "team": team_name,
         "league": config.league_id,
@@ -89,7 +94,7 @@ def main():
 
     # Save
     ROSTERS_DIR.mkdir(parents=True, exist_ok=True)
-    filename = f"{date.today().isoformat()}_hart_roster.json"
+    filename = f"{monday.isoformat()}_hart_roster.json"
     out_path = ROSTERS_DIR / filename
     with open(out_path, "w") as f:
         json.dump(snapshot, f, indent=2)
