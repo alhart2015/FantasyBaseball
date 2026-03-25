@@ -118,6 +118,9 @@ def fetch_team_batting_stats(season: int | None = None) -> dict[str, dict]:
     Gets the team list from statsapi, then fetches season hitting stats
     for each team individually. Normalizes abbreviations to FanGraphs format.
 
+    If the requested season returns no data (e.g. pre-season before games
+    have been played), automatically retries with the previous season.
+
     Args:
         season: MLB season year. Defaults to the current year if None.
 
@@ -127,6 +130,25 @@ def fetch_team_batting_stats(season: int | None = None) -> dict[str, dict]:
     if season is None:
         season = datetime.now().year
 
+    stats = _fetch_team_batting_stats_for_season(season)
+    if not stats and season == datetime.now().year:
+        logger.info(
+            "No %d stats available (pre-season?); falling back to %d",
+            season, season - 1,
+        )
+        stats = _fetch_team_batting_stats_for_season(season - 1)
+    return stats
+
+
+def _fetch_team_batting_stats_for_season(season: int) -> dict[str, dict]:
+    """Fetch team batting stats for a specific season.
+
+    Args:
+        season: MLB season year.
+
+    Returns:
+        Result of normalize_team_batting_stats: {abbrev: {ops, k_pct}}.
+    """
     teams_response = statsapi.get("teams", {"sportId": 1})
     teams = teams_response.get("teams", [])
 

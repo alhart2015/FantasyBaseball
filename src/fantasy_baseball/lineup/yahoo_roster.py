@@ -119,9 +119,16 @@ def parse_standings_raw(
 
 
 def fetch_free_agents(league, position: str, count: int = 50) -> list[dict]:
-    """Fetch top free agents at a position."""
+    """Fetch top available players (free agents + waivers) at a position.
+
+    Uses status 'A' (all available) instead of 'FA' (free agents only)
+    so that waiver-wire players are included.  Pre-season, all unrostered
+    players have waiver status, so 'FA'-only queries return nothing.
+    """
     try:
-        agents = league.free_agents(position)
+        # _fetch_players('A', ...) returns both FA and W status players.
+        # league.free_agents() only returns 'FA', which is empty pre-season.
+        agents = league._fetch_players('A', position=position)
         result = []
         for p in agents[:count]:
             result.append({
@@ -149,17 +156,15 @@ def fetch_scoring_period(league) -> tuple[str, str]:
     """Get the current Yahoo scoring period date range.
 
     Returns (start_date, end_date) as "YYYY-MM-DD" strings.
-    Falls back to Monday-Sunday of the current week on error.
+    Falls back to Monday-Sunday of the current week on error
+    (common pre-season when no scoring week exists yet).
     """
     try:
         week = league.current_week()
         start, end = league.week_date_range(week)
         return start.isoformat(), end.isoformat()
     except Exception:
-        logger.warning(
-            "Failed to get Yahoo scoring period; using Mon-Sun fallback",
-            exc_info=True,
-        )
+        logger.info("No active scoring period (pre-season?) — using Mon-Sun of current week")
         today = datetime.date.today()
         monday = today - datetime.timedelta(days=today.weekday())
         sunday = monday + datetime.timedelta(days=6)

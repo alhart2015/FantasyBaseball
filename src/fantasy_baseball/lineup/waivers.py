@@ -47,11 +47,18 @@ def scan_waivers(
     free_agents: list[pd.Series],
     leverage: dict[str, float],
     max_results: int = 5,
+    open_slots: int = 0,
+    open_hitter_slots: int = 0,
+    open_pitcher_slots: int = 0,
+    open_bench_slots: int = 0,
 ) -> list[dict]:
     """Scan free agents and rank add/drop recommendations.
 
     For each free agent, finds the weakest roster player they could replace
     (same position type: hitter vs pitcher) and evaluates the swap.
+    When open slots exist, also recommends pure adds (no drop required)
+    matching the slot type (hitter slots filled by hitters, pitcher slots
+    by pitchers, bench slots by either).
     Returns only positive-gain recommendations, sorted best-first.
 
     Args:
@@ -59,11 +66,24 @@ def scan_waivers(
         free_agents: List of free agent stat Series.
         leverage: Category leverage weights.
         max_results: Maximum number of recommendations to return.
+        open_slots: Total empty slots (legacy; used when typed counts not provided).
+        open_hitter_slots: Empty hitter-only active slots.
+        open_pitcher_slots: Empty pitcher-only active slots.
+        open_bench_slots: Empty bench slots (either type).
 
     Returns:
         List of evaluate_pickup result dicts, sorted by sgp_gain descending.
     """
-    if not free_agents or not roster:
+    # Support both legacy open_slots and typed slots
+    total_open = open_hitter_slots + open_pitcher_slots + open_bench_slots
+    if total_open == 0 and open_slots > 0:
+        # Legacy caller — treat all as bench (any type)
+        open_bench_slots = open_slots
+        total_open = open_slots
+
+    if not free_agents:
+        return []
+    if not roster and total_open <= 0:
         return []
 
     # Pre-compute wSGP for all roster players
@@ -73,9 +93,49 @@ def scan_waivers(
         roster_scores.append({"player": p, "wsgp": wsgp})
 
     recommendations = []
-    seen_pairs: set[tuple[str, str]] = set()
+    seen_adds: set[str] = set()
 
+    # Pure adds for empty slots — type-aware ranking
+    if total_open > 0:
+        fa_hitters = []
+        fa_pitchers = []
+        for fa in free_agents:
+            wsgp = calculate_weighted_sgp(fa, leverage)
+            if wsgp <= 0:
+                continue
+            if fa.get("player_type") == "pitcher":
+                fa_pitchers.append((fa, wsgp))
+            else:
+                fa_hitters.append((fa, wsgp))
+        fa_hitters.sort(key=lambda x: x[1], reverse=True)
+        fa_pitchers.sort(key=lambda x: x[1], reverse=True)
+
+        def _add_pure(pool, count, label):
+            added = 0
+            for fa, wsgp in pool:
+                if added >= count or fa["name"] in seen_adds:
+                    continue
+                recommendations.append({
+                    "add": fa["name"],
+                    "drop": f"(empty {label} slot)",
+                    "sgp_gain": wsgp,
+                    "categories": {},
+                })
+                seen_adds.add(fa["name"])
+                added += 1
+
+        _add_pure(fa_hitters, open_hitter_slots, "hitter")
+        _add_pure(fa_pitchers, open_pitcher_slots, "pitcher")
+        # Bench slots: pick best remaining from either type
+        remaining = [(fa, w) for fa, w in fa_hitters + fa_pitchers
+                     if fa["name"] not in seen_adds]
+        remaining.sort(key=lambda x: x[1], reverse=True)
+        _add_pure(remaining, open_bench_slots, "bench")
+
+    # Drop/add swaps for remaining free agents
     for fa in free_agents:
+        if fa["name"] in seen_adds:
+            continue
         fa_type = fa.get("player_type", "hitter")
 
         # Find worst roster player of same type
@@ -85,9 +145,9 @@ def scan_waivers(
 
         worst = min(same_type, key=lambda x: x["wsgp"])
         pair_key = (fa["name"], worst["player"]["name"])
-        if pair_key in seen_pairs:
+        if pair_key in seen_adds:
             continue
-        seen_pairs.add(pair_key)
+        seen_adds.add(pair_key)
 
         result = evaluate_pickup(fa, worst["player"], leverage)
         if result["sgp_gain"] > 0:

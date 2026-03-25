@@ -138,6 +138,34 @@ def test_fetch_team_batting_stats(mock_api):
     assert abs(result["NYY"]["ops"] - 0.787) < 0.001
 
 
+@patch("fantasy_baseball.lineup.matchups.datetime")
+@patch("fantasy_baseball.lineup.matchups.statsapi")
+def test_fetch_falls_back_to_prior_season_when_preseason(mock_api, mock_dt):
+    """When current-year stats return empty, fall back to season-1."""
+    mock_dt.now.return_value.year = 2026
+
+    mock_api.get.side_effect = [
+        # First call (2026): teams list
+        {"teams": [
+            {"id": 147, "name": "New York Yankees", "abbreviation": "NYY"},
+        ]},
+        # 2026 per-team call: empty splits (no games played yet)
+        {"stats": [{"splits": []}]},
+        # Fallback call (2025): teams list
+        {"teams": [
+            {"id": 147, "name": "New York Yankees", "abbreviation": "NYY"},
+        ]},
+        # 2025 per-team call: real data
+        {"stats": [{"splits": [{"stat": {
+            "ops": ".787", "strikeOuts": 1463, "plateAppearances": 6235,
+        }}]}]},
+    ]
+
+    result = fetch_team_batting_stats(season=None)
+    assert "NYY" in result
+    assert abs(result["NYY"]["ops"] - 0.787) < 0.001
+
+
 def test_full_pipeline():
     """End-to-end: raw stats -> factors -> adjusted pitcher projection."""
     raw = [

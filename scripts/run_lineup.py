@@ -347,25 +347,34 @@ def main():
     # Fetch game logs and apply recency-weighted blending
     print("Fetching roster game logs for recency blending...")
 
-    # Build name -> MLBAMID lookup from raw projection CSVs (blended projections
-    # don't carry MLBAMID through, so we read the raw files for the mapping)
-    mlbamid_lookup: dict[str, int] = {}
-    for csv_pattern in PROJECTIONS_DIR.glob("*.csv"):
+    # Build (name, type) -> MLBAMID lookup from raw projection CSVs (blended
+    # projections don't carry MLBAMID through, so we read the raw files).
+    # Keyed by (normalized_name, player_type) to avoid collisions when a
+    # hitter and pitcher share the same name (e.g. Julio Rodriguez).
+    mlbamid_lookup: dict[tuple[str, str], int] = {}
+    for csv_path in PROJECTIONS_DIR.glob("*.csv"):
         try:
-            raw_df = pd.read_csv(csv_pattern, usecols=lambda c: c in ("Name", "MLBAMID"))
+            csv_lower = csv_path.name.lower()
+            if "hitter" in csv_lower:
+                ptype = "hitter"
+            elif "pitcher" in csv_lower:
+                ptype = "pitcher"
+            else:
+                continue
+            raw_df = pd.read_csv(csv_path, usecols=lambda c: c in ("Name", "MLBAMID"))
             if "MLBAMID" in raw_df.columns and "Name" in raw_df.columns:
                 for _, row in raw_df.dropna(subset=["MLBAMID"]).iterrows():
-                    mlbamid_lookup[normalize_name(row["Name"])] = int(row["MLBAMID"])
+                    mlbamid_lookup[(normalize_name(row["Name"]), ptype)] = int(row["MLBAMID"])
         except Exception:
             pass
 
     roster_players_for_logs = []
     for p in roster_hitters:
-        mid = mlbamid_lookup.get(normalize_name(p["name"]))
+        mid = mlbamid_lookup.get((normalize_name(p["name"]), "hitter"))
         if mid:
             roster_players_for_logs.append({"mlbam_id": mid, "name": p["name"], "type": "hitter"})
     for p in roster_pitchers:
-        mid = mlbamid_lookup.get(normalize_name(p["name"]))
+        mid = mlbamid_lookup.get((normalize_name(p["name"]), "pitcher"))
         if mid:
             roster_players_for_logs.append({"mlbam_id": mid, "name": p["name"], "type": "pitcher"})
 
@@ -498,18 +507,74 @@ def main():
     print("=" * 60)
     print("WAIVER WIRE RECOMMENDATIONS")
     print("=" * 60)
+
+    # Detect empty active roster slots by type using selected_position.
+    # Yahoo returns position names like "Util" (not "UTIL"), "SP"/"RP" (not "P"),
+    # so we normalize to lowercase for matching.
+    il_positions = {"il", "il+", "dl", "dl+"}
+    bench_positions = {"bn"}
+
+    # Classify each roster player's slot
+    filled_hitter = 0
+    filled_pitcher = 0
+    filled_bench = 0
+    filled_il = 0
+    for p in roster:
+        slot = (p.get("selected_position") or "").lower()
+        if slot in il_positions:
+            filled_il += 1
+        elif slot in bench_positions:
+            filled_bench += 1
+        elif is_pitcher([slot.upper()]) or slot in ("sp", "rp", "p"):
+            filled_pitcher += 1
+        elif slot:  # any other non-empty slot is a hitter position
+            filled_hitter += 1
+
+    total_hitter_slots = sum(
+        v for k, v in config.roster_slots.items()
+        if k.lower() not in {"p", "bn", "il", "il+", "dl", "dl+"}
+    )
+    total_pitcher_slots = config.roster_slots.get("P", 0)
+    total_bench_slots = config.roster_slots.get("BN", 0)
+
+    open_hitter_slots = max(0, total_hitter_slots - filled_hitter)
+    open_pitcher_slots = max(0, total_pitcher_slots - filled_pitcher)
+    open_bench_slots = max(0, total_bench_slots - filled_bench)
+    open_slots = open_hitter_slots + open_pitcher_slots + open_bench_slots
+
+    if open_slots:
+        parts = []
+        if open_hitter_slots:
+            parts.append(f"{open_hitter_slots} hitter")
+        if open_pitcher_slots:
+            parts.append(f"{open_pitcher_slots} pitcher")
+        if open_bench_slots:
+            parts.append(f"{open_bench_slots} bench")
+        print(f"  Empty slots: {', '.join(parts)} — will recommend pure adds")
+
     all_roster = roster_hitters + roster_pitchers
-    if all_roster:
+    if all_roster or open_slots > 0:
         # Fetch free agents for key positions
         print("Scanning free agents...")
         fa_players = []
+        fa_fetched = 0
+        fa_seen_names: set[str] = set()
         for pos in ["C", "1B", "2B", "3B", "SS", "OF", "SP", "RP"]:
             fas = fetch_free_agents(league, pos, count=25)
+            fa_fetched += len(fas)
             for fa in fas:
                 fa_name_norm = normalize_name(fa["name"])
-                # Match to projections
+                if fa_name_norm in fa_seen_names:
+                    continue
+                fa_seen_names.add(fa_name_norm)
+                # Match to projections — check the appropriate projection
+                # source first based on position to avoid name collisions
                 proj_row = None
-                for df in [hitters_proj, pitchers_proj]:
+                if pos in ("SP", "RP"):
+                    search_order = [pitchers_proj, hitters_proj]
+                else:
+                    search_order = [hitters_proj, pitchers_proj]
+                for df in search_order:
                     if df.empty:
                         continue
                     matches = df[df["name"].apply(normalize_name) == fa_name_norm]
@@ -523,17 +588,49 @@ def main():
                     proj_row = scale_by_schedule(proj_row, fa_games)
                     fa_players.append(proj_row)
 
-        recommendations = scan_waivers(all_roster, fa_players, leverage, max_results=5)
+        if fa_fetched == 0:
+            print("  No available players returned by Yahoo")
+            # Fallback: use projections to find best unrostered players
+            print("  Falling back to projection-based recommendations...")
+            roster_names = {normalize_name(p["name"]) for p in roster}
+            for df in [hitters_proj, pitchers_proj]:
+                if df.empty:
+                    continue
+                for _, row in df.iterrows():
+                    if normalize_name(row["name"]) not in roster_names:
+                        candidate = row.copy()
+                        if "positions" not in candidate.index:
+                            candidate["positions"] = []
+                        team = candidate.get("team", "")
+                        fa_games = games_per_team.get(team, DEFAULT_GAMES_PER_WEEK)
+                        candidate = scale_by_schedule(candidate, fa_games)
+                        fa_players.append(candidate)
+            print(f"  {len(fa_players)} unrostered players found in projections")
+        else:
+            print(f"  Found {fa_fetched} free agents, {len(fa_players)} matched projections")
+
+        recommendations = scan_waivers(
+            all_roster, fa_players, leverage, max_results=5,
+            open_hitter_slots=open_hitter_slots,
+            open_pitcher_slots=open_pitcher_slots,
+            open_bench_slots=open_bench_slots,
+        )
         if recommendations:
+            if fa_fetched == 0:
+                print("  (based on projections — verify availability on Yahoo)")
             for i, rec in enumerate(recommendations, 1):
-                print(f"  {i}. ADD {rec['add']:<20} DROP {rec['drop']:<20} "
-                      f"gain: +{rec['sgp_gain']:.2f} wSGP")
-                # Show category impact
-                cats = rec.get("categories", {})
-                gains = [f"+{cat}" for cat, v in cats.items() if v > 0.01]
-                losses = [f"-{cat}" for cat, v in cats.items() if v < -0.01]
-                if gains or losses:
-                    print(f"     gains {', '.join(gains)}  |  costs {', '.join(losses)}")
+                if rec["drop"].startswith("(empty"):
+                    print(f"  {i}. ADD {rec['add']:<20} {rec['drop']}  "
+                          f"value: +{rec['sgp_gain']:.2f} wSGP")
+                else:
+                    print(f"  {i}. ADD {rec['add']:<20} DROP {rec['drop']:<20} "
+                          f"gain: +{rec['sgp_gain']:.2f} wSGP")
+                    # Show category impact
+                    cats = rec.get("categories", {})
+                    gains = [f"+{cat}" for cat, v in cats.items() if v > 0.01]
+                    losses = [f"-{cat}" for cat, v in cats.items() if v < -0.01]
+                    if gains or losses:
+                        print(f"     gains {', '.join(gains)}  |  costs {', '.join(losses)}")
         else:
             print("  No positive-value pickups found.")
     print()

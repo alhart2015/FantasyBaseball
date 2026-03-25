@@ -75,3 +75,46 @@ class TestScanWaivers:
         ]
         results = scan_waivers(roster, [], EQUAL_LEVERAGE)
         assert results == []
+
+    def test_open_slots_recommends_pure_adds(self):
+        """When there are open roster slots, recommend free agents without drops."""
+        roster = [
+            _make_player("Current", "hitter", r=70, hr=20, rbi=60, sb=10, avg=.270, ab=500, h=135,
+                         positions=["OF"], best_position="OF"),
+        ]
+        free_agents = [
+            _make_player("Available", "hitter", r=80, hr=25, rbi=70, sb=12, avg=.275, ab=520, h=143,
+                         positions=["1B"], best_position="1B"),
+        ]
+        results = scan_waivers(roster, free_agents, EQUAL_LEVERAGE, open_hitter_slots=1)
+        assert len(results) >= 1
+        pure_adds = [r for r in results if r["drop"].startswith("(empty")]
+        assert len(pure_adds) >= 1
+        assert pure_adds[0]["add"] == "Available"
+
+    def test_open_slots_with_empty_roster(self):
+        """Open slots should work even with an empty matched roster."""
+        free_agents = [
+            _make_player("FreeAgent", "hitter", r=80, hr=25, rbi=70, sb=12, avg=.275, ab=520, h=143,
+                         positions=["OF"], best_position="OF"),
+        ]
+        results = scan_waivers([], free_agents, EQUAL_LEVERAGE, open_bench_slots=2)
+        assert len(results) >= 1
+        assert results[0]["drop"].startswith("(empty")
+
+    def test_typed_slots_only_fill_matching_type(self):
+        """Pitcher open slots should only be filled by pitchers, not hitters."""
+        roster = [
+            _make_player("Hitter", "hitter", r=70, hr=20, rbi=60, sb=10, avg=.270, ab=500, h=135,
+                         positions=["OF"], best_position="OF"),
+        ]
+        hitter_fa = _make_player("BigBat", "hitter", r=90, hr=30, rbi=80, sb=15, avg=.280,
+                                 ab=540, h=151, positions=["1B"], best_position="1B")
+        pitcher_fa = _make_player("Ace", "pitcher", w=12, k=180, sv=0, era=3.20, whip=1.10,
+                                  ip=180, er=64, bb=50, h_allowed=150, gs=30, g=30,
+                                  positions=["SP"], best_position="SP")
+        results = scan_waivers(roster, [hitter_fa, pitcher_fa], EQUAL_LEVERAGE,
+                               open_pitcher_slots=2)
+        pure_adds = [r for r in results if r["drop"].startswith("(empty")]
+        # Only the pitcher should fill the pitcher slot
+        assert all(r["add"] == "Ace" for r in pure_adds)
