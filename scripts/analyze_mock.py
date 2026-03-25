@@ -13,7 +13,8 @@ from fantasy_baseball.draft.board import build_draft_board
 from fantasy_baseball.utils.name_utils import normalize_name
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
-STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
+SIM_STATE_PATH = PROJECT_ROOT / "data" / "sim_state.json"
+LIVE_STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
 
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
@@ -73,7 +74,8 @@ def sim_season(team_players, rng, h_slots, p_slots):
 
 def main():
     config = load_config(CONFIG_PATH)
-    with open(STATE_PATH) as f:
+    state_path = SIM_STATE_PATH if SIM_STATE_PATH.exists() else LIVE_STATE_PATH
+    with open(state_path) as f:
         state = json.load(f)
 
     board = build_draft_board(

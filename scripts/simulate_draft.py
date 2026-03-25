@@ -704,7 +704,7 @@ def main():
 
     # Save state so monte_carlo.py can read it
     tracker = result["tracker"]
-    state_path = PROJECT_ROOT / "data" / "draft_state.json"
+    state_path = PROJECT_ROOT / "data" / "sim_state.json"
     state_data = {
         "current_pick": tracker.current_pick,
         "current_round": tracker.current_round,

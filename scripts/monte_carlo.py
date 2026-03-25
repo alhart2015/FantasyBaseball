@@ -3,7 +3,7 @@
 Usage:
     python scripts/monte_carlo.py [--iterations N]
 
-Reads the draft result from data/draft_state.json, reconstructs all team
+Reads the draft result from data/sim_state.json (or draft_state.json), reconstructs all team
 rosters, then runs N simulations (default 1000) with random injuries and
 stat variance to estimate win probability and risk profile.
 """
@@ -36,7 +36,8 @@ from fantasy_baseball.utils.name_utils import normalize_name
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
-STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
+SIM_STATE_PATH = PROJECT_ROOT / "data" / "sim_state.json"
+LIVE_STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
 
 # Active roster slot counts (set from config in main)
 ACTIVE_HITTER_SLOTS = 13
@@ -229,8 +230,10 @@ def main():
     )
     board_after_keepers = apply_keepers(board, config.keepers)
 
-    with open(STATE_PATH) as f:
+    state_path = SIM_STATE_PATH if SIM_STATE_PATH.exists() else LIVE_STATE_PATH
+    with open(state_path) as f:
         state = json.load(f)
+    print(f"Loaded state from {state_path.name}")
 
     print("Reconstructing rosters...")
     team_players = reconstruct_rosters(config, board_after_keepers, state)
