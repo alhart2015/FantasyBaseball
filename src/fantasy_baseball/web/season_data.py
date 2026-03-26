@@ -541,16 +541,17 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         _set_refresh_progress("Computing lineup moves...")
         moves = []
         for slot, player_name in optimal_hitters.items():
-            # Find current assignment for this player
             for p in roster_with_proj:
                 if p["name"] == player_name:
                     current_slot = p.get("selected_position", "BN")
                     base_slot = slot.split("_")[0]
-                    if current_slot != base_slot:
+                    # Case-insensitive compare (Yahoo returns "Util", optimizer uses "UTIL")
+                    if current_slot.upper() != base_slot.upper():
                         moves.append({
+                            "action": "START",
                             "player": player_name,
-                            "from": current_slot,
-                            "to": base_slot,
+                            "slot": base_slot,
+                            "reason": f"wSGP: {p.get('wsgp', 0):.1f}",
                         })
                     break
 

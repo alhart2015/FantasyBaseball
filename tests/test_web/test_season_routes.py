@@ -62,8 +62,9 @@ def _mock_standings():
 
 
 def test_trade_standings_returns_404_without_data(client):
-    resp = client.get("/api/trade/0/standings")
-    assert resp.status_code == 404
+    with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
+        resp = client.get("/api/trade/0/standings")
+        assert resp.status_code == 404
 
 
 def test_standings_renders_table_with_data(client):

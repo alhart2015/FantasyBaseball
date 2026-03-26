@@ -51,8 +51,7 @@
     <button class="btn-optimize optimal" disabled>Optimal &#10003;</button>
     {% else %}
     <button class="btn-optimize available"
-            hx-post="/api/optimize"
-            hx-swap="none">Optimize</button>
+            onclick="runOptimize(this)">Optimize</button>
     {% endif %}
 </div>
 
@@ -185,6 +184,25 @@ function toggleExpand(row) {
     if (next && next.classList.contains('expand-content')) {
         next.classList.toggle('open');
     }
+}
+
+function runOptimize(btn) {
+    btn.disabled = true;
+    btn.textContent = 'Optimizing...';
+    fetch('/api/optimize', {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+            if (data.is_optimal) {
+                btn.className = 'btn-optimize optimal';
+                btn.textContent = 'Optimal \u2713';
+            } else {
+                window.location.reload();
+            }
+        })
+        .catch(() => {
+            btn.disabled = false;
+            btn.textContent = 'Optimize';
+        });
 }
 </script>
 
