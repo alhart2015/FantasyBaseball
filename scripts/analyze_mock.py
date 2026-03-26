@@ -10,78 +10,17 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.config import load_config
 from fantasy_baseball.draft.board import build_draft_board
+from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.simulation import simulate_season
+from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES as ALL_CATS,
+    INVERSE_STATS as INVERSE,
+)
 from fantasy_baseball.utils.name_utils import normalize_name
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 SIM_STATE_PATH = PROJECT_ROOT / "data" / "sim_state.json"
 LIVE_STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
-
-from fantasy_baseball.utils.constants import (
-    ALL_CATEGORIES as ALL_CATS,
-    CLOSER_SV_THRESHOLD,
-    HITTING_COUNTING,
-    INJURY_PROB,
-    INJURY_SEVERITY,
-    INVERSE_STATS as INVERSE,
-    PITCHING_COUNTING,
-    REPLACEMENT_HITTER,
-    REPLACEMENT_RP,
-    REPLACEMENT_SP,
-    STAT_VARIANCE,
-)
-
-
-def sim_season(team_players, rng, h_slots, p_slots):
-    stats = {}
-    for tn, players in team_players.items():
-        hitters = [p for p in players if p["player_type"] == "hitter"]
-        pitchers = [p for p in players if p["player_type"] == "pitcher"]
-        ah, ap = [], []
-        for h in hitters:
-            frac = rng.uniform(*INJURY_SEVERITY["hitter"]) if rng.random() < INJURY_PROB["hitter"] else 0
-            scale = 1 - frac
-            row = {}
-            for col in HITTING_COUNTING:
-                base = float(h.get(col, 0) or 0)
-                repl_val = REPLACEMENT_HITTER.get(col, 0) * frac
-                sigma = STAT_VARIANCE.get(col, 0.0)
-                if sigma > 0:
-                    perf = max(0, 1 + rng.normal(0, sigma))
-                    row[col] = base * perf * scale + repl_val
-                else:
-                    row[col] = base * scale + repl_val
-            ah.append(row)
-        for p in pitchers:
-            frac = rng.uniform(*INJURY_SEVERITY["pitcher"]) if rng.random() < INJURY_PROB["pitcher"] else 0
-            repl = REPLACEMENT_RP if float(p.get("sv", 0) or 0) >= CLOSER_SV_THRESHOLD else REPLACEMENT_SP
-            scale = 1 - frac
-            row = {}
-            for col in PITCHING_COUNTING:
-                base = float(p.get(col, 0) or 0)
-                repl_val = repl.get(col, 0) * frac
-                sigma = STAT_VARIANCE.get(col, 0.0)
-                if sigma > 0:
-                    perf = max(0, 1 + rng.normal(0, sigma))
-                    row[col] = base * perf * scale + repl_val
-                else:
-                    row[col] = base * scale + repl_val
-            ap.append(row)
-        ah.sort(key=lambda x: x["r"] + x["hr"] + x["rbi"] + x["sb"], reverse=True)
-        ap.sort(key=lambda x: (x.get("sv", 0) >= CLOSER_SV_THRESHOLD, x["w"] + x["k"] + x["sv"]), reverse=True)
-        ah, ap = ah[:h_slots], ap[:p_slots]
-        r = sum(x["r"] for x in ah); hr = sum(x["hr"] for x in ah)
-        rbi = sum(x["rbi"] for x in ah); sb = sum(x["sb"] for x in ah)
-        th = sum(x["h"] for x in ah); tab = sum(x["ab"] for x in ah)
-        avg = th / tab if tab > 0 else 0
-        w = sum(x["w"] for x in ap); k = sum(x["k"] for x in ap)
-        sv = sum(x["sv"] for x in ap)
-        tip = sum(x["ip"] for x in ap); ter = sum(x["er"] for x in ap)
-        tbb = sum(x["bb"] for x in ap); tha = sum(x["h_allowed"] for x in ap)
-        era = ter * 9 / tip if tip > 0 else 99
-        whip = (tbb + tha) / tip if tip > 0 else 99
-        stats[tn] = {"R": r, "HR": hr, "RBI": rbi, "SB": sb, "AVG": avg,
-                     "W": w, "K": k, "SV": sv, "ERA": era, "WHIP": whip}
-    return stats
 
 
 def main():
@@ -143,22 +82,14 @@ def main():
     all_cat_vals = {t: {c: [] for c in ALL_CATS} for t in team_players}
 
     for _ in range(N):
-        stats = sim_season(team_players, rng, h_slots, p_slots)
-        results = {}
-        for cat in ALL_CATS:
-            rev = cat not in INVERSE
-            ranked = sorted(stats.keys(), key=lambda t: stats[t][cat], reverse=rev)
-            for i, t in enumerate(ranked):
-                results.setdefault(t, {})[f"{cat}_pts"] = num_teams - i
-        for t in results:
-            results[t]["total"] = sum(results[t][f"{c}_pts"] for c in ALL_CATS)
-        for t in team_players:
-            total = results[t]["total"]
-            all_totals[t].append(total)
-            rank = 1 + sum(1 for o in team_players if results[o]["total"] > total)
+        stats, _ = simulate_season(team_players, rng, h_slots, p_slots)
+        results = score_roto(stats)
+        ranked = sorted(results.items(), key=lambda x: x[1]["total"], reverse=True)
+        for rank, (t, pts) in enumerate(ranked, 1):
+            all_totals[t].append(pts["total"])
             all_finishes[t].append(rank)
             for cat in ALL_CATS:
-                all_cat_pts[t][cat].append(results[t][f"{cat}_pts"])
+                all_cat_pts[t][cat].append(pts.get(f"{cat}_pts", 0))
                 all_cat_vals[t][cat].append(stats[t][cat])
 
     order = sorted(team_players.keys(), key=lambda t: np.median(all_totals[t]), reverse=True)

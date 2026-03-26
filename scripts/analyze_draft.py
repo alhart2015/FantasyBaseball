@@ -18,18 +18,11 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from simulate_draft import build_board_and_context, _select_active_players, _active_slot_counts
 
+from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.simulation import simulate_season
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
-    CLOSER_SV_THRESHOLD,
-    HITTING_COUNTING as HITTING_STATS,
-    INJURY_PROB,
-    INJURY_SEVERITY,
     INVERSE_STATS as INVERSE,
-    PITCHING_COUNTING as PITCHING_STATS,
-    REPLACEMENT_HITTER as REPL_H,
-    REPLACEMENT_RP as REPL_RP,
-    REPLACEMENT_SP as REPL_SP,
-    STAT_VARIANCE,
 )
 ITERS = 1000
 
@@ -200,70 +193,12 @@ def main():
 
     t0 = time.time()
     for it in range(ITERS):
-        team_stats = {}
-        for tn in team_names:
-            adj_h, adj_p = [], []
-            for p in rosters[tn]:
-                is_pitcher = p["player_type"] == "pitcher"
-                prob = INJURY_PROB["pitcher" if is_pitcher else "hitter"]
-                sev = INJURY_SEVERITY["pitcher" if is_pitcher else "hitter"]
-                frac = 0.0
-                if rng.random() < prob:
-                    frac = sev[0] + rng.random() * (sev[1] - sev[0])
-                scale = 1.0 - frac
-                stats_list = PITCHING_STATS if is_pitcher else HITTING_STATS
-                repl = (REPL_RP if p.get("sv", 0) >= CLOSER_SV_THRESHOLD else REPL_SP) if is_pitcher else REPL_H
-                row = {}
-                for s in stats_list:
-                    base = p.get(s, 0.0)
-                    repl_val = repl.get(s, 0) * frac
-                    sigma = STAT_VARIANCE.get(s, 0.0)
-                    if sigma > 0:
-                        perf = max(0, 1.0 + rng.normal(0, sigma))
-                        row[s] = base * perf * scale + repl_val
-                    else:
-                        row[s] = base * scale + repl_val
-                if is_pitcher:
-                    adj_p.append(row)
-                else:
-                    adj_h.append(row)
+        team_stats, _ = simulate_season(rosters, rng, h_slots, p_slots)
+        roto = score_roto(team_stats)
 
-            adj_h.sort(key=lambda h: h["r"] + h["hr"] + h["rbi"] + h["sb"], reverse=True)
-            adj_h = adj_h[:h_slots]
-            adj_p.sort(key=lambda p: (p.get("sv", 0) >= CLOSER_SV_THRESHOLD, p["w"] + p["k"] + p["sv"]), reverse=True)
-            adj_p = adj_p[:p_slots]
-
-            r = sum(h["r"] for h in adj_h)
-            hr = sum(h["hr"] for h in adj_h)
-            rbi = sum(h["rbi"] for h in adj_h)
-            sb = sum(h["sb"] for h in adj_h)
-            th = sum(h["h"] for h in adj_h)
-            tab = sum(h["ab"] for h in adj_h)
-            avg = th / tab if tab > 0 else 0
-            w = sum(p["w"] for p in adj_p)
-            k = sum(p["k"] for p in adj_p)
-            sv = sum(p["sv"] for p in adj_p)
-            tip = sum(p["ip"] for p in adj_p)
-            ter = sum(p["er"] for p in adj_p)
-            tbb = sum(p["bb"] for p in adj_p)
-            tha = sum(p["h_allowed"] for p in adj_p)
-            era = ter * 9 / tip if tip > 0 else 99
-            whip = (tbb + tha) / tip if tip > 0 else 99
-            team_stats[tn] = {
-                "R": r, "HR": hr, "RBI": rbi, "SB": sb, "AVG": avg,
-                "W": w, "K": k, "SV": sv, "ERA": era, "WHIP": whip,
-            }
-
-        totals = {tn: 0 for tn in team_names}
-        for cat in ALL_CATS:
-            rev = cat not in INVERSE
-            ranked = sorted(team_names, key=lambda tn: team_stats[tn][cat], reverse=rev)
-            for i, tn in enumerate(ranked):
-                totals[tn] += num_teams - i
-
-        sorted_teams = sorted(totals.items(), key=lambda x: x[1], reverse=True)
+        sorted_teams = sorted(roto.items(), key=lambda x: x[1]["total"], reverse=True)
         for rank_i, (tn, pts) in enumerate(sorted_teams, 1):
-            all_pts[tn].append(pts)
+            all_pts[tn].append(pts["total"])
             all_ranks[tn].append(rank_i)
 
     elapsed = time.time() - t0
