@@ -145,3 +145,42 @@ def register_routes(app: Flask) -> None:
     def api_refresh_status():
         from fantasy_baseball.web.season_data import get_refresh_status
         return jsonify(get_refresh_status())
+
+    @app.route("/api/fetch-mlb", methods=["POST"])
+    def api_fetch_mlb():
+        from fantasy_baseball.web.season_data import get_refresh_status, _set_refresh_progress
+
+        status = get_refresh_status()
+        if status["running"]:
+            return jsonify({"status": "already_running"})
+
+        def _run_mlb_fetch():
+            from fantasy_baseball.web.season_data import _refresh_lock, _refresh_status
+            from fantasy_baseball.data.db import (
+                create_tables, fetch_and_load_game_logs, get_connection,
+            )
+
+            with _refresh_lock:
+                _refresh_status["running"] = True
+                _refresh_status["progress"] = "Starting MLB data fetch..."
+                _refresh_status["error"] = None
+            try:
+                config = _load_config()
+                conn = get_connection()
+                create_tables(conn)
+                new_rows = fetch_and_load_game_logs(
+                    conn, config.season_year,
+                    progress_cb=_set_refresh_progress,
+                )
+                conn.close()
+                _set_refresh_progress(f"Done — {new_rows} new game log rows added")
+            except Exception as exc:
+                with _refresh_lock:
+                    _refresh_status["error"] = str(exc)
+            finally:
+                with _refresh_lock:
+                    _refresh_status["running"] = False
+
+        thread = threading.Thread(target=_run_mlb_fetch, daemon=True)
+        thread.start()
+        return jsonify({"status": "started"})

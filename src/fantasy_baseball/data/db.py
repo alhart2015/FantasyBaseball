@@ -80,6 +80,25 @@ CREATE TABLE IF NOT EXISTS standings (
     w REAL, k REAL, sv REAL, era REAL, whip REAL,
     PRIMARY KEY (year, snapshot_date, team)
 );
+
+CREATE TABLE IF NOT EXISTS game_logs (
+    season       INTEGER NOT NULL,
+    mlbam_id     INTEGER NOT NULL,
+    name         TEXT NOT NULL,
+    team         TEXT,
+    player_type  TEXT NOT NULL,          -- hitter, pitcher
+    date         TEXT NOT NULL,          -- YYYY-MM-DD
+    -- Hitter stats
+    pa INTEGER, ab INTEGER, h INTEGER, r INTEGER, hr INTEGER,
+    rbi INTEGER, sb INTEGER,
+    -- Pitcher stats
+    ip REAL, k INTEGER, er INTEGER, bb INTEGER, h_allowed INTEGER,
+    w INTEGER, sv INTEGER, gs INTEGER,
+    PRIMARY KEY (season, mlbam_id, date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_logs_name ON game_logs(name);
+CREATE INDEX IF NOT EXISTS idx_game_logs_date ON game_logs(season, date);
 """
 
 
@@ -549,3 +568,128 @@ def load_blended_projections(
             conn.executemany(insert_sql, rows)
 
     conn.commit()
+
+
+def fetch_and_load_game_logs(
+    conn, season: int, progress_cb=None
+) -> int:
+    """Fetch game logs for all MLB players and insert into game_logs table.
+
+    Incrementally updates — only inserts games not already in the DB.
+    Uses the MLB Stats API to get all team rosters, then fetches per-player
+    game logs via the existing fetch_player_game_log() function.
+
+    Returns:
+        Number of new game log rows inserted.
+    """
+    import statsapi
+
+    from fantasy_baseball.analysis.game_logs import fetch_player_game_log
+
+    # Get the latest date we have per player so we can skip up-to-date ones
+    existing = {}
+    for row in conn.execute(
+        "SELECT mlbam_id, MAX(date) as last_date FROM game_logs "
+        "WHERE season = ? GROUP BY mlbam_id", (season,)
+    ):
+        existing[row["mlbam_id"]] = row["last_date"]
+
+    # Get all MLB teams
+    if progress_cb:
+        progress_cb("Fetching MLB team rosters...")
+    teams_data = statsapi.get("teams", {"sportId": 1, "season": season})
+    teams_list = teams_data.get("teams", [])
+
+    # Build player list from rosters
+    players = []
+    seen_ids = set()
+    for team in teams_list:
+        team_id = team["id"]
+        team_abbrev = team.get("abbreviation", "")
+        try:
+            roster_data = statsapi.get(
+                "team_roster",
+                {"teamId": team_id, "rosterType": "fullSeason", "season": season},
+            )
+        except Exception:
+            try:
+                roster_data = statsapi.get(
+                    "team_roster",
+                    {"teamId": team_id, "rosterType": "active", "season": season},
+                )
+            except Exception:
+                continue
+
+        for entry in roster_data.get("roster", []):
+            person = entry.get("person", {})
+            mlbam_id = person.get("id")
+            if not mlbam_id or mlbam_id in seen_ids:
+                continue
+            seen_ids.add(mlbam_id)
+
+            pos_type = entry.get("position", {}).get("type", "")
+            player_type = "pitcher" if pos_type == "Pitcher" else "hitter"
+
+            players.append({
+                "mlbam_id": mlbam_id,
+                "name": person.get("fullName", ""),
+                "team": team_abbrev,
+                "player_type": player_type,
+            })
+
+    if progress_cb:
+        progress_cb(f"Found {len(players)} MLB players, fetching game logs...")
+
+    new_rows = 0
+    for i, player in enumerate(players):
+        if progress_cb and (i + 1) % 50 == 0:
+            progress_cb(f"Game logs: {i + 1}/{len(players)} players...")
+
+        mid = player["mlbam_id"]
+        group = "hitting" if player["player_type"] == "hitter" else "pitching"
+
+        try:
+            games = fetch_player_game_log(mid, season, group)
+        except Exception:
+            continue
+
+        if not games:
+            continue
+
+        # Only insert games newer than what we already have
+        last_date = existing.get(mid)
+        if last_date:
+            games = [g for g in games if g["date"] > last_date]
+        if not games:
+            continue
+
+        for g in games:
+            if player["player_type"] == "hitter":
+                conn.execute(
+                    "INSERT OR IGNORE INTO game_logs "
+                    "(season, mlbam_id, name, team, player_type, date, "
+                    "pa, ab, h, r, hr, rbi, sb) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (season, mid, player["name"], player["team"],
+                     "hitter", g["date"],
+                     g.get("pa"), g.get("ab"), g.get("h"), g.get("r"),
+                     g.get("hr"), g.get("rbi"), g.get("sb")),
+                )
+            else:
+                conn.execute(
+                    "INSERT OR IGNORE INTO game_logs "
+                    "(season, mlbam_id, name, team, player_type, date, "
+                    "ip, k, er, bb, h_allowed, w, sv, gs) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (season, mid, player["name"], player["team"],
+                     "pitcher", g["date"],
+                     g.get("ip"), g.get("k"), g.get("er"), g.get("bb"),
+                     g.get("h_allowed"), g.get("w"), g.get("sv"), g.get("gs")),
+                )
+            new_rows += 1
+
+        if (i + 1) % 50 == 0:
+            conn.commit()
+
+    conn.commit()
+    return new_rows
