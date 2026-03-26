@@ -86,7 +86,16 @@ def format_standings_for_display(
     if not standings:
         return {"teams": []}
 
-    all_stats = {t["name"]: t["stats"] for t in standings}
+    # Fill missing stat keys with defaults (early season, some teams lack all categories)
+    stat_defaults = {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0.0,
+                     "W": 0, "K": 0, "SV": 0, "ERA": 99.0, "WHIP": 99.0}
+    all_stats = {}
+    for t in standings:
+        filled = dict(stat_defaults)
+        filled.update(t["stats"])
+        all_stats[t["name"]] = filled
+        t["stats"] = filled  # update in place so templates also get filled stats
+
     roto = score_roto(all_stats)
 
     cat_ranks = _compute_category_ranks(standings)
@@ -449,7 +458,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # --- Step 4: Blend projections ---
         _set_refresh_progress("Blending projections...")
-        projections_dir = project_root / "data" / "projections"
+        projections_dir = project_root / "data" / "projections" / str(config.season_year)
         hitters_proj, pitchers_proj = blend_projections(
             projections_dir,
             config.projection_systems,
