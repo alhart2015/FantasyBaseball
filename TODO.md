@@ -2,6 +2,12 @@
 
 - [x] **Fix post-draft roster reconstruction for traded picks** — Resolved by deleting `monte_carlo.py` (broken snake formula) and adding `--monte-carlo N` to `simulate_draft.py`, which already builds correct rosters including traded picks. Mid-season Monte Carlo runs via `summary.py` using real Yahoo rosters.
 
+- [x] **Cap management-adjusted roto points at 10 per category** — `apply_management_adjustment` adds a raw roto point adjustment to the total, which can push a team above the 10-point-per-category max (100 total in a 10-team league). Need to either clamp the adjusted total or distribute the management adjustment across categories with per-category caps.
+
+- [ ] **Auto-detect injuries from Yahoo API** — Currently injuries are manually tracked in `data/injuries.yaml`. The Yahoo Fantasy API should expose IL status on roster players. Investigate the roster response for IL/DTD flags and auto-populate the injury management section of `summary.py` instead of requiring manual entry.
+
+- [ ] **Fix trade recommender KeyError on pre-season standings** — `compute_roto_points_by_cat` in `trades/evaluate.py` crashes with `KeyError: 'AVG'` when standings stats are missing categories (e.g., pre-season or when the Yahoo stat ID mapping omits a category). Need to handle missing stat keys gracefully — skip the trade analysis or use projected stats as fallback.
+
 - [ ] **Validate ROS projections account for injuries** — Verify that FanGraphs ROS projections properly reduce stats for players on IL (e.g., Strider's ROS K projection should reflect missed time, not a full healthy season). If not, the injury management system should scale projections by expected games remaining.
 
 - [ ] **Pitcher streaming tool** — Score free agent SPs by matchup quality to identify streamers (pick up a mediocre pitcher facing a terrible offense for one start, then drop). Builds on the matchup adjustment system.
@@ -11,6 +17,14 @@
 - [ ] **Multi-player trades and draft pick deals** — Extend trade recommender to support 2-for-2 swaps and draft pick trades. For draft picks: identify teams out of contention who might trade current-year players for next-year picks (contender/rebuilder dynamic). If Hart is competing, propose "my 2027 3rd-round pick for your closer" style deals to out-of-contention teams. Requires modeling draft pick value and team contention status from standings.
 
 - [ ] **Keeper value in all decisions** — Factor multi-year keeper value into trade recommendations, waiver pickups, and draft strategy. Pull future-year projected stats (FanGraphs has age curves and multi-year projections) to estimate whether a player will be a keeper candidate next year. Young breakout players (e.g., a 23-year-old having a great season) should be valued higher because they'll be kept — trading them away costs future value, not just current-year production. Conversely, aging veterans on decline curves are worth less than their current stats suggest because they won't be kept. This affects: (1) trade recommender — don't trade away future keepers for a marginal current-year upgrade, and flag opponents' aging stars as buy-low targets; (2) waiver wire — prioritize young upside players over veteran rentals; (3) draft strategy — weight keeper-eligible players higher in later rounds. Requires modeling: age curves, keeper eligibility rules (league-specific), and a "keeper probability" score per player.
+
+# TODO — Monte Carlo Calibration
+
+- [x] **Calibrate stat variance from historical projections vs actuals** — Done. Per-stat variance now in `STAT_VARIANCE` dict in `constants.py`, calibrated from Steamer+ZiPS vs MLB actuals 2022-2024. Key findings: HR (0.343) and SB (0.715) are far more volatile than R (0.156) or AVG (0.103). Pitching: W (0.416) and SV (0.900) are extremely volatile; K (0.139) and H_allowed (0.143) are relatively stable. Each stat now gets its own independent variance draw in `simulation.py`. See `scripts/calibrate_variance.py` for methodology.
+
+- [x] **Add directional correlations between stat categories** — Currently each stat gets an independent variance draw. Reality has correlations: HR-RBI residuals correlate at +0.760, R-RBI at +0.728, ERA-WHIP at +0.729, while SB-HR is only +0.278 and W-SV is +0.030. Empirical correlation matrices from calibration (in `scripts/calibrate_variance.py` output). Implementation: use Cholesky decomposition on the correlation matrix to produce correlated draws from independent normals. This would make a player who overperforms in HR also likely overperform in RBI, but not necessarily in SB.
+
+- [x] **Estimate per-team SGP improvement from in-season management** — The simulation freezes rosters at their current state for the entire season, ignoring waiver moves, trades, and streaming. Use 2024 and 2025 league data to estimate how much each team's SGP improves from draft day to end of season. Data available: 2025 draft picks (`backtest_2025.py` `DRAFT_2025`), 2025 projections (`data/projections/2025/`), 2025 actual final standings (`backtest_2025.py` `ACTUAL` dict). Compare projected draft-day team stats vs actual end-of-season stats to compute average SGP improvement, then add a simple roster churn factor to `simulate_season()`.
 
 # TODO — Postseason / Offseason
 

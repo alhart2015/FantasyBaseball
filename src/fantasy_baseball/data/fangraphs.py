@@ -80,7 +80,11 @@ def load_projection_set(
 
 
 def _find_file(directory: Path, system: str, player_type: str) -> Path | None:
-    """Find a projection CSV file, trying multiple naming conventions."""
+    """Find a projection CSV file, trying multiple naming conventions.
+
+    Also handles year-suffixed files (e.g. steamer-hitters-2025.csv) that
+    live inside year-specific subdirectories.
+    """
     candidates = [
         directory / f"{system}-{player_type}.csv",
         directory / f"{system}_{player_type}.csv",
@@ -89,4 +93,11 @@ def _find_file(directory: Path, system: str, player_type: str) -> Path | None:
     for path in candidates:
         if path.exists():
             return path
+    # Glob fallback for year-suffixed files (e.g. steamer-hitters-2025.csv)
+    glob_matches = sorted(directory.glob(f"{system}-{player_type}-*.csv"))
+    if glob_matches:
+        return glob_matches[-1]
+    glob_matches = sorted(directory.glob(f"{system}_{player_type}_*.csv"))
+    if glob_matches:
+        return glob_matches[-1]
     return None

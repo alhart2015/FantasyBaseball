@@ -34,7 +34,7 @@ from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.scoring import project_team_stats, score_roto, ALL_CATS, INVERSE_CATS
-from fantasy_baseball.simulation import simulate_season
+from fantasy_baseball.simulation import simulate_season, apply_management_adjustment
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
@@ -147,7 +147,7 @@ def main():
     print("Loading projections...")
     weights = config.projection_weights if config.projection_weights else None
     hitters_proj, pitchers_proj = blend_projections(
-        PROJECTIONS_DIR, config.projection_systems, weights,
+        PROJECTIONS_DIR / str(config.season_year), config.projection_systems, weights,
     )
 
     # Precompute normalized names for fast projection matching
@@ -164,7 +164,31 @@ def main():
     user_roster = all_rosters[team_name]
     print(f"  {team_name}: {len(user_roster)} players matched")
 
-    # ── 1. STATIC PROJECTED STANDINGS ─────────────────────────────────
+    # ── 1. CURRENT STANDINGS ─────────────────────────────────────────
+    if standings:
+        print()
+        print("=" * 90)
+        print("CURRENT STANDINGS")
+        print("=" * 90)
+
+        standings_sorted = sorted(standings, key=lambda t: t.get("rank", 99))
+        print(f"\n{'Team':<32} {'Rank':>4}   " + "  ".join(f"{c:>5}" for c in ALL_CATS))
+        print("-" * 90)
+        for t in standings_sorted:
+            s = t.get("stats", {})
+            marker = " <<<" if t["name"] == team_name else ""
+            line = f"{t['name']:<32} {t.get('rank', '?'):>4}  "
+            for c in ALL_CATS:
+                v = s.get(c, 0)
+                if c == "AVG":
+                    line += f" {v:.3f}"
+                elif c in ("ERA", "WHIP"):
+                    line += f" {v:>5.2f}"
+                else:
+                    line += f" {v:>5.0f}"
+            print(line + marker)
+
+    # ── 2. STATIC PROJECTED STANDINGS ─────────────────────────────────
     print()
     print("=" * 90)
     print("PROJECTED ROTO STANDINGS (static)")
@@ -199,7 +223,7 @@ def main():
         print(f" {hart_roto.get(f'{c}_pts', 0):>5.0f}", end="")
     print()
 
-    # ── 2. MONTE CARLO ────────────────────────────────────────────────
+    # ── 3. MONTE CARLO ────────────────────────────────────────────────
     print()
     print("=" * 90)
     print(f"MONTE CARLO ({args.iterations} iterations)")
@@ -209,38 +233,45 @@ def main():
     h_slots = sum(v for k, v in config.roster_slots.items() if k not in ("P", "BN", "IL"))
     p_slots = config.roster_slots.get("P", 9)
 
-    rng = np.random.default_rng(args.seed)
-    mc_totals = {name: [] for name in all_rosters}
-    mc_wins = {name: 0 for name in all_rosters}
-    mc_top3 = {name: 0 for name in all_rosters}
-    mc_cat_pts = {name: {c: [] for c in ALL_CATS} for name in all_rosters}
+    # Run both modes: without and with management adjustments
+    for mc_label, use_mgmt in [("Roster strength only", False),
+                                ("With in-season management", True)]:
+        rng = np.random.default_rng(args.seed)
+        mc_totals = {name: [] for name in all_rosters}
+        mc_wins = {name: 0 for name in all_rosters}
+        mc_top3 = {name: 0 for name in all_rosters}
+        mc_cat_pts = {name: {c: [] for c in ALL_CATS} for name in all_rosters}
 
-    for _ in range(args.iterations):
-        sim_stats, _ = simulate_season(all_rosters, rng, h_slots, p_slots)
-        sim_roto = score_roto(sim_stats)
-        ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
-        for rank, (name, pts) in enumerate(ranked, 1):
-            mc_totals[name].append(pts["total"])
-            if rank == 1:
-                mc_wins[name] += 1
-            if rank <= 3:
-                mc_top3[name] += 1
-            for c in ALL_CATS:
-                mc_cat_pts[name][c].append(pts.get(f"{c}_pts", 0))
+        for _ in range(args.iterations):
+            sim_stats, _ = simulate_season(all_rosters, rng, h_slots, p_slots)
+            if use_mgmt:
+                sim_stats = apply_management_adjustment(sim_stats, rng)
+            sim_roto = score_roto(sim_stats)
+            ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
+            for rank, (name, pts) in enumerate(ranked, 1):
+                mc_totals[name].append(pts["total"])
+                if rank == 1:
+                    mc_wins[name] += 1
+                if rank <= 3:
+                    mc_top3[name] += 1
+                for c in ALL_CATS:
+                    mc_cat_pts[name][c].append(pts.get(f"{c}_pts", 0))
 
-    n = args.iterations
-    print(f"\n{'Team':<32} {'Med':>4} {'P10':>4} {'P90':>4}  {'1st':>5} {'Top3':>5}")
-    print("-" * 70)
-    mc_sorted = sorted(mc_totals.items(), key=lambda x: np.median(x[1]), reverse=True)
-    for name, pts_list in mc_sorted:
-        marker = " <<<" if name == team_name else ""
-        med = np.median(pts_list)
-        p10 = np.percentile(pts_list, 10)
-        p90 = np.percentile(pts_list, 90)
-        win_pct = mc_wins[name] / n * 100
-        top3_pct = mc_top3[name] / n * 100
-        print(f"{name:<32} {med:>4.0f} {p10:>4.0f} {p90:>4.0f}  {win_pct:>5.1f}% {top3_pct:>5.1f}%{marker}")
+        n = args.iterations
+        print(f"\n  {mc_label}")
+        print(f"  {'Team':<32} {'Med':>4} {'P10':>4} {'P90':>4}  {'1st':>5} {'Top3':>5}")
+        print("  " + "-" * 66)
+        mc_sorted = sorted(mc_totals.items(), key=lambda x: np.median(x[1]), reverse=True)
+        for name, pts_list in mc_sorted:
+            marker = " <<<" if name == team_name else ""
+            med = np.median(pts_list)
+            p10 = np.percentile(pts_list, 10)
+            p90 = np.percentile(pts_list, 90)
+            win_pct = mc_wins[name] / n * 100
+            top3_pct = mc_top3[name] / n * 100
+            print(f"  {name:<32} {med:>4.0f} {p10:>4.0f} {p90:>4.0f}  {win_pct:>5.1f}% {top3_pct:>5.1f}%{marker}")
 
+    # Category risk uses the management-adjusted run (last iteration)
     print(f"\n{'Category risk — ' + team_name}")
     print(f"  {'Cat':>4} {'Med':>4} {'P10':>4} {'P90':>4}  {'Top3':>5} {'Bot3':>5}")
     print("  " + "-" * 40)
@@ -253,7 +284,7 @@ def main():
         bot3 = sum(1 for p in pts if p <= 3) / n * 100
         print(f"  {c:>4} {med:>4.0f} {p10:>4.0f} {p90:>4.0f}  {top3:>5.1f}% {bot3:>5.1f}%")
 
-    # ── 3. LINEUP RECOMMENDATIONS ─────────────────────────────────────
+    # ── 4. LINEUP RECOMMENDATIONS ─────────────────────────────────────
     print()
     print("=" * 90)
     print("LINEUP RECOMMENDATIONS")
@@ -327,7 +358,7 @@ def main():
     else:
         print("\nNo start/sit changes needed — current lineup is optimal.")
 
-    # ── 4. INJURY MANAGEMENT ──────────────────────────────────────────
+    # ── 5. INJURY MANAGEMENT ──────────────────────────────────────────
     print()
     print("=" * 90)
     print("INJURY MANAGEMENT")
@@ -393,7 +424,7 @@ def main():
     else:
         print("\nNo injuries tracked. Edit data/injuries.yaml to add IL players.")
 
-    # ── 5. WAIVER WIRE ────────────────────────────────────────────────
+    # ── 6. WAIVER WIRE ────────────────────────────────────────────────
     print()
     print("=" * 90)
     print("WAIVER WIRE")
@@ -450,7 +481,7 @@ def main():
     else:
         print("\n  No positive waiver moves found — your roster is solid.")
 
-    # ── 6. TRADE RECOMMENDATIONS ──────────────────────────────────────
+    # ── 7. TRADE RECOMMENDATIONS ──────────────────────────────────────
     print()
     print("=" * 90)
     print("TRADE RECOMMENDATIONS")

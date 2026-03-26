@@ -214,20 +214,15 @@ def main():
                 stats_list = PITCHING_STATS if is_pitcher else HITTING_STATS
                 repl = (REPL_RP if p.get("sv", 0) >= 15 else REPL_SP) if is_pitcher else REPL_H
                 row = {}
-                sv_key = "pitcher" if is_pitcher else "hitter"
-                perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE[sv_key]))
-                inv_perf = max(0, 2.0 - perf)
                 for s in stats_list:
                     base = p.get(s, 0.0)
                     repl_val = repl.get(s, 0) * frac
-                    if is_pitcher and s == "ip":
-                        row[s] = base * scale + repl_val
-                    elif is_pitcher and s in ("er", "bb", "h_allowed"):
-                        row[s] = base * inv_perf * scale + repl_val
-                    elif not is_pitcher and s == "ab":
-                        row[s] = base * scale + repl_val
-                    else:
+                    sigma = STAT_VARIANCE.get(s, 0.0)
+                    if sigma > 0:
+                        perf = max(0, 1.0 + rng.normal(0, sigma))
                         row[s] = base * perf * scale + repl_val
+                    else:
+                        row[s] = base * scale + repl_val
                 if is_pitcher:
                     adj_p.append(row)
                 else:

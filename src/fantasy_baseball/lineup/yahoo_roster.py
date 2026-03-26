@@ -7,8 +7,8 @@ logger = logging.getLogger(__name__)
 
 # Yahoo stat IDs for 5x5 roto categories
 YAHOO_STAT_ID_MAP: dict[str, str] = {
-    "60": "R",
-    "7": "HR",
+    "7": "R",
+    "12": "HR",
     "13": "RBI",
     "16": "SB",
     "3": "AVG",
@@ -98,9 +98,9 @@ def parse_standings_raw(
                 stat = stat_entry.get("stat", {})
                 sid = str(stat.get("stat_id", ""))
                 val = stat.get("value", "")
-                if sid in YAHOO_STAT_ID_MAP and val != "":
+                if sid in stat_id_map and val != "":
                     try:
-                        team["stats"][YAHOO_STAT_ID_MAP[sid]] = float(val)
+                        team["stats"][stat_id_map[sid]] = float(val)
                     except (ValueError, TypeError):
                         pass
 

@@ -19,6 +19,12 @@ from fantasy_baseball.utils.constants import (
     REPLACEMENT_SP,
     STAT_VARIANCE,
 )
+from fantasy_baseball.simulation import (
+    _HITTER_COV,
+    _HITTER_IDX,
+    _PITCHER_COV,
+    _PITCHER_IDX,
+)
 from fantasy_baseball.utils.name_utils import normalize_name
 
 
@@ -77,6 +83,7 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
 
         # Hitters — perf affects quality stats (H, R, HR, RBI, SB) but
         # not volume stats (AB, PA) so rate stats like AVG actually vary.
+        h_mean = np.zeros(len(_HITTER_IDX))
         adj_hitters = []
         for h in hitters:
             frac_missed = 0.0
@@ -86,20 +93,18 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
 
             row = {}
             scale = 1.0 - frac_missed
-            perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["hitter"]))
+            draws = rng.multivariate_normal(h_mean, _HITTER_COV)
             for col in HITTING_COUNTING:
                 base = h.get(col, 0)
                 repl_val = REPLACEMENT_HITTER.get(col, 0) * frac_missed
-                if col in ("ab", "pa"):
-                    row[col] = base * scale + repl_val
-                else:
+                if col in _HITTER_IDX:
+                    perf = max(0, 1.0 + draws[_HITTER_IDX[col]])
                     row[col] = base * perf * scale + repl_val
+                else:
+                    row[col] = base * scale + repl_val
             adj_hitters.append(row)
 
-        # Pitchers — perf affects quality stats but not volume (IP).
-        # Good outcomes (W, K, SV) scale with perf; bad outcomes
-        # (ER, BB, H_allowed) scale inversely so ERA/WHIP worsen
-        # when perf < 1.
+        p_mean = np.zeros(len(_PITCHER_IDX))
         adj_pitchers = []
         for p in pitchers:
             frac_missed = 0.0
@@ -112,17 +117,15 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
 
             row = {}
             scale = 1.0 - frac_missed
-            perf = max(0, 1.0 + rng.normal(0, STAT_VARIANCE["pitcher"]))
-            inv_perf = max(0, 2.0 - perf)
+            draws = rng.multivariate_normal(p_mean, _PITCHER_COV)
             for col in PITCHING_COUNTING:
                 base = p.get(col, 0)
                 repl_val = repl.get(col, 0) * frac_missed
-                if col == "ip":
-                    row[col] = base * scale + repl_val
-                elif col in ("er", "bb", "h_allowed"):
-                    row[col] = base * inv_perf * scale + repl_val
-                else:
+                if col in _PITCHER_IDX:
+                    perf = max(0, 1.0 + draws[_PITCHER_IDX[col]])
                     row[col] = base * perf * scale + repl_val
+                else:
+                    row[col] = base * scale + repl_val
             adj_pitchers.append(row)
 
         # Select active roster only (bench players don't contribute stats)

@@ -249,7 +249,7 @@ def main():
     # Build draft board (keep full board for keeper lookups)
     print("Building draft board...")
     full_board = build_draft_board(
-        projections_dir=PROJECTIONS_DIR,
+        projections_dir=PROJECTIONS_DIR / str(config.season_year),
         positions_path=POSITIONS_PATH,
         systems=config.projection_systems,
         weights=config.projection_weights or None,

@@ -25,10 +25,10 @@ ROSTER_SLOTS = {
 
 def main():
     # Load 2025 preseason projections
-    h1 = parse_hitting_csv(PROJECT_ROOT / "data/projections/fangraphs-leaderboard-projections-steamer-hitters-2025.csv")
-    h2 = parse_hitting_csv(PROJECT_ROOT / "data/projections/fangraphs-leaderboard-projections-zips-hitters-2025.csv")
-    p1 = parse_pitching_csv(PROJECT_ROOT / "data/projections/fangraphs-leaderboard-projections-steamer-pitchers-2025.csv")
-    p2 = parse_pitching_csv(PROJECT_ROOT / "data/projections/fangraphs-leaderboard-projections-zips-pitchers-2025.csv")
+    h1 = parse_hitting_csv(PROJECT_ROOT / "data/projections/2025/fangraphs-leaderboard-projections-steamer-hitters-2025.csv")
+    h2 = parse_hitting_csv(PROJECT_ROOT / "data/projections/2025/fangraphs-leaderboard-projections-zips-hitters-2025.csv")
+    p1 = parse_pitching_csv(PROJECT_ROOT / "data/projections/2025/fangraphs-leaderboard-projections-steamer-pitchers-2025.csv")
+    p2 = parse_pitching_csv(PROJECT_ROOT / "data/projections/2025/fangraphs-leaderboard-projections-zips-pitchers-2025.csv")
 
     h1["_weight"] = 0.5
     h2["_weight"] = 0.5

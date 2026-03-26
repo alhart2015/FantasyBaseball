@@ -43,7 +43,7 @@ def config() -> LeagueConfig:
 def full_board(config: LeagueConfig) -> pd.DataFrame:
     """Build a draft board from real projections (expensive, cached per module)."""
     return build_draft_board(
-        projections_dir=_PROJECTIONS_DIR,
+        projections_dir=_PROJECTIONS_DIR / str(config.season_year),
         positions_path=_POSITIONS_PATH,
         systems=config.projection_systems,
         weights=config.projection_weights,

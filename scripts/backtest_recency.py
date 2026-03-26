@@ -109,12 +109,12 @@ def load_preseason_projections() -> dict:
             }
     """
     hitter_files = [
-        PROJECTIONS_DIR / "steamer-hitters-2025.csv",
-        PROJECTIONS_DIR / "zips-hitters-2025.csv",
+        PROJECTIONS_DIR / "2025" / "steamer-hitters-2025.csv",
+        PROJECTIONS_DIR / "2025" / "zips-hitters-2025.csv",
     ]
     pitcher_files = [
-        PROJECTIONS_DIR / "steamer-pitchers-2025.csv",
-        PROJECTIONS_DIR / "zips-pitchers-2025.csv",
+        PROJECTIONS_DIR / "2025" / "steamer-pitchers-2025.csv",
+        PROJECTIONS_DIR / "2025" / "zips-pitchers-2025.csv",
     ]
 
     projections = {}

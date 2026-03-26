@@ -334,10 +334,10 @@ def sim_season(rosters, rng, h_slots=13, p_slots=9):
 
 def main():
     board = build_draft_board(
-        projections_dir=PROJECTIONS_DIR,
+        projections_dir=PROJECTIONS_DIR / "2025",
         positions_path=POSITIONS_PATH,
-        systems=["steamer", "zips", "atc"],
-        weights={"steamer": 0.33, "zips": 0.33, "atc": 0.34},
+        systems=["steamer", "zips"],
+        weights={"steamer": 0.50, "zips": 0.50},
         num_teams=10,
     )
 

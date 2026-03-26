@@ -292,7 +292,7 @@ def main():
     print("Loading projections...")
     weights = config.projection_weights if config.projection_weights else None
     hitters_proj, pitchers_proj = blend_projections(
-        PROJECTIONS_DIR, config.projection_systems, weights,
+        PROJECTIONS_DIR / str(config.season_year), config.projection_systems, weights,
     )
     # Precompute normalized names for projection matching (avoids repeated
     # apply(normalize_name) on every lookup — ~800x fewer calls).
@@ -369,7 +369,7 @@ def main():
     # Keyed by (normalized_name, player_type) to avoid collisions when a
     # hitter and pitcher share the same name (e.g. Julio Rodriguez).
     mlbamid_lookup: dict[tuple[str, str], int] = {}
-    for csv_path in PROJECTIONS_DIR.glob("*.csv"):
+    for csv_path in (PROJECTIONS_DIR / str(config.season_year)).glob("*.csv"):
         try:
             csv_lower = csv_path.name.lower()
             if "hitter" in csv_lower:

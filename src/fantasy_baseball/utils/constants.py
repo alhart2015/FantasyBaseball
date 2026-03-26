@@ -65,7 +65,83 @@ INJURY_SEVERITY: dict[str, tuple[float, float]] = {
     "pitcher": (0.20, 0.60),
     "hitter": (0.15, 0.40),
 }
-STAT_VARIANCE: dict[str, float] = {"hitter": 0.10, "pitcher": 0.18}
+# Per-stat performance variance (SD of actual/projected ratio residuals).
+# Calibrated from Steamer+ZiPS projections vs MLB actuals, 2022-2024.
+# Per-PA rates for hitters, per-IP rates for pitchers (isolates
+# performance variance from playing time, which the injury model handles).
+# Stats with 0.0 variance (ab, ip) are playing-time-only — no perf multiplier.
+STAT_VARIANCE: dict[str, float] = {
+    # Hitter counting stats
+    "r": 0.156,
+    "hr": 0.343,
+    "rbi": 0.187,
+    "sb": 0.715,
+    "h": 0.103,
+    "ab": 0.0,
+    # Pitcher counting stats
+    "w": 0.416,
+    "k": 0.139,
+    "sv": 0.900,
+    "ip": 0.0,
+    "er": 0.252,
+    "bb": 0.257,
+    "h_allowed": 0.143,
+}
+
+# Empirical correlation matrices for correlated variance draws.
+# Calibrated from projection-vs-actual residuals, 2022-2024.
+# Column order must match the stat lists below.
+
+# Hitter correlated stats and their correlation matrix.
+# Column order: r, hr, rbi, sb, h
+# AVG emerges from h/ab, so we correlate h (hits) with the counting stats.
+# h-to-counting correlations derived from AVG correlations with R/HR/RBI/SB.
+HITTER_CORR_STATS: list[str] = ["r", "hr", "rbi", "sb", "h"]
+HITTER_CORRELATION: list[list[float]] = [
+    #    r      hr     rbi    sb     h
+    [+1.000, +0.653, +0.728, +0.435, +0.463],  # r
+    [+0.653, +1.000, +0.760, +0.278, +0.321],  # hr
+    [+0.728, +0.760, +1.000, +0.343, +0.466],  # rbi
+    [+0.435, +0.278, +0.343, +1.000, +0.290],  # sb
+    [+0.463, +0.321, +0.466, +0.290, +1.000],  # h
+]
+
+# Pitcher correlated stats and their correlation matrix.
+# Column order: w, k, sv, er, bb, h_allowed
+# ERA/WHIP emerge from er/bb/h_allowed components, so we correlate those.
+# er/bb/h_allowed correlations derived from ERA/WHIP correlations with W/K/SV.
+PITCHER_CORR_STATS: list[str] = ["w", "k", "sv", "er", "bb", "h_allowed"]
+PITCHER_CORRELATION: list[list[float]] = [
+    #    w      k      sv     er     bb     h_a
+    [+1.000, +0.366, +0.030, -0.057, -0.105, -0.057],  # w
+    [+0.366, +1.000, +0.115, -0.237, -0.317, -0.237],  # k
+    [+0.030, +0.115, +1.000, -0.341, -0.345, -0.341],  # sv
+    [-0.057, -0.237, -0.341, +1.000, +0.729, +0.729],  # er
+    [-0.105, -0.317, -0.345, +0.729, +1.000, +0.729],  # bb
+    [-0.057, -0.237, -0.341, +0.729, +0.729, +1.000],  # h_allowed
+]
+
+# In-season management adjustment (roto points).
+# Calibrated from draft-day projected roto vs actual final standings, 2023-2025.
+# Represents the net effect of waiver moves, trades, and streaming over a
+# full season. Normalized to sum to zero (roto is zero-sum).
+# Each entry is (mean_adjustment, sd). Applied per-simulation as
+# N(mean, sd) added to a team's roto total after scoring.
+MANAGEMENT_ADJUSTMENT: dict[str, tuple[float, float]] = {
+    "Hello Peanuts!": (+17.1, 8.4),
+    "Boston Estrellas": (+12.8, 7.8),
+    "Springfield Isotopes": (+12.1, 5.1),
+    "Hart of the Order": (+11.1, 14.4),
+    "Spacemen": (+5.6, 18.6),
+    "Send in the Cavalli": (+5.0, 10.0),
+    "Work in Progress": (-5.2, 9.9),
+    "Jon's Underdogs": (-11.9, 9.7),
+    "Tortured Baseball Department": (-13.7, 10.0),
+    "SkeleThor": (-33.0, 12.6),
+}
+
+# Default adjustment for teams not in the lookup (new managers, other leagues).
+MANAGEMENT_ADJUSTMENT_DEFAULT: tuple[float, float] = (0.0, 10.0)
 
 # Replacement-level full-season stats for waiver pickups
 REPLACEMENT_HITTER: dict[str, int] = {

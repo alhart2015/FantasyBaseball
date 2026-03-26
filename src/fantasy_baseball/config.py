@@ -18,6 +18,7 @@ class LeagueConfig:
     teams: dict[int, str] = field(default_factory=dict)
     strategy: str = "no_punt_opp"
     scoring_mode: str = "var"
+    season_year: int = 2026
 
 
 def load_config(config_path: Path) -> LeagueConfig:
@@ -46,4 +47,5 @@ def load_config(config_path: Path) -> LeagueConfig:
         teams={int(k): v for k, v in draft.get("teams", {}).items()},
         strategy=draft.get("strategy", "no_punt_opp"),
         scoring_mode=draft.get("scoring_mode", "var"),
+        season_year=league.get("season_year", 2026),
     )

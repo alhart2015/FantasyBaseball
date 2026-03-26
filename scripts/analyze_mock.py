@@ -40,30 +40,29 @@ def sim_season(team_players, rng, h_slots, p_slots):
         for h in hitters:
             frac = rng.uniform(*INJURY_SEVERITY["hitter"]) if rng.random() < INJURY_PROB["hitter"] else 0
             scale = 1 - frac
-            perf = max(0, 1 + rng.normal(0, STAT_VARIANCE["hitter"]))
             row = {}
             for col in HITTING_COUNTING:
                 base = float(h.get(col, 0) or 0)
                 repl_val = REPLACEMENT_HITTER.get(col, 0) * frac
-                if col == "ab":
-                    row[col] = base * scale + repl_val
-                else:
+                sigma = STAT_VARIANCE.get(col, 0.0)
+                if sigma > 0:
+                    perf = max(0, 1 + rng.normal(0, sigma))
                     row[col] = base * perf * scale + repl_val
+                else:
+                    row[col] = base * scale + repl_val
             ah.append(row)
         for p in pitchers:
             frac = rng.uniform(*INJURY_SEVERITY["pitcher"]) if rng.random() < INJURY_PROB["pitcher"] else 0
             repl = REPLACEMENT_RP if float(p.get("sv", 0) or 0) >= 15 else REPLACEMENT_SP
             scale = 1 - frac
-            perf = max(0, 1 + rng.normal(0, STAT_VARIANCE["pitcher"]))
-            inv_perf = max(0, 2.0 - perf)
             row = {}
             for col in PITCHING_COUNTING:
                 base = float(p.get(col, 0) or 0)
                 repl_val = repl.get(col, 0) * frac
-                if col == "ip":
-                    row[col] = base * scale + repl_val
-                elif col in ("er", "bb", "h_allowed"):
-                    row[col] = base * inv_perf * scale + repl_val
+                sigma = STAT_VARIANCE.get(col, 0.0)
+                if sigma > 0:
+                    perf = max(0, 1 + rng.normal(0, sigma))
+                    row[col] = base * perf * scale + repl_val
                 else:
                     row[col] = base * perf * scale + repl_val
             ap.append(row)
@@ -92,7 +91,7 @@ def main():
         state = json.load(f)
 
     board = build_draft_board(
-        projections_dir=PROJECT_ROOT / "data" / "projections",
+        projections_dir=PROJECT_ROOT / "data" / "projections" / str(config.season_year),
         positions_path=PROJECT_ROOT / "data" / "player_positions.json",
         systems=config.projection_systems,
         weights=config.projection_weights or None,

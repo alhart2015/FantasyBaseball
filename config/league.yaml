@@ -3,6 +3,7 @@ league:
   num_teams: 10
   game_code: mlb
   team_name: "Hart of the Order"
+  season_year: 2026
 
 draft:
   strategy: three_closers

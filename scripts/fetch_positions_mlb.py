@@ -5,8 +5,9 @@ from the position cache, then queries the MLB API for their positions.
 Merges results into player_positions.json.
 
 Usage:
-    python scripts/fetch_positions_mlb.py
+    python scripts/fetch_positions_mlb.py [--year YEAR]
 """
+import argparse
 import json
 import sys
 import time
@@ -45,10 +46,12 @@ MLB_POS_MAP = {
 }
 
 
-def load_projection_mlbamids():
+def load_projection_mlbamids(proj_dir=None):
     """Load all player names and MLBAMIDs from projection CSVs."""
+    if proj_dir is None:
+        proj_dir = PROJECTIONS_DIR
     players = {}  # name -> mlbamid
-    for csv_file in PROJECTIONS_DIR.glob("*.csv"):
+    for csv_file in proj_dir.glob("*.csv"):
         df = pd.read_csv(csv_file, encoding="utf-8-sig")
         if "Name" not in df.columns or "MLBAMID" not in df.columns:
             continue
@@ -109,6 +112,11 @@ def fetch_positions_from_mlb_api(mlbam_ids):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--year", type=int, default=2026, help="Season year (default: 2026)")
+    args = parser.parse_args()
+    proj_dir = PROJECTIONS_DIR / str(args.year)
+
     # Load current position cache
     if CACHE_PATH.exists():
         with open(CACHE_PATH) as f:
@@ -121,7 +129,7 @@ def main():
     norm_cache = {normalize_name(k) for k in cache}
 
     # Load projection players with MLBAMIDs
-    proj_players = load_projection_mlbamids()
+    proj_players = load_projection_mlbamids(proj_dir)
     print(f"Projection players with MLBAMID: {len(proj_players)}")
 
     # Find players missing from cache
