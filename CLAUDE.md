@@ -57,6 +57,17 @@ Connects to Yahoo API → pulls roster + standings → `lineup/leverage.py` iden
 - **Scripts inject `src/` into sys.path** rather than relying solely on the editable install. Both work, but scripts do it explicitly for robustness.
 - **Projection files** must be named `{system}-hitters.csv` / `{system}-pitchers.csv`. The blend function validates and gives actionable FanGraphs download links on error.
 
+## Reuse before writing
+
+Before writing new logic, check whether the codebase already solves the problem. This project has been built incrementally and many patterns exist in scripts or library modules that handle edge cases you'll miss if you rewrite from scratch. Specifically:
+
+- **Search `src/` and `scripts/` for existing functions** before implementing computation logic. If `summary.py` or `run_lineup.py` already does what you need, extract a shared function into the appropriate library module rather than duplicating the code.
+- **Check how existing scripts handle the same data.** Yahoo API data has quirks (case mismatches like `"Util"` vs `"UTIL"`, missing stats in early season, inconsistent stat ID mappings). The existing scripts have already solved these — read them before writing new Yahoo integration code.
+- **Projection paths include the season year** (`data/projections/2026/`, not `data/projections/`). Config fields like `season_year` exist for this reason.
+- **`simulation.py` is the shared Monte Carlo module.** Use `run_monte_carlo()` and `apply_management_adjustment()` — don't rewrite MC loops.
+
+When building a new feature that orchestrates existing modules (like the season dashboard refresh pipeline), read the scripts that already do similar orchestration (`summary.py`, `run_lineup.py`) and follow their patterns for data loading, projection matching, and edge case handling.
+
 ## Config
 
 All league settings live in `config/league.yaml`. Key fields: `draft.strategy`, `draft.scoring_mode`, `keepers`, `roster_slots`, `sgp_denominators`. See `config/league.yaml.example` for the template. OAuth credentials go in `config/oauth.json` (gitignored).
