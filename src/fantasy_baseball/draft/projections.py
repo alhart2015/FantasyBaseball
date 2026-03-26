@@ -20,10 +20,10 @@ from fantasy_baseball.utils.constants import (
     STAT_VARIANCE,
 )
 from fantasy_baseball.simulation import (
-    _HITTER_COV,
-    _HITTER_IDX,
-    _PITCHER_COV,
-    _PITCHER_IDX,
+    HITTER_COV,
+    HITTER_IDX,
+    PITCHER_COV,
+    PITCHER_IDX,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
 
@@ -83,7 +83,7 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
 
         # Hitters — perf affects quality stats (H, R, HR, RBI, SB) but
         # not volume stats (AB, PA) so rate stats like AVG actually vary.
-        h_mean = np.zeros(len(_HITTER_IDX))
+        h_mean = np.zeros(len(HITTER_IDX))
         adj_hitters = []
         for h in hitters:
             frac_missed = 0.0
@@ -93,18 +93,18 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
 
             row = {}
             scale = 1.0 - frac_missed
-            draws = rng.multivariate_normal(h_mean, _HITTER_COV)
+            draws = rng.multivariate_normal(h_mean, HITTER_COV)
             for col in HITTING_COUNTING:
                 base = h.get(col, 0)
                 repl_val = REPLACEMENT_HITTER.get(col, 0) * frac_missed
-                if col in _HITTER_IDX:
-                    perf = max(0, 1.0 + draws[_HITTER_IDX[col]])
+                if col in HITTER_IDX:
+                    perf = max(0, 1.0 + draws[HITTER_IDX[col]])
                     row[col] = base * perf * scale + repl_val
                 else:
                     row[col] = base * scale + repl_val
             adj_hitters.append(row)
 
-        p_mean = np.zeros(len(_PITCHER_IDX))
+        p_mean = np.zeros(len(PITCHER_IDX))
         adj_pitchers = []
         for p in pitchers:
             frac_missed = 0.0
@@ -117,12 +117,12 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
 
             row = {}
             scale = 1.0 - frac_missed
-            draws = rng.multivariate_normal(p_mean, _PITCHER_COV)
+            draws = rng.multivariate_normal(p_mean, PITCHER_COV)
             for col in PITCHING_COUNTING:
                 base = p.get(col, 0)
                 repl_val = repl.get(col, 0) * frac_missed
-                if col in _PITCHER_IDX:
-                    perf = max(0, 1.0 + draws[_PITCHER_IDX[col]])
+                if col in PITCHER_IDX:
+                    perf = max(0, 1.0 + draws[PITCHER_IDX[col]])
                     row[col] = base * perf * scale + repl_val
                 else:
                     row[col] = base * scale + repl_val
@@ -137,7 +137,7 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
             adj_hitters = adj_hitters[:h_slots]
         if p_slots is not None:
             adj_pitchers.sort(
-                key=lambda p: (p.get("sv", 0) >= 15, p["w"] + p["k"] + p["sv"]),
+                key=lambda p: (p.get("sv", 0) >= CLOSER_SV_THRESHOLD, p["w"] + p["k"] + p["sv"]),
                 reverse=True,
             )
             adj_pitchers = adj_pitchers[:p_slots]

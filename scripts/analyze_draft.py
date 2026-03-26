@@ -212,7 +212,7 @@ def main():
                     frac = sev[0] + rng.random() * (sev[1] - sev[0])
                 scale = 1.0 - frac
                 stats_list = PITCHING_STATS if is_pitcher else HITTING_STATS
-                repl = (REPL_RP if p.get("sv", 0) >= 15 else REPL_SP) if is_pitcher else REPL_H
+                repl = (REPL_RP if p.get("sv", 0) >= CLOSER_SV_THRESHOLD else REPL_SP) if is_pitcher else REPL_H
                 row = {}
                 for s in stats_list:
                     base = p.get(s, 0.0)
@@ -230,7 +230,7 @@ def main():
 
             adj_h.sort(key=lambda h: h["r"] + h["hr"] + h["rbi"] + h["sb"], reverse=True)
             adj_h = adj_h[:h_slots]
-            adj_p.sort(key=lambda p: (p.get("sv", 0) >= 15, p["w"] + p["k"] + p["sv"]), reverse=True)
+            adj_p.sort(key=lambda p: (p.get("sv", 0) >= CLOSER_SV_THRESHOLD, p["w"] + p["k"] + p["sv"]), reverse=True)
             adj_p = adj_p[:p_slots]
 
             r = sum(h["r"] for h in adj_h)

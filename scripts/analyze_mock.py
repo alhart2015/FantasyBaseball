@@ -53,7 +53,7 @@ def sim_season(team_players, rng, h_slots, p_slots):
             ah.append(row)
         for p in pitchers:
             frac = rng.uniform(*INJURY_SEVERITY["pitcher"]) if rng.random() < INJURY_PROB["pitcher"] else 0
-            repl = REPLACEMENT_RP if float(p.get("sv", 0) or 0) >= 15 else REPLACEMENT_SP
+            repl = REPLACEMENT_RP if float(p.get("sv", 0) or 0) >= CLOSER_SV_THRESHOLD else REPLACEMENT_SP
             scale = 1 - frac
             row = {}
             for col in PITCHING_COUNTING:
@@ -64,10 +64,10 @@ def sim_season(team_players, rng, h_slots, p_slots):
                     perf = max(0, 1 + rng.normal(0, sigma))
                     row[col] = base * perf * scale + repl_val
                 else:
-                    row[col] = base * perf * scale + repl_val
+                    row[col] = base * scale + repl_val
             ap.append(row)
         ah.sort(key=lambda x: x["r"] + x["hr"] + x["rbi"] + x["sb"], reverse=True)
-        ap.sort(key=lambda x: (x.get("sv", 0) >= 15, x["w"] + x["k"] + x["sv"]), reverse=True)
+        ap.sort(key=lambda x: (x.get("sv", 0) >= CLOSER_SV_THRESHOLD, x["w"] + x["k"] + x["sv"]), reverse=True)
         ah, ap = ah[:h_slots], ap[:p_slots]
         r = sum(x["r"] for x in ah); hr = sum(x["hr"] for x in ah)
         rbi = sum(x["rbi"] for x in ah); sb = sum(x["sb"] for x in ah)

@@ -43,12 +43,12 @@ def _build_cov_matrix(
 
 
 # Pre-compute covariance matrices at import time (they never change).
-_HITTER_COV = _build_cov_matrix(HITTER_CORR_STATS, HITTER_CORRELATION)
-_PITCHER_COV = _build_cov_matrix(PITCHER_CORR_STATS, PITCHER_CORRELATION)
+HITTER_COV = _build_cov_matrix(HITTER_CORR_STATS, HITTER_CORRELATION)
+PITCHER_COV = _build_cov_matrix(PITCHER_CORR_STATS, PITCHER_CORRELATION)
 
 # Map stat name -> index in the correlated draw vector.
-_HITTER_IDX = {s: i for i, s in enumerate(HITTER_CORR_STATS)}
-_PITCHER_IDX = {s: i for i, s in enumerate(PITCHER_CORR_STATS)}
+HITTER_IDX = {s: i for i, s in enumerate(HITTER_CORR_STATS)}
+PITCHER_IDX = {s: i for i, s in enumerate(PITCHER_CORR_STATS)}
 
 
 def simulate_season(
@@ -151,16 +151,25 @@ def _apply_variance(
     counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
     injury_prob = INJURY_PROB[player_type]
     injury_lo, injury_hi = INJURY_SEVERITY[player_type]
-    cov = _HITTER_COV if is_hitter else _PITCHER_COV
-    idx_map = _HITTER_IDX if is_hitter else _PITCHER_IDX
+    cov = HITTER_COV if is_hitter else PITCHER_COV
+    idx_map = HITTER_IDX if is_hitter else PITCHER_IDX
     n_corr = len(idx_map)
     mean = np.zeros(n_corr)
 
+    n = len(players)
+    if n == 0:
+        return []
+
+    # Batch all random draws for the entire player list at once
+    injury_rolls = rng.random(n)
+    injury_severities = rng.uniform(injury_lo, injury_hi, n)
+    all_draws = rng.multivariate_normal(mean, cov, size=n)
+
     adjusted = []
-    for p in players:
+    for i, p in enumerate(players):
         frac_missed = 0.0
-        if rng.random() < injury_prob:
-            frac_missed = rng.uniform(injury_lo, injury_hi)
+        if injury_rolls[i] < injury_prob:
+            frac_missed = injury_severities[i]
             injuries_out.append((p.get("name", "?"), frac_missed))
 
         scale = 1.0 - frac_missed
@@ -171,9 +180,7 @@ def _apply_variance(
             is_closer = p.get("sv", 0) >= CLOSER_SV_THRESHOLD
             repl = REPLACEMENT_RP if is_closer else REPLACEMENT_SP
 
-        # Draw correlated performance multipliers for all stats at once
-        draws = rng.multivariate_normal(mean, cov)
-
+        draws = all_draws[i]
         row = {}
         for col in counting_cols:
             base = float(p.get(col, 0) or 0)
@@ -183,7 +190,6 @@ def _apply_variance(
                 perf = max(0, 1.0 + draws[idx_map[col]])
                 row[col] = base * perf * scale + repl_contrib
             else:
-                # ab, ip — playing time only, no performance variance
                 row[col] = base * scale + repl_contrib
 
         row["name"] = p.get("name", "?")
