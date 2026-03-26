@@ -32,7 +32,7 @@ from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.scoring import project_team_stats, score_roto, ALL_CATS, INVERSE_CATS
-from fantasy_baseball.simulation import simulate_season, apply_management_adjustment
+from fantasy_baseball.simulation import simulate_season, apply_management_adjustment, run_monte_carlo
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
@@ -222,53 +222,29 @@ def main():
     # Run both modes: without and with management adjustments
     for mc_label, use_mgmt in [("Roster strength only", False),
                                 ("With in-season management", True)]:
-        rng = np.random.default_rng(args.seed)
-        mc_totals = {name: [] for name in all_rosters}
-        mc_wins = {name: 0 for name in all_rosters}
-        mc_top3 = {name: 0 for name in all_rosters}
-        mc_cat_pts = {name: {c: [] for c in ALL_CATS} for name in all_rosters}
+        mc = run_monte_carlo(
+            all_rosters, h_slots, p_slots, team_name,
+            n_iterations=args.iterations, use_management=use_mgmt, seed=args.seed,
+        )
 
-        for _ in range(args.iterations):
-            sim_stats, _ = simulate_season(all_rosters, rng, h_slots, p_slots)
-            if use_mgmt:
-                sim_stats = apply_management_adjustment(sim_stats, rng)
-            sim_roto = score_roto(sim_stats)
-            ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
-            for rank, (name, pts) in enumerate(ranked, 1):
-                mc_totals[name].append(pts["total"])
-                if rank == 1:
-                    mc_wins[name] += 1
-                if rank <= 3:
-                    mc_top3[name] += 1
-                for c in ALL_CATS:
-                    mc_cat_pts[name][c].append(pts.get(f"{c}_pts", 0))
-
-        n = args.iterations
         print(f"\n  {mc_label}")
         print(f"  {'Team':<32} {'Med':>4} {'P10':>4} {'P90':>4}  {'1st':>5} {'Top3':>5}")
         print("  " + "-" * 66)
-        mc_sorted = sorted(mc_totals.items(), key=lambda x: np.median(x[1]), reverse=True)
-        for name, pts_list in mc_sorted:
+        mc_sorted = sorted(mc["team_results"].items(),
+                           key=lambda x: x[1]["median_pts"], reverse=True)
+        for name, res in mc_sorted:
             marker = " <<<" if name == team_name else ""
-            med = np.median(pts_list)
-            p10 = np.percentile(pts_list, 10)
-            p90 = np.percentile(pts_list, 90)
-            win_pct = mc_wins[name] / n * 100
-            top3_pct = mc_top3[name] / n * 100
-            print(f"  {name:<32} {med:>4.0f} {p10:>4.0f} {p90:>4.0f}  {win_pct:>5.1f}% {top3_pct:>5.1f}%{marker}")
+            print(f"  {name:<32} {res['median_pts']:>4.0f} {res['p10']:>4.0f} {res['p90']:>4.0f}"
+                  f"  {res['first_pct']:>5.1f}% {res['top3_pct']:>5.1f}%{marker}")
 
-    # Category risk uses the management-adjusted run (last iteration)
+    # Category risk uses the management-adjusted run (last iteration's mc)
     print(f"\n{'Category risk — ' + team_name}")
     print(f"  {'Cat':>4} {'Med':>4} {'P10':>4} {'P90':>4}  {'Top3':>5} {'Bot3':>5}")
     print("  " + "-" * 40)
     for c in ALL_CATS:
-        pts = mc_cat_pts[team_name][c]
-        med = np.median(pts)
-        p10 = np.percentile(pts, 10)
-        p90 = np.percentile(pts, 90)
-        top3 = sum(1 for p in pts if p >= 8) / n * 100
-        bot3 = sum(1 for p in pts if p <= 3) / n * 100
-        print(f"  {c:>4} {med:>4.0f} {p10:>4.0f} {p90:>4.0f}  {top3:>5.1f}% {bot3:>5.1f}%")
+        r = mc["category_risk"][c]
+        print(f"  {c:>4} {r['median_pts']:>4.0f} {r['p10']:>4.0f} {r['p90']:>4.0f}"
+              f"  {r['top3_pct']:>5.1f}% {r['bot3_pct']:>5.1f}%")
 
     # ── 4. LINEUP RECOMMENDATIONS ─────────────────────────────────────
     print()

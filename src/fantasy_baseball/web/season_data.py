@@ -690,73 +690,28 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         write_cache("projections", {"projected_standings": projected_standings}, cache_dir)
 
         # --- Step 13: Monte Carlo simulation ---
-        # Matches the pattern from summary.py: same simulate_season call for both,
-        # difference is whether apply_management_adjustment is called on the output.
-        import numpy as np
-        from fantasy_baseball.simulation import apply_management_adjustment, simulate_season
+        from fantasy_baseball.simulation import run_monte_carlo
 
         h_slots = sum(v for k, v in config.roster_slots.items()
                       if k not in ("P", "BN", "IL", "DL"))
         p_slots = config.roster_slots.get("P", 9)
-        n_iter = 1000
 
         mc_rosters = {}
         for tname, roster in all_team_rosters.items():
             mc_rosters[tname] = [pd.Series(p) for p in roster]
 
-        mc_results = {}
-        for mc_label, use_mgmt in [("Monte Carlo", False),
-                                    ("MC + Roster Mgmt", True)]:
-            rng = np.random.default_rng(42)
-            all_totals = {tname: [] for tname in mc_rosters}
-            mc_wins = {tname: 0 for tname in mc_rosters}
-            mc_top3 = {tname: 0 for tname in mc_rosters}
-            user_cat_pts = {cat: [] for cat in ALL_CATEGORIES}
+        base_mc = run_monte_carlo(
+            mc_rosters, h_slots, p_slots, config.team_name,
+            n_iterations=1000, use_management=False,
+            progress_cb=lambda i: _set_refresh_progress(f"Monte Carlo: iteration {i}/1000..."),
+        )
+        mgmt_mc = run_monte_carlo(
+            mc_rosters, h_slots, p_slots, config.team_name,
+            n_iterations=1000, use_management=True,
+            progress_cb=lambda i: _set_refresh_progress(f"MC + Roster Mgmt: iteration {i}/1000..."),
+        )
 
-            for i in range(n_iter):
-                if i % 200 == 0:
-                    _set_refresh_progress(f"{mc_label}: iteration {i}/{n_iter}...")
-                sim_stats, _ = simulate_season(mc_rosters, rng, h_slots, p_slots)
-                if use_mgmt:
-                    sim_stats = apply_management_adjustment(sim_stats, rng)
-                roto = score_roto(sim_stats)
-                ranked = sorted(roto.items(), key=lambda x: x[1]["total"], reverse=True)
-                for rank, (tname, pts) in enumerate(ranked, 1):
-                    all_totals[tname].append(pts["total"])
-                    if rank == 1:
-                        mc_wins[tname] += 1
-                    if rank <= 3:
-                        mc_top3[tname] += 1
-                for cat in ALL_CATEGORIES:
-                    user_cat_pts[cat].append(roto[config.team_name][f"{cat}_pts"])
-
-            team_results = {}
-            for tname in mc_rosters:
-                arr = np.array(all_totals[tname])
-                team_results[tname] = {
-                    "median_pts": round(float(np.median(arr)), 1),
-                    "p10": round(float(np.percentile(arr, 10))),
-                    "p90": round(float(np.percentile(arr, 90))),
-                    "first_pct": round(mc_wins[tname] / n_iter * 100, 1),
-                    "top3_pct": round(mc_top3[tname] / n_iter * 100, 1),
-                }
-
-            num_teams = len(mc_rosters)
-            category_risk = {}
-            for cat in ALL_CATEGORIES:
-                arr = np.array(user_cat_pts[cat])
-                category_risk[cat] = {
-                    "median_pts": round(float(np.median(arr)), 1),
-                    "p10": round(float(np.percentile(arr, 10)), 1),
-                    "p90": round(float(np.percentile(arr, 90)), 1),
-                    "top3_pct": round(sum(1 for p in arr if p >= 8) / n_iter * 100, 1),
-                    "bot3_pct": round(sum(1 for p in arr if p <= 3) / n_iter * 100, 1),
-                }
-
-            key = "base" if not use_mgmt else "with_management"
-            mc_results[key] = {"team_results": team_results, "category_risk": category_risk}
-
-        write_cache("monte_carlo", mc_results, cache_dir)
+        write_cache("monte_carlo", {"base": base_mc, "with_management": mgmt_mc}, cache_dir)
 
         # --- Step 13: Write meta ---
         _set_refresh_progress("Finalizing...")
