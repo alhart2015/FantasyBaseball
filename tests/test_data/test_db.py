@@ -359,3 +359,56 @@ def test_append_standings_snapshot(tmp_path):
     append_standings_snapshot(conn, standings, 2026, "2026-03-24")
     assert conn.execute("SELECT COUNT(*) FROM standings").fetchone()[0] == 1
     conn.close()
+
+
+def test_build_db_end_to_end(tmp_path):
+    """Integration test: build a DB from minimal test data and query it."""
+    import json
+
+    proj_dir = tmp_path / "projections" / "2026"
+    proj_dir.mkdir(parents=True)
+    (proj_dir / "steamer-hitters.csv").write_text(
+        'Name,Team,PA,AB,H,R,HR,RBI,SB,AVG,G,PlayerId,MLBAMID\n'
+        '"James Wood","WSN",600,520,140,85,26,80,15,0.269,145,"29518",695578\n'
+    )
+    (proj_dir / "steamer-pitchers.csv").write_text(
+        'Name,Team,W,L,SV,ERA,IP,ER,BB,SO,H,HR,WHIP,G,GS,PlayerId,MLBAMID\n'
+        '"Corbin Burnes","BAL",14,7,0,3.20,200,71,50,220,170,20,1.10,32,32,"19361",669203\n'
+    )
+
+    drafts_path = tmp_path / "drafts.json"
+    drafts_path.write_text(json.dumps({
+        "2026": [{"pick": 1, "round": 1, "team": "Hart", "player": "James Wood"}]
+    }))
+
+    standings_path = tmp_path / "standings.json"
+    standings_path.write_text(json.dumps({
+        "2025": {"standings": [
+            {"name": "Hart", "team_key": "k1", "rank": 1,
+             "stats": {"R": 900, "HR": 250, "RBI": 880, "SB": 150, "AVG": 0.260,
+                       "W": 80, "K": 1400, "SV": 90, "ERA": 3.60, "WHIP": 1.20}}
+        ]}
+    }))
+
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    create_tables(conn)
+    load_raw_projections(conn, tmp_path / "projections")
+    load_blended_projections(conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0})
+    load_draft_results(conn, drafts_path)
+    load_standings(conn, standings_path)
+
+    # Verify queries
+    wood = conn.execute("SELECT year, hr, avg FROM blended_projections WHERE name='James Wood'").fetchone()
+    assert wood is not None and wood["hr"] == 26
+
+    draft = conn.execute("SELECT * FROM draft_results WHERE year=2026").fetchone()
+    assert draft["player"] == "James Wood"
+    # fg_id should be resolved since raw_projections has James Wood for 2026
+    assert draft["fg_id"] == "29518"
+
+    standings = conn.execute("SELECT * FROM standings WHERE year=2025").fetchone()
+    assert standings["r"] == 900
+
+    conn.close()
