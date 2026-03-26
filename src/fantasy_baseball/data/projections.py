@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from .fangraphs import load_projection_set, _find_file
+from fantasy_baseball.utils.name_utils import normalize_name
+from fantasy_baseball.utils.positions import is_hitter, is_pitcher
 
 # Counting stats to blend directly (weighted average)
 HITTING_COUNTING_COLS: list[str] = ["r", "hr", "rbi", "sb", "h", "ab", "pa"]
@@ -195,3 +197,68 @@ def _blend_pitchers(dfs: list[pd.DataFrame]) -> pd.DataFrame:
     result["era"] = np.where(ip > 0, result["er"] * 9 / ip, 0.0)
     result["whip"] = np.where(ip > 0, (result["bb"] + result["h_allowed"]) / ip, 0.0)
     return result
+
+
+def match_roster_to_projections(
+    roster: list[dict],
+    hitters_proj: pd.DataFrame,
+    pitchers_proj: pd.DataFrame,
+) -> list[dict]:
+    """Match roster players to blended projections by normalized name.
+
+    Expects ``_name_norm`` column precomputed on both DataFrames
+    (call ``df["_name_norm"] = df["name"].apply(normalize_name)`` first).
+
+    Returns a list of enriched player dicts. Each matched player gets
+    ``player_type`` ("hitter"/"pitcher") and all stat columns from the
+    projection row. Unmatched players are omitted.
+    """
+    matched = []
+    for player in roster:
+        name = player["name"].replace(" (Batter)", "").replace(" (Pitcher)", "")
+        name_norm = normalize_name(name)
+        positions = player.get("positions", [])
+
+        proj = None
+        ptype = None
+        if is_hitter(positions) and not hitters_proj.empty:
+            matches = hitters_proj[hitters_proj["_name_norm"] == name_norm]
+            if not matches.empty:
+                proj = matches.iloc[0]
+                ptype = "hitter"
+        if proj is None and is_pitcher(positions) and not pitchers_proj.empty:
+            matches = pitchers_proj[pitchers_proj["_name_norm"] == name_norm]
+            if not matches.empty:
+                proj = matches.iloc[0]
+                ptype = "pitcher"
+        if proj is None:
+            for df, pt in [(hitters_proj, "hitter"), (pitchers_proj, "pitcher")]:
+                if df.empty:
+                    continue
+                matches = df[df["_name_norm"] == name_norm]
+                if not matches.empty:
+                    proj = matches.iloc[0]
+                    ptype = pt
+                    break
+
+        if proj is not None:
+            entry = {
+                "name": name,
+                "positions": positions,
+                "player_type": ptype,
+                "selected_position": player.get("selected_position", ""),
+                "player_id": player.get("player_id", ""),
+                "status": player.get("status", ""),
+            }
+            if ptype == "hitter":
+                for col in HITTING_COUNTING_COLS:
+                    entry[col] = float(proj.get(col, 0) or 0)
+                entry["avg"] = float(proj.get("avg", 0) or 0)
+            else:
+                for col in PITCHING_COUNTING_COLS:
+                    entry[col] = float(proj.get(col, 0) or 0)
+                entry["era"] = float(proj.get("era", 0) or 0)
+                entry["whip"] = float(proj.get("whip", 0) or 0)
+            matched.append(entry)
+
+    return matched

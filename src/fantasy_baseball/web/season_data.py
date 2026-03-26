@@ -475,37 +475,19 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # --- Step 6: Match roster players to projections, compute wSGP ---
         _set_refresh_progress("Matching roster to projections...")
+        from fantasy_baseball.data.projections import match_roster_to_projections
+
+        matched = match_roster_to_projections(roster_raw, hitters_proj, pitchers_proj)
+        # Build lookup of matched players, add wSGP
+        matched_names = set()
         roster_with_proj = []
+        for entry in matched:
+            entry["wsgp"] = calculate_weighted_sgp(pd.Series(entry), leverage)
+            matched_names.add(normalize_name(entry["name"]))
+            roster_with_proj.append(entry)
+        # Include unmatched players with wsgp=0
         for player in roster_raw:
-            norm = normalize_name(player["name"])
-            proj_row = None
-            # Pitchers check pitchers_proj first
-            positions = player.get("positions", [])
-            if set(positions) & PITCHER_POSITIONS:
-                search_order = [pitchers_proj, hitters_proj]
-            else:
-                search_order = [hitters_proj, pitchers_proj]
-
-            for df in search_order:
-                if df.empty:
-                    continue
-                matches = df[df["_name_norm"] == norm]
-                if not matches.empty:
-                    proj_row = matches.iloc[0].to_dict()
-                    break
-
-            if proj_row:
-                entry = dict(proj_row)
-                entry.update({
-                    "name": player["name"],
-                    "positions": player.get("positions", []),
-                    "selected_position": player.get("selected_position", "BN"),
-                    "player_id": player.get("player_id", ""),
-                    "status": player.get("status", ""),
-                })
-                entry["wsgp"] = calculate_weighted_sgp(pd.Series(entry), leverage)
-                roster_with_proj.append(entry)
-            else:
+            if normalize_name(player["name"]) not in matched_names:
                 entry = dict(player)
                 entry["wsgp"] = 0.0
                 roster_with_proj.append(entry)
@@ -610,27 +592,9 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                 continue
             try:
                 opp_raw = fetch_roster(league, key)
-                opp_proj_list = []
-                for p in opp_raw:
-                    norm = normalize_name(p["name"])
-                    pos = p.get("positions", [])
-                    if set(pos) & {"SP", "RP", "P"}:
-                        search_order = [pitchers_proj, hitters_proj]
-                    else:
-                        search_order = [hitters_proj, pitchers_proj]
-                    for df in search_order:
-                        if df.empty:
-                            continue
-                        matches = df[df["_name_norm"] == norm]
-                        if not matches.empty:
-                            entry = matches.iloc[0].to_dict()
-                            entry.update({
-                                "name": p["name"],
-                                "positions": pos,
-                                "player_id": p.get("player_id", ""),
-                            })
-                            opp_proj_list.append(entry)
-                            break
+                opp_proj_list = match_roster_to_projections(
+                    opp_raw, hitters_proj, pitchers_proj
+                )
                 if opp_proj_list:
                     opp_rosters[tname] = opp_proj_list
             except Exception:

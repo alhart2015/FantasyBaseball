@@ -26,6 +26,7 @@ from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_p
 from fantasy_baseball.lineup.waivers import scan_waivers, detect_open_slots, fetch_and_match_free_agents
 from fantasy_baseball.trades.evaluate import find_trades, compute_roto_points_by_cat
 from fantasy_baseball.trades.pitch import generate_pitch
+from fantasy_baseball.data.projections import match_roster_to_projections
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter, is_pitcher
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
@@ -38,54 +39,6 @@ CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 
 # ── Helpers ───────────────────────────────────────────────────────────
-
-def match_roster_to_projections(roster, hitters_proj, pitchers_proj):
-    """Match roster players to projections by name. Returns enriched dicts.
-
-    Expects _name_norm column precomputed on both DataFrames.
-    """
-    matched = []
-    for player in roster:
-        name = player["name"].replace(" (Batter)", "").replace(" (Pitcher)", "")
-        name_norm = normalize_name(name)
-        positions = player["positions"]
-
-        proj = None
-        ptype = None
-        if is_hitter(positions) and not hitters_proj.empty:
-            matches = hitters_proj[hitters_proj["_name_norm"] == name_norm]
-            if not matches.empty:
-                proj = matches.iloc[0]
-                ptype = "hitter"
-        if proj is None and is_pitcher(positions) and not pitchers_proj.empty:
-            matches = pitchers_proj[pitchers_proj["_name_norm"] == name_norm]
-            if not matches.empty:
-                proj = matches.iloc[0]
-                ptype = "pitcher"
-        if proj is None:
-            for df, pt in [(hitters_proj, "hitter"), (pitchers_proj, "pitcher")]:
-                if df.empty:
-                    continue
-                matches = df[df["_name_norm"] == name_norm]
-                if not matches.empty:
-                    proj = matches.iloc[0]
-                    ptype = pt
-                    break
-
-        if proj is not None:
-            entry = {
-                "name": name, "positions": positions,
-                "player_type": ptype, "selected_position": player.get("selected_position", ""),
-            }
-            if ptype == "hitter":
-                for col in ["r", "hr", "rbi", "sb", "avg", "h", "ab", "pa"]:
-                    entry[col] = float(proj.get(col, 0) or 0)
-            else:
-                for col in ["w", "k", "sv", "era", "whip", "ip", "er", "bb", "h_allowed"]:
-                    entry[col] = float(proj.get(col, 0) or 0)
-            matched.append(entry)
-    return matched
-
 
 # ── Main ──────────────────────────────────────────────────────────────
 
