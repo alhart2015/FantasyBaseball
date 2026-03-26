@@ -103,6 +103,28 @@ def register_routes(app: Flask) -> None:
     @app.route("/waivers-trades")
     def waivers_trades():
         meta = read_meta()
+        waivers_raw = read_cache("waivers")
+        trades_raw = read_cache("trades")
         return render_template(
-            "season/waivers_trades.html", meta=meta, active_page="waivers_trades"
+            "season/waivers_trades.html",
+            meta=meta,
+            active_page="waivers_trades",
+            waivers=waivers_raw or [],
+            trades=trades_raw or [],
+            categories=["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"],
         )
+
+    @app.route("/api/trade/<int:idx>/standings")
+    def api_trade_standings(idx):
+        trades_raw = read_cache("trades")
+        if not trades_raw or idx >= len(trades_raw):
+            return jsonify({"error": "Trade not found"}), 404
+
+        standings_raw = read_cache("standings")
+        if not standings_raw:
+            return jsonify({"error": "No standings data"}), 404
+
+        from fantasy_baseball.web.season_data import compute_trade_standings_impact
+        config = _load_config()
+        result = compute_trade_standings_impact(trade=trades_raw[idx], standings=standings_raw, user_team_name=config.team_name)
+        return jsonify(result)

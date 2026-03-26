@@ -215,6 +215,58 @@ def run_optimize() -> dict:
     return {"moves": [], "is_optimal": True}
 
 
+def compute_trade_standings_impact(
+    trade: dict, standings: list[dict], user_team_name: str
+) -> dict:
+    """Compute before/after roto standings for a trade.
+
+    Returns dict with:
+      - before: {user_team: {cat: points}, opp_team: {cat: points}}
+      - after: {user_team: {cat: points}, opp_team: {cat: points}}
+      - before_stats: {user_team: {cat: stat}, opp_team: {cat: stat}}
+      - after_stats: {user_team: {cat: stat}, opp_team: {cat: stat}}
+      - categories: list of category names
+    """
+    opp_name = trade["opponent"]
+
+    all_stats_before = {t["name"]: dict(t["stats"]) for t in standings}
+    roto_before = score_roto(all_stats_before)
+
+    all_stats_after = {t["name"]: dict(t["stats"]) for t in standings}
+
+    if "hart_stats_after" in trade and "opp_stats_after" in trade:
+        all_stats_after[user_team_name] = trade["hart_stats_after"]
+        all_stats_after[opp_name] = trade["opp_stats_after"]
+    else:
+        for cat in ALL_CATEGORIES:
+            hart_delta = trade.get("hart_cat_deltas", {}).get(cat, 0)
+            opp_delta = trade.get("opp_cat_deltas", {}).get(cat, 0)
+            all_stats_after[user_team_name][cat] += hart_delta
+            all_stats_after[opp_name][cat] += opp_delta
+
+    roto_after = score_roto(all_stats_after)
+
+    return {
+        "before": {
+            user_team_name: roto_before[user_team_name],
+            opp_name: roto_before[opp_name],
+        },
+        "after": {
+            user_team_name: roto_after[user_team_name],
+            opp_name: roto_after[opp_name],
+        },
+        "before_stats": {
+            user_team_name: all_stats_before[user_team_name],
+            opp_name: all_stats_before[opp_name],
+        },
+        "after_stats": {
+            user_team_name: all_stats_after[user_team_name],
+            opp_name: all_stats_after[opp_name],
+        },
+        "categories": ALL_CATEGORIES,
+    }
+
+
 def _compute_category_ranks(standings: list[dict]) -> dict[str, dict[str, int]]:
     """Compute per-category rank for each team (1 = best).
 
