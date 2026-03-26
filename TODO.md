@@ -4,6 +4,8 @@
 
 - [ ] **Pitcher streaming tool** — Score free agent SPs by matchup quality to identify streamers (pick up a mediocre pitcher facing a terrible offense for one start, then drop). Builds on the matchup adjustment system.
 
+- [ ] **Load rest-of-season (ROS) projections into SQLite** — FanGraphs publishes updated ROS projections throughout the season. Once we start downloading these CSVs to `data/projections/`, add them to the database as a separate layer from the preseason projections. Likely needs a `projection_type` column (preseason vs ROS) or a `snapshot_date` to track when the ROS projection was pulled. Format TBD — depends on what the CSVs look like when we get them.
+
 - [ ] **Automate ROS projection download** — If the manual FanGraphs CSV download gets tedious, automate it. FanGraphs doesn't have a public API so this would require browser automation (Playwright) or finding an unofficial data source. Low priority unless the manual process is a pain.
 
 - [ ] **Browser-based OAuth flow for season dashboard** — Add Yahoo OAuth redirect flow directly in the dashboard so it can be used from a phone without CLI re-auth. When the token is expired, redirect to Yahoo login, handle the callback, store the refreshed token. Required before remote hosting.
