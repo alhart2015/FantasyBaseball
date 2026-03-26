@@ -41,81 +41,59 @@
         </main>
     </div>
 <script>
-function startRefresh() {
-    const btn = document.getElementById('refresh-btn');
+function startBackgroundTask(apiUrl, btnId, busyText, doneAction) {
+    const btn = document.getElementById(btnId);
+    const otherBtn = document.getElementById(btnId === 'refresh-btn' ? 'mlb-btn' : 'refresh-btn');
     const progress = document.getElementById('refresh-progress');
+    const originalText = btn.textContent;
+
     btn.disabled = true;
-    btn.textContent = 'Refreshing...';
-    progress.style.display = 'block';
-
-    fetch('/api/refresh', {method: 'POST'})
-        .then(r => r.json())
-        .then(() => pollRefreshStatus());
-}
-
-function pollRefreshStatus() {
-    const progress = document.getElementById('refresh-progress');
-    const btn = document.getElementById('refresh-btn');
-
-    fetch('/api/refresh-status')
-        .then(r => r.json())
-        .then(data => {
-            progress.textContent = data.progress || 'Working...';
-            if (data.running) {
-                setTimeout(pollRefreshStatus, 1000);
-            } else if (data.error) {
-                progress.textContent = 'Error: ' + data.error;
-                progress.style.color = 'var(--danger)';
-                btn.disabled = false;
-                btn.textContent = 'Refresh Data';
-            } else {
-                window.location.reload();
-            }
-        })
-        .catch(() => setTimeout(pollRefreshStatus, 2000));
-}
-
-function startMlbFetch() {
-    const btn = document.getElementById('mlb-btn');
-    const refreshBtn = document.getElementById('refresh-btn');
-    const progress = document.getElementById('refresh-progress');
-    btn.disabled = true;
-    refreshBtn.disabled = true;
-    btn.textContent = 'Fetching...';
+    otherBtn.disabled = true;
+    btn.textContent = busyText;
     progress.style.display = 'block';
     progress.style.color = 'var(--accent)';
 
-    fetch('/api/fetch-mlb', {method: 'POST'})
+    fetch(apiUrl, {method: 'POST'})
         .then(r => r.json())
-        .then(() => pollMlbStatus());
+        .then(() => pollStatus(btn, otherBtn, originalText, doneAction));
 }
 
-function pollMlbStatus() {
+function pollStatus(btn, otherBtn, originalText, doneAction) {
     const progress = document.getElementById('refresh-progress');
-    const btn = document.getElementById('mlb-btn');
-    const refreshBtn = document.getElementById('refresh-btn');
 
     fetch('/api/refresh-status')
         .then(r => r.json())
         .then(data => {
             progress.textContent = data.progress || 'Working...';
             if (data.running) {
-                setTimeout(pollMlbStatus, 2000);
+                setTimeout(() => pollStatus(btn, otherBtn, originalText, doneAction), 1000);
             } else if (data.error) {
                 progress.textContent = 'Error: ' + data.error;
                 progress.style.color = 'var(--danger)';
                 btn.disabled = false;
-                refreshBtn.disabled = false;
-                btn.textContent = 'Fetch MLB Data';
+                otherBtn.disabled = false;
+                btn.textContent = originalText;
             } else {
                 btn.disabled = false;
-                refreshBtn.disabled = false;
-                btn.textContent = 'Fetch MLB Data';
-                progress.textContent = data.progress || 'MLB data updated!';
-                setTimeout(() => { progress.style.display = 'none'; }, 5000);
+                otherBtn.disabled = false;
+                btn.textContent = originalText;
+                if (doneAction === 'reload') {
+                    window.location.reload();
+                } else {
+                    progress.textContent = data.progress || 'Done!';
+                    setTimeout(() => { progress.style.display = 'none'; }, 5000);
+                }
             }
         })
-        .catch(() => setTimeout(pollMlbStatus, 3000));
+        .catch(() => setTimeout(() => pollStatus(btn, otherBtn, originalText, doneAction), 2000));
+}
+
+function startRefresh() {
+    startBackgroundTask('/api/refresh', 'refresh-btn', 'Refreshing...', 'reload');
+}
+
+function startMlbFetch() {
+    startBackgroundTask('/api/fetch-mlb', 'mlb-btn', 'Fetching...', 'show');
 }
 </script>
 </body>

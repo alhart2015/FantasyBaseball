@@ -641,10 +641,18 @@ def fetch_and_load_game_logs(
         progress_cb(f"Found {len(players)} MLB players, fetching game logs...")
 
     new_rows = 0
-    for i, player in enumerate(players):
-        if progress_cb and (i + 1) % 50 == 0:
-            progress_cb(f"Game logs: {i + 1}/{len(players)} players...")
+    _HITTER_INSERT = (
+        "INSERT OR IGNORE INTO game_logs "
+        "(season, mlbam_id, name, team, player_type, date, pa, ab, h, r, hr, rbi, sb) "
+        "VALUES (?, ?, ?, ?, 'hitter', ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    _PITCHER_INSERT = (
+        "INSERT OR IGNORE INTO game_logs "
+        "(season, mlbam_id, name, team, player_type, date, ip, k, er, bb, h_allowed, w, sv, gs) "
+        "VALUES (?, ?, ?, ?, 'pitcher', ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
 
+    for i, player in enumerate(players):
         mid = player["mlbam_id"]
         group = "hitting" if player["player_type"] == "hitter" else "pitching"
 
@@ -663,33 +671,28 @@ def fetch_and_load_game_logs(
         if not games:
             continue
 
-        for g in games:
-            if player["player_type"] == "hitter":
-                conn.execute(
-                    "INSERT OR IGNORE INTO game_logs "
-                    "(season, mlbam_id, name, team, player_type, date, "
-                    "pa, ab, h, r, hr, rbi, sb) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (season, mid, player["name"], player["team"],
-                     "hitter", g["date"],
-                     g.get("pa"), g.get("ab"), g.get("h"), g.get("r"),
-                     g.get("hr"), g.get("rbi"), g.get("sb")),
-                )
-            else:
-                conn.execute(
-                    "INSERT OR IGNORE INTO game_logs "
-                    "(season, mlbam_id, name, team, player_type, date, "
-                    "ip, k, er, bb, h_allowed, w, sv, gs) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (season, mid, player["name"], player["team"],
-                     "pitcher", g["date"],
-                     g.get("ip"), g.get("k"), g.get("er"), g.get("bb"),
-                     g.get("h_allowed"), g.get("w"), g.get("sv"), g.get("gs")),
-                )
-            new_rows += 1
+        common = (season, mid, player["name"], player["team"])
+        if player["player_type"] == "hitter":
+            rows = [
+                (*common, g["date"], g.get("pa"), g.get("ab"), g.get("h"),
+                 g.get("r"), g.get("hr"), g.get("rbi"), g.get("sb"))
+                for g in games
+            ]
+            conn.executemany(_HITTER_INSERT, rows)
+        else:
+            rows = [
+                (*common, g["date"], g.get("ip"), g.get("k"), g.get("er"),
+                 g.get("bb"), g.get("h_allowed"), g.get("w"), g.get("sv"), g.get("gs"))
+                for g in games
+            ]
+            conn.executemany(_PITCHER_INSERT, rows)
+        new_rows += len(rows)
 
+        # Flush to disk and report progress every 50 players
         if (i + 1) % 50 == 0:
             conn.commit()
+            if progress_cb:
+                progress_cb(f"Game logs: {i + 1}/{len(players)} players...")
 
     conn.commit()
     return new_rows

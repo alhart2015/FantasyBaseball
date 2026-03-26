@@ -624,3 +624,46 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
     finally:
         with _refresh_lock:
             _refresh_status["running"] = False
+
+
+def run_mlb_fetch() -> None:
+    """Fetch all MLB player game logs and store in SQLite.
+
+    Manages refresh status so the UI can poll progress. Mirrors the
+    pattern used by run_full_refresh().
+    """
+    with _refresh_lock:
+        _refresh_status["running"] = True
+        _refresh_status["progress"] = "Starting MLB data fetch..."
+        _refresh_status["error"] = None
+
+    try:
+        from fantasy_baseball.config import load_config
+        from fantasy_baseball.data.db import (
+            create_tables,
+            fetch_and_load_game_logs,
+            get_connection,
+        )
+
+        project_root = Path(__file__).resolve().parents[3]
+        config = load_config(project_root / "config" / "league.yaml")
+
+        conn = get_connection()
+        create_tables(conn)
+        try:
+            new_rows = fetch_and_load_game_logs(
+                conn, config.season_year,
+                progress_cb=_set_refresh_progress,
+            )
+        finally:
+            conn.close()
+
+        _set_refresh_progress(f"Done — {new_rows} new game log rows added")
+
+    except Exception as exc:
+        with _refresh_lock:
+            _refresh_status["error"] = str(exc)
+        raise
+    finally:
+        with _refresh_lock:
+            _refresh_status["running"] = False
