@@ -489,18 +489,40 @@ def main():
 
     opp_rosters = {n: r for n, r in all_rosters.items() if n != team_name}
 
+    # Use projected standings for trade impact when current standings are
+    # too early in the season to be meaningful (total counting stats near zero).
     if standings:
-        leverage_by_team = {}
-        for team in standings:
-            leverage_by_team[team["name"]] = calculate_leverage(standings, team["name"])
+        total_counting = sum(
+            s.get("stats", {}).get("R", 0) + s.get("stats", {}).get("HR", 0)
+            for s in standings
+        )
+    else:
+        total_counting = 0
 
-        current_ranks = compute_roto_points_by_cat(standings)
+    if total_counting < 500:
+        # Early season: use projected full-season standings
+        trade_standings = [
+            {"name": name, "stats": all_stats[name]} for name in all_stats
+        ]
+        if total_counting > 0:
+            print("\n  Early season — using projected standings for trade analysis.")
+    else:
+        trade_standings = standings
+
+    if trade_standings:
+        leverage_by_team = {}
+        for team in trade_standings:
+            leverage_by_team[team["name"]] = calculate_leverage(
+                trade_standings, team["name"],
+            )
+
+        current_ranks = compute_roto_points_by_cat(trade_standings)
 
         trades = find_trades(
             hart_name=team_name,
             hart_roster=user_roster,
             opp_rosters=opp_rosters,
-            standings=standings,
+            standings=trade_standings,
             leverage_by_team=leverage_by_team,
             roster_slots=config.roster_slots,
             max_results=5,
@@ -508,7 +530,7 @@ def main():
     else:
         trades = []
         current_ranks = {}
-        print("\n  Pre-season — trade analysis requires standings data.")
+        print("\n  No standings data — trade analysis requires standings.")
 
     if trades:
         for i, trade in enumerate(trades, 1):
@@ -519,10 +541,10 @@ def main():
             print(f"\n  {i}. SEND: {trade['send']:<22} ({send_pos})  ->  {opp}")
             print(f"     GET:  {trade['receive']:<22} ({recv_pos})  <-  {opp}")
 
-            hart_parts = [f"{d:+d} {c}" for c, d in trade["hart_cat_deltas"].items() if d != 0]
-            opp_parts = [f"{d:+d} {c}" for c, d in trade["opp_cat_deltas"].items() if d != 0]
-            print(f"     You gain: {trade['hart_delta']:+d} roto pts ({', '.join(hart_parts) if hart_parts else 'no change'})")
-            print(f"     They gain: {trade['opp_delta']:+d} roto pts ({', '.join(opp_parts) if opp_parts else 'no change'})")
+            hart_parts = [f"{d:+.0f} {c}" for c, d in trade["hart_cat_deltas"].items() if abs(d) >= 0.5]
+            opp_parts = [f"{d:+.0f} {c}" for c, d in trade["opp_cat_deltas"].items() if abs(d) >= 0.5]
+            print(f"     You gain: {trade['hart_delta']:+.0f} roto pts ({', '.join(hart_parts) if hart_parts else 'no change'})")
+            print(f"     They gain: {trade['opp_delta']:+.0f} roto pts ({', '.join(opp_parts) if opp_parts else 'no change'})")
 
             opp_ranks = current_ranks.get(opp, {})
             pitch = generate_pitch(opp, trade["opp_cat_deltas"], opp_ranks)

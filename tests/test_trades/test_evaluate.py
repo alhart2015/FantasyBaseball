@@ -1,6 +1,7 @@
 import pytest
 from fantasy_baseball.trades.evaluate import (
     compute_roto_points,
+    compute_roto_points_by_cat,
     compute_trade_impact,
     find_trades,
 )
@@ -70,6 +71,26 @@ SAMPLE_STANDINGS = [
      "stats": {"R": 850, "HR": 250, "RBI": 870, "SB": 180,
                "AVG": .255, "W": 85, "K": 1400, "SV": 40, "ERA": 3.80, "WHIP": 1.20}},
 ]
+
+
+def test_compute_roto_points_by_cat_missing_stats():
+    """Teams missing some stat categories should get default values, not crash."""
+    standings = [
+        {"name": "Full", "stats": {"R": 100, "HR": 30, "RBI": 90, "SB": 20,
+         "AVG": .260, "W": 10, "K": 150, "SV": 10, "ERA": 3.50, "WHIP": 1.15}},
+        {"name": "No Pitching", "stats": {"R": 80, "HR": 25, "RBI": 85, "SB": 15,
+         "AVG": .250, "W": 0, "K": 0, "SV": 0}},
+        # ERA and WHIP missing entirely for "No Pitching"
+    ]
+    result = compute_roto_points_by_cat(standings)
+    # Should not crash, and every team should have all 10 categories
+    assert "ERA" in result["No Pitching"]
+    assert "WHIP" in result["No Pitching"]
+    assert len(result["Full"]) == 10
+    assert len(result["No Pitching"]) == 10
+    # "No Pitching" should rank last in ERA/WHIP (got default 99.0)
+    assert result["Full"]["ERA"] > result["No Pitching"]["ERA"]
+    assert result["Full"]["WHIP"] > result["No Pitching"]["WHIP"]
 
 
 def test_find_trades_returns_ranked_list():

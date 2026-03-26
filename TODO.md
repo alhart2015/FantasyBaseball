@@ -6,7 +6,7 @@
 
 - [ ] **Auto-detect injuries from Yahoo API** — Currently injuries are manually tracked in `data/injuries.yaml`. The Yahoo Fantasy API should expose IL status on roster players. Investigate the roster response for IL/DTD flags and auto-populate the injury management section of `summary.py` instead of requiring manual entry.
 
-- [ ] **Fix trade recommender KeyError on pre-season standings** — `compute_roto_points_by_cat` in `trades/evaluate.py` crashes with `KeyError: 'AVG'` when standings stats are missing categories (e.g., pre-season or when the Yahoo stat ID mapping omits a category). Need to handle missing stat keys gracefully — skip the trade analysis or use projected stats as fallback.
+- [x] **Fix trade recommender KeyError on pre-season standings** — `compute_roto_points_by_cat` in `trades/evaluate.py` crashes with `KeyError: 'AVG'` when standings stats are missing categories (e.g., pre-season or when the Yahoo stat ID mapping omits a category). Need to handle missing stat keys gracefully — skip the trade analysis or use projected stats as fallback.
 
 - [ ] **Validate ROS projections account for injuries** — Verify that FanGraphs ROS projections properly reduce stats for players on IL (e.g., Strider's ROS K projection should reflect missed time, not a full healthy season). If not, the injury management system should scale projections by expected games remaining.
 

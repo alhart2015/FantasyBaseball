@@ -48,8 +48,16 @@ def compute_roto_points_by_cat(
     n = len(standings)
     result: dict[str, dict[str, float]] = {t["name"]: {} for t in standings}
 
+    # Default values for missing stats: 0 for counting, worst-case for rate
+    _STAT_DEFAULTS = {"ERA": 99.0, "WHIP": 99.0}
+
     for cat in ALL_CATS:
         inverse = cat in INVERSE_CATS
+        # Fill missing stats with defaults so all teams can be ranked
+        for t in standings:
+            stats = t.get("stats", {})
+            if cat not in stats:
+                stats[cat] = _STAT_DEFAULTS.get(cat, 0.0)
         # Sort: for inverse cats lowest value → rank n (best)
         ranked = sorted(standings, key=lambda t: t["stats"][cat], reverse=inverse)
         # Fractional tie-breaking: tied teams share the average of their ranks
