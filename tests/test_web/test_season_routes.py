@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import patch
 
 from fantasy_baseball.web.season_app import create_app
 
@@ -47,3 +48,25 @@ def test_active_page_highlighted(client):
     resp = client.get("/standings")
     html = resp.data.decode()
     assert 'active' in html
+
+
+def _mock_standings():
+    teams = [
+        ("Hart of the Order", {"R": 300, "HR": 90, "RBI": 290, "SB": 50, "AVG": 0.270,
+                               "W": 35, "K": 600, "SV": 25, "ERA": 3.50, "WHIP": 1.18}),
+        ("SkeleThor", {"R": 310, "HR": 85, "RBI": 295, "SB": 40, "AVG": 0.265,
+                       "W": 38, "K": 580, "SV": 30, "ERA": 3.40, "WHIP": 1.15}),
+    ]
+    return [{"name": n, "team_key": f"key_{i}", "rank": i + 1, "stats": s}
+            for i, (n, s) in enumerate(teams)]
+
+
+def test_standings_renders_table_with_data(client):
+    with patch("fantasy_baseball.web.season_routes.read_cache") as mock_cache, \
+         patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+        mock_cache.side_effect = lambda k: _mock_standings() if k == "standings" else {}
+        mock_cfg.return_value.team_name = "Hart of the Order"
+        resp = client.get("/standings")
+        assert resp.status_code == 200
+        assert b"Hart of the Order" in resp.data
+        assert b"user-team" in resp.data
