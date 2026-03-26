@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from fantasy_baseball.data.projections import blend_projections
+
 DB_PATH = Path(__file__).resolve().parents[3] / "data" / "fantasy.db"
 
 SCHEMA = """
@@ -232,6 +234,87 @@ def load_raw_projections(conn, projections_dir):
                 tuple(None if pd.isna(v) else v for v in row)
                 for row in df.itertuples(index=False, name=None)
             ]
+            conn.executemany(insert_sql, rows)
+
+    conn.commit()
+
+
+# Ordered list of columns in blended_projections (excluding the PRIMARY KEY pair
+# which we always supply explicitly).
+_BLENDED_TABLE_COLS = [
+    "year", "fg_id", "name", "team", "player_type",
+    "pa", "ab", "h", "r", "hr", "rbi", "sb", "avg",
+    "w", "k", "sv", "ip", "er", "bb", "h_allowed",
+    "era", "whip", "adp",
+]
+
+
+def _df_to_blended_rows(df: pd.DataFrame, year: int) -> tuple[list[str], list[tuple]]:
+    """Prepare a blended projection DataFrame for insertion.
+
+    Adds the ``year`` column, ensures ``fg_id`` exists (falls back to ``name``),
+    selects only columns present in the table schema, and returns
+    ``(column_names, rows)`` ready for ``executemany``.
+    """
+    df = df.copy()
+    df["year"] = year
+
+    # Ensure fg_id — fall back to name if the column is absent or all-null
+    if "fg_id" not in df.columns or df["fg_id"].isna().all():
+        df["fg_id"] = df["name"]
+    else:
+        df["fg_id"] = df["fg_id"].fillna(df["name"])
+
+    # Select only columns that exist in both the DataFrame and the table schema
+    keep = [c for c in _BLENDED_TABLE_COLS if c in df.columns]
+    df = df[keep]
+
+    rows = [
+        tuple(None if pd.isna(v) else v for v in row)
+        for row in df.itertuples(index=False, name=None)
+    ]
+    return keep, rows
+
+
+def load_blended_projections(
+    conn,
+    projections_dir,
+    systems: list[str],
+    weights: dict[str, float] | None = None,
+) -> None:
+    """Scan projections_dir for year subdirectories, blend projections for each
+    year using the requested systems, and insert into blended_projections.
+
+    Years where the requested systems have no files (e.g. a future year with
+    only hitter CSVs) are skipped silently so one bad year doesn't abort the
+    whole load.
+
+    Uses INSERT OR REPLACE so repeated calls are idempotent.
+    """
+    projections_dir = Path(projections_dir)
+
+    for year_dir in sorted(projections_dir.iterdir()):
+        if not year_dir.is_dir() or not year_dir.name.isdigit():
+            continue
+        year = int(year_dir.name)
+
+        try:
+            hitters_df, pitchers_df = blend_projections(year_dir, systems, weights)
+        except Exception:
+            # Missing files, unrecognised format, etc. — skip this year.
+            continue
+
+        for df in (hitters_df, pitchers_df):
+            if df.empty:
+                continue
+            col_names, rows = _df_to_blended_rows(df, year)
+            if not rows:
+                continue
+            placeholders = ", ".join("?" * len(col_names))
+            insert_sql = (
+                f"INSERT OR REPLACE INTO blended_projections ({', '.join(col_names)}) "
+                f"VALUES ({placeholders})"
+            )
             conn.executemany(insert_sql, rows)
 
     conn.commit()
