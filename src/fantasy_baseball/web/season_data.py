@@ -496,12 +496,14 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             tname = team["name"]
             leverage_by_team[tname] = calculate_leverage(standings, tname)
 
+        all_raw_rosters = {config.team_name: roster_raw}
         for key, team_info in teams.items():
             tname = team_info.get("name", "")
             if tname == config.team_name or key == user_team_key:
                 continue
             try:
                 opp_raw = fetch_roster(league, key)
+                all_raw_rosters[tname] = opp_raw
                 opp_proj_list = match_roster_to_projections(
                     opp_raw, hitters_proj, pitchers_proj
                 )
@@ -580,7 +582,30 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         write_cache("monte_carlo", {"base": base_mc, "with_management": mgmt_mc}, cache_dir)
 
-        # --- Step 14: Write meta ---
+        # --- Step 14: Update SQLite database ---
+        _set_refresh_progress("Updating database...")
+        from fantasy_baseball.data.db import (
+            append_roster_snapshot,
+            append_standings_snapshot,
+            create_tables,
+            get_connection,
+        )
+
+        snapshot_date = start_date  # Monday of scoring week
+        db_conn = get_connection()
+        create_tables(db_conn)  # idempotent — ensures tables exist
+        try:
+            # Append all team rosters for this week
+            week_num = None
+            for tname, raw_roster in all_raw_rosters.items():
+                append_roster_snapshot(db_conn, raw_roster, snapshot_date, week_num, tname)
+
+            # Append current standings snapshot
+            append_standings_snapshot(db_conn, standings, config.season_year, snapshot_date)
+        finally:
+            db_conn.close()
+
+        # --- Step 15: Write meta ---
         _set_refresh_progress("Finalizing...")
         meta = {
             "last_refresh": datetime.now().strftime("%Y-%m-%d %H:%M"),
