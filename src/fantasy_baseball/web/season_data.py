@@ -670,7 +670,26 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         write_cache("trades", trade_proposals, cache_dir)
 
-        # --- Step 12: Monte Carlo placeholder ---
+        # --- Step 12: Project full-season standings from rosters ---
+        _set_refresh_progress("Projecting standings...")
+        from fantasy_baseball.scoring import project_team_stats
+
+        all_team_rosters = {config.team_name: roster_with_proj}
+        all_team_rosters.update(opp_rosters)
+
+        projected_standings = []
+        for tname, roster in all_team_rosters.items():
+            proj_stats = project_team_stats(roster)
+            projected_standings.append({
+                "name": tname,
+                "team_key": "",
+                "rank": 0,
+                "stats": proj_stats,
+            })
+
+        write_cache("projections", {"projected_standings": projected_standings}, cache_dir)
+
+        # --- Step 13: Monte Carlo placeholder ---
         _set_refresh_progress("Writing Monte Carlo placeholder...")
         write_cache("monte_carlo", {}, cache_dir)
 
