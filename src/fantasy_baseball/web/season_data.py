@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 
 from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS as INVERSE_CATS
+from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 
 _refresh_lock = threading.Lock()
 _refresh_status = {"running": False, "progress": "", "error": None}
@@ -24,8 +26,17 @@ def _set_refresh_progress(msg: str) -> None:
 
 CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache"
 
-ALL_CATEGORIES = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
-INVERSE_CATS = {"ERA", "WHIP"}
+# Defaults for early-season teams missing stats
+_STAT_DEFAULTS = {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0.0,
+                  "W": 0, "K": 0, "SV": 0, "ERA": 99.0, "WHIP": 99.0}
+
+
+def _fill_stat_defaults(standings: list[dict]) -> None:
+    """Ensure every team has all 10 stat keys (early season some are missing)."""
+    for t in standings:
+        filled = dict(_STAT_DEFAULTS)
+        filled.update(t["stats"])
+        t["stats"] = filled
 
 CACHE_FILES = {
     "standings": "standings.json",
@@ -86,16 +97,9 @@ def format_standings_for_display(
     if not standings:
         return {"teams": []}
 
-    # Fill missing stat keys with defaults (early season, some teams lack all categories)
-    stat_defaults = {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0.0,
-                     "W": 0, "K": 0, "SV": 0, "ERA": 99.0, "WHIP": 99.0}
-    all_stats = {}
-    for t in standings:
-        filled = dict(stat_defaults)
-        filled.update(t["stats"])
-        all_stats[t["name"]] = filled
-        t["stats"] = filled  # update in place so templates also get filled stats
+    _fill_stat_defaults(standings)
 
+    all_stats = {t["name"]: t["stats"] for t in standings}
     roto = score_roto(all_stats)
 
     cat_ranks = _compute_category_ranks(standings)
@@ -184,7 +188,6 @@ def format_monte_carlo_for_display(
     return {"teams": teams, "category_risk": risk}
 
 
-PITCHER_POSITIONS = {"SP", "RP", "P"}
 HITTER_SLOTS_ORDER = ["C", "1B", "2B", "3B", "SS", "IF", "OF", "OF", "OF", "OF",
                        "UTIL", "UTIL", "BN", "IL"]
 
@@ -307,7 +310,6 @@ def _compute_category_ranks(standings: list[dict]) -> dict[str, dict[str, int]]:
 def _build_probable_starters(
     pitcher_roster: list[dict],
     schedule: dict,
-    matchup_factors: dict,
     team_stats: dict,
 ) -> list[dict]:
     """Cross-reference roster pitchers with the weekly schedule to find probable starts.
@@ -450,18 +452,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         # --- Step 3: Fetch standings + roster ---
         _set_refresh_progress("Fetching standings...")
         standings = fetch_standings(league)
-        # Fill missing stat keys (early season, some teams lack all categories)
-        _stat_defaults = {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0.0,
-                          "W": 0, "K": 0, "SV": 0, "ERA": 99.0, "WHIP": 99.0}
-        for t in standings:
-            filled = dict(_stat_defaults)
-            filled.update(t["stats"])
-            t["stats"] = filled
+        _fill_stat_defaults(standings)
         write_cache("standings", standings, cache_dir)
 
         _set_refresh_progress("Fetching roster...")
         roster_raw = fetch_roster(league, user_team_key)
-        write_cache("roster", roster_raw, cache_dir)
 
         # --- Step 4: Blend projections ---
         _set_refresh_progress("Blending projections...")
@@ -486,8 +481,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             proj_row = None
             # Pitchers check pitchers_proj first
             positions = player.get("positions", [])
-            pitcher_positions = {"SP", "RP", "P"}
-            if set(positions) & pitcher_positions:
+            if set(positions) & PITCHER_POSITIONS:
                 search_order = [pitchers_proj, hitters_proj]
             else:
                 search_order = [hitters_proj, pitchers_proj]
@@ -524,8 +518,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         pitcher_players = []
         for p in roster_with_proj:
             positions = p.get("positions", [])
-            pitcher_positions_set = {"SP", "RP", "P"}
-            if set(positions) & pitcher_positions_set:
+            if set(positions) & PITCHER_POSITIONS:
                 pitcher_players.append(pd.Series(p))
             else:
                 hitter_players.append(pd.Series(p))
@@ -575,10 +568,10 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         pitcher_roster_for_schedule = [
             p for p in roster_with_proj
-            if set(p.get("positions", [])) & {"SP", "RP", "P"}
+            if set(p.get("positions", [])) & PITCHER_POSITIONS
         ]
         probable_starters = _build_probable_starters(
-            pitcher_roster_for_schedule, schedule or {}, matchup_factors, team_stats
+            pitcher_roster_for_schedule, schedule or {}, team_stats
         )
         write_cache("probable_starters", probable_starters, cache_dir)
 
@@ -713,7 +706,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         write_cache("monte_carlo", {"base": base_mc, "with_management": mgmt_mc}, cache_dir)
 
-        # --- Step 13: Write meta ---
+        # --- Step 14: Write meta ---
         _set_refresh_progress("Finalizing...")
         meta = {
             "last_refresh": datetime.now().strftime("%Y-%m-%d %H:%M"),

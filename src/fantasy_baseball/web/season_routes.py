@@ -1,9 +1,11 @@
 """Route handlers for the season dashboard."""
 
+import threading
 from pathlib import Path
 
 from flask import Flask, jsonify, redirect, render_template, url_for
 
+from fantasy_baseball.utils.constants import ALL_CATEGORIES
 from fantasy_baseball.web.season_data import read_cache, read_meta
 
 _config = None
@@ -68,7 +70,7 @@ def register_routes(app: Flask) -> None:
             projected=projected_data,
             mc=mc_data,
             mc_mgmt=mc_mgmt_data,
-            categories=["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"],
+            categories=ALL_CATEGORIES,
         )
 
     @app.route("/lineup")
@@ -111,7 +113,7 @@ def register_routes(app: Flask) -> None:
             active_page="waivers_trades",
             waivers=waivers_raw or [],
             trades=trades_raw or [],
-            categories=["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"],
+            categories=ALL_CATEGORIES,
         )
 
     @app.route("/api/trade/<int:idx>/standings")
@@ -128,8 +130,6 @@ def register_routes(app: Flask) -> None:
         config = _load_config()
         result = compute_trade_standings_impact(trade=trades_raw[idx], standings=standings_raw, user_team_name=config.team_name)
         return jsonify(result)
-
-    import threading
 
     @app.route("/api/refresh", methods=["POST"])
     def api_refresh():

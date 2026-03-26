@@ -256,7 +256,7 @@ def apply_management_adjustment(
     return adjusted
 
 
-ALL_CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
+from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
 
 
 def run_monte_carlo(
@@ -330,8 +330,8 @@ def run_monte_carlo(
             "median_pts": round(float(np.median(arr)), 1),
             "p10": round(float(np.percentile(arr, 10)), 1),
             "p90": round(float(np.percentile(arr, 90)), 1),
-            "top3_pct": round(sum(1 for p in arr if p >= 8) / n * 100, 1),
-            "bot3_pct": round(sum(1 for p in arr if p <= 3) / n * 100, 1),
+            "top3_pct": round(float((arr >= 8).sum()) / n * 100, 1),
+            "bot3_pct": round(float((arr <= 3).sum()) / n * 100, 1),
         }
 
     return {"team_results": team_results, "category_risk": category_risk}
