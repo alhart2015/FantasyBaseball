@@ -69,12 +69,9 @@
     <div class="card-header" style="cursor: pointer;" onclick="toggleTradeDetails(this, {{ loop.index0 }})">
         <div>
             <span style="font-weight: 600; font-size: 14px;">vs {{ trade.opponent }}</span>
-            <span style="color: var(--text-secondary); font-size: 12px; margin-left: 8px;">
-                You +{{ trade.hart_delta }} pts &nbsp;|&nbsp; Them +{{ trade.opp_delta }} pts
-            </span>
         </div>
-        <div style="color: var(--success); font-weight: bold; font-size: 14px;">
-            +{{ "%.2f"|format(trade.hart_wsgp_gain) }} wSGP
+        <div style="font-weight: bold; font-size: 14px;">
+            <span style="color: var(--success);">{{ "%+.1f"|format(trade.hart_delta) }} roto pts</span>
             <span style="color: var(--text-secondary); font-size: 11px; margin-left: 4px;">&#9660;</span>
         </div>
     </div>

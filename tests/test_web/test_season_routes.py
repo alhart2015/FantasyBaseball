@@ -193,6 +193,6 @@ def test_full_waivers_page_with_cached_data(client, tmp_path):
             assert "Tyler O&#39;Neill" in html or "Tyler O'Neill" in html
             assert "Josh Hader" in html
             assert "SkeleThor" in html
-            assert "+2.1" in html  # wSGP gain
+            assert "+2.0 roto pts" in html  # hart_delta displayed as roto points
     finally:
         season_data.CACHE_DIR = old_cache_dir
