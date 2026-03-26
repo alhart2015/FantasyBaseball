@@ -1,0 +1,209 @@
+{% extends "season/base.html" %}
+{% block title %}Lineup — Season Dashboard{% endblock %}
+{% block content %}
+
+<style>
+.section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 20px 0 10px;
+}
+.section-header h3 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+}
+</style>
+
+<div class="page-header">
+    <h2>Lineup</h2>
+    {% if meta and meta.get('week') %}
+    <div class="week-label">Week {{ meta['week'] }}</div>
+    {% endif %}
+</div>
+
+{% if not lineup %}
+<p class="placeholder-text">No lineup data. Click "Refresh Data" to fetch from Yahoo.</p>
+{% else %}
+
+{# Moves banner #}
+{% if lineup.moves %}
+<div class="moves-banner">
+    <h4>Suggested Moves ({{ lineup.moves | length }})</h4>
+    {% for move in lineup.moves %}
+    <div class="move-row">
+        <span class="badge {% if move.action == 'START' %}badge-success{% elif move.action == 'BENCH' %}badge-warning{% else %}badge-info{% endif %}">
+            {{ move.action }}
+        </span>
+        <span><strong>{{ move.player }}</strong></span>
+        {% if move.slot %}<span>&rarr; {{ move.slot }}</span>{% endif %}
+        {% if move.reason %}<span style="color: var(--text-secondary); font-size: 11px;">{{ move.reason }}</span>{% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{# Hitters section #}
+<div class="section-header">
+    <h3>Hitters</h3>
+    {% if lineup.is_optimal %}
+    <button class="btn-optimize optimal" disabled>Optimal &#10003;</button>
+    {% else %}
+    <button class="btn-optimize available"
+            onclick="runOptimize(this)">Optimize</button>
+    {% endif %}
+</div>
+
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Slot</th>
+            <th>Player</th>
+            <th>Elig</th>
+            <th>Games</th>
+            <th>wSGP</th>
+            <th>Status</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for h in lineup.hitters %}
+        <tr class="{% if h.is_bench %}bench-row{% endif %}{% if h.is_il and not h.is_bench %} il-active-row{% endif %}">
+            <td>{{ h.selected_position }}</td>
+            <td style="text-align: left; font-weight: 500;">{{ h.name }}</td>
+            <td style="text-align: left; color: var(--text-secondary); font-size: 11px;">
+                {{ h.positions | join(", ") }}
+            </td>
+            <td>{{ h.games if h.games else "—" }}</td>
+            <td>{{ "%.2f" | format(h.wsgp) if h.wsgp else "—" }}</td>
+            <td>
+                {% if h.status %}
+                <span class="badge badge-il">{{ h.status }}</span>
+                {% endif %}
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+
+{# Pitchers section #}
+<div class="section-header" style="margin-top: 24px;">
+    <h3>Pitchers</h3>
+</div>
+
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Slot</th>
+            <th>Player</th>
+            <th>Games</th>
+            <th>wSGP</th>
+            <th>Status</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for p in lineup.pitchers %}
+        <tr class="{% if p.is_bench %}bench-row{% endif %}{% if p.is_il and not p.is_bench %} il-active-row{% endif %}">
+            <td>{{ p.selected_position }}</td>
+            <td style="text-align: left; font-weight: 500;">{{ p.name }}</td>
+            <td>{{ p.games if p.games else "—" }}</td>
+            <td>{{ "%.2f" | format(p.wsgp) if p.wsgp else "—" }}</td>
+            <td>
+                {% if p.status %}
+                <span class="badge badge-il">{{ p.status }}</span>
+                {% endif %}
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+
+{# Probable starters section #}
+{% if starters %}
+<div class="section-header" style="margin-top: 24px;">
+    <h3>Probable Starters</h3>
+</div>
+
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Pitcher</th>
+            <th>Day</th>
+            <th>Opponent</th>
+            <th>Matchup</th>
+            <th>Starts</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for s in starters %}
+        <tr class="expandable" onclick="toggleExpand(this)">
+            <td style="text-align: left; font-weight: 500;">{{ s.pitcher }}</td>
+            <td>{{ s.day }}</td>
+            <td>{{ s.opponent }}</td>
+            <td>
+                {% if s.matchup_quality == "Great" %}
+                <span class="badge badge-success">Great</span>
+                {% elif s.matchup_quality == "Fair" %}
+                <span class="badge badge-warning">Fair</span>
+                {% elif s.matchup_quality == "Tough" %}
+                <span class="badge badge-danger">Tough</span>
+                {% endif %}
+            </td>
+            <td>
+                {{ s.starts }}
+                {% if s.starts and s.starts | int >= 2 %}
+                <span class="badge badge-info" style="margin-left: 4px;">2-start</span>
+                {% endif %}
+            </td>
+        </tr>
+        <tr class="expand-content">
+            <td colspan="5">
+                <div style="padding: 4px 0;">
+                    {% if s.ops_rank %}
+                    <span style="margin-right: 12px;">OPS rank: <strong>{{ s.ops_rank }}</strong></span>
+                    {% endif %}
+                    {% if s.k_pct_rank %}
+                    <span>K% rank: <strong>{{ s.k_pct_rank }}</strong></span>
+                    {% endif %}
+                    {% if not s.ops_rank and not s.k_pct_rank %}
+                    <span style="color: var(--text-secondary);">No matchup detail available.</span>
+                    {% endif %}
+                </div>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+{% endif %}
+
+<script>
+function toggleExpand(row) {
+    var next = row.nextElementSibling;
+    if (next && next.classList.contains('expand-content')) {
+        next.classList.toggle('open');
+    }
+}
+
+function runOptimize(btn) {
+    btn.disabled = true;
+    btn.textContent = 'Optimizing...';
+    fetch('/api/optimize', {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+            if (data.is_optimal) {
+                btn.className = 'btn-optimize optimal';
+                btn.textContent = 'Optimal \u2713';
+            } else {
+                window.location.reload();
+            }
+        })
+        .catch(() => {
+            btn.disabled = false;
+            btn.textContent = 'Optimize';
+        });
+}
+</script>
+
+{% endblock %}

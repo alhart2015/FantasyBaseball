@@ -1,0 +1,235 @@
+{% extends "season/base.html" %}
+{% block title %}Standings — Season Dashboard{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h2>Standings</h2>
+    {% if meta and meta.get('week') %}
+    <div class="week-label">Week {{ meta['week'] }}</div>
+    {% endif %}
+</div>
+
+{% if not standings %}
+<p class="placeholder-text">No standings data. Click "Refresh Data" to fetch from Yahoo.</p>
+{% else %}
+
+<div class="pill-group" id="standings-top-toggle">
+    <button class="pill active" data-view="current" onclick="toggleStandingsView(this)">Current</button>
+    <button class="pill" data-view="projected" onclick="toggleStandingsView(this)">Projected</button>
+</div>
+
+<div id="current-view">
+    <div class="pill-group" id="current-sub-toggle">
+        <button class="pill active" data-sub="points" onclick="toggleCurrentSub(this)">Roto Points</button>
+        <button class="pill" data-sub="stats" onclick="toggleCurrentSub(this)">Stat Totals</button>
+    </div>
+
+    <table class="data-table" id="standings-table">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Team</th>
+                {% for cat in categories %}
+                <th>{{ cat }}</th>
+                {% endfor %}
+                <th class="total-col">Total</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for team in standings.teams %}
+            <tr class="{% if team.is_user %}user-team{% endif %}">
+                <td>{{ team.rank }}</td>
+                <td class="team-name">{{ team.name }}</td>
+                {% for cat in categories %}
+                <td class="{{ team.color_classes[cat] }} stat-cell"
+                    data-points="{{ team.roto_points[cat ~ '_pts'] | round(1) }}"
+                    data-stat="{{ team.stats[cat] }}">
+                    {{ team.roto_points[cat ~ '_pts'] | round(1) }}
+                </td>
+                {% endfor %}
+                <td class="total-col">{{ team.roto_points.total | round(1) }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div id="projected-view" style="display: none;">
+    <div class="pill-group" id="projected-sub-toggle">
+        <button class="pill active" data-psub="static" onclick="toggleProjectedSub(this)">Static</button>
+        <button class="pill" data-psub="mc" onclick="toggleProjectedSub(this)">Monte Carlo</button>
+        <button class="pill" data-psub="mc-mgmt" onclick="toggleProjectedSub(this)">MC + Roster Mgmt</button>
+    </div>
+
+    {# Static projected view #}
+    <div id="proj-static">
+        {% if projected %}
+        <div class="pill-group" id="proj-static-sub-toggle">
+            <button class="pill active" data-pssub="points" onclick="toggleProjStaticSub(this)">Roto Points</button>
+            <button class="pill" data-pssub="stats" onclick="toggleProjStaticSub(this)">Stat Totals</button>
+        </div>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Team</th>
+                    {% for cat in categories %}
+                    <th>{{ cat }}</th>
+                    {% endfor %}
+                    <th class="total-col">Total</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for team in projected.teams %}
+                <tr class="{% if team.is_user %}user-team{% endif %}">
+                    <td>{{ team.rank }}</td>
+                    <td class="team-name">{{ team.name }}</td>
+                    {% for cat in categories %}
+                    <td class="{{ team.color_classes[cat] }} proj-stat-cell"
+                        data-points="{{ team.roto_points[cat ~ '_pts'] | round(1) }}"
+                        data-stat="{{ team.stats[cat] }}">
+                        {{ team.roto_points[cat ~ '_pts'] | round(1) }}
+                    </td>
+                    {% endfor %}
+                    <td class="total-col">{{ team.roto_points.total | round(1) }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="placeholder-text">No projected standings data available.</p>
+        {% endif %}
+    </div>
+
+    {# Macro for MC team table (reused by both MC and MC+Mgmt) #}
+    {% macro mc_team_table(mc_data) %}
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Team</th>
+                <th>Median Pts</th>
+                <th>P10</th>
+                <th>P90</th>
+                <th>1st %</th>
+                <th>Top 3 %</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for team in mc_data.teams %}
+            <tr class="{% if team.is_user %}user-team{% endif %}">
+                <td class="team-name">{{ team.name }}</td>
+                <td>{{ team.median_pts | round(1) }}</td>
+                <td style="opacity: 0.6;">{{ team.p10 | round(1) }}</td>
+                <td style="opacity: 0.6;">{{ team.p90 | round(1) }}</td>
+                <td class="{% if team.is_user and team.first_pct >= 15 %}cat-top{% endif %}">{{ team.first_pct | round(1) }}%</td>
+                <td class="{% if team.is_user and team.top3_pct >= 40 %}cat-top{% elif team.is_user and team.top3_pct < 20 %}cat-bottom{% endif %}">{{ team.top3_pct | round(1) }}%</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endmacro %}
+
+    {# Macro for category risk table #}
+    {% macro cat_risk_table(mc_data) %}
+    {% if mc_data.category_risk %}
+    <div class="card" style="margin-top: 1.5rem;">
+        <h3 style="color: var(--warning); margin-bottom: 12px;">Category Risk — Your Team</h3>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Cat</th>
+                    <th>Median Pts</th>
+                    <th>P10</th>
+                    <th>P90</th>
+                    <th>Top 3 %</th>
+                    <th>Bot 3 %</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for row in mc_data.category_risk %}
+                <tr>
+                    <td style="font-weight: bold;">{{ row.cat }}</td>
+                    <td>{{ row.median_pts | round(1) }}</td>
+                    <td style="opacity: 0.6;">{{ row.p10 | round(1) }}</td>
+                    <td style="opacity: 0.6;">{{ row.p90 | round(1) }}</td>
+                    <td class="{{ row.risk_class }}">{{ row.top3_pct | round(1) }}%</td>
+                    <td class="{% if row.bot3_pct >= 30 %}cat-bottom{% endif %}">{{ row.bot3_pct | round(1) }}%</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    {% endmacro %}
+
+    {# Monte Carlo view #}
+    <div id="proj-mc" style="display: none;">
+        {% if mc %}
+        {{ mc_team_table(mc) }}
+        {{ cat_risk_table(mc) }}
+        {% else %}
+        <p class="placeholder-text">No Monte Carlo data available.</p>
+        {% endif %}
+    </div>
+
+    {# MC + Roster Mgmt view #}
+    <div id="proj-mc-mgmt" style="display: none;">
+        {% if mc_mgmt %}
+        {{ mc_team_table(mc_mgmt) }}
+        {{ cat_risk_table(mc_mgmt) }}
+        {% else %}
+        <p class="placeholder-text">No MC + Roster Mgmt data available.</p>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+function toggleStandingsView(el) {
+    document.querySelectorAll('#standings-top-toggle .pill').forEach(p => p.classList.remove('active'));
+    el.classList.add('active');
+    const view = el.dataset.view;
+    document.getElementById('current-view').style.display = view === 'current' ? '' : 'none';
+    document.getElementById('projected-view').style.display = view === 'projected' ? '' : 'none';
+}
+
+function toggleCurrentSub(el) {
+    document.querySelectorAll('#current-sub-toggle .pill').forEach(p => p.classList.remove('active'));
+    el.classList.add('active');
+    const mode = el.dataset.sub;
+    document.querySelectorAll('.stat-cell').forEach(cell => {
+        if (mode === 'points') {
+            cell.textContent = cell.dataset.points;
+        } else {
+            const raw = parseFloat(cell.dataset.stat);
+            cell.textContent = raw < 1 && raw > 0 ? raw.toFixed(3) :
+                               raw < 10 && raw % 1 !== 0 ? raw.toFixed(2) : Math.round(raw);
+        }
+    });
+}
+
+function toggleProjectedSub(el) {
+    document.querySelectorAll('#projected-sub-toggle .pill').forEach(p => p.classList.remove('active'));
+    el.classList.add('active');
+    const sub = el.dataset.psub;
+    document.getElementById('proj-static').style.display = sub === 'static' ? '' : 'none';
+    document.getElementById('proj-mc').style.display = sub === 'mc' ? '' : 'none';
+    document.getElementById('proj-mc-mgmt').style.display = sub === 'mc-mgmt' ? '' : 'none';
+}
+
+function toggleProjStaticSub(el) {
+    document.querySelectorAll('#proj-static-sub-toggle .pill').forEach(p => p.classList.remove('active'));
+    el.classList.add('active');
+    const mode = el.dataset.pssub;
+    document.querySelectorAll('.proj-stat-cell').forEach(cell => {
+        if (mode === 'points') {
+            cell.textContent = cell.dataset.points;
+        } else {
+            const raw = parseFloat(cell.dataset.stat);
+            cell.textContent = raw < 1 && raw > 0 ? raw.toFixed(3) :
+                               raw < 10 && raw % 1 !== 0 ? raw.toFixed(2) : Math.round(raw);
+        }
+    });
+}
+</script>
+
+{% endif %}
+{% endblock %}

@@ -1,10 +1,13 @@
 """Monte Carlo season simulation with injuries and stat variance.
 
-Shared by scripts/simulate_draft.py (post-draft --monte-carlo) and
-scripts/summary.py (in-season weekly projections).
+Shared by scripts/simulate_draft.py (post-draft --monte-carlo),
+scripts/summary.py (in-season weekly projections), and
+the season dashboard (web/season_data.py).
 """
 
 import numpy as np
+
+from fantasy_baseball.scoring import score_roto
 
 from fantasy_baseball.utils.constants import (
     CLOSER_SV_THRESHOLD,
@@ -251,3 +254,84 @@ def apply_management_adjustment(
             "WHIP": stats["WHIP"] * inv_factor,
         }
     return adjusted
+
+
+from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
+
+
+def run_monte_carlo(
+    team_rosters: dict,
+    h_slots: int,
+    p_slots: int,
+    user_team_name: str,
+    n_iterations: int = 1000,
+    use_management: bool = False,
+    seed: int = 42,
+    progress_cb=None,
+) -> dict:
+    """Run a Monte Carlo simulation and return structured results.
+
+    Args:
+        team_rosters: {team_name: [player Series/dicts]} for all teams.
+        h_slots: Number of active hitter slots.
+        p_slots: Number of active pitcher slots.
+        user_team_name: Name of user's team (for category risk).
+        n_iterations: Number of simulation iterations.
+        use_management: If True, apply management adjustment after each sim.
+        seed: RNG seed for reproducibility.
+        progress_cb: Optional callback(msg: str) called every 200 iterations.
+
+    Returns:
+        {"team_results": {team: {median_pts, p10, p90, first_pct, top3_pct}},
+         "category_risk": {cat: {median_pts, p10, p90, top3_pct, bot3_pct}}}
+    """
+    rng = np.random.default_rng(seed)
+    team_names = list(team_rosters.keys())
+
+    all_totals = {name: [] for name in team_names}
+    mc_wins = {name: 0 for name in team_names}
+    mc_top3 = {name: 0 for name in team_names}
+    user_cat_pts = {c: [] for c in ALL_CATS}
+
+    for i in range(n_iterations):
+        if progress_cb and i % 200 == 0:
+            progress_cb(i)
+        sim_stats, _ = simulate_season(team_rosters, rng, h_slots, p_slots)
+        if use_management:
+            sim_stats = apply_management_adjustment(sim_stats, rng)
+        sim_roto = score_roto(sim_stats)
+        ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
+        for rank, (name, pts) in enumerate(ranked, 1):
+            all_totals[name].append(pts["total"])
+            if rank == 1:
+                mc_wins[name] += 1
+            if rank <= 3:
+                mc_top3[name] += 1
+            if name == user_team_name:
+                for c in ALL_CATS:
+                    user_cat_pts[c].append(pts.get(f"{c}_pts", 0))
+
+    n = n_iterations
+    team_results = {}
+    for name in team_names:
+        arr = np.array(all_totals[name])
+        team_results[name] = {
+            "median_pts": round(float(np.median(arr)), 1),
+            "p10": round(float(np.percentile(arr, 10))),
+            "p90": round(float(np.percentile(arr, 90))),
+            "first_pct": round(mc_wins[name] / n * 100, 1),
+            "top3_pct": round(mc_top3[name] / n * 100, 1),
+        }
+
+    category_risk = {}
+    for c in ALL_CATS:
+        arr = np.array(user_cat_pts[c])
+        category_risk[c] = {
+            "median_pts": round(float(np.median(arr)), 1),
+            "p10": round(float(np.percentile(arr, 10)), 1),
+            "p90": round(float(np.percentile(arr, 90)), 1),
+            "top3_pct": round(float((arr >= 8).sum()) / n * 100, 1),
+            "bot3_pct": round(float((arr <= 3).sum()) / n * 100, 1),
+        }
+
+    return {"team_results": team_results, "category_risk": category_risk}

@@ -24,3 +24,6 @@ docs/superpowers/
 
 # Simulation output (regenerable via simulate_draft.py)
 data/sim_results/
+
+# Season dashboard cache (populated at runtime)
+data/cache/

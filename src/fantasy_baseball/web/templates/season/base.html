@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Season Dashboard{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='season.css') }}">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body>
+    <div class="layout">
+        <nav class="sidebar">
+            <div class="sidebar-header">Hart of the Order</div>
+            <a href="{{ url_for('standings') }}"
+               class="nav-link {% if active_page == 'standings' %}active{% endif %}">
+                Standings
+            </a>
+            <a href="{{ url_for('lineup') }}"
+               class="nav-link {% if active_page == 'lineup' %}active{% endif %}">
+                Lineup
+            </a>
+            <a href="{{ url_for('waivers_trades') }}"
+               class="nav-link {% if active_page == 'waivers_trades' %}active{% endif %}">
+                Waivers &amp; Trades
+            </a>
+            <div class="sidebar-footer">
+                <div class="refresh-info">
+                    {% if meta and meta.get('last_refresh') %}
+                        Last refresh: {{ meta['last_refresh'] }}
+                    {% else %}
+                        No data yet
+                    {% endif %}
+                </div>
+                <button class="btn-refresh" id="refresh-btn" onclick="startRefresh()">Refresh Data</button>
+                <div id="refresh-progress" style="display: none; font-size: 11px; color: var(--accent); margin-top: 6px;"></div>
+            </div>
+        </nav>
+        <main class="content">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+<script>
+function startRefresh() {
+    const btn = document.getElementById('refresh-btn');
+    const progress = document.getElementById('refresh-progress');
+    btn.disabled = true;
+    btn.textContent = 'Refreshing...';
+    progress.style.display = 'block';
+
+    fetch('/api/refresh', {method: 'POST'})
+        .then(r => r.json())
+        .then(() => pollRefreshStatus());
+}
+
+function pollRefreshStatus() {
+    const progress = document.getElementById('refresh-progress');
+    const btn = document.getElementById('refresh-btn');
+
+    fetch('/api/refresh-status')
+        .then(r => r.json())
+        .then(data => {
+            progress.textContent = data.progress || 'Working...';
+            if (data.running) {
+                setTimeout(pollRefreshStatus, 1000);
+            } else if (data.error) {
+                progress.textContent = 'Error: ' + data.error;
+                progress.style.color = 'var(--danger)';
+                btn.disabled = false;
+                btn.textContent = 'Refresh Data';
+            } else {
+                window.location.reload();
+            }
+        })
+        .catch(() => setTimeout(pollRefreshStatus, 2000));
+}
+</script>
+</body>
+</html>

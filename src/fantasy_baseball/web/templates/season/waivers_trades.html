@@ -1,0 +1,266 @@
+{% extends "season/base.html" %}
+{% block title %}Waivers &amp; Trades — Season Dashboard{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h2>Waivers &amp; Trades</h2>
+    {% if meta and meta.get('week') %}
+    <div class="week-label">Week {{ meta['week'] }}</div>
+    {% endif %}
+</div>
+
+{# === Waiver Wire === #}
+<h3 style="font-size: 15px; font-weight: 600; color: var(--text); margin: 20px 0 10px;">Waiver Wire</h3>
+
+{% if not waivers %}
+<p class="placeholder-text">No waiver recommendations. Click "Refresh Data" to generate suggestions.</p>
+{% else %}
+{% for w in waivers %}
+<div class="card">
+    <div class="card-header">
+        <div>
+            <span style="font-weight: 600; font-size: 14px;">{{ w.add }}</span>
+            {% if w.add_positions %}
+            <span style="color: var(--text-secondary); font-size: 12px; margin-left: 6px;">{{ w.add_positions }}</span>
+            {% endif %}
+        </div>
+        <div style="color: var(--success); font-weight: bold; font-size: 14px;">
+            +{{ "%.2f"|format(w.sgp_gain) }} wSGP
+        </div>
+    </div>
+
+    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 6px;">
+        <span style="margin-right: 4px;">ADD</span>
+        <strong style="color: var(--success);">{{ w.add }}</strong>
+        <span style="margin: 0 6px; color: var(--text-secondary);">/</span>
+        <span style="margin-right: 4px;">DROP</span>
+        <strong style="color: var(--danger);">{{ w.drop }}</strong>
+    </div>
+
+    {% if w.projected_stats %}
+    <div style="font-size: 11px; color: var(--text-secondary); margin-top: 6px;">
+        {{ w.projected_stats }}
+    </div>
+    {% endif %}
+
+    {% if w.categories %}
+    <div class="cat-impact">
+        {% for cat, delta in w.categories.items() %}
+        {% if delta > 0 %}
+        <span class="cat-gain">{{ cat }} +{{ delta }}</span>
+        {% elif delta < 0 %}
+        <span class="cat-loss">{{ cat }} {{ delta }}</span>
+        {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+{# === Trade Recommendations === #}
+<h3 style="font-size: 15px; font-weight: 600; color: var(--text); margin: 28px 0 10px;">Trade Recommendations</h3>
+
+{% if not trades %}
+<p class="placeholder-text">No trade recommendations available. Click "Refresh Data" to generate suggestions.</p>
+{% else %}
+{% for trade in trades %}
+<div class="card" id="trade-card-{{ loop.index0 }}">
+    <div class="card-header" style="cursor: pointer;" onclick="toggleTradeDetails(this, {{ loop.index0 }})">
+        <div>
+            <span style="font-weight: 600; font-size: 14px;">vs {{ trade.opponent }}</span>
+        </div>
+        <div style="font-weight: bold; font-size: 14px;">
+            <span style="color: var(--success);">{{ "%+.1f"|format(trade.hart_delta) }} roto pts</span>
+            <span style="color: var(--text-secondary); font-size: 11px; margin-left: 4px;">&#9660;</span>
+        </div>
+    </div>
+
+    <div class="trade-swap">
+        <div class="trade-side trade-send">
+            <div style="font-size: 10px; color: var(--danger); font-weight: bold; letter-spacing: 0.5px; margin-bottom: 4px;">YOU SEND</div>
+            <div style="font-weight: 600;">{{ trade.send }}</div>
+            {% if trade.send_positions %}
+            <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">{{ trade.send_positions | join(", ") }}</div>
+            {% endif %}
+        </div>
+        <div class="trade-arrow">&#8644;</div>
+        <div class="trade-side trade-receive">
+            <div style="font-size: 10px; color: var(--success); font-weight: bold; letter-spacing: 0.5px; margin-bottom: 4px;">YOU GET</div>
+            <div style="font-weight: 600;">{{ trade.receive }}</div>
+            {% if trade.receive_positions %}
+            <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">{{ trade.receive_positions | join(", ") }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="trade-details" id="trade-details-{{ loop.index0 }}">
+        <div style="display: flex; gap: 24px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 160px;">
+                <div style="font-size: 11px; color: var(--text-secondary); font-weight: 600; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Why this works — You</div>
+                <div class="cat-impact">
+                    {% for cat in categories %}
+                    {% set delta = trade.hart_cat_deltas.get(cat, 0) %}
+                    {% if delta > 0 %}
+                    <span class="cat-gain">{{ cat }} +{{ delta }}</span>
+                    {% elif delta < 0 %}
+                    <span class="cat-loss">{{ cat }} {{ delta }}</span>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+            </div>
+            <div style="flex: 1; min-width: 160px;">
+                <div style="font-size: 11px; color: var(--text-secondary); font-weight: 600; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Why they'd do it — {{ trade.opponent }}</div>
+                <div class="cat-impact">
+                    {% for cat in categories %}
+                    {% set delta = trade.opp_cat_deltas.get(cat, 0) %}
+                    {% if delta > 0 %}
+                    <span class="cat-gain">{{ cat }} +{{ delta }}</span>
+                    {% elif delta < 0 %}
+                    <span class="cat-loss">{{ cat }} {{ delta }}</span>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <div style="margin-top: 12px;">
+            <button class="pill" onclick="loadTradeStandings({{ loop.index0 }})">Load Before/After Standings</button>
+        </div>
+
+        <div id="trade-standings-{{ loop.index0 }}" style="margin-top: 12px;"></div>
+
+        {% if trade.pitch %}
+        <div class="trade-pitch">{{ trade.pitch }}</div>
+        {% endif %}
+    </div>
+</div>
+{% endfor %}
+{% endif %}
+
+<script>
+function esc(s) {
+    if (s == null) return '';
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function toggleTradeDetails(el, idx) {
+    var details = document.getElementById('trade-details-' + idx);
+    if (!details) return;
+    details.classList.toggle('open');
+    var arrow = el.querySelector('.trade-arrow-indicator');
+    if (!arrow) {
+        arrow = el.querySelector('span[style*="9660"]');
+    }
+}
+
+function loadTradeStandings(idx) {
+    var container = document.getElementById('trade-standings-' + idx);
+    if (!container) return;
+    container.innerHTML = '<span style="color: var(--text-secondary); font-size: 12px;">Loading...</span>';
+
+    fetch('/api/trade/' + idx + '/standings')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.error) {
+                container.innerHTML = '<span style="color: var(--danger); font-size: 12px;">' + esc(data.error) + '</span>';
+                return;
+            }
+            container.innerHTML = renderTradeStandings(data, idx);
+        })
+        .catch(function(e) {
+            container.innerHTML = '<span style="color: var(--danger); font-size: 12px;">Failed to load standings.</span>';
+        });
+}
+
+function renderTradeStandings(data, idx) {
+    var cats = data.categories || [];
+    var teams = Object.keys(data.before);
+
+    var pillsId = 'tsp-' + idx;
+    var tableId = 'tst-' + idx;
+
+    var html = '<div style="border: 1px solid var(--panel-border); border-radius: 6px; overflow: hidden;">';
+    html += '<div class="pill-group" style="padding: 8px 10px; margin-bottom: 0; background: var(--panel-bg);">';
+    html += '<button class="pill active" onclick="toggleTradeStandingsView(this, \'points\', \'' + idx + '\')">Roto Points</button>';
+    html += '<button class="pill" onclick="toggleTradeStandingsView(this, \'stats\', \'' + idx + '\')">Stat Totals</button>';
+    html += '</div>';
+
+    html += '<table class="data-table" id="' + tableId + '" style="font-size: 12px;">';
+    html += '<thead><tr><th>Team</th>';
+    for (var i = 0; i < cats.length; i++) {
+        html += '<th>' + esc(cats[i]) + '</th>';
+    }
+    html += '<th class="total-col">Total</th></tr></thead>';
+    html += '<tbody>';
+
+    for (var t = 0; t < teams.length; t++) {
+        var team = teams[t];
+        var bPts = data.before[team] || {};
+        var aPts = data.after[team] || {};
+        var bStats = data.before_stats[team] || {};
+        var aStats = data.after_stats[team] || {};
+
+        var bTotal = bPts['total'] || 0;
+        var aTotal = aPts['total'] || 0;
+        var totalDiff = aTotal - bTotal;
+        var totalClass = totalDiff > 0 ? 'cat-gain' : totalDiff < 0 ? 'cat-loss' : '';
+
+        html += '<tr><td style="font-weight:600; padding: 6px 6px;">' + esc(team) + '</td>';
+        for (var c = 0; c < cats.length; c++) {
+            var cat = cats[c];
+            var bPtVal = bPts[cat + '_pts'] != null ? bPts[cat + '_pts'] : 0;
+            var aPtVal = aPts[cat + '_pts'] != null ? aPts[cat + '_pts'] : 0;
+            var diff = aPtVal - bPtVal;
+            var diffClass = diff > 0 ? 'cat-gain' : diff < 0 ? 'cat-loss' : '';
+            var bStatVal = bStats[cat] != null ? bStats[cat] : 0;
+            var aStatVal = aStats[cat] != null ? aStats[cat] : 0;
+
+            var ptContent = parseFloat(bPtVal).toFixed(1)
+                + (diff !== 0 ? ' <span class="' + diffClass + '" style="font-size:10px;">(' + (diff > 0 ? '+' : '') + parseFloat(diff).toFixed(1) + ')</span>' : '');
+            var statContent = parseFloat(bStatVal).toFixed(cat === 'AVG' || cat === 'ERA' || cat === 'WHIP' ? 3 : 0)
+                + ' <span style="font-size:10px; color: var(--text-secondary);">&rarr; '
+                + parseFloat(aStatVal).toFixed(cat === 'AVG' || cat === 'ERA' || cat === 'WHIP' ? 3 : 0)
+                + '</span>';
+
+            html += '<td class="stat-cell" data-points="' + esc(ptContent) + '" data-stat="' + esc(statContent) + '">' + ptContent + '</td>';
+        }
+
+        var totalContent = parseFloat(bTotal).toFixed(1)
+            + (totalDiff !== 0 ? ' <span class="' + totalClass + '" style="font-size:10px;">(' + (totalDiff > 0 ? '+' : '') + parseFloat(totalDiff).toFixed(1) + ')</span>' : '');
+        html += '<td class="total-col">' + totalContent + '</td>';
+        html += '</tr>';
+    }
+
+    html += '</tbody></table></div>';
+    return html;
+}
+
+function toggleTradeStandingsView(el, mode, idx) {
+    var tableId = 'tst-' + idx;
+    var table = document.getElementById(tableId);
+    if (!table) return;
+
+    var pills = el.parentElement.querySelectorAll('.pill');
+    for (var i = 0; i < pills.length; i++) {
+        pills[i].classList.remove('active');
+    }
+    el.classList.add('active');
+
+    var cells = table.querySelectorAll('td.stat-cell');
+    for (var c = 0; c < cells.length; c++) {
+        if (mode === 'stats') {
+            cells[c].innerHTML = cells[c].getAttribute('data-stat');
+        } else {
+            cells[c].innerHTML = cells[c].getAttribute('data-points');
+        }
+    }
+}
+</script>
+
+{% endblock %}
