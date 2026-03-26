@@ -17,3 +17,7 @@ config/oauth.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Superpowers tool artifacts
+.superpowers/
+docs/superpowers/
