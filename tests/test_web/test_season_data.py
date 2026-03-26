@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from fantasy_baseball.web.season_data import read_cache, write_cache, read_meta, format_standings_for_display, format_monte_carlo_for_display
+from fantasy_baseball.web.season_data import read_cache, write_cache, read_meta, format_standings_for_display, format_monte_carlo_for_display, format_lineup_for_display
 
 
 def test_write_and_read_cache(tmp_path):
@@ -104,3 +104,46 @@ def test_format_monte_carlo_category_risk_colors():
     assert sv["risk_class"] == "cat-bottom"
     r_cat = next(r for r in risk if r["cat"] == "R")
     assert r_cat["risk_class"] == "cat-top"
+
+
+# --- format_lineup_for_display tests ---
+
+def _sample_roster():
+    return [
+        {"name": "Adley Rutschman", "positions": ["C"], "selected_position": "C",
+         "player_id": "123", "status": ""},
+        {"name": "Mike Trout", "positions": ["OF"], "selected_position": "OF",
+         "player_id": "456", "status": "IL"},
+        {"name": "Masataka Yoshida", "positions": ["OF", "UTIL"], "selected_position": "BN",
+         "player_id": "789", "status": ""},
+    ]
+
+
+def _sample_optimal():
+    return {
+        "hitters": {"C": "Adley Rutschman", "OF": "Masataka Yoshida"},
+        "pitchers": {},
+        "moves": [
+            {"action": "START", "player": "Masataka Yoshida", "slot": "OF", "reason": "wSGP: 1.9"},
+            {"action": "BENCH", "player": "Mike Trout", "slot": "IL", "reason": "IL-eligible"},
+        ],
+    }
+
+
+def test_format_lineup_separates_hitters_pitchers():
+    data = format_lineup_for_display(_sample_roster(), _sample_optimal())
+    assert "hitters" in data
+    assert "pitchers" in data
+    assert len(data["hitters"]) >= 2
+
+
+def test_format_lineup_detects_suboptimal():
+    data = format_lineup_for_display(_sample_roster(), _sample_optimal())
+    assert data["is_optimal"] is False
+    assert len(data["moves"]) == 2
+
+
+def test_format_lineup_optimal_when_no_moves():
+    optimal = {"hitters": {}, "pitchers": {}, "moves": []}
+    data = format_lineup_for_display(_sample_roster(), optimal)
+    assert data["is_optimal"] is True

@@ -160,6 +160,61 @@ def format_monte_carlo_for_display(
     return {"teams": teams, "category_risk": risk}
 
 
+PITCHER_POSITIONS = {"SP", "RP", "P"}
+HITTER_SLOTS_ORDER = ["C", "1B", "2B", "3B", "SS", "IF", "OF", "OF", "OF", "OF",
+                       "UTIL", "UTIL", "BN", "IL"]
+
+
+def format_lineup_for_display(
+    roster: list[dict], optimal: dict | None
+) -> dict:
+    """Format roster + optimizer output for the lineup template."""
+    hitters = []
+    pitchers = []
+
+    for p in roster:
+        pos = p.get("selected_position", "BN")
+        is_pitcher = pos in PITCHER_POSITIONS or (
+            pos == "BN" and set(p.get("positions", [])).issubset(PITCHER_POSITIONS | {"BN"})
+        )
+        entry = {
+            "name": p["name"],
+            "positions": p.get("positions", []),
+            "selected_position": pos,
+            "player_id": p.get("player_id", ""),
+            "status": p.get("status", ""),
+            "wsgp": p.get("wsgp", 0),
+            "games": p.get("games_this_week", 0),
+            "is_bench": pos in ("BN", "IL", "DL"),
+            "is_il": "IL" in p.get("status", "") or pos == "IL",
+        }
+        if is_pitcher:
+            pitchers.append(entry)
+        else:
+            hitters.append(entry)
+
+    slot_rank = {s: i for i, s in enumerate(HITTER_SLOTS_ORDER)}
+    hitters.sort(key=lambda h: (slot_rank.get(h["selected_position"], 99), -h["wsgp"]))
+    pitchers.sort(key=lambda p: (p["is_bench"], -p["wsgp"]))
+
+    moves = optimal.get("moves", []) if optimal else []
+
+    return {
+        "hitters": hitters,
+        "pitchers": pitchers,
+        "is_optimal": len(moves) == 0,
+        "moves": moves,
+    }
+
+
+def run_optimize() -> dict:
+    """Re-run lineup optimizer from cached data. Returns moves list."""
+    optimal = read_cache("lineup_optimal")
+    if optimal:
+        return {"moves": optimal.get("moves", []), "is_optimal": len(optimal.get("moves", [])) == 0}
+    return {"moves": [], "is_optimal": True}
+
+
 def _compute_category_ranks(standings: list[dict]) -> dict[str, dict[str, int]]:
     """Compute per-category rank for each team (1 = best).
 

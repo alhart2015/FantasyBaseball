@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from flask import Flask, redirect, render_template, url_for
+from flask import Flask, jsonify, redirect, render_template, url_for
 
 from fantasy_baseball.web.season_data import read_cache, read_meta
 
@@ -74,7 +74,31 @@ def register_routes(app: Flask) -> None:
     @app.route("/lineup")
     def lineup():
         meta = read_meta()
-        return render_template("season/lineup.html", meta=meta, active_page="lineup")
+        roster_raw = read_cache("roster")
+        optimal_raw = read_cache("lineup_optimal")
+        starters_raw = read_cache("probable_starters")
+
+        lineup_data = None
+        if roster_raw:
+            from fantasy_baseball.web.season_data import format_lineup_for_display
+            lineup_data = format_lineup_for_display(roster_raw, optimal_raw)
+
+        return render_template(
+            "season/lineup.html",
+            meta=meta,
+            active_page="lineup",
+            lineup=lineup_data,
+            starters=starters_raw,
+        )
+
+    @app.route("/api/optimize", methods=["POST"])
+    def api_optimize():
+        from fantasy_baseball.web.season_data import run_optimize
+        try:
+            result = run_optimize()
+            return jsonify(result)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
     @app.route("/waivers-trades")
     def waivers_trades():
