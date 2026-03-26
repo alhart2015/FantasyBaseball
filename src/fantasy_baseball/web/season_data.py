@@ -25,7 +25,7 @@ def read_cache(key: str, cache_dir: Path = CACHE_DIR) -> dict | list | None:
     path = cache_dir / CACHE_FILES[key]
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+    except (FileNotFoundError, json.JSONDecodeError):
         return None
 
 
