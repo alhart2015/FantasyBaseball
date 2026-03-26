@@ -48,7 +48,7 @@ GET  /lineup                    → Lineup page
 GET  /waivers-trades            → Waivers & Trades page
 POST /api/refresh               → Trigger data refresh (returns job ID)
 GET  /api/refresh-status        → Poll refresh progress
-GET  /api/optimize              → Run lineup optimizer, return suggested moves
+POST /api/optimize              → Run lineup optimizer, return suggested moves
 GET  /api/trade/<idx>/standings  → Return before/after standings for a trade
 ```
 
@@ -92,9 +92,11 @@ Active page highlighted with a left border accent and bold text.
 
 ## Standings Page
 
+Top-level pill toggle: **Current | Projected**. Sub-toggles appear contextually below based on the active top-level selection.
+
 ### Current Standings View
 
-Toggle between two sub-views via pill-style radio buttons:
+Sub-toggle between two views via pill-style radio buttons:
 
 **Roto Points:** Table with all 10 teams, sorted by total roto points (descending). Columns: rank, team name, R, HR, RBI, SB, AVG, W, K, SV, ERA, WHIP, Total. Each cell shows the roto points (1-10) earned in that category.
 
@@ -209,7 +211,7 @@ src/fantasy_baseball/web/
 ├── static/
 │   ├── style.css                   # Existing draft styles (unchanged)
 │   └── season.css                  # New: season dashboard styles
-data/cache/                         # New: cached computation results (gitignored)
+data/cache/                         # New: cached computation results (add to .gitignore)
 ```
 
 ## Launch
