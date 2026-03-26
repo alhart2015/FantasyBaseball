@@ -128,3 +128,20 @@ def register_routes(app: Flask) -> None:
         config = _load_config()
         result = compute_trade_standings_impact(trade=trades_raw[idx], standings=standings_raw, user_team_name=config.team_name)
         return jsonify(result)
+
+    import threading
+
+    @app.route("/api/refresh", methods=["POST"])
+    def api_refresh():
+        from fantasy_baseball.web.season_data import get_refresh_status, run_full_refresh
+        status = get_refresh_status()
+        if status["running"]:
+            return jsonify({"status": "already_running"})
+        thread = threading.Thread(target=run_full_refresh, daemon=True)
+        thread.start()
+        return jsonify({"status": "started"})
+
+    @app.route("/api/refresh-status")
+    def api_refresh_status():
+        from fantasy_baseball.web.season_data import get_refresh_status
+        return jsonify(get_refresh_status())

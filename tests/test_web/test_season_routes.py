@@ -75,3 +75,10 @@ def test_standings_renders_table_with_data(client):
         assert resp.status_code == 200
         assert b"Hart of the Order" in resp.data
         assert b"user-team" in resp.data
+
+
+def test_refresh_status_not_running(client):
+    resp = client.get("/api/refresh-status")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["running"] is False
