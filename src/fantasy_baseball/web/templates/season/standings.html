@@ -100,62 +100,72 @@
         {% endif %}
     </div>
 
-    {# Monte Carlo view #}
-    <div id="proj-mc" style="display: none;">
-        {% if mc %}
+    {# Macro for MC team table (reused by both MC and MC+Mgmt) #}
+    {% macro mc_team_table(mc_data) %}
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Team</th>
+                <th>Median Pts</th>
+                <th>P10</th>
+                <th>P90</th>
+                <th>1st %</th>
+                <th>Top 3 %</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for team in mc_data.teams %}
+            <tr class="{% if team.is_user %}user-team{% endif %}">
+                <td class="team-name">{{ team.name }}</td>
+                <td>{{ team.median_pts | round(1) }}</td>
+                <td style="opacity: 0.6;">{{ team.p10 | round(1) }}</td>
+                <td style="opacity: 0.6;">{{ team.p90 | round(1) }}</td>
+                <td class="{% if team.is_user and team.first_pct >= 15 %}cat-top{% endif %}">{{ team.first_pct | round(1) }}%</td>
+                <td class="{% if team.is_user and team.top3_pct >= 40 %}cat-top{% elif team.is_user and team.top3_pct < 20 %}cat-bottom{% endif %}">{{ team.top3_pct | round(1) }}%</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endmacro %}
+
+    {# Macro for category risk table #}
+    {% macro cat_risk_table(mc_data) %}
+    {% if mc_data.category_risk %}
+    <div class="card" style="margin-top: 1.5rem;">
+        <h3 style="color: var(--warning); margin-bottom: 12px;">Category Risk — Your Team</h3>
         <table class="data-table">
             <thead>
                 <tr>
-                    <th>Team</th>
+                    <th>Cat</th>
                     <th>Median Pts</th>
                     <th>P10</th>
                     <th>P90</th>
-                    <th>1st %</th>
                     <th>Top 3 %</th>
+                    <th>Bot 3 %</th>
                 </tr>
             </thead>
             <tbody>
-            {% for team in mc.teams %}
-                <tr class="{% if team.is_user %}user-team{% endif %}">
-                    <td class="team-name">{{ team.name }}</td>
-                    <td>{{ team.median_pts | round(1) }}</td>
-                    <td>{{ team.p10 | round(1) }}</td>
-                    <td>{{ team.p90 | round(1) }}</td>
-                    <td>{{ team.first_pct | round(1) }}%</td>
-                    <td>{{ team.top3_pct | round(1) }}%</td>
+            {% for row in mc_data.category_risk %}
+                <tr>
+                    <td style="font-weight: bold;">{{ row.cat }}</td>
+                    <td>{{ row.median_pts | round(1) }}</td>
+                    <td style="opacity: 0.6;">{{ row.p10 | round(1) }}</td>
+                    <td style="opacity: 0.6;">{{ row.p90 | round(1) }}</td>
+                    <td class="{{ row.risk_class }}">{{ row.top3_pct | round(1) }}%</td>
+                    <td class="{% if row.bot3_pct >= 30 %}cat-bottom{% endif %}">{{ row.bot3_pct | round(1) }}%</td>
                 </tr>
             {% endfor %}
             </tbody>
         </table>
-        {% if mc.category_risk %}
-        <div class="card" style="margin-top: 1.5rem;">
-            <h3>Category Risk</h3>
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Cat</th>
-                        <th>Median Pts</th>
-                        <th>P10</th>
-                        <th>P90</th>
-                        <th>Top 3 %</th>
-                        <th>Bot 3 %</th>
-                    </tr>
-                </thead>
-                <tbody>
-                {% for row in mc.category_risk %}
-                    <tr class="{{ row.risk_class }}">
-                        <td>{{ row.cat }}</td>
-                        <td>{{ row.median_pts | round(1) }}</td>
-                        <td>{{ row.p10 | round(1) }}</td>
-                        <td>{{ row.p90 | round(1) }}</td>
-                        <td>{{ row.top3_pct | round(1) }}%</td>
-                        <td>{{ row.bot3_pct | round(1) }}%</td>
-                    </tr>
-                {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% endif %}
+    </div>
+    {% endif %}
+    {% endmacro %}
+
+    {# Monte Carlo view #}
+    <div id="proj-mc" style="display: none;">
+        {% if mc %}
+        {{ mc_team_table(mc) }}
+        {{ cat_risk_table(mc) }}
         {% else %}
         <p class="placeholder-text">No Monte Carlo data available.</p>
         {% endif %}
@@ -164,59 +174,8 @@
     {# MC + Roster Mgmt view #}
     <div id="proj-mc-mgmt" style="display: none;">
         {% if mc_mgmt %}
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Team</th>
-                    <th>Median Pts</th>
-                    <th>P10</th>
-                    <th>P90</th>
-                    <th>1st %</th>
-                    <th>Top 3 %</th>
-                </tr>
-            </thead>
-            <tbody>
-            {% for team in mc_mgmt.teams %}
-                <tr class="{% if team.is_user %}user-team{% endif %}">
-                    <td class="team-name">{{ team.name }}</td>
-                    <td>{{ team.median_pts | round(1) }}</td>
-                    <td>{{ team.p10 | round(1) }}</td>
-                    <td>{{ team.p90 | round(1) }}</td>
-                    <td>{{ team.first_pct | round(1) }}%</td>
-                    <td>{{ team.top3_pct | round(1) }}%</td>
-                </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-        {% if mc_mgmt.category_risk %}
-        <div class="card" style="margin-top: 1.5rem;">
-            <h3>Category Risk</h3>
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Cat</th>
-                        <th>Median Pts</th>
-                        <th>P10</th>
-                        <th>P90</th>
-                        <th>Top 3 %</th>
-                        <th>Bot 3 %</th>
-                    </tr>
-                </thead>
-                <tbody>
-                {% for row in mc_mgmt.category_risk %}
-                    <tr class="{{ row.risk_class }}">
-                        <td>{{ row.cat }}</td>
-                        <td>{{ row.median_pts | round(1) }}</td>
-                        <td>{{ row.p10 | round(1) }}</td>
-                        <td>{{ row.p90 | round(1) }}</td>
-                        <td>{{ row.top3_pct | round(1) }}%</td>
-                        <td>{{ row.bot3_pct | round(1) }}%</td>
-                    </tr>
-                {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% endif %}
+        {{ mc_team_table(mc_mgmt) }}
+        {{ cat_risk_table(mc_mgmt) }}
         {% else %}
         <p class="placeholder-text">No MC + Roster Mgmt data available.</p>
         {% endif %}
