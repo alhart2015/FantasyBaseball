@@ -450,6 +450,13 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         # --- Step 3: Fetch standings + roster ---
         _set_refresh_progress("Fetching standings...")
         standings = fetch_standings(league)
+        # Fill missing stat keys (early season, some teams lack all categories)
+        _stat_defaults = {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0.0,
+                          "W": 0, "K": 0, "SV": 0, "ERA": 99.0, "WHIP": 99.0}
+        for t in standings:
+            filled = dict(_stat_defaults)
+            filled.update(t["stats"])
+            t["stats"] = filled
         write_cache("standings", standings, cache_dir)
 
         _set_refresh_progress("Fetching roster...")
