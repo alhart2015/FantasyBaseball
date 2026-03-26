@@ -40,11 +40,12 @@ CREATE TABLE raw_projections (
     adp REAL,
     g   REAL,
 
-    PRIMARY KEY (year, system, player_type, fg_id)
+    UNIQUE (year, system, player_type, fg_id)
 );
+CREATE INDEX idx_raw_name ON raw_projections(year, name);
 ```
 
-When `fg_id` is missing (rare), fall back to `name` + `player_type` as a composite key.
+No PRIMARY KEY constraint — use SQLite's implicit `rowid` instead. The UNIQUE constraint enforces dedup but allows NULL `fg_id` (SQLite treats each NULL as distinct in UNIQUE). When `fg_id` is missing, the row is still inserted and queryable by name.
 
 ### `blended_projections`
 
@@ -97,6 +98,10 @@ CREATE TABLE draft_results (
 
 From `data/rosters/*.json` files + appended during dashboard refresh.
 
+Slot keys come from the roster JSON as-is (e.g., `OF`, `OF2`, `OF3`, `P`, `P2`). No normalization needed — they're already unique per snapshot.
+
+No `fg_id` on this table. Joining to `blended_projections` requires a name match at query time. This is intentional — roster data comes from Yahoo which doesn't carry FanGraphs IDs, and name resolution is lossy enough that baking it in at load time would create false matches.
+
 ```sql
 CREATE TABLE weekly_rosters (
     snapshot_date TEXT NOT NULL,          -- YYYY-MM-DD (Monday of scoring week)
@@ -132,7 +137,7 @@ CREATE TABLE standings (
 ### Rebuild from files (`build_db.py`)
 
 1. Drop all tables, recreate schema
-2. **raw_projections:** Scan `data/projections/{year}/` for all CSV files. Parse system name and player type from filename (`{system}-{hitters|pitchers}.csv`). Import all rows with year, system, player_type columns added. Map FanGraphs column names to DB column names (e.g., `SO` → `so`, `PlayerId` → `fg_id`, `MLBAMID` → `mlbam_id`).
+2. **raw_projections:** Scan `data/projections/{year}/` for all CSV files. Parse system name and player type from filename. Filenames vary: `steamer-hitters.csv`, `steamer-hitters-2025.csv`, `zips-hitters-2028-proj-from-2026-03-25.csv`. Use the existing `_find_file()` logic in `data/fangraphs.py` for flex-matching, or split on `-hitters`/`-pitchers` to extract system name (everything before) and player type. Import all rows with year, system, player_type columns added. Map FanGraphs column names to DB column names (e.g., `SO` → `so`, `PlayerId` → `fg_id`, `MLBAMID` → `mlbam_id`).
 3. **blended_projections:** For each year that has projection CSVs, call `blend_projections()` with the configured systems/weights. Insert the resulting DataFrames. Rate stats (AVG, ERA, WHIP) are recomputed from blended counting stats, not directly blended.
 4. **draft_results:** Load `historical_drafts_resolved.json`. For each pick, attempt to resolve `fg_id` by matching normalized player name to `raw_projections` for that year. Strip "(Batter)"/"(Pitcher)" suffixes before matching.
 5. **weekly_rosters:** Scan `data/rosters/*.json`. Flatten each roster dict into one row per player (snapshot_date, week_num, team, slot, player_name, positions).
