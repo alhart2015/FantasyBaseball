@@ -690,7 +690,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         write_cache("projections", {"projected_standings": projected_standings}, cache_dir)
 
         # --- Step 13: Monte Carlo simulation ---
-        _set_refresh_progress("Running Monte Carlo (1000 iterations)...")
         import numpy as np
         from fantasy_baseball.simulation import simulate_season
 
@@ -698,58 +697,70 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                       if k not in ("P", "BN", "IL", "DL"))
         p_slots = config.roster_slots.get("P", 9)
         n_iter = 1000
-        rng = np.random.default_rng(42)
 
         # Convert roster dicts to pd.Series for simulate_season
         mc_rosters = {}
         for tname, roster in all_team_rosters.items():
             mc_rosters[tname] = [pd.Series(p) for p in roster]
 
-        all_totals = {tname: [] for tname in mc_rosters}
-        user_cat_pts = {cat: [] for cat in ALL_CATEGORIES}
+        # Count total hitters/pitchers per team for the no-management run
+        max_h = max(sum(1 for p in roster if p.get("player_type") == "hitter")
+                    for roster in mc_rosters.values())
+        max_p = max(sum(1 for p in roster if p.get("player_type") == "pitcher")
+                    for roster in mc_rosters.values())
 
-        for i in range(n_iter):
-            if i % 200 == 0:
-                _set_refresh_progress(f"Monte Carlo iteration {i}/{n_iter}...")
-            sim_stats, _ = simulate_season(mc_rosters, rng, h_slots, p_slots)
-            roto = score_roto(sim_stats)
-            for tname in mc_rosters:
-                all_totals[tname].append(roto[tname]["total"])
+        def _run_mc(label, h, p):
+            rng = np.random.default_rng(42)
+            all_totals = {tname: [] for tname in mc_rosters}
+            user_cat_pts = {cat: [] for cat in ALL_CATEGORIES}
+
+            for i in range(n_iter):
+                if i % 200 == 0:
+                    _set_refresh_progress(f"{label}: iteration {i}/{n_iter}...")
+                sim_stats, _ = simulate_season(mc_rosters, rng, h, p)
+                roto = score_roto(sim_stats)
+                for tname in mc_rosters:
+                    all_totals[tname].append(roto[tname]["total"])
+                for cat in ALL_CATEGORIES:
+                    user_cat_pts[cat].append(roto[config.team_name][f"{cat}_pts"])
+
+            team_names = list(mc_rosters.keys())
+            totals_matrix = np.column_stack([np.array(all_totals[n]) for n in team_names])
+            team_results = {}
+            for j, tname in enumerate(team_names):
+                arr = totals_matrix[:, j]
+                first_count = sum(1 for ii in range(n_iter) if np.argmax(totals_matrix[ii]) == j)
+                top3_count = sum(1 for ii in range(n_iter)
+                                if np.argsort(-totals_matrix[ii]).tolist().index(j) < 3)
+                team_results[tname] = {
+                    "median_pts": round(float(np.median(arr)), 1),
+                    "p10": round(float(np.percentile(arr, 10))),
+                    "p90": round(float(np.percentile(arr, 90))),
+                    "first_pct": round(first_count / n_iter * 100, 1),
+                    "top3_pct": round(top3_count / n_iter * 100, 1),
+                }
+
+            num_teams = len(team_names)
+            category_risk = {}
             for cat in ALL_CATEGORIES:
-                user_cat_pts[cat].append(roto[config.team_name][f"{cat}_pts"])
+                arr = np.array(user_cat_pts[cat])
+                category_risk[cat] = {
+                    "median_pts": round(float(np.median(arr)), 1),
+                    "p10": round(float(np.percentile(arr, 10)), 1),
+                    "p90": round(float(np.percentile(arr, 90)), 1),
+                    "top3_pct": round(float(np.mean(arr >= num_teams - 2)) * 100, 1),
+                    "bot3_pct": round(float(np.mean(arr <= 3)) * 100, 1),
+                }
+            return {"team_results": team_results, "category_risk": category_risk}
 
-        # Compute results
-        team_results = {}
-        team_names = list(mc_rosters.keys())
-        totals_matrix = np.column_stack([np.array(all_totals[n]) for n in team_names])
-
-        for j, tname in enumerate(team_names):
-            arr = totals_matrix[:, j]
-            first_count = sum(1 for i in range(n_iter) if np.argmax(totals_matrix[i]) == j)
-            top3_count = sum(1 for i in range(n_iter)
-                            if np.argsort(-totals_matrix[i]).tolist().index(j) < 3)
-            team_results[tname] = {
-                "median_pts": round(float(np.median(arr)), 1),
-                "p10": round(float(np.percentile(arr, 10))),
-                "p90": round(float(np.percentile(arr, 90))),
-                "first_pct": round(first_count / n_iter * 100, 1),
-                "top3_pct": round(top3_count / n_iter * 100, 1),
-            }
-
-        num_teams = len(team_names)
-        category_risk = {}
-        for cat in ALL_CATEGORIES:
-            arr = np.array(user_cat_pts[cat])
-            category_risk[cat] = {
-                "median_pts": round(float(np.median(arr)), 1),
-                "p10": round(float(np.percentile(arr, 10)), 1),
-                "p90": round(float(np.percentile(arr, 90)), 1),
-                "top3_pct": round(float(np.mean(arr >= num_teams - 2)) * 100, 1),
-                "bot3_pct": round(float(np.mean(arr <= 3)) * 100, 1),
-            }
+        # Base MC: no roster management (all players contribute)
+        base_mc = _run_mc("Monte Carlo", max_h, max_p)
+        # With management: only best h_slots/p_slots contribute
+        mgmt_mc = _run_mc("MC + Roster Mgmt", h_slots, p_slots)
 
         write_cache("monte_carlo", {
-            "base": {"team_results": team_results, "category_risk": category_risk},
+            "base": base_mc,
+            "with_management": mgmt_mc,
         }, cache_dir)
 
         # --- Step 13: Write meta ---
