@@ -1,7 +1,10 @@
 """SQLite database for fantasy baseball data."""
 
+import re
 import sqlite3
 from pathlib import Path
+
+import pandas as pd
 
 DB_PATH = Path(__file__).resolve().parents[3] / "data" / "fantasy.db"
 
@@ -89,4 +92,146 @@ def get_connection(db_path=None):
 def create_tables(conn):
     """Create all tables (idempotent via IF NOT EXISTS)."""
     conn.executescript(SCHEMA)
+    conn.commit()
+
+
+# FanGraphs CSV column → DB column, for hitters
+_HITTER_COLS = {
+    "Name": "name",
+    "Team": "team",
+    "PlayerId": "fg_id",
+    "MLBAMID": "mlbam_id",
+    "PA": "pa",
+    "AB": "ab",
+    "H": "h",
+    "R": "r",
+    "HR": "hr",
+    "RBI": "rbi",
+    "SB": "sb",
+    "CS": "cs",
+    "BB": "bb",
+    "SO": "so",
+    "AVG": "avg",
+    "OBP": "obp",
+    "SLG": "slg",
+    "OPS": "ops",
+    "ISO": "iso",
+    "BABIP": "babip",
+    "wOBA": "woba",
+    "wRC+": "wrc_plus",
+    "WAR": "war",
+    "ADP": "adp",
+    "G": "g",
+}
+
+# FanGraphs CSV column → DB column, for pitchers.
+# H, HR, BB, SO map to different DB columns than for hitters.
+_PITCHER_COLS = {
+    "Name": "name",
+    "Team": "team",
+    "PlayerId": "fg_id",
+    "MLBAMID": "mlbam_id",
+    "W": "w",
+    "L": "l",
+    "SV": "sv",
+    "IP": "ip",
+    "ER": "er",
+    "SO": "k",
+    "BB": "bb_p",
+    "H": "h_allowed",
+    "HR": "hr_p",
+    "ERA": "era",
+    "WHIP": "whip",
+    "FIP": "fip",
+    "K/9": "k9",
+    "BB/9": "bb9",
+    "WAR": "war_p",
+    "ADP": "adp",
+    "G": "g",
+}
+
+# All DB columns in raw_projections (used to filter to only known columns)
+_DB_COLUMNS = {
+    "year", "system", "player_type",
+    "name", "team", "fg_id", "mlbam_id",
+    "pa", "ab", "h", "r", "hr", "rbi", "sb", "cs", "bb", "so",
+    "avg", "obp", "slg", "ops", "iso", "babip", "woba", "wrc_plus", "war",
+    "w", "l", "sv", "ip", "er", "k", "bb_p", "h_allowed",
+    "era", "whip", "fip", "k9", "bb9", "hr_p", "war_p",
+    "adp", "g",
+}
+
+# Pattern: system name is everything before -hitters or -pitchers
+_FILENAME_RE = re.compile(r"^(?P<system>.+?)-(?P<ptype>hitters|pitchers)")
+
+
+def _parse_csv_filename(stem: str):
+    """Return (system, player_type) from a CSV filename stem, or (None, None)."""
+    m = _FILENAME_RE.match(stem)
+    if not m:
+        return None, None
+    system = m.group("system")
+    player_type = "hitter" if m.group("ptype") == "hitters" else "pitcher"
+    return system, player_type
+
+
+def load_raw_projections(conn, projections_dir):
+    """Scan projections_dir for year subdirectories, read FanGraphs CSVs,
+    and insert rows into raw_projections (INSERT OR IGNORE on duplicates).
+
+    projections_dir should be a Path-like pointing to the parent of the year
+    folders (e.g. ``data/projections/``).
+    """
+    projections_dir = Path(projections_dir)
+
+    for year_dir in sorted(projections_dir.iterdir()):
+        if not year_dir.is_dir() or not year_dir.name.isdigit():
+            continue
+        year = int(year_dir.name)
+
+        for csv_path in sorted(year_dir.glob("*.csv")):
+            system, player_type = _parse_csv_filename(csv_path.stem)
+            if system is None:
+                continue  # unrecognised filename, skip silently
+
+            col_map = _HITTER_COLS if player_type == "hitter" else _PITCHER_COLS
+
+            try:
+                df = pd.read_csv(csv_path, dtype={"PlayerId": str, "MLBAMID": str})
+            except Exception:
+                continue  # skip malformed files
+
+            # Strip BOM from column names (FanGraphs sometimes exports UTF-8-BOM)
+            df.columns = [c.lstrip("\ufeff") for c in df.columns]
+
+            # Rename only the columns that are present in both the CSV and the mapping
+            rename = {fg: db for fg, db in col_map.items() if fg in df.columns}
+            df = df.rename(columns=rename)
+
+            # Attach metadata
+            df["year"] = year
+            df["system"] = system
+            df["player_type"] = player_type
+
+            # Keep only columns that exist in the DB schema
+            keep = [c for c in df.columns if c in _DB_COLUMNS]
+            df = df[keep]
+
+            # Convert mlbam_id to integer where possible, coercing errors to NaN
+            if "mlbam_id" in df.columns:
+                df["mlbam_id"] = pd.to_numeric(df["mlbam_id"], errors="coerce")
+
+            # Insert rows; INSERT OR IGNORE handles the UNIQUE constraint
+            placeholders = ", ".join("?" * len(keep))
+            col_names = ", ".join(keep)
+            insert_sql = (
+                f"INSERT OR IGNORE INTO raw_projections ({col_names}) "
+                f"VALUES ({placeholders})"
+            )
+            rows = [
+                tuple(None if pd.isna(v) else v for v in row)
+                for row in df.itertuples(index=False, name=None)
+            ]
+            conn.executemany(insert_sql, rows)
+
     conn.commit()
