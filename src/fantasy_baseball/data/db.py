@@ -398,6 +398,78 @@ def load_weekly_rosters(conn, rosters_dir) -> None:
     conn.commit()
 
 
+# ---------------------------------------------------------------------------
+# Live append functions (called from the dashboard refresh)
+# ---------------------------------------------------------------------------
+
+
+def append_roster_snapshot(conn, roster, snapshot_date, week_num, team) -> None:
+    """Insert one row per player into weekly_rosters.
+
+    ``roster`` is a list of player dicts::
+
+        [{"name": "...", "selected_position": "OF", "positions": ["OF", "Util"]}, ...]
+
+    ``slot`` is taken from ``player["selected_position"]``.
+    ``positions`` is the player's eligible positions joined with ``", "``.
+
+    Uses INSERT OR IGNORE so repeated calls with the same
+    (snapshot_date, team, slot) are idempotent.
+    """
+    rows = []
+    for player in roster:
+        slot = player["selected_position"]
+        positions_str = ", ".join(player.get("positions", []))
+        rows.append((snapshot_date, week_num, team, slot, player["name"], positions_str or None))
+
+    conn.executemany(
+        "INSERT OR IGNORE INTO weekly_rosters "
+        "(snapshot_date, week_num, team, slot, player_name, positions) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+
+
+def append_standings_snapshot(conn, standings, year, snapshot_date) -> None:
+    """Insert one row per team into standings.
+
+    ``standings`` is a list of team dicts::
+
+        [{"name": "...", "rank": 1, "stats": {"R": 100, "HR": 30, ...}}, ...]
+
+    Stat keys are case-insensitive.  Uses INSERT OR IGNORE so repeated calls
+    with the same (year, snapshot_date, team) are idempotent.
+    """
+    rows = []
+    for entry in standings:
+        stats = {k.lower(): v for k, v in entry.get("stats", {}).items()}
+        rows.append((
+            year,
+            snapshot_date,
+            entry["name"],
+            entry.get("rank"),
+            stats.get("r"),
+            stats.get("hr"),
+            stats.get("rbi"),
+            stats.get("sb"),
+            stats.get("avg"),
+            stats.get("w"),
+            stats.get("k"),
+            stats.get("sv"),
+            stats.get("era"),
+            stats.get("whip"),
+        ))
+
+    conn.executemany(
+        "INSERT OR IGNORE INTO standings "
+        "(year, snapshot_date, team, rank, r, hr, rbi, sb, avg, w, k, sv, era, whip) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+
+
 # Ordered list of columns in blended_projections (excluding the PRIMARY KEY pair
 # which we always supply explicitly).
 _BLENDED_TABLE_COLS = [

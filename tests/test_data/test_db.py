@@ -8,6 +8,8 @@ from fantasy_baseball.data.db import (
     load_draft_results,
     load_standings,
     load_weekly_rosters,
+    append_roster_snapshot,
+    append_standings_snapshot,
     DB_PATH,
 )
 
@@ -311,4 +313,49 @@ def test_load_weekly_rosters(tmp_path):
     assert len(rows) == 2
     assert rows[0]["player_name"] == "Ivan Herrera"
     assert rows[0]["positions"] == "C, Util"
+    conn.close()
+
+
+def test_append_roster_snapshot(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    create_tables(conn)
+
+    roster = [
+        {"name": "Juan Soto", "selected_position": "OF", "positions": ["OF", "Util"]},
+        {"name": "Corbin Burnes", "selected_position": "P", "positions": ["SP"]},
+    ]
+    append_roster_snapshot(conn, roster, "2026-03-24", 1, "Hart of the Order")
+
+    rows = conn.execute("SELECT * FROM weekly_rosters").fetchall()
+    assert len(rows) == 2
+
+    # Idempotent: second call should not duplicate
+    append_roster_snapshot(conn, roster, "2026-03-24", 1, "Hart of the Order")
+    rows = conn.execute("SELECT * FROM weekly_rosters").fetchall()
+    assert len(rows) == 2
+    conn.close()
+
+
+def test_append_standings_snapshot(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    create_tables(conn)
+
+    standings = [
+        {"name": "Hart of the Order", "rank": 1,
+         "stats": {"R": 100, "HR": 30, "RBI": 95, "SB": 20, "AVG": 0.265,
+                   "W": 10, "K": 200, "SV": 15, "ERA": 3.50, "WHIP": 1.18}},
+    ]
+    append_standings_snapshot(conn, standings, 2026, "2026-03-24")
+
+    row = conn.execute("SELECT * FROM standings").fetchone()
+    assert row["year"] == 2026
+    assert row["snapshot_date"] == "2026-03-24"
+
+    # Idempotent
+    append_standings_snapshot(conn, standings, 2026, "2026-03-24")
+    assert conn.execute("SELECT COUNT(*) FROM standings").fetchone()[0] == 1
     conn.close()
