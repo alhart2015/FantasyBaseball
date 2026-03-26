@@ -27,3 +27,6 @@ data/sim_results/
 
 # Season dashboard cache (populated at runtime)
 data/cache/
+
+# SQLite databases (populated at runtime)
+data/*.db
