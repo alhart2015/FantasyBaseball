@@ -26,10 +26,11 @@ Simulate and compare draft strategies with Monte Carlo analysis:
 - **Opponent modeling** — assign strategies to specific opponents based on historical draft tendencies
 - **ADP noise** — randomize opponent draft order to test robustness
 - **Active roster modeling** — only counts stats from starting lineup, not bench
-- **Monte Carlo projections** — injury model, stat variance, and roto scoring across 1000 simulated seasons
+- **Monte Carlo projections** — correlated injury model, empirical stat variance, and roto scoring across 1000 simulated seasons
 
 ### In-Season Tools
-CLI tools that connect to Yahoo, analyze your standings position, and recommend optimal lineups, waiver moves, and trades:
+CLI tools and a season dashboard that connect to Yahoo, analyze your standings position, and recommend optimal lineups, waiver moves, and trades:
+- **Season dashboard** — Flask web UI for in-season management (standings, rosters, projections, game logs)
 - **Standings leverage** — identifies which categories are closest to gaining (or losing) a standings point
 - **Optimal hitter lineup** — uses the Hungarian algorithm to assign hitters to roster slots, maximizing leverage-weighted SGP
 - **Pitcher ranking** — ranks pitchers by leverage-weighted SGP with matchup quality adjustments
@@ -39,6 +40,11 @@ CLI tools that connect to Yahoo, analyze your standings position, and recommend 
 - **Schedule-aware projections** — scales counting stats by actual games per week (not a flat average)
 - **Trade recommender** — proposes 1-for-1 trades that improve both sides, using leverage-weighted SGP to find mutually beneficial swaps across all league opponents
 - **Recency weighting** — blends ROS projections with recent performance for start/sit decisions (validated via backtest: +1.9% next-week accuracy)
+
+### Data & Analytics
+- **SQLite database** — `fantasy.db` stores projections (raw + blended), draft results, standings history, weekly rosters, and MLB game logs
+- **Empirical variance model** — stat variance and correlation matrices calibrated from 2022-2024 projection-vs-actual residuals, used in Monte Carlo simulation
+- **Game log tracking** — fetches and stores per-game batting and pitching stats from the MLB Stats API
 
 ## Setup
 
@@ -96,8 +102,9 @@ python scripts/monte_carlo.py -n 1000  # Season projection with injuries + varia
 ## In-Season Usage
 
 ```bash
-python scripts/run_lineup.py    # Lineup optimization + waiver recommendations
-python scripts/run_trades.py    # Trade recommendations across all opponents
+python scripts/run_lineup.py          # Lineup optimization + waiver recommendations
+python scripts/run_trades.py          # Trade recommendations across all opponents
+python scripts/run_season_dashboard.py  # Launch season dashboard at localhost:5001
 ```
 
 `run_lineup.py` connects to Yahoo, fetches your roster, standings, and the MLB schedule, then prints:
@@ -127,7 +134,7 @@ The current strategy: use VONA + leverage-weighted drafting to build a balanced 
 
 ### Monte Carlo Season Simulation
 
-Each simulated season applies random injuries (45% of pitchers, 18% of hitters) and stat variance (hitters: 10% std dev, pitchers: 18%) to all players. Performance variance affects rate stats realistically — worse performance lowers AVG and raises ERA/WHIP, rather than cancelling out. Injured players are replaced proportionally by replacement-level waiver pickups. Only active roster players (13 hitters, 9 pitchers) contribute stats. Roto standings are scored across 1000 iterations to produce win probabilities and category risk profiles.
+Each simulated season applies random injuries (45% of pitchers, 18% of hitters) and correlated stat variance to all players. Variance is drawn from multivariate normal distributions with empirically calibrated per-stat standard deviations (HR: ±34.3%, SB: ±71.5%, AVG: ±10.3%, ERA: ±25.2%) and correlation matrices so that related stats (e.g., HR and RBI) move together realistically. Injured players are replaced proportionally by replacement-level waiver pickups. Only active roster players (13 hitters, 9 pitchers) contribute stats. Roto standings are scored across 1000 iterations to produce win probabilities and category risk profiles. Team-specific management adjustments model the impact of in-season waiver moves and streaming.
 
 ## Project Structure
 
@@ -136,41 +143,44 @@ FantasyBaseball/
 ├── src/fantasy_baseball/
 │   ├── analysis/      # Game logs, recency weighting
 │   ├── auth/          # Yahoo OAuth2 authentication
-│   ├── data/          # FanGraphs CSV parsing, projection blending, MLB schedule
+│   ├── data/          # FanGraphs CSV parsing, projection blending, MLB schedule, SQLite DB
 │   ├── draft/         # Draft board, tracker, balance, recommender, strategies, search
 │   ├── lineup/        # In-season optimizer: leverage, weighted SGP, optimizer, waivers, matchups
 │   ├── sgp/           # SGP engine: denominators, player values, replacement levels, VAR
 │   ├── trades/        # Trade evaluation and pitch generation
-│   ├── utils/         # Constants, position helpers, name normalization
-│   ├── web/           # Flask dashboard for draft visualization
+│   ├── utils/         # Constants (variance/correlation matrices), position helpers, name normalization
+│   ├── web/           # Flask dashboards for draft and in-season management
 │   ├── scoring.py     # Shared roto scoring and team stat projection
+│   ├── simulation.py  # Monte Carlo season simulation with correlated variance
 │   └── config.py      # YAML config loading
 ├── scripts/
 │   ├── run_draft.py           # Interactive draft assistant CLI (+ mock mode)
 │   ├── run_lineup.py          # In-season lineup optimizer CLI
 │   ├── run_trades.py          # Trade recommender CLI
+│   ├── run_season_dashboard.py # In-season web dashboard
 │   ├── summary.py             # Weekly analysis: rosters, projections, lineup, waivers, trades
 │   ├── simulate_draft.py      # Draft simulation with configurable strategies
 │   ├── compare_strategies.py  # Side-by-side strategy comparison
-│   ├── monte_carlo.py         # Monte Carlo season projection
-│   ├── fetch_positions.py     # Cache Yahoo position data (including keepers)
+│   ├── build_db.py            # Rebuild SQLite database from source files
+│   ├── calibrate_variance.py  # Calibrate stat variance from projection-vs-actual residuals
+│   ├── fetch_positions_mlb.py # Fill position gaps via MLB Stats API
 │   ├── analyze_draft.py       # Post-draft projection + Monte Carlo analysis
 │   ├── analyze_mock.py        # Post-mock-draft projection analysis
 │   ├── analyze_history.py     # Historical draft tendency analysis
 │   ├── backtest_2025.py       # Backtest simulation against 2025 actual results
-│   └── backtest_recency.py    # Recency weighting backtest
+│   ├── backtest_recency.py    # Recency weighting backtest
+│   └── backtest_trades.py     # Trade recommender backtest
 ├── data/
 │   ├── projections/    # FanGraphs CSV files (not committed)
+│   ├── fantasy.db      # SQLite database (not committed)
 │   └── player_positions.json  # Cached Yahoo positions (not committed)
 ├── config/
 │   ├── league.yaml     # League settings + keepers
 │   └── oauth.json      # Yahoo credentials (gitignored)
-├── docs/
-│   └── superpowers/    # Design specs and implementation plans
 ├── CLAUDE.md           # Claude Code guidance
 ├── SETUP.md            # Setup guide for new users
 ├── TODO.md             # In-season enhancement roadmap
-└── tests/              # 418 tests
+└── tests/              # 558 tests
 ```
 
 ## Running Tests
@@ -183,6 +193,7 @@ pytest -v
 
 - **Python 3.11+** with pandas, numpy, scipy
 - **yahoo-fantasy-api** + **yahoo-oauth** for Yahoo Fantasy API access
-- **MLB-StatsAPI** for weekly schedule and probable pitcher data
-- **Flask** + **htmx** for the draft dashboard
-- **pytest** for testing
+- **MLB-StatsAPI** for weekly schedule, probable pitchers, and game logs
+- **SQLite** for persistent storage of projections, draft history, standings, rosters, and game logs
+- **Flask** + **htmx** for draft and season dashboards
+- **pytest** for testing (558 tests)
