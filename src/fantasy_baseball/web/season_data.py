@@ -307,98 +307,6 @@ def _compute_category_ranks(standings: list[dict]) -> dict[str, dict[str, int]]:
     return ranks
 
 
-def _build_probable_starters(
-    pitcher_roster: list[dict],
-    schedule: dict,
-    team_stats: dict,
-) -> list[dict]:
-    """Cross-reference roster pitchers with the weekly schedule to find probable starts.
-
-    Computes a matchup quality badge (Great/Fair/Tough) based on opponent OPS,
-    and builds expandable detail data (OPS rank, K% rank).
-
-    Args:
-        pitcher_roster: List of pitcher dicts with "name" and "team" fields.
-        schedule: Result of get_week_schedule() with "probable_pitchers" list.
-        matchup_factors: Result of calculate_matchup_factors().
-        team_stats: Normalized team batting stats {abbrev: {ops, k_pct}}.
-
-    Returns:
-        List of dicts with pitcher name, date, opponent, badge, and detail data.
-    """
-    from fantasy_baseball.utils.name_utils import normalize_name
-
-    if not schedule or not schedule.get("probable_pitchers"):
-        return []
-
-    # Rank teams by OPS and K% for detail display
-    if team_stats:
-        ops_ranked = sorted(team_stats.items(), key=lambda x: x[1]["ops"], reverse=True)
-        k_ranked = sorted(team_stats.items(), key=lambda x: x[1]["k_pct"], reverse=False)
-        ops_rank_map = {abbrev: i + 1 for i, (abbrev, _) in enumerate(ops_ranked)}
-        k_rank_map = {abbrev: i + 1 for i, (abbrev, _) in enumerate(k_ranked)}
-        num_teams = len(team_stats)
-    else:
-        ops_rank_map = {}
-        k_rank_map = {}
-        num_teams = 30
-
-    # Build a name-normalized lookup for roster pitchers: norm_name -> team abbrev
-    roster_name_to_team: dict[str, str] = {}
-    for p in pitcher_roster:
-        norm = normalize_name(p.get("name", ""))
-        roster_name_to_team[norm] = p.get("team", "")
-
-    starters = []
-    for game in schedule["probable_pitchers"]:
-        for side in ("away", "home"):
-            pitcher_name = game.get(f"{side}_pitcher", "TBD")
-            if not pitcher_name or pitcher_name == "TBD":
-                continue
-
-            norm = normalize_name(pitcher_name)
-            if norm not in roster_name_to_team:
-                continue
-
-            opponent_abbrev = game["home_team"] if side == "away" else game["away_team"]
-
-            # Matchup badge based on opponent OPS
-            ops = team_stats.get(opponent_abbrev, {}).get("ops", 0.0)
-            avg_ops = (
-                sum(s["ops"] for s in team_stats.values()) / len(team_stats)
-                if team_stats
-                else 0.75
-            )
-            if ops == 0.0:
-                badge = "Fair"
-            elif ops < avg_ops * 0.95:
-                badge = "Great"
-            elif ops > avg_ops * 1.05:
-                badge = "Tough"
-            else:
-                badge = "Fair"
-
-            ops_rank = ops_rank_map.get(opponent_abbrev, 0)
-            k_rank = k_rank_map.get(opponent_abbrev, 0)
-
-            starters.append({
-                "pitcher": pitcher_name,
-                "date": game.get("date", ""),
-                "opponent": opponent_abbrev,
-                "badge": badge,
-                "detail": {
-                    "ops_rank": ops_rank,
-                    "k_rank": k_rank,
-                    "num_teams": num_teams,
-                    "ops": round(ops, 3),
-                    "k_pct": round(
-                        team_stats.get(opponent_abbrev, {}).get("k_pct", 0.0), 3
-                    ),
-                },
-            })
-
-    starters.sort(key=lambda s: s["date"])
-    return starters
 
 
 def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
@@ -552,8 +460,10 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             p for p in roster_with_proj
             if set(p.get("positions", [])) & PITCHER_POSITIONS
         ]
-        probable_starters = _build_probable_starters(
-            pitcher_roster_for_schedule, schedule or {}, team_stats
+        from fantasy_baseball.lineup.matchups import get_probable_starters
+        probable_starters = get_probable_starters(
+            pitcher_roster_for_schedule, schedule or {},
+            matchup_factors=matchup_factors, team_stats=team_stats,
         )
         write_cache("probable_starters", probable_starters, cache_dir)
 

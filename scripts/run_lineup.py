@@ -22,6 +22,7 @@ from fantasy_baseball.lineup.matchups import (
     get_team_batting_stats,
     calculate_matchup_factors,
     adjust_pitcher_projection,
+    get_probable_starters,
 )
 from fantasy_baseball.analysis.game_logs import fetch_all_game_logs
 from fantasy_baseball.analysis.recency import predict_reliability_blend
@@ -135,77 +136,39 @@ def print_probable_starters(
     if not schedule or not roster_pitchers:
         return
 
-    probable = schedule.get("probable_pitchers", [])
-    if not probable:
-        print("  No probable pitcher data available.")
-        return
-
-    # Build pitcher name -> list of starts, and name -> team lookup
-    pitcher_starts: dict[str, list[dict]] = {}
-    roster_names = {normalize_name(p["name"]) for p in roster_pitchers}
-    pitcher_teams = {p["name"]: p.get("team", "") for p in roster_pitchers}
-
-    for game in probable:
-        for side, team_key in [("away", "away_team"), ("home", "home_team")]:
-            pitcher_name = game.get(f"{side}_pitcher", "TBD")
-            if pitcher_name == "TBD":
-                continue
-            if normalize_name(pitcher_name) not in roster_names:
-                continue
-
-            opponent_key = "home_team" if side == "away" else "away_team"
-            indicator = "@" if side == "away" else "vs"
-            try:
-                day = dt.strptime(game["date"], "%Y-%m-%d").strftime("%a")
-            except (ValueError, KeyError):
-                day = "?"
-
-            quality = ""
-            if matchup_factors and game[opponent_key] in matchup_factors:
-                f = matchup_factors[game[opponent_key]]["era_whip_factor"]
-                if f <= 0.93:
-                    quality = " (easy)"
-                elif f <= 0.97:
-                    quality = " (lean)"
-                elif f >= 1.07:
-                    quality = " (tough)"
-                elif f >= 1.03:
-                    quality = " (hard)"
-
-            if pitcher_name not in pitcher_starts:
-                pitcher_starts[pitcher_name] = []
-            pitcher_starts[pitcher_name].append({
-                "day": day,
-                "indicator": indicator,
-                "opponent": game[opponent_key],
-                "quality": quality,
-            })
-
-    if not pitcher_starts:
+    starters = get_probable_starters(roster_pitchers, schedule, matchup_factors)
+    if not starters:
         print("  No roster pitchers found in probable starters.")
         return
 
-    two_start = {k: v for k, v in pitcher_starts.items() if len(v) >= 2}
-    one_start = {k: v for k, v in pitcher_starts.items() if len(v) == 1}
+    pitcher_teams = {p["name"]: p.get("team", "") for p in roster_pitchers}
+    two_start = [s for s in starters if s["starts"] >= 2]
+    one_start = [s for s in starters if s["starts"] == 1]
+
+    # Map quality badges to CLI labels
+    quality_labels = {"Great": " (easy)", "Tough": " (tough)", "Fair": ""}
 
     if two_start:
         print("  ** TWO-START PITCHERS **")
-        for name, starts in sorted(two_start.items()):
-            team = pitcher_teams.get(name, "")
+        for s in sorted(two_start, key=lambda x: x["pitcher"]):
+            team = pitcher_teams.get(s["pitcher"], "")
             matchups = ", ".join(
-                f"{s['day']} {s['indicator']} {s['opponent']}{s.get('quality', '')}" for s in starts
+                f"{m['day']} {m['indicator']} {m['opponent']}"
+                f"{quality_labels.get(m['matchup_quality'], '')}"
+                for m in s["matchups"]
             )
-            print(f"    {name:<25} {team:<5} {matchups}")
+            print(f"    {s['pitcher']:<25} {team:<5} {matchups}")
 
     if one_start:
         print("  SINGLE START")
-        for name, starts in sorted(one_start.items()):
-            team = pitcher_teams.get(name, "")
-            s = starts[0]
-            print(f"    {name:<25} {team:<5} {s['day']} {s['indicator']} {s['opponent']}{s.get('quality', '')}")
+        for s in sorted(one_start, key=lambda x: x["pitcher"]):
+            team = pitcher_teams.get(s["pitcher"], "")
+            m = s["matchups"][0]
+            print(f"    {s['pitcher']:<25} {team:<5} {m['day']} {m['indicator']} {m['opponent']}"
+                  f"{quality_labels.get(m['matchup_quality'], '')}")
 
     # Roster pitchers with no announced start
-    announced = {normalize_name(k) for k in pitcher_starts.keys()}
+    announced = {normalize_name(s["pitcher"]) for s in starters}
     unannounced = [
         p["name"] for p in roster_pitchers
         if normalize_name(p["name"]) not in announced

@@ -138,8 +138,8 @@
     {% for s in starters %}
         <tr class="expandable" onclick="toggleExpand(this)">
             <td style="text-align: left; font-weight: 500;">{{ s.pitcher }}</td>
-            <td>{{ s.day }}</td>
-            <td>{{ s.opponent }}</td>
+            <td>{{ s.days }}</td>
+            <td>{{ s.opponents }}</td>
             <td>
                 {% if s.matchup_quality == "Great" %}
                 <span class="badge badge-success">Great</span>
@@ -158,17 +158,18 @@
         </tr>
         <tr class="expand-content">
             <td colspan="5">
+                {% for m in s.matchups %}
                 <div style="padding: 4px 0;">
-                    {% if s.ops_rank %}
-                    <span style="margin-right: 12px;">OPS rank: <strong>{{ s.ops_rank }}</strong></span>
-                    {% endif %}
-                    {% if s.k_pct_rank %}
-                    <span>K% rank: <strong>{{ s.k_pct_rank }}</strong></span>
-                    {% endif %}
-                    {% if not s.ops_rank and not s.k_pct_rank %}
-                    <span style="color: var(--text-secondary);">No matchup detail available.</span>
+                    <strong>{{ m.day }}</strong> {{ m.indicator }} {{ m.opponent }}
+                    {% if m.detail and m.detail.ops %}
+                    — OPS: {{ m.detail.ops }} ({{ m.detail.ops_rank }}th)
+                    · K%: {{ m.detail.k_pct }}% ({{ m.detail.k_rank }}th)
                     {% endif %}
                 </div>
+                {% endfor %}
+                {% if not s.matchups %}
+                <div style="padding: 4px 0; color: var(--text-secondary);">No matchup detail available.</div>
+                {% endif %}
             </td>
         </tr>
     {% endfor %}
