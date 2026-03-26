@@ -1,5 +1,6 @@
 """SQLite database for fantasy baseball data."""
 
+import json
 import re
 import sqlite3
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from fantasy_baseball.data.projections import blend_projections
+from fantasy_baseball.utils.name_utils import normalize_name
 
 DB_PATH = Path(__file__).resolve().parents[3] / "data" / "fantasy.db"
 
@@ -236,6 +238,163 @@ def load_raw_projections(conn, projections_dir):
             ]
             conn.executemany(insert_sql, rows)
 
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Historical data loaders
+# ---------------------------------------------------------------------------
+
+# Pattern to strip FanGraphs-style "(Batter)" / "(Pitcher)" suffixes from names
+_PLAYER_SUFFIX_RE = re.compile(r"\s*\((?:Batter|Pitcher)\)\s*$", re.IGNORECASE)
+
+
+def load_draft_results(conn, drafts_path) -> None:
+    """Load draft picks from ``drafts_path`` (JSON) into ``draft_results``.
+
+    The JSON must be structured as::
+
+        {"2023": [{"pick": 1, "round": 1, "team": "...", "player": "..."}, ...], ...}
+
+    "(Batter)" and "(Pitcher)" suffixes are stripped from player names before
+    insertion.  For each pick an ``fg_id`` lookup is attempted against
+    ``raw_projections`` using ``normalize_name``.  If multiple rows match the
+    highest-ADP (lowest numeric value) row wins; if no match exists the field
+    is left NULL.
+
+    Uses INSERT OR IGNORE so repeated calls are idempotent.
+    """
+    drafts_path = Path(drafts_path)
+    data = json.loads(drafts_path.read_text(encoding="utf-8"))
+
+    rows = []
+    for year_str, picks in data.items():
+        year = int(year_str)
+        for pick in picks:
+            player_raw = pick["player"]
+            player_name = _PLAYER_SUFFIX_RE.sub("", player_raw)
+            norm = normalize_name(player_name)
+
+            # Attempt fg_id resolution from raw_projections for that year.
+            # Fetch all rows for the year, then filter client-side by normalized name
+            # so that normalize_name is applied consistently in Python.
+            candidates = conn.execute(
+                "SELECT name, fg_id, adp FROM raw_projections WHERE year = ?",
+                (year,),
+            ).fetchall()
+            matched = [r for r in candidates if normalize_name(r["name"]) == norm and r["fg_id"]]
+
+            fg_id = None
+            if matched:
+                # Pick the row with the lowest ADP (best-ranked); nulls sort last
+                def _adp_key(r):
+                    a = r["adp"]
+                    return (a is None, a if a is not None else 0)
+                best = min(matched, key=_adp_key)
+                fg_id = best["fg_id"]
+
+            rows.append((year, pick["pick"], pick["round"], pick["team"], player_name, fg_id))
+
+    conn.executemany(
+        "INSERT OR IGNORE INTO draft_results (year, pick, round, team, player, fg_id) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+
+
+def load_standings(conn, standings_path) -> None:
+    """Load historical standings from ``standings_path`` (JSON) into ``standings``.
+
+    Expected structure::
+
+        {
+          "2023": {
+            "standings": [
+              {"name": "...", "team_key": "...", "rank": 1,
+               "stats": {"R": 900, "HR": 250, ...}}
+            ]
+          }
+        }
+
+    Each team is inserted with ``snapshot_date = 'final'``.  Stat keys in the
+    JSON are case-insensitive and mapped to their lowercase DB column names.
+    Uses INSERT OR IGNORE so repeated calls are idempotent.
+    """
+    standings_path = Path(standings_path)
+    data = json.loads(standings_path.read_text(encoding="utf-8"))
+
+    rows = []
+    for year_str, year_data in data.items():
+        year = int(year_str)
+        for entry in year_data.get("standings", []):
+            stats = {k.lower(): v for k, v in entry.get("stats", {}).items()}
+            rows.append((
+                year,
+                "final",
+                entry["name"],
+                entry.get("rank"),
+                stats.get("r"),
+                stats.get("hr"),
+                stats.get("rbi"),
+                stats.get("sb"),
+                stats.get("avg"),
+                stats.get("w"),
+                stats.get("k"),
+                stats.get("sv"),
+                stats.get("era"),
+                stats.get("whip"),
+            ))
+
+    conn.executemany(
+        "INSERT OR IGNORE INTO standings "
+        "(year, snapshot_date, team, rank, r, hr, rbi, sb, avg, w, k, sv, era, whip) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+
+
+def load_weekly_rosters(conn, rosters_dir) -> None:
+    """Load weekly roster snapshots from JSON files in ``rosters_dir``.
+
+    Each ``*.json`` file must contain::
+
+        {
+          "snapshot_date": "2026-03-23",
+          "week_num": 1,
+          "team": "Hart of the Order",
+          "roster": {
+            "C":  {"name": "Ivan Herrera", "positions": ["C", "Util"]},
+            "OF": {"name": "Juan Soto",    "positions": ["OF", "Util"]},
+            ...
+          }
+        }
+
+    Each slot key ("C", "OF", "P2", …) becomes one row in ``weekly_rosters``.
+    The ``positions`` list is joined with ``", "``.
+
+    Uses INSERT OR IGNORE so repeated calls are idempotent.
+    """
+    rosters_dir = Path(rosters_dir)
+    rows = []
+    for json_path in sorted(rosters_dir.glob("*.json")):
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        snapshot_date = data["snapshot_date"]
+        week_num = data.get("week_num")
+        team = data["team"]
+        for slot, player_info in data.get("roster", {}).items():
+            player_name = player_info.get("name", "")
+            positions_list = player_info.get("positions", [])
+            positions_str = ", ".join(positions_list) if positions_list else None
+            rows.append((snapshot_date, week_num, team, slot, player_name, positions_str))
+
+    conn.executemany(
+        "INSERT OR IGNORE INTO weekly_rosters "
+        "(snapshot_date, week_num, team, slot, player_name, positions) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
+    )
     conn.commit()
 
 

@@ -1,5 +1,15 @@
+import json
 import sqlite3
-from fantasy_baseball.data.db import create_tables, get_connection, load_raw_projections, load_blended_projections, DB_PATH
+from fantasy_baseball.data.db import (
+    create_tables,
+    get_connection,
+    load_raw_projections,
+    load_blended_projections,
+    load_draft_results,
+    load_standings,
+    load_weekly_rosters,
+    DB_PATH,
+)
 
 
 def test_create_tables_creates_all_five(tmp_path):
@@ -224,4 +234,81 @@ def test_load_blended_projections_skips_bad_year(tmp_path):
     years = {r["year"] for r in rows}
     assert 2026 in years
     assert 2027 not in years
+    conn.close()
+
+
+def test_load_draft_results(tmp_path):
+    drafts = {
+        "2025": [
+            {"pick": 1, "round": 1, "team": "Hart of the Order", "player": "Juan Soto"},
+            {"pick": 2, "round": 1, "team": "SkeleThor", "player": "Shohei Ohtani (Batter)"},
+        ]
+    }
+    drafts_path = tmp_path / "drafts.json"
+    drafts_path.write_text(json.dumps(drafts))
+
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    create_tables(conn)
+    load_draft_results(conn, drafts_path)
+
+    rows = conn.execute("SELECT * FROM draft_results ORDER BY pick").fetchall()
+    assert len(rows) == 2
+    assert rows[0]["player"] == "Juan Soto"
+    assert rows[1]["player"] == "Shohei Ohtani"  # suffix stripped
+    conn.close()
+
+
+def test_load_standings(tmp_path):
+    standings = {
+        "2023": {
+            "standings": [
+                {"name": "Hart of the Order", "team_key": "k1", "rank": 1,
+                 "stats": {"R": 900, "HR": 250, "RBI": 880, "SB": 150, "AVG": 0.260,
+                           "W": 80, "K": 1400, "SV": 90, "ERA": 3.60, "WHIP": 1.20}},
+            ]
+        }
+    }
+    path = tmp_path / "standings.json"
+    path.write_text(json.dumps(standings))
+
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    create_tables(conn)
+    load_standings(conn, path)
+
+    row = conn.execute("SELECT * FROM standings").fetchone()
+    assert row["year"] == 2023
+    assert row["snapshot_date"] == "final"
+    assert row["r"] == 900
+    conn.close()
+
+
+def test_load_weekly_rosters(tmp_path):
+    roster_dir = tmp_path / "rosters"
+    roster_dir.mkdir()
+    roster = {
+        "snapshot_date": "2026-03-23",
+        "week_num": 1,
+        "team": "Hart of the Order",
+        "league": 5652,
+        "roster": {
+            "C": {"name": "Ivan Herrera", "positions": ["C", "Util"]},
+            "OF": {"name": "Juan Soto", "positions": ["OF", "Util"]},
+        }
+    }
+    (roster_dir / "2026-03-23_hart_roster.json").write_text(json.dumps(roster))
+
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    create_tables(conn)
+    load_weekly_rosters(conn, roster_dir)
+
+    rows = conn.execute("SELECT * FROM weekly_rosters ORDER BY slot").fetchall()
+    assert len(rows) == 2
+    assert rows[0]["player_name"] == "Ivan Herrera"
+    assert rows[0]["positions"] == "C, Util"
     conn.close()
