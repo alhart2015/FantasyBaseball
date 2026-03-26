@@ -28,18 +28,46 @@ def register_routes(app: Flask) -> None:
     def standings():
         meta = read_meta()
         raw_standings = read_cache("standings")
+        config = _load_config()
         standings_data = None
+        projected_data = None
+        mc_data = None
+        mc_mgmt_data = None
+
         if raw_standings:
-            from fantasy_baseball.web.season_data import format_standings_for_display
-            config = _load_config()
+            from fantasy_baseball.web.season_data import (
+                format_standings_for_display,
+                format_monte_carlo_for_display,
+            )
+
             standings_data = format_standings_for_display(
                 raw_standings, config.team_name
             )
+
+            raw_projected = read_cache("projections")
+            if raw_projected and "projected_standings" in raw_projected:
+                projected_data = format_standings_for_display(
+                    raw_projected["projected_standings"], config.team_name
+                )
+
+            raw_mc = read_cache("monte_carlo")
+            if raw_mc:
+                mc_data = format_monte_carlo_for_display(
+                    raw_mc.get("base", raw_mc), config.team_name
+                )
+                if "with_management" in raw_mc:
+                    mc_mgmt_data = format_monte_carlo_for_display(
+                        raw_mc["with_management"], config.team_name
+                    )
+
         return render_template(
             "season/standings.html",
             meta=meta,
             active_page="standings",
             standings=standings_data,
+            projected=projected_data,
+            mc=mc_data,
+            mc_mgmt=mc_mgmt_data,
             categories=["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"],
         )
 

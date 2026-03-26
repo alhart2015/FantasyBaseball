@@ -54,7 +54,173 @@
 </div>
 
 <div id="projected-view" style="display: none;">
-    <p class="placeholder-text">Projected standings coming soon.</p>
+    <div class="pill-group" id="projected-sub-toggle">
+        <button class="pill active" data-psub="static" onclick="toggleProjectedSub(this)">Static</button>
+        <button class="pill" data-psub="mc" onclick="toggleProjectedSub(this)">Monte Carlo</button>
+        <button class="pill" data-psub="mc-mgmt" onclick="toggleProjectedSub(this)">MC + Roster Mgmt</button>
+    </div>
+
+    {# Static projected view #}
+    <div id="proj-static">
+        {% if projected %}
+        <div class="pill-group" id="proj-static-sub-toggle">
+            <button class="pill active" data-pssub="points" onclick="toggleProjStaticSub(this)">Roto Points</button>
+            <button class="pill" data-pssub="stats" onclick="toggleProjStaticSub(this)">Stat Totals</button>
+        </div>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Team</th>
+                    {% for cat in categories %}
+                    <th>{{ cat }}</th>
+                    {% endfor %}
+                    <th class="total-col">Total</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for team in projected.teams %}
+                <tr class="{% if team.is_user %}user-team{% endif %}">
+                    <td>{{ team.rank }}</td>
+                    <td class="team-name">{{ team.name }}</td>
+                    {% for cat in categories %}
+                    <td class="{{ team.color_classes[cat] }} proj-stat-cell"
+                        data-points="{{ team.roto_points[cat ~ '_pts'] | round(1) }}"
+                        data-stat="{{ team.stats[cat] }}">
+                        {{ team.roto_points[cat ~ '_pts'] | round(1) }}
+                    </td>
+                    {% endfor %}
+                    <td class="total-col">{{ team.roto_points.total | round(1) }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="placeholder-text">No projected standings data available.</p>
+        {% endif %}
+    </div>
+
+    {# Monte Carlo view #}
+    <div id="proj-mc" style="display: none;">
+        {% if mc %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Team</th>
+                    <th>Median Pts</th>
+                    <th>P10</th>
+                    <th>P90</th>
+                    <th>1st %</th>
+                    <th>Top 3 %</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for team in mc.teams %}
+                <tr class="{% if team.is_user %}user-team{% endif %}">
+                    <td class="team-name">{{ team.name }}</td>
+                    <td>{{ team.median_pts | round(1) }}</td>
+                    <td>{{ team.p10 | round(1) }}</td>
+                    <td>{{ team.p90 | round(1) }}</td>
+                    <td>{{ team.first_pct | round(1) }}%</td>
+                    <td>{{ team.top3_pct | round(1) }}%</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% if mc.category_risk %}
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>Category Risk</h3>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Cat</th>
+                        <th>Median Pts</th>
+                        <th>P10</th>
+                        <th>P90</th>
+                        <th>Top 3 %</th>
+                        <th>Bot 3 %</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for row in mc.category_risk %}
+                    <tr class="{{ row.risk_class }}">
+                        <td>{{ row.cat }}</td>
+                        <td>{{ row.median_pts | round(1) }}</td>
+                        <td>{{ row.p10 | round(1) }}</td>
+                        <td>{{ row.p90 | round(1) }}</td>
+                        <td>{{ row.top3_pct | round(1) }}%</td>
+                        <td>{{ row.bot3_pct | round(1) }}%</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+        {% else %}
+        <p class="placeholder-text">No Monte Carlo data available.</p>
+        {% endif %}
+    </div>
+
+    {# MC + Roster Mgmt view #}
+    <div id="proj-mc-mgmt" style="display: none;">
+        {% if mc_mgmt %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Team</th>
+                    <th>Median Pts</th>
+                    <th>P10</th>
+                    <th>P90</th>
+                    <th>1st %</th>
+                    <th>Top 3 %</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for team in mc_mgmt.teams %}
+                <tr class="{% if team.is_user %}user-team{% endif %}">
+                    <td class="team-name">{{ team.name }}</td>
+                    <td>{{ team.median_pts | round(1) }}</td>
+                    <td>{{ team.p10 | round(1) }}</td>
+                    <td>{{ team.p90 | round(1) }}</td>
+                    <td>{{ team.first_pct | round(1) }}%</td>
+                    <td>{{ team.top3_pct | round(1) }}%</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% if mc_mgmt.category_risk %}
+        <div class="card" style="margin-top: 1.5rem;">
+            <h3>Category Risk</h3>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Cat</th>
+                        <th>Median Pts</th>
+                        <th>P10</th>
+                        <th>P90</th>
+                        <th>Top 3 %</th>
+                        <th>Bot 3 %</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for row in mc_mgmt.category_risk %}
+                    <tr class="{{ row.risk_class }}">
+                        <td>{{ row.cat }}</td>
+                        <td>{{ row.median_pts | round(1) }}</td>
+                        <td>{{ row.p10 | round(1) }}</td>
+                        <td>{{ row.p90 | round(1) }}</td>
+                        <td>{{ row.top3_pct | round(1) }}%</td>
+                        <td>{{ row.bot3_pct | round(1) }}%</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+        {% else %}
+        <p class="placeholder-text">No MC + Roster Mgmt data available.</p>
+        {% endif %}
+    </div>
 </div>
 
 <script>
@@ -71,6 +237,30 @@ function toggleCurrentSub(el) {
     el.classList.add('active');
     const mode = el.dataset.sub;
     document.querySelectorAll('.stat-cell').forEach(cell => {
+        if (mode === 'points') {
+            cell.textContent = cell.dataset.points;
+        } else {
+            const raw = parseFloat(cell.dataset.stat);
+            cell.textContent = raw < 1 && raw > 0 ? raw.toFixed(3) :
+                               raw < 10 && raw % 1 !== 0 ? raw.toFixed(2) : Math.round(raw);
+        }
+    });
+}
+
+function toggleProjectedSub(el) {
+    document.querySelectorAll('#projected-sub-toggle .pill').forEach(p => p.classList.remove('active'));
+    el.classList.add('active');
+    const sub = el.dataset.psub;
+    document.getElementById('proj-static').style.display = sub === 'static' ? '' : 'none';
+    document.getElementById('proj-mc').style.display = sub === 'mc' ? '' : 'none';
+    document.getElementById('proj-mc-mgmt').style.display = sub === 'mc-mgmt' ? '' : 'none';
+}
+
+function toggleProjStaticSub(el) {
+    document.querySelectorAll('#proj-static-sub-toggle .pill').forEach(p => p.classList.remove('active'));
+    el.classList.add('active');
+    const mode = el.dataset.pssub;
+    document.querySelectorAll('.proj-stat-cell').forEach(cell => {
         if (mode === 'points') {
             cell.textContent = cell.dataset.points;
         } else {

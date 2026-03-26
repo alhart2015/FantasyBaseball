@@ -112,6 +112,54 @@ def format_standings_for_display(
     return {"teams": teams}
 
 
+def format_monte_carlo_for_display(
+    mc_data: dict, user_team_name: str
+) -> dict:
+    """Format Monte Carlo results for template display.
+
+    Returns dict with:
+      - teams: list sorted by median_pts desc, each with median_pts, p10, p90,
+               first_pct, top3_pct, is_user
+      - category_risk: list of dicts with cat, median_pts, p10, p90,
+                       top3_pct, bot3_pct, risk_class
+    """
+    if not mc_data or "team_results" not in mc_data:
+        return {"teams": [], "category_risk": []}
+
+    teams = []
+    for name, res in mc_data["team_results"].items():
+        teams.append({
+            "name": name,
+            "median_pts": res["median_pts"],
+            "p10": res["p10"],
+            "p90": res["p90"],
+            "first_pct": res["first_pct"],
+            "top3_pct": res["top3_pct"],
+            "is_user": name == user_team_name,
+        })
+    teams.sort(key=lambda t: t["median_pts"], reverse=True)
+
+    risk = []
+    for cat, data in mc_data.get("category_risk", {}).items():
+        if data["top3_pct"] >= 50:
+            risk_class = "cat-top"
+        elif data["bot3_pct"] >= 30:
+            risk_class = "cat-bottom"
+        else:
+            risk_class = ""
+        risk.append({
+            "cat": cat,
+            "median_pts": data["median_pts"],
+            "p10": data["p10"],
+            "p90": data["p90"],
+            "top3_pct": data["top3_pct"],
+            "bot3_pct": data["bot3_pct"],
+            "risk_class": risk_class,
+        })
+
+    return {"teams": teams, "category_risk": risk}
+
+
 def _compute_category_ranks(standings: list[dict]) -> dict[str, dict[str, int]]:
     """Compute per-category rank for each team (1 = best).
 

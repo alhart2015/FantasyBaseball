@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from fantasy_baseball.web.season_data import read_cache, write_cache, read_meta, format_standings_for_display
+from fantasy_baseball.web.season_data import read_cache, write_cache, read_meta, format_standings_for_display, format_monte_carlo_for_display
 
 
 def test_write_and_read_cache(tmp_path):
@@ -65,3 +65,42 @@ def test_format_standings_color_codes_user_team():
     # With 3 teams, ranks 1 = top, 3 = bottom
     # Hart has highest SB (50) → should be cat-top
     assert hart["color_classes"]["SB"] == "cat-top"
+
+
+def _sample_monte_carlo():
+    return {
+        "team_results": {
+            "Hart of the Order": {
+                "median_pts": 68.5, "p10": 58, "p90": 76,
+                "first_pct": 18.3, "top3_pct": 52.1,
+            },
+            "SkeleThor": {
+                "median_pts": 65.0, "p10": 55, "p90": 73,
+                "first_pct": 14.7, "top3_pct": 41.8,
+            },
+        },
+        "category_risk": {
+            "R": {"median_pts": 7, "p10": 5, "p90": 9, "top3_pct": 62, "bot3_pct": 8},
+            "SV": {"median_pts": 4, "p10": 2, "p90": 7, "top3_pct": 22, "bot3_pct": 38},
+        },
+    }
+
+
+def test_format_monte_carlo_sorted_by_median():
+    data = format_monte_carlo_for_display(
+        _sample_monte_carlo(), "Hart of the Order"
+    )
+    assert data["teams"][0]["name"] == "Hart of the Order"
+    assert data["teams"][0]["median_pts"] == 68.5
+    assert data["teams"][0]["is_user"] is True
+
+
+def test_format_monte_carlo_category_risk_colors():
+    data = format_monte_carlo_for_display(
+        _sample_monte_carlo(), "Hart of the Order"
+    )
+    risk = data["category_risk"]
+    sv = next(r for r in risk if r["cat"] == "SV")
+    assert sv["risk_class"] == "cat-bottom"
+    r_cat = next(r for r in risk if r["cat"] == "R")
+    assert r_cat["risk_class"] == "cat-top"
