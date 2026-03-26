@@ -10,6 +10,12 @@
 
 - [ ] **Browser-based OAuth flow for season dashboard** — Add Yahoo OAuth redirect flow directly in the dashboard so it can be used from a phone without CLI re-auth. When the token is expired, redirect to Yahoo login, handle the callback, store the refreshed token. Required before remote hosting.
 
+- [ ] **Parallelize MLB game log fetching** — `fetch_and_load_game_logs` fetches ~800 players sequentially (~10 min). Use `ThreadPoolExecutor(max_workers=25)` to fetch in parallel — no rate limits on the MLB Stats API. Should cut wall-clock time to under a minute.
+
+- [ ] **Batch MLB roster fetch** — `fetch_and_load_game_logs` calls `statsapi.get("team_roster")` 30 times (once per team) to build the player list. The MLB API supports `/sports/1/players` to get all players in one call. Also, `statsapi.get("teams")` is called in 3 separate modules (`db.py`, `mlb_schedule.py`, `matchups.py`) — extract a shared utility.
+
+- [ ] **Incremental game log fetch with startDate** — Currently fetches the full season game log for each player and filters client-side. The MLB Stats API accepts `startDate`/`endDate` params on the gameLog endpoint. Passing `startDate=last_date+1` would skip downloading games we already have.
+
 - [ ] **Interactive SQL query window in season dashboard** — Add a page (or sidebar panel) where you can type SQL queries against `fantasy.db` and see results in a table. Useful for ad-hoc questions about projections, game logs, draft history, and standings without leaving the browser. Read-only queries only (SELECT). Syntax highlighting and query history would be nice-to-haves.
 
 - [ ] **Multi-player trades and draft pick deals** — Extend trade recommender to support 2-for-2 swaps and draft pick trades. For draft picks: identify teams out of contention who might trade current-year players for next-year picks (contender/rebuilder dynamic). If Hart is competing, propose "my 2027 3rd-round pick for your closer" style deals to out-of-contention teams. Requires modeling draft pick value and team contention status from standings.
