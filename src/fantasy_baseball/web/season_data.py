@@ -689,9 +689,68 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         write_cache("projections", {"projected_standings": projected_standings}, cache_dir)
 
-        # --- Step 13: Monte Carlo placeholder ---
-        _set_refresh_progress("Writing Monte Carlo placeholder...")
-        write_cache("monte_carlo", {}, cache_dir)
+        # --- Step 13: Monte Carlo simulation ---
+        _set_refresh_progress("Running Monte Carlo (1000 iterations)...")
+        import numpy as np
+        from fantasy_baseball.simulation import simulate_season
+
+        h_slots = sum(v for k, v in config.roster_slots.items()
+                      if k not in ("P", "BN", "IL", "DL"))
+        p_slots = config.roster_slots.get("P", 9)
+        n_iter = 1000
+        rng = np.random.default_rng(42)
+
+        # Convert roster dicts to pd.Series for simulate_season
+        mc_rosters = {}
+        for tname, roster in all_team_rosters.items():
+            mc_rosters[tname] = [pd.Series(p) for p in roster]
+
+        all_totals = {tname: [] for tname in mc_rosters}
+        user_cat_pts = {cat: [] for cat in ALL_CATEGORIES}
+
+        for i in range(n_iter):
+            if i % 200 == 0:
+                _set_refresh_progress(f"Monte Carlo iteration {i}/{n_iter}...")
+            sim_stats, _ = simulate_season(mc_rosters, rng, h_slots, p_slots)
+            roto = score_roto(sim_stats)
+            for tname in mc_rosters:
+                all_totals[tname].append(roto[tname]["total"])
+            for cat in ALL_CATEGORIES:
+                user_cat_pts[cat].append(roto[config.team_name][f"{cat}_pts"])
+
+        # Compute results
+        team_results = {}
+        team_names = list(mc_rosters.keys())
+        totals_matrix = np.column_stack([np.array(all_totals[n]) for n in team_names])
+
+        for j, tname in enumerate(team_names):
+            arr = totals_matrix[:, j]
+            first_count = sum(1 for i in range(n_iter) if np.argmax(totals_matrix[i]) == j)
+            top3_count = sum(1 for i in range(n_iter)
+                            if np.argsort(-totals_matrix[i]).tolist().index(j) < 3)
+            team_results[tname] = {
+                "median_pts": round(float(np.median(arr)), 1),
+                "p10": round(float(np.percentile(arr, 10))),
+                "p90": round(float(np.percentile(arr, 90))),
+                "first_pct": round(first_count / n_iter * 100, 1),
+                "top3_pct": round(top3_count / n_iter * 100, 1),
+            }
+
+        num_teams = len(team_names)
+        category_risk = {}
+        for cat in ALL_CATEGORIES:
+            arr = np.array(user_cat_pts[cat])
+            category_risk[cat] = {
+                "median_pts": round(float(np.median(arr)), 1),
+                "p10": round(float(np.percentile(arr, 10)), 1),
+                "p90": round(float(np.percentile(arr, 90)), 1),
+                "top3_pct": round(float(np.mean(arr >= num_teams - 2)) * 100, 1),
+                "bot3_pct": round(float(np.mean(arr <= 3)) * 100, 1),
+            }
+
+        write_cache("monte_carlo", {
+            "base": {"team_results": team_results, "category_risk": category_risk},
+        }, cache_dir)
 
         # --- Step 13: Write meta ---
         _set_refresh_progress("Finalizing...")
