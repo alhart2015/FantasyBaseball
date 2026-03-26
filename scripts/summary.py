@@ -8,12 +8,10 @@ Usage:
 """
 import argparse
 import sys
-from datetime import date, datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -21,7 +19,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from fantasy_baseball.auth.yahoo_auth import get_yahoo_session, get_league
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.projections import blend_projections
-from fantasy_baseball.lineup.yahoo_roster import fetch_roster, fetch_standings
+from fantasy_baseball.lineup.yahoo_roster import fetch_injuries, fetch_roster, fetch_standings
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
@@ -38,20 +36,8 @@ from fantasy_baseball.simulation import simulate_season, apply_management_adjust
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
-INJURIES_PATH = PROJECT_ROOT / "data" / "injuries.yaml"
-
 
 # ── Helpers ───────────────────────────────────────────────────────────
-
-def load_injuries():
-    """Load injury tracker from data/injuries.yaml. Returns list of dicts."""
-    if not INJURIES_PATH.exists():
-        return []
-    with open(INJURIES_PATH) as f:
-        data = yaml.safe_load(f)
-    entries = data.get("injuries") if data else []
-    return entries or []
-
 
 def match_roster_to_projections(roster, hitters_proj, pitchers_proj):
     """Match roster players to projections by name. Returns enriched dicts.
@@ -364,65 +350,36 @@ def main():
     print("INJURY MANAGEMENT")
     print("=" * 90)
 
-    injuries = load_injuries()
-    today = date.today()
+    injuries = fetch_injuries(league, user_team_key)
 
     if injuries:
-        print(f"\n  {'Player':<25} {'IL Date':<12} {'Return':<12} {'Days Left':>9}  {'Replacement'}")
-        print("  " + "-" * 80)
-        returning_soon = []
-        needs_replacement = []
+        print(f"\n  {'Player':<25} {'Status':<20} {'Injury':<15} {'Slot'}")
+        print("  " + "-" * 70)
+        on_il = []
+        not_on_il = []
         for inj in injuries:
             name = inj["name"]
-            il_date = inj.get("il_date", "?")
-            ret = inj.get("expected_return")
-            replacement = inj.get("replacement")
-            notes = inj.get("notes", "")
-
-            if ret:
-                if isinstance(ret, str):
-                    ret_date = datetime.strptime(ret, "%Y-%m-%d").date()
-                else:
-                    ret_date = ret
-                days_left = (ret_date - today).days
-                days_str = f"{days_left:>6}d"
-                if days_left <= 7:
-                    returning_soon.append((name, days_left, replacement))
+            status = inj.get("status_full") or inj.get("status", "?")
+            note = inj.get("injury_note", "")
+            slot = inj.get("selected_position", "?")
+            print(f"  {name:<25} {status:<20} {note:<15} {slot}")
+            if slot in ("IL", "IL+"):
+                on_il.append(inj)
             else:
-                days_str = "      ?"
+                not_on_il.append(inj)
 
-            repl_str = replacement or "(none)"
-            print(f"  {name:<25} {str(il_date):<12} {str(ret or '?'):<12} {days_str}  {repl_str}")
-            if notes:
-                print(f"  {'':>25} {notes}")
-            if not replacement:
-                needs_replacement.append(inj)
-
-        if returning_soon:
-            print("\n  RETURNING SOON:")
-            for name, days, repl in returning_soon:
-                if days <= 0:
-                    print(f"    {name} — eligible to return NOW")
-                    if repl:
-                        print(f"      -> Consider dropping {repl} to activate")
-                else:
-                    print(f"    {name} — returning in ~{days} days")
-                    if repl:
-                        print(f"      -> Plan to drop {repl} to activate")
-
-        if needs_replacement:
-            print("\n  NEEDS REPLACEMENT:")
-            for inj in needs_replacement:
+        if not_on_il:
+            print("\n  NOT IN IL SLOT:")
+            for inj in not_on_il:
                 name = inj["name"]
-                # Find the injured player's type to scope waiver search
-                player_entry = next((p for p in user_roster if p["name"] == name), None)
-                if player_entry:
-                    ptype = player_entry["player_type"]
-                    print(f"    {name} ({ptype}) — no replacement picked up yet")
+                status = inj.get("status", "")
+                if "IL" in status:
+                    print(f"    {name} — IL-eligible but in {inj['selected_position']} slot. "
+                          f"Move to IL to free a roster spot.")
                 else:
-                    print(f"    {name} — no replacement picked up yet")
+                    print(f"    {name} — {status} (day-to-day)")
     else:
-        print("\nNo injuries tracked. Edit data/injuries.yaml to add IL players.")
+        print("\n  No injured players on roster.")
 
     # ── 6. WAIVER WIRE ────────────────────────────────────────────────
     print()

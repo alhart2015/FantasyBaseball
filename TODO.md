@@ -4,7 +4,7 @@
 
 - [x] **Cap management-adjusted roto points at 10 per category** — `apply_management_adjustment` adds a raw roto point adjustment to the total, which can push a team above the 10-point-per-category max (100 total in a 10-team league). Need to either clamp the adjusted total or distribute the management adjustment across categories with per-category caps.
 
-- [ ] **Auto-detect injuries from Yahoo API** — Currently injuries are manually tracked in `data/injuries.yaml`. The Yahoo Fantasy API should expose IL status on roster players. Investigate the roster response for IL/DTD flags and auto-populate the injury management section of `summary.py` instead of requiring manual entry.
+- [x] **Auto-detect injuries from Yahoo API** — Currently injuries are manually tracked in `data/injuries.yaml`. The Yahoo Fantasy API should expose IL status on roster players. Investigate the roster response for IL/DTD flags and auto-populate the injury management section of `summary.py` instead of requiring manual entry.
 
 - [x] **Fix trade recommender KeyError on pre-season standings** — `compute_roto_points_by_cat` in `trades/evaluate.py` crashes with `KeyError: 'AVG'` when standings stats are missing categories (e.g., pre-season or when the Yahoo stat ID mapping omits a category). Need to handle missing stat keys gracefully — skip the trade analysis or use projected stats as fallback.
 

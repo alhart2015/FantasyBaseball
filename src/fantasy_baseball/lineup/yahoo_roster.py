@@ -31,13 +31,89 @@ def parse_roster(raw_roster: list[dict]) -> list[dict]:
     """Normalize raw Yahoo roster data."""
     players = []
     for p in raw_roster:
-        players.append({
+        entry = {
             "name": p["name"],
             "positions": p.get("eligible_positions", []),
             "selected_position": p.get("selected_position", ""),
             "player_id": p.get("player_id", ""),
-        })
+        }
+        # Include injury status when present (IL15, IL60, DTD, etc.)
+        if p.get("status"):
+            entry["status"] = p["status"]
+        players.append(entry)
     return players
+
+
+def fetch_injuries(league, team_key: str) -> list[dict]:
+    """Fetch injured players on a team's roster with injury details.
+
+    Uses the raw Yahoo API to get injury_note and status_full fields
+    that the library's roster() method omits.
+
+    Returns list of dicts: {name, status, status_full, injury_note,
+    selected_position, player_id, positions}.
+    """
+    raw = league.yhandler.get(f"team/{team_key}/roster/players")
+    return parse_injuries_raw(raw)
+
+
+def parse_injuries_raw(raw: dict) -> list[dict]:
+    """Parse raw Yahoo roster JSON to extract injured players.
+
+    Looks for players with a non-empty ``status`` field (IL15, IL60, DTD, etc.)
+    and returns their injury details.
+    """
+    team_data = raw.get("fantasy_content", {}).get("team", [])
+    if len(team_data) < 2:
+        return []
+
+    roster_data = team_data[1].get("roster", {})
+    players_block = roster_data.get("0", {}).get("players", {})
+
+    injured = []
+    for key in sorted(players_block.keys()):
+        if key == "count":
+            continue
+        player = players_block[key].get("player", [])
+        if not player:
+            continue
+
+        meta = player[0] if isinstance(player[0], list) else []
+        info = {
+            "name": "", "status": "", "status_full": "",
+            "injury_note": "", "player_id": "", "positions": [],
+            "selected_position": "",
+        }
+
+        for item in meta:
+            if not isinstance(item, dict):
+                continue
+            if "name" in item:
+                info["name"] = item["name"].get("full", "")
+            if "status" in item:
+                info["status"] = item["status"]
+                info["status_full"] = item.get("status_full", "")
+            if "injury_note" in item:
+                info["injury_note"] = item["injury_note"]
+            if "player_id" in item:
+                info["player_id"] = item["player_id"]
+            if "eligible_positions" in item:
+                info["positions"] = [
+                    ep["position"] for ep in item["eligible_positions"]
+                    if isinstance(ep, dict) and "position" in ep
+                ]
+
+        # Selected position from second element
+        if len(player) > 1 and isinstance(player[1], dict):
+            sp = player[1].get("selected_position", [])
+            for entry in sp:
+                if isinstance(entry, dict) and "position" in entry:
+                    info["selected_position"] = entry["position"]
+
+        if info["status"]:
+            injured.append(info)
+
+    return injured
 
 
 def fetch_standings(league) -> list[dict]:
