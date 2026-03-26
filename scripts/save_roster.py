@@ -56,11 +56,11 @@ def main():
     # Determine week number
     week_num = args.week
     if week_num is None:
-        try:
-            week_num = league.current_week()
-        except Exception:
-            print("Could not auto-detect week. Use --week N to specify.")
-            sys.exit(1)
+        # Roto leagues don't have scoring weeks, so derive from calendar.
+        # MLB opening day is typically late March; use weeks since then.
+        today = date.today()
+        opening_day = date(today.year, 3, 20)  # approximate
+        week_num = max(0, (today - opening_day).days // 7)
 
     print(f"Fetching roster for {team_name} (week {week_num})...")
     raw_roster = fetch_roster(league, user_team_key)
@@ -96,6 +96,13 @@ def main():
     ROSTERS_DIR.mkdir(parents=True, exist_ok=True)
     filename = f"{monday.isoformat()}_hart_roster.json"
     out_path = ROSTERS_DIR / filename
+
+    if out_path.exists():
+        answer = input(f"  {out_path} already exists. Overwrite? [y/N] ")
+        if answer.lower() != "y":
+            print("  Skipped.")
+            return
+
     with open(out_path, "w") as f:
         json.dump(snapshot, f, indent=2)
 
