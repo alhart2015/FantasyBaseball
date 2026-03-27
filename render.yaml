@@ -3,7 +3,7 @@ services:
     name: fantasy-baseball
     runtime: python
     buildCommand: pip install -e . && python scripts/build_db.py
-    startCommand: gunicorn fantasy_baseball.web.season_app:create_app() --bind 0.0.0.0:$PORT
+    startCommand: gunicorn wsgi:app --bind 0.0.0.0:$PORT
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.11"
