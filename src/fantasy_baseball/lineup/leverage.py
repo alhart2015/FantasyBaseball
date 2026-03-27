@@ -12,12 +12,49 @@ def _gap_for_category(
     return abs(user_val - neighbor_val)
 
 
+FULL_CONFIDENCE_GAMES: int = 81
+
+
+def _estimate_season_progress(standings: list[dict]) -> float:
+    """Estimate season progress from MLB game logs in SQLite.
+
+    Counts distinct game dates in the game_logs table for the current season.
+    Returns 0.0 to 1.0, reaching 1.0 at FULL_CONFIDENCE_GAMES (81 games).
+    Falls back to R-based estimation if game_logs is unavailable.
+    """
+    try:
+        from datetime import date
+        from fantasy_baseball.data.db import get_connection
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                "SELECT COUNT(DISTINCT date) FROM game_logs WHERE season = ?",
+                (date.today().year,)
+            ).fetchone()
+            games = row[0] if row else 0
+        finally:
+            conn.close()
+        if games > 0:
+            return min(1.0, games / FULL_CONFIDENCE_GAMES)
+    except Exception:
+        pass
+
+    # Fallback: estimate from league-average R (~4.6 R/game/team)
+    if not standings:
+        return 0.0
+    total_r = sum(t.get("stats", {}).get("R", 0) for t in standings)
+    avg_r = total_r / len(standings)
+    approx_games = avg_r / 4.6
+    return min(1.0, approx_games / FULL_CONFIDENCE_GAMES)
+
+
 def calculate_leverage(
     standings: list[dict],
     user_team_name: str,
     *,
     attack_weight: float = 0.6,
     defense_weight: float = 0.4,
+    season_progress: float | None = None,
 ) -> dict[str, float]:
     """Calculate leverage weights for each stat category based on standings gaps.
 
@@ -32,8 +69,17 @@ def calculate_leverage(
     one neighbor exists (first or last place), that neighbor receives full
     weight.
 
+    ``season_progress`` (0.0 to 1.0) controls how much weight goes to
+    standings-based leverage vs. equal weights. Early season (low progress),
+    leverage is mostly uniform because standings are noise. Late season
+    (high progress), leverage is fully standings-driven. If None, estimated
+    from the league-average runs scored in standings (proxy for games played).
+    Ramps to 1.0 at ~81 games (half season).
+
     Weights are normalized to sum to 1.0.
     """
+    if season_progress is None:
+        season_progress = _estimate_season_progress(standings)
     sorted_teams = sorted(standings, key=lambda t: t.get("rank", 99))
     user_team = None
     user_idx = None
@@ -101,5 +147,15 @@ def calculate_leverage(
 
     total = sum(raw_leverage.values())
     if total > 0:
-        return {cat: val / total for cat, val in raw_leverage.items()}
-    return {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
+        standings_leverage = {cat: val / total for cat, val in raw_leverage.items()}
+    else:
+        standings_leverage = {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
+
+    # Blend standings-based leverage with uniform weights based on season progress.
+    # Early season: mostly uniform (standings are noise).
+    # Late season: fully standings-driven.
+    uniform = 1.0 / len(ALL_CATEGORIES)
+    return {
+        cat: season_progress * standings_leverage[cat] + (1.0 - season_progress) * uniform
+        for cat in ALL_CATEGORIES
+    }

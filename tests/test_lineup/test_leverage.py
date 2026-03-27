@@ -43,7 +43,7 @@ class TestCalculateLeverage:
         """SB has a tiny defensive gap (5) vs R's attack gap (10).
         The small SB defense gap dominates, so SB leverage > R."""
         standings = _make_standings()
-        leverage = calculate_leverage(standings, "User Team")
+        leverage = calculate_leverage(standings, "User Team", season_progress=1.0)
         # SB defense gap (50-45=5) is smaller than R attack gap (460-450=10),
         # so SB correctly gets higher leverage from defensive pressure.
         assert leverage["SB"] > leverage["R"]
@@ -61,7 +61,7 @@ class TestCalculateLeverage:
         # but override to make gap tiny: 50 vs 50.01)
         standings[3]["stats"]["SB"] = 50.01  # Team 4 (above user)
         standings[4]["stats"]["SB"] = 50.00  # User
-        leverage = calculate_leverage(standings, "User Team")
+        leverage = calculate_leverage(standings, "User Team", season_progress=1.0)
         # SB should be high but not more than ~30% of total weight
         # (with 10 categories, equal would be 10% each)
         assert leverage["SB"] < 0.35, (
@@ -70,6 +70,26 @@ class TestCalculateLeverage:
         # Other categories should still have meaningful weight
         non_sb = sum(v for k, v in leverage.items() if k != "SB")
         assert non_sb > 0.65
+
+    def test_early_season_leverage_near_uniform(self):
+        """At season_progress=0, all categories should be equal (uniform weights)."""
+        standings = _make_standings()
+        leverage = calculate_leverage(standings, "User Team", season_progress=0.0)
+        uniform = 1.0 / 10
+        for cat, weight in leverage.items():
+            assert weight == pytest.approx(uniform, abs=0.001), (
+                f"{cat} = {weight:.4f}, expected ~{uniform:.4f} at season start"
+            )
+
+    def test_midseason_leverage_blended(self):
+        """At season_progress=0.5, leverage is halfway between uniform and standings-based."""
+        standings = _make_standings()
+        full = calculate_leverage(standings, "User Team", season_progress=1.0)
+        half = calculate_leverage(standings, "User Team", season_progress=0.5)
+        uniform = 1.0 / 10
+        for cat in full:
+            expected = 0.5 * full[cat] + 0.5 * uniform
+            assert half[cat] == pytest.approx(expected, abs=0.001)
 
     def test_last_place_team_has_leverage(self):
         standings = _make_standings()

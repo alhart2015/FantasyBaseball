@@ -198,7 +198,7 @@ class TestLeverageIntegration:
         midseason_standings[3]["stats"]["SB"] = 52.01  # Base Bandits (above)
         midseason_standings[4]["stats"]["SB"] = 52.00  # Hart of the Order
 
-        leverage = calculate_leverage(midseason_standings, "Hart of the Order")
+        leverage = calculate_leverage(midseason_standings, "Hart of the Order", season_progress=1.0)
 
         assert leverage["SB"] < 0.35, (
             f"SB leverage {leverage['SB']:.4f} exceeds 35% cap despite "
@@ -217,7 +217,7 @@ class TestLeverageIntegration:
           SB gap: 71 - 52 = 19  (largest counting gap)
         So HR should get higher leverage than SB.
         """
-        leverage = calculate_leverage(midseason_standings, "Hart of the Order")
+        leverage = calculate_leverage(midseason_standings, "Hart of the Order", season_progress=1.0)
 
         # HR attack gap (3) is much smaller than SB attack gap (19),
         # so HR leverage should be higher
