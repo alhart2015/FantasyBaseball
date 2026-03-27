@@ -55,6 +55,18 @@
     font-size: 12px; margin-top: 8px;
 }
 .show-more-btn:hover { border-color: var(--accent); }
+.waiver-detail { display: none; margin-top: 10px; }
+.waiver-detail.open { display: block; }
+.lineup-compare { display: flex; gap: 16px; flex-wrap: wrap; }
+.lineup-col { flex: 1; min-width: 200px; }
+.lineup-col h4 { font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.lineup-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+.lineup-table th { text-align: left; font-size: 11px; color: var(--text-secondary); padding: 4px 6px; border-bottom: 1px solid var(--panel-border); }
+.lineup-table td { padding: 4px 6px; }
+.lineup-dropped { background: rgba(239, 68, 68, 0.1); color: #fca5a5; text-decoration: line-through; }
+.lineup-added { background: rgba(34, 197, 94, 0.1); color: #86efac; font-weight: 600; }
+.lineup-moved { color: var(--accent); }
+.lineup-bench td { opacity: 0.5; }
 </style>
 
 <div class="page-header">
@@ -75,12 +87,12 @@
 <p class="placeholder-text">No waiver recommendations. Click "Refresh Data" to generate suggestions.</p>
 {% else %}
 {% for w in waivers %}
-<div class="card">
+<div class="card" onclick="toggleWaiverDetail(this)">
     <div class="card-header">
         <div>
             <span style="font-weight: 600; font-size: 14px;">{{ w.add }}</span>
             {% if w.add_positions %}
-            <span style="color: var(--text-secondary); font-size: 12px; margin-left: 6px;">{{ w.add_positions }}</span>
+            <span style="color: var(--text-secondary); font-size: 12px; margin-left: 4px;">({{ w.add_positions | join(", ") }})</span>
             {% endif %}
         </div>
         <div style="color: var(--success); font-weight: bold; font-size: 14px;">
@@ -91,26 +103,64 @@
     <div style="font-size: 12px; color: var(--text-secondary); margin-top: 6px;">
         <span style="margin-right: 4px;">ADD</span>
         <strong style="color: var(--success);">{{ w.add }}</strong>
+        {% if w.add_positions %}<span style="font-size: 11px;"> ({{ w.add_positions | join(", ") }})</span>{% endif %}
         <span style="margin: 0 6px; color: var(--text-secondary);">/</span>
         <span style="margin-right: 4px;">DROP</span>
         <strong style="color: var(--danger);">{{ w.drop }}</strong>
+        {% if w.drop_positions %}<span style="font-size: 11px;"> ({{ w.drop_positions | join(", ") }})</span>{% endif %}
     </div>
-
-    {% if w.projected_stats %}
-    <div style="font-size: 11px; color: var(--text-secondary); margin-top: 6px;">
-        {{ w.projected_stats }}
-    </div>
-    {% endif %}
 
     {% if w.categories %}
     <div class="cat-impact">
         {% for cat, delta in w.categories.items() %}
         {% if delta > 0 %}
-        <span class="cat-gain">{{ cat }} +{{ delta }}</span>
+        <span class="cat-gain">{{ cat }} +{{ "%.2f"|format(delta) }}</span>
         {% elif delta < 0 %}
-        <span class="cat-loss">{{ cat }} {{ delta }}</span>
+        <span class="cat-loss">{{ cat }} {{ "%.2f"|format(delta) }}</span>
         {% endif %}
         {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if w.lineup_before and w.lineup_after %}
+    <div class="waiver-detail">
+        <div class="lineup-compare">
+            <div class="lineup-col">
+                <h4>Before</h4>
+                <table class="lineup-table">
+                    <thead><tr><th>Slot</th><th>Player</th><th>wSGP</th></tr></thead>
+                    <tbody>
+                    {% for e in w.lineup_before %}
+                    <tr class="{% if e.get('is_dropped') %}lineup-dropped{% endif %}{% if e.slot == 'BN' %} lineup-bench{% endif %}">
+                        <td>{{ e.slot }}</td>
+                        <td>{{ e.name }}</td>
+                        <td>{{ "%.2f"|format(e.wsgp) }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="lineup-col">
+                <h4>After</h4>
+                <table class="lineup-table">
+                    <thead><tr><th>Slot</th><th>Player</th><th>wSGP</th></tr></thead>
+                    <tbody>
+                    {% for e in w.lineup_after %}
+                    <tr class="{% if e.get('is_added') %}lineup-added{% elif e.get('moved_from') %}lineup-moved{% endif %}{% if e.slot == 'BN' %} lineup-bench{% endif %}">
+                        <td>{{ e.slot }}</td>
+                        <td>
+                            {{ e.name }}
+                            {% if e.get('moved_from') %}
+                            <span style="font-size: 10px; color: var(--text-secondary);">&larr; was {{ e.moved_from }}</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ "%.2f"|format(e.wsgp) }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
     {% endif %}
 </div>
@@ -324,6 +374,11 @@ function toggleSection(id) {
 
 function toggleBuyLowDetail(card) {
     var detail = card.querySelector('.buy-low-detail');
+    if (detail) detail.classList.toggle('open');
+}
+
+function toggleWaiverDetail(card) {
+    var detail = card.querySelector('.waiver-detail');
     if (detail) detail.classList.toggle('open');
 }
 
