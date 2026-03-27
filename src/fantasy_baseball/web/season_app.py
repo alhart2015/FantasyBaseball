@@ -1,5 +1,6 @@
 """Season dashboard Flask application."""
 
+import os
 from pathlib import Path
 
 from flask import Flask
@@ -13,5 +14,6 @@ def create_app() -> Flask:
         template_folder=str(Path(__file__).parent / "templates"),
         static_folder=str(Path(__file__).parent / "static"),
     )
+    app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-change-me")
     register_routes(app)
     return app

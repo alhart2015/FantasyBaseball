@@ -1,14 +1,28 @@
 """Route handlers for the season dashboard."""
 
+import functools
+import os
 import threading
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, render_template, request, url_for
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
 from fantasy_baseball.utils.constants import ALL_CATEGORIES
 from fantasy_baseball.web.season_data import read_cache, read_meta
 
 _config = None
+
+
+def _require_auth(f):
+    """Decorator that requires admin password for protected routes."""
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        if session.get("authenticated"):
+            return f(*args, **kwargs)
+        if request.is_json or request.content_type == "application/json":
+            return jsonify({"error": "Authentication required"}), 401
+        return redirect(url_for("login", next=request.path))
+    return wrapper
 
 
 def _load_config():
@@ -131,7 +145,26 @@ def register_routes(app: Flask) -> None:
         result = compute_trade_standings_impact(trade=trades_raw[idx], standings=standings_raw, user_team_name=config.team_name)
         return jsonify(result)
 
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        error = None
+        if request.method == "POST":
+            password = request.form.get("password", "")
+            admin_pw = os.environ.get("ADMIN_PASSWORD", "")
+            if admin_pw and password == admin_pw:
+                session["authenticated"] = True
+                next_url = request.args.get("next", url_for("standings"))
+                return redirect(next_url)
+            error = "Wrong password"
+        return render_template("season/login.html", error=error, active_page=None, meta=read_meta())
+
+    @app.route("/logout")
+    def logout():
+        session.pop("authenticated", None)
+        return redirect(url_for("standings"))
+
     @app.route("/sql", methods=["GET", "POST"])
+    @_require_auth
     def sql_runner():
         meta = read_meta()
         query = ""
@@ -178,6 +211,7 @@ def register_routes(app: Flask) -> None:
         )
 
     @app.route("/api/refresh", methods=["POST"])
+    @_require_auth
     def api_refresh():
         from fantasy_baseball.web.season_data import get_refresh_status, run_full_refresh
         status = get_refresh_status()
@@ -193,6 +227,7 @@ def register_routes(app: Flask) -> None:
         return jsonify(get_refresh_status())
 
     @app.route("/api/fetch-mlb", methods=["POST"])
+    @_require_auth
     def api_fetch_mlb():
         from fantasy_baseball.web.season_data import get_refresh_status, run_mlb_fetch
 

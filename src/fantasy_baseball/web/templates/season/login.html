@@ -1,0 +1,55 @@
+{% extends "season/base.html" %}
+{% block title %}Login — Season Dashboard{% endblock %}
+{% block content %}
+
+<style>
+.login-form {
+    max-width: 320px;
+    margin: 80px auto;
+}
+.login-form h2 {
+    margin-bottom: 16px;
+    font-size: 18px;
+}
+.login-input {
+    width: 100%;
+    padding: 10px;
+    background: var(--card-bg);
+    color: var(--text);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    font-size: 14px;
+    margin-bottom: 12px;
+}
+.login-input:focus { outline: 1px solid var(--accent); }
+.login-btn {
+    width: 100%;
+    padding: 10px;
+    background: var(--accent);
+    color: #000;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 14px;
+}
+.login-btn:hover { opacity: 0.85; }
+.login-error {
+    color: var(--danger);
+    font-size: 13px;
+    margin-bottom: 12px;
+}
+</style>
+
+<div class="login-form">
+    <h2>Admin Login</h2>
+    {% if error %}
+    <div class="login-error">{{ error }}</div>
+    {% endif %}
+    <form method="post">
+        <input type="password" name="password" class="login-input" placeholder="Password" autofocus>
+        <button type="submit" class="login-btn">Login</button>
+    </form>
+</div>
+
+{% endblock %}
