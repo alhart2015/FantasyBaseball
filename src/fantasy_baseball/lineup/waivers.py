@@ -154,8 +154,13 @@ def _compute_team_wsgp(
     leverage: dict[str, float],
     roster_slots: dict[str, int],
     denoms: dict[str, float] | None = None,
+    player_wsgp: dict[str, float] | None = None,
 ) -> dict:
     """Run both optimizers and return total wSGP of assigned starters.
+
+    Args:
+        player_wsgp: Pre-computed name->wSGP lookup. If provided, skips recomputing
+            wSGP for players already in the dict (only computes missing entries).
 
     Returns dict with:
         total_wsgp: float — sum of wSGP for players actually assigned to a slot
@@ -169,10 +174,13 @@ def _compute_team_wsgp(
     hitters = [p for p in roster if p.get("player_type") != "pitcher"]
     pitchers = [p for p in roster if p.get("player_type") == "pitcher"]
 
-    # Pre-compute wSGP for all players
-    player_wsgp = {}
+    if player_wsgp is None:
+        player_wsgp = {}
+    else:
+        player_wsgp = dict(player_wsgp)  # don't mutate caller's dict
     for p in roster:
-        player_wsgp[p["name"]] = calculate_weighted_sgp(p, leverage, denoms=denoms)
+        if p["name"] not in player_wsgp:
+            player_wsgp[p["name"]] = calculate_weighted_sgp(p, leverage, denoms=denoms)
 
     # Optimize hitters (Hungarian algorithm)
     hitter_lineup = optimize_hitter_lineup(hitters, leverage, roster_slots)
@@ -286,15 +294,8 @@ def scan_waivers(
     if not roster and total_open <= 0:
         return []
 
-    # Pre-compute wSGP for all roster players
-    roster_scores = []
-    for p in roster:
-        wsgp = calculate_weighted_sgp(p, leverage)
-        roster_scores.append({"player": p, "wsgp": wsgp})
-
     recommendations = []
     recommended_adds: set[str] = set()
-    recommended_swaps: set[tuple[str, str]] = set()
 
     # Pure adds for empty slots — type-aware ranking
     if total_open > 0:
@@ -363,6 +364,7 @@ def scan_waivers(
     wsgp_floor = active_wsgps[2] if len(active_wsgps) > 2 else 0.0
 
     p_slots = roster_slots.get("P", 9)
+    before_slots = {e["name"]: e["slot"] for e in baseline_summary}
 
     for fa in free_agents:
         if fa["name"] in recommended_adds:
@@ -372,12 +374,17 @@ def scan_waivers(
 
         fa_type = fa.get("player_type", "hitter")
         best_for_fa = None
+        best_drop_player = None
+        best_new_result = None
+
+        # Build reusable wSGP dict: baseline + FA entry
+        swap_wsgp = dict(baseline["player_wsgp"])
+        swap_wsgp[fa["name"]] = fa_wsgp[fa["name"]]
 
         for drop_player in roster:
             drop_name = drop_player["name"]
             drop_type = drop_player.get("player_type", "hitter")
 
-            # Build hypothetical roster
             new_roster = [p for p in roster if p["name"] != drop_name] + [fa]
             new_hitters = [p for p in new_roster if p.get("player_type") != "pitcher"]
             new_pitchers = [p for p in new_roster if p.get("player_type") == "pitcher"]
@@ -391,50 +398,53 @@ def scan_waivers(
                 if len(new_pitchers) < p_slots:
                     continue
 
-            # Re-optimize
-            new_result = _compute_team_wsgp(new_roster, leverage, roster_slots, denoms=denoms)
+            # Re-optimize (pass pre-computed wSGP, only FA entry is new)
+            drop_wsgp = {k: v for k, v in swap_wsgp.items() if k != drop_name}
+            new_result = _compute_team_wsgp(
+                new_roster, leverage, roster_slots, denoms=denoms, player_wsgp=drop_wsgp,
+            )
             gain = round(new_result["total_wsgp"] - baseline_wsgp, 2)
 
             if gain > 0 and (best_for_fa is None or gain > best_for_fa["sgp_gain"]):
-                after_summary = _build_lineup_summary(
-                    new_result["hitter_lineup"], new_result["pitcher_starters"],
-                    new_result["player_wsgp"], [p["name"] for p in new_roster],
-                )
-
-                # Annotate before lineup (mark dropped player)
-                before_annotated = []
-                for entry in baseline_summary:
-                    e = dict(entry)
-                    if e["name"] == drop_name:
-                        e["is_dropped"] = True
-                    before_annotated.append(e)
-
-                # Annotate after lineup (mark added player and moved players)
-                before_slots = {e["name"]: e["slot"] for e in baseline_summary}
-                after_annotated = []
-                for entry in after_summary:
-                    e = dict(entry)
-                    if e["name"] == fa["name"]:
-                        e["is_added"] = True
-                    elif e["name"] in before_slots and before_slots[e["name"]] != e["slot"]:
-                        e["moved_from"] = before_slots[e["name"]]
-                    after_annotated.append(e)
-
-                # Get per-category deltas (from evaluate_pickup, discard its sgp_gain)
-                cat_result = evaluate_pickup(fa, drop_player, leverage)
-
+                best_drop_player = drop_player
+                best_new_result = new_result
                 best_for_fa = {
                     "add": fa["name"],
                     "add_positions": list(fa.get("positions", [])),
                     "drop": drop_name,
                     "drop_positions": list(drop_player.get("positions", [])),
                     "sgp_gain": gain,
-                    "categories": cat_result["categories"],
-                    "lineup_before": before_annotated,
-                    "lineup_after": after_annotated,
                 }
 
-        if best_for_fa:
+        # Build lineup annotations only for the winning swap (not every candidate)
+        if best_for_fa and best_new_result and best_drop_player is not None:
+            after_summary = _build_lineup_summary(
+                best_new_result["hitter_lineup"], best_new_result["pitcher_starters"],
+                best_new_result["player_wsgp"],
+                [p["name"] for p in roster if p["name"] != best_for_fa["drop"]] + [fa["name"]],
+            )
+
+            before_annotated = []
+            for entry in baseline_summary:
+                e = dict(entry)
+                if e["name"] == best_for_fa["drop"]:
+                    e["is_dropped"] = True
+                before_annotated.append(e)
+
+            after_annotated = []
+            for entry in after_summary:
+                e = dict(entry)
+                if e["name"] == fa["name"]:
+                    e["is_added"] = True
+                elif e["name"] in before_slots and before_slots[e["name"]] != e["slot"]:
+                    e["moved_from"] = before_slots[e["name"]]
+                after_annotated.append(e)
+
+            cat_result = evaluate_pickup(fa, best_drop_player, leverage)
+            best_for_fa["categories"] = cat_result["categories"]
+            best_for_fa["lineup_before"] = before_annotated
+            best_for_fa["lineup_after"] = after_annotated
+
             recommendations.append(best_for_fa)
 
     recommendations.sort(key=lambda x: x["sgp_gain"], reverse=True)
