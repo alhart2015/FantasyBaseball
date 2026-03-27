@@ -69,6 +69,7 @@ CACHE_FILES = {
     "trades": "trades.json",
     "monte_carlo": "monte_carlo.json",
     "meta": "meta.json",
+    "buy_low": "buy_low.json",
 }
 
 

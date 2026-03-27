@@ -121,12 +121,15 @@ def register_routes(app: Flask) -> None:
         meta = read_meta()
         waivers_raw = read_cache("waivers")
         trades_raw = read_cache("trades")
+        buy_low_raw = read_cache("buy_low") or {}
         return render_template(
             "season/waivers_trades.html",
             meta=meta,
             active_page="waivers_trades",
             waivers=waivers_raw or [],
             trades=trades_raw or [],
+            buy_low_targets=buy_low_raw.get("trade_targets", []),
+            buy_low_free_agents=buy_low_raw.get("free_agents", []),
             categories=ALL_CATEGORIES,
         )
 
