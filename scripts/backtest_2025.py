@@ -10,6 +10,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.draft.board import build_draft_board
+from fantasy_baseball.data.db import get_connection, create_tables, load_blended_projections, load_positions
+from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.utils.name_utils import normalize_name
 
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
@@ -333,13 +335,20 @@ def sim_season(rosters, rng, h_slots=13, p_slots=9):
 
 
 def main():
+    conn = get_connection(":memory:")
+    create_tables(conn)
+    load_blended_projections(
+        conn, PROJECTIONS_DIR, ["steamer", "zips"],
+        {"steamer": 0.50, "zips": 0.50},
+    )
+    if POSITIONS_PATH.exists():
+        load_positions(conn, load_positions_cache(POSITIONS_PATH))
+
     board = build_draft_board(
-        projections_dir=PROJECTIONS_DIR / "2025",
-        positions_path=POSITIONS_PATH,
-        systems=["steamer", "zips"],
-        weights={"steamer": 0.50, "zips": 0.50},
+        conn=conn,
         num_teams=10,
     )
+    conn.close()
 
     # Build ASCII lookup for fuzzy matching
     board_lookup = {}

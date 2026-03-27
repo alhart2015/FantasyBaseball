@@ -11,8 +11,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.auth.yahoo_auth import get_yahoo_session, get_league
 from fantasy_baseball.config import load_config
-from fantasy_baseball.data.projections import blend_projections
-from fantasy_baseball.data.yahoo_players import load_positions_cache
+from fantasy_baseball.data.db import get_connection, get_blended_projections, get_positions
 from fantasy_baseball.lineup.yahoo_roster import fetch_roster, fetch_standings, fetch_scoring_period
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
@@ -34,7 +33,6 @@ from datetime import datetime as dt
 import pandas as pd
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
-POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 SCHEDULE_PATH = PROJECT_ROOT / "data" / "weekly_schedule.json"
 BATTING_STATS_PATH = PROJECT_ROOT / "data" / "team_batting_stats.json"
@@ -253,17 +251,16 @@ def main():
 
     # Load projections and match to roster
     print("Loading projections...")
-    weights = config.projection_weights if config.projection_weights else None
-    hitters_proj, pitchers_proj = blend_projections(
-        PROJECTIONS_DIR / str(config.season_year), config.projection_systems, weights,
-    )
+    conn = get_connection()
+    hitters_proj, pitchers_proj = get_blended_projections(conn)
+    positions_cache = get_positions(conn)
+    conn.close()
     # Precompute normalized names for projection matching (avoids repeated
     # apply(normalize_name) on every lookup — ~800x fewer calls).
     if not hitters_proj.empty:
         hitters_proj["_name_norm"] = hitters_proj["name"].apply(normalize_name)
     if not pitchers_proj.empty:
         pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
-    positions_cache = load_positions_cache(POSITIONS_PATH)
     norm_positions = {normalize_name(k): v for k, v in positions_cache.items()}
 
     # Match roster players to projections

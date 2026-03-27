@@ -21,6 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.config import load_config
+from fantasy_baseball.data.db import get_connection
 from fantasy_baseball.draft.board import build_draft_board, apply_keepers
 from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.draft.balance import CategoryBalance, calculate_draft_leverage
@@ -35,8 +36,6 @@ from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
-POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
-PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 
 
 class TeamTrackerProxy:
@@ -228,15 +227,14 @@ def build_board_and_context(config_path=None):
     if config_path is None:
         config_path = CONFIG_PATH
     config = load_config(config_path)
+    conn = get_connection()
     full_board = build_draft_board(
-        projections_dir=PROJECTIONS_DIR / str(config.season_year),
-        positions_path=POSITIONS_PATH,
-        systems=config.projection_systems,
-        weights=config.projection_weights or None,
+        conn=conn,
         sgp_overrides=config.sgp_overrides or None,
         roster_slots=config.roster_slots or None,
         num_teams=config.num_teams,
     )
+    conn.close()
     board = apply_keepers(full_board, config.keepers)
     scarcity_order = compute_slot_scarcity_order(full_board, config.roster_slots)
     pick_order = _load_pick_order(config)

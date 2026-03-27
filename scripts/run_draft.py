@@ -34,12 +34,11 @@ from fantasy_baseball.draft.strategy import (
     _force_closer, OPP_CLOSER_ADP_BUFFER,
 )
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
+from fantasy_baseball.data.db import get_connection
 from fantasy_baseball.web.app import create_app
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 DRAFT_ORDER_PATH = PROJECT_ROOT / "config" / "draft_order.json"
-POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
-PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 STATE_PATH = PROJECT_ROOT / "data" / "draft_state.json"
 BOARD_PATH = PROJECT_ROOT / "data" / "draft_state_board.json"
 DRAFTS_DIR = PROJECT_ROOT / "data" / "drafts"
@@ -248,15 +247,14 @@ def main():
 
     # Build draft board (keep full board for keeper lookups)
     print("Building draft board...")
+    conn = get_connection()
     full_board = build_draft_board(
-        projections_dir=PROJECTIONS_DIR / str(config.season_year),
-        positions_path=POSITIONS_PATH,
-        systems=config.projection_systems,
-        weights=config.projection_weights or None,
+        conn=conn,
         sgp_overrides=config.sgp_overrides or None,
         roster_slots=config.roster_slots or None,
         num_teams=num_teams,
     )
+    conn.close()
     board = apply_keepers(full_board, keepers)
     print(f"Draft pool: {len(board)} players (after removing {len(keepers)} keepers)")
     print()

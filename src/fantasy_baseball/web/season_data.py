@@ -324,7 +324,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
         from fantasy_baseball.config import load_config
         from fantasy_baseball.data.mlb_schedule import get_week_schedule
-        from fantasy_baseball.data.projections import blend_projections
+        from fantasy_baseball.data.db import get_connection as get_db_connection, get_blended_projections
         from fantasy_baseball.lineup.leverage import calculate_leverage
         from fantasy_baseball.lineup.matchups import calculate_matchup_factors, get_team_batting_stats
         from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
@@ -366,14 +366,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         _set_refresh_progress("Fetching roster...")
         roster_raw = fetch_roster(league, user_team_key)
 
-        # --- Step 4: Blend projections ---
-        _set_refresh_progress("Blending projections...")
-        projections_dir = project_root / "data" / "projections" / str(config.season_year)
-        hitters_proj, pitchers_proj = blend_projections(
-            projections_dir,
-            config.projection_systems,
-            config.projection_weights,
-        )
+        # --- Step 4: Read projections from SQLite ---
+        _set_refresh_progress("Loading projections...")
+        db_conn = get_db_connection()
+        hitters_proj, pitchers_proj = get_blended_projections(db_conn)
+        db_conn.close()
         hitters_proj["_name_norm"] = hitters_proj["name"].apply(normalize_name)
         pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
 

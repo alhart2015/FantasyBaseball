@@ -17,6 +17,11 @@ from fantasy_baseball.draft.strategy import (
     build_player_lookup,
 )
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD, DEFAULT_ROSTER_SLOTS
+from fantasy_baseball.data.db import (
+    get_connection, create_tables,
+    load_blended_projections, load_positions,
+)
+from fantasy_baseball.data.yahoo_players import load_positions_cache
 
 
 # ---------------------------------------------------------------------------
@@ -41,16 +46,24 @@ def config() -> LeagueConfig:
 
 @pytest.fixture(scope="module")
 def full_board(config: LeagueConfig) -> pd.DataFrame:
-    """Build a draft board from real projections (expensive, cached per module)."""
-    return build_draft_board(
-        projections_dir=_PROJECTIONS_DIR / str(config.season_year),
-        positions_path=_POSITIONS_PATH,
-        systems=config.projection_systems,
-        weights=config.projection_weights,
+    """Build a draft board from real projections via SQLite."""
+    conn = get_connection(":memory:")
+    create_tables(conn)
+
+    load_blended_projections(conn, _PROJECTIONS_DIR, config.projection_systems, config.projection_weights)
+
+    if _POSITIONS_PATH.exists():
+        positions = load_positions_cache(_POSITIONS_PATH)
+        load_positions(conn, positions)
+
+    board = build_draft_board(
+        conn=conn,
         sgp_overrides=config.sgp_overrides,
         roster_slots=config.roster_slots,
         num_teams=config.num_teams,
     )
+    conn.close()
+    return board
 
 
 @pytest.fixture(scope="module")

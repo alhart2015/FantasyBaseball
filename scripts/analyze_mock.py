@@ -9,6 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.config import load_config
+from fantasy_baseball.data.db import get_connection
 from fantasy_baseball.draft.board import build_draft_board
 from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.simulation import simulate_season
@@ -29,15 +30,14 @@ def main():
     with open(state_path) as f:
         state = json.load(f)
 
+    conn = get_connection()
     board = build_draft_board(
-        projections_dir=PROJECT_ROOT / "data" / "projections" / str(config.season_year),
-        positions_path=PROJECT_ROOT / "data" / "player_positions.json",
-        systems=config.projection_systems,
-        weights=config.projection_weights or None,
+        conn=conn,
         sgp_overrides=config.sgp_overrides or None,
         roster_slots=config.roster_slots or None,
         num_teams=10,
     )
+    conn.close()
 
     num_teams = 10
     num_keepers = state.get("num_keepers", 0)

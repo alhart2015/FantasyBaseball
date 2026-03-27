@@ -18,7 +18,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.auth.yahoo_auth import get_yahoo_session, get_league
 from fantasy_baseball.config import load_config
-from fantasy_baseball.data.projections import blend_projections
+from fantasy_baseball.data.db import get_connection, get_blended_projections
 from fantasy_baseball.lineup.yahoo_roster import fetch_injuries, fetch_roster, fetch_standings
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
@@ -36,7 +36,6 @@ from fantasy_baseball.scoring import project_team_stats, score_roto, ALL_CATS, I
 from fantasy_baseball.simulation import simulate_season, apply_management_adjustment, run_monte_carlo
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
-PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 
 # ── Helpers ───────────────────────────────────────────────────────────
 
@@ -84,10 +83,9 @@ def main():
 
     # ── Load projections ──────────────────────────────────────────────
     print("Loading projections...")
-    weights = config.projection_weights if config.projection_weights else None
-    hitters_proj, pitchers_proj = blend_projections(
-        PROJECTIONS_DIR / str(config.season_year), config.projection_systems, weights,
-    )
+    conn = get_connection()
+    hitters_proj, pitchers_proj = get_blended_projections(conn)
+    conn.close()
 
     # Precompute normalized names for fast projection matching
     if not hitters_proj.empty:
