@@ -59,6 +59,10 @@ CLOSER_SV_THRESHOLD: int = 20
 HITTING_COUNTING: list[str] = ["r", "hr", "rbi", "sb", "h", "ab"]
 PITCHING_COUNTING: list[str] = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
 
+# Full projection key lists (counting + rate + opportunity stats, used by pace/buy-low)
+HITTER_PROJ_KEYS: list[str] = ["pa", "r", "hr", "rbi", "sb", "h", "ab", "avg"]
+PITCHER_PROJ_KEYS: list[str] = ["ip", "w", "k", "sv", "er", "bb", "h_allowed", "era", "whip"]
+
 # Monte Carlo simulation parameters (single source of truth)
 INJURY_PROB: dict[str, float] = {"pitcher": 0.45, "hitter": 0.18}
 INJURY_SEVERITY: dict[str, tuple[float, float]] = {

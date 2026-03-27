@@ -4,7 +4,10 @@ import pandas as pd
 
 from fantasy_baseball.analysis.pace import compute_player_pace
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
-from fantasy_baseball.utils.constants import HITTING_CATEGORIES, PITCHING_CATEGORIES
+from fantasy_baseball.utils.constants import (
+    HITTING_CATEGORIES, HITTER_PROJ_KEYS,
+    PITCHING_CATEGORIES, PITCHER_PROJ_KEYS,
+)
 from fantasy_baseball.utils.name_utils import normalize_name
 
 
@@ -38,10 +41,10 @@ def find_buy_low_candidates(
 
         # Build projection dict from player entry
         if ptype == "hitter":
-            proj_keys = ["pa", "r", "hr", "rbi", "sb", "h", "ab", "avg"]
+            proj_keys = HITTER_PROJ_KEYS
             categories = HITTING_CATEGORIES
         else:
-            proj_keys = ["ip", "w", "k", "sv", "er", "bb", "h_allowed", "era", "whip"]
+            proj_keys = PITCHER_PROJ_KEYS
             categories = PITCHING_CATEGORIES
 
         projected = {k: player.get(k, 0) or 0 for k in proj_keys}
@@ -69,7 +72,7 @@ def find_buy_low_candidates(
         # Compute wSGP using projection stats and user's leverage
         try:
             wsgp = round(calculate_weighted_sgp(pd.Series(player), leverage), 2)
-        except Exception:
+        except (KeyError, ZeroDivisionError, ValueError):
             wsgp = 0.0
 
         candidates.append({

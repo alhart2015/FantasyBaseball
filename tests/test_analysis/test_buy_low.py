@@ -1,5 +1,8 @@
 from fantasy_baseball.analysis.buy_low import find_buy_low_candidates
 
+_FLAT_LEVERAGE = {"R": 1.0, "HR": 1.0, "RBI": 1.0, "SB": 1.0, "AVG": 1.0,
+                  "W": 1.0, "K": 1.0, "SV": 1.0, "ERA": 1.0, "WHIP": 1.0}
+
 
 def test_hitter_below_pace_qualifies():
     """A hitter > 1 SD below projection pace across categories is a buy-low candidate."""
@@ -15,8 +18,7 @@ def test_hitter_below_pace_qualifies():
             "pa": 60, "ab": 54, "h": 10, "r": 4, "hr": 0, "rbi": 3, "sb": 0,
         },
     }
-    leverage = {"R": 1.0, "HR": 1.0, "RBI": 1.0, "SB": 1.0, "AVG": 1.0,
-                "W": 1.0, "K": 1.0, "SV": 1.0, "ERA": 1.0, "WHIP": 1.0}
+    leverage = _FLAT_LEVERAGE
 
     result = find_buy_low_candidates(players, game_logs, leverage, owner="Opponent A")
     assert len(result) == 1
@@ -40,8 +42,7 @@ def test_hitter_on_pace_excluded():
             "pa": 60, "ab": 54, "h": 15, "r": 9, "hr": 3, "rbi": 9, "sb": 1,
         },
     }
-    leverage = {"R": 1.0, "HR": 1.0, "RBI": 1.0, "SB": 1.0, "AVG": 1.0,
-                "W": 1.0, "K": 1.0, "SV": 1.0, "ERA": 1.0, "WHIP": 1.0}
+    leverage = _FLAT_LEVERAGE
 
     result = find_buy_low_candidates(players, game_logs, leverage)
     assert len(result) == 0
@@ -57,8 +58,7 @@ def test_no_game_logs_excluded():
         "h": 150, "ab": 540, "avg": 0.278,
     }]
     game_logs = {}
-    leverage = {"R": 1.0, "HR": 1.0, "RBI": 1.0, "SB": 1.0, "AVG": 1.0,
-                "W": 1.0, "K": 1.0, "SV": 1.0, "ERA": 1.0, "WHIP": 1.0}
+    leverage = _FLAT_LEVERAGE
 
     result = find_buy_low_candidates(players, game_logs, leverage)
     assert len(result) == 0
@@ -78,8 +78,7 @@ def test_sorted_most_underperforming_first():
         "somewhat bad": {"pa": 60, "ab": 54, "h": 10, "r": 4, "hr": 1, "rbi": 4, "sb": 0},
         "very bad": {"pa": 60, "ab": 54, "h": 5, "r": 2, "hr": 0, "rbi": 1, "sb": 0},
     }
-    leverage = {"R": 1.0, "HR": 1.0, "RBI": 1.0, "SB": 1.0, "AVG": 1.0,
-                "W": 1.0, "K": 1.0, "SV": 1.0, "ERA": 1.0, "WHIP": 1.0}
+    leverage = _FLAT_LEVERAGE
 
     result = find_buy_low_candidates(players, game_logs, leverage)
     assert len(result) >= 2
@@ -100,8 +99,7 @@ def test_pitcher_below_pace_qualifies():
     game_logs = {
         "bad pitcher": {"ip": 18.0, "k": 10, "w": 0, "sv": 0, "er": 14, "bb": 12, "h_allowed": 22},
     }
-    leverage = {"R": 1.0, "HR": 1.0, "RBI": 1.0, "SB": 1.0, "AVG": 1.0,
-                "W": 1.0, "K": 1.0, "SV": 1.0, "ERA": 1.0, "WHIP": 1.0}
+    leverage = _FLAT_LEVERAGE
 
     result = find_buy_low_candidates(players, game_logs, leverage)
     assert len(result) == 1
@@ -121,8 +119,7 @@ def test_below_threshold_stats_excluded_from_average():
     game_logs = {
         "small sample hitter": {"pa": 15, "ab": 13, "h": 3, "r": 0, "hr": 0, "rbi": 0, "sb": 0},
     }
-    leverage = {"R": 1.0, "HR": 1.0, "RBI": 1.0, "SB": 1.0, "AVG": 1.0,
-                "W": 1.0, "K": 1.0, "SV": 1.0, "ERA": 1.0, "WHIP": 1.0}
+    leverage = _FLAT_LEVERAGE
 
     result = find_buy_low_candidates(players, game_logs, leverage)
     assert len(result) == 1

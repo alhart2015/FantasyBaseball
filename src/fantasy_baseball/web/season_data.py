@@ -8,7 +8,9 @@ from datetime import datetime
 from pathlib import Path
 
 from fantasy_baseball.scoring import score_roto
-from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS as INVERSE_CATS
+from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES, HITTER_PROJ_KEYS, INVERSE_STATS as INVERSE_CATS, PITCHER_PROJ_KEYS,
+)
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 
 _refresh_lock = threading.Lock()
@@ -509,10 +511,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                     actuals = hitter_logs.get(norm, {})
                 else:
                     actuals = pitcher_logs.get(norm, {})
-                projected = {k: entry.get(k, 0) for k in
-                             (["pa", "r", "hr", "rbi", "sb", "h", "ab", "avg"]
-                              if ptype == "hitter"
-                              else ["ip", "w", "k", "sv", "er", "bb", "h_allowed", "era", "whip"])}
+                proj_keys = HITTER_PROJ_KEYS if ptype == "hitter" else PITCHER_PROJ_KEYS
+                projected = {k: entry.get(k, 0) for k in proj_keys}
                 entry["stats"] = compute_player_pace(actuals, projected, ptype)
         finally:
             pace_conn.close()
@@ -669,7 +669,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         buy_low_trade_targets.sort(key=lambda c: c["avg_z"])
 
         buy_low_free_agents = find_buy_low_candidates(
-            [s.to_dict() if hasattr(s, 'to_dict') else dict(s) for s in fa_players],
+            [s.to_dict() for s in fa_players],
             all_game_logs, leverage, owner="Free Agent",
         )
 
