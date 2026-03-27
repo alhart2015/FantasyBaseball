@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from fantasy_baseball.web import season_data
 from fantasy_baseball.web.season_data import read_cache, write_cache, read_meta, format_standings_for_display, format_monte_carlo_for_display, format_lineup_for_display
 
@@ -151,29 +153,30 @@ def test_format_lineup_optimal_when_no_moves():
     assert data["is_optimal"] is True
 
 
-def test_get_redis_returns_none_when_unconfigured(monkeypatch):
+@pytest.fixture()
+def reset_redis_singleton():
+    """Reset Redis singleton state before and after each test."""
+    season_data._redis_client = None
+    season_data._redis_initialized = False
+    yield
+    season_data._redis_client = None
+    season_data._redis_initialized = False
+
+
+def test_get_redis_returns_none_when_unconfigured(monkeypatch, reset_redis_singleton):
     """With no env vars, _get_redis() returns None."""
     monkeypatch.delenv("UPSTASH_REDIS_REST_URL", raising=False)
     monkeypatch.delenv("UPSTASH_REDIS_REST_TOKEN", raising=False)
-    # Reset singleton state
-    season_data._redis_client = None
-    season_data._redis_initialized = False
     result = season_data._get_redis()
     assert result is None
-    # Cleanup
-    season_data._redis_initialized = False
 
 
-def test_get_redis_returns_client_when_configured(monkeypatch):
+def test_get_redis_returns_client_when_configured(monkeypatch, reset_redis_singleton):
     """With env vars set, _get_redis() returns a Redis client."""
     monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://fake.upstash.io")
     monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "fake-token")
-    season_data._redis_client = None
-    season_data._redis_initialized = False
     with patch("upstash_redis.Redis") as MockRedis:
         MockRedis.return_value = "mock-client"
         result = season_data._get_redis()
         assert result == "mock-client"
         MockRedis.assert_called_once_with(url="https://fake.upstash.io", token="fake-token")
-    season_data._redis_client = None
-    season_data._redis_initialized = False

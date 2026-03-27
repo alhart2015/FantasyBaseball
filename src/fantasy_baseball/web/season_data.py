@@ -27,12 +27,12 @@ def _get_redis():
     with _redis_lock:
         if _redis_initialized:
             return _redis_client
-        _redis_initialized = True
         url = os.environ.get("UPSTASH_REDIS_REST_URL")
         token = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
         if url and token:
             from upstash_redis import Redis
             _redis_client = Redis(url=url, token=token)
+        _redis_initialized = True
     return _redis_client
 
 
