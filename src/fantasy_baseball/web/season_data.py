@@ -461,7 +461,10 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
         from fantasy_baseball.config import load_config
         from fantasy_baseball.data.mlb_schedule import get_week_schedule
-        from fantasy_baseball.data.db import get_connection as get_db_connection, get_blended_projections
+        from fantasy_baseball.data.db import (
+            create_tables, fetch_and_load_game_logs,
+            get_connection as get_db_connection, get_blended_projections,
+        )
         from fantasy_baseball.lineup.leverage import calculate_leverage
         from fantasy_baseball.lineup.matchups import calculate_matchup_factors, get_team_batting_stats
         from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
@@ -536,7 +539,19 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                 entry["wsgp"] = 0.0
                 roster_with_proj.append(entry)
 
-        # --- Step 6b: Compute season-to-date pace vs projections ---
+        # --- Step 6b: Fetch MLB game logs ---
+        _set_refresh_progress("Fetching MLB game logs...")
+        gl_conn = get_db_connection()
+        create_tables(gl_conn)
+        try:
+            fetch_and_load_game_logs(
+                gl_conn, config.season_year,
+                progress_cb=_set_refresh_progress,
+            )
+        finally:
+            gl_conn.close()
+
+        # --- Step 6c: Compute season-to-date pace vs projections ---
         _set_refresh_progress("Computing player pace...")
         hitter_logs, pitcher_logs = _load_game_log_totals(config.season_year)
 
@@ -814,48 +829,3 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             _refresh_status["running"] = False
 
 
-def run_mlb_fetch() -> None:
-    """Fetch all MLB player game logs and store in SQLite.
-
-    Manages refresh status so the UI can poll progress. Mirrors the
-    pattern used by run_full_refresh().
-    """
-    with _refresh_lock:
-        _refresh_status["running"] = True
-        _refresh_status["progress"] = "Starting MLB data fetch..."
-        _refresh_status["error"] = None
-
-    try:
-        from fantasy_baseball.config import load_config
-        from fantasy_baseball.data.db import (
-            create_tables,
-            fetch_and_load_game_logs,
-            get_connection,
-        )
-
-        project_root = Path(__file__).resolve().parents[3]
-        config = load_config(project_root / "config" / "league.yaml")
-
-        conn = get_connection()
-        create_tables(conn)
-        try:
-            new_rows = fetch_and_load_game_logs(
-                conn, config.season_year,
-                progress_cb=_set_refresh_progress,
-            )
-        finally:
-            conn.close()
-
-        # Persist aggregated totals to Redis so they survive Render spin-downs
-        _set_refresh_progress("Persisting game log totals...")
-        _load_game_log_totals(config.season_year)
-
-        _set_refresh_progress(f"Done — {new_rows} new game log rows added")
-
-    except Exception as exc:
-        with _refresh_lock:
-            _refresh_status["error"] = str(exc)
-        raise
-    finally:
-        with _refresh_lock:
-            _refresh_status["running"] = False

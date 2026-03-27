@@ -229,14 +229,3 @@ def register_routes(app: Flask) -> None:
         from fantasy_baseball.web.season_data import get_refresh_status
         return jsonify(get_refresh_status())
 
-    @app.route("/api/fetch-mlb", methods=["POST"])
-    @_require_auth
-    def api_fetch_mlb():
-        from fantasy_baseball.web.season_data import get_refresh_status, run_mlb_fetch
-
-        status = get_refresh_status()
-        if status["running"]:
-            return jsonify({"status": "already_running"})
-        thread = threading.Thread(target=run_mlb_fetch, daemon=True)
-        thread.start()
-        return jsonify({"status": "started"})
