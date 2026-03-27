@@ -153,6 +153,26 @@ def test_format_lineup_optimal_when_no_moves():
     assert data["is_optimal"] is True
 
 
+def test_roster_cache_includes_stats(tmp_path, monkeypatch):
+    """After refresh, roster entries should include a 'stats' dict."""
+    roster = [
+        {"name": "Juan Soto", "positions": ["OF"], "selected_position": "OF",
+         "player_id": "1", "status": "", "wsgp": 3.0, "player_type": "hitter",
+         "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "pa": 600, "avg": 0.278,
+         "stats": {
+             "PA": {"actual": 102, "color_class": "stat-neutral"},
+             "R": {"actual": 19, "expected": 15.3, "z_score": 1.2, "color_class": "stat-hot-2", "projection": 90},
+             "HR": {"actual": 9, "expected": 5.1, "z_score": 1.6, "color_class": "stat-hot-2", "projection": 30},
+             "RBI": {"actual": 18, "expected": 15.3, "z_score": 0.3, "color_class": "stat-neutral", "projection": 90},
+             "SB": {"actual": 2, "expected": 1.7, "z_score": 0.2, "color_class": "stat-neutral", "projection": 10},
+             "AVG": {"actual": 0.298, "expected": 0.278, "z_score": 0.7, "color_class": "stat-hot-1", "projection": 0.278},
+         }},
+    ]
+    result = format_lineup_for_display(roster, {"moves": []})
+    assert "stats" in result["hitters"][0]
+    assert result["hitters"][0]["stats"]["HR"]["actual"] == 9
+
+
 @pytest.fixture()
 def reset_redis_singleton():
     """Reset Redis singleton state before and after each test."""
