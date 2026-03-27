@@ -18,6 +18,7 @@ dependencies = [
     "waitress>=3.0",
     "MLB-StatsAPI>=1.7",
     "gunicorn>=21.2",
+    "upstash-redis>=1.0",
 ]
 
 [project.optional-dependencies]
