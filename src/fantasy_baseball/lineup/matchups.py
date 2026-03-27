@@ -178,6 +178,11 @@ def _fetch_team_batting_stats_for_season(
             if not splits:
                 logger.warning("No hitting splits for team %s (id=%s)", abbrev, team_id)
                 continue
+        except Exception:
+            logger.warning("Failed to fetch stats for team %s (id=%s), skipping", abbrev, team_id)
+            continue
+
+        try:
             stat = splits[0]["stat"]
             raw_stats.append(
                 {
