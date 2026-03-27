@@ -2,6 +2,30 @@
 {% block title %}Waivers &amp; Trades — Season Dashboard{% endblock %}
 {% block content %}
 
+<style>
+.section-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    user-select: none;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 28px 0 10px;
+    padding: 0;
+}
+.section-toggle:first-of-type { margin-top: 20px; }
+.section-toggle .chevron {
+    font-size: 12px;
+    color: var(--text-secondary);
+    transition: transform 0.2s;
+}
+.section-toggle .chevron.collapsed { transform: rotate(-90deg); }
+.section-body { overflow: hidden; }
+.section-body.collapsed { display: none; }
+</style>
+
 <div class="page-header">
     <h2>Waivers &amp; Trades</h2>
     {% if meta and meta.get('week') %}
@@ -10,7 +34,11 @@
 </div>
 
 {# === Waiver Wire === #}
-<h3 style="font-size: 15px; font-weight: 600; color: var(--text); margin: 20px 0 10px;">Waiver Wire</h3>
+<div class="section-toggle" onclick="toggleSection('waivers')">
+    <span>Waiver Wire</span>
+    <span class="chevron" id="chevron-waivers">&#9660;</span>
+</div>
+<div class="section-body" id="section-waivers">
 
 {% if not waivers %}
 <p class="placeholder-text">No waiver recommendations. Click "Refresh Data" to generate suggestions.</p>
@@ -57,9 +85,14 @@
 </div>
 {% endfor %}
 {% endif %}
+</div>
 
 {# === Trade Recommendations === #}
-<h3 style="font-size: 15px; font-weight: 600; color: var(--text); margin: 28px 0 10px;">Trade Recommendations</h3>
+<div class="section-toggle" onclick="toggleSection('trades')">
+    <span>Trade Recommendations</span>
+    <span class="chevron" id="chevron-trades">&#9660;</span>
+</div>
+<div class="section-body" id="section-trades">
 
 {% if not trades %}
 <p class="placeholder-text">No trade recommendations available. Click "Refresh Data" to generate suggestions.</p>
@@ -137,8 +170,17 @@
 </div>
 {% endfor %}
 {% endif %}
+</div>
 
 <script>
+function toggleSection(id) {
+    var body = document.getElementById('section-' + id);
+    var chevron = document.getElementById('chevron-' + id);
+    if (!body) return;
+    body.classList.toggle('collapsed');
+    if (chevron) chevron.classList.toggle('collapsed');
+}
+
 function esc(s) {
     if (s == null) return '';
     return String(s)
