@@ -30,7 +30,7 @@
 
 - [x] **Lineup stats not appearing when deployed** — Fixed: game log totals now persist to Upstash Redis (same pattern as cache files). On Render cold start, falls back to Redis when SQLite game_logs is empty. Also fixed tooltip clipping by positioning below cells instead of above.
 
-- [ ] **Chrome tab icon** — Put up something for the chrome tab icon, right now it looks like it's the default.
+- [x] **Chrome tab icon** — Put up something for the chrome tab icon, right now it looks like it's the default.
 
 - [x] **Buy-low detector: underperformers vs projection** — Compare actual YTD stats (from game logs in SQLite) against ROS projections to identify players performing well below their expected level. Use the empirical variance model to flag players whose actual production is >1 SD below projection — these are statistically likely to regress upward. Surface them as buy-low trade targets (on other teams' rosters) or waiver pickups (if dropped). Key stats to compare: AVG, HR rate, K rate for hitters; ERA, WHIP, K/9 for pitchers. Weight recent performance (last 30 days) vs full-season to distinguish slow starts from genuine decline. Filter out players with injury explanations (IL stints account for low counting stats). Output: ranked list of buy-low candidates with projected ROS value, current owner, and the gap between actual and expected production.
 
