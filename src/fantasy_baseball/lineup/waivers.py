@@ -196,6 +196,52 @@ def _compute_team_wsgp(
     }
 
 
+def _build_lineup_summary(
+    hitter_lineup: dict[str, str],
+    pitcher_starters: list[dict],
+    player_wsgp: dict[str, float],
+    all_player_names: list[str],
+) -> list[dict]:
+    """Build a lineup summary list for display.
+
+    Returns list of {"name", "slot", "wsgp"} dicts.
+    Hitter slots have _N suffixes stripped. Unassigned players get slot="BN".
+    """
+    summary = []
+    assigned_names = set()
+
+    # Hitters from optimizer
+    for slot_key, name in hitter_lineup.items():
+        display_slot = slot_key.split("_")[0]  # "OF_2" -> "OF"
+        summary.append({
+            "name": name,
+            "slot": display_slot,
+            "wsgp": round(player_wsgp.get(name, 0.0), 2),
+        })
+        assigned_names.add(name)
+
+    # Pitcher starters
+    for ps in pitcher_starters:
+        name = ps["name"]
+        summary.append({
+            "name": name,
+            "slot": "P",
+            "wsgp": round(player_wsgp.get(name, 0.0), 2),
+        })
+        assigned_names.add(name)
+
+    # Bench: everyone not assigned
+    for name in all_player_names:
+        if name not in assigned_names:
+            summary.append({
+                "name": name,
+                "slot": "BN",
+                "wsgp": round(player_wsgp.get(name, 0.0), 2),
+            })
+
+    return summary
+
+
 def scan_waivers(
     roster: list[pd.Series],
     free_agents: list[pd.Series],

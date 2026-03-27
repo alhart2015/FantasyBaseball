@@ -1,6 +1,6 @@
 import pytest
 import pandas as pd
-from fantasy_baseball.lineup.waivers import evaluate_pickup, scan_waivers, _compute_team_wsgp
+from fantasy_baseball.lineup.waivers import evaluate_pickup, scan_waivers, _compute_team_wsgp, _build_lineup_summary
 
 
 def _make_player(name, player_type, **stats):
@@ -174,3 +174,38 @@ class TestComputeTeamWsgp:
         slots = {"C": 1, "P": 0, "BN": 1, "IL": 0}
         result = _compute_team_wsgp(roster, EQUAL_LEVERAGE, slots)
         assert len(result["hitter_lineup"]) == 1
+
+
+class TestBuildLineupSummary:
+    def test_basic_lineup(self):
+        """Builds lineup list from optimizer output."""
+        hitter_lineup = {"C": "Player A", "1B": "Player B", "OF": "Player C"}
+        pitcher_starters = [{"name": "Pitcher X", "wsgp": 2.0}]
+        player_wsgp = {"Player A": 1.5, "Player B": 2.0, "Player C": 1.0, "Pitcher X": 2.0}
+        all_players = ["Player A", "Player B", "Player C", "Player D", "Pitcher X", "Pitcher Y"]
+
+        result = _build_lineup_summary(hitter_lineup, pitcher_starters, player_wsgp, all_players)
+        assert len(result) > 0
+        player_a = next(e for e in result if e["name"] == "Player A")
+        assert player_a["slot"] == "C"
+        assert player_a["wsgp"] == 1.5
+
+    def test_strips_slot_suffixes(self):
+        """OF_2, UTIL_3 etc. are stripped to base slot name for display."""
+        hitter_lineup = {"OF": "Player A", "OF_2": "Player B"}
+        pitcher_starters = []
+        player_wsgp = {"Player A": 1.0, "Player B": 0.8}
+
+        result = _build_lineup_summary(hitter_lineup, pitcher_starters, player_wsgp, ["Player A", "Player B"])
+        slots = [e["slot"] for e in result if e["name"] in ("Player A", "Player B")]
+        assert all(s == "OF" for s in slots)
+
+    def test_bench_players_flagged(self):
+        """Players not in any optimizer output are marked as bench."""
+        hitter_lineup = {"C": "Starter"}
+        pitcher_starters = []
+        player_wsgp = {"Starter": 2.0, "Benched": 0.5}
+
+        result = _build_lineup_summary(hitter_lineup, pitcher_starters, player_wsgp, ["Starter", "Benched"])
+        benched = next(e for e in result if e["name"] == "Benched")
+        assert benched["slot"] == "BN"
