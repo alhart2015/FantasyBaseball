@@ -67,9 +67,9 @@
 {# === Waiver Wire === #}
 <div class="section-toggle" onclick="toggleSection('waivers')">
     <span>Waiver Wire</span>
-    <span class="chevron" id="chevron-waivers">&#9660;</span>
+    <span class="chevron collapsed" id="chevron-waivers">&#9660;</span>
 </div>
-<div class="section-body" id="section-waivers">
+<div class="section-body collapsed" id="section-waivers">
 
 {% if not waivers %}
 <p class="placeholder-text">No waiver recommendations. Click "Refresh Data" to generate suggestions.</p>
@@ -121,9 +121,9 @@
 {# === Trade Recommendations === #}
 <div class="section-toggle" onclick="toggleSection('trades')">
     <span>Trade Recommendations</span>
-    <span class="chevron" id="chevron-trades">&#9660;</span>
+    <span class="chevron collapsed" id="chevron-trades">&#9660;</span>
 </div>
-<div class="section-body" id="section-trades">
+<div class="section-body collapsed" id="section-trades">
 
 {% if not trades %}
 <p class="placeholder-text">No trade recommendations available. Click "Refresh Data" to generate suggestions.</p>
@@ -206,9 +206,9 @@
 {# === Buy-Low Trade Targets === #}
 <div class="section-toggle" onclick="toggleSection('buy-low-targets')">
     <span>Buy-Low Trade Targets</span>
-    <span class="chevron" id="chevron-buy-low-targets">&#9660;</span>
+    <span class="chevron collapsed" id="chevron-buy-low-targets">&#9660;</span>
 </div>
-<div class="section-body" id="section-buy-low-targets">
+<div class="section-body collapsed" id="section-buy-low-targets">
 {% if not buy_low_targets %}
 <p class="placeholder-text">No buy-low candidates yet — game log data needed.</p>
 {% else %}
@@ -261,9 +261,9 @@
 {# === Buy-Low Free Agents === #}
 <div class="section-toggle" onclick="toggleSection('buy-low-fa')">
     <span>Buy-Low Free Agents</span>
-    <span class="chevron" id="chevron-buy-low-fa">&#9660;</span>
+    <span class="chevron collapsed" id="chevron-buy-low-fa">&#9660;</span>
 </div>
-<div class="section-body" id="section-buy-low-fa">
+<div class="section-body collapsed" id="section-buy-low-fa">
 {% if not buy_low_free_agents %}
 <p class="placeholder-text">No buy-low free agents found — all tracking near projections.</p>
 {% else %}
