@@ -2,6 +2,7 @@
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -158,12 +159,10 @@ def _fetch_team_batting_stats_for_season(
         Result of normalize_team_batting_stats: {abbrev: {ops, k_pct}}.
     """
 
-    raw_stats = []
-    for team in teams:
+    def _fetch_one_team(team):
         team_id = team["id"]
         mlb_abbrev = team["abbreviation"]
         abbrev = normalize_team_abbrev(mlb_abbrev)
-
         try:
             stats_response = statsapi.get(
                 "team_stats",
@@ -177,23 +176,20 @@ def _fetch_team_batting_stats_for_season(
             splits = stats_response.get("stats", [{}])[0].get("splits", [])
             if not splits:
                 logger.warning("No hitting splits for team %s (id=%s)", abbrev, team_id)
-                continue
+                return None
+            stat = splits[0]["stat"]
+            return {
+                "abbreviation": abbrev,
+                "ops": stat["ops"],
+                "strikeouts": stat["strikeOuts"],
+                "plate_appearances": stat["plateAppearances"],
+            }
         except Exception:
             logger.warning("Failed to fetch stats for team %s (id=%s), skipping", abbrev, team_id)
-            continue
+            return None
 
-        try:
-            stat = splits[0]["stat"]
-            raw_stats.append(
-                {
-                    "abbreviation": abbrev,
-                    "ops": stat["ops"],
-                    "strikeouts": stat["strikeOuts"],
-                    "plate_appearances": stat["plateAppearances"],
-                }
-            )
-        except Exception:
-            logger.exception("Failed to fetch stats for team %s (id=%s)", abbrev, team_id)
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        raw_stats = [r for r in pool.map(_fetch_one_team, teams) if r is not None]
 
     return normalize_team_batting_stats(raw_stats)
 

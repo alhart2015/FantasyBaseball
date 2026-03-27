@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -651,20 +652,31 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             leverage_by_team[tname] = calculate_leverage(standings, tname)
 
         all_raw_rosters = {config.team_name: roster_raw}
-        for key, team_info in teams.items():
+
+        def _fetch_opp(key_and_info):
+            key, team_info = key_and_info
             tname = team_info.get("name", "")
-            if tname == config.team_name or key == user_team_key:
-                continue
             try:
                 opp_raw = fetch_roster(league, key)
-                all_raw_rosters[tname] = opp_raw
                 opp_proj_list = match_roster_to_projections(
                     opp_raw, hitters_proj, pitchers_proj
                 )
+                return (tname, opp_raw, opp_proj_list)
+            except Exception:
+                return None
+
+        opp_items = [
+            (key, info) for key, info in teams.items()
+            if info.get("name", "") != config.team_name and key != user_team_key
+        ]
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for result in pool.map(_fetch_opp, opp_items):
+                if result is None:
+                    continue
+                tname, opp_raw, opp_proj_list = result
+                all_raw_rosters[tname] = opp_raw
                 if opp_proj_list:
                     opp_rosters[tname] = opp_proj_list
-            except Exception:
-                pass  # Skip teams we can't fetch
 
         hart_roster_for_trades = [
             p for p in roster_with_proj

@@ -3,6 +3,7 @@
 import json
 import re
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pandas as pd
@@ -709,7 +710,17 @@ def fetch_and_load_game_logs(
     if progress_cb:
         progress_cb(f"Found {len(players)} MLB players, fetching game logs...")
 
+    def _fetch_one(player):
+        mid = player["mlbam_id"]
+        group = "hitting" if player["player_type"] == "hitter" else "pitching"
+        try:
+            games = fetch_player_game_log(mid, season, group)
+        except Exception:
+            return (player, [])
+        return (player, games or [])
+
     new_rows = 0
+    done_count = 0
     _HITTER_INSERT = (
         "INSERT OR IGNORE INTO game_logs "
         "(season, mlbam_id, name, team, player_type, date, pa, ab, h, r, hr, rbi, sb) "
@@ -721,47 +732,41 @@ def fetch_and_load_game_logs(
         "VALUES (?, ?, ?, ?, 'pitcher', ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
 
-    for i, player in enumerate(players):
-        mid = player["mlbam_id"]
-        group = "hitting" if player["player_type"] == "hitter" else "pitching"
+    # Fetch in parallel, insert as results arrive to limit memory usage
+    with ThreadPoolExecutor(max_workers=15) as pool:
+        futures = [pool.submit(_fetch_one, p) for p in players]
+        for future in as_completed(futures):
+            player, games = future.result()
+            done_count += 1
 
-        try:
-            games = fetch_player_game_log(mid, season, group)
-        except Exception:
-            continue
+            if games:
+                mid = player["mlbam_id"]
+                last_date = existing.get(mid)
+                if last_date:
+                    games = [g for g in games if g["date"] > last_date]
 
-        if not games:
-            continue
+                if games:
+                    common = (season, mid, player["name"], player["team"])
+                    if player["player_type"] == "hitter":
+                        rows = [
+                            (*common, g["date"], g.get("pa"), g.get("ab"), g.get("h"),
+                             g.get("r"), g.get("hr"), g.get("rbi"), g.get("sb"))
+                            for g in games
+                        ]
+                        conn.executemany(_HITTER_INSERT, rows)
+                    else:
+                        rows = [
+                            (*common, g["date"], g.get("ip"), g.get("k"), g.get("er"),
+                             g.get("bb"), g.get("h_allowed"), g.get("w"), g.get("sv"), g.get("gs"))
+                            for g in games
+                        ]
+                        conn.executemany(_PITCHER_INSERT, rows)
+                    new_rows += len(rows)
 
-        # Only insert games newer than what we already have
-        last_date = existing.get(mid)
-        if last_date:
-            games = [g for g in games if g["date"] > last_date]
-        if not games:
-            continue
-
-        common = (season, mid, player["name"], player["team"])
-        if player["player_type"] == "hitter":
-            rows = [
-                (*common, g["date"], g.get("pa"), g.get("ab"), g.get("h"),
-                 g.get("r"), g.get("hr"), g.get("rbi"), g.get("sb"))
-                for g in games
-            ]
-            conn.executemany(_HITTER_INSERT, rows)
-        else:
-            rows = [
-                (*common, g["date"], g.get("ip"), g.get("k"), g.get("er"),
-                 g.get("bb"), g.get("h_allowed"), g.get("w"), g.get("sv"), g.get("gs"))
-                for g in games
-            ]
-            conn.executemany(_PITCHER_INSERT, rows)
-        new_rows += len(rows)
-
-        # Flush to disk and report progress every 50 players
-        if (i + 1) % 50 == 0:
-            conn.commit()
-            if progress_cb:
-                progress_cb(f"Game logs: {i + 1}/{len(players)} players...")
+            if done_count % 50 == 0:
+                conn.commit()
+                if progress_cb:
+                    progress_cb(f"Game logs: {done_count}/{len(players)} players...")
 
     conn.commit()
     return new_rows
