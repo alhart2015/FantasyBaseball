@@ -394,6 +394,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.trades.evaluate import find_trades
         from fantasy_baseball.trades.pitch import generate_pitch
         from fantasy_baseball.utils.name_utils import normalize_name
+        from fantasy_baseball.analysis.pace import compute_player_pace
 
         import pandas as pd
 
@@ -456,6 +457,63 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                 entry = dict(player)
                 entry["wsgp"] = 0.0
                 roster_with_proj.append(entry)
+
+        # --- Step 6b: Compute season-to-date pace vs projections ---
+        _set_refresh_progress("Computing player pace...")
+        pace_conn = get_db_connection()
+        try:
+            season_year = config.season_year
+
+            # Bulk-load hitter season totals
+            hitter_logs = {}
+            rows = pace_conn.execute(
+                "SELECT name, SUM(pa) as pa, SUM(ab) as ab, SUM(h) as h, "
+                "SUM(r) as r, SUM(hr) as hr, SUM(rbi) as rbi, SUM(sb) as sb "
+                "FROM game_logs WHERE season = ? AND player_type = 'hitter' "
+                "GROUP BY name", (season_year,)
+            ).fetchall()
+            for row in rows:
+                norm = normalize_name(row["name"])
+                hitter_logs[norm] = {
+                    "pa": row["pa"] or 0, "ab": row["ab"] or 0, "h": row["h"] or 0,
+                    "r": row["r"] or 0, "hr": row["hr"] or 0, "rbi": row["rbi"] or 0, "sb": row["sb"] or 0,
+                }
+
+            # Bulk-load pitcher season totals
+            pitcher_logs = {}
+            rows = pace_conn.execute(
+                "SELECT name, SUM(ip) as ip, SUM(k) as k, SUM(w) as w, SUM(sv) as sv, "
+                "SUM(er) as er, SUM(bb) as bb, SUM(h_allowed) as h_allowed "
+                "FROM game_logs WHERE season = ? AND player_type = 'pitcher' "
+                "GROUP BY name", (season_year,)
+            ).fetchall()
+            for row in rows:
+                norm = normalize_name(row["name"])
+                pitcher_logs[norm] = {
+                    "ip": row["ip"] or 0, "k": row["k"] or 0, "w": row["w"] or 0, "sv": row["sv"] or 0,
+                    "er": row["er"] or 0, "bb": row["bb"] or 0, "h_allowed": row["h_allowed"] or 0,
+                }
+
+            # Attach pace data to each roster player
+            for entry in roster_with_proj:
+                norm = normalize_name(entry["name"])
+                # Use player_type if set by match_roster_to_projections; fall back to
+                # position-based detection (same logic as the Step 7 optimizer split)
+                if "player_type" in entry:
+                    ptype = entry["player_type"]
+                else:
+                    ptype = "pitcher" if set(entry.get("positions", [])) & PITCHER_POSITIONS else "hitter"
+                if ptype == "hitter":
+                    actuals = hitter_logs.get(norm, {})
+                else:
+                    actuals = pitcher_logs.get(norm, {})
+                projected = {k: entry.get(k, 0) for k in
+                             (["pa", "r", "hr", "rbi", "sb", "h", "ab", "avg"]
+                              if ptype == "hitter"
+                              else ["ip", "w", "k", "sv", "er", "bb", "h_allowed", "era", "whip"])}
+                entry["stats"] = compute_player_pace(actuals, projected, ptype)
+        finally:
+            pace_conn.close()
 
         write_cache("roster", roster_with_proj, cache_dir)
 
