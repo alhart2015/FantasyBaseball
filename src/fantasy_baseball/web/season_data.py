@@ -14,6 +14,27 @@ from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 _refresh_lock = threading.Lock()
 _refresh_status = {"running": False, "progress": "", "error": None}
 
+_redis_client = None
+_redis_initialized = False
+_redis_lock = threading.Lock()
+
+
+def _get_redis():
+    """Lazy Upstash Redis client. Returns None if not configured."""
+    global _redis_client, _redis_initialized
+    if _redis_initialized:
+        return _redis_client
+    with _redis_lock:
+        if _redis_initialized:
+            return _redis_client
+        _redis_initialized = True
+        url = os.environ.get("UPSTASH_REDIS_REST_URL")
+        token = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
+        if url and token:
+            from upstash_redis import Redis
+            _redis_client = Redis(url=url, token=token)
+    return _redis_client
+
 
 def get_refresh_status() -> dict:
     with _refresh_lock:
