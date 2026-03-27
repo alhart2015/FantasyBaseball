@@ -333,40 +333,109 @@ def scan_waivers(
         remaining.sort(key=lambda x: x[1], reverse=True)
         _add_pure(remaining, open_bench_slots, "bench")
 
-    # Drop/add swaps for remaining free agents
+    # Phase 2: Re-optimization swaps
+    if not roster or not roster_slots:
+        recommendations.sort(key=lambda x: x["sgp_gain"], reverse=True)
+        return recommendations[:max_results]
+
+    denoms = get_sgp_denominators()
+
+    # Compute baseline optimal lineup
+    baseline = _compute_team_wsgp(roster, leverage, roster_slots, denoms=denoms)
+    baseline_wsgp = baseline["total_wsgp"]
+    baseline_summary = _build_lineup_summary(
+        baseline["hitter_lineup"], baseline["pitcher_starters"],
+        baseline["player_wsgp"], [p["name"] for p in roster],
+    )
+
+    # Pre-compute wSGP for all FAs
+    fa_wsgp = {}
+    for fa in free_agents:
+        if fa["name"] not in recommended_adds:
+            fa_wsgp[fa["name"]] = calculate_weighted_sgp(fa, leverage, denoms=denoms)
+
+    # Compute wSGP floor: 3rd-lowest wSGP among active-slot players
+    active_wsgps = sorted([
+        baseline["player_wsgp"].get(name, 0.0)
+        for name in list(baseline["hitter_lineup"].values())
+        + [ps["name"] for ps in baseline["pitcher_starters"]]
+    ])
+    wsgp_floor = active_wsgps[2] if len(active_wsgps) > 2 else 0.0
+
+    p_slots = roster_slots.get("P", 9)
+
     for fa in free_agents:
         if fa["name"] in recommended_adds:
             continue
-        fa_type = fa.get("player_type", "hitter")
-
-        # Find worst roster player of same type, sorted weakest-first
-        same_type = [rs for rs in roster_scores if rs["player"].get("player_type") == fa_type]
-        if not same_type:
+        if fa_wsgp.get(fa["name"], 0.0) < wsgp_floor:
             continue
-        same_type_sorted = sorted(same_type, key=lambda x: x["wsgp"])
 
-        for candidate in same_type_sorted:
-            pair_key = (fa["name"], candidate["player"]["name"])
-            if pair_key in recommended_swaps:
-                continue
+        fa_type = fa.get("player_type", "hitter")
+        best_for_fa = None
 
-            # Position feasibility check for hitter swaps
-            if roster_slots and fa_type == "hitter":
-                post_swap_positions = [
-                    list(rs["player"].get("positions", []))
-                    for rs in roster_scores
-                    if rs["player"]["name"] != candidate["player"]["name"]
-                    and rs["player"].get("player_type") == "hitter"
-                ]
-                post_swap_positions.append(list(fa.get("positions", [])))
-                if not can_cover_slots(post_swap_positions, roster_slots):
-                    continue  # this drop leaves a position hole — try next
+        for drop_player in roster:
+            drop_name = drop_player["name"]
+            drop_type = drop_player.get("player_type", "hitter")
 
-            recommended_swaps.add(pair_key)
-            result = evaluate_pickup(fa, candidate["player"], leverage)
-            if result["sgp_gain"] > 0:
-                recommendations.append(result)
-            break  # found a valid drop candidate for this FA
+            # Build hypothetical roster
+            new_roster = [p for p in roster if p["name"] != drop_name] + [fa]
+            new_hitters = [p for p in new_roster if p.get("player_type") != "pitcher"]
+            new_pitchers = [p for p in new_roster if p.get("player_type") == "pitcher"]
+
+            # Feasibility checks
+            if drop_type == "hitter" or fa_type == "hitter":
+                hitter_positions = [list(p.get("positions", [])) for p in new_hitters]
+                if not can_cover_slots(hitter_positions, roster_slots):
+                    continue
+            if drop_type == "pitcher" or fa_type == "pitcher":
+                if len(new_pitchers) < p_slots:
+                    continue
+
+            # Re-optimize
+            new_result = _compute_team_wsgp(new_roster, leverage, roster_slots, denoms=denoms)
+            gain = round(new_result["total_wsgp"] - baseline_wsgp, 2)
+
+            if gain > 0 and (best_for_fa is None or gain > best_for_fa["sgp_gain"]):
+                after_summary = _build_lineup_summary(
+                    new_result["hitter_lineup"], new_result["pitcher_starters"],
+                    new_result["player_wsgp"], [p["name"] for p in new_roster],
+                )
+
+                # Annotate before lineup (mark dropped player)
+                before_annotated = []
+                for entry in baseline_summary:
+                    e = dict(entry)
+                    if e["name"] == drop_name:
+                        e["is_dropped"] = True
+                    before_annotated.append(e)
+
+                # Annotate after lineup (mark added player and moved players)
+                before_slots = {e["name"]: e["slot"] for e in baseline_summary}
+                after_annotated = []
+                for entry in after_summary:
+                    e = dict(entry)
+                    if e["name"] == fa["name"]:
+                        e["is_added"] = True
+                    elif e["name"] in before_slots and before_slots[e["name"]] != e["slot"]:
+                        e["moved_from"] = before_slots[e["name"]]
+                    after_annotated.append(e)
+
+                # Get per-category deltas (from evaluate_pickup, discard its sgp_gain)
+                cat_result = evaluate_pickup(fa, drop_player, leverage)
+
+                best_for_fa = {
+                    "add": fa["name"],
+                    "add_positions": list(fa.get("positions", [])),
+                    "drop": drop_name,
+                    "drop_positions": list(drop_player.get("positions", [])),
+                    "sgp_gain": gain,
+                    "categories": cat_result["categories"],
+                    "lineup_before": before_annotated,
+                    "lineup_after": after_annotated,
+                }
+
+        if best_for_fa:
+            recommendations.append(best_for_fa)
 
     recommendations.sort(key=lambda x: x["sgp_gain"], reverse=True)
     return recommendations[:max_results]

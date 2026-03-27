@@ -50,7 +50,8 @@ class TestScanWaivers:
             _make_player("Best", "hitter", r=90, hr=30, rbi=80, sb=15, avg=.280, ab=540, h=151,
                          positions=["OF"], best_position="OF"),
         ]
-        results = scan_waivers(roster, free_agents, EQUAL_LEVERAGE)
+        results = scan_waivers(roster, free_agents, EQUAL_LEVERAGE,
+                               roster_slots={"OF": 1, "P": 0, "BN": 0, "IL": 0})
         assert len(results) > 0
         assert all(r["sgp_gain"] > 0 for r in results)
         # Should be sorted best-first
@@ -209,3 +210,117 @@ class TestBuildLineupSummary:
         result = _build_lineup_summary(hitter_lineup, pitcher_starters, player_wsgp, ["Starter", "Benched"])
         benched = next(e for e in result if e["name"] == "Benched")
         assert benched["slot"] == "BN"
+
+
+class TestScanWaiversReoptimize:
+    def test_cross_position_swap_recommended(self):
+        """Can pick up a 3B and drop a benched OF if roster reshuffles to cover.
+
+        Good SS is eligible at SS, 3B, and OF.  With slots SS/1B/3B, Weak OF has
+        no active slot and sits on the bench.  Adding Great 3B (3B only) fills the
+        3B slot while Weak OF is dropped — a cross-position swap that the
+        whole-roster re-optimiser can evaluate but the old same-type logic could not.
+        """
+        roster = [
+            _make_player("Good SS", "hitter", r=80, hr=20, rbi=70, sb=15, avg=.280, ab=500, h=140,
+                         positions=["SS", "3B", "OF"]),
+            _make_player("Weak OF", "hitter", r=40, hr=5, rbi=25, sb=2, avg=.230, ab=300, h=69,
+                         positions=["OF"]),
+            _make_player("Decent 1B", "hitter", r=60, hr=15, rbi=55, sb=5, avg=.260, ab=450, h=117,
+                         positions=["1B"]),
+        ]
+        free_agents = [
+            _make_player("Great 3B", "hitter", r=90, hr=30, rbi=85, sb=10, avg=.275, ab=540, h=148,
+                         positions=["3B"]),
+        ]
+        # No OF slot — Weak OF is currently benched.  Adding Great 3B fills 3B.
+        slots = {"SS": 1, "1B": 1, "3B": 1, "P": 0, "BN": 1, "IL": 0}
+
+        result = scan_waivers(roster, free_agents, EQUAL_LEVERAGE,
+                              roster_slots=slots, max_results=10)
+        assert len(result) >= 1
+        assert result[0]["add"] == "Great 3B"
+        assert result[0]["drop"] == "Weak OF"
+        assert result[0]["sgp_gain"] > 0
+        assert "add_positions" in result[0]
+        assert "drop_positions" in result[0]
+
+    def test_position_infeasible_swap_skipped(self):
+        """Can't drop the only C if no one else can play C."""
+        roster = [
+            _make_player("Only C", "hitter", r=50, hr=12, rbi=45, sb=3, avg=.250, ab=400, h=100,
+                         positions=["C"]),
+            _make_player("OF Guy", "hitter", r=60, hr=15, rbi=55, sb=5, avg=.260, ab=450, h=117,
+                         positions=["OF"]),
+        ]
+        free_agents = [
+            _make_player("Great OF", "hitter", r=90, hr=30, rbi=85, sb=15, avg=.280, ab=540, h=151,
+                         positions=["OF"]),
+        ]
+        slots = {"C": 1, "OF": 1, "P": 0, "BN": 0, "IL": 0}
+
+        result = scan_waivers(roster, free_agents, EQUAL_LEVERAGE,
+                              roster_slots=slots, max_results=10)
+        assert len(result) >= 1
+        assert result[0]["add"] == "Great OF"
+        assert result[0]["drop"] == "OF Guy"
+        for r in result:
+            assert r["drop"] != "Only C"
+
+    def test_includes_lineup_before_after(self):
+        """Recommendations include before/after lineup data for expanded card."""
+        roster = [
+            _make_player("Starter", "hitter", r=60, hr=15, rbi=55, sb=5, avg=.260, ab=450, h=117,
+                         positions=["OF"]),
+        ]
+        free_agents = [
+            _make_player("Better", "hitter", r=80, hr=25, rbi=75, sb=10, avg=.270, ab=500, h=135,
+                         positions=["OF"]),
+        ]
+        slots = {"OF": 1, "P": 0, "BN": 0, "IL": 0}
+
+        result = scan_waivers(roster, free_agents, EQUAL_LEVERAGE,
+                              roster_slots=slots, max_results=10)
+        assert len(result) >= 1
+        assert "lineup_before" in result[0]
+        assert "lineup_after" in result[0]
+        before_names = [e["name"] for e in result[0]["lineup_before"]]
+        after_names = [e["name"] for e in result[0]["lineup_after"]]
+        assert "Starter" in before_names
+        assert "Better" in after_names
+
+    def test_best_drop_per_fa(self):
+        """For each FA, only the best drop candidate is kept."""
+        roster = [
+            _make_player("OK OF", "hitter", r=60, hr=15, rbi=55, sb=5, avg=.260, ab=450, h=117,
+                         positions=["OF"]),
+            _make_player("Bad OF", "hitter", r=30, hr=5, rbi=20, sb=1, avg=.220, ab=300, h=66,
+                         positions=["OF"]),
+        ]
+        free_agents = [
+            _make_player("Good OF", "hitter", r=80, hr=25, rbi=75, sb=10, avg=.270, ab=500, h=135,
+                         positions=["OF"]),
+        ]
+        slots = {"OF": 2, "P": 0, "BN": 0, "IL": 0}
+
+        result = scan_waivers(roster, free_agents, EQUAL_LEVERAGE,
+                              roster_slots=slots, max_results=10)
+        good_of_recs = [r for r in result if r["add"] == "Good OF"]
+        assert len(good_of_recs) == 1
+        assert good_of_recs[0]["drop"] == "Bad OF"
+
+    def test_wsgp_floor_prunes_bad_fas(self):
+        """FAs below the wSGP floor are skipped."""
+        roster = [
+            _make_player("Decent", "hitter", r=70, hr=20, rbi=65, sb=8, avg=.265, ab=480, h=127,
+                         positions=["1B"]),
+        ]
+        free_agents = [
+            _make_player("Terrible", "hitter", r=10, hr=1, rbi=5, sb=0, avg=.180, ab=100, h=18,
+                         positions=["1B"]),
+        ]
+        slots = {"1B": 1, "P": 0, "BN": 0, "IL": 0}
+
+        result = scan_waivers(roster, free_agents, EQUAL_LEVERAGE,
+                              roster_slots=slots, max_results=10)
+        assert len(result) == 0
