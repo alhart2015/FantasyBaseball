@@ -17,12 +17,11 @@
 
 .stat-cell { position: relative; cursor: default; }
 .stat-cell .tooltip {
-    display: none; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+    display: none; position: fixed;
     background: var(--panel-bg, #1a1a2e); border: 1px solid var(--panel-border, #3a3a5e);
     border-radius: 6px; padding: 10px 14px; font-size: 11px; white-space: nowrap;
     z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.5); min-width: 180px; text-align: left;
 }
-.stat-cell:hover .tooltip { display: block; }
 .tooltip-row { display: flex; justify-content: space-between; padding: 2px 0; }
 .tooltip-label { color: var(--text-secondary, #8888aa); }
 .tooltip-val { font-weight: 500; }
@@ -271,6 +270,32 @@ function runOptimize(btn) {
             btn.textContent = 'Optimize';
         });
 }
+
+// Position tooltips dynamically to avoid viewport clipping
+document.querySelectorAll('.stat-cell').forEach(function(cell) {
+    cell.addEventListener('mouseenter', function() {
+        var tip = cell.querySelector('.tooltip');
+        if (!tip) return;
+        tip.style.display = 'block';
+        var rect = cell.getBoundingClientRect();
+        var tipH = tip.offsetHeight;
+        // Show below if there's room, otherwise above
+        if (rect.bottom + tipH + 8 < window.innerHeight) {
+            tip.style.top = (rect.bottom + 4) + 'px';
+        } else {
+            tip.style.top = (rect.top - tipH - 4) + 'px';
+        }
+        // Center horizontally, clamp to viewport
+        var tipW = tip.offsetWidth;
+        var left = rect.left + rect.width / 2 - tipW / 2;
+        left = Math.max(4, Math.min(left, window.innerWidth - tipW - 4));
+        tip.style.left = left + 'px';
+    });
+    cell.addEventListener('mouseleave', function() {
+        var tip = cell.querySelector('.tooltip');
+        if (tip) tip.style.display = 'none';
+    });
+});
 </script>
 
 {% endblock %}
