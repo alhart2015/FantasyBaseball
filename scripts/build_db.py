@@ -14,16 +14,19 @@ from fantasy_baseball.data.db import (
     get_connection,
     load_blended_projections,
     load_draft_results,
+    load_positions,
     load_raw_projections,
     load_standings,
     load_weekly_rosters,
 )
+from fantasy_baseball.data.yahoo_players import load_positions_cache
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 DRAFTS_PATH = PROJECT_ROOT / "data" / "historical_drafts_resolved.json"
 STANDINGS_PATH = PROJECT_ROOT / "data" / "historical_standings.json"
 ROSTERS_DIR = PROJECT_ROOT / "data" / "rosters"
+POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
 
 
 def main():
@@ -64,6 +67,12 @@ def main():
         load_weekly_rosters(conn, ROSTERS_DIR)
         roster_count = conn.execute("SELECT COUNT(*) FROM weekly_rosters").fetchone()[0]
         print(f"  Loaded {roster_count} roster entries")
+
+    if POSITIONS_PATH.exists():
+        positions = load_positions_cache(POSITIONS_PATH)
+        load_positions(conn, positions)
+        pos_count = conn.execute("SELECT COUNT(*) FROM positions").fetchone()[0]
+        print(f"  Loaded {pos_count} player positions")
 
     conn.close()
     print("Done!")

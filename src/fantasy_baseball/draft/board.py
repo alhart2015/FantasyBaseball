@@ -1,8 +1,6 @@
 import logging
 import pandas as pd
-from pathlib import Path
-from fantasy_baseball.data.projections import blend_projections
-from fantasy_baseball.data.yahoo_players import load_positions_cache
+from fantasy_baseball.data.db import get_blended_projections, get_positions
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.replacement import calculate_replacement_levels, calculate_replacement_rates
@@ -101,17 +99,14 @@ def apply_backfill_blending(pool: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_draft_board(
-    projections_dir: Path,
-    positions_path: Path,
-    systems: list[str],
-    weights: dict[str, float] | None = None,
+    conn,
     sgp_overrides: dict[str, float] | None = None,
     roster_slots: dict[str, int] | None = None,
     num_teams: int | None = None,
 ) -> pd.DataFrame:
-    """Build a ranked draft board from projections and position data."""
-    hitters, pitchers = blend_projections(projections_dir, systems, weights)
-    positions = load_positions_cache(positions_path)
+    """Build a ranked draft board from projections and position data in SQLite."""
+    hitters, pitchers = get_blended_projections(conn)
+    positions = get_positions(conn)
 
     # Build normalized lookup for positions.
     # When names collide after normalization (e.g. 'José Ramírez' the 3B
@@ -218,6 +213,12 @@ def _validate_top_adp_players(
 
     all_blended = pd.concat([unfiltered_hitters, unfiltered_pitchers], ignore_index=True)
     if "adp" not in all_blended.columns:
+        return
+
+    # adp may arrive as object dtype (e.g. all-NULL column from SQLite);
+    # coerce to numeric and skip if no valid values remain.
+    all_blended["adp"] = pd.to_numeric(all_blended["adp"], errors="coerce")
+    if all_blended["adp"].isna().all():
         return
 
     top_adp = all_blended.nsmallest(adp_threshold, "adp")
