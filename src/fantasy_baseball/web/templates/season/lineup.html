@@ -14,6 +14,27 @@
     font-weight: 600;
     color: var(--text);
 }
+
+/* Stat color coding */
+.stat-hot-2 { color: #22c55e; font-weight: 600; background: rgba(34, 197, 94, 0.15); }
+.stat-hot-1 { color: #86efac; background: rgba(134, 239, 172, 0.08); }
+.stat-neutral { }
+.stat-cold-1 { color: #fca5a5; background: rgba(252, 165, 165, 0.08); }
+.stat-cold-2 { color: #ef4444; font-weight: 600; background: rgba(239, 68, 68, 0.15); }
+
+.stat-cell { position: relative; cursor: default; }
+.stat-cell .tooltip {
+    display: none; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+    background: var(--panel-bg, #1a1a2e); border: 1px solid var(--panel-border, #3a3a5e);
+    border-radius: 6px; padding: 10px 14px; font-size: 11px; white-space: nowrap;
+    z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.5); min-width: 180px; text-align: left;
+}
+.stat-cell:hover .tooltip { display: block; }
+.tooltip-row { display: flex; justify-content: space-between; padding: 2px 0; }
+.tooltip-label { color: var(--text-secondary, #8888aa); }
+.tooltip-val { font-weight: 500; }
+.tooltip-divider { border-top: 1px solid var(--panel-border, #2a2a3e); margin: 4px 0; }
+.pa-col { color: var(--text-secondary) !important; font-size: 12px; }
 </style>
 
 <div class="page-header">
@@ -61,20 +82,44 @@
             <th>Slot</th>
             <th>Player</th>
             <th>Elig</th>
-            <th>Games</th>
+            <th>PA</th>
+            <th>R</th>
+            <th>HR</th>
+            <th>RBI</th>
+            <th>SB</th>
+            <th>AVG</th>
             <th>wSGP</th>
-            <th>Status</th>
+            <th></th>
         </tr>
     </thead>
     <tbody>
     {% for h in lineup.hitters %}
+        {% set s = h.stats if h.stats else {} %}
         <tr class="{% if h.is_bench %}bench-row{% endif %}{% if h.is_il and not h.is_bench %} il-active-row{% endif %}">
             <td>{{ h.selected_position }}</td>
             <td style="text-align: left; font-weight: 500;">{{ h.name }}</td>
             <td style="text-align: left; color: var(--text-secondary); font-size: 11px;">
                 {{ h.positions | join(", ") }}
             </td>
-            <td>{{ h.games if h.games else "—" }}</td>
+            {% for cat in ["PA", "R", "HR", "RBI", "SB", "AVG"] %}
+            {% set st = s.get(cat, {}) if s else {} %}
+            <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'PA' %} pa-col{% endif %}">
+                {% if st and st.get('actual') is not none and (st.get('actual', 0) != 0 or s.get('PA', {}).get('actual', 0) > 0) %}
+                    {% if cat == 'AVG' %}{{ "%.3f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}
+                {% else %}—{% endif %}
+                {% if st and st.get('z_score') is defined and cat != 'PA' %}
+                <div class="tooltip">
+                    <div style="font-weight: 600; margin-bottom: 6px;">{{ h.name }} — {{ cat }}</div>
+                    <div class="tooltip-row"><span class="tooltip-label">Actual</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">Expected pace</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.expected) }}{% else %}{{ st.expected }}{% endif %}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">Z-score</span><span class="tooltip-val">{{ "%+.1f"|format(st.z_score) }}</span></div>
+                    <div class="tooltip-divider"></div>
+                    <div class="tooltip-row"><span class="tooltip-label">Pre-season proj</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.projection) }}{% else %}{{ st.projection }} {{ cat }}{% endif %}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val" style="color: var(--text-secondary); font-style: italic;">Coming soon</span></div>
+                </div>
+                {% endif %}
+            </td>
+            {% endfor %}
             <td>{{ "%.2f" | format(h.wsgp) if h.wsgp else "—" }}</td>
             <td>
                 {% if h.status %}
@@ -96,17 +141,41 @@
         <tr>
             <th>Slot</th>
             <th>Player</th>
-            <th>Games</th>
+            <th>IP</th>
+            <th>W</th>
+            <th>K</th>
+            <th>SV</th>
+            <th>ERA</th>
+            <th>WHIP</th>
             <th>wSGP</th>
-            <th>Status</th>
+            <th></th>
         </tr>
     </thead>
     <tbody>
     {% for p in lineup.pitchers %}
+        {% set s = p.stats if p.stats else {} %}
         <tr class="{% if p.is_bench %}bench-row{% endif %}{% if p.is_il and not p.is_bench %} il-active-row{% endif %}">
             <td>{{ p.selected_position }}</td>
             <td style="text-align: left; font-weight: 500;">{{ p.name }}</td>
-            <td>{{ p.games if p.games else "—" }}</td>
+            {% for cat in ["IP", "W", "K", "SV", "ERA", "WHIP"] %}
+            {% set st = s.get(cat, {}) if s else {} %}
+            <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'IP' %} pa-col{% endif %}">
+                {% if st and st.get('actual') is not none and (st.get('actual', 0) != 0 or s.get('IP', {}).get('actual', 0) > 0) %}
+                    {% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.actual) }}{% elif cat == 'IP' %}{{ st.actual }}{% else %}{{ st.actual }}{% endif %}
+                {% else %}—{% endif %}
+                {% if st and st.get('z_score') is defined and cat != 'IP' %}
+                <div class="tooltip">
+                    <div style="font-weight: 600; margin-bottom: 6px;">{{ p.name }} — {{ cat }}</div>
+                    <div class="tooltip-row"><span class="tooltip-label">Actual</span><span class="tooltip-val">{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">Expected pace</span><span class="tooltip-val">{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.expected) }}{% else %}{{ st.expected }}{% endif %}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">Z-score</span><span class="tooltip-val">{{ "%+.1f"|format(st.z_score) }}</span></div>
+                    <div class="tooltip-divider"></div>
+                    <div class="tooltip-row"><span class="tooltip-label">Pre-season proj</span><span class="tooltip-val">{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.projection) }}{% else %}{{ st.projection }} {{ cat }}{% endif %}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val" style="color: var(--text-secondary); font-style: italic;">Coming soon</span></div>
+                </div>
+                {% endif %}
+            </td>
+            {% endfor %}
             <td>{{ "%.2f" | format(p.wsgp) if p.wsgp else "—" }}</td>
             <td>
                 {% if p.status %}
