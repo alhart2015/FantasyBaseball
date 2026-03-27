@@ -133,3 +133,23 @@ def test_middle_sample_counting_colored_rates_neutral():
     result = compute_player_pace(actual, projected, "hitter")
     assert result["HR"]["color_class"] != "stat-neutral"
     assert result["AVG"]["color_class"] == "stat-neutral"
+
+
+def test_no_game_logs_shows_dashes():
+    """Player with no actual stats gets 0 actuals and neutral colors."""
+    projected = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    actual = {}  # no game logs at all
+    result = compute_player_pace(actual, projected, "hitter")
+    assert result["HR"]["actual"] == 0
+    assert result["HR"]["color_class"] == "stat-neutral"
+    assert result["PA"]["actual"] == 0
+
+
+def test_no_projection_shows_actuals_neutral():
+    """Player not matched to projections — show actuals, all neutral."""
+    projected = {}  # unmatched
+    actual = {"pa": 60, "r": 9, "hr": 3, "rbi": 9, "sb": 1, "h": 15, "ab": 54}
+    result = compute_player_pace(actual, projected, "hitter")
+    assert result["HR"]["actual"] == 3
+    assert result["HR"]["color_class"] == "stat-neutral"
+    assert result["HR"].get("z_score", 0) == 0.0
