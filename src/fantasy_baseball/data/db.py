@@ -99,6 +99,11 @@ CREATE TABLE IF NOT EXISTS game_logs (
 
 CREATE INDEX IF NOT EXISTS idx_game_logs_name ON game_logs(name);
 CREATE INDEX IF NOT EXISTS idx_game_logs_date ON game_logs(season, date);
+
+CREATE TABLE IF NOT EXISTS positions (
+    name       TEXT NOT NULL PRIMARY KEY,
+    positions  TEXT NOT NULL
+);
 """
 
 
@@ -489,6 +494,36 @@ def append_standings_snapshot(conn, standings, year, snapshot_date) -> None:
     conn.commit()
 
 
+def load_positions(conn, positions: dict[str, list[str]]) -> None:
+    """Load position eligibility into the positions table.
+
+    ``positions`` is a dict mapping player name to a list of position strings.
+    Uses INSERT OR REPLACE so repeated calls are idempotent.
+    """
+    rows = [
+        (name, ", ".join(pos_list))
+        for name, pos_list in positions.items()
+    ]
+    conn.executemany(
+        "INSERT OR REPLACE INTO positions (name, positions) VALUES (?, ?)",
+        rows,
+    )
+    conn.commit()
+
+
+def get_positions(conn) -> dict[str, list[str]]:
+    """Read position eligibility from the database.
+
+    Returns a dict mapping player name to list of position strings,
+    matching the format of ``load_positions_cache()``.
+    """
+    rows = conn.execute("SELECT name, positions FROM positions").fetchall()
+    return {
+        row["name"]: [p.strip() for p in row["positions"].split(",")]
+        for row in rows
+    }
+
+
 # Ordered list of columns in blended_projections (excluding the PRIMARY KEY pair
 # which we always supply explicitly).
 _BLENDED_TABLE_COLS = [
@@ -568,6 +603,40 @@ def load_blended_projections(
             conn.executemany(insert_sql, rows)
 
     conn.commit()
+
+
+def get_blended_projections(
+    conn, year: int | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Read blended projections from the database.
+
+    Returns (hitters_df, pitchers_df) matching the format produced by
+    ``blend_projections()`` in projections.py.
+
+    If *year* is None, uses the maximum year in the table (current season).
+    """
+    if year is None:
+        row = conn.execute(
+            "SELECT MAX(year) as y FROM blended_projections"
+        ).fetchone()
+        year = row["y"] if row and row["y"] is not None else 0
+
+    hitters = pd.read_sql_query(
+        "SELECT * FROM blended_projections WHERE year = ? AND player_type = 'hitter'",
+        conn, params=(year,),
+    )
+    pitchers = pd.read_sql_query(
+        "SELECT * FROM blended_projections WHERE year = ? AND player_type = 'pitcher'",
+        conn, params=(year,),
+    )
+
+    # Drop the year column (not part of blend_projections output).
+    # Keep player_type — downstream code (backfill, SGP, player_id) requires it.
+    for df in (hitters, pitchers):
+        if "year" in df.columns:
+            df.drop(columns=["year"], inplace=True)
+
+    return hitters, pitchers
 
 
 def fetch_and_load_game_logs(

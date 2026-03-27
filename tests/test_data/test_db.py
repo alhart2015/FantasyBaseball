@@ -1,13 +1,17 @@
 import json
 import sqlite3
+from pathlib import Path
 from fantasy_baseball.data.db import (
     create_tables,
     get_connection,
     load_raw_projections,
     load_blended_projections,
+    get_blended_projections,
     load_draft_results,
     load_standings,
     load_weekly_rosters,
+    load_positions,
+    get_positions,
     append_roster_snapshot,
     append_standings_snapshot,
     DB_PATH,
@@ -411,4 +415,83 @@ def test_build_db_end_to_end(tmp_path):
     standings = conn.execute("SELECT * FROM standings WHERE year=2025").fetchone()
     assert standings["r"] == 900
 
+    conn.close()
+
+
+def test_load_positions(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    create_tables(conn)
+
+    positions = {
+        "Aaron Judge": ["OF", "DH"],
+        "Gerrit Cole": ["SP"],
+        "Shohei Ohtani": ["Util"],
+    }
+    load_positions(conn, positions)
+
+    rows = conn.execute("SELECT * FROM positions ORDER BY name").fetchall()
+    assert len(rows) == 3
+    judge = [r for r in rows if r["name"] == "Aaron Judge"][0]
+    assert judge["positions"] == "OF, DH"
+    conn.close()
+
+
+def test_get_positions(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    create_tables(conn)
+
+    positions = {
+        "Aaron Judge": ["OF", "DH"],
+        "Gerrit Cole": ["SP"],
+    }
+    load_positions(conn, positions)
+    result = get_positions(conn)
+
+    assert result == {"Aaron Judge": ["OF", "DH"], "Gerrit Cole": ["SP"]}
+    conn.close()
+
+
+def test_get_blended_projections(tmp_path):
+    """Round-trip: load blended projections, then read them back."""
+    import shutil
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    create_tables(conn)
+
+    # load_blended_projections expects year subdirectories, so create one
+    fixtures = Path(__file__).parent.parent / "fixtures"
+    year_dir = tmp_path / "projections" / "2026"
+    year_dir.mkdir(parents=True)
+    for csv in fixtures.glob("*.csv"):
+        shutil.copy(csv, year_dir / csv.name)
+
+    load_blended_projections(conn, tmp_path / "projections", ["steamer"], None)
+
+    hitters, pitchers = get_blended_projections(conn, year=2026)
+
+    # Fixture has 4 hitters (steamer_hitters.csv) and 3 pitchers (steamer_pitchers.csv)
+    assert len(hitters) == 4
+    assert len(pitchers) == 3
+
+    # player_type must be preserved (downstream code requires it)
+    assert "player_type" in hitters.columns
+    assert (hitters["player_type"] == "hitter").all()
+    assert (pitchers["player_type"] == "pitcher").all()
+
+    # year column should be dropped (not part of blend_projections output)
+    assert "year" not in hitters.columns
+
+    # Check required columns exist
+    for col in ("name", "fg_id", "ab", "h", "r", "hr", "rbi", "sb", "avg", "adp"):
+        assert col in hitters.columns, f"Missing hitter column: {col}"
+    for col in ("name", "fg_id", "w", "k", "sv", "ip", "er", "bb", "h_allowed", "era", "whip", "adp"):
+        assert col in pitchers.columns, f"Missing pitcher column: {col}"
+
+    # Verify a specific player
+    judge = hitters[hitters["name"] == "Aaron Judge"]
+    assert len(judge) == 1
+    assert judge.iloc[0]["hr"] > 0
     conn.close()
