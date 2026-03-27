@@ -93,11 +93,11 @@ def read_cache(key: str, cache_dir: Path = CACHE_DIR) -> dict | list | None:
         if raw is None:
             return None
         data = json.loads(raw)
+    except json.JSONDecodeError:
+        print(f"[redis] read_cache({key}) corrupt data, treating as miss")
+        return None
     except Exception as e:
-        if isinstance(e, json.JSONDecodeError):
-            print(f"[redis] read_cache({key}) corrupt data, treating as miss")
-        else:
-            print(f"[redis] read_cache({key}) failed: {e}")
+        print(f"[redis] read_cache({key}) failed: {e}")
         return None
 
     # Write back to local disk for subsequent fast reads
