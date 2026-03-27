@@ -73,12 +73,41 @@ CACHE_FILES = {
 
 
 def read_cache(key: str, cache_dir: Path = CACHE_DIR) -> dict | list | None:
-    """Read a cached JSON file. Returns None if missing or corrupt."""
+    """Read a cached JSON file. Falls back to Redis on local miss."""
     path = cache_dir / CACHE_FILES[key]
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+    # Fallback to Redis (only for default cache dir)
+    if cache_dir != CACHE_DIR:
         return None
+
+    redis = _get_redis()
+    if not redis:
+        return None
+
+    try:
+        raw = redis.get(f"cache:{key}")
+        if raw is None:
+            return None
+        data = json.loads(raw)
+    except Exception as e:
+        if isinstance(e, json.JSONDecodeError):
+            print(f"[redis] read_cache({key}) corrupt data, treating as miss")
+        else:
+            print(f"[redis] read_cache({key}) failed: {e}")
+        return None
+
+    # Write back to local disk for subsequent fast reads
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError as e:
+        print(f"[redis] local write-back for {key} failed: {e}")
+
+    return data
 
 
 def write_cache(key: str, data: dict | list, cache_dir: Path = CACHE_DIR) -> None:

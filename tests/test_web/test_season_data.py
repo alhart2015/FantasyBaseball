@@ -218,3 +218,60 @@ def test_write_cache_handles_redis_error(tmp_path, monkeypatch):
     write_cache("standings", data, cache_dir=tmp_path)
     # Local write still succeeded
     assert read_cache("standings", cache_dir=tmp_path) == data
+
+
+# --- read_cache Redis fallback tests ---
+
+def test_read_cache_falls_back_to_redis(tmp_path, monkeypatch):
+    """When local disk has no file, read_cache fetches from Redis and writes back locally."""
+    data = {"teams": [1, 2, 3]}
+    mock_redis = type("MockRedis", (), {"get": lambda self, k: json.dumps(data)})()
+    monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
+    monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
+
+    result = read_cache("standings", cache_dir=tmp_path)
+    assert result == data
+    # Verify it wrote back to local disk
+    local = json.loads((tmp_path / "standings.json").read_text(encoding="utf-8"))
+    assert local == data
+
+
+def test_read_cache_returns_none_when_both_miss(tmp_path, monkeypatch):
+    """When local disk and Redis both miss, returns None."""
+    mock_redis = type("MockRedis", (), {"get": lambda self, k: None})()
+    monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
+    monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
+
+    result = read_cache("standings", cache_dir=tmp_path)
+    assert result is None
+
+
+def test_read_cache_handles_corrupt_redis_data(tmp_path, monkeypatch):
+    """When Redis returns non-JSON, treat as miss."""
+    mock_redis = type("MockRedis", (), {"get": lambda self, k: "not-json{{"})()
+    monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
+    monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
+
+    result = read_cache("standings", cache_dir=tmp_path)
+    assert result is None
+
+
+def test_read_cache_skips_redis_non_default_dir(tmp_path, monkeypatch):
+    """read_cache with non-default cache_dir does not touch Redis."""
+    mock_redis = MagicMock()
+    monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
+    # tmp_path != CACHE_DIR, so Redis should be skipped
+    result = read_cache("standings", cache_dir=tmp_path)
+    assert result is None
+    mock_redis.get.assert_not_called()
+
+
+def test_read_cache_handles_redis_error(tmp_path, monkeypatch):
+    """read_cache returns None if Redis raises a network error."""
+    mock_redis = MagicMock()
+    mock_redis.get.side_effect = ConnectionError("Upstash unreachable")
+    monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
+    monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
+
+    result = read_cache("standings", cache_dir=tmp_path)
+    assert result is None
