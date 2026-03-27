@@ -2,6 +2,7 @@ from typing import Callable
 
 import pandas as pd
 
+from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.lineup.yahoo_roster import fetch_free_agents
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
@@ -145,6 +146,53 @@ def evaluate_pickup(
         "drop": drop_player["name"],
         "sgp_gain": add_wsgp - drop_wsgp,
         "categories": categories,
+    }
+
+
+def _compute_team_wsgp(
+    roster: list[pd.Series],
+    leverage: dict[str, float],
+    roster_slots: dict[str, int],
+    denoms: dict[str, float] | None = None,
+) -> dict:
+    """Run both optimizers and return total wSGP of assigned starters.
+
+    Returns dict with:
+        total_wsgp: float — sum of wSGP for players actually assigned to a slot
+        hitter_lineup: dict[str, str] — slot -> player name from Hungarian optimizer
+        pitcher_starters: list[dict] — pitcher starters from ranking
+        player_wsgp: dict[str, float] — name -> wSGP lookup for all roster players
+    """
+    if denoms is None:
+        denoms = get_sgp_denominators()
+
+    hitters = [p for p in roster if p.get("player_type") != "pitcher"]
+    pitchers = [p for p in roster if p.get("player_type") == "pitcher"]
+
+    # Pre-compute wSGP for all players
+    player_wsgp = {}
+    for p in roster:
+        player_wsgp[p["name"]] = calculate_weighted_sgp(p, leverage, denoms=denoms)
+
+    # Optimize hitters (Hungarian algorithm)
+    hitter_lineup = optimize_hitter_lineup(hitters, leverage, roster_slots)
+
+    # Optimize pitchers (simple ranking)
+    p_slots = roster_slots.get("P", 9)
+    pitcher_starters, _ = optimize_pitcher_lineup(pitchers, leverage, slots=p_slots)
+
+    # Sum wSGP of assigned players only
+    total = 0.0
+    for name in hitter_lineup.values():
+        total += player_wsgp.get(name, 0.0)
+    for ps in pitcher_starters:
+        total += player_wsgp.get(ps["name"], 0.0)
+
+    return {
+        "total_wsgp": total,
+        "hitter_lineup": hitter_lineup,
+        "pitcher_starters": pitcher_starters,
+        "player_wsgp": player_wsgp,
     }
 
 

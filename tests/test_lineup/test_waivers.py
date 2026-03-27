@@ -1,6 +1,6 @@
 import pytest
 import pandas as pd
-from fantasy_baseball.lineup.waivers import evaluate_pickup, scan_waivers
+from fantasy_baseball.lineup.waivers import evaluate_pickup, scan_waivers, _compute_team_wsgp
 
 
 def _make_player(name, player_type, **stats):
@@ -138,3 +138,39 @@ class TestScanWaivers:
         pure_adds = [r for r in results if r["drop"].startswith("(empty")]
         # Only the pitcher should fill the pitcher slot
         assert all(r["add"] == "Ace" for r in pure_adds)
+
+
+ROSTER_SLOTS = {"C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1, "OF": 4, "UTIL": 2, "P": 9, "BN": 2, "IL": 2}
+
+
+class TestComputeTeamWsgp:
+    def test_returns_total_and_lineups(self):
+        """_compute_team_wsgp returns total wSGP of assigned starters plus lineup dicts."""
+        roster = [
+            _make_player("Hitter A", "hitter", r=80, hr=25, rbi=75, sb=10, avg=.270, ab=500, h=135,
+                         positions=["1B"]),
+            _make_player("Hitter B", "hitter", r=60, hr=15, rbi=55, sb=5, avg=.260, ab=450, h=117,
+                         positions=["OF"]),
+            _make_player("Pitcher A", "pitcher", w=12, k=180, sv=0, ip=180, er=60, bb=50, h_allowed=150,
+                         era=3.00, whip=1.11, positions=["SP"]),
+        ]
+        result = _compute_team_wsgp(roster, EQUAL_LEVERAGE, ROSTER_SLOTS)
+        assert "total_wsgp" in result
+        assert "hitter_lineup" in result
+        assert "pitcher_starters" in result
+        assert "player_wsgp" in result
+        assert result["total_wsgp"] > 0
+        assert isinstance(result["hitter_lineup"], dict)
+        assert isinstance(result["pitcher_starters"], list)
+
+    def test_unassigned_players_dont_count(self):
+        """Players who can't be assigned to any slot contribute 0 to total."""
+        roster = [
+            _make_player("Catcher 1", "hitter", r=50, hr=15, rbi=50, sb=2, avg=.260, ab=400, h=104,
+                         positions=["C"]),
+            _make_player("Catcher 2", "hitter", r=40, hr=10, rbi=35, sb=1, avg=.240, ab=350, h=84,
+                         positions=["C"]),
+        ]
+        slots = {"C": 1, "P": 0, "BN": 1, "IL": 0}
+        result = _compute_team_wsgp(roster, EQUAL_LEVERAGE, slots)
+        assert len(result["hitter_lineup"]) == 1
