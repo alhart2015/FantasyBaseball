@@ -82,7 +82,7 @@ def read_cache(key: str, cache_dir: Path = CACHE_DIR) -> dict | list | None:
 
 
 def write_cache(key: str, data: dict | list, cache_dir: Path = CACHE_DIR) -> None:
-    """Atomically write a cached JSON file (tmpfile + rename)."""
+    """Atomically write a cached JSON file (tmpfile + rename), with Redis write-through."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     path = cache_dir / CACHE_FILES[key]
     fd, tmp = tempfile.mkstemp(dir=cache_dir, suffix=".json")
@@ -96,6 +96,15 @@ def write_cache(key: str, data: dict | list, cache_dir: Path = CACHE_DIR) -> Non
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+
+    # Write-through to Redis (only for default cache dir)
+    if cache_dir == CACHE_DIR:
+        redis = _get_redis()
+        if redis:
+            try:
+                redis.set(f"cache:{key}", json.dumps(data))
+            except Exception as e:
+                print(f"[redis] write_cache({key}) failed: {e}")
 
 
 def read_meta(cache_dir: Path = CACHE_DIR) -> dict:
