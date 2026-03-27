@@ -95,7 +95,7 @@ def compute_player_pace(
             "expected": round(expected, 1),
             "z_score": round(z, 2),
             "color_class": _z_to_color(z),
-            "projection": proj,
+            "projection": round(proj),
         }
 
     # Rate stats — always computed, but color suppressed below min_rates threshold
@@ -108,7 +108,7 @@ def compute_player_pace(
 
         actual_avg = round(actual_h / actual_ab, 3) if actual_ab > 0 else 0.0
 
-        if proj_avg > 0 and rates_colored:
+        if proj_avg > 0 and actual_ab > 0 and rates_colored:
             variance = STAT_VARIANCE.get("h", 0.0)
             z = (actual_avg - proj_avg) / (variance * proj_avg) if variance > 0 else 0.0
         else:

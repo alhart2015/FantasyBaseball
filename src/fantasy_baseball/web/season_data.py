@@ -281,7 +281,7 @@ def format_lineup_for_display(
             hitters.append(entry)
 
     slot_rank = {s: i for i, s in enumerate(HITTER_SLOTS_ORDER)}
-    hitters.sort(key=lambda h: (slot_rank.get(h["selected_position"], 99), -h["wsgp"]))
+    hitters.sort(key=lambda h: (slot_rank.get(h["selected_position"].upper(), 99), -h["wsgp"]))
     pitchers.sort(key=lambda p: (p["is_bench"], -p["wsgp"]))
 
     moves = optimal.get("moves", []) if optimal else []

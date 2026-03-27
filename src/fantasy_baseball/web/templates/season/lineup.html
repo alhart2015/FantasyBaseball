@@ -111,10 +111,12 @@
                 <div class="tooltip">
                     <div style="font-weight: 600; margin-bottom: 6px;">{{ h.name }} — {{ cat }}</div>
                     <div class="tooltip-row"><span class="tooltip-label">Actual</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}</span></div>
-                    <div class="tooltip-row"><span class="tooltip-label">Expected pace</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.expected) }}{% else %}{{ st.expected }}{% endif %}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">{% if cat == 'AVG' %}Projection{% else %}Expected pace{% endif %}</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.expected) }}{% else %}{{ st.expected }}{% endif %}</span></div>
                     <div class="tooltip-row"><span class="tooltip-label">Z-score</span><span class="tooltip-val">{{ "%+.1f"|format(st.z_score) }}</span></div>
                     <div class="tooltip-divider"></div>
-                    <div class="tooltip-row"><span class="tooltip-label">Pre-season proj</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.projection) }}{% else %}{{ st.projection }} {{ cat }}{% endif %}</span></div>
+                    {% if cat != 'AVG' %}
+                    <div class="tooltip-row"><span class="tooltip-label">Pre-season proj</span><span class="tooltip-val">{{ st.projection }} {{ cat }}</span></div>
+                    {% endif %}
                     <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val" style="color: var(--text-secondary); font-style: italic;">Coming soon</span></div>
                 </div>
                 {% endif %}
@@ -167,10 +169,12 @@
                 <div class="tooltip">
                     <div style="font-weight: 600; margin-bottom: 6px;">{{ p.name }} — {{ cat }}</div>
                     <div class="tooltip-row"><span class="tooltip-label">Actual</span><span class="tooltip-val">{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}</span></div>
-                    <div class="tooltip-row"><span class="tooltip-label">Expected pace</span><span class="tooltip-val">{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.expected) }}{% else %}{{ st.expected }}{% endif %}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">{% if cat in ['ERA', 'WHIP'] %}Projection{% else %}Expected pace{% endif %}</span><span class="tooltip-val">{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.expected) }}{% else %}{{ st.expected }}{% endif %}</span></div>
                     <div class="tooltip-row"><span class="tooltip-label">Z-score</span><span class="tooltip-val">{{ "%+.1f"|format(st.z_score) }}</span></div>
                     <div class="tooltip-divider"></div>
-                    <div class="tooltip-row"><span class="tooltip-label">Pre-season proj</span><span class="tooltip-val">{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.projection) }}{% else %}{{ st.projection }} {{ cat }}{% endif %}</span></div>
+                    {% if cat not in ['ERA', 'WHIP'] %}
+                    <div class="tooltip-row"><span class="tooltip-label">Pre-season proj</span><span class="tooltip-val">{{ st.projection }} {{ cat }}</span></div>
+                    {% endif %}
                     <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val" style="color: var(--text-secondary); font-style: italic;">Coming soon</span></div>
                 </div>
                 {% endif %}
