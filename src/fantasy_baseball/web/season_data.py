@@ -144,6 +144,79 @@ def read_meta(cache_dir: Path = CACHE_DIR) -> dict:
     return read_cache("meta", cache_dir) or {}
 
 
+def _load_game_log_totals(season_year: int) -> tuple[dict, dict]:
+    """Load aggregated game log totals from SQLite, with Redis fallback/write-through.
+
+    Returns (hitter_logs, pitcher_logs) where each is {normalized_name: {stat: value}}.
+    On Render, SQLite game_logs may be empty after a cold start — falls back to Redis.
+    After loading from SQLite, writes to Redis so the data survives spin-downs.
+    """
+    from fantasy_baseball.data.db import get_connection as get_db_connection
+    from fantasy_baseball.utils.name_utils import normalize_name
+
+    hitter_logs = {}
+    pitcher_logs = {}
+
+    # Try SQLite first
+    conn = get_db_connection()
+    try:
+        rows = conn.execute(
+            "SELECT name, SUM(pa) as pa, SUM(ab) as ab, SUM(h) as h, "
+            "SUM(r) as r, SUM(hr) as hr, SUM(rbi) as rbi, SUM(sb) as sb "
+            "FROM game_logs WHERE season = ? AND player_type = 'hitter' "
+            "GROUP BY name", (season_year,)
+        ).fetchall()
+        for row in rows:
+            norm = normalize_name(row["name"])
+            hitter_logs[norm] = {
+                "pa": row["pa"] or 0, "ab": row["ab"] or 0, "h": row["h"] or 0,
+                "r": row["r"] or 0, "hr": row["hr"] or 0, "rbi": row["rbi"] or 0, "sb": row["sb"] or 0,
+            }
+
+        rows = conn.execute(
+            "SELECT name, SUM(ip) as ip, SUM(k) as k, SUM(w) as w, SUM(sv) as sv, "
+            "SUM(er) as er, SUM(bb) as bb, SUM(h_allowed) as h_allowed "
+            "FROM game_logs WHERE season = ? AND player_type = 'pitcher' "
+            "GROUP BY name", (season_year,)
+        ).fetchall()
+        for row in rows:
+            norm = normalize_name(row["name"])
+            pitcher_logs[norm] = {
+                "ip": row["ip"] or 0, "k": row["k"] or 0, "w": row["w"] or 0, "sv": row["sv"] or 0,
+                "er": row["er"] or 0, "bb": row["bb"] or 0, "h_allowed": row["h_allowed"] or 0,
+            }
+    finally:
+        conn.close()
+
+    # If SQLite had data, write through to Redis for persistence
+    if hitter_logs or pitcher_logs:
+        redis = _get_redis()
+        if redis:
+            try:
+                redis.set("game_log_totals:hitters", json.dumps(hitter_logs))
+                redis.set("game_log_totals:pitchers", json.dumps(pitcher_logs))
+            except Exception as e:
+                print(f"[redis] game_log_totals write failed: {e}")
+        return hitter_logs, pitcher_logs
+
+    # SQLite empty — fall back to Redis (cold start on Render)
+    redis = _get_redis()
+    if redis:
+        try:
+            raw_h = redis.get("game_log_totals:hitters")
+            raw_p = redis.get("game_log_totals:pitchers")
+            if raw_h:
+                hitter_logs = json.loads(raw_h)
+            if raw_p:
+                pitcher_logs = json.loads(raw_p)
+            if hitter_logs or pitcher_logs:
+                print("[redis] loaded game log totals from Redis (SQLite was empty)")
+        except Exception as e:
+            print(f"[redis] game_log_totals read failed: {e}")
+
+    return hitter_logs, pitcher_logs
+
+
 def format_standings_for_display(
     standings: list[dict], user_team_name: str
 ) -> dict:
@@ -464,58 +537,22 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # --- Step 6b: Compute season-to-date pace vs projections ---
         _set_refresh_progress("Computing player pace...")
-        pace_conn = get_db_connection()
-        try:
-            season_year = config.season_year
+        hitter_logs, pitcher_logs = _load_game_log_totals(config.season_year)
 
-            # Bulk-load hitter season totals
-            hitter_logs = {}
-            rows = pace_conn.execute(
-                "SELECT name, SUM(pa) as pa, SUM(ab) as ab, SUM(h) as h, "
-                "SUM(r) as r, SUM(hr) as hr, SUM(rbi) as rbi, SUM(sb) as sb "
-                "FROM game_logs WHERE season = ? AND player_type = 'hitter' "
-                "GROUP BY name", (season_year,)
-            ).fetchall()
-            for row in rows:
-                norm = normalize_name(row["name"])
-                hitter_logs[norm] = {
-                    "pa": row["pa"] or 0, "ab": row["ab"] or 0, "h": row["h"] or 0,
-                    "r": row["r"] or 0, "hr": row["hr"] or 0, "rbi": row["rbi"] or 0, "sb": row["sb"] or 0,
-                }
-
-            # Bulk-load pitcher season totals
-            pitcher_logs = {}
-            rows = pace_conn.execute(
-                "SELECT name, SUM(ip) as ip, SUM(k) as k, SUM(w) as w, SUM(sv) as sv, "
-                "SUM(er) as er, SUM(bb) as bb, SUM(h_allowed) as h_allowed "
-                "FROM game_logs WHERE season = ? AND player_type = 'pitcher' "
-                "GROUP BY name", (season_year,)
-            ).fetchall()
-            for row in rows:
-                norm = normalize_name(row["name"])
-                pitcher_logs[norm] = {
-                    "ip": row["ip"] or 0, "k": row["k"] or 0, "w": row["w"] or 0, "sv": row["sv"] or 0,
-                    "er": row["er"] or 0, "bb": row["bb"] or 0, "h_allowed": row["h_allowed"] or 0,
-                }
-
-            # Attach pace data to each roster player
-            for entry in roster_with_proj:
-                norm = normalize_name(entry["name"])
-                # Use player_type if set by match_roster_to_projections; fall back to
-                # position-based detection (same logic as the Step 7 optimizer split)
-                if "player_type" in entry:
-                    ptype = entry["player_type"]
-                else:
-                    ptype = "pitcher" if set(entry.get("positions", [])) & PITCHER_POSITIONS else "hitter"
-                if ptype == "hitter":
-                    actuals = hitter_logs.get(norm, {})
-                else:
-                    actuals = pitcher_logs.get(norm, {})
-                proj_keys = HITTER_PROJ_KEYS if ptype == "hitter" else PITCHER_PROJ_KEYS
-                projected = {k: entry.get(k, 0) for k in proj_keys}
-                entry["stats"] = compute_player_pace(actuals, projected, ptype)
-        finally:
-            pace_conn.close()
+        # Attach pace data to each roster player
+        for entry in roster_with_proj:
+            norm = normalize_name(entry["name"])
+            if "player_type" in entry:
+                ptype = entry["player_type"]
+            else:
+                ptype = "pitcher" if set(entry.get("positions", [])) & PITCHER_POSITIONS else "hitter"
+            if ptype == "hitter":
+                actuals = hitter_logs.get(norm, {})
+            else:
+                actuals = pitcher_logs.get(norm, {})
+            proj_keys = HITTER_PROJ_KEYS if ptype == "hitter" else PITCHER_PROJ_KEYS
+            projected = {k: entry.get(k, 0) for k in proj_keys}
+            entry["stats"] = compute_player_pace(actuals, projected, ptype)
 
         write_cache("roster", roster_with_proj, cache_dir)
 
@@ -796,6 +833,10 @@ def run_mlb_fetch() -> None:
             )
         finally:
             conn.close()
+
+        # Persist aggregated totals to Redis so they survive Render spin-downs
+        _set_refresh_progress("Persisting game log totals...")
+        _load_game_log_totals(config.season_year)
 
         _set_refresh_progress(f"Done — {new_rows} new game log rows added")
 
