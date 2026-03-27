@@ -3,7 +3,7 @@
 import threading
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, render_template, url_for
+from flask import Flask, jsonify, redirect, render_template, request, url_for
 
 from fantasy_baseball.utils.constants import ALL_CATEGORIES
 from fantasy_baseball.web.season_data import read_cache, read_meta
@@ -130,6 +130,52 @@ def register_routes(app: Flask) -> None:
         config = _load_config()
         result = compute_trade_standings_impact(trade=trades_raw[idx], standings=standings_raw, user_team_name=config.team_name)
         return jsonify(result)
+
+    @app.route("/sql", methods=["GET", "POST"])
+    def sql_runner():
+        meta = read_meta()
+        query = ""
+        columns = None
+        rows = None
+        row_count = None
+        error = None
+
+        if request.method == "POST":
+            query = request.form.get("query", "").strip()
+            table_name = request.form.get("schema_table", "").strip()
+
+            if request.form.get("action") == "tables":
+                query = "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            elif request.form.get("action") == "schema" and table_name:
+                query = f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table_name}'"
+
+            if query:
+                from fantasy_baseball.data.db import get_connection
+                conn = get_connection()
+                try:
+                    cursor = conn.execute(query)
+                    if cursor.description:
+                        columns = [d[0] for d in cursor.description]
+                        rows = cursor.fetchall()
+                        row_count = len(rows)
+                    else:
+                        conn.commit()
+                        row_count = cursor.rowcount
+                except Exception as e:
+                    error = str(e)
+                finally:
+                    conn.close()
+
+        return render_template(
+            "season/sql.html",
+            meta=meta,
+            active_page="sql",
+            query=query,
+            columns=columns,
+            rows=rows,
+            row_count=row_count,
+            error=error,
+        )
 
     @app.route("/api/refresh", methods=["POST"])
     def api_refresh():

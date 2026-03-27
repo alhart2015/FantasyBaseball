@@ -23,6 +23,10 @@
                class="nav-link {% if active_page == 'waivers_trades' %}active{% endif %}">
                 Waivers &amp; Trades
             </a>
+            <a href="{{ url_for('sql_runner') }}"
+               class="nav-link {% if active_page == 'sql' %}active{% endif %}">
+                SQL
+            </a>
             <div class="sidebar-footer">
                 <div class="refresh-info">
                     {% if meta and meta.get('last_refresh') %}

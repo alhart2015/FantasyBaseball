@@ -1,0 +1,144 @@
+{% extends "season/base.html" %}
+{% block title %}SQL — Season Dashboard{% endblock %}
+{% block content %}
+
+<style>
+.sql-form { margin-bottom: 16px; }
+.sql-textarea {
+    width: 100%;
+    min-height: 120px;
+    background: var(--card-bg);
+    color: var(--text);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 10px;
+    font-family: "Consolas", "Monaco", monospace;
+    font-size: 13px;
+    resize: vertical;
+}
+.sql-textarea:focus { outline: 1px solid var(--accent); }
+.sql-buttons { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+.btn-run {
+    padding: 6px 20px;
+    background: var(--accent);
+    color: #000;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 13px;
+}
+.btn-run:hover { opacity: 0.85; }
+.btn-secondary {
+    padding: 6px 14px;
+    background: var(--panel-border);
+    color: var(--text);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+}
+.btn-secondary:hover { opacity: 0.85; }
+.schema-input {
+    background: var(--card-bg);
+    color: var(--text);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-family: "Consolas", "Monaco", monospace;
+    font-size: 13px;
+    width: 180px;
+}
+.schema-input:focus { outline: 1px solid var(--accent); }
+.sql-error {
+    background: rgba(239, 83, 80, 0.15);
+    border: 1px solid var(--danger);
+    color: var(--danger);
+    padding: 8px 12px;
+    border-radius: 4px;
+    margin-bottom: 12px;
+    font-family: "Consolas", "Monaco", monospace;
+    font-size: 13px;
+}
+.sql-info {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-bottom: 12px;
+}
+.results-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.results-table th {
+    background: var(--panel-bg);
+    padding: 6px 10px;
+    text-align: left;
+    border-bottom: 2px solid var(--panel-border);
+    color: var(--accent);
+    font-weight: 600;
+    position: sticky;
+    top: 0;
+}
+.results-table td {
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--panel-border);
+    font-family: "Consolas", "Monaco", monospace;
+    white-space: nowrap;
+}
+.results-table tr:hover { background: var(--row-highlight); }
+.results-wrap {
+    max-height: 70vh;
+    overflow: auto;
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+}
+</style>
+
+<div class="page-header">
+    <h2>SQL</h2>
+</div>
+
+<form method="post" class="sql-form">
+    <textarea name="query" class="sql-textarea" placeholder="SELECT * FROM blended_projections LIMIT 10">{{ query }}</textarea>
+    <div class="sql-buttons">
+        <button type="submit" class="btn-run">Run</button>
+        <button type="submit" name="action" value="tables" class="btn-secondary">Tables</button>
+        <input type="text" name="schema_table" class="schema-input" placeholder="table name">
+        <button type="submit" name="action" value="schema" class="btn-secondary">Schema</button>
+    </div>
+</form>
+
+{% if error %}
+<div class="sql-error">{{ error }}</div>
+{% endif %}
+
+{% if row_count is not none and columns is none %}
+<div class="sql-info">{{ row_count }} row{{ 's' if row_count != 1 else '' }} affected.</div>
+{% endif %}
+
+{% if columns %}
+<div class="sql-info">{{ row_count }} row{{ 's' if row_count != 1 else '' }}</div>
+<div class="results-wrap">
+    <table class="results-table">
+        <thead>
+            <tr>
+                {% for col in columns %}
+                <th>{{ col }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in rows %}
+            <tr>
+                {% for val in row %}
+                <td>{{ val }}</td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% endblock %}
