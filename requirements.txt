@@ -1,0 +1,11 @@
+yahoo-fantasy-api>=2.12
+yahoo-oauth>=2.0
+pandas>=2.0
+numpy>=1.24
+scipy>=1.11
+requests>=2.31
+pyyaml>=6.0
+flask>=3.0
+waitress>=3.0
+MLB-StatsAPI>=1.7
+gunicorn>=21.2
