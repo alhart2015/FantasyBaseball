@@ -396,6 +396,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.trades.pitch import generate_pitch
         from fantasy_baseball.utils.name_utils import normalize_name
         from fantasy_baseball.analysis.pace import compute_player_pace
+        from fantasy_baseball.analysis.buy_low import find_buy_low_candidates
 
         import pandas as pd
 
@@ -654,6 +655,28 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             )
 
         write_cache("trades", trade_proposals, cache_dir)
+
+        # --- Step 11b: Compute buy-low candidates ---
+        _set_refresh_progress("Finding buy-low candidates...")
+        all_game_logs = {**hitter_logs, **pitcher_logs}
+
+        buy_low_trade_targets = []
+        for tname, opp_roster in opp_rosters.items():
+            candidates = find_buy_low_candidates(
+                opp_roster, all_game_logs, leverage, owner=tname,
+            )
+            buy_low_trade_targets.extend(candidates)
+        buy_low_trade_targets.sort(key=lambda c: c["avg_z"])
+
+        buy_low_free_agents = find_buy_low_candidates(
+            [s.to_dict() if hasattr(s, 'to_dict') else dict(s) for s in fa_players],
+            all_game_logs, leverage, owner="Free Agent",
+        )
+
+        write_cache("buy_low", {
+            "trade_targets": buy_low_trade_targets,
+            "free_agents": buy_low_free_agents,
+        }, cache_dir)
 
         # --- Step 12: Project full-season standings from rosters ---
         _set_refresh_progress("Projecting standings...")
