@@ -122,10 +122,7 @@ def write_cache(key: str, data: dict | list, cache_dir: Path = CACHE_DIR) -> Non
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-        # On Windows, must remove target before rename
-        if path.exists():
-            path.unlink()
-        Path(tmp).rename(path)
+        os.replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise

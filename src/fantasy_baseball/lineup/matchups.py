@@ -336,10 +336,6 @@ def get_probable_starters(
                 f = matchup_factors[opponent]["era_whip_factor"]
                 if f <= 0.93:
                     quality = "Great"
-                elif f <= 0.97:
-                    quality = "Fair"
-                elif f >= 1.07:
-                    quality = "Tough"
                 elif f >= 1.03:
                     quality = "Tough"
                 else:

@@ -6,7 +6,6 @@ roto impact vs actual impact using real end-of-season data.
 """
 import json
 import sys
-import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -24,6 +23,7 @@ from fantasy_baseball.trades.evaluate import (
 )
 from fantasy_baseball.trades.pitch import generate_pitch
 from fantasy_baseball.lineup.leverage import calculate_leverage
+from fantasy_baseball.utils.name_utils import normalize_name
 
 GAME_LOG_CACHE = PROJECT_ROOT / "data" / "stats" / "game_logs_2025.json"
 PROJ_DIR = PROJECT_ROOT / "data" / "projections"
@@ -34,11 +34,6 @@ ROSTER_SLOTS = {
     "OF": 4, "UTIL": 2, "P": 9, "BN": 2, "IL": 2,
 }
 HART_TEAM = "Hart of the Order"
-
-
-def normalize_name(name: str) -> str:
-    nfkd = unicodedata.normalize("NFKD", name)
-    return "".join(c for c in nfkd if not unicodedata.combining(c)).lower().strip()
 
 
 def load_game_logs() -> dict[int, dict]:

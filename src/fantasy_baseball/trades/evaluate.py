@@ -64,7 +64,7 @@ def compute_roto_points_by_cat(
         i = 0
         while i < n:
             j = i + 1
-            while j < n and ranked[j]["stats"][cat] == ranked[i]["stats"][cat]:
+            while j < n and abs(ranked[j]["stats"][cat] - ranked[i]["stats"][cat]) < 1e-9:
                 j += 1
             avg_rank = sum(range(i + 1, j + 1)) / (j - i)
             for k in range(i, j):

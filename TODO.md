@@ -26,6 +26,13 @@
 
 - [ ] **Keeper value in all decisions** — Factor multi-year keeper value into trade recommendations, waiver pickups, and draft strategy. Pull future-year projected stats (FanGraphs has age curves and multi-year projections) to estimate whether a player will be a keeper candidate next year. Young breakout players (e.g., a 23-year-old having a great season) should be valued higher because they'll be kept — trading them away costs future value, not just current-year production. Conversely, aging veterans on decline curves are worth less than their current stats suggest because they won't be kept. This affects: (1) trade recommender — don't trade away future keepers for a marginal current-year upgrade, and flag opponents' aging stars as buy-low targets; (2) waiver wire — prioritize young upside players over veteran rentals; (3) draft strategy — weight keeper-eligible players higher in later rounds. Requires modeling: age curves, keeper eligibility rules (league-specific), and a "keeper probability" score per player.
 
+- [ ] **Simplify suggested fixes** — Larger refactors identified by codebase-wide simplify review (2026-03-28):
+  - `draft/projections.py` has a ~100-line duplicate `simulate_season()` that diverges from the canonical `simulation.py` version (no batched draws, no correlated variance). Likely dead code — investigate and remove or delegate.
+  - Per-category SGP computation is repeated in `recommender._vona_leverage_weight`, `weighted_sgp.calculate_weighted_sgp`, and `waivers._category_sgp`. Extract a shared `compute_category_sgp_dict()` helper.
+  - Strategy functions all take `(board, full_board, tracker, balance, config, team_filled, **kwargs)` — introduce a `DraftContext` dataclass to clean up ~15 function signatures and eliminate `kwargs.get()` boilerplate.
+  - `simulate_draft.py` opponent ADP loop uses `iterrows()` per pick (~54K Series allocations per sim). Convert `adp_board` to a list of dicts before the draft loop.
+  - `replacement.py:_get_eligible_players` recomputes position masks via `.apply(lambda)` on every pick in the recommender. Pre-compute a `{position: bool_array}` dict once and maintain incrementally.
+
 # TODO — Postseason / Offseason
 
 - [ ] **Post-draft Monte Carlo analysis** — Run Monte Carlo simulations on the actual completed draft results (real rosters from Yahoo) to assess win probability and category risk. Currently `simulate_draft.py --monte-carlo` only works on simulated drafts. Need a script or mode that takes real Yahoo rosters post-draft and feeds them through the shared `simulate_season` engine. Low priority since `summary.py` covers this during the season.

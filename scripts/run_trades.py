@@ -6,63 +6,20 @@ Usage:
 import sys
 from pathlib import Path
 
-import pandas as pd
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.auth.yahoo_auth import get_yahoo_session, get_league
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.db import get_connection, get_blended_projections
+from fantasy_baseball.data.projections import match_roster_to_projections
 from fantasy_baseball.lineup.yahoo_roster import fetch_roster, fetch_standings
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.trades.evaluate import find_trades, compute_roto_points_by_cat
 from fantasy_baseball.trades.pitch import generate_pitch
 from fantasy_baseball.utils.name_utils import normalize_name
-from fantasy_baseball.utils.positions import is_hitter, is_pitcher
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
-
-
-def match_roster_to_projections(roster, hitters_proj, pitchers_proj):
-    """Match roster player names to projection stats. Returns enriched player dicts."""
-    matched = []
-    for player in roster:
-        name_norm = normalize_name(player["name"])
-        positions = player["positions"]
-
-        proj = None
-        ptype = None
-        if is_hitter(positions) and not hitters_proj.empty:
-            matches = hitters_proj[hitters_proj["name"].apply(normalize_name) == name_norm]
-            if not matches.empty:
-                proj = matches.iloc[0]
-                ptype = "hitter"
-        if proj is None and is_pitcher(positions) and not pitchers_proj.empty:
-            matches = pitchers_proj[pitchers_proj["name"].apply(normalize_name) == name_norm]
-            if not matches.empty:
-                proj = matches.iloc[0]
-                ptype = "pitcher"
-        if proj is None:
-            for df, pt in [(hitters_proj, "hitter"), (pitchers_proj, "pitcher")]:
-                if df.empty:
-                    continue
-                matches = df[df["name"].apply(normalize_name) == name_norm]
-                if not matches.empty:
-                    proj = matches.iloc[0]
-                    ptype = pt
-                    break
-
-        if proj is not None:
-            entry = {"name": player["name"], "positions": positions, "player_type": ptype}
-            if ptype == "hitter":
-                for col in ["r", "hr", "rbi", "sb", "avg", "h", "ab", "pa"]:
-                    entry[col] = float(proj.get(col, 0) or 0)
-            else:
-                for col in ["w", "k", "sv", "era", "whip", "ip", "er", "bb", "h_allowed"]:
-                    entry[col] = float(proj.get(col, 0) or 0)
-            matched.append(entry)
-    return matched
 
 
 def main():
@@ -101,6 +58,8 @@ def main():
     conn = get_connection()
     hitters_proj, pitchers_proj = get_blended_projections(conn)
     conn.close()
+    hitters_proj["_name_norm"] = hitters_proj["name"].apply(normalize_name)
+    pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
 
     hart_roster = match_roster_to_projections(
         all_rosters_raw[config.team_name], hitters_proj, pitchers_proj,

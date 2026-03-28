@@ -9,7 +9,6 @@ Usage:
 import sys
 import csv
 import json
-import unicodedata
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -33,6 +32,7 @@ from fantasy_baseball.analysis.recency import (
     PITCHER_STAT_KEYS,
 )
 from backtest_2025 import DRAFT_2025
+from fantasy_baseball.utils.name_utils import normalize_name
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -78,12 +78,6 @@ SEASON_END = date(2025, 9, 28)  # approximate end of 2025 regular season
 # ---------------------------------------------------------------------------
 # Name normalization
 # ---------------------------------------------------------------------------
-
-def normalize_name(name: str) -> str:
-    """Unicode-normalize and lowercase a name for fuzzy matching."""
-    nfkd = unicodedata.normalize("NFKD", name)
-    return "".join(c for c in nfkd if not unicodedata.combining(c)).lower().strip()
-
 
 def strip_suffixes(name: str) -> str:
     """Remove common name suffixes for looser matching."""

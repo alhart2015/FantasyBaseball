@@ -178,18 +178,20 @@ def register_routes(app: Flask) -> None:
 
         if request.method == "POST":
             query = request.form.get("query", "").strip()
+            query_params: tuple = ()
             table_name = request.form.get("schema_table", "").strip()
 
             if request.form.get("action") == "tables":
                 query = "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
             elif request.form.get("action") == "schema" and table_name:
-                query = f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table_name}'"
+                query = "SELECT sql FROM sqlite_master WHERE type='table' AND name=?"
+                query_params = (table_name,)
 
             if query:
                 from fantasy_baseball.data.db import get_connection
                 conn = get_connection()
                 try:
-                    cursor = conn.execute(query)
+                    cursor = conn.execute(query, query_params)
                     if cursor.description:
                         columns = [d[0] for d in cursor.description]
                         rows = cursor.fetchall()
