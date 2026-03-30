@@ -242,6 +242,18 @@ def register_routes(app: Flask) -> None:
             error=error,
         )
 
+    @app.route("/logs")
+    def logs():
+        meta = read_meta()
+        from fantasy_baseball.web.job_logger import get_all_logs
+        job_logs = get_all_logs()
+        return render_template(
+            "season/logs.html",
+            meta=meta,
+            active_page="logs",
+            job_logs=job_logs,
+        )
+
     @app.route("/api/refresh", methods=["POST"])
     @_require_auth
     def api_refresh():
@@ -267,25 +279,43 @@ def register_routes(app: Flask) -> None:
             create_tables, get_connection as get_db_connection,
             load_ros_projections,
         )
+        from fantasy_baseball.web.job_logger import JobLogger
 
+        logger = JobLogger("ros_fetch")
         project_root = Path(__file__).resolve().parents[3]
         config = load_config(project_root / "config" / "league.yaml")
         projections_dir = project_root / "data" / "projections"
 
-        results = fetch_ros_projections(
-            projections_dir, config.projection_systems, config.season_year,
-        )
-
-        # Load fetched CSVs into SQLite
-        db_conn = get_db_connection()
-        create_tables(db_conn)
         try:
-            load_ros_projections(
-                db_conn, projections_dir,
-                config.projection_systems, config.projection_weights,
+            logger.log(f"Fetching ROS projections for {len(config.projection_systems)} systems")
+            results = fetch_ros_projections(
+                projections_dir, config.projection_systems, config.season_year,
+                progress_cb=logger.log,
             )
-        finally:
-            db_conn.close()
 
-        return jsonify({"status": "done", "systems": results})
+            for system, status in results.items():
+                logger.log(f"  {system}: {status}")
+
+            logger.log("Loading into SQLite...")
+            db_conn = get_db_connection()
+            create_tables(db_conn)
+            try:
+                load_ros_projections(
+                    db_conn, projections_dir,
+                    config.projection_systems, config.projection_weights,
+                )
+            finally:
+                db_conn.close()
+
+            failed = [s for s, v in results.items() if v != "ok"]
+            if failed:
+                logger.finish("error", f"Failed systems: {', '.join(failed)}")
+            else:
+                logger.finish("ok")
+
+            return jsonify({"status": "done", "systems": results})
+
+        except Exception as exc:
+            logger.finish("error", str(exc))
+            return jsonify({"status": "error", "error": str(exc)}), 500
 
