@@ -259,6 +259,7 @@ def format_standings_for_display(
 
         teams.append({
             "name": name,
+            "team_key": t.get("team_key", ""),
             "stats": t["stats"],
             "roto_points": roto_pts,
             "is_user": is_user,
