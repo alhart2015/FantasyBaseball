@@ -1,6 +1,6 @@
 # TODO — In-Season Enhancements
 
-- [ ] **Validate ROS projections account for injuries** — Verify that FanGraphs ROS projections properly reduce stats for players on IL (e.g., Strider's ROS K projection should reflect missed time, not a full healthy season). If not, the injury management system should scale projections by expected games remaining.
+- [x] **Validate ROS projections account for injuries** — Verified: FanGraphs ROS projections do reduce stats for IL players. Wheeler and Strider both project 25 GS / ~150 IP (vs ~31 GS / ~190 IP for healthy SPs), reflecting ~1 month of missed time consistent with their IL stints. No additional injury scaling needed on top of what the projection systems already provide.
 
 - [ ] **Pitcher streaming tool** — Score free agent SPs by matchup quality to identify streamers (pick up a mediocre pitcher facing a terrible offense for one start, then drop). Builds on the matchup adjustment system.
 
