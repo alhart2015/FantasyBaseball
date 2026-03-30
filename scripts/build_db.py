@@ -47,20 +47,6 @@ def main():
     raw_count = conn.execute("SELECT COUNT(*) FROM raw_projections").fetchone()[0]
     print(f"  Loaded {raw_count} raw projection rows")
 
-    load_blended_projections(
-        conn, PROJECTIONS_DIR,
-        config.projection_systems, config.projection_weights,
-    )
-    blended_count = conn.execute("SELECT COUNT(*) FROM blended_projections").fetchone()[0]
-    print(f"  Loaded {blended_count} blended projection rows")
-
-    load_ros_projections(
-        conn, PROJECTIONS_DIR,
-        config.projection_systems, config.projection_weights,
-    )
-    ros_count = conn.execute("SELECT COUNT(*) FROM ros_blended_projections").fetchone()[0]
-    print(f"  Loaded {ros_count} ROS projection rows")
-
     if DRAFTS_PATH.exists():
         load_draft_results(conn, DRAFTS_PATH)
         draft_count = conn.execute("SELECT COUNT(*) FROM draft_results").fetchone()[0]
@@ -71,10 +57,39 @@ def main():
         standings_count = conn.execute("SELECT COUNT(*) FROM standings").fetchone()[0]
         print(f"  Loaded {standings_count} standings rows")
 
+    # Load rosters BEFORE projections so roster names are available for quality checks
+    roster_names = None
     if ROSTERS_DIR.exists():
         load_weekly_rosters(conn, ROSTERS_DIR)
         roster_count = conn.execute("SELECT COUNT(*) FROM weekly_rosters").fetchone()[0]
         print(f"  Loaded {roster_count} roster entries")
+        from fantasy_baseball.utils.name_utils import normalize_name
+        rows = conn.execute(
+            "SELECT DISTINCT player_name FROM weekly_rosters "
+            "WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM weekly_rosters)"
+        ).fetchall()
+        if rows:
+            roster_names = {
+                normalize_name(r["player_name"].replace(" (Batter)", "").replace(" (Pitcher)", ""))
+                for r in rows
+            }
+            print(f"  Found {len(roster_names)} rostered players for quality checks")
+
+    load_blended_projections(
+        conn, PROJECTIONS_DIR,
+        config.projection_systems, config.projection_weights,
+        roster_names=roster_names, progress_cb=print,
+    )
+    blended_count = conn.execute("SELECT COUNT(*) FROM blended_projections").fetchone()[0]
+    print(f"  Loaded {blended_count} blended projection rows")
+
+    load_ros_projections(
+        conn, PROJECTIONS_DIR,
+        config.projection_systems, config.projection_weights,
+        roster_names=roster_names, progress_cb=print,
+    )
+    ros_count = conn.execute("SELECT COUNT(*) FROM ros_blended_projections").fetchone()[0]
+    print(f"  Loaded {ros_count} ROS projection rows")
 
     if POSITIONS_PATH.exists():
         positions = load_positions_cache(POSITIONS_PATH)

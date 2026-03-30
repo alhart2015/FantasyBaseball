@@ -2,7 +2,6 @@
 
 - [ ] **Pitcher streaming tool** — Score free agent SPs by matchup quality to identify streamers (pick up a mediocre pitcher facing a terrible offense for one start, then drop). Builds on the matchup adjustment system.
 
-- [ ] **Projection data quality checks** — Validate projection CSVs during load and warn about issues that silently corrupt the blend. Known problems: ZiPS ROS exports SV column as all-NaN, which zeros out every closer's saves when blended. Checks should include: (1) flag systems where a key stat column (SV, HR, K, etc.) is entirely null — exclude that system from the blend for that stat rather than treating NaN as 0, (2) flag name collisions where two players share a normalized name and the wrong one gets matched to a roster (e.g., Mason Miller the closer vs Mason Miller the prospect), (3) warn if a system's player count is dramatically different from other systems (suggests a bad export), (4) warn if a player's ROS projection exceeds their preseason projection (shouldn't happen mid-season).
 
 - [ ] **Browser-based OAuth flow for season dashboard** — Add Yahoo OAuth redirect flow directly in the dashboard so it can be used from a phone without CLI re-auth. When the token is expired, redirect to Yahoo login, handle the callback, store the refreshed token. Required before remote hosting.
 
