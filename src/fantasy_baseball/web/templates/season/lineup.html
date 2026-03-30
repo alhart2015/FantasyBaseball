@@ -31,6 +31,20 @@
 
 <div class="page-header">
     <h2>Lineup</h2>
+    {% if teams %}
+    <select id="team-selector" onchange="onTeamChange(this.value)"
+            style="background: var(--panel-bg); color: var(--text); border: 1px solid var(--panel-border);
+                   border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer; margin-left: 12px;">
+        {% for t in teams %}
+        <option value="{{ t.team_key }}"
+                {% if t.team_key == selected_team_key %}selected{% endif %}
+                {% if t.is_user %}data-is-user="true"{% endif %}>
+            {{ t.name }}{% if t.is_user %} (You){% endif %}
+        </option>
+        {% endfor %}
+    </select>
+    {% endif %}
+    <span id="opponent-status" style="color: var(--text-secondary); font-size: 12px; margin-left: 8px;"></span>
     {% if meta and meta.get('week') %}
     <div class="week-label">Week {{ meta['week'] }}</div>
     {% endif %}
@@ -247,6 +261,9 @@
 {% endif %}
 
 <script>
+var userTeamKey = "{{ user_team_key }}";
+var isViewingOpponent = false;
+
 function toggleExpand(row) {
     var next = row.nextElementSibling;
     if (next && next.classList.contains('expand-content')) {
@@ -273,31 +290,162 @@ function runOptimize(btn) {
         });
 }
 
-// Position tooltips dynamically to avoid viewport clipping
-document.querySelectorAll('.stat-cell').forEach(function(cell) {
-    cell.addEventListener('mouseenter', function() {
-        var tip = cell.querySelector('.tooltip');
-        if (!tip) return;
-        tip.style.display = 'block';
-        var rect = cell.getBoundingClientRect();
-        var tipH = tip.offsetHeight;
-        // Show below if there's room, otherwise above
-        if (rect.bottom + tipH + 8 < window.innerHeight) {
-            tip.style.top = (rect.bottom + 4) + 'px';
-        } else {
-            tip.style.top = (rect.top - tipH - 4) + 'px';
+function onTeamChange(teamKey) {
+    if (teamKey === userTeamKey) {
+        window.location.href = '/lineup';
+        return;
+    }
+    var selector = document.getElementById('team-selector');
+    selector.disabled = true;
+    var statusEl = document.getElementById('opponent-status');
+    if (statusEl) statusEl.textContent = 'Loading...';
+
+    fetch('/api/opponent/' + encodeURIComponent(teamKey) + '/lineup')
+        .then(function(r) {
+            if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || 'Failed'); });
+            return r.json();
+        })
+        .then(function(data) {
+            renderOpponentLineup(data);
+            selector.disabled = false;
+            if (statusEl) statusEl.textContent = '';
+        })
+        .catch(function(err) {
+            alert('Error loading opponent: ' + err.message);
+            selector.disabled = false;
+            if (statusEl) statusEl.textContent = '';
+        });
+}
+
+function fmtStat(val, cat) {
+    if (val === null || val === undefined) return '\u2014';
+    if (cat === 'AVG') return val.toFixed(3);
+    if (cat === 'ERA' || cat === 'WHIP') return val.toFixed(2);
+    return val;
+}
+
+function renderOpponentLineup(data) {
+    isViewingOpponent = true;
+
+    // Hide user-only elements
+    var movesBanner = document.querySelector('.moves-banner');
+    if (movesBanner) movesBanner.style.display = 'none';
+
+    // Build hitters table
+    var hitterCats = ['PA', 'R', 'HR', 'RBI', 'SB', 'AVG'];
+    var hitterHtml = '<thead><tr><th>Slot</th><th>Player</th><th>Elig</th>';
+    hitterCats.forEach(function(c) { hitterHtml += '<th>' + c + '</th>'; });
+    hitterHtml += '<th style="font-size:11px;">wSGP<br><span style="color:#6a8adf;">them</span></th>';
+    hitterHtml += '<th style="font-size:11px;">wSGP<br><span style="color:#dfb06a;">you</span></th>';
+    hitterHtml += '<th></th></tr></thead><tbody>';
+
+    data.hitters.forEach(function(h) {
+        var benchClass = (h.selected_position === 'BN' || h.selected_position === 'IL') ? ' class="bench-row"' : '';
+        hitterHtml += '<tr' + benchClass + '>';
+        hitterHtml += '<td>' + (h.selected_position || 'BN') + '</td>';
+        hitterHtml += '<td style="text-align:left;font-weight:500;">' + h.name + '</td>';
+        hitterHtml += '<td style="text-align:left;color:var(--text-secondary);font-size:11px;">' + (h.positions || []).join(', ') + '</td>';
+        hitterCats.forEach(function(cat) {
+            var st = (h.stats || {})[cat] || {};
+            var colorClass = st.color_class || 'stat-neutral';
+            var val = st.actual !== undefined && st.actual !== null ? fmtStat(st.actual, cat) : '\u2014';
+            hitterHtml += '<td class="' + colorClass + (cat === 'PA' ? ' pa-col' : '') + '">' + val + '</td>';
+        });
+        hitterHtml += '<td style="color:#6a8adf;">' + (h.wsgp_them ? h.wsgp_them.toFixed(2) : '\u2014') + '</td>';
+        hitterHtml += '<td style="color:#dfb06a;">' + (h.wsgp_you ? h.wsgp_you.toFixed(2) : '\u2014') + '</td>';
+        hitterHtml += '<td>' + (h.status ? '<span class="badge badge-il">' + h.status + '</span>' : '') + '</td>';
+        hitterHtml += '</tr>';
+    });
+    hitterHtml += '</tbody>';
+
+    // Build pitchers table
+    var pitcherCats = ['IP', 'W', 'K', 'SV', 'ERA', 'WHIP'];
+    var pitcherHtml = '<thead><tr><th>Slot</th><th>Player</th>';
+    pitcherCats.forEach(function(c) { pitcherHtml += '<th>' + c + '</th>'; });
+    pitcherHtml += '<th style="font-size:11px;">wSGP<br><span style="color:#6a8adf;">them</span></th>';
+    pitcherHtml += '<th style="font-size:11px;">wSGP<br><span style="color:#dfb06a;">you</span></th>';
+    pitcherHtml += '<th></th></tr></thead><tbody>';
+
+    data.pitchers.forEach(function(p) {
+        var benchClass = (p.selected_position === 'BN' || p.selected_position === 'IL') ? ' class="bench-row"' : '';
+        pitcherHtml += '<tr' + benchClass + '>';
+        pitcherHtml += '<td>' + (p.selected_position || 'BN') + '</td>';
+        pitcherHtml += '<td style="text-align:left;font-weight:500;">' + p.name + '</td>';
+        pitcherCats.forEach(function(cat) {
+            var st = (p.stats || {})[cat] || {};
+            var colorClass = st.color_class || 'stat-neutral';
+            var val = st.actual !== undefined && st.actual !== null ? fmtStat(st.actual, cat) : '\u2014';
+            pitcherHtml += '<td class="' + colorClass + (cat === 'IP' ? ' pa-col' : '') + '">' + val + '</td>';
+        });
+        pitcherHtml += '<td style="color:#6a8adf;">' + (p.wsgp_them ? p.wsgp_them.toFixed(2) : '\u2014') + '</td>';
+        pitcherHtml += '<td style="color:#dfb06a;">' + (p.wsgp_you ? p.wsgp_you.toFixed(2) : '\u2014') + '</td>';
+        pitcherHtml += '<td>' + (p.status ? '<span class="badge badge-il">' + p.status + '</span>' : '') + '</td>';
+        pitcherHtml += '</tr>';
+    });
+    pitcherHtml += '</tbody>';
+
+    // Replace table contents
+    var tables = document.querySelectorAll('.data-table');
+    if (tables[0]) tables[0].innerHTML = hitterHtml;
+    if (tables[1]) tables[1].innerHTML = pitcherHtml;
+
+    // Update hitters section header — hide optimize, show rank
+    var sectionHeaders = document.querySelectorAll('.section-header');
+    if (sectionHeaders[0]) {
+        var btn = sectionHeaders[0].querySelector('.btn-optimize');
+        if (btn) btn.style.display = 'none';
+        var rankEl = sectionHeaders[0].querySelector('.opp-rank');
+        if (!rankEl) {
+            rankEl = document.createElement('span');
+            rankEl.className = 'opp-rank';
+            rankEl.style.cssText = 'color:var(--text-secondary);font-size:12px;';
+            sectionHeaders[0].appendChild(rankEl);
         }
-        // Center horizontally, clamp to viewport
-        var tipW = tip.offsetWidth;
-        var left = rect.left + rect.width / 2 - tipW / 2;
-        left = Math.max(4, Math.min(left, window.innerWidth - tipW - 4));
-        tip.style.left = left + 'px';
-    });
-    cell.addEventListener('mouseleave', function() {
-        var tip = cell.querySelector('.tooltip');
-        if (tip) tip.style.display = 'none';
-    });
+        var suffix = data.rank === 1 ? 'st' : data.rank === 2 ? 'nd' : data.rank === 3 ? 'rd' : 'th';
+        rankEl.textContent = 'Ranked ' + data.rank + suffix;
+        rankEl.style.display = '';
+    }
+
+    // Hide probable starters for opponents
+    if (sectionHeaders[2]) sectionHeaders[2].style.display = 'none';
+    if (tables[2]) tables[2].style.display = 'none';
+}
+
+function showTooltip() {
+    var tip = this.querySelector('.tooltip');
+    if (!tip) return;
+    tip.style.display = 'block';
+    var rect = this.getBoundingClientRect();
+    var tipH = tip.offsetHeight;
+    if (rect.bottom + tipH + 8 < window.innerHeight) {
+        tip.style.top = (rect.bottom + 4) + 'px';
+    } else {
+        tip.style.top = (rect.top - tipH - 4) + 'px';
+    }
+    var tipW = tip.offsetWidth;
+    var left = rect.left + rect.width / 2 - tipW / 2;
+    left = Math.max(4, Math.min(left, window.innerWidth - tipW - 4));
+    tip.style.left = left + 'px';
+}
+
+function hideTooltip() {
+    var tip = this.querySelector('.tooltip');
+    if (tip) tip.style.display = 'none';
+}
+
+// Bind tooltips for initial render
+document.querySelectorAll('.stat-cell').forEach(function(cell) {
+    cell.addEventListener('mouseenter', showTooltip);
+    cell.addEventListener('mouseleave', hideTooltip);
 });
+
+// Auto-load opponent if selected via query param
+(function() {
+    var selector = document.getElementById('team-selector');
+    if (selector && selector.value && selector.value !== userTeamKey) {
+        onTeamChange(selector.value);
+    }
+})();
 </script>
 
 {% endblock %}

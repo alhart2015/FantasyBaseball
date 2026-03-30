@@ -164,12 +164,24 @@ def register_routes(app: Flask) -> None:
             from fantasy_baseball.web.season_data import format_lineup_for_display
             lineup_data = format_lineup_for_display(roster_raw, optimal_raw)
 
+        # Build teams list for opponent selector dropdown
+        from fantasy_baseball.web.season_data import get_teams_list
+        standings_raw = read_cache("standings")
+        config = _load_config()
+        teams_data = get_teams_list(standings_raw or [], config.team_name)
+
+        # Check if a specific team was requested via query param
+        selected_team_key = request.args.get("team", teams_data.get("user_team_key", ""))
+
         return render_template(
             "season/lineup.html",
             meta=meta,
             active_page="lineup",
             lineup=lineup_data,
             starters=starters_raw,
+            teams=teams_data["teams"],
+            user_team_key=teams_data.get("user_team_key", ""),
+            selected_team_key=selected_team_key,
         )
 
     @app.route("/api/optimize", methods=["POST"])
