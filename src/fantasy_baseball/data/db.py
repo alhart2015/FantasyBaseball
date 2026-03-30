@@ -604,6 +604,8 @@ def load_blended_projections(
     projections_dir,
     systems: list[str],
     weights: dict[str, float] | None = None,
+    roster_names: set[str] | None = None,
+    progress_cb=None,
 ) -> None:
     """Scan projections_dir for year subdirectories, blend projections for each
     year using the requested systems, and insert into blended_projections.
@@ -622,7 +624,10 @@ def load_blended_projections(
         year = int(year_dir.name)
 
         try:
-            hitters_df, pitchers_df, _ = blend_projections(year_dir, systems, weights)
+            hitters_df, pitchers_df, _ = blend_projections(
+                year_dir, systems, weights,
+                roster_names=roster_names, progress_cb=progress_cb,
+            )
         except Exception:
             continue
 
@@ -639,6 +644,8 @@ def load_ros_projections(
     projections_dir,
     systems: list[str],
     weights: dict[str, float] | None = None,
+    roster_names: set[str] | None = None,
+    progress_cb=None,
 ) -> None:
     """Scan projections_dir for ROS snapshot directories and load them.
 
@@ -668,7 +675,10 @@ def load_ros_projections(
             snapshot_date = date_dir.name
 
             try:
-                hitters_df, pitchers_df, _ = blend_projections(date_dir, systems, weights)
+                hitters_df, pitchers_df, _ = blend_projections(
+                    date_dir, systems, weights,
+                    roster_names=roster_names, progress_cb=progress_cb,
+                )
             except Exception:
                 continue
 
