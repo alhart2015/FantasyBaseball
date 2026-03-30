@@ -181,6 +181,13 @@ def simulate_remaining_season(
     team_stats = {}
     injuries = {}
 
+    # Season over — just return actuals, no simulation needed
+    if fraction_remaining <= 0:
+        for team_key in team_rosters:
+            team_stats[team_key] = dict(actual_standings.get(team_key, {}))
+            injuries[team_key] = []
+        return team_stats, injuries
+
     for team_key, players in team_rosters.items():
         actuals = actual_standings.get(team_key, {})
         hitters = [p for p in players if p.get("player_type") == "hitter"]

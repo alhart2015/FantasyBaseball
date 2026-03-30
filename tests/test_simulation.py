@@ -129,41 +129,25 @@ class TestSimulateRemainingSeason:
         assert "Team B" in injuries
 
     def test_zero_remaining(self):
-        """When fraction_remaining=0, variance is zero so results are
-        deterministic across different seeds."""
+        """When fraction_remaining=0, result must equal actuals exactly."""
         rosters = _build_two_team_rosters()
         actuals = _build_actual_standings()
 
-        rng1 = np.random.default_rng(99)
-        team_stats1, _ = simulate_remaining_season(
-            actuals, rosters, fraction_remaining=0.0, rng=rng1,
+        rng = np.random.default_rng(99)
+        team_stats, injuries = simulate_remaining_season(
+            actuals, rosters, fraction_remaining=0.0, rng=rng,
             h_slots=3, p_slots=2,
         )
 
-        rng2 = np.random.default_rng(123)
-        team_stats2, _ = simulate_remaining_season(
-            actuals, rosters, fraction_remaining=0.0, rng=rng2,
-            h_slots=3, p_slots=2,
-        )
-
-        # With fraction_remaining=0: cov is all zeros (draws are zero),
-        # injury_prob is 0 (no injuries). Player stats pass through unchanged.
-        # So different seeds should produce identical results.
         for team in ["Team A", "Team B"]:
-            s1 = team_stats1[team]
-            s2 = team_stats2[team]
-            for cat in ["R", "HR", "RBI", "SB", "W", "K", "SV", "AVG", "ERA", "WHIP"]:
-                assert abs(s1[cat] - s2[cat]) < 1e-9, (
-                    f"{team} {cat} not deterministic with zero remaining: "
-                    f"{s1[cat]} vs {s2[cat]}"
-                )
-
-            # Counting stats should still include actuals (sim adds projections)
             act = actuals[team]
+            result = team_stats[team]
             for cat in ["R", "HR", "RBI", "SB", "W", "K", "SV"]:
-                assert s1[cat] >= act[cat], (
-                    f"{team} {cat}: final {s1[cat]} < actual {act[cat]}"
+                assert result[cat] == pytest.approx(act[cat]), (
+                    f"{team} {cat}: expected {act[cat]} at fraction_remaining=0, "
+                    f"got {result[cat]}"
                 )
+            assert injuries[team] == []
 
 
 # ---------------------------------------------------------------------------
