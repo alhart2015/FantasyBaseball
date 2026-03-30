@@ -623,6 +623,100 @@ def load_blended_projections(
     conn.commit()
 
 
+# Ordered list of columns in ros_blended_projections (snapshot_date added after year).
+_ROS_TABLE_COLS = [
+    "year", "snapshot_date", "fg_id", "name", "team", "player_type",
+    "pa", "ab", "h", "r", "hr", "rbi", "sb", "avg",
+    "w", "k", "sv", "ip", "er", "bb", "h_allowed",
+    "era", "whip", "adp",
+]
+
+
+def _df_to_ros_rows(
+    df: pd.DataFrame, year: int, snapshot_date: str
+) -> tuple[list[str], list[tuple]]:
+    """Prepare a ROS blended projection DataFrame for insertion.
+
+    Adds ``year`` and ``snapshot_date`` columns, ensures ``fg_id`` exists
+    (falls back to ``name``), selects only columns present in the table schema,
+    and returns ``(column_names, rows)`` ready for ``executemany``.
+    """
+    df = df.copy()
+    df["year"] = year
+    df["snapshot_date"] = snapshot_date
+
+    # Ensure fg_id — fall back to name if the column is absent or all-null
+    if "fg_id" not in df.columns or df["fg_id"].isna().all():
+        df["fg_id"] = df["name"]
+    else:
+        df["fg_id"] = df["fg_id"].fillna(df["name"])
+
+    # Select only columns that exist in both the DataFrame and the table schema
+    keep = [c for c in _ROS_TABLE_COLS if c in df.columns]
+    df = df[keep]
+
+    rows = [
+        tuple(None if pd.isna(v) else v for v in row)
+        for row in df.itertuples(index=False, name=None)
+    ]
+    return keep, rows
+
+
+def load_ros_projections(
+    conn,
+    projections_dir,
+    systems: list[str],
+    weights: dict[str, float] | None = None,
+) -> None:
+    """Scan projections_dir for ROS snapshot directories and load them.
+
+    Directory structure expected::
+
+        projections_dir/{year}/ros/{YYYY-MM-DD}/{system}-hitters.csv
+
+    For each date subdirectory found, calls ``blend_projections()`` and inserts
+    the result into ``ros_blended_projections``.  Date dirs that are missing the
+    requested system files are skipped silently.  Uses INSERT OR REPLACE so
+    repeated calls are idempotent.
+    """
+    projections_dir = Path(projections_dir)
+
+    for year_dir in sorted(projections_dir.iterdir()):
+        if not year_dir.is_dir() or not year_dir.name.isdigit():
+            continue
+        year = int(year_dir.name)
+
+        ros_dir = year_dir / "ros"
+        if not ros_dir.is_dir():
+            continue
+
+        for date_dir in sorted(ros_dir.iterdir()):
+            if not date_dir.is_dir():
+                continue
+            snapshot_date = date_dir.name
+
+            try:
+                hitters_df, pitchers_df = blend_projections(date_dir, systems, weights)
+            except Exception:
+                # Missing files, unrecognised format, etc. — skip this snapshot.
+                continue
+
+            for df in (hitters_df, pitchers_df):
+                if df.empty:
+                    continue
+                col_names, rows = _df_to_ros_rows(df, year, snapshot_date)
+                if not rows:
+                    continue
+                placeholders = ", ".join("?" * len(col_names))
+                insert_sql = (
+                    f"INSERT OR REPLACE INTO ros_blended_projections ({', '.join(col_names)}) "
+                    f"VALUES ({placeholders})"
+                )
+                conn.executemany(insert_sql, rows)
+
+    conn.commit()
+
+
 def get_blended_projections(
     conn, year: int | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:

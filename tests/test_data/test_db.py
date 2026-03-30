@@ -7,6 +7,7 @@ from fantasy_baseball.data.db import (
     load_raw_projections,
     load_blended_projections,
     get_blended_projections,
+    load_ros_projections,
     load_draft_results,
     load_standings,
     load_weekly_rosters,
@@ -514,4 +515,70 @@ def test_get_blended_projections(tmp_path):
     judge = hitters[hitters["name"] == "Aaron Judge"]
     assert len(judge) == 1
     assert judge.iloc[0]["hr"] > 0
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Helper: build a minimal ROS projections directory tree using fixture CSVs
+# ---------------------------------------------------------------------------
+
+def _make_ros_dir(tmp_path, year=2026, date="2026-04-07"):
+    """Create data/projections/{year}/ros/{date}/ with steamer fixture CSVs."""
+    import shutil
+    fixtures = Path(__file__).parent.parent / "fixtures"
+    date_dir = tmp_path / "projections" / str(year) / "ros" / date
+    date_dir.mkdir(parents=True)
+    # blend_projections expects {system}-hitters.csv / {system}-pitchers.csv
+    shutil.copy(fixtures / "steamer_hitters.csv", date_dir / "steamer-hitters.csv")
+    shutil.copy(fixtures / "steamer_pitchers.csv", date_dir / "steamer-pitchers.csv")
+    return date_dir
+
+
+# ---------------------------------------------------------------------------
+# Task 2: load_ros_projections()
+# ---------------------------------------------------------------------------
+
+def test_load_ros_projections_basic(tmp_path):
+    """Task 2: loading a single ROS snapshot inserts hitter and pitcher rows."""
+    _make_ros_dir(tmp_path, year=2026, date="2026-04-07")
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    create_tables(conn)
+    load_ros_projections(conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0})
+
+    rows = conn.execute(
+        "SELECT * FROM ros_blended_projections WHERE year=2026 AND snapshot_date='2026-04-07'"
+    ).fetchall()
+    # Fixture has 4 hitters + 3 pitchers
+    assert len(rows) == 7
+
+    hitter_rows = [r for r in rows if r["player_type"] == "hitter"]
+    pitcher_rows = [r for r in rows if r["player_type"] == "pitcher"]
+    assert len(hitter_rows) == 4
+    assert len(pitcher_rows) == 3
+
+    # Spot-check a value
+    judge = conn.execute(
+        "SELECT hr FROM ros_blended_projections WHERE name='Aaron Judge' AND snapshot_date='2026-04-07'"
+    ).fetchone()
+    assert judge is not None
+    assert judge["hr"] > 0
+    conn.close()
+
+
+def test_load_ros_projections_idempotent(tmp_path):
+    """Task 2: calling load_ros_projections twice must not duplicate rows."""
+    _make_ros_dir(tmp_path, year=2026, date="2026-04-07")
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    create_tables(conn)
+    load_ros_projections(conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0})
+    load_ros_projections(conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0})
+
+    count = conn.execute(
+        "SELECT COUNT(*) FROM ros_blended_projections WHERE year=2026 AND snapshot_date='2026-04-07'"
+    ).fetchone()[0]
+    assert count == 7  # exactly one hitter + pitcher set, no duplicates
     conn.close()
