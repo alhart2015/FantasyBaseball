@@ -6,6 +6,8 @@
 
 - [x] **Load rest-of-season (ROS) projections into SQLite** — Done: `ros_blended_projections` table with `snapshot_date` column. `load_ros_projections()` scans `data/projections/{year}/ros/YYYY-MM-DD/` directories and blends using the same `blend_projections()` function. Loaded during `build_db.py` and during dashboard refresh.
 
+- [ ] **Projection data quality checks** — Validate projection CSVs during load and warn about issues that silently corrupt the blend. Known problems: ZiPS ROS exports SV column as all-NaN, which zeros out every closer's saves when blended. Checks should include: (1) flag systems where a key stat column (SV, HR, K, etc.) is entirely null — exclude that system from the blend for that stat rather than treating NaN as 0, (2) flag name collisions where two players share a normalized name and the wrong one gets matched to a roster (e.g., Mason Miller the closer vs Mason Miller the prospect), (3) warn if a system's player count is dramatically different from other systems (suggests a bad export), (4) warn if a player's ROS projection exceeds their preseason projection (shouldn't happen mid-season).
+
 - [ ] **Automate ROS projection download** — If the manual FanGraphs CSV download gets tedious, automate it. FanGraphs doesn't have a public API so this would require browser automation (Playwright) or finding an unofficial data source. Low priority unless the manual process is a pain.
 
 - [ ] **Browser-based OAuth flow for season dashboard** — Add Yahoo OAuth redirect flow directly in the dashboard so it can be used from a phone without CLI re-auth. When the token is expired, redirect to Yahoo login, handle the callback, store the refreshed token. Required before remote hosting.
