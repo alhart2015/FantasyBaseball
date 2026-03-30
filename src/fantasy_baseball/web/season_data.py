@@ -461,6 +461,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.data.db import (
             create_tables, fetch_and_load_game_logs,
             get_connection as get_db_connection, get_blended_projections,
+            get_ros_projections, load_ros_projections,
         )
         from fantasy_baseball.lineup.leverage import calculate_leverage
         from fantasy_baseball.lineup.matchups import calculate_matchup_factors, get_team_batting_stats
@@ -513,6 +514,27 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         hitters_proj["_name_norm"] = hitters_proj["name"].apply(normalize_name)
         pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
 
+        # --- Step 4b: Load ROS projections ---
+        _set_refresh_progress("Loading ROS projections...")
+        projections_dir = project_root / "data" / "projections"
+        ros_conn = get_db_connection()
+        create_tables(ros_conn)
+        try:
+            load_ros_projections(
+                ros_conn, projections_dir,
+                config.projection_systems, config.projection_weights,
+            )
+        finally:
+            ros_conn.close()
+
+        ros_conn = get_db_connection()
+        ros_hitters, ros_pitchers = get_ros_projections(ros_conn)
+        ros_conn.close()
+        has_ros = not ros_hitters.empty or not ros_pitchers.empty
+        if has_ros:
+            ros_hitters["_name_norm"] = ros_hitters["name"].apply(normalize_name)
+            ros_pitchers["_name_norm"] = ros_pitchers["name"].apply(normalize_name)
+
         # --- Step 5: Leverage weights ---
         _set_refresh_progress("Calculating leverage weights...")
         leverage = calculate_leverage(standings, config.team_name)
@@ -522,12 +544,29 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.data.projections import match_roster_to_projections
 
         matched = match_roster_to_projections(roster_raw, hitters_proj, pitchers_proj)
+
+        # Match ROS projections to roster players for tooltip display
+        if has_ros:
+            ros_matched = match_roster_to_projections(roster_raw, ros_hitters, ros_pitchers)
+            ros_lookup = {normalize_name(p["name"]): p for p in ros_matched}
+        else:
+            ros_lookup = {}
+
         # Build lookup of matched players, add wSGP
         matched_names = set()
         roster_with_proj = []
         for entry in matched:
             entry["wsgp"] = calculate_weighted_sgp(pd.Series(entry), leverage)
-            matched_names.add(normalize_name(entry["name"]))
+            norm = normalize_name(entry["name"])
+            matched_names.add(norm)
+            # Attach ROS projection stats for tooltip
+            ros_entry = ros_lookup.get(norm)
+            if ros_entry:
+                entry["ros"] = {
+                    k: ros_entry.get(k, 0)
+                    for k in (["r", "hr", "rbi", "sb", "avg"] if entry.get("player_type") == "hitter"
+                              else ["w", "k", "sv", "era", "whip"])
+                }
             roster_with_proj.append(entry)
         # Include unmatched players with wsgp=0
         for player in roster_raw:
@@ -780,7 +819,60 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             progress_cb=lambda i: _set_refresh_progress(f"MC + Roster Mgmt: iteration {i}/1000..."),
         )
 
-        write_cache("monte_carlo", {"base": base_mc, "with_management": mgmt_mc}, cache_dir)
+        # --- Step 13b: ROS Monte Carlo simulation ---
+        ros_mc = None
+        if has_ros:
+            from fantasy_baseball.simulation import run_ros_monte_carlo
+            from datetime import date
+
+            season_start = date.fromisoformat(config.season_start)
+            season_end = date.fromisoformat(config.season_end)
+            total_days = (season_end - season_start).days
+            remaining_days = max(0, (season_end - date.today()).days)
+            fraction_remaining = remaining_days / total_days if total_days > 0 else 0
+
+            # Build ROS rosters for all teams
+            ros_mc_rosters = {}
+            # User's team
+            user_ros_matched = match_roster_to_projections(
+                roster_raw, ros_hitters, ros_pitchers,
+            )
+            if user_ros_matched:
+                ros_mc_rosters[config.team_name] = [pd.Series(p) for p in user_ros_matched]
+
+            # Opponent teams
+            for tname, opp_raw in all_raw_rosters.items():
+                if tname == config.team_name:
+                    continue
+                opp_ros = match_roster_to_projections(
+                    opp_raw, ros_hitters, ros_pitchers,
+                )
+                if opp_ros:
+                    ros_mc_rosters[tname] = [pd.Series(p) for p in opp_ros]
+
+            # Build actual standings dict
+            actual_standings_dict = {
+                s["name"]: s["stats"] for s in standings
+            }
+
+            if ros_mc_rosters:
+                ros_mc = run_ros_monte_carlo(
+                    team_rosters=ros_mc_rosters,
+                    actual_standings=actual_standings_dict,
+                    fraction_remaining=fraction_remaining,
+                    h_slots=h_slots, p_slots=p_slots,
+                    user_team_name=config.team_name,
+                    n_iterations=1000,
+                    progress_cb=lambda i: _set_refresh_progress(
+                        f"Current MC: iteration {i}/1000..."
+                    ),
+                )
+
+        write_cache("monte_carlo", {
+            "base": base_mc,
+            "with_management": mgmt_mc,
+            "ros": ros_mc,
+        }, cache_dir)
 
         # --- Step 14: Update SQLite database ---
         _set_refresh_progress("Updating database...")
