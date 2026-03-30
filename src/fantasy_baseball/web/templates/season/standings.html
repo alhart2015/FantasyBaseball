@@ -58,6 +58,7 @@
         <button class="pill active" data-psub="static" onclick="toggleProjectedSub(this)">Static</button>
         <button class="pill" data-psub="mc" onclick="toggleProjectedSub(this)">Monte Carlo</button>
         <button class="pill" data-psub="mc-mgmt" onclick="toggleProjectedSub(this)">MC + Roster Mgmt</button>
+        <button class="pill" data-psub="ros-mc" onclick="toggleProjectedSub(this)">Current MC</button>
     </div>
 
     {# Static projected view #}
@@ -180,6 +181,16 @@
         <p class="placeholder-text">No MC + Roster Mgmt data available.</p>
         {% endif %}
     </div>
+
+    {# Current MC (ROS) view #}
+    <div id="proj-ros-mc" style="display: none;">
+        {% if ros_mc %}
+        {{ mc_team_table(ros_mc) }}
+        {{ cat_risk_table(ros_mc) }}
+        {% else %}
+        <p class="placeholder-text">No ROS projections loaded. Download ROS projections from FanGraphs and place them in data/projections/&lt;year&gt;/ros/YYYY-MM-DD/.</p>
+        {% endif %}
+    </div>
 </div>
 
 <script>
@@ -213,6 +224,7 @@ function toggleProjectedSub(el) {
     document.getElementById('proj-static').style.display = sub === 'static' ? '' : 'none';
     document.getElementById('proj-mc').style.display = sub === 'mc' ? '' : 'none';
     document.getElementById('proj-mc-mgmt').style.display = sub === 'mc-mgmt' ? '' : 'none';
+    document.getElementById('proj-ros-mc').style.display = sub === 'ros-mc' ? '' : 'none';
 }
 
 function toggleProjStaticSub(el) {
