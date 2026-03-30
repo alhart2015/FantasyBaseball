@@ -698,18 +698,10 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                         (config.season_year, latest_on_disk),
                     ).fetchone()[0]
                     if existing == 0:
-                        # Build roster names for quality checks
+                        from fantasy_baseball.data.db import get_roster_names
                         ros_roster_names = None
                         try:
-                            roster_rows = db_conn.execute(
-                                "SELECT DISTINCT player_name FROM weekly_rosters "
-                                "WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM weekly_rosters)"
-                            ).fetchall()
-                            if roster_rows:
-                                ros_roster_names = {
-                                    normalize_name(r["player_name"].replace(" (Batter)", "").replace(" (Pitcher)", ""))
-                                    for r in roster_rows
-                                }
+                            ros_roster_names = get_roster_names(db_conn)
                         except Exception:
                             pass
                         load_ros_projections(

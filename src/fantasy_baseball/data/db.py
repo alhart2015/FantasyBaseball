@@ -529,6 +529,24 @@ def load_positions(conn, positions: dict[str, list[str]]) -> None:
     conn.commit()
 
 
+def get_roster_names(conn) -> set[str] | None:
+    """Get normalized names of all rostered players from the latest roster snapshot.
+
+    Returns a set of normalized player names (with Yahoo suffixes like
+    "(Batter)" stripped), or None if no roster data exists.
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT player_name FROM weekly_rosters "
+        "WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM weekly_rosters)"
+    ).fetchall()
+    if not rows:
+        return None
+    return {
+        normalize_name(_PLAYER_SUFFIX_RE.sub("", r["player_name"]))
+        for r in rows
+    }
+
+
 def get_positions(conn) -> dict[str, list[str]]:
     """Read position eligibility from the database.
 

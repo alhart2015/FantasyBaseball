@@ -63,16 +63,9 @@ def main():
         load_weekly_rosters(conn, ROSTERS_DIR)
         roster_count = conn.execute("SELECT COUNT(*) FROM weekly_rosters").fetchone()[0]
         print(f"  Loaded {roster_count} roster entries")
-        from fantasy_baseball.utils.name_utils import normalize_name
-        rows = conn.execute(
-            "SELECT DISTINCT player_name FROM weekly_rosters "
-            "WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM weekly_rosters)"
-        ).fetchall()
-        if rows:
-            roster_names = {
-                normalize_name(r["player_name"].replace(" (Batter)", "").replace(" (Pitcher)", ""))
-                for r in rows
-            }
+        from fantasy_baseball.data.db import get_roster_names
+        roster_names = get_roster_names(conn)
+        if roster_names:
             print(f"  Found {len(roster_names)} rostered players for quality checks")
 
     load_blended_projections(

@@ -219,9 +219,12 @@ def _blend_players(
         result["fg_id"] = combined.groupby(group_col)["fg_id"].first()
 
     # ADP: weighted average of non-null values only
+    # Use original group-normalized weights (not per-stat NaN-aware weights)
     if "adp" in combined.columns:
+        group_w_sum = pd.Series(weights_arr).groupby(groups).transform("sum").values
+        base_nw = np.where(group_w_sum > 0, weights_arr / group_w_sum, 0.0)
         adp_vals = combined["adp"].values.astype(float).copy()
-        adp_nw = nw.copy()
+        adp_nw = base_nw.copy()
         mask = np.isnan(adp_vals)
         adp_vals[mask] = 0.0
         adp_nw[mask] = 0.0

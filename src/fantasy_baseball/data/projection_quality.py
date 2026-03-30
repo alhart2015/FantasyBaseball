@@ -74,6 +74,14 @@ def _check_stat_outliers(
         if len(sys_frames) < 2:
             continue
 
+        # Resolve key column once per system (fg_id if fully populated, else name)
+        sys_key_col = {}
+        for sys_name, df in sys_frames.items():
+            if "fg_id" in df.columns and df["fg_id"].notna().all():
+                sys_key_col[sys_name] = "fg_id"
+            else:
+                sys_key_col[sys_name] = "name"
+
         for stat in stat_cols:
             present_systems = {s: df for s, df in sys_frames.items() if stat in df.columns}
             if len(present_systems) < 2:
@@ -81,16 +89,11 @@ def _check_stat_outliers(
 
             # Find players with >0 in this stat in ANY system (for sparse stats like SV)
             all_keys = set()
-            for df in present_systems.values():
-                if "fg_id" in df.columns and df["fg_id"].notna().all():
-                    key_col = "fg_id"
-                else:
-                    key_col = "name"
-                nonzero = df[df[stat].fillna(0) > 0][key_col]
+            for sys_name, df in present_systems.items():
+                nonzero = df[df[stat].fillna(0) > 0][sys_key_col[sys_name]]
                 all_keys.update(nonzero.values)
 
             # Check for all-NaN columns before the sparse-stat filter
-            # (a system with all-NaN won't contribute to all_keys but should still be flagged)
             all_nan_systems = {
                 s for s, df in present_systems.items() if df[stat].isna().all()
             }
@@ -104,11 +107,7 @@ def _check_stat_outliers(
                 if sys_name in all_nan_systems:
                     sys_medians[sys_name] = float("nan")
                     continue
-                if "fg_id" in df.columns and df["fg_id"].notna().all():
-                    key_col = "fg_id"
-                else:
-                    key_col = "name"
-                pool = df[df[key_col].isin(all_keys)]
+                pool = df[df[sys_key_col[sys_name]].isin(all_keys)]
                 vals = pool[stat].fillna(0)
                 sys_medians[sys_name] = float(vals.median()) if len(vals) > 0 else 0.0
 
@@ -167,9 +166,6 @@ def _check_player_counts(
         for sys_name, dfs in system_dfs.items():
             df = dfs[df_idx]
             counts[sys_name] = len(df) if not df.empty else 0
-
-        if not counts or all(c == 0 for c in counts.values()):
-            continue
 
         nonzero_counts = [c for c in counts.values() if c > 0]
         if not nonzero_counts:
