@@ -407,6 +407,7 @@ def register_routes(app: Flask) -> None:
             create_tables, get_connection as get_db_connection,
             load_ros_projections,
         )
+        from fantasy_baseball.utils.name_utils import normalize_name
         from fantasy_baseball.web.job_logger import JobLogger
 
         logger = JobLogger("ros_fetch")
@@ -424,14 +425,47 @@ def register_routes(app: Flask) -> None:
             for system, status in results.items():
                 logger.log(f"  {system}: {status}")
 
-            logger.log("Loading into SQLite...")
+            # Load roster names for quality checks
+            roster_names = None
             db_conn = get_db_connection()
             create_tables(db_conn)
             try:
+                rows = db_conn.execute(
+                    "SELECT DISTINCT player_name FROM weekly_rosters "
+                    "WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM weekly_rosters)"
+                ).fetchall()
+                if rows:
+                    roster_names = {
+                        normalize_name(r["player_name"].replace(" (Batter)", "").replace(" (Pitcher)", ""))
+                        for r in rows
+                    }
+                    logger.log(f"Loaded {len(roster_names)} rostered players for quality checks")
+
+                # Track quality warnings for standalone report
+                quality_warnings = []
+                def _quality_cb(msg):
+                    logger.log(msg)
+                    if msg.startswith("QUALITY:"):
+                        quality_warnings.append(msg)
+
+                logger.log("Loading into SQLite...")
                 load_ros_projections(
                     db_conn, projections_dir,
                     config.projection_systems, config.projection_weights,
+                    roster_names=roster_names, progress_cb=_quality_cb,
                 )
+
+                # Write standalone quality report
+                if quality_warnings:
+                    q_logger = JobLogger("projection_quality")
+                    for w in quality_warnings:
+                        q_logger.log(w)
+                    exclusions = [w for w in quality_warnings if "EXCLUDE" in w]
+                    q_logger.finish(
+                        "warning" if exclusions else "ok",
+                        f"{len(quality_warnings)} warnings, {len(exclusions)} exclusions"
+                        if quality_warnings else None,
+                    )
             finally:
                 db_conn.close()
 
