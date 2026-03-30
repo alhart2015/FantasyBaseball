@@ -4,6 +4,8 @@ league:
   game_code: mlb
   team_name: "Hart of the Order"
   season_year: 2026
+  season_start: "2026-03-27"
+  season_end: "2026-09-28"
 
 draft:
   strategy: three_closers

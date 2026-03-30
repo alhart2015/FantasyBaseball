@@ -19,6 +19,8 @@ class LeagueConfig:
     strategy: str = "no_punt_opp"
     scoring_mode: str = "var"
     season_year: int = 2026
+    season_start: str = "2026-03-27"
+    season_end: str = "2026-09-28"
 
 
 def load_config(config_path: Path) -> LeagueConfig:
@@ -48,4 +50,6 @@ def load_config(config_path: Path) -> LeagueConfig:
         strategy=draft.get("strategy", "no_punt_opp"),
         scoring_mode=draft.get("scoring_mode", "var"),
         season_year=league.get("season_year", 2026),
+        season_start=league.get("season_start", "2026-03-27"),
+        season_end=league.get("season_end", "2026-09-28"),
     )
