@@ -150,15 +150,14 @@ def simulate_remaining_season(
 ) -> tuple[dict, dict]:
     """Simulate only the remaining portion of the season and blend with YTD actuals.
 
-    For each team, scales variance and injury probability by fraction_remaining,
-    simulates remaining-season stats, then blends with actual YTD stats to
-    produce full-season totals (counting stats sum, rate stats recomputed from
-    component totals).
+    ROS projections from FanGraphs are full-season scale (not remainder-only),
+    so counting stats are scaled by fraction_remaining before variance is applied.
+    Variance and injury probability are also scaled by fraction_remaining.
 
     Args:
         actual_standings: {team_key: {R, HR, RBI, SB, AVG, W, K, SV, ERA, WHIP}}
             — actual YTD stats for each team.
-        team_rosters: {team_key: [player dicts]} with ROS projections.
+        team_rosters: {team_key: [player dicts]} with full-season ROS projections.
         fraction_remaining: Float 0.0–1.0, portion of season left to simulate.
         rng: NumPy random generator for reproducibility.
         h_slots: Number of active hitter slots.
@@ -172,10 +171,24 @@ def simulate_remaining_season(
     team_stats = {}
     injuries = {}
 
+    # Scale full-season ROS projections to remaining season
+    h_counting = HITTING_COUNTING   # ["r", "hr", "rbi", "sb", "h", "ab"]
+    p_counting = PITCHING_COUNTING  # ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
+
     for team_key, players in team_rosters.items():
         actuals = actual_standings.get(team_key, {})
-        hitters = [p for p in players if p.get("player_type") == "hitter"]
-        pitchers = [p for p in players if p.get("player_type") == "pitcher"]
+
+        # Scale counting stats by fraction_remaining
+        scaled_players = []
+        for p in players:
+            sp = dict(p)
+            cols = h_counting if sp.get("player_type") == "hitter" else p_counting
+            for col in cols:
+                sp[col] = float(sp.get(col, 0) or 0) * fraction_remaining
+            scaled_players.append(sp)
+
+        hitters = [p for p in scaled_players if p.get("player_type") == "hitter"]
+        pitchers = [p for p in scaled_players if p.get("player_type") == "pitcher"]
         team_injuries = []
 
         adj_hitters = _apply_variance(
