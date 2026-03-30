@@ -40,7 +40,7 @@ REQUIRED_PITCHING_COLS: list[str] = ["name", "ip", "w", "k", "era", "whip", "sv"
 
 def parse_hitting_csv(filepath: Path) -> pd.DataFrame:
     """Parse a FanGraphs hitting projections CSV into normalized columns."""
-    df = pd.read_csv(filepath, encoding="utf-8-sig")
+    df = pd.read_csv(filepath, encoding="utf-8-sig", dtype={"PlayerId": str, "playerid": str})
     rename = {k: v for k, v in HITTING_COLUMN_MAP.items() if k in df.columns}
     df = df.rename(columns=rename)
     missing = [c for c in REQUIRED_HITTING_COLS if c not in df.columns]
@@ -52,7 +52,7 @@ def parse_hitting_csv(filepath: Path) -> pd.DataFrame:
 
 def parse_pitching_csv(filepath: Path) -> pd.DataFrame:
     """Parse a FanGraphs pitching projections CSV into normalized columns."""
-    df = pd.read_csv(filepath, encoding="utf-8-sig")
+    df = pd.read_csv(filepath, encoding="utf-8-sig", dtype={"PlayerId": str, "playerid": str})
     rename = {k: v for k, v in PITCHING_COLUMN_MAP.items() if k in df.columns}
     df = df.rename(columns=rename)
     missing = [c for c in REQUIRED_PITCHING_COLS if c not in df.columns]
