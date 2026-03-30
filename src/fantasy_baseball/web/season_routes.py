@@ -243,6 +243,7 @@ def register_routes(app: Flask) -> None:
         )
 
     @app.route("/logs")
+    @_require_auth
     def logs():
         meta = read_meta()
         from fantasy_baseball.web.job_logger import get_all_logs

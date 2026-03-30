@@ -35,34 +35,39 @@ class JobLogger:
         })
 
     def finish(self, status: str, error: str | None = None) -> None:
-        """Write the complete log to Redis."""
-        finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        duration = round(time.time() - self._start)
-        today = date.today().isoformat()
-        timestamp = int(self._start)
-        key = f"job_log:{self.job_name}:{today}:{timestamp}"
-
-        log_data = json.dumps({
-            "job": self.job_name,
-            "started_at": self._started_at,
-            "finished_at": finished_at,
-            "status": status,
-            "duration_seconds": duration,
-            "error": error,
-            "entries": self._entries,
-        })
-
-        redis = _get_redis()
-        if redis is None:
-            return
+        """Write the complete log to Redis. Never raises."""
         try:
+            finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            duration = round(time.time() - self._start)
+            today = date.today().isoformat()
+            timestamp = int(self._start)
+            key = f"job_log:{self.job_name}:{today}:{timestamp}"
+
+            log_data = json.dumps({
+                "job": self.job_name,
+                "started_at": self._started_at,
+                "finished_at": finished_at,
+                "status": status,
+                "duration_seconds": duration,
+                "error": error,
+                "entries": self._entries,
+            })
+
+            redis = _get_redis()
+            if redis is None:
+                return
             redis.set(key, log_data, ex=30 * 86400)  # 30 day TTL
         except Exception:
-            pass  # don't crash the job if logging fails
+            pass  # never crash the job if logging fails
 
 
 def get_all_logs() -> list[dict]:
-    """Read all job logs from Redis, sorted by most recent first."""
+    """Read all job logs from Redis, sorted by most recent first.
+
+    Uses KEYS to find log entries (fine for small keyspaces; this Redis
+    instance only holds dashboard cache + job logs). Uses MGET to batch
+    all reads into a single round-trip.
+    """
     redis = _get_redis()
     if redis is None:
         return []
@@ -70,9 +75,9 @@ def get_all_logs() -> list[dict]:
         keys = redis.keys("job_log:*")
         if not keys:
             return []
+        values = redis.mget(*keys)
         logs = []
-        for key in keys:
-            raw = redis.get(key)
+        for raw in values:
             if raw:
                 logs.append(json.loads(raw))
         logs.sort(key=lambda l: l.get("started_at", ""), reverse=True)

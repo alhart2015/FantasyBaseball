@@ -82,7 +82,7 @@ def test_get_all_logs_returns_sorted():
 
     mock_redis = MagicMock()
     mock_redis.keys.return_value = ["job_log:refresh:2026-03-29:111", "job_log:refresh:2026-03-30:222"]
-    mock_redis.get.side_effect = [older_log, newer_log]
+    mock_redis.mget.return_value = [older_log, newer_log]
 
     with patch("fantasy_baseball.web.job_logger._get_redis", return_value=mock_redis):
         logs = get_all_logs()

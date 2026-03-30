@@ -86,6 +86,8 @@ def test_refresh_status_not_running(client):
 
 
 def test_logs_page_renders(client):
+    with client.session_transaction() as sess:
+        sess["authenticated"] = True
     with patch("fantasy_baseball.web.job_logger._get_redis", return_value=None):
         resp = client.get("/logs")
     assert resp.status_code == 200

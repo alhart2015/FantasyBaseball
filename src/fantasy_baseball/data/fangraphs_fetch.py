@@ -141,14 +141,15 @@ def fetch_ros_projections(
 
             players = _fetch_fangraphs_data(type_code, stats_type)
 
+            suffix = "hitters" if stats_type == "bat" else "pitchers"
+
             if not players:
-                results[system] = f"error: no data returned for {stats_type}"
+                results[system] = f"error: no data returned for {suffix}"
                 system_ok = False
                 if progress_cb:
-                    progress_cb(system, stats_type, "error")
+                    progress_cb(f"Fetching {system} {suffix}... no data")
                 break
 
-            suffix = "hitters" if stats_type == "bat" else "pitchers"
             csv_path = snapshot_dir / f"{system}-{suffix}.csv"
             try:
                 _to_csv(players, csv_path)
@@ -156,11 +157,11 @@ def fetch_ros_projections(
                 results[system] = f"error: {exc}"
                 system_ok = False
                 if progress_cb:
-                    progress_cb(system, stats_type, "error")
+                    progress_cb(f"Fetching {system} {suffix}... error: {exc}")
                 break
 
             if progress_cb:
-                progress_cb(system, stats_type, "ok")
+                progress_cb(f"Fetched {system} {suffix}: {len(players)} players")
 
         if system_ok:
             results[system] = "ok"
