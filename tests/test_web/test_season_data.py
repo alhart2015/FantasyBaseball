@@ -153,6 +153,22 @@ def test_format_lineup_optimal_when_no_moves():
     assert data["is_optimal"] is True
 
 
+def test_format_lineup_passes_ros_data_through():
+    """ROS projection data on roster entries must survive format_lineup_for_display."""
+    roster = [
+        {"name": "Aaron Judge", "positions": ["OF"], "selected_position": "OF",
+         "player_id": "1", "status": "", "wsgp": 5.0,
+         "ros": {"r": 90, "hr": 40, "rbi": 100, "sb": 5, "avg": 0.280}},
+        {"name": "No ROS Player", "positions": ["1B"], "selected_position": "1B",
+         "player_id": "2", "status": "", "wsgp": 2.0},
+    ]
+    data = format_lineup_for_display(roster, {"moves": []})
+    judge = next(h for h in data["hitters"] if h["name"] == "Aaron Judge")
+    no_ros = next(h for h in data["hitters"] if h["name"] == "No ROS Player")
+    assert judge["ros"] == {"r": 90, "hr": 40, "rbi": 100, "sb": 5, "avg": 0.280}
+    assert no_ros["ros"] is None
+
+
 def test_roster_cache_includes_stats(tmp_path, monkeypatch):
     """After refresh, roster entries should include a 'stats' dict."""
     roster = [
