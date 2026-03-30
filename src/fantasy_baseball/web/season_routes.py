@@ -113,6 +113,13 @@ def _run_ros_fetch() -> None:
             logger.log(f"  {system}: {status}")
 
         # Load roster names for quality checks
+        quality_warnings = []
+
+        def _quality_cb(msg):
+            logger.log(msg)
+            if msg.startswith("QUALITY:"):
+                quality_warnings.append(msg)
+
         db_conn = get_db_connection()
         create_tables(db_conn)
         try:
@@ -124,10 +131,21 @@ def _run_ros_fetch() -> None:
             load_ros_projections(
                 db_conn, projections_dir,
                 config.projection_systems, config.projection_weights,
-                roster_names=roster_names, progress_cb=logger.log,
+                roster_names=roster_names, progress_cb=_quality_cb,
             )
         finally:
             db_conn.close()
+
+        # Write standalone quality report
+        if quality_warnings:
+            q_logger = JobLogger("projection_quality")
+            for w in quality_warnings:
+                q_logger.log(w)
+            exclusions = [w for w in quality_warnings if "EXCLUDE" in w]
+            q_logger.finish(
+                "warning" if exclusions else "ok",
+                f"{len(quality_warnings)} warnings, {len(exclusions)} exclusions",
+            )
 
         failed = [s for s, v in results.items() if v != "ok"]
         if failed:
