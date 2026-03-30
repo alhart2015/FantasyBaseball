@@ -4,7 +4,7 @@
 
 - [ ] **Pitcher streaming tool** — Score free agent SPs by matchup quality to identify streamers (pick up a mediocre pitcher facing a terrible offense for one start, then drop). Builds on the matchup adjustment system.
 
-- [ ] **Load rest-of-season (ROS) projections into SQLite** — FanGraphs publishes updated ROS projections throughout the season. Once we start downloading these CSVs to `data/projections/`, add them to the database as a separate layer from the preseason projections. Likely needs a `projection_type` column (preseason vs ROS) or a `snapshot_date` to track when the ROS projection was pulled. Format TBD — depends on what the CSVs look like when we get them.
+- [x] **Load rest-of-season (ROS) projections into SQLite** — Done: `ros_blended_projections` table with `snapshot_date` column. `load_ros_projections()` scans `data/projections/{year}/ros/YYYY-MM-DD/` directories and blends using the same `blend_projections()` function. Loaded during `build_db.py` and during dashboard refresh.
 
 - [ ] **Automate ROS projection download** — If the manual FanGraphs CSV download gets tedious, automate it. FanGraphs doesn't have a public API so this would require browser automation (Playwright) or finding an unofficial data source. Low priority unless the manual process is a pain.
 
@@ -18,7 +18,9 @@
 
 - [ ] **Yahoo fantasy and mlbapi mcp servers** — Do they exist?
 
-- [ ] **In-season Monte Carlo with actual standings + ROS projections** — Split the simulation tab into two views: (1) **Pre-season simulation** — the current MC sim using only preseason projections, preserved as a baseline. (2) **Current simulation** — starts from actual current standings (real category totals from Yahoo), then projects the rest of the season using ROS projections with our established variance model. This means if you're already 30 HR behind 1st place in HR, the sim knows that and factors it in — you need to make up the gap with ROS production, not start from zero. For each team: actual YTD stats are locked in, then ROS projected stats (scaled by remaining games) are added with variance drawn from our covariance matrices. Variance should shrink as more of the season is in the books (more actuals = less uncertainty in the remaining projection). For rate stats (AVG, ERA, WHIP), blend actual and projected using AB/IP weighting — don't simple-average rates. The current sim should answer "given where I am right now, what are my odds of winning/top 3/gaining a roto point in each category?" The pre-season sim stays as a reference point to show how expectations have shifted.
+- [ ] **Add section for hot waiver pickups** — This is the opposite of buy-low. These are people outperforming expectations who are on a hot streak and could be picked up to ride the hot hand.
+
+- [x] **In-season Monte Carlo with actual standings + ROS projections** — Done: `simulate_remaining_season()` blends locked-in Yahoo actuals with ROS projections, variance scaled by `fraction_remaining`. "Current MC" tab on standings page. Rate stats blended from components (H/AB for AVG, ER/IP for ERA, (H+BB)/IP for WHIP).
 
 - [ ] **Opponent lineup viewer** — Add a dropdown on the lineup page to view any opponent's roster with the same layout used for the user's lineup (optimal assignments, leverage-weighted SGP, pace data). Requires fetching the selected opponent's roster via Yahoo API and running it through the same projection-matching and optimization pipeline.
 
