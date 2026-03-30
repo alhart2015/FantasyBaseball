@@ -1,0 +1,100 @@
+{% extends "season/base.html" %}
+{% block title %}Logs — Season Dashboard{% endblock %}
+{% block content %}
+
+<style>
+.log-filters { display: flex; gap: 8px; margin-bottom: 16px; }
+.log-card {
+    background: var(--card-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    margin-bottom: 8px;
+}
+.log-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    cursor: pointer;
+    user-select: none;
+}
+.log-header:hover { background: var(--row-highlight); border-radius: 6px; }
+.log-job { font-weight: 600; min-width: 100px; }
+.log-time { color: var(--text-secondary); font-size: 13px; }
+.log-duration { color: var(--text-secondary); font-size: 13px; }
+.badge-ok { background: rgba(76, 175, 80, 0.2); color: #4caf50; padding: 2px 8px; border-radius: 3px; font-size: 12px; font-weight: 600; }
+.badge-error { background: rgba(239, 83, 80, 0.2); color: var(--danger); padding: 2px 8px; border-radius: 3px; font-size: 12px; font-weight: 600; }
+.log-body {
+    display: none;
+    padding: 0 14px 12px;
+    border-top: 1px solid var(--panel-border);
+}
+.log-body.open { display: block; }
+.log-entries {
+    font-family: "Consolas", "Monaco", monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+}
+.log-entry-time { color: var(--accent); margin-right: 8px; }
+.log-error-msg {
+    background: rgba(239, 83, 80, 0.1);
+    border: 1px solid var(--danger);
+    color: var(--danger);
+    padding: 6px 10px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    margin-top: 8px;
+    font-family: "Consolas", "Monaco", monospace;
+    font-size: 12px;
+}
+</style>
+
+<div class="page-header">
+    <h2>Job Logs</h2>
+</div>
+
+<div class="log-filters pill-group">
+    <button class="pill active" onclick="filterLogs(this, 'all')">All</button>
+    <button class="pill" onclick="filterLogs(this, 'refresh')">Refresh</button>
+    <button class="pill" onclick="filterLogs(this, 'ros_fetch')">ROS Fetch</button>
+</div>
+
+{% if job_logs %}
+<div id="log-list">
+{% for log in job_logs %}
+    <div class="log-card" data-job="{{ log.job }}">
+        <div class="log-header" onclick="this.nextElementSibling.classList.toggle('open')">
+            <span class="log-job">{{ log.job }}</span>
+            <span class="log-time">{{ log.started_at }}</span>
+            <span class="{{ 'badge-ok' if log.status == 'ok' else 'badge-error' }}">{{ log.status }}</span>
+            <span class="log-duration">{{ log.duration_seconds }}s</span>
+        </div>
+        <div class="log-body">
+            {% if log.error %}
+            <div class="log-error-msg">{{ log.error }}</div>
+            {% endif %}
+            <div class="log-entries">
+                {% for entry in log.entries %}
+                <div><span class="log-entry-time">{{ entry.time }}</span>{{ entry.msg }}</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+{% endfor %}
+</div>
+{% else %}
+<p class="placeholder-text">No job logs found.</p>
+{% endif %}
+
+<script>
+function filterLogs(btn, job) {
+    document.querySelectorAll('.log-filters .pill').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.log-card').forEach(card => {
+        card.style.display = (job === 'all' || card.dataset.job === job) ? '' : 'none';
+    });
+}
+</script>
+
+{% endblock %}

@@ -28,6 +28,10 @@
                class="nav-link {% if active_page == 'sql' %}active{% endif %}">
                 SQL
             </a>
+            <a href="{{ url_for('logs') }}"
+               class="nav-link {% if active_page == 'logs' %}active{% endif %}">
+                Logs
+            </a>
             <div class="sidebar-footer">
                 <div class="refresh-info">
                     {% if meta and meta.get('last_refresh') %}
