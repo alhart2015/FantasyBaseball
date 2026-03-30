@@ -162,7 +162,26 @@ def _check_player_counts(
     report: QualityReport,
 ) -> None:
     """Warn if a system has dramatically fewer players than others."""
-    pass
+    for player_type, df_idx in [("hitter", 0), ("pitcher", 1)]:
+        counts = {}
+        for sys_name, dfs in system_dfs.items():
+            df = dfs[df_idx]
+            counts[sys_name] = len(df) if not df.empty else 0
+
+        if not counts or all(c == 0 for c in counts.values()):
+            continue
+
+        nonzero_counts = [c for c in counts.values() if c > 0]
+        if not nonzero_counts:
+            continue
+        median_count = float(np.median(nonzero_counts))
+
+        for sys_name, count in counts.items():
+            if count > 0 and count < median_count * 0.5:
+                report.warnings.append(
+                    f"WARNING: {sys_name} player count ({count} {player_type}s) is "
+                    f"below 50% of median ({median_count:.0f}) — possible bad export"
+                )
 
 
 def _check_roster_coverage(
@@ -171,4 +190,32 @@ def _check_roster_coverage(
     report: QualityReport,
 ) -> None:
     """Warn about rostered players missing from projection systems."""
-    pass
+    systems = list(system_dfs.keys())
+
+    sys_name_sets: dict[str, set[str]] = {}
+    for sys_name, (hitters, pitchers) in system_dfs.items():
+        names = set()
+        for df in (hitters, pitchers):
+            if not df.empty and "name" in df.columns:
+                names.update(df["name"].apply(normalize_name).values)
+        sys_name_sets[sys_name] = names
+
+    for player_name in sorted(roster_names):
+        missing_from = [
+            sys_name for sys_name in systems
+            if player_name not in sys_name_sets[sys_name]
+        ]
+        if not missing_from:
+            continue
+
+        report.missing_players[player_name] = missing_from
+
+        if len(missing_from) == len(systems):
+            report.warnings.append(
+                f"WARNING: {player_name} missing from ALL projection systems — "
+                f"no projection available"
+            )
+        else:
+            report.warnings.append(
+                f"WARNING: {player_name} missing from {', '.join(missing_from)}"
+            )

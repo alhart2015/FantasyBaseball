@@ -130,3 +130,111 @@ class TestStatOutlierDetection:
         report = check_projection_quality(system_dfs)
         for sys_excl in report.exclusions.values():
             assert "sv" not in sys_excl
+
+
+class TestPlayerCountCheck:
+    def test_warns_on_low_player_count(self):
+        """System with <50% of median player count gets a warning."""
+        big_hitters = pd.DataFrame([
+            {"name": f"Player {i}", "hr": 20, "r": 80, "rbi": 80,
+             "sb": 5, "h": 140, "ab": 500, "pa": 600, "fg_id": str(i)}
+            for i in range(100)
+        ])
+        small_hitters = pd.DataFrame([
+            {"name": f"Player {i}", "hr": 20, "r": 80, "rbi": 80,
+             "sb": 5, "h": 140, "ab": 500, "pa": 600, "fg_id": str(i)}
+            for i in range(10)
+        ])
+        system_dfs = {
+            "steamer": (big_hitters, pd.DataFrame()),
+            "zips": (big_hitters.copy(), pd.DataFrame()),
+            "tiny": (small_hitters, pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs)
+        count_warnings = [w for w in report.warnings if "tiny" in w and "count" in w.lower()]
+        assert len(count_warnings) > 0
+
+    def test_no_warning_when_counts_similar(self):
+        """Systems with similar player counts should not trigger warnings."""
+        hitters_a = pd.DataFrame([
+            {"name": f"Player {i}", "hr": 20, "r": 80, "rbi": 80,
+             "sb": 5, "h": 140, "ab": 500, "pa": 600, "fg_id": str(i)}
+            for i in range(100)
+        ])
+        hitters_b = pd.DataFrame([
+            {"name": f"Player {i}", "hr": 20, "r": 80, "rbi": 80,
+             "sb": 5, "h": 140, "ab": 500, "pa": 600, "fg_id": str(i)}
+            for i in range(90)
+        ])
+        system_dfs = {
+            "steamer": (hitters_a, pd.DataFrame()),
+            "zips": (hitters_b, pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs)
+        count_warnings = [w for w in report.warnings if "count" in w.lower()]
+        assert len(count_warnings) == 0
+
+
+class TestRosterCoverage:
+    def test_warns_on_missing_player(self):
+        """Rostered player missing from one system gets a warning."""
+        steamer = pd.DataFrame([
+            {"name": "Aaron Judge", "hr": 45, "r": 110, "rbi": 120,
+             "sb": 5, "h": 160, "ab": 550, "pa": 650, "fg_id": "1"},
+            {"name": "Blake Snell", "hr": 0, "r": 0, "rbi": 0,
+             "sb": 0, "h": 0, "ab": 0, "pa": 0, "fg_id": "3"},
+        ])
+        zips = pd.DataFrame([
+            {"name": "Aaron Judge", "hr": 42, "r": 105, "rbi": 115,
+             "sb": 4, "h": 155, "ab": 545, "pa": 640, "fg_id": "1"},
+        ])
+        from fantasy_baseball.utils.name_utils import normalize_name
+        roster = {normalize_name("Aaron Judge"), normalize_name("Blake Snell")}
+        system_dfs = {
+            "steamer": (steamer, pd.DataFrame()),
+            "zips": (zips, pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs, roster_names=roster)
+        assert normalize_name("Blake Snell") in report.missing_players
+        assert "zips" in report.missing_players[normalize_name("Blake Snell")]
+
+    def test_warns_loudly_when_missing_from_all(self):
+        """Player missing from ALL systems gets a loud warning."""
+        hitters = pd.DataFrame([
+            {"name": "Aaron Judge", "hr": 45, "r": 110, "rbi": 120,
+             "sb": 5, "h": 160, "ab": 550, "pa": 650, "fg_id": "1"},
+        ])
+        from fantasy_baseball.utils.name_utils import normalize_name
+        roster = {normalize_name("Aaron Judge"), normalize_name("Ghost Player")}
+        system_dfs = {
+            "steamer": (hitters, pd.DataFrame()),
+            "zips": (hitters.copy(), pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs, roster_names=roster)
+        assert normalize_name("Ghost Player") in report.missing_players
+        all_warnings = [w for w in report.warnings if "ALL" in w and "ghost player" in w.lower()]
+        assert len(all_warnings) > 0
+
+    def test_no_warning_when_all_covered(self):
+        """All rostered players in all systems -> no missing player warnings."""
+        hitters = pd.DataFrame([
+            {"name": "Aaron Judge", "hr": 45, "r": 110, "rbi": 120,
+             "sb": 5, "h": 160, "ab": 550, "pa": 650, "fg_id": "1"},
+        ])
+        from fantasy_baseball.utils.name_utils import normalize_name
+        roster = {normalize_name("Aaron Judge")}
+        system_dfs = {
+            "steamer": (hitters, pd.DataFrame()),
+            "zips": (hitters.copy(), pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs, roster_names=roster)
+        assert report.missing_players == {}
+
+    def test_skips_roster_check_when_none(self):
+        """roster_names=None skips roster coverage check entirely."""
+        system_dfs = {
+            "steamer": (pd.DataFrame(), pd.DataFrame()),
+            "zips": (pd.DataFrame(), pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs, roster_names=None)
+        assert report.missing_players == {}
