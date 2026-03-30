@@ -105,6 +105,35 @@ class TestFetchFangraphsData:
         assert result == []
 
 
+    def test_fetch_fangraphs_data_parses_dehydrated_state(self):
+        """Current FanGraphs structure: dehydratedState.queries[0].state.data."""
+        players = [
+            {"PlayerName": "Bobby Witt Jr.", "HR": 28, "playerid": "25764"},
+        ]
+        blob = {
+            "props": {
+                "pageProps": {
+                    "dehydratedState": {
+                        "queries": [
+                            {"state": {"data": players}}
+                        ]
+                    }
+                }
+            }
+        }
+        html = f'<script id="__NEXT_DATA__">{json.dumps(blob)}</script>'
+
+        mock_resp = MagicMock()
+        mock_resp.text = html
+        mock_resp.raise_for_status.return_value = None
+
+        with patch("fantasy_baseball.data.fangraphs_fetch.requests.get", return_value=mock_resp):
+            result = _fetch_fangraphs_data("steamerr", "bat")
+
+        assert len(result) == 1
+        assert result[0]["PlayerName"] == "Bobby Witt Jr."
+
+
 class TestToCsv:
     def test_to_csv_renames_columns(self, tmp_path):
         players = [

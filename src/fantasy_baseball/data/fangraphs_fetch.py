@@ -67,16 +67,25 @@ def _fetch_fangraphs_data(type_code: str, stats_type: str) -> list[dict]:
     except json.JSONDecodeError:
         return []
 
-    # FanGraphs embeds projection rows at props.pageProps.data.data
+    page_props = blob.get("props", {}).get("pageProps", {})
+
+    # Current path: dehydratedState.queries[0].state.data (React Query)
     try:
-        queries = blob["props"]["pageProps"]["data"]["data"]
+        data = page_props["dehydratedState"]["queries"][0]["state"]["data"]
+        if isinstance(data, list) and data:
+            return data
+    except (KeyError, TypeError, IndexError):
+        pass
+
+    # Legacy path: data.data
+    try:
+        data = page_props["data"]["data"]
+        if isinstance(data, list) and data:
+            return data
     except (KeyError, TypeError):
-        return []
+        pass
 
-    if not isinstance(queries, list):
-        return []
-
-    return queries
+    return []
 
 
 def _to_csv(players: list[dict], filepath: Path) -> None:
