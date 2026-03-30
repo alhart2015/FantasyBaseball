@@ -16,6 +16,7 @@ from fantasy_baseball.data.db import (
     load_draft_results,
     load_positions,
     load_raw_projections,
+    load_ros_projections,
     load_standings,
     load_weekly_rosters,
 )
@@ -52,6 +53,13 @@ def main():
     )
     blended_count = conn.execute("SELECT COUNT(*) FROM blended_projections").fetchone()[0]
     print(f"  Loaded {blended_count} blended projection rows")
+
+    load_ros_projections(
+        conn, PROJECTIONS_DIR,
+        config.projection_systems, config.projection_weights,
+    )
+    ros_count = conn.execute("SELECT COUNT(*) FROM ros_blended_projections").fetchone()[0]
+    print(f"  Loaded {ros_count} ROS projection rows")
 
     if DRAFTS_PATH.exists():
         load_draft_results(conn, DRAFTS_PATH)
