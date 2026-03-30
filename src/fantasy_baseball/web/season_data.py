@@ -509,27 +509,33 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         # --- Step 4: Read projections from SQLite ---
         _set_refresh_progress("Loading projections...")
         db_conn = get_db_connection()
-        hitters_proj, pitchers_proj = get_blended_projections(db_conn)
-        db_conn.close()
-        hitters_proj["_name_norm"] = hitters_proj["name"].apply(normalize_name)
-        pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
-
-        # --- Step 4b: Load ROS projections ---
-        _set_refresh_progress("Loading ROS projections...")
-        projections_dir = project_root / "data" / "projections"
-        ros_conn = get_db_connection()
-        create_tables(ros_conn)
+        create_tables(db_conn)
         try:
-            load_ros_projections(
-                ros_conn, projections_dir,
-                config.projection_systems, config.projection_weights,
-            )
-        finally:
-            ros_conn.close()
+            hitters_proj, pitchers_proj = get_blended_projections(db_conn)
 
-        ros_conn = get_db_connection()
-        ros_hitters, ros_pitchers = get_ros_projections(ros_conn)
-        ros_conn.close()
+            # Load ROS projections (skip if latest snapshot already in DB)
+            _set_refresh_progress("Loading ROS projections...")
+            projections_dir = project_root / "data" / "projections"
+            ros_dir = projections_dir / str(config.season_year) / "ros"
+            if ros_dir.is_dir():
+                latest_on_disk = max(
+                    (d.name for d in ros_dir.iterdir() if d.is_dir()), default=None,
+                )
+                if latest_on_disk:
+                    existing = db_conn.execute(
+                        "SELECT COUNT(*) FROM ros_blended_projections "
+                        "WHERE year = ? AND snapshot_date = ?",
+                        (config.season_year, latest_on_disk),
+                    ).fetchone()[0]
+                    if existing == 0:
+                        load_ros_projections(
+                            db_conn, projections_dir,
+                            config.projection_systems, config.projection_weights,
+                        )
+
+            ros_hitters, ros_pitchers = get_ros_projections(db_conn)
+        finally:
+            db_conn.close()
         has_ros = not ros_hitters.empty or not ros_pitchers.empty
         if has_ros:
             ros_hitters["_name_norm"] = ros_hitters["name"].apply(normalize_name)
@@ -806,7 +812,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         mc_rosters = {}
         for tname, roster in all_team_rosters.items():
-            mc_rosters[tname] = [pd.Series(p) for p in roster]
+            mc_rosters[tname] = roster
 
         base_mc = run_monte_carlo(
             mc_rosters, h_slots, p_slots, config.team_name,
@@ -833,12 +839,9 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
             # Build ROS rosters for all teams
             ros_mc_rosters = {}
-            # User's team
-            user_ros_matched = match_roster_to_projections(
-                roster_raw, ros_hitters, ros_pitchers,
-            )
-            if user_ros_matched:
-                ros_mc_rosters[config.team_name] = [pd.Series(p) for p in user_ros_matched]
+            # User's team (reuse ros_matched from step 6)
+            if ros_matched:
+                ros_mc_rosters[config.team_name] = ros_matched
 
             # Opponent teams
             for tname, opp_raw in all_raw_rosters.items():
@@ -848,7 +851,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                     opp_raw, ros_hitters, ros_pitchers,
                 )
                 if opp_ros:
-                    ros_mc_rosters[tname] = [pd.Series(p) for p in opp_ros]
+                    ros_mc_rosters[tname] = opp_ros
 
             # Build actual standings dict
             actual_standings_dict = {

@@ -178,10 +178,10 @@ def simulate_remaining_season(
         pitchers = [p for p in players if p.get("player_type") == "pitcher"]
         team_injuries = []
 
-        adj_hitters = _apply_variance_scaled(
+        adj_hitters = _apply_variance(
             hitters, "hitter", rng, team_injuries, fraction_remaining,
         )
-        adj_pitchers = _apply_variance_scaled(
+        adj_pitchers = _apply_variance(
             pitchers, "pitcher", rng, team_injuries, fraction_remaining,
         )
 
@@ -252,6 +252,7 @@ def _apply_variance(
     player_type: str,
     rng: np.random.Generator,
     injuries_out: list,
+    fraction_remaining: float = 1.0,
 ) -> list[dict]:
     """Apply injury and correlated performance variance to a list of players.
 
@@ -260,72 +261,8 @@ def _apply_variance(
     vary more independently. Correlations and per-stat sigmas are calibrated
     from historical projection-vs-actual residuals (2022-2024).
 
-    Mutates injuries_out by appending (name, frac_missed) for injured players.
-    """
-    is_hitter = player_type == "hitter"
-    counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
-    injury_prob = INJURY_PROB[player_type]
-    injury_lo, injury_hi = INJURY_SEVERITY[player_type]
-    cov = HITTER_COV if is_hitter else PITCHER_COV
-    idx_map = HITTER_IDX if is_hitter else PITCHER_IDX
-    n_corr = len(idx_map)
-    mean = np.zeros(n_corr)
-
-    n = len(players)
-    if n == 0:
-        return []
-
-    # Batch all random draws for the entire player list at once
-    injury_rolls = rng.random(n)
-    injury_severities = rng.uniform(injury_lo, injury_hi, n)
-    all_draws = rng.multivariate_normal(mean, cov, size=n)
-
-    adjusted = []
-    for i, p in enumerate(players):
-        frac_missed = 0.0
-        if injury_rolls[i] < injury_prob:
-            frac_missed = injury_severities[i]
-            injuries_out.append((p.get("name", "?"), frac_missed))
-
-        scale = 1.0 - frac_missed
-
-        if is_hitter:
-            repl = REPLACEMENT_HITTER
-        else:
-            is_closer = p.get("sv", 0) >= CLOSER_SV_THRESHOLD
-            repl = REPLACEMENT_RP if is_closer else REPLACEMENT_SP
-
-        draws = all_draws[i]
-        row = {}
-        for col in counting_cols:
-            base = float(p.get(col, 0) or 0)
-            repl_contrib = repl.get(col, 0) * frac_missed
-
-            if col in idx_map:
-                perf = max(0, 1.0 + draws[idx_map[col]])
-                row[col] = base * perf * scale + repl_contrib
-            else:
-                row[col] = base * scale + repl_contrib
-
-        row["name"] = p.get("name", "?")
-        row["player_type"] = player_type
-        adjusted.append(row)
-
-    return adjusted
-
-
-def _apply_variance_scaled(
-    players: list,
-    player_type: str,
-    rng: np.random.Generator,
-    injuries_out: list,
-    fraction_remaining: float,
-) -> list[dict]:
-    """Apply injury and correlated performance variance scaled by fraction_remaining.
-
-    Like _apply_variance but scales injury probability and covariance matrix by
-    fraction_remaining, reflecting that a partial season has proportionally less
-    variance and injury risk than a full season.
+    When fraction_remaining < 1.0, injury probability and covariance are scaled
+    down proportionally (less variance and injury risk for a partial season).
 
     Mutates injuries_out by appending (name, frac_missed) for injured players.
     """

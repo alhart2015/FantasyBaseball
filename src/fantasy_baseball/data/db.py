@@ -542,8 +542,7 @@ def get_positions(conn) -> dict[str, list[str]]:
     }
 
 
-# Ordered list of columns in blended_projections (excluding the PRIMARY KEY pair
-# which we always supply explicitly).
+# Ordered list of columns in blended_projections.
 _BLENDED_TABLE_COLS = [
     "year", "fg_id", "name", "team", "player_type",
     "pa", "ab", "h", "r", "hr", "rbi", "sb", "avg",
@@ -551,25 +550,30 @@ _BLENDED_TABLE_COLS = [
     "era", "whip", "adp",
 ]
 
+# ROS table has the same columns with snapshot_date added after year.
+_ROS_TABLE_COLS = [_BLENDED_TABLE_COLS[0], "snapshot_date"] + _BLENDED_TABLE_COLS[1:]
 
-def _df_to_blended_rows(df: pd.DataFrame, year: int) -> tuple[list[str], list[tuple]]:
+
+def _df_to_insert_rows(
+    df: pd.DataFrame, table_cols: list[str], **extra_columns,
+) -> tuple[list[str], list[tuple]]:
     """Prepare a blended projection DataFrame for insertion.
 
-    Adds the ``year`` column, ensures ``fg_id`` exists (falls back to ``name``),
-    selects only columns present in the table schema, and returns
-    ``(column_names, rows)`` ready for ``executemany``.
+    Adds any **extra_columns** (e.g. year=2026, snapshot_date='2026-03-30'),
+    ensures ``fg_id`` exists (falls back to ``name``), selects only columns
+    present in *table_cols*, and returns ``(column_names, rows)`` ready for
+    ``executemany``.
     """
     df = df.copy()
-    df["year"] = year
+    for col, val in extra_columns.items():
+        df[col] = val
 
-    # Ensure fg_id — fall back to name if the column is absent or all-null
     if "fg_id" not in df.columns or df["fg_id"].isna().all():
         df["fg_id"] = df["name"]
     else:
         df["fg_id"] = df["fg_id"].fillna(df["name"])
 
-    # Select only columns that exist in both the DataFrame and the table schema
-    keep = [c for c in _BLENDED_TABLE_COLS if c in df.columns]
+    keep = [c for c in table_cols if c in df.columns]
     df = df[keep]
 
     rows = [
@@ -577,6 +581,22 @@ def _df_to_blended_rows(df: pd.DataFrame, year: int) -> tuple[list[str], list[tu
         for row in df.itertuples(index=False, name=None)
     ]
     return keep, rows
+
+
+def _insert_blended_dfs(conn, table_name, dfs, row_converter):
+    """Insert hitter/pitcher DataFrames into a blended projections table."""
+    for df in dfs:
+        if df.empty:
+            continue
+        col_names, rows = row_converter(df)
+        if not rows:
+            continue
+        placeholders = ", ".join("?" * len(col_names))
+        insert_sql = (
+            f"INSERT OR REPLACE INTO {table_name} ({', '.join(col_names)}) "
+            f"VALUES ({placeholders})"
+        )
+        conn.executemany(insert_sql, rows)
 
 
 def load_blended_projections(
@@ -604,62 +624,14 @@ def load_blended_projections(
         try:
             hitters_df, pitchers_df = blend_projections(year_dir, systems, weights)
         except Exception:
-            # Missing files, unrecognised format, etc. — skip this year.
             continue
 
-        for df in (hitters_df, pitchers_df):
-            if df.empty:
-                continue
-            col_names, rows = _df_to_blended_rows(df, year)
-            if not rows:
-                continue
-            placeholders = ", ".join("?" * len(col_names))
-            insert_sql = (
-                f"INSERT OR REPLACE INTO blended_projections ({', '.join(col_names)}) "
-                f"VALUES ({placeholders})"
-            )
-            conn.executemany(insert_sql, rows)
+        def to_rows(df):
+            return _df_to_insert_rows(df, _BLENDED_TABLE_COLS, year=year)
+
+        _insert_blended_dfs(conn, "blended_projections", (hitters_df, pitchers_df), to_rows)
 
     conn.commit()
-
-
-# Ordered list of columns in ros_blended_projections (snapshot_date added after year).
-_ROS_TABLE_COLS = [
-    "year", "snapshot_date", "fg_id", "name", "team", "player_type",
-    "pa", "ab", "h", "r", "hr", "rbi", "sb", "avg",
-    "w", "k", "sv", "ip", "er", "bb", "h_allowed",
-    "era", "whip", "adp",
-]
-
-
-def _df_to_ros_rows(
-    df: pd.DataFrame, year: int, snapshot_date: str
-) -> tuple[list[str], list[tuple]]:
-    """Prepare a ROS blended projection DataFrame for insertion.
-
-    Adds ``year`` and ``snapshot_date`` columns, ensures ``fg_id`` exists
-    (falls back to ``name``), selects only columns present in the table schema,
-    and returns ``(column_names, rows)`` ready for ``executemany``.
-    """
-    df = df.copy()
-    df["year"] = year
-    df["snapshot_date"] = snapshot_date
-
-    # Ensure fg_id — fall back to name if the column is absent or all-null
-    if "fg_id" not in df.columns or df["fg_id"].isna().all():
-        df["fg_id"] = df["name"]
-    else:
-        df["fg_id"] = df["fg_id"].fillna(df["name"])
-
-    # Select only columns that exist in both the DataFrame and the table schema
-    keep = [c for c in _ROS_TABLE_COLS if c in df.columns]
-    df = df[keep]
-
-    rows = [
-        tuple(None if pd.isna(v) else v for v in row)
-        for row in df.itertuples(index=False, name=None)
-    ]
-    return keep, rows
 
 
 def load_ros_projections(
@@ -698,21 +670,14 @@ def load_ros_projections(
             try:
                 hitters_df, pitchers_df = blend_projections(date_dir, systems, weights)
             except Exception:
-                # Missing files, unrecognised format, etc. — skip this snapshot.
                 continue
 
-            for df in (hitters_df, pitchers_df):
-                if df.empty:
-                    continue
-                col_names, rows = _df_to_ros_rows(df, year, snapshot_date)
-                if not rows:
-                    continue
-                placeholders = ", ".join("?" * len(col_names))
-                insert_sql = (
-                    f"INSERT OR REPLACE INTO ros_blended_projections ({', '.join(col_names)}) "
-                    f"VALUES ({placeholders})"
-                )
-                conn.executemany(insert_sql, rows)
+            def to_rows(df, _y=year, _sd=snapshot_date):
+                return _df_to_insert_rows(df, _ROS_TABLE_COLS, year=_y, snapshot_date=_sd)
+
+            _insert_blended_dfs(
+                conn, "ros_blended_projections", (hitters_df, pitchers_df), to_rows,
+            )
 
     conn.commit()
 
