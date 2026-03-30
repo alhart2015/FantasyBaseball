@@ -109,7 +109,7 @@
                     {% if cat != 'AVG' %}
                     <div class="tooltip-row"><span class="tooltip-label">Pre-season proj</span><span class="tooltip-val">{{ st.projection }} {{ cat }}</span></div>
                     {% endif %}
-                    <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val" style="color: var(--text-secondary); font-style: italic;">Coming soon</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val">{% if h.ros and h.ros[cat] is defined %}{% if cat == 'AVG' %}{{ "%.3f"|format(h.ros[cat]) }}{% else %}{{ h.ros[cat] | round | int }}{% endif %} {{ cat }}{% else %}<span style="color: var(--text-secondary); font-style: italic;">—</span>{% endif %}</span></div>
                 </div>
                 {% endif %}
             </td>
@@ -167,7 +167,7 @@
                     {% if cat not in ['ERA', 'WHIP'] %}
                     <div class="tooltip-row"><span class="tooltip-label">Pre-season proj</span><span class="tooltip-val">{{ st.projection }} {{ cat }}</span></div>
                     {% endif %}
-                    <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val" style="color: var(--text-secondary); font-style: italic;">Coming soon</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val">{% if p.ros and p.ros[cat] is defined %}{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(p.ros[cat]) }}{% else %}{{ p.ros[cat] | round | int }}{% endif %} {{ cat }}{% else %}<span style="color: var(--text-secondary); font-style: italic;">—</span>{% endif %}</span></div>
                 </div>
                 {% endif %}
             </td>
