@@ -14,11 +14,22 @@ _config = None
 
 
 def _require_auth(f):
-    """Decorator that requires admin password for protected routes."""
+    """Decorator that requires admin password for protected routes.
+
+    Supports two auth methods:
+    - Session cookie (browser login via /login)
+    - Bearer token header (for automated jobs like QStash cron)
+    """
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
         if session.get("authenticated"):
             return f(*args, **kwargs)
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+            admin_pw = os.environ.get("ADMIN_PASSWORD", "dev")
+            if token == admin_pw:
+                return f(*args, **kwargs)
         if request.is_json or request.content_type == "application/json":
             return jsonify({"error": "Authentication required"}), 401
         return redirect(url_for("login", next=request.path))
