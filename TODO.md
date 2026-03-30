@@ -14,7 +14,6 @@
 
 - [ ] **Add section for hot waiver pickups** — This is the opposite of buy-low. These are people outperforming expectations who are on a hot streak and could be picked up to ride the hot hand.
 
-- [ ] **Opponent lineup viewer** — Add a dropdown on the lineup page to view any opponent's roster with the same layout used for the user's lineup (optimal assignments, leverage-weighted SGP, pace data). Requires fetching the selected opponent's roster via Yahoo API and running it through the same projection-matching and optimization pipeline.
 
 - [ ] **Sort buy-low candidates by wSGP** — Buy-low candidates are currently sorted by largest underperformance (gap between pace and projection). Sort by wSGP instead so the most impactful pickup opportunities surface first.
 
