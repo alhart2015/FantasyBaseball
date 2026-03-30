@@ -87,6 +87,58 @@ def _load_projections():
     return hitters, pitchers, ros_hitters, ros_pitchers
 
 
+def _run_ros_fetch() -> None:
+    """Background worker for ROS projection fetch + quality checks."""
+    from fantasy_baseball.config import load_config
+    from fantasy_baseball.data.fangraphs_fetch import fetch_ros_projections
+    from fantasy_baseball.data.db import (
+        create_tables, get_connection as get_db_connection,
+        get_roster_names, load_ros_projections,
+    )
+    from fantasy_baseball.web.job_logger import JobLogger
+
+    logger = JobLogger("ros_fetch")
+    project_root = Path(__file__).resolve().parents[3]
+    config = load_config(project_root / "config" / "league.yaml")
+    projections_dir = project_root / "data" / "projections"
+
+    try:
+        logger.log(f"Fetching ROS projections for {len(config.projection_systems)} systems")
+        results = fetch_ros_projections(
+            projections_dir, config.projection_systems, config.season_year,
+            progress_cb=logger.log,
+        )
+
+        for system, status in results.items():
+            logger.log(f"  {system}: {status}")
+
+        # Load roster names for quality checks
+        db_conn = get_db_connection()
+        create_tables(db_conn)
+        try:
+            roster_names = get_roster_names(db_conn)
+            if roster_names:
+                logger.log(f"Loaded {len(roster_names)} rostered players for quality checks")
+
+            logger.log("Loading into SQLite...")
+            load_ros_projections(
+                db_conn, projections_dir,
+                config.projection_systems, config.projection_weights,
+                roster_names=roster_names, progress_cb=logger.log,
+            )
+        finally:
+            db_conn.close()
+
+        failed = [s for s, v in results.items() if v != "ok"]
+        if failed:
+            logger.finish("error", f"Failed systems: {', '.join(failed)}")
+        else:
+            logger.finish("ok")
+
+    except Exception as exc:
+        logger.finish("error", str(exc))
+
+
 def register_routes(app: Flask) -> None:
 
     @app.route("/")
@@ -401,56 +453,12 @@ def register_routes(app: Flask) -> None:
     @app.route("/api/fetch-ros-projections", methods=["POST"])
     @_require_auth
     def api_fetch_ros_projections():
-        from fantasy_baseball.config import load_config
-        from fantasy_baseball.data.fangraphs_fetch import fetch_ros_projections
-        from fantasy_baseball.data.db import (
-            create_tables, get_connection as get_db_connection,
-            load_ros_projections,
-        )
-        from fantasy_baseball.web.job_logger import JobLogger
+        """Kick off ROS projection fetch in a background thread.
 
-        logger = JobLogger("ros_fetch")
-        project_root = Path(__file__).resolve().parents[3]
-        config = load_config(project_root / "config" / "league.yaml")
-        projections_dir = project_root / "data" / "projections"
-
-        try:
-            logger.log(f"Fetching ROS projections for {len(config.projection_systems)} systems")
-            results = fetch_ros_projections(
-                projections_dir, config.projection_systems, config.season_year,
-                progress_cb=logger.log,
-            )
-
-            for system, status in results.items():
-                logger.log(f"  {system}: {status}")
-
-            # Load roster names for quality checks
-            from fantasy_baseball.data.db import get_roster_names
-            db_conn = get_db_connection()
-            create_tables(db_conn)
-            try:
-                roster_names = get_roster_names(db_conn)
-                if roster_names:
-                    logger.log(f"Loaded {len(roster_names)} rostered players for quality checks")
-
-                logger.log("Loading into SQLite...")
-                load_ros_projections(
-                    db_conn, projections_dir,
-                    config.projection_systems, config.projection_weights,
-                    roster_names=roster_names, progress_cb=logger.log,
-                )
-            finally:
-                db_conn.close()
-
-            failed = [s for s, v in results.items() if v != "ok"]
-            if failed:
-                logger.finish("error", f"Failed systems: {', '.join(failed)}")
-            else:
-                logger.finish("ok")
-
-            return jsonify({"status": "done", "systems": results})
-
-        except Exception as exc:
-            logger.finish("error", str(exc))
-            return jsonify({"status": "error", "error": str(exc)}), 500
+        Returns immediately with {"status": "started"}. Progress and
+        results are written to the job log (visible on /logs).
+        """
+        thread = threading.Thread(target=_run_ros_fetch, daemon=True)
+        thread.start()
+        return jsonify({"status": "started"})
 

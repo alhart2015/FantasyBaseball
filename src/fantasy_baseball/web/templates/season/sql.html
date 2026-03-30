@@ -152,19 +152,14 @@ function fetchRosProjections() {
     const status = document.getElementById('fetch-ros-status');
     btn.disabled = true;
     btn.textContent = 'Fetching...';
-    status.textContent = 'Downloading from FanGraphs...';
+    status.textContent = 'Starting...';
     status.style.color = 'var(--accent)';
 
     fetch('/api/fetch-ros-projections', {method: 'POST'})
         .then(r => r.json())
         .then(data => {
-            if (data.status === 'done') {
-                const systems = data.systems;
-                const summary = Object.entries(systems)
-                    .map(([k, v]) => k + ': ' + v)
-                    .join(', ');
-                status.textContent = summary;
-                status.style.color = 'var(--accent)';
+            if (data.status === 'started') {
+                status.textContent = 'Running in background \u2014 check Logs page for results';
             } else {
                 status.textContent = 'Error: ' + JSON.stringify(data);
                 status.style.color = 'var(--danger)';
