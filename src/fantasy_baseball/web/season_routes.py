@@ -1,6 +1,7 @@
 """Route handlers for the season dashboard."""
 
 import functools
+import hmac
 import os
 import threading
 from pathlib import Path
@@ -11,6 +12,10 @@ from fantasy_baseball.utils.constants import ALL_CATEGORIES
 from fantasy_baseball.web.season_data import read_cache, read_meta
 
 _config = None
+
+
+def _get_admin_password():
+    return os.environ.get("ADMIN_PASSWORD", "dev")
 
 
 def _require_auth(f):
@@ -27,8 +32,7 @@ def _require_auth(f):
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
-            admin_pw = os.environ.get("ADMIN_PASSWORD", "dev")
-            if token == admin_pw:
+            if hmac.compare_digest(token, _get_admin_password()):
                 return f(*args, **kwargs)
         if request.is_json or request.content_type == "application/json":
             return jsonify({"error": "Authentication required"}), 401
@@ -164,8 +168,8 @@ def register_routes(app: Flask) -> None:
         error = None
         if request.method == "POST":
             password = request.form.get("password", "")
-            admin_pw = os.environ.get("ADMIN_PASSWORD", "dev")
-            if admin_pw and password == admin_pw:
+            admin_pw = _get_admin_password()
+            if admin_pw and hmac.compare_digest(password, admin_pw):
                 session["authenticated"] = True
                 next_url = request.args.get("next", url_for("standings"))
                 return redirect(next_url)
