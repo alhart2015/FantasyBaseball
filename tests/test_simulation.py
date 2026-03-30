@@ -3,7 +3,10 @@
 import numpy as np
 import pytest
 
-from fantasy_baseball.simulation import simulate_remaining_season
+from fantasy_baseball.simulation import (
+    run_ros_monte_carlo,
+    simulate_remaining_season,
+)
 
 
 def _make_hitter(name, r=80, hr=25, rbi=80, sb=10, h=150, ab=550):
@@ -161,3 +164,63 @@ class TestSimulateRemainingSeason:
                 assert s1[cat] >= act[cat], (
                     f"{team} {cat}: final {s1[cat]} < actual {act[cat]}"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Task 6 tests: run_ros_monte_carlo
+# ---------------------------------------------------------------------------
+
+
+class TestRunRosMonteCarlo:
+    """Tests for run_ros_monte_carlo()."""
+
+    def test_returns_expected_format(self):
+        """Verify return has team_results and category_risk with expected keys."""
+        rosters = _build_two_team_rosters()
+        actuals = _build_actual_standings()
+
+        result = run_ros_monte_carlo(
+            team_rosters=rosters,
+            actual_standings=actuals,
+            fraction_remaining=0.5,
+            h_slots=3,
+            p_slots=2,
+            user_team_name="Team A",
+            n_iterations=100,
+            seed=42,
+        )
+
+        # Top-level keys
+        assert "team_results" in result
+        assert "category_risk" in result
+
+        # team_results should have both teams
+        tr = result["team_results"]
+        assert "Team A" in tr
+        assert "Team B" in tr
+
+        # Each team result should have the expected keys
+        expected_team_keys = {"median_pts", "p10", "p90", "first_pct", "top3_pct"}
+        for team in ["Team A", "Team B"]:
+            assert set(tr[team].keys()) == expected_team_keys, (
+                f"{team} keys: {set(tr[team].keys())} != {expected_team_keys}"
+            )
+            # Sanity: median_pts should be positive (roto points)
+            assert tr[team]["median_pts"] > 0
+            # first_pct and top3_pct are percentages 0-100
+            assert 0 <= tr[team]["first_pct"] <= 100
+            assert 0 <= tr[team]["top3_pct"] <= 100
+
+        # With only 2 teams, first_pct should sum to ~100
+        total_first = sum(tr[t]["first_pct"] for t in tr)
+        assert abs(total_first - 100.0) < 0.1, f"first_pct sum: {total_first}"
+
+        # category_risk should have all 10 categories
+        cr = result["category_risk"]
+        expected_cats = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "ERA", "WHIP", "SV"]
+        for cat in expected_cats:
+            assert cat in cr, f"Missing category: {cat}"
+            expected_cat_keys = {"median_pts", "p10", "p90", "top3_pct", "bot3_pct"}
+            assert set(cr[cat].keys()) == expected_cat_keys, (
+                f"{cat} keys: {set(cr[cat].keys())} != {expected_cat_keys}"
+            )
