@@ -232,3 +232,18 @@ class TestApiOpponentLineup:
         data = resp.get_json()
         assert data["team_name"] == "Springfield Isotopes"
         assert len(data["hitters"]) == 1
+
+
+class TestStandingsLinks:
+    def test_team_names_are_links(self, client):
+        standings = _sample_standings()
+        with patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc, \
+             patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm, \
+             patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+            mock_rc.side_effect = lambda k: standings if k == "standings" else {}
+            mock_rm.return_value = {"last_refresh": "9:00 AM", "week": "1"}
+            mock_cfg.return_value.team_name = "Hart of the Order"
+            resp = client.get("/standings")
+        html = resp.data.decode()
+        assert '/lineup?team=469.l.5652.t.8' in html  # Springfield Isotopes link
+        assert '/lineup?team=469.l.5652.t.3' in html  # Hart of the Order link

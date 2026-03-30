@@ -38,7 +38,7 @@
         {% for team in standings.teams %}
             <tr class="{% if team.is_user %}user-team{% endif %}">
                 <td>{{ team.rank }}</td>
-                <td class="team-name">{{ team.name }}</td>
+                <td class="team-name"><a href="/lineup?team={{ team.team_key }}" style="color: inherit; text-decoration: none; border-bottom: 1px dotted var(--text-secondary);">{{ team.name }}</a></td>
                 {% for cat in categories %}
                 <td class="{{ team.color_classes[cat] }} stat-cell"
                     data-points="{{ team.roto_points[cat ~ '_pts'] | round(1) }}"
