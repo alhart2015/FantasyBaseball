@@ -536,6 +536,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             ros_hitters, ros_pitchers = get_ros_projections(db_conn)
         finally:
             db_conn.close()
+        hitters_proj["_name_norm"] = hitters_proj["name"].apply(normalize_name)
+        pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
         has_ros = not ros_hitters.empty or not ros_pitchers.empty
         if has_ros:
             ros_hitters["_name_norm"] = ros_hitters["name"].apply(normalize_name)
