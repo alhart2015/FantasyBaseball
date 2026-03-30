@@ -85,6 +85,13 @@ def test_refresh_status_not_running(client):
     assert data["running"] is False
 
 
+def test_logs_page_renders(client):
+    with patch("fantasy_baseball.web.job_logger._get_redis", return_value=None):
+        resp = client.get("/logs")
+    assert resp.status_code == 200
+    assert b"Job Logs" in resp.data
+
+
 def test_full_standings_page_with_cached_data(client, tmp_path):
     """Integration test: standings page renders correctly with all cached data present."""
     from fantasy_baseball.web import season_data
