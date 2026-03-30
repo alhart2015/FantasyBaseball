@@ -258,3 +258,34 @@ def register_routes(app: Flask) -> None:
         from fantasy_baseball.web.season_data import get_refresh_status
         return jsonify(get_refresh_status())
 
+    @app.route("/api/fetch-ros-projections", methods=["POST"])
+    @_require_auth
+    def api_fetch_ros_projections():
+        from fantasy_baseball.config import load_config
+        from fantasy_baseball.data.fangraphs_fetch import fetch_ros_projections
+        from fantasy_baseball.data.db import (
+            create_tables, get_connection as get_db_connection,
+            load_ros_projections,
+        )
+
+        project_root = Path(__file__).resolve().parents[3]
+        config = load_config(project_root / "config" / "league.yaml")
+        projections_dir = project_root / "data" / "projections"
+
+        results = fetch_ros_projections(
+            projections_dir, config.projection_systems, config.season_year,
+        )
+
+        # Load fetched CSVs into SQLite
+        db_conn = get_db_connection()
+        create_tables(db_conn)
+        try:
+            load_ros_projections(
+                db_conn, projections_dir,
+                config.projection_systems, config.projection_weights,
+            )
+        finally:
+            db_conn.close()
+
+        return jsonify({"status": "done", "systems": results})
+
