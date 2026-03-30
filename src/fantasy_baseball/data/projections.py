@@ -81,12 +81,22 @@ def blend_projections(
     projections_dir: Path,
     systems: list[str],
     weights: dict[str, float] | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+    roster_names: set[str] | None = None,
+    progress_cb=None,
+) -> tuple[pd.DataFrame, pd.DataFrame, "QualityReport | None"]:
     """Blend multiple projection systems into weighted averages.
 
     Counting stats are blended directly. Rate stats (AVG, ERA, WHIP)
     are recomputed from blended component stats.
+
+    Runs pre-blend quality checks when 2+ systems are loaded. Excludes
+    stat columns flagged as outliers (e.g., a system with all-zero SV).
+
+    Returns (hitters_df, pitchers_df, quality_report). quality_report is
+    None if fewer than 2 systems were loaded.
     """
+    from fantasy_baseball.data.projection_quality import check_projection_quality
+
     validate_projections_dir(projections_dir, systems)
 
     if weights is None:
@@ -95,24 +105,56 @@ def blend_projections(
     total_weight = sum(weights.values())
     weights = {k: v / total_weight for k, v in weights.items()}
 
+    # Load all systems
+    system_dfs: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
     all_hitters: list[pd.DataFrame] = []
     all_pitchers: list[pd.DataFrame] = []
 
     for system in systems:
         hitters, pitchers = load_projection_set(projections_dir, system)
+        system_dfs[system] = (hitters, pitchers)
         w = weights.get(system, 0)
         if not hitters.empty:
             hitters = hitters.copy()
             hitters["_weight"] = w
+            hitters["_system"] = system
             all_hitters.append(hitters)
         if not pitchers.empty:
             pitchers = pitchers.copy()
             pitchers["_weight"] = w
+            pitchers["_system"] = system
             all_pitchers.append(pitchers)
+
+    # Run quality checks
+    report = None
+    if len(system_dfs) >= 2:
+        report = check_projection_quality(system_dfs, roster_names)
+        if progress_cb:
+            for warning in report.warnings:
+                progress_cb(f"QUALITY: {warning}")
+
+        # Apply exclusions: zero out excluded stat columns so they don't contribute
+        if report.exclusions:
+            for df_list, stat_source in [
+                (all_hitters, HITTING_COUNTING_COLS),
+                (all_pitchers, PITCHING_COUNTING_COLS),
+            ]:
+                for df in df_list:
+                    system = df["_system"].iloc[0] if not df.empty else None
+                    if system and system in report.exclusions:
+                        excluded = report.exclusions[system]
+                        for stat in excluded:
+                            if stat in df.columns and stat in stat_source:
+                                df[stat] = float("nan")
+
+    # Clean up _system column before blending
+    for df in all_hitters + all_pitchers:
+        if "_system" in df.columns:
+            df.drop(columns=["_system"], inplace=True)
 
     blended_hitters = _blend_hitters(all_hitters)
     blended_pitchers = _blend_pitchers(all_pitchers)
-    return blended_hitters, blended_pitchers
+    return blended_hitters, blended_pitchers, report
 
 
 def _blend_players(
@@ -138,14 +180,31 @@ def _blend_players(
         else "name"
     )
 
-    # Normalize weights within each group (vectorized)
-    group_w_sum = combined.groupby(group_col)["_weight"].transform("sum")
-    nw = (combined["_weight"] / group_w_sum).values
-
-    # Pre-multiply counting stats by normalized weight, then sum per group
+    # Pre-multiply counting stats by normalized weight, then sum per group.
+    # Per-stat NaN-aware weight normalization: if a system has NaN for a stat,
+    # its weight is excluded from that stat's denominator so other systems'
+    # values are not diluted. This correctly handles quality-check exclusions
+    # where a bad system's stat column is NaN'd before blending.
     stat_cols = [c for c in counting_cols if c in combined.columns]
-    weighted = combined[stat_cols].fillna(0).multiply(nw, axis=0)
-    weighted[group_col] = combined[group_col].values
+    groups = combined[group_col].values
+    weights_arr = combined["_weight"].values
+
+    weighted_parts = {}
+    for stat in stat_cols:
+        vals = combined[stat].values.astype(float)
+        nan_mask = np.isnan(vals)
+        # Per-row effective weight: 0 where stat is NaN
+        eff_w = weights_arr.copy()
+        eff_w[nan_mask] = 0.0
+        # Normalize within each group based on non-NaN weight sum
+        eff_w_series = pd.Series(eff_w, name="_eff_w")
+        group_eff_w_sum = eff_w_series.groupby(groups).transform("sum").values
+        denom = np.where(group_eff_w_sum > 0, group_eff_w_sum, 1.0)
+        nw = np.where(group_eff_w_sum > 0, eff_w / denom, 0.0)
+        weighted_parts[stat] = np.where(nan_mask, 0.0, vals) * nw
+
+    weighted = pd.DataFrame(weighted_parts)
+    weighted[group_col] = groups
     result = weighted.groupby(group_col, sort=False)[stat_cols].sum()
 
     # Metadata from highest-weight row per group

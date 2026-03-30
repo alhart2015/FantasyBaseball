@@ -20,7 +20,7 @@ def fixtures_dir():
 def test_full_pipeline(fixtures_dir):
     """End-to-end: blend projections, calculate SGP, compute VAR, rank players."""
     # Step 1: Blend projections
-    hitters, pitchers = blend_projections(
+    hitters, pitchers, _ = blend_projections(
         fixtures_dir,
         systems=["steamer", "zips"],
     )
@@ -85,7 +85,7 @@ def test_full_pipeline(fixtures_dir):
 
 def test_pipeline_with_keepers(fixtures_dir):
     """Verify keepers can be removed from the player pool."""
-    hitters, pitchers = blend_projections(
+    hitters, pitchers, _ = blend_projections(
         fixtures_dir,
         systems=["steamer"],
     )

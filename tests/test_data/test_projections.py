@@ -7,7 +7,7 @@ from fantasy_baseball.utils.name_utils import normalize_name
 
 class TestBlendProjections:
     def test_blend_two_systems_equal_weight(self, fixtures_dir):
-        hitters, pitchers = blend_projections(
+        hitters, pitchers, _ = blend_projections(
             fixtures_dir,
             systems=["steamer", "zips"],
         )
@@ -15,7 +15,7 @@ class TestBlendProjections:
         assert len(pitchers) == 3
 
     def test_blended_counting_stats_are_averaged(self, fixtures_dir):
-        hitters, pitchers = blend_projections(
+        hitters, pitchers, _ = blend_projections(
             fixtures_dir,
             systems=["steamer", "zips"],
         )
@@ -26,7 +26,7 @@ class TestBlendProjections:
         assert judge["r"] == pytest.approx(107.5)
 
     def test_blended_avg_recomputed_from_components(self, fixtures_dir):
-        hitters, pitchers = blend_projections(
+        hitters, pitchers, _ = blend_projections(
             fixtures_dir,
             systems=["steamer", "zips"],
         )
@@ -37,7 +37,7 @@ class TestBlendProjections:
         assert judge["avg"] == pytest.approx(expected_avg, abs=0.001)
 
     def test_blended_era_recomputed_from_components(self, fixtures_dir):
-        hitters, pitchers = blend_projections(
+        hitters, pitchers, _ = blend_projections(
             fixtures_dir,
             systems=["steamer", "zips"],
         )
@@ -48,7 +48,7 @@ class TestBlendProjections:
         assert cole["era"] == pytest.approx(expected_era, abs=0.01)
 
     def test_blended_whip_recomputed_from_components(self, fixtures_dir):
-        hitters, pitchers = blend_projections(
+        hitters, pitchers, _ = blend_projections(
             fixtures_dir,
             systems=["steamer", "zips"],
         )
@@ -60,7 +60,7 @@ class TestBlendProjections:
         assert cole["whip"] == pytest.approx(expected_whip, abs=0.01)
 
     def test_custom_weights(self, fixtures_dir):
-        hitters, pitchers = blend_projections(
+        hitters, pitchers, _ = blend_projections(
             fixtures_dir,
             systems=["steamer", "zips"],
             weights={"steamer": 0.75, "zips": 0.25},
@@ -70,7 +70,7 @@ class TestBlendProjections:
         assert judge["hr"] == pytest.approx(44.25)
 
     def test_single_system(self, fixtures_dir):
-        hitters, pitchers = blend_projections(
+        hitters, pitchers, _ = blend_projections(
             fixtures_dir,
             systems=["steamer"],
         )
@@ -107,7 +107,7 @@ class TestMatchRosterToProjections:
 
     def test_matches_with_name_norm(self, fixtures_dir):
         """match_roster_to_projections works when _name_norm is present."""
-        hitters, pitchers = blend_projections(fixtures_dir, systems=["steamer"])
+        hitters, pitchers, _ = blend_projections(fixtures_dir, systems=["steamer"])
         hitters["_name_norm"] = hitters["name"].apply(normalize_name)
         pitchers["_name_norm"] = pitchers["name"].apply(normalize_name)
 

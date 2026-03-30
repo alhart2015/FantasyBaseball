@@ -1,6 +1,7 @@
 import pytest
 import pandas as pd
 from fantasy_baseball.data.projection_quality import QualityReport, check_projection_quality
+from fantasy_baseball.data.projections import blend_projections
 
 
 class TestQualityReport:
@@ -238,3 +239,58 @@ class TestRosterCoverage:
         }
         report = check_projection_quality(system_dfs, roster_names=None)
         assert report.missing_players == {}
+
+
+class TestBlendWithQualityChecks:
+    def test_returns_three_tuple(self, fixtures_dir):
+        """blend_projections now returns (hitters, pitchers, report)."""
+        hitters, pitchers, report = blend_projections(
+            fixtures_dir, systems=["steamer", "zips"],
+        )
+        assert len(hitters) > 0
+        assert len(pitchers) > 0
+        assert isinstance(report, QualityReport)
+
+    def test_excludes_bad_stat_from_blend(self, tmp_path):
+        """When a system has all-zero SV, that system's SV is excluded from blend."""
+        # System A: closer with 40 SV
+        a_pitchers = pd.DataFrame([{
+            "Name": "Closer X", "Team": "NYY", "IP": 70, "W": 4, "SO": 70,
+            "SV": 40, "ERA": 1.80, "WHIP": 0.90, "ER": 14, "BB": 14,
+            "H": 49, "playerid": "1",
+        }])
+        # System B: same closer but SV = 0 (broken export)
+        b_pitchers = pd.DataFrame([{
+            "Name": "Closer X", "Team": "NYY", "IP": 68, "W": 3, "SO": 66,
+            "SV": 0, "ERA": 2.00, "WHIP": 0.95, "ER": 15, "BB": 15,
+            "H": 50, "playerid": "1",
+        }])
+
+        # Write CSVs
+        a_pitchers.to_csv(tmp_path / "systema-pitchers.csv", index=False)
+        b_pitchers.to_csv(tmp_path / "systemb-pitchers.csv", index=False)
+        # Need empty hitter files too
+        pd.DataFrame(columns=["Name", "Team", "PA", "AB", "H", "HR", "R",
+                               "RBI", "SB", "AVG", "playerid"]).to_csv(
+            tmp_path / "systema-hitters.csv", index=False)
+        pd.DataFrame(columns=["Name", "Team", "PA", "AB", "H", "HR", "R",
+                               "RBI", "SB", "AVG", "playerid"]).to_csv(
+            tmp_path / "systemb-hitters.csv", index=False)
+
+        hitters, pitchers, report = blend_projections(
+            tmp_path, systems=["systema", "systemb"],
+        )
+        closer = pitchers[pitchers["name"] == "Closer X"].iloc[0]
+        # SV should come only from system A (40), not averaged with B's 0
+        assert closer["sv"] == pytest.approx(40.0)
+        assert "systemb" in report.exclusions
+        assert "sv" in report.exclusions["systemb"]
+
+    def test_progress_cb_receives_warnings(self, fixtures_dir):
+        """progress_cb is called with each warning."""
+        messages = []
+        hitters, pitchers, report = blend_projections(
+            fixtures_dir, systems=["steamer", "zips"],
+            progress_cb=messages.append,
+        )
+        assert isinstance(messages, list)

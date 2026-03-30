@@ -622,7 +622,7 @@ def load_blended_projections(
         year = int(year_dir.name)
 
         try:
-            hitters_df, pitchers_df = blend_projections(year_dir, systems, weights)
+            hitters_df, pitchers_df, _ = blend_projections(year_dir, systems, weights)
         except Exception:
             continue
 
@@ -668,7 +668,7 @@ def load_ros_projections(
             snapshot_date = date_dir.name
 
             try:
-                hitters_df, pitchers_df = blend_projections(date_dir, systems, weights)
+                hitters_df, pitchers_df, _ = blend_projections(date_dir, systems, weights)
             except Exception:
                 continue
 
