@@ -1,5 +1,7 @@
 import pytest
-from fantasy_baseball.web.season_data import format_standings_for_display
+from unittest.mock import patch
+from fantasy_baseball.web.season_data import format_standings_for_display, get_teams_list
+from fantasy_baseball.web.season_app import create_app
 
 
 def _sample_standings():
@@ -17,6 +19,66 @@ def _sample_standings():
     ]
     return [{"name": n, "team_key": tk, "rank": i + 1, "stats": s}
             for i, (n, tk, s) in enumerate(teams)]
+
+
+class TestGetTeamsList:
+    def test_returns_all_teams(self):
+        standings = _sample_standings()
+        result = get_teams_list(standings, "Hart of the Order")
+        assert len(result["teams"]) == 3
+
+    def test_marks_user_team(self):
+        standings = _sample_standings()
+        result = get_teams_list(standings, "Hart of the Order")
+        hart = next(t for t in result["teams"] if t["name"] == "Hart of the Order")
+        assert hart["is_user"] is True
+        iso = next(t for t in result["teams"] if t["name"] == "Springfield Isotopes")
+        assert iso["is_user"] is False
+
+    def test_includes_team_key_and_rank(self):
+        standings = _sample_standings()
+        result = get_teams_list(standings, "Hart of the Order")
+        iso = next(t for t in result["teams"] if t["name"] == "Springfield Isotopes")
+        assert iso["team_key"] == "469.l.5652.t.8"
+        assert "rank" in iso
+
+    def test_user_team_key_set(self):
+        standings = _sample_standings()
+        result = get_teams_list(standings, "Hart of the Order")
+        assert result["user_team_key"] == "469.l.5652.t.3"
+
+    def test_empty_standings(self):
+        result = get_teams_list([], "Hart of the Order")
+        assert result["teams"] == []
+        assert result["user_team_key"] is None
+
+
+@pytest.fixture
+def client():
+    app = create_app()
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        yield c
+
+
+class TestApiTeams:
+    def test_returns_teams_from_standings_cache(self, client):
+        with patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc, \
+             patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+            mock_rc.side_effect = lambda k: _sample_standings() if k == "standings" else None
+            mock_cfg.return_value.team_name = "Hart of the Order"
+            resp = client.get("/api/teams")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert len(data["teams"]) == 3
+        assert data["user_team_key"] == "469.l.5652.t.3"
+
+    def test_returns_empty_without_standings(self, client):
+        with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
+            resp = client.get("/api/teams")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["teams"] == []
 
 
 class TestStandingsTeamKey:

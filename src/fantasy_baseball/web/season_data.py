@@ -274,6 +274,38 @@ def format_standings_for_display(
     return {"teams": teams}
 
 
+def get_teams_list(
+    standings: list[dict], user_team_name: str
+) -> dict:
+    """Build a team list for the opponent selector dropdown.
+
+    Args:
+        standings: Raw standings cache (list of team dicts with name, team_key, rank).
+        user_team_name: The user's team name for flagging.
+
+    Returns:
+        {"teams": [...], "user_team_key": str | None}
+    """
+    if not standings:
+        return {"teams": [], "user_team_key": None}
+
+    user_team_key = None
+    teams = []
+    for t in standings:
+        is_user = t["name"] == user_team_name
+        if is_user:
+            user_team_key = t.get("team_key", "")
+        teams.append({
+            "name": t["name"],
+            "team_key": t.get("team_key", ""),
+            "rank": t.get("rank", 0),
+            "is_user": is_user,
+        })
+
+    teams.sort(key=lambda t: t["rank"])
+    return {"teams": teams, "user_team_key": user_team_key}
+
+
 def format_monte_carlo_for_display(
     mc_data: dict, user_team_name: str
 ) -> dict:

@@ -255,6 +255,15 @@ def register_routes(app: Flask) -> None:
             job_logs=job_logs,
         )
 
+    @app.route("/api/teams")
+    def api_teams():
+        from fantasy_baseball.web.season_data import get_teams_list
+        standings = read_cache("standings")
+        config = _load_config()
+        if not standings:
+            return jsonify({"teams": [], "user_team_key": None})
+        return jsonify(get_teams_list(standings, config.team_name))
+
     @app.route("/api/refresh", methods=["POST"])
     @_require_auth
     def api_refresh():
