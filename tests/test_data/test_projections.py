@@ -1,7 +1,8 @@
 import pytest
 import pandas as pd
 from pathlib import Path
-from fantasy_baseball.data.projections import blend_projections
+from fantasy_baseball.data.projections import blend_projections, match_roster_to_projections
+from fantasy_baseball.utils.name_utils import normalize_name
 
 
 class TestBlendProjections:
@@ -93,3 +94,28 @@ class TestBlendProjections:
         empty_dir.mkdir()
         with pytest.raises(FileNotFoundError, match="No CSV files found"):
             blend_projections(empty_dir, systems=["steamer"])
+
+
+class TestMatchRosterToProjections:
+    def test_requires_name_norm_column(self):
+        """match_roster_to_projections fails without _name_norm on projection DFs."""
+        roster = [{"name": "Aaron Judge", "positions": ["OF"]}]
+        hitters = pd.DataFrame({"name": ["Aaron Judge"], "hr": [45]})
+        pitchers = pd.DataFrame()
+        with pytest.raises(KeyError, match="_name_norm"):
+            match_roster_to_projections(roster, hitters, pitchers)
+
+    def test_matches_with_name_norm(self, fixtures_dir):
+        """match_roster_to_projections works when _name_norm is present."""
+        hitters, pitchers = blend_projections(fixtures_dir, systems=["steamer"])
+        hitters["_name_norm"] = hitters["name"].apply(normalize_name)
+        pitchers["_name_norm"] = pitchers["name"].apply(normalize_name)
+
+        roster = [
+            {"name": "Aaron Judge", "positions": ["OF"]},
+            {"name": "Gerrit Cole", "positions": ["SP"]},
+        ]
+        matched = match_roster_to_projections(roster, hitters, pitchers)
+        assert len(matched) == 2
+        names = {p["name"] for p in matched}
+        assert names == {"Aaron Judge", "Gerrit Cole"}
