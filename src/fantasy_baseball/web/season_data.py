@@ -348,6 +348,7 @@ def format_lineup_for_display(
             "is_bench": pos in ("BN", "IL", "DL"),
             "is_il": "IL" in p.get("status", "") or pos == "IL",
             "stats": p.get("stats", {}),
+            "ros": p.get("ros"),
         }
         if is_pitcher:
             pitchers.append(entry)
