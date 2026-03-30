@@ -215,8 +215,8 @@ class TestApiOpponentLineup:
         with patch("fantasy_baseball.web.season_routes.read_cache", side_effect=mock_cache), \
              patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg, \
              patch("fantasy_baseball.web.season_data.build_opponent_lineup") as mock_build, \
-             patch("fantasy_baseball.web.season_routes._get_yahoo_league_cached") as mock_league, \
-             patch("fantasy_baseball.web.season_routes._get_projections_cached") as mock_proj:
+             patch("fantasy_baseball.web.season_routes._load_yahoo_league") as mock_league, \
+             patch("fantasy_baseball.web.season_routes._load_projections") as mock_proj:
             mock_cfg.return_value.team_name = "Hart of the Order"
             mock_cfg.return_value.season_year = 2026
             mock_build.return_value = {

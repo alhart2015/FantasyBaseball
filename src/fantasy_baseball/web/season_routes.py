@@ -49,7 +49,7 @@ def _load_config():
     return _config
 
 
-def _get_yahoo_league_cached():
+def _load_yahoo_league():
     """Get Yahoo league object and user team key."""
     from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
     config = _load_config()
@@ -66,7 +66,7 @@ def _get_yahoo_league_cached():
     return league, user_team_key
 
 
-def _get_projections_cached():
+def _load_projections():
     """Load projections from SQLite. Returns (hitters, pitchers, ros_hitters, ros_pitchers)."""
     from fantasy_baseball.data.db import (
         get_connection as get_db_connection, get_blended_projections, get_ros_projections,
@@ -343,13 +343,13 @@ def register_routes(app: Flask) -> None:
         config = _load_config()
 
         try:
-            league, _ = _get_yahoo_league_cached()
+            league, _ = _load_yahoo_league()
             roster = fetch_roster(league, team_key)
         except Exception as e:
             return jsonify({"error": f"Failed to fetch roster: {e}"}), 500
 
         try:
-            hitters_proj, pitchers_proj, ros_hitters, ros_pitchers = _get_projections_cached()
+            hitters_proj, pitchers_proj, ros_hitters, ros_pitchers = _load_projections()
         except Exception as e:
             return jsonify({"error": f"Failed to load projections: {e}"}), 500
 

@@ -262,7 +262,6 @@
 
 <script>
 var userTeamKey = "{{ user_team_key }}";
-var isViewingOpponent = false;
 
 function toggleExpand(row) {
     var next = row.nextElementSibling;
@@ -324,65 +323,42 @@ function fmtStat(val, cat) {
     return val;
 }
 
-function renderOpponentLineup(data) {
-    isViewingOpponent = true;
+function buildTableHtml(players, cats, volumeCol, includeElig) {
+    var html = '<thead><tr><th>Slot</th><th>Player</th>';
+    if (includeElig) html += '<th>Elig</th>';
+    cats.forEach(function(c) { html += '<th>' + c + '</th>'; });
+    html += '<th style="font-size:11px;">wSGP<br><span style="color:#6a8adf;">them</span></th>';
+    html += '<th style="font-size:11px;">wSGP<br><span style="color:#dfb06a;">you</span></th>';
+    html += '<th></th></tr></thead><tbody>';
 
+    players.forEach(function(p) {
+        var benchClass = (p.selected_position === 'BN' || p.selected_position === 'IL') ? ' class="bench-row"' : '';
+        html += '<tr' + benchClass + '>';
+        html += '<td>' + (p.selected_position || 'BN') + '</td>';
+        html += '<td style="text-align:left;font-weight:500;">' + p.name + '</td>';
+        if (includeElig) html += '<td style="text-align:left;color:var(--text-secondary);font-size:11px;">' + (p.positions || []).join(', ') + '</td>';
+        cats.forEach(function(cat) {
+            var st = (p.stats || {})[cat] || {};
+            var colorClass = st.color_class || 'stat-neutral';
+            var val = st.actual !== undefined && st.actual !== null ? fmtStat(st.actual, cat) : '\u2014';
+            html += '<td class="' + colorClass + (cat === volumeCol ? ' pa-col' : '') + '">' + val + '</td>';
+        });
+        html += '<td style="color:#6a8adf;">' + (p.wsgp_them ? p.wsgp_them.toFixed(2) : '\u2014') + '</td>';
+        html += '<td style="color:#dfb06a;">' + (p.wsgp_you ? p.wsgp_you.toFixed(2) : '\u2014') + '</td>';
+        html += '<td>' + (p.status ? '<span class="badge badge-il">' + p.status + '</span>' : '') + '</td>';
+        html += '</tr>';
+    });
+    html += '</tbody>';
+    return html;
+}
+
+function renderOpponentLineup(data) {
     // Hide user-only elements
     var movesBanner = document.querySelector('.moves-banner');
     if (movesBanner) movesBanner.style.display = 'none';
 
-    // Build hitters table
-    var hitterCats = ['PA', 'R', 'HR', 'RBI', 'SB', 'AVG'];
-    var hitterHtml = '<thead><tr><th>Slot</th><th>Player</th><th>Elig</th>';
-    hitterCats.forEach(function(c) { hitterHtml += '<th>' + c + '</th>'; });
-    hitterHtml += '<th style="font-size:11px;">wSGP<br><span style="color:#6a8adf;">them</span></th>';
-    hitterHtml += '<th style="font-size:11px;">wSGP<br><span style="color:#dfb06a;">you</span></th>';
-    hitterHtml += '<th></th></tr></thead><tbody>';
-
-    data.hitters.forEach(function(h) {
-        var benchClass = (h.selected_position === 'BN' || h.selected_position === 'IL') ? ' class="bench-row"' : '';
-        hitterHtml += '<tr' + benchClass + '>';
-        hitterHtml += '<td>' + (h.selected_position || 'BN') + '</td>';
-        hitterHtml += '<td style="text-align:left;font-weight:500;">' + h.name + '</td>';
-        hitterHtml += '<td style="text-align:left;color:var(--text-secondary);font-size:11px;">' + (h.positions || []).join(', ') + '</td>';
-        hitterCats.forEach(function(cat) {
-            var st = (h.stats || {})[cat] || {};
-            var colorClass = st.color_class || 'stat-neutral';
-            var val = st.actual !== undefined && st.actual !== null ? fmtStat(st.actual, cat) : '\u2014';
-            hitterHtml += '<td class="' + colorClass + (cat === 'PA' ? ' pa-col' : '') + '">' + val + '</td>';
-        });
-        hitterHtml += '<td style="color:#6a8adf;">' + (h.wsgp_them ? h.wsgp_them.toFixed(2) : '\u2014') + '</td>';
-        hitterHtml += '<td style="color:#dfb06a;">' + (h.wsgp_you ? h.wsgp_you.toFixed(2) : '\u2014') + '</td>';
-        hitterHtml += '<td>' + (h.status ? '<span class="badge badge-il">' + h.status + '</span>' : '') + '</td>';
-        hitterHtml += '</tr>';
-    });
-    hitterHtml += '</tbody>';
-
-    // Build pitchers table
-    var pitcherCats = ['IP', 'W', 'K', 'SV', 'ERA', 'WHIP'];
-    var pitcherHtml = '<thead><tr><th>Slot</th><th>Player</th>';
-    pitcherCats.forEach(function(c) { pitcherHtml += '<th>' + c + '</th>'; });
-    pitcherHtml += '<th style="font-size:11px;">wSGP<br><span style="color:#6a8adf;">them</span></th>';
-    pitcherHtml += '<th style="font-size:11px;">wSGP<br><span style="color:#dfb06a;">you</span></th>';
-    pitcherHtml += '<th></th></tr></thead><tbody>';
-
-    data.pitchers.forEach(function(p) {
-        var benchClass = (p.selected_position === 'BN' || p.selected_position === 'IL') ? ' class="bench-row"' : '';
-        pitcherHtml += '<tr' + benchClass + '>';
-        pitcherHtml += '<td>' + (p.selected_position || 'BN') + '</td>';
-        pitcherHtml += '<td style="text-align:left;font-weight:500;">' + p.name + '</td>';
-        pitcherCats.forEach(function(cat) {
-            var st = (p.stats || {})[cat] || {};
-            var colorClass = st.color_class || 'stat-neutral';
-            var val = st.actual !== undefined && st.actual !== null ? fmtStat(st.actual, cat) : '\u2014';
-            pitcherHtml += '<td class="' + colorClass + (cat === 'IP' ? ' pa-col' : '') + '">' + val + '</td>';
-        });
-        pitcherHtml += '<td style="color:#6a8adf;">' + (p.wsgp_them ? p.wsgp_them.toFixed(2) : '\u2014') + '</td>';
-        pitcherHtml += '<td style="color:#dfb06a;">' + (p.wsgp_you ? p.wsgp_you.toFixed(2) : '\u2014') + '</td>';
-        pitcherHtml += '<td>' + (p.status ? '<span class="badge badge-il">' + p.status + '</span>' : '') + '</td>';
-        pitcherHtml += '</tr>';
-    });
-    pitcherHtml += '</tbody>';
+    var hitterHtml = buildTableHtml(data.hitters, ['PA', 'R', 'HR', 'RBI', 'SB', 'AVG'], 'PA', true);
+    var pitcherHtml = buildTableHtml(data.pitchers, ['IP', 'W', 'K', 'SV', 'ERA', 'WHIP'], 'IP', false);
 
     // Replace table contents
     var tables = document.querySelectorAll('.data-table');
