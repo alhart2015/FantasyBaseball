@@ -306,6 +306,124 @@ def get_teams_list(
     return {"teams": teams, "user_team_key": user_team_key}
 
 
+def build_opponent_lineup(
+    roster: list[dict],
+    opponent_name: str,
+    standings: list[dict],
+    hitters_proj: "pd.DataFrame",
+    pitchers_proj: "pd.DataFrame",
+    ros_hitters: "pd.DataFrame",
+    ros_pitchers: "pd.DataFrame",
+    user_leverage: dict[str, float],
+    season_year: int,
+) -> dict:
+    """Build a fully enriched opponent lineup (projections, pace, dual wSGP).
+
+    Args:
+        roster: Raw roster from fetch_roster().
+        opponent_name: Opponent team name (for leverage calculation).
+        standings: Raw standings cache.
+        hitters_proj: Blended hitter projections (with _name_norm column).
+        pitchers_proj: Blended pitcher projections (with _name_norm column).
+        ros_hitters: ROS hitter projections (may be empty DataFrame).
+        ros_pitchers: ROS pitcher projections (may be empty DataFrame).
+        user_leverage: User's leverage weights.
+        season_year: Season year for game log lookup.
+
+    Returns:
+        Dict with "hitters" and "pitchers" lists, each entry containing
+        projection stats, pace data, and dual wSGP (wsgp_them, wsgp_you).
+    """
+    import pandas as pd
+
+    from fantasy_baseball.analysis.pace import compute_player_pace
+    from fantasy_baseball.data.projections import match_roster_to_projections
+    from fantasy_baseball.lineup.leverage import calculate_leverage
+    from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
+    from fantasy_baseball.utils.name_utils import normalize_name
+
+    # Match roster to projections
+    matched = match_roster_to_projections(roster, hitters_proj, pitchers_proj)
+
+    # ROS projection lookup
+    has_ros = not ros_hitters.empty or not ros_pitchers.empty
+    if has_ros:
+        ros_matched = match_roster_to_projections(roster, ros_hitters, ros_pitchers)
+        ros_lookup = {normalize_name(p["name"]): p for p in ros_matched}
+    else:
+        ros_lookup = {}
+
+    # Opponent leverage
+    opp_leverage = calculate_leverage(standings, opponent_name)
+
+    # Load game log totals for pace
+    hitter_logs, pitcher_logs = _load_game_log_totals(season_year)
+
+    # Build enriched entries
+    matched_names = set()
+    enriched = []
+    for entry in matched:
+        player_series = pd.Series(entry)
+        entry["wsgp_them"] = calculate_weighted_sgp(player_series, opp_leverage)
+        entry["wsgp_you"] = calculate_weighted_sgp(player_series, user_leverage)
+        norm = normalize_name(entry["name"])
+        matched_names.add(norm)
+
+        # ROS projection tooltip data
+        ros_entry = ros_lookup.get(norm)
+        if ros_entry:
+            entry["ros"] = {
+                k: ros_entry.get(k, 0)
+                for k in (["r", "hr", "rbi", "sb", "avg"]
+                          if entry.get("player_type") == "hitter"
+                          else ["w", "k", "sv", "era", "whip"])
+            }
+
+        # Pace data
+        ptype = entry.get("player_type", "hitter")
+        if ptype == "hitter":
+            actuals = hitter_logs.get(norm, {})
+        else:
+            actuals = pitcher_logs.get(norm, {})
+        proj_keys = HITTER_PROJ_KEYS if ptype == "hitter" else PITCHER_PROJ_KEYS
+        projected = {k: entry.get(k, 0) for k in proj_keys}
+        entry["stats"] = compute_player_pace(actuals, projected, ptype)
+
+        enriched.append(entry)
+
+    # Include unmatched players
+    for player in roster:
+        if normalize_name(player["name"]) not in matched_names:
+            entry = dict(player)
+            entry["wsgp_them"] = 0.0
+            entry["wsgp_you"] = 0.0
+            entry["stats"] = {}
+            enriched.append(entry)
+
+    # Split into hitters and pitchers
+    hitters = []
+    pitchers = []
+    for p in enriched:
+        pos = p.get("selected_position", "BN")
+        is_pitcher = pos in PITCHER_POSITIONS or (
+            pos == "BN" and set(p.get("positions", [])).issubset(
+                PITCHER_POSITIONS | {"BN"}
+            )
+        )
+        if is_pitcher:
+            pitchers.append(p)
+        else:
+            hitters.append(p)
+
+    slot_rank = {s: i for i, s in enumerate(HITTER_SLOTS_ORDER)}
+    hitters.sort(key=lambda h: (slot_rank.get(h.get("selected_position", "").upper(), 99),
+                                -h.get("wsgp_them", 0)))
+    pitchers.sort(key=lambda p: (p.get("selected_position", "") in ("BN", "IL", "DL"),
+                                 -p.get("wsgp_them", 0)))
+
+    return {"hitters": hitters, "pitchers": pitchers}
+
+
 def format_monte_carlo_for_display(
     mc_data: dict, user_team_name: str
 ) -> dict:

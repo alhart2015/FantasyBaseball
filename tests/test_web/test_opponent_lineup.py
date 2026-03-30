@@ -95,3 +95,87 @@ class TestStandingsTeamKey:
         )
         isotopes = next(t for t in result["teams"] if t["name"] == "Springfield Isotopes")
         assert isotopes["team_key"] == "469.l.5652.t.8"
+
+
+import pandas as pd
+from unittest.mock import MagicMock
+from fantasy_baseball.web.season_data import build_opponent_lineup
+
+
+def _sample_projections():
+    """Minimal blended projections DataFrames."""
+    from fantasy_baseball.utils.name_utils import normalize_name
+    hitters = pd.DataFrame([
+        {"name": "Salvador Perez", "fg_id": "1", "player_type": "hitter",
+         "pa": 550, "ab": 500, "h": 130, "r": 60, "hr": 25, "rbi": 80,
+         "sb": 3, "avg": 0.260, "adp": 80},
+    ])
+    pitchers = pd.DataFrame([
+        {"name": "Corbin Burnes", "fg_id": "2", "player_type": "pitcher",
+         "w": 14, "k": 200, "sv": 0, "ip": 190, "er": 55, "bb": 40,
+         "h_allowed": 155, "era": 2.60, "whip": 1.03, "adp": 15},
+    ])
+    hitters["_name_norm"] = hitters["name"].apply(normalize_name)
+    pitchers["_name_norm"] = pitchers["name"].apply(normalize_name)
+    return hitters, pitchers
+
+
+class TestBuildOpponentLineup:
+    def test_returns_hitters_and_pitchers(self):
+        roster = [
+            {"name": "Salvador Perez", "positions": ["C", "Util"],
+             "selected_position": "C", "player_id": "100", "status": ""},
+            {"name": "Corbin Burnes", "positions": ["SP"],
+             "selected_position": "SP", "player_id": "200", "status": ""},
+        ]
+        hitters_proj, pitchers_proj = _sample_projections()
+        standings = _sample_standings()
+        user_leverage = {"R": 0.1, "HR": 0.1, "RBI": 0.1, "SB": 0.1,
+                         "AVG": 0.1, "W": 0.1, "K": 0.1, "SV": 0.1,
+                         "ERA": 0.1, "WHIP": 0.1}
+
+        result = build_opponent_lineup(
+            roster=roster,
+            opponent_name="Springfield Isotopes",
+            standings=standings,
+            hitters_proj=hitters_proj,
+            pitchers_proj=pitchers_proj,
+            ros_hitters=pd.DataFrame(),
+            ros_pitchers=pd.DataFrame(),
+            user_leverage=user_leverage,
+            season_year=2026,
+        )
+
+        assert len(result["hitters"]) == 1
+        assert len(result["pitchers"]) == 1
+        assert result["hitters"][0]["name"] == "Salvador Perez"
+        assert result["pitchers"][0]["name"] == "Corbin Burnes"
+
+    def test_dual_wsgp_columns(self):
+        roster = [
+            {"name": "Salvador Perez", "positions": ["C", "Util"],
+             "selected_position": "C", "player_id": "100", "status": ""},
+        ]
+        hitters_proj, pitchers_proj = _sample_projections()
+        standings = _sample_standings()
+        user_leverage = {"R": 0.2, "HR": 0.2, "RBI": 0.2, "SB": 0.1,
+                         "AVG": 0.1, "W": 0.05, "K": 0.05, "SV": 0.05,
+                         "ERA": 0.025, "WHIP": 0.025}
+
+        result = build_opponent_lineup(
+            roster=roster,
+            opponent_name="Springfield Isotopes",
+            standings=standings,
+            hitters_proj=hitters_proj,
+            pitchers_proj=pitchers_proj,
+            ros_hitters=pd.DataFrame(),
+            ros_pitchers=pd.DataFrame(),
+            user_leverage=user_leverage,
+            season_year=2026,
+        )
+
+        perez = result["hitters"][0]
+        assert "wsgp_them" in perez
+        assert "wsgp_you" in perez
+        assert isinstance(perez["wsgp_them"], float)
+        assert isinstance(perez["wsgp_you"], float)
