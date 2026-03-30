@@ -454,6 +454,13 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         _refresh_status["progress"] = "Starting..."
         _refresh_status["error"] = None
 
+    from fantasy_baseball.web.job_logger import JobLogger
+    logger = JobLogger("refresh")
+
+    def _progress(msg):
+        _set_refresh_progress(msg)
+        logger.log(msg)
+
     try:
         # Lazy imports — only loaded when refresh actually runs
         from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
@@ -481,13 +488,13 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         project_root = Path(__file__).resolve().parents[3]
 
         # --- Step 1: Auth + league ---
-        _set_refresh_progress("Authenticating with Yahoo...")
+        _progress("Authenticating with Yahoo...")
         sc = get_yahoo_session()
         config = load_config(project_root / "config" / "league.yaml")
         league = get_league(sc, config.league_id, config.game_code)
 
         # --- Step 2: Find user's team key ---
-        _set_refresh_progress("Finding team...")
+        _progress("Finding team...")
         teams = league.teams()
         user_team_key = None
         for key, team_info in teams.items():
@@ -499,23 +506,25 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             user_team_key = next(iter(teams))
 
         # --- Step 3: Fetch standings + roster ---
-        _set_refresh_progress("Fetching standings...")
+        _progress("Fetching standings...")
         standings = fetch_standings(league)
         _fill_stat_defaults(standings)
         write_cache("standings", standings, cache_dir)
+        _progress(f"Fetched standings for {len(standings)} teams")
 
-        _set_refresh_progress("Fetching roster...")
+        _progress("Fetching roster...")
         roster_raw = fetch_roster(league, user_team_key)
+        _progress(f"Fetched roster: {len(roster_raw)} players")
 
         # --- Step 4: Read projections from SQLite ---
-        _set_refresh_progress("Loading projections...")
+        _progress("Loading projections...")
         db_conn = get_db_connection()
         create_tables(db_conn)
         try:
             hitters_proj, pitchers_proj = get_blended_projections(db_conn)
 
             # Load ROS projections (skip if latest snapshot already in DB)
-            _set_refresh_progress("Loading ROS projections...")
+            _progress("Loading ROS projections...")
             projections_dir = project_root / "data" / "projections"
             ros_dir = projections_dir / str(config.season_year) / "ros"
             if ros_dir.is_dir():
@@ -539,17 +548,21 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             db_conn.close()
         hitters_proj["_name_norm"] = hitters_proj["name"].apply(normalize_name)
         pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
+        _progress(f"Loaded {len(hitters_proj)} hitter + {len(pitchers_proj)} pitcher projections")
         has_ros = not ros_hitters.empty or not ros_pitchers.empty
         if has_ros:
             ros_hitters["_name_norm"] = ros_hitters["name"].apply(normalize_name)
             ros_pitchers["_name_norm"] = ros_pitchers["name"].apply(normalize_name)
+            _progress(f"Loaded {len(ros_hitters)} ROS hitters + {len(ros_pitchers)} ROS pitchers")
+        else:
+            _progress("No ROS projections available")
 
         # --- Step 5: Leverage weights ---
-        _set_refresh_progress("Calculating leverage weights...")
+        _progress("Calculating leverage weights...")
         leverage = calculate_leverage(standings, config.team_name)
 
         # --- Step 6: Match roster players to projections, compute wSGP ---
-        _set_refresh_progress("Matching roster to projections...")
+        _progress("Matching roster to projections...")
         from fantasy_baseball.data.projections import match_roster_to_projections
 
         matched = match_roster_to_projections(roster_raw, hitters_proj, pitchers_proj)
@@ -583,21 +596,22 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                 entry = dict(player)
                 entry["wsgp"] = 0.0
                 roster_with_proj.append(entry)
+        _progress(f"Matched {len(roster_with_proj)} players to projections")
 
         # --- Step 6b: Fetch MLB game logs ---
-        _set_refresh_progress("Fetching MLB game logs...")
+        _progress("Fetching MLB game logs...")
         gl_conn = get_db_connection()
         create_tables(gl_conn)
         try:
             fetch_and_load_game_logs(
                 gl_conn, config.season_year,
-                progress_cb=_set_refresh_progress,
+                progress_cb=_progress,
             )
         finally:
             gl_conn.close()
 
         # --- Step 6c: Compute season-to-date pace vs projections ---
-        _set_refresh_progress("Computing player pace...")
+        _progress("Computing player pace...")
         hitter_logs, pitcher_logs = _load_game_log_totals(config.season_year)
 
         # Attach pace data to each roster player
@@ -618,7 +632,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         write_cache("roster", roster_with_proj, cache_dir)
 
         # --- Step 7: Run lineup optimizer ---
-        _set_refresh_progress("Optimizing lineup...")
+        _progress("Optimizing lineup...")
         hitter_players = []
         pitcher_players = []
         for p in roster_with_proj:
@@ -636,7 +650,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         )
 
         # --- Step 8: Compare optimal to current, find moves ---
-        _set_refresh_progress("Computing lineup moves...")
+        _progress("Computing lineup moves...")
         moves = []
         for slot, player_name in optimal_hitters.items():
             for p in roster_with_proj:
@@ -662,7 +676,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         write_cache("lineup_optimal", optimal_data, cache_dir)
 
         # --- Step 9: Probable starters ---
-        _set_refresh_progress("Fetching schedule and matchup data...")
+        _progress("Fetching schedule and matchup data...")
         start_date, end_date = fetch_scoring_period(league)
         schedule_cache_path = project_root / "data" / "weekly_schedule.json"
         schedule = get_week_schedule(start_date, end_date, schedule_cache_path)
@@ -683,7 +697,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         write_cache("probable_starters", probable_starters, cache_dir)
 
         # --- Step 10: Scan waivers ---
-        _set_refresh_progress("Scanning waivers...")
+        _progress("Scanning waivers...")
         open_h, open_p, open_b = detect_open_slots(roster_raw, config.roster_slots)
         fa_players, _ = fetch_and_match_free_agents(
             league, hitters_proj, pitchers_proj
@@ -702,7 +716,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         write_cache("waivers", waiver_recs, cache_dir)
 
         # --- Step 11: Find trades + generate pitches ---
-        _set_refresh_progress("Evaluating trades...")
+        _progress("Evaluating trades...")
         # Build opponent rosters (fetch top players from each team)
         opp_rosters: dict[str, list[dict]] = {}
         cat_ranks = _compute_category_ranks(standings)
@@ -766,7 +780,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         write_cache("trades", trade_proposals, cache_dir)
 
         # --- Step 11b: Compute buy-low candidates ---
-        _set_refresh_progress("Finding buy-low candidates...")
+        _progress("Finding buy-low candidates...")
         all_game_logs = {**hitter_logs, **pitcher_logs}
 
         buy_low_trade_targets = []
@@ -788,7 +802,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         }, cache_dir)
 
         # --- Step 12: Project full-season standings from rosters ---
-        _set_refresh_progress("Projecting standings...")
+        _progress("Projecting standings...")
         from fantasy_baseball.scoring import project_team_stats
 
         all_team_rosters = {config.team_name: roster_with_proj}
@@ -820,13 +834,15 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         base_mc = run_monte_carlo(
             mc_rosters, h_slots, p_slots, config.team_name,
             n_iterations=1000, use_management=False,
-            progress_cb=lambda i: _set_refresh_progress(f"Monte Carlo: iteration {i}/1000..."),
+            progress_cb=lambda i: _progress(f"Monte Carlo: iteration {i}/1000..."),
         )
+        _progress("Pre-season Monte Carlo complete")
         mgmt_mc = run_monte_carlo(
             mc_rosters, h_slots, p_slots, config.team_name,
             n_iterations=1000, use_management=True,
-            progress_cb=lambda i: _set_refresh_progress(f"MC + Roster Mgmt: iteration {i}/1000..."),
+            progress_cb=lambda i: _progress(f"MC + Roster Mgmt: iteration {i}/1000..."),
         )
+        _progress("Pre-season + Mgmt Monte Carlo complete")
 
         # --- Step 13b: ROS Monte Carlo simulation ---
         ros_mc = None
@@ -870,10 +886,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                     h_slots=h_slots, p_slots=p_slots,
                     user_team_name=config.team_name,
                     n_iterations=1000, use_management=False,
-                    progress_cb=lambda i: _set_refresh_progress(
+                    progress_cb=lambda i: _progress(
                         f"Current MC: iteration {i}/1000..."
                     ),
                 )
+                _progress("Current Monte Carlo complete")
                 ros_mgmt_mc = run_ros_monte_carlo(
                     team_rosters=ros_mc_rosters,
                     actual_standings=actual_standings_dict,
@@ -881,10 +898,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                     h_slots=h_slots, p_slots=p_slots,
                     user_team_name=config.team_name,
                     n_iterations=1000, use_management=True,
-                    progress_cb=lambda i: _set_refresh_progress(
+                    progress_cb=lambda i: _progress(
                         f"Current MC + Mgmt: iteration {i}/1000..."
                     ),
                 )
+                _progress("Current + Mgmt Monte Carlo complete")
 
         write_cache("monte_carlo", {
             "base": base_mc,
@@ -894,7 +912,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         }, cache_dir)
 
         # --- Step 14: Update SQLite database ---
-        _set_refresh_progress("Updating database...")
+        _progress("Updating database...")
         from fantasy_baseball.data.db import (
             append_roster_snapshot,
             append_standings_snapshot,
@@ -917,7 +935,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             db_conn.close()
 
         # --- Step 15: Write meta ---
-        _set_refresh_progress("Finalizing...")
+        _progress("Finalizing...")
         meta = {
             "last_refresh": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "start_date": start_date,
@@ -926,11 +944,13 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         }
         write_cache("meta", meta, cache_dir)
 
-        _set_refresh_progress("Done")
+        logger.finish("ok")
+        _progress("Done")
 
     except Exception as exc:
         with _refresh_lock:
             _refresh_status["error"] = str(exc)
+        logger.finish("error", str(exc))
         raise
     finally:
         with _refresh_lock:
