@@ -135,6 +135,118 @@ def simulate_season(
     return team_stats, injuries
 
 
+# Typical full-season team totals for blending actual + simulated rate stats.
+_TYPICAL_TEAM_AB = 5500
+_TYPICAL_TEAM_IP = 1450
+
+
+def simulate_remaining_season(
+    actual_standings: dict[str, dict[str, float]],
+    team_rosters: dict,
+    fraction_remaining: float,
+    rng: np.random.Generator,
+    h_slots: int = 13,
+    p_slots: int = 9,
+) -> tuple[dict, dict]:
+    """Simulate only the remaining portion of the season and blend with YTD actuals.
+
+    For each team, scales variance and injury probability by fraction_remaining,
+    simulates remaining-season stats, then blends with actual YTD stats to
+    produce full-season totals (counting stats sum, rate stats recomputed from
+    component totals).
+
+    Args:
+        actual_standings: {team_key: {R, HR, RBI, SB, AVG, W, K, SV, ERA, WHIP}}
+            — actual YTD stats for each team.
+        team_rosters: {team_key: [player dicts]} with ROS projections.
+        fraction_remaining: Float 0.0–1.0, portion of season left to simulate.
+        rng: NumPy random generator for reproducibility.
+        h_slots: Number of active hitter slots.
+        p_slots: Number of active pitcher slots.
+
+    Returns:
+        Tuple of (team_stats, injuries):
+        - team_stats: {team_key: {R, HR, RBI, SB, AVG, W, K, SV, ERA, WHIP}}
+        - injuries: {team_key: [(player_name, frac_missed), ...]}
+    """
+    team_stats = {}
+    injuries = {}
+
+    for team_key, players in team_rosters.items():
+        actuals = actual_standings.get(team_key, {})
+        hitters = [p for p in players if p.get("player_type") == "hitter"]
+        pitchers = [p for p in players if p.get("player_type") == "pitcher"]
+        team_injuries = []
+
+        adj_hitters = _apply_variance_scaled(
+            hitters, "hitter", rng, team_injuries, fraction_remaining,
+        )
+        adj_pitchers = _apply_variance_scaled(
+            pitchers, "pitcher", rng, team_injuries, fraction_remaining,
+        )
+
+        # Select active roster (bench excluded) — same logic as simulate_season
+        adj_hitters.sort(
+            key=lambda h: h["r"] + h["hr"] + h["rbi"] + h["sb"],
+            reverse=True,
+        )
+        adj_pitchers.sort(
+            key=lambda p: (
+                p.get("sv", 0) >= CLOSER_SV_THRESHOLD,
+                p["w"] + p["k"] + p.get("sv", 0),
+            ),
+            reverse=True,
+        )
+        active_h = adj_hitters[:h_slots]
+        active_p = adj_pitchers[:p_slots]
+
+        # Aggregate simulated remaining counting stats from active roster
+        sim_r = sum(h["r"] for h in active_h)
+        sim_hr = sum(h["hr"] for h in active_h)
+        sim_rbi = sum(h["rbi"] for h in active_h)
+        sim_sb = sum(h["sb"] for h in active_h)
+        sim_h = sum(h["h"] for h in active_h)
+        sim_ab = sum(h["ab"] for h in active_h)
+        sim_w = sum(p["w"] for p in active_p)
+        sim_k = sum(p["k"] for p in active_p)
+        sim_sv = sum(p.get("sv", 0) for p in active_p)
+        sim_ip = sum(p["ip"] for p in active_p)
+        sim_er = sum(p["er"] for p in active_p)
+        sim_bb = sum(p["bb"] for p in active_p)
+        sim_ha = sum(p["h_allowed"] for p in active_p)
+
+        # Estimate actual component stats from rate stats
+        fraction_elapsed = 1.0 - fraction_remaining
+        actual_ab = _TYPICAL_TEAM_AB * fraction_elapsed
+        actual_ip = _TYPICAL_TEAM_IP * fraction_elapsed
+        actual_h = actuals.get("AVG", 0) * actual_ab
+        actual_er = actuals.get("ERA", 0) * actual_ip / 9
+        actual_h_plus_bb = actuals.get("WHIP", 0) * actual_ip
+
+        # Blend actuals + simulated
+        total_ab = actual_ab + sim_ab
+        total_ip = actual_ip + sim_ip
+        total_h = actual_h + sim_h
+        total_er = actual_er + sim_er
+        total_h_plus_bb = actual_h_plus_bb + sim_bb + sim_ha
+
+        team_stats[team_key] = {
+            "R": actuals.get("R", 0) + sim_r,
+            "HR": actuals.get("HR", 0) + sim_hr,
+            "RBI": actuals.get("RBI", 0) + sim_rbi,
+            "SB": actuals.get("SB", 0) + sim_sb,
+            "AVG": total_h / total_ab if total_ab > 0 else 0,
+            "W": actuals.get("W", 0) + sim_w,
+            "K": actuals.get("K", 0) + sim_k,
+            "SV": actuals.get("SV", 0) + sim_sv,
+            "ERA": total_er * 9 / total_ip if total_ip > 0 else 99,
+            "WHIP": total_h_plus_bb / total_ip if total_ip > 0 else 99,
+        }
+        injuries[team_key] = team_injuries
+
+    return team_stats, injuries
+
+
 def _apply_variance(
     players: list,
     player_type: str,
@@ -155,6 +267,74 @@ def _apply_variance(
     injury_prob = INJURY_PROB[player_type]
     injury_lo, injury_hi = INJURY_SEVERITY[player_type]
     cov = HITTER_COV if is_hitter else PITCHER_COV
+    idx_map = HITTER_IDX if is_hitter else PITCHER_IDX
+    n_corr = len(idx_map)
+    mean = np.zeros(n_corr)
+
+    n = len(players)
+    if n == 0:
+        return []
+
+    # Batch all random draws for the entire player list at once
+    injury_rolls = rng.random(n)
+    injury_severities = rng.uniform(injury_lo, injury_hi, n)
+    all_draws = rng.multivariate_normal(mean, cov, size=n)
+
+    adjusted = []
+    for i, p in enumerate(players):
+        frac_missed = 0.0
+        if injury_rolls[i] < injury_prob:
+            frac_missed = injury_severities[i]
+            injuries_out.append((p.get("name", "?"), frac_missed))
+
+        scale = 1.0 - frac_missed
+
+        if is_hitter:
+            repl = REPLACEMENT_HITTER
+        else:
+            is_closer = p.get("sv", 0) >= CLOSER_SV_THRESHOLD
+            repl = REPLACEMENT_RP if is_closer else REPLACEMENT_SP
+
+        draws = all_draws[i]
+        row = {}
+        for col in counting_cols:
+            base = float(p.get(col, 0) or 0)
+            repl_contrib = repl.get(col, 0) * frac_missed
+
+            if col in idx_map:
+                perf = max(0, 1.0 + draws[idx_map[col]])
+                row[col] = base * perf * scale + repl_contrib
+            else:
+                row[col] = base * scale + repl_contrib
+
+        row["name"] = p.get("name", "?")
+        row["player_type"] = player_type
+        adjusted.append(row)
+
+    return adjusted
+
+
+def _apply_variance_scaled(
+    players: list,
+    player_type: str,
+    rng: np.random.Generator,
+    injuries_out: list,
+    fraction_remaining: float,
+) -> list[dict]:
+    """Apply injury and correlated performance variance scaled by fraction_remaining.
+
+    Like _apply_variance but scales injury probability and covariance matrix by
+    fraction_remaining, reflecting that a partial season has proportionally less
+    variance and injury risk than a full season.
+
+    Mutates injuries_out by appending (name, frac_missed) for injured players.
+    """
+    is_hitter = player_type == "hitter"
+    counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
+    injury_prob = INJURY_PROB[player_type] * fraction_remaining
+    injury_lo, injury_hi = INJURY_SEVERITY[player_type]
+    base_cov = HITTER_COV if is_hitter else PITCHER_COV
+    cov = base_cov * fraction_remaining
     idx_map = HITTER_IDX if is_hitter else PITCHER_IDX
     n_corr = len(idx_map)
     mean = np.zeros(n_corr)
@@ -299,6 +479,92 @@ def run_monte_carlo(
         sim_stats, _ = simulate_season(team_rosters, rng, h_slots, p_slots)
         if use_management:
             sim_stats = apply_management_adjustment(sim_stats, rng)
+        sim_roto = score_roto(sim_stats)
+        ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
+        for rank, (name, pts) in enumerate(ranked, 1):
+            all_totals[name].append(pts["total"])
+            if rank == 1:
+                mc_wins[name] += 1
+            if rank <= 3:
+                mc_top3[name] += 1
+            if name == user_team_name:
+                for c in ALL_CATS:
+                    user_cat_pts[c].append(pts.get(f"{c}_pts", 0))
+
+    n = n_iterations
+    team_results = {}
+    for name in team_names:
+        arr = np.array(all_totals[name])
+        team_results[name] = {
+            "median_pts": round(float(np.median(arr)), 1),
+            "p10": round(float(np.percentile(arr, 10))),
+            "p90": round(float(np.percentile(arr, 90))),
+            "first_pct": round(mc_wins[name] / n * 100, 1),
+            "top3_pct": round(mc_top3[name] / n * 100, 1),
+        }
+
+    category_risk = {}
+    for c in ALL_CATS:
+        arr = np.array(user_cat_pts[c])
+        category_risk[c] = {
+            "median_pts": round(float(np.median(arr)), 1),
+            "p10": round(float(np.percentile(arr, 10)), 1),
+            "p90": round(float(np.percentile(arr, 90)), 1),
+            "top3_pct": round(float((arr >= 8).sum()) / n * 100, 1),
+            "bot3_pct": round(float((arr <= 3).sum()) / n * 100, 1),
+        }
+
+    return {"team_results": team_results, "category_risk": category_risk}
+
+
+def run_ros_monte_carlo(
+    team_rosters: dict,
+    actual_standings: dict[str, dict[str, float]],
+    fraction_remaining: float,
+    h_slots: int,
+    p_slots: int,
+    user_team_name: str,
+    n_iterations: int = 1000,
+    seed: int = 42,
+    progress_cb=None,
+) -> dict:
+    """Run a Monte Carlo simulation over the remaining season.
+
+    Like run_monte_carlo but uses simulate_remaining_season to blend
+    actual YTD stats with simulated ROS projections. Always applies
+    management adjustment after each iteration.
+
+    Args:
+        team_rosters: {team_name: [player dicts]} with ROS projections.
+        actual_standings: {team_name: {R, HR, RBI, SB, AVG, W, K, SV, ERA, WHIP}}
+            — actual YTD stats for each team.
+        fraction_remaining: Float 0.0–1.0, portion of season left.
+        h_slots: Number of active hitter slots.
+        p_slots: Number of active pitcher slots.
+        user_team_name: Name of user's team (for category risk).
+        n_iterations: Number of simulation iterations.
+        seed: RNG seed for reproducibility.
+        progress_cb: Optional callback(msg: str) called every 200 iterations.
+
+    Returns:
+        {"team_results": {team: {median_pts, p10, p90, first_pct, top3_pct}},
+         "category_risk": {cat: {median_pts, p10, p90, top3_pct, bot3_pct}}}
+    """
+    rng = np.random.default_rng(seed)
+    team_names = list(team_rosters.keys())
+
+    all_totals = {name: [] for name in team_names}
+    mc_wins = {name: 0 for name in team_names}
+    mc_top3 = {name: 0 for name in team_names}
+    user_cat_pts = {c: [] for c in ALL_CATS}
+
+    for i in range(n_iterations):
+        if progress_cb and i % 200 == 0:
+            progress_cb(i)
+        sim_stats, _ = simulate_remaining_season(
+            actual_standings, team_rosters, fraction_remaining, rng, h_slots, p_slots,
+        )
+        sim_stats = apply_management_adjustment(sim_stats, rng)
         sim_roto = score_roto(sim_stats)
         ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
         for rank, (name, pts) in enumerate(ranked, 1):
