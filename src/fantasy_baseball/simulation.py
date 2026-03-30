@@ -150,9 +150,19 @@ def simulate_remaining_season(
 ) -> tuple[dict, dict]:
     """Simulate only the remaining portion of the season and blend with YTD actuals.
 
-    ROS projections from FanGraphs are full-season scale (not remainder-only),
-    so counting stats are scaled by fraction_remaining before variance is applied.
-    Variance and injury probability are also scaled by fraction_remaining.
+    ROS projections from FanGraphs are full-season scale — they represent
+    the system's best estimate of total stats for the year, incorporating
+    early-season performance.  To simulate only the remainder:
+
+    1. Apply variance to full-season player projections (covariance scaled
+       by fraction_remaining so uncertainty shrinks as season progresses).
+    2. Aggregate to team-level simulated full-season totals.
+    3. Subtract actual YTD stats to get simulated remaining production
+       (clamped to >= 0 so hot starts are preserved).
+    4. Final = actual + remaining.
+
+    For rate stats, component stats (H, AB, IP, ER, etc.) are estimated
+    from the actual rates and blended with simulated remaining components.
 
     Args:
         actual_standings: {team_key: {R, HR, RBI, SB, AVG, W, K, SV, ERA, WHIP}}
@@ -171,26 +181,13 @@ def simulate_remaining_season(
     team_stats = {}
     injuries = {}
 
-    # Scale full-season ROS projections to remaining season
-    h_counting = HITTING_COUNTING   # ["r", "hr", "rbi", "sb", "h", "ab"]
-    p_counting = PITCHING_COUNTING  # ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
-
     for team_key, players in team_rosters.items():
         actuals = actual_standings.get(team_key, {})
-
-        # Scale counting stats by fraction_remaining
-        scaled_players = []
-        for p in players:
-            sp = dict(p)
-            cols = h_counting if sp.get("player_type") == "hitter" else p_counting
-            for col in cols:
-                sp[col] = float(sp.get(col, 0) or 0) * fraction_remaining
-            scaled_players.append(sp)
-
-        hitters = [p for p in scaled_players if p.get("player_type") == "hitter"]
-        pitchers = [p for p in scaled_players if p.get("player_type") == "pitcher"]
+        hitters = [p for p in players if p.get("player_type") == "hitter"]
+        pitchers = [p for p in players if p.get("player_type") == "pitcher"]
         team_injuries = []
 
+        # Apply variance to full-season projections (covariance scaled down)
         adj_hitters = _apply_variance(
             hitters, "hitter", rng, team_injuries, fraction_remaining,
         )
@@ -213,7 +210,7 @@ def simulate_remaining_season(
         active_h = adj_hitters[:h_slots]
         active_p = adj_pitchers[:p_slots]
 
-        # Aggregate simulated remaining counting stats from active roster
+        # Aggregate simulated full-season team totals
         sim_r = sum(h["r"] for h in active_h)
         sim_hr = sum(h["hr"] for h in active_h)
         sim_rbi = sum(h["rbi"] for h in active_h)
@@ -228,7 +225,16 @@ def simulate_remaining_season(
         sim_bb = sum(p["bb"] for p in active_p)
         sim_ha = sum(p["h_allowed"] for p in active_p)
 
-        # Estimate actual component stats from rate stats
+        # Subtract actuals to get simulated remaining (clamped to >= 0)
+        rem_r = max(0, sim_r - actuals.get("R", 0))
+        rem_hr = max(0, sim_hr - actuals.get("HR", 0))
+        rem_rbi = max(0, sim_rbi - actuals.get("RBI", 0))
+        rem_sb = max(0, sim_sb - actuals.get("SB", 0))
+        rem_w = max(0, sim_w - actuals.get("W", 0))
+        rem_k = max(0, sim_k - actuals.get("K", 0))
+        rem_sv = max(0, sim_sv - actuals.get("SV", 0))
+
+        # Estimate actual component stats from rate stats for blending
         fraction_elapsed = 1.0 - fraction_remaining
         actual_ab = _TYPICAL_TEAM_AB * fraction_elapsed
         actual_ip = _TYPICAL_TEAM_IP * fraction_elapsed
@@ -236,22 +242,29 @@ def simulate_remaining_season(
         actual_er = actuals.get("ERA", 0) * actual_ip / 9
         actual_h_plus_bb = actuals.get("WHIP", 0) * actual_ip
 
-        # Blend actuals + simulated
-        total_ab = actual_ab + sim_ab
-        total_ip = actual_ip + sim_ip
-        total_h = actual_h + sim_h
-        total_er = actual_er + sim_er
-        total_h_plus_bb = actual_h_plus_bb + sim_bb + sim_ha
+        # Remaining components: simulated full-season minus actual
+        rem_ab = max(0, sim_ab - actual_ab)
+        rem_h = max(0, sim_h - actual_h)
+        rem_ip = max(0, sim_ip - actual_ip)
+        rem_er = max(0, sim_er - actual_er)
+        rem_h_plus_bb = max(0, (sim_bb + sim_ha) - (actual_h_plus_bb))
+
+        # Final = actual + remaining
+        total_ab = actual_ab + rem_ab
+        total_h = actual_h + rem_h
+        total_ip = actual_ip + rem_ip
+        total_er = actual_er + rem_er
+        total_h_plus_bb = actual_h_plus_bb + rem_h_plus_bb
 
         team_stats[team_key] = {
-            "R": actuals.get("R", 0) + sim_r,
-            "HR": actuals.get("HR", 0) + sim_hr,
-            "RBI": actuals.get("RBI", 0) + sim_rbi,
-            "SB": actuals.get("SB", 0) + sim_sb,
+            "R": actuals.get("R", 0) + rem_r,
+            "HR": actuals.get("HR", 0) + rem_hr,
+            "RBI": actuals.get("RBI", 0) + rem_rbi,
+            "SB": actuals.get("SB", 0) + rem_sb,
             "AVG": total_h / total_ab if total_ab > 0 else 0,
-            "W": actuals.get("W", 0) + sim_w,
-            "K": actuals.get("K", 0) + sim_k,
-            "SV": actuals.get("SV", 0) + sim_sv,
+            "W": actuals.get("W", 0) + rem_w,
+            "K": actuals.get("K", 0) + rem_k,
+            "SV": actuals.get("SV", 0) + rem_sv,
             "ERA": total_er * 9 / total_ip if total_ip > 0 else 99,
             "WHIP": total_h_plus_bb / total_ip if total_ip > 0 else 99,
         }
