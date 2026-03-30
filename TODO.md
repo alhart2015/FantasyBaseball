@@ -2,7 +2,6 @@
 
 - [ ] **Pitcher streaming tool** — Score free agent SPs by matchup quality to identify streamers (pick up a mediocre pitcher facing a terrible offense for one start, then drop). Builds on the matchup adjustment system.
 
-
 - [ ] **Browser-based OAuth flow for season dashboard** — Add Yahoo OAuth redirect flow directly in the dashboard so it can be used from a phone without CLI re-auth. When the token is expired, redirect to Yahoo login, handle the callback, store the refreshed token. Required before remote hosting.
 
 - [ ] **Batch MLB roster fetch** — `fetch_and_load_game_logs` calls `statsapi.get("team_roster")` 30 times (once per team) to build the player list. The MLB API supports `/sports/1/players` to get all players in one call. Also, `statsapi.get("teams")` is called in 3 separate modules (`db.py`, `mlb_schedule.py`, `matchups.py`) — extract a shared utility.
@@ -12,7 +11,6 @@
 - [ ] **Yahoo fantasy and mlbapi mcp servers** — Do they exist?
 
 - [ ] **Add section for hot waiver pickups** — This is the opposite of buy-low. These are people outperforming expectations who are on a hot streak and could be picked up to ride the hot hand.
-
 
 - [ ] **Sort buy-low candidates by wSGP** — Buy-low candidates are currently sorted by largest underperformance (gap between pace and projection). Sort by wSGP instead so the most impactful pickup opportunities surface first.
 
