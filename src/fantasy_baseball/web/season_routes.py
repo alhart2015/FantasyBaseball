@@ -49,6 +49,44 @@ def _load_config():
     return _config
 
 
+def _get_yahoo_league_cached():
+    """Get Yahoo league object and user team key."""
+    from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
+    config = _load_config()
+    sc = get_yahoo_session()
+    league = get_league(sc, config.league_id, config.game_code)
+    teams = league.teams()
+    user_team_key = None
+    for key, team_info in teams.items():
+        if team_info.get("name") == config.team_name:
+            user_team_key = key
+            break
+    if user_team_key is None:
+        user_team_key = next(iter(teams))
+    return league, user_team_key
+
+
+def _get_projections_cached():
+    """Load projections from SQLite. Returns (hitters, pitchers, ros_hitters, ros_pitchers)."""
+    from fantasy_baseball.data.db import (
+        get_connection as get_db_connection, get_blended_projections, get_ros_projections,
+    )
+    from fantasy_baseball.utils.name_utils import normalize_name
+    db_conn = get_db_connection()
+    try:
+        hitters, pitchers = get_blended_projections(db_conn)
+        ros_hitters, ros_pitchers = get_ros_projections(db_conn)
+    finally:
+        db_conn.close()
+    hitters["_name_norm"] = hitters["name"].apply(normalize_name)
+    pitchers["_name_norm"] = pitchers["name"].apply(normalize_name)
+    if not ros_hitters.empty:
+        ros_hitters["_name_norm"] = ros_hitters["name"].apply(normalize_name)
+    if not ros_pitchers.empty:
+        ros_pitchers["_name_norm"] = ros_pitchers["name"].apply(normalize_name)
+    return hitters, pitchers, ros_hitters, ros_pitchers
+
+
 def register_routes(app: Flask) -> None:
 
     @app.route("/")
@@ -263,6 +301,74 @@ def register_routes(app: Flask) -> None:
         if not standings:
             return jsonify({"teams": [], "user_team_key": None})
         return jsonify(get_teams_list(standings, config.team_name))
+
+    @app.route("/api/opponent/<team_key>/lineup")
+    @_require_auth
+    def api_opponent_lineup(team_key):
+        import time
+        from fantasy_baseball.lineup.leverage import calculate_leverage
+        from fantasy_baseball.lineup.yahoo_roster import fetch_roster
+        from fantasy_baseball.web.season_data import (
+            _opponent_cache, OPPONENT_CACHE_TTL_SECONDS,
+            build_opponent_lineup,
+        )
+
+        # Check cache
+        cached = _opponent_cache.get(team_key)
+        if cached and (time.time() - cached["fetched_at"]) < OPPONENT_CACHE_TTL_SECONDS:
+            return jsonify(cached["data"])
+
+        # Need standings for leverage + team name lookup
+        standings = read_cache("standings")
+        if not standings:
+            return jsonify({"error": "No standings data. Run a refresh first."}), 404
+
+        # Find opponent name from team_key
+        opponent = next((t for t in standings if t.get("team_key") == team_key), None)
+        if not opponent:
+            return jsonify({"error": f"Team key {team_key} not found"}), 404
+
+        config = _load_config()
+
+        try:
+            league, _ = _get_yahoo_league_cached()
+            roster = fetch_roster(league, team_key)
+        except Exception as e:
+            return jsonify({"error": f"Failed to fetch roster: {e}"}), 500
+
+        try:
+            hitters_proj, pitchers_proj, ros_hitters, ros_pitchers = _get_projections_cached()
+        except Exception as e:
+            return jsonify({"error": f"Failed to load projections: {e}"}), 500
+
+        user_leverage = calculate_leverage(standings, config.team_name)
+
+        lineup = build_opponent_lineup(
+            roster=roster,
+            opponent_name=opponent["name"],
+            standings=standings,
+            hitters_proj=hitters_proj,
+            pitchers_proj=pitchers_proj,
+            ros_hitters=ros_hitters,
+            ros_pitchers=ros_pitchers,
+            user_leverage=user_leverage,
+            season_year=config.season_year,
+        )
+
+        response_data = {
+            "team_name": opponent["name"],
+            "team_key": team_key,
+            "rank": opponent.get("rank", 0),
+            "hitters": lineup["hitters"],
+            "pitchers": lineup["pitchers"],
+        }
+
+        _opponent_cache[team_key] = {
+            "data": response_data,
+            "fetched_at": time.time(),
+        }
+
+        return jsonify(response_data)
 
     @app.route("/api/refresh", methods=["POST"])
     @_require_auth

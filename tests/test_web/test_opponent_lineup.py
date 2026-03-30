@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch
-from fantasy_baseball.web.season_data import format_standings_for_display, get_teams_list
+from fantasy_baseball.web.season_data import format_standings_for_display, get_teams_list, _opponent_cache, clear_opponent_cache
 from fantasy_baseball.web.season_app import create_app
 
 
@@ -179,3 +179,56 @@ class TestBuildOpponentLineup:
         assert "wsgp_you" in perez
         assert isinstance(perez["wsgp_them"], float)
         assert isinstance(perez["wsgp_you"], float)
+
+
+class TestOpponentCache:
+    def test_clear_opponent_cache(self):
+        _opponent_cache["test_key"] = {"data": {}, "fetched_at": 0}
+        clear_opponent_cache()
+        assert _opponent_cache == {}
+
+
+class TestApiOpponentLineup:
+    def test_requires_auth(self, client):
+        resp = client.get("/api/opponent/469.l.5652.t.8/lineup")
+        # Should redirect to login (302) or return 401
+        assert resp.status_code in (302, 401)
+
+    def test_returns_404_without_standings(self, client):
+        with client.session_transaction() as sess:
+            sess["authenticated"] = True
+        with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
+            resp = client.get("/api/opponent/469.l.5652.t.8/lineup")
+        assert resp.status_code == 404
+
+    def test_returns_lineup_data(self, client):
+        with client.session_transaction() as sess:
+            sess["authenticated"] = True
+
+        hitters_proj, pitchers_proj = _sample_projections()
+
+        def mock_cache(key):
+            if key == "standings":
+                return _sample_standings()
+            return None
+
+        with patch("fantasy_baseball.web.season_routes.read_cache", side_effect=mock_cache), \
+             patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg, \
+             patch("fantasy_baseball.web.season_data.build_opponent_lineup") as mock_build, \
+             patch("fantasy_baseball.web.season_routes._get_yahoo_league_cached") as mock_league, \
+             patch("fantasy_baseball.web.season_routes._get_projections_cached") as mock_proj:
+            mock_cfg.return_value.team_name = "Hart of the Order"
+            mock_cfg.return_value.season_year = 2026
+            mock_build.return_value = {
+                "hitters": [{"name": "Salvador Perez", "wsgp_them": 1.8, "wsgp_you": 2.1}],
+                "pitchers": [],
+            }
+            mock_league.return_value = (MagicMock(), "469.l.5652.t.3")
+            mock_proj.return_value = (hitters_proj, pitchers_proj, pd.DataFrame(), pd.DataFrame())
+
+            resp = client.get("/api/opponent/469.l.5652.t.8/lineup")
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["team_name"] == "Springfield Isotopes"
+        assert len(data["hitters"]) == 1

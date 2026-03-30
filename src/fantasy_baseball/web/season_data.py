@@ -17,6 +17,15 @@ from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 _refresh_lock = threading.Lock()
 _refresh_status = {"running": False, "progress": "", "error": None}
 
+_opponent_cache: dict = {}
+OPPONENT_CACHE_TTL_SECONDS = 900  # 15 minutes
+
+
+def clear_opponent_cache() -> None:
+    """Clear the opponent lineup in-memory cache (called on full refresh)."""
+    _opponent_cache.clear()
+
+
 _redis_client = None
 _redis_initialized = False
 _redis_lock = threading.Lock()
@@ -1097,6 +1106,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         logger.finish("ok")
         _progress("Done")
+        clear_opponent_cache()
 
     except Exception as exc:
         with _refresh_lock:
