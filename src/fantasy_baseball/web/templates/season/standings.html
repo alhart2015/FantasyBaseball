@@ -56,9 +56,10 @@
 <div id="projected-view" style="display: none;">
     <div class="pill-group" id="projected-sub-toggle">
         <button class="pill active" data-psub="static" onclick="toggleProjectedSub(this)">Static</button>
-        <button class="pill" data-psub="mc" onclick="toggleProjectedSub(this)">Monte Carlo</button>
-        <button class="pill" data-psub="mc-mgmt" onclick="toggleProjectedSub(this)">MC + Roster Mgmt</button>
-        <button class="pill" data-psub="ros-mc" onclick="toggleProjectedSub(this)">Current MC</button>
+        <button class="pill" data-psub="mc" onclick="toggleProjectedSub(this)">Pre-Season</button>
+        <button class="pill" data-psub="mc-mgmt" onclick="toggleProjectedSub(this)">Pre-Season + Mgmt</button>
+        <button class="pill" data-psub="ros-mc" onclick="toggleProjectedSub(this)">Current</button>
+        <button class="pill" data-psub="ros-mgmt-mc" onclick="toggleProjectedSub(this)">Current + Mgmt</button>
     </div>
 
     {# Static projected view #}
@@ -191,6 +192,16 @@
         <p class="placeholder-text">No ROS projections loaded. Download ROS projections from FanGraphs and place them in data/projections/&lt;year&gt;/ros/YYYY-MM-DD/.</p>
         {% endif %}
     </div>
+
+    {# Current MC + Mgmt (ROS) view #}
+    <div id="proj-ros-mgmt-mc" style="display: none;">
+        {% if ros_mgmt_mc %}
+        {{ mc_team_table(ros_mgmt_mc) }}
+        {{ cat_risk_table(ros_mgmt_mc) }}
+        {% else %}
+        <p class="placeholder-text">No ROS projections loaded. Download ROS projections from FanGraphs and place them in data/projections/&lt;year&gt;/ros/YYYY-MM-DD/.</p>
+        {% endif %}
+    </div>
 </div>
 
 <script>
@@ -225,6 +236,7 @@ function toggleProjectedSub(el) {
     document.getElementById('proj-mc').style.display = sub === 'mc' ? '' : 'none';
     document.getElementById('proj-mc-mgmt').style.display = sub === 'mc-mgmt' ? '' : 'none';
     document.getElementById('proj-ros-mc').style.display = sub === 'ros-mc' ? '' : 'none';
+    document.getElementById('proj-ros-mgmt-mc').style.display = sub === 'ros-mgmt-mc' ? '' : 'none';
 }
 
 function toggleProjStaticSub(el) {

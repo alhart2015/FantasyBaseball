@@ -830,6 +830,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # --- Step 13b: ROS Monte Carlo simulation ---
         ros_mc = None
+        ros_mgmt_mc = None
         if has_ros:
             from fantasy_baseball.simulation import run_ros_monte_carlo
             from datetime import date
@@ -868,9 +869,20 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                     fraction_remaining=fraction_remaining,
                     h_slots=h_slots, p_slots=p_slots,
                     user_team_name=config.team_name,
-                    n_iterations=1000,
+                    n_iterations=1000, use_management=False,
                     progress_cb=lambda i: _set_refresh_progress(
                         f"Current MC: iteration {i}/1000..."
+                    ),
+                )
+                ros_mgmt_mc = run_ros_monte_carlo(
+                    team_rosters=ros_mc_rosters,
+                    actual_standings=actual_standings_dict,
+                    fraction_remaining=fraction_remaining,
+                    h_slots=h_slots, p_slots=p_slots,
+                    user_team_name=config.team_name,
+                    n_iterations=1000, use_management=True,
+                    progress_cb=lambda i: _set_refresh_progress(
+                        f"Current MC + Mgmt: iteration {i}/1000..."
                     ),
                 )
 
@@ -878,6 +890,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             "base": base_mc,
             "with_management": mgmt_mc,
             "ros": ros_mc,
+            "ros_with_management": ros_mgmt_mc,
         }, cache_dir)
 
         # --- Step 14: Update SQLite database ---

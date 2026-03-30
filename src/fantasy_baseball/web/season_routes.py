@@ -65,6 +65,7 @@ def register_routes(app: Flask) -> None:
         mc_data = None
         mc_mgmt_data = None
         ros_mc_data = None
+        ros_mgmt_mc_data = None
 
         if raw_standings:
             from fantasy_baseball.web.season_data import (
@@ -95,6 +96,10 @@ def register_routes(app: Flask) -> None:
                     ros_mc_data = format_monte_carlo_for_display(
                         raw_mc["ros"], config.team_name
                     )
+                if "ros_with_management" in raw_mc and raw_mc["ros_with_management"]:
+                    ros_mgmt_mc_data = format_monte_carlo_for_display(
+                        raw_mc["ros_with_management"], config.team_name
+                    )
 
         return render_template(
             "season/standings.html",
@@ -105,6 +110,7 @@ def register_routes(app: Flask) -> None:
             mc=mc_data,
             mc_mgmt=mc_mgmt_data,
             ros_mc=ros_mc_data,
+            ros_mgmt_mc=ros_mgmt_mc_data,
             categories=ALL_CATEGORIES,
         )
 

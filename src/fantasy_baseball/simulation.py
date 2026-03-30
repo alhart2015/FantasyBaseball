@@ -462,14 +462,14 @@ def run_ros_monte_carlo(
     p_slots: int,
     user_team_name: str,
     n_iterations: int = 1000,
+    use_management: bool = False,
     seed: int = 42,
     progress_cb=None,
 ) -> dict:
     """Run a Monte Carlo simulation over the remaining season.
 
     Like run_monte_carlo but uses simulate_remaining_season to blend
-    actual YTD stats with simulated ROS projections. Always applies
-    management adjustment after each iteration.
+    actual YTD stats with simulated ROS projections.
 
     Args:
         team_rosters: {team_name: [player dicts]} with ROS projections.
@@ -480,6 +480,7 @@ def run_ros_monte_carlo(
         p_slots: Number of active pitcher slots.
         user_team_name: Name of user's team (for category risk).
         n_iterations: Number of simulation iterations.
+        use_management: If True, apply management adjustment after each sim.
         seed: RNG seed for reproducibility.
         progress_cb: Optional callback(msg: str) called every 200 iterations.
 
@@ -501,7 +502,8 @@ def run_ros_monte_carlo(
         sim_stats, _ = simulate_remaining_season(
             actual_standings, team_rosters, fraction_remaining, rng, h_slots, p_slots,
         )
-        sim_stats = apply_management_adjustment(sim_stats, rng)
+        if use_management:
+            sim_stats = apply_management_adjustment(sim_stats, rng)
         sim_roto = score_roto(sim_stats)
         ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
         for rank, (name, pts) in enumerate(ranked, 1):
