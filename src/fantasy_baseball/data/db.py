@@ -717,6 +717,58 @@ def load_ros_projections(
     conn.commit()
 
 
+def get_ros_projections(
+    conn, year: int | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Read the latest ROS blended projections from the database.
+
+    Finds the maximum ``snapshot_date`` for the requested *year* (or maximum
+    year when *year* is None), then returns ``(hitters_df, pitchers_df)``
+    matching the format produced by ``blend_projections()``.
+
+    Returns empty DataFrames if no ROS data exists.
+    """
+    if year is None:
+        row = conn.execute(
+            "SELECT MAX(year) as y FROM ros_blended_projections"
+        ).fetchone()
+        year = row["y"] if row and row["y"] is not None else None
+
+    if year is None:
+        empty = pd.DataFrame()
+        return empty, empty
+
+    row = conn.execute(
+        "SELECT MAX(snapshot_date) as d FROM ros_blended_projections WHERE year = ?",
+        (year,),
+    ).fetchone()
+    snapshot_date = row["d"] if row and row["d"] is not None else None
+
+    if snapshot_date is None:
+        empty = pd.DataFrame()
+        return empty, empty
+
+    hitters = pd.read_sql_query(
+        "SELECT * FROM ros_blended_projections "
+        "WHERE year = ? AND snapshot_date = ? AND player_type = 'hitter'",
+        conn, params=(year, snapshot_date),
+    )
+    pitchers = pd.read_sql_query(
+        "SELECT * FROM ros_blended_projections "
+        "WHERE year = ? AND snapshot_date = ? AND player_type = 'pitcher'",
+        conn, params=(year, snapshot_date),
+    )
+
+    # Drop year and snapshot_date — not part of blend_projections output.
+    # Keep player_type — downstream code requires it.
+    for df in (hitters, pitchers):
+        for col in ("year", "snapshot_date"):
+            if col in df.columns:
+                df.drop(columns=[col], inplace=True)
+
+    return hitters, pitchers
+
+
 def get_blended_projections(
     conn, year: int | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:

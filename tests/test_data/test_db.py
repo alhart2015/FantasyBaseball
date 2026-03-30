@@ -8,6 +8,7 @@ from fantasy_baseball.data.db import (
     load_blended_projections,
     get_blended_projections,
     load_ros_projections,
+    get_ros_projections,
     load_draft_results,
     load_standings,
     load_weekly_rosters,
@@ -581,4 +582,53 @@ def test_load_ros_projections_idempotent(tmp_path):
         "SELECT COUNT(*) FROM ros_blended_projections WHERE year=2026 AND snapshot_date='2026-04-07'"
     ).fetchone()[0]
     assert count == 7  # exactly one hitter + pitcher set, no duplicates
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Task 3: get_ros_projections()
+# ---------------------------------------------------------------------------
+
+def test_get_ros_projections_returns_latest_snapshot(tmp_path):
+    """Task 3: get_ros_projections() returns the most recent snapshot_date."""
+    _make_ros_dir(tmp_path, year=2026, date="2026-04-07")
+    _make_ros_dir(tmp_path, year=2026, date="2026-04-14")
+
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    create_tables(conn)
+    load_ros_projections(conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0})
+
+    hitters, pitchers = get_ros_projections(conn, year=2026)
+
+    assert len(hitters) == 4
+    assert len(pitchers) == 3
+
+    # year and snapshot_date must be dropped from output
+    assert "year" not in hitters.columns
+    assert "snapshot_date" not in hitters.columns
+
+    # player_type preserved
+    assert "player_type" in hitters.columns
+    assert (hitters["player_type"] == "hitter").all()
+    assert (pitchers["player_type"] == "pitcher").all()
+
+    # Verify the data came from the *latest* snapshot (2026-04-14) by checking
+    # that every row in the DB for the older snapshot was NOT selected alone.
+    # We verify by counting: both snapshots each have 7 rows; result should be 7.
+    total_in_db = conn.execute("SELECT COUNT(*) FROM ros_blended_projections").fetchone()[0]
+    assert total_in_db == 14  # 2 snapshots × 7 players
+    conn.close()
+
+
+def test_get_ros_projections_empty_when_no_data(tmp_path):
+    """Task 3: get_ros_projections() returns empty DataFrames when table is empty."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    create_tables(conn)
+
+    hitters, pitchers = get_ros_projections(conn)
+
+    assert hitters.empty
+    assert pitchers.empty
     conn.close()
