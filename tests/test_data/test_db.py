@@ -32,6 +32,26 @@ def test_create_tables_creates_all_five(tmp_path):
     conn.close()
 
 
+def test_create_tables_creates_ros_blended_projections(tmp_path):
+    """Task 1: ros_blended_projections table is created by create_tables()."""
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    create_tables(conn)
+    cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+    tables = [row[0] for row in cursor]
+    assert "ros_blended_projections" in tables
+
+    # Verify the PRIMARY KEY columns exist via pragma
+    cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(ros_blended_projections)")
+    }
+    assert "year" in cols
+    assert "snapshot_date" in cols
+    assert "fg_id" in cols
+    conn.close()
+
+
 def test_create_tables_is_idempotent(tmp_path):
     db_path = tmp_path / "test.db"
     conn = sqlite3.connect(db_path)

@@ -105,6 +105,23 @@ CREATE TABLE IF NOT EXISTS positions (
     name       TEXT NOT NULL PRIMARY KEY,
     positions  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS ros_blended_projections (
+    year          INTEGER NOT NULL,
+    snapshot_date TEXT NOT NULL,
+    fg_id         TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    team          TEXT,
+    player_type   TEXT NOT NULL,
+    pa REAL, ab REAL, h REAL,
+    r REAL, hr REAL, rbi REAL, sb REAL,
+    avg REAL,
+    w REAL, k REAL, sv REAL,
+    ip REAL, er REAL, bb REAL, h_allowed REAL,
+    era REAL, whip REAL,
+    adp REAL,
+    PRIMARY KEY (year, snapshot_date, fg_id)
+);
 """
 
 
