@@ -12,6 +12,12 @@ from fantasy_baseball.utils.name_utils import normalize_name
 EXCLUDE_THRESHOLD = 0.20  # System median < 20% of consensus → exclude
 WARN_THRESHOLD = 0.50     # System median deviates > 50% from consensus → warn
 
+# Minimum playing time to include a player in outlier detection.
+# Filters out fringe players that inflate large-pool systems (Steamer, Oopsy)
+# and skew medians down relative to smaller-pool systems (ZiPS, ATC).
+MIN_HITTER_AB = 50
+MIN_PITCHER_IP = 10
+
 
 @dataclass
 class QualityReport:
@@ -61,15 +67,19 @@ def _check_stat_outliers(
     """
     systems = list(system_dfs.keys())
 
-    for player_type, stat_cols, df_idx in [
-        ("hitter", HITTING_COUNTING_COLS, 0),
-        ("pitcher", PITCHING_COUNTING_COLS, 1),
+    for player_type, stat_cols, df_idx, pt_col, pt_min in [
+        ("hitter", HITTING_COUNTING_COLS, 0, "ab", MIN_HITTER_AB),
+        ("pitcher", PITCHING_COUNTING_COLS, 1, "ip", MIN_PITCHER_IP),
     ]:
         sys_frames = {}
         for sys_name in systems:
             df = system_dfs[sys_name][df_idx]
             if not df.empty:
-                sys_frames[sys_name] = df
+                # Filter to players with meaningful playing time
+                if pt_col in df.columns:
+                    df = df[df[pt_col].fillna(0) >= pt_min]
+                if not df.empty:
+                    sys_frames[sys_name] = df
 
         if len(sys_frames) < 2:
             continue

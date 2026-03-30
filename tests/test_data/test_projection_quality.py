@@ -133,6 +133,31 @@ class TestStatOutlierDetection:
             assert "sv" not in sys_excl
 
 
+    def test_large_pool_fringe_players_filtered_out(self):
+        """Systems with many fringe players (low AB) should not be excluded."""
+        # Steamer: 3 real hitters + 100 fringe players with <50 AB
+        real_hitters = [
+            {"name": f"Star {i}", "hr": 30, "r": 80, "rbi": 90,
+             "sb": 10, "h": 150, "ab": 500, "pa": 600, "fg_id": str(i)}
+            for i in range(3)
+        ]
+        fringe_hitters = [
+            {"name": f"Fringe {i}", "hr": 0, "r": 0, "rbi": 0,
+             "sb": 0, "h": 0, "ab": 5, "pa": 6, "fg_id": str(100 + i)}
+            for i in range(100)
+        ]
+        steamer = pd.DataFrame(real_hitters + fringe_hitters)
+        # ZiPS: only the 3 real hitters (no fringe)
+        zips = pd.DataFrame(real_hitters)
+        system_dfs = {
+            "steamer": (steamer, pd.DataFrame()),
+            "zips": (zips, pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs)
+        # Steamer should NOT be excluded — fringe players filtered by AB < 50
+        assert "steamer" not in report.exclusions
+
+
 class TestPlayerCountCheck:
     def test_warns_on_low_player_count(self):
         """System with <50% of median player count gets a warning."""
