@@ -109,6 +109,11 @@
     </div>
 </form>
 
+<div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--panel-border);">
+    <button class="btn-secondary" id="fetch-ros-btn" onclick="fetchRosProjections()">Fetch ROS Projections</button>
+    <span id="fetch-ros-status" style="margin-left: 8px; font-size: 13px; color: var(--text-secondary);"></span>
+</div>
+
 {% if error %}
 <div class="sql-error">{{ error }}</div>
 {% endif %}
@@ -140,5 +145,40 @@
     </table>
 </div>
 {% endif %}
+
+<script>
+function fetchRosProjections() {
+    const btn = document.getElementById('fetch-ros-btn');
+    const status = document.getElementById('fetch-ros-status');
+    btn.disabled = true;
+    btn.textContent = 'Fetching...';
+    status.textContent = 'Downloading from FanGraphs...';
+    status.style.color = 'var(--accent)';
+
+    fetch('/api/fetch-ros-projections', {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'done') {
+                const systems = data.systems;
+                const summary = Object.entries(systems)
+                    .map(([k, v]) => k + ': ' + v)
+                    .join(', ');
+                status.textContent = summary;
+                status.style.color = 'var(--accent)';
+            } else {
+                status.textContent = 'Error: ' + JSON.stringify(data);
+                status.style.color = 'var(--danger)';
+            }
+            btn.disabled = false;
+            btn.textContent = 'Fetch ROS Projections';
+        })
+        .catch(err => {
+            status.textContent = 'Error: ' + err.message;
+            status.style.color = 'var(--danger)';
+            btn.disabled = false;
+            btn.textContent = 'Fetch ROS Projections';
+        });
+}
+</script>
 
 {% endblock %}
