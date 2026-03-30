@@ -1,18 +1,10 @@
 # TODO — In-Season Enhancements
 
-- [x] **Validate ROS projections account for injuries** — Verified: FanGraphs ROS projections do reduce stats for IL players. Wheeler and Strider both project 25 GS / ~150 IP (vs ~31 GS / ~190 IP for healthy SPs), reflecting ~1 month of missed time consistent with their IL stints. No additional injury scaling needed on top of what the projection systems already provide.
-
 - [ ] **Pitcher streaming tool** — Score free agent SPs by matchup quality to identify streamers (pick up a mediocre pitcher facing a terrible offense for one start, then drop). Builds on the matchup adjustment system.
-
-- [x] **Load rest-of-season (ROS) projections into SQLite** — Done: `ros_blended_projections` table with `snapshot_date` column. `load_ros_projections()` scans `data/projections/{year}/ros/YYYY-MM-DD/` directories and blends using the same `blend_projections()` function. Loaded during `build_db.py` and during dashboard refresh.
 
 - [ ] **Projection data quality checks** — Validate projection CSVs during load and warn about issues that silently corrupt the blend. Known problems: ZiPS ROS exports SV column as all-NaN, which zeros out every closer's saves when blended. Checks should include: (1) flag systems where a key stat column (SV, HR, K, etc.) is entirely null — exclude that system from the blend for that stat rather than treating NaN as 0, (2) flag name collisions where two players share a normalized name and the wrong one gets matched to a roster (e.g., Mason Miller the closer vs Mason Miller the prospect), (3) warn if a system's player count is dramatically different from other systems (suggests a bad export), (4) warn if a player's ROS projection exceeds their preseason projection (shouldn't happen mid-season).
 
-- [x] **Automate ROS projection download** — Done: `fangraphs_fetch.py` fetches all 5 projection systems from FanGraphs' server-rendered `__NEXT_DATA__` JSON via HTTP GET (no browser automation needed). QStash cron runs every Monday at 5 AM ET. UI button on SQL page for manual fetch + local CSV persistence.
-
 - [ ] **Browser-based OAuth flow for season dashboard** — Add Yahoo OAuth redirect flow directly in the dashboard so it can be used from a phone without CLI re-auth. When the token is expired, redirect to Yahoo login, handle the callback, store the refreshed token. Required before remote hosting.
-
-- [x] **Parallelize MLB game log fetching** — Done: `fetch_and_load_game_logs` uses `ThreadPoolExecutor(max_workers=15)`, team batting stats uses 10 workers, opponent roster fetches use 6 workers.
 
 - [ ] **Batch MLB roster fetch** — `fetch_and_load_game_logs` calls `statsapi.get("team_roster")` 30 times (once per team) to build the player list. The MLB API supports `/sports/1/players` to get all players in one call. Also, `statsapi.get("teams")` is called in 3 separate modules (`db.py`, `mlb_schedule.py`, `matchups.py`) — extract a shared utility.
 
@@ -21,8 +13,6 @@
 - [ ] **Yahoo fantasy and mlbapi mcp servers** — Do they exist?
 
 - [ ] **Add section for hot waiver pickups** — This is the opposite of buy-low. These are people outperforming expectations who are on a hot streak and could be picked up to ride the hot hand.
-
-- [x] **In-season Monte Carlo with actual standings + ROS projections** — Done: `simulate_remaining_season()` blends locked-in Yahoo actuals with ROS projections, variance scaled by `fraction_remaining`. "Current MC" tab on standings page. Rate stats blended from components (H/AB for AVG, ER/IP for ERA, (H+BB)/IP for WHIP).
 
 - [ ] **Opponent lineup viewer** — Add a dropdown on the lineup page to view any opponent's roster with the same layout used for the user's lineup (optimal assignments, leverage-weighted SGP, pace data). Requires fetching the selected opponent's roster via Yahoo API and running it through the same projection-matching and optimization pipeline.
 
