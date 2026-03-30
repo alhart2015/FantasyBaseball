@@ -16,7 +16,7 @@
 
 - [ ] **Batch MLB roster fetch** — `fetch_and_load_game_logs` calls `statsapi.get("team_roster")` 30 times (once per team) to build the player list. The MLB API supports `/sports/1/players` to get all players in one call. Also, `statsapi.get("teams")` is called in 3 separate modules (`db.py`, `mlb_schedule.py`, `matchups.py`) — extract a shared utility.
 
-- [ ] **Incremental game log fetch with startDate** — Currently fetches the full season game log for each player and filters client-side. The MLB Stats API accepts `startDate`/`endDate` params on the gameLog endpoint. Passing `startDate=last_date+1` would skip downloading games we already have.
+- [ ] **Incremental game log fetch with startDate** — Currently fetches the full season game log for each player and filters client-side. The MLB Stats API accepts `startDate`/`endDate` params on the gameLog endpoint. Track the last sync timestamp (e.g., 2026-03-29 01:23 EST) and only pull game logs since then. Query the `game_logs` table for `MAX(date)` per player (or globally) and pass `startDate=last_date+1` to skip downloading games we already have.
 
 - [ ] **Yahoo fantasy and mlbapi mcp servers** — Do they exist?
 
