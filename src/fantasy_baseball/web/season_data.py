@@ -599,7 +599,16 @@ def _compute_category_ranks(standings: list[dict]) -> dict[str, dict[str, int]]:
     for cat in ALL_CATEGORIES:
         reverse = cat not in INVERSE_CATS
         sorted_teams = sorted(standings, key=lambda t: t["stats"][cat], reverse=reverse)
-        ranks[cat] = {t["name"]: i + 1 for i, t in enumerate(sorted_teams)}
+        cat_ranks = {}
+        prev_val = None
+        prev_rank = 0
+        for i, t in enumerate(sorted_teams):
+            val = t["stats"][cat]
+            if val != prev_val:
+                prev_rank = i + 1
+                prev_val = val
+            cat_ranks[t["name"]] = prev_rank
+        ranks[cat] = cat_ranks
     return ranks
 
 

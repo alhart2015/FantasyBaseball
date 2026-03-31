@@ -74,6 +74,24 @@ def test_format_standings_color_codes_all_teams():
     assert skel["color_classes"]["SB"] != ""
 
 
+def test_format_standings_tied_teams_same_color():
+    """Teams tied in a category should get the same rank-based color class."""
+    standings = [
+        {"name": "Team A", "team_key": "a", "rank": 1,
+         "stats": {"R": 100, "HR": 30, "RBI": 90, "SB": 20, "AVG": 0.260,
+                   "W": 10, "K": 200, "SV": 10, "ERA": 3.50, "WHIP": 1.20}},
+        {"name": "Team B", "team_key": "b", "rank": 2,
+         "stats": {"R": 100, "HR": 25, "RBI": 90, "SB": 15, "AVG": 0.255,
+                   "W": 8, "K": 180, "SV": 8, "ERA": 3.80, "WHIP": 1.25}},
+    ]
+    data = format_standings_for_display(standings, "Team A")
+    a = next(t for t in data["teams"] if t["name"] == "Team A")
+    b = next(t for t in data["teams"] if t["name"] == "Team B")
+    # R and RBI are tied — must get the same color class
+    assert a["color_classes"]["R"] == b["color_classes"]["R"]
+    assert a["color_classes"]["RBI"] == b["color_classes"]["RBI"]
+
+
 def _sample_monte_carlo():
     return {
         "team_results": {
