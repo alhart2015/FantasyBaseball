@@ -61,14 +61,17 @@ def test_format_standings_has_roto_points():
     assert "total" in hart["roto_points"]
 
 
-def test_format_standings_color_codes_user_team():
+def test_format_standings_color_codes_all_teams():
     data = format_standings_for_display(_sample_standings(), "Hart of the Order")
     hart = next(t for t in data["teams"] if t["name"] == "Hart of the Order")
     assert hart["is_user"] is True
     assert "color_classes" in hart
-    # With 3 teams, ranks 1 = top, 3 = bottom
-    # Hart has highest SB (50) → should be cat-top
-    assert hart["color_classes"]["SB"] == "cat-top"
+    # With 3 teams, ranks 1-2 = rank-top, 3 = rank-high
+    # Hart has highest SB (50) → rank 1 → rank-top
+    assert hart["color_classes"]["SB"] == "rank-top"
+    # Non-user teams also get color classes
+    skel = next(t for t in data["teams"] if t["name"] == "SkeleThor")
+    assert skel["color_classes"]["SB"] != ""
 
 
 def _sample_monte_carlo():

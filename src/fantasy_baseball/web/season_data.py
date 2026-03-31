@@ -254,17 +254,18 @@ def format_standings_for_display(
         roto_pts = roto[name]
 
         color_classes = {}
-        if is_user:
-            for cat in ALL_CATEGORIES:
-                rank = cat_ranks[cat][name]
-                if rank <= 3:
-                    color_classes[cat] = "cat-top"
-                elif rank > num_teams - 3:
-                    color_classes[cat] = "cat-bottom"
-                else:
-                    color_classes[cat] = ""
-        else:
-            color_classes = {cat: "" for cat in ALL_CATEGORIES}
+        for cat in ALL_CATEGORIES:
+            rank = cat_ranks[cat][name]
+            if rank <= 2:
+                color_classes[cat] = "rank-top"
+            elif rank <= 4:
+                color_classes[cat] = "rank-high"
+            elif rank <= 6:
+                color_classes[cat] = "rank-mid"
+            elif rank <= 8:
+                color_classes[cat] = "rank-low"
+            else:
+                color_classes[cat] = "rank-bottom"
 
         teams.append({
             "name": name,
