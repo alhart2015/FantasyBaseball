@@ -9,6 +9,45 @@ from fantasy_baseball.utils.positions import is_hitter, is_pitcher
 HITTING_COUNTING_COLS: list[str] = ["r", "hr", "rbi", "sb", "h", "ab", "pa"]
 PITCHING_COUNTING_COLS: list[str] = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
 
+# ROS projection systems that produce full-season-updated projections.
+# Systems NOT in this set produce remaining-games-only projections and
+# need actual accumulated stats added before cross-system blending.
+FULL_SEASON_ROS_SYSTEMS: set[str] = {"steamer", "the-bat-x"}
+
+
+def normalize_ros_to_full_season(
+    df: pd.DataFrame,
+    game_log_totals: dict[int, dict],
+    player_type: str,
+) -> pd.DataFrame:
+    """Add actual accumulated stats to remaining-games ROS projections.
+
+    For each player with a matching mlbam_id in game_log_totals, adds the
+    actual counting stats to the ROS counting stats so the result represents
+    a full-season projection. Players without a match are left unchanged.
+
+    Returns a new DataFrame (does not mutate the input).
+    """
+    if not game_log_totals or "mlbam_id" not in df.columns:
+        return df.copy()
+
+    result = df.copy()
+    counting_cols = HITTING_COUNTING_COLS if player_type == "hitter" else PITCHING_COUNTING_COLS
+
+    for idx, row in result.iterrows():
+        mid = row.get("mlbam_id")
+        if pd.isna(mid):
+            continue
+        mid = int(mid)
+        actuals = game_log_totals.get(mid)
+        if actuals is None:
+            continue
+        for col in counting_cols:
+            if col in result.columns and col in actuals:
+                result.at[idx, col] = row[col] + actuals[col]
+
+    return result
+
 
 def validate_projections_dir(
     projections_dir: Path, systems: list[str]

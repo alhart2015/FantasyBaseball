@@ -127,3 +127,78 @@ class TestMatchRosterToProjections:
         assert len(matched) == 2
         names = {p["name"] for p in matched}
         assert names == {"Aaron Judge", "Gerrit Cole"}
+
+
+class TestNormalizeRosToFullSeason:
+    def test_adds_hitter_actuals_to_remaining_games(self):
+        from fantasy_baseball.data.projections import (
+            normalize_ros_to_full_season, HITTING_COUNTING_COLS,
+        )
+        df = pd.DataFrame([{
+            "name": "Aaron Judge", "mlbam_id": 592450, "player_type": "hitter",
+            "pa": 400, "ab": 300, "h": 90, "r": 60, "hr": 25, "rbi": 65, "sb": 4,
+        }])
+        game_log_totals = {
+            592450: {"pa": 100, "ab": 80, "h": 25, "r": 15, "hr": 5, "rbi": 15, "sb": 1},
+        }
+        result = normalize_ros_to_full_season(df, game_log_totals, "hitter")
+        judge = result.iloc[0]
+        assert judge["pa"] == 500
+        assert judge["ab"] == 380
+        assert judge["h"] == 115
+        assert judge["r"] == 75
+        assert judge["hr"] == 30
+        assert judge["rbi"] == 80
+        assert judge["sb"] == 5
+
+    def test_adds_pitcher_actuals_to_remaining_games(self):
+        from fantasy_baseball.data.projections import normalize_ros_to_full_season
+        df = pd.DataFrame([{
+            "name": "Gerrit Cole", "mlbam_id": 543037, "player_type": "pitcher",
+            "ip": 170, "k": 190, "w": 12, "sv": 0, "er": 60, "bb": 40, "h_allowed": 130,
+        }])
+        game_log_totals = {
+            543037: {"ip": 13, "k": 16, "w": 1, "sv": 0, "er": 5, "bb": 3, "h_allowed": 9},
+        }
+        result = normalize_ros_to_full_season(df, game_log_totals, "pitcher")
+        cole = result.iloc[0]
+        assert cole["ip"] == 183
+        assert cole["k"] == 206
+        assert cole["w"] == 13
+        assert cole["er"] == 65
+        assert cole["bb"] == 43
+        assert cole["h_allowed"] == 139
+
+    def test_no_game_log_leaves_player_unchanged(self):
+        from fantasy_baseball.data.projections import normalize_ros_to_full_season
+        df = pd.DataFrame([{
+            "name": "Rookie Player", "mlbam_id": 999999, "player_type": "hitter",
+            "pa": 400, "ab": 300, "h": 90, "r": 60, "hr": 25, "rbi": 65, "sb": 4,
+        }])
+        result = normalize_ros_to_full_season(df, {}, "hitter")
+        assert result.iloc[0]["pa"] == 400
+        assert result.iloc[0]["hr"] == 25
+
+    def test_missing_mlbam_id_leaves_player_unchanged(self):
+        from fantasy_baseball.data.projections import normalize_ros_to_full_season
+        df = pd.DataFrame([{
+            "name": "Aaron Judge", "player_type": "hitter",
+            "pa": 400, "ab": 300, "h": 90, "r": 60, "hr": 25, "rbi": 65, "sb": 4,
+        }])
+        game_log_totals = {
+            592450: {"pa": 100, "ab": 80, "h": 25, "r": 15, "hr": 5, "rbi": 15, "sb": 1},
+        }
+        result = normalize_ros_to_full_season(df, game_log_totals, "hitter")
+        assert result.iloc[0]["pa"] == 400
+
+    def test_does_not_mutate_input_dataframe(self):
+        from fantasy_baseball.data.projections import normalize_ros_to_full_season
+        df = pd.DataFrame([{
+            "name": "Aaron Judge", "mlbam_id": 592450, "player_type": "hitter",
+            "pa": 400, "ab": 300, "h": 90, "r": 60, "hr": 25, "rbi": 65, "sb": 4,
+        }])
+        game_log_totals = {
+            592450: {"pa": 100, "ab": 80, "h": 25, "r": 15, "hr": 5, "rbi": 15, "sb": 1},
+        }
+        normalize_ros_to_full_season(df, game_log_totals, "hitter")
+        assert df.iloc[0]["pa"] == 400
