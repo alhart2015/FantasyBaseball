@@ -207,6 +207,19 @@ def main():
     print(f"Standings: {len(standings)} teams")
     print()
 
+    # Read cached projected standings from dashboard (if available)
+    projected_standings = None
+    projections_cache = Path(PROJECT_ROOT / "data" / "cache" / "projections.json")
+    if projections_cache.exists():
+        try:
+            import json
+            cached = json.loads(projections_cache.read_text(encoding="utf-8"))
+            projected_standings = cached.get("projected_standings")
+            if projected_standings:
+                print(f"Loaded cached projected standings ({len(projected_standings)} teams)")
+        except Exception:
+            pass
+
     # Fetch scoring period and MLB schedule
     print("Fetching weekly schedule...")
     period_start, period_end = fetch_scoring_period(league)
@@ -241,7 +254,10 @@ def main():
     print()
 
     # Calculate leverage
-    leverage = calculate_leverage(standings, config.team_name)
+    leverage = calculate_leverage(
+        standings, config.team_name,
+        projected_standings=projected_standings,
+    )
     print("CATEGORY LEVERAGE (higher = more valuable to target):")
     sorted_lev = sorted(leverage.items(), key=lambda x: x[1], reverse=True)
     for cat, weight in sorted_lev:

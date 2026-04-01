@@ -203,8 +203,15 @@ def main():
     print("LINEUP RECOMMENDATIONS")
     print("=" * 90)
 
+    # Build projected standings for leverage
+    projected_standings = [
+        {"name": name, "stats": all_stats[name]} for name in all_stats
+    ]
+
     if standings:
-        leverage = calculate_leverage(standings, team_name)
+        leverage = calculate_leverage(
+            standings, team_name, projected_standings=projected_standings,
+        )
     else:
         # Pre-season: equal weights across all categories
         leverage = {c: 1.0 / len(ALL_CATS) for c in ALL_CATS}
@@ -398,6 +405,7 @@ def main():
         for team in trade_standings:
             leverage_by_team[team["name"]] = calculate_leverage(
                 trade_standings, team["name"],
+                projected_standings=projected_standings,
             )
 
         current_ranks = compute_roto_points_by_cat(trade_standings)
