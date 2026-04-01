@@ -24,11 +24,12 @@ def test_hitter_counting_above_pace():
 
 
 def test_hitter_counting_below_pace():
-    """A hitter well below pace on SB gets cold color."""
+    """A hitter well below pace on SB gets cold color (1-2 SD = light cold)."""
     projected = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
     actual = {"pa": 60, "r": 9, "hr": 3, "rbi": 9, "sb": 0, "h": 15, "ab": 54}
     result = compute_player_pace(actual, projected, "hitter")
-    assert result["SB"]["color_class"] == "stat-cold-2"
+    # z = -1.4 -> between -1 and -2 SD = stat-cold-1
+    assert result["SB"]["color_class"] == "stat-cold-1"
     assert result["SB"]["z_score"] < -1.0
 
 
@@ -90,8 +91,8 @@ def test_pitcher_counting_and_rates():
     assert "IP" in result
     assert result["IP"]["color_class"] == "stat-neutral"
 
-    # K: expected = 190 * (18/180) = 19, actual 22, ratio 1.16, z = 0.16/0.139 = 1.13 -> hot-2
-    assert result["K"]["color_class"] == "stat-hot-2"
+    # K: expected = 190 * (18/180) = 19, actual 22, ratio 1.16, z = 0.16/0.139 = 1.13 -> hot-1 (1-2 SD)
+    assert result["K"]["color_class"] == "stat-hot-1"
 
     # ERA: actual = 10*9/18 = 5.00, proj 3.00, dev = +2.0
     # z = 2.0 / (0.252 * 3.00) = 2.0 / 0.756 = 2.65
@@ -118,12 +119,25 @@ def test_pitcher_era_neutral_below_min_ip():
 
 
 def test_intermediate_color_classes():
-    """z-scores between 0.5 and 1.0 should produce stat-hot-1 / stat-cold-1."""
+    """z-scores between 1.0 and 2.0 should produce stat-hot-1 / stat-cold-1."""
     projected = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    # HR: actual=4, expected=3.0, ratio=1.33, z = 0.33/0.343 = 0.97 -> neutral (< 1.0 SD)
     actual = {"pa": 60, "r": 9, "hr": 4, "rbi": 9, "sb": 1, "h": 15, "ab": 54}
     result = compute_player_pace(actual, projected, "hitter")
-    assert result["HR"]["color_class"] == "stat-hot-1"
-    assert 0.5 < result["HR"]["z_score"] < 1.0
+    assert result["HR"]["color_class"] == "stat-neutral"
+    assert result["HR"]["z_score"] < 1.0
+
+    # With more extreme values: HR actual=6, expected=3.0, ratio=2.0, z = 1.0/0.343 = 2.92 -> hot-2
+    actual2 = {"pa": 60, "r": 9, "hr": 6, "rbi": 9, "sb": 1, "h": 15, "ab": 54}
+    result2 = compute_player_pace(actual2, projected, "hitter")
+    assert result2["HR"]["color_class"] == "stat-hot-2"
+    assert result2["HR"]["z_score"] > 2.0
+
+    # Moderate above: HR actual=5, expected=3.0, ratio=1.67, z = 0.67/0.343 = 1.94 -> hot-1 (1-2 SD)
+    actual3 = {"pa": 60, "r": 9, "hr": 5, "rbi": 9, "sb": 1, "h": 15, "ab": 54}
+    result3 = compute_player_pace(actual3, projected, "hitter")
+    assert result3["HR"]["color_class"] == "stat-hot-1"
+    assert 1.0 < result3["HR"]["z_score"] < 2.0
 
 
 def test_middle_sample_counting_colored_rates_neutral():
@@ -133,6 +147,19 @@ def test_middle_sample_counting_colored_rates_neutral():
     result = compute_player_pace(actual, projected, "hitter")
     assert result["HR"]["color_class"] != "stat-neutral"
     assert result["AVG"]["color_class"] == "stat-neutral"
+
+
+def test_small_absolute_diff_stays_neutral():
+    """When actual is within 1 unit of expected, counting stats stay neutral
+    regardless of z-score (e.g. 1 RBI vs 0.2 expected)."""
+    projected = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    # 12 PA -> counting colored, but expected RBI = 90 * (12/600) = 1.8
+    actual = {"pa": 12, "r": 2, "hr": 1, "rbi": 1, "sb": 1, "h": 3, "ab": 11}
+    result = compute_player_pace(actual, projected, "hitter")
+    # RBI: actual=1, expected=1.8, diff=0.8 < 1.0 -> neutral despite z-score
+    assert result["RBI"]["color_class"] == "stat-neutral"
+    # SB: actual=1, expected=0.2, diff=0.8 < 1.0 -> neutral (not bright green)
+    assert result["SB"]["color_class"] == "stat-neutral"
 
 
 def test_no_game_logs_shows_dashes():

@@ -18,16 +18,24 @@ HITTER_MIN_RATES = 30      # PA threshold for rate stats to be colored
 PITCHER_MIN_COUNTING = 5   # IP threshold for counting stats to be colored
 PITCHER_MIN_RATES = 10     # IP threshold for rate stats to be colored
 
+# Z-score thresholds for color coding
+Z_BRIGHT = 2.0   # >= this: stat-hot-2 / stat-cold-2 (bright green/red)
+Z_LIGHT = 1.0    # >= this: stat-hot-1 / stat-cold-1 (light green/red)
+
+# Minimum absolute difference (actual vs expected) for counting stats to be
+# colored.  Prevents e.g. 1 RBI vs 0.2 expected from showing bright green.
+COUNTING_MIN_ABS_DIFF = 1.0
+
 
 def _z_to_color(z: float) -> str:
     """Map z-score to CSS color class."""
-    if z > 1.0:
+    if z > Z_BRIGHT:
         return "stat-hot-2"
-    if z > 0.5:
+    if z > Z_LIGHT:
         return "stat-hot-1"
-    if z < -1.0:
+    if z < -Z_BRIGHT:
         return "stat-cold-2"
-    if z < -0.5:
+    if z < -Z_LIGHT:
         return "stat-cold-1"
     return "stat-neutral"
 
@@ -94,7 +102,7 @@ def compute_player_pace(
             "actual": actual,
             "expected": round(expected, 1),
             "z_score": round(z, 2),
-            "color_class": _z_to_color(z),
+            "color_class": _z_to_color(z) if abs(actual - expected) >= COUNTING_MIN_ABS_DIFF else "stat-neutral",
             "projection": round(proj),
         }
 
