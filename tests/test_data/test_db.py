@@ -632,3 +632,67 @@ def test_get_ros_projections_empty_when_no_data(tmp_path):
     assert hitters.empty
     assert pitchers.empty
     conn.close()
+
+
+class TestGetSeasonTotals:
+    def test_returns_hitter_totals_by_mlbam_id(self):
+        from fantasy_baseball.data.db import get_connection, create_tables, get_season_totals
+        conn = get_connection(":memory:")
+        create_tables(conn)
+        conn.execute(
+            "INSERT INTO game_logs (season, mlbam_id, name, team, player_type, date, "
+            "pa, ab, h, r, hr, rbi, sb) VALUES (2026, 592450, 'Aaron Judge', 'NYY', "
+            "'hitter', '2026-03-27', 5, 4, 2, 1, 1, 3, 0)"
+        )
+        conn.execute(
+            "INSERT INTO game_logs (season, mlbam_id, name, team, player_type, date, "
+            "pa, ab, h, r, hr, rbi, sb) VALUES (2026, 592450, 'Aaron Judge', 'NYY', "
+            "'hitter', '2026-03-28', 4, 3, 1, 2, 0, 1, 1)"
+        )
+        conn.commit()
+        hitter_totals, pitcher_totals = get_season_totals(conn, 2026)
+        assert 592450 in hitter_totals
+        t = hitter_totals[592450]
+        assert t["pa"] == 9
+        assert t["ab"] == 7
+        assert t["h"] == 3
+        assert t["r"] == 3
+        assert t["hr"] == 1
+        assert t["rbi"] == 4
+        assert t["sb"] == 1
+        assert len(pitcher_totals) == 0
+
+    def test_returns_pitcher_totals_by_mlbam_id(self):
+        from fantasy_baseball.data.db import get_connection, create_tables, get_season_totals
+        conn = get_connection(":memory:")
+        create_tables(conn)
+        conn.execute(
+            "INSERT INTO game_logs (season, mlbam_id, name, team, player_type, date, "
+            "ip, k, er, bb, h_allowed, w, sv, gs) VALUES (2026, 543037, 'Gerrit Cole', "
+            "'NYY', 'pitcher', '2026-03-27', 7.0, 9, 2, 1, 5, 1, 0, 1)"
+        )
+        conn.execute(
+            "INSERT INTO game_logs (season, mlbam_id, name, team, player_type, date, "
+            "ip, k, er, bb, h_allowed, w, sv, gs) VALUES (2026, 543037, 'Gerrit Cole', "
+            "'NYY', 'pitcher', '2026-03-31', 6.0, 7, 3, 2, 4, 0, 0, 1)"
+        )
+        conn.commit()
+        hitter_totals, pitcher_totals = get_season_totals(conn, 2026)
+        assert len(hitter_totals) == 0
+        assert 543037 in pitcher_totals
+        t = pitcher_totals[543037]
+        assert t["ip"] == 13.0
+        assert t["k"] == 16
+        assert t["er"] == 5
+        assert t["bb"] == 3
+        assert t["h_allowed"] == 9
+        assert t["w"] == 1
+        assert t["sv"] == 0
+
+    def test_empty_when_no_data(self):
+        from fantasy_baseball.data.db import get_connection, create_tables, get_season_totals
+        conn = get_connection(":memory:")
+        create_tables(conn)
+        hitter_totals, pitcher_totals = get_season_totals(conn, 2026)
+        assert hitter_totals == {}
+        assert pitcher_totals == {}

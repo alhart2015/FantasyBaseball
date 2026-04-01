@@ -796,6 +796,45 @@ def get_blended_projections(
     return hitters, pitchers
 
 
+def get_season_totals(
+    conn, season: int,
+) -> tuple[dict[int, dict], dict[int, dict]]:
+    """Get accumulated season stats from game_logs, keyed by mlbam_id.
+
+    Returns (hitter_totals, pitcher_totals) where each is
+    {mlbam_id: {stat: value}}.
+    """
+    hitter_totals = {}
+    rows = conn.execute(
+        "SELECT mlbam_id, SUM(pa) as pa, SUM(ab) as ab, SUM(h) as h, "
+        "SUM(r) as r, SUM(hr) as hr, SUM(rbi) as rbi, SUM(sb) as sb "
+        "FROM game_logs WHERE season = ? AND player_type = 'hitter' "
+        "GROUP BY mlbam_id", (season,)
+    ).fetchall()
+    for row in rows:
+        hitter_totals[row["mlbam_id"]] = {
+            "pa": row["pa"] or 0, "ab": row["ab"] or 0, "h": row["h"] or 0,
+            "r": row["r"] or 0, "hr": row["hr"] or 0, "rbi": row["rbi"] or 0,
+            "sb": row["sb"] or 0,
+        }
+
+    pitcher_totals = {}
+    rows = conn.execute(
+        "SELECT mlbam_id, SUM(ip) as ip, SUM(k) as k, SUM(w) as w, SUM(sv) as sv, "
+        "SUM(er) as er, SUM(bb) as bb, SUM(h_allowed) as h_allowed "
+        "FROM game_logs WHERE season = ? AND player_type = 'pitcher' "
+        "GROUP BY mlbam_id", (season,)
+    ).fetchall()
+    for row in rows:
+        pitcher_totals[row["mlbam_id"]] = {
+            "ip": row["ip"] or 0, "k": row["k"] or 0, "w": row["w"] or 0,
+            "sv": row["sv"] or 0, "er": row["er"] or 0, "bb": row["bb"] or 0,
+            "h_allowed": row["h_allowed"] or 0,
+        }
+
+    return hitter_totals, pitcher_totals
+
+
 def fetch_and_load_game_logs(
     conn, season: int, progress_cb=None
 ) -> int:
