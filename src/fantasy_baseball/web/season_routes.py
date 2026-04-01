@@ -296,9 +296,16 @@ def register_routes(app: Flask) -> None:
         if not standings_raw:
             return jsonify({"error": "No standings data"}), 404
 
+        proj_cache = read_cache("projections") or {}
+        projected_standings = proj_cache.get("projected_standings")
+
         from fantasy_baseball.web.season_data import compute_trade_standings_impact
         config = _load_config()
-        result = compute_trade_standings_impact(trade=trades_raw[idx], standings=standings_raw, user_team_name=config.team_name)
+        result = compute_trade_standings_impact(
+            trade=trades_raw[idx], standings=standings_raw,
+            user_team_name=config.team_name,
+            projected_standings=projected_standings,
+        )
         return jsonify(result)
 
     @app.route("/players")

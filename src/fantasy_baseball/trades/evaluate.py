@@ -156,8 +156,15 @@ def compute_trade_impact(
     hart_gains_ros: dict[str, Any],
     opp_loses_ros: dict[str, Any],
     opp_gains_ros: dict[str, Any],
+    projected_standings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Compute roto point impact of a proposed trade for both teams.
+
+    Uses projected end-of-season standings as the baseline when available.
+    The trade delta (swap ROS stats) is applied to the projected stats, so
+    both baseline and post-trade numbers represent end-of-season totals.
+
+    Falls back to current standings when projected_standings is not provided.
 
     Args:
         standings: current league standings (list of team dicts).
@@ -167,6 +174,8 @@ def compute_trade_impact(
         hart_gains_ros: ROS stats for the player Hart receives.
         opp_loses_ros: ROS stats for the player the opponent trades away.
         opp_gains_ros: ROS stats for the player the opponent receives.
+        projected_standings: projected end-of-season standings for all teams.
+            When provided, used as baseline instead of current standings.
 
     Returns:
         {
@@ -176,39 +185,41 @@ def compute_trade_impact(
             "opp_cat_deltas": {cat: int},
         }
     """
-    # Baseline points
-    baseline_by_cat = compute_roto_points_by_cat(standings)
+    baseline = projected_standings if projected_standings is not None else standings
 
-    # Build projected standings
-    projected_standings = []
-    for team in standings:
+    # Baseline points (from projected end-of-season or current standings)
+    baseline_by_cat = compute_roto_points_by_cat(baseline)
+
+    # Apply trade swap to the baseline
+    post_trade = []
+    for team in baseline:
         if team["name"] == hart_name:
             new_stats = _project_team_stats(
                 team["stats"], hart_loses_ros, hart_gains_ros
             )
-            projected_standings.append({"name": team["name"], "stats": new_stats})
+            post_trade.append({"name": team["name"], "stats": new_stats})
         elif team["name"] == opp_name:
             new_stats = _project_team_stats(
                 team["stats"], opp_loses_ros, opp_gains_ros
             )
-            projected_standings.append({"name": team["name"], "stats": new_stats})
+            post_trade.append({"name": team["name"], "stats": new_stats})
         else:
-            projected_standings.append(team)
+            post_trade.append(team)
 
-    projected_by_cat = compute_roto_points_by_cat(projected_standings)
+    post_trade_by_cat = compute_roto_points_by_cat(post_trade)
 
     # Compute deltas
     hart_base = sum(baseline_by_cat[hart_name].values())
-    hart_proj = sum(projected_by_cat[hart_name].values())
+    hart_proj = sum(post_trade_by_cat[hart_name].values())
     opp_base = sum(baseline_by_cat[opp_name].values())
-    opp_proj = sum(projected_by_cat[opp_name].values())
+    opp_proj = sum(post_trade_by_cat[opp_name].values())
 
     hart_cat_deltas = {
-        cat: projected_by_cat[hart_name][cat] - baseline_by_cat[hart_name][cat]
+        cat: post_trade_by_cat[hart_name][cat] - baseline_by_cat[hart_name][cat]
         for cat in ALL_CATS
     }
     opp_cat_deltas = {
-        cat: projected_by_cat[opp_name][cat] - baseline_by_cat[opp_name][cat]
+        cat: post_trade_by_cat[opp_name][cat] - baseline_by_cat[opp_name][cat]
         for cat in ALL_CATS
     }
 
@@ -277,6 +288,7 @@ def find_trades(
     leverage_by_team: dict[str, dict],
     roster_slots: dict[str, int],
     max_results: int = 5,
+    projected_standings: list[dict] | None = None,
 ) -> list[dict]:
     """Find and rank the best 1-for-1 trades for Hart.
 
@@ -284,6 +296,9 @@ def find_trades(
     Filters to trades where both sides gain wSGP (opponent can break even).
     Rejects lopsided trades where players' SGP differs too much.
     Ranks by Hart's projected roto point gain.
+
+    When projected_standings is provided, roto point impact is computed
+    against end-of-season projections rather than current standings.
 
     The roster data should reflect the best-available projections (ideally
     recency-blended) so that injured players show near-zero value and the
@@ -342,6 +357,7 @@ def find_trades(
                 impact = compute_trade_impact(
                     standings, hart_name, opp_name,
                     hart_loses, hart_gains, opp_loses, opp_gains,
+                    projected_standings=projected_standings,
                 )
 
                 proposals.append({

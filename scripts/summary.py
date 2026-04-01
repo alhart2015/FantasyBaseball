@@ -418,6 +418,7 @@ def main():
             leverage_by_team=leverage_by_team,
             roster_slots=config.roster_slots,
             max_results=5,
+            projected_standings=projected_standings,
         )
     else:
         trades = []

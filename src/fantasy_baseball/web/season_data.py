@@ -539,9 +539,13 @@ def run_optimize() -> dict:
 
 
 def compute_trade_standings_impact(
-    trade: dict, standings: list[dict], user_team_name: str
+    trade: dict, standings: list[dict], user_team_name: str,
+    projected_standings: list[dict] | None = None,
 ) -> dict:
     """Compute before/after roto standings for a trade.
+
+    Uses projected end-of-season standings as the baseline when available,
+    so the before/after comparison reflects end-of-season impact.
 
     Returns dict with:
       - before: {user_team: {cat: points}, opp_team: {cat: points}}
@@ -550,12 +554,13 @@ def compute_trade_standings_impact(
       - after_stats: {user_team: {cat: stat}, opp_team: {cat: stat}}
       - categories: list of category names
     """
+    baseline = projected_standings if projected_standings is not None else standings
     opp_name = trade["opponent"]
 
-    all_stats_before = {t["name"]: dict(t["stats"]) for t in standings}
+    all_stats_before = {t["name"]: dict(t["stats"]) for t in baseline}
     roto_before = score_roto(all_stats_before)
 
-    all_stats_after = {t["name"]: dict(t["stats"]) for t in standings}
+    all_stats_after = {t["name"]: dict(t["stats"]) for t in baseline}
 
     if "hart_stats_after" in trade and "opp_stats_after" in trade:
         all_stats_after[user_team_name] = trade["hart_stats_after"]
@@ -975,6 +980,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             leverage_by_team=leverage_by_team,
             roster_slots=config.roster_slots,
             max_results=10,
+            projected_standings=projected_standings,
         )
 
         # Attach trade pitches
