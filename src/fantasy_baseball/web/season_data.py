@@ -731,8 +731,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             ros_hitters["_name_norm"] = ros_hitters["name"].apply(normalize_name)
             ros_pitchers["_name_norm"] = ros_pitchers["name"].apply(normalize_name)
             _progress(f"Loaded {len(ros_hitters)} ROS hitters + {len(ros_pitchers)} ROS pitchers")
+            # Use ROS projections as primary — they're the most current estimates
+            hitters_proj = ros_hitters
+            pitchers_proj = ros_pitchers
         else:
-            _progress("No ROS projections available")
+            _progress("WARNING: No ROS projections available — falling back to preseason")
 
         # --- Step 4b: Fetch opponent rosters ---
         _progress("Fetching opponent rosters...")
