@@ -1057,9 +1057,9 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
             # Build ROS rosters for all teams
             ros_mc_rosters = {}
-            # User's team (reuse ros_matched from step 6)
-            if ros_matched:
-                ros_mc_rosters[config.team_name] = ros_matched
+            # User's team (matched uses ROS projections since step 4c)
+            if matched:
+                ros_mc_rosters[config.team_name] = matched
 
             # Opponent teams
             for tname, opp_raw in all_raw_rosters.items():
