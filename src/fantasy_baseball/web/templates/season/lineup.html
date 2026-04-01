@@ -124,7 +124,7 @@
                     <div class="tooltip-row"><span class="tooltip-label">Pre-season proj</span><span class="tooltip-val">{{ st.projection }} {{ cat }}</span></div>
                     {% endif %}
                     {% set ros_key = cat | lower %}
-                    <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val">{% if h.ros and h.ros[ros_key] is defined %}{% if cat == 'AVG' %}{{ "%.3f"|format(h.ros[ros_key]) }}{% else %}{{ h.ros[ros_key] | round | int }}{% endif %} {{ cat }}{% else %}<span style="color: var(--text-secondary); font-style: italic;">—</span>{% endif %}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val">{% if h[ros_key] is defined and h[ros_key] is not none %}{% if cat == 'AVG' %}{{ "%.3f"|format(h[ros_key]) }}{% else %}{{ h[ros_key] | round | int }}{% endif %} {{ cat }}{% else %}<span style="color: var(--text-secondary); font-style: italic;">—</span>{% endif %}</span></div>
                 </div>
                 {% endif %}
             </td>
@@ -183,7 +183,7 @@
                     <div class="tooltip-row"><span class="tooltip-label">Pre-season proj</span><span class="tooltip-val">{{ st.projection }} {{ cat }}</span></div>
                     {% endif %}
                     {% set ros_key = cat | lower %}
-                    <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val">{% if p.ros and p.ros[ros_key] is defined %}{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(p.ros[ros_key]) }}{% else %}{{ p.ros[ros_key] | round | int }}{% endif %} {{ cat }}{% else %}<span style="color: var(--text-secondary); font-style: italic;">—</span>{% endif %}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val">{% if p[ros_key] is defined and p[ros_key] is not none %}{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(p[ros_key]) }}{% else %}{{ p[ros_key] | round | int }}{% endif %} {{ cat }}{% else %}<span style="color: var(--text-secondary); font-style: italic;">—</span>{% endif %}</span></div>
                 </div>
                 {% endif %}
             </td>

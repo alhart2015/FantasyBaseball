@@ -727,6 +727,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
         _progress(f"Loaded {len(hitters_proj)} hitter + {len(pitchers_proj)} pitcher projections")
         has_ros = not ros_hitters.empty or not ros_pitchers.empty
+        preseason_hitters = hitters_proj
+        preseason_pitchers = pitchers_proj
         if has_ros:
             ros_hitters["_name_norm"] = ros_hitters["name"].apply(normalize_name)
             ros_pitchers["_name_norm"] = ros_pitchers["name"].apply(normalize_name)
@@ -803,12 +805,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         # --- Step 6: Match roster players to projections, compute wSGP ---
         _progress("Matching roster to projections...")
 
-        # Match ROS projections to roster players for tooltip display
-        if has_ros:
-            ros_matched = match_roster_to_projections(roster_raw, ros_hitters, ros_pitchers)
-            ros_lookup = {normalize_name(p["name"]): p for p in ros_matched}
-        else:
-            ros_lookup = {}
+        # Match preseason projections for tooltip comparison (main stats are ROS)
+        preseason_matched = match_roster_to_projections(
+            roster_raw, preseason_hitters, preseason_pitchers,
+        )
+        preseason_lookup = {normalize_name(p["name"]): p for p in preseason_matched}
 
         # Build lookup of matched players, add wSGP
         matched_names = set()
@@ -817,11 +818,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             entry["wsgp"] = calculate_weighted_sgp(pd.Series(entry), leverage)
             norm = normalize_name(entry["name"])
             matched_names.add(norm)
-            # Attach ROS projection stats for tooltip
-            ros_entry = ros_lookup.get(norm)
-            if ros_entry:
-                entry["ros"] = {
-                    k: ros_entry.get(k, 0)
+            # Attach preseason projection stats for tooltip comparison
+            pre_entry = preseason_lookup.get(norm)
+            if pre_entry:
+                entry["preseason"] = {
+                    k: pre_entry.get(k, 0)
                     for k in (["r", "hr", "rbi", "sb", "avg"] if entry.get("player_type") == "hitter"
                               else ["w", "k", "sv", "era", "whip"])
                 }
@@ -850,7 +851,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         _progress("Computing player pace...")
         hitter_logs, pitcher_logs = _load_game_log_totals(config.season_year)
 
-        # Attach pace data to each roster player
+        # Attach pace data to each roster player (pace compares actuals vs preseason)
         for entry in roster_with_proj:
             norm = normalize_name(entry["name"])
             if "player_type" in entry:
@@ -862,7 +863,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             else:
                 actuals = pitcher_logs.get(norm, {})
             proj_keys = HITTER_PROJ_KEYS if ptype == "hitter" else PITCHER_PROJ_KEYS
-            projected = {k: entry.get(k, 0) for k in proj_keys}
+            pre = preseason_lookup.get(norm, {})
+            projected = {k: pre.get(k, 0) for k in proj_keys}
             entry["stats"] = compute_player_pace(actuals, projected, ptype)
 
         write_cache("roster", roster_with_proj, cache_dir)
