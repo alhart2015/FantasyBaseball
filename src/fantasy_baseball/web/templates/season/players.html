@@ -1,0 +1,201 @@
+{% extends "season/base.html" %}
+{% block title %}Players — Season Dashboard{% endblock %}
+{% block content %}
+
+<style>
+.search-container {
+    margin: 20px 0;
+}
+.search-input {
+    width: 100%;
+    max-width: 400px;
+    padding: 10px 14px;
+    font-size: 14px;
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    color: var(--text);
+    outline: none;
+}
+.search-input:focus {
+    border-color: var(--accent);
+}
+.search-input::placeholder {
+    color: var(--text-secondary);
+}
+.search-hint {
+    color: var(--text-secondary);
+    font-size: 12px;
+    margin-top: 6px;
+}
+.search-status {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin: 12px 0;
+}
+.player-card {
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin-bottom: 10px;
+}
+.player-card-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+.player-card-header .player-info {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+.player-card-header .player-name {
+    font-weight: 600;
+    font-size: 15px;
+}
+.player-card-header .player-meta {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+.ownership-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-weight: 600;
+}
+.ownership-badge.roster { background: rgba(76, 175, 80, 0.15); color: #4caf50; }
+.ownership-badge.opponent { background: rgba(255, 152, 0, 0.15); color: #ff9800; }
+.ownership-badge.fa { background: rgba(33, 150, 243, 0.15); color: #2196f3; }
+.wsgp-val {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--accent);
+    margin-left: 12px;
+}
+.stat-table {
+    width: 100%;
+    font-size: 13px;
+    border-collapse: collapse;
+}
+.stat-table th {
+    text-align: left;
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 11px;
+    text-transform: uppercase;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--panel-border);
+}
+.stat-table td {
+    padding: 4px 8px;
+}
+.stat-table tr:not(:last-child) td {
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+#results-container { margin-top: 16px; }
+</style>
+
+<div class="search-container">
+    <input type="text" id="player-search" class="search-input"
+           placeholder="Search players by name..." autocomplete="off">
+    <div class="search-hint">Type at least 2 characters to search</div>
+</div>
+<div id="search-status" class="search-status"></div>
+<div id="results-container"></div>
+
+<script>
+const input = document.getElementById('player-search');
+const status = document.getElementById('search-status');
+const results = document.getElementById('results-container');
+let debounceTimer = null;
+
+input.addEventListener('input', function() {
+    clearTimeout(debounceTimer);
+    const q = this.value.trim();
+    if (q.length < 2) {
+        status.textContent = '';
+        results.innerHTML = '';
+        return;
+    }
+    status.textContent = 'Searching...';
+    debounceTimer = setTimeout(() => doSearch(q), 300);
+});
+
+function doSearch(q) {
+    fetch('/api/players/search?q=' + encodeURIComponent(q))
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                status.textContent = data.error;
+                results.innerHTML = '';
+                return;
+            }
+            status.textContent = data.length + ' result' + (data.length !== 1 ? 's' : '');
+            results.innerHTML = data.map(renderCard).join('');
+        })
+        .catch(() => {
+            status.textContent = 'Search failed';
+            results.innerHTML = '';
+        });
+}
+
+function fmt(val, cat) {
+    if (val === null || val === undefined) return '—';
+    if (cat === 'AVG') return val.toFixed(3);
+    if (cat === 'ERA' || cat === 'WHIP') return val.toFixed(2);
+    return Math.round(val);
+}
+
+function zBadge(z) {
+    if (z === null || z === undefined) return '';
+    const cls = z > 1 ? 'stat-hot-1' : z > 2 ? 'stat-hot-2' : z < -1 ? 'stat-cold-1' : z < -2 ? 'stat-cold-2' : 'stat-neutral';
+    return '<span class="' + cls + '">' + (z >= 0 ? '+' : '') + z.toFixed(1) + '</span>';
+}
+
+function renderCard(p) {
+    const cats = p.player_type === 'hitter'
+        ? ['R', 'HR', 'RBI', 'SB', 'AVG']
+        : ['W', 'K', 'SV', 'ERA', 'WHIP'];
+
+    const ownerClass = p.ownership === 'Your roster' ? 'roster'
+        : p.ownership === 'Free Agent' ? 'fa' : 'opponent';
+
+    let rows = cats.map(cat => {
+        const key = cat.toLowerCase();
+        const ros = p.ros ? p.ros[key] : null;
+        const pre = p.preseason ? p.preseason[key] : null;
+        const pace = p.pace && p.pace[cat] ? p.pace[cat] : null;
+        return '<tr>' +
+            '<td style="font-weight:600">' + cat + '</td>' +
+            '<td>' + fmt(ros, cat) + '</td>' +
+            '<td>' + fmt(pre, cat) + '</td>' +
+            '<td>' + (pace ? fmt(pace.actual, cat) : '—') + '</td>' +
+            '<td>' + (pace ? fmt(pace.expected, cat) : '—') + '</td>' +
+            '<td>' + (pace ? zBadge(pace.z_score) : '—') + '</td>' +
+            '</tr>';
+    }).join('');
+
+    const positions = p.positions ? p.positions.join(', ') : '';
+    const team = p.team || '';
+    const wsgp = p.wsgp !== null ? p.wsgp.toFixed(2) : '—';
+
+    return '<div class="player-card">' +
+        '<div class="player-card-header">' +
+            '<div class="player-info">' +
+                '<span class="player-name">' + p.name + '</span>' +
+                '<span class="player-meta">' + positions + ' — ' + team + '</span>' +
+                '<span class="wsgp-val">' + wsgp + ' wSGP</span>' +
+            '</div>' +
+            '<span class="ownership-badge ' + ownerClass + '">' + p.ownership + '</span>' +
+        '</div>' +
+        '<table class="stat-table">' +
+            '<thead><tr><th>Cat</th><th>ROS</th><th>Preseason</th><th>Actual</th><th>Pace</th><th>Z</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+        '</table>' +
+    '</div>';
+}
+</script>
+
+{% endblock %}

@@ -295,6 +295,15 @@ def register_routes(app: Flask) -> None:
         result = compute_trade_standings_impact(trade=trades_raw[idx], standings=standings_raw, user_team_name=config.team_name)
         return jsonify(result)
 
+    @app.route("/players")
+    def player_search():
+        meta = read_meta()
+        return render_template(
+            "season/players.html",
+            meta=meta,
+            active_page="players",
+        )
+
     @app.route("/login", methods=["GET", "POST"])
     def login():
         error = None
