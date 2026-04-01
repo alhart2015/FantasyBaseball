@@ -734,15 +734,71 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         else:
             _progress("No ROS projections available")
 
+        # --- Step 4b: Fetch opponent rosters ---
+        _progress("Fetching opponent rosters...")
+        from fantasy_baseball.data.projections import match_roster_to_projections
+
+        opp_rosters: dict[str, list[dict]] = {}
+        all_raw_rosters = {config.team_name: roster_raw}
+
+        def _fetch_opp(key_and_info):
+            key, team_info = key_and_info
+            tname = team_info.get("name", "")
+            try:
+                opp_raw = fetch_roster(league, key)
+                opp_proj_list = match_roster_to_projections(
+                    opp_raw, hitters_proj, pitchers_proj
+                )
+                return (tname, opp_raw, opp_proj_list)
+            except Exception:
+                return None
+
+        opp_items = [
+            (key, info) for key, info in teams.items()
+            if info.get("name", "") != config.team_name and key != user_team_key
+        ]
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for result in pool.map(_fetch_opp, opp_items):
+                if result is None:
+                    continue
+                tname, opp_raw, opp_proj_list = result
+                all_raw_rosters[tname] = opp_raw
+                if opp_proj_list:
+                    opp_rosters[tname] = opp_proj_list
+        _progress(f"Fetched {len(opp_rosters)} opponent rosters")
+
+        # --- Step 4c: Build projected standings ---
+        _progress("Projecting end-of-season standings...")
+        from fantasy_baseball.scoring import project_team_stats
+
+        # Match user roster to projections (wSGP added later after leverage)
+        matched = match_roster_to_projections(roster_raw, hitters_proj, pitchers_proj)
+
+        all_team_rosters = {config.team_name: matched}
+        all_team_rosters.update(opp_rosters)
+
+        projected_standings = []
+        for tname, roster in all_team_rosters.items():
+            proj_stats = project_team_stats(roster)
+            projected_standings.append({
+                "name": tname,
+                "team_key": "",
+                "rank": 0,
+                "stats": proj_stats,
+            })
+
+        write_cache("projections", {"projected_standings": projected_standings}, cache_dir)
+        _progress(f"Projected standings for {len(projected_standings)} teams")
+
         # --- Step 5: Leverage weights ---
         _progress("Calculating leverage weights...")
-        leverage = calculate_leverage(standings, config.team_name)
+        leverage = calculate_leverage(
+            standings, config.team_name,
+            projected_standings=projected_standings,
+        )
 
         # --- Step 6: Match roster players to projections, compute wSGP ---
         _progress("Matching roster to projections...")
-        from fantasy_baseball.data.projections import match_roster_to_projections
-
-        matched = match_roster_to_projections(roster_raw, hitters_proj, pitchers_proj)
 
         # Match ROS projections to roster players for tooltip display
         if has_ros:
@@ -894,40 +950,13 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # --- Step 11: Find trades + generate pitches ---
         _progress("Evaluating trades...")
-        # Build opponent rosters (fetch top players from each team)
-        opp_rosters: dict[str, list[dict]] = {}
         cat_ranks = _compute_category_ranks(standings)
         leverage_by_team: dict[str, dict] = {}
         for team in standings:
             tname = team["name"]
-            leverage_by_team[tname] = calculate_leverage(standings, tname)
-
-        all_raw_rosters = {config.team_name: roster_raw}
-
-        def _fetch_opp(key_and_info):
-            key, team_info = key_and_info
-            tname = team_info.get("name", "")
-            try:
-                opp_raw = fetch_roster(league, key)
-                opp_proj_list = match_roster_to_projections(
-                    opp_raw, hitters_proj, pitchers_proj
-                )
-                return (tname, opp_raw, opp_proj_list)
-            except Exception:
-                return None
-
-        opp_items = [
-            (key, info) for key, info in teams.items()
-            if info.get("name", "") != config.team_name and key != user_team_key
-        ]
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            for result in pool.map(_fetch_opp, opp_items):
-                if result is None:
-                    continue
-                tname, opp_raw, opp_proj_list = result
-                all_raw_rosters[tname] = opp_raw
-                if opp_proj_list:
-                    opp_rosters[tname] = opp_proj_list
+            leverage_by_team[tname] = calculate_leverage(
+                standings, tname, projected_standings=projected_standings,
+            )
 
         hart_roster_for_trades = [
             p for p in roster_with_proj
@@ -977,25 +1006,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             "trade_targets": buy_low_trade_targets,
             "free_agents": buy_low_free_agents,
         }, cache_dir)
-
-        # --- Step 12: Project full-season standings from rosters ---
-        _progress("Projecting standings...")
-        from fantasy_baseball.scoring import project_team_stats
-
-        all_team_rosters = {config.team_name: roster_with_proj}
-        all_team_rosters.update(opp_rosters)
-
-        projected_standings = []
-        for tname, roster in all_team_rosters.items():
-            proj_stats = project_team_stats(roster)
-            projected_standings.append({
-                "name": tname,
-                "team_key": "",
-                "rank": 0,
-                "stats": proj_stats,
-            })
-
-        write_cache("projections", {"projected_standings": projected_standings}, cache_dir)
 
         # --- Step 13: Monte Carlo simulation ---
         from fantasy_baseball.simulation import run_monte_carlo
