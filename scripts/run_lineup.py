@@ -209,16 +209,12 @@ def main():
 
     # Read cached projected standings from dashboard (if available)
     projected_standings = None
-    projections_cache = Path(PROJECT_ROOT / "data" / "cache" / "projections.json")
-    if projections_cache.exists():
-        try:
-            import json
-            cached = json.loads(projections_cache.read_text(encoding="utf-8"))
-            projected_standings = cached.get("projected_standings")
-            if projected_standings:
-                print(f"Loaded cached projected standings ({len(projected_standings)} teams)")
-        except Exception:
-            pass
+    from fantasy_baseball.web.season_data import read_cache
+    cached = read_cache("projections")
+    if cached:
+        projected_standings = cached.get("projected_standings")
+        if projected_standings:
+            print(f"Loaded cached projected standings ({len(projected_standings)} teams)")
 
     # Fetch scoring period and MLB schedule
     print("Fetching weekly schedule...")
