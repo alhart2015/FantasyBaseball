@@ -159,3 +159,46 @@ def calculate_leverage(
         cat: season_progress * standings_leverage[cat] + (1.0 - season_progress) * uniform
         for cat in ALL_CATEGORIES
     }
+
+
+def blend_standings(
+    current: list[dict],
+    projected: list[dict],
+    progress: float,
+) -> list[dict]:
+    """Blend current and projected standings based on season progress.
+
+    For each stat: blended = progress * current + (1 - progress) * projected.
+    At progress=0.0, result is fully projected. At progress=1.0, fully current.
+
+    Teams matched by name. Teams appearing in only one list are included as-is.
+    """
+    proj_by_name = {t["name"]: t for t in projected}
+    seen_names = set()
+    blended = []
+
+    for team in current:
+        name = team["name"]
+        seen_names.add(name)
+        proj_team = proj_by_name.get(name)
+        if proj_team is None:
+            blended.append(team)
+            continue
+
+        blended_stats = {}
+        for cat in team["stats"]:
+            cur_val = team["stats"].get(cat, 0)
+            proj_val = proj_team["stats"].get(cat, 0)
+            blended_stats[cat] = progress * cur_val + (1.0 - progress) * proj_val
+
+        blended.append({
+            **team,
+            "stats": blended_stats,
+        })
+
+    # Include projected-only teams
+    for team in projected:
+        if team["name"] not in seen_names:
+            blended.append(team)
+
+    return blended

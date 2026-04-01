@@ -1,5 +1,5 @@
 import pytest
-from fantasy_baseball.lineup.leverage import calculate_leverage
+from fantasy_baseball.lineup.leverage import calculate_leverage, blend_standings
 
 
 def _make_standings():
@@ -96,3 +96,55 @@ class TestCalculateLeverage:
         leverage = calculate_leverage(standings, "Team 10")
         total = sum(leverage.values())
         assert total == pytest.approx(1.0, abs=0.01)
+
+
+class TestBlendStandings:
+    def _make_current(self):
+        return [
+            {"name": "Team A", "stats": {"R": 200, "HR": 50, "RBI": 180, "SB": 30,
+             "AVG": 0.260, "W": 20, "K": 300, "SV": 15, "ERA": 4.00, "WHIP": 1.30}},
+            {"name": "Team B", "stats": {"R": 180, "HR": 45, "RBI": 170, "SB": 40,
+             "AVG": 0.270, "W": 18, "K": 280, "SV": 12, "ERA": 3.80, "WHIP": 1.25}},
+        ]
+
+    def _make_projected(self):
+        return [
+            {"name": "Team A", "stats": {"R": 800, "HR": 200, "RBI": 720, "SB": 100,
+             "AVG": 0.265, "W": 80, "K": 1200, "SV": 60, "ERA": 3.80, "WHIP": 1.22}},
+            {"name": "Team B", "stats": {"R": 780, "HR": 210, "RBI": 700, "SB": 120,
+             "AVG": 0.272, "W": 75, "K": 1150, "SV": 55, "ERA": 3.60, "WHIP": 1.20}},
+        ]
+
+    def test_progress_zero_returns_projected(self):
+        blended = blend_standings(self._make_current(), self._make_projected(), 0.0)
+        team_a = next(t for t in blended if t["name"] == "Team A")
+        assert team_a["stats"]["R"] == pytest.approx(800)
+        assert team_a["stats"]["AVG"] == pytest.approx(0.265)
+
+    def test_progress_one_returns_current(self):
+        blended = blend_standings(self._make_current(), self._make_projected(), 1.0)
+        team_a = next(t for t in blended if t["name"] == "Team A")
+        assert team_a["stats"]["R"] == pytest.approx(200)
+        assert team_a["stats"]["AVG"] == pytest.approx(0.260)
+
+    def test_progress_half_interpolates(self):
+        blended = blend_standings(self._make_current(), self._make_projected(), 0.5)
+        team_a = next(t for t in blended if t["name"] == "Team A")
+        assert team_a["stats"]["R"] == pytest.approx(500)  # (200+800)/2
+        assert team_a["stats"]["AVG"] == pytest.approx(0.2625)  # (0.260+0.265)/2
+
+    def test_teams_matched_by_name(self):
+        current = self._make_current()
+        projected = list(reversed(self._make_projected()))  # reverse order
+        blended = blend_standings(current, projected, 0.0)
+        team_a = next(t for t in blended if t["name"] == "Team A")
+        assert team_a["stats"]["R"] == pytest.approx(800)  # matched correctly
+
+    def test_team_only_in_current_included_as_is(self):
+        current = self._make_current() + [
+            {"name": "Team C", "stats": {"R": 100, "HR": 20, "RBI": 90, "SB": 10,
+             "AVG": 0.240, "W": 10, "K": 150, "SV": 5, "ERA": 4.50, "WHIP": 1.40}},
+        ]
+        blended = blend_standings(current, self._make_projected(), 0.5)
+        team_c = next(t for t in blended if t["name"] == "Team C")
+        assert team_c["stats"]["R"] == 100  # no projected match, kept as-is
