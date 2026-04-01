@@ -148,3 +148,49 @@ class TestBlendStandings:
         blended = blend_standings(current, self._make_projected(), 0.5)
         team_c = next(t for t in blended if t["name"] == "Team C")
         assert team_c["stats"]["R"] == 100  # no projected match, kept as-is
+
+
+class TestCalculateLeverageWithProjected:
+    def _make_projected(self):
+        """Projected standings where SB gaps are large but HR gaps are tiny."""
+        return [
+            {"name": "Team 4", "rank": 4, "stats": {"R": 780, "HR": 201, "RBI": 720, "SB": 200, "AVG": 0.268, "W": 78, "K": 1200, "SV": 72, "ERA": 3.65, "WHIP": 1.21}},
+            {"name": "User Team", "rank": 5, "stats": {"R": 760, "HR": 200, "RBI": 700, "SB": 100, "AVG": 0.265, "W": 75, "K": 1180, "SV": 65, "ERA": 3.75, "WHIP": 1.24}},
+            {"name": "Team 6", "rank": 6, "stats": {"R": 720, "HR": 199, "RBI": 680, "SB": 80, "AVG": 0.260, "W": 70, "K": 1150, "SV": 60, "ERA": 3.90, "WHIP": 1.27}},
+        ]
+
+    def test_projected_standings_override_uniform_ramp(self):
+        """At season_progress=0 with projected standings, leverage is NOT uniform."""
+        standings = _make_standings()
+        projected = self._make_projected()
+        leverage = calculate_leverage(
+            standings, "User Team",
+            season_progress=0.0, projected_standings=projected,
+        )
+        # Should NOT be uniform — projected gaps matter
+        values = list(leverage.values())
+        assert max(values) - min(values) > 0.01
+
+    def test_projected_tiny_hr_gap_gets_high_leverage(self):
+        """HR gap is 1 in projected standings → high HR leverage."""
+        standings = _make_standings()
+        projected = self._make_projected()
+        leverage = calculate_leverage(
+            standings, "User Team",
+            season_progress=0.0, projected_standings=projected,
+        )
+        # HR gaps are tiny (201 vs 200 vs 199) so HR should be high leverage
+        # SB gaps are huge (200 vs 100 vs 80) so SB should be low
+        assert leverage["HR"] > leverage["SB"]
+
+    def test_no_projected_preserves_existing_behavior(self):
+        """Without projected_standings, behavior is unchanged (uniform ramp)."""
+        standings = _make_standings()
+        leverage_old = calculate_leverage(
+            standings, "User Team", season_progress=0.0,
+        )
+        leverage_new = calculate_leverage(
+            standings, "User Team", season_progress=0.0, projected_standings=None,
+        )
+        for cat in leverage_old:
+            assert leverage_old[cat] == pytest.approx(leverage_new[cat])

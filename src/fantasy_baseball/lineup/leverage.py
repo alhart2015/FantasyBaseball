@@ -55,6 +55,7 @@ def calculate_leverage(
     attack_weight: float = 0.6,
     defense_weight: float = 0.4,
     season_progress: float | None = None,
+    projected_standings: list[dict] | None = None,
 ) -> dict[str, float]:
     """Calculate leverage weights for each stat category based on standings gaps.
 
@@ -151,9 +152,68 @@ def calculate_leverage(
     else:
         standings_leverage = {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
 
-    # Blend standings-based leverage with uniform weights based on season progress.
-    # Early season: mostly uniform (standings are noise).
-    # Late season: fully standings-driven.
+    if projected_standings is not None:
+        # Blend current standings with projected, then use full standings-based leverage.
+        # The blend itself handles the early/late season weighting — no uniform ramp needed.
+        blended = blend_standings(standings, projected_standings, season_progress)
+
+        # Recompute leverage from blended standings
+        blended_sorted = sorted(blended, key=lambda t: t.get("rank", 99))
+        blended_user = None
+        blended_idx = None
+        for i, team in enumerate(blended_sorted):
+            if team["name"] == user_team_name:
+                blended_user = team
+                blended_idx = i
+                break
+
+        if blended_user is None:
+            return {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
+
+        blended_stats = blended_user.get("stats", {})
+        b_above = blended_sorted[blended_idx - 1] if blended_idx > 0 else None
+        b_below = (
+            blended_sorted[blended_idx + 1]
+            if blended_idx < len(blended_sorted) - 1
+            else None
+        )
+
+        if b_above is not None and b_below is not None:
+            bw_attack, bw_defense = attack_weight, defense_weight
+        elif b_above is not None:
+            bw_attack, bw_defense = 1.0, 0.0
+        elif b_below is not None:
+            bw_attack, bw_defense = 0.0, 1.0
+        else:
+            return {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
+
+        b_above_stats = b_above.get("stats", {}) if b_above else {}
+        b_below_stats = b_below.get("stats", {}) if b_below else {}
+
+        blended_raw: dict[str, float] = {}
+        for cat in ALL_CATEGORIES:
+            bval = blended_stats.get(cat, 0)
+            lev = 0.0
+            if b_above is not None:
+                gap = _gap_for_category(cat, bval, b_above_stats.get(cat, 0))
+                lev += bw_attack * (1.0 / (gap + epsilon))
+            if b_below is not None:
+                gap = _gap_for_category(cat, bval, b_below_stats.get(cat, 0))
+                lev += bw_defense * (1.0 / (gap + epsilon))
+            blended_raw[cat] = lev
+
+        if blended_raw:
+            med = statistics.median(blended_raw.values())
+            cap = med * MAX_MEANINGFUL_GAP_MULTIPLIER
+            if cap > 0:
+                blended_raw = {cat: min(val, cap) for cat, val in blended_raw.items()}
+
+        total = sum(blended_raw.values())
+        if total > 0:
+            return {cat: val / total for cat, val in blended_raw.items()}
+        return {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
+
+    # Fallback: blend standings-based leverage with uniform weights.
     uniform = 1.0 / len(ALL_CATEGORIES)
     return {
         cat: season_progress * standings_leverage[cat] + (1.0 - season_progress) * uniform
