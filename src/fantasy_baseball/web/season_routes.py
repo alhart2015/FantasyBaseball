@@ -14,6 +14,12 @@ from fantasy_baseball.web.season_data import read_cache, read_meta
 _config = None
 
 
+def _get_search_db():
+    """Get a SQLite connection for player search queries."""
+    from fantasy_baseball.data.db import get_connection
+    return get_connection()
+
+
 def _get_admin_password():
     return os.environ.get("ADMIN_PASSWORD", "dev")
 
@@ -303,6 +309,161 @@ def register_routes(app: Flask) -> None:
             meta=meta,
             active_page="players",
         )
+
+    @app.route("/api/players/search")
+    def api_player_search():
+        from datetime import date
+        from fantasy_baseball.utils.name_utils import normalize_name
+        from fantasy_baseball.lineup.leverage import calculate_leverage
+        from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
+        from fantasy_baseball.analysis.pace import compute_player_pace
+        from fantasy_baseball.utils.constants import HITTER_PROJ_KEYS, PITCHER_PROJ_KEYS
+        import pandas as pd
+
+        query = request.args.get("q", "").strip()
+        if len(query) < 2:
+            return jsonify([])
+
+        conn = _get_search_db()
+        try:
+            season = date.today().year
+
+            # Find latest ROS snapshot
+            row = conn.execute(
+                "SELECT MAX(snapshot_date) as d FROM ros_blended_projections WHERE year = ?",
+                (season,),
+            ).fetchone()
+            snapshot = row["d"] if row and row["d"] else None
+            if not snapshot:
+                return jsonify([])
+
+            # Search ROS projections by name (case-insensitive LIKE)
+            like_pattern = f"%{query}%"
+            ros_rows = conn.execute(
+                "SELECT * FROM ros_blended_projections "
+                "WHERE year = ? AND snapshot_date = ? AND name LIKE ? "
+                "ORDER BY CASE WHEN adp IS NOT NULL THEN adp ELSE 9999 END ASC "
+                "LIMIT 25",
+                (season, snapshot, like_pattern),
+            ).fetchall()
+
+            if not ros_rows:
+                return jsonify([])
+
+            # Load preseason projections for comparison
+            preseason_map = {}
+            for r in conn.execute(
+                "SELECT * FROM blended_projections WHERE year = ? AND name LIKE ?",
+                (season, like_pattern),
+            ).fetchall():
+                preseason_map[r["fg_id"]] = dict(r)
+
+            # Load game log totals for pace
+            hitter_logs = {}
+            for r in conn.execute(
+                "SELECT name, SUM(pa) as pa, SUM(ab) as ab, SUM(h) as h, "
+                "SUM(r) as r, SUM(hr) as hr, SUM(rbi) as rbi, SUM(sb) as sb "
+                "FROM game_logs WHERE season = ? AND player_type = 'hitter' "
+                "GROUP BY name", (season,),
+            ).fetchall():
+                hitter_logs[normalize_name(r["name"])] = dict(r)
+
+            pitcher_logs = {}
+            for r in conn.execute(
+                "SELECT name, SUM(ip) as ip, SUM(k) as k, SUM(w) as w, SUM(sv) as sv, "
+                "SUM(er) as er, SUM(bb) as bb, SUM(h_allowed) as h_allowed "
+                "FROM game_logs WHERE season = ? AND player_type = 'pitcher' "
+                "GROUP BY name", (season,),
+            ).fetchall():
+                pitcher_logs[normalize_name(r["name"])] = dict(r)
+
+            # Leverage for wSGP
+            standings = read_cache("standings") or []
+            config = _load_config()
+            projected_standings_cache = read_cache("projections") or {}
+            projected_standings = projected_standings_cache.get("projected_standings")
+            leverage = calculate_leverage(
+                standings, config.team_name,
+                projected_standings=projected_standings,
+            ) if standings else {c: 1.0 / 10 for c in ALL_CATEGORIES}
+
+            # Ownership lookup
+            roster_cache = read_cache("roster") or []
+            roster_names = {normalize_name(p["name"]): "Your roster" for p in roster_cache}
+            opp_rows = conn.execute(
+                "SELECT player_name, team FROM weekly_rosters "
+                "WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM weekly_rosters) "
+                "AND team != ?",
+                (config.team_name,),
+            ).fetchall()
+            for r in opp_rows:
+                norm = normalize_name(r["player_name"])
+                if norm not in roster_names:
+                    roster_names[norm] = r["team"]
+
+            # Build results
+            results = []
+            for ros in ros_rows:
+                ros_dict = dict(ros)
+                name = ros_dict["name"]
+                norm = normalize_name(name)
+                ptype = ros_dict["player_type"]
+                fg_id = ros_dict.get("fg_id")
+
+                # ROS stats
+                if ptype == "hitter":
+                    ros_stats = {k: ros_dict.get(k) for k in ["r", "hr", "rbi", "sb", "avg"]}
+                else:
+                    ros_stats = {k: ros_dict.get(k) for k in ["w", "k", "sv", "era", "whip"]}
+
+                # Preseason stats
+                pre = preseason_map.get(fg_id, {})
+                if ptype == "hitter":
+                    pre_stats = {k: pre.get(k) for k in ["r", "hr", "rbi", "sb", "avg"]}
+                else:
+                    pre_stats = {k: pre.get(k) for k in ["w", "k", "sv", "era", "whip"]}
+
+                # wSGP
+                wsgp = calculate_weighted_sgp(pd.Series(ros_dict), leverage)
+
+                # Pace
+                pace = None
+                logs = hitter_logs if ptype == "hitter" else pitcher_logs
+                actuals = logs.get(norm)
+                if actuals:
+                    proj_keys = HITTER_PROJ_KEYS if ptype == "hitter" else PITCHER_PROJ_KEYS
+                    projected = {k: pre.get(k, 0) or 0 for k in proj_keys}
+                    if any(v > 0 for v in projected.values()):
+                        pace = compute_player_pace(actuals, projected, ptype)
+
+                # Ownership
+                ownership = roster_names.get(norm, "Free Agent")
+
+                # Positions from weekly_rosters
+                positions = []
+                pos_row = conn.execute(
+                    "SELECT positions FROM weekly_rosters WHERE player_name = ? "
+                    "ORDER BY snapshot_date DESC LIMIT 1",
+                    (name,),
+                ).fetchone()
+                if pos_row and pos_row["positions"]:
+                    positions = [p.strip() for p in pos_row["positions"].split(",")]
+
+                results.append({
+                    "name": name,
+                    "team": ros_dict.get("team", ""),
+                    "positions": positions,
+                    "player_type": ptype,
+                    "ownership": ownership,
+                    "wsgp": round(wsgp, 2),
+                    "ros": ros_stats,
+                    "preseason": pre_stats,
+                    "pace": pace,
+                })
+
+            return jsonify(results)
+        finally:
+            conn.close()
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
