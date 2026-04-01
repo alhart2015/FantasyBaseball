@@ -122,6 +122,7 @@ def blend_projections(
     weights: dict[str, float] | None = None,
     roster_names: set[str] | None = None,
     progress_cb=None,
+    normalizer=None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, "QualityReport | None"]:
     """Blend multiple projection systems into weighted averages.
 
@@ -151,6 +152,8 @@ def blend_projections(
 
     for system in systems:
         hitters, pitchers = load_projection_set(projections_dir, system)
+        if normalizer is not None:
+            hitters, pitchers = normalizer(system, hitters, pitchers)
         system_dfs[system] = (hitters, pitchers)
         w = weights.get(system, 0)
         if not hitters.empty:

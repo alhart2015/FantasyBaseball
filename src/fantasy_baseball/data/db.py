@@ -678,6 +678,23 @@ def load_ros_projections(
     """
     projections_dir = Path(projections_dir)
 
+    from fantasy_baseball.data.projections import (
+        FULL_SEASON_ROS_SYSTEMS, normalize_ros_to_full_season,
+    )
+    from datetime import date
+
+    # Load actual accumulated stats for normalizing remaining-games systems
+    hitter_totals, pitcher_totals = get_season_totals(conn, date.today().year)
+
+    def _normalizer(system_name, hitters_df, pitchers_df):
+        if system_name.lower() in FULL_SEASON_ROS_SYSTEMS:
+            return hitters_df, pitchers_df
+        if progress_cb:
+            progress_cb(f"Normalizing {system_name} ROS → full-season")
+        h = normalize_ros_to_full_season(hitters_df, hitter_totals, "hitter")
+        p = normalize_ros_to_full_season(pitchers_df, pitcher_totals, "pitcher")
+        return h, p
+
     for year_dir in sorted(projections_dir.iterdir()):
         if not year_dir.is_dir() or not year_dir.name.isdigit():
             continue
@@ -696,6 +713,7 @@ def load_ros_projections(
                 hitters_df, pitchers_df, _ = blend_projections(
                     date_dir, systems, weights,
                     roster_names=roster_names, progress_cb=progress_cb,
+                    normalizer=_normalizer,
                 )
             except Exception:
                 continue

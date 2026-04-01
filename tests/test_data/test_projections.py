@@ -202,3 +202,39 @@ class TestNormalizeRosToFullSeason:
         }
         normalize_ros_to_full_season(df, game_log_totals, "hitter")
         assert df.iloc[0]["pa"] == 400
+
+
+class TestBlendWithNormalizer:
+    def test_normalizer_called_for_each_system(self, fixtures_dir):
+        """Normalizer callback is invoked per system with correct args."""
+        calls = []
+
+        def track_normalizer(system_name, hitters_df, pitchers_df):
+            calls.append(system_name)
+            return hitters_df, pitchers_df
+
+        blend_projections(
+            fixtures_dir,
+            systems=["steamer", "zips"],
+            normalizer=track_normalizer,
+        )
+        assert "steamer" in calls
+        assert "zips" in calls
+
+    def test_normalizer_modifies_counting_stats_before_blend(self, fixtures_dir):
+        """When normalizer bumps a system's stats, the blend reflects it."""
+        def bump_zips_hr(system_name, hitters_df, pitchers_df):
+            if system_name == "zips":
+                hitters_df = hitters_df.copy()
+                hitters_df["hr"] = hitters_df["hr"] + 10
+            return hitters_df, pitchers_df
+
+        baseline, _, _ = blend_projections(fixtures_dir, systems=["steamer", "zips"])
+        bumped, _, _ = blend_projections(
+            fixtures_dir, systems=["steamer", "zips"], normalizer=bump_zips_hr,
+        )
+
+        judge_base = baseline[baseline["name"] == "Aaron Judge"].iloc[0]["hr"]
+        judge_bump = bumped[bumped["name"] == "Aaron Judge"].iloc[0]["hr"]
+        # ZiPS HR went up by 10, weight is 0.5 each → blend goes up by 5
+        assert judge_bump == pytest.approx(judge_base + 5, abs=0.1)
