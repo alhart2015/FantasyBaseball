@@ -350,13 +350,16 @@ def register_routes(app: Flask) -> None:
             if not ros_rows:
                 return jsonify([])
 
-            # Load preseason projections for comparison
+            # Load preseason projections for comparison (match by fg_id, not name)
+            fg_ids = [r["fg_id"] for r in ros_rows if r["fg_id"]]
             preseason_map = {}
-            for r in conn.execute(
-                "SELECT * FROM blended_projections WHERE year = ? AND name LIKE ?",
-                (season, like_pattern),
-            ).fetchall():
-                preseason_map[r["fg_id"]] = dict(r)
+            if fg_ids:
+                placeholders = ",".join("?" * len(fg_ids))
+                for r in conn.execute(
+                    f"SELECT * FROM blended_projections WHERE year = ? AND fg_id IN ({placeholders})",
+                    (season, *fg_ids),
+                ).fetchall():
+                    preseason_map[r["fg_id"]] = dict(r)
 
             # Load game log totals for pace
             hitter_logs = {}
@@ -439,10 +442,10 @@ def register_routes(app: Flask) -> None:
                 # Ownership
                 ownership = roster_names.get(norm, "Free Agent")
 
-                # Positions from weekly_rosters
+                # Positions from weekly_rosters (use LIKE for accent tolerance)
                 positions = []
                 pos_row = conn.execute(
-                    "SELECT positions FROM weekly_rosters WHERE player_name = ? "
+                    "SELECT positions FROM weekly_rosters WHERE player_name LIKE ? "
                     "ORDER BY snapshot_date DESC LIMIT 1",
                     (name,),
                 ).fetchone()
