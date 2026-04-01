@@ -15,6 +15,7 @@ HITTING_COLUMN_MAP: dict[str, str] = {
     "ADP": "adp",
     "playerid": "fg_id",
     "PlayerId": "fg_id",
+    "MLBAMID": "mlbam_id",
 }
 
 PITCHING_COLUMN_MAP: dict[str, str] = {
@@ -32,6 +33,7 @@ PITCHING_COLUMN_MAP: dict[str, str] = {
     "H": "h_allowed",
     "playerid": "fg_id",
     "PlayerId": "fg_id",
+    "MLBAMID": "mlbam_id",
 }
 
 REQUIRED_HITTING_COLS: list[str] = ["name", "ab", "h", "hr", "r", "rbi", "sb", "avg"]

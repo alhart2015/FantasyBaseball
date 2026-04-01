@@ -77,6 +77,14 @@ class TestBlendProjections:
         judge = hitters[hitters["name"] == "Aaron Judge"].iloc[0]
         assert judge["hr"] == 45
 
+    def test_blend_preserves_mlbam_id_in_metadata(self, fixtures_dir):
+        """mlbam_id should be available in loaded system DataFrames."""
+        from fantasy_baseball.data.fangraphs import load_projection_set
+        hitters, pitchers = load_projection_set(fixtures_dir, "steamer")
+        assert "mlbam_id" in hitters.columns, "mlbam_id missing from hitter columns"
+        judge = hitters[hitters["name"] == "Aaron Judge"].iloc[0]
+        assert judge["mlbam_id"] == 592450
+
     def test_missing_system_raises_error(self, fixtures_dir):
         with pytest.raises(FileNotFoundError, match="No projection files found for system"):
             blend_projections(
