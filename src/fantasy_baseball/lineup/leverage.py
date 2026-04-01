@@ -48,39 +48,16 @@ def _estimate_season_progress(standings: list[dict]) -> float:
     return min(1.0, approx_games / FULL_CONFIDENCE_GAMES)
 
 
-def calculate_leverage(
+def _leverage_from_standings(
     standings: list[dict],
     user_team_name: str,
-    *,
-    attack_weight: float = 0.6,
-    defense_weight: float = 0.4,
-    season_progress: float | None = None,
-    projected_standings: list[dict] | None = None,
-) -> dict[str, float]:
-    """Calculate leverage weights for each stat category based on standings gaps.
+    attack_weight: float,
+    defense_weight: float,
+) -> dict[str, float] | None:
+    """Compute normalized leverage weights from a set of standings.
 
-    Considers both neighbors in the standings:
-      - **Attack** (team above): categories where a small gap means an easy
-        opportunity to gain a standings point by overtaking them.
-      - **Defense** (team below): categories where a small gap means a threat
-        of losing a standings point if they catch you.
-
-    ``attack_weight`` and ``defense_weight`` control the relative importance
-    of opportunities vs. threats (default 60/40 favoring attack).  When only
-    one neighbor exists (first or last place), that neighbor receives full
-    weight.
-
-    ``season_progress`` (0.0 to 1.0) controls how much weight goes to
-    standings-based leverage vs. equal weights. Early season (low progress),
-    leverage is mostly uniform because standings are noise. Late season
-    (high progress), leverage is fully standings-driven. If None, estimated
-    from the league-average runs scored in standings (proxy for games played).
-    Ramps to 1.0 at ~81 games (half season).
-
-    Weights are normalized to sum to 1.0.
+    Returns None if the user team is not found or has no neighbors.
     """
-    if season_progress is None:
-        season_progress = _estimate_season_progress(standings)
     sorted_teams = sorted(standings, key=lambda t: t.get("rank", 99))
     user_team = None
     user_idx = None
@@ -91,7 +68,7 @@ def calculate_leverage(
             break
 
     if user_team is None:
-        return {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
+        return None
 
     user_stats = user_team.get("stats", {})
 
@@ -102,7 +79,6 @@ def calculate_leverage(
         else None
     )
 
-    # When only one neighbor exists, give it all of the weight.
     if team_above is not None and team_below is not None:
         w_attack = attack_weight
         w_defense = defense_weight
@@ -113,8 +89,7 @@ def calculate_leverage(
         w_attack = 0.0
         w_defense = 1.0
     else:
-        # Only one team in the league — equal weights everywhere.
-        return {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
+        return None
 
     above_stats = team_above.get("stats", {}) if team_above else {}
     below_stats = team_below.get("stats", {}) if team_below else {}
@@ -148,75 +123,72 @@ def calculate_leverage(
 
     total = sum(raw_leverage.values())
     if total > 0:
-        standings_leverage = {cat: val / total for cat, val in raw_leverage.items()}
-    else:
-        standings_leverage = {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
+        return {cat: val / total for cat, val in raw_leverage.items()}
+    return None
+
+
+def calculate_leverage(
+    standings: list[dict],
+    user_team_name: str,
+    *,
+    attack_weight: float = 0.6,
+    defense_weight: float = 0.4,
+    season_progress: float | None = None,
+    projected_standings: list[dict] | None = None,
+) -> dict[str, float]:
+    """Calculate leverage weights for each stat category based on standings gaps.
+
+    Considers both neighbors in the standings:
+      - **Attack** (team above): categories where a small gap means an easy
+        opportunity to gain a standings point by overtaking them.
+      - **Defense** (team below): categories where a small gap means a threat
+        of losing a standings point if they catch you.
+
+    ``attack_weight`` and ``defense_weight`` control the relative importance
+    of opportunities vs. threats (default 60/40 favoring attack).  When only
+    one neighbor exists (first or last place), that neighbor receives full
+    weight.
+
+    ``season_progress`` (0.0 to 1.0) controls how much weight goes to
+    standings-based leverage vs. equal weights. Early season (low progress),
+    leverage is mostly uniform because standings are noise. Late season
+    (high progress), leverage is fully standings-driven. If None, estimated
+    from the league-average runs scored in standings (proxy for games played).
+    Ramps to 1.0 at ~81 games (half season).
+
+    When ``projected_standings`` is provided, leverage is computed from a blend
+    of current and projected standings (weighted by season_progress). This
+    replaces the uniform ramp with forward-looking category weighting.
+
+    Note: neighbor ordering uses current standings rank even when blending
+    with projected stats. This is intentional — roto standings rank determines
+    which teams you're competing with for standings points.
+
+    Weights are normalized to sum to 1.0.
+    """
+    if season_progress is None:
+        season_progress = _estimate_season_progress(standings)
+
+    uniform = {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
 
     if projected_standings is not None:
-        # Blend current standings with projected, then use full standings-based leverage.
-        # The blend itself handles the early/late season weighting — no uniform ramp needed.
+        # Blend current standings with projected, then compute leverage from
+        # the blended view. The blend itself handles early/late season weighting.
         blended = blend_standings(standings, projected_standings, season_progress)
-
-        # Recompute leverage from blended standings
-        blended_sorted = sorted(blended, key=lambda t: t.get("rank", 99))
-        blended_user = None
-        blended_idx = None
-        for i, team in enumerate(blended_sorted):
-            if team["name"] == user_team_name:
-                blended_user = team
-                blended_idx = i
-                break
-
-        if blended_user is None:
-            return {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
-
-        blended_stats = blended_user.get("stats", {})
-        b_above = blended_sorted[blended_idx - 1] if blended_idx > 0 else None
-        b_below = (
-            blended_sorted[blended_idx + 1]
-            if blended_idx < len(blended_sorted) - 1
-            else None
+        result = _leverage_from_standings(
+            blended, user_team_name, attack_weight, defense_weight,
         )
-
-        if b_above is not None and b_below is not None:
-            bw_attack, bw_defense = attack_weight, defense_weight
-        elif b_above is not None:
-            bw_attack, bw_defense = 1.0, 0.0
-        elif b_below is not None:
-            bw_attack, bw_defense = 0.0, 1.0
-        else:
-            return {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
-
-        b_above_stats = b_above.get("stats", {}) if b_above else {}
-        b_below_stats = b_below.get("stats", {}) if b_below else {}
-
-        blended_raw: dict[str, float] = {}
-        for cat in ALL_CATEGORIES:
-            bval = blended_stats.get(cat, 0)
-            lev = 0.0
-            if b_above is not None:
-                gap = _gap_for_category(cat, bval, b_above_stats.get(cat, 0))
-                lev += bw_attack * (1.0 / (gap + epsilon))
-            if b_below is not None:
-                gap = _gap_for_category(cat, bval, b_below_stats.get(cat, 0))
-                lev += bw_defense * (1.0 / (gap + epsilon))
-            blended_raw[cat] = lev
-
-        if blended_raw:
-            med = statistics.median(blended_raw.values())
-            cap = med * MAX_MEANINGFUL_GAP_MULTIPLIER
-            if cap > 0:
-                blended_raw = {cat: min(val, cap) for cat, val in blended_raw.items()}
-
-        total = sum(blended_raw.values())
-        if total > 0:
-            return {cat: val / total for cat, val in blended_raw.items()}
-        return {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
+        return result if result is not None else uniform
 
     # Fallback: blend standings-based leverage with uniform weights.
-    uniform = 1.0 / len(ALL_CATEGORIES)
+    standings_leverage = _leverage_from_standings(
+        standings, user_team_name, attack_weight, defense_weight,
+    )
+    if standings_leverage is None:
+        return uniform
+
     return {
-        cat: season_progress * standings_leverage[cat] + (1.0 - season_progress) * uniform
+        cat: season_progress * standings_leverage[cat] + (1.0 - season_progress) * uniform[cat]
         for cat in ALL_CATEGORIES
     }
 
