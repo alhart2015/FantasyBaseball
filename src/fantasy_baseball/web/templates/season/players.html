@@ -181,10 +181,20 @@ function renderCard(p) {
     const team = p.team || '';
     const wsgp = p.wsgp !== null ? p.wsgp.toFixed(2) : '—';
 
+    const rankHtml = p.rank && p.rank.ros
+        ? '<span class="rank-badge">#' + p.rank.ros +
+          '<span class="rank-tooltip">' +
+          '<div class="rank-tooltip-row"><span class="rank-tooltip-label">ROS</span><span>#' + p.rank.ros + '</span></div>' +
+          '<div class="rank-tooltip-row"><span class="rank-tooltip-label">Preseason</span><span>' + (p.rank.preseason ? '#' + p.rank.preseason : '\u2014') + '</span></div>' +
+          '<div class="rank-tooltip-row"><span class="rank-tooltip-label">Current</span><span>' + (p.rank.current ? '#' + p.rank.current : '\u2014') + '</span></div>' +
+          '</span></span>'
+        : '';
+
     return '<div class="player-card">' +
         '<div class="player-card-header">' +
             '<div class="player-info">' +
                 '<span class="player-name">' + p.name + '</span>' +
+                rankHtml +
                 '<span class="player-meta">' + positions + ' — ' + team + '</span>' +
                 '<span class="wsgp-val">' + wsgp + ' wSGP</span>' +
             '</div>' +

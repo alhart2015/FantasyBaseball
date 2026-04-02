@@ -411,6 +411,9 @@ def register_routes(app: Flask) -> None:
                 if norm not in roster_names:
                     roster_names[norm] = r["team"]
 
+            # Rankings cache for rank badges
+            rankings_cache = read_cache("rankings") or {}
+
             # Build results
             results = []
             for ros in ros_rows:
@@ -449,6 +452,9 @@ def register_routes(app: Flask) -> None:
                 # Ownership
                 ownership = roster_names.get(norm, "Free Agent")
 
+                # Rank
+                rank = rankings_cache.get(norm, {})
+
                 # Positions from weekly_rosters (use LIKE for accent tolerance)
                 positions = []
                 pos_row = conn.execute(
@@ -469,6 +475,7 @@ def register_routes(app: Flask) -> None:
                     "ros": ros_stats,
                     "preseason": pre_stats,
                     "pace": pace,
+                    "rank": rank,
                 })
 
             return jsonify(results)

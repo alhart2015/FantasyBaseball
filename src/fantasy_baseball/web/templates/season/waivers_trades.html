@@ -91,6 +91,15 @@
     <div class="card-header">
         <div>
             <span style="font-weight: 600; font-size: 14px;">{{ w.add }}</span>
+            {% if w.add_rank and w.add_rank.ros %}
+            <span class="rank-badge">#{{ w.add_rank.ros }}
+                <span class="rank-tooltip">
+                    <div class="rank-tooltip-row"><span class="rank-tooltip-label">ROS</span><span>#{{ w.add_rank.ros }}</span></div>
+                    <div class="rank-tooltip-row"><span class="rank-tooltip-label">Preseason</span><span>{{ "#" ~ w.add_rank.preseason if w.add_rank.preseason else "—" }}</span></div>
+                    <div class="rank-tooltip-row"><span class="rank-tooltip-label">Current</span><span>{{ "#" ~ w.add_rank.current if w.add_rank.current else "—" }}</span></div>
+                </span>
+            </span>
+            {% endif %}
             {% if w.add_positions %}
             <span style="color: var(--text-secondary); font-size: 12px; margin-left: 4px;">({{ w.add_positions | join(", ") }})</span>
             {% endif %}
@@ -107,6 +116,15 @@
         <span style="margin: 0 6px; color: var(--text-secondary);">/</span>
         <span style="margin-right: 4px;">DROP</span>
         <strong style="color: var(--danger);">{{ w.drop }}</strong>
+        {% if w.drop_rank and w.drop_rank.ros %}
+        <span class="rank-badge">#{{ w.drop_rank.ros }}
+            <span class="rank-tooltip">
+                <div class="rank-tooltip-row"><span class="rank-tooltip-label">ROS</span><span>#{{ w.drop_rank.ros }}</span></div>
+                <div class="rank-tooltip-row"><span class="rank-tooltip-label">Preseason</span><span>{{ "#" ~ w.drop_rank.preseason if w.drop_rank.preseason else "—" }}</span></div>
+                <div class="rank-tooltip-row"><span class="rank-tooltip-label">Current</span><span>{{ "#" ~ w.drop_rank.current if w.drop_rank.current else "—" }}</span></div>
+            </span>
+        </span>
+        {% endif %}
         {% if w.drop_positions %}<span style="font-size: 11px;"> ({{ w.drop_positions | join(", ") }})</span>{% endif %}
     </div>
 
@@ -193,7 +211,17 @@
     <div class="trade-swap">
         <div class="trade-side trade-send">
             <div style="font-size: 10px; color: var(--danger); font-weight: bold; letter-spacing: 0.5px; margin-bottom: 4px;">YOU SEND</div>
-            <div style="font-weight: 600;">{{ trade.send }}</div>
+            <div style="font-weight: 600;">{{ trade.send }}
+                {% if trade.send_rank and trade.send_rank.ros %}
+                <span class="rank-badge">#{{ trade.send_rank.ros }}
+                    <span class="rank-tooltip">
+                        <div class="rank-tooltip-row"><span class="rank-tooltip-label">ROS</span><span>#{{ trade.send_rank.ros }}</span></div>
+                        <div class="rank-tooltip-row"><span class="rank-tooltip-label">Preseason</span><span>{{ "#" ~ trade.send_rank.preseason if trade.send_rank.preseason else "—" }}</span></div>
+                        <div class="rank-tooltip-row"><span class="rank-tooltip-label">Current</span><span>{{ "#" ~ trade.send_rank.current if trade.send_rank.current else "—" }}</span></div>
+                    </span>
+                </span>
+                {% endif %}
+            </div>
             {% if trade.send_positions %}
             <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">{{ trade.send_positions | join(", ") }}</div>
             {% endif %}
@@ -201,7 +229,17 @@
         <div class="trade-arrow">&#8644;</div>
         <div class="trade-side trade-receive">
             <div style="font-size: 10px; color: var(--success); font-weight: bold; letter-spacing: 0.5px; margin-bottom: 4px;">YOU GET</div>
-            <div style="font-weight: 600;">{{ trade.receive }}</div>
+            <div style="font-weight: 600;">{{ trade.receive }}
+                {% if trade.receive_rank and trade.receive_rank.ros %}
+                <span class="rank-badge">#{{ trade.receive_rank.ros }}
+                    <span class="rank-tooltip">
+                        <div class="rank-tooltip-row"><span class="rank-tooltip-label">ROS</span><span>#{{ trade.receive_rank.ros }}</span></div>
+                        <div class="rank-tooltip-row"><span class="rank-tooltip-label">Preseason</span><span>{{ "#" ~ trade.receive_rank.preseason if trade.receive_rank.preseason else "—" }}</span></div>
+                        <div class="rank-tooltip-row"><span class="rank-tooltip-label">Current</span><span>{{ "#" ~ trade.receive_rank.current if trade.receive_rank.current else "—" }}</span></div>
+                    </span>
+                </span>
+                {% endif %}
+            </div>
             {% if trade.receive_positions %}
             <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">{{ trade.receive_positions | join(", ") }}</div>
             {% endif %}
@@ -269,6 +307,15 @@
     <div class="buy-low-header">
         <div class="player-info">
             <span class="player-name">{{ bl.name }}</span>
+            {% if bl.rank and bl.rank.ros %}
+            <span class="rank-badge">#{{ bl.rank.ros }}
+                <span class="rank-tooltip">
+                    <div class="rank-tooltip-row"><span class="rank-tooltip-label">ROS</span><span>#{{ bl.rank.ros }}</span></div>
+                    <div class="rank-tooltip-row"><span class="rank-tooltip-label">Preseason</span><span>{{ "#" ~ bl.rank.preseason if bl.rank.preseason else "—" }}</span></div>
+                    <div class="rank-tooltip-row"><span class="rank-tooltip-label">Current</span><span>{{ "#" ~ bl.rank.current if bl.rank.current else "—" }}</span></div>
+                </span>
+            </span>
+            {% endif %}
             <span class="player-pos">{{ bl.positions | join(", ") }}</span>
             <span class="player-owner">{{ bl.owner }}</span>
         </div>
@@ -324,6 +371,15 @@
     <div class="buy-low-header">
         <div class="player-info">
             <span class="player-name">{{ bl.name }}</span>
+            {% if bl.rank and bl.rank.ros %}
+            <span class="rank-badge">#{{ bl.rank.ros }}
+                <span class="rank-tooltip">
+                    <div class="rank-tooltip-row"><span class="rank-tooltip-label">ROS</span><span>#{{ bl.rank.ros }}</span></div>
+                    <div class="rank-tooltip-row"><span class="rank-tooltip-label">Preseason</span><span>{{ "#" ~ bl.rank.preseason if bl.rank.preseason else "—" }}</span></div>
+                    <div class="rank-tooltip-row"><span class="rank-tooltip-label">Current</span><span>{{ "#" ~ bl.rank.current if bl.rank.current else "—" }}</span></div>
+                </span>
+            </span>
+            {% endif %}
             <span class="player-pos">{{ bl.positions | join(", ") }}</span>
             <span class="player-owner" style="color: var(--accent);">Free Agent</span>
         </div>

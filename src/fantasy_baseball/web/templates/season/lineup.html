@@ -103,7 +103,17 @@
         {% set s = h.stats if h.stats else {} %}
         <tr class="{% if h.is_bench %}bench-row{% endif %}{% if h.is_il and not h.is_bench %} il-active-row{% endif %}">
             <td>{{ h.selected_position }}</td>
-            <td style="text-align: left; font-weight: 500;">{{ h.name }}</td>
+            <td style="text-align: left; font-weight: 500;">{{ h.name }}
+                {% if h.rank and h.rank.ros %}
+                <span class="rank-badge">#{{ h.rank.ros }}
+                    <span class="rank-tooltip">
+                        <div class="rank-tooltip-row"><span class="rank-tooltip-label">ROS</span><span>#{{ h.rank.ros }}</span></div>
+                        <div class="rank-tooltip-row"><span class="rank-tooltip-label">Preseason</span><span>{{ "#" ~ h.rank.preseason if h.rank.preseason else "—" }}</span></div>
+                        <div class="rank-tooltip-row"><span class="rank-tooltip-label">Current</span><span>{{ "#" ~ h.rank.current if h.rank.current else "—" }}</span></div>
+                    </span>
+                </span>
+                {% endif %}
+            </td>
             <td style="text-align: left; color: var(--text-secondary); font-size: 11px;">
                 {{ h.positions | join(", ") }}
             </td>
@@ -165,7 +175,17 @@
         {% set s = p.stats if p.stats else {} %}
         <tr class="{% if p.is_bench %}bench-row{% endif %}{% if p.is_il and not p.is_bench %} il-active-row{% endif %}">
             <td>{{ p.selected_position }}</td>
-            <td style="text-align: left; font-weight: 500;">{{ p.name }}</td>
+            <td style="text-align: left; font-weight: 500;">{{ p.name }}
+                {% if p.rank and p.rank.ros %}
+                <span class="rank-badge">#{{ p.rank.ros }}
+                    <span class="rank-tooltip">
+                        <div class="rank-tooltip-row"><span class="rank-tooltip-label">ROS</span><span>#{{ p.rank.ros }}</span></div>
+                        <div class="rank-tooltip-row"><span class="rank-tooltip-label">Preseason</span><span>{{ "#" ~ p.rank.preseason if p.rank.preseason else "—" }}</span></div>
+                        <div class="rank-tooltip-row"><span class="rank-tooltip-label">Current</span><span>{{ "#" ~ p.rank.current if p.rank.current else "—" }}</span></div>
+                    </span>
+                </span>
+                {% endif %}
+            </td>
             {% for cat in ["IP", "W", "K", "SV", "ERA", "WHIP"] %}
             {% set st = s.get(cat, {}) if s else {} %}
             <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'IP' %} pa-col{% endif %}">
