@@ -877,20 +877,23 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # --- Step 6d: Compute SGP rankings ---
         _progress("Computing SGP rankings...")
-        from fantasy_baseball.sgp.rankings import compute_sgp_rankings, compute_rankings_from_game_logs
+        from fantasy_baseball.sgp.rankings import (
+            compute_sgp_rankings, compute_rankings_from_game_logs,
+            rank_key, rank_key_from_positions,
+        )
 
         ros_ranks = compute_sgp_rankings(hitters_proj, pitchers_proj)
         preseason_ranks = compute_sgp_rankings(preseason_hitters, preseason_pitchers)
         current_ranks = compute_rankings_from_game_logs(hitter_logs, pitcher_logs)
 
-        # Build combined lookup: {normalized_name: {ros, preseason, current}}
-        all_names = set(ros_ranks) | set(preseason_ranks) | set(current_ranks)
+        # Build combined lookup: {name::player_type: {ros, preseason, current}}
+        all_keys = set(ros_ranks) | set(preseason_ranks) | set(current_ranks)
         rankings_lookup = {}
-        for norm in all_names:
-            rankings_lookup[norm] = {
-                "ros": ros_ranks.get(norm),
-                "preseason": preseason_ranks.get(norm),
-                "current": current_ranks.get(norm),
+        for key in all_keys:
+            rankings_lookup[key] = {
+                "ros": ros_ranks.get(key),
+                "preseason": preseason_ranks.get(key),
+                "current": current_ranks.get(key),
             }
 
         write_cache("rankings", rankings_lookup, cache_dir)
@@ -898,8 +901,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # Attach ranks to roster players
         for entry in roster_with_proj:
-            norm = normalize_name(entry["name"])
-            entry["rank"] = rankings_lookup.get(norm, {})
+            key = rank_key(entry["name"], entry.get("player_type", "hitter"))
+            entry["rank"] = rankings_lookup.get(key, {})
 
         write_cache("roster", roster_with_proj, cache_dir)
 
@@ -987,8 +990,10 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         )
         # Attach ranks to waiver recommendations
         for rec in waiver_recs:
-            rec["add_rank"] = rankings_lookup.get(normalize_name(rec["add"]), {})
-            rec["drop_rank"] = rankings_lookup.get(normalize_name(rec["drop"]), {})
+            rec["add_rank"] = rankings_lookup.get(
+                rank_key_from_positions(rec["add"], rec.get("add_positions", [])), {})
+            rec["drop_rank"] = rankings_lookup.get(
+                rank_key_from_positions(rec["drop"], rec.get("drop_positions", [])), {})
 
         write_cache("waivers", waiver_recs, cache_dir)
 
@@ -1030,8 +1035,10 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # Attach ranks to trade proposals
         for trade in trade_proposals:
-            trade["send_rank"] = rankings_lookup.get(normalize_name(trade["send"]), {})
-            trade["receive_rank"] = rankings_lookup.get(normalize_name(trade["receive"]), {})
+            trade["send_rank"] = rankings_lookup.get(
+                rank_key_from_positions(trade["send"], trade.get("send_positions", [])), {})
+            trade["receive_rank"] = rankings_lookup.get(
+                rank_key_from_positions(trade["receive"], trade.get("receive_positions", [])), {})
 
         write_cache("trades", trade_proposals, cache_dir)
 
@@ -1054,7 +1061,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # Attach ranks to buy-low candidates
         for candidate in buy_low_trade_targets + buy_low_free_agents:
-            candidate["rank"] = rankings_lookup.get(normalize_name(candidate["name"]), {})
+            candidate["rank"] = rankings_lookup.get(
+                rank_key(candidate["name"], candidate.get("player_type", "hitter")), {})
 
         write_cache("buy_low", {
             "trade_targets": buy_low_trade_targets,

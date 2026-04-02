@@ -1,6 +1,6 @@
 import pytest
 import pandas as pd
-from fantasy_baseball.sgp.rankings import compute_sgp_rankings
+from fantasy_baseball.sgp.rankings import compute_sgp_rankings, rank_key
 
 
 class TestComputeSgpRankings:
@@ -17,34 +17,44 @@ class TestComputeSgpRankings:
             {"name": "Emmanuel Clase", "player_type": "pitcher", "w": 3, "k": 70, "sv": 40, "ip": 70, "era": 2.50, "whip": 0.90, "er": 19, "bb": 15, "h_allowed": 48},
         ])
 
-    def test_returns_dict_keyed_by_normalized_name(self):
-        from fantasy_baseball.utils.name_utils import normalize_name
+    def test_returns_dict_keyed_by_name_and_type(self):
         rankings = compute_sgp_rankings(self._make_hitters_df(), self._make_pitchers_df())
-        assert normalize_name("Aaron Judge") in rankings
-        assert normalize_name("Gerrit Cole") in rankings
+        assert rank_key("Aaron Judge", "hitter") in rankings
+        assert rank_key("Gerrit Cole", "pitcher") in rankings
 
     def test_hitters_ranked_separately_from_pitchers(self):
-        from fantasy_baseball.utils.name_utils import normalize_name
         rankings = compute_sgp_rankings(self._make_hitters_df(), self._make_pitchers_df())
-        hitter_ranks = [rankings[normalize_name(n)] for n in ["Aaron Judge", "Juan Soto", "Marcus Semien"]]
-        pitcher_ranks = [rankings[normalize_name(n)] for n in ["Gerrit Cole", "Emmanuel Clase"]]
+        hitter_ranks = [rankings[rank_key(n, "hitter")] for n in ["Aaron Judge", "Juan Soto", "Marcus Semien"]]
+        pitcher_ranks = [rankings[rank_key(n, "pitcher")] for n in ["Gerrit Cole", "Emmanuel Clase"]]
         assert 1 in hitter_ranks
         assert 1 in pitcher_ranks
 
     def test_ranks_are_ordinal_1_based(self):
-        from fantasy_baseball.utils.name_utils import normalize_name
         rankings = compute_sgp_rankings(self._make_hitters_df(), self._make_pitchers_df())
-        hitter_ranks = sorted([rankings[normalize_name(n)] for n in ["Aaron Judge", "Juan Soto", "Marcus Semien"]])
+        hitter_ranks = sorted([rankings[rank_key(n, "hitter")] for n in ["Aaron Judge", "Juan Soto", "Marcus Semien"]])
         assert hitter_ranks == [1, 2, 3]
 
     def test_higher_sgp_gets_lower_rank_number(self):
-        from fantasy_baseball.utils.name_utils import normalize_name
         rankings = compute_sgp_rankings(self._make_hitters_df(), self._make_pitchers_df())
-        assert rankings[normalize_name("Aaron Judge")] < rankings[normalize_name("Marcus Semien")]
+        assert rankings[rank_key("Aaron Judge", "hitter")] < rankings[rank_key("Marcus Semien", "hitter")]
 
     def test_empty_dataframes_return_empty_dict(self):
         rankings = compute_sgp_rankings(pd.DataFrame(), pd.DataFrame())
         assert rankings == {}
+
+    def test_same_name_hitter_and_pitcher_get_separate_ranks(self):
+        """Juan Soto the hitter and Juan Soto the pitcher get independent ranks."""
+        hitters = pd.DataFrame([
+            {"name": "Juan Soto", "player_type": "hitter", "r": 110, "hr": 35, "rbi": 90, "sb": 10, "h": 155, "ab": 540, "avg": 0.287, "pa": 680},
+        ])
+        pitchers = pd.DataFrame([
+            {"name": "Juan Soto", "player_type": "pitcher", "w": 0, "k": 1, "sv": 0, "ip": 2, "era": 4.50, "whip": 1.50, "er": 1, "bb": 1, "h_allowed": 2},
+        ])
+        rankings = compute_sgp_rankings(hitters, pitchers)
+        assert rank_key("Juan Soto", "hitter") in rankings
+        assert rank_key("Juan Soto", "pitcher") in rankings
+        assert rankings[rank_key("Juan Soto", "hitter")] == 1
+        assert rankings[rank_key("Juan Soto", "pitcher")] == 1
 
 
 class TestRankingsFromGameLogs:
@@ -59,10 +69,10 @@ class TestRankingsFromGameLogs:
             "gerrit cole": {"ip": 30, "k": 35, "w": 3, "sv": 0, "er": 8, "bb": 5, "h_allowed": 20},
         }
         rankings = compute_rankings_from_game_logs(hitter_logs, pitcher_logs)
-        assert "aaron judge" in rankings
-        assert "gerrit cole" in rankings
-        assert rankings["aaron judge"] in (1, 2)
-        assert rankings["gerrit cole"] == 1
+        assert "aaron judge::hitter" in rankings
+        assert "gerrit cole::pitcher" in rankings
+        assert rankings["aaron judge::hitter"] in (1, 2)
+        assert rankings["gerrit cole::pitcher"] == 1
 
     def test_empty_logs_return_empty_dict(self):
         from fantasy_baseball.sgp.rankings import compute_rankings_from_game_logs

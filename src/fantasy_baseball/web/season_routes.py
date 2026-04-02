@@ -452,8 +452,8 @@ def register_routes(app: Flask) -> None:
                 # Ownership
                 ownership = roster_names.get(norm, "Free Agent")
 
-                # Rank
-                rank = rankings_cache.get(norm, {})
+                # Rank (keyed by name::player_type)
+                rank = rankings_cache.get(f"{norm}::{ptype}", {})
 
                 # Positions from weekly_rosters (use LIKE for accent tolerance)
                 positions = []
