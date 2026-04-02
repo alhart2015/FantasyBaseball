@@ -82,6 +82,7 @@ CACHE_FILES = {
     "monte_carlo": "monte_carlo.json",
     "meta": "meta.json",
     "buy_low": "buy_low.json",
+    "rankings": "rankings.json",
 }
 
 
@@ -872,6 +873,32 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             projected = {k: pre.get(k, 0) for k in proj_keys}
             entry["stats"] = compute_player_pace(actuals, projected, ptype)
 
+        # --- Step 6d: Compute SGP rankings ---
+        _progress("Computing SGP rankings...")
+        from fantasy_baseball.sgp.rankings import compute_sgp_rankings, compute_rankings_from_game_logs
+
+        ros_ranks = compute_sgp_rankings(hitters_proj, pitchers_proj)
+        preseason_ranks = compute_sgp_rankings(preseason_hitters, preseason_pitchers)
+        current_ranks = compute_rankings_from_game_logs(hitter_logs, pitcher_logs)
+
+        # Build combined lookup: {normalized_name: {ros, preseason, current}}
+        all_names = set(ros_ranks) | set(preseason_ranks) | set(current_ranks)
+        rankings_lookup = {}
+        for norm in all_names:
+            rankings_lookup[norm] = {
+                "ros": ros_ranks.get(norm),
+                "preseason": preseason_ranks.get(norm),
+                "current": current_ranks.get(norm),
+            }
+
+        write_cache("rankings", rankings_lookup, cache_dir)
+        _progress(f"Ranked {len(ros_ranks)} ROS, {len(preseason_ranks)} preseason, {len(current_ranks)} current")
+
+        # Attach ranks to roster players
+        for entry in roster_with_proj:
+            norm = normalize_name(entry["name"])
+            entry["rank"] = rankings_lookup.get(norm, {})
+
         write_cache("roster", roster_with_proj, cache_dir)
 
         # --- Step 7: Run lineup optimizer ---
@@ -956,6 +983,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             open_bench_slots=open_b,
             roster_slots=config.roster_slots,
         )
+        # Attach ranks to waiver recommendations
+        for rec in waiver_recs:
+            rec["add_rank"] = rankings_lookup.get(normalize_name(rec["add"]), {})
+            rec["drop_rank"] = rankings_lookup.get(normalize_name(rec["drop"]), {})
+
         write_cache("waivers", waiver_recs, cache_dir)
 
         # --- Step 11: Find trades + generate pitches ---
@@ -994,6 +1026,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                 opp_team_ranks,
             )
 
+        # Attach ranks to trade proposals
+        for trade in trade_proposals:
+            trade["send_rank"] = rankings_lookup.get(normalize_name(trade["send"]), {})
+            trade["receive_rank"] = rankings_lookup.get(normalize_name(trade["receive"]), {})
+
         write_cache("trades", trade_proposals, cache_dir)
 
         # --- Step 11b: Compute buy-low candidates ---
@@ -1012,6 +1049,10 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             [s.to_dict() for s in fa_players],
             all_game_logs, leverage, owner="Free Agent",
         )
+
+        # Attach ranks to buy-low candidates
+        for candidate in buy_low_trade_targets + buy_low_free_agents:
+            candidate["rank"] = rankings_lookup.get(normalize_name(candidate["name"]), {})
 
         write_cache("buy_low", {
             "trade_targets": buy_low_trade_targets,
