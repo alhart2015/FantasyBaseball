@@ -143,7 +143,8 @@ def create_tables(conn):
     try:
         info = conn.execute("PRAGMA table_info(weekly_rosters)").fetchall()
         if info:
-            pk_cols = {r["name"] for r in info if r["pk"] > 0}
+            pk_cols = {r[1] if isinstance(r, tuple) else r["name"]
+                       for r in info if (r[5] if isinstance(r, tuple) else r["pk"]) > 0}
             if "player_name" not in pk_cols:
                 conn.execute("DROP TABLE weekly_rosters")
                 conn.commit()
