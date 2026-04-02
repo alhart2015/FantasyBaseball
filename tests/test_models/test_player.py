@@ -208,6 +208,68 @@ class TestPlayer:
         assert s["positions"] == ["OF"]
 
 
+class TestCacheCompatibility:
+    def test_to_dict_preserves_nested_ros_and_preseason(self):
+        """Verify to_dict includes nested ros and preseason dicts."""
+        from fantasy_baseball.models.player import Player, HitterStats, RankInfo
+        p = Player(
+            name="Aaron Judge",
+            player_type="hitter",
+            positions=["OF"],
+            team="NYY",
+            fg_id="15640",
+            yahoo_id="12345",
+            selected_position="OF",
+            ros=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
+            preseason=HitterStats(pa=650, ab=550, h=160, r=110, hr=45, rbi=120, sb=5, avg=0.291),
+            wsgp=12.5,
+            rank=RankInfo(ros=2, preseason=1, current=3),
+            pace={"R": {"actual": 15, "expected": 14, "z_score": 0.5}},
+        )
+        d = p.to_dict()
+        # Core identity
+        assert d["name"] == "Aaron Judge"
+        assert d["player_type"] == "hitter"
+        assert d["player_id"] == "12345"
+        # ROS stats in nested dict
+        assert d["ros"]["hr"] == 38
+        # Preseason in nested dict
+        assert d["preseason"]["hr"] == 45
+        # wSGP
+        assert d["wsgp"] == 12.5
+        # Rank
+        assert d["rank"]["ros"] == 2
+        # Pace stored as "stats"
+        assert d["stats"]["R"]["actual"] == 15
+
+    def test_player_from_dict_roundtrip_with_all_fields(self):
+        """Full roundtrip: construct Player, serialize, reconstruct, compare."""
+        from fantasy_baseball.models.player import Player, HitterStats, RankInfo
+        original = Player(
+            name="Aaron Judge",
+            player_type="hitter",
+            positions=["OF"],
+            team="NYY",
+            fg_id="15640",
+            mlbam_id=592450,
+            yahoo_id="12345",
+            selected_position="OF",
+            status="",
+            ros=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
+            preseason=HitterStats(pa=650, ab=550, h=160, r=110, hr=45, rbi=120, sb=5, avg=0.291),
+            wsgp=12.5,
+            rank=RankInfo(ros=2, preseason=1, current=3),
+        )
+        d = original.to_dict()
+        restored = Player.from_dict(d)
+        assert restored.name == original.name
+        assert restored.player_type == original.player_type
+        assert restored.ros.hr == original.ros.hr
+        assert restored.preseason.hr == original.preseason.hr
+        assert restored.wsgp == original.wsgp
+        assert restored.rank.ros == original.rank.ros
+
+
 class TestSgpComputation:
     def test_hitter_stats_compute_sgp(self):
         from fantasy_baseball.models.player import HitterStats
