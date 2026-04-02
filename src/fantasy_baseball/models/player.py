@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields, asdict
+from dataclasses import dataclass, field, fields
 from typing import Any, Optional
 
 import pandas as pd
