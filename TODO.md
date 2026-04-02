@@ -22,6 +22,8 @@
 
 - [ ] **Player identity: use fg_id as primary key instead of name** — Rankings, roster matching, and other lookups currently key by `normalized_name::player_type`. This breaks when two players share a name AND type (e.g., two pitchers named Mason Miller — the real closer gets overwritten by the fringe prospect). FanGraphs `fg_id` is unique and already available in projection tables. Refactor to use `fg_id` as the primary identifier throughout the pipeline: projection matching, ranking lookups, game log joins, and cache keys. This also fixes edge cases with accent mismatches (José vs Jose) and name format differences between Yahoo and FanGraphs.
 
+- [ ] **Extract rate stat utility functions** — AVG (`h/ab`), ERA (`er*9/ip`), and WHIP (`(bb+h_allowed)/ip`) are computed inline in 7+ places: `projections.py` blend, `pace.py`, `board.py` backfill, `rankings.py`, `replacement.py`, `draft/projections.py`, and now `models/player.py`. Extract `calculate_avg()`, `calculate_era()`, `calculate_whip()` into `utils/rate_stats.py` and replace all inline computations.
+
 - [ ] **Simplify suggested fixes** — Larger refactors identified by codebase-wide simplify review (2026-03-28):
   - `draft/projections.py` has a ~100-line duplicate `simulate_season()` that diverges from the canonical `simulation.py` version (no batched draws, no correlated variance). Likely dead code — investigate and remove or delegate.
   - Per-category SGP computation is repeated in `recommender._vona_leverage_weight`, `weighted_sgp.calculate_weighted_sgp`, and `waivers._category_sgp`. Extract a shared `compute_category_sgp_dict()` helper.
