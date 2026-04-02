@@ -42,7 +42,8 @@
                 {% for cat in categories %}
                 <td class="{{ team.color_classes[cat] }} stat-cell"
                     data-points="{{ team.roto_points[cat ~ '_pts'] | round(1) }}"
-                    data-stat="{{ team.stats[cat] }}">
+                    data-stat="{{ team.stats[cat] }}"
+                    data-cat="{{ cat }}">
                     {{ team.roto_points[cat ~ '_pts'] | round(1) }}
                 </td>
                 {% endfor %}
@@ -88,7 +89,8 @@
                     {% for cat in categories %}
                     <td class="{{ team.color_classes[cat] }} proj-stat-cell"
                         data-points="{{ team.roto_points[cat ~ '_pts'] | round(1) }}"
-                        data-stat="{{ team.stats[cat] }}">
+                        data-stat="{{ team.stats[cat] }}"
+                        data-cat="{{ cat }}">
                         {{ team.roto_points[cat ~ '_pts'] | round(1) }}
                     </td>
                     {% endfor %}
@@ -205,6 +207,38 @@
 </div>
 
 <script>
+const RATE_CATS = new Set(['AVG', 'ERA', 'WHIP']);
+const DEFAULT_PREC = {AVG: 3, ERA: 2, WHIP: 2};
+
+/* Format stat-total cells, bumping decimal places for rate stats when
+   distinct values would otherwise display identically (Yahoo behaviour). */
+function formatStatCells(selector) {
+    const byCol = {};
+    document.querySelectorAll(selector).forEach(cell => {
+        const cat = cell.dataset.cat;
+        (byCol[cat] ||= []).push(cell);
+    });
+    for (const [cat, cells] of Object.entries(byCol)) {
+        if (!RATE_CATS.has(cat)) {
+            cells.forEach(c => { c.textContent = Math.round(parseFloat(c.dataset.stat)); });
+            continue;
+        }
+        const vals = cells.map(c => parseFloat(c.dataset.stat));
+        let prec = DEFAULT_PREC[cat];
+        while (prec < 6) {
+            const fmtd = vals.map(v => v.toFixed(prec));
+            let hasTie = false;
+            for (let i = 0; i < vals.length && !hasTie; i++)
+                for (let j = i + 1; j < vals.length && !hasTie; j++)
+                    if (Math.abs(vals[i] - vals[j]) > 1e-9 && fmtd[i] === fmtd[j])
+                        hasTie = true;
+            if (!hasTie) break;
+            prec++;
+        }
+        cells.forEach((c, i) => { c.textContent = vals[i].toFixed(prec); });
+    }
+}
+
 function toggleStandingsView(el) {
     document.querySelectorAll('#standings-top-toggle .pill').forEach(p => p.classList.remove('active'));
     el.classList.add('active');
@@ -213,19 +247,20 @@ function toggleStandingsView(el) {
     document.getElementById('projected-view').style.display = view === 'projected' ? '' : 'none';
 }
 
-function toggleCurrentSub(el) {
-    document.querySelectorAll('#current-sub-toggle .pill').forEach(p => p.classList.remove('active'));
+function toggleStatSub(el, toggleSelector, attrName, cellSelector) {
+    document.querySelectorAll(toggleSelector + ' .pill').forEach(p => p.classList.remove('active'));
     el.classList.add('active');
-    const mode = el.dataset.sub;
-    document.querySelectorAll('.stat-cell').forEach(cell => {
-        if (mode === 'points') {
+    if (el.dataset[attrName] === 'points') {
+        document.querySelectorAll(cellSelector).forEach(cell => {
             cell.textContent = cell.dataset.points;
-        } else {
-            const raw = parseFloat(cell.dataset.stat);
-            cell.textContent = raw < 1 && raw > 0 ? raw.toFixed(3) :
-                               raw < 10 && raw % 1 !== 0 ? raw.toFixed(2) : Math.round(raw);
-        }
-    });
+        });
+    } else {
+        formatStatCells(cellSelector);
+    }
+}
+
+function toggleCurrentSub(el) {
+    toggleStatSub(el, '#current-sub-toggle', 'sub', '.stat-cell');
 }
 
 function toggleProjectedSub(el) {
@@ -240,18 +275,7 @@ function toggleProjectedSub(el) {
 }
 
 function toggleProjStaticSub(el) {
-    document.querySelectorAll('#proj-static-sub-toggle .pill').forEach(p => p.classList.remove('active'));
-    el.classList.add('active');
-    const mode = el.dataset.pssub;
-    document.querySelectorAll('.proj-stat-cell').forEach(cell => {
-        if (mode === 'points') {
-            cell.textContent = cell.dataset.points;
-        } else {
-            const raw = parseFloat(cell.dataset.stat);
-            cell.textContent = raw < 1 && raw > 0 ? raw.toFixed(3) :
-                               raw < 10 && raw % 1 !== 0 ? raw.toFixed(2) : Math.round(raw);
-        }
-    });
+    toggleStatSub(el, '#proj-static-sub-toggle', 'pssub', '.proj-stat-cell');
 }
 </script>
 
