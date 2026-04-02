@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS weekly_rosters (
     slot         TEXT NOT NULL,
     player_name  TEXT NOT NULL,
     positions    TEXT,
-    PRIMARY KEY (snapshot_date, team, slot)
+    PRIMARY KEY (snapshot_date, team, slot, player_name)
 );
 
 CREATE TABLE IF NOT EXISTS standings (
@@ -137,6 +137,18 @@ def get_connection(db_path=None):
 
 def create_tables(conn):
     """Create all tables (idempotent via IF NOT EXISTS)."""
+    # Migrate weekly_rosters if PK is missing player_name (old schema
+    # used (snapshot_date, team, slot) which silently dropped duplicate
+    # slots like multiple OFs or Ps).
+    try:
+        info = conn.execute("PRAGMA table_info(weekly_rosters)").fetchall()
+        if info:
+            pk_cols = {r["name"] for r in info if r["pk"] > 0}
+            if "player_name" not in pk_cols:
+                conn.execute("DROP TABLE weekly_rosters")
+                conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Table doesn't exist yet; CREATE below will handle it
     conn.executescript(SCHEMA)
     conn.commit()
 

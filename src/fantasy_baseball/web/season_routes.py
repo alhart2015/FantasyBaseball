@@ -55,6 +55,66 @@ def _load_config():
     return _config
 
 
+def _get_latest_ros_snapshot(conn, season: int) -> str | None:
+    """Return the most recent ROS snapshot date, or None."""
+    row = conn.execute(
+        "SELECT MAX(snapshot_date) as d FROM ros_blended_projections WHERE year = ?",
+        (season,),
+    ).fetchone()
+    return row["d"] if row and row["d"] else None
+
+
+def _build_roster_maps(conn, team_name: str):
+    """Build position and ownership maps.
+
+    Positions come from the ``positions`` table (broad coverage including
+    free agents) overlaid with ``weekly_rosters`` (more current for
+    rostered players).  Returns (pos_map, owner_map) where pos_map maps
+    normalized names to position lists and owner_map maps normalized
+    names to ``"roster"`` (user's team) or an opponent team name.
+    """
+    from fantasy_baseball.utils.name_utils import normalize_name
+    from fantasy_baseball.data.db import get_positions
+
+    # Base positions from the positions table (covers FAs)
+    pos_map: dict[str, list[str]] = {
+        normalize_name(k): v for k, v in get_positions(conn).items()
+    }
+
+    owner_map: dict[str, str] = {}
+
+    for p in (read_cache("roster") or []):
+        owner_map[normalize_name(p["name"])] = "roster"
+
+    # Weekly rosters override positions (fresher) and provide ownership
+    for r in conn.execute(
+        "SELECT player_name, positions, team FROM weekly_rosters "
+        "WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM weekly_rosters)"
+    ).fetchall():
+        norm = normalize_name(r["player_name"])
+        if r["positions"]:
+            pos_map[norm] = [p.strip() for p in r["positions"].split(",")]
+        if r["team"] != team_name and norm not in owner_map:
+            owner_map[norm] = r["team"]
+
+    return pos_map, owner_map
+
+
+def _get_leverage() -> dict[str, float]:
+    """Return per-category leverage weights (uniform fallback if no standings)."""
+    from fantasy_baseball.lineup.leverage import calculate_leverage
+
+    standings = read_cache("standings") or []
+    config = _load_config()
+    proj_cache = read_cache("projections") or {}
+    if standings:
+        return calculate_leverage(
+            standings, config.team_name,
+            projected_standings=proj_cache.get("projected_standings"),
+        )
+    return {c: 1.0 / 10 for c in ALL_CATEGORIES}
+
+
 def _load_yahoo_league():
     """Get Yahoo league object and user team key."""
     from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
@@ -321,12 +381,10 @@ def register_routes(app: Flask) -> None:
     def api_player_search():
         from datetime import date
         from fantasy_baseball.utils.name_utils import normalize_name
-        from fantasy_baseball.lineup.leverage import calculate_leverage
-        from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
         from fantasy_baseball.analysis.pace import compute_player_pace
         from fantasy_baseball.utils.constants import HITTER_PROJ_KEYS, PITCHER_PROJ_KEYS
         from fantasy_baseball.models.player import Player, HitterStats, PitcherStats, RankInfo
-        import pandas as pd
+        from fantasy_baseball.sgp.rankings import lookup_rank
 
         query = request.args.get("q", "").strip()
         if len(query) < 2:
@@ -335,13 +393,7 @@ def register_routes(app: Flask) -> None:
         conn = _get_search_db()
         try:
             season = date.today().year
-
-            # Find latest ROS snapshot
-            row = conn.execute(
-                "SELECT MAX(snapshot_date) as d FROM ros_blended_projections WHERE year = ?",
-                (season,),
-            ).fetchone()
-            snapshot = row["d"] if row and row["d"] else None
+            snapshot = _get_latest_ros_snapshot(conn, season)
             if not snapshot:
                 return jsonify([])
 
@@ -388,31 +440,9 @@ def register_routes(app: Flask) -> None:
             ).fetchall():
                 pitcher_logs[normalize_name(r["name"])] = dict(r)
 
-            # Leverage for wSGP
-            standings = read_cache("standings") or []
             config = _load_config()
-            projected_standings_cache = read_cache("projections") or {}
-            projected_standings = projected_standings_cache.get("projected_standings")
-            leverage = calculate_leverage(
-                standings, config.team_name,
-                projected_standings=projected_standings,
-            ) if standings else {c: 1.0 / 10 for c in ALL_CATEGORIES}
-
-            # Ownership lookup
-            roster_cache = read_cache("roster") or []
-            roster_names = {normalize_name(p["name"]): "Your roster" for p in roster_cache}
-            opp_rows = conn.execute(
-                "SELECT player_name, team FROM weekly_rosters "
-                "WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM weekly_rosters) "
-                "AND team != ?",
-                (config.team_name,),
-            ).fetchall()
-            for r in opp_rows:
-                norm = normalize_name(r["player_name"])
-                if norm not in roster_names:
-                    roster_names[norm] = r["team"]
-
-            # Rankings cache for rank badges
+            leverage = _get_leverage()
+            pos_map, owner_map = _build_roster_maps(conn, config.team_name)
             rankings_cache = read_cache("rankings") or {}
 
             # Build results
@@ -427,9 +457,6 @@ def register_routes(app: Flask) -> None:
                 # Preseason stats
                 pre = preseason_map.get(fg_id, {})
 
-                # wSGP
-                wsgp = calculate_weighted_sgp(pd.Series(ros_dict), leverage)
-
                 # Pace
                 pace = None
                 logs = hitter_logs if ptype == "hitter" else pitcher_logs
@@ -441,40 +468,103 @@ def register_routes(app: Flask) -> None:
                         pace = compute_player_pace(actuals, projected, ptype)
 
                 # Ownership
-                ownership = roster_names.get(norm, "Free Agent")
+                owner = owner_map.get(norm)
+                ownership = "Your roster" if owner == "roster" else (owner or "Free Agent")
 
-                # Rank
-                from fantasy_baseball.sgp.rankings import lookup_rank
                 rank = lookup_rank(rankings_cache, fg_id, name, ptype)
-
-                # Positions from weekly_rosters (use LIKE for accent tolerance)
-                positions = []
-                pos_row = conn.execute(
-                    "SELECT positions FROM weekly_rosters WHERE player_name LIKE ? "
-                    "ORDER BY snapshot_date DESC LIMIT 1",
-                    (name,),
-                ).fetchone()
-                if pos_row and pos_row["positions"]:
-                    positions = [p.strip() for p in pos_row["positions"].split(",")]
 
                 stats_cls = HitterStats if ptype == "hitter" else PitcherStats
                 player = Player(
                     name=name,
                     player_type=ptype,
                     team=ros_dict.get("team", ""),
-                    positions=positions,
+                    positions=pos_map.get(norm, []),
                     ros=stats_cls.from_dict(ros_dict),
                     preseason=stats_cls.from_dict(pre) if pre else None,
-                    wsgp=round(wsgp, 2),
                     rank=RankInfo.from_dict(rank),
                     pace=pace,
                 )
+                player.compute_wsgp(leverage)
 
                 result = player.to_dict()
                 result["ownership"] = ownership
                 results.append(result)
 
             return jsonify(results)
+        finally:
+            conn.close()
+
+    @app.route("/api/players/browse")
+    def api_player_browse():
+        """Return all ROS-projected players with stats, rank, SGP, wSGP, ownership."""
+        from datetime import date
+        from fantasy_baseball.utils.name_utils import normalize_name
+        from fantasy_baseball.sgp.rankings import lookup_rank
+        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats, RankInfo
+
+        conn = _get_search_db()
+        try:
+            season = date.today().year
+            snapshot = _get_latest_ros_snapshot(conn, season)
+            if not snapshot:
+                return jsonify([])
+
+            all_rows = conn.execute(
+                "SELECT * FROM ros_blended_projections WHERE year = ? AND snapshot_date = ?",
+                (season, snapshot),
+            ).fetchall()
+
+            config = _load_config()
+            pos_map, owner_map = _build_roster_maps(conn, config.team_name)
+            rankings_cache = read_cache("rankings") or {}
+            leverage = _get_leverage()
+
+            players = []
+            for row in all_rows:
+                d = dict(row)
+                name = d["name"]
+                norm = normalize_name(name)
+                ptype = d["player_type"]
+                fg_id = d.get("fg_id")
+
+                stats_cls = HitterStats if ptype == "hitter" else PitcherStats
+                ros = stats_cls.from_dict(d)
+                ros.compute_sgp()
+
+                rank_info = lookup_rank(rankings_cache, fg_id, name, ptype)
+
+                p = Player(
+                    name=name,
+                    player_type=ptype,
+                    team=d.get("team", ""),
+                    fg_id=fg_id,
+                    positions=pos_map.get(norm, []),
+                    ros=ros,
+                    rank=RankInfo.from_dict(rank_info),
+                )
+                p.compute_wsgp(leverage)
+
+                result = {
+                    "name": name,
+                    "team": p.team,
+                    "player_type": ptype,
+                    "positions": p.positions,
+                    "owner": owner_map.get(norm),
+                    "rank": p.rank.ros,
+                    "sgp": round(ros.sgp, 2),
+                    "wsgp": round(p.wsgp, 2),
+                }
+
+                if ptype == "hitter":
+                    result.update({"R": ros.r, "HR": ros.hr, "RBI": ros.rbi,
+                                   "SB": ros.sb, "AVG": ros.avg})
+                else:
+                    result.update({"W": ros.w, "K": ros.k, "SV": ros.sv,
+                                   "ERA": ros.era, "WHIP": ros.whip})
+
+                players.append(result)
+
+            return jsonify(players)
         finally:
             conn.close()
 

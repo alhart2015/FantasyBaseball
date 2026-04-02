@@ -45,7 +45,11 @@ def _seed_test_db(conn):
         CREATE TABLE IF NOT EXISTS weekly_rosters (
             snapshot_date TEXT, week_num INTEGER, team TEXT, slot TEXT,
             player_name TEXT, positions TEXT,
-            PRIMARY KEY (snapshot_date, team, slot)
+            PRIMARY KEY (snapshot_date, team, slot, player_name)
+        );
+        CREATE TABLE IF NOT EXISTS positions (
+            name TEXT NOT NULL PRIMARY KEY,
+            positions TEXT NOT NULL
         );
     """)
     conn.execute(
@@ -69,7 +73,7 @@ def _seed_test_db(conn):
 def test_players_page_renders(client):
     resp = client.get("/players")
     assert resp.status_code == 200
-    assert b"Search players by name" in resp.data
+    assert b"pos-filter" in resp.data
 
 
 def test_search_returns_matching_players(client):
