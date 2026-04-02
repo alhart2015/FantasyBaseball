@@ -53,6 +53,11 @@ class HitterStats:
         d["player_type"] = "hitter"
         return pd.Series(d)
 
+    def compute_sgp(self) -> float:
+        from fantasy_baseball.sgp.player_value import calculate_player_sgp
+        self.sgp = calculate_player_sgp(self.to_series())
+        return self.sgp
+
 
 @dataclass
 class PitcherStats:
@@ -105,6 +110,11 @@ class PitcherStats:
         d = self.to_dict()
         d["player_type"] = "pitcher"
         return pd.Series(d)
+
+    def compute_sgp(self) -> float:
+        from fantasy_baseball.sgp.player_value import calculate_player_sgp
+        self.sgp = calculate_player_sgp(self.to_series())
+        return self.sgp
 
 
 # ---------------------------------------------------------------------------
@@ -262,3 +272,11 @@ class Player:
         if self.ros is not None:
             d.update(self.ros.to_dict())
         return pd.Series(d)
+
+    def compute_wsgp(self, leverage: dict[str, float]) -> float:
+        from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
+        if self.ros is None:
+            self.wsgp = 0.0
+            return 0.0
+        self.wsgp = calculate_weighted_sgp(self.to_series(), leverage)
+        return self.wsgp

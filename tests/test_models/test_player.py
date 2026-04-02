@@ -206,3 +206,55 @@ class TestPlayer:
         assert s["player_type"] == "hitter"
         assert s["hr"] == 38
         assert s["positions"] == ["OF"]
+
+
+class TestSgpComputation:
+    def test_hitter_stats_compute_sgp(self):
+        from fantasy_baseball.models.player import HitterStats
+        stats = HitterStats(pa=650, ab=550, h=160, r=100, hr=40, rbi=100, sb=5, avg=0.291)
+        sgp = stats.compute_sgp()
+        assert sgp > 0
+        assert stats.sgp == sgp  # cached on the instance
+
+    def test_pitcher_stats_compute_sgp(self):
+        from fantasy_baseball.models.player import PitcherStats
+        stats = PitcherStats(ip=200, w=15, k=220, sv=0, er=62, bb=40, h_allowed=150, era=2.79, whip=0.95)
+        sgp = stats.compute_sgp()
+        assert sgp > 0
+        assert stats.sgp == sgp
+
+    def test_player_compute_wsgp(self):
+        from fantasy_baseball.models.player import Player, HitterStats
+        p = Player(
+            name="Aaron Judge", player_type="hitter",
+            ros=HitterStats(pa=650, ab=550, h=160, r=100, hr=40, rbi=100, sb=5, avg=0.291),
+        )
+        leverage = {"R": 0.1, "HR": 0.1, "RBI": 0.1, "SB": 0.1, "AVG": 0.1,
+                    "W": 0.1, "K": 0.1, "SV": 0.1, "ERA": 0.1, "WHIP": 0.1}
+        wsgp = p.compute_wsgp(leverage)
+        assert wsgp > 0
+        assert p.wsgp == wsgp
+
+    def test_player_compute_wsgp_no_ros_returns_zero(self):
+        from fantasy_baseball.models.player import Player
+        p = Player(name="Unknown", player_type="hitter")
+        wsgp = p.compute_wsgp({"R": 0.1, "HR": 0.1, "RBI": 0.1, "SB": 0.1, "AVG": 0.1,
+                               "W": 0.1, "K": 0.1, "SV": 0.1, "ERA": 0.1, "WHIP": 0.1})
+        assert wsgp == 0.0
+
+    def test_hitter_sgp_matches_calculate_player_sgp(self):
+        """Verify our compute_sgp produces same result as the standalone function."""
+        from fantasy_baseball.models.player import HitterStats
+        from fantasy_baseball.sgp.player_value import calculate_player_sgp
+        stats = HitterStats(pa=650, ab=550, h=160, r=100, hr=40, rbi=100, sb=5, avg=0.291)
+        our_sgp = stats.compute_sgp()
+        standalone_sgp = calculate_player_sgp(stats.to_series())
+        assert our_sgp == pytest.approx(standalone_sgp)
+
+    def test_pitcher_sgp_matches_calculate_player_sgp(self):
+        from fantasy_baseball.models.player import PitcherStats
+        from fantasy_baseball.sgp.player_value import calculate_player_sgp
+        stats = PitcherStats(ip=200, w=15, k=220, sv=0, er=62, bb=40, h_allowed=150, era=2.79, whip=0.95)
+        our_sgp = stats.compute_sgp()
+        standalone_sgp = calculate_player_sgp(stats.to_series())
+        assert our_sgp == pytest.approx(standalone_sgp)
