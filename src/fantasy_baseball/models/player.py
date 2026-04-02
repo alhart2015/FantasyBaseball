@@ -58,6 +58,21 @@ class HitterStats:
         self.sgp = calculate_player_sgp(self.to_series())
         return self.sgp
 
+    def is_significant(self, cat: str) -> bool:
+        """Check if this stat has enough sample to be empirically significant."""
+        from fantasy_baseball.utils.constants import STABILIZATION_THRESHOLDS
+        entry = STABILIZATION_THRESHOLDS.get(cat)
+        if entry is None:
+            return True  # No threshold — always significant
+        threshold, unit = entry
+        if unit == "pa":
+            return self.pa >= threshold
+        return True  # Hitters don't use BF-based thresholds
+
+    def significant_dict(self) -> dict[str, bool]:
+        """Return significance for all 5 hitting roto categories."""
+        return {cat: self.is_significant(cat) for cat in ["R", "HR", "RBI", "SB", "AVG"]}
+
 
 @dataclass
 class PitcherStats:
@@ -115,6 +130,22 @@ class PitcherStats:
         from fantasy_baseball.sgp.player_value import calculate_player_sgp
         self.sgp = calculate_player_sgp(self.to_series())
         return self.sgp
+
+    def is_significant(self, cat: str) -> bool:
+        """Check if this stat has enough sample to be empirically significant."""
+        from fantasy_baseball.utils.constants import STABILIZATION_THRESHOLDS
+        entry = STABILIZATION_THRESHOLDS.get(cat)
+        if entry is None:
+            return True  # No threshold — always significant
+        threshold, unit = entry
+        if unit == "bf":
+            bf = self.ip * 3 + self.h_allowed + self.bb
+            return bf >= threshold
+        return True  # Pitchers don't use PA-based thresholds
+
+    def significant_dict(self) -> dict[str, bool]:
+        """Return significance for all 5 pitching roto categories."""
+        return {cat: self.is_significant(cat) for cat in ["W", "K", "SV", "ERA", "WHIP"]}
 
 
 # ---------------------------------------------------------------------------

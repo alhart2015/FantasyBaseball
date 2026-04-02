@@ -349,3 +349,79 @@ class TestSgpComputation:
         our_sgp = stats.compute_sgp()
         standalone_sgp = calculate_player_sgp(stats.to_series())
         assert our_sgp == pytest.approx(standalone_sgp)
+
+
+class TestHitterSignificance:
+    def test_hr_below_threshold(self):
+        from fantasy_baseball.models.player import HitterStats
+        stats = HitterStats(pa=169, r=20, hr=8, rbi=25, sb=3, h=45, ab=150, avg=0.300)
+        assert stats.is_significant("HR") is False
+
+    def test_hr_at_threshold(self):
+        from fantasy_baseball.models.player import HitterStats
+        stats = HitterStats(pa=170, r=20, hr=8, rbi=25, sb=3, h=45, ab=150, avg=0.300)
+        assert stats.is_significant("HR") is True
+
+    def test_hr_above_threshold(self):
+        from fantasy_baseball.models.player import HitterStats
+        stats = HitterStats(pa=300, r=40, hr=15, rbi=50, sb=5, h=80, ab=270, avg=0.296)
+        assert stats.is_significant("HR") is True
+
+    def test_counting_stats_always_significant(self):
+        from fantasy_baseball.models.player import HitterStats
+        stats = HitterStats(pa=1)
+        assert stats.is_significant("R") is True
+        assert stats.is_significant("RBI") is True
+        assert stats.is_significant("SB") is True
+        assert stats.is_significant("AVG") is True
+
+    def test_significant_dict(self):
+        from fantasy_baseball.models.player import HitterStats
+        stats = HitterStats(pa=100)
+        d = stats.significant_dict()
+        assert d == {"R": True, "HR": False, "RBI": True, "SB": True, "AVG": True}
+
+
+class TestPitcherSignificance:
+    def test_k_below_threshold(self):
+        from fantasy_baseball.models.player import PitcherStats
+        # BF = ip*3 + h_allowed + bb = 20*3 + 5 + 3 = 68
+        stats = PitcherStats(ip=20, k=25, w=2, sv=0, er=8, bb=3, h_allowed=5)
+        assert stats.is_significant("K") is False
+
+    def test_k_at_threshold(self):
+        from fantasy_baseball.models.player import PitcherStats
+        # BF = ip*3 + h_allowed + bb = 20*3 + 7 + 3 = 70
+        stats = PitcherStats(ip=20, k=25, w=2, sv=0, er=8, bb=3, h_allowed=7)
+        assert stats.is_significant("K") is True
+
+    def test_era_below_threshold(self):
+        from fantasy_baseball.models.player import PitcherStats
+        # BF = 60*3 + 50 + 20 = 250 < 630
+        stats = PitcherStats(ip=60, k=55, w=5, sv=0, er=25, bb=20, h_allowed=50)
+        assert stats.is_significant("ERA") is False
+
+    def test_era_above_threshold(self):
+        from fantasy_baseball.models.player import PitcherStats
+        # BF = 180*3 + 160 + 55 = 755 > 630
+        stats = PitcherStats(ip=180, k=180, w=12, sv=0, er=60, bb=55, h_allowed=160)
+        assert stats.is_significant("ERA") is True
+
+    def test_whip_threshold(self):
+        from fantasy_baseball.models.player import PitcherStats
+        # BF = 160*3 + 140 + 50 = 670 > 570
+        stats = PitcherStats(ip=160, k=150, w=10, sv=0, er=55, bb=50, h_allowed=140)
+        assert stats.is_significant("WHIP") is True
+
+    def test_counting_stats_always_significant(self):
+        from fantasy_baseball.models.player import PitcherStats
+        stats = PitcherStats(ip=1)
+        assert stats.is_significant("W") is True
+        assert stats.is_significant("SV") is True
+
+    def test_significant_dict(self):
+        from fantasy_baseball.models.player import PitcherStats
+        # BF = 20*3 + 5 + 3 = 68 (below K=70, ERA=630, WHIP=570)
+        stats = PitcherStats(ip=20, k=25, w=2, sv=0, er=8, bb=3, h_allowed=5)
+        d = stats.significant_dict()
+        assert d == {"W": True, "K": False, "SV": True, "ERA": False, "WHIP": False}
