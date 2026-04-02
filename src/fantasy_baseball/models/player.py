@@ -105,3 +105,160 @@ class PitcherStats:
         d = self.to_dict()
         d["player_type"] = "pitcher"
         return pd.Series(d)
+
+
+# ---------------------------------------------------------------------------
+# RankInfo
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RankInfo:
+    ros: Optional[int] = None
+    preseason: Optional[int] = None
+    current: Optional[int] = None
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "RankInfo":
+        return cls(ros=d.get("ros"), preseason=d.get("preseason"), current=d.get("current"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"ros": self.ros, "preseason": self.preseason, "current": self.current}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _has_stat_keys(d: dict[str, Any], player_type: str) -> bool:
+    """Return True if d contains top-level stat keys for the given player_type."""
+    if player_type == "pitcher":
+        return any(k in d for k in ("ip", "k", "era"))
+    # hitter (default)
+    return any(k in d for k in ("hr", "r", "rbi"))
+
+
+def _make_stats(
+    d: dict[str, Any], player_type: str
+) -> "HitterStats | PitcherStats | None":
+    """Build the appropriate stats object from a sub-dict."""
+    if not d:
+        return None
+    if player_type == "pitcher":
+        return PitcherStats.from_dict(d)
+    return HitterStats.from_dict(d)
+
+
+# ---------------------------------------------------------------------------
+# Player
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Player:
+    name: str
+    player_type: str  # "hitter" | "pitcher"
+    positions: list[str] = field(default_factory=list)
+    team: str = ""
+    fg_id: Optional[str] = None
+    mlbam_id: Optional[int] = None
+    yahoo_id: Optional[str] = None
+
+    ros: "HitterStats | PitcherStats | None" = None
+    preseason: "HitterStats | PitcherStats | None" = None
+    current: "HitterStats | PitcherStats | None" = None
+
+    wsgp: float = 0.0
+    rank: RankInfo = field(default_factory=RankInfo)
+
+    selected_position: str = ""
+    status: str = ""
+    pace: Optional[dict] = None
+
+    # ------------------------------------------------------------------
+    # Constructor
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Player":
+        name = d.get("name", "")
+        player_type = d.get("player_type", "hitter")
+
+        # Stat bags: detect nested vs flat format
+        if _has_stat_keys(d, player_type):
+            # Flat format — all stats at top level, treat as ROS
+            ros = _make_stats(d, player_type)
+            preseason = None
+            current = None
+        else:
+            ros_raw = d.get("ros")
+            ros = _make_stats(ros_raw, player_type) if ros_raw is not None else None
+
+            pre_raw = d.get("preseason")
+            preseason = _make_stats(pre_raw, player_type) if pre_raw is not None else None
+
+            cur_raw = d.get("current")
+            current = _make_stats(cur_raw, player_type) if cur_raw is not None else None
+
+        rank_raw = d.get("rank")
+        rank = RankInfo.from_dict(rank_raw) if isinstance(rank_raw, dict) else RankInfo()
+
+        return cls(
+            name=name,
+            player_type=player_type,
+            positions=d.get("positions", []),
+            team=d.get("team", ""),
+            fg_id=d.get("fg_id"),
+            mlbam_id=d.get("mlbam_id"),
+            yahoo_id=d.get("player_id"),  # cache format uses "player_id"
+            ros=ros,
+            preseason=preseason,
+            current=current,
+            wsgp=d.get("wsgp", 0.0),
+            rank=rank,
+            selected_position=d.get("selected_position", ""),
+            status=d.get("status", ""),
+            pace=d.get("stats"),  # cache format uses "stats" for pace
+        )
+
+    # ------------------------------------------------------------------
+    # Serialisation
+    # ------------------------------------------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "name": self.name,
+            "player_type": self.player_type,
+            "positions": self.positions,
+            "team": self.team,
+        }
+        if self.fg_id is not None:
+            d["fg_id"] = self.fg_id
+        if self.mlbam_id is not None:
+            d["mlbam_id"] = self.mlbam_id
+        if self.yahoo_id is not None:
+            d["player_id"] = self.yahoo_id
+        if self.ros is not None:
+            d["ros"] = self.ros.to_dict()
+        if self.preseason is not None:
+            d["preseason"] = self.preseason.to_dict()
+        if self.current is not None:
+            d["current"] = self.current.to_dict()
+        d["wsgp"] = self.wsgp
+        d["rank"] = self.rank.to_dict()
+        if self.selected_position:
+            d["selected_position"] = self.selected_position
+        if self.status:
+            d["status"] = self.status
+        if self.pace is not None:
+            d["stats"] = self.pace
+        return d
+
+    def to_series(self) -> pd.Series:
+        d: dict[str, Any] = {
+            "name": self.name,
+            "player_type": self.player_type,
+            "positions": self.positions,
+            "team": self.team,
+        }
+        if self.ros is not None:
+            d.update(self.ros.to_dict())
+        return pd.Series(d)

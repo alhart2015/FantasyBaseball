@@ -86,3 +86,123 @@ class TestPitcherStats:
         s = stats.to_series()
         assert s["player_type"] == "pitcher"
         assert s["k"] == 220
+
+
+class TestRankInfo:
+    def test_from_dict(self):
+        from fantasy_baseball.models.player import RankInfo
+        r = RankInfo.from_dict({"ros": 5, "preseason": 8, "current": 12})
+        assert r.ros == 5
+        assert r.preseason == 8
+        assert r.current == 12
+
+    def test_from_dict_missing_keys(self):
+        from fantasy_baseball.models.player import RankInfo
+        r = RankInfo.from_dict({"ros": 5})
+        assert r.ros == 5
+        assert r.preseason is None
+        assert r.current is None
+
+    def test_to_dict(self):
+        from fantasy_baseball.models.player import RankInfo
+        r = RankInfo(ros=5, preseason=8, current=12)
+        assert r.to_dict() == {"ros": 5, "preseason": 8, "current": 12}
+
+    def test_empty_rank(self):
+        from fantasy_baseball.models.player import RankInfo
+        r = RankInfo()
+        assert r.ros is None
+
+
+class TestPlayer:
+    def test_from_dict_hitter(self):
+        from fantasy_baseball.models.player import Player, HitterStats
+        d = {
+            "name": "Aaron Judge", "player_type": "hitter",
+            "positions": ["OF", "DH"], "team": "NYY",
+            "fg_id": "15640", "mlbam_id": 592450,
+            "selected_position": "OF", "status": "",
+            "wsgp": 12.5,
+            "rank": {"ros": 2, "preseason": 1, "current": 3},
+            "ros": {"pa": 600, "ab": 500, "h": 145, "r": 95, "hr": 38, "rbi": 92, "sb": 7, "avg": 0.290},
+            "preseason": {"pa": 650, "ab": 550, "h": 160, "r": 110, "hr": 45, "rbi": 120, "sb": 5, "avg": 0.291},
+        }
+        p = Player.from_dict(d)
+        assert p.name == "Aaron Judge"
+        assert p.player_type == "hitter"
+        assert p.fg_id == "15640"
+        assert p.mlbam_id == 592450
+        assert isinstance(p.ros, HitterStats)
+        assert p.ros.hr == 38
+        assert isinstance(p.preseason, HitterStats)
+        assert p.preseason.hr == 45
+        assert p.current is None
+        assert p.wsgp == 12.5
+        assert p.rank.ros == 2
+
+    def test_from_dict_pitcher(self):
+        from fantasy_baseball.models.player import Player, PitcherStats
+        d = {
+            "name": "Gerrit Cole", "player_type": "pitcher",
+            "positions": ["P"], "team": "NYY",
+            "ros": {"ip": 190, "w": 14, "k": 200, "sv": 0, "er": 60, "bb": 40, "h_allowed": 140, "era": 2.84, "whip": 0.95},
+        }
+        p = Player.from_dict(d)
+        assert p.player_type == "pitcher"
+        assert isinstance(p.ros, PitcherStats)
+        assert p.ros.k == 200
+
+    def test_to_dict_roundtrip(self):
+        from fantasy_baseball.models.player import Player
+        d = {
+            "name": "Aaron Judge", "player_type": "hitter",
+            "positions": ["OF"], "team": "NYY",
+            "fg_id": "15640", "mlbam_id": 592450,
+            "wsgp": 12.5,
+            "rank": {"ros": 2, "preseason": 1, "current": 3},
+            "ros": {"pa": 600, "ab": 500, "h": 145, "r": 95, "hr": 38, "rbi": 92, "sb": 7, "avg": 0.290},
+        }
+        p = Player.from_dict(d)
+        result = p.to_dict()
+        assert result["name"] == "Aaron Judge"
+        assert result["ros"]["hr"] == 38
+        assert result["rank"]["ros"] == 2
+        assert result["wsgp"] == 12.5
+
+    def test_from_dict_flat_stats_hitter(self):
+        """Player.from_dict handles flat dicts where stats are top-level keys."""
+        from fantasy_baseball.models.player import Player
+        d = {
+            "name": "Aaron Judge", "player_type": "hitter",
+            "positions": ["OF"], "team": "NYY",
+            "r": 95, "hr": 38, "rbi": 92, "sb": 7, "h": 145, "ab": 500, "pa": 600, "avg": 0.290,
+        }
+        p = Player.from_dict(d)
+        assert p.ros is not None
+        assert p.ros.hr == 38
+
+    def test_from_dict_flat_stats_pitcher(self):
+        """Player.from_dict handles flat dicts where stats are top-level keys."""
+        from fantasy_baseball.models.player import Player
+        d = {
+            "name": "Gerrit Cole", "player_type": "pitcher",
+            "positions": ["P"],
+            "ip": 190, "w": 14, "k": 200, "sv": 0, "era": 2.84, "whip": 0.95,
+        }
+        p = Player.from_dict(d)
+        assert p.ros is not None
+        assert p.ros.k == 200
+
+    def test_to_series(self):
+        from fantasy_baseball.models.player import Player
+        d = {
+            "name": "Aaron Judge", "player_type": "hitter",
+            "positions": ["OF"], "team": "NYY",
+            "ros": {"pa": 600, "ab": 500, "h": 145, "r": 95, "hr": 38, "rbi": 92, "sb": 7, "avg": 0.290},
+        }
+        p = Player.from_dict(d)
+        s = p.to_series()
+        assert s["name"] == "Aaron Judge"
+        assert s["player_type"] == "hitter"
+        assert s["hr"] == 38
+        assert s["positions"] == ["OF"]
