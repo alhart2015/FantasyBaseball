@@ -291,7 +291,7 @@
             {% set st = bl.stats.get(cat, {}) %}
             <tr>
                 <td>{{ cat }}</td>
-                <td>{% if cat in ['AVG'] %}{{ "%.3f"|format(st.get('actual', 0)) }}{% elif cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.get('actual', 0)) }}{% else %}{{ st.get('actual', 0) }}{% endif %}</td>
+                <td{% if st.get('significant') %} class="stat-significant"{% endif %}>{% if cat in ['AVG'] %}{{ "%.3f"|format(st.get('actual', 0)) }}{% elif cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.get('actual', 0)) }}{% else %}{{ st.get('actual', 0) }}{% endif %}</td>
                 <td>{% if cat in ['AVG'] %}{{ "%.3f"|format(st.get('expected', 0)) }}{% elif cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.get('expected', 0)) }}{% else %}{{ st.get('expected', 0) }}{% endif %}</td>
                 <td class="{{ st.get('color_class', 'stat-neutral') }}">{{ "%.2f"|format(st.get('z_score', 0)) }}</td>
             </tr>
@@ -347,7 +347,7 @@
             {% set st = bl.stats.get(cat, {}) %}
             <tr>
                 <td>{{ cat }}</td>
-                <td>{% if cat == 'AVG' %}{{ "%.3f"|format(st.get('actual', 0)) }}{% elif cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.get('actual', 0)) }}{% else %}{{ st.get('actual', 0) }}{% endif %}</td>
+                <td{% if st.get('significant') %} class="stat-significant"{% endif %}>{% if cat == 'AVG' %}{{ "%.3f"|format(st.get('actual', 0)) }}{% elif cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.get('actual', 0)) }}{% else %}{{ st.get('actual', 0) }}{% endif %}</td>
                 <td>{% if cat == 'AVG' %}{{ "%.3f"|format(st.get('expected', 0)) }}{% elif cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.get('expected', 0)) }}{% else %}{{ st.get('expected', 0) }}{% endif %}</td>
                 <td class="{{ st.get('color_class', 'stat-neutral') }}">{{ "%.2f"|format(st.get('z_score', 0)) }}</td>
             </tr>
