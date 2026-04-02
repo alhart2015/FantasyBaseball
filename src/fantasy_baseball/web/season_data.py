@@ -921,7 +921,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         roster_flat = [p.to_flat_dict() for p in roster_players]
         write_cache("roster", roster_flat, cache_dir)
-        roster_with_proj = roster_flat  # legacy alias for Steps 7-11b
 
         # --- Step 7: Run lineup optimizer ---
         _progress("Optimizing lineup...")
@@ -977,8 +976,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         matchup_factors = calculate_matchup_factors(team_stats)
 
         pitcher_roster_for_schedule = [
-            p for p in roster_with_proj
-            if set(p.get("positions", [])) & PITCHER_POSITIONS
+            p.to_flat_dict() for p in roster_players
+            if set(p.positions) & PITCHER_POSITIONS
         ]
         from fantasy_baseball.lineup.matchups import get_probable_starters
         probable_starters = get_probable_starters(
@@ -993,7 +992,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         fa_players, _ = fetch_and_match_free_agents(
             league, hitters_proj, pitchers_proj
         )
-        roster_series = [pd.Series(p) for p in roster_with_proj]
+        roster_series = [p.to_series() for p in roster_players]
         waiver_recs = scan_waivers(
             roster_series,
             fa_players,
@@ -1024,8 +1023,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             )
 
         hart_roster_for_trades = [
-            p for p in roster_with_proj
-            if p.get("player_type") in ("hitter", "pitcher")
+            p.to_flat_dict() for p in roster_players
+            if p.player_type in ("hitter", "pitcher")
         ]
         trade_proposals = find_trades(
             hart_name=config.team_name,
