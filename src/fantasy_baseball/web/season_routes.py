@@ -471,9 +471,6 @@ def register_routes(app: Flask) -> None:
 
                 result = player.to_dict()
                 result["ownership"] = ownership
-                # Rename "stats" (Player's pace key) back to "pace" for API consistency
-                if "stats" in result:
-                    result["pace"] = result.pop("stats")
                 results.append(result)
 
             return jsonify(results)

@@ -226,7 +226,7 @@ class Player:
             rank=rank,
             selected_position=d.get("selected_position", ""),
             status=d.get("status", ""),
-            pace=d.get("stats"),  # cache format uses "stats" for pace
+            pace=d.get("pace") or d.get("stats"),  # "pace" preferred, "stats" for legacy cache
         )
 
     # ------------------------------------------------------------------
@@ -259,7 +259,8 @@ class Player:
         if self.status:
             d["status"] = self.status
         if self.pace is not None:
-            d["stats"] = self.pace
+            d["pace"] = self.pace
+            d["stats"] = self.pace  # legacy key for cache/template compatibility
         return d
 
     def to_series(self) -> pd.Series:
