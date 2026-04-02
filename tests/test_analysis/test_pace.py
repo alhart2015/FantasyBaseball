@@ -180,3 +180,35 @@ def test_no_projection_shows_actuals_neutral():
     assert result["HR"]["actual"] == 3
     assert result["HR"]["color_class"] == "stat-neutral"
     assert result["HR"].get("z_score", 0) == 0.0
+
+
+def test_significance_flags_in_pace_output():
+    """Pace output includes 'significant' key per stat based on stabilization thresholds."""
+    from fantasy_baseball.analysis.pace import compute_player_pace
+
+    # Hitter with 100 PA — below HR threshold (170) but above for counting stats
+    actual = {"pa": 100, "ab": 90, "h": 25, "r": 12, "hr": 5, "rbi": 15, "sb": 2}
+    projected = {"pa": 600, "ab": 540, "h": 150, "r": 80, "hr": 25, "rbi": 85, "sb": 10, "avg": 0.278}
+    result = compute_player_pace(actual, projected, "hitter")
+
+    assert result["R"]["significant"] is True
+    assert result["HR"]["significant"] is False  # 100 PA < 170
+    assert result["RBI"]["significant"] is True
+    assert result["SB"]["significant"] is True
+    assert result["AVG"]["significant"] is True
+
+
+def test_significance_pitcher():
+    """Pitcher significance uses BF = ip*3 + h_allowed + bb."""
+    from fantasy_baseball.analysis.pace import compute_player_pace
+
+    # BF = 25*3 + 20 + 8 = 103 — above K (70) but below ERA (630) and WHIP (570)
+    actual = {"ip": 25, "k": 30, "w": 2, "sv": 0, "er": 10, "bb": 8, "h_allowed": 20}
+    projected = {"ip": 180, "w": 12, "k": 180, "sv": 0, "er": 60, "bb": 50, "h_allowed": 160, "era": 3.00, "whip": 1.17}
+    result = compute_player_pace(actual, projected, "pitcher")
+
+    assert result["K"]["significant"] is True   # 103 >= 70
+    assert result["ERA"]["significant"] is False  # 103 < 630
+    assert result["WHIP"]["significant"] is False  # 103 < 570
+    assert result["W"]["significant"] is True
+    assert result["SV"]["significant"] is True
