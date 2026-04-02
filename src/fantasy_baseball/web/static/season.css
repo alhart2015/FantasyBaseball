@@ -382,3 +382,54 @@ td.rank-bottom { background: rgba(239, 68, 68, 0.25); color: #f87171; font-weigh
 .stat-neutral { }
 .stat-cold-1 { color: #fca5a5; background: rgba(252, 165, 165, 0.08); }
 .stat-cold-2 { color: #ef4444; font-weight: 600; background: rgba(239, 68, 68, 0.15); }
+
+/* SGP Rank Badge */
+.rank-badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    background: rgba(33, 150, 243, 0.1);
+    padding: 1px 6px;
+    border-radius: 3px;
+    cursor: default;
+    position: relative;
+}
+.rank-badge:hover .rank-tooltip {
+    display: block;
+}
+.rank-tooltip {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 11px;
+    font-weight: 400;
+    white-space: nowrap;
+    z-index: 100;
+    margin-bottom: 4px;
+    color: var(--text);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+.rank-tooltip::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: var(--panel-border);
+}
+.rank-tooltip-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+.rank-tooltip-label {
+    color: var(--text-secondary);
+}
