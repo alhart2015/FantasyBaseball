@@ -491,29 +491,36 @@ def format_lineup_for_display(
     roster: list[dict], optimal: dict | None
 ) -> dict:
     """Format roster + optimizer output for the lineup template."""
+    from fantasy_baseball.models.player import Player
+
     hitters = []
     pitchers = []
 
     for p in roster:
-        pos = p.get("selected_position", "BN")
+        player = Player.from_dict(p)
+        pos = player.selected_position or "BN"
         is_pitcher = pos in PITCHER_POSITIONS or (
-            pos == "BN" and set(p.get("positions", [])).issubset(PITCHER_POSITIONS | {"BN"})
+            pos == "BN" and set(player.positions).issubset(PITCHER_POSITIONS | {"BN"})
         )
+
         entry = {
-            "name": p["name"],
-            "positions": p.get("positions", []),
+            "name": player.name,
+            "positions": player.positions,
             "selected_position": pos,
-            "player_id": p.get("player_id", ""),
-            "status": p.get("status", ""),
-            "wsgp": p.get("wsgp", 0),
+            "player_id": player.yahoo_id or "",
+            "status": player.status,
+            "wsgp": player.wsgp,
             "games": p.get("games_this_week", 0),
             "is_bench": pos in ("BN", "IL", "DL"),
-            "is_il": "IL" in p.get("status", "") or pos == "IL",
-            "stats": p.get("stats", {}),
-            "ros": p.get("ros"),
-            "rank": p.get("rank", {}),
-            "preseason": p.get("preseason"),
+            "is_il": "IL" in player.status or pos == "IL",
+            "stats": player.pace or {},
+            "rank": player.rank.to_dict(),
+            "preseason": player.preseason.to_dict() if player.preseason else None,
         }
+        # Flatten ROS stats for template tooltip (h[ros_key] access pattern)
+        if player.ros is not None:
+            entry.update(player.ros.to_dict())
+
         if is_pitcher:
             pitchers.append(entry)
         else:

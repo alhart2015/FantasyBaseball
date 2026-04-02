@@ -175,7 +175,12 @@ def test_format_lineup_optimal_when_no_moves():
 
 
 def test_format_lineup_passes_ros_data_through():
-    """ROS projection data on roster entries must survive format_lineup_for_display."""
+    """ROS projection data on roster entries must survive format_lineup_for_display.
+
+    After the Player-object refactor, ROS stats are flattened to top-level keys
+    (e.g. entry["hr"], entry["r"]) so the Jinja2 template can access them via
+    h[ros_key] — there is no longer a nested entry["ros"] dict.
+    """
     roster = [
         {"name": "Aaron Judge", "positions": ["OF"], "selected_position": "OF",
          "player_id": "1", "status": "", "wsgp": 5.0,
@@ -186,8 +191,15 @@ def test_format_lineup_passes_ros_data_through():
     data = format_lineup_for_display(roster, {"moves": []})
     judge = next(h for h in data["hitters"] if h["name"] == "Aaron Judge")
     no_ros = next(h for h in data["hitters"] if h["name"] == "No ROS Player")
-    assert judge["ros"] == {"r": 90, "hr": 40, "rbi": 100, "sb": 5, "avg": 0.280}
-    assert no_ros["ros"] is None
+    # ROS stats are flattened to top level for template h[ros_key] access
+    assert judge["hr"] == 40
+    assert judge["r"] == 90
+    assert judge["rbi"] == 100
+    assert judge["sb"] == 5
+    assert abs(judge["avg"] - 0.280) < 1e-9
+    # Player with no ROS data has no flat stat keys
+    assert "hr" not in no_ros
+    assert "r" not in no_ros
 
 
 def test_roster_cache_includes_stats(tmp_path, monkeypatch):
