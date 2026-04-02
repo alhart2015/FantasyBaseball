@@ -230,7 +230,10 @@ function render() {
             '<td>' + (p.team || '') + '</td>' +
             '<td class="' + ownerClass + '">' + ownerText + '</td>';
 
-        cats.forEach(c => { cells += '<td>' + fmt(p[c], c) + '</td>'; });
+        cats.forEach(c => {
+            const sig = p.significant && p.significant[c] ? ' stat-significant' : '';
+            cells += '<td class="' + sig.trim() + '">' + fmt(p[c], c) + '</td>';
+        });
         cells += '<td>' + (p.sgp != null ? p.sgp.toFixed(1) : '\u2014') + '</td>';
         cells += '<td>' + (p.wsgp != null ? p.wsgp.toFixed(1) : '\u2014') + '</td>';
 

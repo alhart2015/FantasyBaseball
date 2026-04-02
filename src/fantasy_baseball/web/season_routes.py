@@ -519,6 +519,25 @@ def register_routes(app: Flask) -> None:
             rankings_cache = read_cache("rankings") or {}
             leverage = _get_leverage()
 
+            # Actual PA/BF from game logs for significance indicators
+            actual_pa: dict[str, float] = {}
+            for r in conn.execute(
+                "SELECT name, SUM(pa) as pa FROM game_logs "
+                "WHERE season = ? AND player_type = 'hitter' GROUP BY name",
+                (season,),
+            ).fetchall():
+                actual_pa[normalize_name(r["name"])] = r["pa"] or 0
+
+            actual_pitcher_logs: dict[str, dict] = {}
+            for r in conn.execute(
+                "SELECT name, SUM(ip) as ip, SUM(bb) as bb, SUM(h_allowed) as h_allowed "
+                "FROM game_logs WHERE season = ? AND player_type = 'pitcher' GROUP BY name",
+                (season,),
+            ).fetchall():
+                actual_pitcher_logs[normalize_name(r["name"])] = {
+                    "ip": r["ip"] or 0, "bb": r["bb"] or 0, "h_allowed": r["h_allowed"] or 0,
+                }
+
             players = []
             for row in all_rows:
                 d = dict(row)
@@ -558,9 +577,18 @@ def register_routes(app: Flask) -> None:
                 if ptype == "hitter":
                     result.update({"R": ros.r, "HR": ros.hr, "RBI": ros.rbi,
                                    "SB": ros.sb, "AVG": ros.avg})
+                    actual_obj = HitterStats(pa=actual_pa.get(norm, 0))
+                    result["significant"] = actual_obj.significant_dict()
                 else:
                     result.update({"W": ros.w, "K": ros.k, "SV": ros.sv,
                                    "ERA": ros.era, "WHIP": ros.whip})
+                    logs = actual_pitcher_logs.get(norm, {})
+                    actual_obj = PitcherStats(
+                        ip=logs.get("ip", 0),
+                        bb=logs.get("bb", 0),
+                        h_allowed=logs.get("h_allowed", 0),
+                    )
+                    result["significant"] = actual_obj.significant_dict()
 
                 players.append(result)
 
