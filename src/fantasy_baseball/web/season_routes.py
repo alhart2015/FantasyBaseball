@@ -325,6 +325,7 @@ def register_routes(app: Flask) -> None:
         from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
         from fantasy_baseball.analysis.pace import compute_player_pace
         from fantasy_baseball.utils.constants import HITTER_PROJ_KEYS, PITCHER_PROJ_KEYS
+        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats, RankInfo
         import pandas as pd
 
         query = request.args.get("q", "").strip()
@@ -423,18 +424,8 @@ def register_routes(app: Flask) -> None:
                 ptype = ros_dict["player_type"]
                 fg_id = ros_dict.get("fg_id")
 
-                # ROS stats
-                if ptype == "hitter":
-                    ros_stats = {k: ros_dict.get(k) for k in ["r", "hr", "rbi", "sb", "avg"]}
-                else:
-                    ros_stats = {k: ros_dict.get(k) for k in ["w", "k", "sv", "era", "whip"]}
-
                 # Preseason stats
                 pre = preseason_map.get(fg_id, {})
-                if ptype == "hitter":
-                    pre_stats = {k: pre.get(k) for k in ["r", "hr", "rbi", "sb", "avg"]}
-                else:
-                    pre_stats = {k: pre.get(k) for k in ["w", "k", "sv", "era", "whip"]}
 
                 # wSGP
                 wsgp = calculate_weighted_sgp(pd.Series(ros_dict), leverage)
@@ -465,18 +456,25 @@ def register_routes(app: Flask) -> None:
                 if pos_row and pos_row["positions"]:
                     positions = [p.strip() for p in pos_row["positions"].split(",")]
 
-                results.append({
-                    "name": name,
-                    "team": ros_dict.get("team", ""),
-                    "positions": positions,
-                    "player_type": ptype,
-                    "ownership": ownership,
-                    "wsgp": round(wsgp, 2),
-                    "ros": ros_stats,
-                    "preseason": pre_stats,
-                    "pace": pace,
-                    "rank": rank,
-                })
+                stats_cls = HitterStats if ptype == "hitter" else PitcherStats
+                player = Player(
+                    name=name,
+                    player_type=ptype,
+                    team=ros_dict.get("team", ""),
+                    positions=positions,
+                    ros=stats_cls.from_dict(ros_dict),
+                    preseason=stats_cls.from_dict(pre) if pre else None,
+                    wsgp=round(wsgp, 2),
+                    rank=RankInfo.from_dict(rank),
+                    pace=pace,
+                )
+
+                result = player.to_dict()
+                result["ownership"] = ownership
+                # Rename "stats" (Player's pace key) back to "pace" for API consistency
+                if "stats" in result:
+                    result["pace"] = result.pop("stats")
+                results.append(result)
 
             return jsonify(results)
         finally:
