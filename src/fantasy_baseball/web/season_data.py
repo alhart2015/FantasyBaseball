@@ -927,12 +927,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         _progress("Optimizing lineup...")
         hitter_players = []
         pitcher_players = []
-        for p in roster_with_proj:
-            positions = p.get("positions", [])
-            if set(positions) & PITCHER_POSITIONS:
-                pitcher_players.append(pd.Series(p))
+        for player in roster_players:
+            if set(player.positions) & PITCHER_POSITIONS:
+                pitcher_players.append(player.to_series())
             else:
-                hitter_players.append(pd.Series(p))
+                hitter_players.append(player.to_series())
 
         optimal_hitters = optimize_hitter_lineup(
             hitter_players, leverage, config.roster_slots
@@ -945,9 +944,9 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         _progress("Computing lineup moves...")
         moves = []
         for slot, player_name in optimal_hitters.items():
-            for p in roster_with_proj:
-                if p["name"] == player_name:
-                    current_slot = p.get("selected_position", "BN")
+            for player in roster_players:
+                if player.name == player_name:
+                    current_slot = player.selected_position or "BN"
                     base_slot = slot.split("_")[0]
                     # Case-insensitive compare (Yahoo returns "Util", optimizer uses "UTIL")
                     if current_slot.upper() != base_slot.upper():
@@ -955,7 +954,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                             "action": "START",
                             "player": player_name,
                             "slot": base_slot,
-                            "reason": f"wSGP: {p.get('wsgp', 0):.1f}",
+                            "reason": f"wSGP: {player.wsgp:.1f}",
                         })
                     break
 
