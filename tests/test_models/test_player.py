@@ -270,6 +270,35 @@ class TestCacheCompatibility:
         assert restored.rank.ros == original.rank.ros
 
 
+class TestToFlatDict:
+    def test_flat_dict_has_ros_stats_at_top_level(self):
+        from fantasy_baseball.models.player import Player, HitterStats
+        p = Player(
+            name="Aaron Judge", player_type="hitter",
+            ros=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
+        )
+        d = p.to_flat_dict()
+        assert d["hr"] == 38
+        assert d["r"] == 95
+        assert d["name"] == "Aaron Judge"
+
+    def test_flat_dict_also_has_nested_ros(self):
+        from fantasy_baseball.models.player import Player, HitterStats
+        p = Player(
+            name="Aaron Judge", player_type="hitter",
+            ros=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
+        )
+        d = p.to_flat_dict()
+        assert d["ros"]["hr"] == 38
+
+    def test_flat_dict_no_ros_still_works(self):
+        from fantasy_baseball.models.player import Player
+        p = Player(name="Unknown", player_type="hitter")
+        d = p.to_flat_dict()
+        assert d["name"] == "Unknown"
+        assert "hr" not in d
+
+
 class TestSgpComputation:
     def test_hitter_stats_compute_sgp(self):
         from fantasy_baseball.models.player import HitterStats

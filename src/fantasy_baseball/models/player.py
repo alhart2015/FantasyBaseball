@@ -263,6 +263,18 @@ class Player:
             d["stats"] = self.pace  # legacy key for cache/template compatibility
         return d
 
+    def to_flat_dict(self) -> dict[str, Any]:
+        """Serialize with ROS stats flattened to top level for legacy consumers.
+
+        Produces both flat keys (r, hr, rbi...) AND nested ros dict.
+        Used for cache serialization and backward compatibility with
+        functions that expect flat stat keys.
+        """
+        d = self.to_dict()
+        if self.ros is not None:
+            d.update(self.ros.to_dict())
+        return d
+
     def to_series(self) -> pd.Series:
         d: dict[str, Any] = {
             "name": self.name,
