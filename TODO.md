@@ -1,5 +1,7 @@
 # TODO — In-Season Enhancements
 
+- [ ] **Show games this week on lineup page** — The lineup template reads `games_this_week` but it's never populated (always 0). Cross-reference each roster player with the weekly MLB schedule to show how many games they play this week. Useful for start/sit decisions — a player with 7 games is more valuable than one with 4. The schedule data is already fetched in Step 9 (`get_week_schedule`); just need to count games per team and attach to each Player.
+
 - [ ] **Pitcher streaming tool** — Score free agent SPs by matchup quality to identify streamers (pick up a mediocre pitcher facing a terrible offense for one start, then drop). Builds on the matchup adjustment system.
 
 - [ ] **Browser-based OAuth flow for season dashboard** — Add Yahoo OAuth redirect flow directly in the dashboard so it can be used from a phone without CLI re-auth. When the token is expired, redirect to Yahoo login, handle the callback, store the refreshed token. Required before remote hosting.
