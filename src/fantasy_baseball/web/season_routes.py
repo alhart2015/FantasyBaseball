@@ -443,10 +443,9 @@ def register_routes(app: Flask) -> None:
                 # Ownership
                 ownership = roster_names.get(norm, "Free Agent")
 
-                # Rank (try fg_id first, fall back to name::player_type)
-                rank = rankings_cache.get(fg_id, {}) if fg_id else {}
-                if not rank:
-                    rank = rankings_cache.get(f"{norm}::{ptype}", {})
+                # Rank
+                from fantasy_baseball.sgp.rankings import lookup_rank
+                rank = lookup_rank(rankings_cache, fg_id, name, ptype)
 
                 # Positions from weekly_rosters (use LIKE for accent tolerance)
                 positions = []

@@ -23,6 +23,20 @@ def rank_key_from_positions(name: str, positions: list[str]) -> str:
     return f"{normalize_name(name)}::{ptype}"
 
 
+def lookup_rank(
+    rankings: dict[str, int | dict],
+    fg_id: str | None,
+    name: str,
+    player_type: str,
+) -> dict:
+    """Look up rank data, trying fg_id first then name::player_type fallback."""
+    if fg_id:
+        result = rankings.get(str(fg_id))
+        if result is not None:
+            return result if isinstance(result, dict) else {}
+    return rankings.get(rank_key(name, player_type), {})
+
+
 def compute_sgp_rankings(
     hitters: pd.DataFrame,
     pitchers: pd.DataFrame,
