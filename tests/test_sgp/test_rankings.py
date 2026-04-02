@@ -45,3 +45,25 @@ class TestComputeSgpRankings:
     def test_empty_dataframes_return_empty_dict(self):
         rankings = compute_sgp_rankings(pd.DataFrame(), pd.DataFrame())
         assert rankings == {}
+
+
+class TestRankingsFromGameLogs:
+    def test_ranks_from_game_log_totals(self):
+        from fantasy_baseball.sgp.rankings import compute_rankings_from_game_logs
+
+        hitter_logs = {
+            "aaron judge": {"pa": 100, "ab": 80, "h": 25, "r": 15, "hr": 8, "rbi": 20, "sb": 1},
+            "juan soto": {"pa": 110, "ab": 90, "h": 30, "r": 18, "hr": 6, "rbi": 15, "sb": 3},
+        }
+        pitcher_logs = {
+            "gerrit cole": {"ip": 30, "k": 35, "w": 3, "sv": 0, "er": 8, "bb": 5, "h_allowed": 20},
+        }
+        rankings = compute_rankings_from_game_logs(hitter_logs, pitcher_logs)
+        assert "aaron judge" in rankings
+        assert "gerrit cole" in rankings
+        assert rankings["aaron judge"] in (1, 2)
+        assert rankings["gerrit cole"] == 1
+
+    def test_empty_logs_return_empty_dict(self):
+        from fantasy_baseball.sgp.rankings import compute_rankings_from_game_logs
+        assert compute_rankings_from_game_logs({}, {}) == {}
