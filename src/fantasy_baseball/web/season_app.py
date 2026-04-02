@@ -1,11 +1,14 @@
 """Season dashboard Flask application."""
 
+import logging
 import os
 from pathlib import Path
 
 from flask import Flask
 
 from fantasy_baseball.web.season_routes import register_routes
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 
 
 def create_app() -> Flask:

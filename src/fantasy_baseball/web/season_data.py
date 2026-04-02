@@ -1,12 +1,15 @@
 """Cache management and data assembly for the season dashboard."""
 
 import json
+import logging
 import os
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.utils.constants import (
@@ -645,6 +648,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
     def _progress(msg):
         _set_refresh_progress(msg)
         logger.log(msg)
+        log.info(msg)
 
     try:
         # Lazy imports — only loaded when refresh actually runs
