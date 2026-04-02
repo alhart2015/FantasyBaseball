@@ -812,36 +812,55 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # --- Step 6: Match roster players to projections, compute wSGP ---
         _progress("Matching roster to projections...")
+        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 
-        # Match preseason projections for tooltip comparison (main stats are ROS)
+        # Match preseason projections for tooltip comparison
         preseason_matched = match_roster_to_projections(
             roster_raw, preseason_hitters, preseason_pitchers,
         )
         preseason_lookup = {normalize_name(p["name"]): p for p in preseason_matched}
 
-        # Build lookup of matched players, add wSGP
+        # Build Player objects from matched entries
         matched_names = set()
-        roster_with_proj = []
+        roster_players: list[Player] = []
         for entry in matched:
-            entry["wsgp"] = calculate_weighted_sgp(pd.Series(entry), leverage)
             norm = normalize_name(entry["name"])
             matched_names.add(norm)
-            # Attach preseason projection stats for tooltip comparison
+
+            player = Player.from_dict(entry)
+
+            # Attach preseason stat bag
             pre_entry = preseason_lookup.get(norm)
             if pre_entry:
-                entry["preseason"] = {
-                    k: pre_entry.get(k, 0)
-                    for k in (["r", "hr", "rbi", "sb", "avg"] if entry.get("player_type") == "hitter"
-                              else ["w", "k", "sv", "era", "whip"])
-                }
-            roster_with_proj.append(entry)
-        # Include unmatched players with wsgp=0
-        for player in roster_raw:
-            if normalize_name(player["name"]) not in matched_names:
-                entry = dict(player)
-                entry["wsgp"] = 0.0
-                roster_with_proj.append(entry)
-        _progress(f"Matched {len(roster_with_proj)} players to projections")
+                if player.player_type == "hitter":
+                    player.preseason = HitterStats.from_dict(pre_entry)
+                else:
+                    player.preseason = PitcherStats.from_dict(pre_entry)
+
+            # Compute wSGP via Player method
+            player.compute_wsgp(leverage)
+
+            roster_players.append(player)
+
+        # Include unmatched players
+        for raw_player in roster_raw:
+            if normalize_name(raw_player["name"]) not in matched_names:
+                player = Player.from_dict({
+                    **raw_player,
+                    "player_type": "pitcher" if set(raw_player.get("positions", [])) & PITCHER_POSITIONS else "hitter",
+                })
+                roster_players.append(player)
+
+        _progress(f"Matched {len(roster_players)} players to projections")
+
+        # Serialize to dicts for downstream pipeline steps (optimizer, waivers, trades)
+        roster_with_proj = []
+        for player in roster_players:
+            d = player.to_dict()
+            # Flatten ROS stats to top level for backward compatibility
+            if player.ros is not None:
+                d.update(player.ros.to_dict())
+            roster_with_proj.append(d)
 
         # --- Step 6b: Fetch MLB game logs ---
         _progress("Fetching MLB game logs...")
