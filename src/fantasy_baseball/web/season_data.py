@@ -860,15 +860,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         _progress(f"Matched {len(roster_players)} players to projections")
 
-        # Serialize to dicts for downstream pipeline steps (optimizer, waivers, trades)
-        roster_with_proj = []
-        for player in roster_players:
-            d = player.to_dict()
-            # Flatten ROS stats to top level for backward compatibility
-            if player.ros is not None:
-                d.update(player.ros.to_dict())
-            roster_with_proj.append(d)
-
         # --- Step 6b: Fetch MLB game logs ---
         _progress("Fetching MLB game logs...")
         gl_conn = get_db_connection()
@@ -886,20 +877,16 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         hitter_logs, pitcher_logs = _load_game_log_totals(config.season_year)
 
         # Attach pace data to each roster player (pace compares actuals vs preseason)
-        for entry in roster_with_proj:
-            norm = normalize_name(entry["name"])
-            if "player_type" in entry:
-                ptype = entry["player_type"]
-            else:
-                ptype = "pitcher" if set(entry.get("positions", [])) & PITCHER_POSITIONS else "hitter"
-            if ptype == "hitter":
+        for player in roster_players:
+            norm = normalize_name(player.name)
+            if player.player_type == "hitter":
                 actuals = hitter_logs.get(norm, {})
             else:
                 actuals = pitcher_logs.get(norm, {})
-            proj_keys = HITTER_PROJ_KEYS if ptype == "hitter" else PITCHER_PROJ_KEYS
+            proj_keys = HITTER_PROJ_KEYS if player.player_type == "hitter" else PITCHER_PROJ_KEYS
             pre = preseason_lookup.get(norm, {})
             projected = {k: pre.get(k, 0) for k in proj_keys}
-            entry["stats"] = compute_player_pace(actuals, projected, ptype)
+            player.pace = compute_player_pace(actuals, projected, player.player_type)
 
         # --- Step 6d: Compute SGP rankings ---
         _progress("Computing SGP rankings...")
@@ -926,11 +913,15 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         _progress(f"Ranked {len(ros_ranks)} ROS, {len(preseason_ranks)} preseason, {len(current_ranks)} current")
 
         # Attach ranks to roster players
-        for entry in roster_with_proj:
-            key = rank_key(entry["name"], entry.get("player_type", "hitter"))
-            entry["rank"] = rankings_lookup.get(key, {})
+        from fantasy_baseball.models.player import RankInfo
+        for player in roster_players:
+            key = rank_key(player.name, player.player_type)
+            rank_data = rankings_lookup.get(key, {})
+            player.rank = RankInfo.from_dict(rank_data) if isinstance(rank_data, dict) else RankInfo()
 
-        write_cache("roster", roster_with_proj, cache_dir)
+        roster_flat = [p.to_flat_dict() for p in roster_players]
+        write_cache("roster", roster_flat, cache_dir)
+        roster_with_proj = roster_flat  # legacy alias for Steps 7-11b
 
         # --- Step 7: Run lineup optimizer ---
         _progress("Optimizing lineup...")
