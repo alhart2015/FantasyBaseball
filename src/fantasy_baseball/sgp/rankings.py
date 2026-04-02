@@ -28,7 +28,10 @@ def compute_sgp_rankings(
         sgp_list.sort(key=lambda x: x[1], reverse=True)
 
         for rank, (norm_name, _sgp) in enumerate(sgp_list, start=1):
-            rankings[norm_name] = rank
+            # Same-name players across pools (e.g., Juan Soto hitter + pitcher):
+            # keep the better (lower) rank.
+            if norm_name not in rankings or rank < rankings[norm_name]:
+                rankings[norm_name] = rank
 
     return rankings
 
@@ -78,6 +81,7 @@ def compute_rankings_from_game_logs(
         sgp_list.sort(key=lambda x: x[1], reverse=True)
 
         for rank, (name, _sgp) in enumerate(sgp_list, start=1):
-            rankings[name] = rank
+            if name not in rankings or rank < rankings[name]:
+                rankings[name] = rank
 
     return rankings

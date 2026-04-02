@@ -511,6 +511,8 @@ def format_lineup_for_display(
             "is_il": "IL" in p.get("status", "") or pos == "IL",
             "stats": p.get("stats", {}),
             "ros": p.get("ros"),
+            "rank": p.get("rank", {}),
+            "preseason": p.get("preseason"),
         }
         if is_pitcher:
             pitchers.append(entry)
