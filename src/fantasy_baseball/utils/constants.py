@@ -193,6 +193,19 @@ def safe_float(value) -> float:
     return 0.0 if f != f else f  # f != f is the NaN check
 
 
+# Empirical stat stabilization thresholds (Carleton / FanGraphs research).
+# The sample size at which a stat reaches ~50% reliability (r ≈ 0.70).
+# Stats not listed here (R, RBI, SB, W, SV, AVG) are treated as always
+# significant — either they lack a canonical threshold or it exceeds a
+# full season of data.
+STABILIZATION_THRESHOLDS: dict[str, tuple[int, str]] = {
+    # category: (threshold, unit)
+    "HR": (170, "pa"),     # HR rate stabilizes at ~170 PA
+    "K": (70, "bf"),       # K rate stabilizes at ~70 BF
+    "ERA": (630, "bf"),    # Compound stat, ~630 BF estimated
+    "WHIP": (570, "bf"),   # Midpoint of component range (540-670 BF)
+}
+
 DEFAULT_SGP_DENOMINATORS: dict[str, float] = {
     "R": 20.0,
     "HR": 9.0,
