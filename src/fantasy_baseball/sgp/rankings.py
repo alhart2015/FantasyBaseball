@@ -1,8 +1,8 @@
 """Compute ordinal SGP rankings across the full player pool.
 
-Rankings are keyed by ``name::player_type`` (e.g., ``"juan soto::hitter"``)
-to disambiguate same-name players across hitter/pitcher pools.
-Use ``rank_key()`` to build lookup keys.
+Rankings are keyed by ``fg_id`` (primary, unique) with a secondary
+``name::player_type`` index for lookups that lack fg_id.
+Use ``rank_key()`` to build name-based lookup keys.
 """
 
 import pandas as pd
@@ -13,12 +13,12 @@ PITCHER_POSITIONS = {"P", "SP", "RP"}
 
 
 def rank_key(name: str, player_type: str) -> str:
-    """Build a ranking lookup key from player name and type."""
+    """Build a name-based ranking lookup key."""
     return f"{normalize_name(name)}::{player_type}"
 
 
 def rank_key_from_positions(name: str, positions: list[str]) -> str:
-    """Build a ranking lookup key, inferring player_type from positions."""
+    """Build a name-based ranking lookup key, inferring player_type from positions."""
     ptype = "pitcher" if set(positions) & PITCHER_POSITIONS else "hitter"
     return f"{normalize_name(name)}::{ptype}"
 
@@ -29,8 +29,12 @@ def compute_sgp_rankings(
 ) -> dict[str, int]:
     """Rank all players by unweighted SGP within hitter/pitcher pools.
 
-    Returns {name::player_type: rank} where rank is 1-based ordinal
-    (1 = highest SGP in that pool).
+    Returns dict with two types of keys pointing to the same ranks:
+    - fg_id (e.g., "31757") — primary, unique per player
+    - name::player_type (e.g., "mason miller::pitcher") — fallback
+
+    When two players share a name and type (e.g., two Mason Miller pitchers),
+    the fg_id keys are distinct but the name key gets the better rank.
     """
     rankings = {}
 
@@ -41,13 +45,19 @@ def compute_sgp_rankings(
         sgp_list = []
         for _, row in df.iterrows():
             sgp = calculate_player_sgp(row)
-            key = rank_key(row["name"], ptype)
-            sgp_list.append((key, sgp))
+            fg_id = str(row.get("fg_id", "")) if pd.notna(row.get("fg_id")) else None
+            name_key = rank_key(row["name"], ptype)
+            sgp_list.append((fg_id, name_key, sgp))
 
-        sgp_list.sort(key=lambda x: x[1], reverse=True)
+        sgp_list.sort(key=lambda x: x[2], reverse=True)
 
-        for rank_num, (key, _sgp) in enumerate(sgp_list, start=1):
-            rankings[key] = rank_num
+        for rank_num, (fg_id, name_key, _sgp) in enumerate(sgp_list, start=1):
+            # fg_id key — always unique
+            if fg_id:
+                rankings[fg_id] = rank_num
+            # name key — keep the better (lower) rank on collision
+            if name_key not in rankings or rank_num < rankings[name_key]:
+                rankings[name_key] = rank_num
 
     return rankings
 
@@ -57,6 +67,9 @@ def compute_rankings_from_game_logs(
     pitcher_logs: dict[str, dict],
 ) -> dict[str, int]:
     """Rank players by SGP of actual accumulated stats from game logs.
+
+    Game logs are keyed by normalized name (no fg_id available), so these
+    rankings use name::player_type keys only.
 
     Args:
         hitter_logs: {normalized_name: {pa, ab, h, r, hr, rbi, sb}}

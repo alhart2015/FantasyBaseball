@@ -912,11 +912,14 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         write_cache("rankings", rankings_lookup, cache_dir)
         _progress(f"Ranked {len(ros_ranks)} ROS, {len(preseason_ranks)} preseason, {len(current_ranks)} current")
 
-        # Attach ranks to roster players
+        # Attach ranks to roster players (try fg_id first, fall back to name key)
         from fantasy_baseball.models.player import RankInfo
         for player in roster_players:
-            key = rank_key(player.name, player.player_type)
-            rank_data = rankings_lookup.get(key, {})
+            rank_data = None
+            if player.fg_id:
+                rank_data = rankings_lookup.get(player.fg_id)
+            if rank_data is None:
+                rank_data = rankings_lookup.get(rank_key(player.name, player.player_type), {})
             player.rank = RankInfo.from_dict(rank_data) if isinstance(rank_data, dict) else RankInfo()
 
         roster_flat = [p.to_flat_dict() for p in roster_players]

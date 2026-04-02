@@ -57,6 +57,23 @@ class TestComputeSgpRankings:
         assert rankings[rank_key("Juan Soto", "pitcher")] == 1
 
 
+    def test_same_name_same_type_disambiguated_by_fg_id(self):
+        """Two pitchers named Mason Miller get distinct ranks via fg_id."""
+        pitchers = pd.DataFrame([
+            {"name": "Mason Miller", "player_type": "pitcher", "fg_id": "31757",
+             "w": 3, "k": 99, "sv": 32, "ip": 63, "era": 2.50, "whip": 0.90, "er": 17, "bb": 15, "h_allowed": 42},
+            {"name": "Mason Miller", "player_type": "pitcher", "fg_id": "sa3023658",
+             "w": 0, "k": 1, "sv": 0, "ip": 2, "era": 4.50, "whip": 1.50, "er": 1, "bb": 1, "h_allowed": 2},
+        ])
+        rankings = compute_sgp_rankings(pd.DataFrame(), pitchers)
+        # Each fg_id gets its own rank
+        assert "31757" in rankings
+        assert "sa3023658" in rankings
+        assert rankings["31757"] < rankings["sa3023658"]  # real Miller ranked higher
+        # Name key gets the better (lower) rank
+        assert rankings[rank_key("Mason Miller", "pitcher")] == rankings["31757"]
+
+
 class TestRankingsFromGameLogs:
     def test_ranks_from_game_log_totals(self):
         from fantasy_baseball.sgp.rankings import compute_rankings_from_game_logs
