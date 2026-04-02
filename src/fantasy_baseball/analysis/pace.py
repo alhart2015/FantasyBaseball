@@ -1,6 +1,6 @@
 """Compute player performance vs projection pace with z-score color coding."""
 
-from fantasy_baseball.utils.constants import INVERSE_STATS, STABILIZATION_THRESHOLDS, STAT_VARIANCE
+from fantasy_baseball.utils.constants import INVERSE_STATS, STAT_VARIANCE
 
 # Roto categories by player type
 HITTER_COUNTING = ["r", "hr", "rbi", "sb"]
@@ -40,21 +40,6 @@ def _z_to_color(z: float) -> str:
     return "stat-neutral"
 
 
-def _is_significant(cat: str, player_type: str, actual_opp: float, actual_stats: dict) -> bool:
-    """Check if a stat has enough sample to be empirically significant."""
-    entry = STABILIZATION_THRESHOLDS.get(cat)
-    if entry is None:
-        return True
-    threshold, unit = entry
-    if unit == "pa":
-        return actual_opp >= threshold  # actual_opp is PA for hitters
-    if unit == "bf":
-        if player_type == "pitcher":
-            bf = (actual_stats.get("ip", 0) or 0) * 3 + (actual_stats.get("h_allowed", 0) or 0) + (actual_stats.get("bb", 0) or 0)
-            return bf >= threshold
-    return True
-
-
 def compute_player_pace(
     actual_stats: dict,
     projected_stats: dict,
@@ -71,6 +56,8 @@ def compute_player_pace(
         Dict with UPPERCASE display keys, each containing:
         {"actual", "expected", "z_score", "color_class", "projection"}
     """
+    from fantasy_baseball.models.player import HitterStats, PitcherStats
+
     result = {}
 
     if player_type == "hitter":
@@ -85,6 +72,10 @@ def compute_player_pace(
         min_rates = PITCHER_MIN_RATES
 
     actual_opp = actual_stats.get(opp_key, 0) or 0
+
+    # Build a stats object from actuals for significance checks
+    stats_cls = HitterStats if player_type == "hitter" else PitcherStats
+    actual_obj = stats_cls.from_dict(actual_stats)
     proj_opp = projected_stats.get(opp_key, 0) or 0
 
     # Opportunity column (PA or IP) — always neutral
@@ -119,7 +110,7 @@ def compute_player_pace(
             "z_score": round(z, 2),
             "color_class": _z_to_color(z) if abs(actual - expected) >= COUNTING_MIN_ABS_DIFF else "stat-neutral",
             "projection": round(proj),
-            "significant": _is_significant(display_key, player_type, actual_opp, actual_stats),
+            "significant": actual_obj.is_significant(display_key),
         }
 
     # Rate stats — always computed, but color suppressed below min_rates threshold
@@ -144,7 +135,7 @@ def compute_player_pace(
             "z_score": round(z, 2),
             "color_class": _z_to_color(z),
             "projection": proj_avg,
-            "significant": _is_significant("AVG", player_type, actual_opp, actual_stats),
+            "significant": actual_obj.is_significant("AVG"),
         }
 
     else:  # pitcher
@@ -170,7 +161,7 @@ def compute_player_pace(
             "z_score": round(z, 2),
             "color_class": _z_to_color(z),
             "projection": proj_era,
-            "significant": _is_significant("ERA", player_type, actual_opp, actual_stats),
+            "significant": actual_obj.is_significant("ERA"),
         }
 
         # WHIP
@@ -188,7 +179,7 @@ def compute_player_pace(
             "z_score": round(z, 2),
             "color_class": _z_to_color(z),
             "projection": proj_whip,
-            "significant": _is_significant("WHIP", player_type, actual_opp, actual_stats),
+            "significant": actual_obj.is_significant("WHIP"),
         }
 
     return result

@@ -56,7 +56,7 @@ def test_create_tables_creates_ros_blended_projections(tmp_path):
 
 def test_create_tables_is_idempotent(tmp_path):
     db_path = tmp_path / "test.db"
-    conn = sqlite3.connect(db_path)
+    conn = get_connection(db_path)
     create_tables(conn)
     create_tables(conn)  # should not raise
     conn.close()
