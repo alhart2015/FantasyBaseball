@@ -1,0 +1,11 @@
+{%- macro rank_badge(rank_obj) -%}
+{%- if rank_obj and rank_obj.ros -%}
+<span class="rank-badge">#{{ rank_obj.ros }}
+    <span class="rank-tooltip">
+        <div class="rank-tooltip-row"><span class="rank-tooltip-label">ROS</span><span>#{{ rank_obj.ros }}</span></div>
+        <div class="rank-tooltip-row"><span class="rank-tooltip-label">Preseason</span><span>{{ "#" ~ rank_obj.preseason if rank_obj.preseason else "—" }}</span></div>
+        <div class="rank-tooltip-row"><span class="rank-tooltip-label">Current</span><span>{{ "#" ~ rank_obj.current if rank_obj.current else "—" }}</span></div>
+    </span>
+</span>
+{%- endif -%}
+{%- endmacro -%}
