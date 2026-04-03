@@ -39,13 +39,6 @@ class TestHitterStats:
         d = stats.to_dict()
         assert d["sgp"] == 12.5
 
-    def test_to_series(self):
-        from fantasy_baseball.models.player import HitterStats
-        stats = HitterStats(pa=650, ab=550, h=160, r=100, hr=40, rbi=100, sb=5, avg=0.291)
-        s = stats.to_series()
-        assert s["hr"] == 40
-        assert s["player_type"] == "hitter"
-
     def test_compute_avg_from_components(self):
         from fantasy_baseball.models.player import HitterStats
         stats = HitterStats.from_dict({"h": 150, "ab": 500})
@@ -79,14 +72,6 @@ class TestPitcherStats:
         d = stats.to_dict()
         assert d["k"] == 220
         assert d["era"] == 2.79
-
-    def test_to_series(self):
-        from fantasy_baseball.models.player import PitcherStats
-        stats = PitcherStats(ip=200, w=15, k=220, sv=0, er=62, bb=40, h_allowed=150, era=2.79, whip=0.95)
-        s = stats.to_series()
-        assert s["player_type"] == "pitcher"
-        assert s["k"] == 220
-
 
 class TestRankInfo:
     def test_from_dict(self):
@@ -339,7 +324,7 @@ class TestSgpComputation:
         from fantasy_baseball.sgp.player_value import calculate_player_sgp
         stats = HitterStats(pa=650, ab=550, h=160, r=100, hr=40, rbi=100, sb=5, avg=0.291)
         our_sgp = stats.compute_sgp()
-        standalone_sgp = calculate_player_sgp(stats.to_series())
+        standalone_sgp = calculate_player_sgp(stats)
         assert our_sgp == pytest.approx(standalone_sgp)
 
     def test_pitcher_sgp_matches_calculate_player_sgp(self):
@@ -347,7 +332,7 @@ class TestSgpComputation:
         from fantasy_baseball.sgp.player_value import calculate_player_sgp
         stats = PitcherStats(ip=200, w=15, k=220, sv=0, er=62, bb=40, h_allowed=150, era=2.79, whip=0.95)
         our_sgp = stats.compute_sgp()
-        standalone_sgp = calculate_player_sgp(stats.to_series())
+        standalone_sgp = calculate_player_sgp(stats)
         assert our_sgp == pytest.approx(standalone_sgp)
 
 

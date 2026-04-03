@@ -48,14 +48,9 @@ class HitterStats:
             d["sgp"] = self.sgp
         return d
 
-    def to_series(self) -> pd.Series:
-        d = self.to_dict()
-        d["player_type"] = "hitter"
-        return pd.Series(d)
-
     def compute_sgp(self) -> float:
         from fantasy_baseball.sgp.player_value import calculate_player_sgp
-        self.sgp = calculate_player_sgp(self.to_series())
+        self.sgp = calculate_player_sgp(self)
         return self.sgp
 
     def is_significant(self, cat: str) -> bool:
@@ -121,14 +116,9 @@ class PitcherStats:
             d["sgp"] = self.sgp
         return d
 
-    def to_series(self) -> pd.Series:
-        d = self.to_dict()
-        d["player_type"] = "pitcher"
-        return pd.Series(d)
-
     def compute_sgp(self) -> float:
         from fantasy_baseball.sgp.player_value import calculate_player_sgp
-        self.sgp = calculate_player_sgp(self.to_series())
+        self.sgp = calculate_player_sgp(self)
         return self.sgp
 
     def is_significant(self, cat: str) -> bool:
@@ -322,5 +312,5 @@ class Player:
         if self.ros is None:
             self.wsgp = 0.0
             return 0.0
-        self.wsgp = calculate_weighted_sgp(self.to_series(), leverage)
+        self.wsgp = calculate_weighted_sgp(self.ros, leverage)
         return self.wsgp
