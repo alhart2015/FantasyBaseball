@@ -5,6 +5,7 @@ import pandas as pd
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.lineup.yahoo_roster import fetch_free_agents
+from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import (
     calculate_counting_sgp,
@@ -64,7 +65,7 @@ def fetch_and_match_free_agents(
     pitchers_proj: pd.DataFrame,
     fa_per_position: int = 100,
     on_position_loaded: Callable[[str, int], None] | None = None,
-) -> tuple[list[pd.Series], int]:
+) -> tuple[list[Player], int]:
     """Fetch available players from Yahoo, match to projections.
 
     Fetches FA + waiver players across 8 positions, deduplicates by
@@ -82,9 +83,9 @@ def fetch_and_match_free_agents(
         on_position_loaded: Optional callback(position, count) for progress.
 
     Returns:
-        Tuple of (matched_fa_players as list[pd.Series], total_fetched_count).
+        Tuple of (matched_fa_players as list[Player], total_fetched_count).
     """
-    fa_players: list[pd.Series] = []
+    fa_players: list[Player] = []
     fa_fetched = 0
     seen_names: set[str] = set()
 
@@ -106,23 +107,54 @@ def fetch_and_match_free_agents(
             seen_names.add(fa_name_norm)
 
             proj_row = None
+            ptype = None
             for df in search_order:
                 if df.empty:
                     continue
                 matches = df[df["_name_norm"] == fa_name_norm]
                 if not matches.empty:
-                    proj_row = matches.iloc[0].copy()
+                    proj_row = matches.iloc[0]
+                    ptype = "pitcher" if df is pitchers_proj else "hitter"
                     break
+
             if proj_row is not None:
-                proj_row["positions"] = fa["positions"]
-                fa_players.append(proj_row)
+                if ptype == "hitter":
+                    ros = HitterStats(
+                        pa=float(proj_row.get("pa", 0) or 0),
+                        ab=float(proj_row.get("ab", 0) or 0),
+                        h=float(proj_row.get("h", 0) or 0),
+                        r=float(proj_row.get("r", 0) or 0),
+                        hr=float(proj_row.get("hr", 0) or 0),
+                        rbi=float(proj_row.get("rbi", 0) or 0),
+                        sb=float(proj_row.get("sb", 0) or 0),
+                        avg=float(proj_row.get("avg", 0) or 0),
+                    )
+                else:
+                    ros = PitcherStats(
+                        ip=float(proj_row.get("ip", 0) or 0),
+                        w=float(proj_row.get("w", 0) or 0),
+                        k=float(proj_row.get("k", 0) or 0),
+                        sv=float(proj_row.get("sv", 0) or 0),
+                        er=float(proj_row.get("er", 0) or 0),
+                        bb=float(proj_row.get("bb", 0) or 0),
+                        h_allowed=float(proj_row.get("h_allowed", 0) or 0),
+                        era=float(proj_row.get("era", 0) or 0),
+                        whip=float(proj_row.get("whip", 0) or 0),
+                    )
+                p = Player(
+                    name=fa["name"],
+                    player_type=ptype,
+                    positions=fa["positions"],
+                    ros=ros,
+                )
+                fa_players.append(p)
 
     return fa_players, fa_fetched
 
 
 def evaluate_pickup(
-    add_player: pd.Series,
-    drop_player: pd.Series,
+    add_player: Player,
+    drop_player: Player,
     leverage: dict[str, float],
 ) -> dict:
     """Evaluate the SGP gain of adding one player and dropping another.
@@ -130,8 +162,8 @@ def evaluate_pickup(
     Returns:
         Dict with add, drop, sgp_gain, and per-category breakdown.
     """
-    add_wsgp = calculate_weighted_sgp(add_player, leverage)
-    drop_wsgp = calculate_weighted_sgp(drop_player, leverage)
+    add_wsgp = calculate_weighted_sgp(add_player.ros, leverage)
+    drop_wsgp = calculate_weighted_sgp(drop_player.ros, leverage)
 
     denoms = get_sgp_denominators()
     categories = {}
@@ -142,15 +174,15 @@ def evaluate_pickup(
         categories[stat] = (add_val - drop_val) * weight
 
     return {
-        "add": add_player["name"],
-        "drop": drop_player["name"],
+        "add": add_player.name,
+        "drop": drop_player.name,
         "sgp_gain": add_wsgp - drop_wsgp,
         "categories": categories,
     }
 
 
 def _compute_team_wsgp(
-    roster: list[pd.Series],
+    roster: list[Player],
     leverage: dict[str, float],
     roster_slots: dict[str, int],
     denoms: dict[str, float] | None = None,
@@ -171,16 +203,16 @@ def _compute_team_wsgp(
     if denoms is None:
         denoms = get_sgp_denominators()
 
-    hitters = [p for p in roster if p.get("player_type") != "pitcher"]
-    pitchers = [p for p in roster if p.get("player_type") == "pitcher"]
+    hitters = [p for p in roster if p.player_type != "pitcher"]
+    pitchers = [p for p in roster if p.player_type == "pitcher"]
 
     if player_wsgp is None:
         player_wsgp = {}
     else:
         player_wsgp = dict(player_wsgp)  # don't mutate caller's dict
     for p in roster:
-        if p["name"] not in player_wsgp:
-            player_wsgp[p["name"]] = calculate_weighted_sgp(p, leverage, denoms=denoms)
+        if p.name not in player_wsgp:
+            player_wsgp[p.name] = calculate_weighted_sgp(p.ros, leverage, denoms=denoms)
 
     # Optimize hitters (Hungarian algorithm)
     hitter_lineup = optimize_hitter_lineup(hitters, leverage, roster_slots)
@@ -255,8 +287,8 @@ def _build_lineup_summary(
 
 
 def scan_waivers(
-    roster: list[pd.Series],
-    free_agents: list[pd.Series],
+    roster: list[Player],
+    free_agents: list[Player],
     leverage: dict[str, float],
     max_results: int = 5,
     open_hitter_slots: int = 0,
@@ -279,8 +311,8 @@ def scan_waivers(
     Returns only positive-gain recommendations, sorted best-first.
 
     Args:
-        roster: List of player stat Series (must have 'positions' and 'player_type').
-        free_agents: List of free agent stat Series.
+        roster: List of Player objects.
+        free_agents: List of free agent Player objects.
         leverage: Category leverage weights.
         max_results: Maximum number of recommendations to return.
         open_hitter_slots: Empty hitter-only active slots.
@@ -306,10 +338,10 @@ def scan_waivers(
         fa_hitters = []
         fa_pitchers = []
         for fa in free_agents:
-            wsgp = calculate_weighted_sgp(fa, leverage)
+            wsgp = calculate_weighted_sgp(fa.ros, leverage)
             if wsgp <= 0:
                 continue
-            if fa.get("player_type") == "pitcher":
+            if fa.player_type == "pitcher":
                 fa_pitchers.append((fa, wsgp))
             else:
                 fa_hitters.append((fa, wsgp))
@@ -319,22 +351,22 @@ def scan_waivers(
         def _add_pure(pool, count, label):
             added = 0
             for fa, wsgp in pool:
-                if added >= count or fa["name"] in recommended_adds:
+                if added >= count or fa.name in recommended_adds:
                     continue
                 recommendations.append({
-                    "add": fa["name"],
+                    "add": fa.name,
                     "drop": f"(empty {label} slot)",
                     "sgp_gain": wsgp,
                     "categories": {},
                 })
-                recommended_adds.add(fa["name"])
+                recommended_adds.add(fa.name)
                 added += 1
 
         _add_pure(fa_hitters, open_hitter_slots, "hitter")
         _add_pure(fa_pitchers, open_pitcher_slots, "pitcher")
         # Bench slots: pick best remaining from either type
         remaining = [(fa, w) for fa, w in fa_hitters + fa_pitchers
-                     if fa["name"] not in recommended_adds]
+                     if fa.name not in recommended_adds]
         remaining.sort(key=lambda x: x[1], reverse=True)
         _add_pure(remaining, open_bench_slots, "bench")
 
@@ -350,14 +382,14 @@ def scan_waivers(
     baseline_wsgp = baseline["total_wsgp"]
     baseline_summary = _build_lineup_summary(
         baseline["hitter_lineup"], baseline["pitcher_starters"],
-        baseline["player_wsgp"], [p["name"] for p in roster],
+        baseline["player_wsgp"], [p.name for p in roster],
     )
 
     # Pre-compute wSGP for all FAs
     fa_wsgp = {}
     for fa in free_agents:
-        if fa["name"] not in recommended_adds:
-            fa_wsgp[fa["name"]] = calculate_weighted_sgp(fa, leverage, denoms=denoms)
+        if fa.name not in recommended_adds:
+            fa_wsgp[fa.name] = calculate_weighted_sgp(fa.ros, leverage, denoms=denoms)
 
     # Compute wSGP floor: 3rd-lowest wSGP among active-slot players
     active_wsgps = sorted([
@@ -371,31 +403,31 @@ def scan_waivers(
     before_slots = {e["name"]: e["slot"] for e in baseline_summary}
 
     for fa in free_agents:
-        if fa["name"] in recommended_adds:
+        if fa.name in recommended_adds:
             continue
-        if fa_wsgp.get(fa["name"], 0.0) < wsgp_floor:
+        if fa_wsgp.get(fa.name, 0.0) < wsgp_floor:
             continue
 
-        fa_type = fa.get("player_type", "hitter")
+        fa_type = fa.player_type
         best_for_fa = None
         best_drop_player = None
         best_new_result = None
 
         # Build reusable wSGP dict: baseline + FA entry
         swap_wsgp = dict(baseline["player_wsgp"])
-        swap_wsgp[fa["name"]] = fa_wsgp[fa["name"]]
+        swap_wsgp[fa.name] = fa_wsgp[fa.name]
 
         for drop_player in roster:
-            drop_name = drop_player["name"]
-            drop_type = drop_player.get("player_type", "hitter")
+            drop_name = drop_player.name
+            drop_type = drop_player.player_type
 
-            new_roster = [p for p in roster if p["name"] != drop_name] + [fa]
-            new_hitters = [p for p in new_roster if p.get("player_type") != "pitcher"]
-            new_pitchers = [p for p in new_roster if p.get("player_type") == "pitcher"]
+            new_roster = [p for p in roster if p.name != drop_name] + [fa]
+            new_hitters = [p for p in new_roster if p.player_type != "pitcher"]
+            new_pitchers = [p for p in new_roster if p.player_type == "pitcher"]
 
             # Feasibility checks
             if drop_type == "hitter" or fa_type == "hitter":
-                hitter_positions = [list(p.get("positions", [])) for p in new_hitters]
+                hitter_positions = [list(p.positions) for p in new_hitters]
                 if not can_cover_slots(hitter_positions, roster_slots):
                     continue
             if drop_type == "pitcher" or fa_type == "pitcher":
@@ -413,10 +445,10 @@ def scan_waivers(
                 best_drop_player = drop_player
                 best_new_result = new_result
                 best_for_fa = {
-                    "add": fa["name"],
-                    "add_positions": list(fa.get("positions", [])),
+                    "add": fa.name,
+                    "add_positions": list(fa.positions),
                     "drop": drop_name,
-                    "drop_positions": list(drop_player.get("positions", [])),
+                    "drop_positions": list(drop_player.positions),
                     "sgp_gain": gain,
                 }
 
@@ -425,7 +457,7 @@ def scan_waivers(
             after_summary = _build_lineup_summary(
                 best_new_result["hitter_lineup"], best_new_result["pitcher_starters"],
                 best_new_result["player_wsgp"],
-                [p["name"] for p in roster if p["name"] != best_for_fa["drop"]] + [fa["name"]],
+                [p.name for p in roster if p.name != best_for_fa["drop"]] + [fa.name],
             )
 
             before_annotated = []
@@ -438,7 +470,7 @@ def scan_waivers(
             after_annotated = []
             for entry in after_summary:
                 e = dict(entry)
-                if e["name"] == fa["name"]:
+                if e["name"] == fa.name:
                     e["is_added"] = True
                 elif e["name"] in before_slots and before_slots[e["name"]] != e["slot"]:
                     e["moved_from"] = before_slots[e["name"]]
@@ -455,44 +487,43 @@ def scan_waivers(
     return recommendations[:max_results]
 
 
-def _get_stat_cols(player: pd.Series) -> list[tuple[str, str]]:
+def _get_stat_cols(player: Player) -> list[tuple[str, str]]:
     """Get relevant stat/column pairs for a player's type."""
-    if player.get("player_type") == "hitter":
+    if player.player_type == "hitter":
         return [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb"), ("AVG", "avg")]
-    elif player.get("player_type") == "pitcher":
+    elif player.player_type == "pitcher":
         return [("W", "w"), ("K", "k"), ("SV", "sv"), ("ERA", "era"), ("WHIP", "whip")]
     return []
 
 
-def _category_sgp(player: pd.Series, stat: str, col: str, denoms: dict) -> float:
+def _category_sgp(player: Player, stat: str, col: str, denoms: dict) -> float:
     """Calculate raw SGP for a single category."""
+    ros = player.ros
     if stat in ("AVG",):
         return calculate_hitting_rate_sgp(
-            player_avg=player.get("avg", 0),
-            player_ab=int(player.get("ab", 0)),
+            player_avg=ros.avg,
+            player_ab=int(ros.ab),
             replacement_avg=REPLACEMENT_AVG,
             sgp_denominator=denoms["AVG"],
             team_ab=DEFAULT_TEAM_AB,
         )
     elif stat in ("ERA",):
-        ip = player.get("ip", 0)
-        if ip > 0:
+        if ros.ip > 0:
             return calculate_pitching_rate_sgp(
-                player_rate=player.get("era", 0), player_ip=ip,
+                player_rate=ros.era, player_ip=ros.ip,
                 replacement_rate=REPLACEMENT_ERA,
                 sgp_denominator=denoms["ERA"],
                 team_ip=DEFAULT_TEAM_IP, innings_divisor=9,
             )
         return 0.0
     elif stat in ("WHIP",):
-        ip = player.get("ip", 0)
-        if ip > 0:
+        if ros.ip > 0:
             return calculate_pitching_rate_sgp(
-                player_rate=player.get("whip", 0), player_ip=ip,
+                player_rate=ros.whip, player_ip=ros.ip,
                 replacement_rate=REPLACEMENT_WHIP,
                 sgp_denominator=denoms["WHIP"],
                 team_ip=DEFAULT_TEAM_IP, innings_divisor=1,
             )
         return 0.0
     else:
-        return calculate_counting_sgp(player.get(col, 0), denoms[stat])
+        return calculate_counting_sgp(getattr(ros, col, 0), denoms[stat])

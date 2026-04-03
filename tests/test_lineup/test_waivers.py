@@ -1,12 +1,27 @@
-import pytest
-import pandas as pd
+from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 from fantasy_baseball.lineup.waivers import evaluate_pickup, scan_waivers, _compute_team_wsgp, _build_lineup_summary
 
 
-def _make_player(name, player_type, **stats):
-    data = {"name": name, "player_type": player_type}
-    data.update(stats)
-    return pd.Series(data)
+def _make_player(name, player_type, positions=None, **stats):
+    if positions is None:
+        positions = []
+    if player_type == "hitter":
+        ros = HitterStats(
+            pa=int(stats.get("ab", 0) * 1.15),
+            ab=stats.get("ab", 0), h=stats.get("h", 0),
+            r=stats.get("r", 0), hr=stats.get("hr", 0),
+            rbi=stats.get("rbi", 0), sb=stats.get("sb", 0),
+            avg=stats.get("avg", 0),
+        )
+    else:
+        ros = PitcherStats(
+            ip=stats.get("ip", 0), w=stats.get("w", 0),
+            k=stats.get("k", 0), sv=stats.get("sv", 0),
+            er=stats.get("er", 0), bb=stats.get("bb", 0),
+            h_allowed=stats.get("h_allowed", 0),
+            era=stats.get("era", 0), whip=stats.get("whip", 0),
+        )
+    return Player(name=name, player_type=player_type, positions=positions, ros=ros)
 
 
 EQUAL_LEVERAGE = {cat: 0.1 for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
@@ -40,15 +55,12 @@ class TestScanWaivers:
     def test_returns_ranked_recommendations(self):
         # Roster: one weak hitter
         roster = [
-            _make_player("Weak", "hitter", r=30, hr=5, rbi=20, sb=1, avg=.220, ab=300, h=66,
-                         positions=["OF"], best_position="OF"),
+            _make_player("Weak", "hitter", positions=["OF"], r=30, hr=5, rbi=20, sb=1, avg=.220, ab=300, h=66),
         ]
         # Free agents: two better hitters
         free_agents = [
-            _make_player("Better", "hitter", r=70, hr=20, rbi=60, sb=10, avg=.270, ab=500, h=135,
-                         positions=["OF"], best_position="OF"),
-            _make_player("Best", "hitter", r=90, hr=30, rbi=80, sb=15, avg=.280, ab=540, h=151,
-                         positions=["OF"], best_position="OF"),
+            _make_player("Better", "hitter", positions=["OF"], r=70, hr=20, rbi=60, sb=10, avg=.270, ab=500, h=135),
+            _make_player("Best", "hitter", positions=["OF"], r=90, hr=30, rbi=80, sb=15, avg=.280, ab=540, h=151),
         ]
         results = scan_waivers(roster, free_agents, EQUAL_LEVERAGE,
                                roster_slots={"OF": 1, "P": 0, "BN": 0, "IL": 0})
@@ -59,20 +71,17 @@ class TestScanWaivers:
 
     def test_no_recommendations_when_roster_is_better(self):
         roster = [
-            _make_player("Star", "hitter", r=110, hr=45, rbi=120, sb=20, avg=.300, ab=550, h=165,
-                         positions=["OF"], best_position="OF"),
+            _make_player("Star", "hitter", positions=["OF"], r=110, hr=45, rbi=120, sb=20, avg=.300, ab=550, h=165),
         ]
         free_agents = [
-            _make_player("Scrub", "hitter", r=30, hr=5, rbi=20, sb=1, avg=.220, ab=300, h=66,
-                         positions=["OF"], best_position="OF"),
+            _make_player("Scrub", "hitter", positions=["OF"], r=30, hr=5, rbi=20, sb=1, avg=.220, ab=300, h=66),
         ]
         results = scan_waivers(roster, free_agents, EQUAL_LEVERAGE)
         assert len(results) == 0  # No positive-gain pickups
 
     def test_empty_free_agents(self):
         roster = [
-            _make_player("Player", "hitter", r=70, hr=20, rbi=60, sb=10, avg=.270, ab=500, h=135,
-                         positions=["OF"], best_position="OF"),
+            _make_player("Player", "hitter", positions=["OF"], r=70, hr=20, rbi=60, sb=10, avg=.270, ab=500, h=135),
         ]
         results = scan_waivers(roster, [], EQUAL_LEVERAGE)
         assert results == []
@@ -80,12 +89,10 @@ class TestScanWaivers:
     def test_open_slots_recommends_pure_adds(self):
         """When there are open roster slots, recommend free agents without drops."""
         roster = [
-            _make_player("Current", "hitter", r=70, hr=20, rbi=60, sb=10, avg=.270, ab=500, h=135,
-                         positions=["OF"], best_position="OF"),
+            _make_player("Current", "hitter", positions=["OF"], r=70, hr=20, rbi=60, sb=10, avg=.270, ab=500, h=135),
         ]
         free_agents = [
-            _make_player("Available", "hitter", r=80, hr=25, rbi=70, sb=12, avg=.275, ab=520, h=143,
-                         positions=["1B"], best_position="1B"),
+            _make_player("Available", "hitter", positions=["1B"], r=80, hr=25, rbi=70, sb=12, avg=.275, ab=520, h=143),
         ]
         results = scan_waivers(roster, free_agents, EQUAL_LEVERAGE, open_hitter_slots=1)
         assert len(results) >= 1
@@ -96,8 +103,7 @@ class TestScanWaivers:
     def test_open_slots_with_empty_roster(self):
         """Open slots should work even with an empty matched roster."""
         free_agents = [
-            _make_player("FreeAgent", "hitter", r=80, hr=25, rbi=70, sb=12, avg=.275, ab=520, h=143,
-                         positions=["OF"], best_position="OF"),
+            _make_player("FreeAgent", "hitter", positions=["OF"], r=80, hr=25, rbi=70, sb=12, avg=.275, ab=520, h=143),
         ]
         results = scan_waivers([], free_agents, EQUAL_LEVERAGE, open_bench_slots=2)
         assert len(results) >= 1
@@ -126,14 +132,12 @@ class TestScanWaivers:
     def test_typed_slots_only_fill_matching_type(self):
         """Pitcher open slots should only be filled by pitchers, not hitters."""
         roster = [
-            _make_player("Hitter", "hitter", r=70, hr=20, rbi=60, sb=10, avg=.270, ab=500, h=135,
-                         positions=["OF"], best_position="OF"),
+            _make_player("Hitter", "hitter", positions=["OF"], r=70, hr=20, rbi=60, sb=10, avg=.270, ab=500, h=135),
         ]
-        hitter_fa = _make_player("BigBat", "hitter", r=90, hr=30, rbi=80, sb=15, avg=.280,
-                                 ab=540, h=151, positions=["1B"], best_position="1B")
-        pitcher_fa = _make_player("Ace", "pitcher", w=12, k=180, sv=0, era=3.20, whip=1.10,
-                                  ip=180, er=64, bb=50, h_allowed=150, gs=30, g=30,
-                                  positions=["SP"], best_position="SP")
+        hitter_fa = _make_player("BigBat", "hitter", positions=["1B"], r=90, hr=30, rbi=80, sb=15, avg=.280,
+                                 ab=540, h=151)
+        pitcher_fa = _make_player("Ace", "pitcher", positions=["SP"], w=12, k=180, sv=0, era=3.20, whip=1.10,
+                                  ip=180, er=64, bb=50, h_allowed=150)
         results = scan_waivers(roster, [hitter_fa, pitcher_fa], EQUAL_LEVERAGE,
                                open_pitcher_slots=2)
         pure_adds = [r for r in results if r["drop"].startswith("(empty")]
