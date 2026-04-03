@@ -348,28 +348,9 @@ def match_roster_to_projections(
 
         if proj is not None:
             if ptype == "hitter":
-                ros = HitterStats(
-                    pa=float(proj.get("pa", 0) or 0),
-                    ab=float(proj.get("ab", 0) or 0),
-                    h=float(proj.get("h", 0) or 0),
-                    r=float(proj.get("r", 0) or 0),
-                    hr=float(proj.get("hr", 0) or 0),
-                    rbi=float(proj.get("rbi", 0) or 0),
-                    sb=float(proj.get("sb", 0) or 0),
-                    avg=float(proj.get("avg", 0) or 0),
-                )
+                ros = HitterStats.from_dict(proj.to_dict())
             else:
-                ros = PitcherStats(
-                    ip=float(proj.get("ip", 0) or 0),
-                    w=float(proj.get("w", 0) or 0),
-                    k=float(proj.get("k", 0) or 0),
-                    sv=float(proj.get("sv", 0) or 0),
-                    er=float(proj.get("er", 0) or 0),
-                    bb=float(proj.get("bb", 0) or 0),
-                    h_allowed=float(proj.get("h_allowed", 0) or 0),
-                    era=float(proj.get("era", 0) or 0),
-                    whip=float(proj.get("whip", 0) or 0),
-                )
+                ros = PitcherStats.from_dict(proj.to_dict())
 
             p = Player(
                 name=name,

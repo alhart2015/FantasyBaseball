@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields
 from typing import Any, Optional
 
-import pandas as pd
-
 
 @dataclass
 class HitterStats:
@@ -25,7 +23,7 @@ class HitterStats:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "HitterStats":
         stat_fields = {f.name for f in fields(cls) if f.name != "sgp"}
-        kwargs: dict[str, Any] = {k: d.get(k, 0) for k in stat_fields}
+        kwargs: dict[str, Any] = {k: float(d.get(k, 0) or 0) for k in stat_fields}
         kwargs["sgp"] = d.get("sgp", None)
 
         # Compute avg from h/ab if avg not provided or is zero
@@ -34,9 +32,7 @@ class HitterStats:
 
         return cls(**kwargs)
 
-    @classmethod
-    def from_series(cls, s: pd.Series) -> "HitterStats":
-        return cls.from_dict(s.to_dict())
+
 
     # ------------------------------------------------------------------
     # Serialisation
@@ -89,7 +85,7 @@ class PitcherStats:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "PitcherStats":
         stat_fields = {f.name for f in fields(cls) if f.name != "sgp"}
-        kwargs: dict[str, Any] = {k: d.get(k, 0) for k in stat_fields}
+        kwargs: dict[str, Any] = {k: float(d.get(k, 0) or 0) for k in stat_fields}
         kwargs["sgp"] = d.get("sgp", None)
 
         # Compute ERA and WHIP from components if not provided
@@ -101,10 +97,6 @@ class PitcherStats:
                 kwargs["whip"] = (kwargs["bb"] + kwargs["h_allowed"]) / ip
 
         return cls(**kwargs)
-
-    @classmethod
-    def from_series(cls, s: pd.Series) -> "PitcherStats":
-        return cls.from_dict(s.to_dict())
 
     # ------------------------------------------------------------------
     # Serialisation
@@ -295,17 +287,6 @@ class Player:
         if self.ros is not None:
             d.update(self.ros.to_dict())
         return d
-
-    def to_series(self) -> pd.Series:
-        d: dict[str, Any] = {
-            "name": self.name,
-            "player_type": self.player_type,
-            "positions": self.positions,
-            "team": self.team,
-        }
-        if self.ros is not None:
-            d.update(self.ros.to_dict())
-        return pd.Series(d)
 
     def compute_wsgp(self, leverage: dict[str, float]) -> float:
         from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp

@@ -759,7 +759,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         _progress("Fetching opponent rosters...")
         from fantasy_baseball.data.projections import match_roster_to_projections
 
-        opp_rosters: dict[str, list] = {}
+        opp_rosters: dict[str, list[Player]] = {}
         all_raw_rosters = {config.team_name: roster_raw}
 
         def _fetch_opp(key_and_info):
@@ -1087,9 +1087,10 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                       if k not in ("P", "BN", "IL", "DL"))
         p_slots = config.roster_slots.get("P", 9)
 
-        mc_rosters = {}
-        for tname, roster in all_team_rosters.items():
-            mc_rosters[tname] = [p.to_flat_dict() for p in roster]
+        # Convert Player objects to flat dicts for simulation module
+        flat_rosters = {tname: [p.to_flat_dict() for p in roster]
+                        for tname, roster in all_team_rosters.items()}
+        mc_rosters = flat_rosters
 
         base_mc = run_monte_carlo(
             mc_rosters, h_slots, p_slots, config.team_name,
@@ -1121,7 +1122,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             ros_mc_rosters = {}
             # User's team (matched uses ROS projections since step 4c)
             if matched:
-                ros_mc_rosters[config.team_name] = [p.to_flat_dict() for p in matched]
+                ros_mc_rosters[config.team_name] = flat_rosters.get(config.team_name, [])
 
             # Opponent teams
             for tname, opp_raw in all_raw_rosters.items():

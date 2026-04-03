@@ -234,6 +234,8 @@ def compute_trade_impact(
 def _player_ros_stats(player: Player) -> dict:
     """Extract ROS stats from a Player for trade projection."""
     ros = player.ros
+    if ros is None:
+        return {cat: 0 for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP", "ab", "ip"]}
     if player.player_type == "hitter":
         return {
             "R": ros.r, "HR": ros.hr, "RBI": ros.rbi, "SB": ros.sb,
@@ -340,10 +342,12 @@ def find_trades(
                     continue
 
                 # Roto point impact
-                hart_loses = _player_ros_stats(hart_player)
-                hart_gains = _player_ros_stats(opp_player)
-                opp_loses = _player_ros_stats(opp_player)
-                opp_gains = _player_ros_stats(hart_player)
+                hart_ros = _player_ros_stats(hart_player)
+                opp_ros = _player_ros_stats(opp_player)
+                hart_loses = hart_ros
+                hart_gains = opp_ros
+                opp_loses = opp_ros
+                opp_gains = hart_ros
 
                 impact = compute_trade_impact(
                     standings, hart_name, opp_name,

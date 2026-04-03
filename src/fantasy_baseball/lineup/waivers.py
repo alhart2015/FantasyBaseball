@@ -119,28 +119,9 @@ def fetch_and_match_free_agents(
 
             if proj_row is not None:
                 if ptype == "hitter":
-                    ros = HitterStats(
-                        pa=float(proj_row.get("pa", 0) or 0),
-                        ab=float(proj_row.get("ab", 0) or 0),
-                        h=float(proj_row.get("h", 0) or 0),
-                        r=float(proj_row.get("r", 0) or 0),
-                        hr=float(proj_row.get("hr", 0) or 0),
-                        rbi=float(proj_row.get("rbi", 0) or 0),
-                        sb=float(proj_row.get("sb", 0) or 0),
-                        avg=float(proj_row.get("avg", 0) or 0),
-                    )
+                    ros = HitterStats.from_dict(proj_row.to_dict())
                 else:
-                    ros = PitcherStats(
-                        ip=float(proj_row.get("ip", 0) or 0),
-                        w=float(proj_row.get("w", 0) or 0),
-                        k=float(proj_row.get("k", 0) or 0),
-                        sv=float(proj_row.get("sv", 0) or 0),
-                        er=float(proj_row.get("er", 0) or 0),
-                        bb=float(proj_row.get("bb", 0) or 0),
-                        h_allowed=float(proj_row.get("h_allowed", 0) or 0),
-                        era=float(proj_row.get("era", 0) or 0),
-                        whip=float(proj_row.get("whip", 0) or 0),
-                    )
+                    ros = PitcherStats.from_dict(proj_row.to_dict())
                 p = Player(
                     name=fa["name"],
                     player_type=ptype,

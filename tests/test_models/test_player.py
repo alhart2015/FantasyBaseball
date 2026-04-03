@@ -18,13 +18,6 @@ class TestHitterStats:
         assert stats.pa == 0
         assert stats.avg == 0
 
-    def test_from_series(self):
-        from fantasy_baseball.models.player import HitterStats
-        s = pd.Series({"pa": 650, "ab": 550, "h": 160, "r": 100, "hr": 40, "rbi": 100, "sb": 5, "avg": 0.291})
-        stats = HitterStats.from_series(s)
-        assert stats.hr == 40
-        assert stats.avg == 0.291
-
     def test_to_dict(self):
         from fantasy_baseball.models.player import HitterStats
         stats = HitterStats(pa=650, ab=550, h=160, r=100, hr=40, rbi=100, sb=5, avg=0.291)
@@ -59,12 +52,6 @@ class TestPitcherStats:
         stats = PitcherStats.from_dict({"ip": 180, "er": 60, "bb": 40, "h_allowed": 130})
         assert stats.era == pytest.approx(3.0)
         assert stats.whip == pytest.approx((40 + 130) / 180)
-
-    def test_from_series(self):
-        from fantasy_baseball.models.player import PitcherStats
-        s = pd.Series({"ip": 200, "w": 15, "k": 220, "sv": 0, "er": 62, "bb": 40, "h_allowed": 150, "era": 2.79, "whip": 0.95})
-        stats = PitcherStats.from_series(s)
-        assert stats.k == 220
 
     def test_to_dict(self):
         from fantasy_baseball.models.player import PitcherStats
@@ -177,20 +164,6 @@ class TestPlayer:
         p = Player.from_dict(d)
         assert p.ros is not None
         assert p.ros.k == 200
-
-    def test_to_series(self):
-        from fantasy_baseball.models.player import Player
-        d = {
-            "name": "Aaron Judge", "player_type": "hitter",
-            "positions": ["OF"], "team": "NYY",
-            "ros": {"pa": 600, "ab": 500, "h": 145, "r": 95, "hr": 38, "rbi": 92, "sb": 7, "avg": 0.290},
-        }
-        p = Player.from_dict(d)
-        s = p.to_series()
-        assert s["name"] == "Aaron Judge"
-        assert s["player_type"] == "hitter"
-        assert s["hr"] == 38
-        assert s["positions"] == ["OF"]
 
 
 class TestCacheCompatibility:

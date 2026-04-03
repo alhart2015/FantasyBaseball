@@ -38,7 +38,6 @@ def find_buy_low_candidates(
         norm = normalize_name(name)
         actuals = game_log_lookup.get(norm, {})
 
-        # Build projection dict from player entry
         if ptype == "hitter":
             proj_keys = HITTER_PROJ_KEYS
             categories = HITTING_CATEGORIES
