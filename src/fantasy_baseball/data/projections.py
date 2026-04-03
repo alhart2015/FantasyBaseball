@@ -4,6 +4,7 @@ from pathlib import Path
 from .fangraphs import load_projection_set, _find_file
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter, is_pitcher
+from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 
 # Counting stats to blend directly (weighted average)
 HITTING_COUNTING_COLS: list[str] = ["r", "hr", "rbi", "sb", "h", "ab", "pa"]
@@ -307,17 +308,17 @@ def match_roster_to_projections(
     roster: list[dict],
     hitters_proj: pd.DataFrame,
     pitchers_proj: pd.DataFrame,
-) -> list[dict]:
+) -> list[Player]:
     """Match roster players to blended projections by normalized name.
 
     Expects ``_name_norm`` column precomputed on both DataFrames
     (call ``df["_name_norm"] = df["name"].apply(normalize_name)`` first).
 
-    Returns a list of enriched player dicts. Each matched player gets
-    ``player_type`` ("hitter"/"pitcher") and all stat columns from the
-    projection row. Unmatched players are omitted.
+    Returns a list of :class:`Player` objects with ``.ros`` populated as
+    :class:`HitterStats` or :class:`PitcherStats`. Unmatched players are
+    omitted.
     """
-    matched = []
+    matched: list[Player] = []
     for player in roster:
         name = player["name"].replace(" (Batter)", "").replace(" (Pitcher)", "")
         name_norm = normalize_name(name)
@@ -346,23 +347,39 @@ def match_roster_to_projections(
                     break
 
         if proj is not None:
-            entry = {
-                "name": name,
-                "positions": positions,
-                "player_type": ptype,
-                "selected_position": player.get("selected_position", ""),
-                "player_id": player.get("player_id", ""),
-                "status": player.get("status", ""),
-            }
             if ptype == "hitter":
-                for col in HITTING_COUNTING_COLS:
-                    entry[col] = float(proj.get(col, 0) or 0)
-                entry["avg"] = float(proj.get("avg", 0) or 0)
+                ros = HitterStats(
+                    pa=float(proj.get("pa", 0) or 0),
+                    ab=float(proj.get("ab", 0) or 0),
+                    h=float(proj.get("h", 0) or 0),
+                    r=float(proj.get("r", 0) or 0),
+                    hr=float(proj.get("hr", 0) or 0),
+                    rbi=float(proj.get("rbi", 0) or 0),
+                    sb=float(proj.get("sb", 0) or 0),
+                    avg=float(proj.get("avg", 0) or 0),
+                )
             else:
-                for col in PITCHING_COUNTING_COLS:
-                    entry[col] = float(proj.get(col, 0) or 0)
-                entry["era"] = float(proj.get("era", 0) or 0)
-                entry["whip"] = float(proj.get("whip", 0) or 0)
-            matched.append(entry)
+                ros = PitcherStats(
+                    ip=float(proj.get("ip", 0) or 0),
+                    w=float(proj.get("w", 0) or 0),
+                    k=float(proj.get("k", 0) or 0),
+                    sv=float(proj.get("sv", 0) or 0),
+                    er=float(proj.get("er", 0) or 0),
+                    bb=float(proj.get("bb", 0) or 0),
+                    h_allowed=float(proj.get("h_allowed", 0) or 0),
+                    era=float(proj.get("era", 0) or 0),
+                    whip=float(proj.get("whip", 0) or 0),
+                )
+
+            p = Player(
+                name=name,
+                player_type=ptype,
+                positions=positions,
+                yahoo_id=player.get("player_id", ""),
+                selected_position=player.get("selected_position", ""),
+                status=player.get("status", ""),
+                ros=ros,
+            )
+            matched.append(p)
 
     return matched

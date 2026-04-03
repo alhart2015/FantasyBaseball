@@ -2,6 +2,7 @@ import pytest
 import pandas as pd
 from pathlib import Path
 from fantasy_baseball.data.projections import blend_projections, match_roster_to_projections
+from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 from fantasy_baseball.utils.name_utils import normalize_name
 
 
@@ -125,8 +126,57 @@ class TestMatchRosterToProjections:
         ]
         matched = match_roster_to_projections(roster, hitters, pitchers)
         assert len(matched) == 2
-        names = {p["name"] for p in matched}
+        names = {p.name for p in matched}
         assert names == {"Aaron Judge", "Gerrit Cole"}
+
+    def test_returns_player_objects(self):
+        roster = [
+            {"name": "Aaron Judge", "positions": ["OF"], "selected_position": "OF", "player_id": "123", "status": ""},
+        ]
+        hitters = pd.DataFrame([{
+            "name": "Aaron Judge", "_name_norm": "aaron judge",
+            "r": 110, "hr": 45, "rbi": 120, "sb": 5, "avg": 0.291,
+            "ab": 550, "h": 160, "pa": 650, "player_type": "hitter",
+        }])
+        pitchers = pd.DataFrame(columns=["name", "_name_norm", "player_type"])
+
+        result = match_roster_to_projections(roster, hitters, pitchers)
+        assert len(result) == 1
+        assert isinstance(result[0], Player)
+        assert result[0].name == "Aaron Judge"
+        assert result[0].player_type == "hitter"
+        assert isinstance(result[0].ros, HitterStats)
+        assert result[0].ros.hr == 45
+        assert result[0].ros.avg == 0.291
+        assert result[0].positions == ["OF"]
+
+    def test_pitcher_returns_pitcher_stats(self):
+        roster = [
+            {"name": "Gerrit Cole", "positions": ["SP"], "selected_position": "SP", "player_id": "456", "status": ""},
+        ]
+        hitters = pd.DataFrame(columns=["name", "_name_norm", "player_type"])
+        pitchers = pd.DataFrame([{
+            "name": "Gerrit Cole", "_name_norm": "gerrit cole",
+            "w": 15, "k": 240, "sv": 0, "ip": 200, "er": 70, "bb": 56, "h_allowed": 154,
+            "era": 3.15, "whip": 1.05, "player_type": "pitcher",
+        }])
+
+        result = match_roster_to_projections(roster, hitters, pitchers)
+        assert len(result) == 1
+        assert isinstance(result[0], Player)
+        assert result[0].player_type == "pitcher"
+        assert isinstance(result[0].ros, PitcherStats)
+        assert result[0].ros.k == 240
+
+    def test_unmatched_players_omitted(self):
+        roster = [
+            {"name": "Nobody Special", "positions": ["OF"], "selected_position": "OF", "player_id": "999", "status": ""},
+        ]
+        hitters = pd.DataFrame(columns=["name", "_name_norm", "player_type"])
+        pitchers = pd.DataFrame(columns=["name", "_name_norm", "player_type"])
+
+        result = match_roster_to_projections(roster, hitters, pitchers)
+        assert result == []
 
 
 class TestNormalizeRosToFullSeason:
