@@ -1,9 +1,9 @@
 """Shared fixtures for waiver recommendation integration tests."""
 
 import pytest
-import pandas as pd
 
 from fantasy_baseball.lineup.leverage import calculate_leverage
+from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 
 
 # ---------------------------------------------------------------------------
@@ -103,36 +103,30 @@ USER_TEAM_NAME = "Hart of the Order"
 
 
 def _hitter(name, positions, r, hr, rbi, sb, avg, ab, *, selected_position=""):
-    """Build a hitter pd.Series with realistic stat columns."""
+    """Build a hitter Player with realistic stat columns."""
     h = int(round(avg * ab))
-    return pd.Series({
-        "name": name,
-        "player_type": "hitter",
-        "positions": positions,
-        "r": r, "hr": hr, "rbi": rbi, "sb": sb,
-        "avg": avg, "ab": ab, "h": h,
-        "selected_position": selected_position,
-    })
+    stats = HitterStats(r=r, hr=hr, rbi=rbi, sb=sb, avg=avg, ab=ab, h=h)
+    return Player(
+        name=name, player_type="hitter", positions=positions,
+        ros=stats, selected_position=selected_position,
+    )
 
 
 def _pitcher(name, positions, w, k, sv, era, whip, ip, *, selected_position=""):
-    """Build a pitcher pd.Series with realistic stat columns."""
+    """Build a pitcher Player with realistic stat columns."""
     er = round(era * ip / 9, 1)
     bb = int(round((whip - er / ip) * ip)) if ip > 0 else 0
     # Clamp bb to non-negative (WHIP includes H + BB)
     bb = max(bb, 0)
     h_allowed = int(round(whip * ip - bb))
-    return pd.Series({
-        "name": name,
-        "player_type": "pitcher",
-        "positions": positions,
-        "w": w, "k": k, "sv": sv,
-        "era": era, "whip": whip, "ip": ip,
-        "er": er, "bb": bb, "h_allowed": h_allowed,
-        "gs": 30 if "SP" in positions else 0,
-        "g": 30 if "SP" in positions else 60,
-        "selected_position": selected_position,
-    })
+    stats = PitcherStats(
+        w=w, k=k, sv=sv, era=era, whip=whip, ip=ip,
+        er=er, bb=bb, h_allowed=h_allowed,
+    )
+    return Player(
+        name=name, player_type="pitcher", positions=positions,
+        ros=stats, selected_position=selected_position,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -326,20 +320,22 @@ def leverage(standings, user_team_name):
 
 @pytest.fixture
 def roster():
-    """Roster of ~24 players (pd.Series list), 2 on IL, 1 on BN."""
-    return [p.copy() for p in ROSTER_PLAYERS]
+    """Roster of ~24 Player objects, 2 on IL, 1 on BN."""
+    import copy
+    return [copy.copy(p) for p in ROSTER_PLAYERS]
 
 
 @pytest.fixture
 def active_roster(roster):
     """Only active (non-IL) roster players for waiver swap evaluation."""
-    return [p for p in roster if p.get("selected_position", "").upper() not in ("IL", "IL+")]
+    return [p for p in roster if p.selected_position.upper() not in ("IL", "IL+")]
 
 
 @pytest.fixture
 def free_agents():
     """~30 free agents with realistic projections."""
-    return [p.copy() for p in FREE_AGENT_PLAYERS]
+    import copy
+    return [copy.copy(p) for p in FREE_AGENT_PLAYERS]
 
 
 @pytest.fixture

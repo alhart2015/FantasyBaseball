@@ -5,11 +5,11 @@ weighted SGP -> optimizer assignments, using realistic baseball stat lines.
 """
 
 import pytest
-import pandas as pd
 
 from fantasy_baseball.lineup.leverage import calculate_leverage, MAX_MEANINGFUL_GAP_MULTIPLIER
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
+from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
     DEFAULT_ROSTER_SLOTS,
@@ -22,26 +22,20 @@ from fantasy_baseball.utils.positions import can_fill_slot
 # ---------------------------------------------------------------------------
 
 def _make_hitter(name, positions, r, hr, rbi, sb, avg, ab):
-    return pd.Series({
-        "name": name,
-        "positions": positions,
-        "player_type": "hitter",
-        "r": r, "hr": hr, "rbi": rbi, "sb": sb,
-        "avg": avg, "ab": ab, "h": int(avg * ab),
-    })
+    stats = HitterStats(r=r, hr=hr, rbi=rbi, sb=sb, avg=avg, ab=ab, h=int(avg * ab))
+    return Player(
+        name=name, positions=positions, player_type="hitter", ros=stats,
+    )
 
 
 def _make_pitcher(name, positions, w, k, sv, era, whip, ip):
-    return pd.Series({
-        "name": name,
-        "positions": positions,
-        "player_type": "pitcher",
-        "w": w, "k": k, "sv": sv,
-        "era": era, "whip": whip, "ip": ip,
-        "er": era * ip / 9,
-        "bb": int(whip * ip * 0.3),
-        "h_allowed": int(whip * ip * 0.7),
-    })
+    stats = PitcherStats(
+        w=w, k=k, sv=sv, era=era, whip=whip, ip=ip,
+        er=era * ip / 9, bb=int(whip * ip * 0.3), h_allowed=int(whip * ip * 0.7),
+    )
+    return Player(
+        name=name, positions=positions, player_type="pitcher", ros=stats,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -284,18 +278,18 @@ class TestHitterOptimizerIntegration:
 
         starter_names = set(lineup.values())
         bench_players = [
-            h for h in full_hitter_roster if h["name"] not in starter_names
+            h for h in full_hitter_roster if h.name not in starter_names
         ]
         starters = [
-            h for h in full_hitter_roster if h["name"] in starter_names
+            h for h in full_hitter_roster if h.name in starter_names
         ]
 
         # Compute wSGP for each group
         bench_wsgps = [
-            calculate_weighted_sgp(h, leverage) for h in bench_players
+            calculate_weighted_sgp(h.ros, leverage) for h in bench_players
         ]
         starter_wsgps = [
-            calculate_weighted_sgp(h, leverage) for h in starters
+            calculate_weighted_sgp(h.ros, leverage) for h in starters
         ]
 
         if not bench_wsgps:
@@ -325,7 +319,7 @@ class TestHitterOptimizerIntegration:
 
         # Build name -> positions lookup
         pos_by_name = {
-            h["name"]: h["positions"] for h in full_hitter_roster
+            h.name: h.positions for h in full_hitter_roster
         }
 
         for slot_key, player_name in lineup.items():

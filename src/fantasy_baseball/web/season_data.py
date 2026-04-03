@@ -348,8 +348,6 @@ def build_opponent_lineup(
         Dict with "hitters" and "pitchers" lists, each entry containing
         projection stats, pace data, and dual wSGP (wsgp_them, wsgp_you).
     """
-    import pandas as pd
-
     from fantasy_baseball.analysis.pace import compute_player_pace
     from fantasy_baseball.data.projections import match_roster_to_projections
     from fantasy_baseball.lineup.leverage import calculate_leverage
@@ -363,7 +361,7 @@ def build_opponent_lineup(
     has_ros = not ros_hitters.empty or not ros_pitchers.empty
     if has_ros:
         ros_matched = match_roster_to_projections(roster, ros_hitters, ros_pitchers)
-        ros_lookup = {normalize_name(p["name"]): p for p in ros_matched}
+        ros_lookup = {normalize_name(p.name): p for p in ros_matched}
     else:
         ros_lookup = {}
 
@@ -376,39 +374,40 @@ def build_opponent_lineup(
     # Build enriched entries
     matched_names = set()
     enriched = []
-    for entry in matched:
-        player_series = pd.Series(entry)
-        entry["wsgp_them"] = calculate_weighted_sgp(player_series, opp_leverage)
-        entry["wsgp_you"] = calculate_weighted_sgp(player_series, user_leverage)
-        norm = normalize_name(entry["name"])
+    for player in matched:
+        wsgp_them = calculate_weighted_sgp(player.ros, opp_leverage) if player.ros else 0.0
+        wsgp_you = calculate_weighted_sgp(player.ros, user_leverage) if player.ros else 0.0
+        norm = normalize_name(player.name)
         matched_names.add(norm)
+
+        entry = player.to_flat_dict()
+        entry["wsgp_them"] = wsgp_them
+        entry["wsgp_you"] = wsgp_you
 
         # ROS projection tooltip data
         ros_entry = ros_lookup.get(norm)
-        if ros_entry:
-            entry["ros"] = {
-                k: ros_entry.get(k, 0)
-                for k in (["r", "hr", "rbi", "sb", "avg"]
-                          if entry.get("player_type") == "hitter"
-                          else ["w", "k", "sv", "era", "whip"])
-            }
+        if ros_entry and ros_entry.ros:
+            if player.player_type == "hitter":
+                entry["ros"] = {k: getattr(ros_entry.ros, k, 0) for k in ["r", "hr", "rbi", "sb", "avg"]}
+            else:
+                entry["ros"] = {k: getattr(ros_entry.ros, k, 0) for k in ["w", "k", "sv", "era", "whip"]}
 
         # Pace data
-        ptype = entry.get("player_type", "hitter")
+        ptype = player.player_type
         if ptype == "hitter":
             actuals = hitter_logs.get(norm, {})
         else:
             actuals = pitcher_logs.get(norm, {})
         proj_keys = HITTER_PROJ_KEYS if ptype == "hitter" else PITCHER_PROJ_KEYS
-        projected = {k: entry.get(k, 0) for k in proj_keys}
+        projected = {k: getattr(player.ros, k, 0) if player.ros else 0 for k in proj_keys}
         entry["stats"] = compute_player_pace(actuals, projected, ptype)
 
         enriched.append(entry)
 
     # Include unmatched players
-    for player in roster:
-        if normalize_name(player["name"]) not in matched_names:
-            entry = dict(player)
+    for raw_player in roster:
+        if normalize_name(raw_player["name"]) not in matched_names:
+            entry = dict(raw_player)
             entry["wsgp_them"] = 0.0
             entry["wsgp_you"] = 0.0
             entry["stats"] = {}
@@ -672,8 +671,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.analysis.pace import compute_player_pace
         from fantasy_baseball.analysis.buy_low import find_buy_low_candidates
 
-        import pandas as pd
-
         project_root = Path(__file__).resolve().parents[3]
 
         # --- Step 1: Auth + league ---
@@ -762,7 +759,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         _progress("Fetching opponent rosters...")
         from fantasy_baseball.data.projections import match_roster_to_projections
 
-        opp_rosters: dict[str, list[dict]] = {}
+        opp_rosters: dict[str, list] = {}
         all_raw_rosters = {config.team_name: roster_raw}
 
         def _fetch_opp(key_and_info):
@@ -803,7 +800,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         projected_standings = []
         for tname, roster in all_team_rosters.items():
-            proj_stats = project_team_stats(roster)
+            proj_stats = project_team_stats([p.to_flat_dict() for p in roster])
             projected_standings.append({
                 "name": tname,
                 "team_key": "",
@@ -823,30 +820,25 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # --- Step 6: Match roster players to projections, compute wSGP ---
         _progress("Matching roster to projections...")
-        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
+        from fantasy_baseball.models.player import Player
 
         # Match preseason projections for tooltip comparison
         preseason_matched = match_roster_to_projections(
             roster_raw, preseason_hitters, preseason_pitchers,
         )
-        preseason_lookup = {normalize_name(p["name"]): p for p in preseason_matched}
+        preseason_lookup = {normalize_name(p.name): p for p in preseason_matched}
 
         # Build Player objects from matched entries
         matched_names = set()
         roster_players: list[Player] = []
-        for entry in matched:
-            norm = normalize_name(entry["name"])
+        for player in matched:
+            norm = normalize_name(player.name)
             matched_names.add(norm)
-
-            player = Player.from_dict(entry)
 
             # Attach preseason stat bag
             pre_entry = preseason_lookup.get(norm)
-            if pre_entry:
-                if player.player_type == "hitter":
-                    player.preseason = HitterStats.from_dict(pre_entry)
-                else:
-                    player.preseason = PitcherStats.from_dict(pre_entry)
+            if pre_entry and pre_entry.ros:
+                player.preseason = pre_entry.ros
 
             # Compute wSGP via Player method
             player.compute_wsgp(leverage)
@@ -888,8 +880,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             else:
                 actuals = pitcher_logs.get(norm, {})
             proj_keys = HITTER_PROJ_KEYS if player.player_type == "hitter" else PITCHER_PROJ_KEYS
-            pre = preseason_lookup.get(norm, {})
-            projected = {k: pre.get(k, 0) for k in proj_keys}
+            pre_player = preseason_lookup.get(norm)
+            if pre_player and pre_player.ros:
+                projected = {k: getattr(pre_player.ros, k, 0) for k in proj_keys}
+            else:
+                projected = {k: 0 for k in proj_keys}
             player.pace = compute_player_pace(actuals, projected, player.player_type)
 
         # --- Step 6d: Compute SGP rankings ---
@@ -931,9 +926,9 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         pitcher_players = []
         for player in roster_players:
             if set(player.positions) & PITCHER_POSITIONS:
-                pitcher_players.append(player.to_series())
+                pitcher_players.append(player)
             else:
-                hitter_players.append(player.to_series())
+                hitter_players.append(player)
 
         optimal_hitters = optimize_hitter_lineup(
             hitter_players, leverage, config.roster_slots
@@ -995,9 +990,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         fa_players, _ = fetch_and_match_free_agents(
             league, hitters_proj, pitchers_proj
         )
-        roster_series = [p.to_series() for p in roster_players]
         waiver_recs = scan_waivers(
-            roster_series,
+            roster_players,
             fa_players,
             leverage,
             max_results=10,
@@ -1026,7 +1020,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             )
 
         hart_roster_for_trades = [
-            p.to_flat_dict() for p in roster_players
+            p for p in roster_players
             if p.player_type in ("hitter", "pitcher")
         ]
         trade_proposals = find_trades(
@@ -1073,8 +1067,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         buy_low_trade_targets.sort(key=lambda c: c["avg_z"])
 
         buy_low_free_agents = find_buy_low_candidates(
-            [s.to_dict() for s in fa_players],
-            all_game_logs, leverage, owner="Free Agent",
+            fa_players, all_game_logs, leverage, owner="Free Agent",
         )
 
         # Attach ranks to buy-low candidates
@@ -1096,7 +1089,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         mc_rosters = {}
         for tname, roster in all_team_rosters.items():
-            mc_rosters[tname] = roster
+            mc_rosters[tname] = [p.to_flat_dict() for p in roster]
 
         base_mc = run_monte_carlo(
             mc_rosters, h_slots, p_slots, config.team_name,
@@ -1128,7 +1121,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             ros_mc_rosters = {}
             # User's team (matched uses ROS projections since step 4c)
             if matched:
-                ros_mc_rosters[config.team_name] = matched
+                ros_mc_rosters[config.team_name] = [p.to_flat_dict() for p in matched]
 
             # Opponent teams
             for tname, opp_raw in all_raw_rosters.items():
@@ -1138,7 +1131,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                     opp_raw, ros_hitters, ros_pitchers,
                 )
                 if opp_ros:
-                    ros_mc_rosters[tname] = opp_ros
+                    ros_mc_rosters[tname] = [p.to_flat_dict() for p in opp_ros]
 
             # Build actual standings dict
             actual_standings_dict = {

@@ -5,7 +5,6 @@ with realistic 10-team roto data and a 22-player roster.
 """
 
 import pytest
-import pandas as pd
 
 from fantasy_baseball.lineup.waivers import (
     detect_open_slots,
@@ -94,20 +93,20 @@ class TestDropPreservesPositionalCoverage:
         sole_1b_names = set()
         players_with_1b = [
             p for p in active_roster
-            if "1B" in p.get("positions", [])
-            and p.get("player_type") == "hitter"
+            if "1B" in p.positions
+            and p.player_type == "hitter"
         ]
 
         for candidate in players_with_1b:
             # Would dropping this player leave us unable to cover 1B?
             remaining_positions = [
-                list(p.get("positions", []))
+                list(p.positions)
                 for p in active_roster
-                if p["name"] != candidate["name"]
-                and p.get("player_type") == "hitter"
+                if p.name != candidate.name
+                and p.player_type == "hitter"
             ]
             if not can_cover_slots(remaining_positions, roster_slots):
-                sole_1b_names.add(candidate["name"])
+                sole_1b_names.add(candidate.name)
 
         # Pete Alonso should be identified as the sole irreplaceable 1B
         assert "Pete Alonso" in sole_1b_names, (
@@ -126,18 +125,18 @@ class TestDropPreservesPositionalCoverage:
             # If a sole-1B player IS dropped, the add player must cover 1B.
             # Find the add player's positions from free_agents.
             add_fa = next(
-                (fa for fa in free_agents if fa["name"] == rec["add"]), None
+                (fa for fa in free_agents if fa.name == rec["add"]), None
             )
             assert add_fa is not None
 
             # Build post-swap roster and verify coverage
             post_swap_positions = [
-                list(p.get("positions", []))
+                list(p.positions)
                 for p in active_roster
-                if p["name"] != drop_name
-                and p.get("player_type") == "hitter"
+                if p.name != drop_name
+                and p.player_type == "hitter"
             ]
-            post_swap_positions.append(list(add_fa.get("positions", [])))
+            post_swap_positions.append(list(add_fa.positions))
             assert can_cover_slots(post_swap_positions, roster_slots), (
                 f"Dropping {drop_name} for {rec['add']} leaves a position "
                 f"hole -- can_cover_slots returned False"
@@ -167,15 +166,15 @@ class TestCategoryDirectionMatchesRawStats:
                 continue  # pure adds have no drop-side comparison
 
             add_fa = next(
-                (fa for fa in free_agents if fa["name"] == rec["add"]), None
+                (fa for fa in free_agents if fa.name == rec["add"]), None
             )
             drop_p = next(
-                (p for p in active_roster if p["name"] == rec["drop"]), None
+                (p for p in active_roster if p.name == rec["drop"]), None
             )
             assert add_fa is not None
             assert drop_p is not None
 
-            player_type = add_fa.get("player_type")
+            player_type = add_fa.player_type
 
             if player_type == "hitter":
                 counting_stats = [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")]
@@ -188,8 +187,8 @@ class TestCategoryDirectionMatchesRawStats:
 
             for cat_name, col in counting_stats:
                 cat_sgp_delta = categories.get(cat_name, 0)
-                raw_add = add_fa.get(col, 0)
-                raw_drop = drop_p.get(col, 0)
+                raw_add = getattr(add_fa.ros, col, 0)
+                raw_drop = getattr(drop_p.ros, col, 0)
                 raw_delta = raw_add - raw_drop
 
                 # Direction must match: if the SGP delta says the add is
@@ -214,8 +213,8 @@ class TestCategoryDirectionMatchesRawStats:
             # raw rate.
             if player_type == "hitter":
                 # AVG: marginal_hits = (avg - replacement_avg) * ab
-                add_avg_marginal = (add_fa.get("avg", 0) - 0.250) * add_fa.get("ab", 0)
-                drop_avg_marginal = (drop_p.get("avg", 0) - 0.250) * drop_p.get("ab", 0)
+                add_avg_marginal = (getattr(add_fa.ros, "avg", 0) - 0.250) * getattr(add_fa.ros, "ab", 0)
+                drop_avg_marginal = (getattr(drop_p.ros, "avg", 0) - 0.250) * getattr(drop_p.ros, "ab", 0)
                 avg_delta = categories.get("AVG", 0)
                 if avg_delta > 0.001:
                     assert add_avg_marginal > drop_avg_marginal, (
@@ -238,10 +237,10 @@ class TestCategoryDirectionMatchesRawStats:
                     ("WHIP", "whip", 1.35, 1),
                 ]:
                     cat_sgp_delta = categories.get(cat_name, 0)
-                    add_ip = add_fa.get("ip", 0)
-                    drop_ip = drop_p.get("ip", 0)
-                    add_marginal = (repl_rate - add_fa.get(col, 0)) * add_ip / divisor
-                    drop_marginal = (repl_rate - drop_p.get(col, 0)) * drop_ip / divisor
+                    add_ip = getattr(add_fa.ros, "ip", 0)
+                    drop_ip = getattr(drop_p.ros, "ip", 0)
+                    add_marginal = (repl_rate - getattr(add_fa.ros, col, 0)) * add_ip / divisor
+                    drop_marginal = (repl_rate - getattr(drop_p.ros, col, 0)) * drop_ip / divisor
                     if cat_sgp_delta > 0.001:
                         assert add_marginal > drop_marginal, (
                             f"{rec['add']} vs {rec['drop']}: {cat_name} SGP "
@@ -273,8 +272,8 @@ class TestNoScheduleScalingAsymmetry:
         denoms = get_sgp_denominators()
 
         for fa in free_agents:
-            wsgp = calculate_weighted_sgp(fa, leverage, denoms=denoms)
-            player_type = fa.get("player_type")
+            wsgp = calculate_weighted_sgp(fa.ros, leverage, denoms=denoms)
+            player_type = fa.player_type
 
             if player_type == "hitter":
                 counting = [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")]
@@ -285,7 +284,7 @@ class TestNoScheduleScalingAsymmetry:
 
             # Sum of unweighted counting SGP
             raw_counting_sgp = sum(
-                fa.get(col, 0) / denoms[cat] for cat, col in counting
+                getattr(fa.ros, col, 0) / denoms[cat] for cat, col in counting
             )
 
             # The weighted total can redistribute emphasis but should not
@@ -293,7 +292,7 @@ class TestNoScheduleScalingAsymmetry:
             # This would indicate an asymmetric scaling bug.
             if raw_counting_sgp > 0.5:
                 assert wsgp < raw_counting_sgp * 2.0, (
-                    f"{fa['name']}: weighted SGP ({wsgp:.2f}) exceeds 2x "
+                    f"{fa.name}: weighted SGP ({wsgp:.2f}) exceeds 2x "
                     f"raw counting SGP ({raw_counting_sgp:.2f}), suggesting "
                     f"asymmetric schedule scaling"
                 )
@@ -325,16 +324,16 @@ class TestPureAddsMatchSlotType:
 
         for rec in pure_pitcher_adds:
             add_fa = next(
-                (fa for fa in free_agents if fa["name"] == rec["add"]), None
+                (fa for fa in free_agents if fa.name == rec["add"]), None
             )
             assert add_fa is not None
-            assert add_fa.get("player_type") == "pitcher", (
+            assert add_fa.player_type == "pitcher", (
                 f"Pure pitcher-slot add '{rec['add']}' is not a pitcher "
-                f"(type={add_fa.get('player_type')})"
+                f"(type={add_fa.player_type})"
             )
-            assert is_pitcher(list(add_fa.get("positions", []))), (
+            assert is_pitcher(list(add_fa.positions)), (
                 f"Pure pitcher-slot add '{rec['add']}' has no pitcher "
-                f"positions: {add_fa.get('positions')}"
+                f"positions: {add_fa.positions}"
             )
 
     def test_pure_hitter_adds_are_hitters(
@@ -361,12 +360,12 @@ class TestPureAddsMatchSlotType:
 
         for rec in pure_hitter_adds:
             add_fa = next(
-                (fa for fa in free_agents if fa["name"] == rec["add"]), None
+                (fa for fa in free_agents if fa.name == rec["add"]), None
             )
             assert add_fa is not None
-            assert add_fa.get("player_type") == "hitter", (
+            assert add_fa.player_type == "hitter", (
                 f"Pure hitter-slot add '{rec['add']}' is not a hitter "
-                f"(type={add_fa.get('player_type')})"
+                f"(type={add_fa.player_type})"
             )
 
 

@@ -499,6 +499,8 @@ def _get_stat_cols(player: Player) -> list[tuple[str, str]]:
 def _category_sgp(player: Player, stat: str, col: str, denoms: dict) -> float:
     """Calculate raw SGP for a single category."""
     ros = player.ros
+    if ros is None or not hasattr(ros, col):
+        return 0.0
     if stat in ("AVG",):
         return calculate_hitting_rate_sgp(
             player_avg=ros.avg,
