@@ -1,12 +1,12 @@
 ---
 name: group-review
 user_invocable: true
-description: Use when you want a comprehensive codebase review from three specialist perspectives - baseball expertise, data pipeline quality, and software engineering. Spawns baseball-scout, data-scientist, and software-engineer agents in parallel, then consolidates findings into a severity-ranked report.
+description: Use when you want a comprehensive codebase review from four specialist perspectives - baseball expertise, data pipeline quality, software engineering, and code maintainability. Spawns baseball-scout, data-scientist, software-engineer, and code-maintainability agents in parallel, then consolidates findings into a severity-ranked report.
 ---
 
 # Group Review
 
-Dispatch three specialist agents to review the codebase in parallel, then consolidate their findings into a single severity-ranked report.
+Dispatch four specialist agents to review the codebase in parallel, then consolidate their findings into a single severity-ranked report.
 
 ## Agents
 
@@ -15,6 +15,7 @@ Dispatch three specialist agents to review the codebase in parallel, then consol
 | **baseball-scout** | Baseball reality | Unrealistic projections, bad assumptions about player performance, category scarcity errors, ADP/value mismatches |
 | **data-scientist** | Pipeline correctness | Silent data loss, NaN propagation, rate stat blending errors, pool contamination, methodological flaws |
 | **software-engineer** | Code quality | Performance bottlenecks, correctness bugs, test coverage gaps, race conditions, reliability risks |
+| **code-maintainability** | Structural health | Dead indirection, stringly-typed data, leaky abstractions, coupling, missing normalization boundaries, bug factories |
 
 ## Execution
 
@@ -74,6 +75,7 @@ Dispatch three specialist agents to review the codebase in parallel, then consol
 - baseball-scout: N findings (X critical, Y medium, Z low, W features)
 - data-scientist: N findings (...)
 - software-engineer: N findings (...)
+- code-maintainability: N findings (...)
 ```
 
 ## Deduplication
