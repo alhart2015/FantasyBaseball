@@ -1,6 +1,7 @@
 import pandas as pd
 from fantasy_baseball.utils.constants import DEFAULT_SGP_DENOMINATORS, safe_float as _safe
 from .denominators import get_sgp_denominators
+from fantasy_baseball.models.player import HitterStats, PitcherStats
 
 DEFAULT_TEAM_AB: int = 5500
 DEFAULT_TEAM_IP: int = 1400
@@ -35,7 +36,7 @@ def calculate_pitching_rate_sgp(
 
 
 def calculate_player_sgp(
-    player: pd.Series,
+    player: "HitterStats | PitcherStats | pd.Series",
     denoms: dict[str, float] | None = None,
     team_ab: int = DEFAULT_TEAM_AB,
     team_ip: int = DEFAULT_TEAM_IP,
@@ -49,7 +50,33 @@ def calculate_player_sgp(
 
     total_sgp = 0.0
 
-    if player.get("player_type") == "hitter":
+    if isinstance(player, HitterStats):
+        for stat, val in [("R", player.r), ("HR", player.hr), ("RBI", player.rbi), ("SB", player.sb)]:
+            total_sgp += calculate_counting_sgp(val, denoms[stat])
+        total_sgp += calculate_hitting_rate_sgp(
+            player_avg=player.avg,
+            player_ab=int(player.ab),
+            replacement_avg=replacement_avg,
+            sgp_denominator=denoms["AVG"],
+            team_ab=team_ab,
+        )
+
+    elif isinstance(player, PitcherStats):
+        for stat, val in [("W", player.w), ("K", player.k), ("SV", player.sv)]:
+            total_sgp += calculate_counting_sgp(val, denoms[stat])
+        if player.ip > 0:
+            total_sgp += calculate_pitching_rate_sgp(
+                player_rate=player.era, player_ip=player.ip,
+                replacement_rate=replacement_era,
+                sgp_denominator=denoms["ERA"], team_ip=team_ip, innings_divisor=9,
+            )
+            total_sgp += calculate_pitching_rate_sgp(
+                player_rate=player.whip, player_ip=player.ip,
+                replacement_rate=replacement_whip,
+                sgp_denominator=denoms["WHIP"], team_ip=team_ip, innings_divisor=1,
+            )
+
+    elif player.get("player_type") == "hitter":
         for stat, col in [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")]:
             val = _safe(player.get(col, 0))
             total_sgp += calculate_counting_sgp(val, denoms[stat])

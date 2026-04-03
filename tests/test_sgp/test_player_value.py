@@ -6,6 +6,7 @@ from fantasy_baseball.sgp.player_value import (
     calculate_pitching_rate_sgp,
     calculate_player_sgp,
 )
+from fantasy_baseball.models.player import HitterStats, PitcherStats
 
 
 class TestCountingSgp:
@@ -105,3 +106,37 @@ class TestCalculatePlayerSgp:
         sgp = calculate_player_sgp(player)
         assert sgp == sgp  # not NaN
         assert isinstance(sgp, float)
+
+
+class TestCalculatePlayerSgpDataclass:
+    def test_hitter_stats_matches_series(self):
+        """HitterStats input produces same result as equivalent pd.Series."""
+        stats = HitterStats(pa=650, ab=550, h=160, r=110, hr=45, rbi=120, sb=5, avg=0.291)
+        series = pd.Series({
+            "player_type": "hitter",
+            "r": 110, "hr": 45, "rbi": 120, "sb": 5,
+            "avg": 0.291, "ab": 550, "h": 160,
+        })
+        sgp_dc = calculate_player_sgp(stats)
+        sgp_series = calculate_player_sgp(series)
+        assert sgp_dc == pytest.approx(sgp_series)
+
+    def test_pitcher_stats_matches_series(self):
+        """PitcherStats input produces same result as equivalent pd.Series."""
+        stats = PitcherStats(ip=200, w=15, k=240, sv=0, er=70, bb=56, h_allowed=154, era=3.15, whip=1.05)
+        series = pd.Series({
+            "player_type": "pitcher",
+            "w": 15, "k": 240, "sv": 0,
+            "era": 3.15, "whip": 1.05, "ip": 200,
+        })
+        sgp_dc = calculate_player_sgp(stats)
+        sgp_series = calculate_player_sgp(series)
+        assert sgp_dc == pytest.approx(sgp_series)
+
+    def test_hitter_stats_positive(self):
+        stats = HitterStats(pa=650, ab=550, h=160, r=110, hr=45, rbi=120, sb=5, avg=0.291)
+        assert calculate_player_sgp(stats) > 5.0
+
+    def test_pitcher_stats_positive(self):
+        stats = PitcherStats(ip=200, w=15, k=240, sv=0, er=70, bb=56, h_allowed=154, era=3.15, whip=1.05)
+        assert calculate_player_sgp(stats) > 0
