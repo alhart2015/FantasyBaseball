@@ -1,6 +1,6 @@
 import numpy as np
-import pandas as pd
 from scipy.optimize import linear_sum_assignment
+from fantasy_baseball.models.player import Player
 from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS
 from fantasy_baseball.utils.positions import can_fill_slot
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
@@ -22,7 +22,7 @@ HITTER_SLOTS: list[str] = _build_hitter_slots(DEFAULT_ROSTER_SLOTS)
 
 
 def optimize_hitter_lineup(
-    hitters: list[pd.Series],
+    hitters: list[Player],
     leverage: dict[str, float],
     roster_slots: dict[str, int] | None = None,
 ) -> dict[str, str]:
@@ -42,14 +42,14 @@ def optimize_hitter_lineup(
 
     values = []
     for h in hitters:
-        values.append(calculate_weighted_sgp(h, leverage))
+        values.append(calculate_weighted_sgp(h.ros, leverage))
 
     # Build cost matrix (negative because we maximize)
     size = max(n_players, n_slots)
     cost = np.full((size, size), 1e9)
 
     for i, hitter in enumerate(hitters):
-        positions = hitter.get("positions", [])
+        positions = hitter.positions
         for j, slot in enumerate(hitter_slots):
             if can_fill_slot(positions, slot):
                 cost[i][j] = -values[i]
@@ -61,7 +61,7 @@ def optimize_hitter_lineup(
     for r, c in zip(row_idx, col_idx):
         if r < n_players and c < n_slots and cost[r][c] < 1e8:
             slot = hitter_slots[c]
-            player_name = hitters[r]["name"]
+            player_name = hitters[r].name
             slot_key = slot
             count = assigned_slots.get(slot, 0)
             if count > 0:
@@ -73,7 +73,7 @@ def optimize_hitter_lineup(
 
 
 def optimize_pitcher_lineup(
-    pitchers: list[pd.Series],
+    pitchers: list[Player],
     leverage: dict[str, float],
     slots: int = 9,
 ) -> tuple[list[dict], list[dict]]:
@@ -86,8 +86,8 @@ def optimize_pitcher_lineup(
     """
     scored = []
     for p in pitchers:
-        wsgp = calculate_weighted_sgp(p, leverage)
-        scored.append({"name": p["name"], "wsgp": wsgp, "player": p})
+        wsgp = calculate_weighted_sgp(p.ros, leverage)
+        scored.append({"name": p.name, "wsgp": wsgp, "player": p})
 
     scored.sort(key=lambda x: x["wsgp"], reverse=True)
 
