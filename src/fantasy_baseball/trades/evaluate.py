@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
-import pandas as pd
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
+from fantasy_baseball.models.player import Player
 from fantasy_baseball.utils.positions import can_fill_slot
 
 from fantasy_baseball.utils.constants import (
@@ -231,59 +231,53 @@ def compute_trade_impact(
     }
 
 
-def _player_ros_stats(player: dict) -> dict:
-    """Extract ROS stats from a player dict for trade projection.
-
-    Returns dict with R, HR, RBI, SB, AVG, W, K, SV, ERA, WHIP, ab, ip.
-    """
-    ptype = player.get("player_type", "hitter")
-    if ptype == "hitter":
+def _player_ros_stats(player: Player) -> dict:
+    """Extract ROS stats from a Player for trade projection."""
+    ros = player.ros
+    if player.player_type == "hitter":
         return {
-            "R": player.get("r", 0), "HR": player.get("hr", 0),
-            "RBI": player.get("rbi", 0), "SB": player.get("sb", 0),
-            "AVG": player.get("avg", 0),
+            "R": ros.r, "HR": ros.hr, "RBI": ros.rbi, "SB": ros.sb,
+            "AVG": ros.avg,
             "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0,
-            "ab": player.get("ab", 0), "ip": 0,
+            "ab": ros.ab, "ip": 0,
         }
     else:
         return {
             "R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
-            "W": player.get("w", 0), "K": player.get("k", 0),
-            "SV": player.get("sv", 0), "ERA": player.get("era", 0),
-            "WHIP": player.get("whip", 0),
-            "ab": 0, "ip": player.get("ip", 0),
+            "W": ros.w, "K": ros.k, "SV": ros.sv,
+            "ERA": ros.era, "WHIP": ros.whip,
+            "ab": 0, "ip": ros.ip,
         }
 
 
-def _find_player_by_name(name: str, roster: list[dict]) -> dict | None:
+def _find_player_by_name(name: str, roster: list[Player]) -> Player | None:
     """Find a player in a roster by name (case-insensitive)."""
     name_lower = name.lower()
     for p in roster:
-        if p.get("name", "").lower() == name_lower:
+        if p.name.lower() == name_lower:
             return p
     return None
 
 
-def _can_roster_without(roster: list[dict], remove: dict, add: dict,
+def _can_roster_without(roster: list[Player], remove: Player, add: Player,
                         roster_slots: dict) -> bool:
     """Check if a roster remains legal after swapping one player.
 
     Simple check: the incoming player must be able to fill at least one
     non-bench active slot.
     """
-    positions = add.get("positions", [])
     for slot in roster_slots:
         if slot in ("BN", "IL"):
             continue
-        if can_fill_slot(positions, slot):
+        if can_fill_slot(add.positions, slot):
             return True
     return False
 
 
 def find_trades(
     hart_name: str,
-    hart_roster: list[dict],
-    opp_rosters: dict[str, list[dict]],
+    hart_roster: list[Player],
+    opp_rosters: dict[str, list[Player]],
     standings: list[dict],
     leverage_by_team: dict[str, dict],
     roster_slots: dict[str, int],
@@ -315,8 +309,7 @@ def find_trades(
         opp_leverage = leverage_by_team.get(opp_name, {})
 
         for hart_player in hart_roster:
-            hart_p_series = pd.Series(hart_player)
-            hart_wsgp = calculate_weighted_sgp(hart_p_series, hart_leverage)
+            hart_wsgp = calculate_weighted_sgp(hart_player.ros, hart_leverage)
 
             for opp_player in opp_roster:
                 # Roster legality
@@ -325,23 +318,21 @@ def find_trades(
                 if not _can_roster_without(opp_roster, opp_player, hart_player, roster_slots):
                     continue
 
-                opp_p_series = pd.Series(opp_player)
-
                 # Fairness guardrail: reject lopsided trades where raw
                 # player values are too far apart. Uses the roster data
                 # as-provided (should be recency-blended so injured/inactive
                 # players show near-zero value).
-                hart_raw = calculate_weighted_sgp(hart_p_series, EQUAL_LEVERAGE)
-                opp_raw = calculate_weighted_sgp(opp_p_series, EQUAL_LEVERAGE)
+                hart_raw = calculate_weighted_sgp(hart_player.ros, EQUAL_LEVERAGE)
+                opp_raw = calculate_weighted_sgp(opp_player.ros, EQUAL_LEVERAGE)
                 if abs(hart_raw - opp_raw) > MAX_SGP_GAP:
                     continue
 
                 # wSGP from each side's perspective
-                gain_wsgp = calculate_weighted_sgp(opp_p_series, hart_leverage)
+                gain_wsgp = calculate_weighted_sgp(opp_player.ros, hart_leverage)
                 hart_wsgp_gain = gain_wsgp - hart_wsgp
 
-                opp_current_wsgp = calculate_weighted_sgp(opp_p_series, opp_leverage)
-                opp_gain_wsgp = calculate_weighted_sgp(hart_p_series, opp_leverage)
+                opp_current_wsgp = calculate_weighted_sgp(opp_player.ros, opp_leverage)
+                opp_gain_wsgp = calculate_weighted_sgp(hart_player.ros, opp_leverage)
                 opp_wsgp_gain = opp_gain_wsgp - opp_current_wsgp
 
                 # Both sides must benefit
@@ -361,10 +352,10 @@ def find_trades(
                 )
 
                 proposals.append({
-                    "send": hart_player["name"],
-                    "send_positions": hart_player.get("positions", []),
-                    "receive": opp_player["name"],
-                    "receive_positions": opp_player.get("positions", []),
+                    "send": hart_player.name,
+                    "send_positions": hart_player.positions,
+                    "receive": opp_player.name,
+                    "receive_positions": opp_player.positions,
                     "opponent": opp_name,
                     "hart_delta": impact["hart_delta"],
                     "opp_delta": impact["opp_delta"],

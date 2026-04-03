@@ -1,4 +1,5 @@
 import pytest
+from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 from fantasy_baseball.trades.evaluate import (
     compute_roto_points,
     compute_roto_points_by_cat,
@@ -95,18 +96,18 @@ def test_compute_roto_points_by_cat_missing_stats():
 
 def test_find_trades_returns_ranked_list():
     hart_roster = [
-        {"name": "Slugger", "player_type": "hitter", "positions": ["OF"],
-         "r": 80, "hr": 35, "rbi": 90, "sb": 5, "avg": .270, "h": 140, "ab": 520, "pa": 570},
-        {"name": "Speedy", "player_type": "hitter", "positions": ["SS"],
-         "r": 70, "hr": 10, "rbi": 50, "sb": 40, "avg": .260, "h": 130, "ab": 500, "pa": 550},
+        Player(name="Slugger", player_type="hitter", positions=["OF"],
+               ros=HitterStats(pa=570, ab=520, h=140, r=80, hr=35, rbi=90, sb=5, avg=.270)),
+        Player(name="Speedy", player_type="hitter", positions=["SS"],
+               ros=HitterStats(pa=550, ab=500, h=130, r=70, hr=10, rbi=50, sb=40, avg=.260)),
     ]
     opp_rosters = {
         "Rival": [
-            {"name": "Closer", "player_type": "pitcher", "positions": ["RP"],
-             "w": 3, "k": 60, "sv": 30, "era": 2.80, "whip": 1.00, "ip": 65,
-             "er": 20, "bb": 15, "h_allowed": 50},
-            {"name": "Stealer", "player_type": "hitter", "positions": ["OF"],
-             "r": 75, "hr": 8, "rbi": 45, "sb": 45, "avg": .265, "h": 135, "ab": 510, "pa": 560},
+            Player(name="Closer", player_type="pitcher", positions=["RP"],
+                   ros=PitcherStats(ip=65, w=3, k=60, sv=30, era=2.80, whip=1.00,
+                                    er=20, bb=15, h_allowed=50)),
+            Player(name="Stealer", player_type="hitter", positions=["OF"],
+                   ros=HitterStats(pa=560, ab=510, h=135, r=75, hr=8, rbi=45, sb=45, avg=.265)),
         ],
     }
     leverage_by_team = {
