@@ -325,19 +325,19 @@ class TestHitterSignificance:
         stats = HitterStats(pa=300, r=40, hr=15, rbi=50, sb=5, h=80, ab=270, avg=0.296)
         assert stats.is_significant("HR") is True
 
-    def test_counting_stats_always_significant(self):
+    def test_stats_without_threshold_not_significant(self):
         from fantasy_baseball.models.player import HitterStats
         stats = HitterStats(pa=1)
-        assert stats.is_significant("R") is True
-        assert stats.is_significant("RBI") is True
-        assert stats.is_significant("SB") is True
-        assert stats.is_significant("AVG") is True
+        assert stats.is_significant("R") is False
+        assert stats.is_significant("RBI") is False
+        assert stats.is_significant("SB") is False
+        assert stats.is_significant("AVG") is False
 
     def test_significant_dict(self):
         from fantasy_baseball.models.player import HitterStats
         stats = HitterStats(pa=100)
         d = stats.significant_dict()
-        assert d == {"R": True, "HR": False, "RBI": True, "SB": True, "AVG": True}
+        assert d == {"R": False, "HR": False, "RBI": False, "SB": False, "AVG": False}
 
 
 class TestPitcherSignificance:
@@ -371,15 +371,15 @@ class TestPitcherSignificance:
         stats = PitcherStats(ip=160, k=150, w=10, sv=0, er=55, bb=50, h_allowed=140)
         assert stats.is_significant("WHIP") is True
 
-    def test_counting_stats_always_significant(self):
+    def test_stats_without_threshold_not_significant(self):
         from fantasy_baseball.models.player import PitcherStats
         stats = PitcherStats(ip=1)
-        assert stats.is_significant("W") is True
-        assert stats.is_significant("SV") is True
+        assert stats.is_significant("W") is False
+        assert stats.is_significant("SV") is False
 
     def test_significant_dict(self):
         from fantasy_baseball.models.player import PitcherStats
         # BF = 20*3 + 5 + 3 = 68 (below K=70, ERA=630, WHIP=570)
         stats = PitcherStats(ip=20, k=25, w=2, sv=0, er=8, bb=3, h_allowed=5)
         d = stats.significant_dict()
-        assert d == {"W": True, "K": False, "SV": True, "ERA": False, "WHIP": False}
+        assert d == {"W": False, "K": False, "SV": False, "ERA": False, "WHIP": False}

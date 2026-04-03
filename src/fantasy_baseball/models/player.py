@@ -54,7 +54,7 @@ class HitterStats:
         from fantasy_baseball.utils.constants import STABILIZATION_THRESHOLDS
         entry = STABILIZATION_THRESHOLDS.get(cat)
         if entry is None:
-            return True  # No threshold — always significant
+            return False  # No threshold defined — not yet validated
         threshold, unit = entry
         if unit == "pa":
             return self.pa >= threshold
@@ -118,7 +118,7 @@ class PitcherStats:
         from fantasy_baseball.utils.constants import STABILIZATION_THRESHOLDS
         entry = STABILIZATION_THRESHOLDS.get(cat)
         if entry is None:
-            return True  # No threshold — always significant
+            return False  # No threshold defined — not yet validated
         threshold, unit = entry
         if unit == "bf":
             bf = self.ip * 3 + self.h_allowed + self.bb

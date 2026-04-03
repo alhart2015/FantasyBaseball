@@ -191,11 +191,11 @@ def test_significance_flags_in_pace_output():
     projected = {"pa": 600, "ab": 540, "h": 150, "r": 80, "hr": 25, "rbi": 85, "sb": 10, "avg": 0.278}
     result = compute_player_pace(actual, projected, "hitter")
 
-    assert result["R"]["significant"] is True
+    assert result["R"]["significant"] is False  # no threshold defined
     assert result["HR"]["significant"] is False  # 100 PA < 170
-    assert result["RBI"]["significant"] is True
-    assert result["SB"]["significant"] is True
-    assert result["AVG"]["significant"] is True
+    assert result["RBI"]["significant"] is False  # no threshold defined
+    assert result["SB"]["significant"] is False  # no threshold defined
+    assert result["AVG"]["significant"] is False  # no threshold defined
 
 
 def test_significance_pitcher():
@@ -210,5 +210,5 @@ def test_significance_pitcher():
     assert result["K"]["significant"] is True   # 103 >= 70
     assert result["ERA"]["significant"] is False  # 103 < 630
     assert result["WHIP"]["significant"] is False  # 103 < 570
-    assert result["W"]["significant"] is True
-    assert result["SV"]["significant"] is True
+    assert result["W"]["significant"] is False  # no threshold defined
+    assert result["SV"]["significant"] is False  # no threshold defined
