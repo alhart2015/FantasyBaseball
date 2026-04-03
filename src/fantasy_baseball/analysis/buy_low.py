@@ -1,9 +1,8 @@
 """Buy-low candidate detection — players underperforming projections."""
 
-import pandas as pd
-
 from fantasy_baseball.analysis.pace import compute_player_pace
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
+from fantasy_baseball.models.player import Player
 from fantasy_baseball.utils.constants import (
     HITTING_CATEGORIES, HITTER_PROJ_KEYS,
     PITCHING_CATEGORIES, PITCHER_PROJ_KEYS,
@@ -12,7 +11,7 @@ from fantasy_baseball.utils.name_utils import normalize_name
 
 
 def find_buy_low_candidates(
-    players: list[dict],
+    players: list[Player],
     game_log_lookup: dict,
     leverage: dict,
     owner: str = "Free Agent",
@@ -20,7 +19,7 @@ def find_buy_low_candidates(
     """Find players underperforming projections by > 1 SD.
 
     Args:
-        players: Roster entries with projection stats (dict with lowercase stat keys).
+        players: Roster entries as Player objects with .ros projection stats.
         game_log_lookup: {normalized_name: {stat: value}} from bulk game log query.
         leverage: Per-category leverage weights for wSGP computation.
         owner: Team name or "Free Agent" for display.
@@ -31,8 +30,8 @@ def find_buy_low_candidates(
     candidates = []
 
     for player in players:
-        name = player.get("name", "")
-        ptype = player.get("player_type", "")
+        name = player.name
+        ptype = player.player_type
         if ptype not in ("hitter", "pitcher"):
             continue
 
@@ -47,7 +46,7 @@ def find_buy_low_candidates(
             proj_keys = PITCHER_PROJ_KEYS
             categories = PITCHING_CATEGORIES
 
-        projected = {k: player.get(k, 0) or 0 for k in proj_keys}
+        projected = {k: getattr(player.ros, k, 0) or 0 for k in proj_keys}
         pace = compute_player_pace(actuals, projected, ptype)
 
         # Average z-scores, excluding stats where z=0 and color=neutral
@@ -71,13 +70,13 @@ def find_buy_low_candidates(
 
         # Compute wSGP using projection stats and user's leverage
         try:
-            wsgp = round(calculate_weighted_sgp(pd.Series(player), leverage), 2)
+            wsgp = round(calculate_weighted_sgp(player.ros, leverage), 2)
         except (KeyError, ZeroDivisionError, ValueError):
             wsgp = 0.0
 
         candidates.append({
             "name": name,
-            "positions": player.get("positions", []),
+            "positions": player.positions,
             "owner": owner,
             "player_type": ptype,
             "avg_z": avg_z,
