@@ -23,6 +23,18 @@
 - [ ] **Keeper value in all decisions** — Factor multi-year keeper value into trade recommendations, waiver pickups, and draft strategy. Pull future-year projected stats (FanGraphs has age curves and multi-year projections) to estimate whether a player will be a keeper candidate next year. Young breakout players (e.g., a 23-year-old having a great season) should be valued higher because they'll be kept — trading them away costs future value, not just current-year production. Conversely, aging veterans on decline curves are worth less than their current stats suggest because they won't be kept. This affects: (1) trade recommender — don't trade away future keepers for a marginal current-year upgrade, and flag opponents' aging stars as buy-low targets; (2) waiver wire — prioritize young upside players over veteran rentals; (3) draft strategy — weight keeper-eligible players higher in later rounds. Requires modeling: age curves, keeper eligibility rules (league-specific), and a "keeper probability" score per player.
 
 
+- [ ] **Harden data ingest: position and name matching** — The projection-to-roster matching pipeline has had repeated bugs around edge cases: Julio Rodriguez (accent encoding), Mason Miller (name collisions between hitter and pitcher), Shohei Ohtani (dual hitter/pitcher split). Audit `match_roster_to_projections`, name normalization, and position collision resolution end-to-end. Add targeted test cases for each known problem player and fix any remaining fragility.
+
+- [ ] **Clean up "default for backwards compatibility" and other code smells** — Grep for remaining `# default for backwards compat` comments and similar shims. These were added during refactors and should be resolved — either the new behavior is correct (remove the comment and dead path) or the migration is incomplete (finish it).
+
+- [ ] **Fix AVG tie resolution beyond 3 decimal places** — Roto standings ties in AVG are resolved by comparing to 3 decimal places, but actual ties at .001 granularity are common. Compare to full precision (or at least 5+ digits) to properly break ties. Check ERA and WHIP for the same issue.
+
+- [ ] **Daily summary email** — Automated morning email with: last night's results for all roster players (hits, HRs, RBI, etc.), hot/cold streaks (rolling 7-day and 14-day performance vs projection), standings changes (gained/lost roto points overnight), recommended lineup changes for today, add/drop suggestions based on waiver wire, injury news affecting roster, and upcoming probable pitcher matchups. Could use the existing leverage and waiver modules as the analytical backbone.
+
+- [ ] **Show player ranking on other teams' rosters** — The roster view for opponents doesn't show player VAR/ranking info. Add the same ranking context shown for the user's own roster so you can quickly assess trade targets and opponent strengths.
+
+- [ ] **Round IP display to 1 decimal place** — IP values show excessive precision (e.g., 2.3333333). Round to 1 decimal place for display. Note: baseball IP is measured in thirds (6.1 = 6⅓ innings), so the display should ideally convert to baseball notation (6.1, 6.2, 7.0) rather than naive rounding.
+
 - [ ] **Extract rate stat utility functions** — AVG (`h/ab`), ERA (`er*9/ip`), and WHIP (`(bb+h_allowed)/ip`) are computed inline in 7+ places: `projections.py` blend, `pace.py`, `board.py` backfill, `rankings.py`, `replacement.py`, `draft/projections.py`, and now `models/player.py`. Extract `calculate_avg()`, `calculate_era()`, `calculate_whip()` into `utils/rate_stats.py` and replace all inline computations.
 
 - [ ] **Simplify suggested fixes** — Larger refactors identified by codebase-wide simplify review (2026-03-28):

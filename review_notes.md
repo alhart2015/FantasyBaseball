@@ -1,96 +1,124 @@
-## Group Review — 2026-03-26
+## Group Review — 2026-04-05
 
 ### CRITICAL
 
-**1. [baseball-scout, data-scientist, software-engineer] Leverage weight explosion when no pitchers are drafted**
+**1. [baseball-scout] Config strategy/scoring_mode contradicts prior validated analysis**
+`config/league.yaml` has `strategy: three_closers` and `scoring_mode: var`. Prior review determined `two_closers` + `vona` was correct after 4 bugs were found that invalidated earlier results. The `three_closers` strategy forces drafting closers at rounds 5/9/13 where most have negative VAR. This was flagged as Critical in the prior review and remains unfixed. *(Note: if the 2026 draft is already complete, this only affects future simulations — but it should still be corrected.)*
 
-When a team has zero pitchers (common after keeper rounds — Hart has 3 hitter keepers), ERA and WHIP get `raw = 1.0 / epsilon = 1000.0` while counting stats at zero are capped at `10.0`. This creates a **642:1 pitching-to-hitting leverage ratio**, causing the recommender to draft mid-tier SPs over elite hitters after keeper rounds. In VONA mode, hitter urgency is effectively zeroed out, making the bug worse. The existing test (`test_none_pitching_totals_get_high_weight`) only asserts pitching > hitting, missing the severity entirely.
+**2. [code-maintainability, data-scientist, software-engineer] Duplicated `simulate_season` — two diverging copies**
+`simulation.py` (canonical, batch RNG draws, injury tracking) and `draft/projections.py` (per-player RNG, no injuries, no batched draws) implement the same logic independently. They've already diverged. A bug fix or calibration change in one won't propagate to the other. This directly risks inconsistent simulation results between the draft predictor and the post-draft Monte Carlo. *(Already noted in TODO.md under "Simplify suggested fixes".)*
 
-**Fix:** `balance.py:121` — cap `None` raw weight to `10.0` (same as counting stats). Strengthen test to assert ratio < 20.
-
-**2. [baseball-scout] Config strategy/scoring_mode contradicts validated analysis**
-
-`league.yaml` says `strategy: three_closers` + `scoring_mode: var`, but the team's own adversarial review (2026-03-24) validated `two_closers` + `vona` after finding 4 bugs that invalidated prior results. The config was either never updated or reverted. Running the wrong strategy on draft day would be costly.
-
-**Fix:** `config/league.yaml:9-10` — change to `strategy: two_closers` and `scoring_mode: vona`.
-
-**3. [baseball-scout] "Util" position not recognized for UTIL roster slot**
-
-Yahoo caches Ohtani (batter) with positions `["Util"]`, but `HITTER_POSITIONS` doesn't include `"Util"`, so `can_fill_slot(["Util"], "UTIL")` returns `False`. Ohtani can't be assigned to any active roster slot. Currently he's kept by another team so it doesn't wreck Hart's draft, but it affects opponent roster modeling in simulations.
-
-**Fix:** `positions.py:3` — add `"Util"` to `HITTER_POSITIONS`.
+**3. [software-engineer] No tests for the delta protocol (draft-day dashboard)**
+`compute_delta`, `read_delta`, and the Flask `/api/state?since=<version>` endpoint have zero test coverage. This is the real-time update mechanism for the draft dashboard. A bug here silently serves stale data during a live draft. Missing tests: delta with None old_state, changed vs unchanged field detection, version inclusion, multi-version-behind fallback.
 
 ---
 
 ### MEDIUM
 
-**4. [baseball-scout] Backfill mechanism inflates pitcher value and double-counts injury risk**
+**4. [baseball-scout] SGP denominators wrong for this league**
+The custom analysis (`data/analysis/custom_sgp_denominators.md`) shows AVG denominator is 0.005 vs league-specific 0.0025 (−50%), SB is 8 vs 11.9 (+49%), HR is 9 vs 7.3 (−19%). High-AVG hitters are systematically undervalued, speed is overvalued. The `sgp_denominators` override mechanism exists in `league.yaml` but isn't being used. Even a 50/50 blend with league-specific values would help.
 
-Backfill adds waiver-quality IP to any starter below 178 IP (1,437 pitchers affected) and waiver-quality AB to hitters below 600 AB (1,832 hitters affected). This double-counts injury risk since Monte Carlo already models playing time loss. Worse, rate stat dilution punishes high-AVG hitters: Yordan Alvarez drops 11 points of AVG from .295 to .284. The 15 IP / 50 AB thresholds are too tight.
+**5. [baseball-scout] Equal-weight 5-system blend dilutes signal**
+ATC is already a consensus of Steamer, ZiPS, and THE BAT — including it at equal weight double-counts those inputs. "Oopsy" has no established accuracy track record and runs systematically hot (+10 HR, +21 AVG points vs Steamer for Judge). A baseball-savvy blend: Steamer 30%, ZiPS 30%, ATC 25%, THE BAT X 15%, drop or heavily discount Oopsy.
 
-**Recommendation:** Raise thresholds (SP from 15→30, hitter from 50→100), cap backfill at 25% of projected stats, or apply only to counting stats and leave AVG/ERA/WHIP at original values.
+**6. [baseball-scout, code-maintainability] "Util" missing from HITTER_POSITIONS**
+`utils/positions.py` defines `HITTER_POSITIONS = {"C", "1B", "2B", "3B", "SS", "OF", "DH", "IF"}` — no `"Util"`. Yahoo returns `"Util"` for players like Ohtani. `is_hitter(["Util"])` returns `False`, misclassifying those players. Single-line fix.
 
-**5. [baseball-scout] "Oopsy" projection system runs hot, may distort blend**
+**7. [baseball-scout, data-scientist] Backfill mechanism double-counts injury risk**
+Backfill adds waiver-quality stats to players below healthy baselines (600 AB / 178 IP), but Monte Carlo already models playing time loss. This drops Yordan Alvarez's AVG by 11 points. The 600 AB threshold also penalizes high-walk hitters like Soto (536 AB = full healthy season for him). Data-scientist also notes the binary cliff: 549 AB gets no backfill, 550 AB gets full treatment. *(Already in TODO.md as a postseason item.)*
 
-Oopsy consistently projects higher HR and AVG than all four established systems (Judge: +10 HR, +21 AVG pts vs Steamer). At equal 20% weight, it pulls the blend upward. ATC already double-counts Steamer/ZiPS since it's a blend of those systems. Adding a fifth hot system compounds this.
+**8. [code-maintainability] Duplicated roto scoring implementation**
+`trades/evaluate.py:compute_roto_points_by_cat` and `scoring.score_roto` both implement fractional tie-breaking roto scoring with different input formats. `draft/projections.py` adds a thin wrapper with a misleading `num_teams` parameter that's silently ignored.
 
-**Recommendation:** Reduce Oopsy weight to 10% or remove, unless it has a verified accuracy track record.
+**9. [code-maintainability] Pervasive stringly-typed `player_type`**
+`"hitter"` appears in 36 comparison sites across 19 files. No enum, no exhaustiveness check. `calculate_player_sgp` silently returns `total_sgp = 0.0` if neither `"hitter"` nor `"pitcher"` matches. A `PlayerType` enum or `Literal["hitter", "pitcher"]` would turn silent no-ops into immediate errors.
 
-**6. [software-engineer] Simulation `iterrows()` bottleneck — 62% of runtime**
+**10. [code-maintainability] Rate stat formulas duplicated 16+ times across 7 files**
+ERA (`er*9/ip`), WHIP (`(bb+h_allowed)/ip`), AVG (`h/ab`) computed inline in `simulation.py`, `balance.py`, `projections.py`, `replacement.py`, `scoring.py`, `pace.py`, `evaluate.py`. Classic bug factory. *(Already in TODO.md as "Extract rate stat utility functions".)*
 
-`simulate_draft.py:453-467` — opponent pick loop uses `adp_board.iterrows()` for ~180 picks per simulation, consuming 4.0 of 6.5 seconds. Converting to `adp_board.to_dict('records')` gives ~2.4x overall speedup. For `compare_strategies.py` (1120 simulations): saves ~25 minutes.
+**11. [code-maintainability, data-scientist, software-engineer] `_scarcity_cache` keyed by `id(board)` — fragile**
+Python can reuse memory addresses after GC, serving stale cache data. Cache also doesn't vary by `roster_slots`. Three agents independently flagged this. Fix: content-based hash or pass scarcity order explicitly.
 
-**7. [software-engineer] `_lookup_pid` searches by name, not player_id**
+**12. [data-scientist] Management adjustment treats AVG/ERA/WHIP as counting stats**
+`simulation.py:apply_management_adjustment` multiplies AVG by `factor` directly instead of adjusting H and AB components. Same for ERA/WHIP. Error is small (~1%) for typical factor ranges, but technically imprecise.
 
-`strategy.py:728-734` — when two players share a name (e.g., Max Muncy LAD vs ATH), returns first DataFrame match. Should use `player_id` from recommendation dict when available.
+**13. [software-engineer] `build_player_lookup` and `_lookup_pid` performance**
+`build_player_lookup` uses `iterrows()` on ~5700 rows (~30-50ms each call). `_lookup_pid` does O(n) DataFrame scan per call without passing `name_to_pid`. Several strategy helper functions rebuild lookups unnecessarily instead of passing the existing one through.
 
-**8. [baseball-scout] three_closers deadlines force negative-VAR closers**
+**14. [software-engineer] Missing tests: `serialize_board`, `get_roster_by_position`, `_filter_rosterable`**
+Three untested functions in the draft-day code path. `_filter_rosterable` is critical for late-draft correctness (nearly-full roster). `get_roster_by_position` drives dashboard display. `serialize_board` is the one-time full board payload.
 
-Deadlines at rounds 5/9/13 force drafting closers at ADP 80-120+ where most have negative VAR (-0.54 to -2.32). Only matters if Finding #2 isn't fixed, since the validated strategy is two_closers.
+**15. [software-engineer] No tests for interactive draft flow**
+`_handle_user_pick`, `_handle_other_pick`, `_get_player_input` in `run_draft.py` have no unit tests. Edge cases like out-of-range numbers, "skip", name collisions, and the "mine" keyword for traded picks are untested.
+
+**16. [baseball-scout] Closer pool thinner than strategy assumes**
+Only ~10 closers meet the 20 SV threshold in Steamer. `three_closers` needs 30 league-wide. Even `two_closers` needs 20, which doesn't exist. The `no_punt_cap3` strategy with dynamic SV monitoring is better suited.
+
+**17. [code-maintainability] `calculate_player_sgp` and `calculate_weighted_sgp` accept 3 unrelated input types**
+Both accept `HitterStats | PitcherStats | pd.Series` with 4 code paths each (8 total). Adding a new stat requires updating all branches. Standardize on the dataclass path.
+
+**18. [code-maintainability] PITCHER_POSITIONS defined in two places**
+`utils/positions.py` and `sgp/rankings.py` both define `{"P", "SP", "RP"}`. The latter should import from the former.
 
 ---
 
 ### LOW
 
-**9. [data-scientist] PA not adjusted during hitter backfill** — PA stays at pre-backfill value while AB is increased, creating inverted PA<AB. Cosmetic only — PA is never used in calculations.
+**19. [code-maintainability] Inconsistent name normalization** — `trades/evaluate.py` uses `.lower()` instead of `normalize_name()`, `draft/search.py` reimplements its own `_norm()`. Accented names would fail to match.
 
-**10. [baseball-scout] Pitcher correlation matrix has suspiciously uniform values** — ER-BB-H_allowed pairwise correlations are all exactly 0.729, which is unlikely from real calibration data. Modest simulation impact.
+**20. [code-maintainability] Strategies access `balance._hitters` directly** — Couples strategy layer to `CategoryBalance` internals. Add a `get_avg_components()` method.
 
-**11. [software-engineer] `_scarcity_cache` uses `id(board)` as cache key** — `recommender.py:428`. Memory address reuse could return stale data after GC. Safe in practice since board lives for entire session.
+**21. [code-maintainability] Hardcoded season date defaults in config** — `season_start: "2026-03-27"` will be stale next year. Either remove defaults or validate against `season_year`.
 
-**12. [data-scientist] SV threshold cliff at 20 SV** — Binary closer classification creates sharp cliff (19.1 SV = SP/RP, 20.6 SV = closer). Design tradeoff, not a bug.
+**22. [code-maintainability] No validation of `scoring_mode` or `strategy` config values** — Typos silently fall through to defaults.
 
-**13. [data-scientist] ADP infinite values for uncached players** — Handled correctly downstream (appear last in ADP-sorted lists).
+**23. [code-maintainability] Ad-hoc Yahoo position normalization in `waivers.py`** — Should use centralized utility.
 
-**14. [software-engineer] Module-level state in `state.py` leaks across tests** — `_current_version` persists between tests. `reset_version_state()` exists but must be called manually.
+**24. [software-engineer] `CategoryBalance.get_totals()` inconsistency** — Returns 0 for W/K/SV but None for ERA/WHIP when no pitchers drafted, creating 100:1 weighting asymmetry in leverage calc.
 
-**15. [software-engineer] Dependencies not pinned to specific versions** — Uses `>=` rather than `~=`. Appropriate for single-user app but fragile.
+**25. [software-engineer] `_pick_with_avg_floor` looks up by name, not player_id** — Name collisions possible. Recs should include `player_id`.
 
-**16. [data-scientist] No config validation against schema** — Missing/malformed YAML fields silently use defaults.
+**26. [baseball-scout] Team IP constant inconsistency** — `player_value.py` uses 1400, `simulation.py` uses 1450. ~3.5% discrepancy in pitcher rate stat SGP.
+
+**27. [baseball-scout] Pitcher correlation matrix uniform at 0.729** — ER-BB-H_allowed pairwise correlations are all exactly 0.729, which is unlikely from real calibration data. Modest simulation impact.
+
+**28. [baseball-scout] Emmanuel Clase ghost across 3/5 projection systems** — Steamer and Oopsy project ~1 IP, 0 SV. Blend produces near-zero projection.
+
+**29. [code-maintainability] Hardcoded user name `hart_*` in trade evaluation** — Should be `user_*`.
+
+**30. [code-maintainability, software-engineer] Module-level mutable state** — `draft/state.py` globals, `_scarcity_cache` — fine for single-process but no reset for cache in tests.
+
+**31. [data-scientist] No pipeline stage logging** — Row counts at each stage (blend → filter → backfill → SGP → VAR) would help debugging.
 
 ---
 
 ### SUGGESTED FEATURES
 
-**17. [baseball-scout] Cap backfill as percentage of projected stats** — Even with higher thresholds, a 100 IP pitcher shouldn't receive 78 IP of replacement pitching. Cap at 25%.
+**32. [code-maintainability] Type-safe `TeamStats` container** — Centralize the 10 roto category totals with computed properties for rate stats. Eliminates inline formulas and provides validation.
 
-**18. [data-scientist] Log position cache miss rate at board build time** — Count default-position fallbacks and warn the user.
+**33. [code-maintainability] `DraftContext` dataclass** — Strategy functions all take `(board, full_board, tracker, balance, config, team_filled, **kwargs)`. A context object cleans up ~15 signatures. *(Already in TODO.md.)*
 
-**19. [software-engineer] Extract `balance._hitters` access into a method** — Strategies directly access internal `_hitters` list. Add `get_projected_avg()` to decouple.
+**34. [data-scientist] Auto-compute SGP denominators from player pool** — Standard deviation of projected team totals from Monte Carlo. Self-calibrating when league size or stat environment changes.
 
-**20. [data-scientist] Update Yahoo position cache before draft** — Current cache has 938 entries vs 3699 board players. Emmanuel Clase defaults to `[SP]` instead of `[RP]`.
+**35. [baseball-scout] "Stealth closer" alert for relievers projected 10-19 SV** — Robert Suarez (8-11 SV) falls below the threshold but could be a primary closer. Flag high-leverage relievers near the cutoff.
+
+**36. [baseball-scout] Adjust projection weights based on track record** — Weight systems by historical accuracy (Steamer/ZiPS have published Brier scores, Oopsy doesn't).
 
 ---
 
 ### Stats
-- baseball-scout: 10 findings (2 critical, 4 medium, 2 low, 2 features)
-- data-scientist: 8 findings (0 critical, 1 medium, 5 low, 2 features)
-- software-engineer: 10 findings (2 critical, 3 medium, 4 low, 1 feature)
+- baseball-scout: 11 findings (1 critical, 5 medium, 3 low, 2 features)
+- data-scientist: 10 findings (0 critical, 3 medium, 5 low, 2 features)
+- software-engineer: 18 findings (1 critical, 8 medium, 7 low, 2 features)
+- code-maintainability: 17 findings (1 critical, 6 medium, 8 low, 2 features)
+- Deduplicated from: 56 raw findings → 36 consolidated
 
-### Tensions
+### Mediator Notes — Agent Tensions
 
-**Backfill value vs. double-counting:** The baseball scout flags backfill as distorting player values (penalizing high-AVG hitters, inflating SP). The data scientist verified the backfill math is *correct* — rate stats are properly recomputed from components. Both are right: the math is correct but the methodology is flawed. The Monte Carlo simulation already models injury-driven playing time loss, so backfill pre-adjusting projected stats before SGP is genuinely double-counting. **Scout wins this one.**
+**Duplicate `simulate_season` severity**: Code-maintainability rated CRITICAL, data-scientist rated MEDIUM, software-engineer rated LOW (code health). Sided with code-maintainability — the CLAUDE.md explicitly says "a wrong answer that looks plausible is worse than no answer" and two diverging simulation engines risk exactly that.
 
-**SV variance (0.900) and closer valuation:** The scout notes the high SV variance may *systematically undervalue closers* in simulation, which could explain why simulations favor fewer closers. Meanwhile the scout also validates two_closers as the right strategy. There's tension here — if SV variance is too high, the simulation that validated two_closers may itself be biased against closers. Worth investigating but not blocking.
+**Backfill mechanism**: Baseball-scout wants it removed or heavily reworked (double-counts injury risk, distorts AVG for high-walk hitters). Data-scientist notes the binary cliff but considers the methodology defensible. Lean toward the scout — the Monte Carlo already handles injury variance, so backfill is redundant at best and distortionary at worst. Already acknowledged in TODO.md.
 
-**Oopsy projections:** Only the scout flagged this. The data scientist verified the blending math is correct regardless of input quality. The scout's concern is about *input quality*, not pipeline correctness — a properly blended bad projection still produces a bad result. **This deserves attention** — if Oopsy doesn't have a verified track record, it shouldn't get equal weight with Steamer/ZiPS.
+**SGP denominators**: Baseball-scout says the defaults are clearly wrong for this league. Data-scientist frames it as an architectural concern (static vs dynamic). Both are right — the immediate fix is to use the override mechanism that already exists, the long-term fix is auto-computation.
+
+**Closer SV threshold**: Baseball-scout sees the shallow closer pool as a strategic problem. Data-scientist notes the binary cutoff as a methodological concern. These are two sides of the same coin — a softer threshold would partially address the strategic issue by giving partial closer credit to 15-19 SV pitchers.
