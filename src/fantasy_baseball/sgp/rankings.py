@@ -11,7 +11,7 @@ from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
-PITCHER_POSITIONS = {"P", "SP", "RP"}
+from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 
 
 def rank_key(name: str, player_type: str) -> str:

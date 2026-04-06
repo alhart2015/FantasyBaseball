@@ -59,6 +59,14 @@
 
 - [ ] **Fix league.yaml strategy/scoring_mode before next draft** — Config has `strategy: three_closers` and `scoring_mode: var`, but prior analysis (after fixing 4 bugs) validated `two_closers` + `vona` as correct. `three_closers` forces closers at rounds 5/9/13 where most have negative VAR. Update config before next year's draft simulations.
 
+- [ ] **Add tests for `serialize_board`, `get_roster_by_position`, `_filter_rosterable`** — Three untested functions in the draft-day code path. `_filter_rosterable` is critical for late-draft correctness (nearly-full roster). `get_roster_by_position` drives dashboard display. `serialize_board` is the one-time full board payload.
+
+- [ ] **Add tests for interactive draft flow** — `_handle_user_pick`, `_handle_other_pick`, `_get_player_input` in `run_draft.py` have no unit tests. Edge cases: out-of-range numbers, "skip", name collisions, and the "mine" keyword for traded picks.
+
+- [ ] **Rethink closer handling: draft strategy, in-season recommendations, and injury response** — The 20 SV binary threshold classifies closers as all-or-nothing. 19 pitchers clear it in blended projections, but 15 more are in the 10-19 SV range and get zero closer credit. A softer threshold (partial closer credit, or a continuous SV value curve) would better reflect the reality of committee situations, mid-season role changes, and closer injuries. Also revisit how the in-season optimizer handles closer injuries and waiver closer recommendations — the current approach may not react quickly enough to role changes.
+
+- [ ] **Optimize `build_player_lookup` and `_lookup_pid` in strategy.py** — `build_player_lookup` uses `iterrows()` on ~5700 rows (~30-50ms per call, called ~12 times per pick). Replace with `to_dict("index")`. `_lookup_pid` does O(n) DataFrame scan per call — build a `name→pid` dict once instead. Several strategies already build `player_lookup` but don't pass it through to `_lookup_pid`.
+
 - [ ] **Fix `_scarcity_cache` keyed by `id(board)`** — Python can reuse memory addresses after GC, serving stale cache data. Cache also doesn't vary by `roster_slots`. Three review agents flagged this independently. Fix: content-based hash or pass scarcity order explicitly.
 
 - [ ] **Refactor draft pipeline to use Player dataclass** — The draft pipeline (`board.py`, `replacement.py`, `var.py`, `rankings.py`) operates end-to-end on pandas DataFrames with string-keyed column access. Now that the in-season SGP functions accept `HitterStats`/`PitcherStats` directly, extend the same pattern to the draft pipeline: build `Player` objects from blended projections, compute SGP/VAR on the dataclass, and only convert to a DataFrame for the final ranked board output. This eliminates the split where in-season code uses typed dataclasses but draft code uses untyped Series.

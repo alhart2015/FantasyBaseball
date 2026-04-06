@@ -135,7 +135,13 @@ function isHitterFilter(pos) {
 function matchesPosition(player, pos) {
     if (pos === 'ALL_HIT') return player.player_type === 'hitter';
     if (pos === 'ALL_PIT') return player.player_type === 'pitcher';
-    return player.positions && player.positions.includes(pos);
+    if (player.positions && player.positions.includes(pos)) return true;
+    // Yahoo only returns "P" for pitchers — infer SP/RP from saves
+    if (player.player_type === 'pitcher' && player.positions && player.positions.includes('P')) {
+        if (pos === 'SP') return (player.SV || 0) < 5;
+        if (pos === 'RP') return (player.SV || 0) >= 5;
+    }
+    return false;
 }
 
 function fmt(val, cat) {
