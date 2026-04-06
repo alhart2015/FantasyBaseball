@@ -12,6 +12,7 @@ from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.utils.positions import can_fill_slot
 
+from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
     INVERSE_STATS as INVERSE_CATS,
@@ -35,8 +36,10 @@ _TEAM_IP = 1400
 
 def compute_roto_points_by_cat(
     standings: list[dict[str, Any]],
-) -> dict[str, dict[str, int]]:
+) -> dict[str, dict[str, float]]:
     """Return per-category roto points for each team.
+
+    Delegates to ``scoring.score_roto`` for the actual ranking logic.
 
     Args:
         standings: list of {"name": str, "stats": {cat: float}} dicts.
@@ -45,33 +48,24 @@ def compute_roto_points_by_cat(
         {team_name: {cat: points}} where points range from 1 (worst) to
         N (best) for N teams.  ERA and WHIP are inverse (lower is better).
     """
-    n = len(standings)
-    result: dict[str, dict[str, float]] = {t["name"]: {} for t in standings}
-
-    # Default values for missing stats: 0 for counting, worst-case for rate
     _STAT_DEFAULTS = {"ERA": 99.0, "WHIP": 99.0}
 
-    for cat in ALL_CATS:
-        inverse = cat in INVERSE_CATS
-        # Fill missing stats with defaults so all teams can be ranked
-        for t in standings:
-            stats = t.get("stats", {})
+    # Fill missing stats with defaults so all teams can be ranked
+    for t in standings:
+        stats = t.get("stats", {})
+        for cat in ALL_CATS:
             if cat not in stats:
                 stats[cat] = _STAT_DEFAULTS.get(cat, 0.0)
-        # Sort: for inverse cats lowest value → rank n (best)
-        ranked = sorted(standings, key=lambda t: t["stats"][cat], reverse=inverse)
-        # Fractional tie-breaking: tied teams share the average of their ranks
-        i = 0
-        while i < n:
-            j = i + 1
-            while j < n and abs(ranked[j]["stats"][cat] - ranked[i]["stats"][cat]) < 1e-9:
-                j += 1
-            avg_rank = sum(range(i + 1, j + 1)) / (j - i)
-            for k in range(i, j):
-                result[ranked[k]["name"]][cat] = avg_rank
-            i = j
 
-    return result
+    # Convert to score_roto input format and call canonical implementation
+    all_stats = {t["name"]: t["stats"] for t in standings}
+    roto = score_roto(all_stats)
+
+    # Convert "R_pts" keys back to bare "R" keys (drop "total")
+    return {
+        name: {cat: pts[f"{cat}_pts"] for cat in ALL_CATS}
+        for name, pts in roto.items()
+    }
 
 
 def compute_roto_points(standings: list[dict[str, Any]]) -> dict[str, int]:

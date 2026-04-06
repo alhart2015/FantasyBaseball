@@ -611,6 +611,7 @@ def _compute_category_ranks(standings: list[dict]) -> dict[str, dict[str, int]]:
     """Compute per-category rank for each team (1 = best).
 
     For inverse categories (ERA, WHIP), lower value = rank 1.
+    Uses epsilon comparison for float tie detection in rate stats.
     """
     ranks = {}
     for cat in ALL_CATEGORIES:
@@ -621,7 +622,7 @@ def _compute_category_ranks(standings: list[dict]) -> dict[str, dict[str, int]]:
         prev_rank = 0
         for i, t in enumerate(sorted_teams):
             val = t["stats"][cat]
-            if val != prev_val:
+            if prev_val is None or abs(val - prev_val) >= 1e-9:
                 prev_rank = i + 1
                 prev_val = val
             cat_ranks[t["name"]] = prev_rank

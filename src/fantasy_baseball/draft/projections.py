@@ -6,7 +6,7 @@ and the simulate_draft.py --monte-carlo mode.
 """
 import numpy as np
 import pandas as pd
-from fantasy_baseball.scoring import score_roto as _score_roto_canonical
+from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
     CLOSER_SV_THRESHOLD,
@@ -169,14 +169,6 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
     return team_stats
 
 
-def score_roto(team_stats, num_teams=None):
-    """Compute roto points with fractional tie-breaking.
-
-    Delegates to ``scoring.score_roto`` which handles ties correctly.
-    The *num_teams* argument is accepted for backward compatibility but
-    ignored — team count is derived from the input dict.
-    """
-    return _score_roto_canonical(team_stats)
 
 
 def run_projections(
@@ -214,7 +206,7 @@ def run_projections(
 
     for _ in range(iterations):
         stats = simulate_season(padded, rng, h_slots=h_slots, p_slots=p_slots)
-        roto = score_roto(stats, num_teams)
+        roto = score_roto(stats)
         for tn in padded:
             total = roto[tn]["total"]
             all_totals[tn].append(total)
