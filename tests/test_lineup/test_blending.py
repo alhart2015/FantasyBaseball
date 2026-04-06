@@ -173,3 +173,43 @@ class TestBlendPlayerWithGameLogs:
         player = Player(name="Nobody", player_type=PlayerType.HITTER, positions=["OF"])
         result = blend_player_with_game_logs(player, [], "2026-04-06")
         assert result.ros is None
+
+
+class TestBlendingRoundTrip:
+    """Verify blend → wSGP calculation works end-to-end."""
+
+    def test_blended_pitcher_produces_valid_wsgp(self):
+        from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
+        leverage = {cat: 0.1 for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
+
+        player = _pitcher("Test RP", ip=65, w=4, k=70, sv=20, era=2.77, whip=1.11,
+                          er=20, bb=22, h_allowed=50)
+        logs = [
+            {"date": f"2026-04-0{d}", "ip": 1.0, "k": 1, "er": 1, "bb": 1,
+             "h_allowed": 2, "w": 0, "sv": 0, "gs": 0, "g": 1}
+            for d in range(1, 6)
+        ]
+        blended = blend_player_with_game_logs(player, logs, "2026-04-06")
+        wsgp = calculate_weighted_sgp(blended.ros, leverage)
+        original_wsgp = calculate_weighted_sgp(player.ros, leverage)
+
+        # Blended ERA is worse, so wSGP should decrease
+        assert wsgp < original_wsgp
+        assert wsgp > 0  # still a positive contributor
+
+    def test_blended_hitter_produces_valid_wsgp(self):
+        from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
+        leverage = {cat: 0.1 for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
+
+        player = _hitter("Test OF", pa=600, ab=540, h=150, hr=25, r=80, rbi=80, sb=10, avg=0.278)
+        # Hot start: lots of HRs
+        logs = [
+            {"date": f"2026-04-0{d}", "pa": 5, "ab": 4, "h": 2, "r": 1, "hr": 1, "rbi": 2, "sb": 0}
+            for d in range(1, 6)
+        ]
+        blended = blend_player_with_game_logs(player, logs, "2026-04-06")
+        wsgp = calculate_weighted_sgp(blended.ros, leverage)
+        original_wsgp = calculate_weighted_sgp(player.ros, leverage)
+
+        # Hot start should increase wSGP slightly
+        assert wsgp > original_wsgp
