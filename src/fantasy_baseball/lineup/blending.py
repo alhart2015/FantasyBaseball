@@ -15,7 +15,6 @@ from fantasy_baseball.models.player import (
     HitterStats, PitcherStats, Player, PlayerType,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
-from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 # Hitter game log columns to extract from SQLite
 _HITTER_LOG_COLS = ("date", "pa", "ab", "h", "r", "hr", "rbi", "sb")
@@ -83,6 +82,7 @@ def blend_player_with_game_logs(
     If game_logs is empty or player has no ROS stats, returns a copy unchanged.
     """
     result = copy.copy(player)
+    result.positions = list(player.positions)
 
     if player.ros is None or not game_logs:
         return result
