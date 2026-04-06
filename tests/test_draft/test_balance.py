@@ -24,7 +24,7 @@ class TestCategoryBalance:
         bal = CategoryBalance()
         totals = bal.get_totals()
         assert totals["HR"] == 0
-        assert totals["K"] == 0
+        assert totals["K"] is None  # no pitchers → None, not 0
 
     def test_add_hitter(self):
         bal = CategoryBalance()

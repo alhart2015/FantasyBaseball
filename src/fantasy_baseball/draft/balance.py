@@ -39,18 +39,25 @@ class CategoryBalance:
         total_h = sum(h.get("h", 0) for h in self._hitters)
         total_ab = sum(h.get("ab", 0) for h in self._hitters)
         totals["AVG"] = calculate_avg(total_h, total_ab)
-        for stat, col in [("W", "w"), ("K", "k"), ("SV", "sv")]:
-            totals[stat] = sum(p.get(col, 0) for p in self._pitchers)
-        total_ip = sum(p.get("ip", 0) for p in self._pitchers)
-        if total_ip > 0:
-            total_er = sum(p.get("er", 0) for p in self._pitchers)
-            totals["ERA"] = calculate_era(total_er, total_ip)
-            total_bb = sum(p.get("bb", 0) for p in self._pitchers)
-            total_ha = sum(p.get("h_allowed", 0) for p in self._pitchers)
-            totals["WHIP"] = calculate_whip(total_bb, total_ha, total_ip)
+        if self._pitchers:
+            for stat, col in [("W", "w"), ("K", "k"), ("SV", "sv")]:
+                totals[stat] = sum(p.get(col, 0) for p in self._pitchers)
+            total_ip = sum(p.get("ip", 0) for p in self._pitchers)
+            if total_ip > 0:
+                total_er = sum(p.get("er", 0) for p in self._pitchers)
+                totals["ERA"] = calculate_era(total_er, total_ip)
+                total_bb = sum(p.get("bb", 0) for p in self._pitchers)
+                total_ha = sum(p.get("h_allowed", 0) for p in self._pitchers)
+                totals["WHIP"] = calculate_whip(total_bb, total_ha, total_ip)
+            else:
+                totals["ERA"] = None
+                totals["WHIP"] = None
         else:
-            totals["ERA"] = None
-            totals["WHIP"] = None
+            # No pitchers: all pitching categories are None so leverage
+            # treats them uniformly (avoids 100:1 asymmetry where ERA/WHIP
+            # get emergency weight but W/K/SV get zero weight).
+            for stat in ("W", "K", "SV", "ERA", "WHIP"):
+                totals[stat] = None
         return totals
 
     def get_avg_components(self) -> tuple[float, float]:
