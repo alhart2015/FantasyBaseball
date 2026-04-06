@@ -7,9 +7,15 @@ waiver modules.
 
 from __future__ import annotations
 
+import copy
 from collections import defaultdict
 
+from fantasy_baseball.analysis.recency import predict_reliability_blend
+from fantasy_baseball.models.player import (
+    HitterStats, PitcherStats, Player, PlayerType,
+)
 from fantasy_baseball.utils.name_utils import normalize_name
+from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 # Hitter game log columns to extract from SQLite
 _HITTER_LOG_COLS = ("date", "pa", "ab", "h", "r", "hr", "rbi", "sb")
@@ -57,3 +63,106 @@ def load_game_logs_by_name(
         logs[key].append(entry)
 
     return dict(logs)
+
+
+# ---------------------------------------------------------------------------
+# Player-level blending
+# ---------------------------------------------------------------------------
+
+def blend_player_with_game_logs(
+    player: Player,
+    game_logs: list[dict],
+    cutoff: str,
+) -> Player:
+    """Apply reliability-weighted recency blend to a Player's ROS stats.
+
+    Converts the Player's ROS stats to per-PA/IP projection rates,
+    runs predict_reliability_blend against game log entries, and
+    returns a new Player with updated ROS stats.
+
+    If game_logs is empty or player has no ROS stats, returns a copy unchanged.
+    """
+    result = copy.copy(player)
+
+    if player.ros is None or not game_logs:
+        return result
+
+    if player.player_type == PlayerType.HITTER:
+        result.ros = _blend_hitter(player.ros, game_logs, cutoff)
+    else:
+        result.ros = _blend_pitcher(player.ros, game_logs, cutoff)
+
+    return result
+
+
+def _blend_hitter(ros: HitterStats, game_logs: list[dict], cutoff: str) -> HitterStats:
+    pa, ab = ros.pa, ros.ab
+    if pa <= 0 or ab <= 0:
+        return copy.copy(ros)
+
+    proj_rates = {
+        "hr_per_pa": ros.hr / pa,
+        "r_per_pa": ros.r / pa,
+        "rbi_per_pa": ros.rbi / pa,
+        "sb_per_pa": ros.sb / pa,
+        "avg": ros.avg,
+    }
+    rates = predict_reliability_blend(proj_rates, game_logs, cutoff)
+
+    return HitterStats(
+        pa=pa,
+        ab=ab,
+        h=rates["avg"] * ab,
+        r=rates["r_per_pa"] * pa,
+        hr=rates["hr_per_pa"] * pa,
+        rbi=rates["rbi_per_pa"] * pa,
+        sb=rates["sb_per_pa"] * pa,
+        avg=rates["avg"],
+    )
+
+
+def _blend_pitcher(ros: PitcherStats, game_logs: list[dict], cutoff: str) -> PitcherStats:
+    ip = ros.ip
+    if ip <= 0:
+        return copy.copy(ros)
+
+    # Estimate G and GS from projection shape (not stored in PitcherStats).
+    # Relievers: SV > 0 and W < 5 → ~1 IP/game.  Starters: ~6 IP/start.
+    if ros.sv > 0 and ros.w < 5:
+        est_g = max(ip, 1)
+        est_gs = 0.0
+    else:
+        est_gs = max(ip / 6, 1)
+        est_g = est_gs
+
+    proj_rates = {
+        "k_per_ip": ros.k / ip,
+        "era": ros.era,
+        "whip": ros.whip,
+        "w_per_gs": ros.w / est_gs if est_gs > 0 else 0,
+        "sv_per_g": ros.sv / est_g if est_g > 0 else 0,
+    }
+    rates = predict_reliability_blend(proj_rates, game_logs, cutoff)
+
+    # Convert blended rates back to counting stats
+    blended_k = rates["k_per_ip"] * ip
+    blended_era = rates["era"]
+    blended_whip = rates["whip"]
+    blended_er = blended_era * ip / 9
+    # Approximate BB/H split from WHIP (60/40 H/BB typical split)
+    blended_bb = blended_whip * ip * 0.4
+    blended_h_allowed = blended_whip * ip * 0.6
+    blended_w = rates["w_per_gs"] * est_gs if est_gs > 0 else ros.w
+    blended_sv = rates["sv_per_g"] * est_g if est_g > 0 else ros.sv
+
+    return PitcherStats(
+        ip=ip,
+        w=blended_w,
+        k=blended_k,
+        sv=blended_sv,
+        er=blended_er,
+        bb=blended_bb,
+        h_allowed=blended_h_allowed,
+        era=blended_era,
+        whip=blended_whip,
+    )
