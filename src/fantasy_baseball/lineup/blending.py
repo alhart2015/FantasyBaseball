@@ -38,8 +38,10 @@ def load_game_logs_by_name(
         (season,),
     ).fetchall()
     for row in rows:
-        norm = normalize_name(row["name"])
-        logs[norm].append({col: row[col] for col in _HITTER_LOG_COLS})
+        key = f"{normalize_name(row['name'])}::hitter"
+        logs[key].append(
+            {col: row[col] if col == "date" else (row[col] or 0) for col in _HITTER_LOG_COLS}
+        )
 
     # Pitchers
     rows = conn.execute(
@@ -49,9 +51,9 @@ def load_game_logs_by_name(
         (season,),
     ).fetchall()
     for row in rows:
-        norm = normalize_name(row["name"])
-        entry = {col: row[col] for col in _PITCHER_LOG_COLS}
+        key = f"{normalize_name(row['name'])}::pitcher"
+        entry = {col: row[col] if col == "date" else (row[col] or 0) for col in _PITCHER_LOG_COLS}
         entry["g"] = 1  # each row is one game appearance
-        logs[norm].append(entry)
+        logs[key].append(entry)
 
     return dict(logs)

@@ -38,11 +38,11 @@ class TestLoadGameLogsByName:
         conn.commit()
 
         result = load_game_logs_by_name(conn, 2026)
-        assert "juan soto" in result
-        assert len(result["juan soto"]) == 2
-        assert result["juan soto"][0]["date"] == "2026-04-01"
-        assert result["juan soto"][0]["pa"] == 5
-        assert result["juan soto"][0]["hr"] == 1
+        assert "juan soto::hitter" in result
+        assert len(result["juan soto::hitter"]) == 2
+        assert result["juan soto::hitter"][0]["date"] == "2026-04-01"
+        assert result["juan soto::hitter"][0]["pa"] == 5
+        assert result["juan soto::hitter"][0]["hr"] == 1
 
     def test_groups_pitcher_games_with_g_field(self):
         conn = sqlite3.connect(":memory:")
@@ -58,8 +58,8 @@ class TestLoadGameLogsByName:
         conn.commit()
 
         result = load_game_logs_by_name(conn, 2026)
-        assert "bryan abreu" in result
-        games = result["bryan abreu"]
+        assert "bryan abreu::pitcher" in result
+        games = result["bryan abreu::pitcher"]
         assert len(games) == 1
         assert games[0]["g"] == 1  # synthesized from row
         assert games[0]["gs"] == 0
