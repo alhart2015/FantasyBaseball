@@ -5,6 +5,8 @@ from pathlib import Path
 
 import requests
 
+from fantasy_baseball.models.player import PlayerType
+
 logger = logging.getLogger(__name__)
 
 MLB_API_BASE = "https://statsapi.mlb.com/api/v1"
@@ -86,7 +88,7 @@ def fetch_all_game_logs(players: list[dict], season: int = 2025, cache_path: Pat
         mid = player["mlbam_id"]
         name = player["name"]
         ptype = player["type"]
-        group = "hitting" if ptype == "hitter" else "pitching"
+        group = "hitting" if ptype == PlayerType.HITTER else "pitching"
         try:
             games = fetch_player_game_log(mid, season, group)
             results[mid] = {"name": name, "type": ptype, "games": games}

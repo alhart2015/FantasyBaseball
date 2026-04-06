@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.draft.balance import CategoryBalance
 
@@ -53,13 +54,13 @@ def get_current_version() -> int:
 
 def _serialize_player_stats(player: dict, row) -> None:
     """Add stat fields to a player dict based on player type."""
-    if row["player_type"] == "hitter":
+    if row["player_type"] == PlayerType.HITTER:
         player["r"] = int(row.get("r", 0))
         player["hr"] = int(row.get("hr", 0))
         player["rbi"] = int(row.get("rbi", 0))
         player["sb"] = int(row.get("sb", 0))
         player["avg"] = round(float(row.get("avg", 0)), 3)
-    elif row["player_type"] == "pitcher":
+    elif row["player_type"] == PlayerType.PITCHER:
         player["w"] = int(row.get("w", 0))
         player["k"] = int(row.get("k", 0))
         player["sv"] = int(row.get("sv", 0))

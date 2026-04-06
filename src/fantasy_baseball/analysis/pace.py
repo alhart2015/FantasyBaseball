@@ -1,5 +1,6 @@
 """Compute player performance vs projection pace with z-score color coding."""
 
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import INVERSE_STATS, STAT_VARIANCE
 
 # Roto categories by player type
@@ -60,7 +61,7 @@ def compute_player_pace(
 
     result = {}
 
-    if player_type == "hitter":
+    if player_type == PlayerType.HITTER:
         opp_key = "pa"
         counting = HITTER_COUNTING
         min_counting = HITTER_MIN_COUNTING
@@ -74,13 +75,13 @@ def compute_player_pace(
     actual_opp = actual_stats.get(opp_key, 0) or 0
 
     # Build a stats object from actuals for significance checks
-    stats_cls = HitterStats if player_type == "hitter" else PitcherStats
+    stats_cls = HitterStats if player_type == PlayerType.HITTER else PitcherStats
     actual_obj = stats_cls.from_dict(actual_stats)
     proj_opp = projected_stats.get(opp_key, 0) or 0
 
     # Opportunity column (PA or IP) — always neutral
     result[opp_key.upper()] = {
-        "actual": actual_opp if player_type == "hitter" else actual_stats.get("ip", 0),
+        "actual": actual_opp if player_type == PlayerType.HITTER else actual_stats.get("ip", 0),
         "color_class": "stat-neutral",
     }
 
@@ -116,7 +117,7 @@ def compute_player_pace(
     # Rate stats — always computed, but color suppressed below min_rates threshold
     rates_colored = actual_opp >= min_rates
 
-    if player_type == "hitter":
+    if player_type == PlayerType.HITTER:
         actual_h = actual_stats.get("h", 0) or 0
         actual_ab = actual_stats.get("ab", 0) or 0
         proj_avg = projected_stats.get("avg", 0.0) or 0.0

@@ -6,6 +6,7 @@ and the simulate_draft.py --monte-carlo mode.
 """
 import numpy as np
 import pandas as pd
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
@@ -38,8 +39,8 @@ def pad_roster_to_full(
     Counts current hitters and pitchers, then adds replacement-level
     entries for any unfilled active slots.
     """
-    n_hitters = sum(1 for p in players if p.get("player_type") == "hitter")
-    n_pitchers = sum(1 for p in players if p.get("player_type") == "pitcher")
+    n_hitters = sum(1 for p in players if p.get("player_type") == PlayerType.HITTER)
+    n_pitchers = sum(1 for p in players if p.get("player_type") == PlayerType.PITCHER)
 
     # Target hitter slots: C + 1B + 2B + 3B + SS + IF + OF + UTIL
     hitter_slots = sum(
@@ -53,7 +54,7 @@ def pad_roster_to_full(
     # Add replacement hitters
     for i in range(max(0, hitter_slots - n_hitters)):
         repl = dict(REPLACEMENT_HITTER)
-        repl["player_type"] = "hitter"
+        repl["player_type"] = PlayerType.HITTER
         repl["name"] = f"Repl Hitter {i+1}"
         repl["positions"] = ["OF"]
         padded.append(repl)
@@ -61,7 +62,7 @@ def pad_roster_to_full(
     # Add replacement pitchers (SPs)
     for i in range(max(0, pitcher_slots - n_pitchers)):
         repl = dict(REPLACEMENT_SP)
-        repl["player_type"] = "pitcher"
+        repl["player_type"] = PlayerType.PITCHER
         repl["name"] = f"Repl SP {i+1}"
         repl["positions"] = ["SP"]
         padded.append(repl)
@@ -78,8 +79,8 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
     team_stats = {}
 
     for team_num, players in team_players.items():
-        hitters = [p for p in players if p.get("player_type") == "hitter"]
-        pitchers = [p for p in players if p.get("player_type") == "pitcher"]
+        hitters = [p for p in players if p.get("player_type") == PlayerType.HITTER]
+        pitchers = [p for p in players if p.get("player_type") == PlayerType.PITCHER]
 
         # Hitters — perf affects quality stats (H, R, HR, RBI, SB) but
         # not volume stats (AB, PA) so rate stats like AVG actually vary.

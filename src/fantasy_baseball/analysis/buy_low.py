@@ -2,7 +2,7 @@
 
 from fantasy_baseball.analysis.pace import compute_player_pace
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
-from fantasy_baseball.models.player import Player
+from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.utils.constants import (
     HITTING_CATEGORIES, HITTER_PROJ_KEYS,
     PITCHING_CATEGORIES, PITCHER_PROJ_KEYS,
@@ -32,13 +32,13 @@ def find_buy_low_candidates(
     for player in players:
         name = player.name
         ptype = player.player_type
-        if ptype not in ("hitter", "pitcher"):
+        if ptype not in (PlayerType.HITTER, PlayerType.PITCHER):
             continue
 
         norm = normalize_name(name)
         actuals = game_log_lookup.get(norm, {})
 
-        if ptype == "hitter":
+        if ptype == PlayerType.HITTER:
             proj_keys = HITTER_PROJ_KEYS
             categories = HITTING_CATEGORIES
         else:

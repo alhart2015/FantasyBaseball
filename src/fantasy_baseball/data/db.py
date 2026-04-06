@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from fantasy_baseball.data.projections import blend_projections
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.name_utils import normalize_name
 
 DB_PATH = Path(__file__).resolve().parents[3] / "data" / "fantasy.db"
@@ -229,7 +230,7 @@ def _parse_csv_filename(stem: str):
     if not m:
         return None, None
     system = m.group("system")
-    player_type = "hitter" if m.group("ptype") == "hitters" else "pitcher"
+    player_type = PlayerType.HITTER if m.group("ptype") == "hitters" else PlayerType.PITCHER
     return system, player_type
 
 
@@ -252,7 +253,7 @@ def load_raw_projections(conn, projections_dir):
             if system is None:
                 continue  # unrecognised filename, skip silently
 
-            col_map = _HITTER_COLS if player_type == "hitter" else _PITCHER_COLS
+            col_map = _HITTER_COLS if player_type == PlayerType.HITTER else _PITCHER_COLS
 
             try:
                 df = pd.read_csv(csv_path, dtype={"PlayerId": str, "MLBAMID": str})
@@ -703,8 +704,8 @@ def load_ros_projections(
             return hitters_df, pitchers_df
         if progress_cb:
             progress_cb(f"Normalizing {system_name} ROS → full-season")
-        h = normalize_ros_to_full_season(hitters_df, hitter_totals, "hitter")
-        p = normalize_ros_to_full_season(pitchers_df, pitcher_totals, "pitcher")
+        h = normalize_ros_to_full_season(hitters_df, hitter_totals, PlayerType.HITTER)
+        p = normalize_ros_to_full_season(pitchers_df, pitcher_totals, PlayerType.PITCHER)
         return h, p
 
     for year_dir in sorted(projections_dir.iterdir()):
@@ -923,7 +924,7 @@ def fetch_and_load_game_logs(
             seen_ids.add(mlbam_id)
 
             pos_type = entry.get("position", {}).get("type", "")
-            player_type = "pitcher" if pos_type == "Pitcher" else "hitter"
+            player_type = PlayerType.PITCHER if pos_type == "Pitcher" else PlayerType.HITTER
 
             players.append({
                 "mlbam_id": mlbam_id,
@@ -937,7 +938,7 @@ def fetch_and_load_game_logs(
 
     def _fetch_one(player):
         mid = player["mlbam_id"]
-        group = "hitting" if player["player_type"] == "hitter" else "pitching"
+        group = "hitting" if player["player_type"] == PlayerType.HITTER else "pitching"
         try:
             games = fetch_player_game_log(mid, season, group)
         except Exception:
@@ -972,7 +973,7 @@ def fetch_and_load_game_logs(
 
                 if games:
                     common = (season, mid, player["name"], player["team"])
-                    if player["player_type"] == "hitter":
+                    if player["player_type"] == PlayerType.HITTER:
                         rows = [
                             (*common, g["date"], g.get("pa"), g.get("ab"), g.get("h"),
                              g.get("r"), g.get("hr"), g.get("rbi"), g.get("sb"))

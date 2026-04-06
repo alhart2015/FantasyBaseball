@@ -8,6 +8,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import ALL_CATEGORIES
 from fantasy_baseball.web.season_data import read_cache, read_meta
 
@@ -459,10 +460,10 @@ def register_routes(app: Flask) -> None:
 
                 # Pace
                 pace = None
-                logs = hitter_logs if ptype == "hitter" else pitcher_logs
+                logs = hitter_logs if ptype == PlayerType.HITTER else pitcher_logs
                 actuals = logs.get(norm)
                 if actuals:
-                    proj_keys = HITTER_PROJ_KEYS if ptype == "hitter" else PITCHER_PROJ_KEYS
+                    proj_keys = HITTER_PROJ_KEYS if ptype == PlayerType.HITTER else PITCHER_PROJ_KEYS
                     projected = {k: pre.get(k, 0) or 0 for k in proj_keys}
                     if any(v > 0 for v in projected.values()):
                         pace = compute_player_pace(actuals, projected, ptype)
@@ -473,7 +474,7 @@ def register_routes(app: Flask) -> None:
 
                 rank = lookup_rank(rankings_cache, fg_id, name, ptype)
 
-                stats_cls = HitterStats if ptype == "hitter" else PitcherStats
+                stats_cls = HitterStats if ptype == PlayerType.HITTER else PitcherStats
                 player = Player(
                     name=name,
                     player_type=ptype,
@@ -546,7 +547,7 @@ def register_routes(app: Flask) -> None:
                 ptype = d["player_type"]
                 fg_id = d.get("fg_id")
 
-                stats_cls = HitterStats if ptype == "hitter" else PitcherStats
+                stats_cls = HitterStats if ptype == PlayerType.HITTER else PitcherStats
                 ros = stats_cls.from_dict(d)
                 ros.compute_sgp()
 
@@ -574,7 +575,7 @@ def register_routes(app: Flask) -> None:
                     "wsgp": round(p.wsgp, 2),
                 }
 
-                if ptype == "hitter":
+                if ptype == PlayerType.HITTER:
                     result.update({"R": ros.r, "HR": ros.hr, "RBI": ros.rbi,
                                    "SB": ros.sb, "AVG": ros.avg})
                     actual_obj = HitterStats(pa=actual_pa.get(norm, 0))

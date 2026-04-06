@@ -1,4 +1,5 @@
 import pandas as pd
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import (
     CLOSER_SV_THRESHOLD,
     DEFAULT_ROSTER_SLOTS,
@@ -45,7 +46,7 @@ def compute_slot_scarcity_order(
 
 def _player_bucket(player) -> str:
     """Classify a player into hitter / sp / closer for VONA."""
-    if player.get("player_type") == "hitter":
+    if player.get("player_type") == PlayerType.HITTER:
         return "hitter"
     if player.get("sv", 0) >= CLOSER_SV_THRESHOLD:
         return "closer"
@@ -82,7 +83,7 @@ def calculate_vona_scores(
     remaining = available[~available["player_id"].isin(gone_ids)]
 
     # Assign buckets vectorized
-    is_hitter = remaining["player_type"] == "hitter"
+    is_hitter = remaining["player_type"] == PlayerType.HITTER
     sv = remaining["sv"].fillna(0) if "sv" in remaining.columns else pd.Series(0, index=remaining.index)
     remaining_buckets = pd.Series("sp", index=remaining.index)
     remaining_buckets[is_hitter] = "hitter"
@@ -94,7 +95,7 @@ def calculate_vona_scores(
         best_remaining.setdefault(b, 0)
 
     # VONA = player SGP - best remaining in same bucket (vectorized)
-    is_hitter_a = available["player_type"] == "hitter"
+    is_hitter_a = available["player_type"] == PlayerType.HITTER
     sv_a = available["sv"].fillna(0) if "sv" in available.columns else pd.Series(0, index=available.index)
     avail_buckets = pd.Series("sp", index=available.index)
     avail_buckets[is_hitter_a] = "hitter"
@@ -126,14 +127,14 @@ def _vona_leverage_weight(player, leverage, denoms=None):
 
     # Compute absolute SGP contribution per category
     cat_abs = {}
-    if player.get("player_type") == "hitter":
+    if player.get("player_type") == PlayerType.HITTER:
         for stat, col in [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")]:
             cat_abs[stat] = abs(calculate_counting_sgp(player.get(col, 0), denoms[stat]))
         cat_abs["AVG"] = abs(calculate_hitting_rate_sgp(
             player.get("avg", 0), int(player.get("ab", 0)),
             REPLACEMENT_AVG, denoms["AVG"], DEFAULT_TEAM_AB,
         ))
-    elif player.get("player_type") == "pitcher":
+    elif player.get("player_type") == PlayerType.PITCHER:
         for stat, col in [("W", "w"), ("K", "k"), ("SV", "sv")]:
             cat_abs[stat] = abs(calculate_counting_sgp(player.get(col, 0), denoms[stat]))
         ip = player.get("ip", 0)

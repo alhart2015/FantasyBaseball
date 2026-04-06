@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
+from enum import StrEnum
 from typing import Any, Optional
+
+
+class PlayerType(StrEnum):
+    HITTER = "hitter"
+    PITCHER = "pitcher"
 
 
 @dataclass
@@ -152,21 +158,20 @@ class RankInfo:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _has_stat_keys(d: dict[str, Any], player_type: str) -> bool:
+def _has_stat_keys(d: dict[str, Any], player_type: PlayerType) -> bool:
     """Return True if d contains top-level stat keys for the given player_type."""
-    if player_type == "pitcher":
+    if player_type == PlayerType.PITCHER:
         return any(k in d for k in ("ip", "k", "era"))
-    # hitter (default)
     return any(k in d for k in ("hr", "r", "rbi"))
 
 
 def _make_stats(
-    d: dict[str, Any], player_type: str
+    d: dict[str, Any], player_type: PlayerType
 ) -> "HitterStats | PitcherStats | None":
     """Build the appropriate stats object from a sub-dict."""
     if not d:
         return None
-    if player_type == "pitcher":
+    if player_type == PlayerType.PITCHER:
         return PitcherStats.from_dict(d)
     return HitterStats.from_dict(d)
 
@@ -178,7 +183,7 @@ def _make_stats(
 @dataclass
 class Player:
     name: str
-    player_type: str  # "hitter" | "pitcher"
+    player_type: PlayerType
     positions: list[str] = field(default_factory=list)
     team: str = ""
     fg_id: Optional[str] = None
@@ -203,7 +208,7 @@ class Player:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Player":
         name = d.get("name", "")
-        player_type = d.get("player_type", "hitter")
+        player_type = PlayerType(d.get("player_type", "hitter"))
 
         # Stat bags: detect nested vs flat format
         if _has_stat_keys(d, player_type):

@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
-from fantasy_baseball.models.player import Player
+from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.utils.positions import can_fill_slot
 
 from fantasy_baseball.scoring import score_roto
@@ -230,7 +230,7 @@ def _player_ros_stats(player: Player) -> dict:
     ros = player.ros
     if ros is None:
         return {cat: 0 for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP", "ab", "ip"]}
-    if player.player_type == "hitter":
+    if player.player_type == PlayerType.HITTER:
         return {
             "R": ros.r, "HR": ros.hr, "RBI": ros.rbi, "SB": ros.sb,
             "AVG": ros.avg,

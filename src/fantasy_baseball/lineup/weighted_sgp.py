@@ -10,7 +10,7 @@ from fantasy_baseball.sgp.player_value import (
     REPLACEMENT_ERA,
     REPLACEMENT_WHIP,
 )
-from fantasy_baseball.models.player import HitterStats, PitcherStats
+from fantasy_baseball.models.player import HitterStats, PitcherStats, PlayerType
 
 
 def calculate_weighted_sgp(
@@ -74,7 +74,7 @@ def calculate_weighted_sgp(
                 )
                 total += sgp * weight_whip
 
-    elif player.get("player_type") == "hitter":
+    elif player.get("player_type") == PlayerType.HITTER:
         for stat, col in [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")]:
             weight = leverage.get(stat, 0)
             if weight > 0:
@@ -92,7 +92,7 @@ def calculate_weighted_sgp(
             )
             total += sgp * weight_avg
 
-    elif player.get("player_type") == "pitcher":
+    elif player.get("player_type") == PlayerType.PITCHER:
         for stat, col in [("W", "w"), ("K", "k"), ("SV", "sv")]:
             weight = leverage.get(stat, 0)
             if weight > 0:
@@ -120,5 +120,9 @@ def calculate_weighted_sgp(
                     team_ip=DEFAULT_TEAM_IP, innings_divisor=1,
                 )
                 total += sgp * weight_whip
+
+    else:
+        ptype = player.get("player_type") if hasattr(player, "get") else type(player).__name__
+        raise ValueError(f"Unknown player_type: {ptype!r}")
 
     return total

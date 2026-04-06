@@ -6,6 +6,7 @@ Use ``rank_key()`` to build name-based lookup keys.
 """
 
 import pandas as pd
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.name_utils import normalize_name
 
@@ -19,7 +20,7 @@ def rank_key(name: str, player_type: str) -> str:
 
 def rank_key_from_positions(name: str, positions: list[str]) -> str:
     """Build a name-based ranking lookup key, inferring player_type from positions."""
-    ptype = "pitcher" if set(positions) & PITCHER_POSITIONS else "hitter"
+    ptype = PlayerType.PITCHER if set(positions) & PITCHER_POSITIONS else PlayerType.HITTER
     return f"{normalize_name(name)}::{ptype}"
 
 
@@ -52,7 +53,7 @@ def compute_sgp_rankings(
     """
     rankings = {}
 
-    for df, ptype in [(hitters, "hitter"), (pitchers, "pitcher")]:
+    for df, ptype in [(hitters, PlayerType.HITTER), (pitchers, PlayerType.PITCHER)]:
         if df.empty:
             continue
 
@@ -93,7 +94,7 @@ def compute_rankings_from_game_logs(
     """
     rankings = {}
 
-    for logs, player_type in [(hitter_logs, "hitter"), (pitcher_logs, "pitcher")]:
+    for logs, player_type in [(hitter_logs, PlayerType.HITTER), (pitcher_logs, PlayerType.PITCHER)]:
         if not logs:
             continue
 
@@ -101,7 +102,7 @@ def compute_rankings_from_game_logs(
         for norm_name, stats in logs.items():
             player_dict = dict(stats)
             player_dict["player_type"] = player_type
-            if player_type == "hitter":
+            if player_type == PlayerType.HITTER:
                 ab = player_dict.get("ab", 0) or 0
                 h = player_dict.get("h", 0) or 0
                 player_dict["avg"] = h / ab if ab > 0 else 0.0

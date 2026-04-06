@@ -1,4 +1,5 @@
 import pandas as pd
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import (
     HITTING_CATEGORIES, PITCHING_CATEGORIES, ALL_CATEGORIES, INVERSE_STATS,
 )
@@ -25,9 +26,9 @@ class CategoryBalance:
         self._pitchers: list[pd.Series] = []
 
     def add_player(self, player: pd.Series) -> None:
-        if player.get("player_type") == "hitter":
+        if player.get("player_type") == PlayerType.HITTER:
             self._hitters.append(player)
-        elif player.get("player_type") == "pitcher":
+        elif player.get("player_type") == PlayerType.PITCHER:
             self._pitchers.append(player)
 
     def get_totals(self) -> dict[str, float | None]:

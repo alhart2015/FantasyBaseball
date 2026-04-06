@@ -1,6 +1,8 @@
 import pandas as pd
 from pathlib import Path
 
+from fantasy_baseball.models.player import PlayerType
+
 HITTING_COLUMN_MAP: dict[str, str] = {
     "Name": "name",
     "Team": "team",
@@ -48,7 +50,7 @@ def parse_hitting_csv(filepath: Path) -> pd.DataFrame:
     missing = [c for c in REQUIRED_HITTING_COLS if c not in df.columns]
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
-    df["player_type"] = "hitter"
+    df["player_type"] = PlayerType.HITTER
     return df
 
 
@@ -60,7 +62,7 @@ def parse_pitching_csv(filepath: Path) -> pd.DataFrame:
     missing = [c for c in REQUIRED_PITCHING_COLS if c not in df.columns]
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
-    df["player_type"] = "pitcher"
+    df["player_type"] = PlayerType.PITCHER
     return df
 
 

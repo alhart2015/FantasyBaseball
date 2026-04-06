@@ -1,6 +1,7 @@
 import logging
 import pandas as pd
 from fantasy_baseball.data.db import get_blended_projections, get_positions
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.replacement import calculate_replacement_levels, calculate_replacement_rates
@@ -42,7 +43,7 @@ def apply_backfill_blending(pool: pd.DataFrame) -> pd.DataFrame:
             pool[c] = pool[c].astype(float)
 
     for idx, row in pool.iterrows():
-        if row["player_type"] == "pitcher":
+        if row["player_type"] == PlayerType.PITCHER:
             sv = _safe(row.get("sv", 0))
             ip = _safe(row.get("ip", 0))
             positions = row.get("positions", [])
@@ -78,7 +79,7 @@ def apply_backfill_blending(pool: pd.DataFrame) -> pd.DataFrame:
                 pool.at[idx, "era"] = pool.at[idx, "er"] * 9 / new_ip
                 pool.at[idx, "whip"] = (pool.at[idx, "bb"] + pool.at[idx, "h_allowed"]) / new_ip
 
-        elif row["player_type"] == "hitter":
+        elif row["player_type"] == PlayerType.HITTER:
             ab = _safe(row.get("ab", 0))
             gap = HEALTHY_HITTER_AB - ab
             if gap <= BACKFILL_HITTER_THRESHOLD:
@@ -125,8 +126,8 @@ def build_draft_board(
     if not pitchers.empty:
         pitchers = pitchers[pitchers.get("ip", pd.Series(dtype=float)).fillna(0) >= 10]
 
-    hitters = _attach_positions(hitters, norm_positions, default_type="hitter")
-    pitchers = _attach_positions(pitchers, norm_positions, default_type="pitcher")
+    hitters = _attach_positions(hitters, norm_positions, default_type=PlayerType.HITTER)
+    pitchers = _attach_positions(pitchers, norm_positions, default_type=PlayerType.PITCHER)
 
     denoms = get_sgp_denominators(sgp_overrides)
     pool = pd.concat([hitters, pitchers], ignore_index=True)
@@ -237,7 +238,7 @@ def _validate_top_adp_players(
             adp_threshold, len(missing),
         )
         for name, ptype, adp, ab, ip in sorted(missing, key=lambda x: x[2]):
-            stat = f"AB={ab:.0f}" if ptype == "hitter" else f"IP={ip:.0f}"
+            stat = f"AB={ab:.0f}" if ptype == PlayerType.HITTER else f"IP={ip:.0f}"
             logger.warning(
                 "  ADP %3.0f: %-25s [%s] %s (filtered by minimum threshold)",
                 adp, name, ptype, stat,
@@ -249,7 +250,7 @@ def _attach_positions(df, norm_positions, default_type):
     if df.empty:
         return df
     df = df.copy()
-    default_positions = ["OF"] if default_type == "hitter" else ["SP"]
+    default_positions = ["OF"] if default_type == PlayerType.HITTER else ["SP"]
     df["positions"] = df["name"].apply(
         lambda name: norm_positions.get(normalize_name(name), default_positions)
     )

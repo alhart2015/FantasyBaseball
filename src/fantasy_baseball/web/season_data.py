@@ -11,6 +11,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES, HITTER_PROJ_KEYS, INVERSE_STATS as INVERSE_CATS, PITCHER_PROJ_KEYS,
@@ -387,18 +388,18 @@ def build_opponent_lineup(
         # ROS projection tooltip data
         ros_entry = ros_lookup.get(norm)
         if ros_entry and ros_entry.ros:
-            if player.player_type == "hitter":
+            if player.player_type == PlayerType.HITTER:
                 entry["ros"] = {k: getattr(ros_entry.ros, k, 0) for k in ["r", "hr", "rbi", "sb", "avg"]}
             else:
                 entry["ros"] = {k: getattr(ros_entry.ros, k, 0) for k in ["w", "k", "sv", "era", "whip"]}
 
         # Pace data
         ptype = player.player_type
-        if ptype == "hitter":
+        if ptype == PlayerType.HITTER:
             actuals = hitter_logs.get(norm, {})
         else:
             actuals = pitcher_logs.get(norm, {})
-        proj_keys = HITTER_PROJ_KEYS if ptype == "hitter" else PITCHER_PROJ_KEYS
+        proj_keys = HITTER_PROJ_KEYS if ptype == PlayerType.HITTER else PITCHER_PROJ_KEYS
         projected = {k: getattr(player.ros, k, 0) if player.ros else 0 for k in proj_keys}
         entry["stats"] = compute_player_pace(actuals, projected, ptype)
 
@@ -851,7 +852,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             if normalize_name(raw_player["name"]) not in matched_names:
                 player = Player.from_dict({
                     **raw_player,
-                    "player_type": "pitcher" if set(raw_player.get("positions", [])) & PITCHER_POSITIONS else "hitter",
+                    "player_type": PlayerType.PITCHER if set(raw_player.get("positions", [])) & PITCHER_POSITIONS else PlayerType.HITTER,
                 })
                 roster_players.append(player)
 
@@ -876,11 +877,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         # Attach pace data to each roster player (pace compares actuals vs preseason)
         for player in roster_players:
             norm = normalize_name(player.name)
-            if player.player_type == "hitter":
+            if player.player_type == PlayerType.HITTER:
                 actuals = hitter_logs.get(norm, {})
             else:
                 actuals = pitcher_logs.get(norm, {})
-            proj_keys = HITTER_PROJ_KEYS if player.player_type == "hitter" else PITCHER_PROJ_KEYS
+            proj_keys = HITTER_PROJ_KEYS if player.player_type == PlayerType.HITTER else PITCHER_PROJ_KEYS
             pre_player = preseason_lookup.get(norm)
             if pre_player and pre_player.ros:
                 projected = {k: getattr(pre_player.ros, k, 0) for k in proj_keys}
@@ -1022,7 +1023,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         hart_roster_for_trades = [
             p for p in roster_players
-            if p.player_type in ("hitter", "pitcher")
+            if p.player_type in (PlayerType.HITTER, PlayerType.PITCHER)
         ]
         trade_proposals = find_trades(
             hart_name=config.team_name,

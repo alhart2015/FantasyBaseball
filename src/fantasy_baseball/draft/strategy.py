@@ -18,6 +18,7 @@ import pandas as pd
 from fantasy_baseball.draft.balance import CategoryBalance, calculate_draft_leverage
 from fantasy_baseball.draft.recommender import get_recommendations, get_filled_positions
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.positions import can_fill_slot
 # Draft a closer by this round if you have none
@@ -264,7 +265,7 @@ def _count_hitters(tracker, board, full_board, player_lookup=None):
     count = 0
     for pid in tracker.user_roster_ids:
         row = player_lookup.get(pid)
-        if row is not None and row.get("player_type") == "hitter":
+        if row is not None and row.get("player_type") == PlayerType.HITTER:
             count += 1
     return count
 
@@ -531,7 +532,7 @@ def pick_no_punt_cap3(
             if not rows.empty and rows.iloc[0].get("sv", 0) >= CLOSER_SV_THRESHOLD:
                 continue
 
-        if rec["player_type"] != "hitter":
+        if rec["player_type"] != PlayerType.HITTER:
             return rec["name"], _lookup_pid(board, rec["name"])
 
         rows = board[board["name"] == rec["name"]]
@@ -566,7 +567,7 @@ def pick_avg_anchor(
     for pid in tracker.user_roster_ids:
         row = player_lookup.get(pid)
         if row is not None:
-            if row.get("player_type") == "hitter" and row.get("avg", 0) >= AVG_ANCHOR_MIN:
+            if row.get("player_type") == PlayerType.HITTER and row.get("avg", 0) >= AVG_ANCHOR_MIN:
                 has_anchor = True
                 break
 
@@ -576,7 +577,7 @@ def pick_avg_anchor(
         if recs:
             # Try to find a high-AVG hitter in the recommendations
             for rec in recs:
-                if rec["player_type"] != "hitter":
+                if rec["player_type"] != PlayerType.HITTER:
                     continue
                 rows = board[board["name"] == rec["name"]]
                 if rows.empty:
@@ -587,7 +588,7 @@ def pick_avg_anchor(
             # If none in recs, search the board for the best high-AVG hitter
             available = board[~board["player_id"].isin(tracker.drafted_ids)]
             anchors = available[
-                (available["player_type"] == "hitter") &
+                (available["player_type"] == PlayerType.HITTER) &
                 (available["avg"] >= AVG_ANCHOR_MIN)
             ].sort_values("var", ascending=False)
             filled = get_filled_positions(
@@ -649,9 +650,9 @@ def pick_balanced(
 
     force_type = None
     if n_pitchers - n_hitters > BALANCED_MAX_SKEW:
-        force_type = "hitter"
+        force_type = PlayerType.HITTER
     elif n_hitters - n_pitchers > BALANCED_MAX_SKEW:
-        force_type = "pitcher"
+        force_type = PlayerType.PITCHER
 
     if force_type:
         for rec in recs:
@@ -684,7 +685,7 @@ def pick_anti_fragile(
         player = rows.iloc[0]
         var = player.get("var", 0)
 
-        if player.get("player_type") == "pitcher":
+        if player.get("player_type") == PlayerType.PITCHER:
             ip = player.get("ip", 0)
             if ip > ANTI_FRAGILE_IP_THRESHOLD:
                 excess_ip = ip - ANTI_FRAGILE_IP_THRESHOLD
@@ -708,7 +709,7 @@ def _pick_with_avg_floor(recs, board, balance, avg_floor, player_lookup=None):
     current_ab = sum(h.get("ab", 0) for h in balance._hitters)
 
     for rec in recs:
-        if rec["player_type"] != "hitter":
+        if rec["player_type"] != PlayerType.HITTER:
             return rec["name"], _lookup_pid(board, rec["name"], player_lookup)
 
         rows = board[board["name"] == rec["name"]]

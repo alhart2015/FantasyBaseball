@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from fantasy_baseball.data.projections import HITTING_COUNTING_COLS, PITCHING_COUNTING_COLS
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.name_utils import normalize_name
 
 # Thresholds for cross-system outlier detection
@@ -68,8 +69,8 @@ def _check_stat_outliers(
     systems = list(system_dfs.keys())
 
     for player_type, stat_cols, df_idx, pt_col, pt_min in [
-        ("hitter", HITTING_COUNTING_COLS, 0, "ab", MIN_HITTER_AB),
-        ("pitcher", PITCHING_COUNTING_COLS, 1, "ip", MIN_PITCHER_IP),
+        (PlayerType.HITTER, HITTING_COUNTING_COLS, 0, "ab", MIN_HITTER_AB),
+        (PlayerType.PITCHER, PITCHING_COUNTING_COLS, 1, "ip", MIN_PITCHER_IP),
     ]:
         sys_frames = {}
         for sys_name in systems:
@@ -171,7 +172,7 @@ def _check_player_counts(
     report: QualityReport,
 ) -> None:
     """Warn if a system has dramatically fewer players than others."""
-    for player_type, df_idx in [("hitter", 0), ("pitcher", 1)]:
+    for player_type, df_idx in [(PlayerType.HITTER, 0), (PlayerType.PITCHER, 1)]:
         counts = {}
         for sys_name, dfs in system_dfs.items():
             df = dfs[df_idx]

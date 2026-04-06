@@ -5,6 +5,7 @@ Provides two core functions:
 - score_roto: assign roto points (1-N) with fractional tie-breaking
 """
 
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS  # noqa: F401
 from fantasy_baseball.utils.constants import INVERSE_STATS as INVERSE_CATS  # noqa: F401
 from fantasy_baseball.utils.constants import safe_float as _safe
@@ -23,14 +24,14 @@ def project_team_stats(roster: list[dict]) -> dict[str, float]:
     w = k = sv = ip_total = er_total = bb_total = ha_total = 0.0
 
     for p in roster:
-        if p.get("player_type") == "hitter":
+        if p.get("player_type") == PlayerType.HITTER:
             r += _safe(p.get("r", 0))
             hr += _safe(p.get("hr", 0))
             rbi += _safe(p.get("rbi", 0))
             sb += _safe(p.get("sb", 0))
             h_total += _safe(p.get("h", 0))
             ab_total += _safe(p.get("ab", 0))
-        elif p.get("player_type") == "pitcher":
+        elif p.get("player_type") == PlayerType.PITCHER:
             w += _safe(p.get("w", 0))
             k += _safe(p.get("k", 0))
             sv += _safe(p.get("sv", 0))

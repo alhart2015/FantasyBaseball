@@ -1,7 +1,7 @@
 import pandas as pd
 from fantasy_baseball.utils.constants import DEFAULT_SGP_DENOMINATORS, safe_float as _safe
 from .denominators import get_sgp_denominators
-from fantasy_baseball.models.player import HitterStats, PitcherStats
+from fantasy_baseball.models.player import HitterStats, PitcherStats, PlayerType
 
 DEFAULT_TEAM_AB: int = 5500
 DEFAULT_TEAM_IP: int = 1400
@@ -76,7 +76,7 @@ def calculate_player_sgp(
                 sgp_denominator=denoms["WHIP"], team_ip=team_ip, innings_divisor=1,
             )
 
-    elif player.get("player_type") == "hitter":
+    elif player.get("player_type") == PlayerType.HITTER:
         for stat, col in [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")]:
             val = _safe(player.get(col, 0))
             total_sgp += calculate_counting_sgp(val, denoms[stat])
@@ -88,7 +88,7 @@ def calculate_player_sgp(
             team_ab=team_ab,
         )
 
-    elif player.get("player_type") == "pitcher":
+    elif player.get("player_type") == PlayerType.PITCHER:
         for stat, col in [("W", "w"), ("K", "k"), ("SV", "sv")]:
             val = _safe(player.get(col, 0))
             total_sgp += calculate_counting_sgp(val, denoms[stat])
@@ -104,5 +104,9 @@ def calculate_player_sgp(
                 replacement_rate=replacement_whip,
                 sgp_denominator=denoms["WHIP"], team_ip=team_ip, innings_divisor=1,
             )
+
+    else:
+        ptype = player.get("player_type") if hasattr(player, "get") else type(player).__name__
+        raise ValueError(f"Unknown player_type: {ptype!r}")
 
     return total_sgp

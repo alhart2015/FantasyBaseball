@@ -4,7 +4,7 @@ from pathlib import Path
 from .fangraphs import load_projection_set, _find_file
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter, is_pitcher
-from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
+from fantasy_baseball.models.player import Player, PlayerType, HitterStats, PitcherStats
 
 # Counting stats to blend directly (weighted average)
 HITTING_COUNTING_COLS: list[str] = ["r", "hr", "rbi", "sb", "h", "ab", "pa"]
@@ -33,7 +33,7 @@ def normalize_ros_to_full_season(
         return df.copy()
 
     result = df.copy()
-    counting_cols = HITTING_COUNTING_COLS if player_type == "hitter" else PITCHING_COUNTING_COLS
+    counting_cols = HITTING_COUNTING_COLS if player_type == PlayerType.HITTER else PITCHING_COUNTING_COLS
 
     for idx, row in result.iterrows():
         mid = row.get("mlbam_id")
@@ -286,7 +286,7 @@ def _blend_players(
 
 def _blend_hitters(dfs: list[pd.DataFrame]) -> pd.DataFrame:
     """Blend hitter projections. Recomputes AVG from blended H and AB."""
-    result = _blend_players(dfs, HITTING_COUNTING_COLS, "hitter")
+    result = _blend_players(dfs, HITTING_COUNTING_COLS, PlayerType.HITTER)
     if result.empty:
         return result
     result["avg"] = np.where(result["ab"] > 0, result["h"] / result["ab"], 0.0)
@@ -295,7 +295,7 @@ def _blend_hitters(dfs: list[pd.DataFrame]) -> pd.DataFrame:
 
 def _blend_pitchers(dfs: list[pd.DataFrame]) -> pd.DataFrame:
     """Blend pitcher projections. Recomputes ERA and WHIP from components."""
-    result = _blend_players(dfs, PITCHING_COUNTING_COLS, "pitcher")
+    result = _blend_players(dfs, PITCHING_COUNTING_COLS, PlayerType.PITCHER)
     if result.empty:
         return result
     ip = result["ip"]
@@ -330,14 +330,14 @@ def match_roster_to_projections(
             matches = hitters_proj[hitters_proj["_name_norm"] == name_norm]
             if not matches.empty:
                 proj = matches.iloc[0]
-                ptype = "hitter"
+                ptype = PlayerType.HITTER
         if proj is None and is_pitcher(positions) and not pitchers_proj.empty:
             matches = pitchers_proj[pitchers_proj["_name_norm"] == name_norm]
             if not matches.empty:
                 proj = matches.iloc[0]
-                ptype = "pitcher"
+                ptype = PlayerType.PITCHER
         if proj is None:
-            for df, pt in [(hitters_proj, "hitter"), (pitchers_proj, "pitcher")]:
+            for df, pt in [(hitters_proj, PlayerType.HITTER), (pitchers_proj, PlayerType.PITCHER)]:
                 if df.empty:
                     continue
                 matches = df[df["_name_norm"] == name_norm]
@@ -347,7 +347,7 @@ def match_roster_to_projections(
                     break
 
         if proj is not None:
-            if ptype == "hitter":
+            if ptype == PlayerType.HITTER:
                 ros = HitterStats.from_dict(proj.to_dict())
             else:
                 ros = PitcherStats.from_dict(proj.to_dict())

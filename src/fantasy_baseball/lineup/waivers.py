@@ -5,7 +5,7 @@ import pandas as pd
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.lineup.yahoo_roster import fetch_free_agents
-from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
+from fantasy_baseball.models.player import Player, PlayerType, HitterStats, PitcherStats
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import (
     calculate_counting_sgp,
@@ -114,11 +114,11 @@ def fetch_and_match_free_agents(
                 matches = df[df["_name_norm"] == fa_name_norm]
                 if not matches.empty:
                     proj_row = matches.iloc[0]
-                    ptype = "pitcher" if df is pitchers_proj else "hitter"
+                    ptype = PlayerType.PITCHER if df is pitchers_proj else PlayerType.HITTER
                     break
 
             if proj_row is not None:
-                if ptype == "hitter":
+                if ptype == PlayerType.HITTER:
                     ros = HitterStats.from_dict(proj_row.to_dict())
                 else:
                     ros = PitcherStats.from_dict(proj_row.to_dict())
@@ -184,8 +184,8 @@ def _compute_team_wsgp(
     if denoms is None:
         denoms = get_sgp_denominators()
 
-    hitters = [p for p in roster if p.player_type != "pitcher"]
-    pitchers = [p for p in roster if p.player_type == "pitcher"]
+    hitters = [p for p in roster if p.player_type != PlayerType.PITCHER]
+    pitchers = [p for p in roster if p.player_type == PlayerType.PITCHER]
 
     if player_wsgp is None:
         player_wsgp = {}
@@ -322,7 +322,7 @@ def scan_waivers(
             wsgp = calculate_weighted_sgp(fa.ros, leverage)
             if wsgp <= 0:
                 continue
-            if fa.player_type == "pitcher":
+            if fa.player_type == PlayerType.PITCHER:
                 fa_pitchers.append((fa, wsgp))
             else:
                 fa_hitters.append((fa, wsgp))
@@ -403,15 +403,15 @@ def scan_waivers(
             drop_type = drop_player.player_type
 
             new_roster = [p for p in roster if p.name != drop_name] + [fa]
-            new_hitters = [p for p in new_roster if p.player_type != "pitcher"]
-            new_pitchers = [p for p in new_roster if p.player_type == "pitcher"]
+            new_hitters = [p for p in new_roster if p.player_type != PlayerType.PITCHER]
+            new_pitchers = [p for p in new_roster if p.player_type == PlayerType.PITCHER]
 
             # Feasibility checks
-            if drop_type == "hitter" or fa_type == "hitter":
+            if drop_type == PlayerType.HITTER or fa_type == PlayerType.HITTER:
                 hitter_positions = [list(p.positions) for p in new_hitters]
                 if not can_cover_slots(hitter_positions, roster_slots):
                     continue
-            if drop_type == "pitcher" or fa_type == "pitcher":
+            if drop_type == PlayerType.PITCHER or fa_type == PlayerType.PITCHER:
                 if len(new_pitchers) < p_slots:
                     continue
 
@@ -470,9 +470,9 @@ def scan_waivers(
 
 def _get_stat_cols(player: Player) -> list[tuple[str, str]]:
     """Get relevant stat/column pairs for a player's type."""
-    if player.player_type == "hitter":
+    if player.player_type == PlayerType.HITTER:
         return [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb"), ("AVG", "avg")]
-    elif player.player_type == "pitcher":
+    elif player.player_type == PlayerType.PITCHER:
         return [("W", "w"), ("K", "k"), ("SV", "sv"), ("ERA", "era"), ("WHIP", "whip")]
     return []
 

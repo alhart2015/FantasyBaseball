@@ -7,6 +7,7 @@ the season dashboard (web/season_data.py).
 
 import numpy as np
 
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto
 
 from fantasy_baseball.utils.constants import (
@@ -84,15 +85,15 @@ def simulate_season(
     injuries = {}
 
     for team_key, players in team_rosters.items():
-        hitters = [p for p in players if p.get("player_type") == "hitter"]
-        pitchers = [p for p in players if p.get("player_type") == "pitcher"]
+        hitters = [p for p in players if p.get("player_type") == PlayerType.HITTER]
+        pitchers = [p for p in players if p.get("player_type") == PlayerType.PITCHER]
         team_injuries = []
 
         adj_hitters = _apply_variance(
-            hitters, "hitter", rng, team_injuries,
+            hitters, PlayerType.HITTER, rng, team_injuries,
         )
         adj_pitchers = _apply_variance(
-            pitchers, "pitcher", rng, team_injuries,
+            pitchers, PlayerType.PITCHER, rng, team_injuries,
         )
 
         # Select active roster (bench excluded)
@@ -190,16 +191,16 @@ def simulate_remaining_season(
 
     for team_key, players in team_rosters.items():
         actuals = actual_standings.get(team_key, {})
-        hitters = [p for p in players if p.get("player_type") == "hitter"]
-        pitchers = [p for p in players if p.get("player_type") == "pitcher"]
+        hitters = [p for p in players if p.get("player_type") == PlayerType.HITTER]
+        pitchers = [p for p in players if p.get("player_type") == PlayerType.PITCHER]
         team_injuries = []
 
         # Apply variance to full-season projections (covariance scaled down)
         adj_hitters = _apply_variance(
-            hitters, "hitter", rng, team_injuries, fraction_remaining,
+            hitters, PlayerType.HITTER, rng, team_injuries, fraction_remaining,
         )
         adj_pitchers = _apply_variance(
-            pitchers, "pitcher", rng, team_injuries, fraction_remaining,
+            pitchers, PlayerType.PITCHER, rng, team_injuries, fraction_remaining,
         )
 
         # Select active roster (bench excluded) — same logic as simulate_season
@@ -299,7 +300,7 @@ def _apply_variance(
 
     Mutates injuries_out by appending (name, frac_missed) for injured players.
     """
-    is_hitter = player_type == "hitter"
+    is_hitter = player_type == PlayerType.HITTER
     counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
     injury_prob = INJURY_PROB[player_type] * fraction_remaining
     injury_lo, injury_hi = INJURY_SEVERITY[player_type]
