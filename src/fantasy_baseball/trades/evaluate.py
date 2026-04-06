@@ -33,7 +33,7 @@ MAX_SGP_GAP = 0.35
 
 # Baseline estimates for AB and IP used to back out current totals
 _TEAM_AB = 5500
-_TEAM_IP = 1400
+_TEAM_IP = 1450
 
 
 def compute_roto_points_by_cat(

@@ -4,7 +4,7 @@ from .denominators import get_sgp_denominators
 from fantasy_baseball.models.player import HitterStats, PitcherStats, PlayerType
 
 DEFAULT_TEAM_AB: int = 5500
-DEFAULT_TEAM_IP: int = 1400
+DEFAULT_TEAM_IP: int = 1450
 REPLACEMENT_AVG: float = 0.250
 REPLACEMENT_ERA: float = 4.50
 REPLACEMENT_WHIP: float = 1.35
