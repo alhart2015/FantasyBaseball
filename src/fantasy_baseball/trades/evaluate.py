@@ -10,6 +10,7 @@ from typing import Any
 
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import Player, PlayerType
+from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 
 from fantasy_baseball.scoring import score_roto
@@ -242,10 +243,10 @@ def _player_ros_stats(player: Player) -> dict:
 
 
 def _find_player_by_name(name: str, roster: list[Player]) -> Player | None:
-    """Find a player in a roster by name (case-insensitive)."""
-    name_lower = name.lower()
+    """Find a player in a roster by normalized name (accent-safe)."""
+    target = normalize_name(name)
     for p in roster:
-        if p.name.lower() == name_lower:
+        if normalize_name(p.name) == target:
             return p
     return None
 

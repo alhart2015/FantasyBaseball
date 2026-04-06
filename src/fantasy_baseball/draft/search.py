@@ -1,6 +1,8 @@
 from difflib import SequenceMatcher
 from unicodedata import normalize
 
+from fantasy_baseball.utils.name_utils import normalize_name
+
 
 def split_team_and_player(
     raw_input: str,
@@ -66,15 +68,15 @@ def find_player(
     return_top_n: int | None = None,
 ) -> str | list[str] | None:
     """Find the best matching player name using fuzzy search."""
-    query_lower = query.lower().strip()
+    query_norm = normalize_name(query)
     scored: list[tuple[float, str]] = []
 
     for name in player_names:
-        name_lower = name.lower()
-        full_score = SequenceMatcher(None, query_lower, name_lower).ratio()
-        last_name = name_lower.split()[-1] if " " in name_lower else name_lower
-        last_score = SequenceMatcher(None, query_lower, last_name).ratio()
-        substring_bonus = 0.3 if query_lower in name_lower else 0.0
+        name_norm = normalize_name(name)
+        full_score = SequenceMatcher(None, query_norm, name_norm).ratio()
+        last_name = name_norm.split()[-1] if " " in name_norm else name_norm
+        last_score = SequenceMatcher(None, query_norm, last_name).ratio()
+        substring_bonus = 0.3 if query_norm in name_norm else 0.0
         best = max(full_score, last_score) + substring_bonus
         scored.append((best, name))
 
