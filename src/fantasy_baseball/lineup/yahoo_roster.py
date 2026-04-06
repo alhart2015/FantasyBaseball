@@ -211,6 +211,7 @@ def fetch_free_agents(league, position: str, count: int = 50) -> list[dict]:
                 "name": p["name"],
                 "positions": p.get("eligible_positions", [position]),
                 "player_id": p.get("player_id", ""),
+                "status": p.get("status", ""),
             })
         return result
     except (PermissionError, OSError) as exc:

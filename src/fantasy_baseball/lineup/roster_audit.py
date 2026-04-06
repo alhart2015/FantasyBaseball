@@ -36,6 +36,7 @@ def audit_roster(
 
     active_roster = [p for p in roster if p.status not in _IL_STATUSES]
     il_players = [p for p in roster if p.status in _IL_STATUSES]
+    active_fas = [fa for fa in free_agents if fa.status not in _IL_STATUSES]
 
     denoms = get_sgp_denominators()
 
@@ -52,7 +53,7 @@ def audit_roster(
 
     # Pre-compute FA wSGP
     fa_wsgp: dict[str, float] = {}
-    for fa in free_agents:
+    for fa in active_fas:
         fa_wsgp[fa.name] = calculate_weighted_sgp(fa.ros, leverage, denoms=denoms)
 
     p_slots = roster_slots.get("P", 9)
@@ -81,7 +82,7 @@ def audit_roster(
         base_wsgp = {k: v for k, v in baseline["player_wsgp"].items()
                      if k != player.name}
 
-        for fa in free_agents:
+        for fa in active_fas:
             new_roster = [p for p in active_roster if p.name != player.name] + [fa]
             new_pitchers = [p for p in new_roster if p.player_type == PlayerType.PITCHER]
 

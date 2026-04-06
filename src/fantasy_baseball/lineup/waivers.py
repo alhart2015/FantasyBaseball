@@ -124,6 +124,7 @@ def fetch_and_match_free_agents(
                     player_type=ptype,
                     positions=fa["positions"],
                     ros=ros,
+                    status=fa.get("status", ""),
                 )
                 fa_players.append(p)
 
