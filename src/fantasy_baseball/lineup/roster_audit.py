@@ -73,10 +73,6 @@ def audit_roster(
                      if k != player.name}
 
         for fa in free_agents:
-            # Quick skip: FA not better than this player individually
-            if fa_wsgp.get(fa.name, 0) <= entry["player_wsgp"]:
-                continue
-
             new_roster = [p for p in roster if p.name != player.name] + [fa]
             new_pitchers = [p for p in new_roster if p.player_type == PlayerType.PITCHER]
 
