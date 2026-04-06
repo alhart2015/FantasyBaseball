@@ -27,30 +27,27 @@ def detect_open_slots(
 ) -> tuple[int, int, int]:
     """Count empty active roster slots by type from Yahoo selected_position.
 
-    Yahoo returns position names like "Util" (not "UTIL"), "SP"/"RP" (not "P"),
-    so values are normalized to lowercase for matching.
-
     Returns:
         Tuple of (open_hitter_slots, open_pitcher_slots, open_bench_slots).
     """
-    il_positions = {"il", "il+", "dl", "dl+"}
-    bench_positions = {"bn"}
+    il_positions = {"IL", "IL+", "DL", "DL+"}
+    bench_positions = {"BN"}
 
     filled_hitter = filled_pitcher = filled_bench = 0
     for p in yahoo_roster:
-        slot = (p.get("selected_position") or "").lower()
+        slot = (p.get("selected_position") or "")
         if slot in il_positions:
             pass
         elif slot in bench_positions:
             filled_bench += 1
-        elif is_pitcher([slot.upper()]) or slot in ("sp", "rp", "p"):
+        elif is_pitcher([slot]):
             filled_pitcher += 1
         elif slot:
             filled_hitter += 1
 
     total_hitter_slots = sum(
         v for k, v in roster_slots.items()
-        if k.lower() not in {"p", "bn", "il", "il+", "dl", "dl+"}
+        if k not in {"P", "BN", "IL", "IL+", "DL", "DL+"}
     )
     return (
         max(0, total_hitter_slots - filled_hitter),
