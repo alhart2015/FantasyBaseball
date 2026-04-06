@@ -25,6 +25,14 @@
 
 - [ ] **Harden data ingest: position and name matching** — The projection-to-roster matching pipeline has had repeated bugs around edge cases: Julio Rodriguez (accent encoding), Mason Miller (name collisions between hitter and pitcher), Shohei Ohtani (dual hitter/pitcher split). Audit `match_roster_to_projections`, name normalization, and position collision resolution end-to-end. Add targeted test cases for each known problem player and fix any remaining fragility.
 
+- [ ] **Type-safe `TeamStats` container** — Centralize the 10 roto category totals into a dataclass with computed `@property` methods for rate stats (AVG, ERA, WHIP) that call `calculate_avg()`/`calculate_era()`/`calculate_whip()` from stored components (H, AB, ER, IP, BB, H_allowed). Replaces `dict[str, float]` flowing through `simulate_season`, `score_roto`, `apply_management_adjustment`, `project_team_stats`, and trade evaluation. Makes it impossible to have stale rate stats. Natural companion to the Player dataclass refactor.
+
+- [ ] **Add pipeline stage logging** — Log row counts at each stage of the data pipeline (blend → filter → backfill → SGP → VAR) to help debug data quality issues. Include timing and basic data quality checks (e.g., how many players dropped at each stage, any unexpected nulls).
+
+- [ ] **Auto-compute SGP denominators from Monte Carlo** — Instead of static denominators, simulate many drafts and seasons, sort each category's team totals, and compute the average gap between adjacent teams. That gap is the denominator by definition. Self-calibrating when league size or stat environment changes. Tradeoff: only as good as the projections and draft model.
+
+- [ ] **Calibrate pitcher component correlation matrix from actuals** — ER-BB, ER-H_allowed, and BB-H_allowed all share the same correlation (0.729) because they were derived from ERA/WHIP-level correlations, not component-level data. Pull actual ER/BB/H_allowed per-IP rates from historical game logs and compute the real pairwise correlations. These should differ (walks and hits allowed have different causes).
+
 - [ ] **Clean up "default for backwards compatibility" and other code smells** — Grep for remaining `# default for backwards compat` comments and similar shims. These were added during refactors and should be resolved — either the new behavior is correct (remove the comment and dead path) or the migration is incomplete (finish it).
 
 - [ ] **Fix AVG tie resolution beyond 3 decimal places** — Roto standings ties in AVG are resolved by comparing to 3 decimal places, but actual ties at .001 granularity are common. Compare to full precision (or at least 5+ digits) to properly break ties. Check ERA and WHIP for the same issue.
@@ -63,7 +71,13 @@
 
 - [ ] **Add tests for interactive draft flow** — `_handle_user_pick`, `_handle_other_pick`, `_get_player_input` in `run_draft.py` have no unit tests. Edge cases: out-of-range numbers, "skip", name collisions, and the "mine" keyword for traded picks.
 
-- [ ] **Rethink closer handling: draft strategy, in-season recommendations, and injury response** — The 20 SV binary threshold classifies closers as all-or-nothing. 19 pitchers clear it in blended projections, but 15 more are in the 10-19 SV range and get zero closer credit. A softer threshold (partial closer credit, or a continuous SV value curve) would better reflect the reality of committee situations, mid-season role changes, and closer injuries. Also revisit how the in-season optimizer handles closer injuries and waiver closer recommendations — the current approach may not react quickly enough to role changes.
+- [ ] **Rethink closer handling: draft strategy, in-season recommendations, and injury response** — The 20 SV binary threshold classifies closers as all-or-nothing. 19 pitchers clear it in blended projections, but 15 more are in the 10-19 SV range and get zero closer credit. A softer threshold (partial closer credit, or a continuous SV value curve) would better reflect the reality of committee situations, mid-season role changes, and closer injuries. Also revisit how the in-season optimizer handles closer injuries and waiver closer recommendations — the current approach may not react quickly enough to role changes. Related: add a "stealth closer" alert for relievers projected 10-19 SV (e.g., Robert Suarez at 8-11 SV) who could become primary closers via injury or role change — these are high-value waiver targets the system currently ignores.
+
+- [ ] **Use player_id instead of name in `_pick_with_avg_floor`** — Looks up players by name, which can collide. Recommendations should include `player_id` and the lookup should use it.
+
+- [ ] **Validate season date defaults against season_year** — `season_start: "2026-03-27"` in league.yaml will be stale next year. Either remove hardcoded defaults or validate that they match `season_year` at config load time.
+
+- [ ] **Reset module-level mutable state between tests** — `draft/state.py` globals and `_scarcity_cache` in `recommender.py` persist across test runs. Add a `reset()` function or use fixtures to clear state, otherwise tests can pass/fail depending on execution order.
 
 - [ ] **Optimize `build_player_lookup` and `_lookup_pid` in strategy.py** — `build_player_lookup` uses `iterrows()` on ~5700 rows (~30-50ms per call, called ~12 times per pick). Replace with `to_dict("index")`. `_lookup_pid` does O(n) DataFrame scan per call — build a `name→pid` dict once instead. Several strategies already build `player_lookup` but don't pass it through to `_lookup_pid`.
 
