@@ -57,9 +57,9 @@ class TestAuditRoster:
         assert len(results) == len(roster)
 
         # The weak OF should have an upgrade identified
-        weak_entry = next(e for e in results if e["player"] == "Weak OF")
-        assert weak_entry["best_fa"] == "Better OF"
-        assert weak_entry["gap"] > 0
+        weak_entry = next(e for e in results if e.player == "Weak OF")
+        assert weak_entry.best_fa == "Better OF"
+        assert weak_entry.gap > 0
 
     def test_shows_no_better_option(self):
         roster = [
@@ -71,8 +71,8 @@ class TestAuditRoster:
         results = audit_roster(roster, free_agents, EQUAL_LEVERAGE,
                                {"OF": 1, "P": 0, "BN": 0, "IL": 0})
         assert len(results) == 1
-        assert results[0]["best_fa"] is None
-        assert results[0]["gap"] == 0.0
+        assert results[0].best_fa is None
+        assert results[0].gap == 0.0
 
     def test_sorted_by_gap_descending(self):
         roster = [
@@ -85,7 +85,7 @@ class TestAuditRoster:
         ]
         results = audit_roster(roster, free_agents, EQUAL_LEVERAGE,
                                {"1B": 1, "OF": 1, "P": 0, "BN": 0, "IL": 0})
-        gaps = [e["gap"] for e in results]
+        gaps = [e.gap for e in results]
         assert gaps == sorted(gaps, reverse=True)
 
     def test_empty_free_agents_all_no_upgrade(self):
@@ -95,8 +95,8 @@ class TestAuditRoster:
         results = audit_roster(roster, [], EQUAL_LEVERAGE,
                                {"OF": 1, "P": 0, "BN": 0, "IL": 0})
         assert len(results) == 1
-        assert results[0]["best_fa"] is None
-        assert results[0]["gap"] == 0.0
+        assert results[0].best_fa is None
+        assert results[0].gap == 0.0
 
     def test_cross_type_swap_pitcher_slot(self):
         """A starter could replace a weak reliever if it produces more team wSGP."""
@@ -114,9 +114,9 @@ class TestAuditRoster:
         results = audit_roster(roster, free_agents, EQUAL_LEVERAGE,
                                {"OF": 1, "P": 2, "BN": 1, "IL": 0})
         # The bad RP should have the Good SP as best_fa (cross-type upgrade)
-        bad_rp_entry = next(e for e in results if e["player"] == "Bad RP")
-        assert bad_rp_entry["best_fa"] == "Good SP"
-        assert bad_rp_entry["gap"] > 0
+        bad_rp_entry = next(e for e in results if e.player == "Bad RP")
+        assert bad_rp_entry.best_fa == "Good SP"
+        assert bad_rp_entry.gap > 0
 
     def test_il_players_excluded_from_optimization(self):
         """IL players should not be treated as active starters."""
@@ -137,11 +137,11 @@ class TestAuditRoster:
                                {"OF": 1, "P": 1, "BN": 1, "IL": 1})
 
         # IL player should appear with slot="IL" and no upgrade
-        il_entry = next(e for e in results if e["player"] == "Hurt Closer")
-        assert il_entry["slot"] == "IL"
-        assert il_entry["best_fa"] is None
+        il_entry = next(e for e in results if e.player == "Hurt Closer")
+        assert il_entry.slot == "IL"
+        assert il_entry.best_fa is None
 
         # Active SP should NOT be recommended to swap for a hitter
         # (would leave 0 active pitchers for 1 P slot)
-        sp_entry = next(e for e in results if e["player"] == "Active SP")
-        assert sp_entry["best_fa"] is None
+        sp_entry = next(e for e in results if e.player == "Active SP")
+        assert sp_entry.best_fa is None

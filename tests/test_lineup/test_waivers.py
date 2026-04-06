@@ -1,5 +1,6 @@
 from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
-from fantasy_baseball.lineup.waivers import evaluate_pickup, scan_waivers, _compute_team_wsgp, _build_lineup_summary
+from fantasy_baseball.lineup.team_optimizer import compute_team_wsgp, build_lineup_summary
+from fantasy_baseball.lineup.waivers import evaluate_pickup, scan_waivers
 
 
 def _make_player(name, player_type, positions=None, **stats):
@@ -150,7 +151,7 @@ ROSTER_SLOTS = {"C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1, "OF": 4, "U
 
 class TestComputeTeamWsgp:
     def test_returns_total_and_lineups(self):
-        """_compute_team_wsgp returns total wSGP of assigned starters plus lineup dicts."""
+        """compute_team_wsgp returns total wSGP of assigned starters plus lineup dicts."""
         roster = [
             _make_player("Hitter A", "hitter", r=80, hr=25, rbi=75, sb=10, avg=.270, ab=500, h=135,
                          positions=["1B"]),
@@ -159,7 +160,7 @@ class TestComputeTeamWsgp:
             _make_player("Pitcher A", "pitcher", w=12, k=180, sv=0, ip=180, er=60, bb=50, h_allowed=150,
                          era=3.00, whip=1.11, positions=["SP"]),
         ]
-        result = _compute_team_wsgp(roster, EQUAL_LEVERAGE, ROSTER_SLOTS)
+        result = compute_team_wsgp(roster, EQUAL_LEVERAGE, ROSTER_SLOTS)
         assert "total_wsgp" in result
         assert "hitter_lineup" in result
         assert "pitcher_starters" in result
@@ -177,7 +178,7 @@ class TestComputeTeamWsgp:
                          positions=["C"]),
         ]
         slots = {"C": 1, "P": 0, "BN": 1, "IL": 0}
-        result = _compute_team_wsgp(roster, EQUAL_LEVERAGE, slots)
+        result = compute_team_wsgp(roster, EQUAL_LEVERAGE, slots)
         assert len(result["hitter_lineup"]) == 1
 
 
@@ -189,7 +190,7 @@ class TestBuildLineupSummary:
         player_wsgp = {"Player A": 1.5, "Player B": 2.0, "Player C": 1.0, "Pitcher X": 2.0}
         all_players = ["Player A", "Player B", "Player C", "Player D", "Pitcher X", "Pitcher Y"]
 
-        result = _build_lineup_summary(hitter_lineup, pitcher_starters, player_wsgp, all_players)
+        result = build_lineup_summary(hitter_lineup, pitcher_starters, player_wsgp, all_players)
         assert len(result) > 0
         player_a = next(e for e in result if e["name"] == "Player A")
         assert player_a["slot"] == "C"
@@ -201,7 +202,7 @@ class TestBuildLineupSummary:
         pitcher_starters = []
         player_wsgp = {"Player A": 1.0, "Player B": 0.8}
 
-        result = _build_lineup_summary(hitter_lineup, pitcher_starters, player_wsgp, ["Player A", "Player B"])
+        result = build_lineup_summary(hitter_lineup, pitcher_starters, player_wsgp, ["Player A", "Player B"])
         slots = [e["slot"] for e in result if e["name"] in ("Player A", "Player B")]
         assert all(s == "OF" for s in slots)
 
@@ -211,7 +212,7 @@ class TestBuildLineupSummary:
         pitcher_starters = []
         player_wsgp = {"Starter": 2.0, "Benched": 0.5}
 
-        result = _build_lineup_summary(hitter_lineup, pitcher_starters, player_wsgp, ["Starter", "Benched"])
+        result = build_lineup_summary(hitter_lineup, pitcher_starters, player_wsgp, ["Starter", "Benched"])
         benched = next(e for e in result if e["name"] == "Benched")
         assert benched["slot"] == "BN"
 

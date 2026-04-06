@@ -2,15 +2,47 @@
 
 from __future__ import annotations
 
-from fantasy_baseball.lineup.waivers import (
-    _compute_team_wsgp,
-    _build_lineup_summary,
-    evaluate_pickup,
-)
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+from fantasy_baseball.lineup.team_optimizer import compute_team_wsgp, build_lineup_summary
+from fantasy_baseball.lineup.waivers import evaluate_pickup
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.utils.constants import IL_STATUSES
+
+
+@dataclass
+class AuditEntry:
+    """Result of evaluating one roster slot against the FA pool."""
+
+    player: str
+    player_type: str
+    positions: list[str]
+    slot: str
+    player_wsgp: float
+    best_fa: Optional[str] = None
+    best_fa_type: Optional[str] = None
+    best_fa_positions: Optional[list[str]] = None
+    best_fa_wsgp: Optional[float] = None
+    gap: float = 0.0
+    categories: dict[str, float] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "player": self.player,
+            "player_type": self.player_type,
+            "positions": self.positions,
+            "slot": self.slot,
+            "player_wsgp": self.player_wsgp,
+            "best_fa": self.best_fa,
+            "best_fa_type": self.best_fa_type,
+            "best_fa_positions": self.best_fa_positions,
+            "best_fa_wsgp": self.best_fa_wsgp,
+            "gap": self.gap,
+            "categories": self.categories,
+        }
 
 
 def audit_roster(
@@ -18,7 +50,7 @@ def audit_roster(
     free_agents: list[Player],
     leverage: dict[str, float],
     roster_slots: dict[str, int],
-) -> list[dict]:
+) -> list[AuditEntry]:
     """Evaluate every roster slot against the best available FA.
 
     For each roster player, finds the FA that produces the largest team
@@ -39,9 +71,9 @@ def audit_roster(
     denoms = get_sgp_denominators()
 
     # Baseline optimal lineup (active players only)
-    baseline = _compute_team_wsgp(active_roster, leverage, roster_slots, denoms=denoms)
+    baseline = compute_team_wsgp(active_roster, leverage, roster_slots, denoms=denoms)
     baseline_wsgp = baseline["total_wsgp"]
-    baseline_summary = _build_lineup_summary(
+    baseline_summary = build_lineup_summary(
         baseline["hitter_lineup"], baseline["pitcher_starters"],
         baseline["player_wsgp"], [p.name for p in roster],
     )
@@ -56,21 +88,15 @@ def audit_roster(
 
     p_slots = roster_slots.get("P", 9)
 
-    entries: list[dict] = []
+    entries: list[AuditEntry] = []
     for player in active_roster:
-        entry = {
-            "player": player.name,
-            "player_type": player.player_type.value,
-            "positions": list(player.positions),
-            "slot": slot_lookup.get(player.name, "BN"),
-            "player_wsgp": round(baseline["player_wsgp"].get(player.name, 0.0), 2),
-            "best_fa": None,
-            "best_fa_type": None,
-            "best_fa_positions": None,
-            "best_fa_wsgp": None,
-            "gap": 0.0,
-            "categories": {},
-        }
+        entry = AuditEntry(
+            player=player.name,
+            player_type=player.player_type.value,
+            positions=list(player.positions),
+            slot=slot_lookup.get(player.name, "BN"),
+            player_wsgp=round(baseline["player_wsgp"].get(player.name, 0.0), 2),
+        )
 
         best_gain = 0.0
         best_fa_player = None
@@ -92,7 +118,7 @@ def audit_roster(
             swap_wsgp = dict(base_wsgp)
             swap_wsgp[fa.name] = fa_wsgp[fa.name]
 
-            new_result = _compute_team_wsgp(
+            new_result = compute_team_wsgp(
                 new_roster, leverage, roster_slots,
                 denoms=denoms, player_wsgp=swap_wsgp,
             )
@@ -104,30 +130,24 @@ def audit_roster(
 
         if best_fa_player:
             cat_result = evaluate_pickup(best_fa_player, player, leverage)
-            entry["best_fa"] = best_fa_player.name
-            entry["best_fa_type"] = best_fa_player.player_type.value
-            entry["best_fa_positions"] = list(best_fa_player.positions)
-            entry["best_fa_wsgp"] = round(fa_wsgp.get(best_fa_player.name, 0.0), 2)
-            entry["gap"] = best_gain
-            entry["categories"] = cat_result["categories"]
+            entry.best_fa = best_fa_player.name
+            entry.best_fa_type = best_fa_player.player_type.value
+            entry.best_fa_positions = list(best_fa_player.positions)
+            entry.best_fa_wsgp = round(fa_wsgp.get(best_fa_player.name, 0.0), 2)
+            entry.gap = best_gain
+            entry.categories = cat_result["categories"]
 
         entries.append(entry)
 
     # Add IL players at the end — they can't be swapped
     for player in il_players:
-        entries.append({
-            "player": player.name,
-            "player_type": player.player_type.value,
-            "positions": list(player.positions),
-            "slot": "IL",
-            "player_wsgp": 0.0,
-            "best_fa": None,
-            "best_fa_type": None,
-            "best_fa_positions": None,
-            "best_fa_wsgp": None,
-            "gap": 0.0,
-            "categories": {},
-        })
+        entries.append(AuditEntry(
+            player=player.name,
+            player_type=player.player_type.value,
+            positions=list(player.positions),
+            slot="IL",
+            player_wsgp=0.0,
+        ))
 
-    entries.sort(key=lambda e: e["gap"], reverse=True)
+    entries.sort(key=lambda e: e.gap, reverse=True)
     return entries

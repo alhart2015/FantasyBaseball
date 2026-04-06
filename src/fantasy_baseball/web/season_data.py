@@ -1022,8 +1022,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         audit_results = audit_roster(
             roster_players, fa_players, leverage, config.roster_slots,
         )
-        write_cache("roster_audit", audit_results, cache_dir)
-        upgrades = sum(1 for e in audit_results if e["gap"] > 0)
+        write_cache("roster_audit", [e.to_dict() for e in audit_results], cache_dir)
+        upgrades = sum(1 for e in audit_results if e.gap > 0)
         _progress(f"Roster audit: {upgrades} upgrade(s) found")
 
         waiver_recs = scan_waivers(
