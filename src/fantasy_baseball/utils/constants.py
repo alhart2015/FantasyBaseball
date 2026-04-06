@@ -206,6 +206,9 @@ STABILIZATION_THRESHOLDS: dict[str, tuple[int, str]] = {
     "WHIP": (570, "bf"),   # Midpoint of component range (540-670 BF)
 }
 
+# Yahoo player statuses that indicate a player is on the injured list.
+IL_STATUSES = frozenset({"IL", "IL+", "IL10", "IL15", "IL60", "DL", "DL+"})
+
 DEFAULT_SGP_DENOMINATORS: dict[str, float] = {
     "R": 20.0,
     "HR": 9.0,

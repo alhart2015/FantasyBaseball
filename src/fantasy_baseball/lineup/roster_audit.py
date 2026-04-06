@@ -10,9 +10,7 @@ from fantasy_baseball.lineup.waivers import (
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
-
-
-_IL_STATUSES = {"IL", "IL+", "IL10", "IL15", "DL", "DL+"}
+from fantasy_baseball.utils.constants import IL_STATUSES
 
 
 def audit_roster(
@@ -34,9 +32,9 @@ def audit_roster(
     if not roster:
         return []
 
-    active_roster = [p for p in roster if p.status not in _IL_STATUSES]
-    il_players = [p for p in roster if p.status in _IL_STATUSES]
-    active_fas = [fa for fa in free_agents if fa.status not in _IL_STATUSES]
+    active_roster = [p for p in roster if p.status not in IL_STATUSES]
+    il_players = [p for p in roster if p.status in IL_STATUSES]
+    active_fas = [fa for fa in free_agents if fa.status not in IL_STATUSES]
 
     denoms = get_sgp_denominators()
 
@@ -76,7 +74,6 @@ def audit_roster(
 
         best_gain = 0.0
         best_fa_player = None
-        best_new_result = None
 
         # Pre-build wSGP dict without this player for swap simulation
         base_wsgp = {k: v for k, v in baseline["player_wsgp"].items()
@@ -104,9 +101,8 @@ def audit_roster(
             if gain > best_gain:
                 best_gain = gain
                 best_fa_player = fa
-                best_new_result = new_result
 
-        if best_fa_player and best_new_result:
+        if best_fa_player:
             cat_result = evaluate_pickup(best_fa_player, player, leverage)
             entry["best_fa"] = best_fa_player.name
             entry["best_fa_type"] = best_fa_player.player_type.value

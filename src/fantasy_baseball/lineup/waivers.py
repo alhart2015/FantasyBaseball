@@ -17,6 +17,7 @@ from fantasy_baseball.sgp.player_value import (
     REPLACEMENT_ERA,
     REPLACEMENT_WHIP,
 )
+from fantasy_baseball.utils.constants import IL_STATUSES
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_cover_slots, is_pitcher
 
@@ -30,13 +31,12 @@ def detect_open_slots(
     Returns:
         Tuple of (open_hitter_slots, open_pitcher_slots, open_bench_slots).
     """
-    il_positions = {"IL", "IL+", "DL", "DL+"}
     bench_positions = {"BN"}
 
     filled_hitter = filled_pitcher = filled_bench = 0
     for p in yahoo_roster:
         slot = (p.get("selected_position") or "")
-        if slot in il_positions:
+        if slot in IL_STATUSES:
             pass
         elif slot in bench_positions:
             filled_bench += 1
@@ -47,7 +47,7 @@ def detect_open_slots(
 
     total_hitter_slots = sum(
         v for k, v in roster_slots.items()
-        if k not in {"P", "BN", "IL", "IL+", "DL", "DL+"}
+        if k not in ({"P", "BN"} | IL_STATUSES)
     )
     return (
         max(0, total_hitter_slots - filled_hitter),

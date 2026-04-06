@@ -65,6 +65,34 @@ def load_game_logs_by_name(
 
 
 # ---------------------------------------------------------------------------
+# Batch blending
+# ---------------------------------------------------------------------------
+
+
+def blend_player_list(
+    players: list[Player],
+    game_logs_by_name: dict[str, list[dict]],
+    cutoff: str,
+    leverage: dict[str, float] | None = None,
+) -> int:
+    """Blend a list of Players with game logs in place.
+
+    Returns count of players blended. If leverage is provided, recomputes
+    wSGP on each blended player.
+    """
+    count = 0
+    for i, player in enumerate(players):
+        key = f"{normalize_name(player.name)}::{player.player_type.value}"
+        logs = game_logs_by_name.get(key, [])
+        if logs:
+            players[i] = blend_player_with_game_logs(player, logs, cutoff)
+            if leverage:
+                players[i].compute_wsgp(leverage)
+            count += 1
+    return count
+
+
+# ---------------------------------------------------------------------------
 # Player-level blending
 # ---------------------------------------------------------------------------
 

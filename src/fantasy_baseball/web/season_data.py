@@ -674,7 +674,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.analysis.pace import compute_player_pace
         from fantasy_baseball.analysis.buy_low import find_buy_low_candidates
         from fantasy_baseball.lineup.blending import (
-            blend_player_with_game_logs,
+            blend_player_list,
             load_game_logs_by_name,
         )
         from fantasy_baseball.lineup.roster_audit import audit_roster
@@ -904,14 +904,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             gl_conn.close()
 
         today = datetime.now().strftime("%Y-%m-%d")
-        blended_count = 0
-        for i, player in enumerate(roster_players):
-            key = f"{normalize_name(player.name)}::{player.player_type.value}"
-            logs = game_logs_by_name.get(key, [])
-            if logs:
-                roster_players[i] = blend_player_with_game_logs(player, logs, today)
-                roster_players[i].compute_wsgp(leverage)
-                blended_count += 1
+        blended_count = blend_player_list(roster_players, game_logs_by_name, today, leverage)
         if blended_count:
             _progress(f"Blended {blended_count} roster players with game logs")
 
@@ -1020,13 +1013,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         )
 
         # Blend FA players with game logs
-        fa_blended = 0
-        for i, fa in enumerate(fa_players):
-            key = f"{normalize_name(fa.name)}::{fa.player_type.value}"
-            logs = game_logs_by_name.get(key, [])
-            if logs:
-                fa_players[i] = blend_player_with_game_logs(fa, logs, today)
-                fa_blended += 1
+        fa_blended = blend_player_list(fa_players, game_logs_by_name, today)
         if fa_blended:
             _progress(f"Blended {fa_blended} free agents with game logs")
 
