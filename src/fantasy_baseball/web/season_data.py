@@ -87,6 +87,7 @@ CACHE_FILES = {
     "meta": "meta.json",
     "buy_low": "buy_low.json",
     "rankings": "rankings.json",
+    "roster_audit": "roster_audit.json",
 }
 
 

@@ -330,6 +330,18 @@ def register_routes(app: Flask) -> None:
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
+    @app.route("/roster-audit")
+    def roster_audit():
+        meta = read_meta()
+        audit_raw = read_cache("roster_audit")
+        return render_template(
+            "season/roster_audit.html",
+            meta=meta,
+            active_page="roster_audit",
+            audit=audit_raw or [],
+            categories=ALL_CATEGORIES,
+        )
+
     @app.route("/waivers-trades")
     def waivers_trades():
         meta = read_meta()

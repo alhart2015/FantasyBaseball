@@ -20,6 +20,10 @@
                class="nav-link {% if active_page == 'lineup' %}active{% endif %}">
                 Lineup
             </a>
+            <a href="{{ url_for('roster_audit') }}"
+               class="nav-link {% if active_page == 'roster_audit' %}active{% endif %}">
+                Roster Audit
+            </a>
             <a href="{{ url_for('waivers_trades') }}"
                class="nav-link {% if active_page == 'waivers_trades' %}active{% endif %}">
                 Waivers &amp; Trades

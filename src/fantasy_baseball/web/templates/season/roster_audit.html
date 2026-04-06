@@ -1,0 +1,134 @@
+{% extends "season/base.html" %}
+{% block title %}Roster Audit — Season Dashboard{% endblock %}
+{% block content %}
+
+<style>
+.audit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.audit-table th {
+    text-align: left; font-size: 11px; color: var(--text-secondary);
+    font-weight: 500; text-transform: uppercase; padding: 6px 8px;
+    border-bottom: 1px solid var(--panel-border);
+}
+.audit-table td { padding: 8px; border-bottom: 1px solid var(--panel-border); }
+.audit-row { cursor: pointer; }
+.audit-row:hover { background: rgba(255, 255, 255, 0.03); }
+.audit-row.has-upgrade { background: rgba(251, 191, 36, 0.05); }
+.audit-row.has-upgrade:hover { background: rgba(251, 191, 36, 0.10); }
+.gap-badge {
+    font-weight: 600; font-size: 12px; padding: 2px 8px;
+    border-radius: 3px; display: inline-block;
+}
+.gap-high { background: rgba(239, 68, 68, 0.15); color: #fca5a5; }
+.gap-medium { background: rgba(251, 191, 36, 0.15); color: #fcd34d; }
+.gap-low { background: rgba(34, 197, 94, 0.15); color: #86efac; }
+.gap-none { color: var(--text-secondary); font-size: 12px; }
+.audit-detail { display: none; }
+.audit-detail.open { display: table-row; }
+.audit-detail td { padding: 12px 8px; background: rgba(0,0,0,0.2); }
+.cat-impact { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.cat-gain { color: var(--success); font-size: 11px; font-weight: 600; }
+.cat-loss { color: var(--danger); font-size: 11px; font-weight: 600; }
+.player-pos { color: var(--text-secondary); font-size: 11px; margin-left: 4px; }
+.player-type-tag {
+    font-size: 10px; padding: 1px 5px; border-radius: 3px;
+    background: rgba(255,255,255,0.08); color: var(--text-secondary);
+    margin-left: 4px;
+}
+</style>
+
+<div class="page-header">
+    <h2>Roster Audit</h2>
+    {% if meta and meta.get('week') %}
+    <div class="week-label">Week {{ meta['week'] }}</div>
+    {% endif %}
+</div>
+
+{% if not audit %}
+<p class="placeholder-text">No roster audit data. Click "Refresh Data" to generate the audit.</p>
+{% else %}
+
+{% set upgrade_count = audit | selectattr('gap', '>', 0) | list | length %}
+{% if upgrade_count > 0 %}
+<p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">
+    {{ upgrade_count }} upgrade{{ 's' if upgrade_count != 1 }} available on the waiver wire.
+    Sorted by impact — biggest improvements first.
+</p>
+{% else %}
+<p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">
+    No upgrades found — your roster is the best available at every slot.
+</p>
+{% endif %}
+
+<table class="audit-table">
+    <thead>
+        <tr>
+            <th>Slot</th>
+            <th>Your Player</th>
+            <th>wSGP</th>
+            <th>Best Available</th>
+            <th>FA wSGP</th>
+            <th>Gap</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for entry in audit %}
+    <tr class="audit-row {% if entry.gap > 0 %}has-upgrade{% endif %}"
+        onclick="toggleAuditDetail('audit-detail-{{ loop.index }}')">
+        <td>{{ entry.slot }}</td>
+        <td>
+            {{ entry.player }}
+            <span class="player-pos">({{ entry.positions | join(", ") }})</span>
+        </td>
+        <td>{{ "%.2f"|format(entry.player_wsgp) }}</td>
+        {% if entry.best_fa %}
+        <td>
+            {{ entry.best_fa }}
+            <span class="player-pos">({{ entry.best_fa_positions | join(", ") }})</span>
+            {% if entry.best_fa_type != entry.player_type %}
+            <span class="player-type-tag">{{ entry.best_fa_type }}</span>
+            {% endif %}
+        </td>
+        <td>{{ "%.2f"|format(entry.best_fa_wsgp) }}</td>
+        <td>
+            {% if entry.gap >= 0.5 %}
+            <span class="gap-badge gap-high">+{{ "%.2f"|format(entry.gap) }}</span>
+            {% elif entry.gap >= 0.2 %}
+            <span class="gap-badge gap-medium">+{{ "%.2f"|format(entry.gap) }}</span>
+            {% else %}
+            <span class="gap-badge gap-low">+{{ "%.2f"|format(entry.gap) }}</span>
+            {% endif %}
+        </td>
+        {% else %}
+        <td colspan="2" style="color: var(--text-secondary); font-style: italic;">—</td>
+        <td><span class="gap-none">No better option</span></td>
+        {% endif %}
+    </tr>
+    {% if entry.best_fa and entry.categories %}
+    <tr class="audit-detail" id="audit-detail-{{ loop.index }}">
+        <td colspan="6">
+            <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px;">Category impact of swapping {{ entry.player }} &rarr; {{ entry.best_fa }}</div>
+            <div class="cat-impact">
+                {% for cat, delta in entry.categories.items() %}
+                {% if delta > 0.01 %}
+                <span class="cat-gain">{{ cat }} +{{ "%.2f"|format(delta) }}</span>
+                {% elif delta < -0.01 %}
+                <span class="cat-loss">{{ cat }} {{ "%.2f"|format(delta) }}</span>
+                {% endif %}
+                {% endfor %}
+            </div>
+        </td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+<script>
+function toggleAuditDetail(id) {
+    const row = document.getElementById(id);
+    if (row) row.classList.toggle('open');
+}
+</script>
+
+{% endblock %}
