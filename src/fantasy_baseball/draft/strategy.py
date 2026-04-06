@@ -523,8 +523,7 @@ def pick_no_punt_cap3(
             board, tracker, full_board, config,
         ) if closer_count >= NO_PUNT_CAP3_TARGET else (None, None)
 
-    current_h = sum(h.get("h", 0) for h in balance._hitters)
-    current_ab = sum(h.get("ab", 0) for h in balance._hitters)
+    current_h, current_ab = balance.get_avg_components()
 
     for rec in recs:
         # Hard cap: skip closers once we have enough
@@ -706,8 +705,7 @@ def _pick_with_avg_floor(recs, board, balance, avg_floor, player_lookup=None):
     Pitchers are always acceptable (they don't affect AVG).
     Returns (name, player_id).
     """
-    current_h = sum(h.get("h", 0) for h in balance._hitters)
-    current_ab = sum(h.get("ab", 0) for h in balance._hitters)
+    current_h, current_ab = balance.get_avg_components()
 
     for rec in recs:
         if rec["player_type"] != PlayerType.HITTER:

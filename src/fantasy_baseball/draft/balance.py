@@ -53,6 +53,12 @@ class CategoryBalance:
             totals["WHIP"] = None
         return totals
 
+    def get_avg_components(self) -> tuple[float, float]:
+        """Return (total_h, total_ab) for computing projected team AVG."""
+        total_h = sum(h.get("h", 0) for h in self._hitters)
+        total_ab = sum(h.get("ab", 0) for h in self._hitters)
+        return total_h, total_ab
+
     def get_warnings(self) -> list[str]:
         totals = self.get_totals()
         warnings = []
