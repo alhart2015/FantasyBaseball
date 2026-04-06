@@ -6,6 +6,8 @@ predicted per-PA rates (hitters) or per-IP rates (pitchers).
 import math
 from datetime import date, timedelta
 
+from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -93,7 +95,7 @@ def _aggregate_hitter_games(games: list[dict]) -> dict:
         "r_per_pa": r / pa,
         "rbi_per_pa": rbi / pa,
         "sb_per_pa": sb / pa,
-        "avg": h / ab if ab > 0 else 0,
+        "avg": calculate_avg(h, ab),
     }
 
 
@@ -120,8 +122,8 @@ def _aggregate_pitcher_games(games: list[dict]) -> dict:
         "ip": ip, "k": k, "er": er, "bb": bb, "h_allowed": h_allowed,
         "w": w, "sv": sv, "gs": gs, "g": g,
         "k_per_ip": k / ip,
-        "era": er / ip * 9,
-        "whip": (bb + h_allowed) / ip,
+        "era": calculate_era(er, ip),
+        "whip": calculate_whip(bb, h_allowed, ip),
         "w_per_gs": w / gs if gs > 0 else 0,
         "sv_per_g": sv / g if g > 0 else 0,
     }
@@ -275,7 +277,7 @@ def _decay_hitter(projection: dict, games: list[dict], cutoff_date: date) -> dic
         "r_per_pa": w_r / w_pa,
         "rbi_per_pa": w_rbi / w_pa,
         "sb_per_pa": w_sb / w_pa,
-        "avg": w_h / w_ab if w_ab > 0 else 0,
+        "avg": calculate_avg(w_h, w_ab),
     }
 
     # Blend with projection using reliability constants and total unweighted PA
@@ -332,8 +334,8 @@ def _decay_pitcher(projection: dict, games: list[dict], cutoff_date: date) -> di
 
     actual_rates = {
         "k_per_ip": w_k / w_ip,
-        "era": w_er / w_ip * 9,
-        "whip": (w_bb + w_h_allowed) / w_ip,
+        "era": calculate_era(w_er, w_ip),
+        "whip": calculate_whip(w_bb, w_h_allowed, w_ip),
         "w_per_gs": w_w / w_gs if w_gs > 0 else 0,
         "sv_per_g": w_sv / w_g if w_g > 0 else 0,
     }

@@ -17,6 +17,7 @@ from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
     INVERSE_STATS as INVERSE_CATS,
 )
+from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era
 
 COUNTING_CATS = ["R", "HR", "RBI", "SB", "W", "K", "SV"]
 
@@ -108,26 +109,20 @@ def _project_team_stats(
     loses_ab = loses_ros["ab"]
     gains_ab = gains_ros["ab"]
     new_ab = _TEAM_AB - loses_ab + gains_ab
-    if new_ab > 0:
-        current_hits = current_stats["AVG"] * _TEAM_AB
-        new_hits = current_hits - loses_ros["AVG"] * loses_ab + gains_ros["AVG"] * gains_ab
-        projected["AVG"] = new_hits / new_ab
-    else:
-        projected["AVG"] = 0.0
+    current_hits = current_stats["AVG"] * _TEAM_AB
+    new_hits = current_hits - loses_ros["AVG"] * loses_ab + gains_ros["AVG"] * gains_ab
+    projected["AVG"] = calculate_avg(new_hits, new_ab, default=0.0)
 
     # --- ERA: convert to ER, adjust, recompute ---
     loses_ip = loses_ros["ip"]
     gains_ip = gains_ros["ip"]
     new_ip = _TEAM_IP - loses_ip + gains_ip
 
-    if new_ip > 0:
-        current_er = current_stats["ERA"] * _TEAM_IP / 9.0
-        loses_er = loses_ros["ERA"] * loses_ip / 9.0
-        gains_er = gains_ros["ERA"] * gains_ip / 9.0
-        new_er = current_er - loses_er + gains_er
-        projected["ERA"] = new_er * 9.0 / new_ip
-    else:
-        projected["ERA"] = 0.0
+    current_er = current_stats["ERA"] * _TEAM_IP / 9.0
+    loses_er = loses_ros["ERA"] * loses_ip / 9.0
+    gains_er = gains_ros["ERA"] * gains_ip / 9.0
+    new_er = current_er - loses_er + gains_er
+    projected["ERA"] = calculate_era(new_er, new_ip, default=0.0)
 
     # --- WHIP: total (BB+H), adjust, recompute ---
     if new_ip > 0:

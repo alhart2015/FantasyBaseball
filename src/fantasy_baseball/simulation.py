@@ -9,6 +9,7 @@ import numpy as np
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 from fantasy_baseball.utils.constants import (
     CLOSER_SV_THRESHOLD,
@@ -124,12 +125,12 @@ def simulate_season(
             "HR": sum(h["hr"] for h in active_h),
             "RBI": sum(h["rbi"] for h in active_h),
             "SB": sum(h["sb"] for h in active_h),
-            "AVG": total_h / total_ab if total_ab > 0 else 0,
+            "AVG": calculate_avg(total_h, total_ab),
             "W": sum(p["w"] for p in active_p),
             "K": sum(p["k"] for p in active_p),
             "SV": sum(p.get("sv", 0) for p in active_p),
-            "ERA": total_er * 9 / total_ip if total_ip > 0 else 99,
-            "WHIP": (total_bb + total_ha) / total_ip if total_ip > 0 else 99,
+            "ERA": calculate_era(total_er, total_ip),
+            "WHIP": calculate_whip(total_bb, total_ha, total_ip),
         }
         injuries[team_key] = team_injuries
 
@@ -269,11 +270,11 @@ def simulate_remaining_season(
             "HR": actuals.get("HR", 0) + rem_hr,
             "RBI": actuals.get("RBI", 0) + rem_rbi,
             "SB": actuals.get("SB", 0) + rem_sb,
-            "AVG": total_h / total_ab if total_ab > 0 else 0,
+            "AVG": calculate_avg(total_h, total_ab),
             "W": actuals.get("W", 0) + rem_w,
             "K": actuals.get("K", 0) + rem_k,
             "SV": actuals.get("SV", 0) + rem_sv,
-            "ERA": total_er * 9 / total_ip if total_ip > 0 else 99,
+            "ERA": calculate_era(total_er, total_ip),
             "WHIP": total_h_plus_bb / total_ip if total_ip > 0 else 99,
         }
         injuries[team_key] = team_injuries

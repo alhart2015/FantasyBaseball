@@ -27,6 +27,7 @@ from fantasy_baseball.simulation import (
     PITCHER_IDX,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
+from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 
 def pad_roster_to_full(
@@ -150,7 +151,7 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
         sb = sum(h["sb"] for h in adj_hitters)
         total_h = sum(h["h"] for h in adj_hitters)
         total_ab = sum(h["ab"] for h in adj_hitters)
-        avg = total_h / total_ab if total_ab > 0 else 0
+        avg = calculate_avg(total_h, total_ab)
 
         w = sum(p["w"] for p in adj_pitchers)
         k = sum(p["k"] for p in adj_pitchers)
@@ -159,8 +160,8 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
         total_er = sum(p["er"] for p in adj_pitchers)
         total_bb = sum(p["bb"] for p in adj_pitchers)
         total_ha = sum(p["h_allowed"] for p in adj_pitchers)
-        era = total_er * 9 / total_ip if total_ip > 0 else 99.0
-        whip = (total_bb + total_ha) / total_ip if total_ip > 0 else 99.0
+        era = calculate_era(total_er, total_ip)
+        whip = calculate_whip(total_bb, total_ha, total_ip)
 
         team_stats[team_num] = {
             "R": r, "HR": hr, "RBI": rbi, "SB": sb, "AVG": avg,

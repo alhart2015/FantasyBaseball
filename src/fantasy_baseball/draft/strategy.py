@@ -21,6 +21,7 @@ from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.positions import can_fill_slot
+from fantasy_baseball.utils.rate_stats import calculate_avg
 # Draft a closer by this round if you have none
 CLOSER_DEADLINE_ROUND = 10
 # Don't let team AVG fall below this
@@ -541,7 +542,7 @@ def pick_no_punt_cap3(
         player = rows.iloc[0]
         new_h = current_h + player.get("h", 0)
         new_ab = current_ab + player.get("ab", 0)
-        projected_avg = new_h / new_ab if new_ab > 0 else 0
+        projected_avg = calculate_avg(new_h, new_ab)
 
         if projected_avg >= NO_PUNT_AVG_FLOOR or current_ab == 0:
             return rec["name"], _lookup_pid(board, rec["name"])
@@ -718,7 +719,7 @@ def _pick_with_avg_floor(recs, board, balance, avg_floor, player_lookup=None):
         player = rows.iloc[0]
         new_h = current_h + player.get("h", 0)
         new_ab = current_ab + player.get("ab", 0)
-        projected_avg = new_h / new_ab if new_ab > 0 else 0
+        projected_avg = calculate_avg(new_h, new_ab)
 
         if projected_avg >= avg_floor or current_ab == 0:
             return rec["name"], _lookup_pid(board, rec["name"], player_lookup)

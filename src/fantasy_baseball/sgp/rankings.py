@@ -9,6 +9,7 @@ import pandas as pd
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.name_utils import normalize_name
+from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 PITCHER_POSITIONS = {"P", "SP", "RP"}
 
@@ -105,18 +106,14 @@ def compute_rankings_from_game_logs(
             if player_type == PlayerType.HITTER:
                 ab = player_dict.get("ab", 0) or 0
                 h = player_dict.get("h", 0) or 0
-                player_dict["avg"] = h / ab if ab > 0 else 0.0
+                player_dict["avg"] = calculate_avg(h, ab, default=0.0)
             else:
                 ip = player_dict.get("ip", 0) or 0
-                if ip > 0:
-                    er = player_dict.get("er", 0) or 0
-                    bb = player_dict.get("bb", 0) or 0
-                    ha = player_dict.get("h_allowed", 0) or 0
-                    player_dict["era"] = er * 9.0 / ip
-                    player_dict["whip"] = (bb + ha) / ip
-                else:
-                    player_dict["era"] = 0.0
-                    player_dict["whip"] = 0.0
+                er = player_dict.get("er", 0) or 0
+                bb = player_dict.get("bb", 0) or 0
+                ha = player_dict.get("h_allowed", 0) or 0
+                player_dict["era"] = calculate_era(er, ip, default=0.0)
+                player_dict["whip"] = calculate_whip(bb, ha, ip, default=0.0)
 
             sgp = calculate_player_sgp(pd.Series(player_dict))
             key = f"{norm_name}::{player_type}"

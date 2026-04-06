@@ -4,6 +4,8 @@ from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from typing import Any, Optional
 
+from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
+
 
 class PlayerType(StrEnum):
     HITTER = "hitter"
@@ -33,8 +35,8 @@ class HitterStats:
         kwargs["sgp"] = d.get("sgp", None)
 
         # Compute avg from h/ab if avg not provided or is zero
-        if kwargs["avg"] == 0 and kwargs["ab"] > 0:
-            kwargs["avg"] = kwargs["h"] / kwargs["ab"]
+        if kwargs["avg"] == 0:
+            kwargs["avg"] = calculate_avg(kwargs["h"], kwargs["ab"])
 
         return cls(**kwargs)
 
@@ -98,9 +100,9 @@ class PitcherStats:
         ip = kwargs["ip"]
         if ip > 0:
             if kwargs["era"] == 0:
-                kwargs["era"] = kwargs["er"] * 9 / ip
+                kwargs["era"] = calculate_era(kwargs["er"], ip)
             if kwargs["whip"] == 0:
-                kwargs["whip"] = (kwargs["bb"] + kwargs["h_allowed"]) / ip
+                kwargs["whip"] = calculate_whip(kwargs["bb"], kwargs["h_allowed"], ip)
 
         return cls(**kwargs)
 

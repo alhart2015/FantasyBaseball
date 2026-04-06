@@ -9,6 +9,7 @@ from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS  # noqa: F401
 from fantasy_baseball.utils.constants import INVERSE_STATS as INVERSE_CATS  # noqa: F401
 from fantasy_baseball.utils.constants import safe_float as _safe
+from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 
 def project_team_stats(roster: list[dict]) -> dict[str, float]:
@@ -42,10 +43,10 @@ def project_team_stats(roster: list[dict]) -> dict[str, float]:
 
     return {
         "R": r, "HR": hr, "RBI": rbi, "SB": sb,
-        "AVG": h_total / ab_total if ab_total > 0 else 0,
+        "AVG": calculate_avg(h_total, ab_total),
         "W": w, "K": k, "SV": sv,
-        "ERA": er_total * 9 / ip_total if ip_total > 0 else 99,
-        "WHIP": (bb_total + ha_total) / ip_total if ip_total > 0 else 99,
+        "ERA": calculate_era(er_total, ip_total),
+        "WHIP": calculate_whip(bb_total, ha_total, ip_total),
     }
 
 

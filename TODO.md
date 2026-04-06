@@ -35,7 +35,6 @@
 
 - [ ] **Round IP display to 1 decimal place** — IP values show excessive precision (e.g., 2.3333333). Round to 1 decimal place for display. Note: baseball IP is measured in thirds (6.1 = 6⅓ innings), so the display should ideally convert to baseball notation (6.1, 6.2, 7.0) rather than naive rounding.
 
-- [ ] **Extract rate stat utility functions** — AVG (`h/ab`), ERA (`er*9/ip`), and WHIP (`(bb+h_allowed)/ip`) are computed inline in 7+ places: `projections.py` blend, `pace.py`, `board.py` backfill, `rankings.py`, `replacement.py`, `draft/projections.py`, and now `models/player.py`. Extract `calculate_avg()`, `calculate_era()`, `calculate_whip()` into `utils/rate_stats.py` and replace all inline computations.
 
 - [ ] **Simplify suggested fixes** — Larger refactors identified by codebase-wide simplify review (2026-03-28):
   - `draft/projections.py` has a ~100-line duplicate `simulate_season()` that diverges from the canonical `simulation.py` version (no batched draws, no correlated variance). Likely dead code — investigate and remove or delegate.

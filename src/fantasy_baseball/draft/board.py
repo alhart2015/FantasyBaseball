@@ -16,6 +16,7 @@ from fantasy_baseball.utils.constants import (
     safe_float as _safe,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
+from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +77,8 @@ def apply_backfill_blending(pool: pd.DataFrame) -> pd.DataFrame:
             # Recompute rate stats from blended components
             new_ip = pool.at[idx, "ip"]
             if new_ip > 0:
-                pool.at[idx, "era"] = pool.at[idx, "er"] * 9 / new_ip
-                pool.at[idx, "whip"] = (pool.at[idx, "bb"] + pool.at[idx, "h_allowed"]) / new_ip
+                pool.at[idx, "era"] = calculate_era(pool.at[idx, "er"], new_ip)
+                pool.at[idx, "whip"] = calculate_whip(pool.at[idx, "bb"], pool.at[idx, "h_allowed"], new_ip)
 
         elif row["player_type"] == PlayerType.HITTER:
             ab = _safe(row.get("ab", 0))
@@ -94,7 +95,7 @@ def apply_backfill_blending(pool: pd.DataFrame) -> pd.DataFrame:
 
             new_ab = pool.at[idx, "ab"]
             if new_ab > 0:
-                pool.at[idx, "avg"] = pool.at[idx, "h"] / new_ab
+                pool.at[idx, "avg"] = calculate_avg(pool.at[idx, "h"], new_ab)
 
     return pool
 

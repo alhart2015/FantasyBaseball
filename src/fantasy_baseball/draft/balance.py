@@ -3,6 +3,7 @@ from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import (
     HITTING_CATEGORIES, PITCHING_CATEGORIES, ALL_CATEGORIES, INVERSE_STATS,
 )
+from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 TEAM_TARGETS: dict[str, float] = {
     "R": 900, "HR": 265, "RBI": 890, "SB": 145, "AVG": 0.260,
@@ -37,16 +38,16 @@ class CategoryBalance:
             totals[stat] = sum(h.get(col, 0) for h in self._hitters)
         total_h = sum(h.get("h", 0) for h in self._hitters)
         total_ab = sum(h.get("ab", 0) for h in self._hitters)
-        totals["AVG"] = total_h / total_ab if total_ab > 0 else 0.0
+        totals["AVG"] = calculate_avg(total_h, total_ab)
         for stat, col in [("W", "w"), ("K", "k"), ("SV", "sv")]:
             totals[stat] = sum(p.get(col, 0) for p in self._pitchers)
         total_ip = sum(p.get("ip", 0) for p in self._pitchers)
         if total_ip > 0:
             total_er = sum(p.get("er", 0) for p in self._pitchers)
-            totals["ERA"] = total_er * 9 / total_ip
+            totals["ERA"] = calculate_era(total_er, total_ip)
             total_bb = sum(p.get("bb", 0) for p in self._pitchers)
             total_ha = sum(p.get("h_allowed", 0) for p in self._pitchers)
-            totals["WHIP"] = (total_bb + total_ha) / total_ip
+            totals["WHIP"] = calculate_whip(total_bb, total_ha, total_ip)
         else:
             totals["ERA"] = None
             totals["WHIP"] = None

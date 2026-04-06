@@ -2,6 +2,7 @@
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import INVERSE_STATS, STAT_VARIANCE
+from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 # Roto categories by player type
 HITTER_COUNTING = ["r", "hr", "rbi", "sb"]
@@ -122,7 +123,7 @@ def compute_player_pace(
         actual_ab = actual_stats.get("ab", 0) or 0
         proj_avg = projected_stats.get("avg", 0.0) or 0.0
 
-        actual_avg = round(actual_h / actual_ab, 3) if actual_ab > 0 else 0.0
+        actual_avg = round(calculate_avg(actual_h, actual_ab, default=0.0), 3)
 
         if proj_avg > 0 and actual_ab > 0 and rates_colored:
             variance = STAT_VARIANCE.get("h", 0.0)
@@ -148,7 +149,7 @@ def compute_player_pace(
         proj_whip = projected_stats.get("whip", 0.0) or 0.0
 
         # ERA
-        actual_era = round(actual_er * 9 / actual_ip, 2) if actual_ip > 0 else 0.0
+        actual_era = round(calculate_era(actual_er, actual_ip, default=0.0), 2)
         if proj_era > 0 and rates_colored:
             variance = STAT_VARIANCE.get("er", 0.0)
             z = (actual_era - proj_era) / (variance * proj_era) if variance > 0 else 0.0
@@ -166,7 +167,7 @@ def compute_player_pace(
         }
 
         # WHIP
-        actual_whip = round((actual_bb + actual_ha) / actual_ip, 2) if actual_ip > 0 else 0.0
+        actual_whip = round(calculate_whip(actual_bb, actual_ha, actual_ip, default=0.0), 2)
         if proj_whip > 0 and rates_colored:
             variance = STAT_VARIANCE.get("h_allowed", 0.0)
             z = (actual_whip - proj_whip) / (variance * proj_whip) if variance > 0 else 0.0

@@ -1,6 +1,7 @@
 import pandas as pd
 from fantasy_baseball.utils.constants import STARTERS_PER_POSITION
 from fantasy_baseball.utils.positions import is_hitter, is_pitcher
+from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 from fantasy_baseball.sgp.player_value import REPLACEMENT_ERA, REPLACEMENT_WHIP, REPLACEMENT_AVG
 
 
@@ -93,8 +94,8 @@ def calculate_replacement_rates(
             total_ip = band["ip"].sum()
             total_bb = band["bb"].sum()
             total_ha = band["h_allowed"].sum()
-            rates["era"] = total_er * 9 / total_ip
-            rates["whip"] = (total_bb + total_ha) / total_ip
+            rates["era"] = calculate_era(total_er, total_ip)
+            rates["whip"] = calculate_whip(total_bb, total_ha, total_ip)
         else:
             rates["era"] = REPLACEMENT_ERA
             rates["whip"] = REPLACEMENT_WHIP
@@ -120,7 +121,7 @@ def calculate_replacement_rates(
         band = all_hitters.iloc[lo:hi]
         band = band[band["ab"] > 0]
         if not band.empty:
-            rates["avg"] = band["h"].sum() / band["ab"].sum()
+            rates["avg"] = calculate_avg(band["h"].sum(), band["ab"].sum())
         else:
             rates["avg"] = REPLACEMENT_AVG
     else:
