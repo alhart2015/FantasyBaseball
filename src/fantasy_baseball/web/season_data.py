@@ -672,6 +672,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.utils.name_utils import normalize_name
         from fantasy_baseball.analysis.pace import compute_player_pace
         from fantasy_baseball.analysis.buy_low import find_buy_low_candidates
+        from fantasy_baseball.lineup.blending import (
+            blend_player_with_game_logs,
+            load_game_logs_by_name,
+        )
+        from fantasy_baseball.lineup.roster_audit import audit_roster
 
         project_root = Path(__file__).resolve().parents[3]
 
@@ -889,6 +894,26 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                 projected = {k: 0 for k in proj_keys}
             player.pace = compute_player_pace(actuals, projected, player.player_type)
 
+        # --- Step 6e: Load per-game logs for recency blending ---
+        _progress("Applying recency blending...")
+        gl_conn = get_db_connection()
+        try:
+            game_logs_by_name = load_game_logs_by_name(gl_conn, config.season_year)
+        finally:
+            gl_conn.close()
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        blended_count = 0
+        for i, player in enumerate(roster_players):
+            key = f"{normalize_name(player.name)}::{player.player_type.value}"
+            logs = game_logs_by_name.get(key, [])
+            if logs:
+                roster_players[i] = blend_player_with_game_logs(player, logs, today)
+                roster_players[i].compute_wsgp(leverage)
+                blended_count += 1
+        if blended_count:
+            _progress(f"Blended {blended_count} roster players with game logs")
+
         # --- Step 6d: Compute SGP rankings ---
         _progress("Computing SGP rankings...")
         from fantasy_baseball.sgp.rankings import (
@@ -992,6 +1017,27 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         fa_players, _ = fetch_and_match_free_agents(
             league, hitters_proj, pitchers_proj
         )
+
+        # Blend FA players with game logs
+        fa_blended = 0
+        for i, fa in enumerate(fa_players):
+            key = f"{normalize_name(fa.name)}::{fa.player_type.value}"
+            logs = game_logs_by_name.get(key, [])
+            if logs:
+                fa_players[i] = blend_player_with_game_logs(fa, logs, today)
+                fa_blended += 1
+        if fa_blended:
+            _progress(f"Blended {fa_blended} free agents with game logs")
+
+        # --- Roster Audit ---
+        _progress("Running roster audit...")
+        audit_results = audit_roster(
+            roster_players, fa_players, leverage, config.roster_slots,
+        )
+        write_cache("roster_audit", audit_results, cache_dir)
+        upgrades = sum(1 for e in audit_results if e["gap"] > 0)
+        _progress(f"Roster audit: {upgrades} upgrade(s) found")
+
         waiver_recs = scan_waivers(
             roster_players,
             fa_players,
