@@ -59,4 +59,6 @@
 
 - [ ] **Fix league.yaml strategy/scoring_mode before next draft** — Config has `strategy: three_closers` and `scoring_mode: var`, but prior analysis (after fixing 4 bugs) validated `two_closers` + `vona` as correct. `three_closers` forces closers at rounds 5/9/13 where most have negative VAR. Update config before next year's draft simulations.
 
+- [ ] **Fix `_scarcity_cache` keyed by `id(board)`** — Python can reuse memory addresses after GC, serving stale cache data. Cache also doesn't vary by `roster_slots`. Three review agents flagged this independently. Fix: content-based hash or pass scarcity order explicitly.
+
 - [ ] **Refactor draft pipeline to use Player dataclass** — The draft pipeline (`board.py`, `replacement.py`, `var.py`, `rankings.py`) operates end-to-end on pandas DataFrames with string-keyed column access. Now that the in-season SGP functions accept `HitterStats`/`PitcherStats` directly, extend the same pattern to the draft pipeline: build `Player` objects from blended projections, compute SGP/VAR on the dataclass, and only convert to a DataFrame for the final ranked board output. This eliminates the split where in-season code uses typed dataclasses but draft code uses untyped Series.

@@ -389,7 +389,13 @@ def apply_management_adjustment(
         )
         draw = rng.normal(mean, sd)
         factor = 1.0 + draw * ROTO_TO_STAT
-        inv_factor = max(0.0, 2.0 - factor)
+
+        # Back out rate stat components, adjust, and recompute.
+        # Management affects quality (hits per AB, runs per IP) with
+        # volume held constant, so only numerators are scaled.
+        h = stats["AVG"] * _TYPICAL_TEAM_AB
+        er = stats["ERA"] * _TYPICAL_TEAM_IP / 9
+        bh = stats["WHIP"] * _TYPICAL_TEAM_IP
 
         adjusted[team] = {
             # Counting stats: scale with management quality
@@ -400,10 +406,10 @@ def apply_management_adjustment(
             "W": stats["W"] * factor,
             "K": stats["K"] * factor,
             "SV": stats["SV"] * factor,
-            # Rate stats: good management improves AVG, lowers ERA/WHIP
-            "AVG": stats["AVG"] * factor,
-            "ERA": stats["ERA"] * inv_factor,
-            "WHIP": stats["WHIP"] * inv_factor,
+            # Rate stats: adjust through components
+            "AVG": calculate_avg(h * factor, _TYPICAL_TEAM_AB),
+            "ERA": calculate_era(er / factor, _TYPICAL_TEAM_IP),
+            "WHIP": calculate_whip(0, bh / factor, _TYPICAL_TEAM_IP),
         }
     return adjusted
 
