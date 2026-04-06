@@ -12,6 +12,9 @@ from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 
 
+_IL_STATUSES = {"IL", "IL+", "IL10", "IL15", "DL", "DL+"}
+
+
 def audit_roster(
     roster: list[Player],
     free_agents: list[Player],
@@ -24,14 +27,20 @@ def audit_roster(
     wSGP gain when swapped in.  Returns an entry for every roster player,
     sorted by gap descending (biggest problems first).  Entries with no
     upgrade available have gap=0.0 and best_fa=None.
+
+    IL players are excluded from lineup optimization (they can't play)
+    but still appear in the output with slot="IL".
     """
     if not roster:
         return []
 
+    active_roster = [p for p in roster if p.status not in _IL_STATUSES]
+    il_players = [p for p in roster if p.status in _IL_STATUSES]
+
     denoms = get_sgp_denominators()
 
-    # Baseline optimal lineup
-    baseline = _compute_team_wsgp(roster, leverage, roster_slots, denoms=denoms)
+    # Baseline optimal lineup (active players only)
+    baseline = _compute_team_wsgp(active_roster, leverage, roster_slots, denoms=denoms)
     baseline_wsgp = baseline["total_wsgp"]
     baseline_summary = _build_lineup_summary(
         baseline["hitter_lineup"], baseline["pitcher_starters"],
@@ -49,7 +58,7 @@ def audit_roster(
     p_slots = roster_slots.get("P", 9)
 
     entries: list[dict] = []
-    for player in roster:
+    for player in active_roster:
         entry = {
             "player": player.name,
             "player_type": player.player_type.value,
@@ -73,7 +82,7 @@ def audit_roster(
                      if k != player.name}
 
         for fa in free_agents:
-            new_roster = [p for p in roster if p.name != player.name] + [fa]
+            new_roster = [p for p in active_roster if p.name != player.name] + [fa]
             new_pitchers = [p for p in new_roster if p.player_type == PlayerType.PITCHER]
 
             # Pitcher count feasibility: a cross-type swap can't leave fewer
@@ -106,6 +115,22 @@ def audit_roster(
             entry["categories"] = cat_result["categories"]
 
         entries.append(entry)
+
+    # Add IL players at the end — they can't be swapped
+    for player in il_players:
+        entries.append({
+            "player": player.name,
+            "player_type": player.player_type.value,
+            "positions": list(player.positions),
+            "slot": "IL",
+            "player_wsgp": 0.0,
+            "best_fa": None,
+            "best_fa_type": None,
+            "best_fa_positions": None,
+            "best_fa_wsgp": None,
+            "gap": 0.0,
+            "categories": {},
+        })
 
     entries.sort(key=lambda e: e["gap"], reverse=True)
     return entries

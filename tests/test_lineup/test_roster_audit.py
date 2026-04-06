@@ -117,3 +117,31 @@ class TestAuditRoster:
         bad_rp_entry = next(e for e in results if e["player"] == "Bad RP")
         assert bad_rp_entry["best_fa"] == "Good SP"
         assert bad_rp_entry["gap"] > 0
+
+    def test_il_players_excluded_from_optimization(self):
+        """IL players should not be treated as active starters."""
+        il_pitcher = _pitcher("Hurt Closer", ["RP"], ip=60, w=3, k=60, sv=25,
+                              era=2.50, whip=1.00, er=17, bb=15, h_allowed=45)
+        il_pitcher.status = "IL15"
+
+        roster = [
+            _hitter("Hitter", ["OF"], r=70, hr=20, rbi=65, sb=8, avg=0.270, ab=500, h=135),
+            _pitcher("Active SP", ["SP"], ip=150, w=9, k=140, era=3.80, whip=1.25,
+                     er=63, bb=40, h_allowed=148),
+            il_pitcher,
+        ]
+        free_agents = [
+            _hitter("FA Hitter", ["OF"], r=80, hr=25, rbi=80, sb=10, avg=0.280, ab=540, h=151),
+        ]
+        results = audit_roster(roster, free_agents, EQUAL_LEVERAGE,
+                               {"OF": 1, "P": 1, "BN": 1, "IL": 1})
+
+        # IL player should appear with slot="IL" and no upgrade
+        il_entry = next(e for e in results if e["player"] == "Hurt Closer")
+        assert il_entry["slot"] == "IL"
+        assert il_entry["best_fa"] is None
+
+        # Active SP should NOT be recommended to swap for a hitter
+        # (would leave 0 active pitchers for 1 P slot)
+        sp_entry = next(e for e in results if e["player"] == "Active SP")
+        assert sp_entry["best_fa"] is None
