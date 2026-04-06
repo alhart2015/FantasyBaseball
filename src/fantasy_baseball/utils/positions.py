@@ -1,6 +1,6 @@
 from .constants import IF_ELIGIBLE
 
-HITTER_POSITIONS: set[str] = {"C", "1B", "2B", "3B", "SS", "OF", "DH", "IF"}
+HITTER_POSITIONS: set[str] = {"C", "1B", "2B", "3B", "SS", "OF", "DH", "IF", "Util"}
 PITCHER_POSITIONS: set[str] = {"P", "SP", "RP"}
 
 

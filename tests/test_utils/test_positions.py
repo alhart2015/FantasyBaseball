@@ -98,6 +98,9 @@ class TestIsHitter:
     def test_two_way_player(self):
         assert is_hitter(["DH", "SP"]) is True
 
+    def test_util_is_hitter(self):
+        assert is_hitter(["Util"]) is True
+
 
 class TestIsPitcher:
     def test_sp_is_pitcher(self):
