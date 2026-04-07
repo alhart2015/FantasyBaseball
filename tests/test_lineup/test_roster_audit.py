@@ -51,7 +51,8 @@ class TestAuditRoster:
         free_agents = [
             _hitter("Better OF", ["OF"], r=80, hr=28, rbi=85, sb=12, avg=0.280, ab=550, h=154),
         ]
-        results = audit_roster(roster, free_agents, EQUAL_LEVERAGE, ROSTER_SLOTS)
+        results = audit_roster(roster, free_agents, EQUAL_LEVERAGE,
+                               {"OF": 1, "P": 3, "BN": 0, "IL": 0})
 
         # Should have an entry for every roster player
         assert len(results) == len(roster)
@@ -145,3 +146,27 @@ class TestAuditRoster:
         # (would leave 0 active pitchers for 1 P slot)
         sp_entry = next(e for e in results if e.player == "Active SP")
         assert sp_entry.best_fa is None
+
+    def test_pitcher_fa_not_recommended_over_needed_hitter(self):
+        """A pitcher FA should not replace a hitter when it would leave
+        too few hitters to fill required hitter slots."""
+        roster = [
+            _hitter("Starter C", ["C"], r=50, hr=12, rbi=45, sb=2, avg=0.240, ab=400, h=96),
+            _hitter("Starter OF", ["OF"], r=70, hr=20, rbi=65, sb=8, avg=0.270, ab=500, h=135),
+            _pitcher("Active SP", ["SP"], ip=150, w=9, k=140, era=3.80, whip=1.25,
+                     er=63, bb=40, h_allowed=148),
+        ]
+        free_agents = [
+            _pitcher("Soroka", ["SP"], ip=170, w=11, k=160, era=3.30, whip=1.15,
+                     er=62, bb=35, h_allowed=161),
+        ]
+        results = audit_roster(roster, free_agents, EQUAL_LEVERAGE,
+                               {"C": 1, "OF": 1, "P": 1, "BN": 1, "IL": 0})
+
+        # Neither hitter should be recommended to drop for a pitcher —
+        # that would leave only 1 hitter for 2 required hitter slots (C + OF).
+        for entry in results:
+            if entry.player_type == "hitter":
+                assert entry.best_fa is None, (
+                    f"{entry.player} should not be replaced by pitcher {entry.best_fa}"
+                )

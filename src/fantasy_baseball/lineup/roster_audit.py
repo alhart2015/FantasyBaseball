@@ -11,6 +11,7 @@ from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.utils.constants import IL_STATUSES
+from fantasy_baseball.utils.positions import can_cover_slots
 
 
 @dataclass
@@ -109,8 +110,12 @@ def audit_roster(
             new_roster = [p for p in active_roster if p.name != player.name] + [fa]
             new_pitchers = [p for p in new_roster if p.player_type == PlayerType.PITCHER]
 
-            # Pitcher count feasibility: a cross-type swap can't leave fewer
-            # pitchers than required active pitcher slots.
+            # Cross-type feasibility: swapping across types can't leave
+            # fewer hitters or pitchers than required slots.
+            if player.player_type == PlayerType.HITTER or fa.player_type == PlayerType.HITTER:
+                new_hitters = [p for p in new_roster if p.player_type != PlayerType.PITCHER]
+                if not can_cover_slots([list(p.positions) for p in new_hitters], roster_slots):
+                    continue
             if player.player_type == PlayerType.PITCHER or fa.player_type == PlayerType.PITCHER:
                 if len(new_pitchers) < p_slots:
                     continue
