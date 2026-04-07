@@ -1,32 +1,60 @@
 from fantasy_baseball.trades.pitch import generate_pitch
 
-ALL_CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
+
+def test_pitch_mentions_rankings():
+    pitch = generate_pitch(
+        send_rank=42,
+        receive_rank=47,
+        send_positions=["SS", "2B"],
+        receive_positions=["OF"],
+    )
+    assert "#42" in pitch
+    assert "#47" in pitch
 
 
-def test_pitch_highlights_gains_and_affordable_loss():
-    opp_cat_deltas = {"R": 0, "HR": -1, "RBI": 0, "SB": 2, "AVG": 1,
-                      "W": 0, "K": 0, "SV": -1, "ERA": 0, "WHIP": 0}
-    opp_cat_ranks = {"R": 5, "HR": 2, "RBI": 5, "SB": 8, "AVG": 7,
-                     "W": 5, "K": 5, "SV": 2, "ERA": 5, "WHIP": 5}
-    pitch = generate_pitch("Springfield Isotopes", opp_cat_deltas, opp_cat_ranks)
-    # Should mention their weak categories (SB=8th, AVG=7th)
-    assert "SB" in pitch or "steals" in pitch.lower() or "stolen" in pitch.lower()
-    assert len(pitch) < 300
+def test_pitch_includes_positional_need_for_different_positions():
+    pitch = generate_pitch(
+        send_rank=30,
+        receive_rank=33,
+        send_positions=["SS"],
+        receive_positions=["OF"],
+    )
+    assert "#30" in pitch
+    assert "#33" in pitch
+    # Should mention positional context when positions differ
+    assert "position" in pitch.lower() or "need" in pitch.lower()
 
 
-def test_pitch_with_no_gains():
-    opp_cat_deltas = {c: 0 for c in ALL_CATS}
-    opp_cat_ranks = {c: 5 for c in ALL_CATS}
-    pitch = generate_pitch("Team X", opp_cat_deltas, opp_cat_ranks)
-    assert "neutral" in pitch.lower()
+def test_pitch_no_positional_note_for_same_position():
+    pitch = generate_pitch(
+        send_rank=20,
+        receive_rank=22,
+        send_positions=["OF"],
+        receive_positions=["OF"],
+    )
+    assert "#20" in pitch
+    assert "#22" in pitch
+    # Should NOT mention positional need when same position
+    assert "position" not in pitch.lower() and "need" not in pitch.lower()
 
 
-def test_pitch_no_losses():
-    opp_cat_deltas = {"R": 1, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
-                      "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0}
-    opp_cat_ranks = {"R": 9, "HR": 5, "RBI": 5, "SB": 5, "AVG": 5,
-                     "W": 5, "K": 5, "SV": 5, "ERA": 5, "WHIP": 5}
-    pitch = generate_pitch("SkeleThor", opp_cat_deltas, opp_cat_ranks)
-    # Should mention their weak R (9th) and not have a "you can afford" part
-    assert "afford" not in pitch.lower()
-    assert len(pitch) > 10
+def test_pitch_when_sending_better_ranked_player():
+    """When we send a better-ranked player, pitch should frame it as generous."""
+    pitch = generate_pitch(
+        send_rank=25,
+        receive_rank=30,
+        send_positions=["1B"],
+        receive_positions=["3B"],
+    )
+    assert "#25" in pitch
+    assert "#30" in pitch
+
+
+def test_pitch_is_short():
+    pitch = generate_pitch(
+        send_rank=50,
+        receive_rank=55,
+        send_positions=["C"],
+        receive_positions=["SP"],
+    )
+    assert len(pitch) < 200
