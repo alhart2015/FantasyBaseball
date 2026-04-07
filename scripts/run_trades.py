@@ -82,6 +82,9 @@ def main():
 
     current_ranks = compute_roto_points_by_cat(standings)
 
+    from fantasy_baseball.sgp.rankings import compute_sgp_rankings
+    rankings = compute_sgp_rankings(hitters_proj, pitchers_proj)
+
     print("Evaluating trades...")
     trades = find_trades(
         hart_name=config.team_name,
@@ -90,6 +93,7 @@ def main():
         standings=standings,
         leverage_by_team=leverage_by_team,
         roster_slots=config.roster_slots,
+        rankings=rankings,
         max_results=5,
     )
 
@@ -115,8 +119,12 @@ def main():
         print(f"\n   Hart gains: {trade['hart_delta']:+d} roto pts ({', '.join(hart_parts) if hart_parts else 'no change'})")
         print(f"   They gain:  {trade['opp_delta']:+d} roto pts ({', '.join(opp_parts) if opp_parts else 'no change'})")
 
-        opp_ranks = current_ranks.get(opp, {})
-        pitch = generate_pitch(opp, trade["opp_cat_deltas"], opp_ranks)
+        pitch = generate_pitch(
+            send_rank=trade.get("send_rank", 0),
+            receive_rank=trade.get("receive_rank", 0),
+            send_positions=trade.get("send_positions", []),
+            receive_positions=trade.get("receive_positions", []),
+        )
         print(f"\n   Pitch: \"{pitch}\"")
 
     print()

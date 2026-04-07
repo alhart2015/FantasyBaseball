@@ -390,6 +390,27 @@ def main():
                 continue
             opp_rosters_for_trades[team_name] = build_adjusted_roster(team_rosters[team_name])
 
+        # Build rankings from projections for perception-based filtering
+        from fantasy_baseball.sgp.rankings import compute_sgp_rankings
+        hitter_rows = []
+        pitcher_rows = []
+        for mid, proj in projections.items():
+            row = {"name": proj["name"], "fg_id": str(mid)}
+            if proj["type"] == "hitter":
+                row["player_type"] = "hitter"
+                for col in ["r", "hr", "rbi", "sb", "avg", "ab", "pa", "h"]:
+                    row[col] = proj.get(col, 0)
+                hitter_rows.append(row)
+            else:
+                row["player_type"] = "pitcher"
+                for col in ["w", "k", "sv", "era", "whip", "ip"]:
+                    row[col] = proj.get(col, 0)
+                pitcher_rows.append(row)
+        rankings = compute_sgp_rankings(
+            pd.DataFrame(hitter_rows) if hitter_rows else pd.DataFrame(),
+            pd.DataFrame(pitcher_rows) if pitcher_rows else pd.DataFrame(),
+        )
+
         # Find trades
         trades = find_trades(
             hart_name=HART_TEAM,
@@ -398,6 +419,7 @@ def main():
             standings=standings,
             leverage_by_team=leverage_by_team,
             roster_slots=ROSTER_SLOTS,
+            rankings=rankings,
             max_results=5,
         )
 
@@ -419,8 +441,12 @@ def main():
             proj_opp_cats = trade["opp_cat_deltas"]
 
             # Generate pitch
-            opp_ranks = current_ranks.get(opp, {})
-            pitch = generate_pitch(opp, proj_opp_cats, opp_ranks)
+            pitch = generate_pitch(
+                send_rank=trade.get("send_rank", 0),
+                receive_rank=trade.get("receive_rank", 0),
+                send_positions=trade.get("send_positions", []),
+                receive_positions=trade.get("receive_positions", []),
+            )
 
             # Compute ACTUAL ROS impact
             send_player = find_player_in_roster(send_name, team_rosters)

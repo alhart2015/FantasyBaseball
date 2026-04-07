@@ -184,8 +184,9 @@ def test_full_waivers_page_with_cached_data(client, tmp_path):
              "hart_delta": 2, "opp_delta": 1,
              "hart_cat_deltas": {"SV": 18, "ERA": -0.20},
              "opp_cat_deltas": {"W": 4, "K": 35},
-             "hart_wsgp_gain": 2.1, "opp_wsgp_gain": 1.5,
-             "pitch": "You're 9th in W and need innings..."},
+             "hart_wsgp_gain": 2.1,
+             "send_rank": {"ros": 45}, "receive_rank": {"ros": 50},
+             "pitch": "You're getting the #45 overall player for your #50 — straight swap."},
         ]
         season_data.write_cache("waivers", waivers, tmp_path)
         season_data.write_cache("trades", trades, tmp_path)

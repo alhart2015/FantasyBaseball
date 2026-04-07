@@ -1047,7 +1047,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # --- Step 11: Find trades + generate pitches ---
         _progress("Evaluating trades...")
-        cat_ranks = _compute_category_ranks(standings)
         leverage_by_team: dict[str, dict] = {}
         for team in standings:
             tname = team["name"]
@@ -1066,23 +1065,20 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             standings=standings,
             leverage_by_team=leverage_by_team,
             roster_slots=config.roster_slots,
+            rankings=ros_ranks,
             max_results=10,
             projected_standings=projected_standings,
         )
 
-        # Attach trade pitches
+        # Attach trade pitches and full rank dicts for template
         for trade in trade_proposals:
-            opp_name = trade["opponent"]
-            opp_cat_ranks = cat_ranks  # use league-wide ranks as proxy
-            opp_team_ranks = {cat: opp_cat_ranks[cat].get(opp_name, 5) for cat in ALL_CATEGORIES}
             trade["pitch"] = generate_pitch(
-                opp_name,
-                trade.get("opp_cat_deltas", {}),
-                opp_team_ranks,
+                send_rank=trade["send_rank"],
+                receive_rank=trade["receive_rank"],
+                send_positions=trade.get("send_positions", []),
+                receive_positions=trade.get("receive_positions", []),
             )
-
-        # Attach ranks to trade proposals
-        for trade in trade_proposals:
+            # Template rank_badge() expects {ros, preseason, current} dicts
             trade["send_rank"] = rankings_lookup.get(
                 rank_key_from_positions(trade["send"], trade.get("send_positions", [])), {})
             trade["receive_rank"] = rankings_lookup.get(

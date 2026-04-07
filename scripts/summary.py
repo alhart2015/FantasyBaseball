@@ -410,6 +410,9 @@ def main():
 
         current_ranks = compute_roto_points_by_cat(trade_standings)
 
+        from fantasy_baseball.sgp.rankings import compute_sgp_rankings
+        rankings = compute_sgp_rankings(hitters_proj, pitchers_proj)
+
         trades = find_trades(
             hart_name=team_name,
             hart_roster=user_roster,
@@ -417,6 +420,7 @@ def main():
             standings=trade_standings,
             leverage_by_team=leverage_by_team,
             roster_slots=config.roster_slots,
+            rankings=rankings,
             max_results=5,
             projected_standings=projected_standings,
         )
@@ -439,8 +443,12 @@ def main():
             print(f"     You gain: {trade['hart_delta']:+.0f} roto pts ({', '.join(hart_parts) if hart_parts else 'no change'})")
             print(f"     They gain: {trade['opp_delta']:+.0f} roto pts ({', '.join(opp_parts) if opp_parts else 'no change'})")
 
-            opp_ranks = current_ranks.get(opp, {})
-            pitch = generate_pitch(opp, trade["opp_cat_deltas"], opp_ranks)
+            pitch = generate_pitch(
+                send_rank=trade.get("send_rank", 0),
+                receive_rank=trade.get("receive_rank", 0),
+                send_positions=trade.get("send_positions", []),
+                receive_positions=trade.get("receive_positions", []),
+            )
             print(f"     Pitch: \"{pitch}\"")
     else:
         print("\nNo mutually beneficial trades found.")
