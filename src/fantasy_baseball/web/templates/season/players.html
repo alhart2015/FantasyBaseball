@@ -118,7 +118,6 @@ fetch('/api/players/browse')
     .then(r => r.json())
     .then(data => {
         allPlayers = data;
-        emptyEl.textContent = 'Select a position or search by name.';
         render();
     })
     .catch(() => {
@@ -127,10 +126,14 @@ fetch('/api/players/browse')
 
 posFilter.addEventListener('change', render);
 faOnly.addEventListener('change', render);
-nameFilter.addEventListener('input', render);
+let _debounce;
+nameFilter.addEventListener('input', () => {
+    clearTimeout(_debounce);
+    _debounce = setTimeout(render, 150);
+});
 
 function isMixedFilter(pos) {
-    return pos === 'ALL' || pos === '';
+    return pos === 'ALL';
 }
 
 function isHitterFilter(pos) {
@@ -162,16 +165,18 @@ function render() {
     const pos = posFilter.value;
     const nameQ = nameFilter.value.trim().toLowerCase();
 
-    // Require either a position or a name query
-    if (!pos && !nameQ) {
+    // Require either a position or a name query (min 2 chars without position)
+    if (!pos && nameQ.length < 2) {
         tableEl.style.display = 'none';
         emptyEl.style.display = '';
-        emptyEl.textContent = 'Select a position or search by name.';
+        emptyEl.textContent = nameQ.length > 0
+            ? 'Type at least 2 characters to search all players.'
+            : 'Select a position or search by name.';
         countEl.textContent = '';
         return;
     }
 
-    const mixed = isMixedFilter(pos) || (!pos && nameQ);
+    const mixed = isMixedFilter(pos) || !pos;
     const effectivePos = pos || 'ALL';
     const isHitter = !mixed && isHitterFilter(pos);
     const cats = mixed ? [] : (isHitter ? HITTING_CATS : PITCHING_CATS);
@@ -247,8 +252,8 @@ function render() {
             '<td class="' + ownerClass + '">' + ownerText + '</td>';
 
         cats.forEach(c => {
-            const sig = p.significant && p.significant[c] ? ' stat-significant' : '';
-            cells += '<td class="' + sig.trim() + '">' + fmt(p[c], c) + '</td>';
+            const sig = p.significant && p.significant[c] ? 'stat-significant' : '';
+            cells += '<td class="' + sig + '">' + fmt(p[c], c) + '</td>';
         });
         cells += '<td>' + (p.sgp != null ? p.sgp.toFixed(1) : '\u2014') + '</td>';
         cells += '<td>' + (p.wsgp != null ? p.wsgp.toFixed(1) : '\u2014') + '</td>';
