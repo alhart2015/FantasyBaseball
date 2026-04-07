@@ -344,3 +344,74 @@ def test_read_cache_handles_redis_error(tmp_path, monkeypatch):
 
     result = read_cache("standings", cache_dir=tmp_path)
     assert result is None
+
+
+class TestComputeComparisonStandings:
+    def test_swap_changes_user_team_stats(self):
+        """Swapping a hitter should change the user's projected stats and roto points."""
+        from fantasy_baseball.web.season_data import compute_comparison_standings
+
+        projected_standings = [
+            {"name": "My Team", "team_key": "", "rank": 0, "stats": {
+                "R": 700, "HR": 200, "RBI": 700, "SB": 100, "AVG": 0.260,
+                "W": 80, "K": 1200, "SV": 50, "ERA": 3.50, "WHIP": 1.20,
+            }},
+            {"name": "Other Team", "team_key": "", "rank": 0, "stats": {
+                "R": 680, "HR": 190, "RBI": 680, "SB": 110, "AVG": 0.255,
+                "W": 85, "K": 1100, "SV": 40, "ERA": 3.80, "WHIP": 1.25,
+            }},
+        ]
+
+        roster = [
+            {"name": "Willy Adames", "player_type": "hitter",
+             "r": 80, "hr": 25, "rbi": 81, "sb": 11, "h": 133, "ab": 567,
+             "avg": 0.235},
+            {"name": "Other Hitter", "player_type": "hitter",
+             "r": 90, "hr": 30, "rbi": 95, "sb": 5, "h": 150, "ab": 550,
+             "avg": 0.273},
+            {"name": "My Pitcher", "player_type": "pitcher",
+             "w": 12, "k": 180, "sv": 0, "ip": 180, "er": 60, "bb": 50,
+             "h_allowed": 150, "era": 3.00, "whip": 1.11},
+        ]
+
+        other_player = {
+            "name": "Ezequiel Tovar", "player_type": "hitter",
+            "r": 73, "hr": 20, "rbi": 74, "sb": 8, "h": 135, "ab": 513,
+            "avg": 0.263,
+        }
+
+        result = compute_comparison_standings(
+            roster_player_name="Willy Adames",
+            other_player=other_player,
+            user_roster=roster,
+            projected_standings=projected_standings,
+            user_team_name="My Team",
+        )
+
+        assert "before" in result
+        assert "after" in result
+        assert "categories" in result
+
+        before_total = result["before"]["roto"]["My Team"]["total"]
+        after_total = result["after"]["roto"]["My Team"]["total"]
+
+        assert result["before"]["stats"]["My Team"] != result["after"]["stats"]["My Team"]
+        assert result["before"]["stats"]["Other Team"] == result["after"]["stats"]["Other Team"]
+
+    def test_swap_not_found_returns_error(self):
+        """If roster_player_name doesn't match anyone in user_roster, return error."""
+        from fantasy_baseball.web.season_data import compute_comparison_standings
+
+        result = compute_comparison_standings(
+            roster_player_name="Nobody",
+            other_player={"name": "X", "player_type": "hitter",
+                          "r": 0, "hr": 0, "rbi": 0, "sb": 0, "h": 0, "ab": 0},
+            user_roster=[{"name": "A", "player_type": "hitter",
+                          "r": 50, "hr": 10, "rbi": 40, "sb": 5, "h": 80, "ab": 300}],
+            projected_standings=[{"name": "My Team", "team_key": "", "rank": 0,
+                                  "stats": {"R": 700, "HR": 200, "RBI": 700, "SB": 100,
+                                            "AVG": 0.260, "W": 80, "K": 1200, "SV": 50,
+                                            "ERA": 3.50, "WHIP": 1.20}}],
+            user_team_name="My Team",
+        )
+        assert "error" in result
