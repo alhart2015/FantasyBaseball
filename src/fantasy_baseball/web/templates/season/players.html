@@ -66,6 +66,7 @@
 <div class="filter-bar">
     <select id="pos-filter">
         <option value="">-- Position --</option>
+        <option value="ALL">All Players</option>
         <optgroup label="Hitters">
             <option value="ALL_HIT">All Hitters</option>
             <option value="C">C</option>
@@ -91,7 +92,7 @@
     <tbody id="table-body"></tbody>
 </table>
 
-<div id="empty-msg">Select a position to browse players.</div>
+<div id="empty-msg">Select a position or search by name.</div>
 
 <script>
 const HITTING_CATS = ['R', 'HR', 'RBI', 'SB', 'AVG'];
@@ -117,7 +118,7 @@ fetch('/api/players/browse')
     .then(r => r.json())
     .then(data => {
         allPlayers = data;
-        emptyEl.textContent = 'Select a position to browse players.';
+        emptyEl.textContent = 'Select a position or search by name.';
         render();
     })
     .catch(() => {
@@ -128,11 +129,16 @@ posFilter.addEventListener('change', render);
 faOnly.addEventListener('change', render);
 nameFilter.addEventListener('input', render);
 
+function isMixedFilter(pos) {
+    return pos === 'ALL' || pos === '';
+}
+
 function isHitterFilter(pos) {
     return pos === 'ALL_HIT' || ['C','1B','2B','3B','SS','OF'].includes(pos);
 }
 
 function matchesPosition(player, pos) {
+    if (pos === 'ALL') return true;
     if (pos === 'ALL_HIT') return player.player_type === 'hitter';
     if (pos === 'ALL_PIT') return player.player_type === 'pitcher';
     if (player.positions && player.positions.includes(pos)) return true;
@@ -154,26 +160,30 @@ function fmt(val, cat) {
 function render() {
     if (!allPlayers) return;
     const pos = posFilter.value;
-    if (!pos) {
+    const nameQ = nameFilter.value.trim().toLowerCase();
+
+    // Require either a position or a name query
+    if (!pos && !nameQ) {
         tableEl.style.display = 'none';
         emptyEl.style.display = '';
-        emptyEl.textContent = 'Select a position to browse players.';
+        emptyEl.textContent = 'Select a position or search by name.';
         countEl.textContent = '';
         return;
     }
 
-    const isHitter = isHitterFilter(pos);
-    const cats = isHitter ? HITTING_CATS : PITCHING_CATS;
+    const mixed = isMixedFilter(pos) || (!pos && nameQ);
+    const effectivePos = pos || 'ALL';
+    const isHitter = !mixed && isHitterFilter(pos);
+    const cats = mixed ? [] : (isHitter ? HITTING_CATS : PITCHING_CATS);
     const validCols = new Set(['rank', 'name', 'positions', 'team', 'owner', 'sgp', 'wsgp', ...cats]);
     if (!validCols.has(sortCol)) {
         sortCol = 'rank';
         sortAsc = true;
     }
-    const nameQ = nameFilter.value.trim().toLowerCase();
 
     // Filter
     let filtered = allPlayers.filter(p => {
-        if (!matchesPosition(p, pos)) return false;
+        if (!matchesPosition(p, effectivePos)) return false;
         if (faOnly.checked && p.owner) return false;
         if (nameQ && !p.name.toLowerCase().includes(nameQ)) return false;
         return true;
