@@ -514,14 +514,11 @@ function renderStandings() {
         standingsData.before.roto[b].total - standingsData.before.roto[a].total
     );
 
-    function renderBody(container, view, diffView) {
+    function renderBody(container, view, diffView, userTeam) {
         container.innerHTML = sorted.map(team => {
             const roto = view.roto[team];
             const stats = view.stats[team];
-            const beforeStats = standingsData.before.stats[team];
-            const afterStats = standingsData.after.stats[team];
-            const changed = JSON.stringify(beforeStats) !== JSON.stringify(afterStats);
-            const rowStyle = changed ? 'color:var(--accent); font-weight:600' : '';
+            const rowStyle = team === userTeam ? 'color:var(--accent); font-weight:600' : '';
 
             const total = roto.total.toFixed(0);
             let totalDiff = '';
@@ -536,19 +533,18 @@ function renderStandings() {
 
             const cells = cats.map(c => {
                 const val = mode === 'roto' ? roto[c + '_pts'] : stats[c];
-                const fmtVal = mode === 'roto' ? val.toFixed(0)
-                    : (c === 'AVG' ? val.toFixed(3) : ['ERA','WHIP'].includes(c) ? val.toFixed(2) : val.toFixed(0));
+                const fmtVal = mode === 'roto' ? val.toFixed(0) : fmt(val, c);
                 let delta = '';
                 if (diffView) {
                     const dVal = mode === 'roto'
                         ? roto[c + '_pts'] - diffView.roto[team][c + '_pts']
                         : stats[c] - diffView.stats[team][c];
                     if (Math.abs(dVal) > 0.01) {
-                        const cls = (INVERSE_CATS.has(c) ? dVal < 0 : dVal > 0) ? 'diff-positive' : 'diff-negative';
-                        const fmtD = mode === 'roto' ? (dVal > 0 ? '+' : '') + dVal.toFixed(0)
-                            : (c === 'AVG' ? (dVal > 0 ? '+' : '') + dVal.toFixed(3)
-                            : ['ERA','WHIP'].includes(c) ? (dVal > 0 ? '+' : '') + dVal.toFixed(2)
-                            : (dVal > 0 ? '+' : '') + dVal.toFixed(0));
+                        const isGood = mode === 'roto' ? dVal > 0
+                            : (INVERSE_CATS.has(c) ? dVal < 0 : dVal > 0);
+                        const cls = isGood ? 'diff-positive' : 'diff-negative';
+                        const sign = dVal > 0 ? '+' : '';
+                        const fmtD = mode === 'roto' ? sign + dVal.toFixed(0) : sign + fmt(dVal, c);
                         delta = ' <span class="' + cls + '" style="font-size:11px">' + fmtD + '</span>';
                     }
                 }
@@ -561,13 +557,14 @@ function renderStandings() {
         }).join('');
     }
 
+    const userTeam = standingsData.user_team;
     renderBody(
         document.getElementById('standings-before-body'),
-        standingsData.before, null
+        standingsData.before, null, userTeam
     );
     renderBody(
         document.getElementById('standings-after-body'),
-        standingsData.after, standingsData.before
+        standingsData.after, standingsData.before, userTeam
     );
 }
 </script>

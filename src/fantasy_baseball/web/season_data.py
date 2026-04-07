@@ -637,6 +637,7 @@ def compute_comparison_standings(
         return {"error": f"Player '{roster_player_name}' not found on roster"}
 
     all_stats_before = {t["name"]: dict(t["stats"]) for t in projected_standings}
+    all_stats_before[user_team_name] = project_team_stats(user_roster)
 
     roster_after = [p for i, p in enumerate(user_roster) if i != drop_idx]
     roster_after.append(other_player)
@@ -656,6 +657,7 @@ def compute_comparison_standings(
             "roto": roto_after,
         },
         "categories": ALL_CATEGORIES,
+        "user_team": user_team_name,
     }
 
 
