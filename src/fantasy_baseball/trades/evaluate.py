@@ -360,8 +360,8 @@ def find_trades(
                     "receive_rank": receive_rank,
                 })
 
-    # Sort: biggest wSGP gain first, then most generous rank gap as tiebreaker
+    # Sort: biggest roto gain first, then wSGP gain, then rank generosity
     proposals.sort(
-        key=lambda t: (-t["hart_wsgp_gain"], t["send_rank"] - t["receive_rank"]),
+        key=lambda t: (-t["hart_delta"], -t["hart_wsgp_gain"], t["send_rank"] - t["receive_rank"]),
     )
     return proposals[:max_results]
