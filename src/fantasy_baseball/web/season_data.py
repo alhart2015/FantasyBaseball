@@ -610,6 +610,57 @@ def compute_trade_standings_impact(
     }
 
 
+def compute_comparison_standings(
+    roster_player_name: str,
+    other_player: "Player",
+    user_roster: "list[Player]",
+    projected_standings: list[dict],
+    user_team_name: str,
+) -> dict:
+    """Compute before/after roto standings for a player swap.
+
+    Replaces ``roster_player_name`` on the user's roster with
+    ``other_player`` and re-projects team stats.  Rate stats (AVG, ERA,
+    WHIP) are recomputed from components, not added/subtracted.
+
+    Returns dict with before/after stats and roto, or {"error": ...}.
+    """
+    from fantasy_baseball.scoring import project_team_stats, score_roto
+
+    drop_idx = None
+    for i, p in enumerate(user_roster):
+        if p.name == roster_player_name:
+            drop_idx = i
+            break
+
+    if drop_idx is None:
+        return {"error": f"Player '{roster_player_name}' not found on roster"}
+
+    all_stats_before = {t["name"]: dict(t["stats"]) for t in projected_standings}
+    all_stats_before[user_team_name] = project_team_stats(user_roster)
+
+    roster_after = [p for i, p in enumerate(user_roster) if i != drop_idx]
+    roster_after.append(other_player)
+    all_stats_after = {t["name"]: dict(t["stats"]) for t in projected_standings}
+    all_stats_after[user_team_name] = project_team_stats(roster_after)
+
+    roto_before = score_roto(all_stats_before)
+    roto_after = score_roto(all_stats_after)
+
+    return {
+        "before": {
+            "stats": all_stats_before,
+            "roto": roto_before,
+        },
+        "after": {
+            "stats": all_stats_after,
+            "roto": roto_after,
+        },
+        "categories": ALL_CATEGORIES,
+        "user_team": user_team_name,
+    }
+
+
 def _compute_category_ranks(standings: list[dict]) -> dict[str, dict[str, int]]:
     """Compute per-category rank for each team (1 = best).
 
@@ -809,7 +860,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         projected_standings = []
         for tname, roster in all_team_rosters.items():
-            proj_stats = project_team_stats([p.to_flat_dict() for p in roster])
+            proj_stats = project_team_stats(roster)
             projected_standings.append({
                 "name": tname,
                 "team_key": "",

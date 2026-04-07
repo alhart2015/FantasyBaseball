@@ -54,6 +54,23 @@
     font-size: 13px;
     margin-top: 20px;
 }
+.standings-toggle {
+    background: none;
+    border: 1px solid var(--panel-border);
+    color: var(--text-secondary);
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 4px;
+}
+.standings-toggle.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+#compare-stats-table td.better { font-weight: 600; }
+#compare-stats-table td.diff-positive { color: var(--success); }
+#compare-stats-table td.diff-negative { color: var(--danger); }
 </style>
 
 <div class="page-header">
@@ -94,6 +111,44 @@
 
 <div id="empty-msg">Select a position or search by name.</div>
 
+<div id="comparison-panel" style="display:none; margin:20px 0; padding:20px; background:var(--panel-bg); border:1px solid var(--panel-border); border-radius:8px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h3 style="margin:0; font-size:16px; color:var(--accent);">Player Comparison</h3>
+        <button id="clear-compare" style="background:none; border:1px solid var(--panel-border); color:var(--text-secondary); padding:4px 10px; border-radius:4px; cursor:pointer; font-size:12px;">✕ Clear</button>
+    </div>
+    <div id="compare-validation" style="color:var(--text-secondary); font-size:13px;"></div>
+    <table class="data-table" id="compare-stats-table" style="display:none; margin-bottom:20px;">
+        <thead><tr id="compare-stats-head"></tr></thead>
+        <tbody id="compare-stats-body"></tbody>
+    </table>
+    <div id="standings-section" style="display:none;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h4 style="margin:0; font-size:14px;">Projected Standings Impact</h4>
+            <div>
+                <button class="standings-toggle active" data-mode="roto">Roto Points</button>
+                <button class="standings-toggle" data-mode="stats">Stat Totals</button>
+            </div>
+        </div>
+        <div id="standings-subtitle" style="font-size:12px; color:var(--text-secondary); margin-bottom:12px;"></div>
+        <div style="display:flex; gap:16px; flex-wrap:wrap;">
+            <div style="flex:1; min-width:300px;">
+                <div style="font-size:12px; color:var(--text-secondary); margin-bottom:6px; text-transform:uppercase; letter-spacing:1px;">Current Team</div>
+                <table class="data-table" id="standings-before">
+                    <thead><tr id="standings-before-head"></tr></thead>
+                    <tbody id="standings-before-body"></tbody>
+                </table>
+            </div>
+            <div style="flex:1; min-width:300px;">
+                <div id="standings-after-label" style="font-size:12px; color:var(--text-secondary); margin-bottom:6px; text-transform:uppercase; letter-spacing:1px;"></div>
+                <table class="data-table" id="standings-after">
+                    <thead><tr id="standings-after-head"></tr></thead>
+                    <tbody id="standings-after-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 const HITTING_CATS = ['R', 'HR', 'RBI', 'SB', 'AVG'];
 const PITCHING_CATS = ['W', 'K', 'SV', 'ERA', 'WHIP'];
@@ -103,6 +158,7 @@ const ASC_DEFAULT = new Set(['rank', 'name', 'positions', 'team', 'owner', 'ERA'
 let allPlayers = null;
 let sortCol = 'rank';
 let sortAsc = true;
+let selectedPlayers = []; // array of player objects, max 2
 
 const posFilter = document.getElementById('pos-filter');
 const faOnly = document.getElementById('fa-only');
@@ -207,6 +263,7 @@ function render() {
 
     // Columns
     const cols = [
+        {key: '_select', label: ''},
         {key: 'rank', label: 'Rank'},
         {key: 'name', label: 'Name'},
         {key: 'positions', label: 'Pos'},
@@ -218,6 +275,7 @@ function render() {
     ];
 
     headEl.innerHTML = cols.map(c => {
+        if (c.key === '_select') return '<th style="width:30px;"></th>';
         const arrow = sortCol === c.key ? (sortAsc ? ' \u25B2' : ' \u25BC') : '';
         return '<th data-col="' + c.key + '">' + c.label +
                '<span class="sort-arrow">' + arrow + '</span></th>';
@@ -245,7 +303,12 @@ function render() {
         const rankText = p.rank != null ? p.rank : '\u2014';
         const posText = p.positions && p.positions.length ? p.positions.join(', ') : '\u2014';
 
-        let cells = '<td>' + rankText + '</td>' +
+        const isSelected = selectedPlayers.some(s => s.name === p.name);
+        let cells = '<td style="text-align:center"><input type="checkbox" class="compare-cb" data-name="' +
+            p.name.replace(/"/g, '&quot;') + '"' +
+            (isSelected ? ' checked' : '') +
+            ' style="accent-color:var(--accent);cursor:pointer"></td>';
+        cells += '<td>' + rankText + '</td>' +
             '<td style="text-align:left;font-weight:500">' + p.name + '</td>' +
             '<td>' + posText + '</td>' +
             '<td>' + (p.team || '') + '</td>' +
@@ -261,9 +324,248 @@ function render() {
         return '<tr>' + cells + '</tr>';
     }).join('');
 
+    document.querySelectorAll('.compare-cb').forEach(cb => {
+        cb.addEventListener('change', () => {
+            const name = cb.dataset.name;
+            if (cb.checked) {
+                const player = filtered.find(p => p.name === name);
+                if (player && selectedPlayers.length >= 2) {
+                    selectedPlayers.shift();
+                }
+                if (player && !selectedPlayers.some(s => s.name === name)) {
+                    selectedPlayers.push(player);
+                }
+            } else {
+                selectedPlayers = selectedPlayers.filter(s => s.name !== name);
+            }
+            render();
+            updateComparison();
+        });
+    });
+
     tableEl.style.display = '';
     emptyEl.style.display = 'none';
     countEl.textContent = filtered.length + ' player' + (filtered.length !== 1 ? 's' : '');
+}
+
+const INVERSE_CATS = new Set(['ERA', 'WHIP']);
+const compPanel = document.getElementById('comparison-panel');
+const compValidation = document.getElementById('compare-validation');
+const compStatsTable = document.getElementById('compare-stats-table');
+const compStatsHead = document.getElementById('compare-stats-head');
+const compStatsBody = document.getElementById('compare-stats-body');
+const standingsSection = document.getElementById('standings-section');
+let standingsData = null;
+let standingsMode = 'roto';
+
+document.getElementById('clear-compare').addEventListener('click', () => {
+    selectedPlayers = [];
+    standingsData = null;
+    compPanel.style.display = 'none';
+    render();
+});
+
+document.querySelectorAll('.standings-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.standings-toggle').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        standingsMode = btn.dataset.mode;
+        if (standingsData) renderStandings();
+    });
+});
+
+function updateComparison() {
+    if (selectedPlayers.length < 2) {
+        compPanel.style.display = selectedPlayers.length > 0 ? '' : 'none';
+        compStatsTable.style.display = 'none';
+        standingsSection.style.display = 'none';
+        compValidation.textContent = selectedPlayers.length === 1
+            ? 'Select one more player to compare.'
+            : '';
+        return;
+    }
+
+    const [a, b] = selectedPlayers;
+    const rosterPlayer = a.owner === 'roster' ? a : (b.owner === 'roster' ? b : null);
+    const otherPlayer = a.owner === 'roster' ? b : (b.owner === 'roster' ? a : null);
+
+    compPanel.style.display = '';
+
+    if (!rosterPlayer || !otherPlayer || otherPlayer.owner === 'roster') {
+        compStatsTable.style.display = 'none';
+        standingsSection.style.display = 'none';
+        compValidation.textContent = 'Select one player from your roster and one who is not on your roster.';
+        return;
+    }
+
+    compValidation.textContent = '';
+    renderStatComparison(rosterPlayer, otherPlayer);
+    fetchStandings(rosterPlayer, otherPlayer);
+}
+
+function renderStatComparison(roster, other) {
+    const isHitter = roster.player_type === 'hitter';
+    const cats = isHitter ? HITTING_CATS : PITCHING_CATS;
+    const rows = [
+        {label: 'ROS Rank', key: 'rank', inverse: true},
+        ...cats.map(c => ({label: c, key: c, inverse: INVERSE_CATS.has(c)})),
+        {label: 'Total SGP', key: 'sgp', inverse: false},
+        {label: 'wSGP', key: 'wsgp', inverse: false},
+    ];
+
+    const rLabel = roster.name + ' (Yours)';
+    const oLabel = other.name + (other.owner ? '' : ' (FA)');
+
+    compStatsHead.innerHTML =
+        '<th style="text-align:left">Stat</th>' +
+        '<th style="text-align:right;color:var(--success)">' + rLabel + '</th>' +
+        '<th style="text-align:right;color:#2196f3">' + oLabel + '</th>' +
+        '<th style="text-align:right">Diff</th>';
+
+    compStatsBody.innerHTML = rows.map(r => {
+        const rv = roster[r.key];
+        const ov = other[r.key];
+        if (rv == null && ov == null) return '';
+
+        const rFmt = fmt(rv, r.key);
+        const oFmt = fmt(ov, r.key);
+        const diff = (ov != null && rv != null) ? ov - rv : null;
+        let diffFmt = '\u2014';
+        let diffClass = '';
+        if (diff != null) {
+            const isRate = RATE_CATS.has(r.key);
+            const better = r.inverse ? diff < 0 : diff > 0;
+            const worse = r.inverse ? diff > 0 : diff < 0;
+            diffClass = better ? 'diff-positive' : (worse ? 'diff-negative' : '');
+            const sign = diff > 0 ? '+' : '';
+            diffFmt = isRate ? sign + diff.toFixed(r.key === 'AVG' ? 3 : 2)
+                     : r.key === 'sgp' || r.key === 'wsgp' ? sign + diff.toFixed(1)
+                     : sign + Math.round(diff);
+        }
+
+        const rBetter = diff != null && (r.inverse ? diff > 0 : diff < 0);
+        const oBetter = diff != null && (r.inverse ? diff < 0 : diff > 0);
+
+        return '<tr>' +
+            '<td style="color:var(--text-secondary)">' + r.label + '</td>' +
+            '<td style="text-align:right" class="' + (rBetter ? 'better' : '') + '">' + rFmt + '</td>' +
+            '<td style="text-align:right" class="' + (oBetter ? 'better' : '') + '">' + oFmt + '</td>' +
+            '<td style="text-align:right" class="' + diffClass + '">' + diffFmt + '</td>' +
+            '</tr>';
+    }).join('');
+
+    compStatsTable.style.display = '';
+}
+
+let fetchSeq = 0;
+function fetchStandings(rosterPlayer, otherPlayer) {
+    standingsSection.style.display = 'none';
+    const mySeq = ++fetchSeq;
+    const params = new URLSearchParams({
+        roster_player: rosterPlayer.name,
+        other_player: otherPlayer.name,
+        other_type: otherPlayer.player_type,
+        other_r: otherPlayer.R || 0,
+        other_hr: otherPlayer.HR || 0,
+        other_rbi: otherPlayer.RBI || 0,
+        other_sb: otherPlayer.SB || 0,
+        other_h: otherPlayer.h || 0,
+        other_ab: otherPlayer.ab || 0,
+        other_w: otherPlayer.W || 0,
+        other_k: otherPlayer.K || 0,
+        other_sv: otherPlayer.SV || 0,
+        other_ip: otherPlayer.ip || 0,
+        other_er: otherPlayer.er || 0,
+        other_bb: otherPlayer.bb || 0,
+        other_ha: otherPlayer.h_allowed || 0,
+    });
+    fetch('/api/players/compare?' + params)
+        .then(r => r.json())
+        .then(data => {
+            if (mySeq !== fetchSeq) return;
+            if (data.error) return;
+            standingsData = data;
+            document.getElementById('standings-subtitle').textContent =
+                'Replacing ' + rosterPlayer.name + ' with ' + otherPlayer.name;
+            document.getElementById('standings-after-label').textContent =
+                'With ' + otherPlayer.name;
+            renderStandings();
+            standingsSection.style.display = '';
+        })
+        .catch(() => {
+            if (mySeq !== fetchSeq) return;
+            compValidation.textContent = 'Failed to load standings comparison.';
+        });
+}
+
+function renderStandings() {
+    if (!standingsData) return;
+    const cats = standingsData.categories;
+    const mode = standingsMode;
+
+    const headHtml = '<th style="text-align:left">Team</th><th style="text-align:right">Pts</th>' +
+        cats.map(c => '<th style="text-align:right">' + c + '</th>').join('');
+
+    document.getElementById('standings-before-head').innerHTML = headHtml;
+    document.getElementById('standings-after-head').innerHTML = headHtml;
+
+    const teamNames = Object.keys(standingsData.before.roto);
+    const sorted = teamNames.slice().sort((a, b) =>
+        standingsData.before.roto[b].total - standingsData.before.roto[a].total
+    );
+
+    function renderBody(container, view, diffView, userTeam) {
+        container.innerHTML = sorted.map(team => {
+            const roto = view.roto[team];
+            const stats = view.stats[team];
+            const rowStyle = team === userTeam ? 'color:var(--accent); font-weight:600' : '';
+
+            const total = roto.total.toFixed(0);
+            let totalDiff = '';
+            if (diffView) {
+                const d = roto.total - diffView.roto[team].total;
+                if (Math.abs(d) > 0.01) {
+                    const cls = d > 0 ? 'diff-positive' : 'diff-negative';
+                    totalDiff = ' <span class="' + cls + '" style="font-size:11px">' +
+                        (d > 0 ? '+' : '') + d.toFixed(0) + '</span>';
+                }
+            }
+
+            const cells = cats.map(c => {
+                const val = mode === 'roto' ? roto[c + '_pts'] : stats[c];
+                const fmtVal = mode === 'roto' ? val.toFixed(0) : fmt(val, c);
+                let delta = '';
+                if (diffView) {
+                    const dVal = mode === 'roto'
+                        ? roto[c + '_pts'] - diffView.roto[team][c + '_pts']
+                        : stats[c] - diffView.stats[team][c];
+                    if (Math.abs(dVal) > 0.01) {
+                        const isGood = mode === 'roto' ? dVal > 0
+                            : (INVERSE_CATS.has(c) ? dVal < 0 : dVal > 0);
+                        const cls = isGood ? 'diff-positive' : 'diff-negative';
+                        const sign = dVal > 0 ? '+' : '';
+                        const fmtD = mode === 'roto' ? sign + dVal.toFixed(0) : sign + fmt(dVal, c);
+                        delta = ' <span class="' + cls + '" style="font-size:11px">' + fmtD + '</span>';
+                    }
+                }
+                return '<td style="text-align:right">' + fmtVal + delta + '</td>';
+            }).join('');
+
+            return '<tr style="' + rowStyle + '"><td style="text-align:left">' + team + '</td>' +
+                '<td style="text-align:right;font-weight:600">' + total + totalDiff + '</td>' +
+                cells + '</tr>';
+        }).join('');
+    }
+
+    const userTeam = standingsData.user_team;
+    renderBody(
+        document.getElementById('standings-before-body'),
+        standingsData.before, null, userTeam
+    );
+    renderBody(
+        document.getElementById('standings-after-body'),
+        standingsData.after, standingsData.before, userTeam
+    );
 }
 </script>
 

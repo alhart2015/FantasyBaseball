@@ -589,12 +589,15 @@ def register_routes(app: Flask) -> None:
 
                 if ptype == PlayerType.HITTER:
                     result.update({"R": ros.r, "HR": ros.hr, "RBI": ros.rbi,
-                                   "SB": ros.sb, "AVG": ros.avg})
+                                   "SB": ros.sb, "AVG": ros.avg,
+                                   "h": ros.h, "ab": ros.ab})
                     actual_obj = HitterStats(pa=actual_pa.get(norm, 0))
                     result["significant"] = actual_obj.significant_dict()
                 else:
                     result.update({"W": ros.w, "K": ros.k, "SV": ros.sv,
-                                   "ERA": ros.era, "WHIP": ros.whip})
+                                   "ERA": ros.era, "WHIP": ros.whip,
+                                   "ip": ros.ip, "er": ros.er,
+                                   "bb": ros.bb, "h_allowed": ros.h_allowed})
                     logs = actual_pitcher_logs.get(norm, {})
                     actual_obj = PitcherStats(
                         ip=logs.get("ip", 0),
@@ -608,6 +611,63 @@ def register_routes(app: Flask) -> None:
             return jsonify(players)
         finally:
             conn.close()
+
+    @app.route("/api/players/compare")
+    def api_player_compare():
+        """Return projected standings before/after swapping a roster player."""
+        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
+
+        roster_player = request.args.get("roster_player")
+        other_name = request.args.get("other_player")
+        other_type = request.args.get("other_type")
+
+        if not roster_player or not other_name or not other_type:
+            return jsonify({"error": "roster_player, other_player, and other_type are required"}), 400
+
+        roster_cache = read_cache("roster")
+        if not roster_cache:
+            return jsonify({"error": "No roster data available"}), 404
+
+        proj_cache = read_cache("projections") or {}
+        projected_standings = proj_cache.get("projected_standings")
+        if not projected_standings:
+            return jsonify({"error": "No projected standings available"}), 404
+
+        user_roster = [Player.from_dict(p) for p in roster_cache]
+
+        def _float(key, default=0.0):
+            try:
+                return float(request.args.get(key, default))
+            except (TypeError, ValueError):
+                return default
+
+        other_player = Player.from_dict({
+            "name": other_name,
+            "player_type": other_type,
+            "r": _float("other_r"), "hr": _float("other_hr"),
+            "rbi": _float("other_rbi"), "sb": _float("other_sb"),
+            "h": _float("other_h"), "ab": _float("other_ab"),
+            "w": _float("other_w"), "k": _float("other_k"),
+            "sv": _float("other_sv"), "ip": _float("other_ip"),
+            "er": _float("other_er"), "bb": _float("other_bb"),
+            "h_allowed": _float("other_ha"),
+        })
+
+        config = _load_config()
+
+        from fantasy_baseball.web.season_data import compute_comparison_standings
+        result = compute_comparison_standings(
+            roster_player_name=roster_player,
+            other_player=other_player,
+            user_roster=user_roster,
+            projected_standings=projected_standings,
+            user_team_name=config.team_name,
+        )
+
+        if "error" in result:
+            return jsonify(result), 404
+
+        return jsonify(result)
 
     @app.route("/login", methods=["GET", "POST"])
     def login():

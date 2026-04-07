@@ -12,34 +12,53 @@ from fantasy_baseball.utils.constants import safe_float as _safe
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 
-def project_team_stats(roster: list[dict]) -> dict[str, float]:
+def _get(p, key, default=0):
+    """Read a field from a Player dataclass or a plain dict."""
+    if hasattr(p, key):
+        return getattr(p, key)
+    if isinstance(p, dict):
+        return p.get(key, default)
+    return default
+
+
+def _stat(p, key):
+    """Read a stat from a Player's ROS stats or from a flat dict."""
+    # Player dataclass: stats live on the .ros attribute
+    ros = getattr(p, "ros", None)
+    if ros is not None and hasattr(ros, key):
+        return _safe(getattr(ros, key, 0))
+    # Flat dict (legacy callers, tests)
+    if isinstance(p, dict):
+        return _safe(p.get(key, 0))
+    return 0.0
+
+
+def project_team_stats(roster) -> dict[str, float]:
     """Sum projected stats for a roster into roto category totals.
 
-    Each player dict must have 'player_type' ("hitter" or "pitcher") and
-    the relevant stat keys (lowercase: r, hr, rbi, sb, h, ab for hitters;
-    w, k, sv, ip, er, bb, h_allowed for pitchers).
-
+    Accepts Player dataclass objects or plain dicts with flat stat keys.
     Rate stats (AVG, ERA, WHIP) are computed from component totals.
     """
     r = hr = rbi = sb = h_total = ab_total = 0.0
     w = k = sv = ip_total = er_total = bb_total = ha_total = 0.0
 
     for p in roster:
-        if p.get("player_type") == PlayerType.HITTER:
-            r += _safe(p.get("r", 0))
-            hr += _safe(p.get("hr", 0))
-            rbi += _safe(p.get("rbi", 0))
-            sb += _safe(p.get("sb", 0))
-            h_total += _safe(p.get("h", 0))
-            ab_total += _safe(p.get("ab", 0))
-        elif p.get("player_type") == PlayerType.PITCHER:
-            w += _safe(p.get("w", 0))
-            k += _safe(p.get("k", 0))
-            sv += _safe(p.get("sv", 0))
-            ip_total += _safe(p.get("ip", 0))
-            er_total += _safe(p.get("er", 0))
-            bb_total += _safe(p.get("bb", 0))
-            ha_total += _safe(p.get("h_allowed", 0))
+        ptype = _get(p, "player_type")
+        if ptype == PlayerType.HITTER:
+            r += _stat(p, "r")
+            hr += _stat(p, "hr")
+            rbi += _stat(p, "rbi")
+            sb += _stat(p, "sb")
+            h_total += _stat(p, "h")
+            ab_total += _stat(p, "ab")
+        elif ptype == PlayerType.PITCHER:
+            w += _stat(p, "w")
+            k += _stat(p, "k")
+            sv += _stat(p, "sv")
+            ip_total += _stat(p, "ip")
+            er_total += _stat(p, "er")
+            bb_total += _stat(p, "bb")
+            ha_total += _stat(p, "h_allowed")
 
     return {
         "R": r, "HR": hr, "RBI": rbi, "SB": sb,
