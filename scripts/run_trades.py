@@ -15,7 +15,8 @@ from fantasy_baseball.data.db import get_connection, get_blended_projections
 from fantasy_baseball.data.projections import match_roster_to_projections
 from fantasy_baseball.lineup.yahoo_roster import fetch_roster, fetch_standings
 from fantasy_baseball.lineup.leverage import calculate_leverage
-from fantasy_baseball.trades.evaluate import find_trades, compute_roto_points_by_cat
+from fantasy_baseball.sgp.rankings import compute_sgp_rankings
+from fantasy_baseball.trades.evaluate import find_trades
 from fantasy_baseball.trades.pitch import generate_pitch
 from fantasy_baseball.utils.name_utils import normalize_name
 
@@ -80,9 +81,6 @@ def main():
     for team in standings:
         leverage_by_team[team["name"]] = calculate_leverage(standings, team["name"])
 
-    current_ranks = compute_roto_points_by_cat(standings)
-
-    from fantasy_baseball.sgp.rankings import compute_sgp_rankings
     rankings = compute_sgp_rankings(hitters_proj, pitchers_proj)
 
     print("Evaluating trades...")
@@ -103,7 +101,7 @@ def main():
     print("=" * 70)
 
     if not trades:
-        print("\nNo mutually beneficial trades found.")
+        print("\nNo trades found.")
         return
 
     for i, trade in enumerate(trades, 1):

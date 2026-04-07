@@ -17,8 +17,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from backtest_2025 import DRAFT_2025, ACTUAL, ALL_CATS, INVERSE
+from fantasy_baseball.sgp.rankings import compute_sgp_rankings
 from fantasy_baseball.trades.evaluate import (
-    find_trades, compute_roto_points, compute_roto_points_by_cat,
+    find_trades, compute_roto_points,
     compute_trade_impact, _player_ros_stats,
 )
 from fantasy_baseball.trades.pitch import generate_pitch
@@ -334,8 +335,6 @@ def main():
         for team in standings:
             leverage_by_team[team["name"]] = calculate_leverage(standings, team["name"])
 
-        current_ranks = compute_roto_points_by_cat(standings)
-
         # Build roster dicts for trade finder using availability-adjusted
         # projections: if a player has minimal games through the checkpoint,
         # scale down their ROS projection (simulates recency blend for injured
@@ -391,7 +390,6 @@ def main():
             opp_rosters_for_trades[team_name] = build_adjusted_roster(team_rosters[team_name])
 
         # Build rankings from projections for perception-based filtering
-        from fantasy_baseball.sgp.rankings import compute_sgp_rankings
         hitter_rows = []
         pitcher_rows = []
         for mid, proj in projections.items():

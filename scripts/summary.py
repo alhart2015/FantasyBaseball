@@ -24,7 +24,8 @@ from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.lineup.waivers import scan_waivers, detect_open_slots, fetch_and_match_free_agents
-from fantasy_baseball.trades.evaluate import find_trades, compute_roto_points_by_cat
+from fantasy_baseball.sgp.rankings import compute_sgp_rankings
+from fantasy_baseball.trades.evaluate import find_trades
 from fantasy_baseball.trades.pitch import generate_pitch
 from fantasy_baseball.data.projections import match_roster_to_projections
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -408,9 +409,6 @@ def main():
                 projected_standings=projected_standings,
             )
 
-        current_ranks = compute_roto_points_by_cat(trade_standings)
-
-        from fantasy_baseball.sgp.rankings import compute_sgp_rankings
         rankings = compute_sgp_rankings(hitters_proj, pitchers_proj)
 
         trades = find_trades(
@@ -426,7 +424,6 @@ def main():
         )
     else:
         trades = []
-        current_ranks = {}
         print("\n  No standings data — trade analysis requires standings.")
 
     if trades:
@@ -451,7 +448,7 @@ def main():
             )
             print(f"     Pitch: \"{pitch}\"")
     else:
-        print("\nNo mutually beneficial trades found.")
+        print("\nNo trades found.")
 
     print()
     print("Done.")
