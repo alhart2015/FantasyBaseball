@@ -24,7 +24,7 @@ from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.lineup.waivers import scan_waivers, detect_open_slots, fetch_and_match_free_agents
-from fantasy_baseball.sgp.rankings import compute_sgp_rankings
+from fantasy_baseball.sgp.rankings import compute_combined_sgp_rankings
 from fantasy_baseball.trades.evaluate import find_trades
 from fantasy_baseball.trades.pitch import generate_pitch
 from fantasy_baseball.data.projections import match_roster_to_projections
@@ -409,7 +409,7 @@ def main():
                 projected_standings=projected_standings,
             )
 
-        rankings = compute_sgp_rankings(hitters_proj, pitchers_proj)
+        rankings = compute_combined_sgp_rankings(hitters_proj, pitchers_proj)
 
         trades = find_trades(
             hart_name=team_name,

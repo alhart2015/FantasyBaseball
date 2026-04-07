@@ -911,7 +911,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         # --- Step 6d: Compute SGP rankings ---
         _progress("Computing SGP rankings...")
         from fantasy_baseball.sgp.rankings import (
-            compute_sgp_rankings, compute_rankings_from_game_logs,
+            compute_sgp_rankings, compute_combined_sgp_rankings,
+            compute_rankings_from_game_logs,
             rank_key, rank_key_from_positions, lookup_rank,
         )
 
@@ -1065,7 +1066,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             standings=standings,
             leverage_by_team=leverage_by_team,
             roster_slots=config.roster_slots,
-            rankings=ros_ranks,
+            rankings=compute_combined_sgp_rankings(hitters_proj, pitchers_proj),
             max_results=10,
             projected_standings=projected_standings,
         )

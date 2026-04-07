@@ -17,7 +17,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from backtest_2025 import DRAFT_2025, ACTUAL, ALL_CATS, INVERSE
-from fantasy_baseball.sgp.rankings import compute_sgp_rankings
+from fantasy_baseball.sgp.rankings import compute_combined_sgp_rankings
 from fantasy_baseball.trades.evaluate import (
     find_trades, compute_roto_points,
     compute_trade_impact, _player_ros_stats,
@@ -404,7 +404,7 @@ def main():
                 for col in ["w", "k", "sv", "era", "whip", "ip"]:
                     row[col] = proj.get(col, 0)
                 pitcher_rows.append(row)
-        rankings = compute_sgp_rankings(
+        rankings = compute_combined_sgp_rankings(
             pd.DataFrame(hitter_rows) if hitter_rows else pd.DataFrame(),
             pd.DataFrame(pitcher_rows) if pitcher_rows else pd.DataFrame(),
         )

@@ -341,6 +341,10 @@ def find_trades(
                     projected_standings=projected_standings,
                 )
 
+                # Reject trades that hurt our overall roto standing
+                if impact["hart_delta"] < 0:
+                    continue
+
                 proposals.append({
                     "send": hart_player.name,
                     "send_positions": hart_player.positions,

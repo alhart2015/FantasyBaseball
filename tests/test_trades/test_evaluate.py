@@ -201,9 +201,11 @@ def test_rank_filter_rejects_beyond_threshold():
 
 
 def test_rank_filter_accepts_sending_better_ranked():
-    """Sending a better-ranked player (negative gap) should always be accepted."""
-    hart_roster = [_make_hitter("Hart Star", ["OF"], hr=30, sb=3)]
-    opp_rosters = {"Rival": [_make_hitter("Opp Guy", ["OF"], hr=10, sb=30)]}
+    """Sending a better-ranked player (negative rank gap) should pass the filter."""
+    # Players are similar overall — Hart trades a slight HR edge for an SB edge,
+    # so the swap is roto-neutral while wSGP-positive due to SB leverage.
+    hart_roster = [_make_hitter("Hart Star", ["OF"], r=70, hr=22, rbi=65, sb=5)]
+    opp_rosters = {"Rival": [_make_hitter("Opp Guy", ["OF"], r=70, hr=18, rbi=65, sb=15)]}
     rankings = {
         rank_key("Hart Star", "hitter"): 20,
         rank_key("Opp Guy", "hitter"): 50,

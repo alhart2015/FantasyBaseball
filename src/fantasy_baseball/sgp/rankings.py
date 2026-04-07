@@ -78,6 +78,40 @@ def compute_sgp_rankings(
     return rankings
 
 
+def compute_combined_sgp_rankings(
+    hitters: pd.DataFrame,
+    pitchers: pd.DataFrame,
+) -> dict[str, int]:
+    """Rank all players in a single combined pool by unweighted SGP.
+
+    Unlike ``compute_sgp_rankings`` which ranks hitters and pitchers
+    separately, this produces a single ranking across both types.
+    Useful for trade filtering where cross-type comparisons must be
+    meaningful (hitter #5 and pitcher #5 may have very different SGP).
+    """
+    rankings = {}
+    sgp_list = []
+
+    for df, ptype in [(hitters, PlayerType.HITTER), (pitchers, PlayerType.PITCHER)]:
+        if df.empty:
+            continue
+        for _, row in df.iterrows():
+            sgp = calculate_player_sgp(row)
+            fg_id = str(row.get("fg_id", "")) if pd.notna(row.get("fg_id")) else None
+            name_key = rank_key(row["name"], ptype)
+            sgp_list.append((fg_id, name_key, sgp))
+
+    sgp_list.sort(key=lambda x: x[2], reverse=True)
+
+    for rank_num, (fg_id, name_key, _sgp) in enumerate(sgp_list, start=1):
+        if fg_id:
+            rankings[fg_id] = rank_num
+        if name_key not in rankings or rank_num < rankings[name_key]:
+            rankings[name_key] = rank_num
+
+    return rankings
+
+
 def compute_rankings_from_game_logs(
     hitter_logs: dict[str, dict],
     pitcher_logs: dict[str, dict],
