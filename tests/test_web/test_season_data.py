@@ -392,9 +392,7 @@ class TestComputeComparisonStandings:
         assert "after" in result
         assert "categories" in result
 
-        before_total = result["before"]["roto"]["My Team"]["total"]
-        after_total = result["after"]["roto"]["My Team"]["total"]
-
+        assert result["before"]["roto"]["My Team"]["total"] != result["after"]["roto"]["My Team"]["total"]
         assert result["before"]["stats"]["My Team"] != result["after"]["stats"]["My Team"]
         assert result["before"]["stats"]["Other Team"] == result["after"]["stats"]["Other Team"]
 

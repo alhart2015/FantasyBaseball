@@ -457,8 +457,10 @@ function renderStatComparison(roster, other) {
     compStatsTable.style.display = '';
 }
 
+let fetchSeq = 0;
 function fetchStandings(rosterPlayer, otherPlayer) {
     standingsSection.style.display = 'none';
+    const mySeq = ++fetchSeq;
     const params = new URLSearchParams({
         roster_player: rosterPlayer.name,
         other_player: otherPlayer.name,
@@ -480,6 +482,7 @@ function fetchStandings(rosterPlayer, otherPlayer) {
     fetch('/api/players/compare?' + params)
         .then(r => r.json())
         .then(data => {
+            if (mySeq !== fetchSeq) return;
             if (data.error) return;
             standingsData = data;
             document.getElementById('standings-subtitle').textContent =
@@ -488,6 +491,10 @@ function fetchStandings(rosterPlayer, otherPlayer) {
                 'With ' + otherPlayer.name;
             renderStandings();
             standingsSection.style.display = '';
+        })
+        .catch(() => {
+            if (mySeq !== fetchSeq) return;
+            compValidation.textContent = 'Failed to load standings comparison.';
         });
 }
 
