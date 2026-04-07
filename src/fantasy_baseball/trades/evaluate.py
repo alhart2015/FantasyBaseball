@@ -10,6 +10,7 @@ from typing import Any
 
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import Player, PlayerType
+from fantasy_baseball.sgp.rankings import rank_key_from_positions
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 
@@ -22,14 +23,10 @@ from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era
 
 COUNTING_CATS = ["R", "HR", "RBI", "SB", "W", "K", "SV"]
 
-# Equal leverage weights for computing raw (unweighted) player value
-EQUAL_LEVERAGE = {cat: 0.1 for cat in ALL_CATS}
-
-# Maximum raw SGP gap between traded players. Prevents lopsided trades
-# like Aaron Judge for Chris Sale that no human would accept.
-# Applied to the roster data as-provided (should be recency-blended for
-# best accuracy — injured players with 0 stats will have near-zero SGP).
-MAX_SGP_GAP = 0.35
+# Maximum ranking gap for perception-based filtering. A trade is accepted
+# when send_rank - receive_rank <= MAX_RANK_GAP (the player we send can
+# be up to this many spots worse-ranked than the player we receive).
+MAX_RANK_GAP = 5
 
 # Baseline estimates for AB and IP used to back out current totals
 _TEAM_AB = 5500
@@ -273,75 +270,74 @@ def find_trades(
     standings: list[dict],
     leverage_by_team: dict[str, dict],
     roster_slots: dict[str, int],
+    rankings: dict[str, int],
     max_results: int = 5,
     projected_standings: list[dict] | None = None,
 ) -> list[dict]:
     """Find and rank the best 1-for-1 trades for Hart.
 
-    Evaluates every possible swap between Hart and each opponent.
-    Filters to trades where both sides gain wSGP (opponent can break even).
-    Rejects lopsided trades where players' SGP differs too much.
-    Ranks by Hart's projected roto point gain.
+    Uses a perception-based approach: filters to trades where the player
+    sent is similarly ranked to the player received (looks fair to the
+    opponent), then ranks by Hart's wSGP gain (biggest hidden value first).
 
-    When projected_standings is provided, roto point impact is computed
-    against end-of-season projections rather than current standings.
-
-    The roster data should reflect the best-available projections (ideally
-    recency-blended) so that injured players show near-zero value and the
-    fairness check naturally filters them out.
+    Args:
+        hart_name: Hart's team name in standings.
+        hart_roster: Hart's roster as Player objects.
+        opp_rosters: {opponent_name: [Player]} for each opponent.
+        standings: current league standings.
+        leverage_by_team: {team_name: {cat: weight}} leverage weights.
+        roster_slots: league roster slot configuration.
+        rankings: {rank_key: int} unweighted SGP ROS rankings.
+        max_results: maximum number of trade proposals to return.
+        projected_standings: optional projected end-of-season standings.
 
     Returns list of trade dicts with: send, receive, opponent, hart_delta,
-    opp_delta, hart_cat_deltas, opp_cat_deltas, hart_wsgp_gain, opp_wsgp_gain,
-    send_positions, receive_positions.
+    opp_delta, hart_cat_deltas, opp_cat_deltas, hart_wsgp_gain,
+    send_positions, receive_positions, send_rank, receive_rank.
     """
     hart_leverage = leverage_by_team.get(hart_name, {})
     proposals = []
 
     for opp_name, opp_roster in opp_rosters.items():
-        opp_leverage = leverage_by_team.get(opp_name, {})
-
         for hart_player in hart_roster:
+            send_rank = rankings.get(
+                rank_key_from_positions(hart_player.name, hart_player.positions))
+            if send_rank is None:
+                continue
+
             hart_wsgp = calculate_weighted_sgp(hart_player.ros, hart_leverage)
 
             for opp_player in opp_roster:
+                receive_rank = rankings.get(
+                    rank_key_from_positions(opp_player.name, opp_player.positions))
+                if receive_rank is None:
+                    continue
+
                 # Roster legality
                 if not _can_roster_without(hart_roster, hart_player, opp_player, roster_slots):
                     continue
                 if not _can_roster_without(opp_roster, opp_player, hart_player, roster_slots):
                     continue
 
-                # Fairness guardrail: reject lopsided trades where raw
-                # player values are too far apart. Uses the roster data
-                # as-provided (should be recency-blended so injured/inactive
-                # players show near-zero value).
-                hart_raw = calculate_weighted_sgp(hart_player.ros, EQUAL_LEVERAGE)
-                opp_raw = calculate_weighted_sgp(opp_player.ros, EQUAL_LEVERAGE)
-                if abs(hart_raw - opp_raw) > MAX_SGP_GAP:
+                # Ranking proximity: looks fair to the opponent
+                rank_gap = send_rank - receive_rank
+                if rank_gap > MAX_RANK_GAP:
                     continue
 
-                # wSGP from each side's perspective
+                # wSGP gain for Hart
                 gain_wsgp = calculate_weighted_sgp(opp_player.ros, hart_leverage)
                 hart_wsgp_gain = gain_wsgp - hart_wsgp
 
-                opp_current_wsgp = calculate_weighted_sgp(opp_player.ros, opp_leverage)
-                opp_gain_wsgp = calculate_weighted_sgp(hart_player.ros, opp_leverage)
-                opp_wsgp_gain = opp_gain_wsgp - opp_current_wsgp
-
-                # Both sides must benefit
-                if hart_wsgp_gain <= 0 or opp_wsgp_gain < 0:
+                if hart_wsgp_gain <= 0:
                     continue
 
                 # Roto point impact
                 hart_ros = _player_ros_stats(hart_player)
                 opp_ros = _player_ros_stats(opp_player)
-                hart_loses = hart_ros
-                hart_gains = opp_ros
-                opp_loses = opp_ros
-                opp_gains = hart_ros
 
                 impact = compute_trade_impact(
                     standings, hart_name, opp_name,
-                    hart_loses, hart_gains, opp_loses, opp_gains,
+                    hart_ros, opp_ros, opp_ros, hart_ros,
                     projected_standings=projected_standings,
                 )
 
@@ -356,8 +352,12 @@ def find_trades(
                     "hart_cat_deltas": impact["hart_cat_deltas"],
                     "opp_cat_deltas": impact["opp_cat_deltas"],
                     "hart_wsgp_gain": round(hart_wsgp_gain, 2),
-                    "opp_wsgp_gain": round(opp_wsgp_gain, 2),
+                    "send_rank": send_rank,
+                    "receive_rank": receive_rank,
                 })
 
-    proposals.sort(key=lambda t: (t["hart_delta"], t["opp_delta"]), reverse=True)
+    # Sort: biggest wSGP gain first, then most generous rank gap as tiebreaker
+    proposals.sort(
+        key=lambda t: (-t["hart_wsgp_gain"], t["send_rank"] - t["receive_rank"]),
+    )
     return proposals[:max_results]
