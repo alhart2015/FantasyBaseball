@@ -589,12 +589,15 @@ def register_routes(app: Flask) -> None:
 
                 if ptype == PlayerType.HITTER:
                     result.update({"R": ros.r, "HR": ros.hr, "RBI": ros.rbi,
-                                   "SB": ros.sb, "AVG": ros.avg})
+                                   "SB": ros.sb, "AVG": ros.avg,
+                                   "h": ros.h, "ab": ros.ab})
                     actual_obj = HitterStats(pa=actual_pa.get(norm, 0))
                     result["significant"] = actual_obj.significant_dict()
                 else:
                     result.update({"W": ros.w, "K": ros.k, "SV": ros.sv,
-                                   "ERA": ros.era, "WHIP": ros.whip})
+                                   "ERA": ros.era, "WHIP": ros.whip,
+                                   "ip": ros.ip, "er": ros.er,
+                                   "bb": ros.bb, "h_allowed": ros.h_allowed})
                     logs = actual_pitcher_logs.get(norm, {})
                     actual_obj = PitcherStats(
                         ip=logs.get("ip", 0),
