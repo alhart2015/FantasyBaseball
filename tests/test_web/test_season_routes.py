@@ -206,3 +206,12 @@ def test_full_waivers_page_with_cached_data(client, tmp_path):
             assert "+2.0 roto pts" in html  # hart_delta displayed as roto points
     finally:
         season_data.CACHE_DIR = old_cache_dir
+
+
+def test_compare_missing_params(client):
+    """Missing required params should return 400."""
+    resp = client.get("/api/players/compare")
+    assert resp.status_code == 400
+
+    resp2 = client.get("/api/players/compare?roster_player=X")
+    assert resp2.status_code == 400
