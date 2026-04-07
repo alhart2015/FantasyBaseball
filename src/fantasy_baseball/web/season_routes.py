@@ -615,6 +615,8 @@ def register_routes(app: Flask) -> None:
     @app.route("/api/players/compare")
     def api_player_compare():
         """Return projected standings before/after swapping a roster player."""
+        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
+
         roster_player = request.args.get("roster_player")
         other_name = request.args.get("other_player")
         other_type = request.args.get("other_type")
@@ -631,13 +633,15 @@ def register_routes(app: Flask) -> None:
         if not projected_standings:
             return jsonify({"error": "No projected standings available"}), 404
 
+        user_roster = [Player.from_dict(p) for p in roster_cache]
+
         def _float(key, default=0.0):
             try:
                 return float(request.args.get(key, default))
             except (TypeError, ValueError):
                 return default
 
-        other_player = {
+        other_player = Player.from_dict({
             "name": other_name,
             "player_type": other_type,
             "r": _float("other_r"), "hr": _float("other_hr"),
@@ -647,7 +651,7 @@ def register_routes(app: Flask) -> None:
             "sv": _float("other_sv"), "ip": _float("other_ip"),
             "er": _float("other_er"), "bb": _float("other_bb"),
             "h_allowed": _float("other_ha"),
-        }
+        })
 
         config = _load_config()
 
@@ -655,7 +659,7 @@ def register_routes(app: Flask) -> None:
         result = compute_comparison_standings(
             roster_player_name=roster_player,
             other_player=other_player,
-            user_roster=roster_cache,
+            user_roster=user_roster,
             projected_standings=projected_standings,
             user_team_name=config.team_name,
         )

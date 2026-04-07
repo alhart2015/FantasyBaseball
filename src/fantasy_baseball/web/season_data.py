@@ -612,8 +612,8 @@ def compute_trade_standings_impact(
 
 def compute_comparison_standings(
     roster_player_name: str,
-    other_player: dict,
-    user_roster: list[dict],
+    other_player: "Player",
+    user_roster: "list[Player]",
     projected_standings: list[dict],
     user_team_name: str,
 ) -> dict:
@@ -623,26 +623,31 @@ def compute_comparison_standings(
     ``other_player`` and re-projects team stats.  Rate stats (AVG, ERA,
     WHIP) are recomputed from components, not added/subtracted.
 
+    Accepts Player objects; converts to flat dicts internally for
+    project_team_stats().
+
     Returns dict with before/after stats and roto, or {"error": ...}.
     """
     from fantasy_baseball.scoring import project_team_stats, score_roto
 
     drop_idx = None
     for i, p in enumerate(user_roster):
-        if p["name"] == roster_player_name:
+        if p.name == roster_player_name:
             drop_idx = i
             break
 
     if drop_idx is None:
         return {"error": f"Player '{roster_player_name}' not found on roster"}
 
-    all_stats_before = {t["name"]: dict(t["stats"]) for t in projected_standings}
-    all_stats_before[user_team_name] = project_team_stats(user_roster)
+    roster_flat = [p.to_flat_dict() for p in user_roster]
 
-    roster_after = [p for i, p in enumerate(user_roster) if i != drop_idx]
-    roster_after.append(other_player)
+    all_stats_before = {t["name"]: dict(t["stats"]) for t in projected_standings}
+    all_stats_before[user_team_name] = project_team_stats(roster_flat)
+
+    roster_after_flat = [d for i, d in enumerate(roster_flat) if i != drop_idx]
+    roster_after_flat.append(other_player.to_flat_dict())
     all_stats_after = {t["name"]: dict(t["stats"]) for t in projected_standings}
-    all_stats_after[user_team_name] = project_team_stats(roster_after)
+    all_stats_after[user_team_name] = project_team_stats(roster_after_flat)
 
     roto_before = score_roto(all_stats_before)
     roto_after = score_roto(all_stats_after)
