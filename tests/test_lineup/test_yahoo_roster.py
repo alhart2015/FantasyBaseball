@@ -33,10 +33,10 @@ class TestParseRoster:
         roster = parse_roster(raw)
         assert roster[0]["status"] == "IL15"
 
-    def test_status_omitted_when_healthy(self):
+    def test_status_empty_when_healthy(self):
         raw = [_make_mock_roster_player("Juan Soto", ["OF"], "OF")]
         roster = parse_roster(raw)
-        assert "status" not in roster[0]
+        assert roster[0]["status"] == ""
 
     def test_empty_roster(self):
         assert parse_roster([]) == []

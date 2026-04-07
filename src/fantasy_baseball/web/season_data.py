@@ -14,7 +14,8 @@ log = logging.getLogger(__name__)
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.utils.constants import (
-    ALL_CATEGORIES, HITTER_PROJ_KEYS, INVERSE_STATS as INVERSE_CATS, PITCHER_PROJ_KEYS,
+    ALL_CATEGORIES, HITTER_PROJ_KEYS, IL_STATUSES, INVERSE_STATS as INVERSE_CATS,
+    PITCHER_PROJ_KEYS,
 )
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 
@@ -944,9 +945,10 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # --- Step 7: Run lineup optimizer ---
         _progress("Optimizing lineup...")
+        active_players = [p for p in roster_players if p.status not in IL_STATUSES]
         hitter_players = []
         pitcher_players = []
-        for player in roster_players:
+        for player in active_players:
             if set(player.positions) & PITCHER_POSITIONS:
                 pitcher_players.append(player)
             else:

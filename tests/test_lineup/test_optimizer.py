@@ -1,6 +1,7 @@
 import pytest
 from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
+from fantasy_baseball.utils.constants import IL_STATUSES
 
 
 def _make_hitter(name, positions, r, hr, rbi, sb, avg, ab):
@@ -59,6 +60,34 @@ class TestOptimizeHitterLineup:
         lineup = optimize_hitter_lineup(hitters, EQUAL_LEVERAGE)
         starters = set(lineup.values())
         assert "Star" in starters
+
+    def test_il_players_excluded_before_optimization(self):
+        """IL players must be filtered from the roster before the optimizer
+        sees them — otherwise the optimizer will slot them into the lineup."""
+        il_star = _make_hitter("Juan Soto", ["OF"], 110, 40, 110, 5, .295, 550)
+        il_star.status = "IL60"
+        healthy = [
+            _make_hitter("OF1", ["OF"], 80, 22, 70, 10, .265, 500),
+            _make_hitter("OF2", ["OF"], 75, 18, 65, 8, .260, 490),
+            _make_hitter("OF3", ["OF"], 70, 15, 60, 5, .255, 470),
+        ]
+        all_players = [il_star] + healthy
+        active = [p for p in all_players if p.status not in IL_STATUSES]
+        lineup = optimize_hitter_lineup(active, EQUAL_LEVERAGE)
+        assert "Juan Soto" not in lineup.values()
+
+    def test_il_pitcher_excluded_before_optimization(self):
+        il_ace = _make_pitcher("Injured Ace", ["SP"], 15, 240, 0, 2.80, 1.00, 200)
+        il_ace.status = "IL15"
+        healthy = [
+            _make_pitcher("SP1", ["SP"], 10, 160, 0, 3.80, 1.20, 170),
+            _make_pitcher("SP2", ["SP"], 8, 140, 0, 4.00, 1.25, 160),
+        ]
+        all_players = [il_ace] + healthy
+        active = [p for p in all_players if p.status not in IL_STATUSES]
+        starters, bench = optimize_pitcher_lineup(active, EQUAL_LEVERAGE, slots=2)
+        starter_names = [p["name"] for p in starters]
+        assert "Injured Ace" not in starter_names
 
 
 class TestOptimizePitcherLineup:

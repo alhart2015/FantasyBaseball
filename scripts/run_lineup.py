@@ -27,6 +27,7 @@ from fantasy_baseball.analysis.game_logs import fetch_all_game_logs
 from fantasy_baseball.analysis.recency import predict_reliability_blend
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter, is_pitcher
+from fantasy_baseball.utils.constants import IL_STATUSES
 from fantasy_baseball.data.mlb_schedule import get_week_schedule
 
 from datetime import datetime as dt
@@ -202,6 +203,13 @@ def main():
     print("Fetching roster and standings...")
     roster = fetch_roster(league, user_team_key)
     standings = fetch_standings(league)
+
+    il_players = [p for p in roster if p["status"] in IL_STATUSES]
+    if il_players:
+        print(f"Excluding {len(il_players)} IL player(s):")
+        for p in il_players:
+            print(f"  {p['name']} ({p['status']})")
+        roster = [p for p in roster if p["status"] not in IL_STATUSES]
 
     print(f"Roster: {len(roster)} players")
     print(f"Standings: {len(standings)} teams")

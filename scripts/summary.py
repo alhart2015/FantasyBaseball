@@ -30,7 +30,7 @@ from fantasy_baseball.trades.pitch import generate_pitch
 from fantasy_baseball.data.projections import match_roster_to_projections
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter, is_pitcher
-from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
+from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD, IL_STATUSES
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.scoring import project_team_stats, score_roto, ALL_CATS, INVERSE_CATS
@@ -217,10 +217,17 @@ def main():
         # Pre-season: equal weights across all categories
         leverage = {c: 1.0 / len(ALL_CATS) for c in ALL_CATS}
 
+    il_players = [p for p in user_roster if p.status in IL_STATUSES]
+    active_roster = [p for p in user_roster if p.status not in IL_STATUSES]
+    if il_players:
+        print(f"\nExcluding {len(il_players)} IL player(s):")
+        for p in il_players:
+            print(f"  {p.name} ({p.status})")
+
     user_hitters = []
     user_pitchers = []
     denoms = get_sgp_denominators()
-    for p in user_roster:
+    for p in active_roster:
         p_series = pd.Series(p)
         p_series["total_sgp"] = calculate_player_sgp(p_series, denoms=denoms)
         wsgp = calculate_weighted_sgp(p_series, leverage)

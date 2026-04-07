@@ -36,10 +36,8 @@ def parse_roster(raw_roster: list[dict]) -> list[dict]:
             "positions": p.get("eligible_positions", []),
             "selected_position": p.get("selected_position", ""),
             "player_id": p.get("player_id", ""),
+            "status": p.get("status", ""),
         }
-        # Include injury status when present (IL15, IL60, DTD, etc.)
-        if p.get("status"):
-            entry["status"] = p["status"]
         players.append(entry)
     return players
 
