@@ -264,10 +264,12 @@ def test_sort_by_wsgp_gain_descending():
 
 def test_sort_tiebreaker_by_rank_generosity():
     """Trades with equal wSGP gain should prefer sending better-ranked player."""
+    # Both opponents are identically better than Hart (higher SB), so
+    # hart_wsgp_gain > 0 and equal for both — tiebreaker decides order.
     hart_roster = [_make_hitter("Hart OF", ["OF"], hr=20, sb=5)]
     opp_rosters = {
-        "Rival A": [_make_hitter("Opp A", ["OF"], hr=20, sb=5)],
-        "Rival B": [_make_hitter("Opp B", ["OF"], hr=20, sb=5)],
+        "Rival A": [_make_hitter("Opp A", ["OF"], hr=20, sb=15)],
+        "Rival B": [_make_hitter("Opp B", ["OF"], hr=20, sb=15)],
     }
     rankings = {
         rank_key("Hart OF", "hitter"): 50,
@@ -281,8 +283,9 @@ def test_sort_tiebreaker_by_rank_generosity():
                                                       "Rival B": _EQUAL_LEVERAGE},
         roster_slots=ROSTER_SLOTS, rankings=rankings,
     )
-    if len(trades) >= 2:
-        assert trades[0]["receive"] == "Opp A"
+    assert len(trades) == 2, f"Expected 2 trades, got {len(trades)}"
+    # Opp A trade has rank_gap -2, Opp B has +2 — Opp A should come first
+    assert trades[0]["receive"] == "Opp A"
 
 
 def test_roster_legality_still_enforced():
