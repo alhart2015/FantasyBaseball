@@ -679,7 +679,8 @@ def register_routes(app: Flask) -> None:
         try:
             # Get the latest snapshot date
             row = conn.execute(
-                "SELECT MAX(snapshot_date) as latest FROM spoe_results"
+                "SELECT MAX(snapshot_date) as latest FROM spoe_results WHERE year = ?",
+                (config.season_year,),
             ).fetchone()
             latest = row["latest"] if row else None
 

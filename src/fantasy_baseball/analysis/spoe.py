@@ -15,7 +15,7 @@ from fantasy_baseball.data.db import (
 from fantasy_baseball.data.projections import match_roster_to_projections
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto
-from fantasy_baseball.utils.constants import ALL_CATEGORIES, RATE_STATS
+from fantasy_baseball.utils.constants import ALL_CATEGORIES
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
