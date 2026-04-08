@@ -426,6 +426,115 @@ def search_trades_away(
     return results
 
 
+def search_trades_for(
+    player_name: str,
+    hart_name: str,
+    hart_roster: list[Player],
+    opp_rosters: dict[str, list[Player]],
+    standings: list[dict],
+    leverage_by_team: dict[str, dict],
+    roster_slots: dict[str, int],
+    rankings: dict[str, int],
+    projected_standings: list[dict] | None = None,
+) -> list[dict]:
+    """Find trade offers the user can make to acquire a specific opponent player.
+
+    Searches the user's roster for players they could send that pass
+    the rank proximity filter and produce positive wSGP gain.
+
+    Args:
+        player_name: name of the player to acquire (on an opponent's roster).
+        hart_name: user's team name in standings.
+        hart_roster: user's roster as Player objects.
+        opp_rosters: {opponent_name: [Player]} for each opponent.
+        standings: current league standings.
+        leverage_by_team: {team_name: {cat: weight}} leverage weights.
+        roster_slots: league roster slot configuration.
+        rankings: {rank_key: int} unweighted SGP ROS rankings.
+        projected_standings: optional projected end-of-season standings.
+
+    Returns:
+        List with a single opponent group (or empty if player not found):
+        [{"opponent": str, "candidates": [...]}]
+        Candidates sorted by hart_wsgp_gain descending.
+    """
+    # Find which opponent owns the target player
+    target_player = None
+    target_opp = None
+    for opp_name, opp_roster in opp_rosters.items():
+        found = _find_player_by_name(player_name, opp_roster)
+        if found is not None:
+            target_player = found
+            target_opp = opp_name
+            break
+
+    if target_player is None:
+        return []
+
+    receive_rank = rankings.get(
+        rank_key_from_positions(target_player.name, target_player.positions))
+    if receive_rank is None:
+        return []
+
+    hart_leverage = leverage_by_team.get(hart_name, {})
+    gain_wsgp = calculate_weighted_sgp(target_player.ros, hart_leverage)
+    opp_roster = opp_rosters[target_opp]
+
+    candidates = []
+    for hart_player in hart_roster:
+        send_rank = rankings.get(
+            rank_key_from_positions(hart_player.name, hart_player.positions))
+        if send_rank is None:
+            continue
+
+        if not _can_roster_without(hart_roster, hart_player, target_player, roster_slots):
+            continue
+        if not _can_roster_without(opp_roster, target_player, hart_player, roster_slots):
+            continue
+
+        rank_gap = send_rank - receive_rank
+        if rank_gap > MAX_RANK_GAP:
+            continue
+
+        hart_wsgp = calculate_weighted_sgp(hart_player.ros, hart_leverage)
+        hart_wsgp_gain = gain_wsgp - hart_wsgp
+        if hart_wsgp_gain <= 0:
+            continue
+
+        hart_ros = _player_ros_stats(hart_player)
+        target_ros = _player_ros_stats(target_player)
+
+        impact = compute_trade_impact(
+            standings, hart_name, target_opp,
+            hart_ros, target_ros, target_ros, hart_ros,
+            projected_standings=projected_standings,
+        )
+
+        if impact["hart_delta"] < 0:
+            continue
+
+        candidates.append({
+            "send": hart_player.name,
+            "send_positions": hart_player.positions,
+            "send_rank": send_rank,
+            "receive": target_player.name,
+            "receive_positions": target_player.positions,
+            "receive_rank": receive_rank,
+            "hart_wsgp_gain": round(hart_wsgp_gain, 2),
+            "hart_delta": impact["hart_delta"],
+            "opp_delta": impact["opp_delta"],
+            "hart_cat_deltas": impact["hart_cat_deltas"],
+            "opp_cat_deltas": impact["opp_cat_deltas"],
+        })
+
+    candidates.sort(key=lambda c: -c["hart_wsgp_gain"])
+
+    if not candidates:
+        return []
+
+    return [{"opponent": target_opp, "candidates": candidates}]
+
+
 def find_trades(
     hart_name: str,
     hart_roster: list[Player],
