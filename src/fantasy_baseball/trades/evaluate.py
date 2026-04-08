@@ -281,7 +281,7 @@ def _score_positional_weakness(
     for p in opp_roster:
         if set(p.positions) & set(player_positions):
             wsgp = calculate_weighted_sgp(p.ros, opp_leverage) if p.ros else 0.0
-            if opp_best_wsgp is None or wsgp < opp_best_wsgp:
+            if opp_best_wsgp is None or wsgp > opp_best_wsgp:
                 opp_best_wsgp = wsgp
 
     if opp_best_wsgp is None:
