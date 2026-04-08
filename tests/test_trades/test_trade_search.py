@@ -1,7 +1,7 @@
 import pytest
 from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 from fantasy_baseball.sgp.rankings import rank_key
-from fantasy_baseball.trades.evaluate import search_trades_away
+from fantasy_baseball.trades.evaluate import search_trades_away, search_trades_for
 
 ALL_CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
 _EQUAL_LEVERAGE = {cat: 0.1 for cat in ALL_CATS}
@@ -135,3 +135,89 @@ class TestSearchTradesAway:
         )
         for group in results:
             assert "positional_weakness" in group
+
+
+class TestSearchTradesFor:
+    def test_returns_single_opponent_group(self):
+        """Results should contain exactly one group for the opponent who owns the target."""
+        hart_roster = [
+            _make_hitter("Hart OF", ["OF"], hr=25, sb=15),
+            _make_hitter("Hart SS", ["SS"], hr=20, sb=10),
+        ]
+        opp_rosters = {"Rival": [_make_hitter("Target", ["OF"], hr=20, sb=20)]}
+        rankings = {
+            rank_key("Hart OF", "hitter"): 40,
+            rank_key("Hart SS", "hitter"): 45,
+            rank_key("Target", "hitter"): 48,
+        }
+        results = search_trades_for(
+            player_name="Target",
+            hart_name="Hart", hart_roster=hart_roster, opp_rosters=opp_rosters,
+            standings=SAMPLE_STANDINGS,
+            leverage_by_team={"Hart": _EQUAL_LEVERAGE, "Rival": _EQUAL_LEVERAGE},
+            roster_slots=ROSTER_SLOTS, rankings=rankings,
+        )
+        assert len(results) == 1
+        assert results[0]["opponent"] == "Rival"
+
+    def test_player_not_found_returns_empty(self):
+        """Searching for a player not on any opponent roster should return empty list."""
+        hart_roster = [_make_hitter("Hart OF", ["OF"])]
+        opp_rosters = {"Rival": [_make_hitter("Other", ["OF"])]}
+        results = search_trades_for(
+            player_name="Nonexistent",
+            hart_name="Hart", hart_roster=hart_roster, opp_rosters=opp_rosters,
+            standings=SAMPLE_STANDINGS,
+            leverage_by_team={"Hart": _EQUAL_LEVERAGE, "Rival": _EQUAL_LEVERAGE},
+            roster_slots=ROSTER_SLOTS, rankings={},
+        )
+        assert results == []
+
+    def test_candidates_sorted_by_wsgp_gain(self):
+        """Candidates should be sorted by wSGP gain descending."""
+        hart_roster = [
+            _make_hitter("Hart A", ["OF"], hr=25, sb=5),
+            _make_hitter("Hart B", ["OF"], hr=22, sb=3),
+        ]
+        opp_rosters = {"Rival": [_make_hitter("Target", ["OF"], hr=15, sb=25)]}
+        rankings = {
+            rank_key("Hart A", "hitter"): 40,
+            rank_key("Hart B", "hitter"): 42,
+            rank_key("Target", "hitter"): 46,
+        }
+        leverage = {"Hart": {"R": .05, "HR": .05, "RBI": .05, "SB": .3, "AVG": .05,
+                             "W": .1, "K": .1, "SV": .1, "ERA": .1, "WHIP": .1},
+                    "Rival": _EQUAL_LEVERAGE}
+        results = search_trades_for(
+            player_name="Target",
+            hart_name="Hart", hart_roster=hart_roster, opp_rosters=opp_rosters,
+            standings=SAMPLE_STANDINGS,
+            leverage_by_team=leverage,
+            roster_slots=ROSTER_SLOTS, rankings=rankings,
+        )
+        if results and len(results[0]["candidates"]) >= 2:
+            gains = [c["hart_wsgp_gain"] for c in results[0]["candidates"]]
+            assert gains == sorted(gains, reverse=True)
+
+    def test_candidates_have_required_fields(self):
+        """Each candidate should include the standard trade proposal fields."""
+        hart_roster = [_make_hitter("Hart OF", ["OF"], hr=25, sb=15)]
+        opp_rosters = {"Rival": [_make_hitter("Target", ["OF"], hr=20, sb=20)]}
+        rankings = {
+            rank_key("Hart OF", "hitter"): 40,
+            rank_key("Target", "hitter"): 45,
+        }
+        results = search_trades_for(
+            player_name="Target",
+            hart_name="Hart", hart_roster=hart_roster, opp_rosters=opp_rosters,
+            standings=SAMPLE_STANDINGS,
+            leverage_by_team={"Hart": _EQUAL_LEVERAGE, "Rival": _EQUAL_LEVERAGE},
+            roster_slots=ROSTER_SLOTS, rankings=rankings,
+        )
+        assert len(results) > 0
+        candidate = results[0]["candidates"][0]
+        for key in ("send", "receive", "send_rank", "receive_rank",
+                    "send_positions", "receive_positions",
+                    "hart_wsgp_gain", "hart_delta", "opp_delta",
+                    "hart_cat_deltas", "opp_cat_deltas"):
+            assert key in candidate, f"Missing key: {key}"
