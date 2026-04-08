@@ -722,8 +722,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.lineup.waivers import fetch_and_match_free_agents, scan_waivers, detect_open_slots
         from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
         from fantasy_baseball.lineup.yahoo_roster import fetch_roster, fetch_standings, fetch_scoring_period
-        from fantasy_baseball.trades.evaluate import find_trades
-        from fantasy_baseball.trades.pitch import generate_pitch
         from fantasy_baseball.utils.name_utils import normalize_name
         from fantasy_baseball.analysis.pace import compute_player_pace
         from fantasy_baseball.analysis.buy_low import find_buy_low_candidates
@@ -1107,8 +1105,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         write_cache("waivers", waiver_recs, cache_dir)
 
-        # --- Step 11: Find trades + generate pitches ---
-        _progress("Evaluating trades...")
+        # --- Step 11: Compute per-team leverage ---
+        _progress("Computing leverage...")
         leverage_by_team: dict[str, dict] = {}
         for team in standings:
             tname = team["name"]
@@ -1116,38 +1114,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                 standings, tname, projected_standings=projected_standings,
             )
         write_cache("leverage", leverage_by_team, cache_dir)
-
-        hart_roster_for_trades = [
-            p for p in roster_players
-            if p.player_type in (PlayerType.HITTER, PlayerType.PITCHER)
-        ]
-        trade_proposals = find_trades(
-            hart_name=config.team_name,
-            hart_roster=hart_roster_for_trades,
-            opp_rosters=opp_rosters,
-            standings=standings,
-            leverage_by_team=leverage_by_team,
-            roster_slots=config.roster_slots,
-            rankings=compute_combined_sgp_rankings(hitters_proj, pitchers_proj),
-            max_results=10,
-            projected_standings=projected_standings,
-        )
-
-        # Attach trade pitches and full rank dicts for template
-        for trade in trade_proposals:
-            trade["pitch"] = generate_pitch(
-                send_rank=trade["send_rank"],
-                receive_rank=trade["receive_rank"],
-                send_positions=trade.get("send_positions", []),
-                receive_positions=trade.get("receive_positions", []),
-            )
-            # Template rank_badge() expects {ros, preseason, current} dicts
-            trade["send_rank"] = rankings_lookup.get(
-                rank_key_from_positions(trade["send"], trade.get("send_positions", [])), {})
-            trade["receive_rank"] = rankings_lookup.get(
-                rank_key_from_positions(trade["receive"], trade.get("receive_positions", [])), {})
-
-        write_cache("trades", trade_proposals, cache_dir)
 
         # --- Step 11b: Compute buy-low candidates ---
         _progress("Finding buy-low candidates...")
