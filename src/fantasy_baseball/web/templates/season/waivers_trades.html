@@ -417,9 +417,15 @@ function renderTradeCard(t, gIdx, cIdx) {
     html += '<div>';
     html += '<span style="font-weight: 600; font-size: 14px;">Send ' + esc(t.send) + '</span>';
     html += ' <span style="color: var(--text-secondary); font-size: 11px;">#' + t.send_rank + '</span>';
+    if (t.send_positions && t.send_positions.length) {
+        html += ' <span style="color: var(--text-secondary); font-size: 11px;">(' + esc(t.send_positions.join(', ')) + ')</span>';
+    }
     html += ' <span style="color: var(--text-secondary); font-size: 11px; margin: 0 6px;">&#8644;</span>';
     html += '<span style="font-weight: 600; font-size: 14px;">Get ' + esc(t.receive) + '</span>';
     html += ' <span style="color: var(--text-secondary); font-size: 11px;">#' + t.receive_rank + '</span>';
+    if (t.receive_positions && t.receive_positions.length) {
+        html += ' <span style="color: var(--text-secondary); font-size: 11px;">(' + esc(t.receive_positions.join(', ')) + ')</span>';
+    }
     html += '</div>';
     html += '<div style="display: flex; gap: 12px; align-items: center;">';
     html += '<span style="color: var(--success); font-weight: bold; font-size: 13px;">+' + t.hart_wsgp_gain.toFixed(2) + ' wSGP</span>';
