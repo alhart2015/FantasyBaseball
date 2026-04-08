@@ -1,5 +1,71 @@
 import pytest
 from fantasy_baseball.data.db import create_tables, get_connection
+from fantasy_baseball.models.player import Player, HitterStats, PitcherStats, PlayerType
+
+
+def _make_test_hitter(name, r, hr, rbi, sb, h, ab):
+    return Player(
+        name=name, player_type=PlayerType.HITTER, positions=["OF"],
+        ros=HitterStats(r=r, hr=hr, rbi=rbi, sb=sb, h=h, ab=ab, avg=h / ab if ab else 0),
+    )
+
+
+def _make_test_pitcher(name, w, k, sv, ip, er, bb, h_allowed):
+    return Player(
+        name=name, player_type=PlayerType.PITCHER, positions=["SP"],
+        ros=PitcherStats(
+            w=w, k=k, sv=sv, ip=ip, er=er, bb=bb, h_allowed=h_allowed,
+            era=er * 9 / ip if ip else 0, whip=(bb + h_allowed) / ip if ip else 0,
+        ),
+    )
+
+
+class TestProjectTeamWeek:
+    def test_scales_counting_stats_by_weekly_fraction(self):
+        from fantasy_baseball.analysis.spoe import project_team_week
+        roster = [_make_test_hitter("Hitter", 100, 30, 90, 10, 150, 500)]
+        game_log_totals = {}
+        components = project_team_week(roster, game_log_totals, days_remaining=175)
+        assert components["r"] == pytest.approx(100 * 7 / 175)
+        assert components["hr"] == pytest.approx(30 * 7 / 175)
+        assert components["h"] == pytest.approx(150 * 7 / 175)
+
+    def test_subtracts_actuals_before_scaling(self):
+        from fantasy_baseball.analysis.spoe import project_team_week
+        roster = [_make_test_hitter("Hitter", 100, 30, 90, 10, 150, 500)]
+        game_log_totals = {"hitter": {"hr": 5, "r": 10, "rbi": 8, "sb": 1,
+                                       "h": 20, "ab": 60}}
+        components = project_team_week(roster, game_log_totals, days_remaining=175)
+        assert components["hr"] == pytest.approx(25 * 7 / 175)
+
+    def test_clamps_remaining_to_zero(self):
+        from fantasy_baseball.analysis.spoe import project_team_week
+        roster = [_make_test_hitter("Hitter", 100, 30, 90, 10, 150, 500)]
+        game_log_totals = {"hitter": {"hr": 35, "r": 10, "rbi": 8, "sb": 1,
+                                       "h": 20, "ab": 60}}
+        components = project_team_week(roster, game_log_totals, days_remaining=175)
+        assert components["hr"] == pytest.approx(0.0)
+
+    def test_sums_hitters_and_pitchers(self):
+        from fantasy_baseball.analysis.spoe import project_team_week
+        roster = [
+            _make_test_hitter("Hitter", 100, 30, 90, 10, 150, 500),
+            _make_test_pitcher("Pitcher", 14, 200, 0, 190, 70, 45, 160),
+        ]
+        components = project_team_week(roster, {}, days_remaining=175)
+        assert components["r"] == pytest.approx(100 * 7 / 175)
+        assert components["w"] == pytest.approx(14 * 7 / 175)
+        assert components["k"] == pytest.approx(200 * 7 / 175)
+        assert components["ip"] == pytest.approx(190 * 7 / 175)
+
+    def test_unmatched_player_contributes_nothing(self):
+        from fantasy_baseball.analysis.spoe import project_team_week
+        unmatched = Player(
+            name="Ghost", player_type=PlayerType.HITTER, positions=["OF"],
+        )
+        roster = [unmatched]
+        components = project_team_week(roster, {}, days_remaining=175)
+        assert components["r"] == pytest.approx(0.0)
 
 
 def _seed_rosters(conn):

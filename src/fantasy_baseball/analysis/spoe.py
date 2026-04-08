@@ -101,6 +101,45 @@ def load_projections_for_date(
     return hitters_df, pitchers_df
 
 
+def project_team_week(roster, game_log_totals, days_remaining):
+    """Project one week of component stats for a team's roster.
+
+    For each player, subtracts actual stats from full-season projection
+    to get remaining-season stats, then scales to one week.  Players
+    without ROS projections contribute nothing.
+
+    Args:
+        roster: list of Player objects with .ros populated
+        game_log_totals: {normalized_name: {stat: value}} from game logs
+        days_remaining: days from this week's Monday to season end
+
+    Returns:
+        dict of component stats for the team for this week.
+    """
+    weekly_fraction = 7 / days_remaining if days_remaining > 0 else 0
+    team_components = {c: 0.0 for c in ALL_COMPONENTS}
+
+    for player in roster:
+        if player.ros is None:
+            continue
+
+        name_norm = normalize_name(player.name)
+        actuals = game_log_totals.get(name_norm, {})
+
+        if player.player_type == PlayerType.HITTER:
+            component_keys = HITTER_COMPONENTS
+        else:
+            component_keys = PITCHER_COMPONENTS
+
+        for key in component_keys:
+            projected = getattr(player.ros, key, 0) or 0
+            actual = actuals.get(key, 0)
+            remaining = max(0, projected - actual)
+            team_components[key] += remaining * weekly_fraction
+
+    return team_components
+
+
 def aggregate_game_logs_before(
     conn, season: int, before_date: str
 ) -> dict[str, dict[str, float]]:
