@@ -83,7 +83,6 @@ CACHE_FILES = {
     "lineup_optimal": "lineup_optimal.json",
     "probable_starters": "probable_starters.json",
     "waivers": "waivers.json",
-    "trades": "trades.json",
     "monte_carlo": "monte_carlo.json",
     "meta": "meta.json",
     "buy_low": "buy_low.json",

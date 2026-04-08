@@ -346,40 +346,106 @@ def register_routes(app: Flask) -> None:
     def waivers_trades():
         meta = read_meta()
         waivers_raw = read_cache("waivers")
-        trades_raw = read_cache("trades")
         buy_low_raw = read_cache("buy_low") or {}
+
+        # Build player name list for trade search autocomplete
+        roster_raw = read_cache("roster") or []
+        opp_rosters_raw = read_cache("opp_rosters") or {}
+        my_players = sorted(set(p.get("name", "") for p in roster_raw if p.get("name")))
+        opp_players = sorted(set(
+            p.get("name", "")
+            for players in opp_rosters_raw.values()
+            for p in players
+            if p.get("name")
+        ))
+
         return render_template(
             "season/waivers_trades.html",
             meta=meta,
             active_page="waivers_trades",
             waivers=waivers_raw or [],
-            trades=trades_raw or [],
             buy_low_targets=buy_low_raw.get("trade_targets", []),
             buy_low_free_agents=buy_low_raw.get("free_agents", []),
             categories=ALL_CATEGORIES,
+            my_players=my_players,
+            opp_players=opp_players,
         )
 
-    @app.route("/api/trade/<int:idx>/standings")
-    def api_trade_standings(idx):
-        trades_raw = read_cache("trades")
-        if not trades_raw or idx >= len(trades_raw):
-            return jsonify({"error": "Trade not found"}), 404
+    @app.route("/api/trade-search", methods=["POST"])
+    def api_trade_search():
+        from fantasy_baseball.models.player import Player
+        from fantasy_baseball.trades.evaluate import (
+            search_trades_away, search_trades_for,
+        )
 
+        data = request.get_json(silent=True) or {}
+        player_name = data.get("player_name", "").strip()
+        mode = data.get("mode", "")
+
+        if not player_name:
+            return jsonify({"error": "player_name is required"}), 400
+        if mode not in ("away", "for"):
+            return jsonify({"error": "mode must be 'away' or 'for'"}), 400
+
+        config = _load_config()
         standings_raw = read_cache("standings")
         if not standings_raw:
-            return jsonify({"error": "No standings data"}), 404
+            return jsonify({"error": "No standings data. Run a refresh first."}), 404
+
+        roster_raw = read_cache("roster")
+        if not roster_raw:
+            return jsonify({"error": "No roster data. Run a refresh first."}), 404
+
+        opp_rosters_raw = read_cache("opp_rosters")
+        if not opp_rosters_raw:
+            return jsonify({"error": "No opponent roster data. Run a refresh first."}), 404
+
+        leverage_raw = read_cache("leverage")
+        if not leverage_raw:
+            return jsonify({"error": "No leverage data. Run a refresh first."}), 404
+
+        rankings_raw = read_cache("rankings")
+        if not rankings_raw:
+            return jsonify({"error": "No rankings data. Run a refresh first."}), 404
 
         proj_cache = read_cache("projections") or {}
         projected_standings = proj_cache.get("projected_standings")
 
-        from fantasy_baseball.web.season_data import compute_trade_standings_impact
-        config = _load_config()
-        result = compute_trade_standings_impact(
-            trade=trades_raw[idx], standings=standings_raw,
-            user_team_name=config.team_name,
+        hart_roster = [Player.from_dict(p) for p in roster_raw]
+        opp_rosters = {
+            tname: [Player.from_dict(p) for p in players]
+            for tname, players in opp_rosters_raw.items()
+        }
+
+        # Rankings cache stores {key: {ros: int, preseason: int, current: int}}
+        # The search functions expect {key: int} (ROS rank only)
+        flat_rankings = {}
+        for key, val in rankings_raw.items():
+            if isinstance(val, dict):
+                ros = val.get("ros")
+                if ros is not None:
+                    flat_rankings[key] = ros
+            elif isinstance(val, int):
+                flat_rankings[key] = val
+
+        kwargs = dict(
+            player_name=player_name,
+            hart_name=config.team_name,
+            hart_roster=hart_roster,
+            opp_rosters=opp_rosters,
+            standings=standings_raw,
+            leverage_by_team=leverage_raw,
+            roster_slots=config.roster_slots,
+            rankings=flat_rankings,
             projected_standings=projected_standings,
         )
-        return jsonify(result)
+
+        if mode == "away":
+            results = search_trades_away(**kwargs)
+        else:
+            results = search_trades_for(**kwargs)
+
+        return jsonify(results)
 
     @app.route("/players")
     def player_search():
