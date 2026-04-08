@@ -89,6 +89,8 @@ CACHE_FILES = {
     "buy_low": "buy_low.json",
     "rankings": "rankings.json",
     "roster_audit": "roster_audit.json",
+    "opp_rosters": "opp_rosters.json",
+    "leverage": "leverage.json",
 }
 
 
@@ -847,6 +849,12 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                 if opp_proj_list:
                     opp_rosters[tname] = opp_proj_list
         _progress(f"Fetched {len(opp_rosters)} opponent rosters")
+        # Cache opponent rosters for on-demand trade search
+        opp_rosters_flat = {
+            tname: [p.to_dict() for p in roster]
+            for tname, roster in opp_rosters.items()
+        }
+        write_cache("opp_rosters", opp_rosters_flat, cache_dir)
 
         # --- Step 4c: Build projected standings ---
         _progress("Projecting end-of-season standings...")
@@ -1107,6 +1115,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             leverage_by_team[tname] = calculate_leverage(
                 standings, tname, projected_standings=projected_standings,
             )
+        write_cache("leverage", leverage_by_team, cache_dir)
 
         hart_roster_for_trades = [
             p for p in roster_players
