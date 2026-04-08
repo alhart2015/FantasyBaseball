@@ -6,6 +6,13 @@ from datetime import date
 
 import pandas as pd
 
+from fantasy_baseball.data.db import (
+    get_completed_spoe_weeks,
+    load_spoe_components,
+    save_spoe_components,
+    save_spoe_results,
+)
+from fantasy_baseball.data.projections import match_roster_to_projections
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, RATE_STATS
@@ -172,3 +179,174 @@ def aggregate_game_logs_before(
         result[name_norm] = stats
 
     return result
+
+
+def components_to_roto_stats(components: dict[str, float]) -> dict[str, float]:
+    """Convert accumulated component stats to the roto stat dict score_roto expects."""
+    return {
+        "R": components["r"],
+        "HR": components["hr"],
+        "RBI": components["rbi"],
+        "SB": components["sb"],
+        "AVG": calculate_avg(components["h"], components["ab"]),
+        "W": components["w"],
+        "K": components["k"],
+        "SV": components["sv"],
+        "ERA": calculate_era(components["er"], components["ip"]),
+        "WHIP": calculate_whip(components["bb"], components["h_allowed"], components["ip"]),
+    }
+
+
+def _get_week_dates(conn, season_year: int) -> list[str]:
+    """Get all distinct roster snapshot dates for the season, sorted."""
+    rows = conn.execute(
+        "SELECT DISTINCT snapshot_date FROM weekly_rosters "
+        "WHERE snapshot_date >= ? ORDER BY snapshot_date",
+        (f"{season_year}-",),
+    ).fetchall()
+    return [r["snapshot_date"] for r in rows]
+
+
+def _get_standings_for_date(
+    conn, season_year: int, snapshot_date: str
+) -> dict[str, dict[str, float]]:
+    """Load actual standings. Returns {team: {R: val, HR: val, ...}}."""
+    rows = conn.execute(
+        "SELECT team, r, hr, rbi, sb, avg, w, k, sv, era, whip "
+        "FROM standings WHERE year = ? AND snapshot_date = ?",
+        (season_year, snapshot_date),
+    ).fetchall()
+    return {
+        r["team"]: {
+            "R": r["r"],
+            "HR": r["hr"],
+            "RBI": r["rbi"],
+            "SB": r["sb"],
+            "AVG": r["avg"],
+            "W": r["w"],
+            "K": r["k"],
+            "SV": r["sv"],
+            "ERA": r["era"],
+            "WHIP": r["whip"],
+        }
+        for r in rows
+    }
+
+
+def compute_spoe(conn, config) -> None:
+    """Compute SPOE for all weeks with available data.
+
+    Completed weeks are skipped. The last (current) week is always
+    recomputed. Results stored in spoe_results and spoe_components tables.
+    """
+    week_dates = _get_week_dates(conn, config.season_year)
+    if not week_dates:
+        return
+
+    completed = get_completed_spoe_weeks(conn, config.season_year)
+    season_end = date.fromisoformat(config.season_end)
+    current_week = week_dates[-1]
+
+    # Resume from last completed week
+    team_components: dict[str, dict[str, float]] = {}
+    start_idx = 0
+    for prev_date in reversed(week_dates):
+        if prev_date in completed and prev_date != current_week:
+            team_components = load_spoe_components(
+                conn, config.season_year, prev_date
+            )
+            start_idx = week_dates.index(prev_date) + 1
+            break
+
+    for i in range(start_idx, len(week_dates)):
+        snapshot_date = week_dates[i]
+        if snapshot_date in completed and snapshot_date != current_week:
+            continue
+
+        monday = date.fromisoformat(snapshot_date)
+        days_remaining = (season_end - monday).days
+        if days_remaining <= 0:
+            continue
+
+        rosters = load_rosters_for_date(conn, snapshot_date)
+        if not rosters:
+            continue
+
+        hitters_proj, pitchers_proj = load_projections_for_date(
+            conn, config.season_year, snapshot_date
+        )
+        if hitters_proj.empty and pitchers_proj.empty:
+            continue
+
+        game_log_totals = aggregate_game_logs_before(
+            conn, config.season_year, snapshot_date
+        )
+
+        actual_stats = _get_standings_for_date(
+            conn, config.season_year, snapshot_date
+        )
+        if not actual_stats:
+            continue
+
+        for team_name, roster_dicts in rosters.items():
+            matched = match_roster_to_projections(
+                roster_dicts, hitters_proj, pitchers_proj
+            )
+            weekly = project_team_week(matched, game_log_totals, days_remaining)
+
+            if team_name not in team_components:
+                team_components[team_name] = {c: 0.0 for c in ALL_COMPONENTS}
+            for comp in ALL_COMPONENTS:
+                team_components[team_name][comp] += weekly[comp]
+
+        projected_stats = {
+            team: components_to_roto_stats(comps)
+            for team, comps in team_components.items()
+            if team in actual_stats
+        }
+
+        common_teams = set(projected_stats) & set(actual_stats)
+        if len(common_teams) < 2:
+            continue
+
+        proj_for_scoring = {t: projected_stats[t] for t in common_teams}
+        actual_for_scoring = {t: actual_stats[t] for t in common_teams}
+
+        projected_roto = score_roto(proj_for_scoring)
+        actual_roto = score_roto(actual_for_scoring)
+
+        results = []
+        for team in common_teams:
+            total_spoe = 0.0
+            for cat in ALL_CATEGORIES:
+                proj_pts = projected_roto[team].get(f"{cat}_pts", 0)
+                act_pts = actual_roto[team].get(f"{cat}_pts", 0)
+                spoe = act_pts - proj_pts
+                total_spoe += spoe
+                results.append(
+                    {
+                        "team": team,
+                        "category": cat,
+                        "projected_stat": projected_stats[team][cat],
+                        "actual_stat": actual_stats[team][cat],
+                        "projected_pts": proj_pts,
+                        "actual_pts": act_pts,
+                        "spoe": spoe,
+                    }
+                )
+            results.append(
+                {
+                    "team": team,
+                    "category": "total",
+                    "projected_stat": None,
+                    "actual_stat": None,
+                    "projected_pts": projected_roto[team]["total"],
+                    "actual_pts": actual_roto[team]["total"],
+                    "spoe": total_spoe,
+                }
+            )
+
+        save_spoe_results(conn, config.season_year, snapshot_date, results)
+        save_spoe_components(
+            conn, config.season_year, snapshot_date, team_components
+        )
