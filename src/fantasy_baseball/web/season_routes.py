@@ -669,6 +669,55 @@ def register_routes(app: Flask) -> None:
 
         return jsonify(result)
 
+    @app.route("/luck")
+    def luck():
+        meta = read_meta()
+        config = _load_config()
+
+        from fantasy_baseball.data.db import get_connection, get_spoe_results
+        latest = None
+        spoe_data = []
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                "SELECT MAX(snapshot_date) as latest FROM spoe_results WHERE year = ?",
+                (config.season_year,),
+            ).fetchone()
+            latest = row["latest"] if row else None
+
+            if latest:
+                results = get_spoe_results(conn, config.season_year, latest)
+                teams = {}
+                for r in results:
+                    team = r["team"]
+                    if team not in teams:
+                        teams[team] = {"team": team, "categories": {}}
+                    if r["category"] == "total":
+                        teams[team]["total_spoe"] = r["spoe"]
+                        teams[team]["projected_pts"] = r["projected_pts"]
+                        teams[team]["actual_pts"] = r["actual_pts"]
+                    else:
+                        teams[team]["categories"][r["category"]] = r
+
+                spoe_data = sorted(
+                    teams.values(),
+                    key=lambda t: t.get("actual_pts", 0),
+                    reverse=True,
+                )
+        finally:
+            conn.close()
+
+        from fantasy_baseball.utils.constants import ALL_CATEGORIES, RATE_STATS
+        return render_template(
+            "season/luck.html",
+            meta=meta,
+            active_page="luck",
+            spoe_data=spoe_data,
+            snapshot_date=latest,
+            categories=ALL_CATEGORIES,
+            rate_stats=RATE_STATS,
+        )
+
     @app.route("/login", methods=["GET", "POST"])
     def login():
         error = None

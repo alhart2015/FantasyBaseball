@@ -1,0 +1,100 @@
+{% extends "season/base.html" %}
+
+{% block title %}Luck — Season Dashboard{% endblock %}
+
+{% block content %}
+<style>
+    .spoe-table { width: 100%; border-collapse: collapse; }
+    .spoe-table th, .spoe-table td { padding: 8px 12px; text-align: right; }
+    .spoe-table th:first-child, .spoe-table td:first-child { text-align: left; }
+    .spoe-table th { border-bottom: 2px solid var(--panel-border); color: var(--text-dim); font-size: 0.85em; text-transform: uppercase; }
+    .spoe-table tr { border-bottom: 1px solid var(--panel-border); }
+    .spoe-positive { color: var(--success); }
+    .spoe-negative { color: var(--danger); }
+    .expandable { cursor: pointer; }
+    .expandable:hover { background: rgba(255,255,255,0.03); }
+    .expand-content { display: none; }
+    .expand-content.open { display: table-row; }
+    .expand-content td { padding: 4px 12px; font-size: 0.9em; }
+    .detail-table { width: 100%; margin: 4px 0; }
+    .detail-table th { font-size: 0.8em; }
+    .detail-table td { padding: 4px 8px; }
+    .rank-num { color: var(--text-dim); }
+</style>
+
+<h2>Luck Analysis (SPOE)</h2>
+{% if snapshot_date %}
+<p style="color: var(--text-dim); font-size: 0.9em;">
+    Standings Points Over Expected as of {{ snapshot_date }}.
+    Positive = lucky (outperforming projections). Negative = unlucky.
+</p>
+{% endif %}
+
+{% if spoe_data %}
+<table class="spoe-table">
+    <thead>
+        <tr>
+            <th>#</th>
+            <th>Team</th>
+            <th>Actual Pts</th>
+            <th>Projected Pts</th>
+            <th>SPOE</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for team in spoe_data %}
+        <tr class="expandable" onclick="toggleExpand(this)">
+            <td class="rank-num">{{ loop.index }}</td>
+            <td>{{ team.team }}</td>
+            <td>{{ "%.1f"|format(team.actual_pts) }}</td>
+            <td>{{ "%.1f"|format(team.projected_pts) }}</td>
+            <td class="{% if team.total_spoe > 0.5 %}spoe-positive{% elif team.total_spoe < -0.5 %}spoe-negative{% endif %}">
+                {{ "%+.1f"|format(team.total_spoe) }}
+            </td>
+        </tr>
+        <tr class="expand-content">
+            <td colspan="5">
+                <table class="detail-table">
+                    <thead>
+                        <tr>
+                            <th>Category</th>
+                            <th>Proj. Stat</th>
+                            <th>Actual Stat</th>
+                            <th>Proj. Pts</th>
+                            <th>Actual Pts</th>
+                            <th>SPOE</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for cat in categories %}
+                        {% set c = team.categories.get(cat, {}) %}
+                        {% set fmt = "%.3f" if cat in rate_stats else "%.1f" %}
+                        <tr>
+                            <td>{{ cat }}</td>
+                            <td>{{ fmt|format(c.get("projected_stat", 0)) }}</td>
+                            <td>{{ fmt|format(c.get("actual_stat", 0)) }}</td>
+                            <td>{{ "%.1f"|format(c.get("projected_pts", 0)) }}</td>
+                            <td>{{ "%.1f"|format(c.get("actual_pts", 0)) }}</td>
+                            <td class="{% if c.get('spoe', 0) > 0.25 %}spoe-positive{% elif c.get('spoe', 0) < -0.25 %}spoe-negative{% endif %}">
+                                {{ "%+.1f"|format(c.get("spoe", 0)) }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p style="color: var(--text-dim);">No SPOE data yet. Run a dashboard refresh to compute standings luck analysis.</p>
+{% endif %}
+
+<script>
+function toggleExpand(row) {
+    const next = row.nextElementSibling;
+    if (next) next.classList.toggle('open');
+}
+</script>
+{% endblock %}
