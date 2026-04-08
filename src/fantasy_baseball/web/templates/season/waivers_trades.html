@@ -171,89 +171,33 @@
 {% endif %}
 </div>
 
-{# === Trade Recommendations === #}
+{# === Trade Finder === #}
 <div class="section-toggle" onclick="toggleSection('trades')">
-    <span>Trade Recommendations</span>
-    <span class="chevron collapsed" id="chevron-trades">&#9660;</span>
+    <span>Trade Finder</span>
+    <span class="chevron" id="chevron-trades">&#9660;</span>
 </div>
-<div class="section-body collapsed" id="section-trades">
+<div class="section-body" id="section-trades">
 
-{% if not trades %}
-<p class="placeholder-text">No trade recommendations available. Click "Refresh Data" to generate suggestions.</p>
-{% else %}
-{% for trade in trades %}
-<div class="card" id="trade-card-{{ loop.index0 }}">
-    <div class="card-header" style="cursor: pointer;" onclick="toggleTradeDetails(this, {{ loop.index0 }})">
-        <div>
-            <span style="font-weight: 600; font-size: 14px;">vs {{ trade.opponent }}</span>
-        </div>
-        <div style="font-weight: bold; font-size: 14px;">
-            <span style="color: var(--success);">{{ "%+.1f"|format(trade.hart_delta) }} roto pts</span>
-            <span style="color: var(--text-secondary); font-size: 11px; margin-left: 4px;">&#9660;</span>
-        </div>
-    </div>
-
-    <div class="trade-swap">
-        <div class="trade-side trade-send">
-            <div style="font-size: 10px; color: var(--danger); font-weight: bold; letter-spacing: 0.5px; margin-bottom: 4px;">YOU SEND</div>
-            <div style="font-weight: 600;">{{ trade.send }} {{ rank_badge(trade.send_rank) }}</div>
-            {% if trade.send_positions %}
-            <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">{{ trade.send_positions | join(", ") }}</div>
-            {% endif %}
-        </div>
-        <div class="trade-arrow">&#8644;</div>
-        <div class="trade-side trade-receive">
-            <div style="font-size: 10px; color: var(--success); font-weight: bold; letter-spacing: 0.5px; margin-bottom: 4px;">YOU GET</div>
-            <div style="font-weight: 600;">{{ trade.receive }} {{ rank_badge(trade.receive_rank) }}</div>
-            {% if trade.receive_positions %}
-            <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">{{ trade.receive_positions | join(", ") }}</div>
-            {% endif %}
-        </div>
-    </div>
-
-    <div class="trade-details" id="trade-details-{{ loop.index0 }}">
-        <div style="display: flex; gap: 24px; flex-wrap: wrap;">
-            <div style="flex: 1; min-width: 160px;">
-                <div style="font-size: 11px; color: var(--text-secondary); font-weight: 600; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Why this works — You</div>
-                <div class="cat-impact">
-                    {% for cat in categories %}
-                    {% set delta = trade.hart_cat_deltas.get(cat, 0) %}
-                    {% if delta > 0 %}
-                    <span class="cat-gain">{{ cat }} +{{ delta }}</span>
-                    {% elif delta < 0 %}
-                    <span class="cat-loss">{{ cat }} {{ delta }}</span>
-                    {% endif %}
-                    {% endfor %}
-                </div>
-            </div>
-            <div style="flex: 1; min-width: 160px;">
-                <div style="font-size: 11px; color: var(--text-secondary); font-weight: 600; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Why they'd do it — {{ trade.opponent }}</div>
-                <div class="cat-impact">
-                    {% for cat in categories %}
-                    {% set delta = trade.opp_cat_deltas.get(cat, 0) %}
-                    {% if delta > 0 %}
-                    <span class="cat-gain">{{ cat }} +{{ delta }}</span>
-                    {% elif delta < 0 %}
-                    <span class="cat-loss">{{ cat }} {{ delta }}</span>
-                    {% endif %}
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-
-        <div style="margin-top: 12px;">
-            <button class="pill" onclick="loadTradeStandings({{ loop.index0 }})">Load Before/After Standings</button>
-        </div>
-
-        <div id="trade-standings-{{ loop.index0 }}" style="margin-top: 12px;"></div>
-
-        {% if trade.pitch %}
-        <div class="trade-pitch">{{ trade.pitch }}</div>
-        {% endif %}
-    </div>
+<div style="display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap;">
+    <input type="text" id="trade-search-input" list="trade-player-list"
+           placeholder="Type a player name..."
+           style="flex: 1; min-width: 200px; padding: 8px 12px; border-radius: 6px;
+                  border: 1px solid var(--panel-border); background: var(--panel-bg);
+                  color: var(--text); font-size: 14px;">
+    <datalist id="trade-player-list">
+        {% for name in my_players %}
+        <option value="{{ name }}">
+        {% endfor %}
+        {% for name in opp_players %}
+        <option value="{{ name }}">
+        {% endfor %}
+    </datalist>
+    <button class="pill" onclick="tradeSearch('away')" id="btn-trade-away">Trade Away</button>
+    <button class="pill" onclick="tradeSearch('for')" id="btn-trade-for">Trade For</button>
 </div>
-{% endfor %}
-{% endif %}
+
+<div id="trade-search-results"></div>
+
 </div>
 
 {# === Buy-Low Trade Targets === #}
@@ -407,118 +351,132 @@ function esc(s) {
         .replace(/'/g, '&#39;');
 }
 
-function toggleTradeDetails(el, idx) {
-    var details = document.getElementById('trade-details-' + idx);
-    if (!details) return;
-    details.classList.toggle('open');
-    var arrow = el.querySelector('.trade-arrow-indicator');
-    if (!arrow) {
-        arrow = el.querySelector('span[style*="9660"]');
-    }
-}
+function tradeSearch(mode) {
+    var input = document.getElementById('trade-search-input');
+    var name = input.value.trim();
+    if (!name) return;
 
-function loadTradeStandings(idx) {
-    var container = document.getElementById('trade-standings-' + idx);
-    if (!container) return;
-    container.innerHTML = '<span style="color: var(--text-secondary); font-size: 12px;">Loading...</span>';
+    var container = document.getElementById('trade-search-results');
+    container.innerHTML = '<p style="color: var(--text-secondary); font-size: 13px;">Searching...</p>';
 
-    fetch('/api/trade/' + idx + '/standings')
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            if (data.error) {
-                container.innerHTML = '<span style="color: var(--danger); font-size: 12px;">' + esc(data.error) + '</span>';
-                return;
-            }
-            container.innerHTML = renderTradeStandings(data, idx);
-        })
-        .catch(function(e) {
-            container.innerHTML = '<span style="color: var(--danger); font-size: 12px;">Failed to load standings.</span>';
-        });
-}
+    document.getElementById('btn-trade-away').classList.remove('active');
+    document.getElementById('btn-trade-for').classList.remove('active');
+    document.getElementById('btn-trade-' + mode).classList.add('active');
 
-function renderTradeStandings(data, idx) {
-    var cats = data.categories || [];
-    var teams = Object.keys(data.before);
-
-    var pillsId = 'tsp-' + idx;
-    var tableId = 'tst-' + idx;
-
-    var html = '<div style="border: 1px solid var(--panel-border); border-radius: 6px; overflow: hidden;">';
-    html += '<div class="pill-group" style="padding: 8px 10px; margin-bottom: 0; background: var(--panel-bg);">';
-    html += '<button class="pill active" onclick="toggleTradeStandingsView(this, \'points\', \'' + idx + '\')">Roto Points</button>';
-    html += '<button class="pill" onclick="toggleTradeStandingsView(this, \'stats\', \'' + idx + '\')">Stat Totals</button>';
-    html += '</div>';
-
-    html += '<table class="data-table" id="' + tableId + '" style="font-size: 12px;">';
-    html += '<thead><tr><th>Team</th>';
-    for (var i = 0; i < cats.length; i++) {
-        html += '<th>' + esc(cats[i]) + '</th>';
-    }
-    html += '<th class="total-col">Total</th></tr></thead>';
-    html += '<tbody>';
-
-    for (var t = 0; t < teams.length; t++) {
-        var team = teams[t];
-        var bPts = data.before[team] || {};
-        var aPts = data.after[team] || {};
-        var bStats = data.before_stats[team] || {};
-        var aStats = data.after_stats[team] || {};
-
-        var bTotal = bPts['total'] || 0;
-        var aTotal = aPts['total'] || 0;
-        var totalDiff = aTotal - bTotal;
-        var totalClass = totalDiff > 0 ? 'cat-gain' : totalDiff < 0 ? 'cat-loss' : '';
-
-        html += '<tr><td style="font-weight:600; padding: 6px 6px;">' + esc(team) + '</td>';
-        for (var c = 0; c < cats.length; c++) {
-            var cat = cats[c];
-            var bPtVal = bPts[cat + '_pts'] != null ? bPts[cat + '_pts'] : 0;
-            var aPtVal = aPts[cat + '_pts'] != null ? aPts[cat + '_pts'] : 0;
-            var diff = aPtVal - bPtVal;
-            var diffClass = diff > 0 ? 'cat-gain' : diff < 0 ? 'cat-loss' : '';
-            var bStatVal = bStats[cat] != null ? bStats[cat] : 0;
-            var aStatVal = aStats[cat] != null ? aStats[cat] : 0;
-
-            var ptContent = parseFloat(bPtVal).toFixed(1)
-                + (diff !== 0 ? ' <span class="' + diffClass + '" style="font-size:10px;">(' + (diff > 0 ? '+' : '') + parseFloat(diff).toFixed(1) + ')</span>' : '');
-            var statContent = parseFloat(bStatVal).toFixed(cat === 'AVG' || cat === 'ERA' || cat === 'WHIP' ? 3 : 0)
-                + ' <span style="font-size:10px; color: var(--text-secondary);">&rarr; '
-                + parseFloat(aStatVal).toFixed(cat === 'AVG' || cat === 'ERA' || cat === 'WHIP' ? 3 : 0)
-                + '</span>';
-
-            html += '<td class="stat-cell" data-points="' + esc(ptContent) + '" data-stat="' + esc(statContent) + '">' + ptContent + '</td>';
+    fetch('/api/trade-search', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({player_name: name, mode: mode})
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.error) {
+            container.innerHTML = '<p style="color: var(--danger); font-size: 13px;">' + esc(data.error) + '</p>';
+            return;
         }
+        container.innerHTML = renderTradeResults(data, mode);
+    })
+    .catch(function(e) {
+        container.innerHTML = '<p style="color: var(--danger); font-size: 13px;">Search failed.</p>';
+    });
+}
 
-        var totalContent = parseFloat(bTotal).toFixed(1)
-            + (totalDiff !== 0 ? ' <span class="' + totalClass + '" style="font-size:10px;">(' + (totalDiff > 0 ? '+' : '') + parseFloat(totalDiff).toFixed(1) + ')</span>' : '');
-        html += '<td class="total-col">' + totalContent + '</td>';
-        html += '</tr>';
+function renderTradeResults(groups, mode) {
+    if (!groups || groups.length === 0) {
+        return '<p style="color: var(--text-secondary); font-size: 13px;">No trade candidates found.</p>';
     }
 
-    html += '</tbody></table></div>';
+    var html = '';
+    for (var g = 0; g < groups.length; g++) {
+        var group = groups[g];
+        html += '<div style="margin-bottom: 20px;">';
+        html += '<div style="font-weight: 600; font-size: 15px; margin-bottom: 8px;">';
+        html += esc(group.opponent);
+        if (mode === 'away' && group.positional_weakness != null) {
+            var wk = group.positional_weakness;
+            var wkClass = wk > 0 ? 'cat-gain' : 'cat-loss';
+            html += ' <span class="' + wkClass + '" style="font-size: 11px; font-weight: 500;">';
+            html += wk > 0 ? 'Needs this position' : 'Stacked here';
+            html += '</span>';
+        }
+        html += '</div>';
+
+        for (var c = 0; c < group.candidates.length; c++) {
+            var t = group.candidates[c];
+            html += renderTradeCard(t, g, c);
+        }
+        html += '</div>';
+    }
     return html;
 }
 
-function toggleTradeStandingsView(el, mode, idx) {
-    var tableId = 'tst-' + idx;
-    var table = document.getElementById(tableId);
-    if (!table) return;
-
-    var pills = el.parentElement.querySelectorAll('.pill');
-    for (var i = 0; i < pills.length; i++) {
-        pills[i].classList.remove('active');
+function renderTradeCard(t, gIdx, cIdx) {
+    var id = 'tc-' + gIdx + '-' + cIdx;
+    var html = '<div class="card" id="' + id + '">';
+    html += '<div class="card-header" style="cursor: pointer;" onclick="toggleEl(\'' + id + '-detail\')">';
+    html += '<div>';
+    html += '<span style="font-weight: 600; font-size: 14px;">Send ' + esc(t.send) + '</span>';
+    html += ' <span style="color: var(--text-secondary); font-size: 11px;">#' + t.send_rank + '</span>';
+    html += ' <span style="color: var(--text-secondary); font-size: 11px; margin: 0 6px;">&#8644;</span>';
+    html += '<span style="font-weight: 600; font-size: 14px;">Get ' + esc(t.receive) + '</span>';
+    html += ' <span style="color: var(--text-secondary); font-size: 11px;">#' + t.receive_rank + '</span>';
+    html += '</div>';
+    html += '<div style="display: flex; gap: 12px; align-items: center;">';
+    html += '<span style="color: var(--success); font-weight: bold; font-size: 13px;">+' + t.hart_wsgp_gain.toFixed(2) + ' wSGP</span>';
+    if (t.hart_delta !== 0) {
+        var dc = t.hart_delta > 0 ? 'var(--success)' : 'var(--danger)';
+        html += '<span style="color: ' + dc + '; font-weight: bold; font-size: 13px;">' + (t.hart_delta > 0 ? '+' : '') + t.hart_delta + ' roto</span>';
     }
-    el.classList.add('active');
+    html += '</div></div>';
 
-    var cells = table.querySelectorAll('td.stat-cell');
-    for (var c = 0; c < cells.length; c++) {
-        if (mode === 'stats') {
-            cells[c].innerHTML = cells[c].getAttribute('data-stat');
-        } else {
-            cells[c].innerHTML = cells[c].getAttribute('data-points');
-        }
-    }
+    html += '<div id="' + id + '-detail" class="trade-details">';
+    html += '<div style="display: flex; gap: 24px; flex-wrap: wrap; margin-top: 8px;">';
+
+    html += '<div style="flex: 1; min-width: 160px;">';
+    html += '<div style="font-size: 11px; color: var(--text-secondary); font-weight: 600; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Your Impact</div>';
+    html += '<div class="cat-impact">';
+    html += renderCatDeltas(t.hart_cat_deltas);
+    html += '</div></div>';
+
+    html += '<div style="flex: 1; min-width: 160px;">';
+    html += '<div style="font-size: 11px; color: var(--text-secondary); font-weight: 600; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Their Impact</div>';
+    html += '<div class="cat-impact">';
+    html += renderCatDeltas(t.opp_cat_deltas);
+    html += '</div></div>';
+
+    html += '</div></div></div>';
+    return html;
 }
+
+function renderCatDeltas(deltas) {
+    var cats = ['R','HR','RBI','SB','AVG','W','K','SV','ERA','WHIP'];
+    var html = '';
+    for (var i = 0; i < cats.length; i++) {
+        var cat = cats[i];
+        var d = deltas[cat] || 0;
+        if (d > 0) html += '<span class="cat-gain">' + cat + ' +' + d + '</span>';
+        else if (d < 0) html += '<span class="cat-loss">' + cat + ' ' + d + '</span>';
+    }
+    return html;
+}
+
+function toggleEl(id) {
+    var el = document.getElementById(id);
+    if (el) el.classList.toggle('open');
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    var input = document.getElementById('trade-search-input');
+    if (input) {
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                var myPlayers = [{% for name in my_players %}'{{ name }}',{% endfor %}];
+                var mode = myPlayers.indexOf(this.value.trim()) >= 0 ? 'away' : 'for';
+                tradeSearch(mode);
+            }
+        });
+    }
+});
 </script>
 
 {% endblock %}
