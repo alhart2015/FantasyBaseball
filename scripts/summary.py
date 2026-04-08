@@ -25,8 +25,6 @@ from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.lineup.waivers import scan_waivers, detect_open_slots, fetch_and_match_free_agents
 from fantasy_baseball.sgp.rankings import compute_combined_sgp_rankings
-from fantasy_baseball.trades.evaluate import find_trades
-from fantasy_baseball.trades.pitch import generate_pitch
 from fantasy_baseball.data.projections import match_roster_to_projections
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter, is_pitcher
@@ -379,83 +377,6 @@ def main():
                         print(f"       gains {', '.join(gains)}  |  costs {', '.join(losses)}")
     else:
         print("\n  No positive waiver moves found — your roster is solid.")
-
-    # ── 7. TRADE RECOMMENDATIONS ──────────────────────────────────────
-    print()
-    print("=" * 90)
-    print("TRADE RECOMMENDATIONS")
-    print("=" * 90)
-
-    opp_rosters = {n: r for n, r in all_rosters.items() if n != team_name}
-
-    # Use projected standings for trade impact when current standings are
-    # too early in the season to be meaningful (total counting stats near zero).
-    if standings:
-        total_counting = sum(
-            s.get("stats", {}).get("R", 0) + s.get("stats", {}).get("HR", 0)
-            for s in standings
-        )
-    else:
-        total_counting = 0
-
-    if total_counting < 500:
-        # Early season: use projected full-season standings
-        trade_standings = [
-            {"name": name, "stats": all_stats[name]} for name in all_stats
-        ]
-        if total_counting > 0:
-            print("\n  Early season — using projected standings for trade analysis.")
-    else:
-        trade_standings = standings
-
-    if trade_standings:
-        leverage_by_team = {}
-        for team in trade_standings:
-            leverage_by_team[team["name"]] = calculate_leverage(
-                trade_standings, team["name"],
-                projected_standings=projected_standings,
-            )
-
-        rankings = compute_combined_sgp_rankings(hitters_proj, pitchers_proj)
-
-        trades = find_trades(
-            hart_name=team_name,
-            hart_roster=user_roster,
-            opp_rosters=opp_rosters,
-            standings=trade_standings,
-            leverage_by_team=leverage_by_team,
-            roster_slots=config.roster_slots,
-            rankings=rankings,
-            max_results=5,
-            projected_standings=projected_standings,
-        )
-    else:
-        trades = []
-        print("\n  No standings data — trade analysis requires standings.")
-
-    if trades:
-        for i, trade in enumerate(trades, 1):
-            opp = trade["opponent"]
-            send_pos = "/".join(trade["send_positions"][:2])
-            recv_pos = "/".join(trade["receive_positions"][:2])
-
-            print(f"\n  {i}. SEND: {trade['send']:<22} ({send_pos})  ->  {opp}")
-            print(f"     GET:  {trade['receive']:<22} ({recv_pos})  <-  {opp}")
-
-            hart_parts = [f"{d:+.0f} {c}" for c, d in trade["hart_cat_deltas"].items() if abs(d) >= 0.5]
-            opp_parts = [f"{d:+.0f} {c}" for c, d in trade["opp_cat_deltas"].items() if abs(d) >= 0.5]
-            print(f"     You gain: {trade['hart_delta']:+.0f} roto pts ({', '.join(hart_parts) if hart_parts else 'no change'})")
-            print(f"     They gain: {trade['opp_delta']:+.0f} roto pts ({', '.join(opp_parts) if opp_parts else 'no change'})")
-
-            pitch = generate_pitch(
-                send_rank=trade.get("send_rank", 0),
-                receive_rank=trade.get("receive_rank", 0),
-                send_positions=trade.get("send_positions", []),
-                receive_positions=trade.get("receive_positions", []),
-            )
-            print(f"     Pitch: \"{pitch}\"")
-    else:
-        print("\nNo trades found.")
 
     print()
     print("Done.")
