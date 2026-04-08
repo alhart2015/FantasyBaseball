@@ -675,19 +675,18 @@ def register_routes(app: Flask) -> None:
         config = _load_config()
 
         from fantasy_baseball.data.db import get_connection, get_spoe_results
+        latest = None
+        spoe_data = []
         conn = get_connection()
         try:
-            # Get the latest snapshot date
             row = conn.execute(
                 "SELECT MAX(snapshot_date) as latest FROM spoe_results WHERE year = ?",
                 (config.season_year,),
             ).fetchone()
             latest = row["latest"] if row else None
 
-            spoe_data = []
             if latest:
                 results = get_spoe_results(conn, config.season_year, latest)
-                # Group by team
                 teams = {}
                 for r in results:
                     team = r["team"]
@@ -708,12 +707,15 @@ def register_routes(app: Flask) -> None:
         finally:
             conn.close()
 
+        from fantasy_baseball.utils.constants import ALL_CATEGORIES, RATE_STATS
         return render_template(
             "season/luck.html",
             meta=meta,
             active_page="luck",
             spoe_data=spoe_data,
             snapshot_date=latest,
+            categories=ALL_CATEGORIES,
+            rate_stats=RATE_STATS,
         )
 
     @app.route("/login", methods=["GET", "POST"])

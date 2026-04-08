@@ -15,13 +15,16 @@ from fantasy_baseball.data.db import (
 from fantasy_baseball.data.projections import match_roster_to_projections
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto
-from fantasy_baseball.utils.constants import ALL_CATEGORIES
+from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES,
+    HITTING_COUNTING,
+    PITCHING_COUNTING,
+)
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
-# Components tracked for accumulation
-HITTER_COMPONENTS = ["r", "hr", "rbi", "sb", "h", "ab"]
-PITCHER_COMPONENTS = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
+HITTER_COMPONENTS = HITTING_COUNTING
+PITCHER_COMPONENTS = PITCHING_COUNTING
 ALL_COMPONENTS = HITTER_COMPONENTS + PITCHER_COMPONENTS
 
 
@@ -71,7 +74,6 @@ def load_projections_for_date(
     Returns:
         Tuple of (hitters_df, pitchers_df) DataFrames with a _name_norm column.
     """
-    # Find the best ROS snapshot date on or before target_date
     row = conn.execute(
         "SELECT MAX(snapshot_date) as best_date "
         "FROM ros_blended_projections "
@@ -89,7 +91,6 @@ def load_projections_for_date(
         ).fetchall()
         df = pd.DataFrame([dict(r) for r in rows])
     else:
-        # Fall back to preseason blended projections
         rows = conn.execute(
             "SELECT * FROM blended_projections WHERE year = ?",
             (year,),
@@ -161,7 +162,7 @@ def aggregate_game_logs_before(
         Dict mapping normalized player name to stat totals. Stat keys are
         lowercase: h, ab, r, hr, rbi, sb, ip, k, er, bb, h_allowed, w, sv.
     """
-    stat_cols = ["h", "ab", "r", "hr", "rbi", "sb", "ip", "k", "er", "bb", "h_allowed", "w", "sv"]
+    stat_cols = ALL_COMPONENTS
     select_cols = ", ".join(f"SUM({col}) as {col}" for col in stat_cols)
 
     rows = conn.execute(
@@ -346,7 +347,7 @@ def compute_spoe(conn, config) -> None:
                 }
             )
 
-        save_spoe_results(conn, config.season_year, snapshot_date, results)
-        save_spoe_components(
-            conn, config.season_year, snapshot_date, team_components
-        )
+        save_spoe_results(conn, config.season_year, snapshot_date, results,
+                          commit=False)
+        save_spoe_components(conn, config.season_year, snapshot_date,
+                             team_components)  # commits both

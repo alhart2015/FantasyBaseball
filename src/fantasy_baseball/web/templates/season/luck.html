@@ -66,12 +66,13 @@
                         </tr>
                     </thead>
                     <tbody>
-                        {% for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"] %}
+                        {% for cat in categories %}
                         {% set c = team.categories.get(cat, {}) %}
+                        {% set fmt = "%.3f" if cat in rate_stats else "%.1f" %}
                         <tr>
                             <td>{{ cat }}</td>
-                            <td>{% if cat in ["AVG", "ERA", "WHIP"] %}{{ "%.3f"|format(c.get("projected_stat", 0)) }}{% else %}{{ "%.1f"|format(c.get("projected_stat", 0)) }}{% endif %}</td>
-                            <td>{% if cat in ["AVG", "ERA", "WHIP"] %}{{ "%.3f"|format(c.get("actual_stat", 0)) }}{% else %}{{ "%.1f"|format(c.get("actual_stat", 0)) }}{% endif %}</td>
+                            <td>{{ fmt|format(c.get("projected_stat", 0)) }}</td>
+                            <td>{{ fmt|format(c.get("actual_stat", 0)) }}</td>
                             <td>{{ "%.1f"|format(c.get("projected_pts", 0)) }}</td>
                             <td>{{ "%.1f"|format(c.get("actual_pts", 0)) }}</td>
                             <td class="{% if c.get('spoe', 0) > 0.25 %}spoe-positive{% elif c.get('spoe', 0) < -0.25 %}spoe-negative{% endif %}">

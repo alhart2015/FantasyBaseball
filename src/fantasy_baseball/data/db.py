@@ -552,7 +552,7 @@ def append_standings_snapshot(conn, standings, year, snapshot_date) -> None:
 # ---------------------------------------------------------------------------
 
 
-def save_spoe_results(conn, year, snapshot_date, results):
+def save_spoe_results(conn, year, snapshot_date, results, *, commit=True):
     """Save SPOE results for one week.
 
     ``results`` is a list of dicts with keys: team, category,
@@ -571,7 +571,8 @@ def save_spoe_results(conn, year, snapshot_date, results):
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def save_spoe_components(conn, year, snapshot_date, components):
