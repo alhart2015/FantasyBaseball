@@ -1278,6 +1278,10 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
             # Append current standings snapshot
             append_standings_snapshot(db_conn, standings, config.season_year, snapshot_date)
+
+            # Compute SPOE (luck analysis)
+            from fantasy_baseball.analysis.spoe import compute_spoe
+            compute_spoe(db_conn, config)
         finally:
             db_conn.close()
 
