@@ -51,6 +51,11 @@
   - `simulate_draft.py` opponent ADP loop uses `iterrows()` per pick (~54K Series allocations per sim). Convert `adp_board` to a list of dicts before the draft loop.
   - `replacement.py:_get_eligible_players` recomputes position masks via `.apply(lambda)` on every pick in the recommender. Pre-compute a `{position: bool_array}` dict once and maintain incrementally.
 
+- [ ] **SPOE tech debt (2026-04-08)** — Three items deferred from the SPOE code review:
+  - `components_to_roto_stats` in `spoe.py` duplicates the return block of `project_team_stats` in `scoring.py` (both convert H/AB/IP/ER/BB/H_allowed to AVG/ERA/WHIP). Extract a shared helper in `scoring.py` so rate-stat defaults (ERA=99.0 when IP=0, etc.) stay in sync.
+  - `aggregate_game_logs_before` in `spoe.py`, `_load_game_log_totals` in `season_data.py`, and `get_season_totals` in `db.py` are three near-duplicate game-log GROUP BY queries. Extract one parameterized function in `db.py` with an optional `before_date` filter.
+  - Performance at 26 weeks: `aggregate_game_logs_before` re-scans all history each week (should accumulate incrementally), `load_projections_for_date` reloads the same snapshot for consecutive weeks (should cache), `match_roster_to_projections` does O(N) DataFrame filter per player (should use dict lookup). Estimated 2-8s at season end — monitor and optimize when noticeable.
+
 # TODO — Postseason / Offseason
 
 - [ ] **Post-draft Monte Carlo analysis** — Run Monte Carlo simulations on the actual completed draft results (real rosters from Yahoo) to assess win probability and category risk. Currently `simulate_draft.py --monte-carlo` only works on simulated drafts. Need a script or mode that takes real Yahoo rosters post-draft and feeds them through the shared `simulate_season` engine. Low priority since `summary.py` covers this during the season.
