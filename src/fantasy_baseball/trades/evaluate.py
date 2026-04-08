@@ -263,6 +263,169 @@ def _can_roster_without(roster: list[Player], remove: Player, add: Player,
     return False
 
 
+def _score_positional_weakness(
+    player_positions: list[str],
+    opp_roster: list[Player],
+    opp_leverage: dict[str, float],
+    all_opp_rosters: dict[str, list[Player]],
+    all_leverage: dict[str, dict[str, float]],
+) -> float:
+    """Score how badly an opponent needs the offered positions.
+
+    Compares the opponent's best starter at the offered position (by wSGP)
+    against the league median at that position. Returns a score where higher
+    means the opponent has a bigger need.
+    """
+    # Find the opponent's best player at any of the offered positions
+    opp_best_wsgp = None
+    for p in opp_roster:
+        if set(p.positions) & set(player_positions):
+            wsgp = calculate_weighted_sgp(p.ros, opp_leverage) if p.ros else 0.0
+            if opp_best_wsgp is None or wsgp < opp_best_wsgp:
+                opp_best_wsgp = wsgp
+
+    if opp_best_wsgp is None:
+        # Opponent has no one at this position — maximum weakness
+        return 999.0
+
+    # Gather wSGP at this position across all teams for the median
+    all_wsgps = []
+    for tname, roster in all_opp_rosters.items():
+        team_lev = all_leverage.get(tname, {})
+        for p in roster:
+            if set(p.positions) & set(player_positions) and p.ros:
+                all_wsgps.append(calculate_weighted_sgp(p.ros, team_lev))
+
+    if not all_wsgps:
+        return 0.0
+
+    all_wsgps.sort()
+    median_wsgp = all_wsgps[len(all_wsgps) // 2]
+
+    # Weakness = how far below median the opponent's best is
+    # Positive means they're weak; higher is weaker
+    return median_wsgp - opp_best_wsgp
+
+
+def search_trades_away(
+    player_name: str,
+    hart_name: str,
+    hart_roster: list[Player],
+    opp_rosters: dict[str, list[Player]],
+    standings: list[dict],
+    leverage_by_team: dict[str, dict],
+    roster_slots: dict[str, int],
+    rankings: dict[str, int],
+    projected_standings: list[dict] | None = None,
+) -> list[dict]:
+    """Find trade candidates for a player the user wants to trade away.
+
+    Searches all opponent rosters for players the user could receive in
+    exchange. Results are grouped by opponent and sorted by positional
+    weakness (teams that need the offered position most appear first).
+
+    Args:
+        player_name: name of the player to trade away (on user's roster).
+        hart_name: user's team name in standings.
+        hart_roster: user's roster as Player objects.
+        opp_rosters: {opponent_name: [Player]} for each opponent.
+        standings: current league standings.
+        leverage_by_team: {team_name: {cat: weight}} leverage weights.
+        roster_slots: league roster slot configuration.
+        rankings: {rank_key: int} unweighted SGP ROS rankings.
+        projected_standings: optional projected end-of-season standings.
+
+    Returns:
+        List of opponent groups:
+        [{"opponent": str, "positional_weakness": float, "candidates": [...]}, ...]
+        Groups sorted by positional_weakness descending (neediest teams first).
+        Candidates sorted by hart_wsgp_gain descending within each group.
+    """
+    hart_player = _find_player_by_name(player_name, hart_roster)
+    if hart_player is None:
+        return []
+
+    send_rank = rankings.get(
+        rank_key_from_positions(hart_player.name, hart_player.positions))
+    if send_rank is None:
+        return []
+
+    hart_leverage = leverage_by_team.get(hart_name, {})
+    hart_wsgp = calculate_weighted_sgp(hart_player.ros, hart_leverage)
+
+    grouped: dict[str, list[dict]] = {}
+
+    for opp_name, opp_roster in opp_rosters.items():
+        for opp_player in opp_roster:
+            receive_rank = rankings.get(
+                rank_key_from_positions(opp_player.name, opp_player.positions))
+            if receive_rank is None:
+                continue
+
+            if not _can_roster_without(hart_roster, hart_player, opp_player, roster_slots):
+                continue
+            if not _can_roster_without(opp_roster, opp_player, hart_player, roster_slots):
+                continue
+
+            rank_gap = send_rank - receive_rank
+            if rank_gap > MAX_RANK_GAP:
+                continue
+
+            gain_wsgp = calculate_weighted_sgp(opp_player.ros, hart_leverage)
+            hart_wsgp_gain = gain_wsgp - hart_wsgp
+            if hart_wsgp_gain <= 0:
+                continue
+
+            hart_ros = _player_ros_stats(hart_player)
+            opp_ros = _player_ros_stats(opp_player)
+
+            impact = compute_trade_impact(
+                standings, hart_name, opp_name,
+                hart_ros, opp_ros, opp_ros, hart_ros,
+                projected_standings=projected_standings,
+            )
+
+            if impact["hart_delta"] < 0:
+                continue
+
+            grouped.setdefault(opp_name, []).append({
+                "send": hart_player.name,
+                "send_positions": hart_player.positions,
+                "send_rank": send_rank,
+                "receive": opp_player.name,
+                "receive_positions": opp_player.positions,
+                "receive_rank": receive_rank,
+                "hart_wsgp_gain": round(hart_wsgp_gain, 2),
+                "hart_delta": impact["hart_delta"],
+                "opp_delta": impact["opp_delta"],
+                "hart_cat_deltas": impact["hart_cat_deltas"],
+                "opp_cat_deltas": impact["opp_cat_deltas"],
+            })
+
+    # Sort candidates within each group by wSGP gain descending
+    for candidates in grouped.values():
+        candidates.sort(key=lambda c: -c["hart_wsgp_gain"])
+
+    # Score positional weakness per opponent and build result
+    results = []
+    for opp_name, candidates in grouped.items():
+        opp_roster = opp_rosters[opp_name]
+        opp_leverage = leverage_by_team.get(opp_name, {})
+        weakness = _score_positional_weakness(
+            hart_player.positions, opp_roster, opp_leverage,
+            opp_rosters, leverage_by_team,
+        )
+        results.append({
+            "opponent": opp_name,
+            "positional_weakness": round(weakness, 2),
+            "candidates": candidates,
+        })
+
+    # Sort groups by positional weakness descending (neediest first)
+    results.sort(key=lambda g: -g["positional_weakness"])
+    return results
+
+
 def find_trades(
     hart_name: str,
     hart_roster: list[Player],
