@@ -61,12 +61,6 @@ def _mock_standings():
             for i, (n, s) in enumerate(teams)]
 
 
-def test_trade_standings_returns_404_without_data(client):
-    with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
-        resp = client.get("/api/trade/0/standings")
-        assert resp.status_code == 404
-
-
 def test_standings_renders_table_with_data(client):
     with patch("fantasy_baseball.web.season_routes.read_cache") as mock_cache, \
          patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
@@ -165,7 +159,7 @@ def test_full_lineup_page_with_cached_data(client, tmp_path):
 
 
 def test_full_waivers_page_with_cached_data(client, tmp_path):
-    """Integration test: waivers page renders with cached trade/waiver data."""
+    """Integration test: waivers page renders with cached waiver data."""
     from fantasy_baseball.web import season_data
 
     old_cache_dir = season_data.CACHE_DIR
@@ -177,19 +171,7 @@ def test_full_waivers_page_with_cached_data(client, tmp_path):
              "categories": {"HR": 9, "AVG": -0.008}, "add_positions": "OF",
              "projected_stats": ".262 / 28 HR / 75 RBI / 12 SB"},
         ]
-        trades = [
-            {"send": "Nick Pivetta", "send_positions": ["SP"],
-             "receive": "Josh Hader", "receive_positions": ["RP"],
-             "opponent": "SkeleThor",
-             "hart_delta": 2, "opp_delta": 1,
-             "hart_cat_deltas": {"SV": 18, "ERA": -0.20},
-             "opp_cat_deltas": {"W": 4, "K": 35},
-             "hart_wsgp_gain": 2.1,
-             "send_rank": {"ros": 45}, "receive_rank": {"ros": 50},
-             "pitch": "You're getting the #45 overall player for your #50 — straight swap."},
-        ]
         season_data.write_cache("waivers", waivers, tmp_path)
-        season_data.write_cache("trades", trades, tmp_path)
         season_data.write_cache("meta", {"last_refresh": "9:00 AM"}, tmp_path)
 
         with patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc, \
@@ -201,9 +183,6 @@ def test_full_waivers_page_with_cached_data(client, tmp_path):
             assert resp.status_code == 200
             html = resp.data.decode()
             assert "Tyler O&#39;Neill" in html or "Tyler O'Neill" in html
-            assert "Josh Hader" in html
-            assert "SkeleThor" in html
-            assert "+2.0 roto pts" in html  # hart_delta displayed as roto points
     finally:
         season_data.CACHE_DIR = old_cache_dir
 
