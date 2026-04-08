@@ -88,6 +88,7 @@ CACHE_FILES = {
     "buy_low": "buy_low.json",
     "rankings": "rankings.json",
     "roster_audit": "roster_audit.json",
+    "spoe": "spoe.json",
     "opp_rosters": "opp_rosters.json",
     "leverage": "leverage.json",
 }
@@ -1200,6 +1201,20 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             # Compute SPOE (luck analysis)
             from fantasy_baseball.analysis.spoe import compute_spoe
             compute_spoe(db_conn, config)
+
+            # Cache SPOE results for Render (SQLite is ephemeral)
+            from fantasy_baseball.data.db import get_spoe_results
+            row = db_conn.execute(
+                "SELECT MAX(snapshot_date) as latest FROM spoe_results WHERE year = ?",
+                (config.season_year,),
+            ).fetchone()
+            spoe_snapshot = row["latest"] if row else None
+            if spoe_snapshot:
+                spoe_rows = get_spoe_results(db_conn, config.season_year, spoe_snapshot)
+                write_cache("spoe", {
+                    "snapshot_date": spoe_snapshot,
+                    "results": spoe_rows,
+                }, cache_dir)
         finally:
             db_conn.close()
 
