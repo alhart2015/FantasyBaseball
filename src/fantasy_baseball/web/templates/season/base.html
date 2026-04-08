@@ -32,6 +32,10 @@
                class="nav-link {% if active_page == 'players' %}active{% endif %}">
                 Players
             </a>
+            <a href="{{ url_for('luck') }}"
+               class="nav-link {% if active_page == 'luck' %}active{% endif %}">
+                Luck
+            </a>
             <a href="{{ url_for('sql_runner') }}"
                class="nav-link {% if active_page == 'sql' %}active{% endif %}">
                 SQL
