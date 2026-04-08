@@ -470,7 +470,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (input) {
         input.addEventListener('keydown', function(e) {
             if (e.key === 'Enter') {
-                var myPlayers = [{% for name in my_players %}'{{ name }}',{% endfor %}];
+                var myPlayers = {{ my_players | tojson }};
                 var mode = myPlayers.indexOf(this.value.trim()) >= 0 ? 'away' : 'for';
                 tradeSearch(mode);
             }
