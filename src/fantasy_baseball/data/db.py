@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS ros_blended_projections (
 );
 
 CREATE TABLE IF NOT EXISTS spoe_results (
+    year           INTEGER NOT NULL,
     snapshot_date  TEXT NOT NULL,
     team           TEXT NOT NULL,
     category       TEXT NOT NULL,
@@ -133,15 +134,16 @@ CREATE TABLE IF NOT EXISTS spoe_results (
     projected_pts  REAL,
     actual_pts     REAL,
     spoe           REAL,
-    PRIMARY KEY (snapshot_date, team, category)
+    PRIMARY KEY (year, snapshot_date, team, category)
 );
 
 CREATE TABLE IF NOT EXISTS spoe_components (
+    year           INTEGER NOT NULL,
     snapshot_date  TEXT NOT NULL,
     team           TEXT NOT NULL,
     component      TEXT NOT NULL,
     value          REAL NOT NULL,
-    PRIMARY KEY (snapshot_date, team, component)
+    PRIMARY KEY (year, snapshot_date, team, component)
 );
 """
 
@@ -550,29 +552,29 @@ def append_standings_snapshot(conn, standings, year, snapshot_date) -> None:
 # ---------------------------------------------------------------------------
 
 
-def save_spoe_results(conn, snapshot_date, results):
+def save_spoe_results(conn, year, snapshot_date, results):
     """Save SPOE results for one week.
 
     ``results`` is a list of dicts with keys: team, category,
     projected_stat, actual_stat, projected_pts, actual_pts, spoe.
     """
     rows = [
-        (snapshot_date, r["team"], r["category"],
+        (year, snapshot_date, r["team"], r["category"],
          r.get("projected_stat"), r.get("actual_stat"),
          r["projected_pts"], r["actual_pts"], r["spoe"])
         for r in results
     ]
     conn.executemany(
         "INSERT OR REPLACE INTO spoe_results "
-        "(snapshot_date, team, category, projected_stat, actual_stat, "
+        "(year, snapshot_date, team, category, projected_stat, actual_stat, "
         "projected_pts, actual_pts, spoe) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()
 
 
-def save_spoe_components(conn, snapshot_date, components):
+def save_spoe_components(conn, year, snapshot_date, components):
     """Save accumulated projection components for one week.
 
     ``components`` is {team_name: {component_name: value}}.
@@ -580,25 +582,25 @@ def save_spoe_components(conn, snapshot_date, components):
     rows = []
     for team, comps in components.items():
         for comp, value in comps.items():
-            rows.append((snapshot_date, team, comp, value))
+            rows.append((year, snapshot_date, team, comp, value))
     conn.executemany(
         "INSERT OR REPLACE INTO spoe_components "
-        "(snapshot_date, team, component, value) "
-        "VALUES (?, ?, ?, ?)",
+        "(year, snapshot_date, team, component, value) "
+        "VALUES (?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()
 
 
-def load_spoe_components(conn, snapshot_date):
+def load_spoe_components(conn, year, snapshot_date):
     """Load accumulated components for a specific week.
 
     Returns {team_name: {component_name: value}}.
     """
     rows = conn.execute(
         "SELECT team, component, value FROM spoe_components "
-        "WHERE snapshot_date = ?",
-        (snapshot_date,),
+        "WHERE year = ? AND snapshot_date = ?",
+        (year, snapshot_date),
     ).fetchall()
     result = {}
     for r in rows:
@@ -606,28 +608,31 @@ def load_spoe_components(conn, snapshot_date):
     return result
 
 
-def get_completed_spoe_weeks(conn):
-    """Return set of snapshot_dates that have SPOE results."""
+def get_completed_spoe_weeks(conn, year):
+    """Return set of snapshot_dates that have SPOE results for a given year."""
     rows = conn.execute(
-        "SELECT DISTINCT snapshot_date FROM spoe_results"
+        "SELECT DISTINCT snapshot_date FROM spoe_results WHERE year = ?",
+        (year,),
     ).fetchall()
     return {r["snapshot_date"] for r in rows}
 
 
-def get_spoe_results(conn, snapshot_date=None):
-    """Load SPOE results, optionally filtered by snapshot_date.
+def get_spoe_results(conn, year, snapshot_date=None):
+    """Load SPOE results for a year, optionally filtered by snapshot_date.
 
     Returns list of dicts with all spoe_results columns.
     """
-    if snapshot_date:
+    if snapshot_date is not None:
         rows = conn.execute(
-            "SELECT * FROM spoe_results WHERE snapshot_date = ? "
+            "SELECT * FROM spoe_results WHERE year = ? AND snapshot_date = ? "
             "ORDER BY team, category",
-            (snapshot_date,),
+            (year, snapshot_date),
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM spoe_results ORDER BY snapshot_date, team, category"
+            "SELECT * FROM spoe_results WHERE year = ? "
+            "ORDER BY snapshot_date, team, category",
+            (year,),
         ).fetchall()
     return [dict(r) for r in rows]
 
