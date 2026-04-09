@@ -498,3 +498,60 @@ class TestComputeSpoe:
         week2_results = get_spoe_results(conn, 2026, "2026-04-07")
         assert len(week2_results) > 0
         conn.close()
+
+
+class TestProrateSpoeIntegration:
+    """End-to-end: compute_spoe → load components → prorate_spoe."""
+
+    def test_prorated_projected_stats_are_lower_mid_week(self):
+        """When days_played < 7, prorated projected stats should be lower
+        than the full-week projected stats stored in the DB."""
+        from fantasy_baseball.analysis.spoe import (
+            ALL_COMPONENTS,
+            compute_spoe,
+            prorate_spoe,
+        )
+        from fantasy_baseball.data.db import (
+            get_spoe_results,
+            load_spoe_components,
+        )
+
+        conn = get_connection(":memory:")
+        create_tables(conn)
+        _seed_full_scenario(conn)
+        config = _make_test_config()
+
+        compute_spoe(conn, config)
+
+        # Full-week results from DB
+        full_results = get_spoe_results(conn, 2026, "2026-03-31")
+        full_proj_r = {
+            r["team"]: r["projected_stat"]
+            for r in full_results if r["category"] == "R"
+        }
+
+        # Prorate to 3 days
+        current = load_spoe_components(conn, 2026, "2026-03-31")
+        previous = {t: {c: 0.0 for c in ALL_COMPONENTS} for t in current}
+        actual_stats = {
+            r["team"]: {}
+            for r in full_results if r["category"] == "R"
+        }
+        # Load actual stats from standings
+        for r in full_results:
+            if r["category"] != "total":
+                actual_stats.setdefault(r["team"], {})[r["category"]] = r["actual_stat"]
+
+        prorated = prorate_spoe(current, previous, actual_stats, days_played=3)
+        prorated_proj_r = {
+            r["team"]: r["projected_stat"]
+            for r in prorated if r["category"] == "R"
+        }
+
+        for team in full_proj_r:
+            assert prorated_proj_r[team] < full_proj_r[team], (
+                f"{team}: prorated R ({prorated_proj_r[team]:.2f}) should be "
+                f"less than full-week R ({full_proj_r[team]:.2f})"
+            )
+
+        conn.close()
