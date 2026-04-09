@@ -6,7 +6,7 @@ import os
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -1203,22 +1203,56 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             append_standings_snapshot(db_conn, standings, config.season_year, snapshot_date)
 
             # Compute SPOE (luck analysis)
-            from fantasy_baseball.analysis.spoe import compute_spoe
+            from fantasy_baseball.analysis.spoe import (
+                ALL_COMPONENTS,
+                compute_spoe,
+                get_standings_for_date,
+                get_week_dates,
+                prorate_spoe,
+            )
+            from fantasy_baseball.data.db import load_spoe_components
+
             compute_spoe(db_conn, config)
 
-            # Cache SPOE results for Render (SQLite is ephemeral)
-            from fantasy_baseball.data.db import get_spoe_results
-            row = db_conn.execute(
-                "SELECT MAX(snapshot_date) as latest FROM spoe_results WHERE year = ?",
-                (config.season_year,),
-            ).fetchone()
-            spoe_snapshot = row["latest"] if row else None
-            if spoe_snapshot:
-                spoe_rows = get_spoe_results(db_conn, config.season_year, spoe_snapshot)
-                write_cache("spoe", {
-                    "snapshot_date": spoe_snapshot,
-                    "results": spoe_rows,
-                }, cache_dir)
+            # Prorate current week for cache output
+            week_dates = get_week_dates(db_conn, config.season_year)
+
+            if week_dates:
+                current_week = week_dates[-1]
+                current_components = load_spoe_components(
+                    db_conn, config.season_year, current_week
+                )
+
+                if len(week_dates) >= 2:
+                    prev_week = week_dates[-2]
+                    previous_components = load_spoe_components(
+                        db_conn, config.season_year, prev_week
+                    )
+                else:
+                    previous_components = {
+                        team: {c: 0.0 for c in ALL_COMPONENTS}
+                        for team in current_components
+                    }
+
+                actual_stats = get_standings_for_date(
+                    db_conn, config.season_year, current_week
+                )
+
+                # days_played = refresh date - current week Monday, capped at 7
+                refresh_date = date.today()
+                week_monday = date.fromisoformat(current_week)
+                days_played = max(0, min((refresh_date - week_monday).days, 7))
+
+                prorated_results = prorate_spoe(
+                    current_components, previous_components,
+                    actual_stats, days_played,
+                )
+
+                if prorated_results:
+                    write_cache("spoe", {
+                        "snapshot_date": current_week,
+                        "results": prorated_results,
+                    }, cache_dir)
         finally:
             db_conn.close()
 

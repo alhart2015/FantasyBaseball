@@ -198,7 +198,7 @@ def components_to_roto_stats(components: dict[str, float]) -> dict[str, float]:
     }
 
 
-def _get_week_dates(conn, season_year: int) -> list[str]:
+def get_week_dates(conn, season_year: int) -> list[str]:
     """Get all distinct roster snapshot dates for the season, sorted."""
     rows = conn.execute(
         "SELECT DISTINCT snapshot_date FROM weekly_rosters "
@@ -208,7 +208,7 @@ def _get_week_dates(conn, season_year: int) -> list[str]:
     return [r["snapshot_date"] for r in rows]
 
 
-def _get_standings_for_date(
+def get_standings_for_date(
     conn, season_year: int, snapshot_date: str
 ) -> dict[str, dict[str, float]]:
     """Load actual standings. Returns {team: {R: val, HR: val, ...}}."""
@@ -240,7 +240,7 @@ def compute_spoe(conn, config) -> None:
     Completed weeks are skipped. The last (current) week is always
     recomputed. Results stored in spoe_results and spoe_components tables.
     """
-    week_dates = _get_week_dates(conn, config.season_year)
+    week_dates = get_week_dates(conn, config.season_year)
     if not week_dates:
         return
 
@@ -283,7 +283,7 @@ def compute_spoe(conn, config) -> None:
             conn, config.season_year, snapshot_date
         )
 
-        actual_stats = _get_standings_for_date(
+        actual_stats = get_standings_for_date(
             conn, config.season_year, snapshot_date
         )
         if not actual_stats:
