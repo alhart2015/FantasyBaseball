@@ -351,3 +351,88 @@ def compute_spoe(conn, config) -> None:
                           commit=False)
         save_spoe_components(conn, config.season_year, snapshot_date,
                              team_components)  # commits both
+
+
+def prorate_spoe(
+    current_components: dict[str, dict[str, float]],
+    previous_components: dict[str, dict[str, float]],
+    actual_stats: dict[str, dict[str, float]],
+    days_played: int,
+) -> list[dict]:
+    """Re-score SPOE with the current week's projection prorated.
+
+    The DB stores full 7-day weekly projections. When the current week is
+    incomplete, this function scales the current week's contribution by
+    ``days_played / 7`` so projected stats match the time period covered
+    by actual standings.
+
+    Args:
+        current_components: Accumulated components through the current week
+            (full 7-day projection). {team: {component: value}}
+        previous_components: Accumulated components through the end of the
+            previous week. {team: {component: value}}  Missing teams
+            are treated as zero-accumulated (week 1 behavior).
+        actual_stats: Current standings. {team: {R: val, HR: val, ...}}
+        days_played: Days elapsed in the current week (0-7). Pinned to
+            the refresh date, not wall-clock time.
+
+    Returns:
+        List of result dicts matching spoe_results schema (team, category,
+        projected_stat, actual_stat, projected_pts, actual_pts, spoe).
+    """
+    fraction = max(0, min(days_played, 7)) / 7
+
+    prorated_components: dict[str, dict[str, float]] = {}
+    common_teams = set(current_components) & set(actual_stats)
+
+    for team in common_teams:
+        prev = previous_components.get(team, {})
+        curr = current_components[team]
+        prorated_components[team] = {}
+        for comp in ALL_COMPONENTS:
+            prev_val = prev.get(comp, 0.0)
+            curr_week_val = curr.get(comp, 0.0) - prev_val
+            prorated_components[team][comp] = prev_val + curr_week_val * fraction
+
+    projected_stats = {
+        team: components_to_roto_stats(comps)
+        for team, comps in prorated_components.items()
+    }
+
+    if len(common_teams) < 2:
+        return []
+
+    proj_for_scoring = {t: projected_stats[t] for t in common_teams}
+    actual_for_scoring = {t: actual_stats[t] for t in common_teams}
+
+    projected_roto = score_roto(proj_for_scoring)
+    actual_roto = score_roto(actual_for_scoring)
+
+    results = []
+    for team in common_teams:
+        total_spoe = 0.0
+        for cat in ALL_CATEGORIES:
+            proj_pts = projected_roto[team].get(f"{cat}_pts", 0)
+            act_pts = actual_roto[team].get(f"{cat}_pts", 0)
+            spoe = act_pts - proj_pts
+            total_spoe += spoe
+            results.append({
+                "team": team,
+                "category": cat,
+                "projected_stat": projected_stats[team][cat],
+                "actual_stat": actual_stats[team][cat],
+                "projected_pts": proj_pts,
+                "actual_pts": act_pts,
+                "spoe": spoe,
+            })
+        results.append({
+            "team": team,
+            "category": "total",
+            "projected_stat": None,
+            "actual_stat": None,
+            "projected_pts": projected_roto[team]["total"],
+            "actual_pts": actual_roto[team]["total"],
+            "spoe": total_spoe,
+        })
+
+    return results
