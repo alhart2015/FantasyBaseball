@@ -635,6 +635,47 @@ def _compute_category_ranks(standings: list[dict]) -> dict[str, dict[str, int]]:
     return ranks
 
 
+def adjust_for_pending_moves(
+    roster: list,
+    fa_pool: list,
+    pending_moves: list[dict],
+    user_team_name: str,
+) -> tuple[list, list]:
+    """Adjust roster and FA pool for pending transactions.
+
+    - Removes players being added by ANY team from the FA pool (they're claimed)
+    - Removes players being dropped by the USER from the roster (they're leaving)
+
+    Args:
+        roster: User's roster (list of Player objects).
+        fa_pool: Free agent pool (list of Player objects).
+        pending_moves: List of pending move dicts from parse_pending_moves.
+        user_team_name: User's team name for identifying their pending drops.
+
+    Returns:
+        (adjusted_roster, adjusted_fa_pool) — new lists, originals unchanged.
+    """
+    from fantasy_baseball.utils.name_utils import normalize_name
+
+    # Collect all pending adds (claimed players, from ALL teams)
+    claimed_names = set()
+    for move in pending_moves:
+        for add in move.get("adds", []):
+            claimed_names.add(normalize_name(add["name"]))
+
+    # Collect user's pending drops
+    user_drop_names = set()
+    for move in pending_moves:
+        if move.get("team") == user_team_name:
+            for drop in move.get("drops", []):
+                user_drop_names.add(normalize_name(drop["name"]))
+
+    adjusted_fa = [p for p in fa_pool
+                   if normalize_name(p.name) not in claimed_names]
+    adjusted_roster = [p for p in roster
+                       if normalize_name(p.name) not in user_drop_names]
+
+    return adjusted_roster, adjusted_fa
 
 
 def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
@@ -1033,18 +1074,27 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         if fa_blended:
             _progress(f"Blended {fa_blended} free agents with game logs")
 
+        # Adjust for pending moves before scanning waivers
+        if pending_moves:
+            roster_for_waivers, fa_for_waivers = adjust_for_pending_moves(
+                roster_players, fa_players, pending_moves, config.team_name,
+            )
+            _progress(f"Adjusted for {len(pending_moves)} pending move(s)")
+        else:
+            roster_for_waivers, fa_for_waivers = roster_players, fa_players
+
         # --- Roster Audit ---
         _progress("Running roster audit...")
         audit_results = audit_roster(
-            roster_players, fa_players, leverage, config.roster_slots,
+            roster_for_waivers, fa_for_waivers, leverage, config.roster_slots,
         )
         write_cache("roster_audit", [e.to_dict() for e in audit_results], cache_dir)
         upgrades = sum(1 for e in audit_results if e.gap > 0)
         _progress(f"Roster audit: {upgrades} upgrade(s) found")
 
         waiver_recs = scan_waivers(
-            roster_players,
-            fa_players,
+            roster_for_waivers,
+            fa_for_waivers,
             leverage,
             max_results=10,
             open_hitter_slots=open_h,
