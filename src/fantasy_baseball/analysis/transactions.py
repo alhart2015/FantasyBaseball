@@ -198,3 +198,94 @@ def score_transaction(conn, txn: dict, year: int) -> dict:
         "drop_wsgp": round(drop_wsgp, 2),
         "value": round(add_wsgp - drop_wsgp, 2),
     }
+
+
+def build_cache_output(transactions: list[dict]) -> dict:
+    """Build the JSON cache structure for the Transactions tab.
+
+    Groups transactions by team, computes per-team net value,
+    and sorts teams by net value descending.
+
+    Paired standalone moves are merged into a single display entry.
+    """
+    by_id = {t["transaction_id"]: t for t in transactions}
+    rendered = set()
+    teams: dict[str, dict] = {}
+
+    for txn in transactions:
+        tid = txn["transaction_id"]
+        if tid in rendered:
+            continue
+
+        team = txn["team"]
+        if team not in teams:
+            teams[team] = {"team": team, "transactions": [], "net_value": 0.0}
+
+        paired_id = txn.get("paired_with")
+        paired = by_id.get(paired_id) if paired_id else None
+
+        if paired and paired["transaction_id"] not in rendered:
+            drop_txn = txn if txn["type"] == "drop" else paired
+            add_txn = paired if txn["type"] == "drop" else txn
+            entry = {
+                "transaction_id": drop_txn["transaction_id"],
+                "date": _ts_to_date(drop_txn.get("timestamp")),
+                "type": "add/drop",
+                "add_name": add_txn.get("add_name"),
+                "add_positions": _split_positions(add_txn.get("add_positions")),
+                "add_wsgp": round(add_txn.get("add_wsgp", 0) or 0, 2),
+                "drop_name": drop_txn.get("drop_name"),
+                "drop_positions": _split_positions(drop_txn.get("drop_positions")),
+                "drop_wsgp": round(drop_txn.get("drop_wsgp", 0) or 0, 2),
+                "value": round(
+                    (add_txn.get("add_wsgp", 0) or 0) -
+                    (drop_txn.get("drop_wsgp", 0) or 0), 2
+                ),
+                "paired": True,
+            }
+            rendered.add(drop_txn["transaction_id"])
+            rendered.add(add_txn["transaction_id"])
+        else:
+            entry = {
+                "transaction_id": tid,
+                "date": _ts_to_date(txn.get("timestamp")),
+                "type": txn["type"],
+                "add_name": txn.get("add_name"),
+                "add_positions": _split_positions(txn.get("add_positions")),
+                "add_wsgp": round(txn.get("add_wsgp", 0) or 0, 2),
+                "drop_name": txn.get("drop_name"),
+                "drop_positions": _split_positions(txn.get("drop_positions")),
+                "drop_wsgp": round(txn.get("drop_wsgp", 0) or 0, 2),
+                "value": round(txn.get("value", 0) or 0, 2),
+                "paired": False,
+            }
+            rendered.add(tid)
+
+        teams[team]["transactions"].append(entry)
+        teams[team]["net_value"] = round(
+            teams[team]["net_value"] + entry["value"], 2
+        )
+
+    team_list = sorted(teams.values(), key=lambda t: t["net_value"], reverse=True)
+    for t in team_list:
+        t["transaction_count"] = len(t["transactions"])
+        t["transactions"].sort(key=lambda x: x.get("date", ""))
+
+    return {"teams": team_list}
+
+
+def _ts_to_date(timestamp):
+    """Convert Unix timestamp string to YYYY-MM-DD."""
+    if not timestamp:
+        return None
+    try:
+        return datetime.fromtimestamp(int(timestamp)).strftime("%Y-%m-%d")
+    except (ValueError, TypeError, OSError):
+        return None
+
+
+def _split_positions(pos_str):
+    """Split 'OF, Util' into ['OF', 'Util']."""
+    if not pos_str:
+        return []
+    return [p.strip() for p in pos_str.split(",")]
