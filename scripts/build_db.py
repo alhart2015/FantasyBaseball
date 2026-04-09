@@ -35,10 +35,6 @@ def main():
     db_path = DB_PATH
     print(f"Building database: {db_path}")
 
-    if db_path.exists():
-        db_path.unlink()
-        print("  Deleted existing database")
-
     conn = get_connection(db_path)
     create_tables(conn)
     print("  Created tables")
