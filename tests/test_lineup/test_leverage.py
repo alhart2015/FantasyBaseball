@@ -3,7 +3,20 @@ from fantasy_baseball.lineup.leverage import calculate_leverage, blend_standings
 
 
 def _make_standings():
-    """10 teams with standings data. User team is rank 5."""
+    """10 teams with standings data. User team is rank 5 overall.
+
+    Per-category ranks for User Team:
+      R: 5th (450, gap above=10, gap below=20)
+      HR: 5th (130, gap above=5, gap below=10)
+      RBI: 5th (430, gap above=15, gap below=20)
+      SB: 8th (50, gap above=25, gap below=10)  <- bad at SB
+      AVG: 5th (.265, gap above=.003, gap below=.005)
+      W: 5th (45, gap above=3, gap below=3)
+      K: 5th (770, gap above=20, gap below=30)
+      SV: 5th (40, gap above=5, gap below=5)
+      ERA: 5th (3.80, gap above=.10, gap below=.15)
+      WHIP: 5th (1.25, gap above=.03, gap below=.03)
+    """
     return [
         {"name": "Team 1", "rank": 1, "stats": {"R": 500, "HR": 150, "RBI": 480, "SB": 90, "AVG": 0.275, "W": 55, "K": 850, "SV": 55, "ERA": 3.40, "WHIP": 1.15}},
         {"name": "Team 2", "rank": 2, "stats": {"R": 490, "HR": 145, "RBI": 470, "SB": 85, "AVG": 0.272, "W": 52, "K": 830, "SV": 50, "ERA": 3.50, "WHIP": 1.18}},
@@ -20,61 +33,147 @@ def _make_standings():
 
 class TestCalculateLeverage:
     def test_returns_all_categories(self):
-        standings = _make_standings()
-        leverage = calculate_leverage(standings, "User Team")
-        assert "R" in leverage
-        assert "HR" in leverage
-        assert "ERA" in leverage
+        leverage = calculate_leverage(_make_standings(), "User Team")
         assert len(leverage) == 10
+        for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]:
+            assert cat in leverage
 
     def test_all_weights_positive(self):
-        standings = _make_standings()
-        leverage = calculate_leverage(standings, "User Team")
+        leverage = calculate_leverage(_make_standings(), "User Team")
         for cat, weight in leverage.items():
-            assert weight >= 0, f"{cat} has negative weight"
+            assert weight > 0, f"{cat} has non-positive weight"
 
     def test_weights_sum_to_one(self):
-        standings = _make_standings()
-        leverage = calculate_leverage(standings, "User Team")
-        total = sum(leverage.values())
-        assert total == pytest.approx(1.0, abs=0.01)
+        leverage = calculate_leverage(_make_standings(), "User Team")
+        assert sum(leverage.values()) == pytest.approx(1.0, abs=0.001)
 
-    def test_small_gap_gets_high_leverage(self):
-        """SB has a tiny defensive gap (5) vs R's attack gap (10).
-        The small SB defense gap dominates, so SB leverage > R."""
+    def test_uses_per_category_neighbors_not_overall_rank(self):
+        """The critical test: per-category ranking must be used.
+
+        Create a scenario where overall-rank neighbors give wrong results
+        but per-category neighbors give correct results.
+
+        User is 1st overall. The 2nd-place overall team has identical AVG
+        but very different HR. With the OLD bug (overall-rank neighbors),
+        AVG would get extreme leverage from the near-tie with 2nd overall.
+        With the fix (per-category neighbors), the AVG neighbor is a
+        different team with a real gap.
+        """
+        standings = [
+            {"name": "User", "rank": 1, "stats": {
+                "R": 100, "HR": 50, "RBI": 100, "SB": 40, "AVG": 0.270,
+                "W": 20, "K": 200, "SV": 10, "ERA": 3.50, "WHIP": 1.20,
+            }},
+            {"name": "Team 2", "rank": 2, "stats": {
+                "R": 95, "HR": 30, "RBI": 95, "SB": 38, "AVG": 0.270,  # same AVG!
+                "W": 18, "K": 190, "SV": 9, "ERA": 3.60, "WHIP": 1.22,
+            }},
+            {"name": "Team 3", "rank": 3, "stats": {
+                "R": 90, "HR": 45, "RBI": 90, "SB": 35, "AVG": 0.260,  # AVG neighbor below
+                "W": 16, "K": 180, "SV": 8, "ERA": 3.70, "WHIP": 1.25,
+            }},
+        ]
+        leverage = calculate_leverage(standings, "User", season_progress=1.0)
+        # Per-category: User is 1st in AVG (tied with Team 2, gap=0.010 to Team 3)
+        # Per-category: User is 1st in HR (gap=5 to Team 3 who has 45)
+        # HR gap (5) is much larger than AVG gap (0.010), so AVG > HR
+        # But under the old bug, AVG would compare against Team 2 (gap=0) -> infinite leverage
+        # With per-category, AVG defense gap is 0.010 which is still high but not infinite
+        # The key assertion: HR should NOT be near-zero (the old bug made non-tied cats negligible)
+        assert leverage["HR"] > 0.02, (
+            f"HR leverage ({leverage['HR']:.4f}) should be meaningful, "
+            f"not suppressed by a coincidental AVG tie with the overall-rank neighbor"
+        )
+        # AVG should be high (tied at 1st, tiny defense gap of 0.010)
+        # but HR should still be real, not negligible
+        assert leverage["HR"] / leverage["AVG"] > 0.05, (
+            f"HR/AVG ratio ({leverage['HR']/leverage['AVG']:.3f}) too small — "
+            f"HR is being suppressed by AVG dominance"
+        )
+
+    def test_first_place_large_cushion_gets_low_leverage(self):
+        """1st in a category with a big cushion = low leverage (no point to gain,
+        hard to lose). This was the user's actual scenario with SB."""
         standings = _make_standings()
+        # Make User Team 1st in SB by a mile
+        standings[4]["stats"]["SB"] = 200  # User Team
+        # Next best is Team 1 with 90 — gap of 110
         leverage = calculate_leverage(standings, "User Team", season_progress=1.0)
-        # SB defense gap (50-45=5) is smaller than R attack gap (460-450=10),
-        # so SB correctly gets higher leverage from defensive pressure.
-        assert leverage["SB"] > leverage["R"]
+        # SB should have the lowest or near-lowest leverage
+        min_lev = min(leverage.values())
+        assert leverage["SB"] < min_lev * 1.5, (
+            f"SB leverage ({leverage['SB']:.4f}) should be near minimum "
+            f"when user is 1st with a huge cushion"
+        )
 
-    def test_inverse_stats_correct_direction(self):
+    def test_last_place_large_deficit_gets_low_leverage(self):
+        """Last in a category with a huge deficit = low leverage (very hard
+        to gain a point, nothing below to lose)."""
         standings = _make_standings()
-        leverage = calculate_leverage(standings, "User Team")
-        assert leverage["ERA"] > 0
+        # Make User Team dead last in SB by a mile
+        standings[4]["stats"]["SB"] = 1  # User Team
+        # Next worst is Team 10 with 20 — gap of 19
+        leverage = calculate_leverage(standings, "User Team", season_progress=1.0)
+        min_lev = min(leverage.values())
+        assert leverage["SB"] < min_lev * 1.5, (
+            f"SB leverage ({leverage['SB']:.4f}) should be near minimum "
+            f"when user is last with a huge deficit"
+        )
+
+    def test_tiny_gap_gets_high_leverage(self):
+        """A category where user is nearly tied with a neighbor should get
+        high leverage — that's the easiest point to gain/lose."""
+        standings = _make_standings()
+        # Make User Team nearly tied in R with the team above in R
+        standings[3]["stats"]["R"] = 450.5  # Team 4 (above user in R)
+        standings[4]["stats"]["R"] = 450.0  # User Team
+        leverage = calculate_leverage(standings, "User Team", season_progress=1.0)
+        assert leverage["R"] == max(leverage.values()) or leverage["R"] > 0.15, (
+            f"R leverage ({leverage['R']:.4f}) should be high when nearly tied"
+        )
+
+    def test_uniform_gaps_give_equal_leverage(self):
+        """When all per-category gaps are identical raw values, leverage
+        should be uniform. Uses same numeric gap for all categories
+        (counting stats gap=10, rate stats gap=10 — unrealistic but
+        tests that the formula treats equal gaps equally)."""
+        standings = [
+            {"name": "Above", "rank": 1, "stats": {
+                "R": 110, "HR": 110, "RBI": 110, "SB": 110, "AVG": 110,
+                "W": 110, "K": 110, "SV": 110, "ERA": 90, "WHIP": 90,
+            }},
+            {"name": "User", "rank": 2, "stats": {
+                "R": 100, "HR": 100, "RBI": 100, "SB": 100, "AVG": 100,
+                "W": 100, "K": 100, "SV": 100, "ERA": 100, "WHIP": 100,
+            }},
+            {"name": "Below", "rank": 3, "stats": {
+                "R": 90, "HR": 90, "RBI": 90, "SB": 90, "AVG": 90,
+                "W": 90, "K": 90, "SV": 90, "ERA": 110, "WHIP": 110,
+            }},
+        ]
+        leverage = calculate_leverage(standings, "User", season_progress=1.0)
+        expected = 1.0 / 10
+        for cat, weight in leverage.items():
+            assert weight == pytest.approx(expected, abs=0.005), (
+                f"{cat} = {weight:.4f}, expected ~{expected:.4f} with uniform gaps"
+            )
 
     def test_tied_category_does_not_dominate(self):
-        """When one category is nearly tied, it should get high leverage
-        but NOT swamp all other categories combined."""
+        """A nearly-tied category should get high leverage but not swamp
+        all others (outlier capping)."""
         standings = _make_standings()
-        # Make SB nearly tied with team above (75 vs 50 → gap of 25,
-        # but override to make gap tiny: 50 vs 50.01)
-        standings[3]["stats"]["SB"] = 50.01  # Team 4 (above user)
-        standings[4]["stats"]["SB"] = 50.00  # User
+        standings[3]["stats"]["SB"] = 50.01  # Team above in SB nearly tied
+        standings[4]["stats"]["SB"] = 50.00  # User Team
         leverage = calculate_leverage(standings, "User Team", season_progress=1.0)
-        # SB should be high but not more than ~30% of total weight
-        # (with 10 categories, equal would be 10% each)
         assert leverage["SB"] < 0.35, (
-            f"SB leverage {leverage['SB']:.3f} is too dominant for a single category"
+            f"SB leverage {leverage['SB']:.3f} too dominant for a single tied category"
         )
-        # Other categories should still have meaningful weight
         non_sb = sum(v for k, v in leverage.items() if k != "SB")
         assert non_sb > 0.65
 
     def test_early_season_leverage_near_uniform(self):
-        """At season_progress=0, all categories should be equal (uniform weights)."""
-        standings = _make_standings()
-        leverage = calculate_leverage(standings, "User Team", season_progress=0.0)
+        """At season_progress=0 without projections, all categories equal."""
+        leverage = calculate_leverage(_make_standings(), "User Team", season_progress=0.0)
         uniform = 1.0 / 10
         for cat, weight in leverage.items():
             assert weight == pytest.approx(uniform, abs=0.001), (
@@ -82,20 +181,62 @@ class TestCalculateLeverage:
             )
 
     def test_midseason_leverage_blended(self):
-        """At season_progress=0.5, leverage is halfway between uniform and standings-based."""
-        standings = _make_standings()
-        full = calculate_leverage(standings, "User Team", season_progress=1.0)
-        half = calculate_leverage(standings, "User Team", season_progress=0.5)
+        """At season_progress=0.5 without projections, halfway between
+        uniform and standings-based."""
+        full = calculate_leverage(_make_standings(), "User Team", season_progress=1.0)
+        half = calculate_leverage(_make_standings(), "User Team", season_progress=0.5)
         uniform = 1.0 / 10
         for cat in full:
             expected = 0.5 * full[cat] + 0.5 * uniform
             assert half[cat] == pytest.approx(expected, abs=0.001)
 
+    def test_first_place_team_has_leverage(self):
+        leverage = calculate_leverage(_make_standings(), "Team 1")
+        assert sum(leverage.values()) == pytest.approx(1.0, abs=0.01)
+
     def test_last_place_team_has_leverage(self):
-        standings = _make_standings()
-        leverage = calculate_leverage(standings, "Team 10")
-        total = sum(leverage.values())
-        assert total == pytest.approx(1.0, abs=0.01)
+        leverage = calculate_leverage(_make_standings(), "Team 10")
+        assert sum(leverage.values()) == pytest.approx(1.0, abs=0.01)
+
+    def test_unknown_team_returns_uniform(self):
+        leverage = calculate_leverage(_make_standings(), "Nonexistent Team")
+        uniform = 1.0 / 10
+        for weight in leverage.values():
+            assert weight == pytest.approx(uniform, abs=0.001)
+
+    def test_real_world_scenario_first_place_sb_leader(self):
+        """Regression test for the actual bug: user is 1st overall and
+        1st in SB with a large cushion, but 5th in R with a tight gap.
+        R should have higher leverage than SB."""
+        standings = [
+            {"name": "User", "rank": 1, "stats": {
+                "R": 71, "HR": 20, "RBI": 75, "SB": 200,
+                "AVG": 0.253, "W": 7, "K": 114, "SV": 6,
+                "ERA": 3.16, "WHIP": 0.99,
+            }},
+            {"name": "Team 2", "rank": 2, "stats": {
+                "R": 72, "HR": 18, "RBI": 77, "SB": 180,
+                "AVG": 0.253, "W": 6, "K": 109, "SV": 6,
+                "ERA": 3.14, "WHIP": 0.99,
+            }},
+            {"name": "Team 3", "rank": 3, "stats": {
+                "R": 70, "HR": 22, "RBI": 71, "SB": 170,
+                "AVG": 0.249, "W": 8, "K": 119, "SV": 5,
+                "ERA": 3.18, "WHIP": 1.01,
+            }},
+            {"name": "Team 4", "rank": 4, "stats": {
+                "R": 68, "HR": 15, "RBI": 65, "SB": 160,
+                "AVG": 0.245, "W": 5, "K": 100, "SV": 7,
+                "ERA": 3.50, "WHIP": 1.10,
+            }},
+        ]
+        leverage = calculate_leverage(standings, "User", season_progress=1.0)
+        # SB has a 20-steal cushion to 2nd place → low leverage
+        # R has a 1-run gap to the team above in R → higher leverage
+        assert leverage["R"] > leverage["SB"], (
+            f"R ({leverage['R']:.4f}) should beat SB ({leverage['SB']:.4f}): "
+            f"R gap is 1 run, SB cushion is 20 steals"
+        )
 
 
 class TestBlendStandings:
@@ -130,15 +271,15 @@ class TestBlendStandings:
     def test_progress_half_interpolates(self):
         blended = blend_standings(self._make_current(), self._make_projected(), 0.5)
         team_a = next(t for t in blended if t["name"] == "Team A")
-        assert team_a["stats"]["R"] == pytest.approx(500)  # (200+800)/2
-        assert team_a["stats"]["AVG"] == pytest.approx(0.2625)  # (0.260+0.265)/2
+        assert team_a["stats"]["R"] == pytest.approx(500)
+        assert team_a["stats"]["AVG"] == pytest.approx(0.2625)
 
     def test_teams_matched_by_name(self):
         current = self._make_current()
-        projected = list(reversed(self._make_projected()))  # reverse order
+        projected = list(reversed(self._make_projected()))
         blended = blend_standings(current, projected, 0.0)
         team_a = next(t for t in blended if t["name"] == "Team A")
-        assert team_a["stats"]["R"] == pytest.approx(800)  # matched correctly
+        assert team_a["stats"]["R"] == pytest.approx(800)
 
     def test_team_only_in_current_included_as_is(self):
         current = self._make_current() + [
@@ -147,7 +288,7 @@ class TestBlendStandings:
         ]
         blended = blend_standings(current, self._make_projected(), 0.5)
         team_c = next(t for t in blended if t["name"] == "Team C")
-        assert team_c["stats"]["R"] == 100  # no projected match, kept as-is
+        assert team_c["stats"]["R"] == 100
 
 
 class TestCalculateLeverageWithProjected:
@@ -160,37 +301,28 @@ class TestCalculateLeverageWithProjected:
         ]
 
     def test_projected_standings_override_uniform_ramp(self):
-        """At season_progress=0 with projected standings, leverage is NOT uniform."""
         standings = _make_standings()
         projected = self._make_projected()
         leverage = calculate_leverage(
             standings, "User Team",
             season_progress=0.0, projected_standings=projected,
         )
-        # Should NOT be uniform — projected gaps matter
         values = list(leverage.values())
         assert max(values) - min(values) > 0.01
 
     def test_projected_tiny_hr_gap_gets_high_leverage(self):
-        """HR gap is 1 in projected standings → high HR leverage."""
+        """HR gap is 1 in projected → high leverage. SB gap is 100 → low."""
         standings = _make_standings()
         projected = self._make_projected()
         leverage = calculate_leverage(
             standings, "User Team",
             season_progress=0.0, projected_standings=projected,
         )
-        # HR gaps are tiny (201 vs 200 vs 199) so HR should be high leverage
-        # SB gaps are huge (200 vs 100 vs 80) so SB should be low
         assert leverage["HR"] > leverage["SB"]
 
     def test_no_projected_preserves_existing_behavior(self):
-        """Without projected_standings, behavior is unchanged (uniform ramp)."""
         standings = _make_standings()
-        leverage_old = calculate_leverage(
-            standings, "User Team", season_progress=0.0,
-        )
-        leverage_new = calculate_leverage(
-            standings, "User Team", season_progress=0.0, projected_standings=None,
-        )
+        leverage_old = calculate_leverage(standings, "User Team", season_progress=0.0)
+        leverage_new = calculate_leverage(standings, "User Team", season_progress=0.0, projected_standings=None)
         for cat in leverage_old:
             assert leverage_old[cat] == pytest.approx(leverage_new[cat])

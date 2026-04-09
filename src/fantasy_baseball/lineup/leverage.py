@@ -54,60 +54,72 @@ def _leverage_from_standings(
     attack_weight: float,
     defense_weight: float,
 ) -> dict[str, float] | None:
-    """Compute normalized leverage weights from a set of standings.
+    """Compute normalized leverage weights using per-category rank neighbors.
 
-    Returns None if the user team is not found or has no neighbors.
+    For each category, ranks all teams independently and finds the teams
+    directly above and below the user in THAT category. The gap to those
+    per-category neighbors determines how easy it is to gain or lose a
+    standings point.
+
+    Returns None if the user team is not found.
     """
-    sorted_teams = sorted(standings, key=lambda t: t.get("rank", 99))
     user_team = None
-    user_idx = None
-    for i, team in enumerate(sorted_teams):
+    for team in standings:
         if team["name"] == user_team_name:
             user_team = team
-            user_idx = i
             break
 
     if user_team is None:
         return None
 
     user_stats = user_team.get("stats", {})
-
-    team_above = sorted_teams[user_idx - 1] if user_idx > 0 else None
-    team_below = (
-        sorted_teams[user_idx + 1]
-        if user_idx < len(sorted_teams) - 1
-        else None
-    )
-
-    if team_above is not None and team_below is not None:
-        w_attack = attack_weight
-        w_defense = defense_weight
-    elif team_above is not None:
-        w_attack = 1.0
-        w_defense = 0.0
-    elif team_below is not None:
-        w_attack = 0.0
-        w_defense = 1.0
-    else:
-        return None
-
-    above_stats = team_above.get("stats", {}) if team_above else {}
-    below_stats = team_below.get("stats", {}) if team_below else {}
-
     epsilon = 0.001
 
     raw_leverage: dict[str, float] = {}
     for cat in ALL_CATEGORIES:
-        user_val = user_stats.get(cat, 0)
-        leverage = 0.0
+        reverse = cat not in INVERSE_STATS  # higher is better for most cats
+        ranked = sorted(standings, key=lambda t: t["stats"].get(cat, 0), reverse=reverse)
 
-        if team_above is not None:
-            above_val = above_stats.get(cat, 0)
+        user_cat_idx = None
+        for i, team in enumerate(ranked):
+            if team["name"] == user_team_name:
+                user_cat_idx = i
+                break
+
+        if user_cat_idx is None:
+            raw_leverage[cat] = 0.0
+            continue
+
+        cat_above = ranked[user_cat_idx - 1] if user_cat_idx > 0 else None
+        cat_below = (
+            ranked[user_cat_idx + 1]
+            if user_cat_idx < len(ranked) - 1
+            else None
+        )
+
+        if cat_above is not None and cat_below is not None:
+            w_attack = attack_weight
+            w_defense = defense_weight
+        elif cat_above is not None:
+            w_attack = 1.0
+            w_defense = 0.0
+        elif cat_below is not None:
+            w_attack = 0.0
+            w_defense = 1.0
+        else:
+            raw_leverage[cat] = 0.0
+            continue
+
+        leverage = 0.0
+        user_val = user_stats.get(cat, 0)
+
+        if cat_above is not None:
+            above_val = cat_above["stats"].get(cat, 0)
             attack_gap = _gap_for_category(cat, user_val, above_val)
             leverage += w_attack * (1.0 / (attack_gap + epsilon))
 
-        if team_below is not None:
-            below_val = below_stats.get(cat, 0)
+        if cat_below is not None:
+            below_val = cat_below["stats"].get(cat, 0)
             defense_gap = _gap_for_category(cat, user_val, below_val)
             leverage += w_defense * (1.0 / (defense_gap + epsilon))
 
@@ -138,31 +150,28 @@ def calculate_leverage(
 ) -> dict[str, float]:
     """Calculate leverage weights for each stat category based on standings gaps.
 
-    Considers both neighbors in the standings:
-      - **Attack** (team above): categories where a small gap means an easy
-        opportunity to gain a standings point by overtaking them.
-      - **Defense** (team below): categories where a small gap means a threat
-        of losing a standings point if they catch you.
+    For each category, ranks all teams independently and finds the
+    per-category neighbors (team directly above and below the user in
+    THAT category's ranking). The gap to those neighbors determines
+    leverage:
+      - **Attack** (team above in category): small gap = easy opportunity
+        to gain a standings point.
+      - **Defense** (team below in category): small gap = threat of losing
+        a standings point.
 
     ``attack_weight`` and ``defense_weight`` control the relative importance
-    of opportunities vs. threats (default 60/40 favoring attack).  When only
-    one neighbor exists (first or last place), that neighbor receives full
-    weight.
+    of opportunities vs. threats (default 60/40 favoring attack).  When the
+    user is first or last in a category, only the available neighbor is used.
 
     ``season_progress`` (0.0 to 1.0) controls how much weight goes to
     standings-based leverage vs. equal weights. Early season (low progress),
     leverage is mostly uniform because standings are noise. Late season
     (high progress), leverage is fully standings-driven. If None, estimated
-    from the league-average runs scored in standings (proxy for games played).
-    Ramps to 1.0 at ~81 games (half season).
+    from game logs in SQLite. Ramps to 1.0 at ~81 games (half season).
 
     When ``projected_standings`` is provided, leverage is computed from a blend
     of current and projected standings (weighted by season_progress). This
     replaces the uniform ramp with forward-looking category weighting.
-
-    Note: neighbor ordering uses current standings rank even when blending
-    with projected stats. This is intentional — roto standings rank determines
-    which teams you're competing with for standings points.
 
     Weights are normalized to sum to 1.0.
     """
