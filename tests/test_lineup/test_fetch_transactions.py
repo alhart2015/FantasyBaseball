@@ -14,34 +14,34 @@ def _make_raw_txn(txn_id, status, ttype, team_name, team_key,
     idx = 0
     for p in (adds or []):
         players[str(idx)] = {
-            "player": [[
-                {"name": {"full": p["name"]}},
-                {"player_id": p.get("player_id", "")},
-                {"eligible_positions": [
-                    {"position": pos} for pos in p.get("positions", [])
-                ]},
-            ]],
-            "transaction_data": {
-                "type": "add",
-                "destination_team_name": team_name,
-                "destination_team_key": team_key,
-            },
+            "player": [
+                [
+                    {"name": {"full": p["name"]}},
+                    {"player_id": p.get("player_id", "")},
+                    {"display_position": ", ".join(p.get("positions", []))},
+                ],
+                {"transaction_data": [{
+                    "type": "add",
+                    "destination_team_name": team_name,
+                    "destination_team_key": team_key,
+                }]},
+            ],
         }
         idx += 1
     for p in (drops or []):
         players[str(idx)] = {
-            "player": [[
-                {"name": {"full": p["name"]}},
-                {"player_id": p.get("player_id", "")},
-                {"eligible_positions": [
-                    {"position": pos} for pos in p.get("positions", [])
-                ]},
-            ]],
-            "transaction_data": {
-                "type": "drop",
-                "source_team_name": team_name,
-                "source_team_key": team_key,
-            },
+            "player": [
+                [
+                    {"name": {"full": p["name"]}},
+                    {"player_id": p.get("player_id", "")},
+                    {"display_position": ", ".join(p.get("positions", []))},
+                ],
+                {"transaction_data": {
+                    "type": "drop",
+                    "source_team_name": team_name,
+                    "source_team_key": team_key,
+                }},
+            ],
         }
         idx += 1
     txn["players"] = players

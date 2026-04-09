@@ -246,6 +246,52 @@ def fetch_scoring_period(league) -> tuple[str, str]:
         return monday.isoformat(), sunday.isoformat()
 
 
+def _extract_player_info(player_data: dict) -> tuple[dict, dict]:
+    """Extract player metadata and transaction_data from a Yahoo player entry.
+
+    Yahoo nests data as:
+        player_data["player"][0] = [list of metadata dicts]  (name, id, positions)
+        player_data["player"][1] = {"transaction_data": ...}  (add/drop info)
+
+    transaction_data is a list for adds, a dict for drops. We normalize to a dict.
+
+    Returns:
+        (player_info, tdata) where player_info has name, player_id, positions
+        and tdata has type, destination/source team info.
+    """
+    raw_player = player_data.get("player", [])
+    meta = raw_player[0] if raw_player and isinstance(raw_player[0], list) else []
+
+    name = ""
+    player_id = ""
+    positions = []
+    for item in meta:
+        if not isinstance(item, dict):
+            continue
+        if "name" in item:
+            name = item["name"].get("full", "")
+        if "player_id" in item:
+            player_id = item["player_id"]
+        if "display_position" in item:
+            positions = [p.strip() for p in item["display_position"].split(",")]
+        if "eligible_positions" in item and not positions:
+            positions = [
+                ep["position"] for ep in item["eligible_positions"]
+                if isinstance(ep, dict) and "position" in ep
+            ]
+
+    # transaction_data lives in player[1], not at the player_data level
+    tdata = {}
+    if len(raw_player) > 1 and isinstance(raw_player[1], dict):
+        td_raw = raw_player[1].get("transaction_data", {})
+        if isinstance(td_raw, list):
+            tdata = td_raw[0] if td_raw else {}
+        else:
+            tdata = td_raw
+
+    return {"name": name, "player_id": player_id, "positions": positions}, tdata
+
+
 def fetch_pending_moves(league) -> list[dict]:
     """Fetch pending roster transactions for the entire league.
 
@@ -287,30 +333,8 @@ def parse_pending_moves(transactions: list[dict]) -> list[dict]:
             if key == "count" or not isinstance(player_data, dict):
                 continue
 
-            tdata = player_data.get("transaction_data", {})
+            player_info, tdata = _extract_player_info(player_data)
             ptype = tdata.get("type", "")
-
-            # Extract player info from nested structure
-            raw_player = player_data.get("player", [])
-            meta = raw_player[0] if raw_player and isinstance(raw_player[0], list) else []
-
-            name = ""
-            player_id = ""
-            positions = []
-            for item in meta:
-                if not isinstance(item, dict):
-                    continue
-                if "name" in item:
-                    name = item["name"].get("full", "")
-                if "player_id" in item:
-                    player_id = item["player_id"]
-                if "eligible_positions" in item:
-                    positions = [
-                        ep["position"] for ep in item["eligible_positions"]
-                        if isinstance(ep, dict) and "position" in ep
-                    ]
-
-            player_info = {"name": name, "player_id": player_id, "positions": positions}
 
             if ptype == "add":
                 adds.append(player_info)
@@ -373,39 +397,19 @@ def parse_all_transactions(transactions: list[dict]) -> list[dict]:
             if key == "count" or not isinstance(player_data, dict):
                 continue
 
-            tdata = player_data.get("transaction_data", {})
+            player_info, tdata = _extract_player_info(player_data)
             ptype = tdata.get("type", "")
-
-            raw_player = player_data.get("player", [])
-            meta = raw_player[0] if raw_player and isinstance(raw_player[0], list) else []
-
-            name = ""
-            player_id = ""
-            positions = []
-            for item in meta:
-                if not isinstance(item, dict):
-                    continue
-                if "name" in item:
-                    name = item["name"].get("full", "")
-                if "player_id" in item:
-                    player_id = item["player_id"]
-                if "eligible_positions" in item:
-                    positions = [
-                        ep["position"] for ep in item["eligible_positions"]
-                        if isinstance(ep, dict) and "position" in ep
-                    ]
-
-            pos_str = ", ".join(positions) if positions else None
+            pos_str = ", ".join(player_info["positions"]) if player_info["positions"] else None
 
             if ptype == "add":
-                add_name = name
-                add_pid = player_id
+                add_name = player_info["name"]
+                add_pid = player_info["player_id"]
                 add_pos = pos_str
                 team_name = tdata.get("destination_team_name", team_name)
                 team_key = tdata.get("destination_team_key", team_key)
             elif ptype == "drop":
-                drop_name = name
-                drop_pid = player_id
+                drop_name = player_info["name"]
+                drop_pid = player_info["player_id"]
                 drop_pos = pos_str
                 if not team_name:
                     team_name = tdata.get("source_team_name", "")
