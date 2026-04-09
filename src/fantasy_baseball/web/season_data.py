@@ -91,6 +91,7 @@ CACHE_FILES = {
     "spoe": "spoe.json",
     "opp_rosters": "opp_rosters.json",
     "leverage": "leverage.json",
+    "pending_moves": "pending_moves.json",
 }
 
 
@@ -709,6 +710,13 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         _progress("Fetching roster...")
         roster_raw = fetch_roster(league, user_team_key)
         _progress(f"Fetched roster: {len(roster_raw)} players")
+
+        _progress("Fetching pending moves...")
+        from fantasy_baseball.lineup.yahoo_roster import fetch_pending_moves
+        pending_moves = fetch_pending_moves(league)
+        write_cache("pending_moves", pending_moves, cache_dir)
+        if pending_moves:
+            _progress(f"Found {len(pending_moves)} pending move(s)")
 
         # --- Step 4: Read projections from SQLite ---
         _progress("Loading projections...")
