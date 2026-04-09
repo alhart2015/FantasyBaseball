@@ -99,6 +99,11 @@ def audit_roster(
             player_wsgp=round(baseline["player_wsgp"].get(player.name, 0.0), 2),
         )
 
+        # Protected players: high league-wide value, skip FA comparison
+        if player.classification in ("core", "trade_candidate"):
+            entries.append(entry)
+            continue
+
         best_gain = 0.0
         best_fa_player = None
 
