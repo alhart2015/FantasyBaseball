@@ -1,5 +1,12 @@
 """Transaction analysis — pairing, scoring, and aggregation."""
 
+from datetime import datetime
+
+from fantasy_baseball.analysis.spoe import load_projections_for_date
+from fantasy_baseball.lineup.leverage import calculate_leverage
+from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
+from fantasy_baseball.utils.name_utils import normalize_name
+
 HITTER_POSITIONS = {"C", "1B", "2B", "3B", "SS", "OF", "Util", "DH"}
 PITCHER_POSITIONS = {"SP", "RP", "P"}
 
@@ -96,3 +103,98 @@ def pair_standalone_moves(transactions: list[dict]) -> list[tuple[str, str]]:
             paired_add_ids.add(best["transaction_id"])
 
     return pairs
+
+
+def _find_player_wsgp(name, positions_str, hitters_proj, pitchers_proj, leverage):
+    """Look up a player in projections and compute wSGP."""
+    if not name:
+        return 0.0
+
+    name_norm = normalize_name(name)
+    positions = _parse_positions(positions_str)
+
+    # Try hitter first
+    if _is_hitter(positions) and not hitters_proj.empty:
+        matches = hitters_proj[hitters_proj["_name_norm"] == name_norm]
+        if not matches.empty:
+            from fantasy_baseball.models.player import HitterStats
+            row = matches.iloc[0]
+            stats = HitterStats.from_dict(row.to_dict())
+            return calculate_weighted_sgp(stats, leverage)
+
+    # Try pitcher
+    if _is_pitcher(positions) and not pitchers_proj.empty:
+        matches = pitchers_proj[pitchers_proj["_name_norm"] == name_norm]
+        if not matches.empty:
+            from fantasy_baseball.models.player import PitcherStats
+            row = matches.iloc[0]
+            stats = PitcherStats.from_dict(row.to_dict())
+            return calculate_weighted_sgp(stats, leverage)
+
+    return 0.0
+
+
+def score_transaction(conn, txn: dict, year: int) -> dict:
+    """Compute wSGP for the add and drop sides of a transaction.
+
+    Uses the team's leverage at the time of the transaction (from the
+    nearest prior standings snapshot) and the nearest ROS projections.
+
+    Args:
+        conn: SQLite connection.
+        txn: Transaction dict with team, timestamp, add_name, add_positions,
+             drop_name, drop_positions.
+        year: Season year.
+
+    Returns:
+        {"add_wsgp": float, "drop_wsgp": float, "value": float}
+    """
+    # Convert Unix timestamp to date string for DB lookups
+    ts = int(txn.get("timestamp", 0) or 0)
+    txn_date = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else f"{year}-03-01"
+
+    # Find nearest standings snapshot for leverage
+    row = conn.execute(
+        "SELECT MAX(snapshot_date) as best FROM standings "
+        "WHERE year = ? AND snapshot_date <= ?",
+        (year, txn_date),
+    ).fetchone()
+    standings_date = row["best"] if row and row["best"] else None
+
+    if standings_date:
+        standings_rows = conn.execute(
+            "SELECT team, r, hr, rbi, sb, avg, w, k, sv, era, whip "
+            "FROM standings WHERE year = ? AND snapshot_date = ?",
+            (year, standings_date),
+        ).fetchall()
+        standings = [
+            {"name": r["team"], "stats": {
+                "R": r["r"], "HR": r["hr"], "RBI": r["rbi"], "SB": r["sb"],
+                "AVG": r["avg"], "W": r["w"], "K": r["k"], "SV": r["sv"],
+                "ERA": r["era"], "WHIP": r["whip"],
+            }}
+            for r in standings_rows
+        ]
+        leverage = calculate_leverage(standings, txn["team"])
+    else:
+        # No standings yet — equal weights
+        leverage = {cat: 1.0 for cat in ["R", "HR", "RBI", "SB", "AVG",
+                                          "W", "K", "SV", "ERA", "WHIP"]}
+
+    # Load projections nearest to transaction date
+    hitters_proj, pitchers_proj = load_projections_for_date(conn, year, txn_date)
+
+    add_wsgp = _find_player_wsgp(
+        txn.get("add_name"), txn.get("add_positions"),
+        hitters_proj, pitchers_proj, leverage,
+    )
+    drop_wsgp = _find_player_wsgp(
+        txn.get("drop_name"), txn.get("drop_positions"),
+        hitters_proj, pitchers_proj, leverage,
+    )
+
+    return {
+        "add_wsgp": round(add_wsgp, 2),
+        "drop_wsgp": round(drop_wsgp, 2),
+        "value": round(add_wsgp - drop_wsgp, 2),
+    }
