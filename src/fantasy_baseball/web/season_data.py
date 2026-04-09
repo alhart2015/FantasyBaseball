@@ -1066,6 +1066,17 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             rank_data = lookup_rank(rankings_lookup, player.fg_id, player.name, player.player_type)
             player.rank = RankInfo.from_dict(rank_data) if rank_data else RankInfo()
 
+        # Classify roster players by league-wide value vs team fit
+        from fantasy_baseball.lineup.player_classification import classify_roster
+        ros_rank_lookup = {}
+        for key, rank_data in rankings_lookup.items():
+            ros = rank_data.get("ros")
+            if ros is not None:
+                ros_rank_lookup[key] = ros
+        classifications = classify_roster(roster_players, ros_rank_lookup)
+        for player in roster_players:
+            player.classification = classifications.get(player.name, "")
+
         roster_flat = [p.to_flat_dict() for p in roster_players]
         write_cache("roster", roster_flat, cache_dir)
 
