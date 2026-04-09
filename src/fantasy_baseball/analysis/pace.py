@@ -185,3 +185,29 @@ def compute_player_pace(
         }
 
     return result
+
+
+def compute_overall_pace(pace: dict | None) -> dict:
+    """Average per-category z-scores into an overall pace summary.
+
+    Args:
+        pace: Dict from compute_player_pace() with UPPERCASE keys.
+              Each value may contain a 'z_score' float.
+
+    Returns:
+        {"avg_z": float | None, "color_class": str}
+    """
+    if not pace:
+        return {"avg_z": None, "color_class": "stat-neutral"}
+
+    z_scores = [
+        entry["z_score"]
+        for entry in pace.values()
+        if isinstance(entry, dict) and entry.get("z_score") is not None
+    ]
+
+    if not z_scores:
+        return {"avg_z": None, "color_class": "stat-neutral"}
+
+    avg_z = round(sum(z_scores) / len(z_scores), 1)
+    return {"avg_z": avg_z, "color_class": _z_to_color(avg_z)}
