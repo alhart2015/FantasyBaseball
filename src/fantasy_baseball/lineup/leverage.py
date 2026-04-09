@@ -57,12 +57,14 @@ def _leverage_from_standings(
     """Compute normalized leverage weights using per-category rank neighbors.
 
     For each category, ranks all teams independently and finds the teams
-    directly above and below the user in THAT category. The gap to those
-    per-category neighbors determines how easy it is to gain or lose a
-    standings point.
+    directly above and below the user in THAT category. Gaps are normalized
+    by SGP denominators so that a 1-run gap in R and a 0.001 AVG gap are
+    compared on the same scale (both roughly "one standings point worth").
 
     Returns None if the user team is not found.
     """
+    from fantasy_baseball.sgp.player_value import get_sgp_denominators
+
     user_team = None
     for team in standings:
         if team["name"] == user_team_name:
@@ -73,6 +75,7 @@ def _leverage_from_standings(
         return None
 
     user_stats = user_team.get("stats", {})
+    sgp_denoms = get_sgp_denominators()
     epsilon = 0.001
 
     raw_leverage: dict[str, float] = {}
@@ -112,16 +115,19 @@ def _leverage_from_standings(
 
         leverage = 0.0
         user_val = user_stats.get(cat, 0)
+        denom = sgp_denoms.get(cat, 1.0)
 
         if cat_above is not None:
             above_val = cat_above["stats"].get(cat, 0)
-            attack_gap = _gap_for_category(cat, user_val, above_val)
-            leverage += w_attack * (1.0 / (attack_gap + epsilon))
+            raw_gap = _gap_for_category(cat, user_val, above_val)
+            normalized_gap = raw_gap / denom
+            leverage += w_attack * (1.0 / (normalized_gap + epsilon))
 
         if cat_below is not None:
             below_val = cat_below["stats"].get(cat, 0)
-            defense_gap = _gap_for_category(cat, user_val, below_val)
-            leverage += w_defense * (1.0 / (defense_gap + epsilon))
+            raw_gap = _gap_for_category(cat, user_val, below_val)
+            normalized_gap = raw_gap / denom
+            leverage += w_defense * (1.0 / (normalized_gap + epsilon))
 
         raw_leverage[cat] = leverage
 

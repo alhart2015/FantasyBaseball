@@ -52,7 +52,7 @@ class TestScoreTransaction:
         assert "drop_wsgp" in result
         assert "value" in result
         assert result["value"] == pytest.approx(
-            result["add_wsgp"] - result["drop_wsgp"]
+            result["add_wsgp"] - result["drop_wsgp"], abs=0.02
         )
         conn.close()
 

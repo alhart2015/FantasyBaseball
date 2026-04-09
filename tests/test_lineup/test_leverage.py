@@ -132,30 +132,39 @@ class TestCalculateLeverage:
             f"R leverage ({leverage['R']:.4f}) should be high when nearly tied"
         )
 
-    def test_uniform_gaps_give_equal_leverage(self):
-        """When all per-category gaps are identical raw values, leverage
-        should be uniform. Uses same numeric gap for all categories
-        (counting stats gap=10, rate stats gap=10 — unrealistic but
-        tests that the formula treats equal gaps equally)."""
+    def test_uniform_sgp_gaps_give_equal_leverage(self):
+        """When all per-category gaps are exactly 1 SGP denominator,
+        leverage should be uniform (each category is equally close to
+        gaining/losing a point)."""
+        from fantasy_baseball.sgp.player_value import get_sgp_denominators
+        denoms = get_sgp_denominators()
         standings = [
             {"name": "Above", "rank": 1, "stats": {
-                "R": 110, "HR": 110, "RBI": 110, "SB": 110, "AVG": 110,
-                "W": 110, "K": 110, "SV": 110, "ERA": 90, "WHIP": 90,
+                "R": 100 + denoms["R"], "HR": 100 + denoms["HR"],
+                "RBI": 100 + denoms["RBI"], "SB": 100 + denoms["SB"],
+                "AVG": 0.270 + denoms["AVG"],
+                "W": 100 + denoms["W"], "K": 100 + denoms["K"],
+                "SV": 100 + denoms["SV"],
+                "ERA": 3.50 - denoms["ERA"], "WHIP": 1.20 - denoms["WHIP"],
             }},
             {"name": "User", "rank": 2, "stats": {
-                "R": 100, "HR": 100, "RBI": 100, "SB": 100, "AVG": 100,
-                "W": 100, "K": 100, "SV": 100, "ERA": 100, "WHIP": 100,
+                "R": 100, "HR": 100, "RBI": 100, "SB": 100, "AVG": 0.270,
+                "W": 100, "K": 100, "SV": 100, "ERA": 3.50, "WHIP": 1.20,
             }},
             {"name": "Below", "rank": 3, "stats": {
-                "R": 90, "HR": 90, "RBI": 90, "SB": 90, "AVG": 90,
-                "W": 90, "K": 90, "SV": 90, "ERA": 110, "WHIP": 110,
+                "R": 100 - denoms["R"], "HR": 100 - denoms["HR"],
+                "RBI": 100 - denoms["RBI"], "SB": 100 - denoms["SB"],
+                "AVG": 0.270 - denoms["AVG"],
+                "W": 100 - denoms["W"], "K": 100 - denoms["K"],
+                "SV": 100 - denoms["SV"],
+                "ERA": 3.50 + denoms["ERA"], "WHIP": 1.20 + denoms["WHIP"],
             }},
         ]
         leverage = calculate_leverage(standings, "User", season_progress=1.0)
         expected = 1.0 / 10
         for cat, weight in leverage.items():
             assert weight == pytest.approx(expected, abs=0.005), (
-                f"{cat} = {weight:.4f}, expected ~{expected:.4f} with uniform gaps"
+                f"{cat} = {weight:.4f}, expected ~{expected:.4f} with uniform SGP gaps"
             )
 
     def test_tied_category_does_not_dominate(self):
@@ -203,6 +212,34 @@ class TestCalculateLeverage:
         uniform = 1.0 / 10
         for weight in leverage.values():
             assert weight == pytest.approx(uniform, abs=0.001)
+
+    def test_rate_stat_gap_not_inflated_vs_counting(self):
+        """A 0.001 AVG gap and a 1-run R gap represent similar difficulty
+        to close (~1 hit). With SGP normalization, they should produce
+        similar leverage, not 1000x different."""
+        standings = [
+            {"name": "Above", "rank": 1, "stats": {
+                "R": 101, "HR": 100, "RBI": 100, "SB": 100, "AVG": 0.271,
+                "W": 100, "K": 100, "SV": 100, "ERA": 3.50, "WHIP": 1.20,
+            }},
+            {"name": "User", "rank": 2, "stats": {
+                "R": 100, "HR": 100, "RBI": 100, "SB": 100, "AVG": 0.270,
+                "W": 100, "K": 100, "SV": 100, "ERA": 3.50, "WHIP": 1.20,
+            }},
+            {"name": "Below", "rank": 3, "stats": {
+                "R": 99, "HR": 100, "RBI": 100, "SB": 100, "AVG": 0.269,
+                "W": 100, "K": 100, "SV": 100, "ERA": 3.50, "WHIP": 1.20,
+            }},
+        ]
+        leverage = calculate_leverage(standings, "User", season_progress=1.0)
+        # R gap is 1 run, AVG gap is 0.001. Without normalization, AVG
+        # would dominate by ~1000x. With SGP normalization, they should
+        # be within an order of magnitude of each other.
+        ratio = leverage["AVG"] / leverage["R"] if leverage["R"] > 0 else float("inf")
+        assert ratio < 10, (
+            f"AVG/R leverage ratio is {ratio:.1f} — AVG still dominates "
+            f"despite similar SGP-normalized gaps"
+        )
 
     def test_real_world_scenario_first_place_sb_leader(self):
         """Regression test for the actual bug: user is 1st overall and
