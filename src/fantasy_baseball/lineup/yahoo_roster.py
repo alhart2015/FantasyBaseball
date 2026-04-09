@@ -334,3 +334,96 @@ def parse_pending_moves(transactions: list[dict]) -> list[dict]:
         })
 
     return pending
+
+
+def fetch_all_transactions(league) -> list[dict]:
+    """Fetch all successful add/drop transactions for the season.
+
+    Returns list of flat transaction dicts ready for scoring and DB insertion.
+    Excludes pending transactions (those are handled by fetch_pending_moves).
+    """
+    try:
+        raw = league.transactions("add,drop", "")
+        return parse_all_transactions(raw)
+    except Exception:
+        logger.exception("Failed to fetch transactions; returning empty list")
+        return []
+
+
+def parse_all_transactions(transactions: list[dict]) -> list[dict]:
+    """Parse raw Yahoo transactions into flat dicts for DB storage.
+
+    Only includes successful (completed) transactions.
+    Each dict has: transaction_id, type, status, timestamp, team, team_key,
+    add_name, add_player_id, add_positions, drop_name, drop_player_id,
+    drop_positions.
+    """
+    results = []
+    for txn in transactions:
+        if txn.get("status") != "successful":
+            continue
+
+        add_name = add_pid = add_pos = None
+        drop_name = drop_pid = drop_pos = None
+        team_name = ""
+        team_key = ""
+
+        players = txn.get("players", {})
+        for key, player_data in players.items():
+            if key == "count" or not isinstance(player_data, dict):
+                continue
+
+            tdata = player_data.get("transaction_data", {})
+            ptype = tdata.get("type", "")
+
+            raw_player = player_data.get("player", [])
+            meta = raw_player[0] if raw_player and isinstance(raw_player[0], list) else []
+
+            name = ""
+            player_id = ""
+            positions = []
+            for item in meta:
+                if not isinstance(item, dict):
+                    continue
+                if "name" in item:
+                    name = item["name"].get("full", "")
+                if "player_id" in item:
+                    player_id = item["player_id"]
+                if "eligible_positions" in item:
+                    positions = [
+                        ep["position"] for ep in item["eligible_positions"]
+                        if isinstance(ep, dict) and "position" in ep
+                    ]
+
+            pos_str = ", ".join(positions) if positions else None
+
+            if ptype == "add":
+                add_name = name
+                add_pid = player_id
+                add_pos = pos_str
+                team_name = tdata.get("destination_team_name", team_name)
+                team_key = tdata.get("destination_team_key", team_key)
+            elif ptype == "drop":
+                drop_name = name
+                drop_pid = player_id
+                drop_pos = pos_str
+                if not team_name:
+                    team_name = tdata.get("source_team_name", "")
+                    team_key = tdata.get("source_team_key", "")
+
+        results.append({
+            "transaction_id": txn.get("transaction_id", ""),
+            "type": txn.get("type", ""),
+            "status": txn.get("status", ""),
+            "timestamp": txn.get("timestamp", ""),
+            "team": team_name,
+            "team_key": team_key,
+            "add_name": add_name,
+            "add_player_id": add_pid,
+            "add_positions": add_pos,
+            "drop_name": drop_name,
+            "drop_player_id": drop_pid,
+            "drop_positions": drop_pos,
+        })
+
+    return results
