@@ -1,4 +1,5 @@
-from fantasy_baseball.web.season_data import adjust_for_pending_moves
+from fantasy_baseball.utils.name_utils import normalize_name
+from fantasy_baseball.web.season_data import adjust_for_pending_moves, find_unprocessed_moves
 from fantasy_baseball.models.player import Player, PlayerType, HitterStats
 
 
@@ -64,3 +65,62 @@ class TestAdjustForPendingMoves:
         ]
         _, adj_fa = adjust_for_pending_moves([], fa, pending, "My Team")
         assert len(adj_fa) == 0
+
+
+def _make_txn(txn_id, team, add_name=None, drop_name=None,
+              add_positions=None, drop_positions=None):
+    return {
+        "transaction_id": txn_id,
+        "type": "add/drop",
+        "team": team,
+        "team_key": "t.1",
+        "add_name": add_name,
+        "add_positions": add_positions,
+        "drop_name": drop_name,
+        "drop_positions": drop_positions,
+    }
+
+
+class TestFindUnprocessedMoves:
+    def test_detects_drop_still_on_roster(self):
+        """Beeter dropped but still on roster = unprocessed."""
+        txns = [_make_txn("59", "My Team",
+                          add_name="Michael Wacha", add_positions="SP",
+                          drop_name="Clayton Beeter", drop_positions="SP")]
+        roster_names = {normalize_name("Clayton Beeter"),
+                        normalize_name("Juan Soto")}
+        result = find_unprocessed_moves(txns, roster_names, "My Team")
+        assert len(result) == 1
+        assert result[0]["drops"][0]["name"] == "Clayton Beeter"
+        assert result[0]["adds"][0]["name"] == "Michael Wacha"
+
+    def test_ignores_already_processed(self):
+        """If dropped player is gone and added player is on roster, skip."""
+        txns = [_make_txn("59", "My Team",
+                          add_name="Michael Wacha",
+                          drop_name="Clayton Beeter")]
+        roster_names = {normalize_name("Michael Wacha"),
+                        normalize_name("Juan Soto")}
+        result = find_unprocessed_moves(txns, roster_names, "My Team")
+        assert len(result) == 0
+
+    def test_ignores_other_teams(self):
+        txns = [_make_txn("60", "Other Team",
+                          add_name="Player A",
+                          drop_name="Player B")]
+        roster_names = {normalize_name("Player B")}
+        result = find_unprocessed_moves(txns, roster_names, "My Team")
+        assert len(result) == 0
+
+    def test_add_only_not_on_roster(self):
+        txns = [_make_txn("61", "My Team",
+                          add_name="New Player", add_positions="OF")]
+        roster_names = {normalize_name("Juan Soto")}
+        result = find_unprocessed_moves(txns, roster_names, "My Team")
+        assert len(result) == 1
+        assert result[0]["adds"][0]["name"] == "New Player"
+        assert result[0]["drops"] == []
+
+    def test_empty_transactions(self):
+        result = find_unprocessed_moves([], set(), "My Team")
+        assert result == []

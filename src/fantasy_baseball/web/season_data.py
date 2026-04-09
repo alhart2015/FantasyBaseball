@@ -92,6 +92,7 @@ CACHE_FILES = {
     "opp_rosters": "opp_rosters.json",
     "leverage": "leverage.json",
     "pending_moves": "pending_moves.json",
+    "transaction_analyzer": "transaction_analyzer.json",
 }
 
 
@@ -635,6 +636,71 @@ def _compute_category_ranks(standings: list[dict]) -> dict[str, dict[str, int]]:
     return ranks
 
 
+def find_unprocessed_moves(
+    transactions: list[dict],
+    roster_names: set[str],
+    user_team_name: str,
+) -> list[dict]:
+    """Find successful transactions that haven't taken effect on the roster yet.
+
+    A move is "unprocessed" when the user's team completed a transaction
+    (status=successful) but the roster hasn't updated yet (next Tuesday).
+    Detected by checking: dropped player is still on the roster, or added
+    player is not yet on the roster.
+
+    Args:
+        transactions: Flat transaction dicts from parse_all_transactions().
+        roster_names: Set of normalized names currently on the user's roster.
+        user_team_name: User's team name.
+
+    Returns:
+        List of pending move dicts in the format expected by the lineup
+        banner and adjust_for_pending_moves: {team, adds, drops, ...}.
+    """
+    from fantasy_baseball.utils.name_utils import normalize_name
+
+    unprocessed = []
+    for txn in transactions:
+        if txn.get("team") != user_team_name:
+            continue
+
+        drop_name = txn.get("drop_name")
+        add_name = txn.get("add_name")
+
+        drop_still_on_roster = (
+            drop_name and normalize_name(drop_name) in roster_names
+        )
+        add_not_on_roster = (
+            add_name and normalize_name(add_name) not in roster_names
+        )
+
+        if not drop_still_on_roster and not add_not_on_roster:
+            continue
+
+        adds = []
+        if add_name and add_not_on_roster:
+            positions = txn.get("add_positions")
+            pos_list = [p.strip() for p in positions.split(",")] if positions else []
+            adds.append({"name": add_name, "positions": pos_list})
+
+        drops = []
+        if drop_name and drop_still_on_roster:
+            positions = txn.get("drop_positions")
+            pos_list = [p.strip() for p in positions.split(",")] if positions else []
+            drops.append({"name": drop_name, "positions": pos_list})
+
+        unprocessed.append({
+            "transaction_id": txn.get("transaction_id", ""),
+            "type": txn.get("type", ""),
+            "team": user_team_name,
+            "team_key": txn.get("team_key", ""),
+            "adds": adds,
+            "drops": drops,
+        })
+
+    return unprocessed
+
+
 def adjust_for_pending_moves(
     roster: list,
     fa_pool: list,
@@ -752,12 +818,16 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         roster_raw = fetch_roster(league, user_team_key)
         _progress(f"Fetched roster: {len(roster_raw)} players")
 
-        _progress("Fetching pending moves...")
-        from fantasy_baseball.lineup.yahoo_roster import fetch_pending_moves
-        pending_moves = fetch_pending_moves(league)
+        _progress("Checking for unprocessed moves...")
+        from fantasy_baseball.lineup.yahoo_roster import fetch_all_transactions
+        roster_names = {normalize_name(p["name"]) for p in roster_raw}
+        recent_txns = fetch_all_transactions(league)
+        pending_moves = find_unprocessed_moves(
+            recent_txns, roster_names, config.team_name
+        )
         write_cache("pending_moves", pending_moves, cache_dir)
         if pending_moves:
-            _progress(f"Found {len(pending_moves)} pending move(s)")
+            _progress(f"Found {len(pending_moves)} unprocessed move(s)")
 
         # --- Step 4: Read projections from SQLite ---
         _progress("Loading projections...")
@@ -1314,7 +1384,62 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         finally:
             db_conn.close()
 
-        # --- Step 15: Write meta ---
+        # --- Step 15: Transaction analyzer ---
+        _progress("Analyzing transactions...")
+        from fantasy_baseball.lineup.yahoo_roster import fetch_all_transactions
+        from fantasy_baseball.analysis.transactions import (
+            pair_standalone_moves,
+            score_transaction,
+            build_cache_output,
+        )
+        from fantasy_baseball.data.db import (
+            get_connection as get_db_conn,
+            insert_transactions,
+            get_transaction_ids,
+            get_all_transactions,
+            update_transaction_pairing,
+        )
+
+        raw_txns = fetch_all_transactions(league)
+        if raw_txns:
+            txn_conn = get_db_conn()
+            create_tables(txn_conn)
+            try:
+                existing_ids = get_transaction_ids(txn_conn, config.season_year)
+                new_txns = [t for t in raw_txns
+                            if t["transaction_id"] not in existing_ids]
+
+                if new_txns:
+                    _progress(f"Scoring {len(new_txns)} new transaction(s)...")
+                    scored = []
+                    for txn in new_txns:
+                        scores = score_transaction(txn_conn, txn, config.season_year)
+                        scored.append({
+                            "year": config.season_year,
+                            **txn,
+                            **scores,
+                            "paired_with": None,
+                        })
+                    insert_transactions(txn_conn, scored)
+
+                    # Pair standalone moves
+                    all_txns = get_all_transactions(txn_conn, config.season_year)
+                    unpaired = [t for t in all_txns if not t.get("paired_with")]
+                    pairs = pair_standalone_moves(unpaired)
+                    for drop_id, add_id in pairs:
+                        update_transaction_pairing(
+                            txn_conn, config.season_year, drop_id, add_id
+                        )
+
+                # Build cache from full table
+                all_txns = get_all_transactions(txn_conn, config.season_year)
+                cache_data = build_cache_output(all_txns)
+                write_cache("transaction_analyzer", cache_data, cache_dir)
+                _progress(f"Analyzed {len(all_txns)} total transaction(s)")
+            finally:
+                txn_conn.close()
+
+        # --- Step 16: Write meta ---
         _progress("Finalizing...")
         meta = {
             "last_refresh": datetime.now().strftime("%Y-%m-%d %H:%M"),
