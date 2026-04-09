@@ -353,7 +353,7 @@ def build_opponent_lineup(
         Dict with "hitters" and "pitchers" lists, each entry containing
         projection stats, pace data, and dual wSGP (wsgp_them, wsgp_you).
     """
-    from fantasy_baseball.analysis.pace import compute_player_pace
+    from fantasy_baseball.analysis.pace import compute_overall_pace, compute_player_pace
     from fantasy_baseball.data.projections import match_roster_to_projections
     from fantasy_baseball.lineup.leverage import calculate_leverage
     from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
@@ -406,6 +406,7 @@ def build_opponent_lineup(
         proj_keys = HITTER_PROJ_KEYS if ptype == PlayerType.HITTER else PITCHER_PROJ_KEYS
         projected = {k: getattr(player.ros, k, 0) if player.ros else 0 for k in proj_keys}
         entry["stats"] = compute_player_pace(actuals, projected, ptype)
+        entry["overall_pace"] = compute_overall_pace(entry["stats"])
 
         enriched.append(entry)
 
@@ -416,6 +417,7 @@ def build_opponent_lineup(
             entry["wsgp_them"] = 0.0
             entry["wsgp_you"] = 0.0
             entry["stats"] = {}
+            entry["overall_pace"] = compute_overall_pace(entry["stats"])
             enriched.append(entry)
 
     # Split into hitters and pitchers
@@ -498,6 +500,7 @@ def format_lineup_for_display(
     roster: list[dict], optimal: dict | None
 ) -> dict:
     """Format roster + optimizer output for the lineup template."""
+    from fantasy_baseball.analysis.pace import compute_overall_pace
     from fantasy_baseball.models.player import Player
 
     hitters = []
@@ -521,6 +524,7 @@ def format_lineup_for_display(
             "is_bench": pos in ("BN", "IL", "DL"),
             "is_il": "IL" in player.status or pos == "IL",
             "stats": player.pace or {},
+            "overall_pace": compute_overall_pace(player.pace),
             "rank": player.rank.to_dict(),
             "preseason": player.preseason.to_dict() if player.preseason else None,
         }
