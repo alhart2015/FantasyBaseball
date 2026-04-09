@@ -767,7 +767,7 @@ def register_routes(app: Flask) -> None:
             meta=meta,
             active_page="luck",
             spoe_data=spoe_data,
-            snapshot_date=latest,
+            snapshot_date=meta.get("last_refresh", latest),
             categories=ALL_CATEGORIES,
             rate_stats=RATE_STATS,
         )
