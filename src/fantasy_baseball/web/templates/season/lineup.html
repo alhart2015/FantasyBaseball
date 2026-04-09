@@ -72,6 +72,32 @@
 </div>
 {% endif %}
 
+{# Pending transactions banner #}
+{% if pending_moves %}
+{% set user_pending = pending_moves | selectattr("team", "equalto", meta.get("team_name", "")) | list %}
+{% if user_pending %}
+<div class="moves-banner" style="border-left-color: var(--warning);">
+    <h4>Pending Moves ({{ user_pending | length }})</h4>
+    {% for move in user_pending %}
+    <div class="move-row">
+        <span class="badge badge-warning">PENDING</span>
+        {% for add in move.adds %}
+        <span><strong style="color: var(--success);">+ {{ add.name }}</strong>
+            <span style="color: var(--text-secondary); font-size: 11px;">({{ add.positions | join(", ") }})</span>
+        </span>
+        {% endfor %}
+        {% for drop in move.drops %}
+        <span><strong style="color: var(--danger);">- {{ drop.name }}</strong>
+            <span style="color: var(--text-secondary); font-size: 11px;">({{ drop.positions | join(", ") }})</span>
+        </span>
+        {% endfor %}
+        <span style="color: var(--text-secondary); font-size: 11px;">Takes effect Tuesday</span>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endif %}
+
 {# Hitters section #}
 <div class="section-header">
     <h3>Hitters</h3>

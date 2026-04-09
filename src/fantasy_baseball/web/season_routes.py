@@ -295,6 +295,7 @@ def register_routes(app: Flask) -> None:
         roster_raw = read_cache("roster")
         optimal_raw = read_cache("lineup_optimal")
         starters_raw = read_cache("probable_starters")
+        pending_moves_raw = read_cache("pending_moves") or []
 
         lineup_data = None
         if roster_raw:
@@ -316,6 +317,7 @@ def register_routes(app: Flask) -> None:
             active_page="lineup",
             lineup=lineup_data,
             starters=starters_raw,
+            pending_moves=pending_moves_raw,
             teams=teams_data["teams"],
             user_team_key=teams_data.get("user_team_key", ""),
             selected_team_key=selected_team_key,
