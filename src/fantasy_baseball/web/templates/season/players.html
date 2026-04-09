@@ -147,6 +147,9 @@
             </div>
         </div>
     </div>
+    <div id="standings-unavailable" style="display:none; margin-top:16px; padding:12px 16px; color:var(--text-secondary); font-style:italic; font-size:13px; border-top:1px solid var(--panel-border);">
+        Projected standings impact is only available when comparing a player on your team to a player not on your team.
+    </div>
 </div>
 
 <script>
@@ -379,6 +382,7 @@ function updateComparison() {
         compPanel.style.display = selectedPlayers.length > 0 ? '' : 'none';
         compStatsTable.style.display = 'none';
         standingsSection.style.display = 'none';
+        document.getElementById('standings-unavailable').style.display = 'none';
         compValidation.textContent = selectedPlayers.length === 1
             ? 'Select one more player to compare.'
             : '';
@@ -387,20 +391,22 @@ function updateComparison() {
 
     const [a, b] = selectedPlayers;
     const rosterPlayer = a.owner === 'roster' ? a : (b.owner === 'roster' ? b : null);
-    const otherPlayer = a.owner === 'roster' ? b : (b.owner === 'roster' ? a : null);
+    const otherPlayer = rosterPlayer ? (rosterPlayer === a ? b : a) : null;
 
     compPanel.style.display = '';
 
-    if (!rosterPlayer || !otherPlayer || otherPlayer.owner === 'roster') {
-        compStatsTable.style.display = 'none';
+    if (rosterPlayer && otherPlayer && otherPlayer.owner !== 'roster') {
+        // One roster + one non-roster: full comparison with standings
+        compValidation.textContent = '';
+        renderStatComparison(rosterPlayer, otherPlayer);
+        fetchStandings(rosterPlayer, otherPlayer);
+    } else {
+        // Two non-roster players (or two roster): stat comparison only
+        compValidation.textContent = '';
+        renderStatComparison(a, b);
         standingsSection.style.display = 'none';
-        compValidation.textContent = 'Select one player from your roster and one who is not on your roster.';
-        return;
+        document.getElementById('standings-unavailable').style.display = '';
     }
-
-    compValidation.textContent = '';
-    renderStatComparison(rosterPlayer, otherPlayer);
-    fetchStandings(rosterPlayer, otherPlayer);
 }
 
 function renderStatComparison(roster, other) {
@@ -413,8 +419,8 @@ function renderStatComparison(roster, other) {
         {label: 'wSGP', key: 'wsgp', inverse: false},
     ];
 
-    const rLabel = roster.name + ' (Yours)';
-    const oLabel = other.name + (other.owner ? '' : ' (FA)');
+    const rLabel = roster.name + (roster.owner === 'roster' ? ' (Yours)' : (roster.owner ? '' : ' (FA)'));
+    const oLabel = other.name + (other.owner === 'roster' ? ' (Yours)' : (other.owner ? '' : ' (FA)'));
 
     compStatsHead.innerHTML =
         '<th style="text-align:left">Stat</th>' +
@@ -460,6 +466,7 @@ function renderStatComparison(roster, other) {
 let fetchSeq = 0;
 function fetchStandings(rosterPlayer, otherPlayer) {
     standingsSection.style.display = 'none';
+    document.getElementById('standings-unavailable').style.display = 'none';
     const mySeq = ++fetchSeq;
     const params = new URLSearchParams({
         roster_player: rosterPlayer.name,
