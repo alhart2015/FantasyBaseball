@@ -1,0 +1,4242 @@
+[
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "1B",
+    "player_name": "Vinnie Pasquantino",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "2B",
+    "player_name": "Bryson Stott",
+    "positions": "2B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "3B",
+    "player_name": "JJ Wetherholt",
+    "positions": "2B, 3B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "BN",
+    "player_name": "Chris Paddack",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "BN",
+    "player_name": "Shota Imanaga",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "C",
+    "player_name": "Will Smith",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "IF",
+    "player_name": "Matt McLain",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "IL",
+    "player_name": "Bryce Miller",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "OF",
+    "player_name": "Pete Crow-Armstrong",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "OF",
+    "player_name": "Roman Anthony",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "OF",
+    "player_name": "Taylor Ward",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "OF",
+    "player_name": "Yordan Alvarez",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Emerson Hancock",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Kodai Senga",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Kyle Bradish",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "MacKenzie Gore",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Michael King",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Paul Sewald",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Paul Skenes",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Ryan Helsley",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Tarik Skubal",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "SS",
+    "player_name": "Mookie Betts",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "Util",
+    "player_name": "Brenton Doyle",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "Util",
+    "player_name": "Sal Frelick",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "1B",
+    "player_name": "Munetaka Murakami",
+    "positions": "1B, 3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "2B",
+    "player_name": "Marcus Semien",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "3B",
+    "player_name": "Junior Caminero",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "BN",
+    "player_name": "Adolis Garc\u00eda",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "BN",
+    "player_name": "Josh Hader",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "C",
+    "player_name": "Ivan Herrera",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "IF",
+    "player_name": "Willy Adames",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "IL",
+    "player_name": "Spencer Strider",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "IL",
+    "player_name": "Zack Wheeler",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "OF",
+    "player_name": "Juan Soto",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "OF",
+    "player_name": "Julio Rodr\u00edguez",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "OF",
+    "player_name": "Oneil Cruz",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "OF",
+    "player_name": "Randy Arozarena",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Aaron Nola",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Bryan Abreu",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Bryan Woo",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Jes\u00fas Luzardo",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Jos\u00e9 Soriano",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Logan Webb",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Mason Miller",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Ryan Walker",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Sonny Gray",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "SS",
+    "player_name": "CJ Abrams",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "Util",
+    "player_name": "Andy Pages",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "Util",
+    "player_name": "Byron Buxton",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "1B",
+    "player_name": "Sal Stewart",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "2B",
+    "player_name": "Luke Keaschall",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "3B",
+    "player_name": "Austin Riley",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "BN",
+    "player_name": "Addison Barger",
+    "positions": "3B, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "BN",
+    "player_name": "Samuel Basallo",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "C",
+    "player_name": "Salvador Perez",
+    "positions": "C, 1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "IF",
+    "player_name": "Kevin McGonigle",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "OF",
+    "player_name": "Corbin Carroll",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "OF",
+    "player_name": "George Springer",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "OF",
+    "player_name": "Mike Trout",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "OF",
+    "player_name": "Wyatt Langford",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Chase Burns",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Emilio Pag\u00e1n",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Eury P\u00e9rez",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Hunter Brown",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Jacob deGrom",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Jeff Hoffman",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Kenley Jansen",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Nolan McLean",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Shane McClanahan",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "SS",
+    "player_name": "Elly De La Cruz",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "Util",
+    "player_name": "James Wood",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "Util",
+    "player_name": "Jonathan Aranda",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "1B",
+    "player_name": "Nick Kurtz",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "2B",
+    "player_name": "Xavier Edwards",
+    "positions": "2B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "3B",
+    "player_name": "Manny Machado",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "BN",
+    "player_name": "Chandler Simpson",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "BN",
+    "player_name": "Trey Yesavage",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "C",
+    "player_name": "Drake Baldwin",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "IF",
+    "player_name": "Ben Rice",
+    "positions": "C, 1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "IL",
+    "player_name": "Gerrit Cole",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "IL",
+    "player_name": "Shane Bieber",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "OF",
+    "player_name": "Brendan Donovan",
+    "positions": "2B, 3B, SS, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "OF",
+    "player_name": "Cody Bellinger",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "OF",
+    "player_name": "Jakob Marsee",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "OF",
+    "player_name": "Jose Altuve",
+    "positions": "2B, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "Brandon Woodruff",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "Cam Schlittler",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "David Bednar",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "Dylan Cease",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "Edwin D\u00edaz",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "Garrett Crochet",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "Jordan Romano",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "Luis Castillo",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "Will Warren",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "SS",
+    "player_name": "Bobby Witt Jr.",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "Util",
+    "player_name": "Alec Bohm",
+    "positions": "1B, 3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "Util",
+    "player_name": "Jake Burger",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "1B",
+    "player_name": "Rafael Devers",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "2B",
+    "player_name": "Jazz Chisholm Jr.",
+    "positions": "2B, 3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "3B",
+    "player_name": "Eugenio Su\u00e1rez",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "BN",
+    "player_name": "Cade Cavalli",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "BN",
+    "player_name": "Kyle Manzardo",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "C",
+    "player_name": "Hunter Goodman",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "IF",
+    "player_name": "Brandon Lowe",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "OF",
+    "player_name": "Kerry Carpenter",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "OF",
+    "player_name": "Kyle Schwarber",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "OF",
+    "player_name": "Riley Greene",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "OF",
+    "player_name": "Trent Grisham",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Andr\u00e9s Mu\u00f1oz",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Brady Singer",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Chris Bassitt",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Daniel Palencia",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Framber Valdez",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Kevin Gausman",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Pete Fairbanks",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Trevor Megill",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Zac Gallen",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "SS",
+    "player_name": "Dansby Swanson",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "Util",
+    "player_name": "Heliot Ramos",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "Util",
+    "player_name": "Jo Adell",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "1B",
+    "player_name": "Yandy D\u00edaz",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "2B",
+    "player_name": "Gleyber Torres",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "3B",
+    "player_name": "Matt Chapman",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "BN",
+    "player_name": "Jacob Wilson",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "BN",
+    "player_name": "Seiya Suzuki",
+    "positions": "OF, Util, IL"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "C",
+    "player_name": "William Contreras",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "IF",
+    "player_name": "Jeremy Pe\u00f1a",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "IL",
+    "player_name": "Blake Snell",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "IL",
+    "player_name": "Hunter Greene",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "OF",
+    "player_name": "Bryan Reynolds",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "OF",
+    "player_name": "Daylen Lile",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "OF",
+    "player_name": "Kyle Tucker",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "OF",
+    "player_name": "Ronald Acu\u00f1a Jr.",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Abner Uribe",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Andrew Abbott",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Cade Smith",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Chris Sale",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Cristopher S\u00e1nchez",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Devin Williams",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Drew Rasmussen",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Lucas Erceg",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Nathan Eovaldi",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "SS",
+    "player_name": "Gunnar Henderson",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "Util",
+    "player_name": "Freddie Freeman",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "Util",
+    "player_name": "Trevor Story",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "1B",
+    "player_name": "Bryce Harper",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "2B",
+    "player_name": "Brice Turang",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "3B",
+    "player_name": "Max Muncy",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "BN",
+    "player_name": "Carlos Est\u00e9vez",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "BN",
+    "player_name": "Luis Garc\u00eda Jr.",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "C",
+    "player_name": "Agust\u00edn Ram\u00edrez",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "IF",
+    "player_name": "Maikel Garcia",
+    "positions": "2B, 3B, SS, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "OF",
+    "player_name": "Aaron Judge",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "OF",
+    "player_name": "Brent Rooker",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "OF",
+    "player_name": "Luis Robert Jr.",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "OF",
+    "player_name": "Teoscar Hern\u00e1ndez",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Connelly Early",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Joe Ryan",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Kris Bubic",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Max Fried",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Nick Pivetta",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Raisel Iglesias",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Ranger Suarez",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Robbie Ray",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Seranthony Dom\u00ednguez",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "SS",
+    "player_name": "Corey Seager",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "Util",
+    "player_name": "Christian Walker",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "Util",
+    "player_name": "Spencer Torkelson",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "1B",
+    "player_name": "Michael Busch",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "2B",
+    "player_name": "Nico Hoerner",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "3B",
+    "player_name": "Colson Montgomery",
+    "positions": "3B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "BN",
+    "player_name": "Ernie Clement",
+    "positions": "1B, 2B, 3B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "BN",
+    "player_name": "Ram\u00f3n Laureano",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "C",
+    "player_name": "Yainer Diaz",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "IF",
+    "player_name": "Geraldo Perdomo",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "IL",
+    "player_name": "Jackson Chourio",
+    "positions": "OF, Util, IL"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "OF",
+    "player_name": "Alec Burleson",
+    "positions": "1B, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "OF",
+    "player_name": "Ceddanne Rafaela",
+    "positions": "2B, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "OF",
+    "player_name": "Fernando Tatis Jr.",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "OF",
+    "player_name": "Ian Happ",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Cade Horton",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Dennis Santana",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Gavin Williams",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "George Kirby",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Jacob Misiorowski",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Jhoan Duran",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Logan Gilbert",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Robert Garcia",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Yoshinobu Yamamoto",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "SS",
+    "player_name": "Francisco Lindor",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "Util",
+    "player_name": "Chase DeLauter",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "Util",
+    "player_name": "Kazuma Okamoto",
+    "positions": "1B, 3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "1B",
+    "player_name": "Vladimir Guerrero Jr.",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "2B",
+    "player_name": "Ozzie Albies",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "3B",
+    "player_name": "Jos\u00e9 Ram\u00edrez",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "BN",
+    "player_name": "Dylan Crews",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "BN",
+    "player_name": "Wilyer Abreu",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "C",
+    "player_name": "Cal Raleigh",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "IF",
+    "player_name": "Bo Bichette",
+    "positions": "3B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "OF",
+    "player_name": "Brandon Nimmo",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "OF",
+    "player_name": "Jarren Duran",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "OF",
+    "player_name": "Lawrence Butler",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "OF",
+    "player_name": "Tyler Soderstrom",
+    "positions": "1B, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Aroldis Chapman",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Bubba Chandler",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Cole Ragans",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Edward Cabrera",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Sandy Alcantara",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Shohei Ohtani (Pitcher)",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Tatsuya Imai",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Trevor Rogers",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Tyler Glasnow",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "SS",
+    "player_name": "Zach Neto",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "Util",
+    "player_name": "Steven Kwan",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "Util",
+    "player_name": "Willson Contreras",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "1B",
+    "player_name": "Pete Alonso",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "2B",
+    "player_name": "Ketel Marte",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "3B",
+    "player_name": "Alex Bregman",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "BN",
+    "player_name": "Ezequiel Tovar",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "BN",
+    "player_name": "Kyle Stowers",
+    "positions": "OF, Util, IL"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "BN",
+    "player_name": "Ryan Pepiot",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "C",
+    "player_name": "Shea Langeliers",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "IF",
+    "player_name": "Matt Olson",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "IL",
+    "player_name": "Carlos Rod\u00f3n",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "IL",
+    "player_name": "Nick Lodolo",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "OF",
+    "player_name": "Christian Yelich",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "OF",
+    "player_name": "Jac Caglianone",
+    "positions": "1B, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "OF",
+    "player_name": "Jackson Merrill",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "OF",
+    "player_name": "Michael Harris II",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "P",
+    "player_name": "Emmet Sheehan",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "P",
+    "player_name": "Freddy Peralta",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "P",
+    "player_name": "Jack Flaherty",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "P",
+    "player_name": "Matthew Boyd",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "P",
+    "player_name": "Shane Baz",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "P",
+    "player_name": "Tanner Bibee",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "SS",
+    "player_name": "Trea Turner",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "Util",
+    "player_name": "Josh Naylor",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-03-30",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "Util",
+    "player_name": "Shohei Ohtani (Batter)",
+    "positions": "Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "1B",
+    "player_name": "Vinnie Pasquantino",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "2B",
+    "player_name": "Bryson Stott",
+    "positions": "2B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "3B",
+    "player_name": "Carlos Correa",
+    "positions": "3B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "3B",
+    "player_name": "JJ Wetherholt",
+    "positions": "2B, 3B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "BN",
+    "player_name": "Chris Paddack",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "BN",
+    "player_name": "Emerson Hancock",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "BN",
+    "player_name": "Shota Imanaga",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "C",
+    "player_name": "Will Smith",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "IF",
+    "player_name": "Matt McLain",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "IL",
+    "player_name": "Bryce Miller",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "IL",
+    "player_name": "Mookie Betts",
+    "positions": "SS, IF, Util, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "OF",
+    "player_name": "Pete Crow-Armstrong",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "OF",
+    "player_name": "Roman Anthony",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "OF",
+    "player_name": "Taylor Ward",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "OF",
+    "player_name": "Yordan Alvarez",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Emerson Hancock",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Grant Holmes",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Kodai Senga",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Kyle Bradish",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "MacKenzie Gore",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Michael King",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Paul Sewald",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Paul Skenes",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Ryan Helsley",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "P",
+    "player_name": "Tarik Skubal",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "SS",
+    "player_name": "JJ Wetherholt",
+    "positions": "2B, 3B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "SS",
+    "player_name": "Mookie Betts",
+    "positions": "SS, IF, Util, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "Util",
+    "player_name": "Brenton Doyle",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "Util",
+    "player_name": "Cam Smith",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Boston Estrellas",
+    "slot": "Util",
+    "player_name": "Sal Frelick",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "1B",
+    "player_name": "Munetaka Murakami",
+    "positions": "1B, 3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "2B",
+    "player_name": "Marcus Semien",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "2B",
+    "player_name": "Otto Lopez",
+    "positions": "2B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "3B",
+    "player_name": "Junior Caminero",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "BN",
+    "player_name": "Adolis Garc\u00eda",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "BN",
+    "player_name": "Josh Hader",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "BN",
+    "player_name": "Juan Soto",
+    "positions": "OF, Util, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "BN",
+    "player_name": "Spencer Strider",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "C",
+    "player_name": "Ivan Herrera",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "IF",
+    "player_name": "Willy Adames",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "IL",
+    "player_name": "Josh Hader",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "IL",
+    "player_name": "Spencer Strider",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "IL",
+    "player_name": "Zack Wheeler",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "OF",
+    "player_name": "Adolis Garc\u00eda",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "OF",
+    "player_name": "Juan Soto",
+    "positions": "OF, Util, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "OF",
+    "player_name": "Julio Rodr\u00edguez",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "OF",
+    "player_name": "Oneil Cruz",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "OF",
+    "player_name": "Randy Arozarena",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Aaron Nola",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Bryan Abreu",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Bryan Woo",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Clayton Beeter",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Jes\u00fas Luzardo",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Jos\u00e9 Soriano",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Logan Webb",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Mason Miller",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Ryan Walker",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "P",
+    "player_name": "Sonny Gray",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "SS",
+    "player_name": "CJ Abrams",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "Util",
+    "player_name": "Andy Pages",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hart of the Order",
+    "slot": "Util",
+    "player_name": "Byron Buxton",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "1B",
+    "player_name": "Sal Stewart",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "2B",
+    "player_name": "Luke Keaschall",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "3B",
+    "player_name": "Austin Riley",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "3B",
+    "player_name": "Kevin McGonigle",
+    "positions": "3B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "BN",
+    "player_name": "Addison Barger",
+    "positions": "3B, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "BN",
+    "player_name": "Austin Riley",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "BN",
+    "player_name": "Mike Trout",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "BN",
+    "player_name": "Samuel Basallo",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "C",
+    "player_name": "Salvador Perez",
+    "positions": "C, 1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "IF",
+    "player_name": "Jonathan Aranda",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "IF",
+    "player_name": "Kevin McGonigle",
+    "positions": "3B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "IL",
+    "player_name": "Hunter Brown",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "IL",
+    "player_name": "Jordan Westburg",
+    "positions": "2B, 3B, IF, Util, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "OF",
+    "player_name": "Corbin Carroll",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "OF",
+    "player_name": "George Springer",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "OF",
+    "player_name": "James Wood",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "OF",
+    "player_name": "Mike Trout",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "OF",
+    "player_name": "Wyatt Langford",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Andrew Painter",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Chase Burns",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Emilio Pag\u00e1n",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Eury P\u00e9rez",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Hunter Brown",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Jacob deGrom",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Jeff Hoffman",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Kenley Jansen",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Nolan McLean",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "P",
+    "player_name": "Shane McClanahan",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "SS",
+    "player_name": "Elly De La Cruz",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "Util",
+    "player_name": "Giancarlo Stanton",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "Util",
+    "player_name": "James Wood",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "Util",
+    "player_name": "Jonathan Aranda",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Hello Peanuts!",
+    "slot": "Util",
+    "player_name": "Jordan Walker",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "1B",
+    "player_name": "Nick Kurtz",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "2B",
+    "player_name": "Xavier Edwards",
+    "positions": "2B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "3B",
+    "player_name": "Manny Machado",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "BN",
+    "player_name": "Chandler Simpson",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "BN",
+    "player_name": "Jakob Marsee",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "BN",
+    "player_name": "Parker Messick",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "BN",
+    "player_name": "Trey Yesavage",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "C",
+    "player_name": "Drake Baldwin",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "IF",
+    "player_name": "Ben Rice",
+    "positions": "C, 1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "IL",
+    "player_name": "Gerrit Cole",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "IL",
+    "player_name": "Shane Bieber",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "IL",
+    "player_name": "Trey Yesavage",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "OF",
+    "player_name": "Brendan Donovan",
+    "positions": "2B, 3B, SS, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "OF",
+    "player_name": "Chandler Simpson",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "OF",
+    "player_name": "Cody Bellinger",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "OF",
+    "player_name": "Jakob Marsee",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "OF",
+    "player_name": "Jose Altuve",
+    "positions": "2B, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "Brandon Woodruff",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "Cam Schlittler",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "David Bednar",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "Dylan Cease",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "Edwin D\u00edaz",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "Garrett Crochet",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "Jordan Romano",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "Luis Castillo",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "P",
+    "player_name": "Will Warren",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "SS",
+    "player_name": "Bobby Witt Jr.",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "Util",
+    "player_name": "Alec Bohm",
+    "positions": "1B, 3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Jon's Underdogs",
+    "slot": "Util",
+    "player_name": "Jake Burger",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "1B",
+    "player_name": "Rafael Devers",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "2B",
+    "player_name": "Jazz Chisholm Jr.",
+    "positions": "2B, 3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "3B",
+    "player_name": "Eugenio Su\u00e1rez",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "BN",
+    "player_name": "Cade Cavalli",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "BN",
+    "player_name": "Heliot Ramos",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "BN",
+    "player_name": "Kyle Manzardo",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "C",
+    "player_name": "Hunter Goodman",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "IF",
+    "player_name": "Brandon Lowe",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "OF",
+    "player_name": "Daulton Varsho",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "OF",
+    "player_name": "Kerry Carpenter",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "OF",
+    "player_name": "Kyle Schwarber",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "OF",
+    "player_name": "Riley Greene",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "OF",
+    "player_name": "Trent Grisham",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Andr\u00e9s Mu\u00f1oz",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Brady Singer",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Chris Bassitt",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Daniel Palencia",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Framber Valdez",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Kevin Gausman",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Pete Fairbanks",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Trevor Megill",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Tyler Alexander",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "P",
+    "player_name": "Zac Gallen",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "SS",
+    "player_name": "Dansby Swanson",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "Util",
+    "player_name": "Heliot Ramos",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "Util",
+    "player_name": "Jo Adell",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Send in the Cavalli",
+    "slot": "Util",
+    "player_name": "Luis Arraez",
+    "positions": "1B, 2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "1B",
+    "player_name": "Yandy D\u00edaz",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "2B",
+    "player_name": "Gleyber Torres",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "3B",
+    "player_name": "Matt Chapman",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "BN",
+    "player_name": "Jacob Wilson",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "BN",
+    "player_name": "Seiya Suzuki",
+    "positions": "OF, Util, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "BN",
+    "player_name": "Trevor Story",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "C",
+    "player_name": "William Contreras",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "IF",
+    "player_name": "Freddie Freeman",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "IF",
+    "player_name": "Jeremy Pe\u00f1a",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "IL",
+    "player_name": "Blake Snell",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "IL",
+    "player_name": "Hunter Greene",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "OF",
+    "player_name": "Bryan Reynolds",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "OF",
+    "player_name": "Daylen Lile",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "OF",
+    "player_name": "Kyle Tucker",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "OF",
+    "player_name": "Ronald Acu\u00f1a Jr.",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Abner Uribe",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Andrew Abbott",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Cade Smith",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Chris Sale",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Cristopher S\u00e1nchez",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Devin Williams",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Drew Rasmussen",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Lucas Erceg",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Nathan Eovaldi",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "P",
+    "player_name": "Randy V\u00e1squez",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "SS",
+    "player_name": "Gunnar Henderson",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "Util",
+    "player_name": "Freddie Freeman",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "Util",
+    "player_name": "Jacob Wilson",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "Util",
+    "player_name": "Jeremy Pe\u00f1a",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "SkeleThor",
+    "slot": "Util",
+    "player_name": "Trevor Story",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "1B",
+    "player_name": "Bryce Harper",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "2B",
+    "player_name": "Brice Turang",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "3B",
+    "player_name": "Max Muncy",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "BN",
+    "player_name": "Carlos Est\u00e9vez",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "BN",
+    "player_name": "Jack Leiter",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "BN",
+    "player_name": "Luis Garc\u00eda Jr.",
+    "positions": "1B, 2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "BN",
+    "player_name": "Spencer Torkelson",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "C",
+    "player_name": "Agust\u00edn Ram\u00edrez",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "IF",
+    "player_name": "Maikel Garcia",
+    "positions": "2B, 3B, SS, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "IL",
+    "player_name": "Carlos Est\u00e9vez",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "IL",
+    "player_name": "Shane Bieber",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "OF",
+    "player_name": "Aaron Judge",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "OF",
+    "player_name": "Brent Rooker",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "OF",
+    "player_name": "Luis Robert Jr.",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "OF",
+    "player_name": "Teoscar Hern\u00e1ndez",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Connelly Early",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Joe Ryan",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Kris Bubic",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Max Fried",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Nick Pivetta",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Raisel Iglesias",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Ranger Suarez",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Riley O'Brien",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Robbie Ray",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "P",
+    "player_name": "Seranthony Dom\u00ednguez",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "SS",
+    "player_name": "Corey Seager",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "Util",
+    "player_name": "Christian Walker",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "Util",
+    "player_name": "Luis Garc\u00eda Jr.",
+    "positions": "1B, 2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Spacemen",
+    "slot": "Util",
+    "player_name": "Spencer Torkelson",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "1B",
+    "player_name": "Michael Busch",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "2B",
+    "player_name": "Nico Hoerner",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "3B",
+    "player_name": "Colson Montgomery",
+    "positions": "3B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "BN",
+    "player_name": "Ceddanne Rafaela",
+    "positions": "2B, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "BN",
+    "player_name": "Ernie Clement",
+    "positions": "1B, 2B, 3B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "BN",
+    "player_name": "Kazuma Okamoto",
+    "positions": "1B, 3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "BN",
+    "player_name": "Ram\u00f3n Laureano",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "C",
+    "player_name": "Yainer Diaz",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "IF",
+    "player_name": "Geraldo Perdomo",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "IL",
+    "player_name": "Cade Horton",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "IL",
+    "player_name": "Jackson Chourio",
+    "positions": "OF, Util, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "OF",
+    "player_name": "Alec Burleson",
+    "positions": "1B, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "OF",
+    "player_name": "Ceddanne Rafaela",
+    "positions": "2B, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "OF",
+    "player_name": "Chase DeLauter",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "OF",
+    "player_name": "Fernando Tatis Jr.",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "OF",
+    "player_name": "Ian Happ",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Cade Horton",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Clay Holmes",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Dennis Santana",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Gavin Williams",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "George Kirby",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Jacob Misiorowski",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Jhoan Duran",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Logan Gilbert",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Robert Garcia",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "P",
+    "player_name": "Yoshinobu Yamamoto",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "SS",
+    "player_name": "Francisco Lindor",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "Util",
+    "player_name": "Chase DeLauter",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "Util",
+    "player_name": "Kazuma Okamoto",
+    "positions": "1B, 3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "Util",
+    "player_name": "Konnor Griffin",
+    "positions": "SS, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Springfield Isotopes",
+    "slot": "Util",
+    "player_name": "Ram\u00f3n Laureano",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "1B",
+    "player_name": "Vladimir Guerrero Jr.",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "2B",
+    "player_name": "Ozzie Albies",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "3B",
+    "player_name": "Jos\u00e9 Ram\u00edrez",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "BN",
+    "player_name": "Dylan Crews",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "BN",
+    "player_name": "Lawrence Butler",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "BN",
+    "player_name": "Wilyer Abreu",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "C",
+    "player_name": "Cal Raleigh",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "IF",
+    "player_name": "Bo Bichette",
+    "positions": "3B, SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "OF",
+    "player_name": "Brandon Nimmo",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "OF",
+    "player_name": "Jarren Duran",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "OF",
+    "player_name": "Lawrence Butler",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "OF",
+    "player_name": "Tyler Soderstrom",
+    "positions": "1B, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "OF",
+    "player_name": "Wilyer Abreu",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Aroldis Chapman",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Bubba Chandler",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Cole Ragans",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Edward Cabrera",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Sandy Alcantara",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Shohei Ohtani (Pitcher)",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Tatsuya Imai",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Trevor Rogers",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "P",
+    "player_name": "Tyler Glasnow",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "SS",
+    "player_name": "Zach Neto",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "Util",
+    "player_name": "Steven Kwan",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Tortured Baseball Department",
+    "slot": "Util",
+    "player_name": "Willson Contreras",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "1B",
+    "player_name": "Pete Alonso",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "2B",
+    "player_name": "Ketel Marte",
+    "positions": "2B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "3B",
+    "player_name": "Alex Bregman",
+    "positions": "3B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "BN",
+    "player_name": "Ezequiel Tovar",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "BN",
+    "player_name": "Kyle Stowers",
+    "positions": "OF, Util, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "BN",
+    "player_name": "Ryan Pepiot",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "C",
+    "player_name": "Shea Langeliers",
+    "positions": "C, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "IF",
+    "player_name": "Matt Olson",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "IL",
+    "player_name": "Carlos Rod\u00f3n",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "IL",
+    "player_name": "Nick Lodolo",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "OF",
+    "player_name": "Christian Yelich",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "OF",
+    "player_name": "Jac Caglianone",
+    "positions": "1B, IF, OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "OF",
+    "player_name": "Jackson Merrill",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "OF",
+    "player_name": "Michael Harris II",
+    "positions": "OF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "P",
+    "player_name": "Casey Mize",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "P",
+    "player_name": "Emmet Sheehan",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "P",
+    "player_name": "Freddy Peralta",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "P",
+    "player_name": "Jack Flaherty",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "P",
+    "player_name": "Matthew Boyd",
+    "positions": "P, IL"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "P",
+    "player_name": "Michael Soroka",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "P",
+    "player_name": "Robert Suarez",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "P",
+    "player_name": "Ryne Nelson",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "P",
+    "player_name": "Shane Baz",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "P",
+    "player_name": "Tanner Bibee",
+    "positions": "P"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "SS",
+    "player_name": "Trea Turner",
+    "positions": "SS, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "Util",
+    "player_name": "Josh Naylor",
+    "positions": "1B, IF, Util"
+  },
+  {
+    "snapshot_date": "2026-04-06",
+    "week_num": null,
+    "team": "Work in Progress",
+    "slot": "Util",
+    "player_name": "Shohei Ohtani (Batter)",
+    "positions": "Util"
+  }
+]

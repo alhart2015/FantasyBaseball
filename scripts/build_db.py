@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Rebuild the SQLite database from source files."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -28,6 +29,9 @@ DRAFTS_PATH = PROJECT_ROOT / "data" / "historical_drafts_resolved.json"
 STANDINGS_PATH = PROJECT_ROOT / "data" / "historical_standings.json"
 ROSTERS_DIR = PROJECT_ROOT / "data" / "rosters"
 POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
+GAME_LOGS_PATH = PROJECT_ROOT / "data" / "game_logs_2026.json"
+WEEKLY_ROSTERS_PATH = PROJECT_ROOT / "data" / "weekly_rosters_2026.json"
+STANDINGS_2026_PATH = PROJECT_ROOT / "data" / "standings_2026.json"
 
 
 def main():
@@ -85,6 +89,28 @@ def main():
         load_positions(conn, positions)
         pos_count = conn.execute("SELECT COUNT(*) FROM positions").fetchone()[0]
         print(f"  Loaded {pos_count} player positions")
+
+    # Load in-season snapshot data (accumulated across refreshes)
+    for path, table, label in [
+        (WEEKLY_ROSTERS_PATH, "weekly_rosters", "roster snapshots"),
+        (STANDINGS_2026_PATH, "standings", "standings snapshots"),
+        (GAME_LOGS_PATH, "game_logs", "game log entries"),
+    ]:
+        if not path.exists():
+            continue
+        rows = json.loads(path.read_text(encoding="utf-8"))
+        if not rows:
+            continue
+        cols = list(rows[0].keys())
+        placeholders = ", ".join("?" for _ in cols)
+        col_names = ", ".join(cols)
+        conn.executemany(
+            f"INSERT OR IGNORE INTO {table} ({col_names}) VALUES ({placeholders})",
+            [tuple(r[c] for c in cols) for r in rows],
+        )
+        conn.commit()
+        count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        print(f"  Loaded {count} {label}")
 
     conn.close()
     print("Done!")
