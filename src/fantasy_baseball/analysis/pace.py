@@ -113,6 +113,7 @@ def compute_player_pace(
             "color_class": _z_to_color(z) if abs(actual - expected) >= COUNTING_MIN_ABS_DIFF else "stat-neutral",
             "projection": round(proj),
             "significant": actual_obj.is_significant(display_key),
+            "below_threshold": not counting_colored,
         }
 
     # Rate stats — always computed, but color suppressed below min_rates threshold
@@ -138,6 +139,7 @@ def compute_player_pace(
             "color_class": _z_to_color(z),
             "projection": proj_avg,
             "significant": actual_obj.is_significant("AVG"),
+            "below_threshold": not rates_colored,
         }
 
     else:  # pitcher
@@ -164,6 +166,7 @@ def compute_player_pace(
             "color_class": _z_to_color(z),
             "projection": proj_era,
             "significant": actual_obj.is_significant("ERA"),
+            "below_threshold": not rates_colored,
         }
 
         # WHIP
@@ -182,6 +185,7 @@ def compute_player_pace(
             "color_class": _z_to_color(z),
             "projection": proj_whip,
             "significant": actual_obj.is_significant("WHIP"),
+            "below_threshold": not rates_colored,
         }
 
     return result
