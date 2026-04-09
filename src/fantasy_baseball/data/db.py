@@ -145,6 +145,26 @@ CREATE TABLE IF NOT EXISTS spoe_components (
     value          REAL NOT NULL,
     PRIMARY KEY (year, snapshot_date, team, component)
 );
+
+CREATE TABLE IF NOT EXISTS transactions (
+    year            INTEGER NOT NULL,
+    transaction_id  TEXT NOT NULL,
+    timestamp       TEXT,
+    team            TEXT NOT NULL,
+    team_key        TEXT,
+    type            TEXT NOT NULL,
+    add_name        TEXT,
+    add_player_id   TEXT,
+    add_positions   TEXT,
+    drop_name       TEXT,
+    drop_player_id  TEXT,
+    drop_positions  TEXT,
+    add_wsgp        REAL,
+    drop_wsgp       REAL,
+    value           REAL,
+    paired_with     TEXT,
+    PRIMARY KEY (year, transaction_id)
+);
 """
 
 
@@ -636,6 +656,63 @@ def get_spoe_results(conn, year, snapshot_date=None):
             (year,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def insert_transactions(conn, transactions):
+    """Insert scored transaction rows. Uses INSERT OR IGNORE for idempotency."""
+    rows = []
+    for t in transactions:
+        rows.append((
+            t["year"], t["transaction_id"], t.get("timestamp"),
+            t["team"], t.get("team_key"), t["type"],
+            t.get("add_name"), t.get("add_player_id"), t.get("add_positions"),
+            t.get("drop_name"), t.get("drop_player_id"), t.get("drop_positions"),
+            t.get("add_wsgp"), t.get("drop_wsgp"), t.get("value"),
+            t.get("paired_with"),
+        ))
+    conn.executemany(
+        "INSERT OR IGNORE INTO transactions "
+        "(year, transaction_id, timestamp, team, team_key, type, "
+        "add_name, add_player_id, add_positions, "
+        "drop_name, drop_player_id, drop_positions, "
+        "add_wsgp, drop_wsgp, value, paired_with) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+
+
+def get_transaction_ids(conn, year):
+    """Return set of transaction_ids already stored for a year."""
+    rows = conn.execute(
+        "SELECT transaction_id FROM transactions WHERE year = ?",
+        (year,),
+    ).fetchall()
+    return {r["transaction_id"] for r in rows}
+
+
+def get_all_transactions(conn, year):
+    """Load all transactions for a year, ordered by timestamp."""
+    rows = conn.execute(
+        "SELECT * FROM transactions WHERE year = ? ORDER BY timestamp",
+        (year,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_transaction_pairing(conn, year, txn_id_a, txn_id_b):
+    """Mark two transactions as paired with each other."""
+    conn.execute(
+        "UPDATE transactions SET paired_with = ? "
+        "WHERE year = ? AND transaction_id = ?",
+        (txn_id_b, year, txn_id_a),
+    )
+    conn.execute(
+        "UPDATE transactions SET paired_with = ? "
+        "WHERE year = ? AND transaction_id = ?",
+        (txn_id_a, year, txn_id_b),
+    )
+    conn.commit()
 
 
 def load_positions(conn, positions: dict[str, list[str]]) -> None:
