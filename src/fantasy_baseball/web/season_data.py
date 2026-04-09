@@ -973,9 +973,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             if pre_entry and pre_entry.ros:
                 player.preseason = pre_entry.ros
 
-            # Compute wSGP via Player method
-            player.compute_wsgp(leverage)
-
             roster_players.append(player)
 
         # Include unmatched players
@@ -1032,6 +1029,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         blended_count = blend_player_list(roster_players, game_logs_by_name, today, leverage)
         if blended_count:
             _progress(f"Blended {blended_count} roster players with game logs")
+
+        # Compute wSGP for any players that weren't blended (no game logs)
+        for player in roster_players:
+            if player.wsgp == 0.0 and player.ros is not None:
+                player.compute_wsgp(leverage)
 
         # --- Step 6d: Compute SGP rankings ---
         _progress("Computing SGP rankings...")
