@@ -36,6 +36,10 @@
                class="nav-link {% if active_page == 'luck' %}active{% endif %}">
                 Luck
             </a>
+            <a href="{{ url_for('transactions') }}"
+               class="nav-link {% if active_page == 'transactions' %}active{% endif %}">
+                Transactions
+            </a>
             <a href="{{ url_for('sql_runner') }}"
                class="nav-link {% if active_page == 'sql' %}active{% endif %}">
                 SQL

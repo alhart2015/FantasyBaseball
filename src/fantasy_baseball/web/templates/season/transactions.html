@@ -1,0 +1,114 @@
+{% extends "season/base.html" %}
+{% block content %}
+<style>
+.txn-summary { cursor: pointer; }
+.txn-summary:hover { background: var(--row-highlight); }
+.txn-detail { display: none; }
+.txn-detail.open { display: table-row; }
+.txn-detail td { padding: 0; }
+.txn-inner-table { width: 100%; font-size: 12px; }
+.txn-inner-table td { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.03); }
+.txn-inner-table tr:last-child td { border-bottom: none; }
+.value-positive { color: var(--success); font-weight: 600; }
+.value-negative { color: var(--danger); font-weight: 600; }
+.badge-paired { background: rgba(100,181,246,0.15); color: var(--accent); font-size: 10px; padding: 2px 6px; border-radius: 3px; }
+</style>
+
+<div class="page-header">
+    <h2>Transaction Analyzer</h2>
+</div>
+
+{% if not txn_data %}
+<p class="placeholder-text">No transaction data. Click "Refresh Data" to fetch from Yahoo.</p>
+{% else %}
+
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Team</th>
+            <th>Moves</th>
+            <th>Net wSGP</th>
+            <th>Best Move</th>
+            <th>Worst Move</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for team in txn_data %}
+        {% set best = team.transactions | sort(attribute='value', reverse=true) | first %}
+        {% set worst = team.transactions | sort(attribute='value') | first %}
+        <tr class="txn-summary {% if team.team == user_team %}user-team{% endif %}" onclick="toggleTxnDetail(this)">
+            <td class="team-name">{{ team.team }}</td>
+            <td>{{ team.transaction_count }}</td>
+            <td class="{{ 'value-positive' if team.net_value > 0 else 'value-negative' if team.net_value < 0 else '' }}">
+                {{ '%+.1f'|format(team.net_value) }}
+            </td>
+            <td>
+                {% if best and best.value > 0 %}
+                <span class="value-positive">{{ '%+.1f'|format(best.value) }}</span>
+                <span style="color:var(--text-secondary);font-size:11px;">
+                    {% if best.add_name %}+{{ best.add_name }}{% endif %}
+                </span>
+                {% else %}—{% endif %}
+            </td>
+            <td>
+                {% if worst and worst.value < 0 %}
+                <span class="value-negative">{{ '%+.1f'|format(worst.value) }}</span>
+                <span style="color:var(--text-secondary);font-size:11px;">
+                    {% if worst.drop_name %}-{{ worst.drop_name }}{% endif %}
+                </span>
+                {% else %}—{% endif %}
+            </td>
+        </tr>
+        <tr class="txn-detail">
+            <td colspan="5">
+                <table class="txn-inner-table">
+                    <thead>
+                        <tr style="color:var(--text-secondary);font-size:11px;">
+                            <th style="text-align:left">Date</th>
+                            <th style="text-align:left">Added</th>
+                            <th style="text-align:left">Dropped</th>
+                            <th style="text-align:right">Value</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for txn in team.transactions %}
+                        <tr>
+                            <td>{{ txn.date or '—' }}{% if txn.paired %} <span class="badge-paired">Paired</span>{% endif %}</td>
+                            <td>
+                                {% if txn.add_name %}
+                                {{ txn.add_name }}
+                                <span style="color:var(--text-secondary);font-size:11px;">({{ txn.add_positions | join(', ') }})</span>
+                                <span class="value-positive" style="font-size:11px;">{{ '%.1f'|format(txn.add_wsgp) }}</span>
+                                {% else %}—{% endif %}
+                            </td>
+                            <td>
+                                {% if txn.drop_name %}
+                                {{ txn.drop_name }}
+                                <span style="color:var(--text-secondary);font-size:11px;">({{ txn.drop_positions | join(', ') }})</span>
+                                <span class="value-negative" style="font-size:11px;">{{ '%.1f'|format(txn.drop_wsgp) }}</span>
+                                {% else %}—{% endif %}
+                            </td>
+                            <td style="text-align:right" class="{{ 'value-positive' if txn.value > 0 else 'value-negative' if txn.value < 0 else '' }}">
+                                {{ '%+.1f'|format(txn.value) }}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+
+<script>
+function toggleTxnDetail(row) {
+    var detail = row.nextElementSibling;
+    if (detail && detail.classList.contains('txn-detail')) {
+        detail.classList.toggle('open');
+    }
+}
+</script>
+
+{% endif %}
+{% endblock %}

@@ -774,6 +774,19 @@ def register_routes(app: Flask) -> None:
             rate_stats=RATE_STATS,
         )
 
+    @app.route("/transactions")
+    def transactions():
+        meta = read_meta()
+        txn_cache = read_cache("transaction_analyzer") or {}
+        config = _load_config()
+        return render_template(
+            "season/transactions.html",
+            meta=meta,
+            active_page="transactions",
+            txn_data=txn_cache.get("teams", []),
+            user_team=config.team_name,
+        )
+
     @app.route("/login", methods=["GET", "POST"])
     def login():
         error = None
