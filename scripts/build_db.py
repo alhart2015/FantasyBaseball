@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
-"""Rebuild the SQLite database from source files."""
+"""Rebuild the SQLite database from source files.
 
+Usage:
+    python scripts/build_db.py            # Build/update the database
+    python scripts/build_db.py --export   # Export in-season data to JSON for git
+"""
+
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -34,7 +40,39 @@ WEEKLY_ROSTERS_PATH = PROJECT_ROOT / "data" / "weekly_rosters_2026.json"
 STANDINGS_2026_PATH = PROJECT_ROOT / "data" / "standings_2026.json"
 
 
+SNAPSHOT_TABLES = [
+    ("weekly_rosters", WEEKLY_ROSTERS_PATH, "roster snapshots",
+     "SELECT * FROM weekly_rosters WHERE snapshot_date >= '2026-'"),
+    ("standings", STANDINGS_2026_PATH, "standings snapshots",
+     "SELECT * FROM standings WHERE year = 2026 AND snapshot_date != 'final'"),
+    ("game_logs", GAME_LOGS_PATH, "game log entries",
+     "SELECT * FROM game_logs WHERE season = 2026"),
+]
+
+
+def export_snapshots():
+    """Export in-season data from SQLite to JSON files for git."""
+    conn = get_connection(DB_PATH)
+    conn.row_factory = __import__("sqlite3").Row
+    for table, path, label, query in SNAPSHOT_TABLES:
+        rows = conn.execute(query).fetchall()
+        data = [dict(r) for r in rows]
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        print(f"  Exported {len(data)} {label} -> {path.name}")
+    conn.close()
+    print("Done! Commit the updated JSON files to git.")
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Build or export the SQLite database.")
+    parser.add_argument("--export", action="store_true",
+                        help="Export in-season snapshot data to JSON for git")
+    args = parser.parse_args()
+
+    if args.export:
+        export_snapshots()
+        return
+
     config = load_config(CONFIG_PATH)
     db_path = DB_PATH
     print(f"Building database: {db_path}")
@@ -91,11 +129,7 @@ def main():
         print(f"  Loaded {pos_count} player positions")
 
     # Load in-season snapshot data (accumulated across refreshes)
-    for path, table, label in [
-        (WEEKLY_ROSTERS_PATH, "weekly_rosters", "roster snapshots"),
-        (STANDINGS_2026_PATH, "standings", "standings snapshots"),
-        (GAME_LOGS_PATH, "game_logs", "game log entries"),
-    ]:
+    for table, path, label, _query in SNAPSHOT_TABLES:
         if not path.exists():
             continue
         rows = json.loads(path.read_text(encoding="utf-8"))
