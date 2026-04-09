@@ -244,3 +244,93 @@ def fetch_scoring_period(league) -> tuple[str, str]:
         monday = today - datetime.timedelta(days=today.weekday())
         sunday = monday + datetime.timedelta(days=6)
         return monday.isoformat(), sunday.isoformat()
+
+
+def fetch_pending_moves(league) -> list[dict]:
+    """Fetch pending roster transactions for the entire league.
+
+    Calls the Yahoo transactions API for add/drop moves and filters
+    to non-successful (pending/waiver) status.
+
+    Returns list of normalized pending move dicts.
+    """
+    try:
+        raw = league.transactions("add,drop", "25")
+        return parse_pending_moves(raw)
+    except Exception:
+        logger.exception("Failed to fetch pending moves; returning empty list")
+        return []
+
+
+def parse_pending_moves(transactions: list[dict]) -> list[dict]:
+    """Filter to pending transactions and normalize into a clean structure.
+
+    Args:
+        transactions: Raw output from league.transactions().
+
+    Returns:
+        List of dicts with keys: transaction_id, type, status, timestamp,
+        team, team_key, adds (list of player dicts), drops (list of player dicts).
+    """
+    pending = []
+    for txn in transactions:
+        if txn.get("status") == "successful":
+            continue
+
+        adds = []
+        drops = []
+        team_name = ""
+        team_key = ""
+
+        players = txn.get("players", {})
+        for key, player_data in players.items():
+            if key == "count" or not isinstance(player_data, dict):
+                continue
+
+            tdata = player_data.get("transaction_data", {})
+            ptype = tdata.get("type", "")
+
+            # Extract player info from nested structure
+            raw_player = player_data.get("player", [])
+            meta = raw_player[0] if raw_player and isinstance(raw_player[0], list) else []
+
+            name = ""
+            player_id = ""
+            positions = []
+            for item in meta:
+                if not isinstance(item, dict):
+                    continue
+                if "name" in item:
+                    name = item["name"].get("full", "")
+                if "player_id" in item:
+                    player_id = item["player_id"]
+                if "eligible_positions" in item:
+                    positions = [
+                        ep["position"] for ep in item["eligible_positions"]
+                        if isinstance(ep, dict) and "position" in ep
+                    ]
+
+            player_info = {"name": name, "player_id": player_id, "positions": positions}
+
+            if ptype == "add":
+                adds.append(player_info)
+                team_name = tdata.get("destination_team_name", team_name)
+                team_key = tdata.get("destination_team_key", team_key)
+            elif ptype == "drop":
+                drops.append(player_info)
+                if not team_name:
+                    team_name = tdata.get("source_team_name", "")
+                    team_key = tdata.get("source_team_key", "")
+
+        pending.append({
+            "transaction_id": txn.get("transaction_id", ""),
+            "type": txn.get("type", ""),
+            "status": txn.get("status", ""),
+            "timestamp": txn.get("timestamp", ""),
+            "team": team_name,
+            "team_key": team_key,
+            "adds": adds,
+            "drops": drops,
+        })
+
+    return pending
