@@ -526,6 +526,14 @@ def register_routes(app: Flask) -> None:
             pos_map, owner_map = _build_roster_maps(conn, config.team_name)
             rankings_cache = read_cache("rankings") or {}
 
+            # Use cached roster wSGP for rostered players (includes recency blending)
+            roster_wsgp = {}
+            roster_cache = read_cache("roster") or []
+            for rp in roster_cache:
+                rn = normalize_name(rp.get("name", ""))
+                if rp.get("wsgp"):
+                    roster_wsgp[rn] = rp["wsgp"]
+
             # Build results
             results = []
             for ros in ros_rows:
@@ -565,7 +573,11 @@ def register_routes(app: Flask) -> None:
                     rank=RankInfo.from_dict(rank),
                     pace=pace,
                 )
-                player.compute_wsgp(leverage)
+                cached = roster_wsgp.get(norm)
+                if cached is not None:
+                    player.wsgp = cached
+                else:
+                    player.compute_wsgp(leverage)
 
                 result = player.to_dict()
                 result["ownership"] = ownership
@@ -599,6 +611,14 @@ def register_routes(app: Flask) -> None:
             pos_map, owner_map = _build_roster_maps(conn, config.team_name)
             rankings_cache = read_cache("rankings") or {}
             leverage = _get_leverage()
+
+            # Use cached roster wSGP for rostered players (includes recency blending)
+            roster_wsgp = {}
+            roster_cache = read_cache("roster") or []
+            for rp in roster_cache:
+                rn = normalize_name(rp.get("name", ""))
+                if rp.get("wsgp"):
+                    roster_wsgp[rn] = rp["wsgp"]
 
             # Actual PA/BF from game logs for significance indicators
             actual_pa: dict[str, float] = {}
@@ -642,7 +662,11 @@ def register_routes(app: Flask) -> None:
                     ros=ros,
                     rank=RankInfo.from_dict(rank_info),
                 )
-                p.compute_wsgp(leverage)
+                cached = roster_wsgp.get(norm)
+                if cached is not None:
+                    p.wsgp = cached
+                else:
+                    p.compute_wsgp(leverage)
 
                 result = {
                     "name": name,
