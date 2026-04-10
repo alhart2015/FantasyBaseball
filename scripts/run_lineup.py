@@ -23,21 +23,16 @@ from fantasy_baseball.lineup.matchups import (
     adjust_pitcher_projection,
     get_probable_starters,
 )
-from fantasy_baseball.analysis.game_logs import fetch_all_game_logs
-from fantasy_baseball.analysis.recency import predict_reliability_blend
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter, is_pitcher
 from fantasy_baseball.utils.constants import IL_STATUSES
 from fantasy_baseball.data.mlb_schedule import get_week_schedule
 
-from datetime import datetime as dt
 import pandas as pd
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
-PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 SCHEDULE_PATH = PROJECT_ROOT / "data" / "weekly_schedule.json"
 BATTING_STATS_PATH = PROJECT_ROOT / "data" / "team_batting_stats.json"
-ROSTER_GAME_LOGS_PATH = PROJECT_ROOT / "data" / "roster_game_logs.json"
 
 # Default games per week if not specified
 DEFAULT_GAMES_PER_WEEK = 6
@@ -68,62 +63,6 @@ def scale_by_schedule(player: pd.Series, games_this_week: int) -> pd.Series:
                 scaled[col] = scaled[col] * scale_factor
 
     return scaled
-
-
-def apply_recency_blend(player: pd.Series, game_log: list[dict], cutoff: str) -> pd.Series:
-    """Blend a player's projection with actual stats using reliability weighting.
-
-    Converts the projection to per-PA/IP rates, runs predict_reliability_blend,
-    then converts blended rates back to counting stats using the projected volume.
-    """
-    blended = player.copy()
-
-    if player.get("player_type") == "hitter":
-        pa = player.get("pa", 0)
-        ab = player.get("ab", 0)
-        if pa <= 0 or ab <= 0:
-            return blended
-        proj_rates = {
-            "hr_per_pa": player.get("hr", 0) / pa,
-            "r_per_pa": player.get("r", 0) / pa,
-            "rbi_per_pa": player.get("rbi", 0) / pa,
-            "sb_per_pa": player.get("sb", 0) / pa,
-            "avg": player.get("avg", 0) if "avg" in player.index else player.get("h", 0) / ab,
-        }
-        rates = predict_reliability_blend(proj_rates, game_log, cutoff)
-        blended["hr"] = rates["hr_per_pa"] * pa
-        blended["r"] = rates["r_per_pa"] * pa
-        blended["rbi"] = rates["rbi_per_pa"] * pa
-        blended["sb"] = rates["sb_per_pa"] * pa
-        blended["avg"] = rates["avg"]
-        blended["h"] = rates["avg"] * ab
-
-    elif player.get("player_type") == "pitcher":
-        ip = player.get("ip", 0)
-        if ip <= 0:
-            return blended
-        gs = player.get("gs", 0) if "gs" in player.index else 0
-        g = player.get("g", 0) if "g" in player.index else 0
-        proj_rates = {
-            "k_per_ip": player.get("k", 0) / ip,
-            "era": player.get("era", 0) if "era" in player.index else player.get("er", 0) * 9 / ip,
-            "whip": player.get("whip", 0) if "whip" in player.index else (player.get("bb", 0) + player.get("h_allowed", 0)) / ip,
-            "w_per_gs": player.get("w", 0) / gs if gs > 0 else 0,
-            "sv_per_g": player.get("sv", 0) / g if g > 0 else 0,
-        }
-        rates = predict_reliability_blend(proj_rates, game_log, cutoff)
-        blended["k"] = rates["k_per_ip"] * ip
-        blended["era"] = rates["era"]
-        blended["whip"] = rates["whip"]
-        blended["er"] = rates["era"] * ip / 9
-        blended["bb"] = rates["whip"] * ip * 0.4  # approximate split
-        blended["h_allowed"] = rates["whip"] * ip * 0.6
-        if gs > 0:
-            blended["w"] = rates["w_per_gs"] * gs
-        if g > 0:
-            blended["sv"] = rates["sv_per_g"] * g
-
-    return blended
 
 
 def print_probable_starters(
@@ -339,69 +278,6 @@ def main():
                     break
 
     print(f"Matched: {len(roster_hitters)} hitters, {len(roster_pitchers)} pitchers")
-    print()
-
-    # Fetch game logs and apply recency-weighted blending
-    print("Fetching roster game logs for recency blending...")
-
-    # Build (name, type) -> MLBAMID lookup from raw projection CSVs (blended
-    # projections don't carry MLBAMID through, so we read the raw files).
-    # Keyed by (normalized_name, player_type) to avoid collisions when a
-    # hitter and pitcher share the same name (e.g. Julio Rodriguez).
-    mlbamid_lookup: dict[tuple[str, str], int] = {}
-    for csv_path in (PROJECTIONS_DIR / str(config.season_year)).glob("*.csv"):
-        try:
-            csv_lower = csv_path.name.lower()
-            if "hitter" in csv_lower:
-                ptype = "hitter"
-            elif "pitcher" in csv_lower:
-                ptype = "pitcher"
-            else:
-                continue
-            raw_df = pd.read_csv(csv_path, usecols=lambda c: c in ("Name", "MLBAMID"))
-            if "MLBAMID" in raw_df.columns and "Name" in raw_df.columns:
-                for _, row in raw_df.dropna(subset=["MLBAMID"]).iterrows():
-                    mlbamid_lookup[(normalize_name(row["Name"]), ptype)] = int(row["MLBAMID"])
-        except Exception:
-            pass
-
-    roster_players_for_logs = []
-    for p in roster_hitters:
-        mid = mlbamid_lookup.get((normalize_name(p["name"]), "hitter"))
-        if mid:
-            roster_players_for_logs.append({"mlbam_id": mid, "name": p["name"], "type": "hitter"})
-    for p in roster_pitchers:
-        mid = mlbamid_lookup.get((normalize_name(p["name"]), "pitcher"))
-        if mid:
-            roster_players_for_logs.append({"mlbam_id": mid, "name": p["name"], "type": "pitcher"})
-
-    blended_count = 0
-    if roster_players_for_logs:
-        game_logs = fetch_all_game_logs(
-            roster_players_for_logs, cache_path=ROSTER_GAME_LOGS_PATH,
-        )
-        today = dt.now().strftime("%Y-%m-%d")
-
-        # Build mlbam_id lookup by normalized name
-        name_to_log = {}
-        for mid, entry in game_logs.items():
-            name_to_log[normalize_name(entry["name"])] = entry.get("games", [])
-
-        for i, p in enumerate(roster_hitters):
-            log = name_to_log.get(normalize_name(p["name"]), [])
-            if log:
-                roster_hitters[i] = apply_recency_blend(p, log, today)
-                blended_count += 1
-        for i, p in enumerate(roster_pitchers):
-            log = name_to_log.get(normalize_name(p["name"]), [])
-            if log:
-                roster_pitchers[i] = apply_recency_blend(p, log, today)
-                blended_count += 1
-
-    if blended_count:
-        print(f"Applied reliability-weighted recency blend to {blended_count} players")
-    else:
-        print("No game logs available — using projections only")
     print()
 
     # Map roster pitchers to their weekly opponents using probable starters
