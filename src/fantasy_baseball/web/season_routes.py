@@ -159,7 +159,8 @@ def _run_ros_fetch() -> None:
     from fantasy_baseball.config import load_config
     from fantasy_baseball.data.fangraphs_fetch import fetch_ros_projections
     from fantasy_baseball.data.db import (
-        create_tables, get_connection as get_db_connection,
+        create_tables, fetch_and_load_game_logs,
+        get_connection as get_db_connection,
         get_roster_names, load_ros_projections,
     )
     from fantasy_baseball.web.job_logger import JobLogger
@@ -170,6 +171,23 @@ def _run_ros_fetch() -> None:
     projections_dir = project_root / "data" / "projections"
 
     try:
+        # Refresh game_logs FIRST so that normalize_ros_to_full_season has
+        # current accumulated actuals to add. On Render's ephemeral filesystem
+        # game_logs is wiped every deploy and only gets populated during the
+        # dashboard refresh — without this step, ros_fetch runs against an
+        # empty game_logs table, normalize_ros_to_full_season early-returns
+        # via its `if not game_log_totals` guard, and the resulting snapshot
+        # is silently un-normalized (matches preseason values).
+        gl_conn = get_db_connection()
+        create_tables(gl_conn)
+        try:
+            logger.log("Refreshing MLB game logs (so normalization has actuals to add)")
+            fetch_and_load_game_logs(
+                gl_conn, config.season_year, progress_cb=logger.log,
+            )
+        finally:
+            gl_conn.close()
+
         logger.log(f"Fetching ROS projections for {len(config.projection_systems)} systems")
         results = fetch_ros_projections(
             projections_dir, config.projection_systems, config.season_year,
