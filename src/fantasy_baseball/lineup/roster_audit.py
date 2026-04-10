@@ -29,6 +29,7 @@ class AuditEntry:
     best_fa_wsgp: Optional[float] = None
     gap: float = 0.0
     categories: dict[str, float] = field(default_factory=dict)
+    classification: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,6 +44,7 @@ class AuditEntry:
             "best_fa_wsgp": self.best_fa_wsgp,
             "gap": self.gap,
             "categories": self.categories,
+            "classification": self.classification,
         }
 
 
@@ -97,6 +99,7 @@ def audit_roster(
             positions=list(player.positions),
             slot=slot_lookup.get(player.name, "BN"),
             player_wsgp=round(baseline["player_wsgp"].get(player.name, 0.0), 2),
+            classification=player.classification,
         )
 
         # Protected players: high league-wide value, skip FA comparison
@@ -157,6 +160,7 @@ def audit_roster(
             positions=list(player.positions),
             slot="IL",
             player_wsgp=0.0,
+            classification=player.classification,
         ))
 
     entries.sort(key=lambda e: e.gap, reverse=True)
