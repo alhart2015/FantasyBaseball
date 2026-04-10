@@ -248,7 +248,7 @@ class Player:
             selected_position=d.get("selected_position", ""),
             status=d.get("status", ""),
             classification=d.get("classification", ""),
-            pace=d.get("pace") or d.get("stats"),  # "pace" preferred, "stats" for legacy cache
+            pace=d.get("pace"),
         )
 
     # ------------------------------------------------------------------
@@ -284,7 +284,6 @@ class Player:
             d["classification"] = self.classification
         if self.pace is not None:
             d["pace"] = self.pace
-            d["stats"] = self.pace  # legacy key for cache/template compatibility
         return d
 
     def to_flat_dict(self) -> dict[str, Any]:

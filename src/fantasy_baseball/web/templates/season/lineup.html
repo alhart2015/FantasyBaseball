@@ -137,7 +137,7 @@
     </thead>
     <tbody>
     {% for h in lineup.hitters %}
-        {% set s = h.stats if h.stats else {} %}
+        {% set s = h.pace if h.pace else {} %}
         <tr class="{% if h.is_bench %}bench-row{% endif %}{% if h.is_il and not h.is_bench %} il-active-row{% endif %}">
             <td class="stat-cell {{ h.overall_pace.color_class if h.overall_pace else 'stat-neutral' }}">
                 {{ h.selected_position }}
@@ -207,7 +207,7 @@
     </thead>
     <tbody>
     {% for p in lineup.pitchers %}
-        {% set s = p.stats if p.stats else {} %}
+        {% set s = p.pace if p.pace else {} %}
         <tr class="{% if p.is_bench %}bench-row{% endif %}{% if p.is_il and not p.is_bench %} il-active-row{% endif %}">
             <td class="stat-cell {{ p.overall_pace.color_class if p.overall_pace else 'stat-neutral' }}">
                 {{ p.selected_position }}
@@ -397,7 +397,7 @@ function buildTableHtml(players, cats, volumeCol, includeElig) {
         html += '<td style="text-align:left;font-weight:500;">' + p.name + '</td>';
         if (includeElig) html += '<td style="text-align:left;color:var(--text-secondary);font-size:11px;">' + (p.positions || []).join(', ') + '</td>';
         cats.forEach(function(cat) {
-            var st = (p.stats || {})[cat] || {};
+            var st = (p.pace || {})[cat] || {};
             var colorClass = st.color_class || 'stat-neutral';
             var val = st.actual !== undefined && st.actual !== null ? fmtStat(st.actual, cat) : '\u2014';
             html += '<td class="' + colorClass + (cat === volumeCol ? ' pa-col' : '') + '">' + val + '</td>';

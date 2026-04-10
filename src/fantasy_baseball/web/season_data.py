@@ -527,7 +527,7 @@ def format_lineup_for_display(
             "games": p.get("games_this_week", 0),
             "is_bench": pos in ("BN", "IL", "DL"),
             "is_il": "IL" in player.status or pos == "IL",
-            "stats": player.pace or {},
+            "pace": player.pace or {},
             "overall_pace": compute_overall_pace(player.pace),
             "rank": player.rank.to_dict(),
             "preseason": player.preseason.to_dict() if player.preseason else None,

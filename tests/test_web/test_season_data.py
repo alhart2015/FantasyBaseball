@@ -203,12 +203,12 @@ def test_format_lineup_passes_ros_data_through():
 
 
 def test_roster_cache_includes_stats(tmp_path, monkeypatch):
-    """After refresh, roster entries should include a 'stats' dict."""
+    """After refresh, roster entries should include a 'pace' dict."""
     roster = [
         {"name": "Juan Soto", "positions": ["OF"], "selected_position": "OF",
          "player_id": "1", "status": "", "wsgp": 3.0, "player_type": "hitter",
          "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "pa": 600, "avg": 0.278,
-         "stats": {
+         "pace": {
              "PA": {"actual": 102, "color_class": "stat-neutral"},
              "R": {"actual": 19, "expected": 15.3, "z_score": 1.2, "color_class": "stat-hot-2", "projection": 90},
              "HR": {"actual": 9, "expected": 5.1, "z_score": 1.6, "color_class": "stat-hot-2", "projection": 30},
@@ -218,8 +218,8 @@ def test_roster_cache_includes_stats(tmp_path, monkeypatch):
          }},
     ]
     result = format_lineup_for_display(roster, {"moves": []})
-    assert "stats" in result["hitters"][0]
-    assert result["hitters"][0]["stats"]["HR"]["actual"] == 9
+    assert "pace" in result["hitters"][0]
+    assert result["hitters"][0]["pace"]["HR"]["actual"] == 9
 
 
 @pytest.fixture()

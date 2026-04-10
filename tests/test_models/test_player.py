@@ -197,8 +197,8 @@ class TestCacheCompatibility:
         assert d["wsgp"] == 12.5
         # Rank
         assert d["rank"]["ros"] == 2
-        # Pace stored as "stats"
-        assert d["stats"]["R"]["actual"] == 15
+        # Pace stored as "pace"
+        assert d["pace"]["R"]["actual"] == 15
 
     def test_player_from_dict_roundtrip_with_all_fields(self):
         """Full roundtrip: construct Player, serialize, reconstruct, compare."""
