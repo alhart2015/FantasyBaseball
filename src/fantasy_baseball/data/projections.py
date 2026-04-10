@@ -167,9 +167,35 @@ def blend_projections(
     all_pitchers: list[pd.DataFrame] = []
 
     for system in systems:
-        hitters, pitchers = load_projection_set(projections_dir, system)
+        if progress_cb:
+            progress_cb(f"Loading {system} from {projections_dir.name}")
+        try:
+            hitters, pitchers = load_projection_set(projections_dir, system)
+        except Exception as exc:
+            import traceback
+            if progress_cb:
+                progress_cb(
+                    f"ERROR loading {system}: {type(exc).__name__}: {exc}"
+                )
+                progress_cb(
+                    f"ERROR {system} traceback: "
+                    f"{traceback.format_exc().splitlines()[-5:]}"
+                )
+            continue
         if normalizer is not None:
-            hitters, pitchers = normalizer(system, hitters, pitchers)
+            try:
+                hitters, pitchers = normalizer(system, hitters, pitchers)
+            except Exception as exc:
+                import traceback
+                if progress_cb:
+                    progress_cb(
+                        f"ERROR normalizing {system}: {type(exc).__name__}: {exc}"
+                    )
+                    progress_cb(
+                        f"ERROR {system} traceback: "
+                        f"{traceback.format_exc().splitlines()[-5:]}"
+                    )
+                continue
         system_dfs[system] = (hitters, pitchers)
         w = weights.get(system, 0)
         if not hitters.empty:
