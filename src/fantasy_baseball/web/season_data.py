@@ -93,6 +93,7 @@ CACHE_FILES = {
     "leverage": "leverage.json",
     "pending_moves": "pending_moves.json",
     "transaction_analyzer": "transaction_analyzer.json",
+    "transactions": "transactions.json",
 }
 
 
@@ -1406,52 +1407,46 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             score_transaction,
             build_cache_output,
         )
-        from fantasy_baseball.data.db import (
-            get_connection as get_db_conn,
-            insert_transactions,
-            get_transaction_ids,
-            get_all_transactions,
-            update_transaction_pairing,
-        )
 
         raw_txns = fetch_all_transactions(league)
         if raw_txns:
-            txn_conn = get_db_conn()
-            create_tables(txn_conn)
-            try:
-                existing_ids = get_transaction_ids(txn_conn, config.season_year)
-                new_txns = [t for t in raw_txns
-                            if t["transaction_id"] not in existing_ids]
+            # Load previously scored transactions from Redis/disk cache
+            stored_txns = read_cache("transactions", cache_dir) or []
+            existing_ids = {t["transaction_id"] for t in stored_txns}
+            new_txns = [t for t in raw_txns
+                        if t["transaction_id"] not in existing_ids]
 
-                if new_txns:
-                    _progress(f"Scoring {len(new_txns)} new transaction(s)...")
-                    scored = []
+            if new_txns:
+                _progress(f"Scoring {len(new_txns)} new transaction(s)...")
+                from fantasy_baseball.data.db import get_connection as get_db_conn
+                txn_conn = get_db_conn()
+                create_tables(txn_conn)
+                try:
                     for txn in new_txns:
                         scores = score_transaction(txn_conn, txn, config.season_year)
-                        scored.append({
+                        stored_txns.append({
                             "year": config.season_year,
                             **txn,
                             **scores,
                             "paired_with": None,
                         })
-                    insert_transactions(txn_conn, scored)
+                finally:
+                    txn_conn.close()
 
-                    # Pair standalone moves
-                    all_txns = get_all_transactions(txn_conn, config.season_year)
-                    unpaired = [t for t in all_txns if not t.get("paired_with")]
-                    pairs = pair_standalone_moves(unpaired)
-                    for drop_id, add_id in pairs:
-                        update_transaction_pairing(
-                            txn_conn, config.season_year, drop_id, add_id
-                        )
+                # Re-pair all unpaired standalone moves
+                unpaired = [t for t in stored_txns if not t.get("paired_with")]
+                pairs = pair_standalone_moves(unpaired)
+                by_id = {t["transaction_id"]: t for t in stored_txns}
+                for drop_id, add_id in pairs:
+                    by_id[drop_id]["paired_with"] = add_id
+                    by_id[add_id]["paired_with"] = drop_id
 
-                # Build cache from full table
-                all_txns = get_all_transactions(txn_conn, config.season_year)
-                cache_data = build_cache_output(all_txns)
-                write_cache("transaction_analyzer", cache_data, cache_dir)
-                _progress(f"Analyzed {len(all_txns)} total transaction(s)")
-            finally:
-                txn_conn.close()
+            # Persist scored transactions to Redis and build display cache
+            stored_txns.sort(key=lambda t: t.get("timestamp") or "")
+            write_cache("transactions", stored_txns, cache_dir)
+            cache_data = build_cache_output(stored_txns)
+            write_cache("transaction_analyzer", cache_data, cache_dir)
+            _progress(f"Analyzed {len(stored_txns)} total transaction(s)")
 
         # --- Step 16: Write meta ---
         _progress("Finalizing...")
