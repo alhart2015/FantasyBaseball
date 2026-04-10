@@ -412,3 +412,100 @@ class TestComputeComparisonStandings:
             user_team_name="My Team",
         )
         assert "error" in result
+
+
+class TestComparisonConsistencyInvariant:
+    """Guardrail against the Arozarena/Suarez bug: the comparison's "before"
+    baseline must match the projected_standings entry it came from, so that
+    the on-screen player stat diff equals the team-stat delta in the swap.
+    """
+
+    def _build_roster(self):
+        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
+        return [
+            Player(name="Star Hitter", player_type="hitter",
+                   ros=HitterStats(pa=650, ab=567, h=150, r=90, hr=30, rbi=95, sb=25, avg=0.265)),
+            Player(name="Role Hitter", player_type="hitter",
+                   ros=HitterStats(pa=500, ab=440, h=110, r=55, hr=15, rbi=55, sb=5, avg=0.250)),
+            Player(name="Ace", player_type="pitcher",
+                   ros=PitcherStats(ip=180, w=14, k=200, sv=0, er=60, bb=50,
+                                    h_allowed=150, era=3.00, whip=1.11)),
+        ]
+
+    def test_before_stats_equal_projected_standings_entry(self):
+        """The comparison "before" for the user team must equal the value stored
+        in projected_standings (otherwise UI shows one number on the standings
+        page and a different number on the comparison page for the same team)."""
+        from fantasy_baseball.web.season_data import compute_comparison_standings
+        from fantasy_baseball.models.player import Player, HitterStats
+        from fantasy_baseball.scoring import project_team_stats
+
+        roster = self._build_roster()
+        # Build projected_standings so the user entry matches what
+        # project_team_stats would produce — this mirrors a consistent refresh.
+        user_stats = project_team_stats(roster)
+        projected_standings = [
+            {"name": "My Team", "team_key": "", "rank": 0, "stats": dict(user_stats)},
+            {"name": "Rival", "team_key": "", "rank": 0, "stats": {
+                "R": 680, "HR": 190, "RBI": 680, "SB": 110, "AVG": 0.255,
+                "W": 85, "K": 1100, "SV": 40, "ERA": 3.80, "WHIP": 1.25,
+            }},
+        ]
+        other_player = Player(
+            name="Replacement", player_type="hitter",
+            ros=HitterStats(pa=600, ab=530, h=140, r=75, hr=28, rbi=85, sb=3, avg=0.264),
+        )
+
+        result = compute_comparison_standings(
+            roster_player_name="Star Hitter",
+            other_player=other_player,
+            user_roster=roster,
+            projected_standings=projected_standings,
+            user_team_name="My Team",
+        )
+
+        # Invariant: before user-team stats equal the projected_standings entry
+        for cat, val in user_stats.items():
+            assert result["before"]["stats"]["My Team"][cat] == val, (
+                f"before[{cat}] diverged from projected_standings "
+                f"({result['before']['stats']['My Team'][cat]} vs {val}) — "
+                "this is the Arozarena/Suarez bug"
+            )
+
+    def test_swap_delta_equals_player_stat_difference(self):
+        """The team-stat drop from swapping must equal the counting-stat
+        difference between the two players. If it doesn't, the UI's stat
+        comparison row will disagree with the team standings panel."""
+        from fantasy_baseball.web.season_data import compute_comparison_standings
+        from fantasy_baseball.models.player import Player, HitterStats
+        from fantasy_baseball.scoring import project_team_stats
+
+        roster = self._build_roster()
+        user_stats = project_team_stats(roster)
+        projected_standings = [
+            {"name": "My Team", "team_key": "", "rank": 0, "stats": dict(user_stats)},
+        ]
+
+        dropped = roster[0]  # Star Hitter
+        other_player = Player(
+            name="Replacement", player_type="hitter",
+            ros=HitterStats(pa=600, ab=530, h=140, r=75, hr=28, rbi=85, sb=3, avg=0.264),
+        )
+
+        result = compute_comparison_standings(
+            roster_player_name=dropped.name,
+            other_player=other_player,
+            user_roster=roster,
+            projected_standings=projected_standings,
+            user_team_name="My Team",
+        )
+
+        for cat_attr, roto_cat in [("r", "R"), ("hr", "HR"), ("rbi", "RBI"), ("sb", "SB")]:
+            player_delta = getattr(dropped.ros, cat_attr) - getattr(other_player.ros, cat_attr)
+            team_delta = (
+                result["before"]["stats"]["My Team"][roto_cat]
+                - result["after"]["stats"]["My Team"][roto_cat]
+            )
+            assert abs(team_delta - player_delta) < 1e-9, (
+                f"{roto_cat}: team delta {team_delta} != player delta {player_delta}"
+            )
