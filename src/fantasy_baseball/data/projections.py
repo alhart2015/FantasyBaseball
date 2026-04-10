@@ -10,22 +10,37 @@ from fantasy_baseball.models.player import Player, PlayerType, HitterStats, Pitc
 HITTING_COUNTING_COLS: list[str] = ["r", "hr", "rbi", "sb", "h", "ab", "pa"]
 PITCHING_COUNTING_COLS: list[str] = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
 
-# ROS projection systems that produce full-season-updated projections.
-# Systems NOT in this set produce remaining-games-only projections and
-# need actual accumulated stats added before cross-system blending.
-FULL_SEASON_ROS_SYSTEMS: set[str] = {"steamer", "the-bat-x"}
-
-
 def normalize_ros_to_full_season(
     df: pd.DataFrame,
     game_log_totals: dict[int, dict],
     player_type: str,
 ) -> pd.DataFrame:
-    """Add actual accumulated stats to remaining-games ROS projections.
+    """Convert remaining-games ROS projections to full-season totals.
+
+    All FanGraphs ROS exports (steamer, the-bat-x, zips, atc, oopsy) publish
+    remaining-games-only projections — verified empirically on 2026-04-10 by
+    comparing PA values across snapshots:
+
+        system     Apr 1 PA   Apr 10 PA   delta
+        zips       604        579         -25
+        steamer    633        607         -26
+        atc        624        596         -28
+        the-bat-x  638        603         -35
+        oopsy      624        596         -28
+
+    All five systems decreased by roughly 9 games' worth of PA over the 9
+    elapsed games (Yankees played ~9 games during that window), proving they
+    are all rest-of-season-only.
 
     For each player with a matching mlbam_id in game_log_totals, adds the
-    actual counting stats to the ROS counting stats so the result represents
-    a full-season projection. Players without a match are left unchanged.
+    actual season-to-date counting stats to the ROS counting stats so the
+    result represents a full-season projection. Rate stats (AVG, ERA, WHIP)
+    are NOT touched here — they get recomputed downstream from blended
+    counting components in _blend_hitters / _blend_pitchers.
+
+    Players without a matching mlbam_id are left unchanged. This affects
+    prospects and recent callups whose mlbam_id wasn't in our roster
+    or wasn't matched at projection-load time.
 
     Returns a new DataFrame (does not mutate the input).
     """

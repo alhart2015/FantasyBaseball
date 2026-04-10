@@ -696,3 +696,51 @@ class TestGetSeasonTotals:
         hitter_totals, pitcher_totals = get_season_totals(conn, 2026)
         assert hitter_totals == {}
         assert pitcher_totals == {}
+
+
+class TestLoadRosNormalizationAppliesToAllSystems:
+    def test_steamer_gets_normalized_after_fix(self, tmp_path):
+        """Regression test for the FULL_SEASON_ROS_SYSTEMS bug.
+
+        Steamer (and the-bat-x) used to be skipped from normalization based
+        on the assumption they published full-season projections. Empirical
+        verification on 2026-04-10 proved that's wrong — all systems are
+        rest-of-season-only. This test pins the fix: steamer must get its
+        ROS counting stats incremented by accumulated actuals.
+        """
+        from fantasy_baseball.data.db import (
+            get_connection, create_tables, load_ros_projections,
+        )
+
+        _make_ros_dir(tmp_path, year=2026, date="2026-04-07")
+        db_path = tmp_path / "test.db"
+        conn = get_connection(db_path)
+        create_tables(conn)
+
+        # Pre-populate game_logs with Aaron Judge actuals (mlbam_id 592450)
+        conn.execute(
+            "INSERT INTO game_logs (season, mlbam_id, name, team, player_type, date, "
+            "pa, ab, h, r, hr, rbi, sb) "
+            "VALUES (2026, 592450, 'Aaron Judge', 'NYY', 'hitter', '2026-04-05', "
+            "90, 80, 25, 15, 5, 12, 1)"
+        )
+        conn.commit()
+
+        load_ros_projections(
+            conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0},
+        )
+
+        judge = conn.execute(
+            "SELECT pa, ab, h, r, hr, rbi, sb FROM ros_blended_projections "
+            "WHERE name='Aaron Judge' AND snapshot_date='2026-04-07'"
+        ).fetchone()
+        assert judge is not None, "Judge row missing"
+        assert judge["hr"] == 50, f"Expected 45 + 5 = 50, got {judge['hr']}"
+        assert judge["r"] == 125, f"Expected 110 + 15 = 125, got {judge['r']}"
+        assert judge["rbi"] == 132, f"Expected 120 + 12 = 132, got {judge['rbi']}"
+        assert judge["sb"] == 6, f"Expected 5 + 1 = 6, got {judge['sb']}"
+        assert judge["pa"] == 740, f"Expected 650 + 90 = 740, got {judge['pa']}"
+        assert judge["ab"] == 630, f"Expected 550 + 80 = 630, got {judge['ab']}"
+        assert judge["h"] == 185, f"Expected 160 + 25 = 185, got {judge['h']}"
+
+        conn.close()
