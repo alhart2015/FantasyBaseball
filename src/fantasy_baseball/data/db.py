@@ -915,7 +915,21 @@ def load_ros_projections(
                     roster_names=roster_names, progress_cb=progress_cb,
                     normalizer=_normalizer,
                 )
-            except Exception:
+            except Exception as exc:
+                # Surface what blew up so we can diagnose it from the job log
+                # instead of silently dropping a snapshot. Uses progress_cb if
+                # available so the message lands in the same JobLogger entries
+                # the rest of the pipeline writes to.
+                import traceback
+                msg = (
+                    f"ERROR loading {snapshot_date}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                if progress_cb:
+                    progress_cb(msg)
+                    progress_cb(
+                        f"ERROR traceback: {traceback.format_exc().splitlines()[-3:]}"
+                    )
                 continue
 
             def to_rows(df, _y=year, _sd=snapshot_date):
