@@ -1,4 +1,18 @@
-"""Compute player performance vs projection pace with z-score color coding."""
+"""Compute player performance vs projection pace with z-score color coding.
+
+DISPLAY ONLY. The output of this module is used for hot/cold color
+highlighting on the lineup page and nowhere else. It is NOT a projection
+and must NOT be fed into roster decisions, wSGP, trade evaluation,
+waiver scoring, or projected standings. Those all rely on the raw ROS
+projections from the `ros_blended_projections` SQLite table.
+
+History: recency blending used to run over roster players and overwrite
+their ROS stats with reliability-weighted rates from game logs. That
+produced two sources of truth (blended for the user team, raw for
+opponents) and caused the Arozarena/Suarez bug on the player
+comparison page. It has been removed — pace highlighting is now the
+only legitimate use of in-season game logs for display.
+"""
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import INVERSE_STATS, STAT_VARIANCE
