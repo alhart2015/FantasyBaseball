@@ -783,10 +783,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.utils.name_utils import normalize_name
         from fantasy_baseball.analysis.pace import compute_player_pace
         from fantasy_baseball.analysis.buy_low import find_buy_low_candidates
-        from fantasy_baseball.lineup.blending import (
-            blend_player_list,
-            load_game_logs_by_name,
-        )
         from fantasy_baseball.lineup.roster_audit import audit_roster
 
         project_root = Path(__file__).resolve().parents[3]
@@ -1019,22 +1015,13 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                 projected = {k: 0 for k in proj_keys}
             player.pace = compute_player_pace(actuals, projected, player.player_type)
 
-        # --- Step 6e: Load per-game logs for recency blending ---
-        _progress("Applying recency blending...")
-        gl_conn = get_db_connection()
-        try:
-            game_logs_by_name = load_game_logs_by_name(gl_conn, config.season_year)
-        finally:
-            gl_conn.close()
-
-        today = datetime.now().strftime("%Y-%m-%d")
-        blended_count = blend_player_list(roster_players, game_logs_by_name, today, leverage)
-        if blended_count:
-            _progress(f"Blended {blended_count} roster players with game logs")
-
-        # Compute wSGP for any players that weren't blended (no game logs)
+        # --- Step 6e: Compute wSGP on raw ROS stats ---
+        # NOTE: recency blending was removed here because FanGraphs ROS
+        # projections already incorporate early-season performance, and a
+        # second layer of reliability weighting on top created inconsistencies
+        # with projected_standings (see docs/superpowers/plans/2026-04-10-remove-recency-blending.md).
         for player in roster_players:
-            if player.wsgp == 0.0 and player.ros is not None:
+            if player.ros is not None:
                 player.compute_wsgp(leverage)
 
         # --- Step 6d: Compute SGP rankings ---
@@ -1153,11 +1140,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         fa_players, _ = fetch_and_match_free_agents(
             league, hitters_proj, pitchers_proj
         )
-
-        # Blend FA players with game logs
-        fa_blended = blend_player_list(fa_players, game_logs_by_name, today)
-        if fa_blended:
-            _progress(f"Blended {fa_blended} free agents with game logs")
 
         # Adjust for pending moves before scanning waivers
         if pending_moves:
