@@ -294,6 +294,10 @@ def scan_waivers(
         swap_wsgp[fa.name] = fa_wsgp[fa.name]
 
         for drop_player in roster:
+            # Protected players: high league-wide value, skip as drop candidate
+            if drop_player.classification in ("core", "trade_candidate"):
+                continue
+
             drop_name = drop_player.name
             drop_type = drop_player.player_type
 
