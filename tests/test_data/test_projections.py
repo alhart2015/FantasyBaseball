@@ -253,6 +253,37 @@ class TestNormalizeRosToFullSeason:
         normalize_ros_to_full_season(df, game_log_totals, "hitter")
         assert df.iloc[0]["pa"] == 400
 
+    def test_handles_fractional_ip_when_projection_column_is_int64(self):
+        """Regression: zips and atc publish whole-number IP, so pandas
+        infers int64 for the column. Game logs sum IP as fractional thirds
+        (e.g. 180.6667 = 180⅔), and pandas 2.x+ refuses to write a float
+        into an int64 column. The function must coerce counting columns to
+        float64 before adding actuals.
+
+        Reproduces the production failure observed on 2026-04-10:
+            TypeError: Invalid value '180.6667' for dtype 'int64'
+        """
+        from fantasy_baseball.data.projections import normalize_ros_to_full_season
+        # Force int64 dtype on ip by using only whole numbers (matches what
+        # pd.read_csv does for zips/atc CSVs).
+        df = pd.DataFrame([{
+            "name": "Gerrit Cole", "mlbam_id": 543037, "player_type": "pitcher",
+            "ip": 170, "k": 190, "w": 12, "sv": 0, "er": 60, "bb": 40, "h_allowed": 130,
+        }])
+        assert df["ip"].dtype == "int64", "test setup must produce int64 ip column"
+
+        game_log_totals = {
+            543037: {
+                "ip": 10.6667,  # 10⅔ innings — fractional like real game logs
+                "k": 14, "w": 1, "sv": 0, "er": 4, "bb": 3, "h_allowed": 8,
+            },
+        }
+        result = normalize_ros_to_full_season(df, game_log_totals, "pitcher")
+        cole = result.iloc[0]
+        assert cole["ip"] == pytest.approx(180.6667)
+        assert cole["k"] == 204
+        assert cole["er"] == 64
+
 
 class TestBlendWithNormalizer:
     def test_normalizer_called_for_each_system(self, fixtures_dir):

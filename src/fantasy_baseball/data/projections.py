@@ -50,6 +50,15 @@ def normalize_ros_to_full_season(
     result = df.copy()
     counting_cols = HITTING_COUNTING_COLS if player_type == PlayerType.HITTER else PITCHING_COUNTING_COLS
 
+    # Coerce counting columns to float64 BEFORE adding actuals. Some
+    # projection systems publish whole-number IP (zips, atc) so pandas
+    # infers int64 from those columns; game logs sum IP as fractional
+    # thirds (e.g. 180.6667 = 180⅔), and pandas 2.x+ refuses to write a
+    # float into an int64 column. Casting upfront avoids the TypeError.
+    for col in counting_cols:
+        if col in result.columns:
+            result[col] = result[col].astype("float64")
+
     for idx, row in result.iterrows():
         mid = row.get("mlbam_id")
         if pd.isna(mid):
