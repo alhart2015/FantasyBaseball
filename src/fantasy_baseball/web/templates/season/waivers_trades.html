@@ -232,7 +232,7 @@
             <tbody>
             {% set cats = ["R", "HR", "RBI", "SB", "AVG"] if bl.player_type == "hitter" else ["W", "K", "SV", "ERA", "WHIP"] %}
             {% for cat in cats %}
-            {% set st = bl.stats.get(cat, {}) %}
+            {% set st = bl.pace.get(cat, {}) %}
             <tr>
                 <td>{{ cat }}</td>
                 <td{% if st.get('significant') %} class="stat-significant"{% endif %}>{% if cat in ['AVG'] %}{{ "%.3f"|format(st.get('actual', 0)) }}{% elif cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.get('actual', 0)) }}{% else %}{{ st.get('actual', 0) }}{% endif %}</td>
@@ -288,7 +288,7 @@
             <tbody>
             {% set cats = ["R", "HR", "RBI", "SB", "AVG"] if bl.player_type == "hitter" else ["W", "K", "SV", "ERA", "WHIP"] %}
             {% for cat in cats %}
-            {% set st = bl.stats.get(cat, {}) %}
+            {% set st = bl.pace.get(cat, {}) %}
             <tr>
                 <td>{{ cat }}</td>
                 <td{% if st.get('significant') %} class="stat-significant"{% endif %}>{% if cat == 'AVG' %}{{ "%.3f"|format(st.get('actual', 0)) }}{% elif cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.get('actual', 0)) }}{% else %}{{ st.get('actual', 0) }}{% endif %}</td>

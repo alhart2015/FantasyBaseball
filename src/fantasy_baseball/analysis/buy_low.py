@@ -79,7 +79,7 @@ def find_buy_low_candidates(
             "owner": owner,
             "player_type": ptype,
             "avg_z": avg_z,
-            "stats": pace,
+            "pace": pace,
             "wsgp": wsgp,
         })
 

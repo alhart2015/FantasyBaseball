@@ -415,9 +415,21 @@ class TestComputeComparisonStandings:
 
 
 class TestComparisonConsistencyInvariant:
-    """Guardrail against the Arozarena/Suarez bug: the comparison's "before"
-    baseline must match the projected_standings entry it came from, so that
-    the on-screen player stat diff equals the team-stat delta in the swap.
+    """Document and test compute_comparison_standings' contract.
+
+    These tests verify the function is internally consistent with its own
+    inputs: when given a user_roster and a projected_standings entry, the
+    "before" output equals project_team_stats(user_roster), and per-player
+    counting-stat deltas equal team-stat deltas in a swap.
+
+    They do NOT catch the original Arozarena/Suarez bug — that bug was
+    that the refresh pipeline wrote inconsistent data into cache:roster
+    (recency-blended) and cache:projections (raw), so two callers of this
+    function were fed different player stats. The structural fix
+    (removing recency blending so both caches derive from the same source)
+    plus the grep guardrail in test_no_recency_blending.py are the actual
+    protection. These tests are an additional sanity check on the
+    function under test.
     """
 
     def _build_roster(self):
@@ -509,3 +521,45 @@ class TestComparisonConsistencyInvariant:
             assert abs(team_delta - player_delta) < 1e-9, (
                 f"{roto_cat}: team delta {team_delta} != player delta {player_delta}"
             )
+
+    def test_user_roster_takes_precedence_over_projected_standings_entry(self):
+        """compute_comparison_standings recomputes the user team's "before"
+        stats from project_team_stats(user_roster). Any pre-existing user
+        entry in projected_standings is ignored. This means the refresh
+        pipeline must keep cache:roster and cache:projections in sync —
+        if they diverge, the comparison page silently disagrees with the
+        standings page."""
+        from fantasy_baseball.web.season_data import compute_comparison_standings
+        from fantasy_baseball.models.player import Player, HitterStats
+        from fantasy_baseball.scoring import project_team_stats
+
+        roster = self._build_roster()
+        true_user_stats = project_team_stats(roster)
+
+        # Build projected_standings with a DELIBERATELY wrong entry for the user
+        # team — this simulates what would happen if cache:roster and
+        # cache:projections were written from different sources (the original
+        # Arozarena/Suarez bug condition).
+        wrong_user_stats = {k: v + 999 for k, v in true_user_stats.items()}
+        projected_standings = [
+            {"name": "My Team", "team_key": "", "rank": 0, "stats": wrong_user_stats},
+        ]
+
+        other_player = Player(
+            name="Replacement", player_type="hitter",
+            ros=HitterStats(pa=600, ab=530, h=140, r=75, hr=28, rbi=85, sb=3, avg=0.264),
+        )
+
+        result = compute_comparison_standings(
+            roster_player_name="Star Hitter",
+            other_player=other_player,
+            user_roster=roster,
+            projected_standings=projected_standings,
+            user_team_name="My Team",
+        )
+
+        # The function recomputes from user_roster, ignoring the wrong entry.
+        # If the refresh pipeline ever writes inconsistent data into the two
+        # caches, this is the asymmetry that produces UI disagreement.
+        assert result["before"]["stats"]["My Team"]["HR"] == true_user_stats["HR"]
+        assert result["before"]["stats"]["My Team"]["HR"] != wrong_user_stats["HR"]

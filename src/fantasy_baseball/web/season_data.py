@@ -408,8 +408,8 @@ def build_opponent_lineup(
             actuals = pitcher_logs.get(norm, {})
         proj_keys = HITTER_PROJ_KEYS if ptype == PlayerType.HITTER else PITCHER_PROJ_KEYS
         projected = {k: getattr(player.ros, k, 0) if player.ros else 0 for k in proj_keys}
-        entry["stats"] = compute_player_pace(actuals, projected, ptype)
-        entry["overall_pace"] = compute_overall_pace(entry["stats"])
+        entry["pace"] = compute_player_pace(actuals, projected, ptype)
+        entry["overall_pace"] = compute_overall_pace(entry["pace"])
 
         enriched.append(entry)
 
@@ -419,8 +419,8 @@ def build_opponent_lineup(
             entry = dict(raw_player)
             entry["wsgp_them"] = 0.0
             entry["wsgp_you"] = 0.0
-            entry["stats"] = {}
-            entry["overall_pace"] = compute_overall_pace(entry["stats"])
+            entry["pace"] = {}
+            entry["overall_pace"] = compute_overall_pace(entry["pace"])
             enriched.append(entry)
 
     # Split into hitters and pitchers

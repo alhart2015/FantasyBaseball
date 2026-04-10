@@ -16,6 +16,9 @@ PRODUCTION_FILES_TO_CHECK = [
     "src/fantasy_baseball/lineup/waivers.py",
     "src/fantasy_baseball/lineup/optimizer.py",
     "src/fantasy_baseball/lineup/roster_audit.py",
+    "src/fantasy_baseball/analysis/buy_low.py",
+    "src/fantasy_baseball/simulation.py",
+    "src/fantasy_baseball/lineup/team_optimizer.py",
     "scripts/run_lineup.py",
 ]
 
@@ -32,6 +35,7 @@ FORBIDDEN_CALLS = [
     "predict_reliability_blend",
     "predict_exponential_decay",
     "predict_fixed_blend",
+    "apply_recency_blend",
 ]
 
 

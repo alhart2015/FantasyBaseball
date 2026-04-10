@@ -180,6 +180,53 @@ class TestBuildOpponentLineup:
         assert isinstance(perez["wsgp_them"], float)
         assert isinstance(perez["wsgp_you"], float)
 
+    def test_pace_key_not_stats_key(self):
+        """build_opponent_lineup must write pace data under 'pace', not 'stats'.
+
+        Commit ad72b0d renamed the cache key from 'stats' to 'pace' and updated
+        the JS template to read p.pace. Any re-introduction of the old 'stats'
+        key causes opponent pace highlighting to render blank with no colors.
+        """
+        roster = [
+            {"name": "Salvador Perez", "positions": ["C", "Util"],
+             "selected_position": "C", "player_id": "100", "status": ""},
+            {"name": "Corbin Burnes", "positions": ["SP"],
+             "selected_position": "SP", "player_id": "200", "status": ""},
+        ]
+        hitters_proj, pitchers_proj = _sample_projections()
+        standings = _sample_standings()
+        user_leverage = {"R": 0.1, "HR": 0.1, "RBI": 0.1, "SB": 0.1,
+                         "AVG": 0.1, "W": 0.1, "K": 0.1, "SV": 0.1,
+                         "ERA": 0.1, "WHIP": 0.1}
+
+        result = build_opponent_lineup(
+            roster=roster,
+            opponent_name="Springfield Isotopes",
+            standings=standings,
+            hitters_proj=hitters_proj,
+            pitchers_proj=pitchers_proj,
+            ros_hitters=pd.DataFrame(),
+            ros_pitchers=pd.DataFrame(),
+            user_leverage=user_leverage,
+            season_year=2026,
+        )
+
+        hitter = result["hitters"][0]
+        pitcher = result["pitchers"][0]
+
+        # Pace data must be under "pace", never under the legacy "stats" key.
+        assert "pace" in hitter, "hitter missing 'pace' key"
+        assert "stats" not in hitter, "hitter has legacy 'stats' key — JS will render blank"
+        assert isinstance(hitter["pace"], dict), "hitter['pace'] must be a dict"
+        assert "R" in hitter["pace"], "hitter pace must include 'R'"
+        assert "HR" in hitter["pace"], "hitter pace must include 'HR'"
+
+        assert "pace" in pitcher, "pitcher missing 'pace' key"
+        assert "stats" not in pitcher, "pitcher has legacy 'stats' key — JS will render blank"
+        assert isinstance(pitcher["pace"], dict), "pitcher['pace'] must be a dict"
+        assert "W" in pitcher["pace"], "pitcher pace must include 'W'"
+        assert "K" in pitcher["pace"], "pitcher pace must include 'K'"
+
 
 class TestOpponentCache:
     def test_clear_opponent_cache(self):

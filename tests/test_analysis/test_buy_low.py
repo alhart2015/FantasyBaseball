@@ -41,7 +41,7 @@ def test_hitter_below_pace_qualifies():
     assert result[0]["name"] == "Struggling Hitter"
     assert result[0]["owner"] == "Opponent A"
     assert result[0]["avg_z"] < -1.0
-    assert "stats" in result[0]
+    assert "pace" in result[0]
 
 
 def test_hitter_on_pace_excluded():
