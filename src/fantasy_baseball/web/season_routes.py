@@ -1005,11 +1005,15 @@ def register_routes(app: Flask) -> None:
     @app.route("/api/fetch-ros-projections", methods=["POST"])
     @_require_auth
     def api_fetch_ros_projections():
-        """Run ROS projection fetch synchronously.
+        """Kick off a ROS projection fetch in a background thread.
 
-        Requires gunicorn --timeout 120 to avoid worker kill during the
-        ~30s FanGraphs fetch. Results written to job log (visible on /logs).
+        Used to be synchronous but now also refreshes game_logs first
+        (so normalize_ros_to_full_season has actuals to add), which can
+        take 90-300 seconds on a fresh deploy. Pushes past gunicorn's
+        120s timeout. Threaded to match the api_refresh pattern.
+        Results written to job log (visible on /logs).
         """
-        _run_ros_fetch()
-        return jsonify({"status": "done"})
+        thread = threading.Thread(target=_run_ros_fetch, daemon=True)
+        thread.start()
+        return jsonify({"status": "started"})
 
