@@ -15,7 +15,7 @@ from fantasy_baseball.utils.name_utils import normalize_name
 def classify_roster(
     roster: list[Player],
     rankings: dict[str, int],
-    rosterable_threshold: int = 130,
+    rosterable_threshold: int = 50,
 ) -> dict[str, str]:
     """Classify each roster player into one of four categories.
 

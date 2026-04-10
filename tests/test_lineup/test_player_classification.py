@@ -97,7 +97,9 @@ class TestClassifyRoster:
             _pitcher("Middle", 1.0),
             _pitcher("Scrub", 0.3),
         ]
-        rankings = {"ace::pitcher": 5, "middle::pitcher": 90, "scrub::pitcher": 200}
+        # Median of [0.3, 1.0, 1.8] = 1.0
+        # Middle: rank 30 <= 50 (high SGP), wSGP 1.0 = median (low) -> trade_candidate
+        rankings = {"ace::pitcher": 5, "middle::pitcher": 30, "scrub::pitcher": 200}
         result = classify_roster(roster, rankings)
         assert result["Ace"] == "core"
         assert result["Middle"] == "trade_candidate"
