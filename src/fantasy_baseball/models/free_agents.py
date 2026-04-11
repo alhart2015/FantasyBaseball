@@ -72,8 +72,12 @@ class FreeAgentPool:
 
         Args:
             yahoo_league: The ``yahoo_fantasy_api.League`` instance.
-            positions: If given, restricts the fetch to these slots.
-                Default fetches OF, 1B, 2B, 3B, SS, C, Util, SP, RP.
+            positions: If given, restricts the fetch to these positions.
+                Default fetches C, 1B, 2B, 3B, SS, OF, SP, RP — matches
+                the list in ``lineup.waivers.fetch_and_match_free_agents``.
+                UTIL is intentionally excluded: Yahoo's player-fetch API
+                requires primary positions, and UTIL would duplicate
+                hitters already returned by their primary slot fetches.
         """
         from fantasy_baseball.lineup.yahoo_roster import fetch_free_agents
 
@@ -81,7 +85,7 @@ class FreeAgentPool:
             positions = [
                 Position.C, Position.FIRST_BASE, Position.SECOND_BASE,
                 Position.THIRD_BASE, Position.SS, Position.OF,
-                Position.UTIL, Position.SP, Position.RP,
+                Position.SP, Position.RP,
             ]
 
         raw: list[dict] = []
