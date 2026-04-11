@@ -124,15 +124,6 @@ CREATE TABLE IF NOT EXISTS ros_blended_projections (
     PRIMARY KEY (year, snapshot_date, fg_id)
 );
 
-CREATE TABLE IF NOT EXISTS spoe_components (
-    year           INTEGER NOT NULL,
-    snapshot_date  TEXT NOT NULL,
-    team           TEXT NOT NULL,
-    component      TEXT NOT NULL,
-    value          REAL NOT NULL,
-    PRIMARY KEY (year, snapshot_date, team, component)
-);
-
 CREATE TABLE IF NOT EXISTS transactions (
     year            INTEGER NOT NULL,
     transaction_id  TEXT NOT NULL,
@@ -552,42 +543,6 @@ def append_standings_snapshot(conn, standings, year, snapshot_date) -> None:
         rows,
     )
     conn.commit()
-
-
-def load_spoe_components(conn, year, snapshot_date):
-    """Load accumulated components for a specific week.
-
-    Returns {team_name: {component_name: value}}.
-    """
-    rows = conn.execute(
-        "SELECT team, component, value FROM spoe_components "
-        "WHERE year = ? AND snapshot_date = ?",
-        (year, snapshot_date),
-    ).fetchall()
-    result = {}
-    for r in rows:
-        result.setdefault(r["team"], {})[r["component"]] = r["value"]
-    return result
-
-
-def get_spoe_results(conn, year, snapshot_date=None):
-    """Load SPOE results for a year, optionally filtered by snapshot_date.
-
-    Returns list of dicts with all spoe_results columns.
-    """
-    if snapshot_date is not None:
-        rows = conn.execute(
-            "SELECT * FROM spoe_results WHERE year = ? AND snapshot_date = ? "
-            "ORDER BY team, category",
-            (year, snapshot_date),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM spoe_results WHERE year = ? "
-            "ORDER BY snapshot_date, team, category",
-            (year,),
-        ).fetchall()
-    return [dict(r) for r in rows]
 
 
 def insert_transactions(conn, transactions):
