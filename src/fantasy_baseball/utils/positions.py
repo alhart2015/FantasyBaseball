@@ -1,49 +1,93 @@
-from .constants import IF_ELIGIBLE
+"""Legacy position helpers — backed by the Position enum in models/.
 
-HITTER_POSITIONS: set[str] = {"C", "1B", "2B", "3B", "SS", "OF", "DH", "IF", "Util"}
-PITCHER_POSITIONS: set[str] = {"P", "SP", "RP"}
+This module predates the ``Position`` enum and exists so that call
+sites using ``HITTER_POSITIONS``, ``PITCHER_POSITIONS``, and
+``can_fill_slot`` / ``can_cover_slots`` keep working. New code should
+import from ``fantasy_baseball.models.positions`` directly.
+
+The frozensets below are defined in terms of the enum, so containment
+checks work for both ``Position`` members and equivalent strings
+(``StrEnum`` makes ``Position.OF == "OF"``).
+"""
+
+from fantasy_baseball.models.positions import (
+    HITTER_ELIGIBLE,
+    PITCHER_ELIGIBLE,
+    Position,
+)
+
+# Exported for backward compatibility with existing callers
+HITTER_POSITIONS: frozenset = HITTER_ELIGIBLE
+PITCHER_POSITIONS: frozenset = PITCHER_ELIGIBLE
+
+# IF-eligible positions — a subset of HITTER_ELIGIBLE used by can_fill_slot
+_IF_ELIGIBLE: frozenset[Position] = frozenset({
+    Position.FIRST_BASE, Position.SECOND_BASE,
+    Position.THIRD_BASE, Position.SS,
+})
 
 
-def can_fill_slot(player_positions: list[str], slot: str) -> bool:
-    """Check if a player with given eligible positions can fill a roster slot."""
-    if slot in ("BN", "IL"):
+def _coerce(p) -> Position | None:
+    """Accept a Position, canonical position string, or Yahoo mixed-case
+    string, and return the canonical Position. Empty string and ``None``
+    return ``None`` so callers that receive a missing position
+    (e.g. ``selected_position == ""`` from Yahoo) degrade gracefully
+    instead of raising.
+    """
+    if isinstance(p, Position):
+        return p
+    if not p:
+        return None
+    return Position.parse(p)
+
+
+def can_fill_slot(player_positions, slot) -> bool:
+    """Check if a player's eligible positions can fill a roster slot.
+
+    Accepts either ``Position`` enum values or string positions in
+    either argument for backward compatibility. An empty/None slot
+    returns ``False`` (nothing fills a non-existent slot); empty
+    entries in ``player_positions`` are ignored.
+    """
+    slot_p = _coerce(slot)
+    if slot_p is None:
+        return False
+    eligible = [c for c in (_coerce(p) for p in player_positions)
+                if c is not None]
+
+    if slot_p in (Position.BN, Position.IL, Position.IL_PLUS,
+                  Position.DL, Position.DL_PLUS):
         return True
-    if slot == "UTIL":
-        return any(pos in HITTER_POSITIONS for pos in player_positions)
-    if slot == "IF":
-        return any(pos in IF_ELIGIBLE for pos in player_positions)
-    if slot == "OF":
-        return "OF" in player_positions
-    if slot == "P":
-        return any(pos in PITCHER_POSITIONS for pos in player_positions)
-    return slot in player_positions
+    if slot_p is Position.UTIL:
+        return any(p in HITTER_ELIGIBLE for p in eligible)
+    if slot_p is Position.IF:
+        return any(p in _IF_ELIGIBLE for p in eligible)
+    if slot_p is Position.OF:
+        return Position.OF in eligible
+    if slot_p is Position.P:
+        return any(p in PITCHER_ELIGIBLE for p in eligible)
+    return slot_p in eligible
 
 
-def can_cover_slots(
-    player_positions_list: list[list[str]],
-    roster_slots: dict[str, int],
-) -> bool:
+def can_cover_slots(player_positions_list, roster_slots) -> bool:
     """Check if a group of players can fill all required hitter slots.
 
     Uses augmenting-path bipartite matching to verify feasibility.
     Only checks hitter slots (C, 1B, 2B, 3B, SS, IF, OF, UTIL) since
     all pitcher slots are interchangeable.
 
-    Args:
-        player_positions_list: List of eligible-position lists, one per player.
-        roster_slots: Config roster slots dict (e.g. {"C": 1, "1B": 1, ...}).
-
-    Returns:
-        True if every hitter slot can be filled by some player.
+    Accepts ``player_positions_list`` as a list of lists where each
+    inner list contains either ``Position`` enum values or strings.
+    ``roster_slots`` is the config dict mapping slot names to counts
+    (string keys are fine — matches config format).
     """
-    # Build the list of hitter slots to fill
     skip = {"P", "BN", "IL", "IL+", "DL", "DL+"}
-    slots: list[str] = []
-    for pos, count in roster_slots.items():
-        if pos in skip:
+    slots: list[Position] = []
+    for pos_key, count in roster_slots.items():
+        if pos_key in skip:
             continue
         for _ in range(count):
-            slots.append(pos)
+            slots.append(_coerce(pos_key))
 
     if not slots:
         return True
@@ -51,7 +95,6 @@ def can_cover_slots(
         return False
 
     n_slots = len(slots)
-    # match_slot[slot_idx] = player_idx assigned, or -1
     match_slot = [-1] * n_slots
 
     def _try_assign(player_idx: int, visited: set[int]) -> bool:
@@ -75,11 +118,19 @@ def can_cover_slots(
     return matched >= n_slots
 
 
-def is_hitter(positions: list[str]) -> bool:
-    """Check if a player is a hitter based on their eligible positions."""
-    return any(pos in HITTER_POSITIONS for pos in positions)
+def is_hitter(positions) -> bool:
+    """Check if a player is a hitter based on their eligible positions.
+
+    Empty/None entries in ``positions`` are ignored.
+    """
+    eligible = [c for c in (_coerce(p) for p in positions) if c is not None]
+    return any(p in HITTER_ELIGIBLE for p in eligible)
 
 
-def is_pitcher(positions: list[str]) -> bool:
-    """Check if a player is a pitcher based on their eligible positions."""
-    return any(pos in PITCHER_POSITIONS for pos in positions)
+def is_pitcher(positions) -> bool:
+    """Check if a player is a pitcher based on their eligible positions.
+
+    Empty/None entries in ``positions`` are ignored.
+    """
+    eligible = [c for c in (_coerce(p) for p in positions) if c is not None]
+    return any(p in PITCHER_ELIGIBLE for p in eligible)

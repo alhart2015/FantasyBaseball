@@ -123,3 +123,57 @@ class TestPositionSets:
         assert Position.DL in IL_SLOTS
         assert Position.DL_PLUS in IL_SLOTS
         assert Position.BN not in IL_SLOTS
+
+
+class TestInteropWithUtilsPositions:
+    def test_utils_hitter_positions_contains_enum_members(self):
+        """Legacy HITTER_POSITIONS set accepts enum values."""
+        from fantasy_baseball.models.positions import Position
+        from fantasy_baseball.utils.positions import HITTER_POSITIONS
+        assert Position.C in HITTER_POSITIONS
+        assert Position.OF in HITTER_POSITIONS
+        assert Position.UTIL in HITTER_POSITIONS
+        assert Position.P not in HITTER_POSITIONS
+
+    def test_can_fill_slot_accepts_enum_args(self):
+        """can_fill_slot works with Position enum values."""
+        from fantasy_baseball.models.positions import Position
+        from fantasy_baseball.utils.positions import can_fill_slot
+        # Outfielder can fill OF and UTIL
+        assert can_fill_slot([Position.OF], Position.OF)
+        assert can_fill_slot([Position.OF], Position.UTIL)
+        assert can_fill_slot([Position.OF], Position.BN)
+        # Outfielder cannot fill C
+        assert not can_fill_slot([Position.OF], Position.C)
+        # Infielder can fill IF
+        assert can_fill_slot([Position.FIRST_BASE], Position.IF)
+
+    def test_can_fill_slot_accepts_string_args_backward_compat(self):
+        """Legacy string call sites still work because Position is StrEnum."""
+        from fantasy_baseball.utils.positions import can_fill_slot
+        assert can_fill_slot(["OF"], "OF")
+        assert can_fill_slot(["OF"], "UTIL")
+
+    def test_is_pitcher_empty_string_returns_false(self):
+        """waivers.detect_open_slots passes selected_position="" for
+        unfilled Yahoo slots. Must not raise."""
+        from fantasy_baseball.utils.positions import is_hitter, is_pitcher
+        assert is_pitcher([""]) is False
+        assert is_hitter([""]) is False
+
+    def test_can_fill_slot_empty_slot_returns_false(self):
+        """An empty slot string can't be filled by anything."""
+        from fantasy_baseball.utils.positions import can_fill_slot
+        assert can_fill_slot(["OF"], "") is False
+        assert can_fill_slot(["OF"], None) is False
+
+    def test_can_fill_slot_ignores_empty_entries_in_player_positions(self):
+        """Empty strings in player_positions are skipped."""
+        from fantasy_baseball.utils.positions import can_fill_slot
+        assert can_fill_slot(["OF", ""], "OF") is True
+        assert can_fill_slot(["", "OF"], "UTIL") is True
+
+    def test_is_hitter_mixed_empty_and_valid(self):
+        from fantasy_baseball.utils.positions import is_hitter, is_pitcher
+        assert is_hitter(["", "OF"]) is True
+        assert is_pitcher(["", "SP"]) is True

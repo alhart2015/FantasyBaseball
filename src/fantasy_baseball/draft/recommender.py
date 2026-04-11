@@ -3,7 +3,6 @@ from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import (
     CLOSER_SV_THRESHOLD,
     DEFAULT_ROSTER_SLOTS,
-    IF_ELIGIBLE,
     compute_starters_per_position,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
