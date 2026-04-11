@@ -417,19 +417,46 @@ def test_append_standings_snapshot(tmp_path):
     create_tables(conn)
 
     standings = [
-        {"name": "Hart of the Order", "rank": 1,
-         "stats": {"R": 100, "HR": 30, "RBI": 95, "SB": 20, "AVG": 0.265,
-                   "W": 10, "K": 200, "SV": 15, "ERA": 3.50, "WHIP": 1.18}},
+        {
+            "name": "Hart of the Order",
+            "team_key": "469.l.5652.t.4",
+            "rank": 1,
+            "stats": {
+                "R": 100, "HR": 30, "RBI": 95, "SB": 20, "AVG": 0.265,
+                "W": 10, "K": 200, "SV": 15, "ERA": 3.50, "WHIP": 1.18,
+            },
+        },
     ]
     append_standings_snapshot(conn, standings, 2026, "2026-03-24")
 
     row = conn.execute("SELECT * FROM standings").fetchone()
     assert row["year"] == 2026
     assert row["snapshot_date"] == "2026-03-24"
+    assert row["team"] == "Hart of the Order"
+    assert row["team_key"] == "469.l.5652.t.4"
+    assert row["rank"] == 1
+    assert row["r"] == 100
 
     # Idempotent
     append_standings_snapshot(conn, standings, 2026, "2026-03-24")
     assert conn.execute("SELECT COUNT(*) FROM standings").fetchone()[0] == 1
+    conn.close()
+
+
+def test_append_standings_snapshot_without_team_key(tmp_path):
+    """Missing team_key writes NULL (not an empty string)."""
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    create_tables(conn)
+
+    standings = [
+        {"name": "Legacy Team", "rank": 1, "stats": {"R": 100}},
+    ]
+    append_standings_snapshot(conn, standings, 2026, "2026-03-24")
+
+    row = conn.execute("SELECT team_key FROM standings").fetchone()
+    assert row["team_key"] is None
     conn.close()
 
 
