@@ -661,6 +661,65 @@ def _compute_category_ranks(standings: list[dict]) -> dict[str, dict[str, int]]:
     return ranks
 
 
+def _compute_pending_moves_diff(
+    today_roster: list[dict],
+    future_roster: list[dict],
+    team_name: str,
+    team_key: str,
+) -> list[dict]:
+    """Compute pending-moves banner data from a roster diff.
+
+    Compares the user's current roster against Yahoo's future-dated
+    roster (via ``team.roster(day=next_tuesday)``) and returns the
+    add/drop difference in the same shape the lineup UI banner
+    expects.
+
+    The diff uses normalized names so accent / casing variants don't
+    produce spurious entries (e.g., "Julio Rodríguez" vs "Julio
+    Rodriguez").
+
+    Returns an empty list when the rosters match. When there are
+    changes, returns a single move dict bundling all adds and all
+    drops — matches the banner's existing multi-add/drop rendering.
+    """
+    from fantasy_baseball.utils.name_utils import normalize_name
+
+    today_by_norm = {
+        normalize_name(p["name"]): p for p in today_roster
+    }
+    future_by_norm = {
+        normalize_name(p["name"]): p for p in future_roster
+    }
+
+    added_norms = set(future_by_norm) - set(today_by_norm)
+    dropped_norms = set(today_by_norm) - set(future_by_norm)
+
+    if not added_norms and not dropped_norms:
+        return []
+
+    adds = [
+        {
+            "name": future_by_norm[n]["name"],
+            "positions": future_by_norm[n].get("positions", []),
+        }
+        for n in sorted(added_norms)
+    ]
+    drops = [
+        {
+            "name": today_by_norm[n]["name"],
+            "positions": today_by_norm[n].get("positions", []),
+        }
+        for n in sorted(dropped_norms)
+    ]
+
+    return [{
+        "team": team_name,
+        "team_key": team_key,
+        "adds": adds,
+        "drops": drops,
+    }]
+
+
 def find_unprocessed_moves(
     transactions: list[dict],
     roster_names: set[str],
