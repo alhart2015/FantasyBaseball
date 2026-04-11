@@ -894,20 +894,35 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         write_cache("standings", standings, cache_dir)
         _progress(f"Fetched standings for {len(standings)} teams")
 
-        _progress("Fetching roster...")
-        roster_raw = fetch_roster(league, user_team_key)
-        _progress(f"Fetched roster: {len(roster_raw)} players")
+        # Compute the effective date for the next lineup lock. We fetch
+        # all rosters at this date (via Yahoo's team.roster(day=...)) so
+        # the audit/optimizer/waivers see the post-lock future state
+        # without having to simulate pending transactions locally.
+        # fetch_scoring_period returns (start, end) where end is the
+        # last day of the current scoring week; end + 1 is the next
+        # lock date (Tuesday for this league).
+        _progress("Computing effective date...")
+        start_date, end_date = fetch_scoring_period(league)
+        effective_date = date.fromisoformat(end_date) + timedelta(days=1)
+        _progress(f"Effective date (next lock): {effective_date}")
 
-        _progress("Checking for unprocessed moves...")
-        from fantasy_baseball.lineup.yahoo_roster import fetch_all_transactions
-        roster_names = {normalize_name(p["name"]) for p in roster_raw}
-        recent_txns = fetch_all_transactions(league)
-        pending_moves = find_unprocessed_moves(
-            recent_txns, roster_names, config.team_name
+        _progress("Fetching today's roster (for pending-moves diff)...")
+        today_roster_raw = fetch_roster(league, user_team_key)
+
+        _progress(f"Fetching future-dated roster for {effective_date}...")
+        roster_raw = fetch_roster(league, user_team_key, day=effective_date)
+        _progress(f"Fetched future roster: {len(roster_raw)} players")
+
+        pending_moves = _compute_pending_moves_diff(
+            today_roster_raw, roster_raw,
+            team_name=config.team_name, team_key=user_team_key,
         )
         write_cache("pending_moves", pending_moves, cache_dir)
         if pending_moves:
-            _progress(f"Found {len(pending_moves)} unprocessed move(s)")
+            total_changes = sum(
+                len(m["adds"]) + len(m["drops"]) for m in pending_moves
+            )
+            _progress(f"Pending moves: {total_changes} change(s) detected")
 
         # --- Step 4: Read projections from SQLite ---
         _progress("Loading projections...")
@@ -973,7 +988,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             key, team_info = key_and_info
             tname = team_info.get("name", "")
             try:
-                opp_raw = fetch_roster(league, key)
+                opp_raw = fetch_roster(league, key, day=effective_date)
                 opp_proj_list = match_roster_to_projections(
                     opp_raw, hitters_proj, pitchers_proj
                 )
@@ -1197,7 +1212,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # --- Step 9: Probable starters ---
         _progress("Fetching schedule and matchup data...")
-        start_date, end_date = fetch_scoring_period(league)
+        # start_date and end_date were fetched earlier to compute effective_date
         schedule_cache_path = project_root / "data" / "weekly_schedule.json"
         schedule = get_week_schedule(start_date, end_date, schedule_cache_path)
 
@@ -1223,14 +1238,12 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             league, hitters_proj, pitchers_proj
         )
 
-        # Adjust for pending moves before scanning waivers
-        if pending_moves:
-            roster_for_waivers, fa_for_waivers = adjust_for_pending_moves(
-                roster_players, fa_players, pending_moves, config.team_name,
-            )
-            _progress(f"Adjusted for {len(pending_moves)} pending move(s)")
-        else:
-            roster_for_waivers, fa_for_waivers = roster_players, fa_players
+        # roster_players is already the future-dated roster (fetched via
+        # day=effective_date), so no pending-moves adjustment is needed.
+        # The FA pool reflects today's availability — players being
+        # added are already removed from Yahoo's FA list by the time
+        # we fetch it.
+        roster_for_waivers, fa_for_waivers = roster_players, fa_players
 
         # --- Roster Audit ---
         _progress("Running roster audit...")
@@ -1397,12 +1410,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             get_connection,
         )
 
-        # Tuesday of the scoring week — the user's league locks lineups
-        # Tuesday morning, so Tuesday is the ownership-of-record day for
-        # SPoE and other historical analyses.
-        snapshot_date = (
-            date.fromisoformat(start_date) + timedelta(days=1)
-        ).isoformat()
+        # effective_date (computed earlier) is the next-lock day.
+        # Storing the future-dated roster under this date means SPoE's
+        # ownership walk correctly attributes the next scoring week to
+        # the post-lock roster.
+        snapshot_date = effective_date.isoformat()
         db_conn = get_connection()
         create_tables(db_conn)  # idempotent — ensures tables exist
         try:
