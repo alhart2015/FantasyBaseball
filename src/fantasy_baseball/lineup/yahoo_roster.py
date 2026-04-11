@@ -309,79 +309,12 @@ def _extract_player_info(player_data: dict) -> tuple[dict, dict]:
     return {"name": name, "player_id": player_id, "positions": positions}, tdata
 
 
-def fetch_pending_moves(league) -> list[dict]:
-    """Fetch pending roster transactions for the entire league.
-
-    Calls the Yahoo transactions API for add/drop moves and filters
-    to non-successful (pending/waiver) status.
-
-    Returns list of normalized pending move dicts.
-    """
-    try:
-        raw = league.transactions("add,drop", "25")
-        return parse_pending_moves(raw)
-    except Exception:
-        logger.exception("Failed to fetch pending moves; returning empty list")
-        return []
-
-
-def parse_pending_moves(transactions: list[dict]) -> list[dict]:
-    """Filter to pending transactions and normalize into a clean structure.
-
-    Args:
-        transactions: Raw output from league.transactions().
-
-    Returns:
-        List of dicts with keys: transaction_id, type, status, timestamp,
-        team, team_key, adds (list of player dicts), drops (list of player dicts).
-    """
-    pending = []
-    for txn in transactions:
-        if txn.get("status") == "successful":
-            continue
-
-        adds = []
-        drops = []
-        team_name = ""
-        team_key = ""
-
-        players = txn.get("players", {})
-        for key, player_data in players.items():
-            if key == "count" or not isinstance(player_data, dict):
-                continue
-
-            player_info, tdata = _extract_player_info(player_data)
-            ptype = tdata.get("type", "")
-
-            if ptype == "add":
-                adds.append(player_info)
-                team_name = tdata.get("destination_team_name", team_name)
-                team_key = tdata.get("destination_team_key", team_key)
-            elif ptype == "drop":
-                drops.append(player_info)
-                if not team_name:
-                    team_name = tdata.get("source_team_name", "")
-                    team_key = tdata.get("source_team_key", "")
-
-        pending.append({
-            "transaction_id": txn.get("transaction_id", ""),
-            "type": txn.get("type", ""),
-            "status": txn.get("status", ""),
-            "timestamp": txn.get("timestamp", ""),
-            "team": team_name,
-            "team_key": team_key,
-            "adds": adds,
-            "drops": drops,
-        })
-
-    return pending
-
 
 def fetch_all_transactions(league) -> list[dict]:
     """Fetch all successful add/drop transactions for the season.
 
     Returns list of flat transaction dicts ready for scoring and DB insertion.
-    Excludes pending transactions (those are handled by fetch_pending_moves).
+    Only includes successful (completed) transactions, not pending ones.
     """
     try:
         raw = league.transactions("add,drop", "")
