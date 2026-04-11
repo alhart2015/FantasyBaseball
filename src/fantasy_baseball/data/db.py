@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS weekly_rosters (
     slot         TEXT NOT NULL,
     player_name  TEXT NOT NULL,
     positions    TEXT,
+    status       TEXT,
+    yahoo_id     TEXT,
     PRIMARY KEY (snapshot_date, team, slot, player_name)
 );
 
@@ -77,6 +79,7 @@ CREATE TABLE IF NOT EXISTS standings (
     year          INTEGER NOT NULL,
     snapshot_date TEXT NOT NULL,
     team          TEXT NOT NULL,
+    team_key      TEXT,
     rank          INTEGER,
     r REAL, hr REAL, rbi REAL, sb REAL, avg REAL,
     w REAL, k REAL, sv REAL, era REAL, whip REAL,
@@ -156,8 +159,28 @@ def get_connection(db_path=None):
     return conn
 
 
+def _add_column_if_missing(conn, table: str, column: str, col_type: str) -> None:
+    """Add a column to an existing table if it's not already there.
+
+    Idempotent — safe to call on every connection.
+    """
+    try:
+        info = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    except sqlite3.OperationalError:
+        return  # Table doesn't exist yet; CREATE will handle it
+    if not info:
+        return
+    existing = {r["name"] for r in info}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+        conn.commit()
+
+
 def create_tables(conn):
     """Create all tables (idempotent via IF NOT EXISTS)."""
+    # Ensure row_factory is set for dict-like access below.
+    conn.row_factory = sqlite3.Row
+
     # Migrate weekly_rosters if PK is missing player_name (old schema
     # used (snapshot_date, team, slot) which silently dropped duplicate
     # slots like multiple OFs or Ps).
@@ -172,6 +195,11 @@ def create_tables(conn):
         pass  # Table doesn't exist yet; CREATE below will handle it
     conn.executescript(SCHEMA)
     conn.commit()
+
+    # Idempotent column additions for tables that predate later schema bumps.
+    _add_column_if_missing(conn, "weekly_rosters", "status", "TEXT")
+    _add_column_if_missing(conn, "weekly_rosters", "yahoo_id", "TEXT")
+    _add_column_if_missing(conn, "standings", "team_key", "TEXT")
 
 
 # FanGraphs CSV column → DB column, for hitters
