@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS standings (
     year          INTEGER NOT NULL,
     snapshot_date TEXT NOT NULL,
     team          TEXT NOT NULL,
+    team_key      TEXT,
     rank          INTEGER,
     r REAL, hr REAL, rbi REAL, sb REAL, avg REAL,
     w REAL, k REAL, sv REAL, era REAL, whip REAL,
@@ -198,6 +199,7 @@ def create_tables(conn):
     # Idempotent column additions for tables that predate later schema bumps.
     _add_column_if_missing(conn, "weekly_rosters", "status", "TEXT")
     _add_column_if_missing(conn, "weekly_rosters", "yahoo_id", "TEXT")
+    _add_column_if_missing(conn, "standings", "team_key", "TEXT")
 
 
 # FanGraphs CSV column → DB column, for hitters
