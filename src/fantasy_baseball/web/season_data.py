@@ -6,7 +6,7 @@ import os
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -1315,7 +1315,12 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             get_connection,
         )
 
-        snapshot_date = start_date  # Monday of scoring week
+        # Tuesday of the scoring week — the user's league locks lineups
+        # Tuesday morning, so Tuesday is the ownership-of-record day for
+        # SPoE and other historical analyses.
+        snapshot_date = (
+            date.fromisoformat(start_date) + timedelta(days=1)
+        ).isoformat()
         db_conn = get_connection()
         create_tables(db_conn)  # idempotent — ensures tables exist
         try:
