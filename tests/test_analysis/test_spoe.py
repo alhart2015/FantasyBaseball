@@ -286,6 +286,59 @@ class TestComputeCurrentSpoe:
         hr_a = next(r for r in result["results"] if r["team"] == "Team A" and r["category"] == "HR")
         assert hr_a["projected_stat"] == 0.0
 
+    def test_preseason_snapshot_does_not_credit_days_before_season_start(self, tmp_path):
+        """Regression: snapshots dated before season_start should not
+        contribute days from before the season began.
+
+        If a pre-season snapshot dated 2026-03-24 exists (3 days before
+        season_start 2026-03-27), the walk from that snapshot to the next
+        one should only credit days from 2026-03-27 onward — not 2026-03-24.
+        """
+        conn = _make_conn(tmp_path)
+        lookup = _preseason_lookup_from(
+            _hitter_preseason("Star", hr=185),  # 1 HR per day full season
+        )
+
+        # Pre-season snapshot 3 days before season_start
+        _snapshot_roster(conn, "2026-03-24", "Team A", [
+            {"name": "Star", "selected_position": "OF", "positions": ["OF"]},
+        ])
+        # Regular-season snapshot (next Tuesday)
+        _snapshot_roster(conn, "2026-03-31", "Team A", [
+            {"name": "Star", "selected_position": "OF", "positions": ["OF"]},
+        ])
+        _snapshot_roster(conn, "2026-03-31", "Team B", [])
+
+        standings = [
+            {"name": "Team A", "stats": {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
+                                         "W": 0, "K": 0, "SV": 0, "ERA": 99, "WHIP": 99}},
+            {"name": "Team B", "stats": {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
+                                         "W": 0, "K": 0, "SV": 0, "ERA": 99, "WHIP": 99}},
+        ]
+
+        result = compute_current_spoe(
+            conn, standings=standings, preseason_lookup=lookup,
+            season_start=SEASON_START, season_end=SEASON_END,
+            today=date.fromisoformat("2026-04-07"),
+        )
+
+        # The 2026-03-24 snapshot covers the span 2026-03-24 → 2026-03-31.
+        # Season starts 2026-03-27, so only 4 of those 7 days should count
+        # (2026-03-27, 28, 29, 30).
+        # Then 2026-03-31 → 2026-04-07 contributes 7 more days.
+        # Total: 11 days of ownership, NOT 14.
+        expected_hr = 185 * 11 / TOTAL_DAYS
+        hr_a = next(r for r in result["results"] if r["team"] == "Team A" and r["category"] == "HR")
+        assert hr_a["projected_stat"] == pytest.approx(expected_hr, rel=1e-9)
+
+        # Sanity check: if the bug were still present, projected_stat would be
+        # 185 * 14 / TOTAL_DAYS instead, which differs meaningfully.
+        buggy_value = 185 * 14 / TOTAL_DAYS
+        assert abs(hr_a["projected_stat"] - buggy_value) > 1e-6, (
+            "Pre-season clipping bug reintroduced — projection matches "
+            "the 14-day (un-clipped) calculation instead of 11 days."
+        )
+
     def test_result_shape_matches_luck_template(self, tmp_path):
         """Backward-compatibility guard: the returned dict must have the
         keys the luck.html template expects."""

@@ -184,7 +184,15 @@ def compute_current_spoe(
         else:
             end_of_period = today
 
-        days_covered = max(0, (end_of_period - snap_date).days)
+        # Clip the ownership period to the season window. Pre-season
+        # snapshots (e.g., draft-day captures before season_start) should
+        # not contribute days that lie before the season actually began,
+        # otherwise teams with players in those snapshots get over-credited.
+        # Similarly clip to season_end so late refreshes don't count
+        # post-season days that never happened.
+        effective_start = max(snap_date, start)
+        effective_end = min(end_of_period, end)
+        days_covered = max(0, (effective_end - effective_start).days)
         if days_covered == 0:
             continue
 
