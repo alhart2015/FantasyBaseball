@@ -871,22 +871,27 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         else:
             _progress("WARNING: No ROS projections available — falling back to preseason")
 
-        # --- Step 4b: Fetch opponent rosters ---
+        # --- Step 4b: Fetch opponent rosters (raw) ---
         _progress("Fetching opponent rosters...")
-        from fantasy_baseball.data.projections import match_roster_to_projections
+        from fantasy_baseball.data.projections import (
+            hydrate_roster_entries,
+            match_roster_to_projections,
+        )
+        from fantasy_baseball.models.league import League
 
-        opp_rosters: dict[str, list[Player]] = {}
-        all_raw_rosters = {config.team_name: roster_raw}
+        # Collect raw rosters keyed by team name — used only to feed the
+        # DB write below. League.from_db will then be our source of
+        # truth for roster data for the rest of the refresh.
+        raw_rosters_by_team: dict[str, list[dict]] = {
+            config.team_name: roster_raw,
+        }
 
         def _fetch_opp(key_and_info):
             key, team_info = key_and_info
             tname = team_info.get("name", "")
             try:
                 opp_raw = fetch_roster(league, key, day=effective_date)
-                opp_proj_list = match_roster_to_projections(
-                    opp_raw, hitters_proj, pitchers_proj
-                )
-                return (tname, opp_raw, opp_proj_list)
+                return (tname, opp_raw)
             except Exception:
                 return None
 
@@ -898,11 +903,61 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             for result in pool.map(_fetch_opp, opp_items):
                 if result is None:
                     continue
-                tname, opp_raw, opp_proj_list = result
-                all_raw_rosters[tname] = opp_raw
-                if opp_proj_list:
-                    opp_rosters[tname] = opp_proj_list
-        _progress(f"Fetched {len(opp_rosters)} opponent rosters")
+                tname, opp_raw = result
+                raw_rosters_by_team[tname] = opp_raw
+        _progress(
+            f"Fetched {len(raw_rosters_by_team)} rosters (user + opponents)"
+        )
+
+        # --- Step 4c: Write rosters + standings to DB, then load League ---
+        _progress("Writing roster snapshots to DB...")
+        from fantasy_baseball.data.db import (
+            append_roster_snapshot,
+            append_standings_snapshot,
+            create_tables,
+            get_connection,
+        )
+
+        snapshot_date = effective_date.isoformat()
+        db_conn = get_connection()
+        create_tables(db_conn)  # idempotent — ensures tables exist
+        try:
+            week_num = None
+            for tname, team_raw in raw_rosters_by_team.items():
+                append_roster_snapshot(
+                    db_conn, team_raw, snapshot_date, week_num, tname,
+                )
+            append_standings_snapshot(
+                db_conn, standings, config.season_year, snapshot_date,
+            )
+
+            _progress("Loading League from DB...")
+            league_model = League.from_db(db_conn, config.season_year)
+        finally:
+            db_conn.close()
+
+        # --- Step 4d: Hydrate user roster + opponent rosters from League ---
+        _progress("Hydrating user and opponent rosters...")
+        user_team_model = league_model.team_by_name(config.team_name)
+        user_roster_model = user_team_model.latest_roster()
+        matched = hydrate_roster_entries(
+            user_roster_model, hitters_proj, pitchers_proj,
+        )
+
+        opp_rosters: dict[str, list[Player]] = {}
+        for team in league_model.teams:
+            if team.name == config.team_name:
+                continue
+            if not team.rosters:
+                continue
+            latest = team.latest_roster()
+            hydrated = hydrate_roster_entries(
+                latest, hitters_proj, pitchers_proj,
+            )
+            if hydrated:
+                opp_rosters[team.name] = hydrated
+        _progress(f"Hydrated {len(opp_rosters)} opponent rosters")
+
         # Cache opponent rosters for on-demand trade search
         opp_rosters_flat = {
             tname: [p.to_dict() for p in roster]
@@ -910,12 +965,9 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         }
         write_cache("opp_rosters", opp_rosters_flat, cache_dir)
 
-        # --- Step 4c: Build projected standings ---
+        # --- Step 4e: Build projected standings ---
         _progress("Projecting end-of-season standings...")
         from fantasy_baseball.scoring import project_team_stats
-
-        # Match user roster to projections (wSGP added later after leverage)
-        matched = match_roster_to_projections(roster_raw, hitters_proj, pitchers_proj)
 
         all_team_rosters = {config.team_name: matched}
         all_team_rosters.update(opp_rosters)
@@ -1240,21 +1292,15 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             remaining_days = max(0, (season_end - date.today()).days)
             fraction_remaining = remaining_days / total_days if total_days > 0 else 0
 
-            # Build ROS rosters for all teams
+            # Build ROS rosters for all teams. hitters_proj/pitchers_proj
+            # already ARE ros_hitters/ros_pitchers when has_ros is True
+            # (see the assignment above), so opp_rosters is already
+            # matched against ROS projections — just reuse it.
             ros_mc_rosters = {}
-            # User's team (matched uses ROS projections since step 4c)
             if matched:
                 ros_mc_rosters[config.team_name] = flat_rosters.get(config.team_name, [])
-
-            # Opponent teams
-            for tname, opp_raw in all_raw_rosters.items():
-                if tname == config.team_name:
-                    continue
-                opp_ros = match_roster_to_projections(
-                    opp_raw, ros_hitters, ros_pitchers,
-                )
-                if opp_ros:
-                    ros_mc_rosters[tname] = [p.to_flat_dict() for p in opp_ros]
+            for tname, opp_players in opp_rosters.items():
+                ros_mc_rosters[tname] = [p.to_flat_dict() for p in opp_players]
 
             # Build actual standings dict
             actual_standings_dict = {
@@ -1294,34 +1340,15 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             "ros_with_management": ros_mgmt_mc,
         }, cache_dir)
 
-        # --- Step 14: Update SQLite database ---
-        _progress("Updating database...")
-        from fantasy_baseball.data.db import (
-            append_roster_snapshot,
-            append_standings_snapshot,
-            create_tables,
-            get_connection,
-        )
-
-        # effective_date (computed earlier) is the next-lock day.
-        # Storing the future-dated roster under this date means SPoE's
-        # ownership walk correctly attributes the next scoring week to
-        # the post-lock roster.
-        snapshot_date = effective_date.isoformat()
+        # --- Step 14: Compute season-to-date SPoE (luck analysis) ---
+        # The roster + standings snapshots were already written to the
+        # DB in Step 4c, before League hydration. SPoE walks that same
+        # weekly_rosters history to scale preseason projections by
+        # days owned.
+        _progress("Computing SPoE...")
+        from fantasy_baseball.data.db import get_connection
         db_conn = get_connection()
-        create_tables(db_conn)  # idempotent — ensures tables exist
         try:
-            # Append all team rosters for this week
-            week_num = None
-            for tname, raw_roster in all_raw_rosters.items():
-                append_roster_snapshot(db_conn, raw_roster, snapshot_date, week_num, tname)
-
-            # Append current standings snapshot
-            append_standings_snapshot(db_conn, standings, config.season_year, snapshot_date)
-
-            # Compute current season-to-date SPoE (luck analysis).
-            # Walks weekly_rosters history, scales each player's preseason
-            # projection by days owned, compares to live standings.
             from fantasy_baseball.analysis.spoe import (
                 build_preseason_lookup,
                 compute_current_spoe,
@@ -1339,8 +1366,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             )
 
             write_cache("spoe", spoe_result, cache_dir)
-            # Also write the daily snapshot for future trend visualization.
-            # Key pattern: spoe_snapshot:YYYY-MM-DD. No TTL — accumulates.
             _write_spoe_snapshot(spoe_result)
             _progress(f"SPoE computed for snapshot {spoe_result.get('snapshot_date')}")
         finally:
