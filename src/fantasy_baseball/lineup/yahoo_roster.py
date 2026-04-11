@@ -20,10 +20,27 @@ YAHOO_STAT_ID_MAP: dict[str, str] = {
 }
 
 
-def fetch_roster(league, team_key: str) -> list[dict]:
-    """Fetch a team's current roster from Yahoo."""
+def fetch_roster(
+    league,
+    team_key: str,
+    day: datetime.date | None = None,
+) -> list[dict]:
+    """Fetch a team's roster from Yahoo.
+
+    Args:
+        league: Yahoo ``League`` handle.
+        team_key: Yahoo team key (e.g. ``"431.l.17492.t.3"``).
+        day: If given, fetch the roster as-of that date. Used by the
+            refresh pipeline to pull next Tuesday's pre-locked roster
+            instead of today's. Yahoo applies transaction effective
+            dates server-side, so this is the ground-truth future
+            state.
+    """
     team = league.to_team(team_key)
-    raw_roster = team.roster()
+    if day is None:
+        raw_roster = team.roster()
+    else:
+        raw_roster = team.roster(day=day)
     return parse_roster(raw_roster)
 
 
