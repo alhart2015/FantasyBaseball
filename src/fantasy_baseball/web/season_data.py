@@ -163,6 +163,29 @@ def read_meta(cache_dir: Path = CACHE_DIR) -> dict:
     return read_cache("meta", cache_dir) or {}
 
 
+def _write_spoe_snapshot(spoe_result: dict) -> None:
+    """Write a daily SPoE snapshot to Upstash under `spoe_snapshot:YYYY-MM-DD`.
+
+    Separate from the main write_cache path because this key is not
+    under the `cache:` prefix — it's a historical time series for the
+    luck page to optionally render trend charts. No TTL; accumulates.
+    """
+    snapshot_date = spoe_result.get("snapshot_date")
+    if not snapshot_date:
+        return
+    redis = _get_redis()
+    if redis is None:
+        return
+    try:
+        import json
+        redis.set(
+            f"spoe_snapshot:{snapshot_date}",
+            json.dumps(spoe_result),
+        )
+    except Exception as exc:
+        log.warning(f"Failed to write spoe_snapshot:{snapshot_date}: {exc}")
+
+
 def _load_game_log_totals(season_year: int) -> tuple[dict, dict]:
     """Load aggregated game log totals from SQLite, with Redis fallback/write-through.
 
@@ -1332,57 +1355,30 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             # Append current standings snapshot
             append_standings_snapshot(db_conn, standings, config.season_year, snapshot_date)
 
-            # Compute SPOE (luck analysis)
+            # Compute current season-to-date SPoE (luck analysis).
+            # Walks weekly_rosters history, scales each player's preseason
+            # projection by days owned, compares to live standings.
             from fantasy_baseball.analysis.spoe import (
-                ALL_COMPONENTS,
-                compute_spoe,
-                get_standings_for_date,
-                get_week_dates,
-                prorate_spoe,
+                build_preseason_lookup,
+                compute_current_spoe,
             )
-            from fantasy_baseball.data.db import load_spoe_components
 
-            compute_spoe(db_conn, config)
+            preseason_lookup = build_preseason_lookup(
+                preseason_hitters, preseason_pitchers,
+            )
+            spoe_result = compute_current_spoe(
+                db_conn,
+                standings,
+                preseason_lookup,
+                config.season_start,
+                config.season_end,
+            )
 
-            # Prorate current week for cache output
-            week_dates = get_week_dates(db_conn, config.season_year)
-
-            if week_dates:
-                current_week = week_dates[-1]
-                current_components = load_spoe_components(
-                    db_conn, config.season_year, current_week
-                )
-
-                if len(week_dates) >= 2:
-                    prev_week = week_dates[-2]
-                    previous_components = load_spoe_components(
-                        db_conn, config.season_year, prev_week
-                    )
-                else:
-                    previous_components = {
-                        team: {c: 0.0 for c in ALL_COMPONENTS}
-                        for team in current_components
-                    }
-
-                actual_stats = get_standings_for_date(
-                    db_conn, config.season_year, current_week
-                )
-
-                # days_played = refresh date - current week Monday, capped at 7
-                refresh_date = date.today()
-                week_monday = date.fromisoformat(current_week)
-                days_played = max(0, min((refresh_date - week_monday).days, 7))
-
-                prorated_results = prorate_spoe(
-                    current_components, previous_components,
-                    actual_stats, days_played,
-                )
-
-                if prorated_results:
-                    write_cache("spoe", {
-                        "snapshot_date": current_week,
-                        "results": prorated_results,
-                    }, cache_dir)
+            write_cache("spoe", spoe_result, cache_dir)
+            # Also write the daily snapshot for future trend visualization.
+            # Key pattern: spoe_snapshot:YYYY-MM-DD. No TTL — accumulates.
+            _write_spoe_snapshot(spoe_result)
+            _progress(f"SPoE computed for snapshot {spoe_result.get('snapshot_date')}")
         finally:
             db_conn.close()
 
