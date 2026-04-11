@@ -661,112 +661,65 @@ def _compute_category_ranks(standings: list[dict]) -> dict[str, dict[str, int]]:
     return ranks
 
 
-def find_unprocessed_moves(
-    transactions: list[dict],
-    roster_names: set[str],
-    user_team_name: str,
+def _compute_pending_moves_diff(
+    today_roster: list[dict],
+    future_roster: list[dict],
+    team_name: str,
+    team_key: str,
 ) -> list[dict]:
-    """Find successful transactions that haven't taken effect on the roster yet.
+    """Compute pending-moves banner data from a roster diff.
 
-    A move is "unprocessed" when the user's team completed a transaction
-    (status=successful) but the roster hasn't updated yet (next Tuesday).
-    Detected by checking: dropped player is still on the roster, or added
-    player is not yet on the roster.
+    Compares the user's current roster against Yahoo's future-dated
+    roster (via ``team.roster(day=next_tuesday)``) and returns the
+    add/drop difference in the same shape the lineup UI banner
+    expects.
 
-    Args:
-        transactions: Flat transaction dicts from parse_all_transactions().
-        roster_names: Set of normalized names currently on the user's roster.
-        user_team_name: User's team name.
+    The diff uses normalized names so accent / casing variants don't
+    produce spurious entries (e.g., "Julio Rodríguez" vs "Julio
+    Rodriguez").
 
-    Returns:
-        List of pending move dicts in the format expected by the lineup
-        banner and adjust_for_pending_moves: {team, adds, drops, ...}.
+    Returns an empty list when the rosters match. When there are
+    changes, returns a single move dict bundling all adds and all
+    drops — matches the banner's existing multi-add/drop rendering.
     """
     from fantasy_baseball.utils.name_utils import normalize_name
 
-    unprocessed = []
-    for txn in transactions:
-        if txn.get("team") != user_team_name:
-            continue
+    today_by_norm = {
+        normalize_name(p["name"]): p for p in today_roster
+    }
+    future_by_norm = {
+        normalize_name(p["name"]): p for p in future_roster
+    }
 
-        drop_name = txn.get("drop_name")
-        add_name = txn.get("add_name")
+    added_norms = set(future_by_norm) - set(today_by_norm)
+    dropped_norms = set(today_by_norm) - set(future_by_norm)
 
-        drop_still_on_roster = (
-            drop_name and normalize_name(drop_name) in roster_names
-        )
-        add_not_on_roster = (
-            add_name and normalize_name(add_name) not in roster_names
-        )
+    if not added_norms and not dropped_norms:
+        return []
 
-        if not drop_still_on_roster and not add_not_on_roster:
-            continue
+    adds = [
+        {
+            "name": future_by_norm[n]["name"],
+            "positions": future_by_norm[n].get("positions", []),
+        }
+        for n in sorted(added_norms)
+    ]
+    drops = [
+        {
+            "name": today_by_norm[n]["name"],
+            "positions": today_by_norm[n].get("positions", []),
+        }
+        for n in sorted(dropped_norms)
+    ]
 
-        adds = []
-        if add_name and add_not_on_roster:
-            positions = txn.get("add_positions")
-            pos_list = [p.strip() for p in positions.split(",")] if positions else []
-            adds.append({"name": add_name, "positions": pos_list})
-
-        drops = []
-        if drop_name and drop_still_on_roster:
-            positions = txn.get("drop_positions")
-            pos_list = [p.strip() for p in positions.split(",")] if positions else []
-            drops.append({"name": drop_name, "positions": pos_list})
-
-        unprocessed.append({
-            "transaction_id": txn.get("transaction_id", ""),
-            "type": txn.get("type", ""),
-            "team": user_team_name,
-            "team_key": txn.get("team_key", ""),
-            "adds": adds,
-            "drops": drops,
-        })
-
-    return unprocessed
+    return [{
+        "team": team_name,
+        "team_key": team_key,
+        "adds": adds,
+        "drops": drops,
+    }]
 
 
-def adjust_for_pending_moves(
-    roster: list,
-    fa_pool: list,
-    pending_moves: list[dict],
-    user_team_name: str,
-) -> tuple[list, list]:
-    """Adjust roster and FA pool for pending transactions.
-
-    - Removes players being added by ANY team from the FA pool (they're claimed)
-    - Removes players being dropped by the USER from the roster (they're leaving)
-
-    Args:
-        roster: User's roster (list of Player objects).
-        fa_pool: Free agent pool (list of Player objects).
-        pending_moves: List of pending move dicts from parse_pending_moves.
-        user_team_name: User's team name for identifying their pending drops.
-
-    Returns:
-        (adjusted_roster, adjusted_fa_pool) — new lists, originals unchanged.
-    """
-    from fantasy_baseball.utils.name_utils import normalize_name
-
-    # Collect all pending adds (claimed players, from ALL teams)
-    claimed_names = set()
-    for move in pending_moves:
-        for add in move.get("adds", []):
-            claimed_names.add(normalize_name(add["name"]))
-
-    # Collect user's pending drops
-    user_drop_names = set()
-    for move in pending_moves:
-        if move.get("team") == user_team_name:
-            for drop in move.get("drops", []):
-                user_drop_names.add(normalize_name(drop["name"]))
-
-    adjusted_fa = [p for p in fa_pool
-                   if normalize_name(p.name) not in claimed_names]
-    adjusted_roster = [p for p in roster
-                       if normalize_name(p.name) not in user_drop_names]
-
-    return adjusted_roster, adjusted_fa
 
 
 def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
@@ -835,20 +788,35 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         write_cache("standings", standings, cache_dir)
         _progress(f"Fetched standings for {len(standings)} teams")
 
-        _progress("Fetching roster...")
-        roster_raw = fetch_roster(league, user_team_key)
-        _progress(f"Fetched roster: {len(roster_raw)} players")
+        # Compute the effective date for the next lineup lock. We fetch
+        # all rosters at this date (via Yahoo's team.roster(day=...)) so
+        # the audit/optimizer/waivers see the post-lock future state
+        # without having to simulate pending transactions locally.
+        # fetch_scoring_period returns (start, end) where end is the
+        # last day of the current scoring week; end + 1 is the next
+        # lock date (Tuesday for this league).
+        _progress("Computing effective date...")
+        start_date, end_date = fetch_scoring_period(league)
+        effective_date = date.fromisoformat(end_date) + timedelta(days=1)
+        _progress(f"Effective date (next lock): {effective_date}")
 
-        _progress("Checking for unprocessed moves...")
-        from fantasy_baseball.lineup.yahoo_roster import fetch_all_transactions
-        roster_names = {normalize_name(p["name"]) for p in roster_raw}
-        recent_txns = fetch_all_transactions(league)
-        pending_moves = find_unprocessed_moves(
-            recent_txns, roster_names, config.team_name
+        _progress("Fetching today's roster (for pending-moves diff)...")
+        today_roster_raw = fetch_roster(league, user_team_key)
+
+        _progress(f"Fetching future-dated roster for {effective_date}...")
+        roster_raw = fetch_roster(league, user_team_key, day=effective_date)
+        _progress(f"Fetched future roster: {len(roster_raw)} players")
+
+        pending_moves = _compute_pending_moves_diff(
+            today_roster_raw, roster_raw,
+            team_name=config.team_name, team_key=user_team_key,
         )
         write_cache("pending_moves", pending_moves, cache_dir)
         if pending_moves:
-            _progress(f"Found {len(pending_moves)} unprocessed move(s)")
+            total_changes = sum(
+                len(m["adds"]) + len(m["drops"]) for m in pending_moves
+            )
+            _progress(f"Pending moves: {total_changes} change(s) detected")
 
         # --- Step 4: Read projections from SQLite ---
         _progress("Loading projections...")
@@ -914,7 +882,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             key, team_info = key_and_info
             tname = team_info.get("name", "")
             try:
-                opp_raw = fetch_roster(league, key)
+                opp_raw = fetch_roster(league, key, day=effective_date)
                 opp_proj_list = match_roster_to_projections(
                     opp_raw, hitters_proj, pitchers_proj
                 )
@@ -1138,7 +1106,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # --- Step 9: Probable starters ---
         _progress("Fetching schedule and matchup data...")
-        start_date, end_date = fetch_scoring_period(league)
+        # start_date and end_date were fetched earlier to compute effective_date
         schedule_cache_path = project_root / "data" / "weekly_schedule.json"
         schedule = get_week_schedule(start_date, end_date, schedule_cache_path)
 
@@ -1164,14 +1132,12 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             league, hitters_proj, pitchers_proj
         )
 
-        # Adjust for pending moves before scanning waivers
-        if pending_moves:
-            roster_for_waivers, fa_for_waivers = adjust_for_pending_moves(
-                roster_players, fa_players, pending_moves, config.team_name,
-            )
-            _progress(f"Adjusted for {len(pending_moves)} pending move(s)")
-        else:
-            roster_for_waivers, fa_for_waivers = roster_players, fa_players
+        # roster_players is already the future-dated roster (fetched via
+        # day=effective_date), so no pending-moves adjustment is needed.
+        # The FA pool reflects today's availability — players being
+        # added are already removed from Yahoo's FA list by the time
+        # we fetch it.
+        roster_for_waivers, fa_for_waivers = roster_players, fa_players
 
         # --- Roster Audit ---
         _progress("Running roster audit...")
@@ -1338,12 +1304,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             get_connection,
         )
 
-        # Tuesday of the scoring week — the user's league locks lineups
-        # Tuesday morning, so Tuesday is the ownership-of-record day for
-        # SPoE and other historical analyses.
-        snapshot_date = (
-            date.fromisoformat(start_date) + timedelta(days=1)
-        ).isoformat()
+        # effective_date (computed earlier) is the next-lock day.
+        # Storing the future-dated roster under this date means SPoE's
+        # ownership walk correctly attributes the next scoring week to
+        # the post-lock roster.
+        snapshot_date = effective_date.isoformat()
         db_conn = get_connection()
         create_tables(db_conn)  # idempotent — ensures tables exist
         try:
