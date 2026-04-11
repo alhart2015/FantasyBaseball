@@ -14,6 +14,7 @@ compat methods get deleted in Step 9 of the spec.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Iterator
 
 
@@ -81,3 +82,39 @@ class CategoryStats:
         """Return the dict form used by cache JSON."""
         return {key: getattr(self, field_name)
                 for key, field_name in _KEY_TO_FIELD.items()}
+
+
+@dataclass
+class StandingsEntry:
+    """One team's standings row at a point in time."""
+    team_name: str
+    team_key: str
+    rank: int
+    stats: CategoryStats
+
+
+@dataclass
+class StandingsSnapshot:
+    """All teams' standings at a single effective_date.
+
+    ``effective_date`` is the lineup-lock date the snapshot represents
+    (typically the Tuesday the scoring week begins). Entries are not
+    required to be in rank order — call :meth:`by_team` for lookup.
+    """
+    effective_date: date
+    entries: list[StandingsEntry]
+
+    def by_team(self) -> dict[str, StandingsEntry]:
+        """Return a {team_name: entry} lookup.
+
+        Raises:
+            ValueError: if any team name is duplicated in ``entries``.
+        """
+        out: dict[str, StandingsEntry] = {}
+        for entry in self.entries:
+            if entry.team_name in out:
+                raise ValueError(
+                    f"duplicate team in snapshot: {entry.team_name!r}"
+                )
+            out[entry.team_name] = entry
+        return out
