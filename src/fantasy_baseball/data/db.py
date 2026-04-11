@@ -511,24 +511,38 @@ def append_roster_snapshot(conn, roster, snapshot_date, week_num, team) -> None:
 
     ``roster`` is a list of player dicts::
 
-        [{"name": "...", "selected_position": "OF", "positions": ["OF", "Util"]}, ...]
+        [{"name": "...", "selected_position": "OF", "positions": ["OF", "Util"],
+          "status": "IL10", "player_id": "12345"}, ...]
 
-    ``slot`` is taken from ``player["selected_position"]``.
-    ``positions`` is the player's eligible positions joined with ``", "``.
+    ``slot`` is taken from ``player["selected_position"]``. ``positions``
+    is the player's eligible positions joined with ``", "``. ``status``
+    and ``player_id`` are optional — missing keys write as NULL.
 
     Uses INSERT OR IGNORE so repeated calls with the same
-    (snapshot_date, team, slot) are idempotent.
+    (snapshot_date, team, slot, player_name) are idempotent.
     """
     rows = []
     for player in roster:
         slot = player["selected_position"]
         positions_str = ", ".join(player.get("positions", []))
-        rows.append((snapshot_date, week_num, team, slot, player["name"], positions_str or None))
+        status = player.get("status")
+        yahoo_id = player.get("player_id")
+        rows.append((
+            snapshot_date,
+            week_num,
+            team,
+            slot,
+            player["name"],
+            positions_str or None,
+            status if status is not None else None,
+            yahoo_id if yahoo_id is not None else None,
+        ))
 
     conn.executemany(
         "INSERT OR IGNORE INTO weekly_rosters "
-        "(snapshot_date, week_num, team, slot, player_name, positions) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "(snapshot_date, week_num, team, slot, player_name, positions, "
+        " status, yahoo_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()

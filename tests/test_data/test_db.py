@@ -349,18 +349,64 @@ def test_append_roster_snapshot(tmp_path):
     create_tables(conn)
 
     roster = [
-        {"name": "Juan Soto", "selected_position": "OF", "positions": ["OF", "Util"]},
-        {"name": "Corbin Burnes", "selected_position": "P", "positions": ["SP"]},
+        {
+            "name": "Juan Soto",
+            "selected_position": "OF",
+            "positions": ["OF", "Util"],
+            "status": "",
+            "player_id": "10626",
+        },
+        {
+            "name": "Corbin Burnes",
+            "selected_position": "P",
+            "positions": ["SP"],
+            "status": "IL10",
+            "player_id": "9879",
+        },
     ]
     append_roster_snapshot(conn, roster, "2026-03-24", 1, "Hart of the Order")
 
-    rows = conn.execute("SELECT * FROM weekly_rosters").fetchall()
+    rows = conn.execute(
+        "SELECT player_name, status, yahoo_id FROM weekly_rosters "
+        "ORDER BY player_name"
+    ).fetchall()
     assert len(rows) == 2
+    assert rows[0]["player_name"] == "Corbin Burnes"
+    assert rows[0]["status"] == "IL10"
+    assert rows[0]["yahoo_id"] == "9879"
+    assert rows[1]["player_name"] == "Juan Soto"
+    assert rows[1]["status"] == ""  # empty string preserved
+    assert rows[1]["yahoo_id"] == "10626"
 
     # Idempotent: second call should not duplicate
     append_roster_snapshot(conn, roster, "2026-03-24", 1, "Hart of the Order")
     rows = conn.execute("SELECT * FROM weekly_rosters").fetchall()
     assert len(rows) == 2
+    conn.close()
+
+
+def test_append_roster_snapshot_defaults_missing_fields(tmp_path):
+    """Rosters without status/player_id keys still write (as NULL).
+
+    Historical paths or older fixtures may produce rosters without the
+    new fields. The helper should treat them as NULL rather than raise.
+    """
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    create_tables(conn)
+
+    roster = [
+        {"name": "Old Style", "selected_position": "C", "positions": ["C"]},
+    ]
+    append_roster_snapshot(conn, roster, "2026-03-24", 1, "T")
+
+    row = conn.execute(
+        "SELECT player_name, status, yahoo_id FROM weekly_rosters"
+    ).fetchone()
+    assert row["player_name"] == "Old Style"
+    assert row["status"] is None
+    assert row["yahoo_id"] is None
     conn.close()
 
 
