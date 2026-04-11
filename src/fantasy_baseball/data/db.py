@@ -124,19 +124,6 @@ CREATE TABLE IF NOT EXISTS ros_blended_projections (
     PRIMARY KEY (year, snapshot_date, fg_id)
 );
 
-CREATE TABLE IF NOT EXISTS spoe_results (
-    year           INTEGER NOT NULL,
-    snapshot_date  TEXT NOT NULL,
-    team           TEXT NOT NULL,
-    category       TEXT NOT NULL,
-    projected_stat REAL,
-    actual_stat    REAL,
-    projected_pts  REAL,
-    actual_pts     REAL,
-    spoe           REAL,
-    PRIMARY KEY (year, snapshot_date, team, category)
-);
-
 CREATE TABLE IF NOT EXISTS spoe_components (
     year           INTEGER NOT NULL,
     snapshot_date  TEXT NOT NULL,
@@ -567,52 +554,6 @@ def append_standings_snapshot(conn, standings, year, snapshot_date) -> None:
     conn.commit()
 
 
-# ---------------------------------------------------------------------------
-# SPOE storage helpers
-# ---------------------------------------------------------------------------
-
-
-def save_spoe_results(conn, year, snapshot_date, results, *, commit=True):
-    """Save SPOE results for one week.
-
-    ``results`` is a list of dicts with keys: team, category,
-    projected_stat, actual_stat, projected_pts, actual_pts, spoe.
-    """
-    rows = [
-        (year, snapshot_date, r["team"], r["category"],
-         r.get("projected_stat"), r.get("actual_stat"),
-         r["projected_pts"], r["actual_pts"], r["spoe"])
-        for r in results
-    ]
-    conn.executemany(
-        "INSERT OR REPLACE INTO spoe_results "
-        "(year, snapshot_date, team, category, projected_stat, actual_stat, "
-        "projected_pts, actual_pts, spoe) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        rows,
-    )
-    if commit:
-        conn.commit()
-
-
-def save_spoe_components(conn, year, snapshot_date, components):
-    """Save accumulated projection components for one week.
-
-    ``components`` is {team_name: {component_name: value}}.
-    """
-    rows = []
-    for team, comps in components.items():
-        for comp, value in comps.items():
-            rows.append((year, snapshot_date, team, comp, value))
-    conn.executemany(
-        "INSERT OR REPLACE INTO spoe_components "
-        "(year, snapshot_date, team, component, value) "
-        "VALUES (?, ?, ?, ?, ?)",
-        rows,
-    )
-    conn.commit()
-
-
 def load_spoe_components(conn, year, snapshot_date):
     """Load accumulated components for a specific week.
 
@@ -627,15 +568,6 @@ def load_spoe_components(conn, year, snapshot_date):
     for r in rows:
         result.setdefault(r["team"], {})[r["component"]] = r["value"]
     return result
-
-
-def get_completed_spoe_weeks(conn, year):
-    """Return set of snapshot_dates that have SPOE results for a given year."""
-    rows = conn.execute(
-        "SELECT DISTINCT snapshot_date FROM spoe_results WHERE year = ?",
-        (year,),
-    ).fetchall()
-    return {r["snapshot_date"] for r in rows}
 
 
 def get_spoe_results(conn, year, snapshot_date=None):
