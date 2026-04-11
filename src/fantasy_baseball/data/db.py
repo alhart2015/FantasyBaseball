@@ -954,6 +954,54 @@ def get_season_totals(
     return hitter_totals, pitcher_totals
 
 
+def load_projections_for_date(
+    conn, year: int, target_date: str
+) -> tuple["pd.DataFrame", "pd.DataFrame"]:
+    """Find the best ROS blended projections for a target date.
+
+    Queries ros_blended_projections for the MAX snapshot_date <= target_date.
+    Falls back to blended_projections (preseason) if no ROS data exists.
+    Used by transaction scoring to look up the projections that were
+    available when a historical transaction happened.
+    """
+    import pandas as pd
+    from fantasy_baseball.utils.name_utils import normalize_name
+
+    row = conn.execute(
+        "SELECT MAX(snapshot_date) as best_date "
+        "FROM ros_blended_projections "
+        "WHERE year = ? AND snapshot_date <= ?",
+        (year, target_date),
+    ).fetchone()
+
+    best_date = row["best_date"] if row else None
+
+    if best_date is not None:
+        rows = conn.execute(
+            "SELECT * FROM ros_blended_projections "
+            "WHERE year = ? AND snapshot_date = ?",
+            (year, best_date),
+        ).fetchall()
+        df = pd.DataFrame([dict(r) for r in rows])
+    else:
+        rows = conn.execute(
+            "SELECT * FROM blended_projections WHERE year = ?",
+            (year,),
+        ).fetchall()
+        df = pd.DataFrame([dict(r) for r in rows])
+
+    if df.empty:
+        empty = pd.DataFrame()
+        return empty, empty
+
+    df["_name_norm"] = df["name"].apply(normalize_name)
+
+    hitters_df = df[df["player_type"] == "hitter"].reset_index(drop=True)
+    pitchers_df = df[df["player_type"] == "pitcher"].reset_index(drop=True)
+
+    return hitters_df, pitchers_df
+
+
 def fetch_and_load_game_logs(
     conn, season: int, progress_cb=None
 ) -> int:

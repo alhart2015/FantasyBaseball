@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from fantasy_baseball.analysis.spoe import load_projections_for_date
+from fantasy_baseball.data.db import load_projections_for_date
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -178,7 +178,7 @@ def score_transaction(conn, txn: dict, year: int) -> dict:
         leverage = calculate_leverage(standings, txn["team"])
     else:
         # No standings yet — equal weights
-        leverage = {cat: 1.0 for cat in ["R", "HR", "RBI", "SB", "AVG",
+        leverage = {cat: 0.1 for cat in ["R", "HR", "RBI", "SB", "AVG",
                                           "W", "K", "SV", "ERA", "WHIP"]}
 
     # Load projections nearest to transaction date

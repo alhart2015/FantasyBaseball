@@ -202,11 +202,17 @@ def compute_current_spoe(
                 for c in relevant:
                     comps[c] += preseason.get(c, 0.0) * fraction
 
-    expected_stats = {team: _components_to_stats(comps) for team, comps in team_components.items()}
-
     actual_stats: dict[str, dict[str, float]] = {}
     for t in standings:
         actual_stats[t["name"]] = dict(t["stats"])
+        # Ensure every team that appears in standings shows up in the
+        # results, even if its roster walk contributed zero (empty roster
+        # or all players missing from preseason lookup). Without this,
+        # score_roto would rank a reduced team set and the results would
+        # omit teams that deserve a row.
+        _ = team_components[t["name"]]
+
+    expected_stats = {team: _components_to_stats(comps) for team, comps in team_components.items()}
 
     common = set(expected_stats) & set(actual_stats)
     if len(common) < 2:
