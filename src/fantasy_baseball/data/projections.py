@@ -5,6 +5,7 @@ from .fangraphs import load_projection_set, _find_file
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter, is_pitcher
 from fantasy_baseball.models.player import Player, PlayerType, HitterStats, PitcherStats
+from fantasy_baseball.models.roster import Roster
 
 # Counting stats to blend directly (weighted average)
 HITTING_COUNTING_COLS: list[str] = ["r", "hr", "rbi", "sb", "h", "ab", "pa"]
@@ -414,3 +415,35 @@ def match_roster_to_projections(
             matched.append(p)
 
     return matched
+
+
+def hydrate_roster_entries(
+    roster: Roster,
+    hitters_proj: pd.DataFrame,
+    pitchers_proj: pd.DataFrame,
+) -> list[Player]:
+    """Convert a :class:`Roster`'s entries into ``list[Player]`` with
+    projection stats populated.
+
+    Thin adapter around :func:`match_roster_to_projections`: converts
+    each :class:`RosterEntry` into the dict shape the legacy matcher
+    expects, then delegates so every edge case (name normalization,
+    accent handling, "(Batter)"/"(Pitcher)" suffix stripping, position
+    collisions) is preserved for free.
+
+    Unmatched entries are omitted, matching
+    :func:`match_roster_to_projections`'s contract.
+    """
+    roster_dicts = [
+        {
+            "name": entry.name,
+            "positions": [p.value for p in entry.positions],
+            "selected_position": entry.selected_position.value,
+            "status": entry.status,
+            "player_id": entry.yahoo_id,
+        }
+        for entry in roster.entries
+    ]
+    return match_roster_to_projections(
+        roster_dicts, hitters_proj, pitchers_proj,
+    )
