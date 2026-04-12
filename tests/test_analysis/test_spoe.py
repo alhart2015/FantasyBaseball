@@ -9,9 +9,8 @@ import pytest
 from fantasy_baseball.analysis.spoe import (
     build_preseason_lookup,
     compute_current_spoe,
-    get_week_dates,
-    load_rosters_for_date,
 )
+from fantasy_baseball.models.league import League
 from fantasy_baseball.data.db import (
     append_roster_snapshot,
     create_tables,
@@ -30,6 +29,13 @@ def _make_conn(tmp_path):
     conn = get_connection(tmp_path / "test.db")
     create_tables(conn)
     return conn
+
+
+def _league_from(conn, season_year: int = 2026):
+    """Build a League object from the test conn. Mirrors how
+    run_full_refresh loads the League in production (after writing
+    rosters via append_roster_snapshot)."""
+    return League.from_db(conn, season_year)
 
 
 def _snapshot_roster(conn, snapshot_date: str, team: str, players: list[dict]):
@@ -104,7 +110,7 @@ class TestComputeCurrentSpoe:
 
         # today BEFORE season_start → days_elapsed = 0 but season_fraction=0
         result = compute_current_spoe(
-            conn, standings=[], preseason_lookup=lookup,
+            _league_from(conn), standings=[], preseason_lookup=lookup,
             season_start=SEASON_START, season_end=SEASON_END,
             today=date.fromisoformat("2026-03-01"),
         )
@@ -137,7 +143,7 @@ class TestComputeCurrentSpoe:
 
         # today = 2026-04-07 → snapshot covers 7 days (full week)
         result = compute_current_spoe(
-            conn, standings=standings, preseason_lookup=lookup,
+            _league_from(conn), standings=standings, preseason_lookup=lookup,
             season_start=SEASON_START, season_end=SEASON_END,
             today=date.fromisoformat("2026-04-07"),
         )
@@ -184,7 +190,7 @@ class TestComputeCurrentSpoe:
 
         # today = 2026-04-14 → first snapshot covers 7 days, second covers 7 days
         result = compute_current_spoe(
-            conn, standings=standings, preseason_lookup=lookup,
+            _league_from(conn), standings=standings, preseason_lookup=lookup,
             season_start=SEASON_START, season_end=SEASON_END,
             today=date.fromisoformat("2026-04-14"),
         )
@@ -197,7 +203,13 @@ class TestComputeCurrentSpoe:
         assert sb_row["projected_stat"] == pytest.approx(expected_sb, rel=1e-9)
 
     def test_mid_season_ownership_change_splits_credit(self, tmp_path):
-        """Player on Team A for week 1, Team B for week 2. Each gets 1 week of credit."""
+        """Player on Team A for week 1, Team B for week 2. Each gets 1 week of credit.
+
+        With the per-team ownership_periods architecture, we need explicit
+        snapshots for each team to mark ownership boundaries. Team A must have
+        a snapshot on 2026-04-07 showing a different roster (without Traded)
+        to end the ownership period.
+        """
         conn = _make_conn(tmp_path)
         lookup = _preseason_lookup_from(
             _hitter_preseason("Traded", hr=40),
@@ -206,11 +218,12 @@ class TestComputeCurrentSpoe:
         _snapshot_roster(conn, "2026-03-31", "Team A", [
             {"name": "Traded", "selected_position": "OF", "positions": ["OF"]},
         ])
+        _snapshot_roster(conn, "2026-04-07", "Team A", [
+            {"name": "UnknownPlayer", "selected_position": "OF", "positions": ["OF"]},
+        ])
         _snapshot_roster(conn, "2026-04-07", "Team B", [
             {"name": "Traded", "selected_position": "OF", "positions": ["OF"]},
         ])
-        # Team A has no other players
-        _snapshot_roster(conn, "2026-04-07", "Team A", [])
 
         standings = [
             {"name": "Team A", "stats": {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
@@ -220,16 +233,16 @@ class TestComputeCurrentSpoe:
         ]
 
         result = compute_current_spoe(
-            conn, standings=standings, preseason_lookup=lookup,
+            _league_from(conn), standings=standings, preseason_lookup=lookup,
             season_start=SEASON_START, season_end=SEASON_END,
             today=date.fromisoformat("2026-04-14"),
         )
 
-        # Team A should get 7 days of HR credit
+        # Team A owns Traded from 2026-03-31 to 2026-04-07 (7 days)
         hr_a = next(r for r in result["results"] if r["team"] == "Team A" and r["category"] == "HR")
         assert hr_a["projected_stat"] == pytest.approx(40 * 7 / TOTAL_DAYS, rel=1e-9)
 
-        # Team B should also get 7 days of HR credit
+        # Team B owns Traded from 2026-04-07 to 2026-04-14 (7 days)
         hr_b = next(r for r in result["results"] if r["team"] == "Team B" and r["category"] == "HR")
         assert hr_b["projected_stat"] == pytest.approx(40 * 7 / TOTAL_DAYS, rel=1e-9)
 
@@ -251,7 +264,7 @@ class TestComputeCurrentSpoe:
 
         # today = 2026-04-10 → 3 days since snapshot, not 7
         result = compute_current_spoe(
-            conn, standings=standings, preseason_lookup=lookup,
+            _league_from(conn), standings=standings, preseason_lookup=lookup,
             season_start=SEASON_START, season_end=SEASON_END,
             today=date.fromisoformat("2026-04-10"),
         )
@@ -277,7 +290,7 @@ class TestComputeCurrentSpoe:
         ]
 
         result = compute_current_spoe(
-            conn, standings=standings, preseason_lookup=lookup,
+            _league_from(conn), standings=standings, preseason_lookup=lookup,
             season_start=SEASON_START, season_end=SEASON_END,
             today=date.fromisoformat("2026-04-14"),
         )
@@ -317,7 +330,7 @@ class TestComputeCurrentSpoe:
         ]
 
         result = compute_current_spoe(
-            conn, standings=standings, preseason_lookup=lookup,
+            _league_from(conn), standings=standings, preseason_lookup=lookup,
             season_start=SEASON_START, season_end=SEASON_END,
             today=date.fromisoformat("2026-04-07"),
         )
@@ -355,7 +368,7 @@ class TestComputeCurrentSpoe:
                                          "W": 0, "K": 0, "SV": 0, "ERA": 99, "WHIP": 99}},
         ]
         result = compute_current_spoe(
-            conn, standings=standings, preseason_lookup=lookup,
+            _league_from(conn), standings=standings, preseason_lookup=lookup,
             season_start=SEASON_START, season_end=SEASON_END,
             today=date.fromisoformat("2026-04-07"),
         )
