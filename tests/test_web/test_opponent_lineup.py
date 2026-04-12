@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch
-from fantasy_baseball.web.season_data import format_standings_for_display, get_teams_list, _opponent_cache, clear_opponent_cache
+from fantasy_baseball.web.season_data import format_standings_for_display, get_teams_list, _opponent_cache, clear_opponent_cache, _standings_to_snapshot
 from fantasy_baseball.web.season_app import create_app
 
 
@@ -84,14 +84,14 @@ class TestApiTeams:
 class TestStandingsTeamKey:
     def test_team_key_present_in_display_data(self):
         result = format_standings_for_display(
-            _sample_standings(), "Hart of the Order"
+            _standings_to_snapshot(_sample_standings()), "Hart of the Order"
         )
         for team in result["teams"]:
             assert "team_key" in team, f"Missing team_key for {team['name']}"
 
     def test_team_key_values_correct(self):
         result = format_standings_for_display(
-            _sample_standings(), "Hart of the Order"
+            _standings_to_snapshot(_sample_standings()), "Hart of the Order"
         )
         isotopes = next(t for t in result["teams"] if t["name"] == "Springfield Isotopes")
         assert isotopes["team_key"] == "469.l.5652.t.8"

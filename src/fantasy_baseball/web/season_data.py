@@ -12,6 +12,7 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
 from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES, HITTER_PROJ_KEYS, IL_STATUSES, INVERSE_STATS as INVERSE_CATS,
@@ -76,6 +77,30 @@ def _fill_stat_defaults(standings: list[dict]) -> None:
         filled = dict(_STAT_DEFAULTS)
         filled.update(t["stats"])
         t["stats"] = filled
+
+
+def _standings_to_snapshot(
+    standings: list[dict],
+    effective_date: date | None = None,
+) -> StandingsSnapshot:
+    """Convert a raw standings list[dict] to a StandingsSnapshot.
+
+    Used at the boundary between Yahoo fetch / cache read and typed
+    consumers (calculate_leverage, format_standings_for_display).
+    """
+    return StandingsSnapshot(
+        effective_date=effective_date or date.min,
+        entries=[
+            StandingsEntry(
+                team_name=t["name"],
+                team_key=t.get("team_key", ""),
+                rank=t.get("rank", 0),
+                stats=CategoryStats.from_dict(t.get("stats", {})),
+            )
+            for t in standings
+        ],
+    )
+
 
 CACHE_FILES = {
     "standings": "standings.json",
@@ -261,31 +286,32 @@ def _load_game_log_totals(season_year: int) -> tuple[dict, dict]:
 
 
 def format_standings_for_display(
-    standings: list[dict], user_team_name: str
+    standings: StandingsSnapshot, user_team_name: str
 ) -> dict:
-    """Transform raw standings cache into display-ready structure with roto points and color codes.
+    """Transform standings snapshot into display-ready structure with roto points and color codes.
 
     Args:
-        standings: List of team dicts from fetch_standings(), each with "name" and "stats" keys.
+        standings: StandingsSnapshot with typed StandingsEntry objects.
         user_team_name: The authenticated user's team name for highlighting.
 
     Returns:
         {"teams": [...]} where each team has roto_points, is_user flag, color_classes, and rank.
     """
-    if not standings:
+    if not isinstance(standings, StandingsSnapshot):
+        standings = _standings_to_snapshot(standings)
+    if not standings.entries:
         return {"teams": []}
 
-    _fill_stat_defaults(standings)
-
-    all_stats = {t["name"]: t["stats"] for t in standings}
+    # CategoryStats defaults (0.0 for counting, 99.0 for ERA/WHIP)
+    # handle early-season missing data — no _fill_stat_defaults needed.
+    all_stats = {e.team_name: e.stats for e in standings.entries}
     roto = score_roto(all_stats)
 
     cat_ranks = _compute_category_ranks(standings)
-    num_teams = len(standings)
 
     teams = []
-    for t in standings:
-        name = t["name"]
+    for entry in standings.entries:
+        name = entry.team_name
         is_user = name == user_team_name
         roto_pts = roto[name]
 
@@ -305,8 +331,8 @@ def format_standings_for_display(
 
         teams.append({
             "name": name,
-            "team_key": t.get("team_key", ""),
-            "stats": t["stats"],
+            "team_key": entry.team_key,
+            "stats": entry.stats,
             "roto_points": roto_pts,
             "is_user": is_user,
             "color_classes": color_classes,
@@ -398,7 +424,8 @@ def build_opponent_lineup(
         ros_lookup = {}
 
     # Opponent leverage
-    opp_leverage = calculate_leverage(standings, opponent_name)
+    standings_snap = _standings_to_snapshot(standings)
+    opp_leverage = calculate_leverage(standings_snap, opponent_name)
 
     # Load game log totals for pace
     hitter_logs, pitcher_logs = _load_game_log_totals(season_year)
@@ -642,7 +669,7 @@ def compute_comparison_standings(
     }
 
 
-def _compute_category_ranks(standings: list[dict]) -> dict[str, dict[str, int]]:
+def _compute_category_ranks(standings: StandingsSnapshot) -> dict[str, dict[str, int]]:
     """Compute per-category rank for each team (1 = best).
 
     For inverse categories (ERA, WHIP), lower value = rank 1.
@@ -651,16 +678,16 @@ def _compute_category_ranks(standings: list[dict]) -> dict[str, dict[str, int]]:
     ranks = {}
     for cat in ALL_CATEGORIES:
         reverse = cat not in INVERSE_CATS
-        sorted_teams = sorted(standings, key=lambda t: t["stats"][cat], reverse=reverse)
+        sorted_entries = sorted(standings.entries, key=lambda e: e.stats[cat], reverse=reverse)
         cat_ranks = {}
         prev_val = None
         prev_rank = 0
-        for i, t in enumerate(sorted_teams):
-            val = t["stats"][cat]
+        for i, entry in enumerate(sorted_entries):
+            val = entry.stats[cat]
             if prev_val is None or abs(val - prev_val) >= 1e-9:
                 prev_rank = i + 1
                 prev_val = val
-            cat_ranks[t["name"]] = prev_rank
+            cat_ranks[entry.team_name] = prev_rank
         ranks[cat] = cat_ranks
     return ranks
 
@@ -805,6 +832,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         start_date, end_date = fetch_scoring_period(league)
         effective_date = next_tuesday(date.fromisoformat(end_date))
         _progress(f"Effective date (next lock): {effective_date}")
+
+        standings_snap = _standings_to_snapshot(standings, effective_date)
 
         _progress("Fetching today's roster (for pending-moves diff)...")
         today_roster_raw = fetch_roster(league, user_team_key)
@@ -993,11 +1022,13 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         write_cache("projections", {"projected_standings": projected_standings}, cache_dir)
         _progress(f"Projected standings for {len(projected_standings)} teams")
 
+        projected_standings_snap = _standings_to_snapshot(projected_standings, effective_date)
+
         # --- Step 5: Leverage weights ---
         _progress("Calculating leverage weights...")
         leverage = calculate_leverage(
-            standings, config.team_name,
-            projected_standings=projected_standings,
+            standings_snap, config.team_name,
+            projected_standings=projected_standings_snap,
         )
 
         # --- Step 6: Match roster players to projections, compute wSGP ---
@@ -1232,10 +1263,10 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         # --- Step 11: Compute per-team leverage ---
         _progress("Computing leverage...")
         leverage_by_team: dict[str, dict] = {}
-        for team in standings:
-            tname = team["name"]
-            leverage_by_team[tname] = calculate_leverage(
-                standings, tname, projected_standings=projected_standings,
+        for entry in standings_snap.entries:
+            leverage_by_team[entry.team_name] = calculate_leverage(
+                standings_snap, entry.team_name,
+                projected_standings=projected_standings_snap,
             )
         write_cache("leverage", leverage_by_team, cache_dir)
 

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from fantasy_baseball.web import season_data
-from fantasy_baseball.web.season_data import read_cache, write_cache, read_meta, format_standings_for_display, format_monte_carlo_for_display, format_lineup_for_display
+from fantasy_baseball.web.season_data import read_cache, write_cache, read_meta, format_standings_for_display, format_monte_carlo_for_display, format_lineup_for_display, _standings_to_snapshot
 
 
 def test_write_and_read_cache(tmp_path):
@@ -54,7 +54,7 @@ def _sample_standings():
 
 
 def test_format_standings_has_roto_points():
-    data = format_standings_for_display(_sample_standings(), "Hart of the Order")
+    data = format_standings_for_display(_standings_to_snapshot(_sample_standings()), "Hart of the Order")
     assert "teams" in data
     hart = next(t for t in data["teams"] if t["name"] == "Hart of the Order")
     assert "roto_points" in hart
@@ -62,7 +62,7 @@ def test_format_standings_has_roto_points():
 
 
 def test_format_standings_color_codes_all_teams():
-    data = format_standings_for_display(_sample_standings(), "Hart of the Order")
+    data = format_standings_for_display(_standings_to_snapshot(_sample_standings()), "Hart of the Order")
     hart = next(t for t in data["teams"] if t["name"] == "Hart of the Order")
     assert hart["is_user"] is True
     assert "color_classes" in hart
@@ -76,14 +76,14 @@ def test_format_standings_color_codes_all_teams():
 
 def test_format_standings_tied_teams_same_color():
     """Teams tied in a category should get the same rank-based color class."""
-    standings = [
+    standings = _standings_to_snapshot([
         {"name": "Team A", "team_key": "a", "rank": 1,
          "stats": {"R": 100, "HR": 30, "RBI": 90, "SB": 20, "AVG": 0.260,
                    "W": 10, "K": 200, "SV": 10, "ERA": 3.50, "WHIP": 1.20}},
         {"name": "Team B", "team_key": "b", "rank": 2,
          "stats": {"R": 100, "HR": 25, "RBI": 90, "SB": 15, "AVG": 0.255,
                    "W": 8, "K": 180, "SV": 8, "ERA": 3.80, "WHIP": 1.25}},
-    ]
+    ])
     data = format_standings_for_display(standings, "Team A")
     a = next(t for t in data["teams"] if t["name"] == "Team A")
     b = next(t for t in data["teams"] if t["name"] == "Team B")
