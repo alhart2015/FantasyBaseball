@@ -295,28 +295,28 @@ class TestBlendStandings:
 
     def test_progress_zero_returns_projected(self):
         blended = blend_standings(self._make_current(), self._make_projected(), 0.0)
-        team_a = next(t for t in blended if t["name"] == "Team A")
-        assert team_a["stats"]["R"] == pytest.approx(800)
-        assert team_a["stats"]["AVG"] == pytest.approx(0.265)
+        team_a = next(e for e in blended.entries if e.team_name == "Team A")
+        assert team_a.stats["R"] == pytest.approx(800)
+        assert team_a.stats["AVG"] == pytest.approx(0.265)
 
     def test_progress_one_returns_current(self):
         blended = blend_standings(self._make_current(), self._make_projected(), 1.0)
-        team_a = next(t for t in blended if t["name"] == "Team A")
-        assert team_a["stats"]["R"] == pytest.approx(200)
-        assert team_a["stats"]["AVG"] == pytest.approx(0.260)
+        team_a = next(e for e in blended.entries if e.team_name == "Team A")
+        assert team_a.stats["R"] == pytest.approx(200)
+        assert team_a.stats["AVG"] == pytest.approx(0.260)
 
     def test_progress_half_interpolates(self):
         blended = blend_standings(self._make_current(), self._make_projected(), 0.5)
-        team_a = next(t for t in blended if t["name"] == "Team A")
-        assert team_a["stats"]["R"] == pytest.approx(500)
-        assert team_a["stats"]["AVG"] == pytest.approx(0.2625)
+        team_a = next(e for e in blended.entries if e.team_name == "Team A")
+        assert team_a.stats["R"] == pytest.approx(500)
+        assert team_a.stats["AVG"] == pytest.approx(0.2625)
 
     def test_teams_matched_by_name(self):
         current = self._make_current()
         projected = list(reversed(self._make_projected()))
         blended = blend_standings(current, projected, 0.0)
-        team_a = next(t for t in blended if t["name"] == "Team A")
-        assert team_a["stats"]["R"] == pytest.approx(800)
+        team_a = next(e for e in blended.entries if e.team_name == "Team A")
+        assert team_a.stats["R"] == pytest.approx(800)
 
     def test_team_only_in_current_included_as_is(self):
         current = self._make_current() + [
@@ -324,8 +324,8 @@ class TestBlendStandings:
              "AVG": 0.240, "W": 10, "K": 150, "SV": 5, "ERA": 4.50, "WHIP": 1.40}},
         ]
         blended = blend_standings(current, self._make_projected(), 0.5)
-        team_c = next(t for t in blended if t["name"] == "Team C")
-        assert team_c["stats"]["R"] == 100
+        team_c = next(e for e in blended.entries if e.team_name == "Team C")
+        assert team_c.stats["R"] == 100
 
 
 class TestCalculateLeverageWithProjected:

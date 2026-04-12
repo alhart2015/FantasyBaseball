@@ -1,8 +1,29 @@
 import statistics
 
+from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS
 
 MAX_MEANINGFUL_GAP_MULTIPLIER: float = 3.0
+
+
+def _ensure_snapshot(standings) -> StandingsSnapshot:
+    """Convert list[dict] to StandingsSnapshot if needed. Temporary
+    migration shim — deleted once all callers pass StandingsSnapshot."""
+    if isinstance(standings, StandingsSnapshot):
+        return standings
+    from datetime import date as _date
+    return StandingsSnapshot(
+        effective_date=_date.min,  # placeholder for shim-converted data
+        entries=[
+            StandingsEntry(
+                team_name=t["name"],
+                team_key=t.get("team_key", ""),
+                rank=t.get("rank", 0),
+                stats=CategoryStats.from_dict(t.get("stats", {})),
+            )
+            for t in standings
+        ],
+    )
 
 
 def _gap_for_category(
@@ -15,7 +36,7 @@ def _gap_for_category(
 FULL_CONFIDENCE_GAMES: int = 81
 
 
-def _estimate_season_progress(standings: list[dict]) -> float:
+def _estimate_season_progress(standings: StandingsSnapshot) -> float:
     """Estimate season progress from MLB game logs in SQLite.
 
     Counts distinct game dates in the game_logs table for the current season.
@@ -40,16 +61,16 @@ def _estimate_season_progress(standings: list[dict]) -> float:
         pass
 
     # Fallback: estimate from league-average R (~4.6 R/game/team)
-    if not standings:
+    if not standings.entries:
         return 0.0
-    total_r = sum(t.get("stats", {}).get("R", 0) for t in standings)
-    avg_r = total_r / len(standings)
+    total_r = sum(e.stats.get("R", 0) for e in standings.entries)
+    avg_r = total_r / len(standings.entries)
     approx_games = avg_r / 4.6
     return min(1.0, approx_games / FULL_CONFIDENCE_GAMES)
 
 
 def _leverage_from_standings(
-    standings: list[dict],
+    standings: StandingsSnapshot,
     user_team_name: str,
     attack_weight: float,
     defense_weight: float,
@@ -65,27 +86,27 @@ def _leverage_from_standings(
     """
     from fantasy_baseball.sgp.player_value import get_sgp_denominators
 
-    user_team = None
-    for team in standings:
-        if team["name"] == user_team_name:
-            user_team = team
+    user_entry = None
+    for entry in standings.entries:
+        if entry.team_name == user_team_name:
+            user_entry = entry
             break
 
-    if user_team is None:
+    if user_entry is None:
         return None
 
-    user_stats = user_team.get("stats", {})
+    user_stats = user_entry.stats
     sgp_denoms = get_sgp_denominators()
     epsilon = 0.001
 
     raw_leverage: dict[str, float] = {}
     for cat in ALL_CATEGORIES:
         reverse = cat not in INVERSE_STATS  # higher is better for most cats
-        ranked = sorted(standings, key=lambda t: t["stats"].get(cat, 0), reverse=reverse)
+        ranked = sorted(standings.entries, key=lambda e: e.stats.get(cat, 0), reverse=reverse)
 
         user_cat_idx = None
-        for i, team in enumerate(ranked):
-            if team["name"] == user_team_name:
+        for i, entry in enumerate(ranked):
+            if entry.team_name == user_team_name:
                 user_cat_idx = i
                 break
 
@@ -118,13 +139,13 @@ def _leverage_from_standings(
         denom = sgp_denoms.get(cat, 1.0)
 
         if cat_above is not None:
-            above_val = cat_above["stats"].get(cat, 0)
+            above_val = cat_above.stats.get(cat, 0)
             raw_gap = _gap_for_category(cat, user_val, above_val)
             normalized_gap = raw_gap / denom
             leverage += w_attack * (1.0 / (normalized_gap + epsilon))
 
         if cat_below is not None:
-            below_val = cat_below["stats"].get(cat, 0)
+            below_val = cat_below.stats.get(cat, 0)
             raw_gap = _gap_for_category(cat, user_val, below_val)
             normalized_gap = raw_gap / denom
             leverage += w_defense * (1.0 / (normalized_gap + epsilon))
@@ -181,6 +202,10 @@ def calculate_leverage(
 
     Weights are normalized to sum to 1.0.
     """
+    standings = _ensure_snapshot(standings)
+    if projected_standings is not None:
+        projected_standings = _ensure_snapshot(projected_standings)
+
     if season_progress is None:
         season_progress = _estimate_season_progress(standings)
 
@@ -209,10 +234,10 @@ def calculate_leverage(
 
 
 def blend_standings(
-    current: list[dict],
-    projected: list[dict],
+    current: StandingsSnapshot,
+    projected: StandingsSnapshot,
     progress: float,
-) -> list[dict]:
+) -> StandingsSnapshot:
     """Blend current and projected standings based on season progress.
 
     For each stat: blended = progress * current + (1 - progress) * projected.
@@ -220,32 +245,40 @@ def blend_standings(
 
     Teams matched by name. Teams appearing in only one list are included as-is.
     """
-    proj_by_name = {t["name"]: t for t in projected}
-    seen_names = set()
-    blended = []
+    current = _ensure_snapshot(current)
+    projected = _ensure_snapshot(projected)
 
-    for team in current:
-        name = team["name"]
+    proj_by_name = {e.team_name: e for e in projected.entries}
+    seen_names: set[str] = set()
+    blended_entries: list[StandingsEntry] = []
+
+    for entry in current.entries:
+        name = entry.team_name
         seen_names.add(name)
-        proj_team = proj_by_name.get(name)
-        if proj_team is None:
-            blended.append(team)
+        proj_entry = proj_by_name.get(name)
+        if proj_entry is None:
+            blended_entries.append(entry)
             continue
 
-        blended_stats = {}
-        for cat in team["stats"]:
-            cur_val = team["stats"].get(cat, 0)
-            proj_val = proj_team["stats"].get(cat, 0)
+        blended_stats: dict[str, float] = {}
+        for cat in ALL_CATEGORIES:
+            cur_val = entry.stats.get(cat, 0)
+            proj_val = proj_entry.stats.get(cat, 0)
             blended_stats[cat] = progress * cur_val + (1.0 - progress) * proj_val
 
-        blended.append({
-            **team,
-            "stats": blended_stats,
-        })
+        blended_entries.append(StandingsEntry(
+            team_name=entry.team_name,
+            team_key=entry.team_key,
+            rank=entry.rank,
+            stats=CategoryStats.from_dict(blended_stats),
+        ))
 
     # Include projected-only teams
-    for team in projected:
-        if team["name"] not in seen_names:
-            blended.append(team)
+    for entry in projected.entries:
+        if entry.team_name not in seen_names:
+            blended_entries.append(entry)
 
-    return blended
+    return StandingsSnapshot(
+        effective_date=current.effective_date,
+        entries=blended_entries,
+    )
