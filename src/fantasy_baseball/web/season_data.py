@@ -1233,7 +1233,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         ros_mgmt_mc = None
         if has_ros:
             from fantasy_baseball.simulation import run_ros_monte_carlo
-            from datetime import date
 
             season_start = date.fromisoformat(config.season_start)
             season_end = date.fromisoformat(config.season_end)

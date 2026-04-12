@@ -563,3 +563,59 @@ class TestComparisonConsistencyInvariant:
         # caches, this is the asymmetry that produces UI disagreement.
         assert result["before"]["stats"]["My Team"]["HR"] == true_user_stats["HR"]
         assert result["before"]["stats"]["My Team"]["HR"] != wrong_user_stats["HR"]
+
+
+class TestRunFullRefreshScopingGuards:
+    """Regression guards for Python scoping bugs in run_full_refresh.
+
+    run_full_refresh is a long function that imports modules lazily
+    inside conditional branches. Any local ``from X import Y`` that
+    shadows a module-level name promotes that name to a local variable
+    for the entire function scope (LEGB rule), causing UnboundLocalError
+    when the name is referenced earlier in the function.
+
+    Production bug landed on 2026-04-12: Step 2 of the League data
+    model refactor started using ``date.fromisoformat(end_date)`` near
+    the top of run_full_refresh to compute effective_date. A
+    pre-existing local ``from datetime import date`` inside the
+    Monte Carlo block shadowed the module-level import, so the
+    function crashed with ``UnboundLocalError: cannot access local
+    variable 'date' where it is not associated with a value``.
+    """
+
+    def test_no_local_datetime_import_inside_run_full_refresh(self):
+        import inspect
+
+        from fantasy_baseball.web import season_data
+
+        src = inspect.getsource(season_data.run_full_refresh)
+        assert "from datetime import date" not in src, (
+            "Local `from datetime import date` found in run_full_refresh. "
+            "This shadows the module-level import on line 9 and causes "
+            "UnboundLocalError when date is used earlier in the function. "
+            "If you need to import date inside the function, rename it "
+            "(e.g. `from datetime import date as _date`) to avoid shadowing."
+        )
+        assert "from datetime import datetime" not in src, (
+            "Local `from datetime import datetime` would shadow the "
+            "module-level import for the same reason as the date case."
+        )
+        assert "from datetime import timedelta" not in src, (
+            "Local `from datetime import timedelta` would shadow the "
+            "module-level import for the same reason as the date case."
+        )
+
+    def test_module_level_date_import_is_present(self):
+        """Confirms the module-level import exists so the function can
+        rely on ``date`` being available without a local import."""
+        import inspect
+
+        from fantasy_baseball.web import season_data
+
+        module_src = inspect.getsource(season_data)
+        # The module-level import must appear before the run_full_refresh
+        # definition, not inside it.
+        first_refresh_idx = module_src.find("def run_full_refresh")
+        assert first_refresh_idx > 0
+        header = module_src[:first_refresh_idx]
+        assert "from datetime import date" in header
