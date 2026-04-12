@@ -23,7 +23,7 @@ Usage::
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 
@@ -50,3 +50,27 @@ def local_today() -> date:
     current season year near a year boundary.
     """
     return local_now().date()
+
+
+def next_tuesday(ref: date) -> date:
+    """Return the next Tuesday strictly after ``ref``.
+
+    The user's Yahoo league locks lineups on Tuesday morning.
+    ``fetch_scoring_period`` returns Yahoo's Mon–Sun scoring week,
+    so ``end + 1`` lands on Monday — one day before the actual lock.
+    This helper computes the Tuesday that comes *after* ``ref``:
+
+        Sun  → next Tue (2 days later)
+        Mon  → next Tue (1 day later)
+        Tue  → following Tue (7 days later — never returns ``ref``)
+        Wed  → next Tue (6 days later)
+
+    If your league ever changes its lock day (or a config option is
+    added), update the weekday target here. For now it's hardcoded
+    to 1 (Tuesday) because the user's league is the only consumer.
+    """
+    TUESDAY = 1  # Monday = 0, Tuesday = 1, ..., Sunday = 6
+    days_ahead = (TUESDAY - ref.weekday()) % 7
+    if days_ahead == 0:
+        days_ahead = 7
+    return ref + timedelta(days=days_ahead)

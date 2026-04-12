@@ -18,7 +18,7 @@ from fantasy_baseball.utils.constants import (
     PITCHER_PROJ_KEYS,
 )
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
-from fantasy_baseball.utils.time_utils import local_now, local_today
+from fantasy_baseball.utils.time_utils import local_now, local_today, next_tuesday
 
 _refresh_lock = threading.Lock()
 _refresh_status = {"running": False, "progress": "", "error": None}
@@ -793,12 +793,14 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         # all rosters at this date (via Yahoo's team.roster(day=...)) so
         # the audit/optimizer/waivers see the post-lock future state
         # without having to simulate pending transactions locally.
-        # fetch_scoring_period returns (start, end) where end is the
-        # last day of the current scoring week; end + 1 is the next
-        # lock date (Tuesday for this league).
+        # fetch_scoring_period returns Yahoo's Mon–Sun scoring week
+        # (end_date is Sunday). The user's league locks lineups on
+        # Tuesday morning, so the effective date is the next Tuesday
+        # strictly after end_date — end_date + 1 would land on Monday,
+        # one day too early.
         _progress("Computing effective date...")
         start_date, end_date = fetch_scoring_period(league)
-        effective_date = date.fromisoformat(end_date) + timedelta(days=1)
+        effective_date = next_tuesday(date.fromisoformat(end_date))
         _progress(f"Effective date (next lock): {effective_date}")
 
         _progress("Fetching today's roster (for pending-moves diff)...")
