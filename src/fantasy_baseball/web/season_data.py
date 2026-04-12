@@ -614,13 +614,16 @@ def compute_comparison_standings(
     if drop_idx is None:
         return {"error": f"Player '{roster_player_name}' not found on roster"}
 
+    # project_team_stats returns a CategoryStats; call .to_dict() so
+    # all_stats_before / all_stats_after values are uniformly
+    # dict[str, float] for JSON serialization at the Flask route.
     all_stats_before = {t["name"]: dict(t["stats"]) for t in projected_standings}
-    all_stats_before[user_team_name] = project_team_stats(user_roster)
+    all_stats_before[user_team_name] = project_team_stats(user_roster).to_dict()
 
     roster_after = [p for i, p in enumerate(user_roster) if i != drop_idx]
     roster_after.append(other_player)
     all_stats_after = {t["name"]: dict(t["stats"]) for t in projected_standings}
-    all_stats_after[user_team_name] = project_team_stats(roster_after)
+    all_stats_after[user_team_name] = project_team_stats(roster_after).to_dict()
 
     roto_before = score_roto(all_stats_before)
     roto_after = score_roto(all_stats_after)
@@ -982,7 +985,9 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                 "name": tname,
                 "team_key": "",
                 "rank": 0,
-                "stats": proj_stats,
+                # project_team_stats returns a CategoryStats (dataclass);
+                # serialize to a plain dict for the JSON cache write.
+                "stats": proj_stats.to_dict(),
             })
 
         write_cache("projections", {"projected_standings": projected_standings}, cache_dir)
