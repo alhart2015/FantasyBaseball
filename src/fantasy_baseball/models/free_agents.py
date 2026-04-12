@@ -15,6 +15,7 @@ from typing import Iterator
 
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.roster import RosterEntry
+from fantasy_baseball.utils.time_utils import local_today
 
 
 @dataclass
@@ -98,7 +99,7 @@ class FreeAgentPool:
                 raw.append(player)
 
         return cls(
-            effective_date=date.today(),
+            effective_date=local_today(),
             entries=cls._parse_yahoo_entries(raw),
         )
 
@@ -121,7 +122,7 @@ class FreeAgentPool:
 
         # Parse effective date from meta.start_date if available
         start = meta.get("start_date") if isinstance(meta, dict) else None
-        eff = date.fromisoformat(start) if start else date.today()
+        eff = date.fromisoformat(start) if start else local_today()
 
         return cls(
             effective_date=eff,

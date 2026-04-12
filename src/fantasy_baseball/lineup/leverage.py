@@ -23,13 +23,13 @@ def _estimate_season_progress(standings: list[dict]) -> float:
     Falls back to R-based estimation if game_logs is unavailable.
     """
     try:
-        from datetime import date
         from fantasy_baseball.data.db import get_connection
+        from fantasy_baseball.utils.time_utils import local_today
         conn = get_connection()
         try:
             row = conn.execute(
                 "SELECT COUNT(DISTINCT date) FROM game_logs WHERE season = ?",
-                (date.today().year,)
+                (local_today().year,)
             ).fetchone()
             games = row[0] if row else 0
         finally:

@@ -3,11 +3,12 @@
 import json
 import re
 import time
-from datetime import date
 from pathlib import Path
 
 import pandas as pd
 import requests
+
+from fantasy_baseball.utils.time_utils import local_today
 
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -130,7 +131,7 @@ def fetch_ros_projections(
     dict mapping system name -> ``"ok"`` or ``"error: <reason>"``.
     """
     output_dir = Path(output_dir)
-    today = date.today().isoformat()
+    today = local_today().isoformat()
     snapshot_dir = output_dir / str(season_year) / "ros" / today
 
     results: dict[str, str] = {}

@@ -2,6 +2,8 @@ import json
 import logging
 from collections import defaultdict
 from datetime import datetime
+
+from fantasy_baseball.utils.time_utils import local_now
 from pathlib import Path
 
 import statsapi
@@ -87,7 +89,7 @@ def fetch_week_schedule(start_date: str, end_date: str) -> dict:
         "team_abbrev_map": team_name_map,
         "start_date": start_date,
         "end_date": end_date,
-        "fetched_at": datetime.now().isoformat(timespec="seconds"),
+        "fetched_at": local_now().isoformat(timespec="seconds"),
     }
 
 

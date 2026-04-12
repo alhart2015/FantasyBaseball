@@ -18,6 +18,7 @@ from fantasy_baseball.utils.constants import (
     PITCHER_PROJ_KEYS,
 )
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
+from fantasy_baseball.utils.time_utils import local_now, local_today
 
 _refresh_lock = threading.Lock()
 _refresh_status = {"running": False, "progress": "", "error": None}
@@ -1289,7 +1290,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             season_start = date.fromisoformat(config.season_start)
             season_end = date.fromisoformat(config.season_end)
             total_days = (season_end - season_start).days
-            remaining_days = max(0, (season_end - date.today()).days)
+            remaining_days = max(0, (season_end - local_today()).days)
             fraction_remaining = remaining_days / total_days if total_days > 0 else 0
 
             # Build ROS rosters for all teams. hitters_proj/pitchers_proj
@@ -1423,7 +1424,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         # --- Step 16: Write meta ---
         _progress("Finalizing...")
         meta = {
-            "last_refresh": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "last_refresh": local_now().strftime("%Y-%m-%d %H:%M"),
             "start_date": start_date,
             "end_date": end_date,
             "team_name": config.team_name,

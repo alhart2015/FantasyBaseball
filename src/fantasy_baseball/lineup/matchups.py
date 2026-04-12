@@ -4,6 +4,8 @@ import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+
+from fantasy_baseball.utils.time_utils import local_today
 from pathlib import Path
 
 import pandas as pd
@@ -130,14 +132,14 @@ def fetch_team_batting_stats(season: int | None = None) -> dict[str, dict]:
         Result of normalize_team_batting_stats: {abbrev: {ops, k_pct}}.
     """
     if season is None:
-        season = datetime.now().year
+        season = local_today().year
 
     # Fetch teams list once and reuse for fallback
     teams_response = statsapi.get("teams", {"sportId": 1})
     teams = teams_response.get("teams", [])
 
     stats = _fetch_team_batting_stats_for_season(season, teams)
-    if not stats and season == datetime.now().year:
+    if not stats and season == local_today().year:
         logger.info(
             "No %d stats available (pre-season?); falling back to %d",
             season, season - 1,

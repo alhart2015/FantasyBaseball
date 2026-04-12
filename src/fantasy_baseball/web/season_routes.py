@@ -478,8 +478,8 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/players/search")
     def api_player_search():
-        from datetime import date
         from fantasy_baseball.utils.name_utils import normalize_name
+        from fantasy_baseball.utils.time_utils import local_today
         from fantasy_baseball.analysis.pace import compute_player_pace
         from fantasy_baseball.utils.constants import HITTER_PROJ_KEYS, PITCHER_PROJ_KEYS
         from fantasy_baseball.models.player import Player, HitterStats, PitcherStats, RankInfo
@@ -491,7 +491,7 @@ def register_routes(app: Flask) -> None:
 
         conn = _get_search_db()
         try:
-            season = date.today().year
+            season = local_today().year
             snapshot = _get_latest_ros_snapshot(conn, season)
             if not snapshot:
                 return jsonify([])
@@ -608,14 +608,14 @@ def register_routes(app: Flask) -> None:
     @app.route("/api/players/browse")
     def api_player_browse():
         """Return all ROS-projected players with stats, rank, SGP, wSGP, ownership."""
-        from datetime import date
         from fantasy_baseball.utils.name_utils import normalize_name
+        from fantasy_baseball.utils.time_utils import local_today
         from fantasy_baseball.sgp.rankings import lookup_rank
         from fantasy_baseball.models.player import Player, HitterStats, PitcherStats, RankInfo
 
         conn = _get_search_db()
         try:
-            season = date.today().year
+            season = local_today().year
             snapshot = _get_latest_ros_snapshot(conn, season)
             if not snapshot:
                 return jsonify([])

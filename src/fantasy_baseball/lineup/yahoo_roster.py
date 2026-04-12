@@ -3,6 +3,8 @@
 import datetime
 import logging
 
+from fantasy_baseball.utils.time_utils import local_today
+
 logger = logging.getLogger(__name__)
 
 # Yahoo stat IDs for 5x5 roto categories
@@ -257,7 +259,7 @@ def fetch_scoring_period(league) -> tuple[str, str]:
         return start.isoformat(), end.isoformat()
     except Exception:
         logger.info("No active scoring period (pre-season?) — using Mon-Sun of current week")
-        today = datetime.date.today()
+        today = local_today()
         monday = today - datetime.timedelta(days=today.weekday())
         sunday = monday + datetime.timedelta(days=6)
         return monday.isoformat(), sunday.isoformat()

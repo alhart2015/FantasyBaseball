@@ -2,7 +2,8 @@
 
 import json
 import time
-from datetime import datetime, date
+
+from fantasy_baseball.utils.time_utils import local_now, local_today
 
 
 def _get_redis():
@@ -24,22 +25,22 @@ class JobLogger:
     def __init__(self, job_name: str):
         self.job_name = job_name
         self._start = time.time()
-        self._started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._started_at = local_now().strftime("%Y-%m-%d %H:%M:%S")
         self._entries: list[dict] = []
 
     def log(self, msg: str) -> None:
         """Append a timestamped log entry."""
         self._entries.append({
-            "time": datetime.now().strftime("%H:%M:%S"),
+            "time": local_now().strftime("%H:%M:%S"),
             "msg": msg,
         })
 
     def finish(self, status: str, error: str | None = None) -> None:
         """Write the complete log to Redis. Never raises."""
         try:
-            finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            finished_at = local_now().strftime("%Y-%m-%d %H:%M:%S")
             duration = round(time.time() - self._start)
-            today = date.today().isoformat()
+            today = local_today().isoformat()
             timestamp = int(self._start)
             key = f"job_log:{self.job_name}:{today}:{timestamp}"
 

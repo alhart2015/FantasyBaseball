@@ -815,11 +815,11 @@ def load_ros_projections(
     projections_dir = Path(projections_dir)
 
     from fantasy_baseball.data.projections import normalize_ros_to_full_season
-    from datetime import date
+    from fantasy_baseball.utils.time_utils import local_today
 
     # All FanGraphs ROS exports are remaining-games-only — every system gets
     # normalized to full-season by adding accumulated actuals from game_logs.
-    hitter_totals, pitcher_totals = get_season_totals(conn, date.today().year)
+    hitter_totals, pitcher_totals = get_season_totals(conn, local_today().year)
 
     def _normalizer(system_name, hitters_df, pitchers_df):
         if progress_cb:

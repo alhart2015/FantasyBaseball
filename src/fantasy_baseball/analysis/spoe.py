@@ -29,6 +29,7 @@ from fantasy_baseball.utils.constants import (
 )
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
+from fantasy_baseball.utils.time_utils import local_today
 
 HITTER_COMPONENTS = HITTING_COUNTING
 PITCHER_COMPONENTS = PITCHING_COUNTING
@@ -146,7 +147,8 @@ def compute_current_spoe(
         preseason_lookup: output of build_preseason_lookup.
         season_start: "YYYY-MM-DD" season start date.
         season_end: "YYYY-MM-DD" season end date.
-        today: Date to treat as "now". Defaults to date.today().
+        today: Date to treat as "now". Defaults to the user's local
+            date (see :func:`fantasy_baseball.utils.time_utils.local_today`).
             Used by tests to pin the walk.
 
     Returns:
@@ -154,7 +156,7 @@ def compute_current_spoe(
         ``results`` list. Shape matches the previous weekly cache:spoe
         so the luck page template doesn't need to change.
     """
-    today = today or date.today()
+    today = today or local_today()
     start = date.fromisoformat(season_start)
     end = date.fromisoformat(season_end)
     total_days = (end - start).days
