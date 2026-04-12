@@ -104,14 +104,18 @@ def _build_roster_maps(conn, team_name: str):
 def _get_leverage() -> dict[str, float]:
     """Return per-category leverage weights (uniform fallback if no standings)."""
     from fantasy_baseball.lineup.leverage import calculate_leverage
+    from fantasy_baseball.web.season_data import _standings_to_snapshot
 
-    standings = read_cache("standings") or []
+    standings_raw = read_cache("standings") or []
     config = _load_config()
     proj_cache = read_cache("projections") or {}
-    if standings:
+    if standings_raw:
+        standings_snap = _standings_to_snapshot(standings_raw)
+        proj_raw = proj_cache.get("projected_standings")
+        proj_snap = _standings_to_snapshot(proj_raw) if proj_raw else None
         return calculate_leverage(
-            standings, config.team_name,
-            projected_standings=proj_cache.get("projected_standings"),
+            standings_snap, config.team_name,
+            projected_standings=proj_snap,
         )
     return {c: 1.0 / 10 for c in ALL_CATEGORIES}
 
@@ -264,16 +268,18 @@ def register_routes(app: Flask) -> None:
             from fantasy_baseball.web.season_data import (
                 format_standings_for_display,
                 format_monte_carlo_for_display,
+                _standings_to_snapshot,
             )
 
             standings_data = format_standings_for_display(
-                raw_standings, config.team_name
+                _standings_to_snapshot(raw_standings), config.team_name
             )
 
             raw_projected = read_cache("projections")
             if raw_projected and "projected_standings" in raw_projected:
                 projected_data = format_standings_for_display(
-                    raw_projected["projected_standings"], config.team_name
+                    _standings_to_snapshot(raw_projected["projected_standings"]),
+                    config.team_name,
                 )
 
             raw_mc = read_cache("monte_carlo")
@@ -926,6 +932,7 @@ def register_routes(app: Flask) -> None:
         from fantasy_baseball.lineup.yahoo_roster import fetch_roster
         from fantasy_baseball.web.season_data import (
             _opponent_cache, OPPONENT_CACHE_TTL_SECONDS,
+            _standings_to_snapshot,
             build_opponent_lineup,
         )
 
@@ -957,7 +964,8 @@ def register_routes(app: Flask) -> None:
         except Exception as e:
             return jsonify({"error": f"Failed to load projections: {e}"}), 500
 
-        user_leverage = calculate_leverage(standings, config.team_name)
+        standings_snap = _standings_to_snapshot(standings)
+        user_leverage = calculate_leverage(standings_snap, config.team_name)
 
         lineup = build_opponent_lineup(
             roster=roster,

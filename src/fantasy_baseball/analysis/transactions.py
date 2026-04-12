@@ -1,10 +1,11 @@
 """Transaction analysis — pairing, scoring, and aggregation."""
 
-from datetime import datetime
+from datetime import date as _date_type, datetime
 
 from fantasy_baseball.data.db import load_projections_for_date
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
+from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
 from fantasy_baseball.utils.name_utils import normalize_name
 
 HITTER_POSITIONS = {"C", "1B", "2B", "3B", "SS", "OF", "Util", "DH"}
@@ -167,15 +168,27 @@ def score_transaction(conn, txn: dict, year: int) -> dict:
             "FROM standings WHERE year = ? AND snapshot_date = ?",
             (year, standings_date),
         ).fetchall()
-        standings = [
-            {"name": r["team"], "stats": {
-                "R": r["r"], "HR": r["hr"], "RBI": r["rbi"], "SB": r["sb"],
-                "AVG": r["avg"], "W": r["w"], "K": r["k"], "SV": r["sv"],
-                "ERA": r["era"], "WHIP": r["whip"],
-            }}
-            for r in standings_rows
-        ]
-        leverage = calculate_leverage(standings, txn["team"])
+        standings_snap = StandingsSnapshot(
+            effective_date=_date_type.fromisoformat(standings_date),
+            entries=[
+                StandingsEntry(
+                    team_name=r["team"],
+                    team_key="",
+                    rank=0,
+                    stats=CategoryStats(
+                        r=r["r"] or 0.0, hr=r["hr"] or 0.0,
+                        rbi=r["rbi"] or 0.0, sb=r["sb"] or 0.0,
+                        avg=r["avg"] or 0.0,
+                        w=r["w"] or 0.0, k=r["k"] or 0.0,
+                        sv=r["sv"] or 0.0,
+                        era=r["era"] if r["era"] is not None else 99.0,
+                        whip=r["whip"] if r["whip"] is not None else 99.0,
+                    ),
+                )
+                for r in standings_rows
+            ],
+        )
+        leverage = calculate_leverage(standings_snap, txn["team"])
     else:
         # No standings yet — equal weights
         leverage = {cat: 0.1 for cat in ["R", "HR", "RBI", "SB", "AVG",
