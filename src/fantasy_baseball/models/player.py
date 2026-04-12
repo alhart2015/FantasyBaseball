@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from typing import Any, Optional
 
+from fantasy_baseball.models.positions import Position
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 
@@ -186,7 +187,7 @@ def _make_stats(
 class Player:
     name: str
     player_type: PlayerType
-    positions: list[str] = field(default_factory=list)
+    positions: list[Position] = field(default_factory=list)
     team: str = ""
     fg_id: Optional[str] = None
     mlbam_id: Optional[int] = None
@@ -199,7 +200,7 @@ class Player:
     wsgp: float = 0.0
     rank: RankInfo = field(default_factory=RankInfo)
 
-    selected_position: str = ""
+    selected_position: Position | None = None
     status: str = ""
     classification: str = ""
     pace: Optional[dict] = None
@@ -232,10 +233,25 @@ class Player:
         rank_raw = d.get("rank")
         rank = RankInfo.from_dict(rank_raw) if isinstance(rank_raw, dict) else RankInfo()
 
+        raw_positions = d.get("positions", [])
+        parsed_positions = [
+            p if isinstance(p, Position) else Position.parse(p)
+            for p in raw_positions
+        ]
+
+        raw_slot = d.get("selected_position")
+        parsed_slot: Position | None
+        if raw_slot is None or raw_slot == "":
+            parsed_slot = None
+        elif isinstance(raw_slot, Position):
+            parsed_slot = raw_slot
+        else:
+            parsed_slot = Position.parse(raw_slot)
+
         return cls(
             name=name,
             player_type=player_type,
-            positions=d.get("positions", []),
+            positions=parsed_positions,
             team=d.get("team", ""),
             fg_id=d.get("fg_id"),
             mlbam_id=d.get("mlbam_id"),
@@ -245,7 +261,7 @@ class Player:
             current=current,
             wsgp=d.get("wsgp", 0.0),
             rank=rank,
-            selected_position=d.get("selected_position", ""),
+            selected_position=parsed_slot,
             status=d.get("status", ""),
             classification=d.get("classification", ""),
             pace=d.get("pace"),

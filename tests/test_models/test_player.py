@@ -383,3 +383,80 @@ class TestPitcherSignificance:
         stats = PitcherStats(ip=20, k=25, w=2, sv=0, er=8, bb=3, h_allowed=5)
         d = stats.significant_dict()
         assert d == {"W": False, "K": False, "SV": False, "ERA": False, "WHIP": False}
+
+
+class TestPlayerPositionEnum:
+    def test_from_dict_parses_positions_to_enum(self):
+        from fantasy_baseball.models.player import Player
+        from fantasy_baseball.models.positions import Position
+
+        p = Player.from_dict({
+            "name": "Juan Soto",
+            "player_type": "hitter",
+            "positions": ["OF", "Util"],
+            "selected_position": "OF",
+        })
+        assert p.positions == [Position.OF, Position.UTIL]
+        assert p.selected_position is Position.OF
+
+    def test_from_dict_empty_selected_position_handled(self):
+        """Yahoo often returns empty selected_position for FA pool
+        players and pre-season unassigned players. That must NOT raise."""
+        from fantasy_baseball.models.player import Player
+
+        p = Player.from_dict({
+            "name": "X",
+            "player_type": "hitter",
+            "positions": ["OF"],
+        })
+        assert p.selected_position is None
+
+    def test_from_dict_normalizes_casing(self):
+        """Yahoo's 'Util' becomes Position.UTIL via Position.parse."""
+        from fantasy_baseball.models.player import Player
+        from fantasy_baseball.models.positions import Position
+
+        p = Player.from_dict({
+            "name": "X",
+            "player_type": "hitter",
+            "positions": ["OF", "Util"],
+            "selected_position": "Util",
+        })
+        assert Position.UTIL in p.positions
+        assert p.selected_position is Position.UTIL
+
+    def test_to_dict_serializes_positions_as_strings(self):
+        """Cache round-trip: to_dict must produce JSON-safe strings,
+        not enum repr. StrEnum values ARE strings, so json.dumps works
+        without a custom encoder."""
+        import json
+        from fantasy_baseball.models.player import Player, PlayerType
+        from fantasy_baseball.models.positions import Position
+
+        p = Player(
+            name="Juan Soto",
+            player_type=PlayerType.HITTER,
+            positions=[Position.OF, Position.UTIL],
+            selected_position=Position.OF,
+        )
+        d = p.to_dict()
+        blob = json.dumps(d)
+        parsed = json.loads(blob)
+        assert parsed["positions"] == ["OF", "UTIL"]
+        assert parsed["selected_position"] == "OF"
+
+    def test_string_positions_still_work_via_strenum_equality(self):
+        """StrEnum equality: Position.OF == 'OF'. Legacy code that
+        does `'OF' in player.positions` still works."""
+        from fantasy_baseball.models.player import Player, PlayerType
+        from fantasy_baseball.models.positions import Position
+
+        p = Player(
+            name="X",
+            player_type=PlayerType.HITTER,
+            positions=[Position.OF, Position.UTIL],
+            selected_position=Position.OF,
+        )
+        assert "OF" in p.positions
+        assert "UTIL" in p.positions
+        assert p.selected_position == "OF"
