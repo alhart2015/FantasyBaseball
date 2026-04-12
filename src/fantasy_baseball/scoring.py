@@ -173,7 +173,10 @@ def _apply_displacement(roster: list[Player]) -> list[Player | dict]:
 
     Returns a list where each entry is either an unmodified Player
     (active, unaffected) or a dict of scaled stats (active, displaced).
-    Bench and IL players are excluded from the returned list.
+    Bench players are excluded. IL players are included at full scale
+    (they will return and produce). The worst matching active player
+    has their stats scaled down to reflect the playing time the IL
+    player takes away.
     """
     # Separate players into categories
     active: list[Player] = []
@@ -216,8 +219,12 @@ def _apply_displacement(roster: list[Player]) -> list[Player | dict]:
         already_displaced.add(target.name)
         displacement_factors[target.name] = factor
 
-    # Build output: apply displacement factors to affected players
+    # Build output: IL players at full scale + active with displacement
     result: list = []
+    # IL players contribute their full projected stats
+    for p in il_players:
+        result.append(p)
+    # Active players: apply displacement factors to affected ones
     for p in active:
         if not isinstance(p, Player):
             result.append(p)
@@ -225,7 +232,6 @@ def _apply_displacement(roster: list[Player]) -> list[Player | dict]:
         if p.name in displacement_factors:
             factor = displacement_factors[p.name]
             scaled = _scale_stats(p, factor)
-            # Wrap as a dict with player_type for the summation loop
             scaled["player_type"] = p.player_type
             result.append(scaled)
         else:

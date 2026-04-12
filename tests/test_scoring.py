@@ -201,10 +201,11 @@ class TestDisplacementBenchExclusion:
                          positions=[Position.OF])
         # IL Guy is not excluded as bench (has IL status), so displacement
         # logic applies instead. Since Active is the only option, his stats
-        # get scaled down.
+        # get scaled down. IL Guy counted at full scale.
         stats = project_team_stats([active, il_player], displacement=True)
         # Active (500 ab) displaced by IL Guy (200 ab) -> factor = (500-200)/500 = 0.6
-        assert stats["R"] == pytest.approx(80 * 0.6)
+        # Total R = Active*0.6 + IL Guy full = 48 + 40 = 88
+        assert stats["R"] == pytest.approx(80 * 0.6 + 40)
 
 
 class TestDisplacementILHitter:
@@ -227,12 +228,10 @@ class TestDisplacementILHitter:
         stats = project_team_stats([good_of, bad_of, il_of], displacement=True)
 
         # bad_of displaced: factor = max(0, 300 - 200) / 300 = 1/3
-        # bad_of scaled: r=40*1/3≈13.33, hr=8*1/3≈2.67, rbi=30*1/3=10, sb=2*1/3≈0.67
-        # h=80*1/3≈26.67, ab=300*1/3=100
-        # Totals: good_of full + bad_of scaled + IL excluded from sum
-        assert stats["R"] == pytest.approx(90 + 40 / 3)
-        assert stats["HR"] == pytest.approx(30 + 8 / 3)
-        assert stats["RBI"] == pytest.approx(90 + 30 / 3)
+        # Totals: good_of full + bad_of scaled + IL full
+        assert stats["R"] == pytest.approx(90 + 40 / 3 + 30)
+        assert stats["HR"] == pytest.approx(30 + 8 / 3 + 5)
+        assert stats["RBI"] == pytest.approx(90 + 30 / 3 + 20)
 
     def test_il_hitter_fallback_to_worst_hitter_overall(self):
         """When no active hitter shares a position, fallback to worst hitter."""
@@ -251,7 +250,8 @@ class TestDisplacementILHitter:
 
         # Fallback: displace worst hitter overall. SS has lower SGP than 1B.
         # SS factor = max(0, 350 - 150) / 350 = 200/350 = 4/7
-        assert stats["R"] == pytest.approx(70 + 50 * (4 / 7))
+        # Total R = 1B full + SS scaled + IL full
+        assert stats["R"] == pytest.approx(70 + 50 * (4 / 7) + 20)
 
     def test_displacement_caps_at_zero(self):
         """When IL player has more playing time than active, factor is 0."""
@@ -265,8 +265,9 @@ class TestDisplacementILHitter:
         stats = project_team_stats([active, il_player], displacement=True)
 
         # factor = max(0, 200 - 400) / 200 = 0
-        assert stats["R"] == 0
-        assert stats["HR"] == 0
+        # Active zeroed out, IL counted in full
+        assert stats["R"] == 50
+        assert stats["HR"] == 10
 
     def test_each_active_displaced_at_most_once(self):
         """Two IL hitters can't both displace the same active player."""
@@ -285,8 +286,9 @@ class TestDisplacementILHitter:
         # IL1 has more playing time (200 ab > 150 ab), processed first.
         # active displaced by IL1: factor = (500 - 200) / 500 = 0.6
         # IL2 has no remaining active to displace (only one active, already displaced).
-        assert stats["R"] == pytest.approx(80 * 0.6)
-        assert stats["HR"] == pytest.approx(20 * 0.6)
+        # Total = active*0.6 + IL1 full + IL2 full
+        assert stats["R"] == pytest.approx(80 * 0.6 + 30 + 20)
+        assert stats["HR"] == pytest.approx(20 * 0.6 + 5 + 3)
 
 
 class TestDisplacementILPitcher:
@@ -307,8 +309,9 @@ class TestDisplacementILPitcher:
         stats = project_team_stats([good_sp, bad_sp, il_sp], displacement=True)
 
         # bad_sp displaced: factor = max(0, 120 - 130) / 120 = 0
-        assert stats["W"] == pytest.approx(15)  # only good_sp
-        assert stats["K"] == pytest.approx(200)
+        # Total = good_sp + bad_sp*0 + il_sp full
+        assert stats["W"] == pytest.approx(15 + 8)
+        assert stats["K"] == pytest.approx(200 + 100)
 
     def test_rp_displaces_rp(self):
         """IL RP (ip<=100) displaces worst active RP, not an SP."""
@@ -325,8 +328,9 @@ class TestDisplacementILPitcher:
         stats = project_team_stats([sp, rp, il_rp], displacement=True)
 
         # RP displaced: factor = max(0, 60 - 30) / 60 = 0.5
-        assert stats["W"] == pytest.approx(12 + 3 * 0.5)
-        assert stats["SV"] == pytest.approx(20 * 0.5)
+        # Total = SP full + RP*0.5 + IL RP full
+        assert stats["W"] == pytest.approx(12 + 3 * 0.5 + 1)
+        assert stats["SV"] == pytest.approx(20 * 0.5 + 10)
 
 
 class TestDisplacementILSlotAndStatus:
@@ -344,7 +348,8 @@ class TestDisplacementILSlotAndStatus:
 
         stats = project_team_stats([active, il_player], displacement=True)
         # factor = (500 - 150) / 500 = 0.7
-        assert stats["R"] == pytest.approx(80 * 0.7)
+        # Total = active*0.7 + IL full
+        assert stats["R"] == pytest.approx(80 * 0.7 + 20)
 
     def test_il_status_on_active_slot_triggers_displacement(self):
         """Player with IL status but on an active slot (e.g., Yahoo quirk)
@@ -359,7 +364,8 @@ class TestDisplacementILSlotAndStatus:
 
         stats = project_team_stats([active, il_player], displacement=True)
         # factor = (500 - 250) / 500 = 0.5
-        assert stats["R"] == pytest.approx(80 * 0.5)
+        # Total = active*0.5 + IL full
+        assert stats["R"] == pytest.approx(80 * 0.5 + 30)
 
 
 class TestDisplacementDictInputUnaffected:
@@ -403,8 +409,9 @@ class TestDisplacementProcessingOrder:
         # OF2 factor = max(0, 280 - 300) / 280 = 0
         # IL2 (100 ab) processed next, displaces OF1 (only remaining)
         # OF1 factor = max(0, 400 - 100) / 400 = 0.75
-        assert stats["R"] == pytest.approx(60 * 0.75)
-        assert stats["HR"] == pytest.approx(15 * 0.75)
+        # Total = OF1*0.75 + OF2*0 + IL1 full + IL2 full
+        assert stats["R"] == pytest.approx(60 * 0.75 + 50 + 20)
+        assert stats["HR"] == pytest.approx(15 * 0.75 + 12 + 3)
 
 
 class TestDisplacementRoleMatching:
@@ -428,7 +435,8 @@ class TestDisplacementRoleMatching:
 
         # No position match -> fallback to worst hitter overall = active2
         # active2 factor = max(0, 250 - 150) / 250 = 0.4
-        assert stats["R"] == pytest.approx(60 + 30 * 0.4)
+        # Total = active1 full + active2*0.4 + IL full
+        assert stats["R"] == pytest.approx(60 + 30 * 0.4 + 20)
 
 
 class TestDisplacementNoRos:
