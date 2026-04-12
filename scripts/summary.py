@@ -203,13 +203,16 @@ def main():
     print("=" * 90)
 
     # Build projected standings for leverage
+    from fantasy_baseball.web.season_data import _standings_to_snapshot
     projected_standings = [
         {"name": name, "stats": all_stats[name]} for name in all_stats
     ]
+    projected_snap = _standings_to_snapshot(projected_standings)
 
     if standings:
+        standings_snap = _standings_to_snapshot(standings)
         leverage = calculate_leverage(
-            standings, team_name, projected_standings=projected_standings,
+            standings_snap, team_name, projected_standings=projected_snap,
         )
     else:
         # Pre-season: equal weights across all categories

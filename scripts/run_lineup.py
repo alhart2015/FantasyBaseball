@@ -155,12 +155,13 @@ def main():
     print()
 
     # Read cached projected standings from dashboard (if available)
-    projected_standings = None
-    from fantasy_baseball.web.season_data import read_cache
+    projected_standings_snap = None
+    from fantasy_baseball.web.season_data import read_cache, _standings_to_snapshot
     cached = read_cache("projections")
     if cached:
         projected_standings = cached.get("projected_standings")
         if projected_standings:
+            projected_standings_snap = _standings_to_snapshot(projected_standings)
             print(f"Loaded cached projected standings ({len(projected_standings)} teams)")
 
     # Fetch scoring period and MLB schedule
@@ -197,9 +198,10 @@ def main():
     print()
 
     # Calculate leverage
+    standings_snap = _standings_to_snapshot(standings)
     leverage = calculate_leverage(
-        standings, config.team_name,
-        projected_standings=projected_standings,
+        standings_snap, config.team_name,
+        projected_standings=projected_standings_snap,
     )
     print("CATEGORY LEVERAGE (higher = more valuable to target):")
     sorted_lev = sorted(leverage.items(), key=lambda x: x[1], reverse=True)

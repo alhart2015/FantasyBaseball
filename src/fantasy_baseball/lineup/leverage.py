@@ -1,6 +1,6 @@
 import statistics
 
-from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
+from fantasy_baseball.models.standings import StandingsSnapshot
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS
 
 MAX_MEANINGFUL_GAP_MULTIPLIER: float = 3.0
@@ -172,13 +172,15 @@ def calculate_leverage(
 
     ``season_progress`` (0.0 to 1.0) controls how much weight goes to
     standings-based leverage vs. equal weights. Early season (low progress),
-    leverage is mostly uniform because standings are noise. Late season
-    (high progress), leverage is fully standings-driven. If None, estimated
-    from game logs in SQLite. Ramps to 1.0 at ~81 games (half season).
+    leverage is mostly uniform because projections have wide error bars.
+    Late season (high progress), leverage is fully standings-driven. If
+    None, estimated from game logs in SQLite. Ramps to 1.0 at ~81 games
+    (half season).
 
-    When ``projected_standings`` is provided, leverage is computed from a blend
-    of current and projected standings (weighted by season_progress). This
-    replaces the uniform ramp with forward-looking category weighting.
+    When ``projected_standings`` is provided, leverage gaps are computed
+    from projected standings directly (they already incorporate actual
+    performance + ROS projections). The uniform ramp still applies to
+    reflect projection uncertainty.
 
     Weights are normalized to sum to 1.0.
     """
@@ -187,71 +189,20 @@ def calculate_leverage(
 
     uniform = {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
 
-    if projected_standings is not None:
-        # Blend current standings with projected, then compute leverage from
-        # the blended view. The blend itself handles early/late season weighting.
-        blended = blend_standings(standings, projected_standings, season_progress)
-        result = _leverage_from_standings(
-            blended, user_team_name, attack_weight, defense_weight,
-        )
-        return result if result is not None else uniform
-
-    # Fallback: blend standings-based leverage with uniform weights.
+    # Use projected standings when available (they already incorporate
+    # actual performance to date + ROS projections), otherwise fall back
+    # to raw current standings.
+    source = projected_standings if projected_standings is not None else standings
     standings_leverage = _leverage_from_standings(
-        standings, user_team_name, attack_weight, defense_weight,
+        source, user_team_name, attack_weight, defense_weight,
     )
     if standings_leverage is None:
         return uniform
 
+    # Blend toward uniform early in the season to reflect projection
+    # uncertainty. Even projected standings have wide error bars with
+    # only a few weeks of data.
     return {
         cat: season_progress * standings_leverage[cat] + (1.0 - season_progress) * uniform[cat]
         for cat in ALL_CATEGORIES
     }
-
-
-def blend_standings(
-    current: StandingsSnapshot,
-    projected: StandingsSnapshot,
-    progress: float,
-) -> StandingsSnapshot:
-    """Blend current and projected standings based on season progress.
-
-    For each stat: blended = progress * current + (1 - progress) * projected.
-    At progress=0.0, result is fully projected. At progress=1.0, fully current.
-
-    Teams matched by name. Teams appearing in only one list are included as-is.
-    """
-    proj_by_name = {e.team_name: e for e in projected.entries}
-    seen_names: set[str] = set()
-    blended_entries: list[StandingsEntry] = []
-
-    for entry in current.entries:
-        name = entry.team_name
-        seen_names.add(name)
-        proj_entry = proj_by_name.get(name)
-        if proj_entry is None:
-            blended_entries.append(entry)
-            continue
-
-        blended_stats: dict[str, float] = {}
-        for cat in ALL_CATEGORIES:
-            cur_val = entry.stats.get(cat, 0)
-            proj_val = proj_entry.stats.get(cat, 0)
-            blended_stats[cat] = progress * cur_val + (1.0 - progress) * proj_val
-
-        blended_entries.append(StandingsEntry(
-            team_name=entry.team_name,
-            team_key=entry.team_key,
-            rank=entry.rank,
-            stats=CategoryStats.from_dict(blended_stats),
-        ))
-
-    # Include projected-only teams
-    for entry in projected.entries:
-        if entry.team_name not in seen_names:
-            blended_entries.append(entry)
-
-    return StandingsSnapshot(
-        effective_date=current.effective_date,
-        entries=blended_entries,
-    )

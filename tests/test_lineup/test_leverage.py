@@ -1,7 +1,7 @@
 from datetime import date
 
 import pytest
-from fantasy_baseball.lineup.leverage import calculate_leverage, blend_standings
+from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
 
 
@@ -321,68 +321,6 @@ class TestCalculateLeverage:
         )
 
 
-class TestBlendStandings:
-    def _make_current(self):
-        return _list_to_snapshot([
-            {"name": "Team A", "stats": {"R": 200, "HR": 50, "RBI": 180, "SB": 30,
-             "AVG": 0.260, "W": 20, "K": 300, "SV": 15, "ERA": 4.00, "WHIP": 1.30}},
-            {"name": "Team B", "stats": {"R": 180, "HR": 45, "RBI": 170, "SB": 40,
-             "AVG": 0.270, "W": 18, "K": 280, "SV": 12, "ERA": 3.80, "WHIP": 1.25}},
-        ])
-
-    def _make_projected(self):
-        return _list_to_snapshot([
-            {"name": "Team A", "stats": {"R": 800, "HR": 200, "RBI": 720, "SB": 100,
-             "AVG": 0.265, "W": 80, "K": 1200, "SV": 60, "ERA": 3.80, "WHIP": 1.22}},
-            {"name": "Team B", "stats": {"R": 780, "HR": 210, "RBI": 700, "SB": 120,
-             "AVG": 0.272, "W": 75, "K": 1150, "SV": 55, "ERA": 3.60, "WHIP": 1.20}},
-        ])
-
-    def test_progress_zero_returns_projected(self):
-        blended = blend_standings(self._make_current(), self._make_projected(), 0.0)
-        team_a = next(e for e in blended.entries if e.team_name == "Team A")
-        assert team_a.stats["R"] == pytest.approx(800)
-        assert team_a.stats["AVG"] == pytest.approx(0.265)
-
-    def test_progress_one_returns_current(self):
-        blended = blend_standings(self._make_current(), self._make_projected(), 1.0)
-        team_a = next(e for e in blended.entries if e.team_name == "Team A")
-        assert team_a.stats["R"] == pytest.approx(200)
-        assert team_a.stats["AVG"] == pytest.approx(0.260)
-
-    def test_progress_half_interpolates(self):
-        blended = blend_standings(self._make_current(), self._make_projected(), 0.5)
-        team_a = next(e for e in blended.entries if e.team_name == "Team A")
-        assert team_a.stats["R"] == pytest.approx(500)
-        assert team_a.stats["AVG"] == pytest.approx(0.2625)
-
-    def test_teams_matched_by_name(self):
-        current = self._make_current()
-        proj = self._make_projected()
-        projected = StandingsSnapshot(
-            effective_date=proj.effective_date,
-            entries=list(reversed(proj.entries)),
-        )
-        blended = blend_standings(current, projected, 0.0)
-        team_a = next(e for e in blended.entries if e.team_name == "Team A")
-        assert team_a.stats["R"] == pytest.approx(800)
-
-    def test_team_only_in_current_included_as_is(self):
-        base = self._make_current()
-        team_c = StandingsEntry(
-            team_name="Team C", team_key="", rank=0,
-            stats=CategoryStats.from_dict({"R": 100, "HR": 20, "RBI": 90, "SB": 10,
-             "AVG": 0.240, "W": 10, "K": 150, "SV": 5, "ERA": 4.50, "WHIP": 1.40}),
-        )
-        current = StandingsSnapshot(
-            effective_date=base.effective_date,
-            entries=base.entries + [team_c],
-        )
-        blended = blend_standings(current, self._make_projected(), 0.5)
-        team_c = next(e for e in blended.entries if e.team_name == "Team C")
-        assert team_c.stats["R"] == 100
-
-
 class TestCalculateLeverageWithProjected:
     def _make_projected(self):
         """Projected standings where SB gaps are large but HR gaps are tiny."""
@@ -392,23 +330,46 @@ class TestCalculateLeverageWithProjected:
             {"name": "Team 6", "rank": 6, "stats": {"R": 720, "HR": 199, "RBI": 680, "SB": 80, "AVG": 0.260, "W": 70, "K": 1150, "SV": 60, "ERA": 3.90, "WHIP": 1.27}},
         ])
 
-    def test_projected_standings_override_uniform_ramp(self):
+    def test_projected_early_season_near_uniform(self):
+        """At season_progress=0.0, leverage is uniform even with projected
+        standings — projections have wide error bars early on."""
         standings = _make_standings()
         projected = self._make_projected()
         leverage = calculate_leverage(
             standings, "User Team",
             season_progress=0.0, projected_standings=projected,
         )
-        values = list(leverage.values())
-        assert max(values) - min(values) > 0.01
+        uniform = 1.0 / 10
+        for cat, weight in leverage.items():
+            assert weight == pytest.approx(uniform, abs=0.001), (
+                f"{cat} = {weight:.4f}, expected ~{uniform:.4f} at season start"
+            )
 
-    def test_projected_tiny_hr_gap_gets_high_leverage(self):
+    def test_projected_midseason_blended(self):
+        """At season_progress=0.5, leverage is halfway between projected-
+        standings-derived and uniform."""
+        standings = _make_standings()
+        projected = self._make_projected()
+        full = calculate_leverage(
+            standings, "User Team",
+            season_progress=1.0, projected_standings=projected,
+        )
+        half = calculate_leverage(
+            standings, "User Team",
+            season_progress=0.5, projected_standings=projected,
+        )
+        uniform = 1.0 / 10
+        for cat in full:
+            expected = 0.5 * full[cat] + 0.5 * uniform
+            assert half[cat] == pytest.approx(expected, abs=0.001)
+
+    def test_projected_full_season_tiny_hr_gap_gets_high_leverage(self):
         """HR gap is 1 in projected → high leverage. SB gap is 100 → low."""
         standings = _make_standings()
         projected = self._make_projected()
         leverage = calculate_leverage(
             standings, "User Team",
-            season_progress=0.0, projected_standings=projected,
+            season_progress=1.0, projected_standings=projected,
         )
         assert leverage["HR"] > leverage["SB"]
 
