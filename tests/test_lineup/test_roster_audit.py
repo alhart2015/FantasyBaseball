@@ -170,3 +170,93 @@ class TestAuditRoster:
                 assert entry.best_fa is None, (
                     f"{entry.player} should not be replaced by pitcher {entry.best_fa}"
                 )
+
+
+class TestAuditILFilterUsesSlotOrStatus:
+    def _player(self, name, slot, status="", player_type="hitter"):
+        from fantasy_baseball.models.positions import Position
+        positions = [Position.OF] if player_type == "hitter" else [Position.P]
+        if player_type == "hitter":
+            ros = HitterStats(
+                pa=500 * 1.15,
+                ab=500, h=130,
+                r=70, hr=20,
+                rbi=70, sb=5,
+                avg=0.260,
+            )
+        else:
+            ros = PitcherStats(
+                ip=60.0, w=3.0,
+                k=60.0, sv=0.0,
+                er=20.0, bb=20.0,
+                h_allowed=50.0,
+                era=3.00, whip=1.17,
+            )
+        return Player(
+            name=name,
+            player_type=PlayerType(player_type),
+            positions=positions,
+            ros=ros,
+            selected_position=Position.parse(slot) if slot else None,
+            status=status,
+        )
+
+    def test_il_slot_with_empty_status_is_filtered(self):
+        """A player slotted to IL with no status string set should
+        still be excluded from active_roster. Yahoo sometimes omits
+        status on freshly-slotted IL players.
+        """
+        roster = [
+            self._player("Healthy OF", "OF"),
+            self._player("IL Pitcher", "IL", status="", player_type="pitcher"),
+        ]
+        free_agents = []
+        leverage = {cat: 0.1 for cat in
+                    ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
+        roster_slots = {"OF": 3, "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1,
+                        "IF": 1, "UTIL": 2, "P": 9, "BN": 2, "IL": 2}
+
+        entries = audit_roster(roster, free_agents, leverage, roster_slots)
+
+        il_entries = [e for e in entries if e.player == "IL Pitcher"]
+        assert len(il_entries) == 1
+        assert il_entries[0].slot == "IL"
+
+    def test_il_slot_with_il15_status_is_filtered(self):
+        """A player with both IL slot and IL15 status (the typical
+        case) is still correctly excluded."""
+        roster = [
+            self._player("Healthy OF", "OF"),
+            self._player("IL Pitcher", "IL", status="IL15", player_type="pitcher"),
+        ]
+        free_agents = []
+        leverage = {cat: 0.1 for cat in
+                    ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
+        roster_slots = {"OF": 3, "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1,
+                        "IF": 1, "UTIL": 2, "P": 9, "BN": 2, "IL": 2}
+
+        entries = audit_roster(roster, free_agents, leverage, roster_slots)
+
+        il_entries = [e for e in entries if e.player == "IL Pitcher"]
+        assert len(il_entries) == 1
+        assert il_entries[0].slot == "IL"
+
+    def test_bn_slot_with_il10_status_is_filtered(self):
+        """A player slotted to BN with an IL10 status (the Soto case:
+        Yahoo bench-slotted the IL player) is excluded via the
+        status check."""
+        roster = [
+            self._player("Healthy OF", "OF"),
+            self._player("Bench IL Hitter", "BN", status="IL10", player_type="hitter"),
+        ]
+        free_agents = []
+        leverage = {cat: 0.1 for cat in
+                    ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
+        roster_slots = {"OF": 3, "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1,
+                        "IF": 1, "UTIL": 2, "P": 9, "BN": 2, "IL": 2}
+
+        entries = audit_roster(roster, free_agents, leverage, roster_slots)
+
+        il_entries = [e for e in entries if e.player == "Bench IL Hitter"]
+        assert len(il_entries) == 1
+        assert il_entries[0].slot == "IL"

@@ -9,6 +9,7 @@ from fantasy_baseball.lineup.team_optimizer import compute_team_wsgp, build_line
 from fantasy_baseball.lineup.waivers import evaluate_pickup
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import Player, PlayerType
+from fantasy_baseball.models.positions import IL_SLOTS
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.utils.constants import IL_STATUSES
 from fantasy_baseball.utils.positions import can_cover_slots
@@ -67,9 +68,29 @@ def audit_roster(
     if not roster:
         return []
 
-    active_roster = [p for p in roster if p.status not in IL_STATUSES]
-    il_players = [p for p in roster if p.status in IL_STATUSES]
-    active_fas = [fa for fa in free_agents if fa.status not in IL_STATUSES]
+    def _is_il(player) -> bool:
+        """A player is on IL if either the status string or the
+        selected_position slot indicates IL.
+
+        Covers three production shapes seen in Yahoo roster data:
+          - Soto: selected_position='BN' + status='IL10' — the
+            status check catches this (bench-slotted IL player).
+          - Strider: selected_position='IL' + status='IL15' — both
+            checks catch this (formally in the IL slot).
+          - Hader: selected_position='IL' + status='' — only the
+            slot check catches this (Yahoo sometimes omits status
+            on freshly-slotted IL players).
+        """
+        if player.status in IL_STATUSES:
+            return True
+        slot = player.selected_position
+        if slot is None:
+            return False
+        return slot in IL_SLOTS
+
+    active_roster = [p for p in roster if not _is_il(p)]
+    il_players = [p for p in roster if _is_il(p)]
+    active_fas = [fa for fa in free_agents if not _is_il(fa)]
 
     denoms = get_sgp_denominators()
 
