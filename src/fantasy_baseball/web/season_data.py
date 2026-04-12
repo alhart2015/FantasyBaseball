@@ -1007,7 +1007,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         projected_standings = []
         for tname, roster in all_team_rosters.items():
-            proj_stats = project_team_stats(roster)
+            proj_stats = project_team_stats(roster, displacement=True)
             projected_standings.append({
                 "name": tname,
                 "team_key": "",
