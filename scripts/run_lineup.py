@@ -17,6 +17,7 @@ from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.lineup.waivers import scan_waivers, detect_open_slots, fetch_and_match_free_agents
+from fantasy_baseball.models.player import Player
 from fantasy_baseball.lineup.matchups import (
     get_team_batting_stats,
     calculate_matchup_factors,
@@ -79,7 +80,7 @@ def print_probable_starters(
         print("  No roster pitchers found in probable starters.")
         return
 
-    pitcher_teams = {p["name"]: p.get("team", "") for p in roster_pitchers}
+    pitcher_teams = {p.name: getattr(p, "team", "") for p in roster_pitchers}
     two_start = [s for s in starters if s["starts"] >= 2]
     one_start = [s for s in starters if s["starts"] == 1]
 
@@ -108,8 +109,8 @@ def print_probable_starters(
     # Roster pitchers with no announced start
     announced = {normalize_name(s["pitcher"]) for s in starters}
     unannounced = [
-        p["name"] for p in roster_pitchers
-        if normalize_name(p["name"]) not in announced
+        p.name for p in roster_pitchers
+        if normalize_name(p.name) not in announced
     ]
     if unannounced:
         print("  NO START ANNOUNCED")
@@ -235,6 +236,14 @@ def main():
 
         # Look up hitting and pitching projections separately so two-way
         # players get the correct projection for each role.
+        def _to_player(series, positions, player_type):
+            """Convert a projection Series to a Player dataclass."""
+            d = series.to_dict()
+            d["positions"] = positions
+            d["player_type"] = player_type
+            d["name"] = d.get("name", name)
+            return Player.from_dict(d)
+
         hit_proj = None
         if is_hitter(positions) and not hitters_proj.empty:
             matches = hitters_proj[hitters_proj["_name_norm"] == name_norm]
@@ -245,7 +254,7 @@ def main():
                 team = hit_proj.get("team", "")
                 games_this_week = games_per_team.get(team, DEFAULT_GAMES_PER_WEEK)
                 hit_proj = scale_by_schedule(hit_proj, games_this_week)
-                roster_hitters.append(hit_proj)
+                roster_hitters.append(_to_player(hit_proj, positions, "hitter"))
 
         pit_proj = None
         if is_pitcher(positions) and not pitchers_proj.empty:
@@ -257,7 +266,7 @@ def main():
                 team = pit_proj.get("team", "")
                 games_this_week = games_per_team.get(team, DEFAULT_GAMES_PER_WEEK)
                 pit_proj = scale_by_schedule(pit_proj, games_this_week)
-                roster_pitchers.append(pit_proj)
+                roster_pitchers.append(_to_player(pit_proj, positions, "pitcher"))
 
         if hit_proj is None and pit_proj is None:
             # Fallback: try either projection source for players whose
@@ -276,7 +285,7 @@ def main():
                     team = proj_row.get("team", "")
                     games_this_week = games_per_team.get(team, DEFAULT_GAMES_PER_WEEK)
                     proj_row = scale_by_schedule(proj_row, games_this_week)
-                    dest.append(proj_row)
+                    dest.append(_to_player(proj_row, positions, ptype))
                     break
 
     print(f"Matched: {len(roster_hitters)} hitters, {len(roster_pitchers)} pitchers")
@@ -300,10 +309,13 @@ def main():
     # Apply matchup adjustments to roster pitchers
     adjusted_count = 0
     for i, p in enumerate(roster_pitchers):
-        name_norm = normalize_name(p["name"])
+        name_norm = normalize_name(p.name)
         for prob_name, factors in pitcher_matchups.items():
             if normalize_name(prob_name) == name_norm:
-                roster_pitchers[i] = adjust_pitcher_projection(p, factors)
+                # adjust_pitcher_projection expects a Series; convert round-trip
+                series = pd.Series(p.to_flat_dict())
+                adjusted = adjust_pitcher_projection(series, factors)
+                roster_pitchers[i] = Player.from_dict(adjusted.to_dict())
                 adjusted_count += 1
                 break
     if adjusted_count:
@@ -321,10 +333,10 @@ def main():
         # Build lookup for reasoning (Gap 2 fix)
         hitter_wsgp = {}
         for h in roster_hitters:
-            hitter_wsgp[h["name"]] = calculate_weighted_sgp(h, leverage)
+            hitter_wsgp[h.name] = calculate_weighted_sgp(h.ros, leverage)
 
         starters = set(lineup.values())
-        bench_hitters = [h for h in roster_hitters if h["name"] not in starters]
+        bench_hitters = [h for h in roster_hitters if h.name not in starters]
 
         for slot, name in sorted(lineup.items()):
             wsgp = hitter_wsgp.get(name, 0)
@@ -333,22 +345,21 @@ def main():
             # For flex slots (IF, UTIL), show reasoning vs best bench player
             if any(slot.startswith(prefix) for prefix in ("IF", "UTIL")):
                 if bench_hitters:
-                    best_bench = max(bench_hitters, key=lambda h: hitter_wsgp.get(h["name"], 0))
-                    bench_wsgp = hitter_wsgp.get(best_bench["name"], 0)
+                    best_bench = max(bench_hitters, key=lambda h: hitter_wsgp.get(h.name, 0))
+                    bench_wsgp = hitter_wsgp.get(best_bench.name, 0)
                     delta = wsgp - bench_wsgp
                     if delta > 0:
-                        # Find top contributing categories
                         top_cats = _top_category_reasons(
-                            roster_hitters, name, best_bench["name"], leverage
+                            roster_hitters, name, best_bench.name, leverage
                         )
-                        line += f"  (over {best_bench['name']}: +{delta:.2f} — {top_cats})"
+                        line += f"  (over {best_bench.name}: +{delta:.2f} — {top_cats})"
 
             print(line)
 
         if bench_hitters:
             print("  BENCH:")
-            for h in sorted(bench_hitters, key=lambda h: hitter_wsgp.get(h["name"], 0), reverse=True):
-                print(f"    {h['name']:<25} wSGP: {hitter_wsgp.get(h['name'], 0):.2f}")
+            for h in sorted(bench_hitters, key=lambda h: hitter_wsgp.get(h.name, 0), reverse=True):
+                print(f"    {h.name:<25} wSGP: {hitter_wsgp.get(h.name, 0):.2f}")
         print()
 
     # Optimize pitcher lineup (Gap 5 fix: use config for slot count)
@@ -438,7 +449,7 @@ def main():
 
 
 def _top_category_reasons(
-    hitters: list[pd.Series],
+    hitters: list,
     starter_name: str,
     bench_name: str,
     leverage: dict[str, float],
@@ -449,20 +460,19 @@ def _top_category_reasons(
 
     denoms = get_sgp_denominators()
 
-    starter = next((h for h in hitters if h["name"] == starter_name), None)
-    bench = next((h for h in hitters if h["name"] == bench_name), None)
-    if starter is None or bench is None:
+    starter = next((h for h in hitters if h.name == starter_name), None)
+    bench = next((h for h in hitters if h.name == bench_name), None)
+    if starter is None or bench is None or starter.ros is None or bench.ros is None:
         return ""
 
     deltas = {}
     for stat, col in [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")]:
         weight = leverage.get(stat, 0)
         if weight > 0:
-            s_sgp = calculate_counting_sgp(starter.get(col, 0), denoms[stat]) * weight
-            b_sgp = calculate_counting_sgp(bench.get(col, 0), denoms[stat]) * weight
+            s_sgp = calculate_counting_sgp(getattr(starter.ros, col, 0), denoms[stat]) * weight
+            b_sgp = calculate_counting_sgp(getattr(bench.ros, col, 0), denoms[stat]) * weight
             deltas[stat] = s_sgp - b_sgp
 
-    # Return top 2 positive categories
     top = sorted(deltas.items(), key=lambda x: x[1], reverse=True)
     gains = [cat for cat, d in top if d > 0][:2]
     return f"gains {', '.join(gains)}" if gains else "marginal"

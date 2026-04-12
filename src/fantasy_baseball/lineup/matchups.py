@@ -300,7 +300,7 @@ def get_probable_starters(
     if not schedule or not schedule.get("probable_pitchers"):
         return []
 
-    roster_names = {normalize_name(p["name"]) for p in pitcher_roster}
+    roster_names = {normalize_name(p.name if hasattr(p, "name") else p["name"]) for p in pitcher_roster}
 
     # Pre-compute rankings for detail display
     if team_stats:
