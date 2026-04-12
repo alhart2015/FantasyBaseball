@@ -1,11 +1,11 @@
 """Transaction analysis — pairing, scoring, and aggregation."""
 
-from datetime import date as _date_type, datetime
+from datetime import datetime
 
 from fantasy_baseball.data.db import load_projections_for_date
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
-from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
+from fantasy_baseball.models.league import League
 from fantasy_baseball.utils.name_utils import normalize_name
 
 HITTER_POSITIONS = {"C", "1B", "2B", "3B", "SS", "OF", "Util", "DH"}
@@ -135,14 +135,15 @@ def _find_player_wsgp(name, positions_str, hitters_proj, pitchers_proj, leverage
     return 0.0
 
 
-def score_transaction(conn, txn: dict, year: int) -> dict:
+def score_transaction(league: League, conn, txn: dict, year: int) -> dict:
     """Compute wSGP for the add and drop sides of a transaction.
 
     Uses the team's leverage at the time of the transaction (from the
     nearest prior standings snapshot) and the nearest ROS projections.
 
     Args:
-        conn: SQLite connection.
+        league: League model with pre-loaded standings history.
+        conn: SQLite connection (used for projection lookups).
         txn: Transaction dict with team, timestamp, add_name, add_positions,
              drop_name, drop_positions.
         year: Season year.
@@ -154,40 +155,11 @@ def score_transaction(conn, txn: dict, year: int) -> dict:
     ts = int(txn.get("timestamp", 0) or 0)
     txn_date = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else f"{year}-03-01"
 
-    # Find nearest standings snapshot for leverage
-    row = conn.execute(
-        "SELECT MAX(snapshot_date) as best FROM standings "
-        "WHERE year = ? AND snapshot_date <= ?",
-        (year, txn_date),
-    ).fetchone()
-    standings_date = row["best"] if row and row["best"] else None
+    # Use League's pre-loaded standings history instead of a per-txn SQL query
+    from datetime import date as _date
+    standings_snap = league.standings_as_of(_date.fromisoformat(txn_date))
 
-    if standings_date:
-        standings_rows = conn.execute(
-            "SELECT team, r, hr, rbi, sb, avg, w, k, sv, era, whip "
-            "FROM standings WHERE year = ? AND snapshot_date = ?",
-            (year, standings_date),
-        ).fetchall()
-        standings_snap = StandingsSnapshot(
-            effective_date=_date_type.fromisoformat(standings_date),
-            entries=[
-                StandingsEntry(
-                    team_name=r["team"],
-                    team_key="",
-                    rank=0,
-                    stats=CategoryStats(
-                        r=r["r"] or 0.0, hr=r["hr"] or 0.0,
-                        rbi=r["rbi"] or 0.0, sb=r["sb"] or 0.0,
-                        avg=r["avg"] or 0.0,
-                        w=r["w"] or 0.0, k=r["k"] or 0.0,
-                        sv=r["sv"] or 0.0,
-                        era=r["era"] if r["era"] is not None else 99.0,
-                        whip=r["whip"] if r["whip"] is not None else 99.0,
-                    ),
-                )
-                for r in standings_rows
-            ],
-        )
+    if standings_snap is not None:
         leverage = calculate_leverage(standings_snap, txn["team"])
     else:
         # No standings yet — equal weights

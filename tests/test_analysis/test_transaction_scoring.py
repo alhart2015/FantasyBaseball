@@ -1,6 +1,11 @@
 import pytest
 from fantasy_baseball.analysis.transactions import score_transaction
 from fantasy_baseball.data.db import create_tables, get_connection
+from fantasy_baseball.models.league import League
+
+
+def _league_from(conn, year=2026):
+    return League.from_db(conn, year)
 
 
 def _seed_standings(conn, snapshot_date="2026-03-31"):
@@ -47,7 +52,7 @@ class TestScoreTransaction:
             "drop_name": "Marcus Semien",
             "drop_positions": "2B, SS",
         }
-        result = score_transaction(conn, txn, 2026)
+        result = score_transaction(_league_from(conn), conn, txn, 2026)
         assert "add_wsgp" in result
         assert "drop_wsgp" in result
         assert "value" in result
@@ -70,7 +75,7 @@ class TestScoreTransaction:
             "drop_name": None,
             "drop_positions": None,
         }
-        result = score_transaction(conn, txn, 2026)
+        result = score_transaction(_league_from(conn), conn, txn, 2026)
         assert result["drop_wsgp"] == 0.0
         assert result["add_wsgp"] > 0
         conn.close()
@@ -89,7 +94,7 @@ class TestScoreTransaction:
             "drop_name": "Marcus Semien",
             "drop_positions": "2B, SS",
         }
-        result = score_transaction(conn, txn, 2026)
+        result = score_transaction(_league_from(conn), conn, txn, 2026)
         assert result["add_wsgp"] == 0.0
         assert result["drop_wsgp"] > 0
         assert result["value"] < 0
@@ -109,6 +114,6 @@ class TestScoreTransaction:
             "drop_name": None,
             "drop_positions": None,
         }
-        result = score_transaction(conn, txn, 2026)
+        result = score_transaction(_league_from(conn), conn, txn, 2026)
         assert result["add_wsgp"] == 0.0
         conn.close()

@@ -1425,7 +1425,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                 create_tables(txn_conn)
                 try:
                     for txn in new_txns:
-                        scores = score_transaction(txn_conn, txn, config.season_year)
+                        scores = score_transaction(league_model, txn_conn, txn, config.season_year)
                         stored_txns.append({
                             "year": config.season_year,
                             **txn,
