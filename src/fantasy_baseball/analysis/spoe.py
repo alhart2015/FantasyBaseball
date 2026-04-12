@@ -37,40 +37,6 @@ PITCHER_COMPONENTS = PITCHING_COUNTING
 ALL_COMPONENTS = HITTER_COMPONENTS + PITCHER_COMPONENTS
 
 
-def load_rosters_for_date(conn, snapshot_date: str) -> dict[str, list[dict]]:
-    """Load all team rosters for a given snapshot date from weekly_rosters."""
-    rows = conn.execute(
-        "SELECT team, player_name, positions "
-        "FROM weekly_rosters "
-        "WHERE snapshot_date = ?",
-        (snapshot_date,),
-    ).fetchall()
-
-    rosters: dict[str, list[dict]] = {}
-    for row in rows:
-        team = row["team"]
-        positions_str = row["positions"] or ""
-        positions = [p.strip() for p in positions_str.split(",")] if positions_str else []
-        rosters.setdefault(team, []).append(
-            {"name": row["player_name"], "positions": positions}
-        )
-    return rosters
-
-
-def get_week_dates(conn, season_year: int) -> list[str]:
-    """Return distinct snapshot_dates from weekly_rosters for the season, sorted.
-
-    Each returned date is the Tuesday-of-scoring-week label the refresh
-    writes via append_roster_snapshot.
-    """
-    rows = conn.execute(
-        "SELECT DISTINCT snapshot_date FROM weekly_rosters "
-        "WHERE snapshot_date >= ? ORDER BY snapshot_date",
-        (f"{season_year}-",),
-    ).fetchall()
-    return [r["snapshot_date"] for r in rows]
-
-
 def build_preseason_lookup(
     hitters_df: pd.DataFrame, pitchers_df: pd.DataFrame
 ) -> dict[str, dict[str, Any]]:
