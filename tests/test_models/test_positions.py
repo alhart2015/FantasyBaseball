@@ -76,6 +76,67 @@ class TestPositionParse:
         assert Position.parse_list("") == []
         assert Position.parse_list(None) == []
 
+    def test_parse_strips_trailing_digits_numbered_slot(self):
+        """Historical JSON roster snapshots use "OF2", "BN3", "P5" to
+        disambiguate multiple same-named slots. Position.parse must
+        collapse them to the base position so League.from_db can load
+        legacy rows from weekly_rosters without crashing.
+
+        Production bug landed 2026-04-12 with "Unknown position: 'BN2'"
+        when League.from_db hit a historical row.
+        """
+        from fantasy_baseball.models.positions import Position
+
+        # The exact value from the production crash
+        assert Position.parse("BN2") is Position.BN
+
+        # Other common numbered slots from legacy snapshots
+        assert Position.parse("OF2") is Position.OF
+        assert Position.parse("OF3") is Position.OF
+        assert Position.parse("OF4") is Position.OF
+        assert Position.parse("P2") is Position.P
+        assert Position.parse("P5") is Position.P
+        assert Position.parse("BN3") is Position.BN
+        assert Position.parse("UTIL2") is Position.UTIL
+        assert Position.parse("IF2") is Position.IF
+        assert Position.parse("IL2") is Position.IL
+
+    def test_parse_handles_multi_digit_slot_suffix(self):
+        """Leagues with many pitcher slots can have P9, P10, P11..."""
+        from fantasy_baseball.models.positions import Position
+        assert Position.parse("P10") is Position.P
+        assert Position.parse("OF10") is Position.OF
+
+    def test_parse_preserves_leading_digit_positions(self):
+        """Regression guard: 1B/2B/3B have digits at the START, not end.
+
+        The trailing-digit stripper must not touch them.
+        """
+        from fantasy_baseball.models.positions import Position
+        assert Position.parse("1B") is Position.FIRST_BASE
+        assert Position.parse("2B") is Position.SECOND_BASE
+        assert Position.parse("3B") is Position.THIRD_BASE
+
+    def test_parse_numbered_slot_case_insensitive(self):
+        """Numbered slot stripping works on mixed-case input."""
+        from fantasy_baseball.models.positions import Position
+        assert Position.parse("bn2") is Position.BN
+        assert Position.parse("Of2") is Position.OF
+
+    def test_parse_list_handles_numbered_slots(self):
+        """The DB loader passes comma-joined position strings through
+        parse_list. Historical positions columns may contain numbered
+        slots too."""
+        from fantasy_baseball.models.positions import Position
+        result = Position.parse_list("OF2, Util, BN3")
+        assert result == [Position.OF, Position.UTIL, Position.BN]
+
+    def test_parse_all_digits_raises(self):
+        """A bare integer string isn't a position at all."""
+        from fantasy_baseball.models.positions import Position
+        with pytest.raises(ValueError, match="Unknown position"):
+            Position.parse("42")
+
 
 class TestPositionSets:
     def test_hitter_eligible_contains_all_hitter_positions(self):

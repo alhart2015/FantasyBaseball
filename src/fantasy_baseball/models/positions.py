@@ -8,7 +8,15 @@ code never has to worry about it.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
+
+
+# Matches trailing digits used to disambiguate same-named slots in
+# historical roster JSON files and legacy DB rows (e.g. "OF2", "BN3",
+# "P5"). Leading digits in "1B"/"2B"/"3B" are preserved because the
+# regex anchors on the end of the string.
+_TRAILING_DIGITS = re.compile(r"\d+$")
 
 
 class Position(StrEnum):
@@ -35,18 +43,29 @@ class Position(StrEnum):
 
     @classmethod
     def parse(cls, s: str) -> "Position":
-        """Parse a position string, normalizing casing.
+        """Parse a position string, normalizing casing and numbered slots.
 
         Yahoo returns ``"Util"`` in eligible_positions but ``"UTIL"`` in
         some other fields; config uses ``"UTIL"``. This method accepts
         any casing and returns the canonical enum member.
 
+        Historical roster snapshots (from JSON files loaded via
+        ``load_weekly_rosters``) use trailing digits to disambiguate
+        multiple same-named slots — ``"OF2"``, ``"BN3"``, ``"P5"``.
+        Those are collapsed to their base position so
+        :class:`Position.OF` / ``BN`` / ``P`` round-trip cleanly. The
+        leading digits in ``"1B"`` / ``"2B"`` / ``"3B"`` are preserved
+        because only trailing digits are stripped.
+
         Raises:
-            ValueError: if ``s`` is empty or does not match any member.
+            ValueError: if ``s`` is empty or does not match any member
+                after normalization.
         """
         if not s:
             raise ValueError(f"Unknown position: {s!r}")
-        norm = s.strip().upper()
+        norm = _TRAILING_DIGITS.sub("", s.strip().upper())
+        if not norm:
+            raise ValueError(f"Unknown position: {s!r}")
         try:
             return cls(norm)
         except ValueError:
