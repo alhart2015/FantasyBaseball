@@ -21,6 +21,7 @@ from typing import Any
 
 import pandas as pd
 
+from fantasy_baseball.models.league import League
 from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
@@ -124,7 +125,7 @@ def _empty_components() -> dict[str, float]:
 
 
 def compute_current_spoe(
-    conn,
+    league: League,
     standings: list[dict],
     preseason_lookup: dict[str, dict[str, Any]],
     season_start: str,
@@ -133,15 +134,17 @@ def compute_current_spoe(
 ) -> dict:
     """Compute current season-to-date SPoE.
 
-    Walks weekly_rosters history. Each snapshot's ownership period covers
-    the days from that snapshot until the next snapshot (or until today
-    for the most recent snapshot). Each player's preseason projection is
-    scaled by `days_covered / total_season_days` and added to the owning
-    team's accumulated expected components. Final expected stats are
-    compared to live standings via score_roto.
+    Iterates league.teams and calls Team.ownership_periods() on each
+    to get already-clipped (entry, period_start, period_end) tuples.
+    Each player's preseason projection is scaled by
+    days_covered / total_season_days and added to the owning team's
+    accumulated expected components. Final expected stats are compared
+    to live standings via score_roto.
 
     Args:
-        conn: SQLite connection (for reading weekly_rosters).
+        league: Loaded League object. SPoE iterates league.teams and
+            calls Team.ownership_periods() on each to get the
+            (entry, period_start, period_end) tuples it needs.
         standings: list of team dicts from cache:standings — each dict
             has ``name`` and ``stats`` keys.
         preseason_lookup: output of build_preseason_lookup.
@@ -169,48 +172,31 @@ def compute_current_spoe(
     days_elapsed = max(0, (today - start).days)
     season_fraction = min(1.0, days_elapsed / total_days)
 
-    season_year = start.year
-    week_dates = get_week_dates(conn, season_year)
-
     team_components: dict[str, dict[str, float]] = defaultdict(_empty_components)
 
-    for i, snap in enumerate(week_dates):
-        snap_date = date.fromisoformat(snap)
-        if snap_date >= today:
-            # Snapshot is in the future relative to `today` — skip.
-            continue
+    for team_obj in league.teams:
+        comps = team_components[team_obj.name]
+        periods = team_obj.ownership_periods(
+            season_start=start,
+            season_end=end,
+            today=today,
+        )
+        for entry, period_start, period_end in periods:
+            days_covered = (period_end - period_start).days
+            if days_covered <= 0:
+                continue
+            fraction = days_covered / total_days
 
-        if i + 1 < len(week_dates):
-            next_snap = date.fromisoformat(week_dates[i + 1])
-            end_of_period = min(next_snap, today)
-        else:
-            end_of_period = today
-
-        # Clip the ownership period to the season window. Pre-season
-        # snapshots (e.g., draft-day captures before season_start) should
-        # not contribute days that lie before the season actually began,
-        # otherwise teams with players in those snapshots get over-credited.
-        # Similarly clip to season_end so late refreshes don't count
-        # post-season days that never happened.
-        effective_start = max(snap_date, start)
-        effective_end = min(end_of_period, end)
-        days_covered = max(0, (effective_end - effective_start).days)
-        if days_covered == 0:
-            continue
-
-        fraction = days_covered / total_days
-
-        rosters = load_rosters_for_date(conn, snap)
-        for team, players in rosters.items():
-            comps = team_components[team]
-            for player in players:
-                preseason = preseason_lookup.get(normalize_name(player["name"]))
-                if preseason is None:
-                    continue
-                ptype = preseason.get("player_type")
-                relevant = HITTER_COMPONENTS if ptype == "hitter" else PITCHER_COMPONENTS
-                for c in relevant:
-                    comps[c] += preseason.get(c, 0.0) * fraction
+            preseason = preseason_lookup.get(normalize_name(entry.name))
+            if preseason is None:
+                continue
+            ptype = preseason.get("player_type")
+            relevant = (
+                HITTER_COMPONENTS if ptype == "hitter"
+                else PITCHER_COMPONENTS
+            )
+            for c in relevant:
+                comps[c] += preseason.get(c, 0.0) * fraction
 
     actual_stats: dict[str, dict[str, float]] = {}
     for t in standings:
