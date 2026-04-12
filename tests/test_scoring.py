@@ -6,22 +6,31 @@ from fantasy_baseball.models.player import (
     Player,
     PlayerType,
 )
+from fantasy_baseball.models.positions import Position
 from fantasy_baseball.scoring import ALL_CATS, project_team_stats, score_roto
 
 
-def _hitter(name, r=0, hr=0, rbi=0, sb=0, h=0, ab=0):
+def _hitter(name, r=0, hr=0, rbi=0, sb=0, h=0, ab=0, pa=0,
+            positions=None, selected_position=None, status=""):
     return Player(
         name=name,
         player_type=PlayerType.HITTER,
-        ros=HitterStats(r=r, hr=hr, rbi=rbi, sb=sb, h=h, ab=ab),
+        positions=positions or [],
+        ros=HitterStats(r=r, hr=hr, rbi=rbi, sb=sb, h=h, ab=ab, pa=pa or ab),
+        selected_position=selected_position,
+        status=status,
     )
 
 
-def _pitcher(name, w=0, k=0, sv=0, ip=0, er=0, bb=0, h_allowed=0):
+def _pitcher(name, w=0, k=0, sv=0, ip=0, er=0, bb=0, h_allowed=0,
+             positions=None, selected_position=None, status=""):
     return Player(
         name=name,
         player_type=PlayerType.PITCHER,
+        positions=positions or [],
         ros=PitcherStats(w=w, k=k, sv=sv, ip=ip, er=er, bb=bb, h_allowed=h_allowed),
+        selected_position=selected_position,
+        status=status,
     )
 
 
@@ -139,3 +148,304 @@ class TestScoreRoto:
         for c in ALL_CATS:
             assert f"{c}_pts" in roto["A"]
         assert "total" in roto["A"]
+
+
+# ── Displacement tests ──────────────────────────────────────────────
+
+
+class TestDisplacementOff:
+    """When displacement=False (default), bench/IL players are summed naively."""
+
+    def test_default_displacement_false(self):
+        """displacement defaults to False; bench players are counted."""
+        bench = _hitter("Bench Guy", r=50, hr=10, rbi=40, sb=5, h=80, ab=300,
+                        selected_position=Position.BN)
+        active = _hitter("Active", r=80, hr=20, rbi=70, sb=10, h=140, ab=500,
+                         selected_position=Position.OF,
+                         positions=[Position.OF])
+        stats = project_team_stats([active, bench])
+        assert stats["R"] == 130  # 80 + 50
+        assert stats["HR"] == 30  # 20 + 10
+
+
+class TestDisplacementBenchExclusion:
+    """Bench players (BN slot, not IL) are excluded when displacement=True."""
+
+    def test_bench_hitter_excluded(self):
+        bench = _hitter("Bench", r=50, hr=10, rbi=40, sb=5, h=80, ab=300,
+                        selected_position=Position.BN)
+        active = _hitter("Active", r=80, hr=20, rbi=70, sb=10, h=140, ab=500,
+                         selected_position=Position.OF,
+                         positions=[Position.OF])
+        stats = project_team_stats([active, bench], displacement=True)
+        assert stats["R"] == 80
+        assert stats["HR"] == 20
+
+    def test_bench_pitcher_excluded(self):
+        bench = _pitcher("BenchP", w=5, k=60, sv=0, ip=80, er=30, bb=20,
+                         h_allowed=70, selected_position=Position.BN)
+        active = _pitcher("ActiveP", w=10, k=150, sv=0, ip=180, er=60, bb=50,
+                          h_allowed=150, selected_position=Position.SP,
+                          positions=[Position.SP])
+        stats = project_team_stats([active, bench], displacement=True)
+        assert stats["W"] == 10
+        assert stats["K"] == 150
+
+    def test_il_player_on_bench_slot_with_il_status_not_excluded_as_bench(self):
+        """A player on BN slot but with IL status is NOT treated as bench —
+        they're treated as IL (for displacement purposes)."""
+        il_player = _hitter("IL Guy", r=40, hr=8, rbi=30, sb=3, h=60, ab=200,
+                            selected_position=Position.BN, status="IL")
+        active = _hitter("Active", r=80, hr=20, rbi=70, sb=10, h=140, ab=500,
+                         selected_position=Position.OF,
+                         positions=[Position.OF])
+        # IL Guy is not excluded as bench (has IL status), so displacement
+        # logic applies instead. Since Active is the only option, his stats
+        # get scaled down.
+        stats = project_team_stats([active, il_player], displacement=True)
+        # Active (500 ab) displaced by IL Guy (200 ab) -> factor = (500-200)/500 = 0.6
+        assert stats["R"] == pytest.approx(80 * 0.6)
+
+
+class TestDisplacementILHitter:
+    """IL hitter displaces worst positional match among active hitters."""
+
+    def test_basic_hitter_displacement(self):
+        """IL hitter displaces worst active hitter sharing a position."""
+        # Active hitters: one good OF, one bad OF
+        good_of = _hitter("Good OF", r=90, hr=30, rbi=90, sb=10, h=160, ab=550,
+                          positions=[Position.OF],
+                          selected_position=Position.OF)
+        bad_of = _hitter("Bad OF", r=40, hr=8, rbi=30, sb=2, h=80, ab=300,
+                         positions=[Position.OF],
+                         selected_position=Position.OF)
+        # IL hitter: OF eligible, 200 PA on IL
+        il_of = _hitter("IL OF", r=30, hr=5, rbi=20, sb=1, h=50, ab=200,
+                        positions=[Position.OF],
+                        selected_position=Position.IL, status="IL")
+
+        stats = project_team_stats([good_of, bad_of, il_of], displacement=True)
+
+        # bad_of displaced: factor = max(0, 300 - 200) / 300 = 1/3
+        # bad_of scaled: r=40*1/3≈13.33, hr=8*1/3≈2.67, rbi=30*1/3=10, sb=2*1/3≈0.67
+        # h=80*1/3≈26.67, ab=300*1/3=100
+        # Totals: good_of full + bad_of scaled + IL excluded from sum
+        assert stats["R"] == pytest.approx(90 + 40 / 3)
+        assert stats["HR"] == pytest.approx(30 + 8 / 3)
+        assert stats["RBI"] == pytest.approx(90 + 30 / 3)
+
+    def test_il_hitter_fallback_to_worst_hitter_overall(self):
+        """When no active hitter shares a position, fallback to worst hitter."""
+        ss = _hitter("SS guy", r=50, hr=10, rbi=40, sb=5, h=90, ab=350,
+                     positions=[Position.SS],
+                     selected_position=Position.SS)
+        first = _hitter("1B guy", r=70, hr=25, rbi=80, sb=2, h=130, ab=480,
+                        positions=[Position.FIRST_BASE],
+                        selected_position=Position.FIRST_BASE)
+        # IL hitter is OF eligible — no active OF exists
+        il_of = _hitter("IL OF", r=20, hr=4, rbi=15, sb=1, h=40, ab=150,
+                        positions=[Position.OF],
+                        selected_position=Position.IL, status="IL10")
+
+        stats = project_team_stats([ss, first, il_of], displacement=True)
+
+        # Fallback: displace worst hitter overall. SS has lower SGP than 1B.
+        # SS factor = max(0, 350 - 150) / 350 = 200/350 = 4/7
+        assert stats["R"] == pytest.approx(70 + 50 * (4 / 7))
+
+    def test_displacement_caps_at_zero(self):
+        """When IL player has more playing time than active, factor is 0."""
+        active = _hitter("Active", r=40, hr=8, rbi=30, sb=2, h=60, ab=200,
+                         positions=[Position.OF],
+                         selected_position=Position.OF)
+        il_player = _hitter("IL Big", r=50, hr=10, rbi=40, sb=5, h=100, ab=400,
+                            positions=[Position.OF],
+                            selected_position=Position.IL, status="IL60")
+
+        stats = project_team_stats([active, il_player], displacement=True)
+
+        # factor = max(0, 200 - 400) / 200 = 0
+        assert stats["R"] == 0
+        assert stats["HR"] == 0
+
+    def test_each_active_displaced_at_most_once(self):
+        """Two IL hitters can't both displace the same active player."""
+        active = _hitter("Only Active", r=80, hr=20, rbi=70, sb=10, h=140, ab=500,
+                         positions=[Position.OF],
+                         selected_position=Position.OF)
+        il1 = _hitter("IL1", r=30, hr=5, rbi=20, sb=1, h=50, ab=200,
+                       positions=[Position.OF],
+                       selected_position=Position.IL, status="IL")
+        il2 = _hitter("IL2", r=20, hr=3, rbi=15, sb=1, h=40, ab=150,
+                       positions=[Position.OF],
+                       selected_position=Position.IL_PLUS, status="IL+")
+
+        stats = project_team_stats([active, il1, il2], displacement=True)
+
+        # IL1 has more playing time (200 ab > 150 ab), processed first.
+        # active displaced by IL1: factor = (500 - 200) / 500 = 0.6
+        # IL2 has no remaining active to displace (only one active, already displaced).
+        assert stats["R"] == pytest.approx(80 * 0.6)
+        assert stats["HR"] == pytest.approx(20 * 0.6)
+
+
+class TestDisplacementILPitcher:
+    """IL pitcher displaces worst active pitcher matching SP/RP role."""
+
+    def test_sp_displaces_sp(self):
+        """IL SP (ip>100) displaces worst active SP."""
+        good_sp = _pitcher("Good SP", w=15, k=200, sv=0, ip=190, er=55, bb=40,
+                           h_allowed=150, positions=[Position.SP],
+                           selected_position=Position.SP)
+        bad_sp = _pitcher("Bad SP", w=5, k=80, sv=0, ip=120, er=55, bb=40,
+                          h_allowed=110, positions=[Position.SP],
+                          selected_position=Position.SP)
+        il_sp = _pitcher("IL SP", w=8, k=100, sv=0, ip=130, er=40, bb=30,
+                         h_allowed=100, positions=[Position.SP],
+                         selected_position=Position.IL, status="IL15")
+
+        stats = project_team_stats([good_sp, bad_sp, il_sp], displacement=True)
+
+        # bad_sp displaced: factor = max(0, 120 - 130) / 120 = 0
+        assert stats["W"] == pytest.approx(15)  # only good_sp
+        assert stats["K"] == pytest.approx(200)
+
+    def test_rp_displaces_rp(self):
+        """IL RP (ip<=100) displaces worst active RP, not an SP."""
+        sp = _pitcher("SP", w=12, k=180, sv=0, ip=180, er=60, bb=45,
+                      h_allowed=150, positions=[Position.SP],
+                      selected_position=Position.SP)
+        rp = _pitcher("RP", w=3, k=50, sv=20, ip=60, er=20, bb=15,
+                      h_allowed=50, positions=[Position.RP],
+                      selected_position=Position.RP)
+        il_rp = _pitcher("IL RP", w=1, k=20, sv=10, ip=30, er=10, bb=8,
+                         h_allowed=25, positions=[Position.RP],
+                         selected_position=Position.IL, status="IL")
+
+        stats = project_team_stats([sp, rp, il_rp], displacement=True)
+
+        # RP displaced: factor = max(0, 60 - 30) / 60 = 0.5
+        assert stats["W"] == pytest.approx(12 + 3 * 0.5)
+        assert stats["SV"] == pytest.approx(20 * 0.5)
+
+
+class TestDisplacementILSlotAndStatus:
+    """IL detection uses both selected_position in IL_SLOTS and status in IL_STATUSES."""
+
+    def test_il_slot_triggers_displacement(self):
+        """Player on IL slot is treated as IL even without status string."""
+        active = _hitter("Active", r=80, hr=20, rbi=70, sb=10, h=140, ab=500,
+                         positions=[Position.OF],
+                         selected_position=Position.OF)
+        # selected_position=IL but status="" — still counts as IL
+        il_player = _hitter("IL slot", r=20, hr=4, rbi=15, sb=1, h=40, ab=150,
+                            positions=[Position.OF],
+                            selected_position=Position.IL, status="")
+
+        stats = project_team_stats([active, il_player], displacement=True)
+        # factor = (500 - 150) / 500 = 0.7
+        assert stats["R"] == pytest.approx(80 * 0.7)
+
+    def test_il_status_on_active_slot_triggers_displacement(self):
+        """Player with IL status but on an active slot (e.g., Yahoo quirk)
+        is treated as IL."""
+        active = _hitter("Active", r=80, hr=20, rbi=70, sb=10, h=140, ab=500,
+                         positions=[Position.OF],
+                         selected_position=Position.OF)
+        # selected_position=OF but status="IL60" — still IL
+        il_player = _hitter("IL status", r=30, hr=6, rbi=20, sb=2, h=60, ab=250,
+                            positions=[Position.OF],
+                            selected_position=Position.OF, status="IL60")
+
+        stats = project_team_stats([active, il_player], displacement=True)
+        # factor = (500 - 250) / 500 = 0.5
+        assert stats["R"] == pytest.approx(80 * 0.5)
+
+
+class TestDisplacementDictInputUnaffected:
+    """Dict-input callers (draft scripts) bypass displacement entirely."""
+
+    def test_dict_roster_ignores_displacement(self):
+        roster = [
+            {"player_type": PlayerType.HITTER, "r": 80, "hr": 20, "rbi": 70,
+             "sb": 10, "h": 140, "ab": 500},
+            {"player_type": PlayerType.HITTER, "r": 50, "hr": 10, "rbi": 40,
+             "sb": 5, "h": 80, "ab": 300, "selected_position": "BN"},
+        ]
+        stats = project_team_stats(roster, displacement=True)
+        # Dicts are never filtered — all summed naively
+        assert stats["R"] == 130
+        assert stats["HR"] == 30
+
+
+class TestDisplacementProcessingOrder:
+    """IL players processed in descending playing time order."""
+
+    def test_higher_playing_time_il_processed_first(self):
+        """The IL player with more playing time gets first pick of displacement."""
+        of1 = _hitter("OF1", r=60, hr=15, rbi=50, sb=8, h=100, ab=400,
+                      positions=[Position.OF],
+                      selected_position=Position.OF)
+        of2 = _hitter("OF2", r=40, hr=8, rbi=30, sb=2, h=70, ab=280,
+                      positions=[Position.OF],
+                      selected_position=Position.OF)
+        # IL1 has 300 ab, IL2 has 100 ab
+        il1 = _hitter("IL1", r=50, hr=12, rbi=40, sb=5, h=90, ab=300,
+                      positions=[Position.OF],
+                      selected_position=Position.IL, status="IL")
+        il2 = _hitter("IL2", r=20, hr=3, rbi=10, sb=1, h=30, ab=100,
+                      positions=[Position.OF],
+                      selected_position=Position.IL, status="IL")
+
+        stats = project_team_stats([of1, of2, il1, il2], displacement=True)
+
+        # IL1 (300 ab) processed first, displaces OF2 (worst SGP, 280 ab)
+        # OF2 factor = max(0, 280 - 300) / 280 = 0
+        # IL2 (100 ab) processed next, displaces OF1 (only remaining)
+        # OF1 factor = max(0, 400 - 100) / 400 = 0.75
+        assert stats["R"] == pytest.approx(60 * 0.75)
+        assert stats["HR"] == pytest.approx(15 * 0.75)
+
+
+class TestDisplacementRoleMatching:
+    """Position-role matching: generic slots (UTIL, IF, DH, P, BN, IL) are ignored."""
+
+    def test_generic_positions_ignored_in_matching(self):
+        """Players with only UTIL/DH/etc. in their positions list use
+        fallback (worst hitter overall)."""
+        active1 = _hitter("1B", r=60, hr=15, rbi=50, sb=3, h=100, ab=400,
+                          positions=[Position.FIRST_BASE],
+                          selected_position=Position.FIRST_BASE)
+        active2 = _hitter("Worst", r=30, hr=5, rbi=20, sb=1, h=50, ab=250,
+                          positions=[Position.SECOND_BASE],
+                          selected_position=Position.SECOND_BASE)
+        # IL player only has UTIL in positions — no "real" position overlap
+        il_util = _hitter("IL Util", r=20, hr=4, rbi=15, sb=1, h=35, ab=150,
+                          positions=[Position.UTIL],
+                          selected_position=Position.IL, status="IL")
+
+        stats = project_team_stats([active1, active2, il_util], displacement=True)
+
+        # No position match -> fallback to worst hitter overall = active2
+        # active2 factor = max(0, 250 - 150) / 250 = 0.4
+        assert stats["R"] == pytest.approx(60 + 30 * 0.4)
+
+
+class TestDisplacementNoRos:
+    """Players with ros=None are handled gracefully."""
+
+    def test_il_player_without_ros_no_displacement(self):
+        """IL player with ros=None has 0 playing time — no displacement."""
+        active = _hitter("Active", r=80, hr=20, rbi=70, sb=10, h=140, ab=500,
+                         positions=[Position.OF],
+                         selected_position=Position.OF)
+        il_no_ros = Player(
+            name="No ROS", player_type=PlayerType.HITTER,
+            positions=[Position.OF],
+            selected_position=Position.IL, status="IL",
+            ros=None,
+        )
+        stats = project_team_stats([active, il_no_ros], displacement=True)
+        # IL player has 0 ab -> 0 displacement
+        assert stats["R"] == 80
+        assert stats["HR"] == 20
