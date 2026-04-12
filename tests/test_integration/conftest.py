@@ -1,9 +1,12 @@
 """Shared fixtures for waiver recommendation integration tests."""
 
+from datetime import date
+
 import pytest
 
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
+from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
 
 
 # ---------------------------------------------------------------------------
@@ -301,10 +304,26 @@ YAHOO_ROSTER_WITH_GAPS = [
 # Pytest fixtures
 # ---------------------------------------------------------------------------
 
+def _standings_list_to_snapshot(standings_list: list[dict]) -> StandingsSnapshot:
+    """Convert a test standings list[dict] to StandingsSnapshot."""
+    return StandingsSnapshot(
+        effective_date=date.min,
+        entries=[
+            StandingsEntry(
+                team_name=t["name"],
+                team_key=t.get("team_key", ""),
+                rank=t.get("rank", 0),
+                stats=CategoryStats.from_dict(t.get("stats", {})),
+            )
+            for t in standings_list
+        ],
+    )
+
+
 @pytest.fixture
 def standings():
     """10-team roto standings with known stat gaps."""
-    return [dict(t) for t in STANDINGS]
+    return _standings_list_to_snapshot(STANDINGS)
 
 
 @pytest.fixture

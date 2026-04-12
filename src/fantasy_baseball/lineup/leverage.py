@@ -6,26 +6,6 @@ from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS
 MAX_MEANINGFUL_GAP_MULTIPLIER: float = 3.0
 
 
-def _ensure_snapshot(standings) -> StandingsSnapshot:
-    """Convert list[dict] to StandingsSnapshot if needed. Temporary
-    migration shim — deleted once all callers pass StandingsSnapshot."""
-    if isinstance(standings, StandingsSnapshot):
-        return standings
-    from datetime import date as _date
-    return StandingsSnapshot(
-        effective_date=_date.min,  # placeholder for shim-converted data
-        entries=[
-            StandingsEntry(
-                team_name=t["name"],
-                team_key=t.get("team_key", ""),
-                rank=t.get("rank", 0),
-                stats=CategoryStats.from_dict(t.get("stats", {})),
-            )
-            for t in standings
-        ],
-    )
-
-
 def _gap_for_category(
     cat: str, user_val: float, neighbor_val: float
 ) -> float:
@@ -167,13 +147,13 @@ def _leverage_from_standings(
 
 
 def calculate_leverage(
-    standings: list[dict],
+    standings: StandingsSnapshot,
     user_team_name: str,
     *,
     attack_weight: float = 0.6,
     defense_weight: float = 0.4,
     season_progress: float | None = None,
-    projected_standings: list[dict] | None = None,
+    projected_standings: StandingsSnapshot | None = None,
 ) -> dict[str, float]:
     """Calculate leverage weights for each stat category based on standings gaps.
 
@@ -202,10 +182,6 @@ def calculate_leverage(
 
     Weights are normalized to sum to 1.0.
     """
-    standings = _ensure_snapshot(standings)
-    if projected_standings is not None:
-        projected_standings = _ensure_snapshot(projected_standings)
-
     if season_progress is None:
         season_progress = _estimate_season_progress(standings)
 
@@ -245,9 +221,6 @@ def blend_standings(
 
     Teams matched by name. Teams appearing in only one list are included as-is.
     """
-    current = _ensure_snapshot(current)
-    projected = _ensure_snapshot(projected)
-
     proj_by_name = {e.team_name: e for e in projected.entries}
     seen_names: set[str] = set()
     blended_entries: list[StandingsEntry] = []

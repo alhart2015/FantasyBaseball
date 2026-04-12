@@ -4,17 +4,36 @@ These tests exercise the full flow: standings -> leverage weights ->
 weighted SGP -> optimizer assignments, using realistic baseball stat lines.
 """
 
+from datetime import date
+
 import pytest
 
 from fantasy_baseball.lineup.leverage import calculate_leverage, MAX_MEANINGFUL_GAP_MULTIPLIER
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
+from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
     DEFAULT_ROSTER_SLOTS,
 )
 from fantasy_baseball.utils.positions import can_fill_slot
+
+
+def _list_to_snapshot(standings_list: list[dict]) -> StandingsSnapshot:
+    """Convert a test standings list[dict] to StandingsSnapshot."""
+    return StandingsSnapshot(
+        effective_date=date.min,
+        entries=[
+            StandingsEntry(
+                team_name=t["name"],
+                team_key=t.get("team_key", ""),
+                rank=t.get("rank", 0),
+                stats=CategoryStats.from_dict(t.get("stats", {})),
+            )
+            for t in standings_list
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +64,7 @@ def _make_pitcher(name, positions, w, k, sv, era, whip, ip):
 @pytest.fixture
 def midseason_standings():
     """10-team league at mid-season. User team 'Hart of the Order' is rank 5."""
-    return [
+    return _list_to_snapshot([
         {"name": "Power Hitters", "rank": 1, "stats": {
             "R": 512, "HR": 158, "RBI": 495, "SB": 88, "AVG": 0.274,
             "W": 54, "K": 862, "SV": 58, "ERA": 3.38, "WHIP": 1.14,
@@ -86,7 +105,7 @@ def midseason_standings():
             "R": 358, "HR": 82, "RBI": 335, "SB": 22, "AVG": 0.242,
             "W": 29, "K": 625, "SV": 16, "ERA": 4.75, "WHIP": 1.46,
         }},
-    ]
+    ])
 
 
 @pytest.fixture
@@ -98,10 +117,10 @@ def preseason_standings():
         "Last Rounders", "Cellar Dwellers",
     ]
     zero_stats = {cat: 0 for cat in ALL_CATEGORIES}
-    return [
+    return _list_to_snapshot([
         {"name": name, "rank": i + 1, "stats": dict(zero_stats)}
         for i, name in enumerate(teams)
-    ]
+    ])
 
 
 @pytest.fixture
@@ -189,10 +208,19 @@ class TestLeverageIntegration:
         """When one category has a near-zero gap (0.01), its leverage
         should not exceed 35% of total weight thanks to the median cap."""
         # Force SB to be nearly tied between user and team above (rank 4)
-        midseason_standings[3]["stats"]["SB"] = 52.01  # Base Bandits (above)
-        midseason_standings[4]["stats"]["SB"] = 52.00  # Hart of the Order
+        import dataclasses
+        modified = []
+        for entry in midseason_standings.entries:
+            if entry.team_name == "Base Bandits":
+                entry = dataclasses.replace(entry, stats=dataclasses.replace(entry.stats, sb=52.01))
+            elif entry.team_name == "Hart of the Order":
+                entry = dataclasses.replace(entry, stats=dataclasses.replace(entry.stats, sb=52.00))
+            modified.append(entry)
+        tied_standings = StandingsSnapshot(
+            effective_date=midseason_standings.effective_date, entries=modified,
+        )
 
-        leverage = calculate_leverage(midseason_standings, "Hart of the Order", season_progress=1.0)
+        leverage = calculate_leverage(tied_standings, "Hart of the Order", season_progress=1.0)
 
         assert leverage["SB"] < 0.35, (
             f"SB leverage {leverage['SB']:.4f} exceeds 35% cap despite "

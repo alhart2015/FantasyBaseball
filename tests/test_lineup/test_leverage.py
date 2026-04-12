@@ -1,5 +1,24 @@
+from datetime import date
+
 import pytest
 from fantasy_baseball.lineup.leverage import calculate_leverage, blend_standings
+from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
+
+
+def _list_to_snapshot(standings_list: list[dict]) -> StandingsSnapshot:
+    """Convert a test standings list[dict] to StandingsSnapshot."""
+    return StandingsSnapshot(
+        effective_date=date.min,
+        entries=[
+            StandingsEntry(
+                team_name=t["name"],
+                team_key=t.get("team_key", ""),
+                rank=t.get("rank", 0),
+                stats=CategoryStats.from_dict(t.get("stats", {})),
+            )
+            for t in standings_list
+        ],
+    )
 
 
 def _make_standings():
@@ -17,7 +36,7 @@ def _make_standings():
       ERA: 5th (3.80, gap above=.10, gap below=.15)
       WHIP: 5th (1.25, gap above=.03, gap below=.03)
     """
-    return [
+    return _list_to_snapshot([
         {"name": "Team 1", "rank": 1, "stats": {"R": 500, "HR": 150, "RBI": 480, "SB": 90, "AVG": 0.275, "W": 55, "K": 850, "SV": 55, "ERA": 3.40, "WHIP": 1.15}},
         {"name": "Team 2", "rank": 2, "stats": {"R": 490, "HR": 145, "RBI": 470, "SB": 85, "AVG": 0.272, "W": 52, "K": 830, "SV": 50, "ERA": 3.50, "WHIP": 1.18}},
         {"name": "Team 3", "rank": 3, "stats": {"R": 475, "HR": 140, "RBI": 455, "SB": 80, "AVG": 0.270, "W": 50, "K": 810, "SV": 48, "ERA": 3.60, "WHIP": 1.20}},
@@ -28,7 +47,7 @@ def _make_standings():
         {"name": "Team 8", "rank": 8, "stats": {"R": 400, "HR": 105, "RBI": 380, "SB": 35, "AVG": 0.252, "W": 35, "K": 690, "SV": 25, "ERA": 4.30, "WHIP": 1.35}},
         {"name": "Team 9", "rank": 9, "stats": {"R": 380, "HR": 95, "RBI": 360, "SB": 30, "AVG": 0.248, "W": 32, "K": 660, "SV": 20, "ERA": 4.50, "WHIP": 1.40}},
         {"name": "Team 10", "rank": 10, "stats": {"R": 350, "HR": 80, "RBI": 330, "SB": 20, "AVG": 0.240, "W": 28, "K": 620, "SV": 15, "ERA": 4.80, "WHIP": 1.48}},
-    ]
+    ])
 
 
 class TestCalculateLeverage:
@@ -59,7 +78,7 @@ class TestCalculateLeverage:
         With the fix (per-category neighbors), the AVG neighbor is a
         different team with a real gap.
         """
-        standings = [
+        standings = _list_to_snapshot([
             {"name": "User", "rank": 1, "stats": {
                 "R": 100, "HR": 50, "RBI": 100, "SB": 40, "AVG": 0.270,
                 "W": 20, "K": 200, "SV": 10, "ERA": 3.50, "WHIP": 1.20,
@@ -72,7 +91,7 @@ class TestCalculateLeverage:
                 "R": 90, "HR": 45, "RBI": 90, "SB": 35, "AVG": 0.260,  # AVG neighbor below
                 "W": 16, "K": 180, "SV": 8, "ERA": 3.70, "WHIP": 1.25,
             }},
-        ]
+        ])
         leverage = calculate_leverage(standings, "User", season_progress=1.0)
         # Per-category: User is 1st in AVG (tied with Team 2, gap=0.010 to Team 3)
         # Per-category: User is 1st in HR (gap=5 to Team 3 who has 45)
@@ -94,9 +113,15 @@ class TestCalculateLeverage:
     def test_first_place_large_cushion_gets_low_leverage(self):
         """1st in a category with a big cushion = low leverage (no point to gain,
         hard to lose). This was the user's actual scenario with SB."""
-        standings = _make_standings()
+        import dataclasses
+        base = _make_standings()
         # Make User Team 1st in SB by a mile
-        standings[4]["stats"]["SB"] = 200  # User Team
+        entries = [
+            dataclasses.replace(e, stats=dataclasses.replace(e.stats, sb=200))
+            if e.team_name == "User Team" else e
+            for e in base.entries
+        ]
+        standings = StandingsSnapshot(effective_date=base.effective_date, entries=entries)
         # Next best is Team 1 with 90 — gap of 110
         leverage = calculate_leverage(standings, "User Team", season_progress=1.0)
         # SB should have the lowest or near-lowest leverage
@@ -109,9 +134,15 @@ class TestCalculateLeverage:
     def test_last_place_large_deficit_gets_low_leverage(self):
         """Last in a category with a huge deficit = low leverage (very hard
         to gain a point, nothing below to lose)."""
-        standings = _make_standings()
+        import dataclasses
+        base = _make_standings()
         # Make User Team dead last in SB by a mile
-        standings[4]["stats"]["SB"] = 1  # User Team
+        entries = [
+            dataclasses.replace(e, stats=dataclasses.replace(e.stats, sb=1))
+            if e.team_name == "User Team" else e
+            for e in base.entries
+        ]
+        standings = StandingsSnapshot(effective_date=base.effective_date, entries=entries)
         # Next worst is Team 10 with 20 — gap of 19
         leverage = calculate_leverage(standings, "User Team", season_progress=1.0)
         min_lev = min(leverage.values())
@@ -123,10 +154,17 @@ class TestCalculateLeverage:
     def test_tiny_gap_gets_high_leverage(self):
         """A category where user is nearly tied with a neighbor should get
         high leverage — that's the easiest point to gain/lose."""
-        standings = _make_standings()
+        import dataclasses
+        base = _make_standings()
         # Make User Team nearly tied in R with the team above in R
-        standings[3]["stats"]["R"] = 450.5  # Team 4 (above user in R)
-        standings[4]["stats"]["R"] = 450.0  # User Team
+        entries = []
+        for e in base.entries:
+            if e.team_name == "Team 4":
+                e = dataclasses.replace(e, stats=dataclasses.replace(e.stats, r=450.5))
+            elif e.team_name == "User Team":
+                e = dataclasses.replace(e, stats=dataclasses.replace(e.stats, r=450.0))
+            entries.append(e)
+        standings = StandingsSnapshot(effective_date=base.effective_date, entries=entries)
         leverage = calculate_leverage(standings, "User Team", season_progress=1.0)
         assert leverage["R"] == max(leverage.values()) or leverage["R"] > 0.15, (
             f"R leverage ({leverage['R']:.4f}) should be high when nearly tied"
@@ -138,7 +176,7 @@ class TestCalculateLeverage:
         gaining/losing a point)."""
         from fantasy_baseball.sgp.player_value import get_sgp_denominators
         denoms = get_sgp_denominators()
-        standings = [
+        standings = _list_to_snapshot([
             {"name": "Above", "rank": 1, "stats": {
                 "R": 100 + denoms["R"], "HR": 100 + denoms["HR"],
                 "RBI": 100 + denoms["RBI"], "SB": 100 + denoms["SB"],
@@ -159,7 +197,7 @@ class TestCalculateLeverage:
                 "SV": 100 - denoms["SV"],
                 "ERA": 3.50 + denoms["ERA"], "WHIP": 1.20 + denoms["WHIP"],
             }},
-        ]
+        ])
         leverage = calculate_leverage(standings, "User", season_progress=1.0)
         expected = 1.0 / 10
         for cat, weight in leverage.items():
@@ -170,9 +208,16 @@ class TestCalculateLeverage:
     def test_tied_category_does_not_dominate(self):
         """A nearly-tied category should get high leverage but not swamp
         all others (outlier capping)."""
-        standings = _make_standings()
-        standings[3]["stats"]["SB"] = 50.01  # Team above in SB nearly tied
-        standings[4]["stats"]["SB"] = 50.00  # User Team
+        import dataclasses
+        base = _make_standings()
+        entries = []
+        for e in base.entries:
+            if e.team_name == "Team 4":
+                e = dataclasses.replace(e, stats=dataclasses.replace(e.stats, sb=50.01))
+            elif e.team_name == "User Team":
+                e = dataclasses.replace(e, stats=dataclasses.replace(e.stats, sb=50.00))
+            entries.append(e)
+        standings = StandingsSnapshot(effective_date=base.effective_date, entries=entries)
         leverage = calculate_leverage(standings, "User Team", season_progress=1.0)
         assert leverage["SB"] < 0.35, (
             f"SB leverage {leverage['SB']:.3f} too dominant for a single tied category"
@@ -217,7 +262,7 @@ class TestCalculateLeverage:
         """A 0.001 AVG gap and a 1-run R gap represent similar difficulty
         to close (~1 hit). With SGP normalization, they should produce
         similar leverage, not 1000x different."""
-        standings = [
+        standings = _list_to_snapshot([
             {"name": "Above", "rank": 1, "stats": {
                 "R": 101, "HR": 100, "RBI": 100, "SB": 100, "AVG": 0.271,
                 "W": 100, "K": 100, "SV": 100, "ERA": 3.50, "WHIP": 1.20,
@@ -230,7 +275,7 @@ class TestCalculateLeverage:
                 "R": 99, "HR": 100, "RBI": 100, "SB": 100, "AVG": 0.269,
                 "W": 100, "K": 100, "SV": 100, "ERA": 3.50, "WHIP": 1.20,
             }},
-        ]
+        ])
         leverage = calculate_leverage(standings, "User", season_progress=1.0)
         # R gap is 1 run, AVG gap is 0.001. Without normalization, AVG
         # would dominate by ~1000x. With SGP normalization, they should
@@ -245,7 +290,7 @@ class TestCalculateLeverage:
         """Regression test for the actual bug: user is 1st overall and
         1st in SB with a large cushion, but 5th in R with a tight gap.
         R should have higher leverage than SB."""
-        standings = [
+        standings = _list_to_snapshot([
             {"name": "User", "rank": 1, "stats": {
                 "R": 71, "HR": 20, "RBI": 75, "SB": 200,
                 "AVG": 0.253, "W": 7, "K": 114, "SV": 6,
@@ -266,7 +311,7 @@ class TestCalculateLeverage:
                 "AVG": 0.245, "W": 5, "K": 100, "SV": 7,
                 "ERA": 3.50, "WHIP": 1.10,
             }},
-        ]
+        ])
         leverage = calculate_leverage(standings, "User", season_progress=1.0)
         # SB has a 20-steal cushion to 2nd place → low leverage
         # R has a 1-run gap to the team above in R → higher leverage
@@ -278,20 +323,20 @@ class TestCalculateLeverage:
 
 class TestBlendStandings:
     def _make_current(self):
-        return [
+        return _list_to_snapshot([
             {"name": "Team A", "stats": {"R": 200, "HR": 50, "RBI": 180, "SB": 30,
              "AVG": 0.260, "W": 20, "K": 300, "SV": 15, "ERA": 4.00, "WHIP": 1.30}},
             {"name": "Team B", "stats": {"R": 180, "HR": 45, "RBI": 170, "SB": 40,
              "AVG": 0.270, "W": 18, "K": 280, "SV": 12, "ERA": 3.80, "WHIP": 1.25}},
-        ]
+        ])
 
     def _make_projected(self):
-        return [
+        return _list_to_snapshot([
             {"name": "Team A", "stats": {"R": 800, "HR": 200, "RBI": 720, "SB": 100,
              "AVG": 0.265, "W": 80, "K": 1200, "SV": 60, "ERA": 3.80, "WHIP": 1.22}},
             {"name": "Team B", "stats": {"R": 780, "HR": 210, "RBI": 700, "SB": 120,
              "AVG": 0.272, "W": 75, "K": 1150, "SV": 55, "ERA": 3.60, "WHIP": 1.20}},
-        ]
+        ])
 
     def test_progress_zero_returns_projected(self):
         blended = blend_standings(self._make_current(), self._make_projected(), 0.0)
@@ -313,16 +358,26 @@ class TestBlendStandings:
 
     def test_teams_matched_by_name(self):
         current = self._make_current()
-        projected = list(reversed(self._make_projected()))
+        proj = self._make_projected()
+        projected = StandingsSnapshot(
+            effective_date=proj.effective_date,
+            entries=list(reversed(proj.entries)),
+        )
         blended = blend_standings(current, projected, 0.0)
         team_a = next(e for e in blended.entries if e.team_name == "Team A")
         assert team_a.stats["R"] == pytest.approx(800)
 
     def test_team_only_in_current_included_as_is(self):
-        current = self._make_current() + [
-            {"name": "Team C", "stats": {"R": 100, "HR": 20, "RBI": 90, "SB": 10,
-             "AVG": 0.240, "W": 10, "K": 150, "SV": 5, "ERA": 4.50, "WHIP": 1.40}},
-        ]
+        base = self._make_current()
+        team_c = StandingsEntry(
+            team_name="Team C", team_key="", rank=0,
+            stats=CategoryStats.from_dict({"R": 100, "HR": 20, "RBI": 90, "SB": 10,
+             "AVG": 0.240, "W": 10, "K": 150, "SV": 5, "ERA": 4.50, "WHIP": 1.40}),
+        )
+        current = StandingsSnapshot(
+            effective_date=base.effective_date,
+            entries=base.entries + [team_c],
+        )
         blended = blend_standings(current, self._make_projected(), 0.5)
         team_c = next(e for e in blended.entries if e.team_name == "Team C")
         assert team_c.stats["R"] == 100
@@ -331,11 +386,11 @@ class TestBlendStandings:
 class TestCalculateLeverageWithProjected:
     def _make_projected(self):
         """Projected standings where SB gaps are large but HR gaps are tiny."""
-        return [
+        return _list_to_snapshot([
             {"name": "Team 4", "rank": 4, "stats": {"R": 780, "HR": 201, "RBI": 720, "SB": 200, "AVG": 0.268, "W": 78, "K": 1200, "SV": 72, "ERA": 3.65, "WHIP": 1.21}},
             {"name": "User Team", "rank": 5, "stats": {"R": 760, "HR": 200, "RBI": 700, "SB": 100, "AVG": 0.265, "W": 75, "K": 1180, "SV": 65, "ERA": 3.75, "WHIP": 1.24}},
             {"name": "Team 6", "rank": 6, "stats": {"R": 720, "HR": 199, "RBI": 680, "SB": 80, "AVG": 0.260, "W": 70, "K": 1150, "SV": 60, "ERA": 3.90, "WHIP": 1.27}},
-        ]
+        ])
 
     def test_projected_standings_override_uniform_ramp(self):
         standings = _make_standings()

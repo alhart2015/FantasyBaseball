@@ -297,8 +297,6 @@ def format_standings_for_display(
     Returns:
         {"teams": [...]} where each team has roto_points, is_user flag, color_classes, and rank.
     """
-    if not isinstance(standings, StandingsSnapshot):
-        standings = _standings_to_snapshot(standings)
     if not standings.entries:
         return {"teams": []}
 
