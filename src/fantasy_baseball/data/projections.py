@@ -5,6 +5,7 @@ from .fangraphs import load_projection_set, _find_file
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter, is_pitcher
 from fantasy_baseball.models.player import Player, PlayerType, HitterStats, PitcherStats
+from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.roster import Roster
 
 # Counting stats to blend directly (weighted average)
@@ -403,12 +404,25 @@ def match_roster_to_projections(
             else:
                 ros = PitcherStats.from_dict(proj.to_dict())
 
+            # Parse positions and selected_position explicitly
+            parsed_positions = [
+                p if isinstance(p, Position) else Position.parse(p)
+                for p in positions
+            ]
+            raw_slot = player.get("selected_position", "")
+            if raw_slot is None or raw_slot == "":
+                parsed_slot = None
+            elif isinstance(raw_slot, Position):
+                parsed_slot = raw_slot
+            else:
+                parsed_slot = Position.parse(raw_slot)
+
             p = Player(
                 name=name,
                 player_type=ptype,
-                positions=positions,
+                positions=parsed_positions,
                 yahoo_id=player.get("player_id", ""),
-                selected_position=player.get("selected_position", ""),
+                selected_position=parsed_slot,
                 status=player.get("status", ""),
                 ros=ros,
             )
