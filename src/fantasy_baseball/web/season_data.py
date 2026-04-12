@@ -1301,10 +1301,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                       if k not in ("P", "BN", "IL", "DL"))
         p_slots = config.roster_slots.get("P", 9)
 
-        # Convert Player objects to flat dicts for simulation module
-        flat_rosters = {tname: [p.to_flat_dict() for p in roster]
-                        for tname, roster in all_team_rosters.items()}
-        mc_rosters = flat_rosters
+        mc_rosters = all_team_rosters
 
         base_mc = run_monte_carlo(
             mc_rosters, h_slots, p_slots, config.team_name,
@@ -1337,9 +1334,9 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             # matched against ROS projections — just reuse it.
             ros_mc_rosters = {}
             if matched:
-                ros_mc_rosters[config.team_name] = flat_rosters.get(config.team_name, [])
+                ros_mc_rosters[config.team_name] = all_team_rosters.get(config.team_name, [])
             for tname, opp_players in opp_rosters.items():
-                ros_mc_rosters[tname] = [p.to_flat_dict() for p in opp_players]
+                ros_mc_rosters[tname] = opp_players
 
             # Build actual standings dict
             actual_standings_dict = {

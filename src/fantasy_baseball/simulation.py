@@ -7,7 +7,7 @@ the season dashboard (web/season_data.py).
 
 import numpy as np
 
-from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
@@ -447,8 +447,19 @@ def run_monte_carlo(
         {"team_results": {team: {median_pts, p10, p90, first_pct, top3_pct}},
          "category_risk": {cat: {median_pts, p10, p90, top3_pct, bot3_pct}}}
     """
+    # Convert Player objects to flat dicts for the simulation internals.
+    # The internal simulation engine (simulate_season, _apply_variance)
+    # works with flat stat dicts; this conversion preserves that while
+    # giving callers a typed list[Player] API.
+    flat_rosters: dict[str, list[dict]] = {}
+    for team_key, players in team_rosters.items():
+        flat_rosters[team_key] = [
+            p.to_flat_dict() if hasattr(p, "to_flat_dict") else p
+            for p in players
+        ]
+
     rng = np.random.default_rng(seed)
-    team_names = list(team_rosters.keys())
+    team_names = list(flat_rosters.keys())
 
     all_totals = {name: [] for name in team_names}
     mc_wins = {name: 0 for name in team_names}
@@ -458,7 +469,7 @@ def run_monte_carlo(
     for i in range(n_iterations):
         if progress_cb and i % 200 == 0:
             progress_cb(i)
-        sim_stats, _ = simulate_season(team_rosters, rng, h_slots, p_slots)
+        sim_stats, _ = simulate_season(flat_rosters, rng, h_slots, p_slots)
         if use_management:
             sim_stats = apply_management_adjustment(sim_stats, rng)
         sim_roto = score_roto(sim_stats)
@@ -533,8 +544,16 @@ def run_ros_monte_carlo(
         {"team_results": {team: {median_pts, p10, p90, first_pct, top3_pct}},
          "category_risk": {cat: {median_pts, p10, p90, top3_pct, bot3_pct}}}
     """
+    # Convert Player objects to flat dicts for the simulation internals.
+    flat_rosters: dict[str, list[dict]] = {}
+    for team_key, players in team_rosters.items():
+        flat_rosters[team_key] = [
+            p.to_flat_dict() if hasattr(p, "to_flat_dict") else p
+            for p in players
+        ]
+
     rng = np.random.default_rng(seed)
-    team_names = list(team_rosters.keys())
+    team_names = list(flat_rosters.keys())
 
     all_totals = {name: [] for name in team_names}
     mc_wins = {name: 0 for name in team_names}
@@ -545,7 +564,7 @@ def run_ros_monte_carlo(
         if progress_cb and i % 200 == 0:
             progress_cb(i)
         sim_stats, _ = simulate_remaining_season(
-            actual_standings, team_rosters, fraction_remaining, rng, h_slots, p_slots,
+            actual_standings, flat_rosters, fraction_remaining, rng, h_slots, p_slots,
         )
         if use_management:
             sim_stats = apply_management_adjustment(sim_stats, rng)
