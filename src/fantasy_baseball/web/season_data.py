@@ -1206,7 +1206,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         matchup_factors = calculate_matchup_factors(team_stats)
 
         pitcher_roster_for_schedule = [
-            p.to_flat_dict() for p in roster_players
+            p for p in roster_players
             if set(p.positions) & PITCHER_POSITIONS
         ]
         from fantasy_baseball.lineup.matchups import get_probable_starters
