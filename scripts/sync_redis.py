@@ -27,23 +27,11 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 CACHE_DIR = PROJECT_ROOT / "data" / "cache"
 
-# All known Redis keys and where they map locally
-CACHE_KEYS = {
-    "cache:standings": "standings.json",
-    "cache:roster": "roster.json",
-    "cache:projections": "projections.json",
-    "cache:lineup_optimal": "lineup_optimal.json",
-    "cache:probable_starters": "probable_starters.json",
-    "cache:waivers": "waivers.json",
-    "cache:monte_carlo": "monte_carlo.json",
-    "cache:meta": "meta.json",
-    "cache:buy_low": "buy_low.json",
-    "cache:rankings": "rankings.json",
-    "cache:roster_audit": "roster_audit.json",
-    "cache:spoe": "spoe.json",
-    "cache:opp_rosters": "opp_rosters.json",
-    "cache:leverage": "leverage.json",
-}
+# Derive cache keys from the canonical CACHE_FILES dict in season_data.py
+# so new caches are automatically included without maintaining a second list.
+from fantasy_baseball.web.season_data import CACHE_FILES
+
+CACHE_KEYS = {f"cache:{key}": filename for key, filename in CACHE_FILES.items()}
 
 EXTRA_KEYS = {
     "game_log_totals:hitters": "game_log_totals_hitters.json",
