@@ -463,7 +463,7 @@ def build_opponent_lineup(
             hitters.append(p)
 
     slot_rank = {s: i for i, s in enumerate(HITTER_SLOTS_ORDER)}
-    hitters.sort(key=lambda h: (slot_rank.get(h.get("selected_position", "").upper(), 99),
+    hitters.sort(key=lambda h: (slot_rank.get(h.get("selected_position", ""), 99),
                                 -h.get("wsgp_them", 0)))
     pitchers.sort(key=lambda p: (p.get("selected_position", "") in ("BN", "IL", "DL"),
                                  -p.get("wsgp_them", 0)))
@@ -566,7 +566,7 @@ def format_lineup_for_display(
             hitters.append(entry)
 
     slot_rank = {s: i for i, s in enumerate(HITTER_SLOTS_ORDER)}
-    hitters.sort(key=lambda h: (slot_rank.get(h["selected_position"].upper(), 99), -h["wsgp"]))
+    hitters.sort(key=lambda h: (slot_rank.get(h["selected_position"], 99), -h["wsgp"]))
     pitchers.sort(key=lambda p: (p["is_bench"], -p["wsgp"]))
 
     moves = optimal.get("moves", []) if optimal else []
@@ -1139,8 +1139,10 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                 if player.name == player_name:
                     current_slot = player.selected_position or "BN"
                     base_slot = slot.split("_")[0]
-                    # Case-insensitive compare (Yahoo returns "Util", optimizer uses "UTIL")
-                    if current_slot.upper() != base_slot.upper():
+                    # Position is StrEnum; comparison is direct after
+                    # enum normalization at the Player constructor
+                    # boundary. See feat/player-position-enum.
+                    if current_slot != base_slot:
                         moves.append({
                             "action": "START",
                             "player": player_name,
