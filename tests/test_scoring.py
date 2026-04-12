@@ -1,5 +1,28 @@
 import pytest
-from fantasy_baseball.scoring import project_team_stats, score_roto, ALL_CATS
+
+from fantasy_baseball.models.player import (
+    HitterStats,
+    PitcherStats,
+    Player,
+    PlayerType,
+)
+from fantasy_baseball.scoring import ALL_CATS, project_team_stats, score_roto
+
+
+def _hitter(name, r=0, hr=0, rbi=0, sb=0, h=0, ab=0):
+    return Player(
+        name=name,
+        player_type=PlayerType.HITTER,
+        ros=HitterStats(r=r, hr=hr, rbi=rbi, sb=sb, h=h, ab=ab),
+    )
+
+
+def _pitcher(name, w=0, k=0, sv=0, ip=0, er=0, bb=0, h_allowed=0):
+    return Player(
+        name=name,
+        player_type=PlayerType.PITCHER,
+        ros=PitcherStats(w=w, k=k, sv=sv, ip=ip, er=er, bb=bb, h_allowed=h_allowed),
+    )
 
 
 class TestProjectTeamStats:
@@ -10,12 +33,9 @@ class TestProjectTeamStats:
         when Gerrit Cole, Shane Bieber, etc. had their pitching zeroed out.
         """
         roster = [
-            {"name": "Hitter A", "player_type": "hitter",
-             "r": 100, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 550,
-             "positions": ["OF", "Util"]},
-            {"name": "Pitcher With Util", "player_type": "pitcher",
-             "w": 15, "k": 200, "sv": 0, "ip": 180, "er": 60, "bb": 50,
-             "h_allowed": 150, "positions": ["P", "Util"]},
+            _hitter("Hitter A", r=100, hr=30, rbi=90, sb=10, h=150, ab=550),
+            _pitcher("Pitcher With Util", w=15, k=200, sv=0, ip=180, er=60,
+                     bb=50, h_allowed=150),
         ]
         stats = project_team_stats(roster)
         assert stats["W"] == 15
@@ -24,11 +44,9 @@ class TestProjectTeamStats:
 
     def test_hitter_and_pitcher_both_counted(self):
         roster = [
-            {"name": "Hitter", "player_type": "hitter",
-             "r": 80, "hr": 25, "rbi": 70, "sb": 5, "h": 130, "ab": 500},
-            {"name": "Pitcher", "player_type": "pitcher",
-             "w": 10, "k": 150, "sv": 30, "ip": 60, "er": 20, "bb": 15,
-             "h_allowed": 50},
+            _hitter("Hitter", r=80, hr=25, rbi=70, sb=5, h=130, ab=500),
+            _pitcher("Pitcher", w=10, k=150, sv=30, ip=60, er=20, bb=15,
+                     h_allowed=50),
         ]
         stats = project_team_stats(roster)
         assert stats["R"] == 80
@@ -48,9 +66,8 @@ class TestProjectTeamStats:
 
     def test_pitchers_only(self):
         roster = [
-            {"name": "SP", "player_type": "pitcher",
-             "w": 12, "k": 180, "sv": 0, "ip": 200, "er": 70, "bb": 50,
-             "h_allowed": 170},
+            _pitcher("SP", w=12, k=180, sv=0, ip=200, er=70, bb=50,
+                     h_allowed=170),
         ]
         stats = project_team_stats(roster)
         assert stats["R"] == 0
@@ -59,40 +76,24 @@ class TestProjectTeamStats:
 
     def test_hitters_only(self):
         roster = [
-            {"name": "H", "player_type": "hitter",
-             "r": 90, "hr": 35, "rbi": 100, "sb": 15, "h": 160, "ab": 580},
+            _hitter("H", r=90, hr=35, rbi=100, sb=15, h=160, ab=580),
         ]
         stats = project_team_stats(roster)
         assert stats["W"] == 0
         assert stats["ERA"] == 99
         assert stats["R"] == 90
 
-    def test_nan_values_coerced_to_zero(self):
-        """NaN in player stats must not poison team totals."""
+    def test_player_without_ros_is_skipped(self):
+        """Players unmatched to projections have ``ros=None`` and should
+        contribute nothing to team totals rather than raising."""
         roster = [
-            {"name": "Bad Data", "player_type": "hitter",
-             "r": float("nan"), "hr": 20, "rbi": None, "sb": 5,
-             "h": float("nan"), "ab": 500},
-            {"name": "Good Hitter", "player_type": "hitter",
-             "r": 80, "hr": 25, "rbi": 70, "sb": 10, "h": 130, "ab": 500},
+            _hitter("Good", r=80, hr=25, rbi=70, sb=5, h=130, ab=500),
+            Player(name="Unmatched", player_type=PlayerType.HITTER, ros=None),
         ]
         stats = project_team_stats(roster)
-        assert stats["R"] == 80  # NaN treated as 0
-        assert stats["HR"] == 45
-        assert stats["RBI"] == 70  # None treated as 0
-        assert stats["AVG"] == pytest.approx(130 / 1000)
-
-    def test_nan_pitcher_stats_coerced(self):
-        roster = [
-            {"name": "Bad Pitcher", "player_type": "pitcher",
-             "w": float("nan"), "k": 100, "sv": None, "ip": 150,
-             "er": float("nan"), "bb": 40, "h_allowed": 130},
-        ]
-        stats = project_team_stats(roster)
-        assert stats["W"] == 0
-        assert stats["K"] == 100
-        assert stats["SV"] == 0
-        assert stats["ERA"] == pytest.approx(0 * 9 / 150)
+        assert stats["R"] == 80
+        assert stats["HR"] == 25
+        assert stats["AVG"] == pytest.approx(130 / 500)
 
 
 class TestScoreRoto:

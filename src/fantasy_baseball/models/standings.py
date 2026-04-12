@@ -58,6 +58,21 @@ class CategoryStats:
             return default
         return getattr(self, field_name)
 
+    def keys(self) -> list[str]:
+        """Return the category keys in canonical order.
+
+        Present so ``dict(cs)`` and ``**cs`` unpacking work in legacy
+        call sites (e.g. ``scripts/simulate_draft.py``) that treat the
+        return of ``project_team_stats`` as a plain mapping. Step 9
+        cleanup removes this along with the rest of the dict-compat
+        surface.
+        """
+        return list(CATEGORY_ORDER)
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate keys in canonical order (mapping protocol)."""
+        return iter(CATEGORY_ORDER)
+
     def items(self) -> Iterator[tuple[str, float]]:
         for key in CATEGORY_ORDER:
             yield key, getattr(self, _KEY_TO_FIELD[key])

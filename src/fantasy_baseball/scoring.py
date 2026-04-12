@@ -1,11 +1,15 @@
 """Roto scoring and team stat projection — shared across all modules.
 
 Provides two core functions:
-- project_team_stats: sum projected stats for a roster into roto categories
+- project_team_stats: sum projected stats for a roster into a
+  CategoryStats. Accepts Player dataclass objects OR flat dicts for
+  backwards compatibility with draft/script callers that still build
+  rosters as plain dicts.
 - score_roto: assign roto points (1-N) with fractional tie-breaking
 """
 
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.models.standings import CategoryStats
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS  # noqa: F401
 from fantasy_baseball.utils.constants import INVERSE_STATS as INVERSE_CATS  # noqa: F401
 from fantasy_baseball.utils.constants import safe_float as _safe
@@ -27,17 +31,26 @@ def _stat(p, key):
     ros = getattr(p, "ros", None)
     if ros is not None and hasattr(ros, key):
         return _safe(getattr(ros, key, 0))
-    # Flat dict (legacy callers, tests)
+    # Flat dict (legacy callers, tests, draft scripts)
     if isinstance(p, dict):
         return _safe(p.get(key, 0))
     return 0.0
 
 
-def project_team_stats(roster) -> dict[str, float]:
-    """Sum projected stats for a roster into roto category totals.
+def project_team_stats(roster) -> CategoryStats:
+    """Sum projected stats for a roster into a CategoryStats.
 
-    Accepts Player dataclass objects or plain dicts with flat stat keys.
-    Rate stats (AVG, ERA, WHIP) are computed from component totals.
+    Accepts Player dataclass objects OR plain dicts with flat stat
+    keys. Rate stats (AVG, ERA, WHIP) are computed from component
+    totals rather than simple sums, so the result is mathematically
+    correct rather than just a naive average.
+
+    The dict-input path exists for backwards compatibility with
+    draft-side scripts (``scripts/simulate_draft.py``,
+    ``scripts/summary.py``) that build rosters as plain dicts. Those
+    scripts are explicitly out of scope for the League data model
+    refactor and would need significant rework to use Player objects.
+    Step 9 cleanup can revisit.
     """
     r = hr = rbi = sb = h_total = ab_total = 0.0
     w = k = sv = ip_total = er_total = bb_total = ha_total = 0.0
@@ -60,27 +73,32 @@ def project_team_stats(roster) -> dict[str, float]:
             bb_total += _stat(p, "bb")
             ha_total += _stat(p, "h_allowed")
 
-    return {
-        "R": r, "HR": hr, "RBI": rbi, "SB": sb,
-        "AVG": calculate_avg(h_total, ab_total),
-        "W": w, "K": k, "SV": sv,
-        "ERA": calculate_era(er_total, ip_total),
-        "WHIP": calculate_whip(bb_total, ha_total, ip_total),
-    }
+    return CategoryStats(
+        r=r, hr=hr, rbi=rbi, sb=sb,
+        avg=calculate_avg(h_total, ab_total),
+        w=w, k=k, sv=sv,
+        era=calculate_era(er_total, ip_total),
+        whip=calculate_whip(bb_total, ha_total, ip_total),
+    )
 
 
 def score_roto(
-    all_team_stats: dict[str, dict[str, float]],
+    all_team_stats: dict,
 ) -> dict[str, dict[str, float]]:
     """Assign roto points with fractional tie-breaking.
 
     Args:
-        all_team_stats: {team_name: {cat: value}} for all teams.
+        all_team_stats: ``{team_name: stats}`` for all teams. Each
+            ``stats`` value can be either a plain ``dict[str, float]``
+            (legacy callers in draft/trade code) or a
+            :class:`CategoryStats` instance (callers that went through
+            ``project_team_stats``). Both shapes support ``[cat]``
+            indexing, which is all this function needs.
 
     Returns:
-        {team_name: {cat_pts: float, ..., "total": float}} where
-        cat_pts keys are "R_pts", "HR_pts", etc.  Points range from
-        1 (worst) to N (best) for N teams.
+        ``{team_name: {cat_pts: float, ..., "total": float}}`` where
+        ``cat_pts`` keys are ``"R_pts"``, ``"HR_pts"``, etc. Points
+        range from 1 (worst) to N (best) for N teams.
     """
     teams = list(all_team_stats.keys())
     n = len(teams)
