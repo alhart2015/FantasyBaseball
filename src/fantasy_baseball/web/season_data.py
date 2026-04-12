@@ -1346,35 +1346,29 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         }, cache_dir)
 
         # --- Step 14: Compute season-to-date SPoE (luck analysis) ---
-        # The roster + standings snapshots were already written to the
-        # DB in Step 4c, before League hydration. SPoE walks that same
-        # weekly_rosters history to scale preseason projections by
-        # days owned.
+        # Reuses the league_model loaded in Step 4c. No separate DB
+        # connection needed — SPoE walks Team.ownership_periods() on
+        # the in-memory League object.
         _progress("Computing SPoE...")
-        from fantasy_baseball.data.db import get_connection
-        db_conn = get_connection()
-        try:
-            from fantasy_baseball.analysis.spoe import (
-                build_preseason_lookup,
-                compute_current_spoe,
-            )
+        from fantasy_baseball.analysis.spoe import (
+            build_preseason_lookup,
+            compute_current_spoe,
+        )
 
-            preseason_lookup = build_preseason_lookup(
-                preseason_hitters, preseason_pitchers,
-            )
-            spoe_result = compute_current_spoe(
-                db_conn,
-                standings,
-                preseason_lookup,
-                config.season_start,
-                config.season_end,
-            )
+        preseason_lookup = build_preseason_lookup(
+            preseason_hitters, preseason_pitchers,
+        )
+        spoe_result = compute_current_spoe(
+            league_model,
+            standings,
+            preseason_lookup,
+            config.season_start,
+            config.season_end,
+        )
 
-            write_cache("spoe", spoe_result, cache_dir)
-            _write_spoe_snapshot(spoe_result)
-            _progress(f"SPoE computed for snapshot {spoe_result.get('snapshot_date')}")
-        finally:
-            db_conn.close()
+        write_cache("spoe", spoe_result, cache_dir)
+        _write_spoe_snapshot(spoe_result)
+        _progress(f"SPoE computed for snapshot {spoe_result.get('snapshot_date')}")
 
         # --- Step 15: Transaction analyzer ---
         _progress("Analyzing transactions...")
