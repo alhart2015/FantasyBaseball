@@ -321,6 +321,7 @@ td.rank-bottom { background: rgba(239, 68, 68, 0.25); color: #f87171; font-weigh
 .cat-gain { color: var(--success); }
 .cat-loss { color: var(--danger); }
 
+.totals-row { border-bottom: 2px solid var(--border); }
 .bench-row { opacity: 0.5; }
 .il-active-row { background: rgba(239, 83, 80, 0.06); }
 
