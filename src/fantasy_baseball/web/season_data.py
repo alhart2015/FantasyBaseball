@@ -118,6 +118,7 @@ CACHE_FILES = {
     "pending_moves": "pending_moves.json",
     "transaction_analyzer": "transaction_analyzer.json",
     "transactions": "transactions.json",
+    "ros_projections": "ros_projections.json",
 }
 
 
@@ -1022,6 +1023,19 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
         _progress(f"Loaded {len(hitters_proj)} hitter + {len(pitchers_proj)} pitcher projections")
         has_rest_of_season = not rest_of_season_hitters.empty or not rest_of_season_pitchers.empty
+
+        # Fallback: if SQLite has no ROS data (ephemeral filesystem wiped),
+        # try loading from Redis where the ROS fetch job persists them.
+        if not has_rest_of_season:
+            import pandas as pd
+            ros_cached = read_cache("ros_projections", cache_dir)
+            if ros_cached:
+                rest_of_season_hitters = pd.DataFrame(ros_cached.get("hitters", []))
+                rest_of_season_pitchers = pd.DataFrame(ros_cached.get("pitchers", []))
+                has_rest_of_season = not rest_of_season_hitters.empty or not rest_of_season_pitchers.empty
+                if has_rest_of_season:
+                    _progress(f"Loaded ROS projections from Redis cache ({len(rest_of_season_hitters)} hitters + {len(rest_of_season_pitchers)} pitchers)")
+
         preseason_hitters = hitters_proj
         preseason_pitchers = pitchers_proj
         if has_rest_of_season:

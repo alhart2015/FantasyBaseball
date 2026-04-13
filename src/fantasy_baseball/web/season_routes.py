@@ -222,6 +222,20 @@ def _run_rest_of_season_fetch() -> None:
                 config.projection_systems, config.projection_weights,
                 roster_names=roster_names, progress_cb=_quality_cb,
             )
+
+            # Persist blended ROS projections to Redis so the refresh
+            # pipeline can read them even if Render spins up a new instance
+            # (ephemeral filesystem is wiped between instances).
+            from fantasy_baseball.data.db import get_rest_of_season_projections
+            from fantasy_baseball.web.season_data import write_cache
+            ros_h, ros_p = get_rest_of_season_projections(db_conn)
+            if not ros_h.empty or not ros_p.empty:
+                ros_data = {
+                    "hitters": ros_h.to_dict(orient="records"),
+                    "pitchers": ros_p.to_dict(orient="records"),
+                }
+                write_cache("ros_projections", ros_data)
+                logger.log(f"Persisted {len(ros_h)} ROS hitters + {len(ros_p)} ROS pitchers to Redis")
         finally:
             db_conn.close()
 
