@@ -112,24 +112,54 @@
         <td><span class="gap-none">No better option</span></td>
         {% endif %}
     </tr>
-    {% if entry.best_fa and entry.categories %}
+    {% if entry.candidates %}
     <tr class="audit-detail" id="audit-detail-{{ loop.index }}">
         <td colspan="6">
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
-                <div style="font-size: 12px; font-weight: 600;">Category impact of swapping {{ entry.player }} &rarr; {{ entry.best_fa }}</div>
-                <a href="/players?compare={{ entry.player | urlencode }}::{{ entry.player_type }},{{ entry.best_fa | urlencode }}::{{ entry.best_fa_type }}"
-                   class="pill" style="font-size: 11px; padding: 2px 10px; text-decoration: none;"
-                   onclick="event.stopPropagation();">Compare</a>
+            <div style="font-size: 12px; font-weight: 600; margin-bottom: 8px;">
+                Swap candidates for {{ entry.player }} — sorted by deltaRoto
             </div>
-            <div class="cat-impact">
-                {% for cat, delta in entry.categories.items() %}
-                {% if delta > 0.01 %}
-                <span class="cat-gain">{{ cat }} +{{ "%.2f"|format(delta) }}</span>
-                {% elif delta < -0.01 %}
-                <span class="cat-loss">{{ cat }} {{ "%.2f"|format(delta) }}</span>
-                {% endif %}
+            <table class="audit-table" style="margin: 0; font-size: 12px;">
+                <thead>
+                    <tr>
+                        <th>Player</th>
+                        <th style="text-align:right">wSGP</th>
+                        <th style="text-align:right">wSGP Gap</th>
+                        <th style="text-align:right">deltaRoto</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for c in entry.candidates | sort(attribute='delta_roto_sort', reverse=true) %}
+                <tr>
+                    <td>
+                        {{ c.name }}
+                        <span class="player-pos">({{ c.positions | join(", ") }})</span>
+                    </td>
+                    <td style="text-align:right">{{ "%.2f"|format(c.wsgp) }}</td>
+                    <td style="text-align:right">
+                        <span class="gap-badge {% if c.gap >= 0.5 %}gap-high{% elif c.gap >= 0.2 %}gap-medium{% else %}gap-low{% endif %}">
+                            +{{ "%.2f"|format(c.gap) }}
+                        </span>
+                    </td>
+                    <td style="text-align:right">
+                        {% if c.delta_roto %}
+                        {% set dr = c.delta_roto.total %}
+                        <span style="font-weight:600; color: {% if dr > 0.01 %}var(--success){% elif dr < -0.01 %}var(--danger){% else %}var(--text-secondary){% endif %}">
+                            {{ "%+.1f"|format(dr) }}
+                        </span>
+                        {% else %}
+                        <span style="color:var(--text-secondary)">—</span>
+                        {% endif %}
+                    </td>
+                    <td style="text-align:right">
+                        <a href="/players?compare={{ entry.player | urlencode }}::{{ entry.player_type }},{{ c.name | urlencode }}::{{ c.player_type }}"
+                           class="pill" style="font-size: 11px; padding: 2px 10px; text-decoration: none;"
+                           onclick="event.stopPropagation();">Compare</a>
+                    </td>
+                </tr>
                 {% endfor %}
-            </div>
+                </tbody>
+            </table>
         </td>
     </tr>
     {% endif %}
