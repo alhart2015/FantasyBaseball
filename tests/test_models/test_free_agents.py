@@ -107,39 +107,3 @@ class TestFreeAgentPoolFromYahooParsed:
         assert entries == []
 
 
-class TestFreeAgentPoolFromCache:
-    def test_from_cache_reads_cache_waivers(self, tmp_path, monkeypatch):
-        """from_cache reads cache:waivers or similar — test against a tmp cache."""
-        import json
-        from fantasy_baseball.models.free_agents import FreeAgentPool
-        from fantasy_baseball.web import season_data
-
-        cache_dir = tmp_path / "cache"
-        cache_dir.mkdir()
-        (cache_dir / "waivers.json").write_text(json.dumps([
-            {"name": "FA Alpha", "positions": ["OF", "Util"], "player_id": "1", "status": ""},
-            {"name": "FA Beta",  "positions": ["SP"],         "player_id": "2", "status": ""},
-        ]))
-        (cache_dir / "meta.json").write_text(json.dumps({
-            "last_refresh": "2026-04-11 12:00",
-            "start_date": "2026-04-07",
-            "end_date": "2026-04-13",
-            "team_name": "Hart of the Order",
-        }))
-
-        monkeypatch.setattr(season_data, "CACHE_DIR", cache_dir)
-
-        pool = FreeAgentPool.from_cache()
-        names = [e.name for e in pool]
-        assert "FA Alpha" in names
-        assert "FA Beta" in names
-
-    def test_from_cache_missing_cache_returns_empty_pool(self, tmp_path, monkeypatch):
-        from fantasy_baseball.models.free_agents import FreeAgentPool
-        from fantasy_baseball.web import season_data
-        empty_dir = tmp_path / "empty_cache"
-        empty_dir.mkdir()
-        monkeypatch.setattr(season_data, "CACHE_DIR", empty_dir)
-
-        pool = FreeAgentPool.from_cache()
-        assert len(pool) == 0

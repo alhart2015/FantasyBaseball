@@ -30,10 +30,10 @@ def test_lineup_page_renders(client):
     assert b"Lineup" in resp.data
 
 
-def test_waivers_trades_page_renders(client):
+def test_trades_page_renders(client):
     resp = client.get("/waivers-trades")
     assert resp.status_code == 200
-    assert b"Waivers" in resp.data
+    assert b"Trades" in resp.data
 
 
 def test_sidebar_nav_links_present(client):
@@ -158,33 +158,12 @@ def test_full_lineup_page_with_cached_data(client, tmp_path):
         season_data.CACHE_DIR = old_cache_dir
 
 
-def test_full_waivers_page_with_cached_data(client, tmp_path):
-    """Integration test: waivers page renders with cached waiver data."""
-    from fantasy_baseball.web import season_data
-
-    old_cache_dir = season_data.CACHE_DIR
-    season_data.CACHE_DIR = tmp_path
-
-    try:
-        waivers = [
-            {"add": "Tyler O'Neill", "drop": "Masataka Yoshida", "sgp_gain": 1.8,
-             "categories": {"HR": 9, "AVG": -0.008}, "add_positions": "OF",
-             "projected_stats": ".262 / 28 HR / 75 RBI / 12 SB"},
-        ]
-        season_data.write_cache("waivers", waivers, tmp_path)
-        season_data.write_cache("meta", {"last_refresh": "9:00 AM"}, tmp_path)
-
-        with patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc, \
-             patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm:
-            mock_rc.side_effect = lambda k: season_data.read_cache(k, tmp_path)
-            mock_rm.return_value = season_data.read_meta(tmp_path)
-
-            resp = client.get("/waivers-trades")
-            assert resp.status_code == 200
-            html = resp.data.decode()
-            assert "Tyler O&#39;Neill" in html or "Tyler O'Neill" in html
-    finally:
-        season_data.CACHE_DIR = old_cache_dir
+def test_full_trades_page_renders(client):
+    """Integration test: trades page renders without waiver/buy-low data."""
+    resp = client.get("/waivers-trades")
+    assert resp.status_code == 200
+    html = resp.data.decode()
+    assert "Trade Finder" in html
 
 
 def test_compare_missing_params(client):

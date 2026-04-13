@@ -108,10 +108,8 @@ CACHE_FILES = {
     "projections": "projections.json",
     "lineup_optimal": "lineup_optimal.json",
     "probable_starters": "probable_starters.json",
-    "waivers": "waivers.json",
     "monte_carlo": "monte_carlo.json",
     "meta": "meta.json",
-    "buy_low": "buy_low.json",
     "rankings": "rankings.json",
     "roster_audit": "roster_audit.json",
     "spoe": "spoe.json",
@@ -782,12 +780,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.lineup.leverage import calculate_leverage
         from fantasy_baseball.lineup.matchups import calculate_matchup_factors, get_team_batting_stats
         from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
-        from fantasy_baseball.lineup.waivers import fetch_and_match_free_agents, scan_waivers, detect_open_slots
+        from fantasy_baseball.lineup.waivers import fetch_and_match_free_agents
         from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
         from fantasy_baseball.lineup.yahoo_roster import fetch_roster, fetch_standings, fetch_scoring_period
         from fantasy_baseball.utils.name_utils import normalize_name
         from fantasy_baseball.analysis.pace import compute_player_pace
-        from fantasy_baseball.analysis.buy_low import find_buy_low_candidates
         from fantasy_baseball.lineup.roster_audit import audit_roster
 
         project_root = Path(__file__).resolve().parents[3]
@@ -1223,47 +1220,17 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         )
         write_cache("probable_starters", probable_starters, cache_dir)
 
-        # --- Step 10: Scan waivers ---
-        _progress("Scanning waivers...")
-        open_h, open_p, open_b = detect_open_slots(roster_raw, config.roster_slots)
+        # --- Step 10: Roster audit ---
+        _progress("Running roster audit...")
         fa_players, _ = fetch_and_match_free_agents(
             league, hitters_proj, pitchers_proj
         )
-
-        # roster_players is already the future-dated roster (fetched via
-        # day=effective_date), so no pending-moves adjustment is needed.
-        # The FA pool reflects today's availability — players being
-        # added are already removed from Yahoo's FA list by the time
-        # we fetch it.
-        roster_for_waivers, fa_for_waivers = roster_players, fa_players
-
-        # --- Roster Audit ---
-        _progress("Running roster audit...")
         audit_results = audit_roster(
-            roster_for_waivers, fa_for_waivers, leverage, config.roster_slots,
+            roster_players, fa_players, leverage, config.roster_slots,
         )
         write_cache("roster_audit", [e.to_dict() for e in audit_results], cache_dir)
         upgrades = sum(1 for e in audit_results if e.gap > 0)
         _progress(f"Roster audit: {upgrades} upgrade(s) found")
-
-        waiver_recs = scan_waivers(
-            roster_for_waivers,
-            fa_for_waivers,
-            leverage,
-            max_results=10,
-            open_hitter_slots=open_h,
-            open_pitcher_slots=open_p,
-            open_bench_slots=open_b,
-            roster_slots=config.roster_slots,
-        )
-        # Attach ranks to waiver recommendations
-        for rec in waiver_recs:
-            rec["add_rank"] = rankings_lookup.get(
-                rank_key_from_positions(rec["add"], rec.get("add_positions", [])), {})
-            rec["drop_rank"] = rankings_lookup.get(
-                rank_key_from_positions(rec["drop"], rec.get("drop_positions", [])), {})
-
-        write_cache("waivers", waiver_recs, cache_dir)
 
         # --- Step 11: Compute per-team leverage ---
         _progress("Computing leverage...")
@@ -1275,33 +1242,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             )
         write_cache("leverage", leverage_by_team, cache_dir)
 
-        # --- Step 11b: Compute buy-low candidates ---
-        _progress("Finding buy-low candidates...")
-        all_game_logs = {**hitter_logs, **pitcher_logs}
-
-        buy_low_trade_targets = []
-        for tname, opp_roster in opp_rosters.items():
-            candidates = find_buy_low_candidates(
-                opp_roster, all_game_logs, leverage, owner=tname,
-            )
-            buy_low_trade_targets.extend(candidates)
-        buy_low_trade_targets.sort(key=lambda c: c["avg_z"])
-
-        buy_low_free_agents = find_buy_low_candidates(
-            fa_players, all_game_logs, leverage, owner="Free Agent",
-        )
-
-        # Attach ranks to buy-low candidates
-        for candidate in buy_low_trade_targets + buy_low_free_agents:
-            candidate["rank"] = rankings_lookup.get(
-                rank_key(candidate["name"], candidate.get("player_type", "hitter")), {})
-
-        write_cache("buy_low", {
-            "trade_targets": buy_low_trade_targets,
-            "free_agents": buy_low_free_agents,
-        }, cache_dir)
-
-        # --- Step 13: Monte Carlo simulation ---
+        # --- Step 12: Monte Carlo simulation ---
         from fantasy_baseball.simulation import run_monte_carlo
 
         h_slots = sum(v for k, v in config.roster_slots.items()
