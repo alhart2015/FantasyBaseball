@@ -115,7 +115,12 @@
     {% if entry.best_fa and entry.categories %}
     <tr class="audit-detail" id="audit-detail-{{ loop.index }}">
         <td colspan="6">
-            <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px;">Category impact of swapping {{ entry.player }} &rarr; {{ entry.best_fa }}</div>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+                <div style="font-size: 12px; font-weight: 600;">Category impact of swapping {{ entry.player }} &rarr; {{ entry.best_fa }}</div>
+                <a href="/players?compare={{ entry.player | urlencode }}::{{ entry.player_type }},{{ entry.best_fa | urlencode }}::{{ entry.best_fa_type }}"
+                   class="pill" style="font-size: 11px; padding: 2px 10px; text-decoration: none;"
+                   onclick="event.stopPropagation();">Compare</a>
+            </div>
             <div class="cat-impact">
                 {% for cat, delta in entry.categories.items() %}
                 {% if delta > 0.01 %}

@@ -690,6 +690,7 @@ def register_routes(app: Flask) -> None:
                     "name": name,
                     "team": p.team,
                     "player_type": ptype,
+                    "fg_id": fg_id,
                     "positions": p.positions,
                     "owner": owner_map.get(norm),
                     "rank": p.rank.rest_of_season,

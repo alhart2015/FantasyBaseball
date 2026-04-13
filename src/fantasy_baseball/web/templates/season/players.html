@@ -178,6 +178,25 @@ fetch('/api/players/browse')
     .then(data => {
         allPlayers = data;
         render();
+
+        // Auto-compare from URL params: /players?compare=Name::type,Name::type
+        const compareParam = new URLSearchParams(window.location.search).get('compare');
+        if (compareParam && allPlayers) {
+            const keys = compareParam.split(',').map(k => k.trim());
+            selectedPlayers = [];
+            for (const key of keys) {
+                const sep = key.lastIndexOf('::');
+                if (sep === -1) continue;
+                const name = key.substring(0, sep);
+                const ptype = key.substring(sep + 2);
+                const p = allPlayers.find(pl => pl.name === name && pl.player_type === ptype);
+                if (p) selectedPlayers.push(p);
+            }
+            if (selectedPlayers.length === 2) {
+                render();
+                updateComparison();
+            }
+        }
     })
     .catch(() => {
         emptyEl.textContent = 'Failed to load player data.';

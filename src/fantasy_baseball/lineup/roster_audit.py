@@ -24,10 +24,12 @@ class AuditEntry:
     positions: list[str]
     slot: str
     player_wsgp: float
+    player_id: Optional[str] = None
     best_fa: Optional[str] = None
     best_fa_type: Optional[str] = None
     best_fa_positions: Optional[list[str]] = None
     best_fa_wsgp: Optional[float] = None
+    best_fa_id: Optional[str] = None
     gap: float = 0.0
     categories: dict[str, float] = field(default_factory=dict)
     classification: str = ""
@@ -39,10 +41,12 @@ class AuditEntry:
             "positions": self.positions,
             "slot": self.slot,
             "player_wsgp": self.player_wsgp,
+            "player_id": self.player_id,
             "best_fa": self.best_fa,
             "best_fa_type": self.best_fa_type,
             "best_fa_positions": self.best_fa_positions,
             "best_fa_wsgp": self.best_fa_wsgp,
+            "best_fa_id": self.best_fa_id,
             "gap": self.gap,
             "categories": self.categories,
             "classification": self.classification,
@@ -120,6 +124,7 @@ def audit_roster(
             positions=list(player.positions),
             slot=slot_lookup.get(player.name, "BN"),
             player_wsgp=round(baseline["player_wsgp"].get(player.name, 0.0), 2),
+            player_id=player.yahoo_id,
             classification=player.classification,
         )
 
@@ -168,6 +173,7 @@ def audit_roster(
             entry.best_fa_type = best_fa_player.player_type.value
             entry.best_fa_positions = list(best_fa_player.positions)
             entry.best_fa_wsgp = round(fa_wsgp.get(best_fa_player.name, 0.0), 2)
+            entry.best_fa_id = best_fa_player.yahoo_id
             entry.gap = best_gain
             entry.categories = cat_result["categories"]
 
@@ -181,6 +187,7 @@ def audit_roster(
             positions=list(player.positions),
             slot="IL",
             player_wsgp=0.0,
+            player_id=player.yahoo_id,
             classification=player.classification,
         ))
 
