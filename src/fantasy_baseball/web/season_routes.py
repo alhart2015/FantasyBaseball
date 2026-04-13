@@ -371,8 +371,6 @@ def register_routes(app: Flask) -> None:
     @app.route("/waivers-trades")
     def waivers_trades():
         meta = read_meta()
-        waivers_raw = read_cache("waivers")
-        buy_low_raw = read_cache("buy_low") or {}
 
         # Build player name list for trade search autocomplete
         roster_raw = read_cache("roster") or []
@@ -389,10 +387,6 @@ def register_routes(app: Flask) -> None:
             "season/waivers_trades.html",
             meta=meta,
             active_page="waivers_trades",
-            waivers=waivers_raw or [],
-            buy_low_targets=buy_low_raw.get("trade_targets", []),
-            buy_low_free_agents=buy_low_raw.get("free_agents", []),
-            categories=ALL_CATEGORIES,
             my_players=my_players,
             opp_players=opp_players,
         )

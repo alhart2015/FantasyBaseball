@@ -1,6 +1,6 @@
 {% extends "season/base.html" %}
 {% from "season/macros.html" import rank_badge %}
-{% block title %}Waivers &amp; Trades — Season Dashboard{% endblock %}
+{% block title %}Trades — Season Dashboard{% endblock %}
 {% block content %}
 
 <style>
@@ -25,150 +25,13 @@
 .section-toggle .chevron.collapsed { transform: rotate(-90deg); }
 .section-body { overflow: hidden; }
 .section-body.collapsed { display: none; }
-.buy-low-card {
-    background: var(--panel-bg); border: 1px solid var(--panel-border);
-    border-radius: 6px; padding: 10px 14px; margin-bottom: 8px; cursor: pointer;
-}
-.buy-low-card:hover { border-color: var(--accent); }
-.buy-low-header {
-    display: flex; align-items: center; justify-content: space-between;
-}
-.buy-low-header .player-info { display: flex; align-items: baseline; gap: 8px; }
-.buy-low-header .player-name { font-weight: 600; font-size: 14px; }
-.buy-low-header .player-pos { color: var(--text-secondary); font-size: 12px; }
-.buy-low-header .player-owner { color: var(--text-secondary); font-size: 11px; }
-.buy-low-badge {
-    font-weight: 600; font-size: 12px; padding: 2px 8px; border-radius: 3px;
-}
-.buy-low-detail { display: none; margin-top: 10px; }
-.buy-low-detail.open { display: block; }
-.buy-low-detail table { width: 100%; font-size: 12px; border-collapse: collapse; }
-.buy-low-detail th {
-    text-align: left; font-size: 11px; color: var(--text-secondary);
-    font-weight: 500; text-transform: uppercase; padding: 4px 6px;
-    border-bottom: 1px solid var(--panel-border);
-}
-.buy-low-detail td { padding: 4px 6px; }
-.show-more-btn {
-    display: block; width: 100%; text-align: center; padding: 8px;
-    background: var(--panel-bg); border: 1px solid var(--panel-border);
-    border-radius: 6px; cursor: pointer; color: var(--accent);
-    font-size: 12px; margin-top: 8px;
-}
-.show-more-btn:hover { border-color: var(--accent); }
-.waiver-detail { display: none; margin-top: 10px; }
-.waiver-detail.open { display: block; }
-.lineup-compare { display: flex; gap: 16px; flex-wrap: wrap; }
-.lineup-col { flex: 1; min-width: 200px; }
-.lineup-col h4 { font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
-.lineup-table { width: 100%; font-size: 12px; border-collapse: collapse; }
-.lineup-table th { text-align: left; font-size: 11px; color: var(--text-secondary); padding: 4px 6px; border-bottom: 1px solid var(--panel-border); }
-.lineup-table td { padding: 4px 6px; }
-.lineup-dropped { background: rgba(239, 68, 68, 0.1); color: #fca5a5; text-decoration: line-through; }
-.lineup-added { background: rgba(34, 197, 94, 0.1); color: #86efac; font-weight: 600; }
-.lineup-moved { color: var(--accent); }
-.lineup-bench td { opacity: 0.5; }
 </style>
 
 <div class="page-header">
-    <h2>Waivers &amp; Trades</h2>
+    <h2>Trades</h2>
     {% if meta and meta.get('week') %}
     <div class="week-label">Week {{ meta['week'] }}</div>
     {% endif %}
-</div>
-
-{# === Waiver Wire === #}
-<div class="section-toggle" onclick="toggleSection('waivers')">
-    <span>Waiver Wire</span>
-    <span class="chevron collapsed" id="chevron-waivers">&#9660;</span>
-</div>
-<div class="section-body collapsed" id="section-waivers">
-
-{% if not waivers %}
-<p class="placeholder-text">No waiver recommendations. Click "Refresh Data" to generate suggestions.</p>
-{% else %}
-{% for w in waivers %}
-<div class="card" onclick="toggleWaiverDetail(this)">
-    <div class="card-header">
-        <div>
-            <span style="font-weight: 600; font-size: 14px;">{{ w.add }}</span>
-            {{ rank_badge(w.add_rank) }}
-            {% if w.add_positions %}
-            <span style="color: var(--text-secondary); font-size: 12px; margin-left: 4px;">({{ w.add_positions | join(", ") }})</span>
-            {% endif %}
-        </div>
-        <div style="color: var(--success); font-weight: bold; font-size: 14px;">
-            +{{ "%.2f"|format(w.sgp_gain) }} wSGP
-        </div>
-    </div>
-
-    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 6px;">
-        <span style="margin-right: 4px;">ADD</span>
-        <strong style="color: var(--success);">{{ w.add }}</strong>
-        {% if w.add_positions %}<span style="font-size: 11px;"> ({{ w.add_positions | join(", ") }})</span>{% endif %}
-        <span style="margin: 0 6px; color: var(--text-secondary);">/</span>
-        <span style="margin-right: 4px;">DROP</span>
-        <strong style="color: var(--danger);">{{ w.drop }}</strong>
-        {{ rank_badge(w.drop_rank) }}
-        {% if w.drop_positions %}<span style="font-size: 11px;"> ({{ w.drop_positions | join(", ") }})</span>{% endif %}
-    </div>
-
-    {% if w.categories %}
-    <div class="cat-impact">
-        {% for cat, delta in w.categories.items() %}
-        {% if delta > 0 %}
-        <span class="cat-gain">{{ cat }} +{{ "%.2f"|format(delta) }}</span>
-        {% elif delta < 0 %}
-        <span class="cat-loss">{{ cat }} {{ "%.2f"|format(delta) }}</span>
-        {% endif %}
-        {% endfor %}
-    </div>
-    {% endif %}
-
-    {% if w.lineup_before and w.lineup_after %}
-    <div class="waiver-detail">
-        <div class="lineup-compare">
-            <div class="lineup-col">
-                <h4>Before</h4>
-                <table class="lineup-table">
-                    <thead><tr><th>Slot</th><th>Player</th><th>wSGP</th></tr></thead>
-                    <tbody>
-                    {% for e in w.lineup_before %}
-                    <tr class="{% if e.get('is_dropped') %}lineup-dropped{% endif %}{% if e.slot == 'BN' %} lineup-bench{% endif %}">
-                        <td>{{ e.slot }}</td>
-                        <td>{{ e.name }}</td>
-                        <td>{{ "%.2f"|format(e.wsgp) }}</td>
-                    </tr>
-                    {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            <div class="lineup-col">
-                <h4>After</h4>
-                <table class="lineup-table">
-                    <thead><tr><th>Slot</th><th>Player</th><th>wSGP</th></tr></thead>
-                    <tbody>
-                    {% for e in w.lineup_after %}
-                    <tr class="{% if e.get('is_added') %}lineup-added{% elif e.get('moved_from') %}lineup-moved{% endif %}{% if e.slot == 'BN' %} lineup-bench{% endif %}">
-                        <td>{{ e.slot }}</td>
-                        <td>
-                            {{ e.name }}
-                            {% if e.get('moved_from') %}
-                            <span style="font-size: 10px; color: var(--text-secondary);">&larr; was {{ e.moved_from }}</span>
-                            {% endif %}
-                        </td>
-                        <td>{{ "%.2f"|format(e.wsgp) }}</td>
-                    </tr>
-                    {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-    {% endif %}
-</div>
-{% endfor %}
-{% endif %}
 </div>
 
 {# === Trade Finder === #}
@@ -200,118 +63,6 @@
 
 </div>
 
-{# === Buy-Low Trade Targets === #}
-<div class="section-toggle" onclick="toggleSection('buy-low-targets')">
-    <span>Buy-Low Trade Targets</span>
-    <span class="chevron collapsed" id="chevron-buy-low-targets">&#9660;</span>
-</div>
-<div class="section-body collapsed" id="section-buy-low-targets">
-{% if not buy_low_targets %}
-<p class="placeholder-text">No buy-low candidates yet — game log data needed.</p>
-{% else %}
-{% for bl in buy_low_targets %}
-<div class="buy-low-card {% if loop.index > 5 %}buy-low-overflow buy-low-overflow-targets{% endif %}"
-     {% if loop.index > 5 %}style="display: none;"{% endif %}
-     onclick="toggleBuyLowDetail(this)">
-    <div class="buy-low-header">
-        <div class="player-info">
-            <span class="player-name">{{ bl.name }}</span>
-            {{ rank_badge(bl.rank) }}
-            <span class="player-pos">{{ bl.positions | join(", ") }}</span>
-            <span class="player-owner">{{ bl.owner }}</span>
-        </div>
-        <span class="buy-low-badge {{ 'stat-cold-2' if bl.avg_z < -1.5 else 'stat-cold-1' }}">
-            {{ "%.2f"|format(bl.avg_z) }} SD
-        </span>
-    </div>
-    <div class="buy-low-detail">
-        <table>
-            <thead>
-                <tr><th>Cat</th><th>Actual</th><th>Expected</th><th>Z-score</th></tr>
-            </thead>
-            <tbody>
-            {% set cats = ["R", "HR", "RBI", "SB", "AVG"] if bl.player_type == "hitter" else ["W", "K", "SV", "ERA", "WHIP"] %}
-            {% for cat in cats %}
-            {% set st = bl.pace.get(cat, {}) %}
-            <tr>
-                <td>{{ cat }}</td>
-                <td>{% if cat in ['AVG'] %}{{ "%.3f"|format(st.get('actual', 0)) }}{% elif cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.get('actual', 0)) }}{% else %}{{ st.get('actual', 0) }}{% endif %}</td>
-                <td>{% if cat in ['AVG'] %}{{ "%.3f"|format(st.get('expected', 0)) }}{% elif cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.get('expected', 0)) }}{% else %}{{ st.get('expected', 0) }}{% endif %}</td>
-                <td class="{{ st.get('color_class', 'stat-neutral') }}">{{ "%.2f"|format(st.get('z_score', 0)) }}</td>
-            </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-        <div style="margin-top: 6px; font-size: 12px; color: var(--text-secondary);">
-            wSGP: <strong>{{ "%.2f"|format(bl.wsgp) }}</strong>
-        </div>
-    </div>
-</div>
-{% endfor %}
-{% if buy_low_targets | length > 5 %}
-<button class="show-more-btn" onclick="toggleShowMore(event, 'targets', {{ buy_low_targets | length }})">
-    Show More ({{ buy_low_targets | length }} total)
-</button>
-{% endif %}
-{% endif %}
-</div>
-
-{# === Buy-Low Free Agents === #}
-<div class="section-toggle" onclick="toggleSection('buy-low-fa')">
-    <span>Buy-Low Free Agents</span>
-    <span class="chevron collapsed" id="chevron-buy-low-fa">&#9660;</span>
-</div>
-<div class="section-body collapsed" id="section-buy-low-fa">
-{% if not buy_low_free_agents %}
-<p class="placeholder-text">No buy-low free agents found — all tracking near projections.</p>
-{% else %}
-{% for bl in buy_low_free_agents %}
-<div class="buy-low-card {% if loop.index > 5 %}buy-low-overflow buy-low-overflow-fa{% endif %}"
-     {% if loop.index > 5 %}style="display: none;"{% endif %}
-     onclick="toggleBuyLowDetail(this)">
-    <div class="buy-low-header">
-        <div class="player-info">
-            <span class="player-name">{{ bl.name }}</span>
-            {{ rank_badge(bl.rank) }}
-            <span class="player-pos">{{ bl.positions | join(", ") }}</span>
-            <span class="player-owner" style="color: var(--accent);">Free Agent</span>
-        </div>
-        <span class="buy-low-badge {{ 'stat-cold-2' if bl.avg_z < -1.5 else 'stat-cold-1' }}">
-            {{ "%.2f"|format(bl.avg_z) }} SD
-        </span>
-    </div>
-    <div class="buy-low-detail">
-        <table>
-            <thead>
-                <tr><th>Cat</th><th>Actual</th><th>Expected</th><th>Z-score</th></tr>
-            </thead>
-            <tbody>
-            {% set cats = ["R", "HR", "RBI", "SB", "AVG"] if bl.player_type == "hitter" else ["W", "K", "SV", "ERA", "WHIP"] %}
-            {% for cat in cats %}
-            {% set st = bl.pace.get(cat, {}) %}
-            <tr>
-                <td>{{ cat }}</td>
-                <td>{% if cat == 'AVG' %}{{ "%.3f"|format(st.get('actual', 0)) }}{% elif cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.get('actual', 0)) }}{% else %}{{ st.get('actual', 0) }}{% endif %}</td>
-                <td>{% if cat == 'AVG' %}{{ "%.3f"|format(st.get('expected', 0)) }}{% elif cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.get('expected', 0)) }}{% else %}{{ st.get('expected', 0) }}{% endif %}</td>
-                <td class="{{ st.get('color_class', 'stat-neutral') }}">{{ "%.2f"|format(st.get('z_score', 0)) }}</td>
-            </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-        <div style="margin-top: 6px; font-size: 12px; color: var(--text-secondary);">
-            wSGP: <strong>{{ "%.2f"|format(bl.wsgp) }}</strong>
-        </div>
-    </div>
-</div>
-{% endfor %}
-{% if buy_low_free_agents | length > 5 %}
-<button class="show-more-btn" onclick="toggleShowMore(event, 'fa', {{ buy_low_free_agents | length }})">
-    Show More ({{ buy_low_free_agents | length }} total)
-</button>
-{% endif %}
-{% endif %}
-</div>
-
 <script>
 function toggleSection(id) {
     var body = document.getElementById('section-' + id);
@@ -319,26 +70,6 @@ function toggleSection(id) {
     if (!body) return;
     body.classList.toggle('collapsed');
     if (chevron) chevron.classList.toggle('collapsed');
-}
-
-function toggleBuyLowDetail(card) {
-    var detail = card.querySelector('.buy-low-detail');
-    if (detail) detail.classList.toggle('open');
-}
-
-function toggleWaiverDetail(card) {
-    var detail = card.querySelector('.waiver-detail');
-    if (detail) detail.classList.toggle('open');
-}
-
-function toggleShowMore(ev, group, total) {
-    var cards = document.querySelectorAll('.buy-low-overflow-' + group);
-    var btn = ev.currentTarget;
-    var visible = cards[0] && cards[0].style.display !== 'none';
-    for (var i = 0; i < cards.length; i++) {
-        cards[i].style.display = visible ? 'none' : 'block';
-    }
-    btn.textContent = visible ? 'Show More (' + total + ' total)' : 'Show Less';
 }
 
 function esc(s) {

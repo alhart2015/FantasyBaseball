@@ -103,28 +103,3 @@ class FreeAgentPool:
             entries=cls._parse_yahoo_entries(raw),
         )
 
-    @classmethod
-    def from_cache(cls) -> "FreeAgentPool":
-        """Load from the existing `cache:waivers` JSON file.
-
-        Returns an empty pool if the cache file is missing. The cache
-        shape is a flat list of free-agent dicts matching the Yahoo
-        parser input format.
-        """
-        # Import the module (not the names) so tests can monkeypatch
-        # ``season_data.CACHE_DIR`` and have it take effect here.
-        from fantasy_baseball.web import season_data
-
-        meta = season_data.read_cache("meta", season_data.CACHE_DIR) or {}
-        raw = season_data.read_cache("waivers", season_data.CACHE_DIR) or []
-        if not isinstance(raw, list):
-            raw = []
-
-        # Parse effective date from meta.start_date if available
-        start = meta.get("start_date") if isinstance(meta, dict) else None
-        eff = date.fromisoformat(start) if start else local_today()
-
-        return cls(
-            effective_date=eff,
-            entries=cls._parse_yahoo_entries(raw),
-        )
