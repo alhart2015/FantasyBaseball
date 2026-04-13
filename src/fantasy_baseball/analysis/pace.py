@@ -77,8 +77,6 @@ def compute_player_pace(
         {"actual", "expected", "z_score", "color_class", "projection",
          "ros_deviation_sgp"}
     """
-    from fantasy_baseball.models.player import HitterStats, PitcherStats
-
     result = {}
 
     if player_type == PlayerType.HITTER:
@@ -94,9 +92,6 @@ def compute_player_pace(
 
     actual_opp = actual_stats.get(opp_key, 0) or 0
 
-    # Build a stats object from actuals for significance checks
-    stats_cls = HitterStats if player_type == PlayerType.HITTER else PitcherStats
-    actual_obj = stats_cls.from_dict(actual_stats)
     proj_opp = projected_stats.get(opp_key, 0) or 0
 
     def _ros_deviation(cat: str) -> float:
@@ -104,9 +99,8 @@ def compute_player_pace(
         if not ros_stats or not sgp_denoms:
             return 0.0
         ros_key = cat.lower()
-        pre_key = cat.lower()
         ros_val = ros_stats.get(ros_key)
-        pre_val = projected_stats.get(pre_key)
+        pre_val = projected_stats.get(ros_key)
         denom = sgp_denoms.get(cat)
         if ros_val is None or pre_val is None or not denom:
             return 0.0
@@ -147,8 +141,6 @@ def compute_player_pace(
             "z_score": round(z, 2),
             "color_class": _z_to_color(z) if abs(actual - expected) >= COUNTING_MIN_ABS_DIFF else "stat-neutral",
             "projection": round(proj),
-            "significant": actual_obj.is_significant(display_key),
-            "below_threshold": not counting_colored,
             "ros_deviation_sgp": _ros_deviation(display_key),
         }
 
@@ -174,8 +166,6 @@ def compute_player_pace(
             "z_score": round(z, 2),
             "color_class": _z_to_color(z),
             "projection": proj_avg,
-            "significant": actual_obj.is_significant("AVG"),
-            "below_threshold": not rates_colored,
             "ros_deviation_sgp": _ros_deviation("AVG"),
         }
 
@@ -202,8 +192,6 @@ def compute_player_pace(
             "z_score": round(z, 2),
             "color_class": _z_to_color(z),
             "projection": proj_era,
-            "significant": actual_obj.is_significant("ERA"),
-            "below_threshold": not rates_colored,
             "ros_deviation_sgp": _ros_deviation("ERA"),
         }
 
@@ -222,8 +210,6 @@ def compute_player_pace(
             "z_score": round(z, 2),
             "color_class": _z_to_color(z),
             "projection": proj_whip,
-            "significant": actual_obj.is_significant("WHIP"),
-            "below_threshold": not rates_colored,
             "ros_deviation_sgp": _ros_deviation("WHIP"),
         }
 
