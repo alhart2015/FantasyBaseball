@@ -384,6 +384,8 @@ document.getElementById('clear-compare').addEventListener('click', () => {
     selectedPlayers = [];
     standingsData = null;
     compPanel.style.display = 'none';
+    const drEl = document.getElementById('delta-roto-summary');
+    if (drEl) drEl.style.display = 'none';
     render();
 });
 
@@ -402,6 +404,8 @@ function updateComparison() {
         compStatsTable.style.display = 'none';
         standingsSection.style.display = 'none';
         document.getElementById('standings-unavailable').style.display = 'none';
+        const drEl = document.getElementById('delta-roto-summary');
+        if (drEl) drEl.style.display = 'none';
         compValidation.textContent = selectedPlayers.length === 1
             ? 'Select one more player to compare.'
             : '';
@@ -511,6 +515,7 @@ function fetchStandings(rosterPlayer, otherPlayer) {
             if (mySeq !== fetchSeq) return;
             if (data.error) return;
             standingsData = data;
+            renderDeltaRoto(data.delta_roto);
             document.getElementById('standings-subtitle').textContent =
                 'Replacing ' + rosterPlayer.name + ' with ' + otherPlayer.name;
             document.getElementById('standings-after-label').textContent =
@@ -522,6 +527,39 @@ function fetchStandings(rosterPlayer, otherPlayer) {
             if (mySeq !== fetchSeq) return;
             compValidation.textContent = 'Failed to load standings comparison.';
         });
+}
+
+function renderDeltaRoto(dr) {
+    let el = document.getElementById('delta-roto-summary');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'delta-roto-summary';
+        el.style.cssText = 'margin-bottom:12px; padding:8px 12px; border-radius:6px; font-size:13px; ' +
+            'background:rgba(255,255,255,0.03); border:1px solid var(--panel-border);';
+        standingsSection.insertBefore(el, standingsSection.firstChild.nextSibling);
+    }
+    if (!dr) { el.style.display = 'none'; return; }
+    const color = dr.total > 0.01 ? 'var(--success)' : (dr.total < -0.01 ? 'var(--danger)' : 'var(--text-secondary)');
+    let html = '<span style="font-weight:600">deltaRoto: </span>' +
+        '<span style="font-weight:700; font-size:15px; color:' + color + '">' +
+        (dr.total > 0 ? '+' : '') + dr.total.toFixed(1) + ' roto pts</span>';
+
+    const catParts = [];
+    const cats = dr.categories;
+    for (const cat of Object.keys(cats)) {
+        const c = cats[cat];
+        if (Math.abs(c.score) > 0.01) {
+            const cc = c.score > 0 ? 'var(--success)' : 'var(--danger)';
+            catParts.push('<span style="color:' + cc + '">' + cat + ' ' +
+                (c.score > 0 ? '+' : '') + c.score.toFixed(2) + '</span>');
+        }
+    }
+    if (catParts.length > 0) {
+        html += '<div style="margin-top:4px; font-size:11px; color:var(--text-secondary)">' +
+            catParts.join(' &middot; ') + '</div>';
+    }
+    el.style.display = '';
+    el.innerHTML = html;
 }
 
 function renderStandings() {

@@ -754,6 +754,16 @@ def compute_comparison_standings(
     roto_before = score_roto(all_stats_before)
     roto_after = score_roto(all_stats_after)
 
+    from fantasy_baseball.lineup.delta_roto import compute_defense_comfort, score_swap
+    from fantasy_baseball.sgp.denominators import get_sgp_denominators
+
+    denoms = get_sgp_denominators()
+    comfort_before = compute_defense_comfort(all_stats_before, user_team_name, denoms)
+    comfort_after = compute_defense_comfort(all_stats_after, user_team_name, denoms)
+    delta_roto = score_swap(
+        roto_before, roto_after, comfort_before, comfort_after, user_team_name,
+    )
+
     return {
         "before": {
             "stats": all_stats_before,
@@ -763,6 +773,7 @@ def compute_comparison_standings(
             "stats": all_stats_after,
             "roto": roto_after,
         },
+        "delta_roto": delta_roto.to_dict(),
         "categories": ALL_CATEGORIES,
         "user_team": user_team_name,
     }
