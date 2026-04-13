@@ -22,7 +22,7 @@ def _make_player(name, player_type, positions=None, **stats):
             h_allowed=stats.get("h_allowed", 0),
             era=stats.get("era", 0), whip=stats.get("whip", 0),
         )
-    return Player(name=name, player_type=player_type, positions=positions, ros=ros)
+    return Player(name=name, player_type=player_type, positions=positions, rest_of_season=ros)
 
 
 EQUAL_LEVERAGE = {cat: 0.1 for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}

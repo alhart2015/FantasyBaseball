@@ -6,7 +6,7 @@ from fantasy_baseball.models.player import Player, PlayerType, HitterStats, Pitc
 def _hitter(name, wsgp, status=""):
     p = Player(name=name, player_type=PlayerType.HITTER,
                positions=["OF", "Util"],
-               ros=HitterStats(pa=600, ab=550, h=150, r=80, hr=25, rbi=80, sb=10, avg=0.273),
+               rest_of_season=HitterStats(pa=600, ab=550, h=150, r=80, hr=25, rbi=80, sb=10, avg=0.273),
                wsgp=wsgp, status=status)
     return p
 
@@ -14,7 +14,7 @@ def _hitter(name, wsgp, status=""):
 def _pitcher(name, wsgp, status=""):
     p = Player(name=name, player_type=PlayerType.PITCHER,
                positions=["P"],
-               ros=PitcherStats(ip=180, w=12, k=180, sv=0, er=60, bb=50, h_allowed=150, era=3.00, whip=1.11),
+               rest_of_season=PitcherStats(ip=180, w=12, k=180, sv=0, er=60, bb=50, h_allowed=150, era=3.00, whip=1.11),
                wsgp=wsgp, status=status)
     return p
 

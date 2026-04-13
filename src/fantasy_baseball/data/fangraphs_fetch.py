@@ -17,7 +17,7 @@ _USER_AGENT = (
 )
 
 # Maps config system names to FanGraphs type= query parameter values
-ROS_TYPE_CODES: dict[str, str] = {
+REST_OF_SEASON_TYPE_CODES: dict[str, str] = {
     "steamer": "steamerr",
     "zips": "rzips",
     "atc": "ratcdc",
@@ -98,7 +98,7 @@ def _to_csv(players: list[dict], filepath: Path) -> None:
     df.to_csv(filepath, index=False)
 
 
-def fetch_ros_projections(
+def fetch_rest_of_season_projections(
     output_dir,
     systems: list[str],
     season_year: int,
@@ -132,13 +132,13 @@ def fetch_ros_projections(
     """
     output_dir = Path(output_dir)
     today = local_today().isoformat()
-    snapshot_dir = output_dir / str(season_year) / "ros" / today
+    snapshot_dir = output_dir / str(season_year) / "rest_of_season" / today
 
     results: dict[str, str] = {}
     first_request = True
 
     for system in systems:
-        type_code = ROS_TYPE_CODES.get(system)
+        type_code = REST_OF_SEASON_TYPE_CODES.get(system)
         if type_code is None:
             results[system] = "error: unknown system"
             continue

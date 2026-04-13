@@ -43,7 +43,7 @@ def _list_to_snapshot(standings_list: list[dict]) -> StandingsSnapshot:
 def _make_hitter(name, positions, r, hr, rbi, sb, avg, ab):
     stats = HitterStats(r=r, hr=hr, rbi=rbi, sb=sb, avg=avg, ab=ab, h=int(avg * ab))
     return Player(
-        name=name, positions=positions, player_type="hitter", ros=stats,
+        name=name, positions=positions, player_type="hitter", rest_of_season=stats,
     )
 
 
@@ -53,7 +53,7 @@ def _make_pitcher(name, positions, w, k, sv, era, whip, ip):
         er=era * ip / 9, bb=int(whip * ip * 0.3), h_allowed=int(whip * ip * 0.7),
     )
     return Player(
-        name=name, positions=positions, player_type="pitcher", ros=stats,
+        name=name, positions=positions, player_type="pitcher", rest_of_season=stats,
     )
 
 
@@ -314,10 +314,10 @@ class TestHitterOptimizerIntegration:
 
         # Compute wSGP for each group
         bench_wsgps = [
-            calculate_weighted_sgp(h.ros, leverage) for h in bench_players
+            calculate_weighted_sgp(h.rest_of_season, leverage) for h in bench_players
         ]
         starter_wsgps = [
-            calculate_weighted_sgp(h.ros, leverage) for h in starters
+            calculate_weighted_sgp(h.rest_of_season, leverage) for h in starters
         ]
 
         if not bench_wsgps:

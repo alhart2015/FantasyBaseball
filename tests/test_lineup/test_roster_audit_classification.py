@@ -8,7 +8,7 @@ def _hitter(name, r=70, hr=20, rbi=70, sb=10, avg=0.260, ab=500, classification=
     p = Player(
         name=name, player_type=PlayerType.HITTER,
         positions=["OF", "Util"],
-        ros=HitterStats(pa=ab+50, ab=ab, h=h, r=r, hr=hr, rbi=rbi, sb=sb, avg=avg),
+        rest_of_season=HitterStats(pa=ab+50, ab=ab, h=h, r=r, hr=hr, rbi=rbi, sb=sb, avg=avg),
         classification=classification,
     )
     return p
@@ -18,7 +18,7 @@ def _pitcher(name, w=10, k=150, sv=0, era=3.50, whip=1.20, ip=180, classificatio
     p = Player(
         name=name, player_type=PlayerType.PITCHER,
         positions=["P"],
-        ros=PitcherStats(ip=ip, w=w, k=k, sv=sv, er=era*ip/9, bb=int(whip*ip*0.3),
+        rest_of_season=PitcherStats(ip=ip, w=w, k=k, sv=sv, er=era*ip/9, bb=int(whip*ip*0.3),
                          h_allowed=int(whip*ip*0.7), era=era, whip=whip),
         classification=classification,
     )

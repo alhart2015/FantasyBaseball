@@ -56,9 +56,9 @@ PITCHER_STATS = ["k_per_ip", "era", "whip", "w_per_gs", "sv_per_g"]
 
 # Minimum data thresholds to include a player in evaluation
 HITTER_MIN_NEXTWEEK_PA = 10
-HITTER_MIN_ROS_PA = 50
+HITTER_MIN_REST_OF_SEASON_PA = 50
 PITCHER_MIN_NEXTWEEK_IP = 3
-PITCHER_MIN_ROS_IP = 20
+PITCHER_MIN_REST_OF_SEASON_IP = 20
 
 # Minimum preseason PA/IP to include a player in projections
 PROJ_HITTER_MIN_PA = 50
@@ -305,10 +305,10 @@ def compute_actual_rates(games: list[dict], player_type: str,
 def has_sufficient_data(agg: dict, player_type: str, target: str) -> bool:
     """Check if aggregated data meets minimum threshold for evaluation."""
     if player_type == "hitter":
-        min_pa = HITTER_MIN_NEXTWEEK_PA if target == "next_week" else HITTER_MIN_ROS_PA
+        min_pa = HITTER_MIN_NEXTWEEK_PA if target == "next_week" else HITTER_MIN_REST_OF_SEASON_PA
         return agg["pa"] >= min_pa
     else:
-        min_ip = PITCHER_MIN_NEXTWEEK_IP if target == "next_week" else PITCHER_MIN_ROS_IP
+        min_ip = PITCHER_MIN_NEXTWEEK_IP if target == "next_week" else PITCHER_MIN_REST_OF_SEASON_IP
         return agg["ip"] >= min_ip
 
 
@@ -350,7 +350,7 @@ def run_evaluation(matched_players: list[dict], game_logs: dict) -> list[dict]:
 
                 for target, start, end in [
                     ("next_week", checkpoint, next_week_end),
-                    ("ros", checkpoint, SEASON_END + timedelta(days=1)),
+                    ("rest_of_season", checkpoint, SEASON_END + timedelta(days=1)),
                 ]:
                     actual = compute_actual_rates(games, ptype, start, end)
                     if actual is None:
@@ -435,7 +435,7 @@ def print_summary(results: list[dict]) -> None:
 
     # --- Question 1: Overall best model ---
     print("\n1. OVERALL: Which model has lowest average MAE?\n")
-    for target in ("next_week", "ros"):
+    for target in ("next_week", "rest_of_season"):
         rankings = sorted(
             [m for m in [mn for mn, _ in MODELS]],
             key=lambda m: avg(model_target_maes.get((m, target), [])),
@@ -449,7 +449,7 @@ def print_summary(results: list[dict]) -> None:
     # --- Question 2: Per-stat benefit ---
     print("2. PER-STAT: Stats that benefit most from recency weighting\n")
     all_stats = HITTER_STATS + PITCHER_STATS
-    for target in ("next_week", "ros"):
+    for target in ("next_week", "rest_of_season"):
         print(f"   Target: {target}")
         for stat in all_stats:
             baseline = avg(model_stat_maes.get(("preseason", target, stat), []))
@@ -470,7 +470,7 @@ def print_summary(results: list[dict]) -> None:
 
     # --- Question 3: Early vs late season ---
     print("3. PER-CHECKPOINT: Does recency help more early vs late season?\n")
-    for target in ("next_week", "ros"):
+    for target in ("next_week", "rest_of_season"):
         print(f"   Target: {target}")
         print(f"   {'Checkpoint':<12}", end="")
         for model, _ in MODELS:
@@ -486,7 +486,7 @@ def print_summary(results: list[dict]) -> None:
 
     # --- Question 4: Conclusion ---
     print("4. CONCLUSION\n")
-    for target in ("next_week", "ros"):
+    for target in ("next_week", "rest_of_season"):
         best_model = min(
             [mn for mn, _ in MODELS],
             key=lambda m: avg(model_target_maes.get((m, target), [])),
@@ -506,7 +506,7 @@ def print_summary(results: list[dict]) -> None:
     )
     ros_best = min(
         [mn for mn, _ in MODELS],
-        key=lambda m: avg(model_target_maes.get((m, "ros"), [])),
+        key=lambda m: avg(model_target_maes.get((m, "rest_of_season"), [])),
     )
     if nw_best == ros_best:
         recommendation += f"Build recency weighting using '{nw_best}' for both targets."

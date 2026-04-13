@@ -37,8 +37,8 @@ def _get(p, key, default=0):
 
 def _stat(p, key):
     """Read a stat from a Player's ROS stats or from a flat dict."""
-    # Player dataclass: stats live on the .ros attribute
-    ros = getattr(p, "ros", None)
+    # Player dataclass: stats live on the .rest_of_season attribute
+    ros = getattr(p, "rest_of_season", None)
     if ros is not None and hasattr(ros, key):
         return _safe(getattr(ros, key, 0))
     # Flat dict (legacy callers, tests, draft scripts)
@@ -72,20 +72,20 @@ def _is_bench(p: Player) -> bool:
 
 def _playing_time(p: Player) -> float:
     """Return the playing-time measure: IP for pitchers, PA (or AB) for hitters."""
-    if p.ros is None:
+    if p.rest_of_season is None:
         return 0.0
     if p.player_type == PlayerType.PITCHER:
-        return _safe(p.ros.ip)
+        return _safe(p.rest_of_season.ip)
     # Hitters: prefer PA, fall back to AB
-    pa = _safe(getattr(p.ros, "pa", 0))
+    pa = _safe(getattr(p.rest_of_season, "pa", 0))
     if pa > 0:
         return pa
-    return _safe(getattr(p.ros, "ab", 0))
+    return _safe(getattr(p.rest_of_season, "ab", 0))
 
 
 def _pitcher_role(p: Player) -> str:
     """Classify a pitcher as 'SP' or 'RP' based on projected IP."""
-    ip = _safe(p.ros.ip) if p.ros else 0.0
+    ip = _safe(p.rest_of_season.ip) if p.rest_of_season else 0.0
     return "SP" if ip > STARTER_IP_THRESHOLD else "RP"
 
 
@@ -146,9 +146,9 @@ def _find_worst_match(
 
 def _player_sgp(p: Player) -> float:
     """Calculate total SGP for a player, returning 0 if no ROS stats."""
-    if p.ros is None:
+    if p.rest_of_season is None:
         return 0.0
-    return calculate_player_sgp(p.ros)
+    return calculate_player_sgp(p.rest_of_season)
 
 
 def _scale_stats(p: Player, factor: float) -> dict[str, float]:
@@ -157,14 +157,14 @@ def _scale_stats(p: Player, factor: float) -> dict[str, float]:
     factor=1.0 means full stats; factor=0.0 means zeroed out.
     """
     result: dict[str, float] = {}
-    if p.ros is None:
+    if p.rest_of_season is None:
         return result
     if p.player_type == PlayerType.HITTER:
         for key in HITTING_COUNTING:
-            result[key] = _safe(getattr(p.ros, key, 0)) * factor
+            result[key] = _safe(getattr(p.rest_of_season, key, 0)) * factor
     elif p.player_type == PlayerType.PITCHER:
         for key in PITCHING_COUNTING:
-            result[key] = _safe(getattr(p.ros, key, 0)) * factor
+            result[key] = _safe(getattr(p.rest_of_season, key, 0)) * factor
     return result
 
 

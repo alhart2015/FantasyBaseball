@@ -44,7 +44,7 @@ def compute_team_wsgp(
         player_wsgp = dict(player_wsgp)  # don't mutate caller's dict
     for p in roster:
         if p.name not in player_wsgp:
-            player_wsgp[p.name] = calculate_weighted_sgp(p.ros, leverage, denoms=denoms)
+            player_wsgp[p.name] = calculate_weighted_sgp(p.rest_of_season, leverage, denoms=denoms)
 
     # Optimize hitters (Hungarian algorithm)
     hitter_lineup = optimize_hitter_lineup(hitters, leverage, roster_slots)

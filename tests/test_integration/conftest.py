@@ -111,7 +111,7 @@ def _hitter(name, positions, r, hr, rbi, sb, avg, ab, *, selected_position=""):
     stats = HitterStats(r=r, hr=hr, rbi=rbi, sb=sb, avg=avg, ab=ab, h=h)
     return Player(
         name=name, player_type="hitter", positions=positions,
-        ros=stats, selected_position=selected_position,
+        rest_of_season=stats, selected_position=selected_position,
     )
 
 
@@ -128,7 +128,7 @@ def _pitcher(name, positions, w, k, sv, era, whip, ip, *, selected_position=""):
     )
     return Player(
         name=name, player_type="pitcher", positions=positions,
-        ros=stats, selected_position=selected_position,
+        rest_of_season=stats, selected_position=selected_position,
     )
 
 

@@ -154,7 +154,7 @@
             </td>
             {% for cat in ["PA", "R", "HR", "RBI", "SB", "AVG"] %}
             {% set st = s.get(cat, {}) if s else {} %}
-            {% set dev = st.get('ros_deviation_sgp', 0)|int %}
+            {% set dev = st.get('rest_of_season_deviation_sgp', 0)|int %}
             {% set dev_abs = dev if dev > 0 else -dev %}
             {% set dev_clamped = [dev_abs, 3]|min %}
             <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'PA' %} pa-col{% endif %}{% if dev > 0 %} stat-ros-up stat-ros-{{ dev_clamped }}{% elif dev < 0 %} stat-ros-down stat-ros-{{ dev_clamped }}{% endif %}">
@@ -171,8 +171,8 @@
                     {% if cat != 'AVG' %}
                     <div class="tooltip-row"><span class="tooltip-label">Pre-season proj</span><span class="tooltip-val">{{ st.projection }} {{ cat }}</span></div>
                     {% endif %}
-                    {% set ros_key = cat | lower %}
-                    <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val">{% if h[ros_key] is defined and h[ros_key] is not none %}{% if cat == 'AVG' %}{{ "%.3f"|format(h[ros_key]) }}{% else %}{{ h[ros_key] | round | int }}{% endif %} {{ cat }}{% else %}<span style="color: var(--text-secondary); font-style: italic;">—</span>{% endif %}</span></div>
+                    {% set rest_of_season_key = cat | lower %}
+                    <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val">{% if h[rest_of_season_key] is defined and h[rest_of_season_key] is not none %}{% if cat == 'AVG' %}{{ "%.3f"|format(h[rest_of_season_key]) }}{% else %}{{ h[rest_of_season_key] | round | int }}{% endif %} {{ cat }}{% else %}<span style="color: var(--text-secondary); font-style: italic;">—</span>{% endif %}</span></div>
                 </div>
                 {% endif %}
             </td>
@@ -224,7 +224,7 @@
             <td style="text-align: left; font-weight: 500;">{{ p.name }} {{ rank_badge(p.rank) }}</td>
             {% for cat in ["IP", "W", "K", "SV", "ERA", "WHIP"] %}
             {% set st = s.get(cat, {}) if s else {} %}
-            {% set dev = st.get('ros_deviation_sgp', 0)|int %}
+            {% set dev = st.get('rest_of_season_deviation_sgp', 0)|int %}
             {% set dev_abs = dev if dev > 0 else -dev %}
             {% set dev_clamped = [dev_abs, 3]|min %}
             <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'IP' %} pa-col{% endif %}{% if dev > 0 %} stat-ros-up stat-ros-{{ dev_clamped }}{% elif dev < 0 %} stat-ros-down stat-ros-{{ dev_clamped }}{% endif %}">
@@ -241,8 +241,8 @@
                     {% if cat not in ['ERA', 'WHIP'] %}
                     <div class="tooltip-row"><span class="tooltip-label">Pre-season proj</span><span class="tooltip-val">{{ st.projection }} {{ cat }}</span></div>
                     {% endif %}
-                    {% set ros_key = cat | lower %}
-                    <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val">{% if p[ros_key] is defined and p[ros_key] is not none %}{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(p[ros_key]) }}{% else %}{{ p[ros_key] | round | int }}{% endif %} {{ cat }}{% else %}<span style="color: var(--text-secondary); font-style: italic;">—</span>{% endif %}</span></div>
+                    {% set rest_of_season_key = cat | lower %}
+                    <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val">{% if p[rest_of_season_key] is defined and p[rest_of_season_key] is not none %}{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(p[rest_of_season_key]) }}{% else %}{{ p[rest_of_season_key] | round | int }}{% endif %} {{ cat }}{% else %}<span style="color: var(--text-secondary); font-style: italic;">—</span>{% endif %}</span></div>
                 </div>
                 {% endif %}
             </td>

@@ -90,7 +90,7 @@ def test_search_returns_matching_players(client):
     assert len(data) == 1
     assert data[0]["name"] == "Aaron Judge"
     assert data[0]["player_type"] == "hitter"
-    assert data[0]["ros"]["hr"] == 38
+    assert data[0]["rest_of_season"]["hr"] == 38
     assert data[0]["preseason"]["hr"] == 45
 
 

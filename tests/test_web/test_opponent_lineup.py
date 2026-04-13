@@ -140,8 +140,8 @@ class TestBuildOpponentLineup:
             standings=standings,
             hitters_proj=hitters_proj,
             pitchers_proj=pitchers_proj,
-            ros_hitters=pd.DataFrame(),
-            ros_pitchers=pd.DataFrame(),
+            rest_of_season_hitters=pd.DataFrame(),
+            rest_of_season_pitchers=pd.DataFrame(),
             user_leverage=user_leverage,
             season_year=2026,
         )
@@ -168,8 +168,8 @@ class TestBuildOpponentLineup:
             standings=standings,
             hitters_proj=hitters_proj,
             pitchers_proj=pitchers_proj,
-            ros_hitters=pd.DataFrame(),
-            ros_pitchers=pd.DataFrame(),
+            rest_of_season_hitters=pd.DataFrame(),
+            rest_of_season_pitchers=pd.DataFrame(),
             user_leverage=user_leverage,
             season_year=2026,
         )
@@ -205,8 +205,8 @@ class TestBuildOpponentLineup:
             standings=standings,
             hitters_proj=hitters_proj,
             pitchers_proj=pitchers_proj,
-            ros_hitters=pd.DataFrame(),
-            ros_pitchers=pd.DataFrame(),
+            rest_of_season_hitters=pd.DataFrame(),
+            rest_of_season_pitchers=pd.DataFrame(),
             user_leverage=user_leverage,
             season_year=2026,
         )

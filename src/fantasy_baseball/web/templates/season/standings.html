@@ -187,9 +187,9 @@
 
     {# Current MC (ROS) view #}
     <div id="proj-ros-mc" style="display: none;">
-        {% if ros_mc %}
-        {{ mc_team_table(ros_mc) }}
-        {{ cat_risk_table(ros_mc) }}
+        {% if rest_of_season_mc %}
+        {{ mc_team_table(rest_of_season_mc) }}
+        {{ cat_risk_table(rest_of_season_mc) }}
         {% else %}
         <p class="placeholder-text">No ROS projections loaded. Download ROS projections from FanGraphs and place them in data/projections/&lt;year&gt;/ros/YYYY-MM-DD/.</p>
         {% endif %}
@@ -197,9 +197,9 @@
 
     {# Current MC + Mgmt (ROS) view #}
     <div id="proj-ros-mgmt-mc" style="display: none;">
-        {% if ros_mgmt_mc %}
-        {{ mc_team_table(ros_mgmt_mc) }}
-        {{ cat_risk_table(ros_mgmt_mc) }}
+        {% if rest_of_season_mgmt_mc %}
+        {{ mc_team_table(rest_of_season_mgmt_mc) }}
+        {{ cat_risk_table(rest_of_season_mgmt_mc) }}
         {% else %}
         <p class="placeholder-text">No ROS projections loaded. Download ROS projections from FanGraphs and place them in data/projections/&lt;year&gt;/ros/YYYY-MM-DD/.</p>
         {% endif %}

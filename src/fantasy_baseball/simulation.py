@@ -153,7 +153,7 @@ def simulate_remaining_season(
     """Simulate only the remaining portion of the season and blend with YTD actuals.
 
     Player ROS projections in `ros_blended_projections` are normalized to
-    full-season totals at fetch time (see normalize_ros_to_full_season in
+    full-season totals at fetch time (see normalize_rest_of_season_to_full_season in
     data/projections.py). FanGraphs publishes remaining-games-only projections
     for all systems; the pipeline adds accumulated actuals to convert them to
     full-season totals before blending.

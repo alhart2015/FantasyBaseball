@@ -110,7 +110,7 @@
 </form>
 
 <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--panel-border);">
-    <button class="btn-secondary" id="fetch-ros-btn" onclick="fetchRosProjections()">Fetch ROS Projections</button>
+    <button class="btn-secondary" id="fetch-rest-of-season-btn" onclick="fetchRestOfSeasonProjections()">Fetch ROS Projections</button>
     <span id="fetch-ros-status" style="margin-left: 8px; font-size: 13px; color: var(--text-secondary);"></span>
 </div>
 
@@ -147,8 +147,8 @@
 {% endif %}
 
 <script>
-function fetchRosProjections() {
-    const btn = document.getElementById('fetch-ros-btn');
+function fetchRestOfSeasonProjections() {
+    const btn = document.getElementById('fetch-rest-of-season-btn');
     const status = document.getElementById('fetch-ros-status');
     btn.disabled = true;
     btn.textContent = 'Fetching...';

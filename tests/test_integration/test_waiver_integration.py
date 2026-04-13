@@ -187,8 +187,8 @@ class TestCategoryDirectionMatchesRawStats:
 
             for cat_name, col in counting_stats:
                 cat_sgp_delta = categories.get(cat_name, 0)
-                raw_add = getattr(add_fa.ros, col, 0)
-                raw_drop = getattr(drop_p.ros, col, 0)
+                raw_add = getattr(add_fa.rest_of_season, col, 0)
+                raw_drop = getattr(drop_p.rest_of_season, col, 0)
                 raw_delta = raw_add - raw_drop
 
                 # Direction must match: if the SGP delta says the add is
@@ -213,8 +213,8 @@ class TestCategoryDirectionMatchesRawStats:
             # raw rate.
             if player_type == "hitter":
                 # AVG: marginal_hits = (avg - replacement_avg) * ab
-                add_avg_marginal = (getattr(add_fa.ros, "avg", 0) - 0.250) * getattr(add_fa.ros, "ab", 0)
-                drop_avg_marginal = (getattr(drop_p.ros, "avg", 0) - 0.250) * getattr(drop_p.ros, "ab", 0)
+                add_avg_marginal = (getattr(add_fa.rest_of_season, "avg", 0) - 0.250) * getattr(add_fa.rest_of_season, "ab", 0)
+                drop_avg_marginal = (getattr(drop_p.rest_of_season, "avg", 0) - 0.250) * getattr(drop_p.rest_of_season, "ab", 0)
                 avg_delta = categories.get("AVG", 0)
                 if avg_delta > 0.001:
                     assert add_avg_marginal > drop_avg_marginal, (
@@ -237,10 +237,10 @@ class TestCategoryDirectionMatchesRawStats:
                     ("WHIP", "whip", 1.35, 1),
                 ]:
                     cat_sgp_delta = categories.get(cat_name, 0)
-                    add_ip = getattr(add_fa.ros, "ip", 0)
-                    drop_ip = getattr(drop_p.ros, "ip", 0)
-                    add_marginal = (repl_rate - getattr(add_fa.ros, col, 0)) * add_ip / divisor
-                    drop_marginal = (repl_rate - getattr(drop_p.ros, col, 0)) * drop_ip / divisor
+                    add_ip = getattr(add_fa.rest_of_season, "ip", 0)
+                    drop_ip = getattr(drop_p.rest_of_season, "ip", 0)
+                    add_marginal = (repl_rate - getattr(add_fa.rest_of_season, col, 0)) * add_ip / divisor
+                    drop_marginal = (repl_rate - getattr(drop_p.rest_of_season, col, 0)) * drop_ip / divisor
                     if cat_sgp_delta > 0.001:
                         assert add_marginal > drop_marginal, (
                             f"{rec['add']} vs {rec['drop']}: {cat_name} SGP "
@@ -272,7 +272,7 @@ class TestNoScheduleScalingAsymmetry:
         denoms = get_sgp_denominators()
 
         for fa in free_agents:
-            wsgp = calculate_weighted_sgp(fa.ros, leverage, denoms=denoms)
+            wsgp = calculate_weighted_sgp(fa.rest_of_season, leverage, denoms=denoms)
             player_type = fa.player_type
 
             if player_type == "hitter":
@@ -284,7 +284,7 @@ class TestNoScheduleScalingAsymmetry:
 
             # Sum of unweighted counting SGP
             raw_counting_sgp = sum(
-                getattr(fa.ros, col, 0) / denoms[cat] for cat, col in counting
+                getattr(fa.rest_of_season, col, 0) / denoms[cat] for cat, col in counting
             )
 
             # The weighted total can redistribute emphasis but should not

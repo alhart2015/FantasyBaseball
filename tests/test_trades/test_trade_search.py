@@ -25,7 +25,7 @@ SAMPLE_STANDINGS = [
 def _make_hitter(name, positions, r=70, hr=20, rbi=65, sb=8, avg=.270, ab=500):
     h = int(avg * ab)
     return Player(name=name, player_type="hitter", positions=positions,
-                  ros=HitterStats(pa=int(ab * 1.15), ab=ab, h=h,
+                  rest_of_season=HitterStats(pa=int(ab * 1.15), ab=ab, h=h,
                                   r=r, hr=hr, rbi=rbi, sb=sb, avg=avg))
 
 
@@ -34,7 +34,7 @@ def _make_pitcher(name, positions, ip=150, w=9, k=140, sv=0, era=3.80, whip=1.25
     bb = int((whip * ip - ip * 0.8) / 1)
     h_allowed = int(whip * ip - bb)
     return Player(name=name, player_type="pitcher", positions=positions,
-                  ros=PitcherStats(ip=ip, w=w, k=k, sv=sv, era=era, whip=whip,
+                  rest_of_season=PitcherStats(ip=ip, w=w, k=k, sv=sv, era=era, whip=whip,
                                    er=er, bb=bb, h_allowed=h_allowed))
 
 

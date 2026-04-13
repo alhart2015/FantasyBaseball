@@ -145,9 +145,9 @@ class TestMatchRosterToProjections:
         assert isinstance(result[0], Player)
         assert result[0].name == "Aaron Judge"
         assert result[0].player_type == "hitter"
-        assert isinstance(result[0].ros, HitterStats)
-        assert result[0].ros.hr == 45
-        assert result[0].ros.avg == 0.291
+        assert isinstance(result[0].rest_of_season, HitterStats)
+        assert result[0].rest_of_season.hr == 45
+        assert result[0].rest_of_season.avg == 0.291
         assert result[0].positions == ["OF"]
 
     def test_pitcher_returns_pitcher_stats(self):
@@ -165,8 +165,8 @@ class TestMatchRosterToProjections:
         assert len(result) == 1
         assert isinstance(result[0], Player)
         assert result[0].player_type == "pitcher"
-        assert isinstance(result[0].ros, PitcherStats)
-        assert result[0].ros.k == 240
+        assert isinstance(result[0].rest_of_season, PitcherStats)
+        assert result[0].rest_of_season.k == 240
 
     def test_unmatched_players_omitted(self):
         roster = [
@@ -182,7 +182,7 @@ class TestMatchRosterToProjections:
 class TestNormalizeRosToFullSeason:
     def test_adds_hitter_actuals_to_remaining_games(self):
         from fantasy_baseball.data.projections import (
-            normalize_ros_to_full_season, HITTING_COUNTING_COLS,
+            normalize_rest_of_season_to_full_season, HITTING_COUNTING_COLS,
         )
         df = pd.DataFrame([{
             "name": "Aaron Judge", "mlbam_id": 592450, "player_type": "hitter",
@@ -191,7 +191,7 @@ class TestNormalizeRosToFullSeason:
         game_log_totals = {
             592450: {"pa": 100, "ab": 80, "h": 25, "r": 15, "hr": 5, "rbi": 15, "sb": 1},
         }
-        result = normalize_ros_to_full_season(df, game_log_totals, "hitter")
+        result = normalize_rest_of_season_to_full_season(df, game_log_totals, "hitter")
         judge = result.iloc[0]
         assert judge["pa"] == 500
         assert judge["ab"] == 380
@@ -202,7 +202,7 @@ class TestNormalizeRosToFullSeason:
         assert judge["sb"] == 5
 
     def test_adds_pitcher_actuals_to_remaining_games(self):
-        from fantasy_baseball.data.projections import normalize_ros_to_full_season
+        from fantasy_baseball.data.projections import normalize_rest_of_season_to_full_season
         df = pd.DataFrame([{
             "name": "Gerrit Cole", "mlbam_id": 543037, "player_type": "pitcher",
             "ip": 170, "k": 190, "w": 12, "sv": 0, "er": 60, "bb": 40, "h_allowed": 130,
@@ -210,7 +210,7 @@ class TestNormalizeRosToFullSeason:
         game_log_totals = {
             543037: {"ip": 13, "k": 16, "w": 1, "sv": 0, "er": 5, "bb": 3, "h_allowed": 9},
         }
-        result = normalize_ros_to_full_season(df, game_log_totals, "pitcher")
+        result = normalize_rest_of_season_to_full_season(df, game_log_totals, "pitcher")
         cole = result.iloc[0]
         assert cole["ip"] == 183
         assert cole["k"] == 206
@@ -220,17 +220,17 @@ class TestNormalizeRosToFullSeason:
         assert cole["h_allowed"] == 139
 
     def test_no_game_log_leaves_player_unchanged(self):
-        from fantasy_baseball.data.projections import normalize_ros_to_full_season
+        from fantasy_baseball.data.projections import normalize_rest_of_season_to_full_season
         df = pd.DataFrame([{
             "name": "Rookie Player", "mlbam_id": 999999, "player_type": "hitter",
             "pa": 400, "ab": 300, "h": 90, "r": 60, "hr": 25, "rbi": 65, "sb": 4,
         }])
-        result = normalize_ros_to_full_season(df, {}, "hitter")
+        result = normalize_rest_of_season_to_full_season(df, {}, "hitter")
         assert result.iloc[0]["pa"] == 400
         assert result.iloc[0]["hr"] == 25
 
     def test_missing_mlbam_id_leaves_player_unchanged(self):
-        from fantasy_baseball.data.projections import normalize_ros_to_full_season
+        from fantasy_baseball.data.projections import normalize_rest_of_season_to_full_season
         df = pd.DataFrame([{
             "name": "Aaron Judge", "player_type": "hitter",
             "pa": 400, "ab": 300, "h": 90, "r": 60, "hr": 25, "rbi": 65, "sb": 4,
@@ -238,11 +238,11 @@ class TestNormalizeRosToFullSeason:
         game_log_totals = {
             592450: {"pa": 100, "ab": 80, "h": 25, "r": 15, "hr": 5, "rbi": 15, "sb": 1},
         }
-        result = normalize_ros_to_full_season(df, game_log_totals, "hitter")
+        result = normalize_rest_of_season_to_full_season(df, game_log_totals, "hitter")
         assert result.iloc[0]["pa"] == 400
 
     def test_does_not_mutate_input_dataframe(self):
-        from fantasy_baseball.data.projections import normalize_ros_to_full_season
+        from fantasy_baseball.data.projections import normalize_rest_of_season_to_full_season
         df = pd.DataFrame([{
             "name": "Aaron Judge", "mlbam_id": 592450, "player_type": "hitter",
             "pa": 400, "ab": 300, "h": 90, "r": 60, "hr": 25, "rbi": 65, "sb": 4,
@@ -250,7 +250,7 @@ class TestNormalizeRosToFullSeason:
         game_log_totals = {
             592450: {"pa": 100, "ab": 80, "h": 25, "r": 15, "hr": 5, "rbi": 15, "sb": 1},
         }
-        normalize_ros_to_full_season(df, game_log_totals, "hitter")
+        normalize_rest_of_season_to_full_season(df, game_log_totals, "hitter")
         assert df.iloc[0]["pa"] == 400
 
     def test_handles_fractional_ip_when_projection_column_is_int64(self):
@@ -263,7 +263,7 @@ class TestNormalizeRosToFullSeason:
         Reproduces the production failure observed on 2026-04-10:
             TypeError: Invalid value '180.6667' for dtype 'int64'
         """
-        from fantasy_baseball.data.projections import normalize_ros_to_full_season
+        from fantasy_baseball.data.projections import normalize_rest_of_season_to_full_season
         # Force int64 dtype on ip by using only whole numbers (matches what
         # pd.read_csv does for zips/atc CSVs).
         df = pd.DataFrame([{
@@ -278,7 +278,7 @@ class TestNormalizeRosToFullSeason:
                 "k": 14, "w": 1, "sv": 0, "er": 4, "bb": 3, "h_allowed": 8,
             },
         }
-        result = normalize_ros_to_full_season(df, game_log_totals, "pitcher")
+        result = normalize_rest_of_season_to_full_season(df, game_log_totals, "pitcher")
         cole = result.iloc[0]
         assert cole["ip"] == pytest.approx(180.6667)
         assert cole["k"] == 204

@@ -42,7 +42,7 @@ def optimize_hitter_lineup(
 
     values = []
     for h in hitters:
-        values.append(calculate_weighted_sgp(h.ros, leverage))
+        values.append(calculate_weighted_sgp(h.rest_of_season, leverage))
 
     # Build cost matrix (negative because we maximize)
     size = max(n_players, n_slots)
@@ -86,7 +86,7 @@ def optimize_pitcher_lineup(
     """
     scored = []
     for p in pitchers:
-        wsgp = calculate_weighted_sgp(p.ros, leverage)
+        wsgp = calculate_weighted_sgp(p.rest_of_season, leverage)
         scored.append({"name": p.name, "wsgp": wsgp, "player": p})
 
     scored.sort(key=lambda x: x["wsgp"], reverse=True)

@@ -7,8 +7,8 @@ from fantasy_baseball.data.db import (
     load_raw_projections,
     load_blended_projections,
     get_blended_projections,
-    load_ros_projections,
-    get_ros_projections,
+    load_rest_of_season_projections,
+    get_rest_of_season_projections,
     load_draft_results,
     load_standings,
     load_weekly_rosters,
@@ -600,7 +600,7 @@ def _make_ros_dir(tmp_path, year=2026, date="2026-04-07"):
     """Create data/projections/{year}/ros/{date}/ with steamer fixture CSVs."""
     import shutil
     fixtures = Path(__file__).parent.parent / "fixtures"
-    date_dir = tmp_path / "projections" / str(year) / "ros" / date
+    date_dir = tmp_path / "projections" / str(year) / "rest_of_season" / date
     date_dir.mkdir(parents=True)
     # blend_projections expects {system}-hitters.csv / {system}-pitchers.csv
     shutil.copy(fixtures / "steamer_hitters.csv", date_dir / "steamer-hitters.csv")
@@ -609,17 +609,17 @@ def _make_ros_dir(tmp_path, year=2026, date="2026-04-07"):
 
 
 # ---------------------------------------------------------------------------
-# Task 2: load_ros_projections()
+# Task 2: load_rest_of_season_projections()
 # ---------------------------------------------------------------------------
 
-def test_load_ros_projections_basic(tmp_path):
+def test_load_rest_of_season_projections_basic(tmp_path):
     """Task 2: loading a single ROS snapshot inserts hitter and pitcher rows."""
     _make_ros_dir(tmp_path, year=2026, date="2026-04-07")
 
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     create_tables(conn)
-    load_ros_projections(conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0})
+    load_rest_of_season_projections(conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0})
 
     rows = conn.execute(
         "SELECT * FROM ros_blended_projections WHERE year=2026 AND snapshot_date='2026-04-07'"
@@ -641,15 +641,15 @@ def test_load_ros_projections_basic(tmp_path):
     conn.close()
 
 
-def test_load_ros_projections_idempotent(tmp_path):
-    """Task 2: calling load_ros_projections twice must not duplicate rows."""
+def test_load_rest_of_season_projections_idempotent(tmp_path):
+    """Task 2: calling load_rest_of_season_projections twice must not duplicate rows."""
     _make_ros_dir(tmp_path, year=2026, date="2026-04-07")
 
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     create_tables(conn)
-    load_ros_projections(conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0})
-    load_ros_projections(conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0})
+    load_rest_of_season_projections(conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0})
+    load_rest_of_season_projections(conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0})
 
     count = conn.execute(
         "SELECT COUNT(*) FROM ros_blended_projections WHERE year=2026 AND snapshot_date='2026-04-07'"
@@ -659,20 +659,20 @@ def test_load_ros_projections_idempotent(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 3: get_ros_projections()
+# Task 3: get_rest_of_season_projections()
 # ---------------------------------------------------------------------------
 
-def test_get_ros_projections_returns_latest_snapshot(tmp_path):
-    """Task 3: get_ros_projections() returns the most recent snapshot_date."""
+def test_get_rest_of_season_projections_returns_latest_snapshot(tmp_path):
+    """Task 3: get_rest_of_season_projections() returns the most recent snapshot_date."""
     _make_ros_dir(tmp_path, year=2026, date="2026-04-07")
     _make_ros_dir(tmp_path, year=2026, date="2026-04-14")
 
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     create_tables(conn)
-    load_ros_projections(conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0})
+    load_rest_of_season_projections(conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0})
 
-    hitters, pitchers = get_ros_projections(conn, year=2026)
+    hitters, pitchers = get_rest_of_season_projections(conn, year=2026)
 
     assert len(hitters) == 4
     assert len(pitchers) == 3
@@ -694,13 +694,13 @@ def test_get_ros_projections_returns_latest_snapshot(tmp_path):
     conn.close()
 
 
-def test_get_ros_projections_empty_when_no_data(tmp_path):
-    """Task 3: get_ros_projections() returns empty DataFrames when table is empty."""
+def test_get_rest_of_season_projections_empty_when_no_data(tmp_path):
+    """Task 3: get_rest_of_season_projections() returns empty DataFrames when table is empty."""
     db_path = tmp_path / "test.db"
     conn = get_connection(db_path)
     create_tables(conn)
 
-    hitters, pitchers = get_ros_projections(conn)
+    hitters, pitchers = get_rest_of_season_projections(conn)
 
     assert hitters.empty
     assert pitchers.empty
@@ -782,7 +782,7 @@ class TestLoadRosNormalizationAppliesToAllSystems:
         ROS counting stats incremented by accumulated actuals.
         """
         from fantasy_baseball.data.db import (
-            get_connection, create_tables, load_ros_projections,
+            get_connection, create_tables, load_rest_of_season_projections,
         )
 
         _make_ros_dir(tmp_path, year=2026, date="2026-04-07")
@@ -799,7 +799,7 @@ class TestLoadRosNormalizationAppliesToAllSystems:
         )
         conn.commit()
 
-        load_ros_projections(
+        load_rest_of_season_projections(
             conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0},
         )
 

@@ -37,8 +37,8 @@ def classify_roster(
     for player in roster:
         # Look up ROS rank using normalized name::player_type key
         rank_key = f"{normalize_name(player.name)}::{player.player_type.value}"
-        ros_rank = rankings.get(rank_key)
-        high_sgp = ros_rank is not None and ros_rank <= rosterable_threshold
+        rest_of_season_rank = rankings.get(rank_key)
+        high_sgp = rest_of_season_rank is not None and rest_of_season_rank <= rosterable_threshold
 
         high_wsgp = player.wsgp > median_wsgp
 

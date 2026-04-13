@@ -63,27 +63,27 @@ class TestPitcherStats:
 class TestRankInfo:
     def test_from_dict(self):
         from fantasy_baseball.models.player import RankInfo
-        r = RankInfo.from_dict({"ros": 5, "preseason": 8, "current": 12})
-        assert r.ros == 5
+        r = RankInfo.from_dict({"rest_of_season": 5, "preseason": 8, "current": 12})
+        assert r.rest_of_season == 5
         assert r.preseason == 8
         assert r.current == 12
 
     def test_from_dict_missing_keys(self):
         from fantasy_baseball.models.player import RankInfo
-        r = RankInfo.from_dict({"ros": 5})
-        assert r.ros == 5
+        r = RankInfo.from_dict({"rest_of_season": 5})
+        assert r.rest_of_season == 5
         assert r.preseason is None
         assert r.current is None
 
     def test_to_dict(self):
         from fantasy_baseball.models.player import RankInfo
-        r = RankInfo(ros=5, preseason=8, current=12)
-        assert r.to_dict() == {"ros": 5, "preseason": 8, "current": 12}
+        r = RankInfo(rest_of_season=5, preseason=8, current=12)
+        assert r.to_dict() == {"rest_of_season": 5, "preseason": 8, "current": 12}
 
     def test_empty_rank(self):
         from fantasy_baseball.models.player import RankInfo
         r = RankInfo()
-        assert r.ros is None
+        assert r.rest_of_season is None
 
 
 class TestPlayer:
@@ -95,8 +95,8 @@ class TestPlayer:
             "fg_id": "15640", "mlbam_id": 592450,
             "selected_position": "OF", "status": "",
             "wsgp": 12.5,
-            "rank": {"ros": 2, "preseason": 1, "current": 3},
-            "ros": {"pa": 600, "ab": 500, "h": 145, "r": 95, "hr": 38, "rbi": 92, "sb": 7, "avg": 0.290},
+            "rank": {"rest_of_season": 2, "preseason": 1, "current": 3},
+            "rest_of_season": {"pa": 600, "ab": 500, "h": 145, "r": 95, "hr": 38, "rbi": 92, "sb": 7, "avg": 0.290},
             "preseason": {"pa": 650, "ab": 550, "h": 160, "r": 110, "hr": 45, "rbi": 120, "sb": 5, "avg": 0.291},
         }
         p = Player.from_dict(d)
@@ -104,25 +104,25 @@ class TestPlayer:
         assert p.player_type == "hitter"
         assert p.fg_id == "15640"
         assert p.mlbam_id == 592450
-        assert isinstance(p.ros, HitterStats)
-        assert p.ros.hr == 38
+        assert isinstance(p.rest_of_season, HitterStats)
+        assert p.rest_of_season.hr == 38
         assert isinstance(p.preseason, HitterStats)
         assert p.preseason.hr == 45
         assert p.current is None
         assert p.wsgp == 12.5
-        assert p.rank.ros == 2
+        assert p.rank.rest_of_season == 2
 
     def test_from_dict_pitcher(self):
         from fantasy_baseball.models.player import Player, PitcherStats
         d = {
             "name": "Gerrit Cole", "player_type": "pitcher",
             "positions": ["P"], "team": "NYY",
-            "ros": {"ip": 190, "w": 14, "k": 200, "sv": 0, "er": 60, "bb": 40, "h_allowed": 140, "era": 2.84, "whip": 0.95},
+            "rest_of_season": {"ip": 190, "w": 14, "k": 200, "sv": 0, "er": 60, "bb": 40, "h_allowed": 140, "era": 2.84, "whip": 0.95},
         }
         p = Player.from_dict(d)
         assert p.player_type == "pitcher"
-        assert isinstance(p.ros, PitcherStats)
-        assert p.ros.k == 200
+        assert isinstance(p.rest_of_season, PitcherStats)
+        assert p.rest_of_season.k == 200
 
     def test_to_dict_roundtrip(self):
         from fantasy_baseball.models.player import Player
@@ -131,14 +131,14 @@ class TestPlayer:
             "positions": ["OF"], "team": "NYY",
             "fg_id": "15640", "mlbam_id": 592450,
             "wsgp": 12.5,
-            "rank": {"ros": 2, "preseason": 1, "current": 3},
-            "ros": {"pa": 600, "ab": 500, "h": 145, "r": 95, "hr": 38, "rbi": 92, "sb": 7, "avg": 0.290},
+            "rank": {"rest_of_season": 2, "preseason": 1, "current": 3},
+            "rest_of_season": {"pa": 600, "ab": 500, "h": 145, "r": 95, "hr": 38, "rbi": 92, "sb": 7, "avg": 0.290},
         }
         p = Player.from_dict(d)
         result = p.to_dict()
         assert result["name"] == "Aaron Judge"
-        assert result["ros"]["hr"] == 38
-        assert result["rank"]["ros"] == 2
+        assert result["rest_of_season"]["hr"] == 38
+        assert result["rank"]["rest_of_season"] == 2
         assert result["wsgp"] == 12.5
 
     def test_from_dict_flat_stats_hitter(self):
@@ -150,8 +150,8 @@ class TestPlayer:
             "r": 95, "hr": 38, "rbi": 92, "sb": 7, "h": 145, "ab": 500, "pa": 600, "avg": 0.290,
         }
         p = Player.from_dict(d)
-        assert p.ros is not None
-        assert p.ros.hr == 38
+        assert p.rest_of_season is not None
+        assert p.rest_of_season.hr == 38
 
     def test_from_dict_flat_stats_pitcher(self):
         """Player.from_dict handles flat dicts where stats are top-level keys."""
@@ -162,8 +162,8 @@ class TestPlayer:
             "ip": 190, "w": 14, "k": 200, "sv": 0, "era": 2.84, "whip": 0.95,
         }
         p = Player.from_dict(d)
-        assert p.ros is not None
-        assert p.ros.k == 200
+        assert p.rest_of_season is not None
+        assert p.rest_of_season.k == 200
 
 
 class TestCacheCompatibility:
@@ -178,10 +178,10 @@ class TestCacheCompatibility:
             fg_id="15640",
             yahoo_id="12345",
             selected_position="OF",
-            ros=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
+            rest_of_season=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
             preseason=HitterStats(pa=650, ab=550, h=160, r=110, hr=45, rbi=120, sb=5, avg=0.291),
             wsgp=12.5,
-            rank=RankInfo(ros=2, preseason=1, current=3),
+            rank=RankInfo(rest_of_season=2, preseason=1, current=3),
             pace={"R": {"actual": 15, "expected": 14, "z_score": 0.5}},
         )
         d = p.to_dict()
@@ -190,13 +190,13 @@ class TestCacheCompatibility:
         assert d["player_type"] == "hitter"
         assert d["player_id"] == "12345"
         # ROS stats in nested dict
-        assert d["ros"]["hr"] == 38
+        assert d["rest_of_season"]["hr"] == 38
         # Preseason in nested dict
         assert d["preseason"]["hr"] == 45
         # wSGP
         assert d["wsgp"] == 12.5
         # Rank
-        assert d["rank"]["ros"] == 2
+        assert d["rank"]["rest_of_season"] == 2
         # Pace stored as "pace"
         assert d["pace"]["R"]["actual"] == 15
 
@@ -213,27 +213,27 @@ class TestCacheCompatibility:
             yahoo_id="12345",
             selected_position="OF",
             status="",
-            ros=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
+            rest_of_season=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
             preseason=HitterStats(pa=650, ab=550, h=160, r=110, hr=45, rbi=120, sb=5, avg=0.291),
             wsgp=12.5,
-            rank=RankInfo(ros=2, preseason=1, current=3),
+            rank=RankInfo(rest_of_season=2, preseason=1, current=3),
         )
         d = original.to_dict()
         restored = Player.from_dict(d)
         assert restored.name == original.name
         assert restored.player_type == original.player_type
-        assert restored.ros.hr == original.ros.hr
+        assert restored.rest_of_season.hr == original.rest_of_season.hr
         assert restored.preseason.hr == original.preseason.hr
         assert restored.wsgp == original.wsgp
-        assert restored.rank.ros == original.rank.ros
+        assert restored.rank.rest_of_season == original.rank.rest_of_season
 
 
 class TestToFlatDict:
-    def test_flat_dict_has_ros_stats_at_top_level(self):
+    def test_flat_dict_has_rest_of_season_stats_at_top_level(self):
         from fantasy_baseball.models.player import Player, HitterStats
         p = Player(
             name="Aaron Judge", player_type="hitter",
-            ros=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
+            rest_of_season=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
         )
         d = p.to_flat_dict()
         assert d["hr"] == 38
@@ -244,10 +244,10 @@ class TestToFlatDict:
         from fantasy_baseball.models.player import Player, HitterStats
         p = Player(
             name="Aaron Judge", player_type="hitter",
-            ros=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
+            rest_of_season=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
         )
         d = p.to_flat_dict()
-        assert d["ros"]["hr"] == 38
+        assert d["rest_of_season"]["hr"] == 38
 
     def test_flat_dict_no_ros_still_works(self):
         from fantasy_baseball.models.player import Player
@@ -276,7 +276,7 @@ class TestSgpComputation:
         from fantasy_baseball.models.player import Player, HitterStats
         p = Player(
             name="Aaron Judge", player_type="hitter",
-            ros=HitterStats(pa=650, ab=550, h=160, r=100, hr=40, rbi=100, sb=5, avg=0.291),
+            rest_of_season=HitterStats(pa=650, ab=550, h=160, r=100, hr=40, rbi=100, sb=5, avg=0.291),
         )
         leverage = {"R": 0.1, "HR": 0.1, "RBI": 0.1, "SB": 0.1, "AVG": 0.1,
                     "W": 0.1, "K": 0.1, "SV": 0.1, "ERA": 0.1, "WHIP": 0.1}

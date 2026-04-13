@@ -60,7 +60,7 @@ def compute_player_pace(
     actual_stats: dict,
     projected_stats: dict,
     player_type: str,
-    ros_stats: dict | None = None,
+    rest_of_season_stats: dict | None = None,
     sgp_denoms: dict | None = None,
 ) -> dict:
     """Compute z-scores and color classes for each roto stat.
@@ -69,13 +69,13 @@ def compute_player_pace(
         actual_stats: Season-to-date from game_logs (lowercase keys).
         projected_stats: Full-season from blended_projections (lowercase keys).
         player_type: "hitter" or "pitcher".
-        ros_stats: Optional ROS projection dict (lowercase keys) for deviation calc.
+        rest_of_season_stats: Optional ROS projection dict (lowercase keys) for deviation calc.
         sgp_denoms: Optional SGP denominator dict (UPPERCASE keys) for deviation calc.
 
     Returns:
         Dict with UPPERCASE display keys, each containing:
         {"actual", "expected", "z_score", "color_class", "projection",
-         "ros_deviation_sgp"}
+         "rest_of_season_deviation_sgp"}
     """
     result = {}
 
@@ -94,17 +94,17 @@ def compute_player_pace(
 
     proj_opp = projected_stats.get(opp_key, 0) or 0
 
-    def _ros_deviation(cat: str) -> float:
+    def _rest_of_season_deviation(cat: str) -> float:
         """Compute SGP deviation: (ros - preseason) / denom, positive = good."""
-        if not ros_stats or not sgp_denoms:
+        if not rest_of_season_stats or not sgp_denoms:
             return 0.0
-        ros_key = cat.lower()
-        ros_val = ros_stats.get(ros_key)
-        pre_val = projected_stats.get(ros_key)
+        rest_of_season_key = cat.lower()
+        rest_of_season_val = rest_of_season_stats.get(rest_of_season_key)
+        pre_val = projected_stats.get(rest_of_season_key)
         denom = sgp_denoms.get(cat)
-        if ros_val is None or pre_val is None or not denom:
+        if rest_of_season_val is None or pre_val is None or not denom:
             return 0.0
-        dev = (ros_val - pre_val) / denom
+        dev = (rest_of_season_val - pre_val) / denom
         if cat in INVERSE_STATS:
             dev = -dev
         return round(dev, 2)
@@ -141,7 +141,7 @@ def compute_player_pace(
             "z_score": round(z, 2),
             "color_class": _z_to_color(z) if abs(actual - expected) >= COUNTING_MIN_ABS_DIFF else "stat-neutral",
             "projection": round(proj),
-            "ros_deviation_sgp": _ros_deviation(display_key),
+            "rest_of_season_deviation_sgp": _rest_of_season_deviation(display_key),
         }
 
     # Rate stats — always computed, but color suppressed below min_rates threshold
@@ -166,7 +166,7 @@ def compute_player_pace(
             "z_score": round(z, 2),
             "color_class": _z_to_color(z),
             "projection": proj_avg,
-            "ros_deviation_sgp": _ros_deviation("AVG"),
+            "rest_of_season_deviation_sgp": _rest_of_season_deviation("AVG"),
         }
 
     else:  # pitcher
@@ -192,7 +192,7 @@ def compute_player_pace(
             "z_score": round(z, 2),
             "color_class": _z_to_color(z),
             "projection": proj_era,
-            "ros_deviation_sgp": _ros_deviation("ERA"),
+            "rest_of_season_deviation_sgp": _rest_of_season_deviation("ERA"),
         }
 
         # WHIP
@@ -210,7 +210,7 @@ def compute_player_pace(
             "z_score": round(z, 2),
             "color_class": _z_to_color(z),
             "projection": proj_whip,
-            "ros_deviation_sgp": _ros_deviation("WHIP"),
+            "rest_of_season_deviation_sgp": _rest_of_season_deviation("WHIP"),
         }
 
     return result

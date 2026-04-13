@@ -116,16 +116,16 @@ class PitcherStats:
 
 @dataclass
 class RankInfo:
-    ros: Optional[int] = None
+    rest_of_season: Optional[int] = None
     preseason: Optional[int] = None
     current: Optional[int] = None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "RankInfo":
-        return cls(ros=d.get("ros"), preseason=d.get("preseason"), current=d.get("current"))
+        return cls(rest_of_season=d.get("rest_of_season"), preseason=d.get("preseason"), current=d.get("current"))
 
     def to_dict(self) -> dict[str, Any]:
-        return {"ros": self.ros, "preseason": self.preseason, "current": self.current}
+        return {"rest_of_season": self.rest_of_season, "preseason": self.preseason, "current": self.current}
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +164,7 @@ class Player:
     mlbam_id: Optional[int] = None
     yahoo_id: Optional[str] = None
 
-    ros: "HitterStats | PitcherStats | None" = None
+    rest_of_season: "HitterStats | PitcherStats | None" = None
     preseason: "HitterStats | PitcherStats | None" = None
     current: "HitterStats | PitcherStats | None" = None
 
@@ -192,7 +192,7 @@ class Player:
             preseason = None
             current = None
         else:
-            ros_raw = d.get("ros")
+            ros_raw = d.get("rest_of_season")
             ros = _make_stats(ros_raw, player_type) if ros_raw is not None else None
 
             pre_raw = d.get("preseason")
@@ -227,7 +227,7 @@ class Player:
             fg_id=d.get("fg_id"),
             mlbam_id=d.get("mlbam_id"),
             yahoo_id=d.get("player_id"),  # cache format uses "player_id"
-            ros=ros,
+            rest_of_season=ros,
             preseason=preseason,
             current=current,
             wsgp=d.get("wsgp", 0.0),
@@ -255,8 +255,8 @@ class Player:
             d["mlbam_id"] = self.mlbam_id
         if self.yahoo_id is not None:
             d["player_id"] = self.yahoo_id
-        if self.ros is not None:
-            d["ros"] = self.ros.to_dict()
+        if self.rest_of_season is not None:
+            d["rest_of_season"] = self.rest_of_season.to_dict()
         if self.preseason is not None:
             d["preseason"] = self.preseason.to_dict()
         if self.current is not None:
@@ -281,14 +281,14 @@ class Player:
         functions that expect flat stat keys.
         """
         d = self.to_dict()
-        if self.ros is not None:
-            d.update(self.ros.to_dict())
+        if self.rest_of_season is not None:
+            d.update(self.rest_of_season.to_dict())
         return d
 
     def compute_wsgp(self, leverage: dict[str, float]) -> float:
         from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
-        if self.ros is None:
+        if self.rest_of_season is None:
             self.wsgp = 0.0
             return 0.0
-        self.wsgp = calculate_weighted_sgp(self.ros, leverage)
+        self.wsgp = calculate_weighted_sgp(self.rest_of_season, leverage)
         return self.wsgp

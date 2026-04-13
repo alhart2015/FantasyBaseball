@@ -218,9 +218,9 @@ def compute_trade_impact(
     }
 
 
-def _player_ros_stats(player: Player) -> dict:
+def _player_rest_of_season_stats(player: Player) -> dict:
     """Extract ROS stats from a Player for trade projection."""
-    ros = player.ros
+    ros = player.rest_of_season
     if ros is None:
         return {cat: 0 for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP", "ab", "ip"]}
     if player.player_type == PlayerType.HITTER:
@@ -280,7 +280,7 @@ def _score_positional_weakness(
     opp_best_wsgp = None
     for p in opp_roster:
         if set(p.positions) & set(player_positions):
-            wsgp = calculate_weighted_sgp(p.ros, opp_leverage) if p.ros else 0.0
+            wsgp = calculate_weighted_sgp(p.rest_of_season, opp_leverage) if p.rest_of_season else 0.0
             if opp_best_wsgp is None or wsgp > opp_best_wsgp:
                 opp_best_wsgp = wsgp
 
@@ -293,8 +293,8 @@ def _score_positional_weakness(
     for tname, roster in all_opp_rosters.items():
         team_lev = all_leverage.get(tname, {})
         for p in roster:
-            if set(p.positions) & set(player_positions) and p.ros:
-                all_wsgps.append(calculate_weighted_sgp(p.ros, team_lev))
+            if set(p.positions) & set(player_positions) and p.rest_of_season:
+                all_wsgps.append(calculate_weighted_sgp(p.rest_of_season, team_lev))
 
     if not all_wsgps:
         return 0.0
@@ -351,7 +351,7 @@ def search_trades_away(
         return []
 
     hart_leverage = leverage_by_team.get(hart_name, {})
-    hart_wsgp = calculate_weighted_sgp(hart_player.ros, hart_leverage)
+    hart_wsgp = calculate_weighted_sgp(hart_player.rest_of_season, hart_leverage)
 
     grouped: dict[str, list[dict]] = {}
 
@@ -371,13 +371,13 @@ def search_trades_away(
             if rank_gap > MAX_RANK_GAP:
                 continue
 
-            gain_wsgp = calculate_weighted_sgp(opp_player.ros, hart_leverage)
+            gain_wsgp = calculate_weighted_sgp(opp_player.rest_of_season, hart_leverage)
             hart_wsgp_gain = gain_wsgp - hart_wsgp
             if hart_wsgp_gain <= 0:
                 continue
 
-            hart_ros = _player_ros_stats(hart_player)
-            opp_ros = _player_ros_stats(opp_player)
+            hart_ros = _player_rest_of_season_stats(hart_player)
+            opp_ros = _player_rest_of_season_stats(opp_player)
 
             impact = compute_trade_impact(
                 standings, hart_name, opp_name,
@@ -477,7 +477,7 @@ def search_trades_for(
         return []
 
     hart_leverage = leverage_by_team.get(hart_name, {})
-    gain_wsgp = calculate_weighted_sgp(target_player.ros, hart_leverage)
+    gain_wsgp = calculate_weighted_sgp(target_player.rest_of_season, hart_leverage)
     opp_roster = opp_rosters[target_opp]
 
     candidates = []
@@ -496,13 +496,13 @@ def search_trades_for(
         if rank_gap > MAX_RANK_GAP:
             continue
 
-        hart_wsgp = calculate_weighted_sgp(hart_player.ros, hart_leverage)
+        hart_wsgp = calculate_weighted_sgp(hart_player.rest_of_season, hart_leverage)
         hart_wsgp_gain = gain_wsgp - hart_wsgp
         if hart_wsgp_gain <= 0:
             continue
 
-        hart_ros = _player_ros_stats(hart_player)
-        target_ros = _player_ros_stats(target_player)
+        hart_ros = _player_rest_of_season_stats(hart_player)
+        target_ros = _player_rest_of_season_stats(target_player)
 
         impact = compute_trade_impact(
             standings, hart_name, target_opp,

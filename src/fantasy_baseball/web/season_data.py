@@ -382,8 +382,8 @@ def build_opponent_lineup(
     standings: list[dict],
     hitters_proj: "pd.DataFrame",
     pitchers_proj: "pd.DataFrame",
-    ros_hitters: "pd.DataFrame",
-    ros_pitchers: "pd.DataFrame",
+    rest_of_season_hitters: "pd.DataFrame",
+    rest_of_season_pitchers: "pd.DataFrame",
     user_leverage: dict[str, float],
     season_year: int,
 ) -> dict:
@@ -395,8 +395,8 @@ def build_opponent_lineup(
         standings: Raw standings cache.
         hitters_proj: Blended hitter projections (with _name_norm column).
         pitchers_proj: Blended pitcher projections (with _name_norm column).
-        ros_hitters: ROS hitter projections (may be empty DataFrame).
-        ros_pitchers: ROS pitcher projections (may be empty DataFrame).
+        rest_of_season_hitters: ROS hitter projections (may be empty DataFrame).
+        rest_of_season_pitchers: ROS pitcher projections (may be empty DataFrame).
         user_leverage: User's leverage weights.
         season_year: Season year for game log lookup.
 
@@ -414,12 +414,12 @@ def build_opponent_lineup(
     matched = match_roster_to_projections(roster, hitters_proj, pitchers_proj)
 
     # ROS projection lookup
-    has_ros = not ros_hitters.empty or not ros_pitchers.empty
-    if has_ros:
-        ros_matched = match_roster_to_projections(roster, ros_hitters, ros_pitchers)
-        ros_lookup = {normalize_name(p.name): p for p in ros_matched}
+    has_rest_of_season = not rest_of_season_hitters.empty or not rest_of_season_pitchers.empty
+    if has_rest_of_season:
+        rest_of_season_matched = match_roster_to_projections(roster, rest_of_season_hitters, rest_of_season_pitchers)
+        rest_of_season_lookup = {normalize_name(p.name): p for p in rest_of_season_matched}
     else:
-        ros_lookup = {}
+        rest_of_season_lookup = {}
 
     # Opponent leverage
     standings_snap = _standings_to_snapshot(standings)
@@ -432,8 +432,8 @@ def build_opponent_lineup(
     matched_names = set()
     enriched = []
     for player in matched:
-        wsgp_them = calculate_weighted_sgp(player.ros, opp_leverage) if player.ros else 0.0
-        wsgp_you = calculate_weighted_sgp(player.ros, user_leverage) if player.ros else 0.0
+        wsgp_them = calculate_weighted_sgp(player.rest_of_season, opp_leverage) if player.rest_of_season else 0.0
+        wsgp_you = calculate_weighted_sgp(player.rest_of_season, user_leverage) if player.rest_of_season else 0.0
         norm = normalize_name(player.name)
         matched_names.add(norm)
 
@@ -442,12 +442,12 @@ def build_opponent_lineup(
         entry["wsgp_you"] = wsgp_you
 
         # ROS projection tooltip data
-        ros_entry = ros_lookup.get(norm)
-        if ros_entry and ros_entry.ros:
+        rest_of_season_entry = rest_of_season_lookup.get(norm)
+        if rest_of_season_entry and rest_of_season_entry.rest_of_season:
             if player.player_type == PlayerType.HITTER:
-                entry["ros"] = {k: getattr(ros_entry.ros, k, 0) for k in ["r", "hr", "rbi", "sb", "avg"]}
+                entry["rest_of_season"] = {k: getattr(rest_of_season_entry.rest_of_season, k, 0) for k in ["r", "hr", "rbi", "sb", "avg"]}
             else:
-                entry["ros"] = {k: getattr(ros_entry.ros, k, 0) for k in ["w", "k", "sv", "era", "whip"]}
+                entry["rest_of_season"] = {k: getattr(rest_of_season_entry.rest_of_season, k, 0) for k in ["w", "k", "sv", "era", "whip"]}
 
         # Pace data
         ptype = player.player_type
@@ -456,7 +456,7 @@ def build_opponent_lineup(
         else:
             actuals = pitcher_logs.get(norm, {})
         proj_keys = HITTER_PROJ_KEYS if ptype == PlayerType.HITTER else PITCHER_PROJ_KEYS
-        projected = {k: getattr(player.ros, k, 0) if player.ros else 0 for k in proj_keys}
+        projected = {k: getattr(player.rest_of_season, k, 0) if player.rest_of_season else 0 for k in proj_keys}
         entry["pace"] = compute_player_pace(actuals, projected, ptype)
         entry["overall_pace"] = compute_overall_pace(entry["pace"])
 
@@ -581,9 +581,9 @@ def format_lineup_for_display(
             "rank": player.rank.to_dict(),
             "preseason": player.preseason.to_dict() if player.preseason else None,
         }
-        # Flatten ROS stats for template tooltip (h[ros_key] access pattern)
-        if player.ros is not None:
-            entry.update(player.ros.to_dict())
+        # Flatten ROS stats for template tooltip (h[rest_of_season_key] access pattern)
+        if player.rest_of_season is not None:
+            entry.update(player.rest_of_season.to_dict())
 
         if is_pitcher:
             pitchers.append(entry)
@@ -777,7 +777,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.data.db import (
             create_tables, fetch_and_load_game_logs,
             get_connection as get_db_connection, get_blended_projections,
-            get_ros_projections, load_ros_projections,
+            get_rest_of_season_projections, load_rest_of_season_projections,
         )
         from fantasy_baseball.lineup.leverage import calculate_leverage
         from fantasy_baseball.lineup.matchups import calculate_matchup_factors, get_team_batting_stats
@@ -861,10 +861,10 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             # Load ROS projections (skip if latest snapshot already in DB)
             _progress("Loading ROS projections...")
             projections_dir = project_root / "data" / "projections"
-            ros_dir = projections_dir / str(config.season_year) / "ros"
-            if ros_dir.is_dir():
+            rest_of_season_dir = projections_dir / str(config.season_year) / "rest_of_season"
+            if rest_of_season_dir.is_dir():
                 latest_on_disk = max(
-                    (d.name for d in ros_dir.iterdir() if d.is_dir()), default=None,
+                    (d.name for d in rest_of_season_dir.iterdir() if d.is_dir()), default=None,
                 )
                 if latest_on_disk:
                     existing = db_conn.execute(
@@ -874,33 +874,33 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                     ).fetchone()[0]
                     if existing == 0:
                         from fantasy_baseball.data.db import get_roster_names
-                        ros_roster_names = None
+                        rest_of_season_roster_names = None
                         try:
-                            ros_roster_names = get_roster_names(db_conn)
+                            rest_of_season_roster_names = get_roster_names(db_conn)
                         except Exception:
                             pass
-                        load_ros_projections(
+                        load_rest_of_season_projections(
                             db_conn, projections_dir,
                             config.projection_systems, config.projection_weights,
-                            roster_names=ros_roster_names, progress_cb=_progress,
+                            roster_names=rest_of_season_roster_names, progress_cb=_progress,
                         )
 
-            ros_hitters, ros_pitchers = get_ros_projections(db_conn)
+            rest_of_season_hitters, rest_of_season_pitchers = get_rest_of_season_projections(db_conn)
         finally:
             db_conn.close()
         hitters_proj["_name_norm"] = hitters_proj["name"].apply(normalize_name)
         pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
         _progress(f"Loaded {len(hitters_proj)} hitter + {len(pitchers_proj)} pitcher projections")
-        has_ros = not ros_hitters.empty or not ros_pitchers.empty
+        has_rest_of_season = not rest_of_season_hitters.empty or not rest_of_season_pitchers.empty
         preseason_hitters = hitters_proj
         preseason_pitchers = pitchers_proj
-        if has_ros:
-            ros_hitters["_name_norm"] = ros_hitters["name"].apply(normalize_name)
-            ros_pitchers["_name_norm"] = ros_pitchers["name"].apply(normalize_name)
-            _progress(f"Loaded {len(ros_hitters)} ROS hitters + {len(ros_pitchers)} ROS pitchers")
+        if has_rest_of_season:
+            rest_of_season_hitters["_name_norm"] = rest_of_season_hitters["name"].apply(normalize_name)
+            rest_of_season_pitchers["_name_norm"] = rest_of_season_pitchers["name"].apply(normalize_name)
+            _progress(f"Loaded {len(rest_of_season_hitters)} ROS hitters + {len(rest_of_season_pitchers)} ROS pitchers")
             # Use ROS projections as primary — they're the most current estimates
-            hitters_proj = ros_hitters
-            pitchers_proj = ros_pitchers
+            hitters_proj = rest_of_season_hitters
+            pitchers_proj = rest_of_season_pitchers
         else:
             _progress("WARNING: No ROS projections available — falling back to preseason")
 
@@ -1048,8 +1048,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
             # Attach preseason stat bag
             pre_entry = preseason_lookup.get(norm)
-            if pre_entry and pre_entry.ros:
-                player.preseason = pre_entry.ros
+            if pre_entry and pre_entry.rest_of_season:
+                player.preseason = pre_entry.rest_of_season
 
             roster_players.append(player)
 
@@ -1086,20 +1086,20 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             norm = normalize_name(player.name)
             if player.player_type == PlayerType.HITTER:
                 actuals = hitter_logs.get(norm, {})
-                ros_keys = ["r", "hr", "rbi", "sb", "avg"]
+                rest_of_season_keys = ["r", "hr", "rbi", "sb", "avg"]
             else:
                 actuals = pitcher_logs.get(norm, {})
-                ros_keys = ["w", "k", "sv", "era", "whip"]
+                rest_of_season_keys = ["w", "k", "sv", "era", "whip"]
             proj_keys = HITTER_PROJ_KEYS if player.player_type == PlayerType.HITTER else PITCHER_PROJ_KEYS
             pre_player = preseason_lookup.get(norm)
-            if pre_player and pre_player.ros:
-                projected = {k: getattr(pre_player.ros, k, 0) for k in proj_keys}
+            if pre_player and pre_player.rest_of_season:
+                projected = {k: getattr(pre_player.rest_of_season, k, 0) for k in proj_keys}
             else:
                 projected = {k: 0 for k in proj_keys}
-            ros_dict = {k: getattr(player.ros, k, 0) for k in ros_keys} if player.ros else None
+            rest_of_season_dict = {k: getattr(player.rest_of_season, k, 0) for k in rest_of_season_keys} if player.rest_of_season else None
             player.pace = compute_player_pace(
                 actuals, projected, player.player_type,
-                ros_stats=ros_dict, sgp_denoms=sgp_denoms,
+                rest_of_season_stats=rest_of_season_dict, sgp_denoms=sgp_denoms,
             )
 
         # --- Step 6e: Compute wSGP on raw ROS stats ---
@@ -1108,7 +1108,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         # second layer of reliability weighting on top created inconsistencies
         # with projected_standings (see docs/superpowers/plans/2026-04-10-remove-recency-blending.md).
         for player in roster_players:
-            if player.ros is not None:
+            if player.rest_of_season is not None:
                 player.compute_wsgp(leverage)
 
         # --- Step 6d: Compute SGP rankings ---
@@ -1119,22 +1119,22 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             rank_key, rank_key_from_positions, lookup_rank,
         )
 
-        ros_ranks = compute_sgp_rankings(hitters_proj, pitchers_proj)
+        rest_of_season_ranks = compute_sgp_rankings(hitters_proj, pitchers_proj)
         preseason_ranks = compute_sgp_rankings(preseason_hitters, preseason_pitchers)
         current_ranks = compute_rankings_from_game_logs(hitter_logs, pitcher_logs)
 
         # Build combined lookup: {name::player_type: {ros, preseason, current}}
-        all_keys = set(ros_ranks) | set(preseason_ranks) | set(current_ranks)
+        all_keys = set(rest_of_season_ranks) | set(preseason_ranks) | set(current_ranks)
         rankings_lookup = {}
         for key in all_keys:
             rankings_lookup[key] = {
-                "ros": ros_ranks.get(key),
+                "rest_of_season": rest_of_season_ranks.get(key),
                 "preseason": preseason_ranks.get(key),
                 "current": current_ranks.get(key),
             }
 
         write_cache("rankings", rankings_lookup, cache_dir)
-        _progress(f"Ranked {len(ros_ranks)} ROS, {len(preseason_ranks)} preseason, {len(current_ranks)} current")
+        _progress(f"Ranked {len(rest_of_season_ranks)} ROS, {len(preseason_ranks)} preseason, {len(current_ranks)} current")
 
         # Attach ranks to roster players
         from fantasy_baseball.models.player import RankInfo
@@ -1144,12 +1144,12 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # Classify roster players by league-wide value vs team fit
         from fantasy_baseball.lineup.player_classification import classify_roster
-        ros_rank_lookup = {}
+        rest_of_season_rank_lookup = {}
         for key, rank_data in rankings_lookup.items():
-            ros = rank_data.get("ros")
+            ros = rank_data.get("rest_of_season")
             if ros is not None:
-                ros_rank_lookup[key] = ros
-        classifications = classify_roster(roster_players, ros_rank_lookup)
+                rest_of_season_rank_lookup[key] = ros
+        classifications = classify_roster(roster_players, rest_of_season_rank_lookup)
         for player in roster_players:
             player.classification = classifications.get(player.name, "")
 
@@ -1324,9 +1324,9 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         _progress("Pre-season + Mgmt Monte Carlo complete")
 
         # --- Step 13b: ROS Monte Carlo simulation ---
-        ros_mc = None
-        ros_mgmt_mc = None
-        if has_ros:
+        rest_of_season_mc = None
+        rest_of_season_mgmt_mc = None
+        if has_rest_of_season:
             from fantasy_baseball.simulation import run_ros_monte_carlo
 
             season_start = date.fromisoformat(config.season_start)
@@ -1336,23 +1336,23 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             fraction_remaining = remaining_days / total_days if total_days > 0 else 0
 
             # Build ROS rosters for all teams. hitters_proj/pitchers_proj
-            # already ARE ros_hitters/ros_pitchers when has_ros is True
+            # already ARE rest_of_season_hitters/rest_of_season_pitchers when has_rest_of_season is True
             # (see the assignment above), so opp_rosters is already
             # matched against ROS projections — just reuse it.
-            ros_mc_rosters = {}
+            rest_of_season_mc_rosters = {}
             if matched:
-                ros_mc_rosters[config.team_name] = all_team_rosters.get(config.team_name, [])
+                rest_of_season_mc_rosters[config.team_name] = all_team_rosters.get(config.team_name, [])
             for tname, opp_players in opp_rosters.items():
-                ros_mc_rosters[tname] = opp_players
+                rest_of_season_mc_rosters[tname] = opp_players
 
             # Build actual standings dict
             actual_standings_dict = {
                 s["name"]: s["stats"] for s in standings
             }
 
-            if ros_mc_rosters:
-                ros_mc = run_ros_monte_carlo(
-                    team_rosters=ros_mc_rosters,
+            if rest_of_season_mc_rosters:
+                rest_of_season_mc = run_ros_monte_carlo(
+                    team_rosters=rest_of_season_mc_rosters,
                     actual_standings=actual_standings_dict,
                     fraction_remaining=fraction_remaining,
                     h_slots=h_slots, p_slots=p_slots,
@@ -1363,8 +1363,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                     ),
                 )
                 _progress("Current Monte Carlo complete")
-                ros_mgmt_mc = run_ros_monte_carlo(
-                    team_rosters=ros_mc_rosters,
+                rest_of_season_mgmt_mc = run_ros_monte_carlo(
+                    team_rosters=rest_of_season_mc_rosters,
                     actual_standings=actual_standings_dict,
                     fraction_remaining=fraction_remaining,
                     h_slots=h_slots, p_slots=p_slots,
@@ -1379,8 +1379,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         write_cache("monte_carlo", {
             "base": base_mc,
             "with_management": mgmt_mc,
-            "ros": ros_mc,
-            "ros_with_management": ros_mgmt_mc,
+            "rest_of_season": rest_of_season_mc,
+            "rest_of_season_with_management": rest_of_season_mgmt_mc,
         }, cache_dir)
 
         # --- Step 14: Compute season-to-date SPoE (luck analysis) ---

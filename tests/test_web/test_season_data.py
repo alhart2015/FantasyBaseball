@@ -179,19 +179,19 @@ def test_format_lineup_passes_ros_data_through():
 
     After the Player-object refactor, ROS stats are flattened to top-level keys
     (e.g. entry["hr"], entry["r"]) so the Jinja2 template can access them via
-    h[ros_key] — there is no longer a nested entry["ros"] dict.
+    h[rest_of_season_key] — there is no longer a nested entry["rest_of_season"] dict.
     """
     roster = [
         {"name": "Aaron Judge", "positions": ["OF"], "selected_position": "OF",
          "player_id": "1", "status": "", "wsgp": 5.0,
-         "ros": {"r": 90, "hr": 40, "rbi": 100, "sb": 5, "avg": 0.280}},
+         "rest_of_season": {"r": 90, "hr": 40, "rbi": 100, "sb": 5, "avg": 0.280}},
         {"name": "No ROS Player", "positions": ["1B"], "selected_position": "1B",
          "player_id": "2", "status": "", "wsgp": 2.0},
     ]
     data = format_lineup_for_display(roster, {"moves": []})
     judge = next(h for h in data["hitters"] if h["name"] == "Aaron Judge")
     no_ros = next(h for h in data["hitters"] if h["name"] == "No ROS Player")
-    # ROS stats are flattened to top level for template h[ros_key] access
+    # ROS stats are flattened to top level for template h[rest_of_season_key] access
     assert judge["hr"] == 40
     assert judge["r"] == 90
     assert judge["rbi"] == 100
@@ -365,17 +365,17 @@ class TestComputeComparisonStandings:
 
         roster = [
             Player(name="Willy Adames", player_type="hitter",
-                   ros=HitterStats(pa=650, ab=567, h=133, r=80, hr=25, rbi=81, sb=11, avg=0.235)),
+                   rest_of_season=HitterStats(pa=650, ab=567, h=133, r=80, hr=25, rbi=81, sb=11, avg=0.235)),
             Player(name="Other Hitter", player_type="hitter",
-                   ros=HitterStats(pa=630, ab=550, h=150, r=90, hr=30, rbi=95, sb=5, avg=0.273)),
+                   rest_of_season=HitterStats(pa=630, ab=550, h=150, r=90, hr=30, rbi=95, sb=5, avg=0.273)),
             Player(name="My Pitcher", player_type="pitcher",
-                   ros=PitcherStats(ip=180, w=12, k=180, sv=0, er=60, bb=50, h_allowed=150,
+                   rest_of_season=PitcherStats(ip=180, w=12, k=180, sv=0, er=60, bb=50, h_allowed=150,
                                     era=3.00, whip=1.11)),
         ]
 
         other_player = Player(
             name="Ezequiel Tovar", player_type="hitter",
-            ros=HitterStats(pa=590, ab=513, h=135, r=73, hr=20, rbi=74, sb=8, avg=0.263),
+            rest_of_season=HitterStats(pa=590, ab=513, h=135, r=73, hr=20, rbi=74, sb=8, avg=0.263),
         )
 
         result = compute_comparison_standings(
@@ -402,9 +402,9 @@ class TestComputeComparisonStandings:
         result = compute_comparison_standings(
             roster_player_name="Nobody",
             other_player=Player(name="X", player_type="hitter",
-                                ros=HitterStats(pa=0, ab=0, h=0, r=0, hr=0, rbi=0, sb=0)),
+                                rest_of_season=HitterStats(pa=0, ab=0, h=0, r=0, hr=0, rbi=0, sb=0)),
             user_roster=[Player(name="A", player_type="hitter",
-                                ros=HitterStats(pa=350, ab=300, h=80, r=50, hr=10, rbi=40, sb=5))],
+                                rest_of_season=HitterStats(pa=350, ab=300, h=80, r=50, hr=10, rbi=40, sb=5))],
             projected_standings=[{"name": "My Team", "team_key": "", "rank": 0,
                                   "stats": {"R": 700, "HR": 200, "RBI": 700, "SB": 100,
                                             "AVG": 0.260, "W": 80, "K": 1200, "SV": 50,
@@ -436,11 +436,11 @@ class TestComparisonConsistencyInvariant:
         from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
         return [
             Player(name="Star Hitter", player_type="hitter",
-                   ros=HitterStats(pa=650, ab=567, h=150, r=90, hr=30, rbi=95, sb=25, avg=0.265)),
+                   rest_of_season=HitterStats(pa=650, ab=567, h=150, r=90, hr=30, rbi=95, sb=25, avg=0.265)),
             Player(name="Role Hitter", player_type="hitter",
-                   ros=HitterStats(pa=500, ab=440, h=110, r=55, hr=15, rbi=55, sb=5, avg=0.250)),
+                   rest_of_season=HitterStats(pa=500, ab=440, h=110, r=55, hr=15, rbi=55, sb=5, avg=0.250)),
             Player(name="Ace", player_type="pitcher",
-                   ros=PitcherStats(ip=180, w=14, k=200, sv=0, er=60, bb=50,
+                   rest_of_season=PitcherStats(ip=180, w=14, k=200, sv=0, er=60, bb=50,
                                     h_allowed=150, era=3.00, whip=1.11)),
         ]
 
@@ -465,7 +465,7 @@ class TestComparisonConsistencyInvariant:
         ]
         other_player = Player(
             name="Replacement", player_type="hitter",
-            ros=HitterStats(pa=600, ab=530, h=140, r=75, hr=28, rbi=85, sb=3, avg=0.264),
+            rest_of_season=HitterStats(pa=600, ab=530, h=140, r=75, hr=28, rbi=85, sb=3, avg=0.264),
         )
 
         result = compute_comparison_standings(
@@ -501,7 +501,7 @@ class TestComparisonConsistencyInvariant:
         dropped = roster[0]  # Star Hitter
         other_player = Player(
             name="Replacement", player_type="hitter",
-            ros=HitterStats(pa=600, ab=530, h=140, r=75, hr=28, rbi=85, sb=3, avg=0.264),
+            rest_of_season=HitterStats(pa=600, ab=530, h=140, r=75, hr=28, rbi=85, sb=3, avg=0.264),
         )
 
         result = compute_comparison_standings(
@@ -513,7 +513,7 @@ class TestComparisonConsistencyInvariant:
         )
 
         for cat_attr, roto_cat in [("r", "R"), ("hr", "HR"), ("rbi", "RBI"), ("sb", "SB")]:
-            player_delta = getattr(dropped.ros, cat_attr) - getattr(other_player.ros, cat_attr)
+            player_delta = getattr(dropped.rest_of_season, cat_attr) - getattr(other_player.rest_of_season, cat_attr)
             team_delta = (
                 result["before"]["stats"]["My Team"][roto_cat]
                 - result["after"]["stats"]["My Team"][roto_cat]
@@ -547,7 +547,7 @@ class TestComparisonConsistencyInvariant:
 
         other_player = Player(
             name="Replacement", player_type="hitter",
-            ros=HitterStats(pa=600, ab=530, h=140, r=75, hr=28, rbi=85, sb=3, avg=0.264),
+            rest_of_season=HitterStats(pa=600, ab=530, h=140, r=75, hr=28, rbi=85, sb=3, avg=0.264),
         )
 
         result = compute_comparison_standings(
