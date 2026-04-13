@@ -626,63 +626,56 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/players/browse")
     def api_player_browse():
-        """Return all ROS-projected players with stats, rank, SGP, wSGP, ownership."""
+        """Return all ROS-projected players with stats, rank, SGP, wSGP, ownership.
+
+        Reads from Redis caches (ros_projections, roster, opp_rosters,
+        rankings, leverage) so the page works without a local SQLite DB.
+        """
         from fantasy_baseball.utils.name_utils import normalize_name
-        from fantasy_baseball.utils.time_utils import local_today
         from fantasy_baseball.sgp.rankings import lookup_rank
         from fantasy_baseball.models.player import Player, HitterStats, PitcherStats, RankInfo
 
-        conn = _get_search_db()
-        try:
-            season = local_today().year
-            snapshot = _get_latest_ros_snapshot(conn, season)
-            if not snapshot:
-                return jsonify([])
+        ros_cache = read_cache("ros_projections")
+        if not ros_cache:
+            return jsonify([])
 
-            all_rows = conn.execute(
-                "SELECT * FROM ros_blended_projections WHERE year = ? AND snapshot_date = ?",
-                (season, snapshot),
-            ).fetchall()
+        config = _load_config()
+        rankings_cache = read_cache("rankings") or {}
+        leverage = _get_leverage()
 
-            config = _load_config()
-            pos_map, owner_map = _build_roster_maps(conn, config.team_name)
-            rankings_cache = read_cache("rankings") or {}
-            leverage = _get_leverage()
+        # Build position and ownership maps from Redis caches
+        pos_map: dict[str, list[str]] = {}
+        owner_map: dict[str, str] = {}
+        roster_wsgp: dict[str, float] = {}
 
-            # Use cached roster wSGP for rostered players (includes recency blending)
-            roster_wsgp = {}
-            roster_cache = read_cache("roster") or []
-            for rp in roster_cache:
-                rn = normalize_name(rp.get("name", ""))
-                if rp.get("wsgp"):
-                    roster_wsgp[rn] = rp["wsgp"]
+        for rp in (read_cache("roster") or []):
+            norm = normalize_name(rp.get("name", ""))
+            owner_map[norm] = "roster"
+            if rp.get("positions"):
+                pos_map[norm] = rp["positions"]
+            if rp.get("wsgp"):
+                roster_wsgp[norm] = rp["wsgp"]
 
-            # Actual PA/BF from game logs for significance indicators
-            actual_pa: dict[str, float] = {}
-            for r in conn.execute(
-                "SELECT name, SUM(pa) as pa FROM game_logs "
-                "WHERE season = ? AND player_type = 'hitter' GROUP BY name",
-                (season,),
-            ).fetchall():
-                actual_pa[normalize_name(r["name"])] = r["pa"] or 0
+        for team_name_opp, team_roster in (read_cache("opp_rosters") or {}).items():
+            for rp in team_roster:
+                norm = normalize_name(rp.get("name", ""))
+                if norm not in owner_map:
+                    owner_map[norm] = team_name_opp
+                if rp.get("positions"):
+                    pos_map[norm] = rp["positions"]
 
-            actual_pitcher_logs: dict[str, dict] = {}
-            for r in conn.execute(
-                "SELECT name, SUM(ip) as ip, SUM(bb) as bb, SUM(h_allowed) as h_allowed "
-                "FROM game_logs WHERE season = ? AND player_type = 'pitcher' GROUP BY name",
-                (season,),
-            ).fetchall():
-                actual_pitcher_logs[normalize_name(r["name"])] = {
-                    "ip": r["ip"] or 0, "bb": r["bb"] or 0, "h_allowed": r["h_allowed"] or 0,
-                }
-
-            players = []
-            for row in all_rows:
-                d = dict(row)
-                name = d["name"]
+        players = []
+        for pool in [ros_cache.get("hitters", []), ros_cache.get("pitchers", [])]:
+            for d in pool:
+                name = d.get("name", "")
                 norm = normalize_name(name)
-                ptype = d["player_type"]
+                ptype = d.get("player_type", "")
+                if not ptype:
+                    continue
                 fg_id = d.get("fg_id")
+                team = d.get("team")
+                if team != team and isinstance(team, float):
+                    team = ""  # NaN team
 
                 stats_cls = HitterStats if ptype == PlayerType.HITTER else PitcherStats
                 ros = stats_cls.from_dict(d)
@@ -693,7 +686,7 @@ def register_routes(app: Flask) -> None:
                 p = Player(
                     name=name,
                     player_type=ptype,
-                    team=d.get("team", ""),
+                    team=team or "",
                     fg_id=fg_id,
                     positions=pos_map.get(norm, []),
                     rest_of_season=ros,
@@ -729,9 +722,7 @@ def register_routes(app: Flask) -> None:
 
                 players.append(result)
 
-            return jsonify(players)
-        finally:
-            conn.close()
+        return jsonify(players)
 
     @app.route("/api/players/compare")
     def api_player_compare():
