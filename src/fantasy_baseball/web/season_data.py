@@ -1078,7 +1078,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         hitter_logs, pitcher_logs = _load_game_log_totals(config.season_year)
 
         # Attach pace data to each roster player (pace compares actuals vs preseason)
-        sgp_denoms = config.sgp_denominators
+        from fantasy_baseball.sgp.denominators import get_sgp_denominators
+        sgp_denoms = get_sgp_denominators(config.sgp_overrides)
         for player in roster_players:
             norm = normalize_name(player.name)
             if player.player_type == PlayerType.HITTER:
