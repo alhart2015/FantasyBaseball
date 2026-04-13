@@ -119,6 +119,7 @@ CACHE_FILES = {
     "transaction_analyzer": "transaction_analyzer.json",
     "transactions": "transactions.json",
     "ros_projections": "ros_projections.json",
+    "positions": "positions.json",
 }
 
 
