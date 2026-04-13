@@ -136,6 +136,32 @@
         </tr>
     </thead>
     <tbody>
+    {% if lineup.hitter_totals %}
+    {% set t = lineup.hitter_totals %}
+    <tr class="totals-row">
+        <td></td>
+        <td style="text-align: left; font-weight: 600;">Team Totals</td>
+        <td></td>
+        {% for cat in ["PA", "R", "HR", "RBI", "SB", "AVG"] %}
+        {% set st = t.get(cat, {}) %}
+        <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'PA' %} pa-col{% endif %}" style="font-weight: 600;">
+            {% if st.get('actual') is not none %}
+                {% if cat == 'AVG' %}{{ "%.3f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}
+            {% else %}—{% endif %}
+            {% if st.get('z_score') is defined and cat not in ['PA'] %}
+            <div class="tooltip">
+                <div style="font-weight: 600; margin-bottom: 6px;">Team — {{ cat }}</div>
+                <div class="tooltip-row"><span class="tooltip-label">Actual</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}</span></div>
+                <div class="tooltip-row"><span class="tooltip-label">Expected pace</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.expected) }}{% else %}{{ st.expected }}{% endif %}</span></div>
+                <div class="tooltip-row"><span class="tooltip-label">Z-score</span><span class="tooltip-val">{{ "%+.1f"|format(st.z_score) }}</span></div>
+            </div>
+            {% endif %}
+        </td>
+        {% endfor %}
+        <td></td>
+        <td></td>
+    </tr>
+    {% endif %}
     {% for h in lineup.hitters %}
         {% set s = h.pace if h.pace else {} %}
         <tr class="{% if h.is_bench %}bench-row{% endif %}{% if h.is_il and not h.is_bench %} il-active-row{% endif %}">
@@ -209,6 +235,31 @@
         </tr>
     </thead>
     <tbody>
+    {% if lineup.pitcher_totals %}
+    {% set t = lineup.pitcher_totals %}
+    <tr class="totals-row">
+        <td></td>
+        <td style="text-align: left; font-weight: 600;">Team Totals</td>
+        {% for cat in ["IP", "W", "K", "SV", "ERA", "WHIP"] %}
+        {% set st = t.get(cat, {}) %}
+        <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'IP' %} pa-col{% endif %}" style="font-weight: 600;">
+            {% if st.get('actual') is not none %}
+                {% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.actual) }}{% elif cat == 'IP' %}{{ "%.1f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}
+            {% else %}—{% endif %}
+            {% if st.get('z_score') is defined and cat != 'IP' %}
+            <div class="tooltip">
+                <div style="font-weight: 600; margin-bottom: 6px;">Team — {{ cat }}</div>
+                <div class="tooltip-row"><span class="tooltip-label">Actual</span><span class="tooltip-val">{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.actual) }}{% elif cat == 'IP' %}{{ "%.1f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}</span></div>
+                <div class="tooltip-row"><span class="tooltip-label">Expected pace</span><span class="tooltip-val">{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.expected) }}{% elif cat == 'IP' %}{{ "%.1f"|format(st.expected) }}{% else %}{{ st.expected }}{% endif %}</span></div>
+                <div class="tooltip-row"><span class="tooltip-label">Z-score</span><span class="tooltip-val">{{ "%+.1f"|format(st.z_score) }}</span></div>
+            </div>
+            {% endif %}
+        </td>
+        {% endfor %}
+        <td></td>
+        <td></td>
+    </tr>
+    {% endif %}
     {% for p in lineup.pitchers %}
         {% set s = p.pace if p.pace else {} %}
         <tr class="{% if p.is_bench %}bench-row{% endif %}{% if p.is_il and not p.is_bench %} il-active-row{% endif %}">

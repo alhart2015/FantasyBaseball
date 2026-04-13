@@ -546,6 +546,137 @@ HITTER_SLOTS_ORDER = ["C", "1B", "2B", "3B", "SS", "IF", "OF", "OF", "OF", "OF",
                        "UTIL", "UTIL", "BN", "IL"]
 
 
+def _compute_team_totals_pace(players: list[dict], player_type: str) -> dict:
+    """Sum pace data across active players to produce a team totals row.
+
+    For counting stats (R, HR, RBI, SB / W, K, SV): sums actual and expected,
+    then computes z-score from the ratio. For rate stats (AVG / ERA, WHIP):
+    computes from component totals (H/AB or ER/IP, (BB+H)/IP) using the
+    same variance-based z-score as individual players.
+    """
+    from fantasy_baseball.analysis.pace import _z_to_color, STAT_VARIANCE
+    from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
+
+    active = [p for p in players if not p["is_bench"]]
+
+    if player_type == "hitter":
+        counting_cats = ["R", "HR", "RBI", "SB"]
+        opp_cat = "PA"
+    else:
+        counting_cats = ["W", "K", "SV"]
+        opp_cat = "IP"
+
+    totals: dict = {}
+
+    # Sum opportunity stat (PA / IP)
+    opp_total = sum(
+        p.get("pace", {}).get(opp_cat, {}).get("actual", 0) or 0
+        for p in active
+    )
+    totals[opp_cat] = {"actual": opp_total, "color_class": "stat-neutral"}
+
+    # Sum counting stats
+    for cat in counting_cats:
+        actual = sum(
+            p.get("pace", {}).get(cat, {}).get("actual", 0) or 0
+            for p in active
+        )
+        expected = sum(
+            p.get("pace", {}).get(cat, {}).get("expected", 0) or 0
+            for p in active
+        )
+        if expected > 0:
+            ratio = actual / expected
+            variance = STAT_VARIANCE.get(cat.lower(), 0.0)
+            z = (ratio - 1.0) / variance if variance > 0 else 0.0
+        else:
+            z = 0.0
+        totals[cat] = {
+            "actual": actual,
+            "expected": round(expected, 1),
+            "z_score": round(z, 2),
+            "color_class": _z_to_color(z),
+        }
+
+    # Rate stats from component totals
+    if player_type == "hitter":
+        standings = read_cache("standings") or []
+        meta = read_meta() or {}
+        team_name = meta.get("team_name", "")
+        team_stats = {}
+        for t in standings:
+            if t.get("name") == team_name:
+                team_stats = t.get("stats", {})
+                break
+
+        actual_avg = team_stats.get("AVG", 0.0)
+        # Use preseason projection average as expected
+        proj_avgs = [
+            p.get("pace", {}).get("AVG", {}).get("expected", 0)
+            for p in active if p.get("pace", {}).get("AVG", {}).get("expected")
+        ]
+        expected_avg = sum(
+            p.get("pace", {}).get("AVG", {}).get("expected", 0) * p.get("pace", {}).get("PA", {}).get("actual", 0)
+            for p in active if p.get("pace", {}).get("AVG", {}).get("expected")
+        )
+        total_pa = sum(
+            p.get("pace", {}).get("PA", {}).get("actual", 0)
+            for p in active if p.get("pace", {}).get("AVG", {}).get("expected")
+        )
+        expected_avg = expected_avg / total_pa if total_pa > 0 else 0.0
+
+        if expected_avg > 0 and actual_avg > 0:
+            variance = STAT_VARIANCE.get("h", 0.0)
+            z = (actual_avg - expected_avg) / (variance * expected_avg) if variance > 0 else 0.0
+        else:
+            z = 0.0
+        totals["AVG"] = {
+            "actual": round(actual_avg, 3),
+            "expected": round(expected_avg, 3),
+            "z_score": round(z, 2),
+            "color_class": _z_to_color(z),
+        }
+    else:
+        standings = read_cache("standings") or []
+        meta = read_meta() or {}
+        team_name = meta.get("team_name", "")
+        team_stats = {}
+        for t in standings:
+            if t.get("name") == team_name:
+                team_stats = t.get("stats", {})
+                break
+
+        for rate_cat, component, calc_fn in [
+            ("ERA", "er", calculate_era),
+            ("WHIP", "h_allowed", calculate_whip),
+        ]:
+            actual_val = team_stats.get(rate_cat, 0.0)
+            # PA-weighted expected from individual projections
+            proj_vals = [
+                (p.get("pace", {}).get(rate_cat, {}).get("expected", 0),
+                 p.get("pace", {}).get("IP", {}).get("actual", 0))
+                for p in active if p.get("pace", {}).get(rate_cat, {}).get("expected")
+            ]
+            weighted = sum(v * ip for v, ip in proj_vals)
+            total_ip = sum(ip for _, ip in proj_vals)
+            expected_val = weighted / total_ip if total_ip > 0 else 0.0
+
+            if expected_val > 0 and actual_val > 0:
+                variance = STAT_VARIANCE.get(component, 0.0)
+                z = (actual_val - expected_val) / (variance * expected_val) if variance > 0 else 0.0
+                z = -z  # inverse: lower is better
+            else:
+                z = 0.0
+            totals[rate_cat] = {
+                "actual": round(actual_val, 2) if rate_cat != "AVG" else round(actual_val, 3),
+                "expected": round(expected_val, 2),
+                "z_score": round(z, 2),
+                "color_class": _z_to_color(z),
+            }
+
+    return totals
+
+
 def format_lineup_for_display(
     roster: list[dict], optimal: dict | None
 ) -> dict:
@@ -597,6 +728,8 @@ def format_lineup_for_display(
     return {
         "hitters": hitters,
         "pitchers": pitchers,
+        "hitter_totals": _compute_team_totals_pace(hitters, "hitter"),
+        "pitcher_totals": _compute_team_totals_pace(pitchers, "pitcher"),
         "is_optimal": len(moves) == 0,
         "moves": moves,
     }
