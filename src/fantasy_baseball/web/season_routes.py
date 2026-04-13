@@ -985,6 +985,8 @@ def register_routes(app: Flask) -> None:
             "rank": opponent.get("rank", 0),
             "hitters": lineup["hitters"],
             "pitchers": lineup["pitchers"],
+            "hitter_totals": lineup["hitter_totals"],
+            "pitcher_totals": lineup["pitcher_totals"],
         }
 
         _opponent_cache[team_key] = {

@@ -269,6 +269,8 @@ class TestApiOpponentLineup:
             mock_build.return_value = {
                 "hitters": [{"name": "Salvador Perez", "wsgp_them": 1.8, "wsgp_you": 2.1}],
                 "pitchers": [],
+                "hitter_totals": {},
+                "pitcher_totals": {},
             }
             mock_league.return_value = (MagicMock(), "469.l.5652.t.3")
             mock_proj.return_value = (hitters_proj, pitchers_proj, pd.DataFrame(), pd.DataFrame())
