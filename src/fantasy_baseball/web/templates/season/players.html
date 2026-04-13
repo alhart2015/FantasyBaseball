@@ -318,7 +318,7 @@ function render() {
             '<td class="' + ownerClass + '">' + ownerText + '</td>';
 
         cats.forEach(c => {
-            const sig = p.significant && p.significant[c] ? 'stat-significant' : '';
+            const sig = '';
             cells += '<td class="' + sig + '">' + fmt(p[c], c) + '</td>';
         });
         cells += '<td>' + (p.sgp != null ? p.sgp.toFixed(1) : '\u2014') + '</td>';

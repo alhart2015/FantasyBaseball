@@ -1081,19 +1081,26 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         hitter_logs, pitcher_logs = _load_game_log_totals(config.season_year)
 
         # Attach pace data to each roster player (pace compares actuals vs preseason)
+        sgp_denoms = config.sgp_denominators
         for player in roster_players:
             norm = normalize_name(player.name)
             if player.player_type == PlayerType.HITTER:
                 actuals = hitter_logs.get(norm, {})
+                ros_keys = ["r", "hr", "rbi", "sb", "avg"]
             else:
                 actuals = pitcher_logs.get(norm, {})
+                ros_keys = ["w", "k", "sv", "era", "whip"]
             proj_keys = HITTER_PROJ_KEYS if player.player_type == PlayerType.HITTER else PITCHER_PROJ_KEYS
             pre_player = preseason_lookup.get(norm)
             if pre_player and pre_player.ros:
                 projected = {k: getattr(pre_player.ros, k, 0) for k in proj_keys}
             else:
                 projected = {k: 0 for k in proj_keys}
-            player.pace = compute_player_pace(actuals, projected, player.player_type)
+            ros_dict = {k: getattr(player.ros, k, 0) for k in ros_keys} if player.ros else None
+            player.pace = compute_player_pace(
+                actuals, projected, player.player_type,
+                ros_stats=ros_dict, sgp_denoms=sgp_denoms,
+            )
 
         # --- Step 6e: Compute wSGP on raw ROS stats ---
         # NOTE: recency blending was removed here because FanGraphs ROS

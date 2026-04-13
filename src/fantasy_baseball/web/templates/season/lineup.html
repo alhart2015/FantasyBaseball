@@ -154,7 +154,10 @@
             </td>
             {% for cat in ["PA", "R", "HR", "RBI", "SB", "AVG"] %}
             {% set st = s.get(cat, {}) if s else {} %}
-            <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'PA' %} pa-col{% endif %}{% if st.get('significant') %} stat-significant{% endif %}">
+            {% set dev = st.get('ros_deviation_sgp', 0)|int %}
+            {% set dev_abs = dev if dev > 0 else -dev %}
+            {% set dev_clamped = [dev_abs, 3]|min %}
+            <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'PA' %} pa-col{% endif %}{% if dev > 0 %} stat-ros-up stat-ros-{{ dev_clamped }}{% elif dev < 0 %} stat-ros-down stat-ros-{{ dev_clamped }}{% endif %}">
                 {% if st and st.get('actual') is not none and (st.get('actual', 0) != 0 or s.get('PA', {}).get('actual', 0) > 0) %}
                     {% if cat == 'AVG' %}{{ "%.3f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}
                 {% else %}—{% endif %}
@@ -163,7 +166,7 @@
                     <div style="font-weight: 600; margin-bottom: 6px;">{{ h.name }} — {{ cat }}</div>
                     <div class="tooltip-row"><span class="tooltip-label">Actual</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}</span></div>
                     <div class="tooltip-row"><span class="tooltip-label">{% if cat == 'AVG' %}Projection{% else %}Expected pace{% endif %}</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.expected) }}{% else %}{{ st.expected }}{% endif %}</span></div>
-                    <div class="tooltip-row"><span class="tooltip-label">Z-score</span><span class="tooltip-val">{% if st.get('below_threshold') %}<span style="color: var(--text-secondary); font-style: italic;">below threshold</span>{% else %}{{ "%+.1f"|format(st.z_score) }}{% endif %}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">Z-score</span><span class="tooltip-val">{{ "%+.1f"|format(st.z_score) }}</span></div>
                     <div class="tooltip-divider"></div>
                     {% if cat != 'AVG' %}
                     <div class="tooltip-row"><span class="tooltip-label">Pre-season proj</span><span class="tooltip-val">{{ st.projection }} {{ cat }}</span></div>
@@ -221,7 +224,10 @@
             <td style="text-align: left; font-weight: 500;">{{ p.name }} {{ rank_badge(p.rank) }}</td>
             {% for cat in ["IP", "W", "K", "SV", "ERA", "WHIP"] %}
             {% set st = s.get(cat, {}) if s else {} %}
-            <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'IP' %} pa-col{% endif %}{% if st.get('significant') %} stat-significant{% endif %}">
+            {% set dev = st.get('ros_deviation_sgp', 0)|int %}
+            {% set dev_abs = dev if dev > 0 else -dev %}
+            {% set dev_clamped = [dev_abs, 3]|min %}
+            <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'IP' %} pa-col{% endif %}{% if dev > 0 %} stat-ros-up stat-ros-{{ dev_clamped }}{% elif dev < 0 %} stat-ros-down stat-ros-{{ dev_clamped }}{% endif %}">
                 {% if st and st.get('actual') is not none and (st.get('actual', 0) != 0 or s.get('IP', {}).get('actual', 0) > 0) %}
                     {% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.actual) }}{% elif cat == 'IP' %}{{ st.actual }}{% else %}{{ st.actual }}{% endif %}
                 {% else %}—{% endif %}
@@ -230,7 +236,7 @@
                     <div style="font-weight: 600; margin-bottom: 6px;">{{ p.name }} — {{ cat }}</div>
                     <div class="tooltip-row"><span class="tooltip-label">Actual</span><span class="tooltip-val">{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}</span></div>
                     <div class="tooltip-row"><span class="tooltip-label">{% if cat in ['ERA', 'WHIP'] %}Projection{% else %}Expected pace{% endif %}</span><span class="tooltip-val">{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.expected) }}{% else %}{{ st.expected }}{% endif %}</span></div>
-                    <div class="tooltip-row"><span class="tooltip-label">Z-score</span><span class="tooltip-val">{% if st.get('below_threshold') %}<span style="color: var(--text-secondary); font-style: italic;">below threshold</span>{% else %}{{ "%+.1f"|format(st.z_score) }}{% endif %}</span></div>
+                    <div class="tooltip-row"><span class="tooltip-label">Z-score</span><span class="tooltip-val">{{ "%+.1f"|format(st.z_score) }}</span></div>
                     <div class="tooltip-divider"></div>
                     {% if cat not in ['ERA', 'WHIP'] %}
                     <div class="tooltip-row"><span class="tooltip-label">Pre-season proj</span><span class="tooltip-val">{{ st.projection }} {{ cat }}</span></div>

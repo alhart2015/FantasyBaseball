@@ -1,3 +1,5 @@
+import pytest
+
 from fantasy_baseball.analysis.pace import compute_player_pace
 
 
@@ -182,33 +184,49 @@ def test_no_projection_shows_actuals_neutral():
     assert result["HR"].get("z_score", 0) == 0.0
 
 
-def test_significance_flags_in_pace_output():
-    """Pace output includes 'significant' key per stat based on stabilization thresholds."""
-    from fantasy_baseball.analysis.pace import compute_player_pace
+def test_hitter_ros_deviation_sgp():
+    """ROS deviation = (ros - preseason) / sgp_denom, positive = good."""
+    preseason = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    ros = {"r": 100, "hr": 33, "rbi": 85, "sb": 12, "avg": 0.290}
+    sgp = {"R": 20, "HR": 9, "RBI": 20, "SB": 8, "AVG": 0.005}
+    actual = {"pa": 60, "r": 9, "hr": 3, "rbi": 9, "sb": 1, "h": 15, "ab": 54}
+    result = compute_player_pace(actual, preseason, "hitter", ros_stats=ros, sgp_denoms=sgp)
 
-    # Hitter with 100 PA — below HR threshold (170) but above for counting stats
-    actual = {"pa": 100, "ab": 90, "h": 25, "r": 12, "hr": 5, "rbi": 15, "sb": 2}
-    projected = {"pa": 600, "ab": 540, "h": 150, "r": 80, "hr": 25, "rbi": 85, "sb": 10, "avg": 0.278}
-    result = compute_player_pace(actual, projected, "hitter")
+    # R: (100 - 90) / 20 = 0.5
+    assert result["R"]["ros_deviation_sgp"] == pytest.approx(0.5, abs=0.01)
+    # HR: (33 - 30) / 9 = 0.33
+    assert result["HR"]["ros_deviation_sgp"] == pytest.approx(0.333, abs=0.01)
+    # RBI: (85 - 90) / 20 = -0.25
+    assert result["RBI"]["ros_deviation_sgp"] == pytest.approx(-0.25, abs=0.01)
+    # SB: (12 - 10) / 8 = 0.25
+    assert result["SB"]["ros_deviation_sgp"] == pytest.approx(0.25, abs=0.01)
+    # AVG: (0.290 - 0.278) / 0.005 = 2.4
+    assert result["AVG"]["ros_deviation_sgp"] == pytest.approx(2.4, abs=0.01)
 
-    assert result["R"]["significant"] is False  # no threshold defined
-    assert result["HR"]["significant"] is False  # 100 PA < 170
-    assert result["RBI"]["significant"] is False  # no threshold defined
-    assert result["SB"]["significant"] is False  # no threshold defined
-    assert result["AVG"]["significant"] is False  # no threshold defined
+
+def test_pitcher_ros_deviation_sgp():
+    """Pitcher ROS deviation: ERA/WHIP are inverse (lower = positive deviation)."""
+    preseason = {"ip": 180, "w": 12, "k": 190, "sv": 0, "er": 60, "bb": 50, "h_allowed": 150,
+                 "era": 3.00, "whip": 1.11}
+    ros = {"w": 14, "k": 200, "sv": 0, "era": 2.70, "whip": 1.05}
+    sgp = {"W": 3, "K": 30, "SV": 7, "ERA": 0.15, "WHIP": 0.015}
+    actual = {"ip": 18.0, "k": 22, "w": 1, "sv": 0, "er": 5, "bb": 5, "h_allowed": 16}
+    result = compute_player_pace(actual, preseason, "pitcher", ros_stats=ros, sgp_denoms=sgp)
+
+    # W: (14 - 12) / 3 = 0.667
+    assert result["W"]["ros_deviation_sgp"] == pytest.approx(0.667, abs=0.01)
+    # K: (200 - 190) / 30 = 0.333
+    assert result["K"]["ros_deviation_sgp"] == pytest.approx(0.333, abs=0.01)
+    # ERA: (2.70 - 3.00) / 0.15 = -2.0, flip sign -> +2.0 (lower ERA = good)
+    assert result["ERA"]["ros_deviation_sgp"] == pytest.approx(2.0, abs=0.01)
+    # WHIP: (1.05 - 1.11) / 0.015 = -4.0, flip sign -> +4.0
+    assert result["WHIP"]["ros_deviation_sgp"] == pytest.approx(4.0, abs=0.01)
 
 
-def test_significance_pitcher():
-    """Pitcher significance uses BF = ip*3 + h_allowed + bb."""
-    from fantasy_baseball.analysis.pace import compute_player_pace
-
-    # BF = 25*3 + 20 + 8 = 103 — above K (70) but below ERA (630) and WHIP (570)
-    actual = {"ip": 25, "k": 30, "w": 2, "sv": 0, "er": 10, "bb": 8, "h_allowed": 20}
-    projected = {"ip": 180, "w": 12, "k": 180, "sv": 0, "er": 60, "bb": 50, "h_allowed": 160, "era": 3.00, "whip": 1.17}
-    result = compute_player_pace(actual, projected, "pitcher")
-
-    assert result["K"]["significant"] is True   # 103 >= 70
-    assert result["ERA"]["significant"] is False  # 103 < 630
-    assert result["WHIP"]["significant"] is False  # 103 < 570
-    assert result["W"]["significant"] is False  # no threshold defined
-    assert result["SV"]["significant"] is False  # no threshold defined
+def test_ros_deviation_zero_when_no_ros():
+    """When ros_stats or sgp_denoms are None, ros_deviation_sgp should be 0."""
+    preseason = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    actual = {"pa": 60, "r": 9, "hr": 3, "rbi": 9, "sb": 1, "h": 15, "ab": 54}
+    result = compute_player_pace(actual, preseason, "hitter")
+    assert result["HR"]["ros_deviation_sgp"] == 0.0
+    assert result["AVG"]["ros_deviation_sgp"] == 0.0
