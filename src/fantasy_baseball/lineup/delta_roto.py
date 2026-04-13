@@ -120,6 +120,70 @@ def score_swap(
     )
 
 
+def compute_delta_roto(
+    drop_name: str,
+    add_player: "Player",
+    user_roster: "list[Player]",
+    projected_standings: list[dict],
+    team_name: str,
+    *,
+    fragile_threshold: float = FRAGILE_THRESHOLD,
+    erosion_weight: float = EROSION_WEIGHT,
+    tie_floor: float = TIE_FLOOR,
+    erosion_cap: float = EROSION_CAP,
+) -> DeltaRotoResult:
+    """Compute deltaRoto for dropping one player and adding another.
+
+    Args:
+        drop_name: name of the roster player to drop.
+        add_player: Player object for the player to add.
+        user_roster: current roster as list of Player objects.
+        projected_standings: projected end-of-season stats for all OTHER teams.
+        team_name: user's team name.
+
+    Raises:
+        ValueError: if drop_name is not found on the roster.
+    """
+    from fantasy_baseball.scoring import project_team_stats, score_roto
+    from fantasy_baseball.sgp.denominators import get_sgp_denominators
+
+    drop_idx = None
+    for i, p in enumerate(user_roster):
+        if p.name == drop_name:
+            drop_idx = i
+            break
+    if drop_idx is None:
+        raise ValueError(f"Player '{drop_name}' not found on roster")
+
+    denoms = get_sgp_denominators()
+
+    all_before: dict[str, dict[str, float]] = {
+        t["name"]: dict(t["stats"]) for t in projected_standings
+    }
+    all_before[team_name] = project_team_stats(user_roster).to_dict()
+
+    roster_after = [p for i, p in enumerate(user_roster) if i != drop_idx]
+    roster_after.append(add_player)
+    all_after: dict[str, dict[str, float]] = {
+        t["name"]: dict(t["stats"]) for t in projected_standings
+    }
+    all_after[team_name] = project_team_stats(roster_after).to_dict()
+
+    roto_before = score_roto(all_before)
+    roto_after = score_roto(all_after)
+
+    comfort_before = compute_defense_comfort(all_before, team_name, denoms)
+    comfort_after = compute_defense_comfort(all_after, team_name, denoms)
+
+    return score_swap(
+        roto_before, roto_after, comfort_before, comfort_after, team_name,
+        fragile_threshold=fragile_threshold,
+        erosion_weight=erosion_weight,
+        tie_floor=tie_floor,
+        erosion_cap=erosion_cap,
+    )
+
+
 def compute_defense_comfort(
     all_stats: dict[str, dict[str, float]],
     team_name: str,
