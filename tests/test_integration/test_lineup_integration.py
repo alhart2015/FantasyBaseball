@@ -8,7 +8,7 @@ from datetime import date
 
 import pytest
 
-from fantasy_baseball.lineup.leverage import calculate_leverage, MAX_MEANINGFUL_GAP_MULTIPLIER
+from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
@@ -204,9 +204,10 @@ class TestLeverageIntegration:
         total = sum(leverage.values())
         assert total == pytest.approx(1.0, abs=1e-6)
 
-    def test_tied_category_capped(self, midseason_standings):
+    def test_tied_category_not_dominant(self, midseason_standings):
         """When one category has a near-zero gap (0.01), its leverage
-        should not exceed 35% of total weight thanks to the median cap."""
+        should not exceed 35% of total weight. Under marginal roto, a
+        near-tie to a single team is still only 1 roto point at stake."""
         # Force SB to be nearly tied between user and team above (rank 4)
         import dataclasses
         modified = []
@@ -223,8 +224,8 @@ class TestLeverageIntegration:
         leverage = calculate_leverage(tied_standings, "Hart of the Order", season_progress=1.0)
 
         assert leverage["SB"] < 0.35, (
-            f"SB leverage {leverage['SB']:.4f} exceeds 35% cap despite "
-            f"MAX_MEANINGFUL_GAP_MULTIPLIER capping"
+            f"SB leverage {leverage['SB']:.4f} exceeds 35% — a near-tie to "
+            f"one team is still only 1 roto point at stake"
         )
         # All other categories combined should still carry majority weight
         non_sb_total = sum(v for k, v in leverage.items() if k != "SB")

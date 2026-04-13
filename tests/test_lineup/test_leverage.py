@@ -151,23 +151,33 @@ class TestCalculateLeverage:
             f"when user is last with a huge deficit"
         )
 
-    def test_tiny_gap_gets_high_leverage(self):
-        """A category where user is nearly tied with a neighbor should get
-        high leverage — that's the easiest point to gain/lose."""
+    def test_packed_cluster_gets_high_leverage(self):
+        """A category where many teams are packed within 1 SGP denom should
+        get high leverage — gaining or losing 1 denom of production swings
+        multiple roto points."""
         import dataclasses
         base = _make_standings()
-        # Make User Team nearly tied in R with the team above in R
+        # Pack 5 teams within 1 SB denom (8) of user: user at 50,
+        # others at 51, 52, 53, 54, 55 — all within 8 SB.
+        # Gaining 8 SB passes all 5; losing 8 could drop through others below.
         entries = []
         for e in base.entries:
             if e.team_name == "Team 4":
-                e = dataclasses.replace(e, stats=dataclasses.replace(e.stats, r=450.5))
-            elif e.team_name == "User Team":
-                e = dataclasses.replace(e, stats=dataclasses.replace(e.stats, r=450.0))
+                e = dataclasses.replace(e, stats=dataclasses.replace(e.stats, sb=55))
+            elif e.team_name == "Team 3":
+                e = dataclasses.replace(e, stats=dataclasses.replace(e.stats, sb=54))
+            elif e.team_name == "Team 2":
+                e = dataclasses.replace(e, stats=dataclasses.replace(e.stats, sb=53))
+            elif e.team_name == "Team 1":
+                e = dataclasses.replace(e, stats=dataclasses.replace(e.stats, sb=52))
+            elif e.team_name == "Team 6":
+                e = dataclasses.replace(e, stats=dataclasses.replace(e.stats, sb=51))
             entries.append(e)
         standings = StandingsSnapshot(effective_date=base.effective_date, entries=entries)
         leverage = calculate_leverage(standings, "User Team", season_progress=1.0)
-        assert leverage["R"] == max(leverage.values()) or leverage["R"] > 0.15, (
-            f"R leverage ({leverage['R']:.4f}) should be high when nearly tied"
+        assert leverage["SB"] == max(leverage.values()) or leverage["SB"] > 0.15, (
+            f"SB leverage ({leverage['SB']:.4f}) should be high when 5 teams "
+            f"are packed within 1 denom"
         )
 
     def test_uniform_sgp_gaps_give_equal_leverage(self):
@@ -318,6 +328,60 @@ class TestCalculateLeverage:
         assert leverage["R"] > leverage["SB"], (
             f"R ({leverage['R']:.4f}) should beat SB ({leverage['SB']:.4f}): "
             f"R gap is 1 run, SB cushion is 20 steals"
+        )
+
+
+    def test_cliff_risk_multiple_roto_points_at_stake(self):
+        """Regression test for the cliff-risk bug (TODO: wSGP underweights
+        cliff risk in packed categories).
+
+        User is 1st in SB at 100, teams 2-6 are packed at 93-97.
+        Losing one SB denom (8) drops to 92, falling behind all 5.
+        SB should get high leverage: 5 roto points at risk, not 1.
+
+        With the old single-neighbor approach, SB leverage was low because
+        the gap to 2nd (3 SB) was smaller than other counting gaps. The
+        marginal roto approach correctly identifies the cliff.
+        """
+        standings = _list_to_snapshot([
+            {"name": "User", "rank": 1, "stats": {
+                "R": 100, "HR": 30, "RBI": 100, "SB": 100,
+                "AVG": 0.270, "W": 15, "K": 200, "SV": 10,
+                "ERA": 3.50, "WHIP": 1.20,
+            }},
+            # Teams 2-6: packed in SB just below user (93-97)
+            {"name": "Team 2", "rank": 2, "stats": {
+                "R": 95, "HR": 28, "RBI": 95, "SB": 97,
+                "AVG": 0.265, "W": 14, "K": 190, "SV": 9,
+                "ERA": 3.60, "WHIP": 1.22,
+            }},
+            {"name": "Team 3", "rank": 3, "stats": {
+                "R": 90, "HR": 26, "RBI": 90, "SB": 96,
+                "AVG": 0.260, "W": 13, "K": 180, "SV": 8,
+                "ERA": 3.70, "WHIP": 1.25,
+            }},
+            {"name": "Team 4", "rank": 4, "stats": {
+                "R": 85, "HR": 24, "RBI": 85, "SB": 95,
+                "AVG": 0.255, "W": 12, "K": 170, "SV": 7,
+                "ERA": 3.80, "WHIP": 1.28,
+            }},
+            {"name": "Team 5", "rank": 5, "stats": {
+                "R": 80, "HR": 22, "RBI": 80, "SB": 94,
+                "AVG": 0.250, "W": 11, "K": 160, "SV": 6,
+                "ERA": 3.90, "WHIP": 1.30,
+            }},
+            {"name": "Team 6", "rank": 6, "stats": {
+                "R": 75, "HR": 20, "RBI": 75, "SB": 93,
+                "AVG": 0.245, "W": 10, "K": 150, "SV": 5,
+                "ERA": 4.00, "WHIP": 1.32,
+            }},
+        ])
+        leverage = calculate_leverage(standings, "User", season_progress=1.0)
+        # SB: user at 100, pack at 93-97. Losing 8 SB → 92, falling behind
+        # all 5 teams. 5 roto points of defensive risk.
+        assert leverage["SB"] == max(leverage.values()), (
+            f"SB leverage ({leverage['SB']:.4f}) should be highest when "
+            f"losing 1 denom risks dropping through a 5-team pack"
         )
 
 

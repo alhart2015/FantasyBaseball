@@ -1,17 +1,5 @@
-import statistics
-
 from fantasy_baseball.models.standings import StandingsSnapshot
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS
-
-MAX_MEANINGFUL_GAP_MULTIPLIER: float = 3.0
-
-
-def _gap_for_category(
-    cat: str, user_val: float, neighbor_val: float
-) -> float:
-    """Return the absolute gap between user and neighbor for a category."""
-    return abs(user_val - neighbor_val)
-
 
 FULL_CONFIDENCE_GAMES: int = 81
 
@@ -55,12 +43,17 @@ def _leverage_from_standings(
     attack_weight: float,
     defense_weight: float,
 ) -> dict[str, float] | None:
-    """Compute normalized leverage weights using per-category rank neighbors.
+    """Compute normalized leverage weights via marginal roto-point impact.
 
-    For each category, ranks all teams independently and finds the teams
-    directly above and below the user in THAT category. Gaps are normalized
-    by SGP denominators so that a 1-run gap in R and a 0.001 AVG gap are
-    compared on the same scale (both roughly "one standings point worth").
+    For each category, asks: "If my stat changed by one SGP denominator,
+    how many roto points would I gain or lose?"  This directly counts how
+    many teams I'd pass (attack) or be passed by (defense), capturing
+    packed clusters that the old single-neighbor approach missed.
+
+    Example: if you're 1st in SB by 20 but teams 2-5 are packed within
+    8 SB of each other, losing one denom (8 SB) drops you into that pack
+    and costs 4 roto points — not the 1 point that single-neighbor
+    leverage would predict.
 
     Returns None if the user team is not found.
     """
@@ -75,70 +68,66 @@ def _leverage_from_standings(
     if user_entry is None:
         return None
 
-    user_stats = user_entry.stats
     sgp_denoms = get_sgp_denominators()
-    epsilon = 0.001
 
     raw_leverage: dict[str, float] = {}
     for cat in ALL_CATEGORIES:
         reverse = cat not in INVERSE_STATS  # higher is better for most cats
-        ranked = sorted(standings.entries, key=lambda e: e.stats.get(cat, 0), reverse=reverse)
+        user_val = user_entry.stats.get(cat, 0)
+        denom = sgp_denoms.get(cat, 1.0)
 
-        user_cat_idx = None
-        for i, entry in enumerate(ranked):
-            if entry.team_name == user_team_name:
-                user_cat_idx = i
-                break
+        other_vals = [
+            entry.stats.get(cat, 0)
+            for entry in standings.entries
+            if entry.team_name != user_team_name
+        ]
 
-        if user_cat_idx is None:
+        if not other_vals:
             raw_leverage[cat] = 0.0
             continue
 
-        cat_above = ranked[user_cat_idx - 1] if user_cat_idx > 0 else None
-        cat_below = (
-            ranked[user_cat_idx + 1]
-            if user_cat_idx < len(ranked) - 1
-            else None
-        )
+        # Current rank: count teams better than user (0 = best)
+        if reverse:
+            current_rank = sum(1 for v in other_vals if v > user_val)
+        else:
+            current_rank = sum(1 for v in other_vals if v < user_val)
 
-        if cat_above is not None and cat_below is not None:
+        # Attack: how many positions gained if stat improves by 1 denom?
+        if reverse:
+            attack_rank = sum(1 for v in other_vals if v > user_val + denom)
+        else:
+            attack_rank = sum(1 for v in other_vals if v < user_val - denom)
+        positions_gained = current_rank - attack_rank
+
+        # Defense: how many positions lost if stat drops by 1 denom?
+        if reverse:
+            defense_rank = sum(1 for v in other_vals if v > user_val - denom)
+        else:
+            defense_rank = sum(1 for v in other_vals if v < user_val + denom)
+        positions_lost = defense_rank - current_rank
+
+        # Weight attack vs defense, floor to small positive value
+        has_attack = current_rank > 0
+        has_defense = current_rank < len(other_vals)
+
+        if has_attack and has_defense:
             w_attack = attack_weight
             w_defense = defense_weight
-        elif cat_above is not None:
+        elif has_attack:
             w_attack = 1.0
             w_defense = 0.0
-        elif cat_below is not None:
+        elif has_defense:
             w_attack = 0.0
             w_defense = 1.0
         else:
             raw_leverage[cat] = 0.0
             continue
 
-        leverage = 0.0
-        user_val = user_stats.get(cat, 0)
-        denom = sgp_denoms.get(cat, 1.0)
+        leverage = w_attack * positions_gained + w_defense * positions_lost
 
-        if cat_above is not None:
-            above_val = cat_above.stats.get(cat, 0)
-            raw_gap = _gap_for_category(cat, user_val, above_val)
-            normalized_gap = raw_gap / denom
-            leverage += w_attack * (1.0 / (normalized_gap + epsilon))
-
-        if cat_below is not None:
-            below_val = cat_below.stats.get(cat, 0)
-            raw_gap = _gap_for_category(cat, user_val, below_val)
-            normalized_gap = raw_gap / denom
-            leverage += w_defense * (1.0 / (normalized_gap + epsilon))
-
-        raw_leverage[cat] = leverage
-
-    # Cap outliers: near-tied categories produce extreme leverage values
-    # that dominate all decisions. Clamp to MAX_MEANINGFUL_GAP_MULTIPLIER × median.
-    if raw_leverage:
-        med = statistics.median(raw_leverage.values())
-        cap = med * MAX_MEANINGFUL_GAP_MULTIPLIER
-        if cap > 0:
-            raw_leverage = {cat: min(val, cap) for cat, val in raw_leverage.items()}
+        # Floor: even categories with no teams within 1 denom get a small
+        # positive value so they're never completely ignored.
+        raw_leverage[cat] = max(leverage, 0.1)
 
     total = sum(raw_leverage.values())
     if total > 0:
