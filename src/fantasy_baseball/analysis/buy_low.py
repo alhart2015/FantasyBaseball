@@ -19,7 +19,7 @@ def find_buy_low_candidates(
     """Find players underperforming projections by > 1 SD.
 
     Args:
-        players: Roster entries as Player objects with .ros projection stats.
+        players: Roster entries as Player objects with .rest_of_season projection stats.
         game_log_lookup: {normalized_name: {stat: value}} from bulk game log query.
         leverage: Per-category leverage weights for wSGP computation.
         owner: Team name or "Free Agent" for display.
@@ -45,7 +45,7 @@ def find_buy_low_candidates(
             proj_keys = PITCHER_PROJ_KEYS
             categories = PITCHING_CATEGORIES
 
-        projected = {k: getattr(player.ros, k, 0) or 0 for k in proj_keys}
+        projected = {k: getattr(player.rest_of_season, k, 0) or 0 for k in proj_keys}
         pace = compute_player_pace(actuals, projected, ptype)
 
         # Average z-scores, excluding stats where z=0 and color=neutral
@@ -69,7 +69,7 @@ def find_buy_low_candidates(
 
         # Compute wSGP using projection stats and user's leverage
         try:
-            wsgp = round(calculate_weighted_sgp(player.ros, leverage), 2)
+            wsgp = round(calculate_weighted_sgp(player.rest_of_season, leverage), 2)
         except (KeyError, ZeroDivisionError, ValueError):
             wsgp = 0.0
 

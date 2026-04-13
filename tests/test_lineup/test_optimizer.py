@@ -7,14 +7,14 @@ from fantasy_baseball.utils.constants import IL_STATUSES
 def _make_hitter(name, positions, r, hr, rbi, sb, avg, ab):
     return Player(
         name=name, player_type="hitter", positions=positions,
-        ros=HitterStats(pa=int(ab * 1.15), ab=ab, h=int(avg * ab), r=r, hr=hr, rbi=rbi, sb=sb, avg=avg),
+        rest_of_season=HitterStats(pa=int(ab * 1.15), ab=ab, h=int(avg * ab), r=r, hr=hr, rbi=rbi, sb=sb, avg=avg),
     )
 
 
 def _make_pitcher(name, positions, w, k, sv, era, whip, ip):
     return Player(
         name=name, player_type="pitcher", positions=positions,
-        ros=PitcherStats(ip=ip, w=w, k=k, sv=sv, era=era, whip=whip,
+        rest_of_season=PitcherStats(ip=ip, w=w, k=k, sv=sv, era=era, whip=whip,
                          er=era * ip / 9, bb=int(whip * ip * 0.3), h_allowed=int(whip * ip * 0.7)),
     )
 

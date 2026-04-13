@@ -138,48 +138,48 @@ def _load_yahoo_league():
 
 
 def _load_projections():
-    """Load projections from SQLite. Returns (hitters, pitchers, ros_hitters, ros_pitchers)."""
+    """Load projections from SQLite. Returns (hitters, pitchers, rest_of_season_hitters, rest_of_season_pitchers)."""
     from fantasy_baseball.data.db import (
-        get_connection as get_db_connection, get_blended_projections, get_ros_projections,
+        get_connection as get_db_connection, get_blended_projections, get_rest_of_season_projections,
     )
     from fantasy_baseball.utils.name_utils import normalize_name
     db_conn = get_db_connection()
     try:
         hitters, pitchers = get_blended_projections(db_conn)
-        ros_hitters, ros_pitchers = get_ros_projections(db_conn)
+        rest_of_season_hitters, rest_of_season_pitchers = get_rest_of_season_projections(db_conn)
     finally:
         db_conn.close()
     hitters["_name_norm"] = hitters["name"].apply(normalize_name)
     pitchers["_name_norm"] = pitchers["name"].apply(normalize_name)
-    if not ros_hitters.empty:
-        ros_hitters["_name_norm"] = ros_hitters["name"].apply(normalize_name)
-    if not ros_pitchers.empty:
-        ros_pitchers["_name_norm"] = ros_pitchers["name"].apply(normalize_name)
-    return hitters, pitchers, ros_hitters, ros_pitchers
+    if not rest_of_season_hitters.empty:
+        rest_of_season_hitters["_name_norm"] = rest_of_season_hitters["name"].apply(normalize_name)
+    if not rest_of_season_pitchers.empty:
+        rest_of_season_pitchers["_name_norm"] = rest_of_season_pitchers["name"].apply(normalize_name)
+    return hitters, pitchers, rest_of_season_hitters, rest_of_season_pitchers
 
 
-def _run_ros_fetch() -> None:
+def _run_rest_of_season_fetch() -> None:
     """Background worker for ROS projection fetch + quality checks."""
     from fantasy_baseball.config import load_config
-    from fantasy_baseball.data.fangraphs_fetch import fetch_ros_projections
+    from fantasy_baseball.data.fangraphs_fetch import fetch_rest_of_season_projections
     from fantasy_baseball.data.db import (
         create_tables, fetch_and_load_game_logs,
         get_connection as get_db_connection,
-        get_roster_names, load_ros_projections,
+        get_roster_names, load_rest_of_season_projections,
     )
     from fantasy_baseball.web.job_logger import JobLogger
 
-    logger = JobLogger("ros_fetch")
+    logger = JobLogger("rest_of_season_fetch")
     project_root = Path(__file__).resolve().parents[3]
     config = load_config(project_root / "config" / "league.yaml")
     projections_dir = project_root / "data" / "projections"
 
     try:
-        # Refresh game_logs FIRST so that normalize_ros_to_full_season has
+        # Refresh game_logs FIRST so that normalize_rest_of_season_to_full_season has
         # current accumulated actuals to add. On Render's ephemeral filesystem
         # game_logs is wiped every deploy and only gets populated during the
-        # dashboard refresh — without this step, ros_fetch runs against an
-        # empty game_logs table, normalize_ros_to_full_season early-returns
+        # dashboard refresh — without this step, rest_of_season_fetch runs against an
+        # empty game_logs table, normalize_rest_of_season_to_full_season early-returns
         # via its `if not game_log_totals` guard, and the resulting snapshot
         # is silently un-normalized (matches preseason values).
         gl_conn = get_db_connection()
@@ -193,7 +193,7 @@ def _run_ros_fetch() -> None:
             gl_conn.close()
 
         logger.log(f"Fetching ROS projections for {len(config.projection_systems)} systems")
-        results = fetch_ros_projections(
+        results = fetch_rest_of_season_projections(
             projections_dir, config.projection_systems, config.season_year,
             progress_cb=logger.log,
         )
@@ -217,7 +217,7 @@ def _run_ros_fetch() -> None:
                 logger.log(f"Loaded {len(roster_names)} rostered players for quality checks")
 
             logger.log("Loading into SQLite...")
-            load_ros_projections(
+            load_rest_of_season_projections(
                 db_conn, projections_dir,
                 config.projection_systems, config.projection_weights,
                 roster_names=roster_names, progress_cb=_quality_cb,
@@ -261,8 +261,8 @@ def register_routes(app: Flask) -> None:
         projected_data = None
         mc_data = None
         mc_mgmt_data = None
-        ros_mc_data = None
-        ros_mgmt_mc_data = None
+        rest_of_season_mc_data = None
+        rest_of_season_mgmt_mc_data = None
 
         if raw_standings:
             from fantasy_baseball.web.season_data import (
@@ -291,13 +291,13 @@ def register_routes(app: Flask) -> None:
                     mc_mgmt_data = format_monte_carlo_for_display(
                         raw_mc["with_management"], config.team_name
                     )
-                if "ros" in raw_mc and raw_mc["ros"]:
-                    ros_mc_data = format_monte_carlo_for_display(
-                        raw_mc["ros"], config.team_name
+                if "rest_of_season" in raw_mc and raw_mc["rest_of_season"]:
+                    rest_of_season_mc_data = format_monte_carlo_for_display(
+                        raw_mc["rest_of_season"], config.team_name
                     )
-                if "ros_with_management" in raw_mc and raw_mc["ros_with_management"]:
-                    ros_mgmt_mc_data = format_monte_carlo_for_display(
-                        raw_mc["ros_with_management"], config.team_name
+                if "rest_of_season_with_management" in raw_mc and raw_mc["rest_of_season_with_management"]:
+                    rest_of_season_mgmt_mc_data = format_monte_carlo_for_display(
+                        raw_mc["rest_of_season_with_management"], config.team_name
                     )
 
         return render_template(
@@ -308,8 +308,8 @@ def register_routes(app: Flask) -> None:
             projected=projected_data,
             mc=mc_data,
             mc_mgmt=mc_mgmt_data,
-            ros_mc=ros_mc_data,
-            ros_mgmt_mc=ros_mgmt_mc_data,
+            rest_of_season_mc=rest_of_season_mc_data,
+            rest_of_season_mgmt_mc=rest_of_season_mgmt_mc_data,
             categories=ALL_CATEGORIES,
         )
 
@@ -448,7 +448,7 @@ def register_routes(app: Flask) -> None:
         flat_rankings = {}
         for key, val in rankings_raw.items():
             if isinstance(val, dict):
-                ros = val.get("ros")
+                ros = val.get("rest_of_season")
                 if ros is not None:
                     flat_rankings[key] = ros
             elif isinstance(val, int):
@@ -504,7 +504,7 @@ def register_routes(app: Flask) -> None:
 
             # Search ROS projections by name (case-insensitive LIKE)
             like_pattern = f"%{query}%"
-            ros_rows = conn.execute(
+            rest_of_season_rows = conn.execute(
                 "SELECT * FROM ros_blended_projections "
                 "WHERE year = ? AND snapshot_date = ? AND name LIKE ? "
                 "ORDER BY CASE WHEN adp IS NOT NULL THEN adp ELSE 9999 END ASC "
@@ -512,11 +512,11 @@ def register_routes(app: Flask) -> None:
                 (season, snapshot, like_pattern),
             ).fetchall()
 
-            if not ros_rows:
+            if not rest_of_season_rows:
                 return jsonify([])
 
             # Load preseason projections for comparison (match by fg_id, not name)
-            fg_ids = [r["fg_id"] for r in ros_rows if r["fg_id"]]
+            fg_ids = [r["fg_id"] for r in rest_of_season_rows if r["fg_id"]]
             preseason_map = {}
             if fg_ids:
                 placeholders = ",".join("?" * len(fg_ids))
@@ -560,12 +560,12 @@ def register_routes(app: Flask) -> None:
 
             # Build results
             results = []
-            for ros in ros_rows:
-                ros_dict = dict(ros)
-                name = ros_dict["name"]
+            for row in rest_of_season_rows:
+                rest_of_season_dict = dict(row)
+                name = rest_of_season_dict["name"]
                 norm = normalize_name(name)
-                ptype = ros_dict["player_type"]
-                fg_id = ros_dict.get("fg_id")
+                ptype = rest_of_season_dict["player_type"]
+                fg_id = rest_of_season_dict.get("fg_id")
 
                 # Preseason stats
                 pre = preseason_map.get(fg_id, {})
@@ -590,9 +590,9 @@ def register_routes(app: Flask) -> None:
                 player = Player(
                     name=name,
                     player_type=ptype,
-                    team=ros_dict.get("team", ""),
+                    team=rest_of_season_dict.get("team", ""),
                     positions=pos_map.get(norm, []),
-                    ros=stats_cls.from_dict(ros_dict),
+                    rest_of_season=stats_cls.from_dict(rest_of_season_dict),
                     preseason=stats_cls.from_dict(pre) if pre else None,
                     rank=RankInfo.from_dict(rank),
                     pace=pace,
@@ -683,7 +683,7 @@ def register_routes(app: Flask) -> None:
                     team=d.get("team", ""),
                     fg_id=fg_id,
                     positions=pos_map.get(norm, []),
-                    ros=ros,
+                    rest_of_season=ros,
                     rank=RankInfo.from_dict(rank_info),
                 )
                 cached = roster_wsgp.get(norm)
@@ -698,7 +698,7 @@ def register_routes(app: Flask) -> None:
                     "player_type": ptype,
                     "positions": p.positions,
                     "owner": owner_map.get(norm),
-                    "rank": p.rank.ros,
+                    "rank": p.rank.rest_of_season,
                     "sgp": round(ros.sgp, 2),
                     "wsgp": round(p.wsgp, 2),
                 }
@@ -951,7 +951,7 @@ def register_routes(app: Flask) -> None:
             return jsonify({"error": f"Failed to fetch roster: {e}"}), 500
 
         try:
-            hitters_proj, pitchers_proj, ros_hitters, ros_pitchers = _load_projections()
+            hitters_proj, pitchers_proj, rest_of_season_hitters, rest_of_season_pitchers = _load_projections()
         except Exception as e:
             return jsonify({"error": f"Failed to load projections: {e}"}), 500
 
@@ -964,8 +964,8 @@ def register_routes(app: Flask) -> None:
             standings=standings,
             hitters_proj=hitters_proj,
             pitchers_proj=pitchers_proj,
-            ros_hitters=ros_hitters,
-            ros_pitchers=ros_pitchers,
+            rest_of_season_hitters=rest_of_season_hitters,
+            rest_of_season_pitchers=rest_of_season_pitchers,
             user_leverage=user_leverage,
             season_year=config.season_year,
         )
@@ -1003,16 +1003,16 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/fetch-ros-projections", methods=["POST"])
     @_require_auth
-    def api_fetch_ros_projections():
+    def api_fetch_rest_of_season_projections():
         """Kick off a ROS projection fetch in a background thread.
 
         Used to be synchronous but now also refreshes game_logs first
-        (so normalize_ros_to_full_season has actuals to add), which can
+        (so normalize_rest_of_season_to_full_season has actuals to add), which can
         take 90-300 seconds on a fresh deploy. Pushes past gunicorn's
         120s timeout. Threaded to match the api_refresh pattern.
         Results written to job log (visible on /logs).
         """
-        thread = threading.Thread(target=_run_ros_fetch, daemon=True)
+        thread = threading.Thread(target=_run_rest_of_season_fetch, daemon=True)
         thread.start()
         return jsonify({"status": "started"})
 

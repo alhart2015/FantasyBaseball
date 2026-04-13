@@ -12,7 +12,7 @@ from fantasy_baseball.models.roster import Roster
 HITTING_COUNTING_COLS: list[str] = ["r", "hr", "rbi", "sb", "h", "ab", "pa"]
 PITCHING_COUNTING_COLS: list[str] = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
 
-def normalize_ros_to_full_season(
+def normalize_rest_of_season_to_full_season(
     df: pd.DataFrame,
     game_log_totals: dict[int, dict],
     player_type: str,
@@ -366,7 +366,7 @@ def match_roster_to_projections(
     Expects ``_name_norm`` column precomputed on both DataFrames
     (call ``df["_name_norm"] = df["name"].apply(normalize_name)`` first).
 
-    Returns a list of :class:`Player` objects with ``.ros`` populated as
+    Returns a list of :class:`Player` objects with ``.rest_of_season`` populated as
     :class:`HitterStats` or :class:`PitcherStats`. Unmatched players are
     omitted.
     """
@@ -424,7 +424,7 @@ def match_roster_to_projections(
                 yahoo_id=player.get("player_id", ""),
                 selected_position=parsed_slot,
                 status=player.get("status", ""),
-                ros=ros,
+                rest_of_season=ros,
             )
             matched.append(p)
 

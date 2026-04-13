@@ -108,7 +108,7 @@ def audit_roster(
     # Pre-compute FA wSGP
     fa_wsgp: dict[str, float] = {}
     for fa in active_fas:
-        fa_wsgp[fa.name] = calculate_weighted_sgp(fa.ros, leverage, denoms=denoms)
+        fa_wsgp[fa.name] = calculate_weighted_sgp(fa.rest_of_season, leverage, denoms=denoms)
 
     p_slots = roster_slots.get("P", 9)
 

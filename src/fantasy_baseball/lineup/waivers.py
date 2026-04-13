@@ -123,7 +123,7 @@ def fetch_and_match_free_agents(
                     name=fa["name"],
                     player_type=ptype,
                     positions=fa["positions"],
-                    ros=ros,
+                    rest_of_season=ros,
                     status=fa.get("status", ""),
                 )
                 fa_players.append(p)
@@ -141,8 +141,8 @@ def evaluate_pickup(
     Returns:
         Dict with add, drop, sgp_gain, and per-category breakdown.
     """
-    add_wsgp = calculate_weighted_sgp(add_player.ros, leverage)
-    drop_wsgp = calculate_weighted_sgp(drop_player.ros, leverage)
+    add_wsgp = calculate_weighted_sgp(add_player.rest_of_season, leverage)
+    drop_wsgp = calculate_weighted_sgp(drop_player.rest_of_season, leverage)
 
     denoms = get_sgp_denominators()
     categories = {}
@@ -214,7 +214,7 @@ def scan_waivers(
         fa_hitters = []
         fa_pitchers = []
         for fa in free_agents:
-            wsgp = calculate_weighted_sgp(fa.ros, leverage)
+            wsgp = calculate_weighted_sgp(fa.rest_of_season, leverage)
             if wsgp <= 0:
                 continue
             if fa.player_type == PlayerType.PITCHER:
@@ -265,7 +265,7 @@ def scan_waivers(
     fa_wsgp = {}
     for fa in free_agents:
         if fa.name not in recommended_adds:
-            fa_wsgp[fa.name] = calculate_weighted_sgp(fa.ros, leverage, denoms=denoms)
+            fa_wsgp[fa.name] = calculate_weighted_sgp(fa.rest_of_season, leverage, denoms=denoms)
 
     # Compute wSGP floor: 3rd-lowest wSGP among active-slot players
     active_wsgps = sorted([
@@ -378,7 +378,7 @@ def _get_stat_cols(player: Player) -> list[tuple[str, str]]:
 
 def _category_sgp(player: Player, stat: str, col: str, denoms: dict) -> float:
     """Calculate raw SGP for a single category."""
-    ros = player.ros
+    ros = player.rest_of_season
     if ros is None or not hasattr(ros, col):
         return 0.0
     if stat in ("AVG",):

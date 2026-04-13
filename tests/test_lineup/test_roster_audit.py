@@ -12,7 +12,7 @@ def _hitter(name, positions, **stats):
         name=name,
         player_type=PlayerType.HITTER,
         positions=positions,
-        ros=HitterStats(
+        rest_of_season=HitterStats(
             pa=int(stats.get("ab", 500) * 1.15),
             ab=stats.get("ab", 500), h=stats.get("h", 130),
             r=stats.get("r", 70), hr=stats.get("hr", 20),
@@ -27,7 +27,7 @@ def _pitcher(name, positions, **stats):
         name=name,
         player_type=PlayerType.PITCHER,
         positions=positions,
-        ros=PitcherStats(
+        rest_of_season=PitcherStats(
             ip=stats.get("ip", 60.0), w=stats.get("w", 3.0),
             k=stats.get("k", 60.0), sv=stats.get("sv", 0.0),
             er=stats.get("er", 20.0), bb=stats.get("bb", 20.0),
@@ -196,7 +196,7 @@ class TestAuditILFilterUsesSlotOrStatus:
             name=name,
             player_type=PlayerType(player_type),
             positions=positions,
-            ros=ros,
+            rest_of_season=ros,
             selected_position=Position.parse(slot) if slot else None,
             status=status,
         )

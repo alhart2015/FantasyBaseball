@@ -77,8 +77,8 @@ class TestHydrateRosterEntries:
         player = result[0]
         assert player.name == "Juan Soto"
         assert player.player_type == PlayerType.HITTER
-        assert player.ros is not None
-        assert player.ros.hr == 35
+        assert player.rest_of_season is not None
+        assert player.rest_of_season.hr == 35
 
     def test_hydrates_pitcher(self):
         from fantasy_baseball.data.projections import hydrate_roster_entries
@@ -91,7 +91,7 @@ class TestHydrateRosterEntries:
         assert len(result) == 1
         player = result[0]
         assert player.player_type == PlayerType.PITCHER
-        assert player.ros.k == 190
+        assert player.rest_of_season.k == 190
 
     def test_drops_unmatched_player(self):
         """Players not in the projection DataFrames are omitted (same as

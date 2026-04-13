@@ -705,7 +705,7 @@ _BLENDED_TABLE_COLS = [
 ]
 
 # ROS table has the same columns with snapshot_date added after year.
-_ROS_TABLE_COLS = [_BLENDED_TABLE_COLS[0], "snapshot_date"] + _BLENDED_TABLE_COLS[1:]
+_REST_OF_SEASON_TABLE_COLS = [_BLENDED_TABLE_COLS[0], "snapshot_date"] + _BLENDED_TABLE_COLS[1:]
 
 
 def _df_to_insert_rows(
@@ -793,7 +793,7 @@ def load_blended_projections(
     conn.commit()
 
 
-def load_ros_projections(
+def load_rest_of_season_projections(
     conn,
     projections_dir,
     systems: list[str],
@@ -814,7 +814,7 @@ def load_ros_projections(
     """
     projections_dir = Path(projections_dir)
 
-    from fantasy_baseball.data.projections import normalize_ros_to_full_season
+    from fantasy_baseball.data.projections import normalize_rest_of_season_to_full_season
     from fantasy_baseball.utils.time_utils import local_today
 
     # All FanGraphs ROS exports are remaining-games-only — every system gets
@@ -824,8 +824,8 @@ def load_ros_projections(
     def _normalizer(system_name, hitters_df, pitchers_df):
         if progress_cb:
             progress_cb(f"Normalizing {system_name} ROS → full-season")
-        h = normalize_ros_to_full_season(hitters_df, hitter_totals, PlayerType.HITTER)
-        p = normalize_ros_to_full_season(pitchers_df, pitcher_totals, PlayerType.PITCHER)
+        h = normalize_rest_of_season_to_full_season(hitters_df, hitter_totals, PlayerType.HITTER)
+        p = normalize_rest_of_season_to_full_season(pitchers_df, pitcher_totals, PlayerType.PITCHER)
         return h, p
 
     for year_dir in sorted(projections_dir.iterdir()):
@@ -833,11 +833,11 @@ def load_ros_projections(
             continue
         year = int(year_dir.name)
 
-        ros_dir = year_dir / "ros"
-        if not ros_dir.is_dir():
+        rest_of_season_dir = year_dir / "rest_of_season"
+        if not rest_of_season_dir.is_dir():
             continue
 
-        for date_dir in sorted(ros_dir.iterdir()):
+        for date_dir in sorted(rest_of_season_dir.iterdir()):
             if not date_dir.is_dir():
                 continue
             snapshot_date = date_dir.name
@@ -866,7 +866,7 @@ def load_ros_projections(
                 continue
 
             def to_rows(df, _y=year, _sd=snapshot_date):
-                return _df_to_insert_rows(df, _ROS_TABLE_COLS, year=_y, snapshot_date=_sd)
+                return _df_to_insert_rows(df, _REST_OF_SEASON_TABLE_COLS, year=_y, snapshot_date=_sd)
 
             _insert_blended_dfs(
                 conn, "ros_blended_projections", (hitters_df, pitchers_df), to_rows,
@@ -875,7 +875,7 @@ def load_ros_projections(
     conn.commit()
 
 
-def get_ros_projections(
+def get_rest_of_season_projections(
     conn, year: int | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Read the latest ROS blended projections from the database.

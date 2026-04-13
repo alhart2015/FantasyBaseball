@@ -16,7 +16,7 @@ def _hitter(name, r=0, hr=0, rbi=0, sb=0, h=0, ab=0, pa=0,
         name=name,
         player_type=PlayerType.HITTER,
         positions=positions or [],
-        ros=HitterStats(r=r, hr=hr, rbi=rbi, sb=sb, h=h, ab=ab, pa=pa or ab),
+        rest_of_season=HitterStats(r=r, hr=hr, rbi=rbi, sb=sb, h=h, ab=ab, pa=pa or ab),
         selected_position=selected_position,
         status=status,
     )
@@ -28,7 +28,7 @@ def _pitcher(name, w=0, k=0, sv=0, ip=0, er=0, bb=0, h_allowed=0,
         name=name,
         player_type=PlayerType.PITCHER,
         positions=positions or [],
-        ros=PitcherStats(w=w, k=k, sv=sv, ip=ip, er=er, bb=bb, h_allowed=h_allowed),
+        rest_of_season=PitcherStats(w=w, k=k, sv=sv, ip=ip, er=er, bb=bb, h_allowed=h_allowed),
         selected_position=selected_position,
         status=status,
     )
@@ -93,11 +93,11 @@ class TestProjectTeamStats:
         assert stats["R"] == 90
 
     def test_player_without_ros_is_skipped(self):
-        """Players unmatched to projections have ``ros=None`` and should
+        """Players unmatched to projections have ``rest_of_season=None`` and should
         contribute nothing to team totals rather than raising."""
         roster = [
             _hitter("Good", r=80, hr=25, rbi=70, sb=5, h=130, ab=500),
-            Player(name="Unmatched", player_type=PlayerType.HITTER, ros=None),
+            Player(name="Unmatched", player_type=PlayerType.HITTER, rest_of_season=None),
         ]
         stats = project_team_stats(roster)
         assert stats["R"] == 80
@@ -440,10 +440,10 @@ class TestDisplacementRoleMatching:
 
 
 class TestDisplacementNoRos:
-    """Players with ros=None are handled gracefully."""
+    """Players with rest_of_season=None are handled gracefully."""
 
     def test_il_player_without_ros_no_displacement(self):
-        """IL player with ros=None has 0 playing time — no displacement."""
+        """IL player with rest_of_season=None has 0 playing time — no displacement."""
         active = _hitter("Active", r=80, hr=20, rbi=70, sb=10, h=140, ab=500,
                          positions=[Position.OF],
                          selected_position=Position.OF)
@@ -451,7 +451,7 @@ class TestDisplacementNoRos:
             name="No ROS", player_type=PlayerType.HITTER,
             positions=[Position.OF],
             selected_position=Position.IL, status="IL",
-            ros=None,
+            rest_of_season=None,
         )
         stats = project_team_stats([active, il_no_ros], displacement=True)
         # IL player has 0 ab -> 0 displacement
