@@ -1348,6 +1348,26 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         audit_results = audit_roster(
             roster_players, fa_players, leverage, config.roster_slots,
         )
+        # Compute deltaRoto for each candidate
+        from fantasy_baseball.lineup.delta_roto import compute_delta_roto
+        for entry in audit_results:
+            for candidate in entry.candidates:
+                fa_player = next(
+                    (fa for fa in fa_players if fa.name == candidate["name"]), None
+                )
+                if fa_player is None:
+                    continue
+                try:
+                    dr = compute_delta_roto(
+                        drop_name=entry.player,
+                        add_player=fa_player,
+                        user_roster=roster_players,
+                        projected_standings=projected_standings,
+                        team_name=config.team_name,
+                    )
+                    candidate["delta_roto"] = dr.to_dict()
+                except Exception:
+                    candidate["delta_roto"] = None
         write_cache("roster_audit", [e.to_dict() for e in audit_results], cache_dir)
         upgrades = sum(1 for e in audit_results if e.gap > 0)
         _progress(f"Roster audit: {upgrades} upgrade(s) found")

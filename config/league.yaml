@@ -134,3 +134,10 @@ sgp_denominators:
   ERA: 0.15
   WHIP: 0.015
   SV: 7
+
+delta_roto:
+  fragile_threshold: 1.0
+  erosion_weight: 0.3
+  tie_floor: 0.5
+  erosion_cap: 0.5
+  candidates_per_slot: 5
