@@ -33,6 +33,7 @@ class AuditEntry:
     gap: float = 0.0
     categories: dict[str, float] = field(default_factory=dict)
     classification: str = ""
+    candidates: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -50,6 +51,7 @@ class AuditEntry:
             "gap": self.gap,
             "categories": self.categories,
             "classification": self.classification,
+            "candidates": self.candidates,
         }
 
 
@@ -133,8 +135,7 @@ def audit_roster(
             entries.append(entry)
             continue
 
-        best_gain = 0.0
-        best_fa_player = None
+        positive_gains: list[tuple[float, Player]] = []
 
         # Pre-build wSGP dict without this player for swap simulation
         base_wsgp = {k: v for k, v in baseline["player_wsgp"].items()
@@ -163,11 +164,15 @@ def audit_roster(
             )
             gain = round(new_result["total_wsgp"] - baseline_wsgp, 2)
 
-            if gain > best_gain:
-                best_gain = gain
-                best_fa_player = fa
+            if gain > 0:
+                positive_gains.append((gain, fa))
 
-        if best_fa_player:
+        # Sort by gain descending, keep top 5
+        positive_gains.sort(key=lambda x: x[0], reverse=True)
+        top_candidates = positive_gains[:5]
+
+        if top_candidates:
+            best_gain, best_fa_player = top_candidates[0]
             cat_result = evaluate_pickup(best_fa_player, player, leverage)
             entry.best_fa = best_fa_player.name
             entry.best_fa_type = best_fa_player.player_type.value
@@ -176,6 +181,18 @@ def audit_roster(
             entry.best_fa_id = best_fa_player.yahoo_id
             entry.gap = best_gain
             entry.categories = cat_result["categories"]
+
+            entry.candidates = [
+                {
+                    "name": fa.name,
+                    "player_type": fa.player_type.value,
+                    "positions": list(fa.positions),
+                    "wsgp": round(fa_wsgp.get(fa.name, 0.0), 2),
+                    "gap": gain,
+                    "player_id": fa.yahoo_id,
+                }
+                for gain, fa in top_candidates
+            ]
 
         entries.append(entry)
 

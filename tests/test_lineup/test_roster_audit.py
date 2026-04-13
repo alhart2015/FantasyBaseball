@@ -171,6 +171,48 @@ class TestAuditRoster:
                     f"{entry.player} should not be replaced by pitcher {entry.best_fa}"
                 )
 
+    def test_candidates_list_populated(self):
+        """audit_roster should populate candidates with top-N FAs per slot."""
+        roster = [
+            _hitter("Weak OF", ["OF"], r=30, hr=5, rbi=20, sb=1, avg=0.220, ab=300, h=66),
+            _pitcher("SP1", ["SP"], ip=180, w=12, k=180, era=3.50, whip=1.20,
+                     er=70, bb=40, h_allowed=176),
+            _pitcher("SP2", ["SP"], ip=170, w=10, k=160, era=3.60, whip=1.22,
+                     er=68, bb=40, h_allowed=167),
+            _pitcher("RP1", ["RP"], ip=60, w=3, k=60, era=3.00, whip=1.17,
+                     sv=20, er=20, bb=20, h_allowed=50),
+        ]
+        free_agents = [
+            _hitter("FA OF 1", ["OF"], r=80, hr=28, rbi=85, sb=12, avg=0.280, ab=550, h=154),
+            _hitter("FA OF 2", ["OF"], r=70, hr=22, rbi=75, sb=8, avg=0.270, ab=520, h=140),
+            _hitter("FA OF 3", ["OF"], r=60, hr=18, rbi=65, sb=5, avg=0.250, ab=500, h=125),
+        ]
+        results = audit_roster(roster, free_agents, EQUAL_LEVERAGE,
+                               {"OF": 1, "P": 3, "BN": 0, "IL": 0})
+
+        weak_entry = next(e for e in results if e.player == "Weak OF")
+        assert weak_entry.best_fa == "FA OF 1"
+        assert len(weak_entry.candidates) >= 2
+        gaps = [c["gap"] for c in weak_entry.candidates]
+        assert gaps == sorted(gaps, reverse=True)
+        for c in weak_entry.candidates:
+            assert "name" in c
+            assert "wsgp" in c
+            assert "gap" in c
+            assert "player_type" in c
+            assert "positions" in c
+
+    def test_candidates_empty_when_no_upgrade(self):
+        roster = [
+            _hitter("Star OF", ["OF"], r=100, hr=40, rbi=110, sb=20, avg=0.300, ab=550, h=165),
+        ]
+        free_agents = [
+            _hitter("Scrub", ["OF"], r=30, hr=5, rbi=20, sb=1, avg=0.220, ab=300, h=66),
+        ]
+        results = audit_roster(roster, free_agents, EQUAL_LEVERAGE,
+                               {"OF": 1, "P": 0, "BN": 0, "IL": 0})
+        assert results[0].candidates == []
+
 
 class TestAuditILFilterUsesSlotOrStatus:
     def _player(self, name, slot, status="", player_type="hitter"):
