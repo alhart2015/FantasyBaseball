@@ -1182,7 +1182,10 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                     # Position is StrEnum; comparison is direct after
                     # enum normalization at the Player constructor
                     # boundary. See feat/player-position-enum.
-                    if current_slot != base_slot:
+                    bench_slots = {"BN", "IL", "DL"}
+                    if current_slot != base_slot and (
+                        current_slot in bench_slots or base_slot in bench_slots
+                    ):
                         moves.append({
                             "action": "START",
                             "player": player_name,
