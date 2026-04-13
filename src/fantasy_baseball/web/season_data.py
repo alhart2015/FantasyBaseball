@@ -1356,6 +1356,21 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         fa_players, _ = fetch_and_match_free_agents(
             league, hitters_proj, pitchers_proj
         )
+
+        # Cache positions for all known players (roster + opponents + FAs)
+        from fantasy_baseball.utils.name_utils import normalize_name as _norm
+        positions_map: dict[str, list[str]] = {}
+        for p in roster_players:
+            positions_map[_norm(p.name)] = list(p.positions)
+        for _opp_roster in opp_rosters.values():
+            for p in _opp_roster:
+                positions_map[_norm(p.name)] = list(p.positions)
+        for fa in fa_players:
+            if fa.positions:
+                positions_map[_norm(fa.name)] = list(fa.positions)
+        write_cache("positions", positions_map, cache_dir)
+        _progress(f"Cached positions for {len(positions_map)} players")
+
         audit_results = audit_roster(
             roster_players, fa_players, leverage, config.roster_slots,
         )

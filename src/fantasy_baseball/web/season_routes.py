@@ -644,15 +644,13 @@ def register_routes(app: Flask) -> None:
         leverage = _get_leverage()
 
         # Build position and ownership maps from Redis caches
-        pos_map: dict[str, list[str]] = {}
+        pos_map: dict[str, list[str]] = read_cache("positions") or {}
         owner_map: dict[str, str] = {}
         roster_wsgp: dict[str, float] = {}
 
         for rp in (read_cache("roster") or []):
             norm = normalize_name(rp.get("name", ""))
             owner_map[norm] = "roster"
-            if rp.get("positions"):
-                pos_map[norm] = rp["positions"]
             if rp.get("wsgp"):
                 roster_wsgp[norm] = rp["wsgp"]
 
@@ -661,8 +659,6 @@ def register_routes(app: Flask) -> None:
                 norm = normalize_name(rp.get("name", ""))
                 if norm not in owner_map:
                     owner_map[norm] = team_name_opp
-                if rp.get("positions"):
-                    pos_map[norm] = rp["positions"]
 
         players = []
         for pool in [ros_cache.get("hitters", []), ros_cache.get("pitchers", [])]:
