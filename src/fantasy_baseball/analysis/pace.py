@@ -60,6 +60,8 @@ def compute_player_pace(
     actual_stats: dict,
     projected_stats: dict,
     player_type: str,
+    ros_stats: dict | None = None,
+    sgp_denoms: dict | None = None,
 ) -> dict:
     """Compute z-scores and color classes for each roto stat.
 
@@ -67,10 +69,13 @@ def compute_player_pace(
         actual_stats: Season-to-date from game_logs (lowercase keys).
         projected_stats: Full-season from blended_projections (lowercase keys).
         player_type: "hitter" or "pitcher".
+        ros_stats: Optional ROS projection dict (lowercase keys) for deviation calc.
+        sgp_denoms: Optional SGP denominator dict (UPPERCASE keys) for deviation calc.
 
     Returns:
         Dict with UPPERCASE display keys, each containing:
-        {"actual", "expected", "z_score", "color_class", "projection"}
+        {"actual", "expected", "z_score", "color_class", "projection",
+         "ros_deviation_sgp"}
     """
     from fantasy_baseball.models.player import HitterStats, PitcherStats
 
@@ -93,6 +98,22 @@ def compute_player_pace(
     stats_cls = HitterStats if player_type == PlayerType.HITTER else PitcherStats
     actual_obj = stats_cls.from_dict(actual_stats)
     proj_opp = projected_stats.get(opp_key, 0) or 0
+
+    def _ros_deviation(cat: str) -> float:
+        """Compute SGP deviation: (ros - preseason) / denom, positive = good."""
+        if not ros_stats or not sgp_denoms:
+            return 0.0
+        ros_key = cat.lower()
+        pre_key = cat.lower()
+        ros_val = ros_stats.get(ros_key)
+        pre_val = projected_stats.get(pre_key)
+        denom = sgp_denoms.get(cat)
+        if ros_val is None or pre_val is None or not denom:
+            return 0.0
+        dev = (ros_val - pre_val) / denom
+        if cat in INVERSE_STATS:
+            dev = -dev
+        return round(dev, 2)
 
     # Opportunity column (PA or IP) — always neutral
     result[opp_key.upper()] = {
@@ -128,6 +149,7 @@ def compute_player_pace(
             "projection": round(proj),
             "significant": actual_obj.is_significant(display_key),
             "below_threshold": not counting_colored,
+            "ros_deviation_sgp": _ros_deviation(display_key),
         }
 
     # Rate stats — always computed, but color suppressed below min_rates threshold
@@ -154,6 +176,7 @@ def compute_player_pace(
             "projection": proj_avg,
             "significant": actual_obj.is_significant("AVG"),
             "below_threshold": not rates_colored,
+            "ros_deviation_sgp": _ros_deviation("AVG"),
         }
 
     else:  # pitcher
@@ -181,6 +204,7 @@ def compute_player_pace(
             "projection": proj_era,
             "significant": actual_obj.is_significant("ERA"),
             "below_threshold": not rates_colored,
+            "ros_deviation_sgp": _ros_deviation("ERA"),
         }
 
         # WHIP
@@ -200,6 +224,7 @@ def compute_player_pace(
             "projection": proj_whip,
             "significant": actual_obj.is_significant("WHIP"),
             "below_threshold": not rates_colored,
+            "ros_deviation_sgp": _ros_deviation("WHIP"),
         }
 
     return result
