@@ -433,13 +433,36 @@ function fmtStat(val, cat) {
     return val;
 }
 
-function buildTableHtml(players, cats, volumeCol, includeElig) {
+function buildTableHtml(players, cats, volumeCol, includeElig, totals) {
     var html = '<thead><tr><th>Slot</th><th>Player</th>';
     if (includeElig) html += '<th>Elig</th>';
     cats.forEach(function(c) { html += '<th>' + c + '</th>'; });
     html += '<th style="font-size:11px;">wSGP<br><span style="color:#6a8adf;">them</span></th>';
     html += '<th style="font-size:11px;">wSGP<br><span style="color:#dfb06a;">you</span></th>';
     html += '<th></th></tr></thead><tbody>';
+
+    if (totals) {
+        html += '<tr class="totals-row">';
+        html += '<td></td>';
+        html += '<td style="text-align:left;font-weight:600;">Team Totals</td>';
+        if (includeElig) html += '<td></td>';
+        cats.forEach(function(cat) {
+            var st = totals[cat] || {};
+            var colorClass = st.color_class || 'stat-neutral';
+            var val = st.actual !== undefined && st.actual !== null ? fmtStat(st.actual, cat) : '\u2014';
+            var tooltip = '';
+            if (st.z_score !== undefined && cat !== volumeCol) {
+                var zStr = (st.z_score > 0 ? '+' : '') + st.z_score.toFixed(1);
+                tooltip = '<div class="tooltip"><div style="font-weight:600;margin-bottom:6px;">Team \u2014 ' + cat + '</div>'
+                    + '<div class="tooltip-row"><span class="tooltip-label">Actual</span><span class="tooltip-val">' + fmtStat(st.actual, cat) + '</span></div>'
+                    + '<div class="tooltip-row"><span class="tooltip-label">Expected pace</span><span class="tooltip-val">' + fmtStat(st.expected, cat) + '</span></div>'
+                    + '<div class="tooltip-row"><span class="tooltip-label">Z-score</span><span class="tooltip-val">' + zStr + '</span></div></div>';
+            }
+            html += '<td class="stat-cell ' + colorClass + (cat === volumeCol ? ' pa-col' : '') + '" style="font-weight:600;">' + val + tooltip + '</td>';
+        });
+        html += '<td></td><td></td><td></td>';
+        html += '</tr>';
+    }
 
     players.forEach(function(p) {
         var benchClass = (p.selected_position === 'BN' || p.selected_position === 'IL') ? ' class="bench-row"' : '';
@@ -473,8 +496,8 @@ function renderOpponentLineup(data) {
     var movesBanner = document.querySelector('.moves-banner');
     if (movesBanner) movesBanner.style.display = 'none';
 
-    var hitterHtml = buildTableHtml(data.hitters, ['PA', 'R', 'HR', 'RBI', 'SB', 'AVG'], 'PA', true);
-    var pitcherHtml = buildTableHtml(data.pitchers, ['IP', 'W', 'K', 'SV', 'ERA', 'WHIP'], 'IP', false);
+    var hitterHtml = buildTableHtml(data.hitters, ['PA', 'R', 'HR', 'RBI', 'SB', 'AVG'], 'PA', true, data.hitter_totals);
+    var pitcherHtml = buildTableHtml(data.pitchers, ['IP', 'W', 'K', 'SV', 'ERA', 'WHIP'], 'IP', false, data.pitcher_totals);
 
     // Replace table contents
     var tables = document.querySelectorAll('.data-table');

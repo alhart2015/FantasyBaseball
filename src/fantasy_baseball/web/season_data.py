@@ -476,6 +476,7 @@ def build_opponent_lineup(
     pitchers = []
     for p in enriched:
         pos = p.get("selected_position", "BN")
+        p["is_bench"] = pos in ("BN", "IL", "DL")
         is_pitcher = pos in PITCHER_POSITIONS or (
             pos == "BN" and set(p.get("positions", [])).issubset(
                 PITCHER_POSITIONS | {"BN"}
@@ -492,7 +493,12 @@ def build_opponent_lineup(
     pitchers.sort(key=lambda p: (p.get("selected_position", "") in ("BN", "IL", "DL"),
                                  -p.get("wsgp_them", 0)))
 
-    return {"hitters": hitters, "pitchers": pitchers}
+    return {
+        "hitters": hitters,
+        "pitchers": pitchers,
+        "hitter_totals": _compute_team_totals_pace(hitters, "hitter", opponent_name),
+        "pitcher_totals": _compute_team_totals_pace(pitchers, "pitcher", opponent_name),
+    }
 
 
 def format_monte_carlo_for_display(
@@ -547,41 +553,51 @@ HITTER_SLOTS_ORDER = ["C", "1B", "2B", "3B", "SS", "IF", "OF", "OF", "OF", "OF",
                        "UTIL", "UTIL", "BN", "IL"]
 
 
-def _compute_team_totals_pace(players: list[dict], player_type: str) -> dict:
-    """Sum pace data across active players to produce a team totals row.
+def _compute_team_totals_pace(
+    players: list[dict],
+    player_type: str,
+    team_name: str | None = None,
+) -> dict:
+    """Build a team totals row with pace highlighting.
 
-    For counting stats (R, HR, RBI, SB / W, K, SV): sums actual and expected,
-    then computes z-score from the ratio. For rate stats (AVG / ERA, WHIP):
-    computes from component totals (H/AB or ER/IP, (BB+H)/IP) using the
-    same variance-based z-score as individual players.
+    Actuals come from Yahoo standings (the source of truth for team totals —
+    correctly accounts for players added/dropped mid-season). Expected values
+    are PA/IP-weighted averages of individual player projections.
     """
     from fantasy_baseball.analysis.pace import _z_to_color, STAT_VARIANCE
-    from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
-    active = [p for p in players if not p["is_bench"]]
+    active = [p for p in players if not p.get("is_bench", False)]
+
+    # Look up team stats from standings
+    if team_name is None:
+        meta = read_meta() or {}
+        team_name = meta.get("team_name", "")
+    standings = read_cache("standings") or []
+    team_stats: dict = {}
+    for t in standings:
+        if t.get("name") == team_name:
+            team_stats = t.get("stats", {})
+            break
 
     if player_type == "hitter":
+        all_cats = ["PA", "R", "HR", "RBI", "SB", "AVG"]
         counting_cats = ["R", "HR", "RBI", "SB"]
+        rate_cats = {"AVG": ("h", False)}
         opp_cat = "PA"
     else:
+        all_cats = ["IP", "W", "K", "SV", "ERA", "WHIP"]
         counting_cats = ["W", "K", "SV"]
+        rate_cats = {"ERA": ("er", True), "WHIP": ("h_allowed", True)}
         opp_cat = "IP"
 
     totals: dict = {}
 
-    # Sum opportunity stat (PA / IP)
-    opp_total = sum(
-        p.get("pace", {}).get(opp_cat, {}).get("actual", 0) or 0
-        for p in active
-    )
-    totals[opp_cat] = {"actual": opp_total, "color_class": "stat-neutral"}
+    # Opportunity stat (PA / IP) — from standings
+    totals[opp_cat] = {"actual": team_stats.get(opp_cat, 0), "color_class": "stat-neutral"}
 
-    # Sum counting stats
+    # Counting stats — actuals from standings, expected from player pace sums
     for cat in counting_cats:
-        actual = sum(
-            p.get("pace", {}).get(cat, {}).get("actual", 0) or 0
-            for p in active
-        )
+        actual = team_stats.get(cat, 0)
         expected = sum(
             p.get("pace", {}).get(cat, {}).get("expected", 0) or 0
             for p in active
@@ -599,81 +615,34 @@ def _compute_team_totals_pace(players: list[dict], player_type: str) -> dict:
             "color_class": _z_to_color(z),
         }
 
-    # Rate stats from component totals
-    if player_type == "hitter":
-        standings = read_cache("standings") or []
-        meta = read_meta() or {}
-        team_name = meta.get("team_name", "")
-        team_stats = {}
-        for t in standings:
-            if t.get("name") == team_name:
-                team_stats = t.get("stats", {})
-                break
-
-        actual_avg = team_stats.get("AVG", 0.0)
-        # Use preseason projection average as expected
-        proj_avgs = [
-            p.get("pace", {}).get("AVG", {}).get("expected", 0)
-            for p in active if p.get("pace", {}).get("AVG", {}).get("expected")
+    # Rate stats — actuals from standings, expected as IP/PA-weighted proj avg
+    for rate_cat, (component, is_inverse) in rate_cats.items():
+        actual_val = team_stats.get(rate_cat, 0.0)
+        opp_key = "IP" if player_type != "hitter" else "PA"
+        proj_vals = [
+            (p.get("pace", {}).get(rate_cat, {}).get("expected", 0),
+             p.get("pace", {}).get(opp_key, {}).get("actual", 0))
+            for p in active if p.get("pace", {}).get(rate_cat, {}).get("expected")
         ]
-        expected_avg = sum(
-            p.get("pace", {}).get("AVG", {}).get("expected", 0) * p.get("pace", {}).get("PA", {}).get("actual", 0)
-            for p in active if p.get("pace", {}).get("AVG", {}).get("expected")
-        )
-        total_pa = sum(
-            p.get("pace", {}).get("PA", {}).get("actual", 0)
-            for p in active if p.get("pace", {}).get("AVG", {}).get("expected")
-        )
-        expected_avg = expected_avg / total_pa if total_pa > 0 else 0.0
+        weighted = sum(v * opp for v, opp in proj_vals)
+        total_opp = sum(opp for _, opp in proj_vals)
+        expected_val = weighted / total_opp if total_opp > 0 else 0.0
 
-        if expected_avg > 0 and actual_avg > 0:
-            variance = STAT_VARIANCE.get("h", 0.0)
-            z = (actual_avg - expected_avg) / (variance * expected_avg) if variance > 0 else 0.0
+        if expected_val > 0 and actual_val > 0:
+            variance = STAT_VARIANCE.get(component, 0.0)
+            z = (actual_val - expected_val) / (variance * expected_val) if variance > 0 else 0.0
+            if is_inverse:
+                z = -z
         else:
             z = 0.0
-        totals["AVG"] = {
-            "actual": round(actual_avg, 3),
-            "expected": round(expected_avg, 3),
+
+        fmt_precision = 3 if rate_cat == "AVG" else 2
+        totals[rate_cat] = {
+            "actual": round(actual_val, fmt_precision),
+            "expected": round(expected_val, fmt_precision),
             "z_score": round(z, 2),
             "color_class": _z_to_color(z),
         }
-    else:
-        standings = read_cache("standings") or []
-        meta = read_meta() or {}
-        team_name = meta.get("team_name", "")
-        team_stats = {}
-        for t in standings:
-            if t.get("name") == team_name:
-                team_stats = t.get("stats", {})
-                break
-
-        for rate_cat, component, calc_fn in [
-            ("ERA", "er", calculate_era),
-            ("WHIP", "h_allowed", calculate_whip),
-        ]:
-            actual_val = team_stats.get(rate_cat, 0.0)
-            # PA-weighted expected from individual projections
-            proj_vals = [
-                (p.get("pace", {}).get(rate_cat, {}).get("expected", 0),
-                 p.get("pace", {}).get("IP", {}).get("actual", 0))
-                for p in active if p.get("pace", {}).get(rate_cat, {}).get("expected")
-            ]
-            weighted = sum(v * ip for v, ip in proj_vals)
-            total_ip = sum(ip for _, ip in proj_vals)
-            expected_val = weighted / total_ip if total_ip > 0 else 0.0
-
-            if expected_val > 0 and actual_val > 0:
-                variance = STAT_VARIANCE.get(component, 0.0)
-                z = (actual_val - expected_val) / (variance * expected_val) if variance > 0 else 0.0
-                z = -z  # inverse: lower is better
-            else:
-                z = 0.0
-            totals[rate_cat] = {
-                "actual": round(actual_val, 2) if rate_cat != "AVG" else round(actual_val, 3),
-                "expected": round(expected_val, 2),
-                "z_score": round(z, 2),
-                "color_class": _z_to_color(z),
-            }
 
     return totals
 
