@@ -565,6 +565,38 @@ class TestComparisonConsistencyInvariant:
         assert result["before"]["stats"]["My Team"]["HR"] != wrong_user_stats["HR"]
 
 
+class TestRunFullRefreshAttributeAccess:
+    """Catch typos like config.sgp_denominators (should be sgp_overrides).
+
+    run_full_refresh accesses attributes on LeagueConfig, Player, and other
+    dataclasses. A typo compiles fine but crashes at runtime — often only
+    discovered after a 15-minute deploy + refresh cycle on Render.
+
+    These tests parse the source and verify every `config.<attr>` reference
+    actually exists on LeagueConfig.
+    """
+
+    def test_config_attribute_access_valid(self):
+        """Every `config.<attr>` in run_full_refresh must exist on LeagueConfig."""
+        import inspect
+        import re
+
+        from fantasy_baseball.config import LeagueConfig
+        from fantasy_baseball.web import season_data
+
+        src = inspect.getsource(season_data.run_full_refresh)
+        valid_attrs = {f.name for f in LeagueConfig.__dataclass_fields__.values()}
+
+        # Match config.something (not config = or config: or config[)
+        refs = set(re.findall(r'\bconfig\.([a-zA-Z_]\w*)', src))
+
+        bad = refs - valid_attrs
+        assert not bad, (
+            f"run_full_refresh references config attributes that don't exist "
+            f"on LeagueConfig: {bad}. Valid attributes: {sorted(valid_attrs)}"
+        )
+
+
 class TestRunFullRefreshScopingGuards:
     """Regression guards for Python scoping bugs in run_full_refresh.
 
