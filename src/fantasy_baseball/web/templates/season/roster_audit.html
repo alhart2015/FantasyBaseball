@@ -129,7 +129,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                {% for c in entry.candidates | sort(attribute='delta_roto_sort', reverse=true) %}
+                {% for c in entry.candidates %}
                 <tr>
                     <td>
                         {{ c.name }}
