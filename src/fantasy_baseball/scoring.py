@@ -74,8 +74,8 @@ def _playing_time(p: Player) -> float:
     """Return the playing-time measure: IP for pitchers, PA (or AB) for hitters."""
     if p.rest_of_season is None:
         return 0.0
-    if p.player_type == PlayerType.PITCHER:
-        return _safe(p.rest_of_season.ip)  # type: ignore[union-attr]
+    if isinstance(p.rest_of_season, PitcherStats):
+        return _safe(p.rest_of_season.ip)
     # Hitters: prefer PA, fall back to AB
     pa = _safe(getattr(p.rest_of_season, "pa", 0))
     if pa > 0:
@@ -85,7 +85,7 @@ def _playing_time(p: Player) -> float:
 
 def _pitcher_role(p: Player) -> str:
     """Classify a pitcher as 'SP' or 'RP' based on projected IP."""
-    ip = _safe(p.rest_of_season.ip) if p.rest_of_season else 0.0  # type: ignore[union-attr]
+    ip = _safe(p.rest_of_season.ip) if isinstance(p.rest_of_season, PitcherStats) else 0.0
     return "SP" if ip > STARTER_IP_THRESHOLD else "RP"
 
 
