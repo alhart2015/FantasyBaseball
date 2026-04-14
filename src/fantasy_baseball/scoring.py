@@ -75,7 +75,7 @@ def _playing_time(p: Player) -> float:
     if p.rest_of_season is None:
         return 0.0
     if p.player_type == PlayerType.PITCHER:
-        return _safe(p.rest_of_season.ip)
+        return _safe(p.rest_of_season.ip)  # type: ignore[union-attr]
     # Hitters: prefer PA, fall back to AB
     pa = _safe(getattr(p.rest_of_season, "pa", 0))
     if pa > 0:
@@ -85,7 +85,7 @@ def _playing_time(p: Player) -> float:
 
 def _pitcher_role(p: Player) -> str:
     """Classify a pitcher as 'SP' or 'RP' based on projected IP."""
-    ip = _safe(p.rest_of_season.ip) if p.rest_of_season else 0.0
+    ip = _safe(p.rest_of_season.ip) if p.rest_of_season else 0.0  # type: ignore[union-attr]
     return "SP" if ip > STARTER_IP_THRESHOLD else "RP"
 
 
@@ -232,7 +232,7 @@ def _apply_displacement(roster: list[Player]) -> list[Player | dict]:
         if p.name in displacement_factors:
             factor = displacement_factors[p.name]
             scaled = _scale_stats(p, factor)
-            scaled["player_type"] = p.player_type
+            scaled["player_type"] = p.player_type  # type: ignore[assignment]
             result.append(scaled)
         else:
             result.append(p)

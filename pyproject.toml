@@ -25,10 +25,25 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "mypy>=1.10",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = ["src"]
+files = [
+    "src/fantasy_baseball/models/",
+    "src/fantasy_baseball/scoring.py",
+    "src/fantasy_baseball/trades/evaluate.py",
+    "src/fantasy_baseball/lineup/delta_roto.py",
+]
+warn_return_any = true
+warn_unused_ignores = true
+check_untyped_defs = true
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

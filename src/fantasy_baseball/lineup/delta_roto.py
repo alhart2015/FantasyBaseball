@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS
+
+if TYPE_CHECKING:
+    from fantasy_baseball.models.player import Player
 
 
 # Tunable defaults (overridden by config/league.yaml delta_roto section)

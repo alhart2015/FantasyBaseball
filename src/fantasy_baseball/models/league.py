@@ -133,7 +133,7 @@ class League:
                 era=row["era"] if row["era"] is not None else 99.0,
                 whip=row["whip"] if row["whip"] is not None else 99.0,
             )
-            entry = StandingsEntry(
+            standings_entry = StandingsEntry(
                 team_name=row["team"],
                 team_key=row["team_key"] or "",
                 rank=int(row["rank"] or 0),
@@ -141,11 +141,11 @@ class League:
             )
             snapshots_by_date.setdefault(
                 row["snapshot_date"], []
-            ).append(entry)
+            ).append(standings_entry)
             # Keep updating so the most-recent snapshot wins (ORDER BY
             # snapshot_date ASC means the last overwrite is the latest).
-            if entry.team_key:
-                team_key_by_name[row["team"]] = entry.team_key
+            if standings_entry.team_key:
+                team_key_by_name[row["team"]] = standings_entry.team_key
 
         standings_snapshots = [
             StandingsSnapshot(

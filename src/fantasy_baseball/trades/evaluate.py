@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
-from fantasy_baseball.models.player import Player, PlayerType
+from fantasy_baseball.models.player import HitterStats, Player, PlayerType
 from fantasy_baseball.sgp.rankings import rank_key_from_positions
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
@@ -77,7 +77,7 @@ def compute_roto_points(standings: list[dict[str, Any]]) -> dict[str, int]:
         {team_name: total_points}
     """
     by_cat = compute_roto_points_by_cat(standings)
-    return {name: sum(cat_pts.values()) for name, cat_pts in by_cat.items()}
+    return {name: sum(cat_pts.values()) for name, cat_pts in by_cat.items()}  # type: ignore[arg-type]
 
 
 def apply_swap_delta(
@@ -233,7 +233,7 @@ def player_rest_of_season_stats(player: Player) -> dict:
     ros = player.rest_of_season
     if ros is None:
         return {cat: 0 for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP", "ab", "ip"]}
-    if player.player_type == PlayerType.HITTER:
+    if isinstance(ros, HitterStats):
         return {
             "R": ros.r, "HR": ros.hr, "RBI": ros.rbi, "SB": ros.sb,
             "AVG": ros.avg,
@@ -356,7 +356,7 @@ def search_trades_away(
         return []
 
     send_rank = rankings.get(
-        rank_key_from_positions(hart_player.name, hart_player.positions))
+        rank_key_from_positions(hart_player.name, hart_player.positions))  # type: ignore[arg-type]
     if send_rank is None:
         return []
 
@@ -368,7 +368,7 @@ def search_trades_away(
     for opp_name, opp_roster in opp_rosters.items():
         for opp_player in opp_roster:
             receive_rank = rankings.get(
-                rank_key_from_positions(opp_player.name, opp_player.positions))
+                rank_key_from_positions(opp_player.name, opp_player.positions))  # type: ignore[arg-type]
             if receive_rank is None:
                 continue
 
@@ -422,7 +422,7 @@ def search_trades_away(
         opp_roster = opp_rosters[opp_name]
         opp_leverage = leverage_by_team.get(opp_name, {})
         weakness = _score_positional_weakness(
-            hart_player.positions, opp_roster, opp_leverage,
+            hart_player.positions, opp_roster, opp_leverage,  # type: ignore[arg-type]
             opp_rosters, leverage_by_team,
         )
         results.append({
@@ -432,7 +432,7 @@ def search_trades_away(
         })
 
     # Sort groups by positional weakness descending (neediest first)
-    results.sort(key=lambda g: -g["positional_weakness"])
+    results.sort(key=lambda g: -g["positional_weakness"])  # type: ignore[operator]
     return results
 
 
@@ -478,11 +478,11 @@ def search_trades_for(
             target_opp = opp_name
             break
 
-    if target_player is None:
+    if target_player is None or target_opp is None:
         return []
 
     receive_rank = rankings.get(
-        rank_key_from_positions(target_player.name, target_player.positions))
+        rank_key_from_positions(target_player.name, target_player.positions))  # type: ignore[arg-type]
     if receive_rank is None:
         return []
 
@@ -493,7 +493,7 @@ def search_trades_for(
     candidates = []
     for hart_player in hart_roster:
         send_rank = rankings.get(
-            rank_key_from_positions(hart_player.name, hart_player.positions))
+            rank_key_from_positions(hart_player.name, hart_player.positions))  # type: ignore[arg-type]
         if send_rank is None:
             continue
 
