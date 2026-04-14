@@ -385,6 +385,63 @@ def test_append_roster_snapshot(tmp_path):
     conn.close()
 
 
+def test_append_roster_snapshot_replaces_team_snapshot(tmp_path):
+    """A second call for the same (snapshot_date, team) replaces the
+    prior roster rather than merging.
+
+    The in-season refresh targets a future-dated Tuesday lock. If a
+    prior refresh wrote McLain at 2B and today's refresh writes Lopez
+    at 2B (after a waiver swap), the stored snapshot must reflect the
+    latest roster only — not union both.
+
+    Regression test for the bug where INSERT OR IGNORE preserved the
+    stale McLain row, producing a corrupt 26-player roster downstream.
+    """
+    db_path = tmp_path / "test.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    create_tables(conn)
+
+    first = [
+        {"name": "Matt McLain", "selected_position": "2B",
+         "positions": ["2B", "IF", "Util"], "status": "", "player_id": "1"},
+        {"name": "Juan Soto", "selected_position": "OF",
+         "positions": ["OF", "Util"], "status": "", "player_id": "2"},
+    ]
+    append_roster_snapshot(conn, first, "2026-04-21", None, "Hart of the Order")
+
+    second = [
+        {"name": "Otto Lopez", "selected_position": "2B",
+         "positions": ["2B", "SS", "IF", "Util"], "status": "", "player_id": "3"},
+        {"name": "Juan Soto", "selected_position": "OF",
+         "positions": ["OF", "Util"], "status": "", "player_id": "2"},
+    ]
+    append_roster_snapshot(conn, second, "2026-04-21", None, "Hart of the Order")
+
+    names = [r["player_name"] for r in conn.execute(
+        "SELECT player_name FROM weekly_rosters "
+        "WHERE snapshot_date = '2026-04-21' AND team = 'Hart of the Order' "
+        "ORDER BY player_name"
+    ).fetchall()]
+    assert names == ["Juan Soto", "Otto Lopez"], (
+        f"Expected stale McLain removed, got {names}"
+    )
+
+    # Writes for a DIFFERENT team on the same date must not be touched.
+    other = [
+        {"name": "Other Player", "selected_position": "C",
+         "positions": ["C"], "status": "", "player_id": "99"},
+    ]
+    append_roster_snapshot(conn, other, "2026-04-21", None, "Other Team")
+    append_roster_snapshot(conn, second, "2026-04-21", None, "Hart of the Order")
+    other_rows = conn.execute(
+        "SELECT player_name FROM weekly_rosters "
+        "WHERE team = 'Other Team'"
+    ).fetchall()
+    assert len(other_rows) == 1
+    conn.close()
+
+
 def test_append_roster_snapshot_defaults_missing_fields(tmp_path):
     """Rosters without status/player_id keys still write (as NULL).
 

@@ -507,7 +507,8 @@ def load_weekly_rosters(conn, rosters_dir) -> None:
 
 
 def append_roster_snapshot(conn, roster, snapshot_date, week_num, team) -> None:
-    """Insert one row per player into weekly_rosters.
+    """Replace the stored roster for ``(snapshot_date, team)`` with
+    ``roster``.
 
     ``roster`` is a list of player dicts::
 
@@ -518,9 +519,19 @@ def append_roster_snapshot(conn, roster, snapshot_date, week_num, team) -> None:
     is the player's eligible positions joined with ``", "``. ``status``
     and ``player_id`` are optional — missing keys write as NULL.
 
-    Uses INSERT OR IGNORE so repeated calls with the same
-    (snapshot_date, team, slot, player_name) are idempotent.
+    Any existing rows for the same ``(snapshot_date, team)`` are
+    deleted first so a second call fully overwrites the prior snapshot.
+    This matters for future-dated snapshots (the Tuesday lineup lock)
+    that get rewritten across refreshes as waiver claims process: a
+    plain INSERT OR IGNORE would leave stale rows whose PK differed
+    only by ``player_name``, yielding a corrupted union of old + new.
     """
+    conn.execute(
+        "DELETE FROM weekly_rosters "
+        "WHERE snapshot_date = ? AND team = ?",
+        (snapshot_date, team),
+    )
+
     rows = []
     for player in roster:
         slot = player["selected_position"]
