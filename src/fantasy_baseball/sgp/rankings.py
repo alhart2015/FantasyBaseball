@@ -38,7 +38,8 @@ def lookup_rank(
         result = rankings.get(str(fg_id))
         if result is not None:
             return result if isinstance(result, dict) else {}
-    return rankings.get(rank_key(name, player_type), {})
+    fallback = rankings.get(rank_key(name, player_type), {})
+    return fallback if isinstance(fallback, dict) else {}
 
 
 def compute_sgp_rankings(
