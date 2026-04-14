@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from fantasy_baseball.lineup.delta_roto import compute_delta_roto
 from fantasy_baseball.lineup.team_optimizer import compute_team_wsgp, build_lineup_summary
 from fantasy_baseball.lineup.waivers import evaluate_pickup
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
@@ -177,10 +178,13 @@ def audit_roster(
     # Map player name → assigned slot from baseline
     slot_lookup = {e["name"]: e["slot"] for e in baseline_summary}
 
-    # Pre-compute FA wSGP
+    # Pre-compute FA wSGP (kept as informational column alongside deltaRoto)
     fa_wsgp: dict[str, float] = {}
     for fa in active_fas:
         fa_wsgp[fa.name] = calculate_weighted_sgp(fa.rest_of_season, leverage, denoms=denoms)
+
+    # Build per-position SGP pools once for this audit
+    pools = build_position_pools(active_fas, denoms=denoms)
 
     p_slots = roster_slots.get("P", 9)
 
@@ -201,18 +205,23 @@ def audit_roster(
             entries.append(entry)
             continue
 
-        positive_gains: list[tuple[float, Player]] = []
+        # Gather candidates from the per-position pools
+        candidates = candidates_for_player(player, pools)
 
         # Pre-build wSGP dict without this player for swap simulation
         base_wsgp = {k: v for k, v in baseline["player_wsgp"].items()
                      if k != player.name}
 
-        for fa in active_fas:
+        # scored: list of (candidate_dict, Player) tuples — Player retained so
+        # we can pass it to evaluate_pickup when selecting the top candidate.
+        scored: list[tuple[dict, Player]] = []
+
+        for fa in candidates:
             new_roster = [p for p in active_roster if p.name != player.name] + [fa]
             new_pitchers = [p for p in new_roster if p.player_type == PlayerType.PITCHER]
 
-            # Cross-type feasibility: swapping across types can't leave
-            # fewer hitters or pitchers than required slots.
+            # Cross-type feasibility: pool structure already blocks most cross-type
+            # swaps, but defense-in-depth against bad pool logic.
             if player.player_type == PlayerType.HITTER or fa.player_type == PlayerType.HITTER:
                 new_hitters = [p for p in new_roster if p.player_type != PlayerType.PITCHER]
                 if not can_cover_slots([list(p.positions) for p in new_hitters], roster_slots):
@@ -221,46 +230,65 @@ def audit_roster(
                 if len(new_pitchers) < p_slots:
                     continue
 
+            try:
+                dr = compute_delta_roto(
+                    drop_name=player.name,
+                    add_player=fa,
+                    user_roster=roster,
+                    projected_standings=projected_standings,
+                    team_name=team_name,
+                )
+            except Exception:
+                continue  # skip candidates that fail to score — don't drop the row
+
+            # wSGP gap (informational column)
             swap_wsgp = dict(base_wsgp)
             swap_wsgp[fa.name] = fa_wsgp[fa.name]
-
             new_result = compute_team_wsgp(
                 new_roster, leverage, roster_slots,
                 denoms=denoms, player_wsgp=swap_wsgp,
             )
-            gain = round(new_result["total_wsgp"] - baseline_wsgp, 2)
+            gap = round(new_result["total_wsgp"] - baseline_wsgp, 2)
 
-            if gain > 0:
-                positive_gains.append((gain, fa))
+            cand_dict = {
+                "name": fa.name,
+                "player_type": fa.player_type.value,
+                "positions": list(fa.positions),
+                "wsgp": round(fa_wsgp.get(fa.name, 0.0), 2),
+                "gap": gap,
+                "delta_roto": dr.to_dict(),
+                "player_id": fa.yahoo_id,
+            }
+            scored.append((cand_dict, fa))
 
-        # Sort by gain descending, keep top 5
-        positive_gains.sort(key=lambda x: x[0], reverse=True)
-        top_candidates = positive_gains[:5]
+        scored.sort(key=lambda t: t[0]["delta_roto"]["total"], reverse=True)
+        entry.candidates = [cand for cand, _ in scored]
 
-        if top_candidates:
-            best_gain, best_fa_player = top_candidates[0]
-            cat_result = evaluate_pickup(best_fa_player, player, leverage)
-            entry.best_fa = best_fa_player.name
-            entry.best_fa_type = best_fa_player.player_type.value
-            entry.best_fa_positions = list(best_fa_player.positions)
-            entry.best_fa_wsgp = round(fa_wsgp.get(best_fa_player.name, 0.0), 2)
-            entry.best_fa_id = best_fa_player.yahoo_id
-            entry.gap = best_gain
+        # Top-1 becomes the recommendation only if it's a real upgrade.
+        if scored and scored[0][0]["delta_roto"]["total"] > 0:
+            top_dict, top_player = scored[0]
+            cat_result = evaluate_pickup(top_player, player, leverage)
+            entry.best_fa = top_dict["name"]
+            entry.best_fa_type = top_dict["player_type"]
+            entry.best_fa_positions = top_dict["positions"]
+            entry.best_fa_wsgp = top_dict["wsgp"]
+            entry.best_fa_id = top_dict["player_id"]
+            entry.gap = top_dict["gap"]
             entry.categories = cat_result["categories"]
-
-            entry.candidates = [
-                {
-                    "name": fa.name,
-                    "player_type": fa.player_type.value,
-                    "positions": list(fa.positions),
-                    "wsgp": round(fa_wsgp.get(fa.name, 0.0), 2),
-                    "gap": gain,
-                    "player_id": fa.yahoo_id,
-                }
-                for gain, fa in top_candidates
-            ]
+        # else: best_fa stays None, gap stays 0.0 — "No upgrade available"
 
         entries.append(entry)
+
+    # Sort entries by top-candidate deltaRoto desc (entries with best_fa=None
+    # sort to the bottom).
+    entries.sort(
+        key=lambda e: (
+            e.candidates[0]["delta_roto"]["total"]
+            if e.best_fa is not None and e.candidates
+            else float("-inf")
+        ),
+        reverse=True,
+    )
 
     # Add IL players at the end — they can't be swapped
     for player in il_players:
@@ -274,5 +302,4 @@ def audit_roster(
             classification=player.classification,
         ))
 
-    entries.sort(key=lambda e: e.gap, reverse=True)
     return entries

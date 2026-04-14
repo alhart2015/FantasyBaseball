@@ -210,7 +210,9 @@ class TestAuditRoster:
         assert results[0].best_fa is None
         assert results[0].gap == 0.0
 
-    def test_sorted_by_gap_descending(self):
+    def test_rows_sorted_by_top_candidate_delta_roto_descending(self):
+        """Rows are sorted by their top candidate's delta_roto.total descending.
+        Entries with no upgrade (best_fa=None) sort to the bottom."""
         roster = [
             _hitter("OK 1B", ["1B"], r=60, hr=15, rbi=55, sb=3, avg=0.255, ab=480, h=122),
             _hitter("Bad OF", ["OF"], r=30, hr=5, rbi=20, sb=1, avg=0.220, ab=300, h=66),
@@ -225,8 +227,14 @@ class TestAuditRoster:
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
         )
-        gaps = [e.gap for e in results]
-        assert gaps == sorted(gaps, reverse=True)
+
+        def _sort_key(e):
+            if e.best_fa is None or not e.candidates:
+                return float("-inf")
+            return e.candidates[0]["delta_roto"]["total"]
+
+        keys = [_sort_key(e) for e in results]
+        assert keys == sorted(keys, reverse=True)
 
     def test_empty_free_agents_all_no_upgrade(self):
         roster = [
@@ -326,8 +334,8 @@ class TestAuditRoster:
                     f"{entry.player} should not be replaced by pitcher {entry.best_fa}"
                 )
 
-    def test_candidates_list_populated(self):
-        """audit_roster should populate candidates with top-N FAs per slot."""
+    def test_candidates_list_sorted_by_delta_roto(self):
+        """candidates list is sorted by delta_roto.total descending (not wSGP)."""
         roster = [
             _hitter("Weak OF", ["OF"], r=30, hr=5, rbi=20, sb=1, avg=0.220, ab=300, h=66),
             _pitcher("SP1", ["SP"], ip=180, w=12, k=180, era=3.50, whip=1.20,
@@ -350,18 +358,70 @@ class TestAuditRoster:
         )
 
         weak_entry = next(e for e in results if e.player == "Weak OF")
-        assert weak_entry.best_fa == "FA OF 1"
         assert len(weak_entry.candidates) >= 2
-        gaps = [c["gap"] for c in weak_entry.candidates]
-        assert gaps == sorted(gaps, reverse=True)
+        # Candidates sorted by delta_roto.total descending
+        dr_totals = [c["delta_roto"]["total"] for c in weak_entry.candidates]
+        assert dr_totals == sorted(dr_totals, reverse=True)
+        # Every candidate dict has both ranking metric (delta_roto) and informational gap
         for c in weak_entry.candidates:
             assert "name" in c
-            assert "wsgp" in c
+            assert "delta_roto" in c
             assert "gap" in c
+            assert "wsgp" in c
             assert "player_type" in c
             assert "positions" in c
 
-    def test_candidates_empty_when_no_upgrade(self):
+    def test_no_upgrade_when_all_delta_roto_negative(self):
+        """If every candidate has delta_roto.total <= 0, best_fa is None
+        but candidates list still contains the (sorted-desc) negative options."""
+        roster = [
+            _hitter("Star OF", ["OF"], r=100, hr=40, rbi=110, sb=20, avg=0.300, ab=550, h=165),
+            _pitcher("SP", ["SP"], ip=180, w=12, k=180, era=3.20, whip=1.10,
+                     er=64, bb=30, h_allowed=168),
+        ]
+        free_agents = [
+            _hitter("Downgrade", ["OF"], r=40, hr=8, rbi=30, sb=2, avg=0.220, ab=400, h=88),
+        ]
+        results = audit_roster(
+            roster, free_agents, EQUAL_LEVERAGE,
+            {"OF": 1, "P": 1, "BN": 0, "IL": 0},
+            projected_standings=_minimal_standings(),
+            team_name=TEAM_NAME,
+        )
+        star = next(e for e in results if e.player == "Star OF")
+        assert star.best_fa is None
+        assert star.gap == 0.0
+        assert len(star.candidates) == 1
+        assert star.candidates[0]["name"] == "Downgrade"
+        assert star.candidates[0]["delta_roto"]["total"] <= 0
+
+    def test_no_cross_type_leakage(self):
+        """A hitter row never gets a pitcher candidate, even if pitchers exist in FA pool."""
+        roster = [
+            _hitter("Weak OF", ["OF"], r=30, hr=5, rbi=20, sb=1, avg=0.220, ab=300, h=66),
+            _pitcher("SP", ["SP"], ip=180, w=12, k=180, era=3.20, whip=1.10,
+                     er=64, bb=30, h_allowed=168),
+        ]
+        free_agents = [
+            _pitcher("Wacha", ["SP"], ip=170, w=11, k=160, era=3.40, whip=1.15,
+                     er=64, bb=35, h_allowed=160),
+            _hitter("FA OF", ["OF"], r=80, hr=25, rbi=75, sb=8, avg=0.275, ab=520, h=143),
+        ]
+        results = audit_roster(
+            roster, free_agents, EQUAL_LEVERAGE,
+            {"OF": 1, "P": 1, "BN": 0, "IL": 0},
+            projected_standings=_minimal_standings(),
+            team_name=TEAM_NAME,
+        )
+        weak = next(e for e in results if e.player == "Weak OF")
+        cand_names = {c["name"] for c in weak.candidates}
+        assert "Wacha" not in cand_names
+        assert "FA OF" in cand_names
+
+    def test_no_best_fa_when_no_upgrade(self):
+        """When no FA beats the roster player on deltaRoto, best_fa is None.
+        (The candidates list still contains the sorted-desc downgrade options —
+        see test_no_upgrade_when_all_delta_roto_negative.)"""
         roster = [
             _hitter("Star OF", ["OF"], r=100, hr=40, rbi=110, sb=20, avg=0.300, ab=550, h=165),
         ]
@@ -374,7 +434,8 @@ class TestAuditRoster:
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
         )
-        assert results[0].candidates == []
+        assert results[0].best_fa is None
+        assert results[0].gap == 0.0
 
 
 class TestAuditILFilterUsesSlotOrStatus:
