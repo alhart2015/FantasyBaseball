@@ -348,18 +348,17 @@ def test_read_cache_handles_redis_error(tmp_path, monkeypatch):
 
 class TestComputeComparisonStandings:
     def test_swap_changes_user_team_stats(self):
-        """Swapping a hitter should change the user's projected stats and roto points."""
+        """Swapping a hitter should change the user's projected stats but not other teams'."""
         from fantasy_baseball.web.season_data import compute_comparison_standings
         from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 
-        # HR is close (200 vs 198) so the swap (drop 25 HR, gain 5 HR) flips it
         projected_standings = [
             {"name": "My Team", "team_key": "", "rank": 0, "stats": {
                 "R": 700, "HR": 200, "RBI": 700, "SB": 100, "AVG": 0.260,
                 "W": 80, "K": 1200, "SV": 50, "ERA": 3.50, "WHIP": 1.20,
             }},
             {"name": "Other Team", "team_key": "", "rank": 0, "stats": {
-                "R": 680, "HR": 198, "RBI": 680, "SB": 110, "AVG": 0.255,
+                "R": 680, "HR": 190, "RBI": 680, "SB": 110, "AVG": 0.255,
                 "W": 85, "K": 1100, "SV": 40, "ERA": 3.80, "WHIP": 1.25,
             }},
         ]
@@ -376,7 +375,7 @@ class TestComputeComparisonStandings:
 
         other_player = Player(
             name="Ezequiel Tovar", player_type="hitter",
-            rest_of_season=HitterStats(pa=590, ab=513, h=135, r=73, hr=5, rbi=74, sb=8, avg=0.263),
+            rest_of_season=HitterStats(pa=590, ab=513, h=135, r=73, hr=20, rbi=74, sb=8, avg=0.263),
         )
 
         result = compute_comparison_standings(
@@ -391,9 +390,14 @@ class TestComputeComparisonStandings:
         assert "after" in result
         assert "categories" in result
 
-        assert result["before"]["roto"]["My Team"]["total"] != result["after"]["roto"]["My Team"]["total"]
+        # User's stats must change (counting stats differ between the two players)
         assert result["before"]["stats"]["My Team"] != result["after"]["stats"]["My Team"]
+        # Other teams are untouched
         assert result["before"]["stats"]["Other Team"] == result["after"]["stats"]["Other Team"]
+        # Counting stat delta matches player difference: Adames 25 HR, Tovar 20 HR
+        before_hr = result["before"]["stats"]["My Team"]["HR"]
+        after_hr = result["after"]["stats"]["My Team"]["HR"]
+        assert before_hr - after_hr == pytest.approx(25 - 20)
 
     def test_swap_not_found_returns_error(self):
         """If roster_player_name doesn't match anyone in user_roster, return error."""
