@@ -102,9 +102,8 @@
 
 - [ ] **Refactor draft pipeline to use Player dataclass** — The draft pipeline (`board.py`, `replacement.py`, `var.py`, `rankings.py`) operates end-to-end on pandas DataFrames with string-keyed column access. Now that the in-season SGP functions accept `HitterStats`/`PitcherStats` directly, extend the same pattern to the draft pipeline: build `Player` objects from blended projections, compute SGP/VAR on the dataclass, and only convert to a DataFrame for the final ranked board output. This eliminates the split where in-season code uses typed dataclasses but draft code uses untyped Series.
 
-- [ ] **Continue mypy migration to strongly typed code** — mypy is set up (see `[tool.mypy]` in `pyproject.toml`) covering: `models/`, `scoring.py`, `trades/evaluate.py`, `lineup/delta_roto.py`, `sgp/rankings.py`. Expand coverage to the remaining modules (`web/`, rest of `sgp/`, rest of `lineup/`, `draft/`) incrementally. Next digestible chunks:
-  - **Small lineup leaves:** `lineup/leverage.py`, `lineup/weighted_sgp.py`, `lineup/player_classification.py` — adjacent to already-typed `delta_roto.py`.
-  - **Rest of `sgp/`:** `player_value.py`, `replacement.py`, `var.py`, `denominators.py` — pandas-heavy, will likely need careful `cast()` use at row-access boundaries.
+- [ ] **Continue mypy migration to strongly typed code** — mypy is set up (see `[tool.mypy]` in `pyproject.toml`) covering: `models/`, `scoring.py`, `trades/evaluate.py`, `lineup/delta_roto.py`, `lineup/leverage.py`, `lineup/player_classification.py`, `lineup/weighted_sgp.py`, `sgp/denominators.py`, `sgp/rankings.py`. Expand coverage to the remaining modules (`web/`, rest of `sgp/`, rest of `lineup/`, `draft/`) incrementally. Next digestible chunks:
+  - **Rest of `sgp/`:** `player_value.py`, `replacement.py`, `var.py` — pandas-heavy, will likely need careful `cast()` use at row-access boundaries.
   - **Larger lineup modules:** `roster_audit.py`, `waivers.py`, `optimizer.py`, `matchups.py`, `team_optimizer.py`, `yahoo_roster.py`.
   - **`draft/`:** blocked on the separate TODO item above to refactor the draft pipeline to use the `Player` dataclass (currently pandas-heavy).
   - **`web/`:** largest surface; save for last.
