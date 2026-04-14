@@ -52,11 +52,11 @@ class CategoryStats:
             raise KeyError(key)
         return float(getattr(self, field_name))
 
-    def get(self, key: str, default: Any = 0.0) -> Any:
+    def get(self, key: str, default: float = 0.0) -> float:
         field_name = _KEY_TO_FIELD.get(key)
         if field_name is None:
             return default
-        return getattr(self, field_name)
+        return float(getattr(self, field_name))
 
     def keys(self) -> list[str]:
         """Return the category keys in canonical order.
