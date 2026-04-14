@@ -43,6 +43,41 @@ def build_position_pools(
     return pools
 
 
+LINEUP_ONLY_SLOTS: set[str] = {"IF", "UTIL", "Util", "P", "BN", "IL"}
+
+
+def candidates_for_player(
+    player: Player,
+    pools: dict[str, list[Player]],
+) -> list[Player]:
+    """Return candidate FAs for this roster player as a deduped list.
+
+    - Hitters: union of pools for each of player's Yahoo positions (lineup-only
+      slots like ``UTIL``/``IF`` don't contribute pools because they're not
+      Yahoo source positions).
+    - Pitchers: SP pool ∪ RP pool (all Yahoo roster pitchers come through as
+      ``positions=["P"]``; we don't distinguish SP/RP on the user's roster).
+    - Dedup key: ``yahoo_id`` when present, else ``name::player_type``.
+    """
+    if player.player_type == PlayerType.PITCHER:
+        source_positions = ["SP", "RP"]
+    else:
+        source_positions = [
+            p for p in player.positions if p not in LINEUP_ONLY_SLOTS
+        ]
+
+    seen: set[str] = set()
+    result: list[Player] = []
+    for pos in source_positions:
+        for fa in pools.get(pos, []):
+            key = fa.yahoo_id or f"{fa.name}::{fa.player_type.value}"
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(fa)
+    return result
+
+
 @dataclass
 class AuditEntry:
     """Result of evaluating one roster slot against the FA pool."""

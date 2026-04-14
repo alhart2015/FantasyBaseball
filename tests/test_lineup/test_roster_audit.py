@@ -83,6 +83,68 @@ class TestBuildPositionPools:
             assert pools[pos] == []
 
 
+from fantasy_baseball.lineup.roster_audit import candidates_for_player
+
+
+class TestCandidatesForPlayer:
+    def test_single_position_hitter_pulls_from_that_pool_only(self):
+        """A catcher-only hitter gets candidates from the C pool only."""
+        c_fa = _hitter("C FA", ["C"], r=50, hr=12, rbi=55, sb=1, avg=0.250, ab=420, h=105)
+        of_fa = _hitter("OF FA", ["OF"], r=80, hr=25, rbi=75, sb=8, avg=0.275, ab=520, h=143)
+        pools = build_position_pools([c_fa, of_fa])
+        catcher = _hitter("Roster C", ["C"], r=40, hr=8, rbi=40, sb=0, avg=0.230, ab=400, h=92)
+        cands = candidates_for_player(catcher, pools)
+        assert c_fa in cands
+        assert of_fa not in cands
+
+    def test_multi_position_hitter_pulls_from_union(self):
+        """A 2B/OF-eligible hitter gets candidates from 2B and OF pools deduped."""
+        b2 = _hitter("2B FA", ["2B"], r=70, hr=15, rbi=60, sb=15, avg=0.270, ab=500, h=135)
+        of_ = _hitter("OF FA", ["OF"], r=80, hr=25, rbi=75, sb=8, avg=0.275, ab=520, h=143)
+        multi = _hitter("Multi FA", ["2B", "OF"], r=75, hr=20, rbi=70, sb=10, avg=0.272, ab=510, h=139)
+        pools = build_position_pools([b2, of_, multi])
+        roster_multi = _hitter("Roster 2B/OF", ["2B", "OF"], r=60, hr=10, rbi=50, sb=5, avg=0.250, ab=480, h=120)
+        cands = candidates_for_player(roster_multi, pools)
+        assert b2 in cands
+        assert of_ in cands
+        assert multi in cands
+        # Deduped: multi appears once even though it's in both pools
+        assert sum(1 for c in cands if c.name == "Multi FA") == 1
+
+    def test_pitcher_pulls_from_sp_union_rp(self):
+        """A Yahoo roster pitcher (positions=['P']) gets SP pool and RP pool."""
+        sp = _pitcher("SP FA", ["SP"], ip=180, w=12, k=180, era=3.20, whip=1.10,
+                      er=64, bb=30, h_allowed=168)
+        rp = _pitcher("RP FA", ["RP"], ip=60, w=3, k=60, sv=20, era=3.00, whip=1.17,
+                      er=20, bb=20, h_allowed=50)
+        pools = build_position_pools([sp, rp])
+        roster_pitcher = _pitcher("Roster P", ["P"], ip=100, w=6, k=80, era=4.00, whip=1.30,
+                                  er=44, bb=30, h_allowed=100)
+        cands = candidates_for_player(roster_pitcher, pools)
+        assert sp in cands
+        assert rp in cands
+
+    def test_hitter_never_gets_pitcher_candidates(self):
+        """A hitter (positions=['OF']) never gets candidates from SP/RP pools."""
+        sp = _pitcher("SP FA", ["SP"], ip=180, w=12, k=180, era=3.20, whip=1.10,
+                      er=64, bb=30, h_allowed=168)
+        of_ = _hitter("OF FA", ["OF"], r=80, hr=25, rbi=75, sb=8, avg=0.275, ab=520, h=143)
+        pools = build_position_pools([sp, of_])
+        hitter = _hitter("Roster OF", ["OF"], r=60, hr=10, rbi=50, sb=5, avg=0.250, ab=480, h=120)
+        cands = candidates_for_player(hitter, pools)
+        assert sp not in cands
+        assert of_ in cands
+
+    def test_lineup_only_slots_are_filtered(self):
+        """Positions like 'UTIL' and 'IF' don't contribute pools (not Yahoo source positions)."""
+        of_ = _hitter("OF FA", ["OF"], r=80, hr=25, rbi=75, sb=8, avg=0.275, ab=520, h=143)
+        pools = build_position_pools([of_])
+        # Roster hitter whose positions list is purely lineup-only → no candidates
+        util_only = _hitter("Util Only", ["UTIL"], r=60, hr=10, rbi=50, sb=5, avg=0.250, ab=480, h=120)
+        cands = candidates_for_player(util_only, pools)
+        assert cands == []
+
+
 class TestAuditRoster:
     def test_identifies_upgrade_available(self):
         roster = [
