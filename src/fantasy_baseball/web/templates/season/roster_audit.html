@@ -51,7 +51,7 @@
 <p class="placeholder-text">No roster audit data. Click "Refresh Data" to generate the audit.</p>
 {% else %}
 
-{% set upgrade_count = audit | selectattr('gap', '>', 0) | list | length %}
+{% set upgrade_count = audit | rejectattr('best_fa', 'none') | list | length %}
 {% if upgrade_count > 0 %}
 <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">
     {{ upgrade_count }} upgrade{{ 's' if upgrade_count != 1 }} available on the waiver wire.
@@ -71,7 +71,7 @@
             <th>wSGP</th>
             <th>Best Available</th>
             <th>FA wSGP</th>
-            <th>Gap</th>
+            <th>ΔRoto</th>
         </tr>
     </thead>
     <tbody>
@@ -99,17 +99,18 @@
         </td>
         <td>{{ "%.2f"|format(entry.best_fa_wsgp) }}</td>
         <td>
-            {% if entry.gap >= 0.5 %}
-            <span class="gap-badge gap-high">+{{ "%.2f"|format(entry.gap) }}</span>
-            {% elif entry.gap >= 0.2 %}
-            <span class="gap-badge gap-medium">+{{ "%.2f"|format(entry.gap) }}</span>
+            {% if entry.candidates and entry.candidates[0].delta_roto %}
+            {% set dr = entry.candidates[0].delta_roto.total %}
+            <span class="gap-badge {% if dr >= 1.0 %}gap-high{% elif dr >= 0.3 %}gap-medium{% else %}gap-low{% endif %}">
+                {{ "%+.2f"|format(dr) }}
+            </span>
             {% else %}
-            <span class="gap-badge gap-low">+{{ "%.2f"|format(entry.gap) }}</span>
+            <span class="gap-none">—</span>
             {% endif %}
         </td>
         {% else %}
         <td colspan="2" style="color: var(--text-secondary); font-style: italic;">—</td>
-        <td><span class="gap-none">No better option</span></td>
+        <td><span class="gap-none">No upgrade available</span></td>
         {% endif %}
     </tr>
     {% if entry.candidates %}
