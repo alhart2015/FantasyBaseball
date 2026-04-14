@@ -101,7 +101,7 @@
         <td>
             {% if entry.candidates and entry.candidates[0].delta_roto %}
             {% set dr = entry.candidates[0].delta_roto.total %}
-            <span class="gap-badge {% if dr >= 1.0 %}gap-high{% elif dr >= 0.3 %}gap-medium{% else %}gap-low{% endif %}">
+            <span class="gap-badge {% if dr >= 1.0 %}gap-low{% elif dr > 0 %}gap-medium{% else %}gap-high{% endif %}">
                 {{ "%+.2f"|format(dr) }}
             </span>
             {% else %}
@@ -130,7 +130,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                {% for c in entry.candidates %}
+                {% for c in entry.candidates | sort(attribute='delta_roto.total', reverse=true) %}
                 <tr>
                     <td>
                         {{ c.name }}
