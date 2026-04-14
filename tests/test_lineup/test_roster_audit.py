@@ -538,3 +538,77 @@ class TestAuditILFilterUsesSlotOrStatus:
         il_entries = [e for e in entries if e.player == "Bench IL Hitter"]
         assert len(il_entries) == 1
         assert il_entries[0].slot == "IL"
+
+
+class TestRegressionFixtures:
+    """Lock in fixes for the specific broken-audit cases flagged by the user."""
+
+    def test_herrera_style_no_upgrade_shows_no_upgrade_and_surfaces_negative_candidate(self):
+        """Herrera-like catcher whose only C-pool option is a downgrade:
+        collapsed row shows no upgrade, expanded candidate list still surfaces
+        the negative option (per design clarification c)."""
+        roster = [
+            # Herrera-ish: decent AVG at modest PA
+            _hitter("Herrera", ["C"], r=60, hr=15, rbi=55, sb=2, avg=0.257, ab=486, h=125),
+            _hitter("OF Filler", ["OF"], r=70, hr=18, rbi=60, sb=5, avg=0.260, ab=500, h=130),
+            _pitcher("SP", ["SP"], ip=180, w=12, k=180, era=3.20, whip=1.10,
+                     er=64, bb=30, h_allowed=168),
+        ]
+        free_agents = [
+            # Perez-ish: worse AVG, more PA → hurts team AVG, no offsetting gains
+            _hitter("Perez", ["C"], r=55, hr=18, rbi=65, sb=1, avg=0.239, ab=554, h=132),
+        ]
+        results = audit_roster(
+            roster, free_agents, EQUAL_LEVERAGE,
+            {"C": 1, "OF": 1, "P": 1, "BN": 0, "IL": 0},
+            projected_standings=_minimal_standings(),
+            team_name=TEAM_NAME,
+        )
+        herrera = next(e for e in results if e.player == "Herrera")
+        # Collapsed row shows no upgrade
+        assert herrera.best_fa is None
+        assert herrera.gap == 0.0
+        # Expanded view still has Perez visible with a negative delta_roto
+        assert len(herrera.candidates) == 1
+        assert herrera.candidates[0]["name"] == "Perez"
+        assert herrera.candidates[0]["delta_roto"]["total"] <= 0
+
+    def test_adolis_style_of_row_never_recommends_pitcher(self):
+        """Adolis-like OF row must never get a pitcher candidate, even when
+        the FA pool is pitcher-heavy and wSGP might have ranked pitchers above
+        the true best OF upgrade (this was the 'hidden Ward' bug)."""
+        roster = [
+            _hitter("Adolis", ["OF"], r=70, hr=25, rbi=75, sb=6, avg=0.235, ab=541, h=127),
+            _pitcher("SP", ["SP"], ip=180, w=12, k=180, era=3.20, whip=1.10,
+                     er=64, bb=30, h_allowed=168),
+        ]
+        # FA pool contains pitchers that could have high swap-wSGP but are
+        # invalid as hitter-row candidates. And one legitimate OF upgrade.
+        free_agents = [
+            _pitcher("Wacha", ["SP"], ip=170, w=11, k=160, era=3.40, whip=1.15,
+                     er=64, bb=35, h_allowed=160),
+            _pitcher("Keller", ["SP"], ip=175, w=11, k=165, era=3.45, whip=1.18,
+                     er=67, bb=38, h_allowed=164),
+            _pitcher("Springs", ["SP"], ip=160, w=10, k=155, era=3.35, whip=1.14,
+                     er=60, bb=32, h_allowed=150),
+            _pitcher("López", ["SP"], ip=165, w=10, k=150, era=3.50, whip=1.20,
+                     er=64, bb=38, h_allowed=158),
+            _pitcher("Cantillo", ["SP"], ip=155, w=9, k=145, era=3.60, whip=1.22,
+                     er=62, bb=40, h_allowed=150),
+            _hitter("Ward", ["OF"], r=80, hr=28, rbi=80, sb=10, avg=0.275, ab=569, h=156),
+        ]
+        results = audit_roster(
+            roster, free_agents, EQUAL_LEVERAGE,
+            {"OF": 1, "P": 1, "BN": 0, "IL": 0},
+            projected_standings=_minimal_standings(),
+            team_name=TEAM_NAME,
+        )
+        adolis = next(e for e in results if e.player == "Adolis")
+        cand_names = {c["name"] for c in adolis.candidates}
+        # Zero pitcher leakage into the hitter row's candidate list
+        for pitcher_name in ("Wacha", "Keller", "Springs", "López", "Cantillo"):
+            assert pitcher_name not in cand_names, (
+                f"{pitcher_name} (pitcher) should not be an Adolis candidate"
+            )
+        # Ward is the only viable candidate
+        assert "Ward" in cand_names
