@@ -39,6 +39,7 @@ files = [
     "src/fantasy_baseball/scoring.py",
     "src/fantasy_baseball/trades/evaluate.py",
     "src/fantasy_baseball/lineup/delta_roto.py",
+    "src/fantasy_baseball/sgp/rankings.py",
 ]
 warn_return_any = true
 warn_unused_ignores = true

@@ -7,10 +7,11 @@ rest-of-season (ROS) projections for the players involved.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, TypedDict
 
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import HitterStats, Player, PlayerType
+from fantasy_baseball.models.positions import Position
 from fantasy_baseball.sgp.rankings import rank_key_from_positions
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
@@ -32,6 +33,13 @@ MAX_RANK_GAP = 5
 # Baseline estimates for AB and IP used to back out current totals
 _TEAM_AB = 5500
 _TEAM_IP = 1450
+
+
+class OpponentGroup(TypedDict):
+    """One opponent's trade-candidate group, as returned by search_trades_away."""
+    opponent: str
+    positional_weakness: float
+    candidates: list[dict[str, Any]]
 
 
 def compute_roto_points_by_cat(
@@ -275,7 +283,7 @@ def _can_roster_without(roster: list[Player], remove: Player, add: Player,
 
 
 def _score_positional_weakness(
-    player_positions: Sequence[str],
+    player_positions: Sequence[Position | str],
     opp_roster: list[Player],
     opp_leverage: dict[str, float],
     all_opp_rosters: dict[str, list[Player]],
@@ -328,7 +336,7 @@ def search_trades_away(
     roster_slots: dict[str, int],
     rankings: dict[str, int],
     projected_standings: list[dict] | None = None,
-) -> list[dict]:
+) -> list[OpponentGroup]:
     """Find trade candidates for a player the user wants to trade away.
 
     Searches all opponent rosters for players the user could receive in
@@ -418,7 +426,7 @@ def search_trades_away(
         candidates.sort(key=lambda c: -c["hart_wsgp_gain"])
 
     # Score positional weakness per opponent and build result
-    results = []
+    results: list[OpponentGroup] = []
     for opp_name, candidates in grouped.items():
         opp_roster = opp_rosters[opp_name]
         opp_leverage = leverage_by_team.get(opp_name, {})
@@ -433,7 +441,7 @@ def search_trades_away(
         })
 
     # Sort groups by positional weakness descending (neediest first)
-    results.sort(key=lambda g: -g["positional_weakness"])  # type: ignore[operator]
+    results.sort(key=lambda g: -g["positional_weakness"])
     return results
 
 

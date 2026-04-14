@@ -151,12 +151,14 @@ def _player_sgp(p: Player) -> float:
     return calculate_player_sgp(p.rest_of_season)
 
 
-def _scale_stats(p: Player, factor: float) -> dict[str, float]:
+def _scale_stats(p: Player, factor: float) -> dict[str, float | PlayerType]:
     """Return a dict of scaled counting stats for the player.
 
-    factor=1.0 means full stats; factor=0.0 means zeroed out.
+    factor=1.0 means full stats; factor=0.0 means zeroed out. The
+    ``player_type`` key is included so callers can route the result the
+    same way they would a full Player.
     """
-    result: dict[str, float] = {}
+    result: dict[str, float | PlayerType] = {}
     if p.rest_of_season is None:
         return result
     if p.player_type == PlayerType.HITTER:
@@ -165,6 +167,7 @@ def _scale_stats(p: Player, factor: float) -> dict[str, float]:
     elif p.player_type == PlayerType.PITCHER:
         for key in PITCHING_COUNTING:
             result[key] = _safe(getattr(p.rest_of_season, key, 0)) * factor
+    result["player_type"] = p.player_type
     return result
 
 
@@ -232,7 +235,6 @@ def _apply_displacement(roster: list[Player]) -> list[Player | dict]:
         if p.name in displacement_factors:
             factor = displacement_factors[p.name]
             scaled = _scale_stats(p, factor)
-            scaled["player_type"] = p.player_type  # type: ignore[assignment]
             result.append(scaled)
         else:
             result.append(p)
