@@ -27,6 +27,19 @@ def _pitcher(name, w=10, k=150, sv=0, era=3.50, whip=1.20, ip=180, classificatio
 
 EQUAL_LEVERAGE = {cat: 0.1 for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
 
+TEAM_NAME = "Test Team"
+
+
+def _minimal_standings():
+    base = {"R": 800, "HR": 200, "RBI": 800, "SB": 100, "AVG": 0.260,
+            "W": 70, "K": 1200, "SV": 50, "ERA": 3.50, "WHIP": 1.20,
+            "AB": 5000, "H": 1300, "IP": 1400, "ER": 560, "BB": 420, "H_ALLOWED": 1300}
+    return [
+        {"name": TEAM_NAME, "stats": dict(base)},
+        {"name": "Opponent", "stats": {**base, "SV": 30, "ERA": 3.80}},
+    ]
+
+
 ROSTER_SLOTS = {
     "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1,
     "OF": 4, "Util": 2, "BN": 1, "P": 7,
@@ -43,7 +56,11 @@ class TestClassificationProtection:
         ] + [_pitcher(f"P{i}", classification="core") for i in range(7)]
         fa = [_hitter("BetterFA", r=50, hr=30, rbi=90, avg=0.280)]
 
-        entries = audit_roster(roster, fa, EQUAL_LEVERAGE, ROSTER_SLOTS)
+        entries = audit_roster(
+            roster, fa, EQUAL_LEVERAGE, ROSTER_SLOTS,
+            projected_standings=_minimal_standings(),
+            team_name=TEAM_NAME,
+        )
         tc_entry = next(e for e in entries if e.player == "TradeCandidate")
         assert tc_entry.best_fa is None
         assert tc_entry.gap == 0.0
@@ -56,7 +73,11 @@ class TestClassificationProtection:
         ] + [_pitcher(f"P{i}", classification="core") for i in range(7)]
         fa = [_hitter("FA", r=60, hr=20, rbi=70)]
 
-        entries = audit_roster(roster, fa, EQUAL_LEVERAGE, ROSTER_SLOTS)
+        entries = audit_roster(
+            roster, fa, EQUAL_LEVERAGE, ROSTER_SLOTS,
+            projected_standings=_minimal_standings(),
+            team_name=TEAM_NAME,
+        )
         core_entry = next(e for e in entries if e.player == "CoreStar")
         assert core_entry.best_fa is None
 
@@ -68,7 +89,11 @@ class TestClassificationProtection:
         ] + [_pitcher(f"P{i}", classification="core") for i in range(7)]
         fa = [_hitter("GoodFA", r=80, hr=25, rbi=80, sb=15, avg=0.270)]
 
-        entries = audit_roster(roster, fa, EQUAL_LEVERAGE, ROSTER_SLOTS)
+        entries = audit_roster(
+            roster, fa, EQUAL_LEVERAGE, ROSTER_SLOTS,
+            projected_standings=_minimal_standings(),
+            team_name=TEAM_NAME,
+        )
         drop_entry = next(e for e in entries if e.player == "DroppableGuy")
         # The code path runs without error — droppable players are not protected
         assert True

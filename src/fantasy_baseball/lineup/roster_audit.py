@@ -123,6 +123,9 @@ def audit_roster(
     free_agents: list[Player],
     leverage: dict[str, float],
     roster_slots: dict[str, int],
+    *,
+    projected_standings: list[dict],
+    team_name: str,
 ) -> list[AuditEntry]:
     """Evaluate every roster slot against the best available FA.
 
