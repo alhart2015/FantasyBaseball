@@ -50,7 +50,7 @@ class CategoryStats:
         field_name = _KEY_TO_FIELD.get(key)
         if field_name is None:
             raise KeyError(key)
-        return getattr(self, field_name)  # type: ignore[no-any-return]
+        return float(getattr(self, field_name))
 
     def get(self, key: str, default: Any = 0.0) -> Any:
         field_name = _KEY_TO_FIELD.get(key)
