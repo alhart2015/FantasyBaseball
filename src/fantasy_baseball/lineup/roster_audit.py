@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -15,6 +16,9 @@ from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import IL_STATUSES
 from fantasy_baseball.utils.positions import can_cover_slots
+
+
+logger = logging.getLogger(__name__)
 
 
 POSITION_POOL_SIZES: dict[str, int] = {
@@ -238,8 +242,11 @@ def audit_roster(
                     projected_standings=projected_standings,
                     team_name=team_name,
                 )
-            except Exception:
-                continue  # skip candidates that fail to score — don't drop the row
+            except (ValueError, KeyError) as exc:
+                logger.warning(
+                    "deltaRoto failed for %s → %s: %s", player.name, fa.name, exc,
+                )
+                continue
 
             # wSGP gap (informational column)
             swap_wsgp = dict(base_wsgp)
@@ -284,7 +291,7 @@ def audit_roster(
     entries.sort(
         key=lambda e: (
             e.candidates[0]["delta_roto"]["total"]
-            if e.best_fa is not None and e.candidates
+            if e.best_fa is not None
             else float("-inf")
         ),
         reverse=True,
