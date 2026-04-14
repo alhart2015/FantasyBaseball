@@ -101,6 +101,24 @@ class TestBuildPositionPools:
         for pos in POSITION_POOL_SIZES:
             assert pools[pos] == []
 
+    def test_pitcher_pools_bucket_yahoo_p_only_by_saves(self):
+        """Yahoo returns positions=['P'] for all pitchers in leagues without
+        SP/RP slots. SP/RP pools must key on projected saves instead."""
+        starter = _pitcher("Starter", ["P"], ip=180, w=12, k=180, sv=0,
+                           era=3.20, whip=1.10, er=64, bb=30, h_allowed=168)
+        closer = _pitcher("Closer", ["P"], ip=60, w=3, k=60, sv=30,
+                          era=3.00, whip=1.17, er=20, bb=20, h_allowed=50)
+        hitter = _hitter("Hitter", ["OF"], r=80, hr=25, rbi=75, sb=8,
+                         avg=0.275, ab=520, h=143)
+        pools = build_position_pools([starter, closer, hitter])
+        assert starter in pools["SP"]
+        assert closer in pools["RP"]
+        assert starter not in pools["RP"]
+        assert closer not in pools["SP"]
+        # Hitters never leak into pitcher pools even if the pool is sparse
+        assert hitter not in pools["SP"]
+        assert hitter not in pools["RP"]
+
 
 from fantasy_baseball.lineup.roster_audit import candidates_for_player
 
