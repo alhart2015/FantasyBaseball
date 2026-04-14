@@ -374,11 +374,6 @@ def register_routes(app: Flask) -> None:
     def roster_audit():
         meta = read_meta()
         audit_raw = read_cache("roster_audit")
-        if audit_raw:
-            for entry in audit_raw:
-                for c in entry.get("candidates", []):
-                    dr = c.get("delta_roto")
-                    c["delta_roto_sort"] = dr["total"] if dr else -999
         return render_template(
             "season/roster_audit.html",
             meta=meta,
