@@ -721,6 +721,8 @@ def compute_comparison_standings(
     user_roster: "list[Player]",
     projected_standings: list[dict],
     user_team_name: str,
+    *,
+    roster_player_projection: "Player | None" = None,
 ) -> dict:
     """Compute before/after roto standings for a player swap.
 
@@ -729,6 +731,11 @@ def compute_comparison_standings(
     The swap delta is applied via :func:`apply_swap_delta` rather than
     recomputing from the roster — this guarantees the "before" totals
     match the standings page exactly.
+
+    When ``roster_player_projection`` is provided, its ROS stats are
+    used for the dropped player's contribution instead of the roster
+    cache entry.  This keeps the delta consistent with the browse page
+    (which reads from ``ros_projections``).
 
     Returns dict with before/after stats and roto, or {"error": ...}.
     """
@@ -741,7 +748,7 @@ def compute_comparison_standings(
     if dropped is None:
         return {"error": f"Player '{roster_player_name}' not found on roster"}
 
-    loses_ros = player_rest_of_season_stats(dropped)
+    loses_ros = player_rest_of_season_stats(roster_player_projection or dropped)
     gains_ros = player_rest_of_season_stats(other_player)
 
     all_stats_before = {t["name"]: dict(t["stats"]) for t in projected_standings}
@@ -995,25 +1002,38 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                             roster_names=rest_of_season_roster_names, progress_cb=_progress,
                         )
 
-            rest_of_season_hitters, rest_of_season_pitchers = get_rest_of_season_projections(db_conn)
+            rest_of_season_hitters_disk, rest_of_season_pitchers_disk = get_rest_of_season_projections(db_conn)
         finally:
             db_conn.close()
         hitters_proj["_name_norm"] = hitters_proj["name"].apply(normalize_name)
         pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
         _progress(f"Loaded {len(hitters_proj)} hitter + {len(pitchers_proj)} pitcher projections")
-        has_rest_of_season = not rest_of_season_hitters.empty or not rest_of_season_pitchers.empty
 
-        # Fallback: if SQLite has no ROS data (ephemeral filesystem wiped),
-        # try loading from Redis where the ROS fetch job persists them.
-        if not has_rest_of_season:
-            import pandas as pd
-            ros_cached = read_cache("ros_projections", cache_dir)
-            if ros_cached:
-                rest_of_season_hitters = pd.DataFrame(ros_cached.get("hitters", []))
-                rest_of_season_pitchers = pd.DataFrame(ros_cached.get("pitchers", []))
-                has_rest_of_season = not rest_of_season_hitters.empty or not rest_of_season_pitchers.empty
-                if has_rest_of_season:
-                    _progress(f"Loaded ROS projections from Redis cache ({len(rest_of_season_hitters)} hitters + {len(rest_of_season_pitchers)} pitchers)")
+        # The daily ROS fetch job persists blended projections to Redis.
+        # On Render the fetch and refresh may run on different instances,
+        # so the fetch job's ephemeral CSV files are gone by the time
+        # the refresh runs — but stale CSVs committed to the git repo
+        # are still on disk.  Redis is the authoritative source for ROS
+        # projections; disk CSVs are only a fallback.
+        import pandas as pd
+        rest_of_season_hitters = pd.DataFrame()
+        rest_of_season_pitchers = pd.DataFrame()
+        ros_cached = read_cache("ros_projections", cache_dir)
+        if ros_cached:
+            rest_of_season_hitters = pd.DataFrame(ros_cached.get("hitters", []))
+            rest_of_season_pitchers = pd.DataFrame(ros_cached.get("pitchers", []))
+        has_rest_of_season = not rest_of_season_hitters.empty or not rest_of_season_pitchers.empty
+        if has_rest_of_season:
+            _progress(f"Loaded ROS projections from Redis "
+                      f"({len(rest_of_season_hitters)} hitters + {len(rest_of_season_pitchers)} pitchers)")
+        else:
+            # Fall back to disk CSVs (loaded into SQLite above)
+            rest_of_season_hitters = rest_of_season_hitters_disk
+            rest_of_season_pitchers = rest_of_season_pitchers_disk
+            has_rest_of_season = not rest_of_season_hitters.empty or not rest_of_season_pitchers.empty
+            if has_rest_of_season:
+                _progress(f"No Redis ROS data — using disk CSVs "
+                          f"({len(rest_of_season_hitters)} hitters + {len(rest_of_season_pitchers)} pitchers)")
 
         preseason_hitters = hitters_proj
         preseason_pitchers = pitchers_proj

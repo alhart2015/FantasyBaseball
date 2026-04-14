@@ -562,6 +562,79 @@ class TestComparisonConsistencyInvariant:
         assert result["before"]["stats"]["My Team"]["R"] == canonical_stats["R"]
 
 
+class TestComparisonProjectionOverride:
+    """Verify roster_player_projection overrides roster cache stats.
+
+    When ros_projections is updated after a refresh, the roster cache
+    has stale player stats.  The compare endpoint should use the
+    ros_projections version so the delta matches what the browse page
+    shows.
+    """
+
+    def test_override_uses_projection_stats_for_delta(self):
+        """roster_player_projection's stats drive the delta, not roster cache."""
+        from fantasy_baseball.web.season_data import compute_comparison_standings
+        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
+
+        # Roster cache has stale pitcher stats (sv=1)
+        stale_pitcher = Player(
+            name="Closer X", player_type="pitcher",
+            rest_of_season=PitcherStats(ip=60, w=3, k=55, sv=1, er=25, bb=15,
+                                        h_allowed=55, era=3.75, whip=1.17),
+        )
+        roster = [
+            Player(name="Hitter A", player_type="hitter",
+                   rest_of_season=HitterStats(pa=600, ab=530, h=140, r=80, hr=25,
+                                              rbi=80, sb=10, avg=0.264)),
+            stale_pitcher,
+        ]
+
+        # ros_projections has updated stats (sv=18)
+        fresh_pitcher = Player(
+            name="Closer X", player_type="pitcher",
+            rest_of_season=PitcherStats(ip=60, w=3, k=55, sv=18, er=25, bb=15,
+                                        h_allowed=55, era=3.75, whip=1.17),
+        )
+
+        projected_standings = [
+            {"name": "My Team", "team_key": "", "rank": 0, "stats": {
+                "R": 700, "HR": 200, "RBI": 700, "SB": 100, "AVG": 0.260,
+                "W": 80, "K": 1200, "SV": 50, "ERA": 3.50, "WHIP": 1.20,
+            }},
+        ]
+
+        replacement = Player(
+            name="Streamer", player_type="pitcher",
+            rest_of_season=PitcherStats(ip=80, w=5, k=70, sv=0, er=35, bb=25,
+                                        h_allowed=75, era=3.94, whip=1.25),
+        )
+
+        # Without override: uses stale sv=1 → delta = 0 - 1 = -1
+        result_stale = compute_comparison_standings(
+            roster_player_name="Closer X",
+            other_player=replacement,
+            user_roster=roster,
+            projected_standings=projected_standings,
+            user_team_name="My Team",
+        )
+        stale_sv_delta = (result_stale["after"]["stats"]["My Team"]["SV"]
+                          - result_stale["before"]["stats"]["My Team"]["SV"])
+        assert stale_sv_delta == pytest.approx(-1)
+
+        # With override: uses fresh sv=18 → delta = 0 - 18 = -18
+        result_fresh = compute_comparison_standings(
+            roster_player_name="Closer X",
+            other_player=replacement,
+            user_roster=roster,
+            projected_standings=projected_standings,
+            user_team_name="My Team",
+            roster_player_projection=fresh_pitcher,
+        )
+        fresh_sv_delta = (result_fresh["after"]["stats"]["My Team"]["SV"]
+                          - result_fresh["before"]["stats"]["My Team"]["SV"])
+        assert fresh_sv_delta == pytest.approx(-18)
+
+
 class TestRunFullRefreshAttributeAccess:
     """Catch typos like config.sgp_denominators (should be sgp_overrides).
 

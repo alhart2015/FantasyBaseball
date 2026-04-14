@@ -724,6 +724,7 @@ def register_routes(app: Flask) -> None:
     def api_player_compare():
         """Return projected standings before/after swapping a roster player."""
         from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
+        from fantasy_baseball.utils.name_utils import normalize_name
 
         roster_player = request.args.get("roster_player")
         other_name = request.args.get("other_player")
@@ -761,6 +762,23 @@ def register_routes(app: Flask) -> None:
             "h_allowed": _float("other_ha"),
         })
 
+        # Look up roster player's ROS from ros_projections — the same
+        # source the browse page uses.  This prevents the delta from
+        # diverging when ros_projections is updated after a refresh.
+        roster_player_projection = None
+        ros_cache = read_cache("ros_projections") or {}
+        target_norm = normalize_name(roster_player)
+        for pool_key in ("hitters", "pitchers"):
+            for d in ros_cache.get(pool_key, []):
+                if normalize_name(d.get("name", "")) == target_norm:
+                    ptype = "hitter" if pool_key == "hitters" else "pitcher"
+                    roster_player_projection = Player.from_dict({
+                        **d, "player_type": ptype,
+                    })
+                    break
+            if roster_player_projection:
+                break
+
         config = _load_config()
 
         from fantasy_baseball.web.season_data import compute_comparison_standings
@@ -770,6 +788,7 @@ def register_routes(app: Flask) -> None:
             user_roster=user_roster,
             projected_standings=projected_standings,
             user_team_name=config.team_name,
+            roster_player_projection=roster_player_projection,
         )
 
         if "error" in result:
