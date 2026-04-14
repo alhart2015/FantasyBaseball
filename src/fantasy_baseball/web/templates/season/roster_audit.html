@@ -76,7 +76,7 @@
     </thead>
     <tbody>
     {% for entry in audit %}
-    <tr class="audit-row {% if entry.gap > 0 %}has-upgrade{% endif %}"
+    <tr class="audit-row {% if entry.best_fa is not none %}has-upgrade{% endif %}"
         onclick="toggleAuditDetail('audit-detail-{{ loop.index }}')">
         <td>{{ entry.slot }}</td>
         <td>
@@ -146,7 +146,7 @@
                         {% if c.delta_roto %}
                         {% set dr = c.delta_roto.total %}
                         <span style="font-weight:600; color: {% if dr > 0.01 %}var(--success){% elif dr < -0.01 %}var(--danger){% else %}var(--text-secondary){% endif %}">
-                            {{ "%+.1f"|format(dr) }}
+                            {{ "%+.2f"|format(dr) }}
                         </span>
                         {% else %}
                         <span style="color:var(--text-secondary)">—</span>
