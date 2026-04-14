@@ -724,33 +724,31 @@ def compute_comparison_standings(
 ) -> dict:
     """Compute before/after roto standings for a player swap.
 
-    Replaces ``roster_player_name`` on the user's roster with
-    ``other_player`` and re-projects team stats.  Rate stats (AVG, ERA,
-    WHIP) are recomputed from components, not added/subtracted.
+    Uses the cached ``projected_standings`` as the single source of
+    truth for team stats (built once during the refresh pipeline).
+    The swap delta is applied via :func:`apply_swap_delta` rather than
+    recomputing from the roster — this guarantees the "before" totals
+    match the standings page exactly.
 
     Returns dict with before/after stats and roto, or {"error": ...}.
     """
-    from fantasy_baseball.scoring import project_team_stats, score_roto
+    from fantasy_baseball.scoring import score_roto
+    from fantasy_baseball.trades.evaluate import (
+        apply_swap_delta, find_player_by_name, player_rest_of_season_stats,
+    )
 
-    drop_idx = None
-    for i, p in enumerate(user_roster):
-        if p.name == roster_player_name:
-            drop_idx = i
-            break
-
-    if drop_idx is None:
+    dropped = find_player_by_name(roster_player_name, user_roster)
+    if dropped is None:
         return {"error": f"Player '{roster_player_name}' not found on roster"}
 
-    # project_team_stats returns a CategoryStats; call .to_dict() so
-    # all_stats_before / all_stats_after values are uniformly
-    # dict[str, float] for JSON serialization at the Flask route.
-    all_stats_before = {t["name"]: dict(t["stats"]) for t in projected_standings}
-    all_stats_before[user_team_name] = project_team_stats(user_roster).to_dict()
+    loses_ros = player_rest_of_season_stats(dropped)
+    gains_ros = player_rest_of_season_stats(other_player)
 
-    roster_after = [p for i, p in enumerate(user_roster) if i != drop_idx]
-    roster_after.append(other_player)
-    all_stats_after = {t["name"]: dict(t["stats"]) for t in projected_standings}
-    all_stats_after[user_team_name] = project_team_stats(roster_after).to_dict()
+    all_stats_before = {t["name"]: dict(t["stats"]) for t in projected_standings}
+    all_stats_after = dict(all_stats_before)
+    all_stats_after[user_team_name] = apply_swap_delta(
+        all_stats_before[user_team_name], loses_ros, gains_ros,
+    )
 
     roto_before = score_roto(all_stats_before)
     roto_after = score_roto(all_stats_after)

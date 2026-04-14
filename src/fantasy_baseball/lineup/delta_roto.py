@@ -134,40 +134,39 @@ def compute_delta_roto(
 ) -> DeltaRotoResult:
     """Compute deltaRoto for dropping one player and adding another.
 
+    Uses cached ``projected_standings`` as the single source of truth
+    for team stats.  The swap delta is applied via
+    :func:`~fantasy_baseball.trades.evaluate.apply_swap_delta`.
+
     Args:
         drop_name: name of the roster player to drop.
         add_player: Player object for the player to add.
-        user_roster: current roster as list of Player objects.
-        projected_standings: projected end-of-season stats for all OTHER teams.
+        user_roster: current roster (used to look up dropped player's ROS stats).
+        projected_standings: projected end-of-season stats for all teams.
         team_name: user's team name.
 
     Raises:
         ValueError: if drop_name is not found on the roster.
     """
-    from fantasy_baseball.scoring import project_team_stats, score_roto
+    from fantasy_baseball.scoring import score_roto
     from fantasy_baseball.sgp.denominators import get_sgp_denominators
+    from fantasy_baseball.trades.evaluate import (
+        apply_swap_delta, find_player_by_name, player_rest_of_season_stats,
+    )
 
-    drop_idx = None
-    for i, p in enumerate(user_roster):
-        if p.name == drop_name:
-            drop_idx = i
-            break
-    if drop_idx is None:
+    dropped = find_player_by_name(drop_name, user_roster)
+    if dropped is None:
         raise ValueError(f"Player '{drop_name}' not found on roster")
 
+    loses_ros = player_rest_of_season_stats(dropped)
+    gains_ros = player_rest_of_season_stats(add_player)
     denoms = get_sgp_denominators()
 
-    all_before: dict[str, dict[str, float]] = {
-        t["name"]: dict(t["stats"]) for t in projected_standings
-    }
-    all_before[team_name] = project_team_stats(user_roster).to_dict()
-
-    roster_after = [p for i, p in enumerate(user_roster) if i != drop_idx]
-    roster_after.append(add_player)
-    all_after: dict[str, dict[str, float]] = {
-        t["name"]: dict(t["stats"]) for t in projected_standings
-    }
-    all_after[team_name] = project_team_stats(roster_after).to_dict()
+    all_before = {t["name"]: dict(t["stats"]) for t in projected_standings}
+    all_after = dict(all_before)
+    all_after[team_name] = apply_swap_delta(
+        all_before[team_name], loses_ros, gains_ros,
+    )
 
     roto_before = score_roto(all_before)
     roto_after = score_roto(all_after)

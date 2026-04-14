@@ -80,16 +80,22 @@ def compute_roto_points(standings: list[dict[str, Any]]) -> dict[str, int]:
     return {name: sum(cat_pts.values()) for name, cat_pts in by_cat.items()}
 
 
-def _project_team_stats(
+def apply_swap_delta(
     current_stats: dict[str, float],
     loses_ros: dict[str, Any],
     gains_ros: dict[str, Any],
 ) -> dict[str, float]:
-    """Project end-of-season team stats after trading a player away and gaining one.
+    """Project end-of-season team stats after swapping one player for another.
+
+    Applies a delta to cached projected standings — the single source of
+    truth for projected team stats (built once during the refresh pipeline
+    via ``project_team_stats``).  All code that needs a "what-if" swap
+    scenario (comparisons, trade evaluation, waiver search) should use
+    this function rather than recomputing standings from scratch.
 
     Args:
         current_stats: current team stats dict (all 10 categories).
-        loses_ros: ROS projection for the player being traded away.
+        loses_ros: ROS projection for the player being dropped/traded away.
             Must include keys: R, HR, RBI, SB, AVG, W, K, SV, ERA, WHIP, ab, ip.
         gains_ros: ROS projection for the player being acquired.
             Same keys as loses_ros.
@@ -181,12 +187,12 @@ def compute_trade_impact(
     post_trade = []
     for team in baseline:
         if team["name"] == hart_name:
-            new_stats = _project_team_stats(
+            new_stats = apply_swap_delta(
                 team["stats"], hart_loses_ros, hart_gains_ros
             )
             post_trade.append({"name": team["name"], "stats": new_stats})
         elif team["name"] == opp_name:
-            new_stats = _project_team_stats(
+            new_stats = apply_swap_delta(
                 team["stats"], opp_loses_ros, opp_gains_ros
             )
             post_trade.append({"name": team["name"], "stats": new_stats})
@@ -218,8 +224,12 @@ def compute_trade_impact(
     }
 
 
-def _player_rest_of_season_stats(player: Player) -> dict:
-    """Extract ROS stats from a Player for trade projection."""
+def player_rest_of_season_stats(player: Player) -> dict:
+    """Extract ROS stats from a Player for swap projection.
+
+    Returns a flat dict with keys R, HR, RBI, SB, AVG, W, K, SV, ERA,
+    WHIP, ab, ip — the format expected by :func:`apply_swap_delta`.
+    """
     ros = player.rest_of_season
     if ros is None:
         return {cat: 0 for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP", "ab", "ip"]}
@@ -239,7 +249,7 @@ def _player_rest_of_season_stats(player: Player) -> dict:
         }
 
 
-def _find_player_by_name(name: str, roster: list[Player]) -> Player | None:
+def find_player_by_name(name: str, roster: list[Player]) -> Player | None:
     """Find a player in a roster by normalized name (accent-safe)."""
     target = normalize_name(name)
     for p in roster:
@@ -341,7 +351,7 @@ def search_trades_away(
         Groups sorted by positional_weakness descending (neediest teams first).
         Candidates sorted by hart_wsgp_gain descending within each group.
     """
-    hart_player = _find_player_by_name(player_name, hart_roster)
+    hart_player = find_player_by_name(player_name, hart_roster)
     if hart_player is None:
         return []
 
@@ -376,8 +386,8 @@ def search_trades_away(
             if hart_wsgp_gain <= 0:
                 continue
 
-            hart_ros = _player_rest_of_season_stats(hart_player)
-            opp_ros = _player_rest_of_season_stats(opp_player)
+            hart_ros = player_rest_of_season_stats(hart_player)
+            opp_ros = player_rest_of_season_stats(opp_player)
 
             impact = compute_trade_impact(
                 standings, hart_name, opp_name,
@@ -462,7 +472,7 @@ def search_trades_for(
     target_player = None
     target_opp = None
     for opp_name, opp_roster in opp_rosters.items():
-        found = _find_player_by_name(player_name, opp_roster)
+        found = find_player_by_name(player_name, opp_roster)
         if found is not None:
             target_player = found
             target_opp = opp_name
@@ -501,8 +511,8 @@ def search_trades_for(
         if hart_wsgp_gain <= 0:
             continue
 
-        hart_ros = _player_rest_of_season_stats(hart_player)
-        target_ros = _player_rest_of_season_stats(target_player)
+        hart_ros = player_rest_of_season_stats(hart_player)
+        target_ros = player_rest_of_season_stats(target_player)
 
         impact = compute_trade_impact(
             standings, hart_name, target_opp,

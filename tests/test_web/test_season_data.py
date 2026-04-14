@@ -352,13 +352,14 @@ class TestComputeComparisonStandings:
         from fantasy_baseball.web.season_data import compute_comparison_standings
         from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 
+        # HR is close (200 vs 198) so the swap (drop 25 HR, gain 5 HR) flips it
         projected_standings = [
             {"name": "My Team", "team_key": "", "rank": 0, "stats": {
                 "R": 700, "HR": 200, "RBI": 700, "SB": 100, "AVG": 0.260,
                 "W": 80, "K": 1200, "SV": 50, "ERA": 3.50, "WHIP": 1.20,
             }},
             {"name": "Other Team", "team_key": "", "rank": 0, "stats": {
-                "R": 680, "HR": 190, "RBI": 680, "SB": 110, "AVG": 0.255,
+                "R": 680, "HR": 198, "RBI": 680, "SB": 110, "AVG": 0.255,
                 "W": 85, "K": 1100, "SV": 40, "ERA": 3.80, "WHIP": 1.25,
             }},
         ]
@@ -375,7 +376,7 @@ class TestComputeComparisonStandings:
 
         other_player = Player(
             name="Ezequiel Tovar", player_type="hitter",
-            rest_of_season=HitterStats(pa=590, ab=513, h=135, r=73, hr=20, rbi=74, sb=8, avg=0.263),
+            rest_of_season=HitterStats(pa=590, ab=513, h=135, r=73, hr=5, rbi=74, sb=8, avg=0.263),
         )
 
         result = compute_comparison_standings(
@@ -453,8 +454,6 @@ class TestComparisonConsistencyInvariant:
         from fantasy_baseball.scoring import project_team_stats
 
         roster = self._build_roster()
-        # Build projected_standings so the user entry matches what
-        # project_team_stats would produce — this mirrors a consistent refresh.
         user_stats = project_team_stats(roster)
         projected_standings = [
             {"name": "My Team", "team_key": "", "rank": 0, "stats": dict(user_stats)},
@@ -476,12 +475,12 @@ class TestComparisonConsistencyInvariant:
             user_team_name="My Team",
         )
 
-        # Invariant: before user-team stats equal the projected_standings entry
+        # Invariant: "before" uses projected_standings directly — the single
+        # source of truth.  No recomputation, so no drift possible.
         for cat, val in user_stats.items():
             assert result["before"]["stats"]["My Team"][cat] == val, (
                 f"before[{cat}] diverged from projected_standings "
-                f"({result['before']['stats']['My Team'][cat]} vs {val}) — "
-                "this is the Arozarena/Suarez bug"
+                f"({result['before']['stats']['My Team'][cat]} vs {val})"
             )
 
     def test_swap_delta_equals_player_stat_difference(self):
@@ -522,27 +521,23 @@ class TestComparisonConsistencyInvariant:
                 f"{roto_cat}: team delta {team_delta} != player delta {player_delta}"
             )
 
-    def test_user_roster_takes_precedence_over_projected_standings_entry(self):
-        """compute_comparison_standings recomputes the user team's "before"
-        stats from project_team_stats(user_roster). Any pre-existing user
-        entry in projected_standings is ignored. This means the refresh
-        pipeline must keep cache:roster and cache:projections in sync —
-        if they diverge, the comparison page silently disagrees with the
-        standings page."""
+    def test_projected_standings_is_single_source_of_truth(self):
+        """compute_comparison_standings uses projected_standings directly —
+        it never recomputes from user_roster.  This guarantees the
+        "before" on the comparison page always matches the standings page,
+        regardless of whether cache:roster and cache:projections diverge."""
         from fantasy_baseball.web.season_data import compute_comparison_standings
         from fantasy_baseball.models.player import Player, HitterStats
-        from fantasy_baseball.scoring import project_team_stats
 
         roster = self._build_roster()
-        true_user_stats = project_team_stats(roster)
 
-        # Build projected_standings with a DELIBERATELY wrong entry for the user
-        # team — this simulates what would happen if cache:roster and
-        # cache:projections were written from different sources (the original
-        # Arozarena/Suarez bug condition).
-        wrong_user_stats = {k: v + 999 for k, v in true_user_stats.items()}
+        # projected_standings with specific values — these are the source of truth.
+        canonical_stats = {
+            "R": 999, "HR": 888, "RBI": 777, "SB": 666, "AVG": 0.300,
+            "W": 99, "K": 1500, "SV": 55, "ERA": 3.50, "WHIP": 1.10,
+        }
         projected_standings = [
-            {"name": "My Team", "team_key": "", "rank": 0, "stats": wrong_user_stats},
+            {"name": "My Team", "team_key": "", "rank": 0, "stats": canonical_stats},
         ]
 
         other_player = Player(
@@ -558,11 +553,9 @@ class TestComparisonConsistencyInvariant:
             user_team_name="My Team",
         )
 
-        # The function recomputes from user_roster, ignoring the wrong entry.
-        # If the refresh pipeline ever writes inconsistent data into the two
-        # caches, this is the asymmetry that produces UI disagreement.
-        assert result["before"]["stats"]["My Team"]["HR"] == true_user_stats["HR"]
-        assert result["before"]["stats"]["My Team"]["HR"] != wrong_user_stats["HR"]
+        # "before" must use projected_standings, not recompute from roster
+        assert result["before"]["stats"]["My Team"]["HR"] == canonical_stats["HR"]
+        assert result["before"]["stats"]["My Team"]["R"] == canonical_stats["R"]
 
 
 class TestRunFullRefreshAttributeAccess:
