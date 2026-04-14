@@ -9,6 +9,7 @@ from collections.abc import Sequence
 
 import pandas as pd
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.models.positions import Position
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
@@ -21,7 +22,7 @@ def rank_key(name: str, player_type: str) -> str:
     return f"{normalize_name(name)}::{player_type}"
 
 
-def rank_key_from_positions(name: str, positions: Sequence[str]) -> str:
+def rank_key_from_positions(name: str, positions: Sequence[Position | str]) -> str:
     """Build a name-based ranking lookup key, inferring player_type from positions."""
     ptype = PlayerType.PITCHER if set(positions) & PITCHER_POSITIONS else PlayerType.HITTER
     return f"{normalize_name(name)}::{ptype}"
