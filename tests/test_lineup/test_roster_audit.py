@@ -37,6 +37,52 @@ def _pitcher(name, positions, **stats):
     )
 
 
+from fantasy_baseball.lineup.roster_audit import build_position_pools, POSITION_POOL_SIZES
+
+
+class TestBuildPositionPools:
+    def test_hitter_buckets_by_all_positions(self):
+        """A 2B/OF-eligible hitter appears in both 2B and OF pools."""
+        multi = _hitter("Multi Pos", ["2B", "OF"], r=80, hr=25, rbi=75, sb=10, avg=0.280, ab=520, h=146)
+        of_only = _hitter("OF Only", ["OF"], r=70, hr=20, rbi=70, sb=8, avg=0.270, ab=500, h=135)
+        pools = build_position_pools([multi, of_only])
+        assert multi in pools["2B"]
+        assert multi in pools["OF"]
+        assert of_only in pools["OF"]
+        assert of_only not in pools["2B"]
+
+    def test_pool_sorted_by_sgp_desc_and_truncated_to_top_n(self):
+        """Pool is sorted by raw SGP descending and truncated to POSITION_POOL_SIZES[pos]."""
+        # Build OF pool of 20 hitters with monotonically decreasing R.
+        # POSITION_POOL_SIZES["OF"] is 15, so only the top 15 survive.
+        fas = [
+            _hitter(f"OF{i}", ["OF"], r=100 - i, hr=25, rbi=75, sb=5, avg=0.270, ab=500, h=135)
+            for i in range(20)
+        ]
+        pools = build_position_pools(fas)
+        assert len(pools["OF"]) == POSITION_POOL_SIZES["OF"]
+        assert pools["OF"][0].name == "OF0"   # highest R → highest SGP
+        assert pools["OF"][-1].name == f"OF{POSITION_POOL_SIZES['OF'] - 1}"
+
+    def test_pitcher_pools(self):
+        """SP-eligible pitcher lands in SP pool, RP-eligible in RP pool."""
+        sp = _pitcher("SP", ["SP"], ip=180, w=12, k=180, era=3.20, whip=1.10,
+                      er=64, bb=30, h_allowed=168)
+        rp = _pitcher("RP", ["RP"], ip=60, w=3, k=60, sv=20, era=3.00, whip=1.17,
+                      er=20, bb=20, h_allowed=50)
+        pools = build_position_pools([sp, rp])
+        assert sp in pools["SP"]
+        assert rp in pools["RP"]
+        assert sp not in pools["RP"]
+        assert rp not in pools["SP"]
+
+    def test_empty_fa_list_yields_empty_pools(self):
+        pools = build_position_pools([])
+        assert set(pools.keys()) == set(POSITION_POOL_SIZES.keys())
+        for pos in POSITION_POOL_SIZES:
+            assert pools[pos] == []
+
+
 class TestAuditRoster:
     def test_identifies_upgrade_available(self):
         roster = [

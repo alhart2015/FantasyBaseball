@@ -11,8 +11,36 @@ from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import IL_STATUSES
 from fantasy_baseball.utils.positions import can_cover_slots
+
+
+POSITION_POOL_SIZES: dict[str, int] = {
+    "C": 5, "1B": 5, "2B": 5, "3B": 5, "SS": 5,
+    "OF": 15, "SP": 20, "RP": 10,
+}
+
+
+def build_position_pools(
+    free_agents: list[Player],
+    denoms: dict[str, float] | None = None,
+) -> dict[str, list[Player]]:
+    """Bucket FAs into per-position pools, each sorted by raw SGP desc
+    and truncated to POSITION_POOL_SIZES[pos]. A multi-eligible FA
+    lives in every pool that matches one of their positions.
+    """
+    if denoms is None:
+        denoms = get_sgp_denominators()
+    pools: dict[str, list[Player]] = {}
+    for pos, n in POSITION_POOL_SIZES.items():
+        eligible = [fa for fa in free_agents if pos in fa.positions]
+        eligible.sort(
+            key=lambda p: calculate_player_sgp(p.rest_of_season, denoms),
+            reverse=True,
+        )
+        pools[pos] = eligible[:n]
+    return pools
 
 
 @dataclass
