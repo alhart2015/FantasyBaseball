@@ -11,6 +11,7 @@ from typing import Any
 
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import HitterStats, Player, PlayerType
+from fantasy_baseball.models.positions import Position
 from fantasy_baseball.sgp.rankings import rank_key_from_positions
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
@@ -275,7 +276,7 @@ def _can_roster_without(roster: list[Player], remove: Player, add: Player,
 
 
 def _score_positional_weakness(
-    player_positions: Sequence[str],
+    player_positions: Sequence[Position | str],
     opp_roster: list[Player],
     opp_leverage: dict[str, float],
     all_opp_rosters: dict[str, list[Player]],
