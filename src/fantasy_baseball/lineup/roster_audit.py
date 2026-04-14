@@ -26,20 +26,45 @@ POSITION_POOL_SIZES: dict[str, int] = {
     "OF": 15, "SP": 20, "RP": 10,
 }
 
+# Projected-SV threshold separating starters from relievers. Yahoo reports
+# pitchers as positions=["P"] in leagues without SP/RP slots, so we can't
+# rely on the position string to bucket them. Projected saves is a clean
+# signal: sub-5 ≈ starter, 5+ ≈ closer/setup.
+RP_SV_THRESHOLD = 5
+
 
 def build_position_pools(
     free_agents: list[Player],
     denoms: dict[str, float] | None = None,
 ) -> dict[str, list[Player]]:
     """Bucket FAs into per-position pools, each sorted by raw SGP desc
-    and truncated to POSITION_POOL_SIZES[pos]. A multi-eligible FA
-    lives in every pool that matches one of their positions.
+    and truncated to POSITION_POOL_SIZES[pos].
+
+    - Hitter pools (C/1B/2B/3B/SS/OF) key on ``pos in fa.positions`` — a
+      multi-eligible hitter lives in every pool that matches.
+    - Pitcher pools (SP/RP) key on projected saves: sv < RP_SV_THRESHOLD
+      goes to SP, sv >= RP_SV_THRESHOLD goes to RP. This works around
+      Yahoo leagues that only surface a generic "P" slot, where
+      fa.positions == ["P"] for every pitcher.
     """
     if denoms is None:
         denoms = get_sgp_denominators()
     pools: dict[str, list[Player]] = {}
     for pos, n in POSITION_POOL_SIZES.items():
-        eligible = [fa for fa in free_agents if pos in fa.positions]
+        if pos == "SP":
+            eligible = [
+                fa for fa in free_agents
+                if fa.player_type == PlayerType.PITCHER
+                and fa.rest_of_season.sv < RP_SV_THRESHOLD
+            ]
+        elif pos == "RP":
+            eligible = [
+                fa for fa in free_agents
+                if fa.player_type == PlayerType.PITCHER
+                and fa.rest_of_season.sv >= RP_SV_THRESHOLD
+            ]
+        else:
+            eligible = [fa for fa in free_agents if pos in fa.positions]
         eligible.sort(
             key=lambda p: calculate_player_sgp(p.rest_of_season, denoms),
             reverse=True,
