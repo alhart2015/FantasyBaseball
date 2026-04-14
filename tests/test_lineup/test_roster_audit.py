@@ -543,7 +543,7 @@ class TestAuditILFilterUsesSlotOrStatus:
 class TestRegressionFixtures:
     """Lock in fixes for the specific broken-audit cases flagged by the user."""
 
-    def test_herrera_style_no_upgrade_shows_no_upgrade_and_surfaces_negative_candidate(self):
+    def test_herrera_style_negative_delta_roto_yields_no_upgrade(self):
         """Herrera-like catcher whose only C-pool option is a downgrade:
         collapsed row shows no upgrade, expanded candidate list still surfaces
         the negative option (per design clarification c)."""
@@ -612,3 +612,4 @@ class TestRegressionFixtures:
             )
         # Ward is the only viable candidate
         assert "Ward" in cand_names
+        assert adolis.best_fa == "Ward"
