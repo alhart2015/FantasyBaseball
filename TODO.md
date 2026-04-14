@@ -44,6 +44,8 @@
 
 - [ ] **Round IP display to 1 decimal place** — IP values show excessive precision (e.g., 2.3333333). Round to 1 decimal place for display. Note: baseball IP is measured in thirds (6.1 = 6⅓ innings), so the display should ideally convert to baseball notation (6.1, 6.2, 7.0) rather than naive rounding.
 
+- [ ] **Clean up projected-standings impact table on player comparison page for pitchers** — When comparing pitchers, the table still renders hitter categories (R/HR/RBI/SB/AVG) alongside the pitcher ones, padding the row with irrelevant zeros and pushing W/K/SV/ERA/WHIP off the right edge of the page. Hide hitter columns when both compared players are pitchers (and vice versa) so only the categories that matter for the swap are shown.
+
 - [ ] **Simplify suggested fixes** — Larger refactors identified by codebase-wide simplify review (2026-03-28):
   - `draft/projections.py` has a ~100-line duplicate `simulate_season()` that diverges from the canonical `simulation.py` version (no batched draws, no correlated variance). Likely dead code — investigate and remove or delegate.
   - Per-category SGP computation is repeated in `recommender._vona_leverage_weight`, `weighted_sgp.calculate_weighted_sgp`, and `waivers._category_sgp`. Extract a shared `compute_category_sgp_dict()` helper.
