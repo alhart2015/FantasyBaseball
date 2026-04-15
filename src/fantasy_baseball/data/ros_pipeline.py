@@ -74,6 +74,13 @@ def blend_and_cache_ros(
     # JSON round-trips coerce int keys to str;
     # normalize_rest_of_season_to_full_season looks up actuals with
     # int(mlbam_id), so we reverse the coercion at the boundary.
+    # Writer invariant: keys are always numeric MLB AM IDs. See
+    # ``data/mlb_game_logs.py`` — line 126 builds each key as
+    # ``str(player["mlbam_id"])`` where ``mlbam_id`` comes from the
+    # MLB Stats API's ``person["id"]`` (line 84), which is always a
+    # numeric ID. We do NOT filter non-numeric keys here on purpose:
+    # a non-numeric key would indicate a writer regression and we want
+    # the ValueError to surface loudly rather than silently dropping data.
     hitter_totals = {
         int(k): v for k, v in get_game_log_totals(client, "hitters").items()
     }
@@ -100,6 +107,8 @@ def blend_and_cache_ros(
 
     # Imported at call time to avoid importing a web-layer module at
     # data-layer import time (circular-ish; narrower coupling here).
+    # TODO(task-11): move write_cache into the data layer so this shim
+    # (and the lazy import) can go away.
     from fantasy_baseball.web.season_data import write_cache
     write_cache("ros_projections", {
         "hitters": hitters_df.to_dict(orient="records"),

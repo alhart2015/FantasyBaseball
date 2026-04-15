@@ -165,12 +165,15 @@ def test_blend_and_cache_ros_normalizes_using_redis_totals(
 
 
 def test_blend_and_cache_ros_still_returns_dfs_when_redis_unconfigured(
-    projections_dir, monkeypatch,
+    projections_dir, fake_redis, monkeypatch,
 ):
     """None client: blending still succeeds; Redis write-through is a no-op.
 
     Convention matches Tasks 2-6: readers return empty, writers no-op.
     write_cache still writes to local disk, so DataFrames come back populated.
+    ``fake_redis`` is injected but the pipeline sees ``None`` for both its
+    own client and ``season_data._get_redis``, so we can assert the Redis
+    cache key was never written.
     """
     _make_ros_tree(projections_dir, year=2026, date="2026-04-07")
 
@@ -187,3 +190,6 @@ def test_blend_and_cache_ros_still_returns_dfs_when_redis_unconfigured(
     )
     assert len(hitters_df) == 4
     assert len(pitchers_df) == 3
+    # Writer no-op: cache:ros_projections must NOT be written when the
+    # Redis client is unconfigured.
+    assert fake_redis.get("cache:ros_projections") is None

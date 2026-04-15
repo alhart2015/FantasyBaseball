@@ -240,6 +240,8 @@ def get_latest_weekly_rosters(client) -> list[dict]:
 # appear on some dual-eligibility names (e.g. Shohei Ohtani). Mirrors
 # the constant in ``data.db`` so get_latest_roster_names normalizes
 # identically to the (about-to-be-removed) SQLite get_roster_names.
+# TODO(task-11): the duplicated regex in ``data/db.py`` goes away when
+# task 11 deletes db.py; this becomes the sole definition.
 _PLAYER_SUFFIX_RE = _re.compile(r"\s*\((?:Batter|Pitcher)\)\s*$", _re.IGNORECASE)
 
 
