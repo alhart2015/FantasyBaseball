@@ -1051,7 +1051,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         )
 
         # --- Step 4c: Write rosters + standings to DB, then load League ---
-        _progress("Writing roster snapshots to DB...")
+        _progress("Writing roster snapshots to Redis...")
         from fantasy_baseball.data.db import (
             append_standings_snapshot,
             create_tables,

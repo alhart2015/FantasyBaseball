@@ -90,3 +90,39 @@ def test_get_weekly_roster_history_none_client_returns_empty():
 
 def test_get_weekly_roster_day_none_client_returns_empty():
     assert redis_store.get_weekly_roster_day(None, "2026-04-15") == []
+
+
+def test_get_weekly_roster_day_ignores_corrupt_json(fake_redis):
+    fake_redis.hset(
+        redis_store.WEEKLY_ROSTERS_HISTORY_KEY,
+        "2026-04-15",
+        "not json {{{",
+    )
+    assert redis_store.get_weekly_roster_day(fake_redis, "2026-04-15") == []
+
+
+def test_get_weekly_roster_history_skips_corrupt_entries(fake_redis):
+    fake_redis.hset(
+        redis_store.WEEKLY_ROSTERS_HISTORY_KEY,
+        "2026-04-08",
+        "not json {{{",
+    )
+    redis_store.write_roster_snapshot(
+        fake_redis, "2026-04-15", "Alpha", [ENTRY_A_TEAM_1]
+    )
+    history = redis_store.get_weekly_roster_history(fake_redis)
+    assert set(history.keys()) == {"2026-04-15"}
+    assert history["2026-04-15"] == [{**ENTRY_A_TEAM_1, "team": "Alpha"}]
+
+
+def test_write_roster_snapshot_recovers_from_corrupt_day(fake_redis):
+    fake_redis.hset(
+        redis_store.WEEKLY_ROSTERS_HISTORY_KEY,
+        "2026-04-15",
+        "not json {{{",
+    )
+    redis_store.write_roster_snapshot(
+        fake_redis, "2026-04-15", "Alpha", [ENTRY_A_TEAM_1]
+    )
+    day = redis_store.get_weekly_roster_day(fake_redis, "2026-04-15")
+    assert day == [{**ENTRY_A_TEAM_1, "team": "Alpha"}]
