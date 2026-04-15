@@ -213,74 +213,38 @@ def _write_spoe_snapshot(spoe_result: dict) -> None:
 
 
 def _load_game_log_totals(season_year: int) -> tuple[dict, dict]:
-    """Load aggregated game log totals from SQLite, with Redis fallback/write-through.
+    """Load aggregated game log totals from Redis, keyed by normalized name.
 
     Returns (hitter_logs, pitcher_logs) where each is {normalized_name: {stat: value}}.
-    On Render, SQLite game_logs may be empty after a cold start — falls back to Redis.
-    After loading from SQLite, writes to Redis so the data survives spin-downs.
+    The season_year parameter is accepted for signature compatibility but unused —
+    Redis keys are not year-partitioned (current season only).
     """
-    from fantasy_baseball.data.db import get_connection as get_db_connection
+    from fantasy_baseball.data.redis_store import get_default_client, get_game_log_totals
     from fantasy_baseball.utils.name_utils import normalize_name
 
-    hitter_logs = {}
-    pitcher_logs = {}
+    client = get_default_client()
+    raw_h = get_game_log_totals(client, "hitters")
+    raw_p = get_game_log_totals(client, "pitchers")
 
-    # Try SQLite first
-    conn = get_db_connection()
-    try:
-        rows = conn.execute(
-            "SELECT name, SUM(pa) as pa, SUM(ab) as ab, SUM(h) as h, "
-            "SUM(r) as r, SUM(hr) as hr, SUM(rbi) as rbi, SUM(sb) as sb "
-            "FROM game_logs WHERE season = ? AND player_type = 'hitter' "
-            "GROUP BY name", (season_year,)
-        ).fetchall()
-        for row in rows:
-            norm = normalize_name(row["name"])
-            hitter_logs[norm] = {
-                "pa": row["pa"] or 0, "ab": row["ab"] or 0, "h": row["h"] or 0,
-                "r": row["r"] or 0, "hr": row["hr"] or 0, "rbi": row["rbi"] or 0, "sb": row["sb"] or 0,
-            }
+    hitter_logs: dict[str, dict] = {}
+    for _mid, entry in raw_h.items():
+        name = entry.get("name") or ""
+        if not name:
+            continue
+        norm = normalize_name(name)
+        hitter_logs[norm] = {
+            k: entry.get(k, 0) or 0 for k in ("pa", "ab", "h", "r", "hr", "rbi", "sb")
+        }
 
-        rows = conn.execute(
-            "SELECT name, SUM(ip) as ip, SUM(k) as k, SUM(w) as w, SUM(sv) as sv, "
-            "SUM(er) as er, SUM(bb) as bb, SUM(h_allowed) as h_allowed "
-            "FROM game_logs WHERE season = ? AND player_type = 'pitcher' "
-            "GROUP BY name", (season_year,)
-        ).fetchall()
-        for row in rows:
-            norm = normalize_name(row["name"])
-            pitcher_logs[norm] = {
-                "ip": row["ip"] or 0, "k": row["k"] or 0, "w": row["w"] or 0, "sv": row["sv"] or 0,
-                "er": row["er"] or 0, "bb": row["bb"] or 0, "h_allowed": row["h_allowed"] or 0,
-            }
-    finally:
-        conn.close()
-
-    # If SQLite had data, write through to Redis for persistence
-    if hitter_logs or pitcher_logs:
-        redis = _get_redis()
-        if redis:
-            try:
-                redis.set("game_log_totals:hitters", json.dumps(hitter_logs))
-                redis.set("game_log_totals:pitchers", json.dumps(pitcher_logs))
-            except Exception as e:
-                print(f"[redis] game_log_totals write failed: {e}")
-        return hitter_logs, pitcher_logs
-
-    # SQLite empty — fall back to Redis (cold start on Render)
-    redis = _get_redis()
-    if redis:
-        try:
-            raw_h = redis.get("game_log_totals:hitters")
-            raw_p = redis.get("game_log_totals:pitchers")
-            if raw_h:
-                hitter_logs = json.loads(raw_h)
-            if raw_p:
-                pitcher_logs = json.loads(raw_p)
-            if hitter_logs or pitcher_logs:
-                print("[redis] loaded game log totals from Redis (SQLite was empty)")
-        except Exception as e:
-            print(f"[redis] game_log_totals read failed: {e}")
+    pitcher_logs: dict[str, dict] = {}
+    for _mid, entry in raw_p.items():
+        name = entry.get("name") or ""
+        if not name:
+            continue
+        norm = normalize_name(name)
+        pitcher_logs[norm] = {
+            k: entry.get(k, 0) or 0 for k in ("ip", "k", "w", "sv", "er", "bb", "h_allowed")
+        }
 
     return hitter_logs, pitcher_logs
 
@@ -892,11 +856,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
         from fantasy_baseball.config import load_config
         from fantasy_baseball.data.mlb_schedule import get_week_schedule
-        from fantasy_baseball.data.db import (
-            create_tables, fetch_and_load_game_logs,
-            get_connection as get_db_connection, get_blended_projections,
-            get_rest_of_season_projections, load_rest_of_season_projections,
-        )
+        from fantasy_baseball.data.mlb_game_logs import fetch_game_log_totals
         from fantasy_baseball.lineup.leverage import calculate_leverage
         from fantasy_baseball.lineup.matchups import calculate_matchup_factors, get_team_batting_stats
         from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
@@ -968,53 +928,64 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             )
             _progress(f"Pending moves: {total_changes} change(s) detected")
 
-        # --- Step 4: Read projections from SQLite ---
+        # --- Step 4: Read preseason projections from Redis ---
         _progress("Loading projections...")
-        db_conn = get_db_connection()
-        create_tables(db_conn)
+        import pandas as pd
+        from fantasy_baseball.data.redis_store import (
+            get_blended_projections as redis_get_blended,
+            get_default_client as _redis_default_client,
+        )
+        _redis_client = _redis_default_client()
+        if _redis_client is None:
+            raise RuntimeError(
+                "Redis client not configured: UPSTASH_REDIS_REST_URL / "
+                "UPSTASH_REDIS_REST_TOKEN are not set in the environment. "
+                "For local dev, put them in a .env file at the project root "
+                "(get_default_client auto-loads it). On Render, set them in "
+                "the service's environment variables."
+            )
+        _hitters_rows = redis_get_blended(_redis_client, "hitters") or []
+        _pitchers_rows = redis_get_blended(_redis_client, "pitchers") or []
+        if not _hitters_rows or not _pitchers_rows:
+            raise RuntimeError(
+                "Preseason projections not found in Redis "
+                "(blended_projections:hitters / blended_projections:pitchers). "
+                "Run `python scripts/build_db.py` once to populate them from "
+                "the CSVs under data/projections/{season}/."
+            )
+        hitters_proj = pd.DataFrame(_hitters_rows)
+        pitchers_proj = pd.DataFrame(_pitchers_rows)
+
+        # Load ROS projections — blend latest dated CSV into Redis
+        # (cache:ros_projections). No-op if no CSV dir exists locally
+        # (Render has no CSVs on disk; the daily admin-triggered
+        # _run_rest_of_season_fetch keeps Redis populated).
+        _progress("Loading ROS projections...")
+        projections_dir = project_root / "data" / "projections"
+        from fantasy_baseball.data.ros_pipeline import blend_and_cache_ros
+        from fantasy_baseball.data.redis_store import (
+            get_default_client, get_latest_roster_names,
+        )
         try:
-            hitters_proj, pitchers_proj = get_blended_projections(db_conn)
+            rest_of_season_roster_names = get_latest_roster_names(get_default_client())
+            blend_and_cache_ros(
+                projections_dir,
+                config.projection_systems, config.projection_weights,
+                rest_of_season_roster_names, config.season_year,
+                progress_cb=_progress,
+            )
+        except FileNotFoundError:
+            # No local CSVs — fine on Render; the admin job keeps Redis populated.
+            _progress("No local ROS CSV dir; relying on Redis cache")
 
-            # Load ROS projections (skip if latest snapshot already in DB)
-            _progress("Loading ROS projections...")
-            projections_dir = project_root / "data" / "projections"
-            rest_of_season_dir = projections_dir / str(config.season_year) / "rest_of_season"
-            if rest_of_season_dir.is_dir():
-                latest_on_disk = max(
-                    (d.name for d in rest_of_season_dir.iterdir() if d.is_dir()), default=None,
-                )
-                if latest_on_disk:
-                    existing = db_conn.execute(
-                        "SELECT COUNT(*) FROM ros_blended_projections "
-                        "WHERE year = ? AND snapshot_date = ?",
-                        (config.season_year, latest_on_disk),
-                    ).fetchone()[0]
-                    if existing == 0:
-                        from fantasy_baseball.data.db import get_roster_names
-                        rest_of_season_roster_names = None
-                        try:
-                            rest_of_season_roster_names = get_roster_names(db_conn)
-                        except Exception:
-                            pass
-                        load_rest_of_season_projections(
-                            db_conn, projections_dir,
-                            config.projection_systems, config.projection_weights,
-                            roster_names=rest_of_season_roster_names, progress_cb=_progress,
-                        )
-
-            rest_of_season_hitters_disk, rest_of_season_pitchers_disk = get_rest_of_season_projections(db_conn)
-        finally:
-            db_conn.close()
         hitters_proj["_name_norm"] = hitters_proj["name"].apply(normalize_name)
         pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
         _progress(f"Loaded {len(hitters_proj)} hitter + {len(pitchers_proj)} pitcher projections")
 
-        # The daily ROS fetch job persists blended projections to Redis.
-        # On Render the fetch and refresh may run on different instances,
-        # so the fetch job's ephemeral CSV files are gone by the time
-        # the refresh runs — but stale CSVs committed to the git repo
-        # are still on disk.  Redis is the authoritative source for ROS
-        # projections; disk CSVs are only a fallback.
+        # ROS projections live in Redis (cache:ros_projections). The
+        # blend above just refreshed that key if local CSVs were
+        # present; otherwise we fall back to whatever the daily admin
+        # job wrote. Disk CSVs are no longer a fallback path.
         import pandas as pd
         rest_of_season_hitters = pd.DataFrame()
         rest_of_season_pitchers = pd.DataFrame()
@@ -1026,14 +997,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         if has_rest_of_season:
             _progress(f"Loaded ROS projections from Redis "
                       f"({len(rest_of_season_hitters)} hitters + {len(rest_of_season_pitchers)} pitchers)")
-        else:
-            # Fall back to disk CSVs (loaded into SQLite above)
-            rest_of_season_hitters = rest_of_season_hitters_disk
-            rest_of_season_pitchers = rest_of_season_pitchers_disk
-            has_rest_of_season = not rest_of_season_hitters.empty or not rest_of_season_pitchers.empty
-            if has_rest_of_season:
-                _progress(f"No Redis ROS data — using disk CSVs "
-                          f"({len(rest_of_season_hitters)} hitters + {len(rest_of_season_pitchers)} pitchers)")
 
         preseason_hitters = hitters_proj
         preseason_pitchers = pitchers_proj
@@ -1056,8 +1019,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.models.league import League
 
         # Collect raw rosters keyed by team name — used only to feed the
-        # DB write below. League.from_db will then be our source of
-        # truth for roster data for the rest of the refresh.
+        # Redis write below. League.from_redis will then be our source
+        # of truth for roster data for the rest of the refresh.
         raw_rosters_by_team: dict[str, list[dict]] = {
             config.team_name: roster_raw,
         }
@@ -1085,32 +1048,55 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             f"Fetched {len(raw_rosters_by_team)} rosters (user + opponents)"
         )
 
-        # --- Step 4c: Write rosters + standings to DB, then load League ---
-        _progress("Writing roster snapshots to DB...")
-        from fantasy_baseball.data.db import (
-            append_roster_snapshot,
-            append_standings_snapshot,
-            create_tables,
-            get_connection,
+        # --- Step 4c: Write rosters + standings to Redis, then load League ---
+        _progress("Writing roster snapshots to Redis...")
+        from fantasy_baseball.data.redis_store import (
+            get_default_client,
+            write_roster_snapshot,
+            write_standings_snapshot,
         )
 
         snapshot_date = effective_date.isoformat()
-        db_conn = get_connection()
-        create_tables(db_conn)  # idempotent — ensures tables exist
-        try:
-            week_num = None
-            for tname, team_raw in raw_rosters_by_team.items():
-                append_roster_snapshot(
-                    db_conn, team_raw, snapshot_date, week_num, tname,
-                )
-            append_standings_snapshot(
-                db_conn, standings, config.season_year, snapshot_date,
+        for tname, team_raw in raw_rosters_by_team.items():
+            # team_raw rows come from parse_roster: keys are "name",
+            # "positions" (list), "selected_position", "player_id",
+            # "status". Convert to the serialized shape the old
+            # SQLite writer produced so downstream readers see an
+            # identical blob.
+            entries = [
+                {
+                    "slot": row["selected_position"],
+                    "player_name": row["name"],
+                    "positions": ", ".join(row.get("positions", [])),
+                    "status": row.get("status") or "",
+                    "yahoo_id": row.get("player_id") or "",
+                }
+                for row in team_raw
+            ]
+            write_roster_snapshot(
+                get_default_client(), snapshot_date, tname, entries,
             )
 
-            _progress("Loading League from DB...")
-            league_model = League.from_db(db_conn, config.season_year)
-        finally:
-            db_conn.close()
+        # Stat keys on the source dicts are UPPERCASE (R/HR/.../WHIP); the
+        # old append_standings_snapshot lowercased them before writing, so
+        # we preserve that shape here.
+        snapshot_payload = {
+            "teams": [
+                {
+                    "team": entry["name"],
+                    "team_key": entry.get("team_key") or "",
+                    "rank": entry.get("rank") or 0,
+                    **{k.lower(): v for k, v in entry.get("stats", {}).items()},
+                }
+                for entry in standings
+            ],
+        }
+        write_standings_snapshot(
+            get_default_client(), snapshot_date, snapshot_payload,
+        )
+
+        _progress("Loading League from Redis...")
+        league_model = League.from_redis(config.season_year)
 
         # --- Step 4d: Hydrate user roster + opponent rosters from League ---
         _progress("Hydrating user and opponent rosters...")
@@ -1209,15 +1195,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # --- Step 6b: Fetch MLB game logs ---
         _progress("Fetching MLB game logs...")
-        gl_conn = get_db_connection()
-        create_tables(gl_conn)
-        try:
-            fetch_and_load_game_logs(
-                gl_conn, config.season_year,
-                progress_cb=_progress,
-            )
-        finally:
-            gl_conn.close()
+        fetch_game_log_totals(config.season_year, progress_cb=_progress)
 
         # --- Step 6c: Compute season-to-date pace vs projections ---
         _progress("Computing player pace...")
@@ -1388,6 +1366,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             if fa.positions:
                 positions_map[_norm(fa.name)] = list(fa.positions)
         write_cache("positions", positions_map, cache_dir)
+        from fantasy_baseball.data.redis_store import set_positions, get_default_client
+        set_positions(get_default_client(), positions_map)
         _progress(f"Cached positions for {len(positions_map)} players")
 
         audit_results = audit_roster(
@@ -1535,20 +1515,20 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
             if new_txns:
                 _progress(f"Scoring {len(new_txns)} new transaction(s)...")
-                from fantasy_baseball.data.db import get_connection as get_db_conn
-                txn_conn = get_db_conn()
-                create_tables(txn_conn)
-                try:
-                    for txn in new_txns:
-                        scores = score_transaction(league_model, txn_conn, txn, config.season_year)
-                        stored_txns.append({
-                            "year": config.season_year,
-                            **txn,
-                            **scores,
-                            "paired_with": None,
-                        })
-                finally:
-                    txn_conn.close()
+                from fantasy_baseball.data.redis_store import (
+                    get_default_client as _txn_redis_client,
+                )
+                _txn_client = _txn_redis_client()
+                for txn in new_txns:
+                    scores = score_transaction(
+                        league_model, _txn_client, txn, config.season_year,
+                    )
+                    stored_txns.append({
+                        "year": config.season_year,
+                        **txn,
+                        **scores,
+                        "paired_with": None,
+                    })
 
                 # Re-pair all unpaired standalone moves
                 unpaired = [t for t in stored_txns if not t.get("paired_with")]

@@ -18,12 +18,5 @@ def create_app() -> Flask:
         static_folder=str(Path(__file__).parent / "static"),
     )
     app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-change-me")
-
-    # Ensure database tables exist (handles first deploy or missing DB)
-    from fantasy_baseball.data.db import get_connection, create_tables
-    conn = get_connection()
-    create_tables(conn)
-    conn.close()
-
     register_routes(app)
     return app

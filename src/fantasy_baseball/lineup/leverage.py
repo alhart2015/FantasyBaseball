@@ -5,24 +5,16 @@ FULL_CONFIDENCE_GAMES: int = 81
 
 
 def _estimate_season_progress(standings: StandingsSnapshot) -> float:
-    """Estimate season progress from MLB game logs in SQLite.
+    """Estimate season progress (0.0 to 1.0) from Redis game log data.
 
-    Counts distinct game dates in the game_logs table for the current season.
-    Returns 0.0 to 1.0, reaching 1.0 at FULL_CONFIDENCE_GAMES (81 games).
-    Falls back to R-based estimation if game_logs is unavailable.
+    Reads the season_progress Redis key (written during game log fetch).
+    Returns 1.0 at FULL_CONFIDENCE_GAMES (81 games). Falls back to R-based
+    estimation if Redis has no data.
     """
     try:
-        from fantasy_baseball.data.db import get_connection
-        from fantasy_baseball.utils.time_utils import local_today
-        conn = get_connection()
-        try:
-            row = conn.execute(
-                "SELECT COUNT(DISTINCT date) FROM game_logs WHERE season = ?",
-                (local_today().year,)
-            ).fetchone()
-            games = row[0] if row else 0
-        finally:
-            conn.close()
+        from fantasy_baseball.data.redis_store import get_default_client, get_season_progress
+        progress = get_season_progress(get_default_client())
+        games = progress["games_elapsed"]
         if games > 0:
             return min(1.0, games / FULL_CONFIDENCE_GAMES)
     except Exception:
@@ -163,7 +155,7 @@ def calculate_leverage(
     standings-based leverage vs. equal weights. Early season (low progress),
     leverage is mostly uniform because projections have wide error bars.
     Late season (high progress), leverage is fully standings-driven. If
-    None, estimated from game logs in SQLite. Ramps to 1.0 at ~81 games
+    None, estimated from game logs in Redis. Ramps to 1.0 at ~81 games
     (half season).
 
     When ``projected_standings`` is provided, leverage gaps are computed

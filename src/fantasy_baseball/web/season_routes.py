@@ -2,6 +2,7 @@
 
 import functools
 import hmac
+import logging
 import os
 import threading
 from pathlib import Path
@@ -12,13 +13,9 @@ from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, RATE_STATS
 from fantasy_baseball.web.season_data import read_cache, read_meta
 
+log = logging.getLogger(__name__)
+
 _config = None
-
-
-def _get_search_db():
-    """Get a SQLite connection for player search queries."""
-    from fantasy_baseball.data.db import get_connection
-    return get_connection()
 
 
 def _get_admin_password():
@@ -56,30 +53,27 @@ def _load_config():
     return _config
 
 
-def _get_latest_ros_snapshot(conn, season: int) -> str | None:
-    """Return the most recent ROS snapshot date, or None."""
-    row = conn.execute(
-        "SELECT MAX(snapshot_date) as d FROM ros_blended_projections WHERE year = ?",
-        (season,),
-    ).fetchone()
-    return row["d"] if row and row["d"] else None
-
-
-def _build_roster_maps(conn, team_name: str):
+def _build_roster_maps(team_name: str):
     """Build position and ownership maps.
 
-    Positions come from the ``positions`` table (broad coverage including
-    free agents) overlaid with ``weekly_rosters`` (more current for
-    rostered players).  Returns (pos_map, owner_map) where pos_map maps
+    Positions come from the Redis ``positions`` key (broad coverage
+    including free agents) overlaid with the latest
+    ``weekly_rosters_history`` snapshot (more current for rostered
+    players).  Returns (pos_map, owner_map) where pos_map maps
     normalized names to position lists and owner_map maps normalized
     names to ``"roster"`` (user's team) or an opponent team name.
     """
     from fantasy_baseball.utils.name_utils import normalize_name
-    from fantasy_baseball.data.db import get_positions
+    from fantasy_baseball.data.redis_store import (
+        get_default_client,
+        get_latest_weekly_rosters,
+        get_positions,
+    )
 
-    # Base positions from the positions table (covers FAs)
+    # Base positions from Redis (covers FAs)
+    client = get_default_client()
     pos_map: dict[str, list[str]] = {
-        normalize_name(k): v for k, v in get_positions(conn).items()
+        normalize_name(k): v for k, v in get_positions(client).items()
     }
 
     owner_map: dict[str, str] = {}
@@ -88,15 +82,12 @@ def _build_roster_maps(conn, team_name: str):
         owner_map[normalize_name(p["name"])] = "roster"
 
     # Weekly rosters override positions (fresher) and provide ownership
-    for r in conn.execute(
-        "SELECT player_name, positions, team FROM weekly_rosters "
-        "WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM weekly_rosters)"
-    ).fetchall():
-        norm = normalize_name(r["player_name"])
-        if r["positions"]:
-            pos_map[norm] = [p.strip() for p in r["positions"].split(",")]
-        if r["team"] != team_name and norm not in owner_map:
-            owner_map[norm] = r["team"]
+    for entry in get_latest_weekly_rosters(client):
+        norm = normalize_name(entry["player_name"])
+        if entry.get("positions"):
+            pos_map[norm] = [p.strip() for p in entry["positions"].split(",")]
+        if entry.get("team") != team_name and norm not in owner_map:
+            owner_map[norm] = entry["team"]
 
     return pos_map, owner_map
 
@@ -138,19 +129,36 @@ def _load_yahoo_league():
 
 
 def _load_projections():
-    """Load projections from SQLite. Returns (hitters, pitchers, rest_of_season_hitters, rest_of_season_pitchers)."""
-    from fantasy_baseball.data.db import (
-        get_connection as get_db_connection, get_blended_projections, get_rest_of_season_projections,
+    """Load projections from Redis. Returns (hitters, pitchers, rest_of_season_hitters, rest_of_season_pitchers)."""
+    import pandas as pd
+    from fantasy_baseball.data.redis_store import (
+        get_blended_projections, get_default_client,
     )
     from fantasy_baseball.utils.name_utils import normalize_name
-    db_conn = get_db_connection()
-    try:
-        hitters, pitchers = get_blended_projections(db_conn)
-        rest_of_season_hitters, rest_of_season_pitchers = get_rest_of_season_projections(db_conn)
-    finally:
-        db_conn.close()
-    hitters["_name_norm"] = hitters["name"].apply(normalize_name)
-    pitchers["_name_norm"] = pitchers["name"].apply(normalize_name)
+    from fantasy_baseball.web.season_data import read_cache
+
+    client = get_default_client()
+    hitters_raw = get_blended_projections(client, "hitters")
+    pitchers_raw = get_blended_projections(client, "pitchers")
+    if client is not None and not hitters_raw and not pitchers_raw:
+        log.warning(
+            "blended_projections:hitters and blended_projections:pitchers are both empty - "
+            "run scripts/build_db.py to populate preseason projections before dashboard use."
+        )
+    hitters = pd.DataFrame(hitters_raw)
+    pitchers = pd.DataFrame(pitchers_raw)
+
+    # ROS projections served from the cache:ros_projections Redis key (existing write-through).
+    # Task 7 migrates the ROS pipeline off SQLite staging; this request-path reader already
+    # goes through Redis cache.
+    ros_cache = read_cache("ros_projections") or {}
+    rest_of_season_hitters = pd.DataFrame(ros_cache.get("hitters", []))
+    rest_of_season_pitchers = pd.DataFrame(ros_cache.get("pitchers", []))
+
+    if "name" in hitters.columns:
+        hitters["_name_norm"] = hitters["name"].apply(normalize_name)
+    if "name" in pitchers.columns:
+        pitchers["_name_norm"] = pitchers["name"].apply(normalize_name)
     if not rest_of_season_hitters.empty:
         rest_of_season_hitters["_name_norm"] = rest_of_season_hitters["name"].apply(normalize_name)
     if not rest_of_season_pitchers.empty:
@@ -162,11 +170,7 @@ def _run_rest_of_season_fetch() -> None:
     """Background worker for ROS projection fetch + quality checks."""
     from fantasy_baseball.config import load_config
     from fantasy_baseball.data.fangraphs_fetch import fetch_rest_of_season_projections
-    from fantasy_baseball.data.db import (
-        create_tables, fetch_and_load_game_logs,
-        get_connection as get_db_connection,
-        get_roster_names, load_rest_of_season_projections,
-    )
+    from fantasy_baseball.data.mlb_game_logs import fetch_game_log_totals
     from fantasy_baseball.web.job_logger import JobLogger
 
     logger = JobLogger("rest_of_season_fetch")
@@ -177,20 +181,12 @@ def _run_rest_of_season_fetch() -> None:
     try:
         # Refresh game_logs FIRST so that normalize_rest_of_season_to_full_season has
         # current accumulated actuals to add. On Render's ephemeral filesystem
-        # game_logs is wiped every deploy and only gets populated during the
-        # dashboard refresh — without this step, rest_of_season_fetch runs against an
-        # empty game_logs table, normalize_rest_of_season_to_full_season early-returns
-        # via its `if not game_log_totals` guard, and the resulting snapshot
-        # is silently un-normalized (matches preseason values).
-        gl_conn = get_db_connection()
-        create_tables(gl_conn)
-        try:
-            logger.log("Refreshing MLB game logs (so normalization has actuals to add)")
-            fetch_and_load_game_logs(
-                gl_conn, config.season_year, progress_cb=logger.log,
-            )
-        finally:
-            gl_conn.close()
+        # Redis is the only persistent store — without this step, rest_of_season_fetch
+        # could run against stale game_log_totals and normalize_rest_of_season_to_full_season
+        # would early-return via its `if not game_log_totals` guard, silently leaving
+        # the resulting snapshot un-normalized (matches preseason values).
+        logger.log("Refreshing MLB game logs (so normalization has actuals to add)")
+        fetch_game_log_totals(config.season_year, progress_cb=logger.log)
 
         logger.log(f"Fetching ROS projections for {len(config.projection_systems)} systems")
         results = fetch_rest_of_season_projections(
@@ -201,7 +197,7 @@ def _run_rest_of_season_fetch() -> None:
         for system, status in results.items():
             logger.log(f"  {system}: {status}")
 
-        # Load roster names for quality checks
+        # Load roster names from Redis for quality checks
         quality_warnings = []
 
         def _quality_cb(msg):
@@ -209,35 +205,20 @@ def _run_rest_of_season_fetch() -> None:
             if msg.startswith("QUALITY:"):
                 quality_warnings.append(msg)
 
-        db_conn = get_db_connection()
-        create_tables(db_conn)
-        try:
-            roster_names = get_roster_names(db_conn)
-            if roster_names:
-                logger.log(f"Loaded {len(roster_names)} rostered players for quality checks")
+        from fantasy_baseball.data.redis_store import (
+            get_default_client, get_latest_roster_names,
+        )
+        roster_names = get_latest_roster_names(get_default_client())
+        if roster_names:
+            logger.log(f"Loaded {len(roster_names)} rostered players for quality checks")
 
-            logger.log("Loading into SQLite...")
-            load_rest_of_season_projections(
-                db_conn, projections_dir,
-                config.projection_systems, config.projection_weights,
-                roster_names=roster_names, progress_cb=_quality_cb,
-            )
-
-            # Persist blended ROS projections to Redis so the refresh
-            # pipeline can read them even if Render spins up a new instance
-            # (ephemeral filesystem is wiped between instances).
-            from fantasy_baseball.data.db import get_rest_of_season_projections
-            from fantasy_baseball.web.season_data import write_cache
-            ros_h, ros_p = get_rest_of_season_projections(db_conn)
-            if not ros_h.empty or not ros_p.empty:
-                ros_data = {
-                    "hitters": ros_h.to_dict(orient="records"),
-                    "pitchers": ros_p.to_dict(orient="records"),
-                }
-                write_cache("ros_projections", ros_data)
-                logger.log(f"Persisted {len(ros_h)} ROS hitters + {len(ros_p)} ROS pitchers to Redis")
-        finally:
-            db_conn.close()
+        logger.log("Blending ROS projections → Redis...")
+        from fantasy_baseball.data.ros_pipeline import blend_and_cache_ros
+        ros_h, ros_p = blend_and_cache_ros(
+            projections_dir, config.projection_systems, config.projection_weights,
+            roster_names, config.season_year, progress_cb=_quality_cb,
+        )
+        logger.log(f"Persisted {len(ros_h)} ROS hitters + {len(ros_p)} ROS pitchers to Redis")
 
         # Write standalone quality report
         if quality_warnings:
@@ -493,131 +474,130 @@ def register_routes(app: Flask) -> None:
     @app.route("/api/players/search")
     def api_player_search():
         from fantasy_baseball.utils.name_utils import normalize_name
-        from fantasy_baseball.utils.time_utils import local_today
         from fantasy_baseball.analysis.pace import compute_player_pace
         from fantasy_baseball.utils.constants import HITTER_PROJ_KEYS, PITCHER_PROJ_KEYS
         from fantasy_baseball.models.player import Player, HitterStats, PitcherStats, RankInfo
         from fantasy_baseball.sgp.rankings import lookup_rank
+        from fantasy_baseball.data.redis_store import (
+            get_blended_projections as redis_get_blended,
+            get_default_client,
+            get_game_log_totals,
+            get_ros_projections,
+        )
 
         query = request.args.get("q", "").strip()
         if len(query) < 2:
             return jsonify([])
 
-        conn = _get_search_db()
-        try:
-            season = local_today().year
-            snapshot = _get_latest_ros_snapshot(conn, season)
-            if not snapshot:
-                return jsonify([])
+        # --- ROS rows from Redis (cache:ros_projections) ---
+        ros_cache = get_ros_projections(get_default_client()) or {}
+        ros_rows = list(ros_cache.get("hitters", [])) + list(ros_cache.get("pitchers", []))
+        if not ros_rows:
+            return jsonify([])
 
-            # Search ROS projections by name (case-insensitive LIKE)
-            like_pattern = f"%{query}%"
-            rest_of_season_rows = conn.execute(
-                "SELECT * FROM ros_blended_projections "
-                "WHERE year = ? AND snapshot_date = ? AND name LIKE ? "
-                "ORDER BY CASE WHEN adp IS NOT NULL THEN adp ELSE 9999 END ASC "
-                "LIMIT 25",
-                (season, snapshot, like_pattern),
-            ).fetchall()
+        # Case-insensitive substring match on name (replaces SQL LIKE)
+        query_norm = normalize_name(query)
+        matched = [
+            r for r in ros_rows
+            if r.get("name") and query_norm in normalize_name(r["name"])
+        ]
+        if not matched:
+            return jsonify([])
 
-            if not rest_of_season_rows:
-                return jsonify([])
+        # Sort by ADP ascending with NULL/missing last (replaces SQL ORDER BY),
+        # then cap at 25 (replaces SQL LIMIT).
+        def _adp_key(r):
+            adp = r.get("adp")
+            return adp if adp is not None else 9999
+        matched.sort(key=_adp_key)
+        rest_of_season_rows = matched[:25]
 
-            # Load preseason projections for comparison (match by fg_id, not name)
-            fg_ids = [r["fg_id"] for r in rest_of_season_rows if r["fg_id"]]
-            preseason_map = {}
-            if fg_ids:
-                placeholders = ",".join("?" * len(fg_ids))
-                for r in conn.execute(
-                    f"SELECT * FROM blended_projections WHERE year = ? AND fg_id IN ({placeholders})",
-                    (season, *fg_ids),
-                ).fetchall():
-                    preseason_map[r["fg_id"]] = dict(r)
+        # --- Preseason projections by fg_id from Redis ---
+        client = get_default_client()
+        preseason_hitters = redis_get_blended(client, "hitters") or []
+        preseason_pitchers = redis_get_blended(client, "pitchers") or []
+        preseason_map: dict[str, dict] = {}
+        for row in preseason_hitters + preseason_pitchers:
+            fid = row.get("fg_id")
+            if fid:
+                preseason_map[fid] = row
 
-            # Load game log totals for pace
-            hitter_logs = {}
-            for r in conn.execute(
-                "SELECT name, SUM(pa) as pa, SUM(ab) as ab, SUM(h) as h, "
-                "SUM(r) as r, SUM(hr) as hr, SUM(rbi) as rbi, SUM(sb) as sb "
-                "FROM game_logs WHERE season = ? AND player_type = 'hitter' "
-                "GROUP BY name", (season,),
-            ).fetchall():
-                hitter_logs[normalize_name(r["name"])] = dict(r)
+        # --- Game log totals for pace (keyed by normalized name) ---
+        hitter_totals = get_game_log_totals(client, "hitters")
+        pitcher_totals = get_game_log_totals(client, "pitchers")
+        hitter_logs: dict[str, dict] = {}
+        for _mid, row in hitter_totals.items():
+            nm = row.get("name")
+            if nm:
+                hitter_logs[normalize_name(nm)] = row
+        pitcher_logs: dict[str, dict] = {}
+        for _mid, row in pitcher_totals.items():
+            nm = row.get("name")
+            if nm:
+                pitcher_logs[normalize_name(nm)] = row
 
-            pitcher_logs = {}
-            for r in conn.execute(
-                "SELECT name, SUM(ip) as ip, SUM(k) as k, SUM(w) as w, SUM(sv) as sv, "
-                "SUM(er) as er, SUM(bb) as bb, SUM(h_allowed) as h_allowed "
-                "FROM game_logs WHERE season = ? AND player_type = 'pitcher' "
-                "GROUP BY name", (season,),
-            ).fetchall():
-                pitcher_logs[normalize_name(r["name"])] = dict(r)
+        config = _load_config()
+        leverage = _get_leverage()
+        pos_map, owner_map = _build_roster_maps(config.team_name)
+        rankings_cache = read_cache("rankings") or {}
 
-            config = _load_config()
-            leverage = _get_leverage()
-            pos_map, owner_map = _build_roster_maps(conn, config.team_name)
-            rankings_cache = read_cache("rankings") or {}
+        # Use cached roster wSGP for rostered players (includes recency blending)
+        roster_wsgp: dict[str, float] = {}
+        roster_cache = read_cache("roster") or []
+        for rp in roster_cache:
+            rn = normalize_name(rp.get("name", ""))
+            if rp.get("wsgp"):
+                roster_wsgp[rn] = rp["wsgp"]
 
-            # Use cached roster wSGP for rostered players (includes recency blending)
-            roster_wsgp = {}
-            roster_cache = read_cache("roster") or []
-            for rp in roster_cache:
-                rn = normalize_name(rp.get("name", ""))
-                if rp.get("wsgp"):
-                    roster_wsgp[rn] = rp["wsgp"]
+        # Build results
+        results = []
+        for rest_of_season_dict in rest_of_season_rows:
+            name = rest_of_season_dict["name"]
+            norm = normalize_name(name)
+            ptype = rest_of_season_dict.get("player_type")
+            fg_id = rest_of_season_dict.get("fg_id")
 
-            # Build results
-            results = []
-            for row in rest_of_season_rows:
-                rest_of_season_dict = dict(row)
-                name = rest_of_season_dict["name"]
-                norm = normalize_name(name)
-                ptype = rest_of_season_dict["player_type"]
-                fg_id = rest_of_season_dict.get("fg_id")
+            # Preseason stats
+            pre = preseason_map.get(fg_id, {})
 
-                # Preseason stats
-                pre = preseason_map.get(fg_id, {})
+            # Pace
+            pace = None
+            logs = hitter_logs if ptype == PlayerType.HITTER else pitcher_logs
+            actuals = logs.get(norm)
+            if actuals:
+                proj_keys = HITTER_PROJ_KEYS if ptype == PlayerType.HITTER else PITCHER_PROJ_KEYS
+                projected = {k: pre.get(k, 0) or 0 for k in proj_keys}
+                if any(v > 0 for v in projected.values()):
+                    pace = compute_player_pace(actuals, projected, ptype)
 
-                # Pace
-                pace = None
-                logs = hitter_logs if ptype == PlayerType.HITTER else pitcher_logs
-                actuals = logs.get(norm)
-                if actuals:
-                    proj_keys = HITTER_PROJ_KEYS if ptype == PlayerType.HITTER else PITCHER_PROJ_KEYS
-                    projected = {k: pre.get(k, 0) or 0 for k in proj_keys}
-                    if any(v > 0 for v in projected.values()):
-                        pace = compute_player_pace(actuals, projected, ptype)
+            # Ownership
+            owner = owner_map.get(norm)
+            ownership = "Your roster" if owner == "roster" else (owner or "Free Agent")
 
-                # Ownership
-                owner = owner_map.get(norm)
-                ownership = "Your roster" if owner == "roster" else (owner or "Free Agent")
+            rank = lookup_rank(rankings_cache, fg_id, name, ptype)
 
-                rank = lookup_rank(rankings_cache, fg_id, name, ptype)
+            stats_cls = HitterStats if ptype == PlayerType.HITTER else PitcherStats
+            player = Player(
+                name=name,
+                player_type=ptype,
+                team=rest_of_season_dict.get("team", "") or "",
+                positions=pos_map.get(norm, []),
+                rest_of_season=stats_cls.from_dict(rest_of_season_dict),
+                preseason=stats_cls.from_dict(pre) if pre else None,
+                rank=RankInfo.from_dict(rank),
+                pace=pace,
+            )
+            cached = roster_wsgp.get(norm)
+            if cached is not None:
+                player.wsgp = cached
+            else:
+                player.compute_wsgp(leverage)
 
-                stats_cls = HitterStats if ptype == PlayerType.HITTER else PitcherStats
-                player = Player(
-                    name=name,
-                    player_type=ptype,
-                    team=rest_of_season_dict.get("team", ""),
-                    positions=pos_map.get(norm, []),
-                    rest_of_season=stats_cls.from_dict(rest_of_season_dict),
-                    preseason=stats_cls.from_dict(pre) if pre else None,
-                    rank=RankInfo.from_dict(rank),
-                    pace=pace,
-                )
-                cached = roster_wsgp.get(norm)
-                if cached is not None:
-                    player.wsgp = cached
-                else:
-                    player.compute_wsgp(leverage)
+            result = player.to_dict()
+            result["ownership"] = ownership
+            results.append(result)
 
-                result = player.to_dict()
-                result["ownership"] = ownership
-                results.append(result)
-
-            return jsonify(results)
-        finally:
-            conn.close()
+        return jsonify(results)
 
     @app.route("/api/players/browse")
     def api_player_browse():
@@ -858,55 +838,6 @@ def register_routes(app: Flask) -> None:
     def logout():
         session.pop("authenticated", None)
         return redirect(url_for("standings"))
-
-    @app.route("/sql", methods=["GET", "POST"])
-    @_require_auth
-    def sql_runner():
-        meta = read_meta()
-        query = ""
-        columns = None
-        rows = None
-        row_count = None
-        error = None
-
-        if request.method == "POST":
-            query = request.form.get("query", "").strip()
-            query_params: tuple = ()
-            table_name = request.form.get("schema_table", "").strip()
-
-            if request.form.get("action") == "tables":
-                query = "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-            elif request.form.get("action") == "schema" and table_name:
-                query = "SELECT sql FROM sqlite_master WHERE type='table' AND name=?"
-                query_params = (table_name,)
-
-            if query:
-                from fantasy_baseball.data.db import get_connection
-                conn = get_connection()
-                try:
-                    cursor = conn.execute(query, query_params)
-                    if cursor.description:
-                        columns = [d[0] for d in cursor.description]
-                        rows = cursor.fetchall()
-                        row_count = len(rows)
-                    else:
-                        conn.commit()
-                        row_count = cursor.rowcount
-                except Exception as e:
-                    error = str(e)
-                finally:
-                    conn.close()
-
-        return render_template(
-            "season/sql.html",
-            meta=meta,
-            active_page="sql",
-            query=query,
-            columns=columns,
-            rows=rows,
-            row_count=row_count,
-            error=error,
-        )
 
     @app.route("/logs")
     @_require_auth

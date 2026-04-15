@@ -1,8 +1,8 @@
 import json
-import sqlite3
-from unittest.mock import patch
 
 import pytest
+
+from fantasy_baseball.data import redis_store
 from fantasy_baseball.web.season_app import create_app
 
 
@@ -15,59 +15,83 @@ def client():
         yield c
 
 
-def _seed_test_db(conn):
-    """Insert test projection data into an in-memory SQLite database."""
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS blended_projections (
-            year INTEGER, fg_id TEXT, name TEXT, team TEXT, player_type TEXT,
-            pa REAL, ab REAL, h REAL, r REAL, hr REAL, rbi REAL, sb REAL, avg REAL,
-            w REAL, k REAL, sv REAL, ip REAL, er REAL, bb REAL, h_allowed REAL,
-            era REAL, whip REAL, adp REAL,
-            PRIMARY KEY (year, fg_id)
-        );
-        CREATE TABLE IF NOT EXISTS ros_blended_projections (
-            year INTEGER, snapshot_date TEXT, fg_id TEXT, name TEXT, team TEXT,
-            player_type TEXT,
-            pa REAL, ab REAL, h REAL, r REAL, hr REAL, rbi REAL, sb REAL, avg REAL,
-            w REAL, k REAL, sv REAL, ip REAL, er REAL, bb REAL, h_allowed REAL,
-            era REAL, whip REAL, adp REAL,
-            PRIMARY KEY (year, snapshot_date, fg_id)
-        );
-        CREATE TABLE IF NOT EXISTS game_logs (
-            season INTEGER, mlbam_id INTEGER, name TEXT, team TEXT,
-            player_type TEXT, date TEXT,
-            pa INTEGER, ab INTEGER, h INTEGER, r INTEGER, hr INTEGER,
-            rbi INTEGER, sb INTEGER,
-            ip REAL, k INTEGER, er INTEGER, bb INTEGER, h_allowed INTEGER,
-            w INTEGER, sv INTEGER, gs INTEGER,
-            PRIMARY KEY (season, mlbam_id, date)
-        );
-        CREATE TABLE IF NOT EXISTS weekly_rosters (
-            snapshot_date TEXT, week_num INTEGER, team TEXT, slot TEXT,
-            player_name TEXT, positions TEXT,
-            PRIMARY KEY (snapshot_date, team, slot, player_name)
-        );
-        CREATE TABLE IF NOT EXISTS positions (
-            name TEXT NOT NULL PRIMARY KEY,
-            positions TEXT NOT NULL
-        );
-    """)
-    conn.execute(
-        "INSERT INTO ros_blended_projections VALUES "
-        "(2026, '2026-04-01', '15640', 'Aaron Judge', 'NYY', 'hitter', "
-        "600, 500, 145, 95, 38, 92, 7, 0.290, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 5.0)"
-    )
-    conn.execute(
-        "INSERT INTO blended_projections VALUES "
-        "(2026, '15640', 'Aaron Judge', 'NYY', 'hitter', "
-        "650, 550, 160, 110, 45, 120, 5, 0.291, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 5.0)"
-    )
-    conn.execute(
-        "INSERT INTO ros_blended_projections VALUES "
-        "(2026, '2026-04-01', '28027', 'Gerrit Cole', 'NYY', 'pitcher', "
-        "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 14, 200, 0, 190, 60, 40, 140, 2.84, 0.95, 20.0)"
-    )
-    conn.commit()
+@pytest.fixture
+def redis_with_players(fake_redis, monkeypatch):
+    """Seed Redis with ROS projections, preseason projections, and game
+    log totals for player search tests, and redirect ``get_default_client``
+    to the fake client.
+
+    Also overrides ``season_routes.read_cache`` so the test does not
+    hit whatever local ``data/cache/*.json`` files happen to be in the
+    repo — returns only the keys the route cares about.
+    """
+    monkeypatch.setattr(redis_store, "_default_client", fake_redis)
+    monkeypatch.setattr(redis_store, "_default_client_initialized", True)
+
+    ros_payload = {
+        "hitters": [
+            {
+                "year": 2026, "snapshot_date": "2026-04-01",
+                "fg_id": "15640", "name": "Aaron Judge", "team": "NYY",
+                "player_type": "hitter",
+                "pa": 600, "ab": 500, "h": 145, "r": 95, "hr": 38,
+                "rbi": 92, "sb": 7, "avg": 0.290,
+                "w": None, "k": None, "sv": None, "ip": None,
+                "er": None, "bb": None, "h_allowed": None,
+                "era": None, "whip": None, "adp": 5.0,
+            }
+        ],
+        "pitchers": [
+            {
+                "year": 2026, "snapshot_date": "2026-04-01",
+                "fg_id": "28027", "name": "Gerrit Cole", "team": "NYY",
+                "player_type": "pitcher",
+                "pa": None, "ab": None, "h": None, "r": None, "hr": None,
+                "rbi": None, "sb": None, "avg": None,
+                "w": 14, "k": 200, "sv": 0, "ip": 190, "er": 60, "bb": 40,
+                "h_allowed": 140, "era": 2.84, "whip": 0.95, "adp": 20.0,
+            }
+        ],
+    }
+    fake_redis.set("cache:ros_projections", json.dumps(ros_payload))
+
+    redis_store.set_blended_projections(fake_redis, "hitters", [
+        {
+            "year": 2026, "fg_id": "15640", "name": "Aaron Judge",
+            "team": "NYY", "player_type": "hitter",
+            "pa": 650, "ab": 550, "h": 160, "r": 110, "hr": 45,
+            "rbi": 120, "sb": 5, "avg": 0.291,
+            "w": None, "k": None, "sv": None, "ip": None,
+            "er": None, "bb": None, "h_allowed": None,
+            "era": None, "whip": None, "adp": 5.0,
+        }
+    ])
+    redis_store.set_blended_projections(fake_redis, "pitchers", [])
+    redis_store.set_game_log_totals(fake_redis, "hitters", {})
+    redis_store.set_game_log_totals(fake_redis, "pitchers", {})
+
+    # Override the cache layer so disk-resident data/cache/*.json files
+    # in the repo do not pollute test results. ros_projections is read
+    # from Redis directly by api_player_search via read_cache (which
+    # also reads Redis, but falls back to disk first).
+    from fantasy_baseball.web import season_routes
+
+    def _fake_read_cache(key, *args, **kwargs):
+        if key == "ros_projections":
+            return ros_payload
+        if key in ("rankings",):
+            return {}
+        if key in ("roster", "standings"):
+            return []
+        if key in ("projections",):
+            return {}
+        if key == "positions":
+            return {}
+        return None
+
+    monkeypatch.setattr(season_routes, "read_cache", _fake_read_cache)
+
+    yield fake_redis
 
 
 def test_players_page_renders(client):
@@ -76,15 +100,8 @@ def test_players_page_renders(client):
     assert b"pos-filter" in resp.data
 
 
-def test_search_returns_matching_players(client):
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    _seed_test_db(conn)
-
-    with patch("fantasy_baseball.web.season_routes._get_search_db") as mock_db:
-        mock_db.return_value = conn
-        resp = client.get("/api/players/search?q=judge")
-
+def test_search_returns_matching_players(client, redis_with_players):
+    resp = client.get("/api/players/search?q=judge")
     assert resp.status_code == 200
     data = json.loads(resp.data)
     assert len(data) == 1
@@ -101,14 +118,108 @@ def test_search_requires_min_2_chars(client):
     assert data == []
 
 
-def test_search_no_results(client):
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    _seed_test_db(conn)
-
-    with patch("fantasy_baseball.web.season_routes._get_search_db") as mock_db:
-        mock_db.return_value = conn
-        resp = client.get("/api/players/search?q=nonexistent")
-
+def test_search_no_results(client, redis_with_players):
+    resp = client.get("/api/players/search?q=nonexistent")
     data = json.loads(resp.data)
     assert data == []
+
+
+def _empty_hitter_row(fg_id: str, name: str, adp: float | None) -> dict:
+    return {
+        "year": 2026, "snapshot_date": "2026-04-01",
+        "fg_id": fg_id, "name": name, "team": "NYY",
+        "player_type": "hitter",
+        "pa": 500, "ab": 450, "h": 120, "r": 70, "hr": 20,
+        "rbi": 70, "sb": 5, "avg": 0.270,
+        "w": None, "k": None, "sv": None, "ip": None,
+        "er": None, "bb": None, "h_allowed": None,
+        "era": None, "whip": None, "adp": adp,
+    }
+
+
+def test_search_sorts_results_by_adp_ascending(
+    client, fake_redis, monkeypatch
+):
+    """Non-monotonic ADPs must come back ordered ascending."""
+    monkeypatch.setattr(redis_store, "_default_client", fake_redis)
+    monkeypatch.setattr(redis_store, "_default_client_initialized", True)
+
+    # Three hitters matching "test", ADPs [50, 10, 30] — expect order 10, 30, 50.
+    ros_payload = {
+        "hitters": [
+            _empty_hitter_row("fg_a", "Test Alpha", 50.0),
+            _empty_hitter_row("fg_b", "Test Bravo", 10.0),
+            _empty_hitter_row("fg_c", "Test Charlie", 30.0),
+        ],
+        "pitchers": [],
+    }
+    fake_redis.set("cache:ros_projections", json.dumps(ros_payload))
+    redis_store.set_blended_projections(fake_redis, "hitters", [])
+    redis_store.set_blended_projections(fake_redis, "pitchers", [])
+    redis_store.set_game_log_totals(fake_redis, "hitters", {})
+    redis_store.set_game_log_totals(fake_redis, "pitchers", {})
+
+    from fantasy_baseball.web import season_routes
+
+    def _fake_read_cache(key, *args, **kwargs):
+        if key in ("rankings",):
+            return {}
+        if key in ("roster", "standings"):
+            return []
+        if key in ("projections",):
+            return {}
+        if key == "positions":
+            return {}
+        return None
+
+    monkeypatch.setattr(season_routes, "read_cache", _fake_read_cache)
+
+    resp = client.get("/api/players/search?q=test")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert [row["name"] for row in data] == [
+        "Test Bravo", "Test Charlie", "Test Alpha",
+    ]
+
+
+def test_search_caps_results_at_25_rows(client, fake_redis, monkeypatch):
+    """A query matching 26+ rows must be capped at 25."""
+    monkeypatch.setattr(redis_store, "_default_client", fake_redis)
+    monkeypatch.setattr(redis_store, "_default_client_initialized", True)
+
+    # 30 players all matching "player", with ADPs 1..30 — expect the
+    # first 25 by ADP ascending (ADPs 1..25).
+    hitters = [
+        _empty_hitter_row(f"fg_{i:02d}", f"Player {i:02d}", float(i))
+        for i in range(1, 31)
+    ]
+    ros_payload = {"hitters": hitters, "pitchers": []}
+    fake_redis.set("cache:ros_projections", json.dumps(ros_payload))
+    redis_store.set_blended_projections(fake_redis, "hitters", [])
+    redis_store.set_blended_projections(fake_redis, "pitchers", [])
+    redis_store.set_game_log_totals(fake_redis, "hitters", {})
+    redis_store.set_game_log_totals(fake_redis, "pitchers", {})
+
+    from fantasy_baseball.web import season_routes
+
+    def _fake_read_cache(key, *args, **kwargs):
+        if key in ("rankings",):
+            return {}
+        if key in ("roster", "standings"):
+            return []
+        if key in ("projections",):
+            return {}
+        if key == "positions":
+            return {}
+        return None
+
+    monkeypatch.setattr(season_routes, "read_cache", _fake_read_cache)
+
+    resp = client.get("/api/players/search?q=player")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert len(data) == 25
+    # Lowest 25 ADPs: Player 01..Player 25 (ADP 1..25).
+    assert [row["name"] for row in data] == [
+        f"Player {i:02d}" for i in range(1, 26)
+    ]
