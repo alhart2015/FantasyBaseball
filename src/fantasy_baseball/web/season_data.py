@@ -856,10 +856,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
         from fantasy_baseball.config import load_config
         from fantasy_baseball.data.mlb_schedule import get_week_schedule
-        from fantasy_baseball.data.db import (
-            create_tables,
-            get_connection as get_db_connection, get_blended_projections,
-        )
         from fantasy_baseball.data.mlb_game_logs import fetch_game_log_totals
         from fantasy_baseball.lineup.leverage import calculate_leverage
         from fantasy_baseball.lineup.matchups import calculate_matchup_factors, get_team_batting_stats
@@ -932,14 +928,20 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             )
             _progress(f"Pending moves: {total_changes} change(s) detected")
 
-        # --- Step 4: Read projections from SQLite ---
+        # --- Step 4: Read preseason projections from Redis ---
         _progress("Loading projections...")
-        db_conn = get_db_connection()
-        create_tables(db_conn)
-        try:
-            hitters_proj, pitchers_proj = get_blended_projections(db_conn)
-        finally:
-            db_conn.close()
+        import pandas as pd
+        from fantasy_baseball.data.redis_store import (
+            get_blended_projections as redis_get_blended,
+            get_default_client as _redis_default_client,
+        )
+        _redis_client = _redis_default_client()
+        hitters_proj = pd.DataFrame(
+            redis_get_blended(_redis_client, "hitters") or []
+        )
+        pitchers_proj = pd.DataFrame(
+            redis_get_blended(_redis_client, "pitchers") or []
+        )
 
         # Load ROS projections — blend latest dated CSV into Redis
         # (cache:ros_projections). No-op if no CSV dir exists locally
@@ -1500,20 +1502,20 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
             if new_txns:
                 _progress(f"Scoring {len(new_txns)} new transaction(s)...")
-                from fantasy_baseball.data.db import get_connection as get_db_conn
-                txn_conn = get_db_conn()
-                create_tables(txn_conn)
-                try:
-                    for txn in new_txns:
-                        scores = score_transaction(league_model, txn_conn, txn, config.season_year)
-                        stored_txns.append({
-                            "year": config.season_year,
-                            **txn,
-                            **scores,
-                            "paired_with": None,
-                        })
-                finally:
-                    txn_conn.close()
+                from fantasy_baseball.data.redis_store import (
+                    get_default_client as _txn_redis_client,
+                )
+                _txn_client = _txn_redis_client()
+                for txn in new_txns:
+                    scores = score_transaction(
+                        league_model, _txn_client, txn, config.season_year,
+                    )
+                    stored_txns.append({
+                        "year": config.season_year,
+                        **txn,
+                        **scores,
+                        "paired_with": None,
+                    })
 
                 # Re-pair all unpaired standalone moves
                 unpaired = [t for t in stored_txns if not t.get("paired_with")]

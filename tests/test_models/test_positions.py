@@ -79,11 +79,11 @@ class TestPositionParse:
     def test_parse_strips_trailing_digits_numbered_slot(self):
         """Historical JSON roster snapshots use "OF2", "BN3", "P5" to
         disambiguate multiple same-named slots. Position.parse must
-        collapse them to the base position so League.from_db can load
-        legacy rows from weekly_rosters without crashing.
+        collapse them to the base position so League.from_redis can load
+        legacy rows from weekly_rosters_history without crashing.
 
         Production bug landed 2026-04-12 with "Unknown position: 'BN2'"
-        when League.from_db hit a historical row.
+        when League.from_redis hit a historical row.
         """
         from fantasy_baseball.models.positions import Position
 

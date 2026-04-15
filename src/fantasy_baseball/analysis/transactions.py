@@ -2,7 +2,6 @@
 
 from datetime import datetime
 
-from fantasy_baseball.data.db import load_projections_for_date
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.league import League
@@ -135,15 +134,69 @@ def _find_player_wsgp(name, positions_str, hitters_proj, pitchers_proj, leverage
     return 0.0
 
 
-def score_transaction(league: League, conn, txn: dict, year: int) -> dict:
+def _load_projections_for_date_redis(client, year: int, target_date: str):
+    """Load projections for a historical transaction date from Redis.
+
+    Redis holds only the latest snapshot (no per-date history), so this
+    ignores ``target_date`` beyond the year-matches-current-season check
+    and returns the latest cached ROS projections, falling back to
+    preseason blended projections when ROS is missing. Signature matches
+    the old SQLite ``load_projections_for_date`` so callers can swap.
+
+    Reads Redis keys directly (not the disk-fallback ``read_cache``)
+    so tests that inject a fake Redis aren't cross-contaminated by
+    stale project-local cache files.
+    """
+    import json
+
+    import pandas as pd
+
+    from fantasy_baseball.data.redis_store import get_blended_projections
+
+    # Prefer the latest ROS snapshot (matches old "MAX(snapshot_date) <= target_date"
+    # intent — Redis only keeps the freshest, and historical transactions are
+    # scored against current projections since we no longer keep the time series).
+    hitters_rows: list = []
+    pitchers_rows: list = []
+    if client is not None:
+        raw = client.get("cache:ros_projections")
+        if raw is not None:
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                payload = {}
+            if isinstance(payload, dict):
+                hitters_rows = list(payload.get("hitters") or [])
+                pitchers_rows = list(payload.get("pitchers") or [])
+
+    if not hitters_rows and not pitchers_rows:
+        # Fall back to preseason
+        hitters_rows = get_blended_projections(client, "hitters") or []
+        pitchers_rows = get_blended_projections(client, "pitchers") or []
+
+    hitters_df = pd.DataFrame(hitters_rows)
+    pitchers_df = pd.DataFrame(pitchers_rows)
+
+    if not hitters_df.empty and "name" in hitters_df.columns:
+        hitters_df["_name_norm"] = hitters_df["name"].apply(normalize_name)
+    if not pitchers_df.empty and "name" in pitchers_df.columns:
+        pitchers_df["_name_norm"] = pitchers_df["name"].apply(normalize_name)
+
+    return hitters_df, pitchers_df
+
+
+def score_transaction(
+    league: League, redis_client, txn: dict, year: int,
+) -> dict:
     """Compute wSGP for the add and drop sides of a transaction.
 
     Uses the team's leverage at the time of the transaction (from the
-    nearest prior standings snapshot) and the nearest ROS projections.
+    nearest prior standings snapshot) and the latest cached projections.
 
     Args:
         league: League model with pre-loaded standings history.
-        conn: SQLite connection (used for projection lookups).
+        redis_client: Redis client used for projection lookups
+            (``cache:ros_projections`` / ``blended_projections:*``).
         txn: Transaction dict with team, timestamp, add_name, add_positions,
              drop_name, drop_positions.
         year: Season year.
@@ -151,7 +204,7 @@ def score_transaction(league: League, conn, txn: dict, year: int) -> dict:
     Returns:
         {"add_wsgp": float, "drop_wsgp": float, "value": float}
     """
-    # Convert Unix timestamp to date string for DB lookups
+    # Convert Unix timestamp to date string for standings lookup
     ts = int(txn.get("timestamp", 0) or 0)
     txn_date = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else f"{year}-03-01"
 
@@ -166,8 +219,10 @@ def score_transaction(league: League, conn, txn: dict, year: int) -> dict:
         leverage = {cat: 0.1 for cat in ["R", "HR", "RBI", "SB", "AVG",
                                           "W", "K", "SV", "ERA", "WHIP"]}
 
-    # Load projections nearest to transaction date
-    hitters_proj, pitchers_proj = load_projections_for_date(conn, year, txn_date)
+    # Load projections (latest ROS, falling back to preseason)
+    hitters_proj, pitchers_proj = _load_projections_for_date_redis(
+        redis_client, year, txn_date,
+    )
 
     add_wsgp = _find_player_wsgp(
         txn.get("add_name"), txn.get("add_positions"),
