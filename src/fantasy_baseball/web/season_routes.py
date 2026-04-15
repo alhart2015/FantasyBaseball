@@ -183,10 +183,11 @@ def _run_rest_of_season_fetch() -> None:
     from fantasy_baseball.config import load_config
     from fantasy_baseball.data.fangraphs_fetch import fetch_rest_of_season_projections
     from fantasy_baseball.data.db import (
-        create_tables, fetch_and_load_game_logs,
+        create_tables,
         get_connection as get_db_connection,
         get_roster_names, load_rest_of_season_projections,
     )
+    from fantasy_baseball.data.mlb_game_logs import fetch_game_log_totals
     from fantasy_baseball.web.job_logger import JobLogger
 
     logger = JobLogger("rest_of_season_fetch")
@@ -197,20 +198,12 @@ def _run_rest_of_season_fetch() -> None:
     try:
         # Refresh game_logs FIRST so that normalize_rest_of_season_to_full_season has
         # current accumulated actuals to add. On Render's ephemeral filesystem
-        # game_logs is wiped every deploy and only gets populated during the
-        # dashboard refresh — without this step, rest_of_season_fetch runs against an
-        # empty game_logs table, normalize_rest_of_season_to_full_season early-returns
-        # via its `if not game_log_totals` guard, and the resulting snapshot
-        # is silently un-normalized (matches preseason values).
-        gl_conn = get_db_connection()
-        create_tables(gl_conn)
-        try:
-            logger.log("Refreshing MLB game logs (so normalization has actuals to add)")
-            fetch_and_load_game_logs(
-                gl_conn, config.season_year, progress_cb=logger.log,
-            )
-        finally:
-            gl_conn.close()
+        # Redis is the only persistent store — without this step, rest_of_season_fetch
+        # could run against stale game_log_totals and normalize_rest_of_season_to_full_season
+        # would early-return via its `if not game_log_totals` guard, silently leaving
+        # the resulting snapshot un-normalized (matches preseason values).
+        logger.log("Refreshing MLB game logs (so normalization has actuals to add)")
+        fetch_game_log_totals(config.season_year, progress_cb=logger.log)
 
         logger.log(f"Fetching ROS projections for {len(config.projection_systems)} systems")
         results = fetch_rest_of_season_projections(

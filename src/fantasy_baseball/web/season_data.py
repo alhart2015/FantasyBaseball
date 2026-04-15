@@ -213,74 +213,38 @@ def _write_spoe_snapshot(spoe_result: dict) -> None:
 
 
 def _load_game_log_totals(season_year: int) -> tuple[dict, dict]:
-    """Load aggregated game log totals from SQLite, with Redis fallback/write-through.
+    """Load aggregated game log totals from Redis, keyed by normalized name.
 
     Returns (hitter_logs, pitcher_logs) where each is {normalized_name: {stat: value}}.
-    On Render, SQLite game_logs may be empty after a cold start — falls back to Redis.
-    After loading from SQLite, writes to Redis so the data survives spin-downs.
+    The season_year parameter is accepted for signature compatibility but unused —
+    Redis keys are not year-partitioned (current season only).
     """
-    from fantasy_baseball.data.db import get_connection as get_db_connection
+    from fantasy_baseball.data.redis_store import get_default_client, get_game_log_totals
     from fantasy_baseball.utils.name_utils import normalize_name
 
-    hitter_logs = {}
-    pitcher_logs = {}
+    client = get_default_client()
+    raw_h = get_game_log_totals(client, "hitters")
+    raw_p = get_game_log_totals(client, "pitchers")
 
-    # Try SQLite first
-    conn = get_db_connection()
-    try:
-        rows = conn.execute(
-            "SELECT name, SUM(pa) as pa, SUM(ab) as ab, SUM(h) as h, "
-            "SUM(r) as r, SUM(hr) as hr, SUM(rbi) as rbi, SUM(sb) as sb "
-            "FROM game_logs WHERE season = ? AND player_type = 'hitter' "
-            "GROUP BY name", (season_year,)
-        ).fetchall()
-        for row in rows:
-            norm = normalize_name(row["name"])
-            hitter_logs[norm] = {
-                "pa": row["pa"] or 0, "ab": row["ab"] or 0, "h": row["h"] or 0,
-                "r": row["r"] or 0, "hr": row["hr"] or 0, "rbi": row["rbi"] or 0, "sb": row["sb"] or 0,
-            }
+    hitter_logs: dict[str, dict] = {}
+    for _mid, entry in raw_h.items():
+        name = entry.get("name") or ""
+        if not name:
+            continue
+        norm = normalize_name(name)
+        hitter_logs[norm] = {
+            k: entry.get(k, 0) or 0 for k in ("pa", "ab", "h", "r", "hr", "rbi", "sb")
+        }
 
-        rows = conn.execute(
-            "SELECT name, SUM(ip) as ip, SUM(k) as k, SUM(w) as w, SUM(sv) as sv, "
-            "SUM(er) as er, SUM(bb) as bb, SUM(h_allowed) as h_allowed "
-            "FROM game_logs WHERE season = ? AND player_type = 'pitcher' "
-            "GROUP BY name", (season_year,)
-        ).fetchall()
-        for row in rows:
-            norm = normalize_name(row["name"])
-            pitcher_logs[norm] = {
-                "ip": row["ip"] or 0, "k": row["k"] or 0, "w": row["w"] or 0, "sv": row["sv"] or 0,
-                "er": row["er"] or 0, "bb": row["bb"] or 0, "h_allowed": row["h_allowed"] or 0,
-            }
-    finally:
-        conn.close()
-
-    # If SQLite had data, write through to Redis for persistence
-    if hitter_logs or pitcher_logs:
-        redis = _get_redis()
-        if redis:
-            try:
-                redis.set("game_log_totals:hitters", json.dumps(hitter_logs))
-                redis.set("game_log_totals:pitchers", json.dumps(pitcher_logs))
-            except Exception as e:
-                print(f"[redis] game_log_totals write failed: {e}")
-        return hitter_logs, pitcher_logs
-
-    # SQLite empty — fall back to Redis (cold start on Render)
-    redis = _get_redis()
-    if redis:
-        try:
-            raw_h = redis.get("game_log_totals:hitters")
-            raw_p = redis.get("game_log_totals:pitchers")
-            if raw_h:
-                hitter_logs = json.loads(raw_h)
-            if raw_p:
-                pitcher_logs = json.loads(raw_p)
-            if hitter_logs or pitcher_logs:
-                print("[redis] loaded game log totals from Redis (SQLite was empty)")
-        except Exception as e:
-            print(f"[redis] game_log_totals read failed: {e}")
+    pitcher_logs: dict[str, dict] = {}
+    for _mid, entry in raw_p.items():
+        name = entry.get("name") or ""
+        if not name:
+            continue
+        norm = normalize_name(name)
+        pitcher_logs[norm] = {
+            k: entry.get(k, 0) or 0 for k in ("ip", "k", "w", "sv", "er", "bb", "h_allowed")
+        }
 
     return hitter_logs, pitcher_logs
 
@@ -893,10 +857,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.config import load_config
         from fantasy_baseball.data.mlb_schedule import get_week_schedule
         from fantasy_baseball.data.db import (
-            create_tables, fetch_and_load_game_logs,
+            create_tables,
             get_connection as get_db_connection, get_blended_projections,
             get_rest_of_season_projections, load_rest_of_season_projections,
         )
+        from fantasy_baseball.data.mlb_game_logs import fetch_game_log_totals
         from fantasy_baseball.lineup.leverage import calculate_leverage
         from fantasy_baseball.lineup.matchups import calculate_matchup_factors, get_team_batting_stats
         from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
@@ -1209,15 +1174,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # --- Step 6b: Fetch MLB game logs ---
         _progress("Fetching MLB game logs...")
-        gl_conn = get_db_connection()
-        create_tables(gl_conn)
-        try:
-            fetch_and_load_game_logs(
-                gl_conn, config.season_year,
-                progress_cb=_progress,
-            )
-        finally:
-            gl_conn.close()
+        fetch_game_log_totals(config.season_year, progress_cb=_progress)
 
         # --- Step 6c: Compute season-to-date pace vs projections ---
         _progress("Computing player pace...")

@@ -105,3 +105,72 @@ def set_blended_projections(
     if client is None:
         return
     client.set(key, json.dumps(rows))
+
+
+def _game_log_totals_key(player_type: str) -> str:
+    if player_type not in _BLENDED_PROJ_TYPES:
+        raise ValueError(
+            f"player_type must be one of {_BLENDED_PROJ_TYPES}, got {player_type!r}"
+        )
+    return f"game_log_totals:{player_type}"
+
+
+def get_game_log_totals(client, player_type: str) -> dict[str, dict]:
+    """Read aggregated game log totals. Returns {} on missing key, corrupt JSON, or None client."""
+    key = _game_log_totals_key(player_type)
+    if client is None:
+        return {}
+    raw = client.get(key)
+    if raw is None:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def set_game_log_totals(
+    client, player_type: str, totals: dict[str, dict]
+) -> None:
+    """Overwrite aggregated game log totals for hitters or pitchers."""
+    key = _game_log_totals_key(player_type)
+    if client is None:
+        return
+    client.set(key, json.dumps(totals))
+
+
+SEASON_PROGRESS_KEY = "season_progress"
+_DEFAULT_SEASON_PROGRESS = {"games_elapsed": 0, "total": 162, "as_of": None}
+
+
+def get_season_progress(client) -> dict:
+    """Read season progress ({games_elapsed, total, as_of}). Returns defaults on missing or corrupt."""
+    if client is None:
+        return dict(_DEFAULT_SEASON_PROGRESS)
+    raw = client.get(SEASON_PROGRESS_KEY)
+    if raw is None:
+        return dict(_DEFAULT_SEASON_PROGRESS)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return dict(_DEFAULT_SEASON_PROGRESS)
+    if not isinstance(data, dict):
+        return dict(_DEFAULT_SEASON_PROGRESS)
+    return {
+        "games_elapsed": int(data.get("games_elapsed", 0)),
+        "total": int(data.get("total", 162)),
+        "as_of": data.get("as_of"),
+    }
+
+
+def set_season_progress(
+    client, games_elapsed: int, total: int = 162, as_of: str | None = None
+) -> None:
+    """Overwrite season progress."""
+    if client is None:
+        return
+    client.set(
+        SEASON_PROGRESS_KEY,
+        json.dumps({"games_elapsed": games_elapsed, "total": total, "as_of": as_of}),
+    )
