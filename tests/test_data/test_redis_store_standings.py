@@ -82,6 +82,14 @@ def test_get_latest_standings_none_client_returns_empty():
     assert redis_store.get_latest_standings(None) == {}
 
 
+def test_get_standings_day_none_client_returns_empty():
+    assert redis_store.get_standings_day(None, "2026-04-15") == {}
+
+
+def test_get_standings_history_none_client_returns_empty():
+    assert redis_store.get_standings_history(None) == {}
+
+
 def test_get_standings_day_ignores_corrupt_json(fake_redis):
     fake_redis.hset(redis_store.STANDINGS_HISTORY_KEY, "2026-04-15", "not json {{{")
     assert redis_store.get_standings_day(fake_redis, "2026-04-15") == {}

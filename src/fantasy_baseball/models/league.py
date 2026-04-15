@@ -163,8 +163,8 @@ class League:
           :class:`StandingsSnapshot` list.
 
         Team identity is joined by team name. ``Team.team_key`` is
-        taken from any standings entry that carries one, or ``""`` if
-        the team appears only in rosters.
+        taken from the most recent standings row for that team, or
+        ``""`` if the team appears only in ``weekly_rosters_history``.
 
         Raises:
             ValueError: if any stored position token is unknown.
