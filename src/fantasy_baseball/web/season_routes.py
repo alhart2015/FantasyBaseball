@@ -68,21 +68,27 @@ def _get_latest_ros_snapshot(conn, season: int) -> str | None:
     return row["d"] if row and row["d"] else None
 
 
-def _build_roster_maps(conn, team_name: str):
+def _build_roster_maps(team_name: str):
     """Build position and ownership maps.
 
     Positions come from the Redis ``positions`` key (broad coverage
-    including free agents) overlaid with ``weekly_rosters`` (more current
-    for rostered players).  Returns (pos_map, owner_map) where pos_map
-    maps normalized names to position lists and owner_map maps normalized
+    including free agents) overlaid with the latest
+    ``weekly_rosters_history`` snapshot (more current for rostered
+    players).  Returns (pos_map, owner_map) where pos_map maps
+    normalized names to position lists and owner_map maps normalized
     names to ``"roster"`` (user's team) or an opponent team name.
     """
     from fantasy_baseball.utils.name_utils import normalize_name
-    from fantasy_baseball.data.redis_store import get_positions, get_default_client
+    from fantasy_baseball.data.redis_store import (
+        get_default_client,
+        get_latest_weekly_rosters,
+        get_positions,
+    )
 
     # Base positions from Redis (covers FAs)
+    client = get_default_client()
     pos_map: dict[str, list[str]] = {
-        normalize_name(k): v for k, v in get_positions(get_default_client()).items()
+        normalize_name(k): v for k, v in get_positions(client).items()
     }
 
     owner_map: dict[str, str] = {}
@@ -91,15 +97,12 @@ def _build_roster_maps(conn, team_name: str):
         owner_map[normalize_name(p["name"])] = "roster"
 
     # Weekly rosters override positions (fresher) and provide ownership
-    for r in conn.execute(
-        "SELECT player_name, positions, team FROM weekly_rosters "
-        "WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM weekly_rosters)"
-    ).fetchall():
-        norm = normalize_name(r["player_name"])
-        if r["positions"]:
-            pos_map[norm] = [p.strip() for p in r["positions"].split(",")]
-        if r["team"] != team_name and norm not in owner_map:
-            owner_map[norm] = r["team"]
+    for entry in get_latest_weekly_rosters(client):
+        norm = normalize_name(entry["player_name"])
+        if entry.get("positions"):
+            pos_map[norm] = [p.strip() for p in entry["positions"].split(",")]
+        if entry.get("team") != team_name and norm not in owner_map:
+            owner_map[norm] = entry["team"]
 
     return pos_map, owner_map
 
@@ -568,7 +571,7 @@ def register_routes(app: Flask) -> None:
 
             config = _load_config()
             leverage = _get_leverage()
-            pos_map, owner_map = _build_roster_maps(conn, config.team_name)
+            pos_map, owner_map = _build_roster_maps(config.team_name)
             rankings_cache = read_cache("rankings") or {}
 
             # Use cached roster wSGP for rostered players (includes recency blending)

@@ -1053,20 +1053,37 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         # --- Step 4c: Write rosters + standings to DB, then load League ---
         _progress("Writing roster snapshots to DB...")
         from fantasy_baseball.data.db import (
-            append_roster_snapshot,
             append_standings_snapshot,
             create_tables,
             get_connection,
+        )
+        from fantasy_baseball.data.redis_store import (
+            get_default_client,
+            write_roster_snapshot,
         )
 
         snapshot_date = effective_date.isoformat()
         db_conn = get_connection()
         create_tables(db_conn)  # idempotent — ensures tables exist
         try:
-            week_num = None
             for tname, team_raw in raw_rosters_by_team.items():
-                append_roster_snapshot(
-                    db_conn, team_raw, snapshot_date, week_num, tname,
+                # team_raw rows come from parse_roster: keys are "name",
+                # "positions" (list), "selected_position", "player_id",
+                # "status". Convert to the serialized shape the old
+                # SQLite writer produced so downstream readers see an
+                # identical blob.
+                entries = [
+                    {
+                        "slot": row["selected_position"],
+                        "player_name": row["name"],
+                        "positions": ", ".join(row.get("positions", [])),
+                        "status": row.get("status") or "",
+                        "yahoo_id": row.get("player_id") or "",
+                    }
+                    for row in team_raw
+                ]
+                write_roster_snapshot(
+                    get_default_client(), snapshot_date, tname, entries,
                 )
             append_standings_snapshot(
                 db_conn, standings, config.season_year, snapshot_date,

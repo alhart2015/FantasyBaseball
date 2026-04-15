@@ -174,3 +174,80 @@ def set_season_progress(
         SEASON_PROGRESS_KEY,
         json.dumps({"games_elapsed": games_elapsed, "total": total, "as_of": as_of}),
     )
+
+
+WEEKLY_ROSTERS_HISTORY_KEY = "weekly_rosters_history"
+
+
+def write_roster_snapshot(
+    client,
+    snapshot_date: str,
+    team: str,
+    entries: list[dict],
+) -> None:
+    """Idempotently replace one team's rows within one snapshot date.
+
+    Reads the existing day's blob, drops any rows whose ``team`` field
+    matches the argument, appends the new entries tagged with the team
+    name, and writes the merged blob back. No-op when the client is None.
+    """
+    if client is None:
+        return
+    raw = client.hget(WEEKLY_ROSTERS_HISTORY_KEY, snapshot_date)
+    if raw is None:
+        day_rows: list[dict] = []
+    else:
+        try:
+            day_rows = json.loads(raw)
+            if not isinstance(day_rows, list):
+                day_rows = []
+        except json.JSONDecodeError:
+            day_rows = []
+    day_rows = [row for row in day_rows if row.get("team") != team]
+    day_rows.extend({**entry, "team": team} for entry in entries)
+    client.hset(
+        WEEKLY_ROSTERS_HISTORY_KEY, snapshot_date, json.dumps(day_rows)
+    )
+
+
+def get_weekly_roster_day(client, snapshot_date: str) -> list[dict]:
+    """Return the entries for one snapshot date. Empty list on None/missing/corrupt."""
+    if client is None:
+        return []
+    raw = client.hget(WEEKLY_ROSTERS_HISTORY_KEY, snapshot_date)
+    if raw is None:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def get_latest_weekly_rosters(client) -> list[dict]:
+    """Return the entries for the maximum snapshot_date in the hash."""
+    if client is None:
+        return []
+    dates = client.hkeys(WEEKLY_ROSTERS_HISTORY_KEY)
+    if not dates:
+        return []
+    latest = max(dates)
+    return get_weekly_roster_day(client, latest)
+
+
+def get_weekly_roster_history(client) -> dict[str, list[dict]]:
+    """Return the entire history as {snapshot_date: [entry, ...]}."""
+    if client is None:
+        return {}
+    raw_map = client.hgetall(WEEKLY_ROSTERS_HISTORY_KEY)
+    if not raw_map:
+        return {}
+    out: dict[str, list[dict]] = {}
+    for date, raw in raw_map.items():
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, list):
+            out[date] = data
+    return out
