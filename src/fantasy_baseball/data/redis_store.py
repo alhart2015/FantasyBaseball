@@ -12,6 +12,7 @@ environment.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re as _re
 import threading
@@ -19,6 +20,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from upstash_redis import Redis
+
+logger = logging.getLogger(__name__)
 
 _default_client = None
 _default_client_initialized = False
@@ -106,6 +109,36 @@ def set_blended_projections(
     if client is None:
         return
     client.set(key, json.dumps(rows))
+
+
+ROS_PROJECTIONS_KEY = "cache:ros_projections"
+
+
+def get_ros_projections(client) -> dict | None:
+    """Read the latest rest-of-season projections snapshot from Redis.
+
+    Returns the parsed ``{"hitters": [...], "pitchers": [...]}`` payload
+    or ``None`` on missing key, corrupt JSON, or ``client is None``.
+
+    Reads Redis directly (no disk fallback via ``read_cache``) so tests
+    injecting a fake Redis client aren't cross-contaminated by stale
+    project-local ``data/cache/*.json`` files.
+    """
+    if client is None:
+        return None
+    raw = client.get(ROS_PROJECTIONS_KEY)
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning(
+            "Corrupt JSON at Redis key %r; ignoring", ROS_PROJECTIONS_KEY
+        )
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
 
 
 def _game_log_totals_key(player_type: str) -> str:

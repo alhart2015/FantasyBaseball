@@ -122,3 +122,104 @@ def test_search_no_results(client, redis_with_players):
     resp = client.get("/api/players/search?q=nonexistent")
     data = json.loads(resp.data)
     assert data == []
+
+
+def _empty_hitter_row(fg_id: str, name: str, adp: float | None) -> dict:
+    return {
+        "year": 2026, "snapshot_date": "2026-04-01",
+        "fg_id": fg_id, "name": name, "team": "NYY",
+        "player_type": "hitter",
+        "pa": 500, "ab": 450, "h": 120, "r": 70, "hr": 20,
+        "rbi": 70, "sb": 5, "avg": 0.270,
+        "w": None, "k": None, "sv": None, "ip": None,
+        "er": None, "bb": None, "h_allowed": None,
+        "era": None, "whip": None, "adp": adp,
+    }
+
+
+def test_search_sorts_results_by_adp_ascending(
+    client, fake_redis, monkeypatch
+):
+    """Non-monotonic ADPs must come back ordered ascending."""
+    monkeypatch.setattr(redis_store, "_default_client", fake_redis)
+    monkeypatch.setattr(redis_store, "_default_client_initialized", True)
+
+    # Three hitters matching "test", ADPs [50, 10, 30] — expect order 10, 30, 50.
+    ros_payload = {
+        "hitters": [
+            _empty_hitter_row("fg_a", "Test Alpha", 50.0),
+            _empty_hitter_row("fg_b", "Test Bravo", 10.0),
+            _empty_hitter_row("fg_c", "Test Charlie", 30.0),
+        ],
+        "pitchers": [],
+    }
+    fake_redis.set("cache:ros_projections", json.dumps(ros_payload))
+    redis_store.set_blended_projections(fake_redis, "hitters", [])
+    redis_store.set_blended_projections(fake_redis, "pitchers", [])
+    redis_store.set_game_log_totals(fake_redis, "hitters", {})
+    redis_store.set_game_log_totals(fake_redis, "pitchers", {})
+
+    from fantasy_baseball.web import season_routes
+
+    def _fake_read_cache(key, *args, **kwargs):
+        if key in ("rankings",):
+            return {}
+        if key in ("roster", "standings"):
+            return []
+        if key in ("projections",):
+            return {}
+        if key == "positions":
+            return {}
+        return None
+
+    monkeypatch.setattr(season_routes, "read_cache", _fake_read_cache)
+
+    resp = client.get("/api/players/search?q=test")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert [row["name"] for row in data] == [
+        "Test Bravo", "Test Charlie", "Test Alpha",
+    ]
+
+
+def test_search_caps_results_at_25_rows(client, fake_redis, monkeypatch):
+    """A query matching 26+ rows must be capped at 25."""
+    monkeypatch.setattr(redis_store, "_default_client", fake_redis)
+    monkeypatch.setattr(redis_store, "_default_client_initialized", True)
+
+    # 30 players all matching "player", with ADPs 1..30 — expect the
+    # first 25 by ADP ascending (ADPs 1..25).
+    hitters = [
+        _empty_hitter_row(f"fg_{i:02d}", f"Player {i:02d}", float(i))
+        for i in range(1, 31)
+    ]
+    ros_payload = {"hitters": hitters, "pitchers": []}
+    fake_redis.set("cache:ros_projections", json.dumps(ros_payload))
+    redis_store.set_blended_projections(fake_redis, "hitters", [])
+    redis_store.set_blended_projections(fake_redis, "pitchers", [])
+    redis_store.set_game_log_totals(fake_redis, "hitters", {})
+    redis_store.set_game_log_totals(fake_redis, "pitchers", {})
+
+    from fantasy_baseball.web import season_routes
+
+    def _fake_read_cache(key, *args, **kwargs):
+        if key in ("rankings",):
+            return {}
+        if key in ("roster", "standings"):
+            return []
+        if key in ("projections",):
+            return {}
+        if key == "positions":
+            return {}
+        return None
+
+    monkeypatch.setattr(season_routes, "read_cache", _fake_read_cache)
+
+    resp = client.get("/api/players/search?q=player")
+    assert resp.status_code == 200
+    data = json.loads(resp.data)
+    assert len(data) == 25
+    # Lowest 25 ADPs: Player 01..Player 25 (ADP 1..25).
+    assert [row["name"] for row in data] == [
+        f"Player {i:02d}" for i in range(1, 26)
+    ]

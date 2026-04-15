@@ -482,6 +482,7 @@ def register_routes(app: Flask) -> None:
             get_blended_projections as redis_get_blended,
             get_default_client,
             get_game_log_totals,
+            get_ros_projections,
         )
 
         query = request.args.get("q", "").strip()
@@ -489,7 +490,7 @@ def register_routes(app: Flask) -> None:
             return jsonify([])
 
         # --- ROS rows from Redis (cache:ros_projections) ---
-        ros_cache = read_cache("ros_projections") or {}
+        ros_cache = get_ros_projections(get_default_client()) or {}
         ros_rows = list(ros_cache.get("hitters", [])) + list(ros_cache.get("pitchers", []))
         if not ros_rows:
             return jsonify([])

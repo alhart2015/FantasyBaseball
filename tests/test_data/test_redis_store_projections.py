@@ -58,3 +58,33 @@ def test_get_blended_projections_ignores_non_list_json(fake_redis):
 def test_get_blended_projections_returns_empty_when_client_none():
     assert redis_store.get_blended_projections(None, "hitters") == []
     assert redis_store.get_blended_projections(None, "pitchers") == []
+
+
+# --- get_ros_projections ---------------------------------------------------
+
+def test_get_ros_projections_returns_none_when_unset(fake_redis):
+    assert redis_store.get_ros_projections(fake_redis) is None
+
+
+def test_get_ros_projections_returns_none_when_client_none():
+    assert redis_store.get_ros_projections(None) is None
+
+
+def test_get_ros_projections_reads_payload(fake_redis):
+    import json
+    payload = {"hitters": [HITTER_ROW], "pitchers": [PITCHER_ROW]}
+    fake_redis.set("cache:ros_projections", json.dumps(payload))
+    assert redis_store.get_ros_projections(fake_redis) == payload
+
+
+def test_get_ros_projections_returns_none_on_corrupt_json(fake_redis, caplog):
+    import logging
+    fake_redis.set("cache:ros_projections", "not valid json {{{")
+    with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.redis_store"):
+        assert redis_store.get_ros_projections(fake_redis) is None
+    assert any("Corrupt JSON" in rec.message for rec in caplog.records)
+
+
+def test_get_ros_projections_returns_none_on_non_dict_json(fake_redis):
+    fake_redis.set("cache:ros_projections", '["unexpected", "list"]')
+    assert redis_store.get_ros_projections(fake_redis) is None

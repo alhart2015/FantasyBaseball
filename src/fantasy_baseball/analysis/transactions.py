@@ -143,31 +143,31 @@ def _load_projections_for_date_redis(client, year: int, target_date: str):
     preseason blended projections when ROS is missing. Signature matches
     the old SQLite ``load_projections_for_date`` so callers can swap.
 
+    Safety invariant — why dropping ``target_date`` doesn't corrupt
+    history: ``run_full_refresh`` only invokes ``score_transaction`` for
+    newly-discovered transactions (``new_txns`` at
+    ``web/season_data.py`` lines 1500-1518); previously-scored
+    transactions keep their already-cached ``stored_txns`` scores and
+    are NOT re-derived, so a later projection shift cannot retroactively
+    change historical scoring.
+
     Reads Redis keys directly (not the disk-fallback ``read_cache``)
     so tests that inject a fake Redis aren't cross-contaminated by
     stale project-local cache files.
     """
-    import json
-
     import pandas as pd
 
-    from fantasy_baseball.data.redis_store import get_blended_projections
+    from fantasy_baseball.data.redis_store import (
+        get_blended_projections,
+        get_ros_projections,
+    )
 
     # Prefer the latest ROS snapshot (matches old "MAX(snapshot_date) <= target_date"
     # intent — Redis only keeps the freshest, and historical transactions are
     # scored against current projections since we no longer keep the time series).
-    hitters_rows: list = []
-    pitchers_rows: list = []
-    if client is not None:
-        raw = client.get("cache:ros_projections")
-        if raw is not None:
-            try:
-                payload = json.loads(raw)
-            except json.JSONDecodeError:
-                payload = {}
-            if isinstance(payload, dict):
-                hitters_rows = list(payload.get("hitters") or [])
-                pitchers_rows = list(payload.get("pitchers") or [])
+    ros = get_ros_projections(client) or {}
+    hitters_rows: list = list(ros.get("hitters") or [])
+    pitchers_rows: list = list(ros.get("pitchers") or [])
 
     if not hitters_rows and not pitchers_rows:
         # Fall back to preseason
