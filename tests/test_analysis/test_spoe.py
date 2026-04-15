@@ -10,12 +10,8 @@ from fantasy_baseball.analysis.spoe import (
     build_preseason_lookup,
     compute_current_spoe,
 )
+from fantasy_baseball.data import redis_store
 from fantasy_baseball.models.league import League
-from fantasy_baseball.data.db import (
-    append_roster_snapshot,
-    create_tables,
-    get_connection,
-)
 
 
 # --- Fixtures --------------------------------------------------------------
@@ -25,27 +21,42 @@ SEASON_END = "2026-09-28"
 TOTAL_DAYS = (date.fromisoformat(SEASON_END) - date.fromisoformat(SEASON_START)).days
 
 
-def _make_conn(tmp_path):
-    conn = get_connection(tmp_path / "test.db")
-    create_tables(conn)
-    return conn
+@pytest.fixture
+def redis_league(fake_redis, monkeypatch):
+    """Redirect ``redis_store.get_default_client()`` at the patched fake
+    client so ``League.from_redis`` reads test data.
+    """
+    monkeypatch.setattr(redis_store, "_default_client", fake_redis)
+    monkeypatch.setattr(redis_store, "_default_client_initialized", True)
+    yield fake_redis
 
 
-def _league_from(conn, season_year: int = 2026):
-    """Build a League object from the test conn. Mirrors how
+def _league_from(client, season_year: int = 2026):
+    """Build a League object from the Redis test client. Mirrors how
     run_full_refresh loads the League in production (after writing
-    rosters via append_roster_snapshot)."""
-    return League.from_db(conn, season_year)
+    rosters via write_roster_snapshot)."""
+    return League.from_redis(season_year)
 
 
-def _snapshot_roster(conn, snapshot_date: str, team: str, players: list[dict]):
-    """Insert a single team's roster snapshot into weekly_rosters.
+def _snapshot_roster(client, snapshot_date: str, team: str, players: list[dict]):
+    """Write a single team's roster snapshot into weekly_rosters_history.
 
     ``players`` is a list of ``{"name": str, "selected_position": str,
-    "positions": list[str]}`` dicts (matching what append_roster_snapshot
-    expects from the refresh pipeline).
+    "positions": list[str]}`` dicts (matching what the refresh pipeline
+    receives). We map this to the ``{slot, player_name, positions, ...}``
+    shape that ``write_roster_snapshot`` serializes.
     """
-    append_roster_snapshot(conn, players, snapshot_date, None, team)
+    entries = [
+        {
+            "slot": p["selected_position"],
+            "player_name": p["name"],
+            "positions": ", ".join(p.get("positions", [])),
+            "status": p.get("status") or "",
+            "yahoo_id": p.get("player_id") or "",
+        }
+        for p in players
+    ]
+    redis_store.write_roster_snapshot(client, snapshot_date, team, entries)
 
 
 def _hitter_preseason(name: str, **overrides) -> dict:
@@ -104,8 +115,8 @@ class TestBuildPreseasonLookup:
 # --- compute_current_spoe tests --------------------------------------------
 
 class TestComputeCurrentSpoe:
-    def test_returns_empty_results_before_season_start(self, tmp_path):
-        conn = _make_conn(tmp_path)
+    def test_returns_empty_results_before_season_start(self, redis_league):
+        conn = redis_league
         lookup = _preseason_lookup_from(_hitter_preseason("Player A"))
 
         # today BEFORE season_start → days_elapsed = 0 but season_fraction=0
@@ -117,8 +128,8 @@ class TestComputeCurrentSpoe:
         assert result["season_fraction"] == 0.0
         assert result["results"] == []
 
-    def test_one_team_one_week_ownership_credits_proportional(self, tmp_path):
-        conn = _make_conn(tmp_path)
+    def test_one_team_one_week_ownership_credits_proportional(self, redis_league):
+        conn = redis_league
         lookup = _preseason_lookup_from(
             _hitter_preseason("Star", hr=30, r=90, rbi=90, sb=10,
                               h=150, ab=580, pa=650),
@@ -164,8 +175,8 @@ class TestComputeCurrentSpoe:
         )
         assert hr_row_b["projected_stat"] == 0.0
 
-    def test_player_owned_for_two_weeks_gets_double_credit(self, tmp_path):
-        conn = _make_conn(tmp_path)
+    def test_player_owned_for_two_weeks_gets_double_credit(self, redis_league):
+        conn = redis_league
         lookup = _preseason_lookup_from(
             _hitter_preseason("Star", sb=20),
         )
@@ -202,7 +213,7 @@ class TestComputeCurrentSpoe:
         )
         assert sb_row["projected_stat"] == pytest.approx(expected_sb, rel=1e-9)
 
-    def test_mid_season_ownership_change_splits_credit(self, tmp_path):
+    def test_mid_season_ownership_change_splits_credit(self, redis_league):
         """Player on Team A for week 1, Team B for week 2. Each gets 1 week of credit.
 
         With the per-team ownership_periods architecture, we need explicit
@@ -210,7 +221,7 @@ class TestComputeCurrentSpoe:
         a snapshot on 2026-04-07 showing a different roster (without Traded)
         to end the ownership period.
         """
-        conn = _make_conn(tmp_path)
+        conn = redis_league
         lookup = _preseason_lookup_from(
             _hitter_preseason("Traded", hr=40),
         )
@@ -246,9 +257,9 @@ class TestComputeCurrentSpoe:
         hr_b = next(r for r in result["results"] if r["team"] == "Team B" and r["category"] == "HR")
         assert hr_b["projected_stat"] == pytest.approx(40 * 7 / TOTAL_DAYS, rel=1e-9)
 
-    def test_partial_current_week(self, tmp_path):
+    def test_partial_current_week(self, redis_league):
         """Current snapshot's period extends only to today, not a full 7 days."""
-        conn = _make_conn(tmp_path)
+        conn = redis_league
         lookup = _preseason_lookup_from(
             _hitter_preseason("Star", r=150),
         )
@@ -273,8 +284,8 @@ class TestComputeCurrentSpoe:
         r_row = next(r for r in result["results"] if r["team"] == "Team A" and r["category"] == "R")
         assert r_row["projected_stat"] == pytest.approx(expected_r, rel=1e-9)
 
-    def test_missing_preseason_skips_player_silently(self, tmp_path):
-        conn = _make_conn(tmp_path)
+    def test_missing_preseason_skips_player_silently(self, redis_league):
+        conn = redis_league
         lookup = _preseason_lookup_from()  # empty
 
         _snapshot_roster(conn, "2026-03-31", "Team A", [
@@ -299,7 +310,7 @@ class TestComputeCurrentSpoe:
         hr_a = next(r for r in result["results"] if r["team"] == "Team A" and r["category"] == "HR")
         assert hr_a["projected_stat"] == 0.0
 
-    def test_preseason_snapshot_does_not_credit_days_before_season_start(self, tmp_path):
+    def test_preseason_snapshot_does_not_credit_days_before_season_start(self, redis_league):
         """Regression: snapshots dated before season_start should not
         contribute days from before the season began.
 
@@ -307,7 +318,7 @@ class TestComputeCurrentSpoe:
         season_start 2026-03-27), the walk from that snapshot to the next
         one should only credit days from 2026-03-27 onward — not 2026-03-24.
         """
-        conn = _make_conn(tmp_path)
+        conn = redis_league
         lookup = _preseason_lookup_from(
             _hitter_preseason("Star", hr=185),  # 1 HR per day full season
         )
@@ -352,10 +363,10 @@ class TestComputeCurrentSpoe:
             "the 14-day (un-clipped) calculation instead of 11 days."
         )
 
-    def test_result_shape_matches_luck_template(self, tmp_path):
+    def test_result_shape_matches_luck_template(self, redis_league):
         """Backward-compatibility guard: the returned dict must have the
         keys the luck.html template expects."""
-        conn = _make_conn(tmp_path)
+        conn = redis_league
         lookup = _preseason_lookup_from(_hitter_preseason("Star"))
         _snapshot_roster(conn, "2026-03-31", "Team A", [
             {"name": "Star", "selected_position": "OF", "positions": ["OF"]},

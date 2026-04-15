@@ -1,24 +1,43 @@
 import pytest
 from fantasy_baseball.analysis.transactions import score_transaction
+from fantasy_baseball.data import redis_store
 from fantasy_baseball.data.db import create_tables, get_connection
 from fantasy_baseball.models.league import League
 
 
-def _league_from(conn, year=2026):
-    return League.from_db(conn, year)
+@pytest.fixture
+def redis_league(fake_redis, monkeypatch):
+    """Redirect ``redis_store.get_default_client()`` to the fake client
+    so ``League.from_redis`` reads test data seeded via
+    ``write_standings_snapshot``.
+    """
+    monkeypatch.setattr(redis_store, "_default_client", fake_redis)
+    monkeypatch.setattr(redis_store, "_default_client_initialized", True)
+    yield fake_redis
 
 
-def _seed_standings(conn, snapshot_date="2026-03-31"):
-    conn.executemany(
-        "INSERT INTO standings "
-        "(year, snapshot_date, team, rank, r, hr, rbi, sb, avg, w, k, sv, era, whip) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [
-            (2026, snapshot_date, "Team A", 1, 30, 8, 25, 3, .280, 3, 40, 2, 3.20, 1.10),
-            (2026, snapshot_date, "Team B", 2, 25, 6, 20, 5, .260, 2, 35, 4, 3.80, 1.25),
+def _league_from(_client, year=2026):
+    return League.from_redis(year)
+
+
+def _seed_standings(client, snapshot_date="2026-03-31"):
+    """Write a standings snapshot in the lowercase-keys shape produced
+    by the refresh pipeline."""
+    payload = {
+        "teams": [
+            {
+                "team": "Team A", "team_key": "", "rank": 1,
+                "r": 30, "hr": 8, "rbi": 25, "sb": 3, "avg": 0.280,
+                "w": 3, "k": 40, "sv": 2, "era": 3.20, "whip": 1.10,
+            },
+            {
+                "team": "Team B", "team_key": "", "rank": 2,
+                "r": 25, "hr": 6, "rbi": 20, "sb": 5, "avg": 0.260,
+                "w": 2, "k": 35, "sv": 4, "era": 3.80, "whip": 1.25,
+            },
         ],
-    )
-    conn.commit()
+    }
+    redis_store.write_standings_snapshot(client, snapshot_date, payload)
 
 
 def _seed_projections(conn, snapshot_date="2026-03-30"):
@@ -38,10 +57,10 @@ def _seed_projections(conn, snapshot_date="2026-03-30"):
 
 
 class TestScoreTransaction:
-    def test_returns_add_and_drop_wsgp(self):
+    def test_returns_add_and_drop_wsgp(self, redis_league):
         conn = get_connection(":memory:")
         create_tables(conn)
-        _seed_standings(conn)
+        _seed_standings(redis_league)
         _seed_projections(conn)
 
         txn = {
@@ -52,7 +71,7 @@ class TestScoreTransaction:
             "drop_name": "Marcus Semien",
             "drop_positions": "2B, SS",
         }
-        result = score_transaction(_league_from(conn), conn, txn, 2026)
+        result = score_transaction(_league_from(redis_league), conn, txn, 2026)
         assert "add_wsgp" in result
         assert "drop_wsgp" in result
         assert "value" in result
@@ -61,10 +80,10 @@ class TestScoreTransaction:
         )
         conn.close()
 
-    def test_add_only_has_zero_drop_wsgp(self):
+    def test_add_only_has_zero_drop_wsgp(self, redis_league):
         conn = get_connection(":memory:")
         create_tables(conn)
-        _seed_standings(conn)
+        _seed_standings(redis_league)
         _seed_projections(conn)
 
         txn = {
@@ -75,15 +94,15 @@ class TestScoreTransaction:
             "drop_name": None,
             "drop_positions": None,
         }
-        result = score_transaction(_league_from(conn), conn, txn, 2026)
+        result = score_transaction(_league_from(redis_league), conn, txn, 2026)
         assert result["drop_wsgp"] == 0.0
         assert result["add_wsgp"] > 0
         conn.close()
 
-    def test_drop_only_has_zero_add_wsgp(self):
+    def test_drop_only_has_zero_add_wsgp(self, redis_league):
         conn = get_connection(":memory:")
         create_tables(conn)
-        _seed_standings(conn)
+        _seed_standings(redis_league)
         _seed_projections(conn)
 
         txn = {
@@ -94,16 +113,16 @@ class TestScoreTransaction:
             "drop_name": "Marcus Semien",
             "drop_positions": "2B, SS",
         }
-        result = score_transaction(_league_from(conn), conn, txn, 2026)
+        result = score_transaction(_league_from(redis_league), conn, txn, 2026)
         assert result["add_wsgp"] == 0.0
         assert result["drop_wsgp"] > 0
         assert result["value"] < 0
         conn.close()
 
-    def test_unmatched_player_gets_zero_wsgp(self):
+    def test_unmatched_player_gets_zero_wsgp(self, redis_league):
         conn = get_connection(":memory:")
         create_tables(conn)
-        _seed_standings(conn)
+        _seed_standings(redis_league)
         _seed_projections(conn)
 
         txn = {
@@ -114,6 +133,6 @@ class TestScoreTransaction:
             "drop_name": None,
             "drop_positions": None,
         }
-        result = score_transaction(_league_from(conn), conn, txn, 2026)
+        result = score_transaction(_league_from(redis_league), conn, txn, 2026)
         assert result["add_wsgp"] == 0.0
         conn.close()

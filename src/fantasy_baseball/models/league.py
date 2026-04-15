@@ -147,6 +147,107 @@ class League:
             if standings_entry.team_key:
                 team_key_by_name[row["team"]] = standings_entry.team_key
 
+        return cls._assemble(
+            season_year, by_team_snap, snapshots_by_date, team_key_by_name,
+        )
+
+    @classmethod
+    def from_redis(cls, season_year: int) -> "League":
+        """Load complete league state for a season from Redis.
+
+        Reads two hashes:
+
+        - ``weekly_rosters_history`` — all snapshot dates that start
+          with ``"{season_year}-"``; builds ``Team.rosters``.
+        - ``standings_history`` — same date filter; builds
+          :class:`StandingsSnapshot` list.
+
+        Team identity is joined by team name. ``Team.team_key`` is
+        taken from any standings entry that carries one, or ``""`` if
+        the team appears only in rosters.
+
+        Raises:
+            ValueError: if any stored position token is unknown.
+        """
+        from fantasy_baseball.data.redis_store import (
+            get_default_client,
+            get_standings_history,
+            get_weekly_roster_history,
+        )
+
+        client = get_default_client()
+        all_rosters = get_weekly_roster_history(client)
+        all_standings = get_standings_history(client)
+
+        prefix = f"{season_year}-"
+
+        # {team_name: {snapshot_date_str: [RosterEntry, ...]}}
+        by_team_snap: dict[str, dict[str, list[RosterEntry]]] = {}
+        for snap_date, entries in all_rosters.items():
+            if not snap_date.startswith(prefix):
+                continue
+            for e in entries:
+                entry = RosterEntry(
+                    name=e["player_name"],
+                    positions=Position.parse_list(e["positions"]),
+                    selected_position=Position.parse(e["slot"]),
+                    status=e.get("status") or "",
+                    yahoo_id=e.get("yahoo_id") or "",
+                )
+                by_team_snap.setdefault(
+                    e["team"], {}
+                ).setdefault(snap_date, []).append(entry)
+
+        snapshots_by_date: dict[str, list[StandingsEntry]] = {}
+        team_key_by_name: dict[str, str] = {}
+        for snap_date in sorted(all_standings.keys()):
+            if not snap_date.startswith(prefix):
+                continue
+            payload = all_standings[snap_date]
+            entries_list: list[StandingsEntry] = []
+            for row in payload.get("teams", []):
+                stats = CategoryStats(
+                    r=row.get("r") or 0.0,
+                    hr=row.get("hr") or 0.0,
+                    rbi=row.get("rbi") or 0.0,
+                    sb=row.get("sb") or 0.0,
+                    avg=row.get("avg") or 0.0,
+                    w=row.get("w") or 0.0,
+                    k=row.get("k") or 0.0,
+                    sv=row.get("sv") or 0.0,
+                    era=row["era"] if row.get("era") is not None else 99.0,
+                    whip=row["whip"] if row.get("whip") is not None else 99.0,
+                )
+                standings_entry = StandingsEntry(
+                    team_name=row["team"],
+                    team_key=row.get("team_key") or "",
+                    rank=int(row.get("rank") or 0),
+                    stats=stats,
+                )
+                entries_list.append(standings_entry)
+                if standings_entry.team_key:
+                    team_key_by_name[row["team"]] = standings_entry.team_key
+            snapshots_by_date[snap_date] = entries_list
+
+        return cls._assemble(
+            season_year, by_team_snap, snapshots_by_date, team_key_by_name,
+        )
+
+    @classmethod
+    def _assemble(
+        cls,
+        season_year: int,
+        by_team_snap: dict[str, dict[str, list[RosterEntry]]],
+        snapshots_by_date: dict[str, list[StandingsEntry]],
+        team_key_by_name: dict[str, str],
+    ) -> "League":
+        """Shared stitching step for ``from_db`` and ``from_redis``.
+
+        Takes already-grouped intermediate structures and builds the
+        final ``League`` object: ``Team`` list (sorted by name, each
+        with sorted ``Roster`` list) and ``StandingsSnapshot`` list
+        (sorted by effective_date).
+        """
         standings_snapshots = [
             StandingsSnapshot(
                 effective_date=date.fromisoformat(snap_key),
@@ -155,7 +256,7 @@ class League:
             for snap_key, entries in sorted(snapshots_by_date.items())
         ]
 
-        # ---- Build Team list (union of team names across both tables) ----
+        # Build Team list (union of team names across both sources)
         all_team_names = set(by_team_snap.keys()) | set(team_key_by_name.keys())
 
         teams: list[Team] = []

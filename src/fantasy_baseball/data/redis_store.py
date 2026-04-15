@@ -251,3 +251,63 @@ def get_weekly_roster_history(client) -> dict[str, list[dict]]:
         if isinstance(data, list):
             out[date] = data
     return out
+
+
+STANDINGS_HISTORY_KEY = "standings_history"
+
+
+def write_standings_snapshot(
+    client, snapshot_date: str, snapshot: dict
+) -> None:
+    """Write a standings snapshot for a given date. Idempotent overwrite.
+
+    ``snapshot`` is the full payload for the day; conventionally
+    ``{"teams": [{...}, ...]}`` where each team dict has lowercase stat
+    keys (``r``, ``hr``, ...) plus ``team``, ``team_key``, ``rank``.
+    No-op when the client is None.
+    """
+    if client is None:
+        return
+    client.hset(STANDINGS_HISTORY_KEY, snapshot_date, json.dumps(snapshot))
+
+
+def get_standings_day(client, snapshot_date: str) -> dict:
+    """Return the payload for one snapshot date. Empty dict on missing/corrupt/None."""
+    if client is None:
+        return {}
+    raw = client.hget(STANDINGS_HISTORY_KEY, snapshot_date)
+    if raw is None:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def get_latest_standings(client) -> dict:
+    """Return the payload for the maximum snapshot_date in the hash."""
+    if client is None:
+        return {}
+    dates = client.hkeys(STANDINGS_HISTORY_KEY)
+    if not dates:
+        return {}
+    return get_standings_day(client, max(dates))
+
+
+def get_standings_history(client) -> dict[str, dict]:
+    """Return the entire history as {snapshot_date: payload}."""
+    if client is None:
+        return {}
+    raw_map = client.hgetall(STANDINGS_HISTORY_KEY)
+    if not raw_map:
+        return {}
+    out: dict[str, dict] = {}
+    for date, raw in raw_map.items():
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            out[date] = data
+    return out

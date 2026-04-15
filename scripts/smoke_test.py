@@ -11,7 +11,7 @@ pull cache data from Upstash, OR run a full local refresh via
 
 Usage:
     python scripts/smoke_test.py          # run all checks
-    python scripts/smoke_test.py --quick  # skip League.from_db (needs SQLite)
+    python scripts/smoke_test.py --quick  # skip League.from_redis
 
 Exits 0 if all checks pass, 1 if any fail.
 """
@@ -217,25 +217,15 @@ def check_standings():
         check("stats has all 10 categories", True)
 
 
-# -- 7. League.from_db (needs SQLite) -------------------------
+# -- 7. League.from_redis -------------------------------------
 
-def check_league_from_db():
-    section("League.from_db (local SQLite)")
-
-    db_path = PROJECT_ROOT / "data" / "fantasy.db"
-    if not db_path.exists():
-        check("fantasy.db exists", False, f"not found at {db_path}")
-        return
+def check_league_from_redis():
+    section("League.from_redis")
 
     try:
-        from fantasy_baseball.data.db import get_connection
         from fantasy_baseball.models.league import League
 
-        conn = get_connection()
-        try:
-            league = League.from_db(conn, 2026)
-        finally:
-            conn.close()
+        league = League.from_redis(2026)
 
         check("League loads without error", True)
         check(
@@ -278,7 +268,7 @@ def check_league_from_db():
             check("user team found", False, "KeyError on team_by_name")
 
     except Exception as e:
-        check("League.from_db", False, str(e))
+        check("League.from_redis", False, str(e))
 
 
 # -- 8. Scoring round-trip ------------------------------------
@@ -334,7 +324,7 @@ def main():
     print(f"\nSmoke test -- {date.today()}")
     print(f"   Cache dir: {CACHE_DIR}")
     if quick:
-        print("   Mode: --quick (skipping League.from_db)")
+        print("   Mode: --quick (skipping League.from_redis)")
 
     check_caches()
     check_meta()
@@ -345,7 +335,7 @@ def main():
     check_scoring()
 
     if not quick:
-        check_league_from_db()
+        check_league_from_redis()
 
     print(f"\n{'=' * 60}")
     print(f"  {_passed} passed, {_failed} failed")
