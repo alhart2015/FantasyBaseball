@@ -936,6 +936,14 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             get_default_client as _redis_default_client,
         )
         _redis_client = _redis_default_client()
+        if _redis_client is None:
+            raise RuntimeError(
+                "Redis client not configured: UPSTASH_REDIS_REST_URL / "
+                "UPSTASH_REDIS_REST_TOKEN are not set in the environment. "
+                "For local dev, put them in a .env file at the project root "
+                "(get_default_client auto-loads it). On Render, set them in "
+                "the service's environment variables."
+            )
         _hitters_rows = redis_get_blended(_redis_client, "hitters") or []
         _pitchers_rows = redis_get_blended(_redis_client, "pitchers") or []
         if not _hitters_rows or not _pitchers_rows:

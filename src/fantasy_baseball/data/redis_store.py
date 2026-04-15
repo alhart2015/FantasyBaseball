@@ -16,6 +16,7 @@ import logging
 import os
 import re as _re
 import threading
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -27,6 +28,25 @@ _default_client = None
 _default_client_initialized = False
 _default_client_lock = threading.Lock()
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _load_dotenv_if_present() -> None:
+    """Best-effort load of .env at project root into os.environ.
+
+    Local dev only: Render sets UPSTASH_* directly in the service env,
+    so .env does not exist there. Uses setdefault so real env vars win.
+    """
+    env_path = _PROJECT_ROOT / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())
+
 
 def get_default_client() -> "Redis | None":
     """Lazy Upstash client for production use. Returns None if unconfigured.
@@ -34,6 +54,9 @@ def get_default_client() -> "Redis | None":
     Thread-safe: uses double-checked locking so concurrent first-access
     from multiple Flask worker threads does not construct the client
     twice. Mirrors the pattern in web/season_data.py::_get_redis().
+
+    Loads project-root .env on first call so local scripts/dashboards
+    work without the caller needing to source it.
     """
     global _default_client, _default_client_initialized
     if _default_client_initialized:
@@ -41,6 +64,7 @@ def get_default_client() -> "Redis | None":
     with _default_client_lock:
         if _default_client_initialized:
             return _default_client
+        _load_dotenv_if_present()
         url = os.environ.get("UPSTASH_REDIS_REST_URL")
         token = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
         if url and token:
