@@ -936,12 +936,17 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             get_default_client as _redis_default_client,
         )
         _redis_client = _redis_default_client()
-        hitters_proj = pd.DataFrame(
-            redis_get_blended(_redis_client, "hitters") or []
-        )
-        pitchers_proj = pd.DataFrame(
-            redis_get_blended(_redis_client, "pitchers") or []
-        )
+        _hitters_rows = redis_get_blended(_redis_client, "hitters") or []
+        _pitchers_rows = redis_get_blended(_redis_client, "pitchers") or []
+        if not _hitters_rows or not _pitchers_rows:
+            raise RuntimeError(
+                "Preseason projections not found in Redis "
+                "(blended_projections:hitters / blended_projections:pitchers). "
+                "Run `python scripts/build_db.py` once to populate them from "
+                "the CSVs under data/projections/{season}/."
+            )
+        hitters_proj = pd.DataFrame(_hitters_rows)
+        pitchers_proj = pd.DataFrame(_pitchers_rows)
 
         # Load ROS projections — blend latest dated CSV into Redis
         # (cache:ros_projections). No-op if no CSV dir exists locally
