@@ -1388,6 +1388,8 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             if fa.positions:
                 positions_map[_norm(fa.name)] = list(fa.positions)
         write_cache("positions", positions_map, cache_dir)
+        from fantasy_baseball.data.redis_store import set_positions, get_default_client
+        set_positions(get_default_client(), positions_map)
         _progress(f"Cached positions for {len(positions_map)} players")
 
         audit_results = audit_roster(

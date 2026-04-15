@@ -68,18 +68,18 @@ def _get_latest_ros_snapshot(conn, season: int) -> str | None:
 def _build_roster_maps(conn, team_name: str):
     """Build position and ownership maps.
 
-    Positions come from the ``positions`` table (broad coverage including
-    free agents) overlaid with ``weekly_rosters`` (more current for
-    rostered players).  Returns (pos_map, owner_map) where pos_map maps
-    normalized names to position lists and owner_map maps normalized
+    Positions come from the Redis ``positions`` key (broad coverage
+    including free agents) overlaid with ``weekly_rosters`` (more current
+    for rostered players).  Returns (pos_map, owner_map) where pos_map
+    maps normalized names to position lists and owner_map maps normalized
     names to ``"roster"`` (user's team) or an opponent team name.
     """
     from fantasy_baseball.utils.name_utils import normalize_name
-    from fantasy_baseball.data.db import get_positions
+    from fantasy_baseball.data.redis_store import get_positions, get_default_client
 
-    # Base positions from the positions table (covers FAs)
+    # Base positions from Redis (covers FAs)
     pos_map: dict[str, list[str]] = {
-        normalize_name(k): v for k, v in get_positions(conn).items()
+        normalize_name(k): v for k, v in get_positions(get_default_client()).items()
     }
 
     owner_map: dict[str, str] = {}

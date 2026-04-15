@@ -44,3 +44,29 @@ def get_default_client() -> "Redis | None":
             _default_client = Redis(url=url, token=token)
         _default_client_initialized = True
     return _default_client
+
+
+POSITIONS_KEY = "positions"
+
+
+def get_positions(client) -> dict[str, list[str]]:
+    """Read the positions map. Returns empty dict when the client is None, the key is missing, or the value is corrupt."""
+    if client is None:
+        return {}
+    raw = client.get(POSITIONS_KEY)
+    if raw is None:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def set_positions(client, positions: dict[str, list[str]]) -> None:
+    """Overwrite the positions map. No-op when the client is None."""
+    if client is None:
+        return
+    client.set(POSITIONS_KEY, json.dumps(positions))
