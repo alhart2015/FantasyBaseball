@@ -19,7 +19,6 @@ from fantasy_baseball.data.db import (
     DB_PATH,
     create_tables,
     get_connection,
-    load_blended_projections,
     load_draft_results,
     load_positions,
     load_raw_projections,
@@ -106,13 +105,37 @@ def main():
         if roster_names:
             print(f"  Found {len(roster_names)} rostered players for quality checks")
 
-    load_blended_projections(
-        conn, PROJECTIONS_DIR,
-        config.projection_systems, config.projection_weights,
-        roster_names=roster_names, progress_cb=print,
+    from fantasy_baseball.data.projections import blend_projections
+    from fantasy_baseball.data.redis_store import (
+        set_blended_projections,
+        get_default_client,
     )
-    blended_count = conn.execute("SELECT COUNT(*) FROM blended_projections").fetchone()[0]
-    print(f"  Loaded {blended_count} blended projection rows")
+    from fantasy_baseball.utils.time_utils import local_today
+
+    current_year = local_today().year
+    year_dir = PROJECTIONS_DIR / str(current_year)
+    if year_dir.exists():
+        hitters_df, pitchers_df, _ = blend_projections(
+            year_dir,
+            config.projection_systems,
+            config.projection_weights,
+            roster_names=roster_names,
+            progress_cb=print,
+        )
+        client = get_default_client()
+        set_blended_projections(
+            client, "hitters", hitters_df.to_dict(orient="records")
+        )
+        set_blended_projections(
+            client, "pitchers", pitchers_df.to_dict(orient="records")
+        )
+        print(f"  Loaded {len(hitters_df)} hitters + {len(pitchers_df)} pitchers to Redis")
+    else:
+        raise FileNotFoundError(
+            f"Preseason projections directory not found: {year_dir}. "
+            f"Expected data/projections/{current_year}/ with {{system}}-hitters.csv / "
+            f"{{system}}-pitchers.csv files for each configured system."
+        )
 
     load_rest_of_season_projections(
         conn, PROJECTIONS_DIR,

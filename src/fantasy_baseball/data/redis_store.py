@@ -70,3 +70,38 @@ def set_positions(client, positions: dict[str, list[str]]) -> None:
     if client is None:
         return
     client.set(POSITIONS_KEY, json.dumps(positions))
+
+
+_BLENDED_PROJ_TYPES = ("hitters", "pitchers")
+
+
+def _blended_key(player_type: str) -> str:
+    if player_type not in _BLENDED_PROJ_TYPES:
+        raise ValueError(
+            f"player_type must be one of {_BLENDED_PROJ_TYPES}, got {player_type!r}"
+        )
+    return f"blended_projections:{player_type}"
+
+
+def get_blended_projections(client, player_type: str) -> list[dict]:
+    """Read blended preseason projections for hitters or pitchers."""
+    if client is None:
+        return []
+    raw = client.get(_blended_key(player_type))
+    if raw is None:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def set_blended_projections(
+    client, player_type: str, rows: list[dict]
+) -> None:
+    """Overwrite blended preseason projections for hitters or pitchers."""
+    key = _blended_key(player_type)  # validates player_type
+    if client is None:
+        return
+    client.set(key, json.dumps(rows))

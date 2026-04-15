@@ -2,6 +2,7 @@
 
 import functools
 import hmac
+import logging
 import os
 import threading
 from pathlib import Path
@@ -11,6 +12,8 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, RATE_STATS
 from fantasy_baseball.web.season_data import read_cache, read_meta
+
+log = logging.getLogger(__name__)
 
 _config = None
 
@@ -138,19 +141,36 @@ def _load_yahoo_league():
 
 
 def _load_projections():
-    """Load projections from SQLite. Returns (hitters, pitchers, rest_of_season_hitters, rest_of_season_pitchers)."""
-    from fantasy_baseball.data.db import (
-        get_connection as get_db_connection, get_blended_projections, get_rest_of_season_projections,
+    """Load projections from Redis. Returns (hitters, pitchers, rest_of_season_hitters, rest_of_season_pitchers)."""
+    import pandas as pd
+    from fantasy_baseball.data.redis_store import (
+        get_blended_projections, get_default_client,
     )
     from fantasy_baseball.utils.name_utils import normalize_name
-    db_conn = get_db_connection()
-    try:
-        hitters, pitchers = get_blended_projections(db_conn)
-        rest_of_season_hitters, rest_of_season_pitchers = get_rest_of_season_projections(db_conn)
-    finally:
-        db_conn.close()
-    hitters["_name_norm"] = hitters["name"].apply(normalize_name)
-    pitchers["_name_norm"] = pitchers["name"].apply(normalize_name)
+    from fantasy_baseball.web.season_data import read_cache
+
+    client = get_default_client()
+    hitters_raw = get_blended_projections(client, "hitters")
+    pitchers_raw = get_blended_projections(client, "pitchers")
+    if client is not None and not hitters_raw and not pitchers_raw:
+        log.warning(
+            "blended_projections:hitters and blended_projections:pitchers are both empty - "
+            "run scripts/build_db.py to populate preseason projections before dashboard use."
+        )
+    hitters = pd.DataFrame(hitters_raw)
+    pitchers = pd.DataFrame(pitchers_raw)
+
+    # ROS projections served from the cache:ros_projections Redis key (existing write-through).
+    # Task 7 migrates the ROS pipeline off SQLite staging; this request-path reader already
+    # goes through Redis cache.
+    ros_cache = read_cache("ros_projections") or {}
+    rest_of_season_hitters = pd.DataFrame(ros_cache.get("hitters", []))
+    rest_of_season_pitchers = pd.DataFrame(ros_cache.get("pitchers", []))
+
+    if "name" in hitters.columns:
+        hitters["_name_norm"] = hitters["name"].apply(normalize_name)
+    if "name" in pitchers.columns:
+        pitchers["_name_norm"] = pitchers["name"].apply(normalize_name)
     if not rest_of_season_hitters.empty:
         rest_of_season_hitters["_name_norm"] = rest_of_season_hitters["name"].apply(normalize_name)
     if not rest_of_season_pitchers.empty:
