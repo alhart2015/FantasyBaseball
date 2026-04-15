@@ -1,0 +1,5524 @@
+{
+  "draft_results": [
+    {
+      "year": 2023,
+      "pick": 1,
+      "round": 1,
+      "team": "Hart of the Order",
+      "player": "Yordan Alvarez",
+      "fg_id": "19556"
+    },
+    {
+      "year": 2023,
+      "pick": 2,
+      "round": 1,
+      "team": "Spacemen",
+      "player": "Manny Machado",
+      "fg_id": "11493"
+    },
+    {
+      "year": 2023,
+      "pick": 3,
+      "round": 1,
+      "team": "Hello Peanuts!",
+      "player": "Julio Rodr\u00edguez",
+      "fg_id": "sa3007992"
+    },
+    {
+      "year": 2023,
+      "pick": 4,
+      "round": 1,
+      "team": "SkeleThor",
+      "player": "Aaron Judge",
+      "fg_id": "15640"
+    },
+    {
+      "year": 2023,
+      "pick": 5,
+      "round": 1,
+      "team": "Jon's Underdogs",
+      "player": "Trea Turner",
+      "fg_id": "16252"
+    },
+    {
+      "year": 2023,
+      "pick": 6,
+      "round": 1,
+      "team": "Work in Progress",
+      "player": "Ronald Acu\u00f1a Jr.",
+      "fg_id": "18401"
+    },
+    {
+      "year": 2023,
+      "pick": 7,
+      "round": 1,
+      "team": "Springfield Isotopes",
+      "player": "Mookie Betts",
+      "fg_id": "13611"
+    },
+    {
+      "year": 2023,
+      "pick": 8,
+      "round": 1,
+      "team": "Cleveland Rocks",
+      "player": "Rafael Devers",
+      "fg_id": "17350"
+    },
+    {
+      "year": 2023,
+      "pick": 9,
+      "round": 1,
+      "team": "Boston Estrellas",
+      "player": "Kyle Tucker",
+      "fg_id": "18345"
+    },
+    {
+      "year": 2023,
+      "pick": 10,
+      "round": 1,
+      "team": "Allie's Benchwarmers",
+      "player": "Marcus Semien",
+      "fg_id": "12533"
+    },
+    {
+      "year": 2023,
+      "pick": 11,
+      "round": 2,
+      "team": "Allie's Benchwarmers",
+      "player": "Kyle Schwarber",
+      "fg_id": "16478"
+    },
+    {
+      "year": 2023,
+      "pick": 12,
+      "round": 2,
+      "team": "Boston Estrellas",
+      "player": "Francisco Lindor",
+      "fg_id": "12916"
+    },
+    {
+      "year": 2023,
+      "pick": 13,
+      "round": 2,
+      "team": "Cleveland Rocks",
+      "player": "Emmanuel Clase",
+      "fg_id": "21032"
+    },
+    {
+      "year": 2023,
+      "pick": 14,
+      "round": 2,
+      "team": "Springfield Isotopes",
+      "player": "Bo Bichette",
+      "fg_id": "19612"
+    },
+    {
+      "year": 2023,
+      "pick": 15,
+      "round": 2,
+      "team": "Work in Progress",
+      "player": "Jos\u00e9 Ram\u00edrez",
+      "fg_id": "sa3006702"
+    },
+    {
+      "year": 2023,
+      "pick": 16,
+      "round": 2,
+      "team": "Jon's Underdogs",
+      "player": "Vladimir Guerrero Jr.",
+      "fg_id": "19611"
+    },
+    {
+      "year": 2023,
+      "pick": 17,
+      "round": 2,
+      "team": "SkeleThor",
+      "player": "Shohei Ohtani",
+      "fg_id": "19755"
+    },
+    {
+      "year": 2023,
+      "pick": 18,
+      "round": 2,
+      "team": "Hello Peanuts!",
+      "player": "Mike Trout",
+      "fg_id": "10155"
+    },
+    {
+      "year": 2023,
+      "pick": 19,
+      "round": 2,
+      "team": "Spacemen",
+      "player": "Bobby Witt Jr.",
+      "fg_id": "25764"
+    },
+    {
+      "year": 2023,
+      "pick": 20,
+      "round": 2,
+      "team": "Hart of the Order",
+      "player": "Juan Soto",
+      "fg_id": "20123"
+    },
+    {
+      "year": 2023,
+      "pick": 21,
+      "round": 3,
+      "team": "Hart of the Order",
+      "player": "Freddie Freeman",
+      "fg_id": "5361"
+    },
+    {
+      "year": 2023,
+      "pick": 22,
+      "round": 3,
+      "team": "Spacemen",
+      "player": "Corbin Burnes",
+      "fg_id": "19361"
+    },
+    {
+      "year": 2023,
+      "pick": 23,
+      "round": 3,
+      "team": "Hello Peanuts!",
+      "player": "Jacob deGrom",
+      "fg_id": "10954"
+    },
+    {
+      "year": 2023,
+      "pick": 24,
+      "round": 3,
+      "team": "SkeleThor",
+      "player": "Pete Alonso",
+      "fg_id": "19251"
+    },
+    {
+      "year": 2023,
+      "pick": 25,
+      "round": 3,
+      "team": "Jon's Underdogs",
+      "player": "Aaron Nola",
+      "fg_id": "16149"
+    },
+    {
+      "year": 2023,
+      "pick": 26,
+      "round": 3,
+      "team": "Work in Progress",
+      "player": "Shane Bieber",
+      "fg_id": "19427"
+    },
+    {
+      "year": 2023,
+      "pick": 27,
+      "round": 3,
+      "team": "Springfield Isotopes",
+      "player": "Austin Riley",
+      "fg_id": "18360"
+    },
+    {
+      "year": 2023,
+      "pick": 28,
+      "round": 3,
+      "team": "Cleveland Rocks",
+      "player": "Shane McClanahan",
+      "fg_id": "21483"
+    },
+    {
+      "year": 2023,
+      "pick": 29,
+      "round": 3,
+      "team": "Boston Estrellas",
+      "player": "Salvador Perez",
+      "fg_id": "7304"
+    },
+    {
+      "year": 2023,
+      "pick": 30,
+      "round": 3,
+      "team": "Allie's Benchwarmers",
+      "player": "Matt Olson",
+      "fg_id": "14344"
+    },
+    {
+      "year": 2023,
+      "pick": 31,
+      "round": 4,
+      "team": "Allie's Benchwarmers",
+      "player": "Gerrit Cole",
+      "fg_id": "13125"
+    },
+    {
+      "year": 2023,
+      "pick": 32,
+      "round": 4,
+      "team": "Boston Estrellas",
+      "player": "Paul Goldschmidt",
+      "fg_id": "9218"
+    },
+    {
+      "year": 2023,
+      "pick": 33,
+      "round": 4,
+      "team": "Cleveland Rocks",
+      "player": "Justin Verlander",
+      "fg_id": "8700"
+    },
+    {
+      "year": 2023,
+      "pick": 34,
+      "round": 4,
+      "team": "Springfield Isotopes",
+      "player": "Sandy Alcantara",
+      "fg_id": "18684"
+    },
+    {
+      "year": 2023,
+      "pick": 35,
+      "round": 4,
+      "team": "Work in Progress",
+      "player": "Michael Harris II",
+      "fg_id": "25931"
+    },
+    {
+      "year": 2023,
+      "pick": 36,
+      "round": 4,
+      "team": "Jon's Underdogs",
+      "player": "Brandon Woodruff",
+      "fg_id": "16162"
+    },
+    {
+      "year": 2023,
+      "pick": 37,
+      "round": 4,
+      "team": "SkeleThor",
+      "player": "Fernando Tatis Jr.",
+      "fg_id": "19709"
+    },
+    {
+      "year": 2023,
+      "pick": 38,
+      "round": 4,
+      "team": "Hello Peanuts!",
+      "player": "Spencer Strider",
+      "fg_id": "27498"
+    },
+    {
+      "year": 2023,
+      "pick": 39,
+      "round": 4,
+      "team": "Spacemen",
+      "player": "Nolan Arenado",
+      "fg_id": "9777"
+    },
+    {
+      "year": 2023,
+      "pick": 40,
+      "round": 4,
+      "team": "Hart of the Order",
+      "player": "Shohei Ohtani",
+      "fg_id": "19755"
+    },
+    {
+      "year": 2023,
+      "pick": 41,
+      "round": 5,
+      "team": "Hart of the Order",
+      "player": "Max Scherzer",
+      "fg_id": "3137"
+    },
+    {
+      "year": 2023,
+      "pick": 42,
+      "round": 5,
+      "team": "Spacemen",
+      "player": "Yu Darvish",
+      "fg_id": "13074"
+    },
+    {
+      "year": 2023,
+      "pick": 43,
+      "round": 5,
+      "team": "Hello Peanuts!",
+      "player": "Josh Hader",
+      "fg_id": "14212"
+    },
+    {
+      "year": 2023,
+      "pick": 44,
+      "round": 5,
+      "team": "SkeleThor",
+      "player": "Zack Wheeler",
+      "fg_id": "10310"
+    },
+    {
+      "year": 2023,
+      "pick": 45,
+      "round": 5,
+      "team": "Jon's Underdogs",
+      "player": "Ozzie Albies",
+      "fg_id": "16556"
+    },
+    {
+      "year": 2023,
+      "pick": 46,
+      "round": 5,
+      "team": "Work in Progress",
+      "player": "Corey Seager",
+      "fg_id": "13624"
+    },
+    {
+      "year": 2023,
+      "pick": 47,
+      "round": 5,
+      "team": "Springfield Isotopes",
+      "player": "Framber Valdez",
+      "fg_id": "17295"
+    },
+    {
+      "year": 2023,
+      "pick": 48,
+      "round": 5,
+      "team": "Cleveland Rocks",
+      "player": "Randy Arozarena",
+      "fg_id": "19290"
+    },
+    {
+      "year": 2023,
+      "pick": 49,
+      "round": 5,
+      "team": "Boston Estrellas",
+      "player": "Cedric Mullins",
+      "fg_id": "17929"
+    },
+    {
+      "year": 2023,
+      "pick": 50,
+      "round": 5,
+      "team": "Allie's Benchwarmers",
+      "player": "Tim Anderson",
+      "fg_id": "15172"
+    },
+    {
+      "year": 2023,
+      "pick": 51,
+      "round": 6,
+      "team": "Allie's Benchwarmers",
+      "player": "J.T. Realmuto",
+      "fg_id": "11739"
+    },
+    {
+      "year": 2023,
+      "pick": 52,
+      "round": 6,
+      "team": "Boston Estrellas",
+      "player": "Luis Castillo",
+      "fg_id": "sa3015801"
+    },
+    {
+      "year": 2023,
+      "pick": 53,
+      "round": 6,
+      "team": "Cleveland Rocks",
+      "player": "Jazz Chisholm Jr.",
+      "fg_id": "20454"
+    },
+    {
+      "year": 2023,
+      "pick": 54,
+      "round": 6,
+      "team": "Springfield Isotopes",
+      "player": "Dylan Cease",
+      "fg_id": "18525"
+    },
+    {
+      "year": 2023,
+      "pick": 55,
+      "round": 6,
+      "team": "Work in Progress",
+      "player": "Julio Ur\u00edas",
+      "fg_id": "14765"
+    },
+    {
+      "year": 2023,
+      "pick": 56,
+      "round": 6,
+      "team": "Jon's Underdogs",
+      "player": "Kevin Gausman",
+      "fg_id": "14107"
+    },
+    {
+      "year": 2023,
+      "pick": 57,
+      "round": 6,
+      "team": "SkeleThor",
+      "player": "Max Fried",
+      "fg_id": "13743"
+    },
+    {
+      "year": 2023,
+      "pick": 58,
+      "round": 6,
+      "team": "Hello Peanuts!",
+      "player": "Adolis Garc\u00eda",
+      "fg_id": "19287"
+    },
+    {
+      "year": 2023,
+      "pick": 59,
+      "round": 6,
+      "team": "Spacemen",
+      "player": "Luis Robert Jr.",
+      "fg_id": "20043"
+    },
+    {
+      "year": 2023,
+      "pick": 60,
+      "round": 6,
+      "team": "Hart of the Order",
+      "player": "Cristian Javier",
+      "fg_id": "17606"
+    },
+    {
+      "year": 2023,
+      "pick": 61,
+      "round": 7,
+      "team": "Boston Estrellas",
+      "player": "Corbin Carroll",
+      "fg_id": "25878"
+    },
+    {
+      "year": 2023,
+      "pick": 62,
+      "round": 7,
+      "team": "Spacemen",
+      "player": "Jordan Romano",
+      "fg_id": "16122"
+    },
+    {
+      "year": 2023,
+      "pick": 63,
+      "round": 7,
+      "team": "Hello Peanuts!",
+      "player": "Robbie Ray",
+      "fg_id": "11486"
+    },
+    {
+      "year": 2023,
+      "pick": 64,
+      "round": 7,
+      "team": "SkeleThor",
+      "player": "Alek Manoah",
+      "fg_id": "26410"
+    },
+    {
+      "year": 2023,
+      "pick": 65,
+      "round": 7,
+      "team": "Jon's Underdogs",
+      "player": "Starling Marte",
+      "fg_id": "9241"
+    },
+    {
+      "year": 2023,
+      "pick": 66,
+      "round": 7,
+      "team": "Work in Progress",
+      "player": "George Springer",
+      "fg_id": "12856"
+    },
+    {
+      "year": 2023,
+      "pick": 67,
+      "round": 7,
+      "team": "Springfield Isotopes",
+      "player": "Ryan Pressly",
+      "fg_id": "7005"
+    },
+    {
+      "year": 2023,
+      "pick": 68,
+      "round": 7,
+      "team": "Cleveland Rocks",
+      "player": "Oneil Cruz",
+      "fg_id": "21711"
+    },
+    {
+      "year": 2023,
+      "pick": 69,
+      "round": 7,
+      "team": "Boston Estrellas",
+      "player": "Raisel Iglesias",
+      "fg_id": "17130"
+    },
+    {
+      "year": 2023,
+      "pick": 70,
+      "round": 7,
+      "team": "Allie's Benchwarmers",
+      "player": "Alex Bregman",
+      "fg_id": "17678"
+    },
+    {
+      "year": 2023,
+      "pick": 71,
+      "round": 8,
+      "team": "Allie's Benchwarmers",
+      "player": "Devin Williams",
+      "fg_id": "15816"
+    },
+    {
+      "year": 2023,
+      "pick": 72,
+      "round": 8,
+      "team": "Boston Estrellas",
+      "player": "Logan Webb",
+      "fg_id": "17995"
+    },
+    {
+      "year": 2023,
+      "pick": 73,
+      "round": 8,
+      "team": "Cleveland Rocks",
+      "player": "Zac Gallen",
+      "fg_id": "19291"
+    },
+    {
+      "year": 2023,
+      "pick": 74,
+      "round": 8,
+      "team": "Springfield Isotopes",
+      "player": "Teoscar Hern\u00e1ndez",
+      "fg_id": "13066"
+    },
+    {
+      "year": 2023,
+      "pick": 75,
+      "round": 8,
+      "team": "Work in Progress",
+      "player": "Clayton Kershaw",
+      "fg_id": "2036"
+    },
+    {
+      "year": 2023,
+      "pick": 76,
+      "round": 8,
+      "team": "Jon's Underdogs",
+      "player": "Eloy Jim\u00e9nez",
+      "fg_id": "17484"
+    },
+    {
+      "year": 2023,
+      "pick": 77,
+      "round": 8,
+      "team": "SkeleThor",
+      "player": "Xander Bogaerts",
+      "fg_id": "12161"
+    },
+    {
+      "year": 2023,
+      "pick": 78,
+      "round": 8,
+      "team": "Hello Peanuts!",
+      "player": "Wander Franco",
+      "fg_id": "23667"
+    },
+    {
+      "year": 2023,
+      "pick": 79,
+      "round": 8,
+      "team": "Spacemen",
+      "player": "Daulton Varsho",
+      "fg_id": "19918"
+    },
+    {
+      "year": 2023,
+      "pick": 80,
+      "round": 8,
+      "team": "Hart of the Order",
+      "player": "Carlos Rod\u00f3n",
+      "fg_id": "16137"
+    },
+    {
+      "year": 2023,
+      "pick": 81,
+      "round": 9,
+      "team": "Hart of the Order",
+      "player": "Ryan Helsley",
+      "fg_id": "18138"
+    },
+    {
+      "year": 2023,
+      "pick": 82,
+      "round": 9,
+      "team": "Spacemen",
+      "player": "Luis Garcia",
+      "fg_id": "23735"
+    },
+    {
+      "year": 2023,
+      "pick": 83,
+      "round": 9,
+      "team": "Hello Peanuts!",
+      "player": "F\u00e9lix Bautista",
+      "fg_id": "20666"
+    },
+    {
+      "year": 2023,
+      "pick": 84,
+      "round": 9,
+      "team": "SkeleThor",
+      "player": "Will Smith",
+      "fg_id": "19197"
+    },
+    {
+      "year": 2023,
+      "pick": 85,
+      "round": 9,
+      "team": "Jon's Underdogs",
+      "player": "Tyler O'Neill",
+      "fg_id": "15711"
+    },
+    {
+      "year": 2023,
+      "pick": 86,
+      "round": 9,
+      "team": "Work in Progress",
+      "player": "Jos\u00e9 Abreu",
+      "fg_id": "15676"
+    },
+    {
+      "year": 2023,
+      "pick": 87,
+      "round": 9,
+      "team": "Springfield Isotopes",
+      "player": "Tommy Edman",
+      "fg_id": "19470"
+    },
+    {
+      "year": 2023,
+      "pick": 88,
+      "round": 9,
+      "team": "Cleveland Rocks",
+      "player": "Gunnar Henderson",
+      "fg_id": "26289"
+    },
+    {
+      "year": 2023,
+      "pick": 89,
+      "round": 9,
+      "team": "Boston Estrellas",
+      "player": "Byron Buxton",
+      "fg_id": "14161"
+    },
+    {
+      "year": 2023,
+      "pick": 90,
+      "round": 9,
+      "team": "Allie's Benchwarmers",
+      "player": "Andrew Vaughn",
+      "fg_id": "26197"
+    },
+    {
+      "year": 2023,
+      "pick": 91,
+      "round": 10,
+      "team": "Allie's Benchwarmers",
+      "player": "Kenley Jansen",
+      "fg_id": "3096"
+    },
+    {
+      "year": 2023,
+      "pick": 92,
+      "round": 10,
+      "team": "Boston Estrellas",
+      "player": "Kyle Wright",
+      "fg_id": "19665"
+    },
+    {
+      "year": 2023,
+      "pick": 93,
+      "round": 10,
+      "team": "Cleveland Rocks",
+      "player": "Jake McCarthy",
+      "fg_id": "21622"
+    },
+    {
+      "year": 2023,
+      "pick": 94,
+      "round": 10,
+      "team": "Springfield Isotopes",
+      "player": "Bryan Reynolds",
+      "fg_id": "19326"
+    },
+    {
+      "year": 2023,
+      "pick": 95,
+      "round": 10,
+      "team": "Work in Progress",
+      "player": "Andr\u00e9s Gim\u00e9nez",
+      "fg_id": "19950"
+    },
+    {
+      "year": 2023,
+      "pick": 96,
+      "round": 10,
+      "team": "Jon's Underdogs",
+      "player": "Ty France",
+      "fg_id": "17982"
+    },
+    {
+      "year": 2023,
+      "pick": 97,
+      "round": 10,
+      "team": "SkeleThor",
+      "player": "Dansby Swanson",
+      "fg_id": "18314"
+    },
+    {
+      "year": 2023,
+      "pick": 98,
+      "round": 10,
+      "team": "Hello Peanuts!",
+      "player": "Camilo Doval",
+      "fg_id": "21992"
+    },
+    {
+      "year": 2023,
+      "pick": 99,
+      "round": 10,
+      "team": "Spacemen",
+      "player": "Christian Yelich",
+      "fg_id": "11477"
+    },
+    {
+      "year": 2023,
+      "pick": 100,
+      "round": 10,
+      "team": "Hart of the Order",
+      "player": "Willy Adames",
+      "fg_id": "15986"
+    },
+    {
+      "year": 2023,
+      "pick": 101,
+      "round": 11,
+      "team": "Hart of the Order",
+      "player": "Joe Musgrove",
+      "fg_id": "12970"
+    },
+    {
+      "year": 2023,
+      "pick": 102,
+      "round": 11,
+      "team": "Spacemen",
+      "player": "Eugenio Su\u00e1rez",
+      "fg_id": "12552"
+    },
+    {
+      "year": 2023,
+      "pick": 103,
+      "round": 11,
+      "team": "Hello Peanuts!",
+      "player": "Carlos Correa",
+      "fg_id": "14162"
+    },
+    {
+      "year": 2023,
+      "pick": 104,
+      "round": 11,
+      "team": "SkeleThor",
+      "player": "Nestor Cortes",
+      "fg_id": "17874"
+    },
+    {
+      "year": 2023,
+      "pick": 105,
+      "round": 11,
+      "team": "Jon's Underdogs",
+      "player": "Giancarlo Stanton",
+      "fg_id": "4949"
+    },
+    {
+      "year": 2023,
+      "pick": 106,
+      "round": 11,
+      "team": "Work in Progress",
+      "player": "Jhoan Duran",
+      "fg_id": "21029"
+    },
+    {
+      "year": 2023,
+      "pick": 107,
+      "round": 11,
+      "team": "Springfield Isotopes",
+      "player": "Adley Rutschman",
+      "fg_id": "26288"
+    },
+    {
+      "year": 2023,
+      "pick": 108,
+      "round": 11,
+      "team": "Cleveland Rocks",
+      "player": "Logan Gilbert",
+      "fg_id": "22250"
+    },
+    {
+      "year": 2023,
+      "pick": 109,
+      "round": 11,
+      "team": "Boston Estrellas",
+      "player": "Luis Severino",
+      "fg_id": "15890"
+    },
+    {
+      "year": 2023,
+      "pick": 110,
+      "round": 11,
+      "team": "Allie's Benchwarmers",
+      "player": "Steven Kwan",
+      "fg_id": "24610"
+    },
+    {
+      "year": 2023,
+      "pick": 111,
+      "round": 12,
+      "team": "Allie's Benchwarmers",
+      "player": "Blake Snell",
+      "fg_id": "13543"
+    },
+    {
+      "year": 2023,
+      "pick": 112,
+      "round": 12,
+      "team": "Boston Estrellas",
+      "player": "Masataka Yoshida",
+      "fg_id": "31837"
+    },
+    {
+      "year": 2023,
+      "pick": 113,
+      "round": 12,
+      "team": "Cleveland Rocks",
+      "player": "Clay Holmes",
+      "fg_id": "13649"
+    },
+    {
+      "year": 2023,
+      "pick": 114,
+      "round": 12,
+      "team": "Springfield Isotopes",
+      "player": "George Kirby",
+      "fg_id": "25436"
+    },
+    {
+      "year": 2023,
+      "pick": 115,
+      "round": 12,
+      "team": "Work in Progress",
+      "player": "Nathaniel Lowe",
+      "fg_id": "19566"
+    },
+    {
+      "year": 2023,
+      "pick": 116,
+      "round": 12,
+      "team": "Jon's Underdogs",
+      "player": "Lance Lynn",
+      "fg_id": "2520"
+    },
+    {
+      "year": 2023,
+      "pick": 117,
+      "round": 12,
+      "team": "SkeleThor",
+      "player": "Vinnie Pasquantino",
+      "fg_id": "27676"
+    },
+    {
+      "year": 2023,
+      "pick": 118,
+      "round": 12,
+      "team": "Hello Peanuts!",
+      "player": "Lucas Giolito",
+      "fg_id": "15474"
+    },
+    {
+      "year": 2023,
+      "pick": 119,
+      "round": 12,
+      "team": "Spacemen",
+      "player": "Amed Rosario",
+      "fg_id": "15518"
+    },
+    {
+      "year": 2023,
+      "pick": 120,
+      "round": 12,
+      "team": "Hart of the Order",
+      "player": "Anthony Santander",
+      "fg_id": "14551"
+    },
+    {
+      "year": 2023,
+      "pick": 121,
+      "round": 13,
+      "team": "Hart of the Order",
+      "player": "David Bednar",
+      "fg_id": "19569"
+    },
+    {
+      "year": 2023,
+      "pick": 122,
+      "round": 13,
+      "team": "Spacemen",
+      "player": "Charlie Morton",
+      "fg_id": "4676"
+    },
+    {
+      "year": 2023,
+      "pick": 123,
+      "round": 13,
+      "team": "Hello Peanuts!",
+      "player": "Jonathan India",
+      "fg_id": "21523"
+    },
+    {
+      "year": 2023,
+      "pick": 124,
+      "round": 13,
+      "team": "SkeleThor",
+      "player": "Kris Bryant",
+      "fg_id": "15429"
+    },
+    {
+      "year": 2023,
+      "pick": 125,
+      "round": 13,
+      "team": "Jon's Underdogs",
+      "player": "Tyler Glasnow",
+      "fg_id": "14374"
+    },
+    {
+      "year": 2023,
+      "pick": 126,
+      "round": 13,
+      "team": "Work in Progress",
+      "player": "Tyler Stephenson",
+      "fg_id": "17988"
+    },
+    {
+      "year": 2023,
+      "pick": 127,
+      "round": 13,
+      "team": "Springfield Isotopes",
+      "player": "Taylor Ward",
+      "fg_id": "17548"
+    },
+    {
+      "year": 2023,
+      "pick": 128,
+      "round": 13,
+      "team": "Cleveland Rocks",
+      "player": "Ryan Mountcastle",
+      "fg_id": "18373"
+    },
+    {
+      "year": 2023,
+      "pick": 129,
+      "round": 13,
+      "team": "Boston Estrellas",
+      "player": "Nick Castellanos",
+      "fg_id": "11737"
+    },
+    {
+      "year": 2023,
+      "pick": 130,
+      "round": 13,
+      "team": "Allie's Benchwarmers",
+      "player": "Alexis D\u00edaz",
+      "fg_id": "21132"
+    },
+    {
+      "year": 2023,
+      "pick": 131,
+      "round": 14,
+      "team": "Allie's Benchwarmers",
+      "player": "Jeff McNeil",
+      "fg_id": "15362"
+    },
+    {
+      "year": 2023,
+      "pick": 132,
+      "round": 14,
+      "team": "Boston Estrellas",
+      "player": "Scott Barlow",
+      "fg_id": "14993"
+    },
+    {
+      "year": 2023,
+      "pick": 133,
+      "round": 14,
+      "team": "Cleveland Rocks",
+      "player": "MJ Melendez",
+      "fg_id": "22197"
+    },
+    {
+      "year": 2023,
+      "pick": 134,
+      "round": 14,
+      "team": "Springfield Isotopes",
+      "player": "Joe Ryan",
+      "fg_id": "21390"
+    },
+    {
+      "year": 2023,
+      "pick": 135,
+      "round": 14,
+      "team": "Work in Progress",
+      "player": "Freddy Peralta",
+      "fg_id": "18679"
+    },
+    {
+      "year": 2023,
+      "pick": 136,
+      "round": 14,
+      "team": "Jon's Underdogs",
+      "player": "Dustin May",
+      "fg_id": "19716"
+    },
+    {
+      "year": 2023,
+      "pick": 137,
+      "round": 14,
+      "team": "SkeleThor",
+      "player": "C.J. Cron",
+      "fg_id": "12546"
+    },
+    {
+      "year": 2023,
+      "pick": 138,
+      "round": 14,
+      "team": "Hello Peanuts!",
+      "player": "Jes\u00fas Luzardo",
+      "fg_id": "19959"
+    },
+    {
+      "year": 2023,
+      "pick": 139,
+      "round": 14,
+      "team": "Spacemen",
+      "player": "Drew Rasmussen",
+      "fg_id": "25385"
+    },
+    {
+      "year": 2023,
+      "pick": 140,
+      "round": 14,
+      "team": "Hart of the Order",
+      "player": "Hunter Greene",
+      "fg_id": "22182"
+    },
+    {
+      "year": 2023,
+      "pick": 141,
+      "round": 15,
+      "team": "Hart of the Order",
+      "player": "Brandon Lowe",
+      "fg_id": "18882"
+    },
+    {
+      "year": 2023,
+      "pick": 142,
+      "round": 15,
+      "team": "Spacemen",
+      "player": "Daniel Bard",
+      "fg_id": "7115"
+    },
+    {
+      "year": 2023,
+      "pick": 143,
+      "round": 15,
+      "team": "Hello Peanuts!",
+      "player": "Jeremy Pe\u00f1a",
+      "fg_id": "21636"
+    },
+    {
+      "year": 2023,
+      "pick": 144,
+      "round": 15,
+      "team": "SkeleThor",
+      "player": "Nick Lodolo",
+      "fg_id": "26378"
+    },
+    {
+      "year": 2023,
+      "pick": 145,
+      "round": 15,
+      "team": "Jon's Underdogs",
+      "player": "Seiya Suzuki",
+      "fg_id": "30116"
+    },
+    {
+      "year": 2023,
+      "pick": 146,
+      "round": 15,
+      "team": "Work in Progress",
+      "player": "Max Muncy",
+      "fg_id": "13301"
+    },
+    {
+      "year": 2023,
+      "pick": 147,
+      "round": 15,
+      "team": "Springfield Isotopes",
+      "player": "Jeffrey Springs",
+      "fg_id": "17677"
+    },
+    {
+      "year": 2023,
+      "pick": 148,
+      "round": 15,
+      "team": "Cleveland Rocks",
+      "player": "Brady Singer",
+      "fg_id": "25377"
+    },
+    {
+      "year": 2023,
+      "pick": 149,
+      "round": 15,
+      "team": "Boston Estrellas",
+      "player": "Jose Miranda",
+      "fg_id": "20538"
+    },
+    {
+      "year": 2023,
+      "pick": 150,
+      "round": 15,
+      "team": "Allie's Benchwarmers",
+      "player": "Jordan Montgomery",
+      "fg_id": "16511"
+    },
+    {
+      "year": 2023,
+      "pick": 151,
+      "round": 16,
+      "team": "Allie's Benchwarmers",
+      "player": "Alex Verdugo",
+      "fg_id": "17027"
+    },
+    {
+      "year": 2023,
+      "pick": 152,
+      "round": 16,
+      "team": "Hart of the Order",
+      "player": "William Contreras",
+      "fg_id": "20503"
+    },
+    {
+      "year": 2023,
+      "pick": 153,
+      "round": 16,
+      "team": "Cleveland Rocks",
+      "player": "Lars Nootbaar",
+      "fg_id": "21454"
+    },
+    {
+      "year": 2023,
+      "pick": 154,
+      "round": 16,
+      "team": "Springfield Isotopes",
+      "player": "Christian Walker",
+      "fg_id": "13419"
+    },
+    {
+      "year": 2023,
+      "pick": 155,
+      "round": 16,
+      "team": "Work in Progress",
+      "player": "Hunter Renfroe",
+      "fg_id": "15464"
+    },
+    {
+      "year": 2023,
+      "pick": 156,
+      "round": 16,
+      "team": "Jon's Underdogs",
+      "player": "Brandon Nimmo",
+      "fg_id": "12927"
+    },
+    {
+      "year": 2023,
+      "pick": 157,
+      "round": 16,
+      "team": "SkeleThor",
+      "player": "Triston McKenzie",
+      "fg_id": "18000"
+    },
+    {
+      "year": 2023,
+      "pick": 158,
+      "round": 16,
+      "team": "Hello Peanuts!",
+      "player": "Alejandro Kirk",
+      "fg_id": "22581"
+    },
+    {
+      "year": 2023,
+      "pick": 159,
+      "round": 16,
+      "team": "Spacemen",
+      "player": "Anthony Rizzo",
+      "fg_id": "3473"
+    },
+    {
+      "year": 2023,
+      "pick": 160,
+      "round": 16,
+      "team": "Hart of the Order",
+      "player": "Matt Chapman",
+      "fg_id": "16505"
+    },
+    {
+      "year": 2023,
+      "pick": 161,
+      "round": 17,
+      "team": "Hart of the Order",
+      "player": "Pablo L\u00f3pez",
+      "fg_id": "17085"
+    },
+    {
+      "year": 2023,
+      "pick": 162,
+      "round": 17,
+      "team": "Spacemen",
+      "player": "Gleyber Torres",
+      "fg_id": "16997"
+    },
+    {
+      "year": 2023,
+      "pick": 163,
+      "round": 17,
+      "team": "Hello Peanuts!",
+      "player": "Alec Bohm",
+      "fg_id": "21618"
+    },
+    {
+      "year": 2023,
+      "pick": 164,
+      "round": 17,
+      "team": "SkeleThor",
+      "player": "Evan Phillips",
+      "fg_id": "17734"
+    },
+    {
+      "year": 2023,
+      "pick": 165,
+      "round": 17,
+      "team": "Jon's Underdogs",
+      "player": "Willson Contreras",
+      "fg_id": "11609"
+    },
+    {
+      "year": 2023,
+      "pick": 166,
+      "round": 17,
+      "team": "Work in Progress",
+      "player": "Anthony Volpe",
+      "fg_id": "27647"
+    },
+    {
+      "year": 2023,
+      "pick": 167,
+      "round": 17,
+      "team": "Springfield Isotopes",
+      "player": "Thairo Estrada",
+      "fg_id": "16426"
+    },
+    {
+      "year": 2023,
+      "pick": 168,
+      "round": 17,
+      "team": "Cleveland Rocks",
+      "player": "Joey Meneses",
+      "fg_id": "14366"
+    },
+    {
+      "year": 2023,
+      "pick": 169,
+      "round": 17,
+      "team": "Boston Estrellas",
+      "player": "Andr\u00e9s Mu\u00f1oz",
+      "fg_id": "20373"
+    },
+    {
+      "year": 2023,
+      "pick": 170,
+      "round": 17,
+      "team": "Allie's Benchwarmers",
+      "player": "Pete Fairbanks",
+      "fg_id": "17998"
+    },
+    {
+      "year": 2023,
+      "pick": 171,
+      "round": 18,
+      "team": "Allie's Benchwarmers",
+      "player": "Ha-Seong Kim",
+      "fg_id": "27506"
+    },
+    {
+      "year": 2023,
+      "pick": 172,
+      "round": 18,
+      "team": "Boston Estrellas",
+      "player": "Jose Altuve",
+      "fg_id": "5417"
+    },
+    {
+      "year": 2023,
+      "pick": 173,
+      "round": 18,
+      "team": "Cleveland Rocks",
+      "player": "Jason Adam",
+      "fg_id": "11861"
+    },
+    {
+      "year": 2023,
+      "pick": 174,
+      "round": 18,
+      "team": "Springfield Isotopes",
+      "player": "Jos\u00e9 Leclerc",
+      "fg_id": "14524"
+    },
+    {
+      "year": 2023,
+      "pick": 175,
+      "round": 18,
+      "team": "Work in Progress",
+      "player": "Hunter Brown",
+      "fg_id": "25880"
+    },
+    {
+      "year": 2023,
+      "pick": 176,
+      "round": 18,
+      "team": "Jon's Underdogs",
+      "player": "Jake Cronenworth",
+      "fg_id": "18036"
+    },
+    {
+      "year": 2023,
+      "pick": 177,
+      "round": 18,
+      "team": "SkeleThor",
+      "player": "Riley Greene",
+      "fg_id": "25976"
+    },
+    {
+      "year": 2023,
+      "pick": 178,
+      "round": 18,
+      "team": "Hello Peanuts!",
+      "player": "Jordan Walker",
+      "fg_id": "27475"
+    },
+    {
+      "year": 2023,
+      "pick": 179,
+      "round": 18,
+      "team": "Spacemen",
+      "player": "Rowdy Tellez",
+      "fg_id": "15679"
+    },
+    {
+      "year": 2023,
+      "pick": 180,
+      "round": 18,
+      "team": "Hart of the Order",
+      "player": "Whit Merrifield",
+      "fg_id": "11281"
+    },
+    {
+      "year": 2023,
+      "pick": 181,
+      "round": 19,
+      "team": "Hart of the Order",
+      "player": "Nico Hoerner",
+      "fg_id": "21479"
+    },
+    {
+      "year": 2023,
+      "pick": 182,
+      "round": 19,
+      "team": "Spacemen",
+      "player": "Ian Happ",
+      "fg_id": "17919"
+    },
+    {
+      "year": 2023,
+      "pick": 183,
+      "round": 19,
+      "team": "Hello Peanuts!",
+      "player": "Garrett Mitchell",
+      "fg_id": "27555"
+    },
+    {
+      "year": 2023,
+      "pick": 184,
+      "round": 19,
+      "team": "SkeleThor",
+      "player": "Chris Bassitt",
+      "fg_id": "12304"
+    },
+    {
+      "year": 2023,
+      "pick": 185,
+      "round": 19,
+      "team": "Jon's Underdogs",
+      "player": "Chris Sale",
+      "fg_id": "10603"
+    },
+    {
+      "year": 2023,
+      "pick": 186,
+      "round": 19,
+      "team": "Work in Progress",
+      "player": "Justin Turner",
+      "fg_id": "5235"
+    },
+    {
+      "year": 2023,
+      "pick": 187,
+      "round": 19,
+      "team": "Springfield Isotopes",
+      "player": "David Robertson",
+      "fg_id": "8241"
+    },
+    {
+      "year": 2023,
+      "pick": 188,
+      "round": 19,
+      "team": "Cleveland Rocks",
+      "player": "Anthony Rendon",
+      "fg_id": "12861"
+    },
+    {
+      "year": 2023,
+      "pick": 189,
+      "round": 19,
+      "team": "Boston Estrellas",
+      "player": "Luis Arraez",
+      "fg_id": "18568"
+    },
+    {
+      "year": 2023,
+      "pick": 190,
+      "round": 19,
+      "team": "Allie's Benchwarmers",
+      "player": "Luis Garc\u00eda",
+      "fg_id": "23735"
+    },
+    {
+      "year": 2023,
+      "pick": 191,
+      "round": 20,
+      "team": "Allie's Benchwarmers",
+      "player": "Isaac Paredes",
+      "fg_id": "20036"
+    },
+    {
+      "year": 2023,
+      "pick": 192,
+      "round": 20,
+      "team": "Boston Estrellas",
+      "player": "Kodai Senga",
+      "fg_id": "31838"
+    },
+    {
+      "year": 2023,
+      "pick": 193,
+      "round": 20,
+      "team": "Cleveland Rocks",
+      "player": "Oscar Gonz\u00e1lez",
+      "fg_id": "20970"
+    },
+    {
+      "year": 2023,
+      "pick": 194,
+      "round": 20,
+      "team": "Springfield Isotopes",
+      "player": "Brandon Drury",
+      "fg_id": "11615"
+    },
+    {
+      "year": 2023,
+      "pick": 195,
+      "round": 20,
+      "team": "Work in Progress",
+      "player": "Kenta Maeda",
+      "fg_id": "18498"
+    },
+    {
+      "year": 2023,
+      "pick": 196,
+      "round": 20,
+      "team": "Jon's Underdogs",
+      "player": "Paul Sewald",
+      "fg_id": "13892"
+    },
+    {
+      "year": 2023,
+      "pick": 197,
+      "round": 20,
+      "team": "SkeleThor",
+      "player": "Ryan McMahon",
+      "fg_id": "15112"
+    },
+    {
+      "year": 2023,
+      "pick": 198,
+      "round": 20,
+      "team": "Hello Peanuts!",
+      "player": "J.D. Martinez",
+      "fg_id": "6184"
+    },
+    {
+      "year": 2023,
+      "pick": 199,
+      "round": 20,
+      "team": "Spacemen",
+      "player": "Andrew Heaney",
+      "fg_id": "15423"
+    },
+    {
+      "year": 2023,
+      "pick": 200,
+      "round": 20,
+      "team": "Hart of the Order",
+      "player": "Ke'Bryan Hayes",
+      "fg_id": "18577"
+    },
+    {
+      "year": 2023,
+      "pick": 201,
+      "round": 21,
+      "team": "Hart of the Order",
+      "player": "Cody Bellinger",
+      "fg_id": "15998"
+    },
+    {
+      "year": 2023,
+      "pick": 202,
+      "round": 21,
+      "team": "Spacemen",
+      "player": "Alex Lange",
+      "fg_id": "19883"
+    },
+    {
+      "year": 2023,
+      "pick": 203,
+      "round": 21,
+      "team": "Hello Peanuts!",
+      "player": "Miles Mikolas",
+      "fg_id": "9803"
+    },
+    {
+      "year": 2023,
+      "pick": 204,
+      "round": 21,
+      "team": "SkeleThor",
+      "player": "DJ LeMahieu",
+      "fg_id": "9874"
+    },
+    {
+      "year": 2023,
+      "pick": 205,
+      "round": 21,
+      "team": "Jon's Underdogs",
+      "player": "Grayson Rodriguez",
+      "fg_id": "24492"
+    },
+    {
+      "year": 2023,
+      "pick": 206,
+      "round": 21,
+      "team": "Work in Progress",
+      "player": "Giovanny Gallegos",
+      "fg_id": "14986"
+    },
+    {
+      "year": 2023,
+      "pick": 207,
+      "round": 21,
+      "team": "Springfield Isotopes",
+      "player": "Jarred Kelenic",
+      "fg_id": "22558"
+    },
+    {
+      "year": 2023,
+      "pick": 208,
+      "round": 21,
+      "team": "Cleveland Rocks",
+      "player": "Merrill Kelly",
+      "fg_id": "11156"
+    },
+    {
+      "year": 2023,
+      "pick": 209,
+      "round": 21,
+      "team": "Boston Estrellas",
+      "player": "Reid Detmers",
+      "fg_id": "27468"
+    },
+    {
+      "year": 2023,
+      "pick": 210,
+      "round": 21,
+      "team": "Allie's Benchwarmers",
+      "player": "Patrick Sandoval",
+      "fg_id": "19447"
+    },
+    {
+      "year": 2023,
+      "pick": 211,
+      "round": 22,
+      "team": "Allie's Benchwarmers",
+      "player": "Luis Ur\u00edas",
+      "fg_id": "16622"
+    },
+    {
+      "year": 2023,
+      "pick": 212,
+      "round": 22,
+      "team": "Boston Estrellas",
+      "player": "Joc Pederson",
+      "fg_id": "11899"
+    },
+    {
+      "year": 2023,
+      "pick": 213,
+      "round": 22,
+      "team": "Cleveland Rocks",
+      "player": "Josh Bell",
+      "fg_id": "13145"
+    },
+    {
+      "year": 2023,
+      "pick": 214,
+      "round": 22,
+      "team": "Springfield Isotopes",
+      "player": "Tyler Anderson",
+      "fg_id": "12880"
+    },
+    {
+      "year": 2023,
+      "pick": 215,
+      "round": 22,
+      "team": "Work in Progress",
+      "player": "Cal Quantrill",
+      "fg_id": "19312"
+    },
+    {
+      "year": 2023,
+      "pick": 216,
+      "round": 22,
+      "team": "Jon's Underdogs",
+      "player": "Javier B\u00e1ez",
+      "fg_id": "12979"
+    },
+    {
+      "year": 2023,
+      "pick": 217,
+      "round": 22,
+      "team": "SkeleThor",
+      "player": "Esteury Ruiz",
+      "fg_id": "21780"
+    },
+    {
+      "year": 2023,
+      "pick": 218,
+      "round": 22,
+      "team": "Hello Peanuts!",
+      "player": "Ketel Marte",
+      "fg_id": "13613"
+    },
+    {
+      "year": 2023,
+      "pick": 219,
+      "round": 22,
+      "team": "Spacemen",
+      "player": "A.J. Minter",
+      "fg_id": "18655"
+    },
+    {
+      "year": 2023,
+      "pick": 220,
+      "round": 22,
+      "team": "Hart of the Order",
+      "player": "Jorge Polanco",
+      "fg_id": "13152"
+    },
+    {
+      "year": 2023,
+      "pick": 221,
+      "round": 23,
+      "team": "Hart of the Order",
+      "player": "Bryce Harper",
+      "fg_id": "11579"
+    },
+    {
+      "year": 2023,
+      "pick": 222,
+      "round": 23,
+      "team": "Spacemen",
+      "player": "Jurickson Profar",
+      "fg_id": "10815"
+    },
+    {
+      "year": 2023,
+      "pick": 223,
+      "round": 23,
+      "team": "Hello Peanuts!",
+      "player": "Seth Brown",
+      "fg_id": "18171"
+    },
+    {
+      "year": 2023,
+      "pick": 224,
+      "round": 23,
+      "team": "SkeleThor",
+      "player": "Hayden Wesneski",
+      "fg_id": "27581"
+    },
+    {
+      "year": 2023,
+      "pick": 225,
+      "round": 23,
+      "team": "Jon's Underdogs",
+      "player": "Mitch Haniger",
+      "fg_id": "14274"
+    },
+    {
+      "year": 2023,
+      "pick": 226,
+      "round": 23,
+      "team": "Work in Progress",
+      "player": "Josh Rojas",
+      "fg_id": "19734"
+    },
+    {
+      "year": 2023,
+      "pick": 227,
+      "round": 23,
+      "team": "Springfield Isotopes",
+      "player": "Josh Jung",
+      "fg_id": "26299"
+    },
+    {
+      "year": 2023,
+      "pick": 228,
+      "round": 23,
+      "team": "Cleveland Rocks",
+      "player": "Jos\u00e9 Urquidy",
+      "fg_id": "18413"
+    },
+    {
+      "year": 2023,
+      "pick": 229,
+      "round": 23,
+      "team": "Boston Estrellas",
+      "player": "Tony Gonsolin",
+      "fg_id": "19388"
+    },
+    {
+      "year": 2023,
+      "pick": 230,
+      "round": 23,
+      "team": "Allie's Benchwarmers",
+      "player": "Brendan Donovan",
+      "fg_id": "24679"
+    },
+    {
+      "year": 2024,
+      "pick": 1,
+      "round": 1,
+      "team": "Hello Peanuts!",
+      "player": "Julio Rodr\u00edguez",
+      "fg_id": "sa3007992"
+    },
+    {
+      "year": 2024,
+      "pick": 2,
+      "round": 1,
+      "team": "Hart of the Order",
+      "player": "Juan Soto",
+      "fg_id": "20123"
+    },
+    {
+      "year": 2024,
+      "pick": 3,
+      "round": 1,
+      "team": "Springfield Isotopes",
+      "player": "Mookie Betts",
+      "fg_id": "13611"
+    },
+    {
+      "year": 2024,
+      "pick": 4,
+      "round": 1,
+      "team": "Boston Estrellas",
+      "player": "Corbin Carroll",
+      "fg_id": "25878"
+    },
+    {
+      "year": 2024,
+      "pick": 5,
+      "round": 1,
+      "team": "Crews Control",
+      "player": "Matt Olson",
+      "fg_id": "14344"
+    },
+    {
+      "year": 2024,
+      "pick": 6,
+      "round": 1,
+      "team": "Jon's Underdogs",
+      "player": "Fernando Tatis Jr.",
+      "fg_id": "19709"
+    },
+    {
+      "year": 2024,
+      "pick": 7,
+      "round": 1,
+      "team": "Tortured Baseball Department",
+      "player": "Rafael Devers",
+      "fg_id": "17350"
+    },
+    {
+      "year": 2024,
+      "pick": 8,
+      "round": 1,
+      "team": "SkeleThor",
+      "player": "Kyle Tucker",
+      "fg_id": "18345"
+    },
+    {
+      "year": 2024,
+      "pick": 9,
+      "round": 1,
+      "team": "Spacemen",
+      "player": "Bobby Witt Jr.",
+      "fg_id": "25764"
+    },
+    {
+      "year": 2024,
+      "pick": 10,
+      "round": 1,
+      "team": "Work in Progress",
+      "player": "Ronald Acu\u00f1a Jr.",
+      "fg_id": "18401"
+    },
+    {
+      "year": 2024,
+      "pick": 11,
+      "round": 2,
+      "team": "Work in Progress",
+      "player": "Jos\u00e9 Ram\u00edrez",
+      "fg_id": "sa3006702"
+    },
+    {
+      "year": 2024,
+      "pick": 12,
+      "round": 2,
+      "team": "Spacemen",
+      "player": "Corbin Burnes",
+      "fg_id": "19361"
+    },
+    {
+      "year": 2024,
+      "pick": 13,
+      "round": 2,
+      "team": "SkeleThor",
+      "player": "Shohei Ohtani",
+      "fg_id": "19755"
+    },
+    {
+      "year": 2024,
+      "pick": 14,
+      "round": 2,
+      "team": "Tortured Baseball Department",
+      "player": "Emmanuel Clase",
+      "fg_id": "21032"
+    },
+    {
+      "year": 2024,
+      "pick": 15,
+      "round": 2,
+      "team": "Jon's Underdogs",
+      "player": "Trea Turner",
+      "fg_id": "16252"
+    },
+    {
+      "year": 2024,
+      "pick": 16,
+      "round": 2,
+      "team": "Crews Control",
+      "player": "Gerrit Cole",
+      "fg_id": "13125"
+    },
+    {
+      "year": 2024,
+      "pick": 17,
+      "round": 2,
+      "team": "Boston Estrellas",
+      "player": "Aaron Judge",
+      "fg_id": "15640"
+    },
+    {
+      "year": 2024,
+      "pick": 18,
+      "round": 2,
+      "team": "Springfield Isotopes",
+      "player": "Austin Riley",
+      "fg_id": "18360"
+    },
+    {
+      "year": 2024,
+      "pick": 19,
+      "round": 2,
+      "team": "Hart of the Order",
+      "player": "Yordan Alvarez",
+      "fg_id": "19556"
+    },
+    {
+      "year": 2024,
+      "pick": 20,
+      "round": 2,
+      "team": "Hello Peanuts!",
+      "player": "Spencer Strider",
+      "fg_id": "27498"
+    },
+    {
+      "year": 2024,
+      "pick": 21,
+      "round": 3,
+      "team": "Hello Peanuts!",
+      "player": "Adolis Garc\u00eda",
+      "fg_id": "19287"
+    },
+    {
+      "year": 2024,
+      "pick": 22,
+      "round": 3,
+      "team": "Hart of the Order",
+      "player": "Freddie Freeman",
+      "fg_id": "5361"
+    },
+    {
+      "year": 2024,
+      "pick": 23,
+      "round": 3,
+      "team": "Springfield Isotopes",
+      "player": "Bo Bichette",
+      "fg_id": "19612"
+    },
+    {
+      "year": 2024,
+      "pick": 24,
+      "round": 3,
+      "team": "Boston Estrellas",
+      "player": "Jose Altuve",
+      "fg_id": "5417"
+    },
+    {
+      "year": 2024,
+      "pick": 25,
+      "round": 3,
+      "team": "Crews Control",
+      "player": "Marcus Semien",
+      "fg_id": "12533"
+    },
+    {
+      "year": 2024,
+      "pick": 26,
+      "round": 3,
+      "team": "Jon's Underdogs",
+      "player": "Ozzie Albies",
+      "fg_id": "16556"
+    },
+    {
+      "year": 2024,
+      "pick": 27,
+      "round": 3,
+      "team": "Tortured Baseball Department",
+      "player": "Zac Gallen",
+      "fg_id": "19291"
+    },
+    {
+      "year": 2024,
+      "pick": 28,
+      "round": 3,
+      "team": "SkeleThor",
+      "player": "Zack Wheeler",
+      "fg_id": "10310"
+    },
+    {
+      "year": 2024,
+      "pick": 29,
+      "round": 3,
+      "team": "Spacemen",
+      "player": "Luis Robert Jr.",
+      "fg_id": "20043"
+    },
+    {
+      "year": 2024,
+      "pick": 30,
+      "round": 3,
+      "team": "Work in Progress",
+      "player": "Michael Harris II",
+      "fg_id": "25931"
+    },
+    {
+      "year": 2024,
+      "pick": 31,
+      "round": 4,
+      "team": "Work in Progress",
+      "player": "Bryce Harper",
+      "fg_id": "11579"
+    },
+    {
+      "year": 2024,
+      "pick": 32,
+      "round": 4,
+      "team": "Spacemen",
+      "player": "Pete Alonso",
+      "fg_id": "19251"
+    },
+    {
+      "year": 2024,
+      "pick": 33,
+      "round": 4,
+      "team": "SkeleThor",
+      "player": "Francisco Lindor",
+      "fg_id": "12916"
+    },
+    {
+      "year": 2024,
+      "pick": 34,
+      "round": 4,
+      "team": "Tortured Baseball Department",
+      "player": "Vladimir Guerrero Jr.",
+      "fg_id": "19611"
+    },
+    {
+      "year": 2024,
+      "pick": 35,
+      "round": 4,
+      "team": "SkeleThor",
+      "player": "Corey Seager",
+      "fg_id": "13624"
+    },
+    {
+      "year": 2024,
+      "pick": 36,
+      "round": 4,
+      "team": "Crews Control",
+      "player": "Christian Yelich",
+      "fg_id": "11477"
+    },
+    {
+      "year": 2024,
+      "pick": 37,
+      "round": 4,
+      "team": "Boston Estrellas",
+      "player": "George Kirby",
+      "fg_id": "25436"
+    },
+    {
+      "year": 2024,
+      "pick": 38,
+      "round": 4,
+      "team": "Springfield Isotopes",
+      "player": "Gunnar Henderson",
+      "fg_id": "26289"
+    },
+    {
+      "year": 2024,
+      "pick": 39,
+      "round": 4,
+      "team": "Hart of the Order",
+      "player": "Luis Castillo",
+      "fg_id": "sa3015801"
+    },
+    {
+      "year": 2024,
+      "pick": 40,
+      "round": 4,
+      "team": "Hello Peanuts!",
+      "player": "Tarik Skubal",
+      "fg_id": "22267"
+    },
+    {
+      "year": 2024,
+      "pick": 41,
+      "round": 5,
+      "team": "Hello Peanuts!",
+      "player": "Cody Bellinger",
+      "fg_id": "15998"
+    },
+    {
+      "year": 2024,
+      "pick": 42,
+      "round": 5,
+      "team": "Hart of the Order",
+      "player": "CJ Abrams",
+      "fg_id": "25768"
+    },
+    {
+      "year": 2024,
+      "pick": 43,
+      "round": 5,
+      "team": "Springfield Isotopes",
+      "player": "Randy Arozarena",
+      "fg_id": "19290"
+    },
+    {
+      "year": 2024,
+      "pick": 44,
+      "round": 5,
+      "team": "Boston Estrellas",
+      "player": "Royce Lewis",
+      "fg_id": "20437"
+    },
+    {
+      "year": 2024,
+      "pick": 45,
+      "round": 5,
+      "team": "Crews Control",
+      "player": "Logan Webb",
+      "fg_id": "17995"
+    },
+    {
+      "year": 2024,
+      "pick": 46,
+      "round": 5,
+      "team": "Jon's Underdogs",
+      "player": "Yoshinobu Yamamoto",
+      "fg_id": "33825"
+    },
+    {
+      "year": 2024,
+      "pick": 47,
+      "round": 5,
+      "team": "Tortured Baseball Department",
+      "player": "Tyler Glasnow",
+      "fg_id": "14374"
+    },
+    {
+      "year": 2024,
+      "pick": 48,
+      "round": 5,
+      "team": "SkeleThor",
+      "player": "Kevin Gausman",
+      "fg_id": "14107"
+    },
+    {
+      "year": 2024,
+      "pick": 49,
+      "round": 5,
+      "team": "Spacemen",
+      "player": "Pablo L\u00f3pez",
+      "fg_id": "17085"
+    },
+    {
+      "year": 2024,
+      "pick": 50,
+      "round": 5,
+      "team": "Work in Progress",
+      "player": "Max Fried",
+      "fg_id": "13743"
+    },
+    {
+      "year": 2024,
+      "pick": 51,
+      "round": 6,
+      "team": "Work in Progress",
+      "player": "Elly De La Cruz",
+      "fg_id": "26668"
+    },
+    {
+      "year": 2024,
+      "pick": 52,
+      "round": 6,
+      "team": "Spacemen",
+      "player": "Manny Machado",
+      "fg_id": "11493"
+    },
+    {
+      "year": 2024,
+      "pick": 53,
+      "round": 6,
+      "team": "SkeleThor",
+      "player": "Framber Valdez",
+      "fg_id": "17295"
+    },
+    {
+      "year": 2024,
+      "pick": 54,
+      "round": 6,
+      "team": "Tortured Baseball Department",
+      "player": "Aaron Nola",
+      "fg_id": "16149"
+    },
+    {
+      "year": 2024,
+      "pick": 55,
+      "round": 6,
+      "team": "Jon's Underdogs",
+      "player": "Freddy Peralta",
+      "fg_id": "18679"
+    },
+    {
+      "year": 2024,
+      "pick": 56,
+      "round": 6,
+      "team": "Crews Control",
+      "player": "Edwin D\u00edaz",
+      "fg_id": "sa738152"
+    },
+    {
+      "year": 2024,
+      "pick": 57,
+      "round": 6,
+      "team": "Boston Estrellas",
+      "player": "Mike Trout",
+      "fg_id": "10155"
+    },
+    {
+      "year": 2024,
+      "pick": 58,
+      "round": 6,
+      "team": "Springfield Isotopes",
+      "player": "Logan Gilbert",
+      "fg_id": "22250"
+    },
+    {
+      "year": 2024,
+      "pick": 59,
+      "round": 6,
+      "team": "Hart of the Order",
+      "player": "Adley Rutschman",
+      "fg_id": "26288"
+    },
+    {
+      "year": 2024,
+      "pick": 60,
+      "round": 6,
+      "team": "Hello Peanuts!",
+      "player": "Josh Hader",
+      "fg_id": "14212"
+    },
+    {
+      "year": 2024,
+      "pick": 61,
+      "round": 7,
+      "team": "Hello Peanuts!",
+      "player": "Oneil Cruz",
+      "fg_id": "21711"
+    },
+    {
+      "year": 2024,
+      "pick": 62,
+      "round": 7,
+      "team": "Hart of the Order",
+      "player": "Grayson Rodriguez",
+      "fg_id": "24492"
+    },
+    {
+      "year": 2024,
+      "pick": 63,
+      "round": 7,
+      "team": "Springfield Isotopes",
+      "player": "Bobby Miller",
+      "fg_id": "27483"
+    },
+    {
+      "year": 2024,
+      "pick": 64,
+      "round": 7,
+      "team": "Boston Estrellas",
+      "player": "Blake Snell",
+      "fg_id": "13543"
+    },
+    {
+      "year": 2024,
+      "pick": 65,
+      "round": 7,
+      "team": "Crews Control",
+      "player": "Zach Eflin",
+      "fg_id": "13774"
+    },
+    {
+      "year": 2024,
+      "pick": 66,
+      "round": 7,
+      "team": "Jon's Underdogs",
+      "player": "Camilo Doval",
+      "fg_id": "21992"
+    },
+    {
+      "year": 2024,
+      "pick": 67,
+      "round": 7,
+      "team": "Tortured Baseball Department",
+      "player": "Nolan Jones",
+      "fg_id": "20529"
+    },
+    {
+      "year": 2024,
+      "pick": 68,
+      "round": 7,
+      "team": "SkeleThor",
+      "player": "Paul Goldschmidt",
+      "fg_id": "9218"
+    },
+    {
+      "year": 2024,
+      "pick": 69,
+      "round": 7,
+      "team": "Spacemen",
+      "player": "Tanner Bibee",
+      "fg_id": "30134"
+    },
+    {
+      "year": 2024,
+      "pick": 70,
+      "round": 7,
+      "team": "Work in Progress",
+      "player": "Hunter Brown",
+      "fg_id": "25880"
+    },
+    {
+      "year": 2024,
+      "pick": 71,
+      "round": 8,
+      "team": "Work in Progress",
+      "player": "Jazz Chisholm Jr.",
+      "fg_id": "20454"
+    },
+    {
+      "year": 2024,
+      "pick": 72,
+      "round": 8,
+      "team": "Spacemen",
+      "player": "Raisel Iglesias",
+      "fg_id": "17130"
+    },
+    {
+      "year": 2024,
+      "pick": 73,
+      "round": 8,
+      "team": "SkeleThor",
+      "player": "Nolan Arenado",
+      "fg_id": "9777"
+    },
+    {
+      "year": 2024,
+      "pick": 74,
+      "round": 8,
+      "team": "Tortured Baseball Department",
+      "player": "J.T. Realmuto",
+      "fg_id": "11739"
+    },
+    {
+      "year": 2024,
+      "pick": 75,
+      "round": 8,
+      "team": "Jon's Underdogs",
+      "player": "Kyle Schwarber",
+      "fg_id": "16478"
+    },
+    {
+      "year": 2024,
+      "pick": 76,
+      "round": 8,
+      "team": "Crews Control",
+      "player": "Alex Bregman",
+      "fg_id": "17678"
+    },
+    {
+      "year": 2024,
+      "pick": 77,
+      "round": 8,
+      "team": "Boston Estrellas",
+      "player": "Evan Phillips",
+      "fg_id": "17734"
+    },
+    {
+      "year": 2024,
+      "pick": 78,
+      "round": 8,
+      "team": "Springfield Isotopes",
+      "player": "Ha-Seong Kim",
+      "fg_id": "27506"
+    },
+    {
+      "year": 2024,
+      "pick": 79,
+      "round": 8,
+      "team": "Hart of the Order",
+      "player": "Joe Ryan",
+      "fg_id": "21390"
+    },
+    {
+      "year": 2024,
+      "pick": 80,
+      "round": 8,
+      "team": "Hello Peanuts!",
+      "player": "Jes\u00fas Luzardo",
+      "fg_id": "19959"
+    },
+    {
+      "year": 2024,
+      "pick": 81,
+      "round": 9,
+      "team": "Hello Peanuts!",
+      "player": "Andr\u00e9s Mu\u00f1oz",
+      "fg_id": "20373"
+    },
+    {
+      "year": 2024,
+      "pick": 82,
+      "round": 9,
+      "team": "Hart of the Order",
+      "player": "Alexis D\u00edaz",
+      "fg_id": "21132"
+    },
+    {
+      "year": 2024,
+      "pick": 83,
+      "round": 9,
+      "team": "Springfield Isotopes",
+      "player": "Spencer Steer",
+      "fg_id": "26323"
+    },
+    {
+      "year": 2024,
+      "pick": 84,
+      "round": 9,
+      "team": "Boston Estrellas",
+      "player": "Triston Casas",
+      "fg_id": "22514"
+    },
+    {
+      "year": 2024,
+      "pick": 85,
+      "round": 9,
+      "team": "Crews Control",
+      "player": "Nico Hoerner",
+      "fg_id": "21479"
+    },
+    {
+      "year": 2024,
+      "pick": 86,
+      "round": 9,
+      "team": "Jon's Underdogs",
+      "player": "Will Smith",
+      "fg_id": "19197"
+    },
+    {
+      "year": 2024,
+      "pick": 87,
+      "round": 9,
+      "team": "Tortured Baseball Department",
+      "player": "Gleyber Torres",
+      "fg_id": "16997"
+    },
+    {
+      "year": 2024,
+      "pick": 88,
+      "round": 9,
+      "team": "SkeleThor",
+      "player": "Cole Ragans",
+      "fg_id": "21846"
+    },
+    {
+      "year": 2024,
+      "pick": 89,
+      "round": 9,
+      "team": "Spacemen",
+      "player": "Evan Carter",
+      "fg_id": "27790"
+    },
+    {
+      "year": 2024,
+      "pick": 90,
+      "round": 9,
+      "team": "Work in Progress",
+      "player": "Yainer Diaz",
+      "fg_id": "23003"
+    },
+    {
+      "year": 2024,
+      "pick": 91,
+      "round": 10,
+      "team": "Work in Progress",
+      "player": "Chris Bassitt",
+      "fg_id": "12304"
+    },
+    {
+      "year": 2024,
+      "pick": 92,
+      "round": 10,
+      "team": "Spacemen",
+      "player": "Teoscar Hern\u00e1ndez",
+      "fg_id": "13066"
+    },
+    {
+      "year": 2024,
+      "pick": 93,
+      "round": 10,
+      "team": "Jon's Underdogs",
+      "player": "Christian Walker",
+      "fg_id": "13419"
+    },
+    {
+      "year": 2024,
+      "pick": 94,
+      "round": 10,
+      "team": "Tortured Baseball Department",
+      "player": "Nick Castellanos",
+      "fg_id": "11737"
+    },
+    {
+      "year": 2024,
+      "pick": 95,
+      "round": 10,
+      "team": "Jon's Underdogs",
+      "player": "Xander Bogaerts",
+      "fg_id": "12161"
+    },
+    {
+      "year": 2024,
+      "pick": 96,
+      "round": 10,
+      "team": "Crews Control",
+      "player": "William Contreras",
+      "fg_id": "20503"
+    },
+    {
+      "year": 2024,
+      "pick": 97,
+      "round": 10,
+      "team": "Boston Estrellas",
+      "player": "Lane Thomas",
+      "fg_id": "16939"
+    },
+    {
+      "year": 2024,
+      "pick": 98,
+      "round": 10,
+      "team": "Springfield Isotopes",
+      "player": "Dylan Cease",
+      "fg_id": "18525"
+    },
+    {
+      "year": 2024,
+      "pick": 99,
+      "round": 10,
+      "team": "Hart of the Order",
+      "player": "Justin Steele",
+      "fg_id": "17312"
+    },
+    {
+      "year": 2024,
+      "pick": 100,
+      "round": 10,
+      "team": "Hello Peanuts!",
+      "player": "Bryson Stott",
+      "fg_id": "26294"
+    },
+    {
+      "year": 2024,
+      "pick": 101,
+      "round": 11,
+      "team": "Hello Peanuts!",
+      "player": "Riley Greene",
+      "fg_id": "25976"
+    },
+    {
+      "year": 2024,
+      "pick": 102,
+      "round": 11,
+      "team": "Hart of the Order",
+      "player": "Ryan Helsley",
+      "fg_id": "18138"
+    },
+    {
+      "year": 2024,
+      "pick": 103,
+      "round": 11,
+      "team": "Springfield Isotopes",
+      "player": "David Bednar",
+      "fg_id": "19569"
+    },
+    {
+      "year": 2024,
+      "pick": 104,
+      "round": 11,
+      "team": "Boston Estrellas",
+      "player": "Clay Holmes",
+      "fg_id": "13649"
+    },
+    {
+      "year": 2024,
+      "pick": 105,
+      "round": 11,
+      "team": "Crews Control",
+      "player": "George Springer",
+      "fg_id": "12856"
+    },
+    {
+      "year": 2024,
+      "pick": 106,
+      "round": 11,
+      "team": "Jon's Underdogs",
+      "player": "Yandy D\u00edaz",
+      "fg_id": "16578"
+    },
+    {
+      "year": 2024,
+      "pick": 107,
+      "round": 11,
+      "team": "Tortured Baseball Department",
+      "player": "Jordan Walker",
+      "fg_id": "27475"
+    },
+    {
+      "year": 2024,
+      "pick": 108,
+      "round": 11,
+      "team": "SkeleThor",
+      "player": "Pete Fairbanks",
+      "fg_id": "17998"
+    },
+    {
+      "year": 2024,
+      "pick": 109,
+      "round": 11,
+      "team": "Spacemen",
+      "player": "Joe Musgrove",
+      "fg_id": "12970"
+    },
+    {
+      "year": 2024,
+      "pick": 110,
+      "round": 11,
+      "team": "Work in Progress",
+      "player": "Craig Kimbrel",
+      "fg_id": "6655"
+    },
+    {
+      "year": 2024,
+      "pick": 111,
+      "round": 12,
+      "team": "Work in Progress",
+      "player": "Adbert Alzolay",
+      "fg_id": "17859"
+    },
+    {
+      "year": 2024,
+      "pick": 112,
+      "round": 12,
+      "team": "Spacemen",
+      "player": "Kenley Jansen",
+      "fg_id": "3096"
+    },
+    {
+      "year": 2024,
+      "pick": 113,
+      "round": 12,
+      "team": "SkeleThor",
+      "player": "Bryan Reynolds",
+      "fg_id": "19326"
+    },
+    {
+      "year": 2024,
+      "pick": 114,
+      "round": 12,
+      "team": "Tortured Baseball Department",
+      "player": "Dansby Swanson",
+      "fg_id": "18314"
+    },
+    {
+      "year": 2024,
+      "pick": 115,
+      "round": 12,
+      "team": "Jon's Underdogs",
+      "player": "Shane Bieber",
+      "fg_id": "19427"
+    },
+    {
+      "year": 2024,
+      "pick": 116,
+      "round": 12,
+      "team": "Crews Control",
+      "player": "Chris Sale",
+      "fg_id": "10603"
+    },
+    {
+      "year": 2024,
+      "pick": 117,
+      "round": 12,
+      "team": "Boston Estrellas",
+      "player": "Spencer Torkelson",
+      "fg_id": "27465"
+    },
+    {
+      "year": 2024,
+      "pick": 118,
+      "round": 12,
+      "team": "Springfield Isotopes",
+      "player": "Paul Sewald",
+      "fg_id": "13892"
+    },
+    {
+      "year": 2024,
+      "pick": 119,
+      "round": 12,
+      "team": "Hart of the Order",
+      "player": "Ketel Marte",
+      "fg_id": "13613"
+    },
+    {
+      "year": 2024,
+      "pick": 120,
+      "round": 12,
+      "team": "Hello Peanuts!",
+      "player": "Tanner Scott",
+      "fg_id": "17586"
+    },
+    {
+      "year": 2024,
+      "pick": 121,
+      "round": 13,
+      "team": "Hello Peanuts!",
+      "player": "Merrill Kelly",
+      "fg_id": "11156"
+    },
+    {
+      "year": 2024,
+      "pick": 122,
+      "round": 13,
+      "team": "Hart of the Order",
+      "player": "Michael King",
+      "fg_id": "19853"
+    },
+    {
+      "year": 2024,
+      "pick": 123,
+      "round": 13,
+      "team": "Springfield Isotopes",
+      "player": "Seiya Suzuki",
+      "fg_id": "30116"
+    },
+    {
+      "year": 2024,
+      "pick": 124,
+      "round": 13,
+      "team": "Boston Estrellas",
+      "player": "Sonny Gray",
+      "fg_id": "12768"
+    },
+    {
+      "year": 2024,
+      "pick": 125,
+      "round": 13,
+      "team": "Crews Control",
+      "player": "Marcell Ozuna",
+      "fg_id": "10324"
+    },
+    {
+      "year": 2024,
+      "pick": 126,
+      "round": 13,
+      "team": "Jon's Underdogs",
+      "player": "Josh Jung",
+      "fg_id": "26299"
+    },
+    {
+      "year": 2024,
+      "pick": 127,
+      "round": 13,
+      "team": "Tortured Baseball Department",
+      "player": "Bailey Ober",
+      "fg_id": "21224"
+    },
+    {
+      "year": 2024,
+      "pick": 128,
+      "round": 13,
+      "team": "SkeleThor",
+      "player": "Wyatt Langford",
+      "fg_id": "33333"
+    },
+    {
+      "year": 2024,
+      "pick": 129,
+      "round": 13,
+      "team": "Spacemen",
+      "player": "Zack Gelof",
+      "fg_id": "29766"
+    },
+    {
+      "year": 2024,
+      "pick": 130,
+      "round": 13,
+      "team": "Work in Progress",
+      "player": "Luis Arraez",
+      "fg_id": "18568"
+    },
+    {
+      "year": 2024,
+      "pick": 131,
+      "round": 14,
+      "team": "Work in Progress",
+      "player": "Hunter Harvey",
+      "fg_id": "15507"
+    },
+    {
+      "year": 2024,
+      "pick": 132,
+      "round": 14,
+      "team": "Spacemen",
+      "player": "Salvador Perez",
+      "fg_id": "7304"
+    },
+    {
+      "year": 2024,
+      "pick": 133,
+      "round": 14,
+      "team": "SkeleThor",
+      "player": "Andr\u00e9s Gim\u00e9nez",
+      "fg_id": "19950"
+    },
+    {
+      "year": 2024,
+      "pick": 134,
+      "round": 14,
+      "team": "Tortured Baseball Department",
+      "player": "Cedric Mullins",
+      "fg_id": "17929"
+    },
+    {
+      "year": 2024,
+      "pick": 135,
+      "round": 14,
+      "team": "Jon's Underdogs",
+      "player": "Walker Buehler",
+      "fg_id": "19374"
+    },
+    {
+      "year": 2024,
+      "pick": 136,
+      "round": 14,
+      "team": "Crews Control",
+      "player": "Shota Imanaga",
+      "fg_id": "33829"
+    },
+    {
+      "year": 2024,
+      "pick": 137,
+      "round": 14,
+      "team": "Boston Estrellas",
+      "player": "Ryan Pepiot",
+      "fg_id": "26221"
+    },
+    {
+      "year": 2024,
+      "pick": 138,
+      "round": 14,
+      "team": "Springfield Isotopes",
+      "player": "Jackson Chourio",
+      "fg_id": "28806"
+    },
+    {
+      "year": 2024,
+      "pick": 139,
+      "round": 14,
+      "team": "Hart of the Order",
+      "player": "Jordan Romano",
+      "fg_id": "16122"
+    },
+    {
+      "year": 2024,
+      "pick": 140,
+      "round": 14,
+      "team": "Hello Peanuts!",
+      "player": "Sean Murphy",
+      "fg_id": "19352"
+    },
+    {
+      "year": 2024,
+      "pick": 141,
+      "round": 15,
+      "team": "Hello Peanuts!",
+      "player": "Kutter Crawford",
+      "fg_id": "20531"
+    },
+    {
+      "year": 2024,
+      "pick": 142,
+      "round": 15,
+      "team": "Hart of the Order",
+      "player": "Alec Bohm",
+      "fg_id": "21618"
+    },
+    {
+      "year": 2024,
+      "pick": 143,
+      "round": 15,
+      "team": "Springfield Isotopes",
+      "player": "Chas McCormick",
+      "fg_id": "19599"
+    },
+    {
+      "year": 2024,
+      "pick": 144,
+      "round": 15,
+      "team": "Boston Estrellas",
+      "player": "Josh Naylor",
+      "fg_id": "18839"
+    },
+    {
+      "year": 2024,
+      "pick": 145,
+      "round": 15,
+      "team": "Crews Control",
+      "player": "James Outman",
+      "fg_id": "24770"
+    },
+    {
+      "year": 2024,
+      "pick": 146,
+      "round": 15,
+      "team": "Jon's Underdogs",
+      "player": "Masataka Yoshida",
+      "fg_id": "31837"
+    },
+    {
+      "year": 2024,
+      "pick": 147,
+      "round": 15,
+      "team": "Tortured Baseball Department",
+      "player": "Jorge Soler",
+      "fg_id": "14221"
+    },
+    {
+      "year": 2024,
+      "pick": 148,
+      "round": 15,
+      "team": "SkeleThor",
+      "player": "Jhoan Duran",
+      "fg_id": "21029"
+    },
+    {
+      "year": 2024,
+      "pick": 149,
+      "round": 15,
+      "team": "Spacemen",
+      "player": "Hunter Greene",
+      "fg_id": "22182"
+    },
+    {
+      "year": 2024,
+      "pick": 150,
+      "round": 15,
+      "team": "Work in Progress",
+      "player": "Christian Encarnacion-Strand",
+      "fg_id": "30011"
+    },
+    {
+      "year": 2024,
+      "pick": 151,
+      "round": 16,
+      "team": "Work in Progress",
+      "player": "Kerry Carpenter",
+      "fg_id": "25961"
+    },
+    {
+      "year": 2024,
+      "pick": 152,
+      "round": 16,
+      "team": "Spacemen",
+      "player": "Mitch Keller",
+      "fg_id": "17594"
+    },
+    {
+      "year": 2024,
+      "pick": 153,
+      "round": 16,
+      "team": "SkeleThor",
+      "player": "Ian Happ",
+      "fg_id": "17919"
+    },
+    {
+      "year": 2024,
+      "pick": 154,
+      "round": 16,
+      "team": "Tortured Baseball Department",
+      "player": "Anthony Santander",
+      "fg_id": "14551"
+    },
+    {
+      "year": 2024,
+      "pick": 155,
+      "round": 16,
+      "team": "Jon's Underdogs",
+      "player": "Yu Darvish",
+      "fg_id": "13074"
+    },
+    {
+      "year": 2024,
+      "pick": 156,
+      "round": 16,
+      "team": "Crews Control",
+      "player": "Jos\u00e9 Alvarado",
+      "fg_id": "17780"
+    },
+    {
+      "year": 2024,
+      "pick": 157,
+      "round": 16,
+      "team": "Boston Estrellas",
+      "player": "Max Muncy",
+      "fg_id": "13301"
+    },
+    {
+      "year": 2024,
+      "pick": 158,
+      "round": 16,
+      "team": "Springfield Isotopes",
+      "player": "Cristian Javier",
+      "fg_id": "17606"
+    },
+    {
+      "year": 2024,
+      "pick": 159,
+      "round": 16,
+      "team": "Hart of the Order",
+      "player": "Anthony Volpe",
+      "fg_id": "27647"
+    },
+    {
+      "year": 2024,
+      "pick": 160,
+      "round": 16,
+      "team": "Hello Peanuts!",
+      "player": "Ezequiel Tovar",
+      "fg_id": "24064"
+    },
+    {
+      "year": 2024,
+      "pick": 161,
+      "round": 17,
+      "team": "Hello Peanuts!",
+      "player": "Ke'Bryan Hayes",
+      "fg_id": "18577"
+    },
+    {
+      "year": 2024,
+      "pick": 162,
+      "round": 17,
+      "team": "Hart of the Order",
+      "player": "Vinnie Pasquantino",
+      "fg_id": "27676"
+    },
+    {
+      "year": 2024,
+      "pick": 163,
+      "round": 17,
+      "team": "Springfield Isotopes",
+      "player": "Willson Contreras",
+      "fg_id": "11609"
+    },
+    {
+      "year": 2024,
+      "pick": 164,
+      "round": 17,
+      "team": "Boston Estrellas",
+      "player": "Nick Pivetta",
+      "fg_id": "15454"
+    },
+    {
+      "year": 2024,
+      "pick": 165,
+      "round": 17,
+      "team": "Crews Control",
+      "player": "Jonathan India",
+      "fg_id": "21523"
+    },
+    {
+      "year": 2024,
+      "pick": 166,
+      "round": 17,
+      "team": "Jon's Underdogs",
+      "player": "Jarren Duran",
+      "fg_id": "24617"
+    },
+    {
+      "year": 2024,
+      "pick": 167,
+      "round": 17,
+      "team": "Tortured Baseball Department",
+      "player": "Jos\u00e9 Berr\u00edos",
+      "fg_id": "14168"
+    },
+    {
+      "year": 2024,
+      "pick": 168,
+      "round": 17,
+      "team": "SkeleThor",
+      "player": "Josh Lowe",
+      "fg_id": "19953"
+    },
+    {
+      "year": 2024,
+      "pick": 169,
+      "round": 17,
+      "team": "Spacemen",
+      "player": "Jos\u00e9 Abreu",
+      "fg_id": "15676"
+    },
+    {
+      "year": 2024,
+      "pick": 170,
+      "round": 17,
+      "team": "Work in Progress",
+      "player": "Nestor Cortes",
+      "fg_id": "17874"
+    },
+    {
+      "year": 2024,
+      "pick": 171,
+      "round": 18,
+      "team": "Work in Progress",
+      "player": "Bryce Miller",
+      "fg_id": "29837"
+    },
+    {
+      "year": 2024,
+      "pick": 172,
+      "round": 18,
+      "team": "Spacemen",
+      "player": "Willy Adames",
+      "fg_id": "15986"
+    },
+    {
+      "year": 2024,
+      "pick": 173,
+      "round": 18,
+      "team": "SkeleThor",
+      "player": "Cal Raleigh",
+      "fg_id": "21534"
+    },
+    {
+      "year": 2024,
+      "pick": 174,
+      "round": 18,
+      "team": "Tortured Baseball Department",
+      "player": "Esteury Ruiz",
+      "fg_id": "21780"
+    },
+    {
+      "year": 2024,
+      "pick": 175,
+      "round": 18,
+      "team": "Jon's Underdogs",
+      "player": "Carlos Rod\u00f3n",
+      "fg_id": "16137"
+    },
+    {
+      "year": 2024,
+      "pick": 176,
+      "round": 18,
+      "team": "Crews Control",
+      "player": "Christopher Morel",
+      "fg_id": "21897"
+    },
+    {
+      "year": 2024,
+      "pick": 177,
+      "round": 18,
+      "team": "Boston Estrellas",
+      "player": "Francisco Alvarez",
+      "fg_id": "26121"
+    },
+    {
+      "year": 2024,
+      "pick": 178,
+      "round": 18,
+      "team": "Springfield Isotopes",
+      "player": "Nathan Eovaldi",
+      "fg_id": "9132"
+    },
+    {
+      "year": 2024,
+      "pick": 179,
+      "round": 18,
+      "team": "Hart of the Order",
+      "player": "Brandon Nimmo",
+      "fg_id": "12927"
+    },
+    {
+      "year": 2024,
+      "pick": 180,
+      "round": 18,
+      "team": "Hello Peanuts!",
+      "player": "Eloy Jim\u00e9nez",
+      "fg_id": "17484"
+    },
+    {
+      "year": 2024,
+      "pick": 181,
+      "round": 19,
+      "team": "Hello Peanuts!",
+      "player": "Trevor Story",
+      "fg_id": "12564"
+    },
+    {
+      "year": 2024,
+      "pick": 182,
+      "round": 19,
+      "team": "Hart of the Order",
+      "player": "Triston McKenzie",
+      "fg_id": "18000"
+    },
+    {
+      "year": 2024,
+      "pick": 183,
+      "round": 19,
+      "team": "Springfield Isotopes",
+      "player": "Brandon Pfaadt",
+      "fg_id": "27782"
+    },
+    {
+      "year": 2024,
+      "pick": 184,
+      "round": 19,
+      "team": "Boston Estrellas",
+      "player": "Alex Lange",
+      "fg_id": "19883"
+    },
+    {
+      "year": 2024,
+      "pick": 185,
+      "round": 19,
+      "team": "Crews Control",
+      "player": "Jos\u00e9 Leclerc",
+      "fg_id": "14524"
+    },
+    {
+      "year": 2024,
+      "pick": 186,
+      "round": 19,
+      "team": "Jon's Underdogs",
+      "player": "Robert Suarez",
+      "fg_id": "30115"
+    },
+    {
+      "year": 2024,
+      "pick": 187,
+      "round": 19,
+      "team": "Tortured Baseball Department",
+      "player": "Justin Verlander",
+      "fg_id": "8700"
+    },
+    {
+      "year": 2024,
+      "pick": 188,
+      "round": 19,
+      "team": "SkeleThor",
+      "player": "Jordan Montgomery",
+      "fg_id": "16511"
+    },
+    {
+      "year": 2024,
+      "pick": 189,
+      "round": 19,
+      "team": "Spacemen",
+      "player": "Jake Burger",
+      "fg_id": "22275"
+    },
+    {
+      "year": 2024,
+      "pick": 190,
+      "round": 19,
+      "team": "Work in Progress",
+      "player": "Justin Turner",
+      "fg_id": "5235"
+    },
+    {
+      "year": 2024,
+      "pick": 191,
+      "round": 20,
+      "team": "Work in Progress",
+      "player": "Brandon Drury",
+      "fg_id": "11615"
+    },
+    {
+      "year": 2024,
+      "pick": 192,
+      "round": 20,
+      "team": "Spacemen",
+      "player": "Kyle Finnegan",
+      "fg_id": "15009"
+    },
+    {
+      "year": 2024,
+      "pick": 193,
+      "round": 20,
+      "team": "SkeleThor",
+      "player": "Charlie Morton",
+      "fg_id": "4676"
+    },
+    {
+      "year": 2024,
+      "pick": 194,
+      "round": 20,
+      "team": "Tortured Baseball Department",
+      "player": "Thairo Estrada",
+      "fg_id": "16426"
+    },
+    {
+      "year": 2024,
+      "pick": 195,
+      "round": 20,
+      "team": "Jon's Underdogs",
+      "player": "Mason Miller",
+      "fg_id": "31757"
+    },
+    {
+      "year": 2024,
+      "pick": 196,
+      "round": 20,
+      "team": "Crews Control",
+      "player": "Daulton Varsho",
+      "fg_id": "19918"
+    },
+    {
+      "year": 2024,
+      "pick": 197,
+      "round": 20,
+      "team": "Boston Estrellas",
+      "player": "Matt McLain",
+      "fg_id": "29695"
+    },
+    {
+      "year": 2024,
+      "pick": 198,
+      "round": 20,
+      "team": "Springfield Isotopes",
+      "player": "Maikel Garcia",
+      "fg_id": "22715"
+    },
+    {
+      "year": 2024,
+      "pick": 199,
+      "round": 20,
+      "team": "Hart of the Order",
+      "player": "Nolan Gorman",
+      "fg_id": "22263"
+    },
+    {
+      "year": 2024,
+      "pick": 200,
+      "round": 20,
+      "team": "Hello Peanuts!",
+      "player": "Edouard Julien",
+      "fg_id": "27534"
+    },
+    {
+      "year": 2024,
+      "pick": 201,
+      "round": 21,
+      "team": "Hello Peanuts!",
+      "player": "Jordan Westburg",
+      "fg_id": "27815"
+    },
+    {
+      "year": 2024,
+      "pick": 202,
+      "round": 21,
+      "team": "Hart of the Order",
+      "player": "Steven Kwan",
+      "fg_id": "24610"
+    },
+    {
+      "year": 2024,
+      "pick": 203,
+      "round": 21,
+      "team": "Springfield Isotopes",
+      "player": "Jack Suwinski",
+      "fg_id": "22244"
+    },
+    {
+      "year": 2024,
+      "pick": 204,
+      "round": 21,
+      "team": "Boston Estrellas",
+      "player": "Gavin Williams",
+      "fg_id": "30122"
+    },
+    {
+      "year": 2024,
+      "pick": 205,
+      "round": 21,
+      "team": "Crews Control",
+      "player": "Kyle Harrison",
+      "fg_id": "27758"
+    },
+    {
+      "year": 2024,
+      "pick": 206,
+      "round": 21,
+      "team": "Jon's Underdogs",
+      "player": "Starling Marte",
+      "fg_id": "9241"
+    },
+    {
+      "year": 2024,
+      "pick": 207,
+      "round": 21,
+      "team": "Tortured Baseball Department",
+      "player": "Rhys Hoskins",
+      "fg_id": "16472"
+    },
+    {
+      "year": 2024,
+      "pick": 208,
+      "round": 21,
+      "team": "SkeleThor",
+      "player": "Eduardo Rodriguez",
+      "fg_id": "13164"
+    },
+    {
+      "year": 2024,
+      "pick": 209,
+      "round": 21,
+      "team": "Spacemen",
+      "player": "Giancarlo Stanton",
+      "fg_id": "4949"
+    },
+    {
+      "year": 2024,
+      "pick": 210,
+      "round": 21,
+      "team": "Work in Progress",
+      "player": "Cristopher S\u00e1nchez",
+      "fg_id": "20778"
+    },
+    {
+      "year": 2024,
+      "pick": 211,
+      "round": 22,
+      "team": "Work in Progress",
+      "player": "Michael Wacha",
+      "fg_id": "14078"
+    },
+    {
+      "year": 2024,
+      "pick": 212,
+      "round": 22,
+      "team": "Spacemen",
+      "player": "Carlos Est\u00e9vez",
+      "fg_id": "14542"
+    },
+    {
+      "year": 2024,
+      "pick": 213,
+      "round": 22,
+      "team": "SkeleThor",
+      "player": "Nathaniel Lowe",
+      "fg_id": "19566"
+    },
+    {
+      "year": 2024,
+      "pick": 214,
+      "round": 22,
+      "team": "Tortured Baseball Department",
+      "player": "Aaron Civale",
+      "fg_id": "19479"
+    },
+    {
+      "year": 2024,
+      "pick": 215,
+      "round": 22,
+      "team": "Jon's Underdogs",
+      "player": "Jacob deGrom",
+      "fg_id": "10954"
+    },
+    {
+      "year": 2024,
+      "pick": 216,
+      "round": 22,
+      "team": "Crews Control",
+      "player": "Isaac Paredes",
+      "fg_id": "20036"
+    },
+    {
+      "year": 2024,
+      "pick": 217,
+      "round": 22,
+      "team": "Boston Estrellas",
+      "player": "Tyler O'Neill",
+      "fg_id": "15711"
+    },
+    {
+      "year": 2024,
+      "pick": 218,
+      "round": 22,
+      "team": "Springfield Isotopes",
+      "player": "Yusei Kikuchi",
+      "fg_id": "20633"
+    },
+    {
+      "year": 2024,
+      "pick": 219,
+      "round": 22,
+      "team": "Hart of the Order",
+      "player": "Taylor Ward",
+      "fg_id": "17548"
+    },
+    {
+      "year": 2024,
+      "pick": 220,
+      "round": 22,
+      "team": "Hello Peanuts!",
+      "player": "Luis Severino",
+      "fg_id": "15890"
+    },
+    {
+      "year": 2024,
+      "pick": 221,
+      "round": 23,
+      "team": "Hello Peanuts!",
+      "player": "Ryan Mountcastle",
+      "fg_id": "18373"
+    },
+    {
+      "year": 2024,
+      "pick": 222,
+      "round": 23,
+      "team": "Hart of the Order",
+      "player": "Eury P\u00e9rez",
+      "fg_id": "27768"
+    },
+    {
+      "year": 2024,
+      "pick": 223,
+      "round": 23,
+      "team": "Springfield Isotopes",
+      "player": "Jackson Holliday",
+      "fg_id": "31781"
+    },
+    {
+      "year": 2024,
+      "pick": 224,
+      "round": 23,
+      "team": "Boston Estrellas",
+      "player": "Brayan Bello",
+      "fg_id": "23920"
+    },
+    {
+      "year": 2024,
+      "pick": 225,
+      "round": 23,
+      "team": "Crews Control",
+      "player": "Jonah Heim",
+      "fg_id": "16930"
+    },
+    {
+      "year": 2024,
+      "pick": 226,
+      "round": 23,
+      "team": "Jon's Underdogs",
+      "player": "Whit Merrifield",
+      "fg_id": "11281"
+    },
+    {
+      "year": 2024,
+      "pick": 227,
+      "round": 23,
+      "team": "Tortured Baseball Department",
+      "player": "Braxton Garrett",
+      "fg_id": "21844"
+    },
+    {
+      "year": 2024,
+      "pick": 228,
+      "round": 23,
+      "team": "SkeleThor",
+      "player": "Jeimer Candelario",
+      "fg_id": "13621"
+    },
+    {
+      "year": 2024,
+      "pick": 229,
+      "round": 23,
+      "team": "Spacemen",
+      "player": "Jorge Polanco",
+      "fg_id": "13152"
+    },
+    {
+      "year": 2024,
+      "pick": 230,
+      "round": 23,
+      "team": "Work in Progress",
+      "player": "Clayton Kershaw",
+      "fg_id": "2036"
+    },
+    {
+      "year": 2025,
+      "pick": 1,
+      "round": 1,
+      "team": "Work in Progress",
+      "player": "Shohei Ohtani",
+      "fg_id": "19755"
+    },
+    {
+      "year": 2025,
+      "pick": 2,
+      "round": 1,
+      "team": "Jon's Underdogs",
+      "player": "Bobby Witt Jr.",
+      "fg_id": "25764"
+    },
+    {
+      "year": 2025,
+      "pick": 3,
+      "round": 1,
+      "team": "Spacemen",
+      "player": "Aaron Judge",
+      "fg_id": "15640"
+    },
+    {
+      "year": 2025,
+      "pick": 4,
+      "round": 1,
+      "team": "Crews Control",
+      "player": "Elly De La Cruz",
+      "fg_id": "26668"
+    },
+    {
+      "year": 2025,
+      "pick": 5,
+      "round": 1,
+      "team": "Hello Peanuts!",
+      "player": "Corbin Carroll",
+      "fg_id": "25878"
+    },
+    {
+      "year": 2025,
+      "pick": 6,
+      "round": 1,
+      "team": "Hart of the Order",
+      "player": "Juan Soto",
+      "fg_id": "20123"
+    },
+    {
+      "year": 2025,
+      "pick": 7,
+      "round": 1,
+      "team": "Tortured Baseball Department",
+      "player": "Jos\u00e9 Ram\u00edrez",
+      "fg_id": "sa3006702"
+    },
+    {
+      "year": 2025,
+      "pick": 8,
+      "round": 1,
+      "team": "Boston Estrellas",
+      "player": "Paul Skenes",
+      "fg_id": "33677"
+    },
+    {
+      "year": 2025,
+      "pick": 9,
+      "round": 1,
+      "team": "SkeleThor",
+      "player": "Kyle Tucker",
+      "fg_id": "18345"
+    },
+    {
+      "year": 2025,
+      "pick": 10,
+      "round": 1,
+      "team": "Springfield Isotopes",
+      "player": "Francisco Lindor",
+      "fg_id": "12916"
+    },
+    {
+      "year": 2025,
+      "pick": 11,
+      "round": 2,
+      "team": "Springfield Isotopes",
+      "player": "Fernando Tatis Jr.",
+      "fg_id": "19709"
+    },
+    {
+      "year": 2025,
+      "pick": 12,
+      "round": 2,
+      "team": "SkeleThor",
+      "player": "Gunnar Henderson",
+      "fg_id": "26289"
+    },
+    {
+      "year": 2025,
+      "pick": 13,
+      "round": 2,
+      "team": "Boston Estrellas",
+      "player": "Tarik Skubal",
+      "fg_id": "22267"
+    },
+    {
+      "year": 2025,
+      "pick": 14,
+      "round": 2,
+      "team": "Tortured Baseball Department",
+      "player": "Vladimir Guerrero Jr.",
+      "fg_id": "19611"
+    },
+    {
+      "year": 2025,
+      "pick": 15,
+      "round": 2,
+      "team": "Hart of the Order",
+      "player": "Julio Rodr\u00edguez",
+      "fg_id": "sa3007992"
+    },
+    {
+      "year": 2025,
+      "pick": 16,
+      "round": 2,
+      "team": "Hello Peanuts!",
+      "player": "Jackson Chourio",
+      "fg_id": "28806"
+    },
+    {
+      "year": 2025,
+      "pick": 17,
+      "round": 2,
+      "team": "Crews Control",
+      "player": "Yordan Alvarez",
+      "fg_id": "19556"
+    },
+    {
+      "year": 2025,
+      "pick": 18,
+      "round": 2,
+      "team": "Spacemen",
+      "player": "Mookie Betts",
+      "fg_id": "13611"
+    },
+    {
+      "year": 2025,
+      "pick": 19,
+      "round": 2,
+      "team": "Jon's Underdogs",
+      "player": "Zack Wheeler",
+      "fg_id": "10310"
+    },
+    {
+      "year": 2025,
+      "pick": 20,
+      "round": 2,
+      "team": "Work in Progress",
+      "player": "Trea Turner",
+      "fg_id": "16252"
+    },
+    {
+      "year": 2025,
+      "pick": 21,
+      "round": 3,
+      "team": "Work in Progress",
+      "player": "Logan Gilbert",
+      "fg_id": "22250"
+    },
+    {
+      "year": 2025,
+      "pick": 22,
+      "round": 3,
+      "team": "Jon's Underdogs",
+      "player": "Jarren Duran",
+      "fg_id": "24617"
+    },
+    {
+      "year": 2025,
+      "pick": 23,
+      "round": 3,
+      "team": "Spacemen",
+      "player": "Bryce Harper",
+      "fg_id": "11579"
+    },
+    {
+      "year": 2025,
+      "pick": 24,
+      "round": 3,
+      "team": "Crews Control",
+      "player": "Jazz Chisholm Jr.",
+      "fg_id": "20454"
+    },
+    {
+      "year": 2025,
+      "pick": 25,
+      "round": 3,
+      "team": "Hello Peanuts!",
+      "player": "Garrett Crochet",
+      "fg_id": "27463"
+    },
+    {
+      "year": 2025,
+      "pick": 26,
+      "round": 3,
+      "team": "Hart of the Order",
+      "player": "William Contreras",
+      "fg_id": "20503"
+    },
+    {
+      "year": 2025,
+      "pick": 27,
+      "round": 3,
+      "team": "Tortured Baseball Department",
+      "player": "Matt Olson",
+      "fg_id": "14344"
+    },
+    {
+      "year": 2025,
+      "pick": 28,
+      "round": 3,
+      "team": "Boston Estrellas",
+      "player": "Jackson Merrill",
+      "fg_id": "29490"
+    },
+    {
+      "year": 2025,
+      "pick": 29,
+      "round": 3,
+      "team": "SkeleThor",
+      "player": "Freddie Freeman",
+      "fg_id": "5361"
+    },
+    {
+      "year": 2025,
+      "pick": 30,
+      "round": 3,
+      "team": "Springfield Isotopes",
+      "player": "Rafael Devers",
+      "fg_id": "17350"
+    },
+    {
+      "year": 2025,
+      "pick": 31,
+      "round": 4,
+      "team": "Springfield Isotopes",
+      "player": "Ketel Marte",
+      "fg_id": "13613"
+    },
+    {
+      "year": 2025,
+      "pick": 32,
+      "round": 4,
+      "team": "SkeleThor",
+      "player": "Corbin Burnes",
+      "fg_id": "19361"
+    },
+    {
+      "year": 2025,
+      "pick": 33,
+      "round": 4,
+      "team": "Boston Estrellas",
+      "player": "Manny Machado",
+      "fg_id": "11493"
+    },
+    {
+      "year": 2025,
+      "pick": 34,
+      "round": 4,
+      "team": "Tortured Baseball Department",
+      "player": "Cole Ragans",
+      "fg_id": "21846"
+    },
+    {
+      "year": 2025,
+      "pick": 35,
+      "round": 4,
+      "team": "Hart of the Order",
+      "player": "Chris Sale",
+      "fg_id": "10603"
+    },
+    {
+      "year": 2025,
+      "pick": 36,
+      "round": 4,
+      "team": "Hello Peanuts!",
+      "player": "Oneil Cruz",
+      "fg_id": "21711"
+    },
+    {
+      "year": 2025,
+      "pick": 37,
+      "round": 4,
+      "team": "Crews Control",
+      "player": "Austin Riley",
+      "fg_id": "18360"
+    },
+    {
+      "year": 2025,
+      "pick": 38,
+      "round": 4,
+      "team": "Spacemen",
+      "player": "Dylan Cease",
+      "fg_id": "18525"
+    },
+    {
+      "year": 2025,
+      "pick": 39,
+      "round": 4,
+      "team": "Jon's Underdogs",
+      "player": "Pete Alonso",
+      "fg_id": "19251"
+    },
+    {
+      "year": 2025,
+      "pick": 40,
+      "round": 4,
+      "team": "Work in Progress",
+      "player": "Wyatt Langford",
+      "fg_id": "33333"
+    },
+    {
+      "year": 2025,
+      "pick": 41,
+      "round": 5,
+      "team": "Work in Progress",
+      "player": "Jose Altuve",
+      "fg_id": "5417"
+    },
+    {
+      "year": 2025,
+      "pick": 42,
+      "round": 5,
+      "team": "Jon's Underdogs",
+      "player": "Blake Snell",
+      "fg_id": "13543"
+    },
+    {
+      "year": 2025,
+      "pick": 43,
+      "round": 5,
+      "team": "Spacemen",
+      "player": "Jacob deGrom",
+      "fg_id": "10954"
+    },
+    {
+      "year": 2025,
+      "pick": 44,
+      "round": 5,
+      "team": "Crews Control",
+      "player": "Corey Seager",
+      "fg_id": "13624"
+    },
+    {
+      "year": 2025,
+      "pick": 45,
+      "round": 5,
+      "team": "Hello Peanuts!",
+      "player": "Tyler Glasnow",
+      "fg_id": "14374"
+    },
+    {
+      "year": 2025,
+      "pick": 46,
+      "round": 5,
+      "team": "Hart of the Order",
+      "player": "Emmanuel Clase",
+      "fg_id": "21032"
+    },
+    {
+      "year": 2025,
+      "pick": 47,
+      "round": 5,
+      "team": "Tortured Baseball Department",
+      "player": "Michael Harris II",
+      "fg_id": "25931"
+    },
+    {
+      "year": 2025,
+      "pick": 48,
+      "round": 5,
+      "team": "Boston Estrellas",
+      "player": "Yoshinobu Yamamoto",
+      "fg_id": "33825"
+    },
+    {
+      "year": 2025,
+      "pick": 49,
+      "round": 5,
+      "team": "SkeleThor",
+      "player": "Ronald Acu\u00f1a Jr.",
+      "fg_id": "18401"
+    },
+    {
+      "year": 2025,
+      "pick": 50,
+      "round": 5,
+      "team": "Springfield Isotopes",
+      "player": "Brent Rooker",
+      "fg_id": "19627"
+    },
+    {
+      "year": 2025,
+      "pick": 51,
+      "round": 6,
+      "team": "Springfield Isotopes",
+      "player": "Teoscar Hern\u00e1ndez",
+      "fg_id": "13066"
+    },
+    {
+      "year": 2025,
+      "pick": 52,
+      "round": 6,
+      "team": "SkeleThor",
+      "player": "Ozzie Albies",
+      "fg_id": "16556"
+    },
+    {
+      "year": 2025,
+      "pick": 53,
+      "round": 6,
+      "team": "Boston Estrellas",
+      "player": "Kyle Schwarber",
+      "fg_id": "16478"
+    },
+    {
+      "year": 2025,
+      "pick": 54,
+      "round": 6,
+      "team": "Tortured Baseball Department",
+      "player": "Devin Williams",
+      "fg_id": "15816"
+    },
+    {
+      "year": 2025,
+      "pick": 55,
+      "round": 6,
+      "team": "Hart of the Order",
+      "player": "CJ Abrams",
+      "fg_id": "25768"
+    },
+    {
+      "year": 2025,
+      "pick": 56,
+      "round": 6,
+      "team": "Hello Peanuts!",
+      "player": "James Wood",
+      "fg_id": "29518"
+    },
+    {
+      "year": 2025,
+      "pick": 57,
+      "round": 6,
+      "team": "Crews Control",
+      "player": "Framber Valdez",
+      "fg_id": "17295"
+    },
+    {
+      "year": 2025,
+      "pick": 58,
+      "round": 6,
+      "team": "Spacemen",
+      "player": "Brenton Doyle",
+      "fg_id": "25479"
+    },
+    {
+      "year": 2025,
+      "pick": 59,
+      "round": 6,
+      "team": "Jon's Underdogs",
+      "player": "Josh Hader",
+      "fg_id": "14212"
+    },
+    {
+      "year": 2025,
+      "pick": 60,
+      "round": 6,
+      "team": "Work in Progress",
+      "player": "Marcell Ozuna",
+      "fg_id": "10324"
+    },
+    {
+      "year": 2025,
+      "pick": 61,
+      "round": 7,
+      "team": "Work in Progress",
+      "player": "Edwin D\u00edaz",
+      "fg_id": "sa738152"
+    },
+    {
+      "year": 2025,
+      "pick": 62,
+      "round": 7,
+      "team": "Jon's Underdogs",
+      "player": "Michael King",
+      "fg_id": "19853"
+    },
+    {
+      "year": 2025,
+      "pick": 63,
+      "round": 7,
+      "team": "Spacemen",
+      "player": "Raisel Iglesias",
+      "fg_id": "17130"
+    },
+    {
+      "year": 2025,
+      "pick": 64,
+      "round": 7,
+      "team": "Crews Control",
+      "player": "Mason Miller",
+      "fg_id": "31757"
+    },
+    {
+      "year": 2025,
+      "pick": 65,
+      "round": 7,
+      "team": "Hello Peanuts!",
+      "player": "Spencer Schwellenbach",
+      "fg_id": "31846"
+    },
+    {
+      "year": 2025,
+      "pick": 66,
+      "round": 7,
+      "team": "Hart of the Order",
+      "player": "Pablo L\u00f3pez",
+      "fg_id": "17085"
+    },
+    {
+      "year": 2025,
+      "pick": 67,
+      "round": 7,
+      "team": "Tortured Baseball Department",
+      "player": "Shota Imanaga",
+      "fg_id": "33829"
+    },
+    {
+      "year": 2025,
+      "pick": 68,
+      "round": 7,
+      "team": "Boston Estrellas",
+      "player": "Ryan Helsley",
+      "fg_id": "18138"
+    },
+    {
+      "year": 2025,
+      "pick": 69,
+      "round": 7,
+      "team": "SkeleThor",
+      "player": "Logan Webb",
+      "fg_id": "17995"
+    },
+    {
+      "year": 2025,
+      "pick": 70,
+      "round": 7,
+      "team": "Springfield Isotopes",
+      "player": "Aaron Nola",
+      "fg_id": "16149"
+    },
+    {
+      "year": 2025,
+      "pick": 71,
+      "round": 8,
+      "team": "Springfield Isotopes",
+      "player": "Tanner Bibee",
+      "fg_id": "30134"
+    },
+    {
+      "year": 2025,
+      "pick": 72,
+      "round": 8,
+      "team": "SkeleThor",
+      "player": "Lawrence Butler",
+      "fg_id": "22542"
+    },
+    {
+      "year": 2025,
+      "pick": 73,
+      "round": 8,
+      "team": "Boston Estrellas",
+      "player": "Marcus Semien",
+      "fg_id": "12533"
+    },
+    {
+      "year": 2025,
+      "pick": 74,
+      "round": 8,
+      "team": "Tortured Baseball Department",
+      "player": "Bo Bichette",
+      "fg_id": "19612"
+    },
+    {
+      "year": 2025,
+      "pick": 75,
+      "round": 8,
+      "team": "Hart of the Order",
+      "player": "Junior Caminero",
+      "fg_id": "28163"
+    },
+    {
+      "year": 2025,
+      "pick": 76,
+      "round": 8,
+      "team": "Hello Peanuts!",
+      "player": "Ryan Walker",
+      "fg_id": "20423"
+    },
+    {
+      "year": 2025,
+      "pick": 77,
+      "round": 8,
+      "team": "Crews Control",
+      "player": "Alex Bregman",
+      "fg_id": "17678"
+    },
+    {
+      "year": 2025,
+      "pick": 78,
+      "round": 8,
+      "team": "Spacemen",
+      "player": "Max Fried",
+      "fg_id": "13743"
+    },
+    {
+      "year": 2025,
+      "pick": 79,
+      "round": 8,
+      "team": "Jon's Underdogs",
+      "player": "F\u00e9lix Bautista",
+      "fg_id": "20666"
+    },
+    {
+      "year": 2025,
+      "pick": 80,
+      "round": 8,
+      "team": "Work in Progress",
+      "player": "Josh Naylor",
+      "fg_id": "18839"
+    },
+    {
+      "year": 2025,
+      "pick": 81,
+      "round": 9,
+      "team": "Work in Progress",
+      "player": "Freddy Peralta",
+      "fg_id": "18679"
+    },
+    {
+      "year": 2025,
+      "pick": 82,
+      "round": 9,
+      "team": "Jon's Underdogs",
+      "player": "Cody Bellinger",
+      "fg_id": "15998"
+    },
+    {
+      "year": 2025,
+      "pick": 83,
+      "round": 9,
+      "team": "Spacemen",
+      "player": "Matt McLain",
+      "fg_id": "29695"
+    },
+    {
+      "year": 2025,
+      "pick": 84,
+      "round": 9,
+      "team": "Crews Control",
+      "player": "Bailey Ober",
+      "fg_id": "21224"
+    },
+    {
+      "year": 2025,
+      "pick": 85,
+      "round": 9,
+      "team": "Hello Peanuts!",
+      "player": "Andr\u00e9s Mu\u00f1oz",
+      "fg_id": "20373"
+    },
+    {
+      "year": 2025,
+      "pick": 86,
+      "round": 9,
+      "team": "Hart of the Order",
+      "player": "Jhoan Duran",
+      "fg_id": "21029"
+    },
+    {
+      "year": 2025,
+      "pick": 87,
+      "round": 9,
+      "team": "Tortured Baseball Department",
+      "player": "Hunter Brown",
+      "fg_id": "25880"
+    },
+    {
+      "year": 2025,
+      "pick": 88,
+      "round": 9,
+      "team": "Boston Estrellas",
+      "player": "Luis Castillo",
+      "fg_id": "sa3015801"
+    },
+    {
+      "year": 2025,
+      "pick": 89,
+      "round": 9,
+      "team": "SkeleThor",
+      "player": "Anthony Santander",
+      "fg_id": "14551"
+    },
+    {
+      "year": 2025,
+      "pick": 90,
+      "round": 9,
+      "team": "Springfield Isotopes",
+      "player": "Riley Greene",
+      "fg_id": "25976"
+    },
+    {
+      "year": 2025,
+      "pick": 91,
+      "round": 10,
+      "team": "Springfield Isotopes",
+      "player": "Seiya Suzuki",
+      "fg_id": "30116"
+    },
+    {
+      "year": 2025,
+      "pick": 92,
+      "round": 10,
+      "team": "SkeleThor",
+      "player": "Adley Rutschman",
+      "fg_id": "26288"
+    },
+    {
+      "year": 2025,
+      "pick": 93,
+      "round": 10,
+      "team": "Boston Estrellas",
+      "player": "Bryan Reynolds",
+      "fg_id": "19326"
+    },
+    {
+      "year": 2025,
+      "pick": 94,
+      "round": 10,
+      "team": "Tortured Baseball Department",
+      "player": "Joe Ryan",
+      "fg_id": "21390"
+    },
+    {
+      "year": 2025,
+      "pick": 95,
+      "round": 10,
+      "team": "Hart of the Order",
+      "player": "Bryce Miller",
+      "fg_id": "29837"
+    },
+    {
+      "year": 2025,
+      "pick": 96,
+      "round": 10,
+      "team": "Hello Peanuts!",
+      "player": "Jordan Westburg",
+      "fg_id": "27815"
+    },
+    {
+      "year": 2025,
+      "pick": 97,
+      "round": 10,
+      "team": "Crews Control",
+      "player": "Christian Walker",
+      "fg_id": "13419"
+    },
+    {
+      "year": 2025,
+      "pick": 98,
+      "round": 10,
+      "team": "Spacemen",
+      "player": "Jake Burger",
+      "fg_id": "22275"
+    },
+    {
+      "year": 2025,
+      "pick": 99,
+      "round": 10,
+      "team": "Jon's Underdogs",
+      "player": "Hunter Greene",
+      "fg_id": "22182"
+    },
+    {
+      "year": 2025,
+      "pick": 100,
+      "round": 10,
+      "team": "Work in Progress",
+      "player": "Mark Vientos",
+      "fg_id": "22184"
+    },
+    {
+      "year": 2025,
+      "pick": 101,
+      "round": 11,
+      "team": "Work in Progress",
+      "player": "Roki Sasaki",
+      "fg_id": "35323"
+    },
+    {
+      "year": 2025,
+      "pick": 102,
+      "round": 11,
+      "team": "Jon's Underdogs",
+      "player": "Willy Adames",
+      "fg_id": "15986"
+    },
+    {
+      "year": 2025,
+      "pick": 103,
+      "round": 11,
+      "team": "Spacemen",
+      "player": "Mike Trout",
+      "fg_id": "10155"
+    },
+    {
+      "year": 2025,
+      "pick": 104,
+      "round": 11,
+      "team": "Crews Control",
+      "player": "Zac Gallen",
+      "fg_id": "19291"
+    },
+    {
+      "year": 2025,
+      "pick": 105,
+      "round": 11,
+      "team": "Hello Peanuts!",
+      "player": "Yainer Diaz",
+      "fg_id": "23003"
+    },
+    {
+      "year": 2025,
+      "pick": 106,
+      "round": 11,
+      "team": "Hart of the Order",
+      "player": "Salvador Perez",
+      "fg_id": "7304"
+    },
+    {
+      "year": 2025,
+      "pick": 107,
+      "round": 11,
+      "team": "Tortured Baseball Department",
+      "player": "Cal Raleigh",
+      "fg_id": "21534"
+    },
+    {
+      "year": 2025,
+      "pick": 108,
+      "round": 11,
+      "team": "Boston Estrellas",
+      "player": "Triston Casas",
+      "fg_id": "22514"
+    },
+    {
+      "year": 2025,
+      "pick": 109,
+      "round": 11,
+      "team": "SkeleThor",
+      "player": "George Kirby",
+      "fg_id": "25436"
+    },
+    {
+      "year": 2025,
+      "pick": 110,
+      "round": 11,
+      "team": "Springfield Isotopes",
+      "player": "Jeff Hoffman",
+      "fg_id": "17432"
+    },
+    {
+      "year": 2025,
+      "pick": 111,
+      "round": 12,
+      "team": "Springfield Isotopes",
+      "player": "Alec Bohm",
+      "fg_id": "21618"
+    },
+    {
+      "year": 2025,
+      "pick": 112,
+      "round": 12,
+      "team": "SkeleThor",
+      "player": "Spencer Strider",
+      "fg_id": "27498"
+    },
+    {
+      "year": 2025,
+      "pick": 113,
+      "round": 12,
+      "team": "Boston Estrellas",
+      "player": "Sandy Alcantara",
+      "fg_id": "18684"
+    },
+    {
+      "year": 2025,
+      "pick": 114,
+      "round": 12,
+      "team": "Tortured Baseball Department",
+      "player": "Luis Robert Jr.",
+      "fg_id": "20043"
+    },
+    {
+      "year": 2025,
+      "pick": 115,
+      "round": 12,
+      "team": "Hart of the Order",
+      "player": "Robert Suarez",
+      "fg_id": "30115"
+    },
+    {
+      "year": 2025,
+      "pick": 116,
+      "round": 12,
+      "team": "Hello Peanuts!",
+      "player": "Christian Yelich",
+      "fg_id": "11477"
+    },
+    {
+      "year": 2025,
+      "pick": 117,
+      "round": 12,
+      "team": "Crews Control",
+      "player": "Justin Steele",
+      "fg_id": "17312"
+    },
+    {
+      "year": 2025,
+      "pick": 118,
+      "round": 12,
+      "team": "Spacemen",
+      "player": "Willson Contreras",
+      "fg_id": "11609"
+    },
+    {
+      "year": 2025,
+      "pick": 119,
+      "round": 12,
+      "team": "Jon's Underdogs",
+      "player": "Matt Chapman",
+      "fg_id": "16505"
+    },
+    {
+      "year": 2025,
+      "pick": 120,
+      "round": 12,
+      "team": "Work in Progress",
+      "player": "Will Smith",
+      "fg_id": "19197"
+    },
+    {
+      "year": 2025,
+      "pick": 121,
+      "round": 13,
+      "team": "Work in Progress",
+      "player": "Sonny Gray",
+      "fg_id": "12768"
+    },
+    {
+      "year": 2025,
+      "pick": 122,
+      "round": 13,
+      "team": "Jon's Underdogs",
+      "player": "Dylan Crews",
+      "fg_id": "33541"
+    },
+    {
+      "year": 2025,
+      "pick": 123,
+      "round": 13,
+      "team": "Spacemen",
+      "player": "Tanner Scott",
+      "fg_id": "17586"
+    },
+    {
+      "year": 2025,
+      "pick": 124,
+      "round": 13,
+      "team": "Crews Control",
+      "player": "Ian Happ",
+      "fg_id": "17919"
+    },
+    {
+      "year": 2025,
+      "pick": 125,
+      "round": 13,
+      "team": "Hello Peanuts!",
+      "player": "Carlos Rod\u00f3n",
+      "fg_id": "16137"
+    },
+    {
+      "year": 2025,
+      "pick": 126,
+      "round": 13,
+      "team": "Hart of the Order",
+      "player": "Luis Garc\u00eda Jr.",
+      "fg_id": "20391"
+    },
+    {
+      "year": 2025,
+      "pick": 127,
+      "round": 13,
+      "team": "Tortured Baseball Department",
+      "player": "Steven Kwan",
+      "fg_id": "24610"
+    },
+    {
+      "year": 2025,
+      "pick": 128,
+      "round": 13,
+      "team": "Boston Estrellas",
+      "player": "Randy Arozarena",
+      "fg_id": "19290"
+    },
+    {
+      "year": 2025,
+      "pick": 129,
+      "round": 13,
+      "team": "SkeleThor",
+      "player": "Bryan Woo",
+      "fg_id": "30279"
+    },
+    {
+      "year": 2025,
+      "pick": 130,
+      "round": 13,
+      "team": "Springfield Isotopes",
+      "player": "Jack Flaherty",
+      "fg_id": "17479"
+    },
+    {
+      "year": 2025,
+      "pick": 131,
+      "round": 14,
+      "team": "Springfield Isotopes",
+      "player": "Kevin Gausman",
+      "fg_id": "14107"
+    },
+    {
+      "year": 2025,
+      "pick": 132,
+      "round": 14,
+      "team": "SkeleThor",
+      "player": "Trevor Megill",
+      "fg_id": "17722"
+    },
+    {
+      "year": 2025,
+      "pick": 133,
+      "round": 14,
+      "team": "Boston Estrellas",
+      "player": "Xander Bogaerts",
+      "fg_id": "12161"
+    },
+    {
+      "year": 2025,
+      "pick": 134,
+      "round": 14,
+      "team": "Tortured Baseball Department",
+      "player": "Brice Turang",
+      "fg_id": "22186"
+    },
+    {
+      "year": 2025,
+      "pick": 135,
+      "round": 14,
+      "team": "Hart of the Order",
+      "player": "Pete Crow-Armstrong",
+      "fg_id": "27769"
+    },
+    {
+      "year": 2025,
+      "pick": 136,
+      "round": 14,
+      "team": "Hello Peanuts!",
+      "player": "Cristopher S\u00e1nchez",
+      "fg_id": "20778"
+    },
+    {
+      "year": 2025,
+      "pick": 137,
+      "round": 14,
+      "team": "Crews Control",
+      "player": "Brandon Nimmo",
+      "fg_id": "12927"
+    },
+    {
+      "year": 2025,
+      "pick": 138,
+      "round": 14,
+      "team": "Spacemen",
+      "player": "Kodai Senga",
+      "fg_id": "31838"
+    },
+    {
+      "year": 2025,
+      "pick": 139,
+      "round": 14,
+      "team": "Jon's Underdogs",
+      "player": "Luis Arraez",
+      "fg_id": "18568"
+    },
+    {
+      "year": 2025,
+      "pick": 140,
+      "round": 14,
+      "team": "Work in Progress",
+      "player": "Nick Castellanos",
+      "fg_id": "11737"
+    },
+    {
+      "year": 2025,
+      "pick": 141,
+      "round": 15,
+      "team": "Work in Progress",
+      "player": "Vinnie Pasquantino",
+      "fg_id": "27676"
+    },
+    {
+      "year": 2025,
+      "pick": 142,
+      "round": 15,
+      "team": "Jon's Underdogs",
+      "player": "J.T. Realmuto",
+      "fg_id": "11739"
+    },
+    {
+      "year": 2025,
+      "pick": 143,
+      "round": 15,
+      "team": "Spacemen",
+      "player": "Ezequiel Tovar",
+      "fg_id": "24064"
+    },
+    {
+      "year": 2025,
+      "pick": 144,
+      "round": 15,
+      "team": "Crews Control",
+      "player": "Josh Lowe",
+      "fg_id": "19953"
+    },
+    {
+      "year": 2025,
+      "pick": 145,
+      "round": 15,
+      "team": "Hello Peanuts!",
+      "player": "Yandy D\u00edaz",
+      "fg_id": "16578"
+    },
+    {
+      "year": 2025,
+      "pick": 146,
+      "round": 15,
+      "team": "Hart of the Order",
+      "player": "Jasson Dom\u00ednguez",
+      "fg_id": "28080"
+    },
+    {
+      "year": 2025,
+      "pick": 147,
+      "round": 15,
+      "team": "Tortured Baseball Department",
+      "player": "Adolis Garc\u00eda",
+      "fg_id": "19287"
+    },
+    {
+      "year": 2025,
+      "pick": 148,
+      "round": 15,
+      "team": "Boston Estrellas",
+      "player": "Jurickson Profar",
+      "fg_id": "10815"
+    },
+    {
+      "year": 2025,
+      "pick": 149,
+      "round": 15,
+      "team": "SkeleThor",
+      "player": "Xavier Edwards",
+      "fg_id": "22266"
+    },
+    {
+      "year": 2025,
+      "pick": 150,
+      "round": 15,
+      "team": "Springfield Isotopes",
+      "player": "Reynaldo L\u00f3pez",
+      "fg_id": "16400"
+    },
+    {
+      "year": 2025,
+      "pick": 151,
+      "round": 16,
+      "team": "Springfield Isotopes",
+      "player": "Seth Lugo",
+      "fg_id": "12447"
+    },
+    {
+      "year": 2025,
+      "pick": 152,
+      "round": 16,
+      "team": "SkeleThor",
+      "player": "Ryan Pressly",
+      "fg_id": "7005"
+    },
+    {
+      "year": 2025,
+      "pick": 153,
+      "round": 16,
+      "team": "Boston Estrellas",
+      "player": "Lane Thomas",
+      "fg_id": "16939"
+    },
+    {
+      "year": 2025,
+      "pick": 154,
+      "round": 16,
+      "team": "Tortured Baseball Department",
+      "player": "Robbie Ray",
+      "fg_id": "11486"
+    },
+    {
+      "year": 2025,
+      "pick": 155,
+      "round": 16,
+      "team": "Hart of the Order",
+      "player": "Shane McClanahan",
+      "fg_id": "21483"
+    },
+    {
+      "year": 2025,
+      "pick": 156,
+      "round": 16,
+      "team": "Hello Peanuts!",
+      "player": "Kenley Jansen",
+      "fg_id": "3096"
+    },
+    {
+      "year": 2025,
+      "pick": 157,
+      "round": 16,
+      "team": "Crews Control",
+      "player": "Shea Langeliers",
+      "fg_id": "25816"
+    },
+    {
+      "year": 2025,
+      "pick": 158,
+      "round": 16,
+      "team": "Spacemen",
+      "player": "Eugenio Su\u00e1rez",
+      "fg_id": "12552"
+    },
+    {
+      "year": 2025,
+      "pick": 159,
+      "round": 16,
+      "team": "Jon's Underdogs",
+      "player": "Spencer Steer",
+      "fg_id": "26323"
+    },
+    {
+      "year": 2025,
+      "pick": 160,
+      "round": 16,
+      "team": "Work in Progress",
+      "player": "Nick Pivetta",
+      "fg_id": "15454"
+    },
+    {
+      "year": 2025,
+      "pick": 161,
+      "round": 17,
+      "team": "Work in Progress",
+      "player": "Ryan Pepiot",
+      "fg_id": "26221"
+    },
+    {
+      "year": 2025,
+      "pick": 162,
+      "round": 17,
+      "team": "Jon's Underdogs",
+      "player": "Pete Fairbanks",
+      "fg_id": "17998"
+    },
+    {
+      "year": 2025,
+      "pick": 163,
+      "round": 17,
+      "team": "Spacemen",
+      "player": "Jordan Romano",
+      "fg_id": "16122"
+    },
+    {
+      "year": 2025,
+      "pick": 164,
+      "round": 17,
+      "team": "Crews Control",
+      "player": "Andr\u00e9s Gim\u00e9nez",
+      "fg_id": "19950"
+    },
+    {
+      "year": 2025,
+      "pick": 165,
+      "round": 17,
+      "team": "Hello Peanuts!",
+      "player": "Michael Toglia",
+      "fg_id": "25845"
+    },
+    {
+      "year": 2025,
+      "pick": 166,
+      "round": 17,
+      "team": "Hart of the Order",
+      "player": "Anthony Volpe",
+      "fg_id": "27647"
+    },
+    {
+      "year": 2025,
+      "pick": 167,
+      "round": 17,
+      "team": "Tortured Baseball Department",
+      "player": "Isaac Paredes",
+      "fg_id": "20036"
+    },
+    {
+      "year": 2025,
+      "pick": 168,
+      "round": 17,
+      "team": "Boston Estrellas",
+      "player": "Austin Wells",
+      "fg_id": "27562"
+    },
+    {
+      "year": 2025,
+      "pick": 169,
+      "round": 17,
+      "team": "SkeleThor",
+      "player": "Jeremy Pe\u00f1a",
+      "fg_id": "21636"
+    },
+    {
+      "year": 2025,
+      "pick": 170,
+      "round": 17,
+      "team": "Springfield Isotopes",
+      "player": "Colton Cowser",
+      "fg_id": "29591"
+    },
+    {
+      "year": 2025,
+      "pick": 171,
+      "round": 18,
+      "team": "Springfield Isotopes",
+      "player": "Jonathan India",
+      "fg_id": "21523"
+    },
+    {
+      "year": 2025,
+      "pick": 172,
+      "round": 18,
+      "team": "SkeleThor",
+      "player": "Zach Eflin",
+      "fg_id": "13774"
+    },
+    {
+      "year": 2025,
+      "pick": 173,
+      "round": 18,
+      "team": "Boston Estrellas",
+      "player": "Taj Bradley",
+      "fg_id": "22543"
+    },
+    {
+      "year": 2025,
+      "pick": 174,
+      "round": 18,
+      "team": "Tortured Baseball Department",
+      "player": "Brandon Pfaadt",
+      "fg_id": "27782"
+    },
+    {
+      "year": 2025,
+      "pick": 175,
+      "round": 18,
+      "team": "Hart of the Order",
+      "player": "Yusei Kikuchi",
+      "fg_id": "20633"
+    },
+    {
+      "year": 2025,
+      "pick": 176,
+      "round": 18,
+      "team": "Hello Peanuts!",
+      "player": "Nolan Arenado",
+      "fg_id": "9777"
+    },
+    {
+      "year": 2025,
+      "pick": 177,
+      "round": 18,
+      "team": "Crews Control",
+      "player": "Nathan Eovaldi",
+      "fg_id": "9132"
+    },
+    {
+      "year": 2025,
+      "pick": 178,
+      "round": 18,
+      "team": "Spacemen",
+      "player": "Andrew Vaughn",
+      "fg_id": "26197"
+    },
+    {
+      "year": 2025,
+      "pick": 179,
+      "round": 18,
+      "team": "Jon's Underdogs",
+      "player": "Tyler O'Neill",
+      "fg_id": "15711"
+    },
+    {
+      "year": 2025,
+      "pick": 180,
+      "round": 18,
+      "team": "Work in Progress",
+      "player": "Taylor Ward",
+      "fg_id": "17548"
+    },
+    {
+      "year": 2025,
+      "pick": 181,
+      "round": 19,
+      "team": "Work in Progress",
+      "player": "Dansby Swanson",
+      "fg_id": "18314"
+    },
+    {
+      "year": 2025,
+      "pick": 182,
+      "round": 19,
+      "team": "Jon's Underdogs",
+      "player": "Clay Holmes",
+      "fg_id": "13649"
+    },
+    {
+      "year": 2025,
+      "pick": 183,
+      "round": 19,
+      "team": "Spacemen",
+      "player": "Jorge Soler",
+      "fg_id": "14221"
+    },
+    {
+      "year": 2025,
+      "pick": 184,
+      "round": 19,
+      "team": "Crews Control",
+      "player": "David Bednar",
+      "fg_id": "19569"
+    },
+    {
+      "year": 2025,
+      "pick": 185,
+      "round": 19,
+      "team": "Hello Peanuts!",
+      "player": "Josh Jung",
+      "fg_id": "26299"
+    },
+    {
+      "year": 2025,
+      "pick": 186,
+      "round": 19,
+      "team": "Hart of the Order",
+      "player": "Bryson Stott",
+      "fg_id": "26294"
+    },
+    {
+      "year": 2025,
+      "pick": 187,
+      "round": 19,
+      "team": "Tortured Baseball Department",
+      "player": "Nico Hoerner",
+      "fg_id": "21479"
+    },
+    {
+      "year": 2025,
+      "pick": 188,
+      "round": 19,
+      "team": "Boston Estrellas",
+      "player": "Carlos Est\u00e9vez",
+      "fg_id": "14542"
+    },
+    {
+      "year": 2025,
+      "pick": 189,
+      "round": 19,
+      "team": "SkeleThor",
+      "player": "Kerry Carpenter",
+      "fg_id": "25961"
+    },
+    {
+      "year": 2025,
+      "pick": 190,
+      "round": 19,
+      "team": "Springfield Isotopes",
+      "player": "MacKenzie Gore",
+      "fg_id": "22201"
+    },
+    {
+      "year": 2025,
+      "pick": 191,
+      "round": 20,
+      "team": "Springfield Isotopes",
+      "player": "Nick Lodolo",
+      "fg_id": "26378"
+    },
+    {
+      "year": 2025,
+      "pick": 192,
+      "round": 20,
+      "team": "SkeleThor",
+      "player": "Tanner Houck",
+      "fg_id": "19879"
+    },
+    {
+      "year": 2025,
+      "pick": 193,
+      "round": 20,
+      "team": "Boston Estrellas",
+      "player": "Jackson Holliday",
+      "fg_id": "31781"
+    },
+    {
+      "year": 2025,
+      "pick": 194,
+      "round": 20,
+      "team": "Tortured Baseball Department",
+      "player": "Heliot Ramos",
+      "fg_id": "22515"
+    },
+    {
+      "year": 2025,
+      "pick": 195,
+      "round": 20,
+      "team": "Hart of the Order",
+      "player": "Royce Lewis",
+      "fg_id": "20437"
+    },
+    {
+      "year": 2025,
+      "pick": 196,
+      "round": 20,
+      "team": "Hello Peanuts!",
+      "player": "Max Scherzer",
+      "fg_id": "3137"
+    },
+    {
+      "year": 2025,
+      "pick": 197,
+      "round": 20,
+      "team": "Crews Control",
+      "player": "Kyle Finnegan",
+      "fg_id": "15009"
+    },
+    {
+      "year": 2025,
+      "pick": 198,
+      "round": 20,
+      "team": "Spacemen",
+      "player": "Mitch Keller",
+      "fg_id": "17594"
+    },
+    {
+      "year": 2025,
+      "pick": 199,
+      "round": 20,
+      "team": "Jon's Underdogs",
+      "player": "Drew Rasmussen",
+      "fg_id": "25385"
+    },
+    {
+      "year": 2025,
+      "pick": 200,
+      "round": 20,
+      "team": "Work in Progress",
+      "player": "Paul Goldschmidt",
+      "fg_id": "9218"
+    },
+    {
+      "year": 2025,
+      "pick": 201,
+      "round": 21,
+      "team": "Work in Progress",
+      "player": "Justin Martinez",
+      "fg_id": "24453"
+    },
+    {
+      "year": 2025,
+      "pick": 202,
+      "round": 21,
+      "team": "Jon's Underdogs",
+      "player": "Jos\u00e9 Berr\u00edos",
+      "fg_id": "14168"
+    },
+    {
+      "year": 2025,
+      "pick": 203,
+      "round": 21,
+      "team": "Spacemen",
+      "player": "Michael Wacha",
+      "fg_id": "14078"
+    },
+    {
+      "year": 2025,
+      "pick": 204,
+      "round": 21,
+      "team": "Crews Control",
+      "player": "Spencer Arrighetti",
+      "fg_id": "29921"
+    },
+    {
+      "year": 2025,
+      "pick": 205,
+      "round": 21,
+      "team": "Hello Peanuts!",
+      "player": "Ryan Mountcastle",
+      "fg_id": "18373"
+    },
+    {
+      "year": 2025,
+      "pick": 206,
+      "round": 21,
+      "team": "Hart of the Order",
+      "player": "Gavin Williams",
+      "fg_id": "30122"
+    },
+    {
+      "year": 2025,
+      "pick": 207,
+      "round": 21,
+      "team": "Tortured Baseball Department",
+      "player": "Jes\u00fas Luzardo",
+      "fg_id": "19959"
+    },
+    {
+      "year": 2025,
+      "pick": 208,
+      "round": 21,
+      "team": "Boston Estrellas",
+      "player": "Max Meyer",
+      "fg_id": "27474"
+    },
+    {
+      "year": 2025,
+      "pick": 209,
+      "round": 21,
+      "team": "SkeleThor",
+      "player": "Victor Robles",
+      "fg_id": "18363"
+    },
+    {
+      "year": 2025,
+      "pick": 210,
+      "round": 21,
+      "team": "Springfield Isotopes",
+      "player": "Willi Castro",
+      "fg_id": "17338"
+    },
+    {
+      "year": 2025,
+      "pick": 211,
+      "round": 22,
+      "team": "Springfield Isotopes",
+      "player": "A.J. Puk",
+      "fg_id": "19343"
+    },
+    {
+      "year": 2025,
+      "pick": 212,
+      "round": 22,
+      "team": "SkeleThor",
+      "player": "Cam Smith",
+      "fg_id": "35108"
+    },
+    {
+      "year": 2025,
+      "pick": 213,
+      "round": 22,
+      "team": "Boston Estrellas",
+      "player": "Carlos Correa",
+      "fg_id": "14162"
+    },
+    {
+      "year": 2025,
+      "pick": 214,
+      "round": 22,
+      "team": "Tortured Baseball Department",
+      "player": "Masyn Winn",
+      "fg_id": "27479"
+    },
+    {
+      "year": 2025,
+      "pick": 215,
+      "round": 22,
+      "team": "Hart of the Order",
+      "player": "Tommy Edman",
+      "fg_id": "19470"
+    },
+    {
+      "year": 2025,
+      "pick": 216,
+      "round": 22,
+      "team": "Hello Peanuts!",
+      "player": "Joey Ortiz",
+      "fg_id": "25493"
+    },
+    {
+      "year": 2025,
+      "pick": 217,
+      "round": 22,
+      "team": "Crews Control",
+      "player": "Zach Neto",
+      "fg_id": "31347"
+    },
+    {
+      "year": 2025,
+      "pick": 218,
+      "round": 22,
+      "team": "Spacemen",
+      "player": "Aroldis Chapman",
+      "fg_id": "10233"
+    },
+    {
+      "year": 2025,
+      "pick": 219,
+      "round": 22,
+      "team": "Jon's Underdogs",
+      "player": "Shohei Ohtani",
+      "fg_id": "19755"
+    },
+    {
+      "year": 2025,
+      "pick": 220,
+      "round": 22,
+      "team": "Work in Progress",
+      "player": "Logan O'Hoppe",
+      "fg_id": "24729"
+    },
+    {
+      "year": 2025,
+      "pick": 221,
+      "round": 23,
+      "team": "Work in Progress",
+      "player": "Gleyber Torres",
+      "fg_id": "16997"
+    },
+    {
+      "year": 2025,
+      "pick": 222,
+      "round": 23,
+      "team": "Jon's Underdogs",
+      "player": "Lourdes Gurriel Jr.",
+      "fg_id": "19238"
+    },
+    {
+      "year": 2025,
+      "pick": 223,
+      "round": 23,
+      "team": "Spacemen",
+      "player": "Byron Buxton",
+      "fg_id": "14161"
+    },
+    {
+      "year": 2025,
+      "pick": 224,
+      "round": 23,
+      "team": "Crews Control",
+      "player": "Cedric Mullins",
+      "fg_id": "17929"
+    },
+    {
+      "year": 2025,
+      "pick": 225,
+      "round": 23,
+      "team": "Hello Peanuts!",
+      "player": "Rhys Hoskins",
+      "fg_id": "16472"
+    },
+    {
+      "year": 2025,
+      "pick": 226,
+      "round": 23,
+      "team": "Hart of the Order",
+      "player": "Shane Baz",
+      "fg_id": "22264"
+    },
+    {
+      "year": 2025,
+      "pick": 227,
+      "round": 23,
+      "team": "Tortured Baseball Department",
+      "player": "Ronel Blanco",
+      "fg_id": "19407"
+    },
+    {
+      "year": 2025,
+      "pick": 228,
+      "round": 23,
+      "team": "Boston Estrellas",
+      "player": "Jake McCarthy",
+      "fg_id": "21622"
+    },
+    {
+      "year": 2025,
+      "pick": 229,
+      "round": 23,
+      "team": "SkeleThor",
+      "player": "Jared Jones",
+      "fg_id": "27863"
+    },
+    {
+      "year": 2025,
+      "pick": 230,
+      "round": 23,
+      "team": "Springfield Isotopes",
+      "player": "Gabriel Moreno",
+      "fg_id": "22664"
+    }
+  ]
+}
