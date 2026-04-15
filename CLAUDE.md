@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This project makes real decisions (draft picks, lineup choices, trade evaluations) based on the numbers it produces. A wrong answer that looks plausible is worse than no answer — it will propagate into strategy recommendations, simulations, and memory files that mislead future sessions. Verify claims against the actual code and config before stating them. When summarizing simulation results or strategy conclusions, check that what you're saying matches what the code actually does and what the config actually says. If you're unsure, read the source — don't guess from memory.
 
+## Tests are the guardrail — don't modify failing tests without justification
+
+Tests are the primary regression-prevention mechanism in this repo. A failing test means the code is broken, not the test. Do not loosen an assertion, change expected values, skip, or delete a test to make it pass — fix the code instead. If you genuinely believe a test is wrong (the requirement changed, the test asserts incidental behavior, the fixture is stale), state the reason explicitly and get confirmation from the user before editing. A silently "fixed" test is worse than a broken build: it removes a guardrail without anyone noticing.
+
 ## Commands
 
 ```bash
