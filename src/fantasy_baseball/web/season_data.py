@@ -859,7 +859,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.data.db import (
             create_tables,
             get_connection as get_db_connection, get_blended_projections,
-            get_rest_of_season_projections, load_rest_of_season_projections,
         )
         from fantasy_baseball.data.mlb_game_logs import fetch_game_log_totals
         from fantasy_baseball.lineup.leverage import calculate_leverage
@@ -939,47 +938,39 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         create_tables(db_conn)
         try:
             hitters_proj, pitchers_proj = get_blended_projections(db_conn)
-
-            # Load ROS projections (skip if latest snapshot already in DB)
-            _progress("Loading ROS projections...")
-            projections_dir = project_root / "data" / "projections"
-            rest_of_season_dir = projections_dir / str(config.season_year) / "rest_of_season"
-            if rest_of_season_dir.is_dir():
-                latest_on_disk = max(
-                    (d.name for d in rest_of_season_dir.iterdir() if d.is_dir()), default=None,
-                )
-                if latest_on_disk:
-                    existing = db_conn.execute(
-                        "SELECT COUNT(*) FROM ros_blended_projections "
-                        "WHERE year = ? AND snapshot_date = ?",
-                        (config.season_year, latest_on_disk),
-                    ).fetchone()[0]
-                    if existing == 0:
-                        from fantasy_baseball.data.db import get_roster_names
-                        rest_of_season_roster_names = None
-                        try:
-                            rest_of_season_roster_names = get_roster_names(db_conn)
-                        except Exception:
-                            pass
-                        load_rest_of_season_projections(
-                            db_conn, projections_dir,
-                            config.projection_systems, config.projection_weights,
-                            roster_names=rest_of_season_roster_names, progress_cb=_progress,
-                        )
-
-            rest_of_season_hitters_disk, rest_of_season_pitchers_disk = get_rest_of_season_projections(db_conn)
         finally:
             db_conn.close()
+
+        # Load ROS projections — blend latest dated CSV into Redis
+        # (cache:ros_projections). No-op if no CSV dir exists locally
+        # (Render has no CSVs on disk; the daily admin-triggered
+        # _run_rest_of_season_fetch keeps Redis populated).
+        _progress("Loading ROS projections...")
+        projections_dir = project_root / "data" / "projections"
+        from fantasy_baseball.data.ros_pipeline import blend_and_cache_ros
+        from fantasy_baseball.data.redis_store import (
+            get_default_client, get_latest_roster_names,
+        )
+        try:
+            rest_of_season_roster_names = get_latest_roster_names(get_default_client())
+            blend_and_cache_ros(
+                projections_dir,
+                config.projection_systems, config.projection_weights,
+                rest_of_season_roster_names, config.season_year,
+                progress_cb=_progress,
+            )
+        except FileNotFoundError:
+            # No local CSVs — fine on Render; the admin job keeps Redis populated.
+            _progress("No local ROS CSV dir; relying on Redis cache")
+
         hitters_proj["_name_norm"] = hitters_proj["name"].apply(normalize_name)
         pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
         _progress(f"Loaded {len(hitters_proj)} hitter + {len(pitchers_proj)} pitcher projections")
 
-        # The daily ROS fetch job persists blended projections to Redis.
-        # On Render the fetch and refresh may run on different instances,
-        # so the fetch job's ephemeral CSV files are gone by the time
-        # the refresh runs — but stale CSVs committed to the git repo
-        # are still on disk.  Redis is the authoritative source for ROS
-        # projections; disk CSVs are only a fallback.
+        # ROS projections live in Redis (cache:ros_projections). The
+        # blend above just refreshed that key if local CSVs were
+        # present; otherwise we fall back to whatever the daily admin
+        # job wrote. Disk CSVs are no longer a fallback path.
         import pandas as pd
         rest_of_season_hitters = pd.DataFrame()
         rest_of_season_pitchers = pd.DataFrame()
@@ -991,14 +982,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         if has_rest_of_season:
             _progress(f"Loaded ROS projections from Redis "
                       f"({len(rest_of_season_hitters)} hitters + {len(rest_of_season_pitchers)} pitchers)")
-        else:
-            # Fall back to disk CSVs (loaded into SQLite above)
-            rest_of_season_hitters = rest_of_season_hitters_disk
-            rest_of_season_pitchers = rest_of_season_pitchers_disk
-            has_rest_of_season = not rest_of_season_hitters.empty or not rest_of_season_pitchers.empty
-            if has_rest_of_season:
-                _progress(f"No Redis ROS data — using disk CSVs "
-                          f"({len(rest_of_season_hitters)} hitters + {len(rest_of_season_pitchers)} pitchers)")
 
         preseason_hitters = hitters_proj
         preseason_pitchers = pitchers_proj

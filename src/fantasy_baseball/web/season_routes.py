@@ -185,11 +185,6 @@ def _run_rest_of_season_fetch() -> None:
     """Background worker for ROS projection fetch + quality checks."""
     from fantasy_baseball.config import load_config
     from fantasy_baseball.data.fangraphs_fetch import fetch_rest_of_season_projections
-    from fantasy_baseball.data.db import (
-        create_tables,
-        get_connection as get_db_connection,
-        get_roster_names, load_rest_of_season_projections,
-    )
     from fantasy_baseball.data.mlb_game_logs import fetch_game_log_totals
     from fantasy_baseball.web.job_logger import JobLogger
 
@@ -217,7 +212,7 @@ def _run_rest_of_season_fetch() -> None:
         for system, status in results.items():
             logger.log(f"  {system}: {status}")
 
-        # Load roster names for quality checks
+        # Load roster names from Redis for quality checks
         quality_warnings = []
 
         def _quality_cb(msg):
@@ -225,35 +220,20 @@ def _run_rest_of_season_fetch() -> None:
             if msg.startswith("QUALITY:"):
                 quality_warnings.append(msg)
 
-        db_conn = get_db_connection()
-        create_tables(db_conn)
-        try:
-            roster_names = get_roster_names(db_conn)
-            if roster_names:
-                logger.log(f"Loaded {len(roster_names)} rostered players for quality checks")
+        from fantasy_baseball.data.redis_store import (
+            get_default_client, get_latest_roster_names,
+        )
+        roster_names = get_latest_roster_names(get_default_client())
+        if roster_names:
+            logger.log(f"Loaded {len(roster_names)} rostered players for quality checks")
 
-            logger.log("Loading into SQLite...")
-            load_rest_of_season_projections(
-                db_conn, projections_dir,
-                config.projection_systems, config.projection_weights,
-                roster_names=roster_names, progress_cb=_quality_cb,
-            )
-
-            # Persist blended ROS projections to Redis so the refresh
-            # pipeline can read them even if Render spins up a new instance
-            # (ephemeral filesystem is wiped between instances).
-            from fantasy_baseball.data.db import get_rest_of_season_projections
-            from fantasy_baseball.web.season_data import write_cache
-            ros_h, ros_p = get_rest_of_season_projections(db_conn)
-            if not ros_h.empty or not ros_p.empty:
-                ros_data = {
-                    "hitters": ros_h.to_dict(orient="records"),
-                    "pitchers": ros_p.to_dict(orient="records"),
-                }
-                write_cache("ros_projections", ros_data)
-                logger.log(f"Persisted {len(ros_h)} ROS hitters + {len(ros_p)} ROS pitchers to Redis")
-        finally:
-            db_conn.close()
+        logger.log("Blending ROS projections → Redis...")
+        from fantasy_baseball.data.ros_pipeline import blend_and_cache_ros
+        ros_h, ros_p = blend_and_cache_ros(
+            projections_dir, config.projection_systems, config.projection_weights,
+            roster_names, config.season_year, progress_cb=_quality_cb,
+        )
+        logger.log(f"Persisted {len(ros_h)} ROS hitters + {len(ros_p)} ROS pitchers to Redis")
 
         # Write standalone quality report
         if quality_warnings:

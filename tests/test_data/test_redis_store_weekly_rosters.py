@@ -126,3 +126,52 @@ def test_write_roster_snapshot_recovers_from_corrupt_day(fake_redis):
     )
     day = redis_store.get_weekly_roster_day(fake_redis, "2026-04-15")
     assert day == [{**ENTRY_A_TEAM_1, "team": "Alpha"}]
+
+
+# ---------------------------------------------------------------------------
+# get_latest_roster_names: Redis-backed replacement for db.get_roster_names
+# ---------------------------------------------------------------------------
+
+ENTRY_WITH_BATTER_SUFFIX = {
+    "slot": "SS", "player_name": "Bobby Witt Jr. (Batter)",
+    "positions": "SS", "status": "", "yahoo_id": "10764",
+}
+ENTRY_WITH_PITCHER_SUFFIX = {
+    "slot": "SP", "player_name": "Gerrit Cole (Pitcher)",
+    "positions": "SP", "status": "", "yahoo_id": "10123",
+}
+
+
+def test_get_latest_roster_names_none_on_empty_hash(fake_redis):
+    assert redis_store.get_latest_roster_names(fake_redis) is None
+
+
+def test_get_latest_roster_names_none_on_none_client():
+    assert redis_store.get_latest_roster_names(None) is None
+
+
+def test_get_latest_roster_names_strips_suffixes_and_unions_teams(fake_redis):
+    redis_store.write_roster_snapshot(
+        fake_redis, "2026-04-15", "Alpha",
+        [ENTRY_WITH_BATTER_SUFFIX, ENTRY_WITH_PITCHER_SUFFIX],
+    )
+    redis_store.write_roster_snapshot(
+        fake_redis, "2026-04-15", "Beta",
+        [{"slot": "OF", "player_name": "Juan Soto (Batter)",
+          "positions": "OF", "status": "", "yahoo_id": "10765"}],
+    )
+    names = redis_store.get_latest_roster_names(fake_redis)
+    # Suffixes stripped, names normalized (lowercased, accents removed).
+    assert names == {"bobby witt jr.", "gerrit cole", "juan soto"}
+
+
+def test_get_latest_roster_names_picks_latest_snapshot(fake_redis):
+    redis_store.write_roster_snapshot(
+        fake_redis, "2026-04-08", "Alpha", [ENTRY_WITH_BATTER_SUFFIX]
+    )
+    redis_store.write_roster_snapshot(
+        fake_redis, "2026-04-15", "Alpha", [ENTRY_WITH_PITCHER_SUFFIX]
+    )
+    names = redis_store.get_latest_roster_names(fake_redis)
+    # Only the 2026-04-15 entry's name should be present.
+    assert names == {"gerrit cole"}

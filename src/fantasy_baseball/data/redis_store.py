@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re as _re
 import threading
 from typing import TYPE_CHECKING
 
@@ -233,6 +234,32 @@ def get_latest_weekly_rosters(client) -> list[dict]:
         return []
     latest = max(dates)
     return get_weekly_roster_day(client, latest)
+
+
+# Matches Yahoo's " (Batter)" / " (Pitcher)" trailing annotations that
+# appear on some dual-eligibility names (e.g. Shohei Ohtani). Mirrors
+# the constant in ``data.db`` so get_latest_roster_names normalizes
+# identically to the (about-to-be-removed) SQLite get_roster_names.
+_PLAYER_SUFFIX_RE = _re.compile(r"\s*\((?:Batter|Pitcher)\)\s*$", _re.IGNORECASE)
+
+
+def get_latest_roster_names(client) -> set[str] | None:
+    """Normalized names of all rostered players from the latest snapshot.
+
+    Strips Yahoo's " (Batter)" / " (Pitcher)" suffixes and normalizes
+    (accent-stripped, lowercased). Returns ``None`` when no roster
+    snapshots exist, or when *client* is ``None`` (unconfigured Redis).
+    """
+    from fantasy_baseball.utils.name_utils import normalize_name
+    if client is None:
+        return None
+    entries = get_latest_weekly_rosters(client)
+    if not entries:
+        return None
+    return {
+        normalize_name(_PLAYER_SUFFIX_RE.sub("", e["player_name"]))
+        for e in entries
+    }
 
 
 def get_weekly_roster_history(client) -> dict[str, list[dict]]:
