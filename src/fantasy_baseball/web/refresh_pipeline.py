@@ -92,6 +92,145 @@ def _write_spoe_snapshot(spoe_result: dict) -> None:
         log.warning(f"Failed to write spoe_snapshot:{snapshot_date}: {exc}")
 
 
+class RefreshRun:
+    """Encapsulates one execution of the season dashboard refresh.
+
+    Each step from the original ``run_full_refresh`` is now a private
+    method. The class holds shared state as instance attributes so
+    methods don't need 10-arg signatures. Methods are NOT individually
+    unit-tested; the integration test in
+    ``tests/test_web/test_refresh_pipeline.py`` covers them collectively.
+
+    Module-level state (``_refresh_lock``, ``_refresh_status``) is shared
+    across threads and stays at module scope.
+    """
+
+    def __init__(self, cache_dir: Path = CACHE_DIR):
+        from fantasy_baseball.web.job_logger import JobLogger
+        self.cache_dir = cache_dir
+        self.logger = JobLogger("refresh")
+
+        # Shared state — populated as steps run. All initialized to None
+        # so attribute access errors surface as clear AttributeErrors
+        # rather than silent fall-through to the wrong type.
+        self.config = None
+        self.league = None              # Yahoo session-bound league
+        self.league_model = None        # League dataclass loaded from Redis
+        self.user_team_key = None
+        self.standings = None
+        self.standings_snap = None
+        self.projected_standings = None
+        self.projected_standings_snap = None
+        self.team_sds = None
+        self.fraction_remaining = None
+        self.sd_scale = None
+        self.effective_date = None
+        self.start_date = None
+        self.end_date = None
+        self.roster_raw = None
+        self.raw_rosters_by_team = None
+        self.opp_rosters = None
+        self.matched = None
+        self.roster_players = None
+        self.preseason_lookup = None
+        self.preseason_hitters = None
+        self.preseason_pitchers = None
+        self.hitters_proj = None
+        self.pitchers_proj = None
+        self.has_rest_of_season = False
+        self.hitter_logs = None
+        self.pitcher_logs = None
+        self.leverage = None
+        self.rankings_lookup = None
+        self.optimal_hitters = None
+        self.optimal_pitchers_starters = None
+        self.optimal_pitchers_bench = None
+        self.fa_players = None
+
+    def _progress(self, msg: str) -> None:
+        _set_refresh_progress(msg)
+        self.logger.log(msg)
+        log.info(msg)
+
+    def run(self) -> None:
+        """Run the full refresh pipeline.
+
+        Same try/except/finally protocol as the legacy ``run_full_refresh``:
+        sets ``_refresh_status`` throughout, captures errors into
+        ``_refresh_status['error']`` while still raising, and clears
+        ``running`` in the ``finally`` block.
+        """
+        with _refresh_lock:
+            _refresh_status["running"] = True
+            _refresh_status["progress"] = "Starting..."
+            _refresh_status["error"] = None
+
+        try:
+            self._authenticate()
+            self._find_user_team()
+            self._fetch_standings_and_roster()
+            self._load_projections()
+            self._fetch_opponent_rosters()
+            self._write_snapshots_and_load_league()
+            self._hydrate_rosters()
+            self._build_projected_standings()
+            self._compute_leverage()
+            self._match_roster_to_projections()
+            self._fetch_game_logs()
+            self._compute_pace()
+            self._compute_wsgp()
+            self._compute_rankings()
+            self._optimize_lineup()
+            self._compute_moves()
+            self._fetch_probable_starters()
+            self._audit_roster()
+            self._compute_per_team_leverage()
+            self._run_monte_carlo()
+            self._run_ros_monte_carlo()
+            self._compute_spoe()
+            self._analyze_transactions()
+            self._write_meta()
+
+            self.logger.finish("ok")
+            self._progress("Done")
+            from fantasy_baseball.web.season_data import clear_opponent_cache
+            clear_opponent_cache()
+        except Exception as exc:
+            with _refresh_lock:
+                _refresh_status["error"] = str(exc)
+            self.logger.finish("error", str(exc))
+            raise
+        finally:
+            with _refresh_lock:
+                _refresh_status["running"] = False
+
+    # Step methods — populated in subsequent tasks
+    def _authenticate(self): raise NotImplementedError
+    def _find_user_team(self): raise NotImplementedError
+    def _fetch_standings_and_roster(self): raise NotImplementedError
+    def _load_projections(self): raise NotImplementedError
+    def _fetch_opponent_rosters(self): raise NotImplementedError
+    def _write_snapshots_and_load_league(self): raise NotImplementedError
+    def _hydrate_rosters(self): raise NotImplementedError
+    def _build_projected_standings(self): raise NotImplementedError
+    def _compute_leverage(self): raise NotImplementedError
+    def _match_roster_to_projections(self): raise NotImplementedError
+    def _fetch_game_logs(self): raise NotImplementedError
+    def _compute_pace(self): raise NotImplementedError
+    def _compute_wsgp(self): raise NotImplementedError
+    def _compute_rankings(self): raise NotImplementedError
+    def _optimize_lineup(self): raise NotImplementedError
+    def _compute_moves(self): raise NotImplementedError
+    def _fetch_probable_starters(self): raise NotImplementedError
+    def _audit_roster(self): raise NotImplementedError
+    def _compute_per_team_leverage(self): raise NotImplementedError
+    def _run_monte_carlo(self): raise NotImplementedError
+    def _run_ros_monte_carlo(self): raise NotImplementedError
+    def _compute_spoe(self): raise NotImplementedError
+    def _analyze_transactions(self): raise NotImplementedError
+    def _write_meta(self): raise NotImplementedError
+
+
 def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
     """Connect to Yahoo, fetch all data, run computations, and write cache files.
 
