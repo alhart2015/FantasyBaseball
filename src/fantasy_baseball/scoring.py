@@ -394,6 +394,48 @@ def project_team_sds(
     return sds
 
 
+def build_projected_standings(
+    team_rosters: dict[str, list],
+) -> list[dict]:
+    """Build the projected_standings list written to the projections cache.
+
+    Each entry has keys ``name``, ``team_key`` (always empty — the
+    consumer fills it from standings if needed), ``rank`` (always 0 —
+    ranking is computed downstream), and ``stats`` (the team's projected
+    category totals from :func:`project_team_stats` with
+    ``displacement=True``, serialized via ``CategoryStats.to_dict``).
+    """
+    return [
+        {
+            "name": tname,
+            "team_key": "",
+            "rank": 0,
+            "stats": project_team_stats(roster, displacement=True).to_dict(),
+        }
+        for tname, roster in team_rosters.items()
+    ]
+
+
+def build_team_sds(
+    team_rosters: dict[str, list],
+    sd_scale: float,
+) -> dict[str, dict[str, float]]:
+    """Build the team_sds dict written to the projections cache.
+
+    Each team's per-category SDs from :func:`project_team_sds` are
+    scaled by ``sd_scale`` — typically ``sqrt(fraction_remaining)`` so
+    variance damps as the season progresses and less of the roto total
+    is still up for grabs.
+    """
+    return {
+        tname: {
+            cat: sd * sd_scale
+            for cat, sd in project_team_sds(roster, displacement=True).items()
+        }
+        for tname, roster in team_rosters.items()
+    }
+
+
 def score_roto(
     all_team_stats: dict,
     *,
