@@ -2,8 +2,11 @@
 integration test. Returns plain dicts/lists matching the shapes
 produced by Yahoo (post-parse) and the projection CSVs (post-blend).
 """
+import json
+from contextlib import contextmanager
 from datetime import date
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 
 TEAM_NAMES = [f"Team {i:02d}" for i in range(1, 13)]  # 12 teams
@@ -171,3 +174,184 @@ def team_batting_stats() -> dict[str, Any]:
 def scoring_period() -> tuple[str, str]:
     """Sunday-ending scoring week."""
     return ("2026-04-13", "2026-04-19")  # Mon-Sun
+
+
+def _mock_league(team_keys_to_names: dict[str, str]) -> MagicMock:
+    """Yahoo league mock that returns canned teams() and supports the
+    attribute access patterns used in run_full_refresh."""
+    mock = MagicMock(name="MockLeague")
+    mock.teams.return_value = {
+        team_key: {"name": tname, "team_key": team_key}
+        for team_key, tname in team_keys_to_names.items()
+    }
+    return mock
+
+
+def _team_keys_to_names() -> dict[str, str]:
+    return {f"458.l.123.t.{i}": name for i, name in enumerate(TEAM_NAMES, start=1)}
+
+
+def seed_redis(client) -> None:
+    """Write the projection blobs into fake Redis so
+    redis_get_blended() reads them back. Uses the keys that
+    fantasy_baseball.data.redis_store expects."""
+    # Match the keys used by data.redis_store.get_blended_projections.
+    # The reader inspects keys like "blended_projections:hitters" and
+    # "blended_projections:pitchers". Encode as JSON list of dicts.
+    client.set("blended_projections:hitters", json.dumps(hitter_projections()))
+    client.set("blended_projections:pitchers", json.dumps(pitcher_projections()))
+
+
+@contextmanager
+def patched_refresh_environment(
+    fake_redis,
+    *,
+    has_rest_of_season: bool = True,
+    cache_dir,
+):
+    """Patch every external dependency of run_full_refresh and yield.
+
+    - Yahoo session/league: MagicMock returning canned teams()
+    - fetch_roster, fetch_standings, fetch_scoring_period: canned data
+    - fetch_all_transactions: returns transactions() (empty by default)
+    - fetch_and_match_free_agents: returns ([Player...], None)
+    - fetch_game_log_totals: writes nothing (Redis seeded already)
+    - get_week_schedule, get_team_batting_stats: return canned/empty
+    - run_monte_carlo, run_ros_monte_carlo: 10 iters instead of 1000
+    - get_default_client (data.redis_store): returns fake_redis
+    - read_cache("ros_projections"): returns ROS proj rows or None
+    """
+    from fantasy_baseball.models.player import Player, PlayerType
+    rosters = all_rosters()
+    team_keys = _team_keys_to_names()
+
+    league_mock = _mock_league(team_keys)
+
+    # Seed Redis with projections + League data
+    seed_redis(fake_redis)
+
+    # Build League dataclass from rosters by writing snapshot keys
+    from fantasy_baseball.data.redis_store import (
+        write_roster_snapshot, write_standings_snapshot,
+    )
+    snapshot_date = "2026-04-21"  # next_tuesday after 2026-04-19
+    for tname, team_roster in rosters.items():
+        entries = [
+            {
+                "slot": r["selected_position"],
+                "player_name": r["name"],
+                "positions": ", ".join(r.get("positions", [])),
+                "status": r.get("status") or "",
+                "yahoo_id": r.get("player_id") or "",
+            }
+            for r in team_roster
+        ]
+        write_roster_snapshot(fake_redis, snapshot_date, tname, entries)
+    write_standings_snapshot(
+        fake_redis, snapshot_date,
+        {"teams": [
+            {
+                "team": s["name"],
+                "team_key": s["team_key"],
+                "rank": s["rank"],
+                **{k.lower(): v for k, v in s["stats"].items()},
+            }
+            for s in standings()
+        ]},
+    )
+
+    # FA players
+    fa_player_objs = [
+        Player(
+            name=fa["name"],
+            positions=fa["positions"],
+            player_type=PlayerType.HITTER,
+            selected_position=fa.get("selected_position", "BN"),
+            yahoo_id=fa.get("player_id", ""),
+        )
+        for fa in free_agents()
+    ]
+
+    def _fetch_roster(league, team_key, day=None):
+        tname = team_keys.get(team_key)
+        return rosters.get(tname, [])
+
+    def _fetch_standings(league):
+        return standings()
+
+    def _fetch_scoring_period(league):
+        return scoring_period()
+
+    def _fetch_all_transactions(league):
+        return transactions()
+
+    def _fetch_and_match_fa(league, hitters_proj, pitchers_proj):
+        return (fa_player_objs, None)
+
+    def _fetch_game_logs(season_year, progress_cb=None):
+        # Seed game logs into Redis using the data.redis_store API
+        from fantasy_baseball.data.redis_store import set_game_log_totals
+        try:
+            set_game_log_totals(fake_redis, season_year, "hitters", hitter_game_logs())
+            set_game_log_totals(fake_redis, season_year, "pitchers", pitcher_game_logs())
+        except Exception:
+            # Function name may vary — this is a best-effort seed
+            pass
+
+    def _ros_pipeline_blend(*args, **kwargs):
+        if has_rest_of_season:
+            # Write ROS projections into the cache so read_cache picks them up
+            from fantasy_baseball.web.season_data import write_cache
+            write_cache(
+                "ros_projections",
+                {"hitters": hitter_projections(), "pitchers": pitcher_projections()},
+                cache_dir,
+            )
+
+    def _scaled_mc(team_rosters, h_slots, p_slots, user_team_name,
+                   n_iterations=1000, use_management=False, progress_cb=None):
+        from fantasy_baseball.simulation import run_monte_carlo as real_mc
+        return real_mc(
+            team_rosters, h_slots, p_slots, user_team_name,
+            n_iterations=10, use_management=use_management,
+            progress_cb=progress_cb,
+        )
+
+    def _scaled_ros_mc(*, team_rosters, actual_standings, fraction_remaining,
+                       h_slots, p_slots, user_team_name,
+                       n_iterations=1000, use_management=False, progress_cb=None):
+        from fantasy_baseball.simulation import run_ros_monte_carlo as real_ros_mc
+        return real_ros_mc(
+            team_rosters=team_rosters, actual_standings=actual_standings,
+            fraction_remaining=fraction_remaining,
+            h_slots=h_slots, p_slots=p_slots, user_team_name=user_team_name,
+            n_iterations=10, use_management=use_management,
+            progress_cb=progress_cb,
+        )
+
+    patches = [
+        patch("fantasy_baseball.web.refresh_pipeline.get_yahoo_session", return_value=MagicMock()),
+        patch("fantasy_baseball.web.refresh_pipeline.get_league", return_value=league_mock),
+        patch("fantasy_baseball.web.refresh_pipeline.fetch_standings", side_effect=_fetch_standings),
+        patch("fantasy_baseball.web.refresh_pipeline.fetch_scoring_period", side_effect=_fetch_scoring_period),
+        patch("fantasy_baseball.web.refresh_pipeline.fetch_roster", side_effect=_fetch_roster),
+        patch("fantasy_baseball.web.refresh_pipeline.fetch_all_transactions", side_effect=_fetch_all_transactions),
+        patch("fantasy_baseball.web.refresh_pipeline.fetch_and_match_free_agents", side_effect=_fetch_and_match_fa),
+        patch("fantasy_baseball.web.refresh_pipeline.fetch_game_log_totals", side_effect=_fetch_game_logs),
+        patch("fantasy_baseball.web.refresh_pipeline.get_week_schedule", return_value={}),
+        patch("fantasy_baseball.web.refresh_pipeline.get_team_batting_stats", return_value={}),
+        patch("fantasy_baseball.web.refresh_pipeline.blend_and_cache_ros", side_effect=_ros_pipeline_blend),
+        patch("fantasy_baseball.web.refresh_pipeline.run_monte_carlo", side_effect=_scaled_mc),
+        patch("fantasy_baseball.web.refresh_pipeline.run_ros_monte_carlo", side_effect=_scaled_ros_mc),
+        patch("fantasy_baseball.data.redis_store.get_default_client", return_value=fake_redis),
+        patch("fantasy_baseball.web.season_data._get_redis", return_value=fake_redis),
+    ]
+
+    started = []
+    try:
+        for p in patches:
+            started.append(p.start())
+        yield
+    finally:
+        for p in patches:
+            p.stop()
