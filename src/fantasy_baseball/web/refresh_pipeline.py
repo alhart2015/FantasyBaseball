@@ -27,7 +27,12 @@ from fantasy_baseball.utils.constants import (
     HITTER_PROJ_KEYS, IL_STATUSES, PITCHER_PROJ_KEYS,
 )
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
-from fantasy_baseball.utils.time_utils import local_now, local_today, next_tuesday
+from fantasy_baseball.utils.time_utils import (
+    compute_effective_date,
+    compute_fraction_remaining,
+    local_now,
+    local_today,
+)
 
 from fantasy_baseball.web.season_data import (
     CACHE_DIR,
@@ -160,7 +165,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         # one day too early.
         _progress("Computing effective date...")
         start_date, end_date = fetch_scoring_period(league)
-        effective_date = next_tuesday(date.fromisoformat(end_date))
+        effective_date = compute_effective_date(end_date)
         _progress(f"Effective date (next lock): {effective_date}")
 
         standings_snap = _standings_to_snapshot(standings, effective_date)
@@ -401,12 +406,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                 "stats": proj_stats.to_dict(),
             })
 
-        import math
-        _season_start = date.fromisoformat(config.season_start)
-        _season_end = date.fromisoformat(config.season_end)
-        _total_days = (_season_end - _season_start).days
-        _remaining_days = max(0, (_season_end - local_today()).days)
-        fraction_remaining = (_remaining_days / _total_days) if _total_days > 0 else 0.0
+        fraction_remaining = compute_fraction_remaining(
+            date.fromisoformat(config.season_start),
+            date.fromisoformat(config.season_end),
+            local_today(),
+        )
         _sd_scale = math.sqrt(fraction_remaining)
 
         from fantasy_baseball.scoring import project_team_sds
@@ -695,11 +699,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         if has_rest_of_season:
             from fantasy_baseball.simulation import run_ros_monte_carlo
 
-            season_start = date.fromisoformat(config.season_start)
-            season_end = date.fromisoformat(config.season_end)
-            total_days = (season_end - season_start).days
-            remaining_days = max(0, (season_end - local_today()).days)
-            fraction_remaining = remaining_days / total_days if total_days > 0 else 0
+            # fraction_remaining was computed in Step 4e and is reused here
 
             # Build ROS rosters for all teams. hitters_proj/pitchers_proj
             # already ARE rest_of_season_hitters/rest_of_season_pitchers when has_rest_of_season is True
