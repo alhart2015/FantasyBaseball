@@ -548,10 +548,10 @@ function renderDeltaRoto(dr) {
     const cats = dr.categories;
     for (const cat of Object.keys(cats)) {
         const c = cats[cat];
-        if (Math.abs(c.score) > 0.01) {
-            const cc = c.score > 0 ? 'var(--success)' : 'var(--danger)';
+        if (Math.abs(c.roto_delta) > 0.01) {
+            const cc = c.roto_delta > 0 ? 'var(--success)' : 'var(--danger)';
             catParts.push('<span style="color:' + cc + '">' + cat + ' ' +
-                (c.score > 0 ? '+' : '') + c.score.toFixed(2) + '</span>');
+                (c.roto_delta > 0 ? '+' : '') + c.roto_delta.toFixed(2) + '</span>');
         }
     }
     if (catParts.length > 0) {
