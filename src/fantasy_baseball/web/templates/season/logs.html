@@ -52,6 +52,12 @@
 
 <div class="page-header">
     <h2>Job Logs</h2>
+    {% if session.get('authenticated') %}
+    <div style="display: flex; align-items: center; gap: 10px;">
+        <span id="fetch-ros-status" style="font-size: 13px; color: var(--text-secondary);"></span>
+        <button id="fetch-ros-btn" class="btn-refresh" style="width: auto; padding: 6px 14px; font-size: 13px;" onclick="fetchRosProjections()">Fetch ROS Projections</button>
+    </div>
+    {% endif %}
 </div>
 
 <div class="log-filters pill-group">
@@ -94,6 +100,35 @@ function filterLogs(btn, job) {
     document.querySelectorAll('.log-card').forEach(card => {
         card.style.display = (job === 'all' || card.dataset.job === job) ? '' : 'none';
     });
+}
+
+function fetchRosProjections() {
+    const btn = document.getElementById('fetch-ros-btn');
+    const status = document.getElementById('fetch-ros-status');
+    btn.disabled = true;
+    btn.textContent = 'Fetching...';
+    status.textContent = 'Starting...';
+    status.style.color = 'var(--accent)';
+
+    fetch('/api/fetch-ros-projections', {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'started') {
+                status.textContent = 'Running in background — reload in a few minutes to see results';
+                setTimeout(() => window.location.reload(), 5000);
+            } else {
+                status.textContent = 'Error: ' + JSON.stringify(data);
+                status.style.color = 'var(--danger)';
+                btn.disabled = false;
+                btn.textContent = 'Fetch ROS Projections';
+            }
+        })
+        .catch(err => {
+            status.textContent = 'Error: ' + err.message;
+            status.style.color = 'var(--danger)';
+            btn.disabled = false;
+            btn.textContent = 'Fetch ROS Projections';
+        });
 }
 </script>
 
