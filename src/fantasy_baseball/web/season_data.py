@@ -687,6 +687,7 @@ def compute_comparison_standings(
     user_team_name: str,
     *,
     roster_player_projection: "Player | None" = None,
+    team_sds: dict[str, dict[str, float]] | None = None,
 ) -> dict:
     """Compute before/after roto standings for a player swap.
 
@@ -700,6 +701,10 @@ def compute_comparison_standings(
     used for the dropped player's contribution instead of the roster
     cache entry.  This keeps the delta consistent with the browse page
     (which reads from ``ros_projections``).
+
+    When ``team_sds`` is provided, ``score_roto`` uses EV-based pairwise
+    Gaussian scoring so the comparison matches the roster audit for the
+    same swap.
 
     Returns dict with before/after stats and roto, or {"error": ...}.
     """
@@ -721,8 +726,8 @@ def compute_comparison_standings(
         all_stats_before[user_team_name], loses_ros, gains_ros,
     )
 
-    roto_before = score_roto(all_stats_before)
-    roto_after = score_roto(all_stats_after)
+    roto_before = score_roto(all_stats_before, team_sds=team_sds)
+    roto_after = score_roto(all_stats_after, team_sds=team_sds)
 
     from fantasy_baseball.lineup.delta_roto import score_swap
 
@@ -1140,7 +1145,29 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                 "stats": proj_stats.to_dict(),
             })
 
-        write_cache("projections", {"projected_standings": projected_standings}, cache_dir)
+        import math
+        _season_start = date.fromisoformat(config.season_start)
+        _season_end = date.fromisoformat(config.season_end)
+        _total_days = (_season_end - _season_start).days
+        _remaining_days = max(0, (_season_end - local_today()).days)
+        fraction_remaining = (_remaining_days / _total_days) if _total_days > 0 else 0.0
+        _sd_scale = math.sqrt(fraction_remaining)
+
+        from fantasy_baseball.scoring import project_team_sds
+        team_sds: dict[str, dict[str, float]] = {}
+        for _tname, _troster in all_team_rosters.items():
+            _raw_sds = project_team_sds(_troster, displacement=True)
+            team_sds[_tname] = {c: sd * _sd_scale for c, sd in _raw_sds.items()}
+
+        write_cache(
+            "projections",
+            {
+                "projected_standings": projected_standings,
+                "team_sds": team_sds,
+                "fraction_remaining": fraction_remaining,
+            },
+            cache_dir,
+        )
         _progress(f"Projected standings for {len(projected_standings)} teams")
 
         projected_standings_snap = _standings_to_snapshot(projected_standings, effective_date)
@@ -1368,6 +1395,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             roster_players, fa_players, leverage, config.roster_slots,
             projected_standings=projected_standings,
             team_name=config.team_name,
+            team_sds=team_sds,
         )
         write_cache("roster_audit", [e.to_dict() for e in audit_results], cache_dir)
         upgrades = sum(1 for e in audit_results if e.gap > 0)
