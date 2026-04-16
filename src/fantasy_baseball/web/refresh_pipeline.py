@@ -498,14 +498,10 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         current_ranks = compute_rankings_from_game_logs(hitter_logs, pitcher_logs)
 
         # Build combined lookup: {name::player_type: {ros, preseason, current}}
-        all_keys = set(rest_of_season_ranks) | set(preseason_ranks) | set(current_ranks)
-        rankings_lookup = {}
-        for key in all_keys:
-            rankings_lookup[key] = {
-                "rest_of_season": rest_of_season_ranks.get(key),
-                "preseason": preseason_ranks.get(key),
-                "current": current_ranks.get(key),
-            }
+        from fantasy_baseball.sgp.rankings import build_rankings_lookup
+        rankings_lookup = build_rankings_lookup(
+            rest_of_season_ranks, preseason_ranks, current_ranks,
+        )
 
         write_cache("rankings", rankings_lookup, cache_dir)
         _progress(f"Ranked {len(rest_of_season_ranks)} ROS, {len(preseason_ranks)} preseason, {len(current_ranks)} current")
