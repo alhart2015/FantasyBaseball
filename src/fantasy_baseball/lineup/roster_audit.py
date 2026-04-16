@@ -156,6 +156,7 @@ def audit_roster(
     *,
     projected_standings: list[dict],
     team_name: str,
+    team_sds: dict[str, dict[str, float]] | None = None,
 ) -> list[AuditEntry]:
     """Evaluate every roster slot against the best available FA.
 
@@ -166,6 +167,11 @@ def audit_roster(
 
     IL players are excluded from lineup optimization (they can't play)
     but still appear in the output with slot="IL".
+
+    When ``team_sds`` is provided, deltaRoto for each candidate uses
+    EV-based ``score_roto`` so within-uncertainty swaps produce
+    fractional deltas instead of full ±1.0 rank flips. ``None``
+    preserves exact-rank semantics.
     """
     if not roster:
         return []
@@ -266,6 +272,7 @@ def audit_roster(
                     user_roster=roster,
                     projected_standings=projected_standings,
                     team_name=team_name,
+                    team_sds=team_sds,
                 )
             except (ValueError, KeyError) as exc:
                 logger.warning(
