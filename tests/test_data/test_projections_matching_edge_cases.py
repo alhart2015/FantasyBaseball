@@ -146,3 +146,50 @@ class TestMasonMillerCrossTypeCollision:
         assert len(result) == 1
         assert result[0].player_type == PlayerType.HITTER
         # Fallback warning is asserted in TestMatchObservability — not here.
+
+
+# --- Shohei Ohtani: dual-entry roster ---
+
+class TestShoheiOhtaniDualEntry:
+    """Yahoo returns Ohtani as two roster entries:
+    - "Shohei Ohtani" with hitter positions
+    - "Shohei Ohtani (Pitcher)" with pitcher positions
+
+    Both must match correctly. The "(Pitcher)" suffix is stripped before
+    name normalization so both find the right projection by name.
+    """
+
+    HITTER_PROJ = {
+        "name": "Shohei Ohtani", "_name_norm": "shohei ohtani",
+        "hr": 44, "r": 110,
+    }
+    PITCHER_PROJ = {
+        "name": "Shohei Ohtani", "_name_norm": "shohei ohtani",
+        "k": 180, "ip": 140, "w": 12,
+    }
+
+    def test_dual_roster_entries_produce_two_player_objects(self):
+        roster = [
+            {"name": "Shohei Ohtani", "positions": ["Util"],
+             "selected_position": "Util", "player_id": "100", "status": ""},
+            {"name": "Shohei Ohtani (Pitcher)", "positions": ["SP"],
+             "selected_position": "SP", "player_id": "200", "status": ""},
+        ]
+        result = match_roster_to_projections(
+            roster, _hitters_df([self.HITTER_PROJ]), _pitchers_df([self.PITCHER_PROJ]),
+        )
+        assert len(result) == 2
+
+        by_yahoo_id = {p.yahoo_id: p for p in result}
+        assert set(by_yahoo_id) == {"100", "200"}
+
+        hitter = by_yahoo_id["100"]
+        assert hitter.player_type == PlayerType.HITTER
+        assert hitter.name == "Shohei Ohtani"
+        assert hitter.rest_of_season.hr == 44
+
+        pitcher = by_yahoo_id["200"]
+        assert pitcher.player_type == PlayerType.PITCHER
+        # Suffix stripped from the stored Player.name as well
+        assert pitcher.name == "Shohei Ohtani"
+        assert pitcher.rest_of_season.k == 180
