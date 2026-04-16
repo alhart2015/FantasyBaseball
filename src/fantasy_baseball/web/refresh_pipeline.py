@@ -22,7 +22,6 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import (
     IL_STATUSES,
 )
@@ -125,6 +124,11 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.lineup.yahoo_roster import fetch_roster, fetch_standings, fetch_scoring_period
         from fantasy_baseball.utils.name_utils import normalize_name
         from fantasy_baseball.lineup.roster_audit import audit_roster
+        from fantasy_baseball.web.refresh_steps import (
+            build_positions_map,
+            compute_lineup_moves,
+            merge_matched_and_raw_roster,
+        )
 
         project_root = Path(__file__).resolve().parents[3]
 
@@ -434,28 +438,10 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         )
         preseason_lookup = {normalize_name(p.name): p for p in preseason_matched}
 
-        # Build Player objects from matched entries
-        matched_names = set()
-        roster_players: list[Player] = []
-        for player in matched:
-            norm = normalize_name(player.name)
-            matched_names.add(norm)
-
-            # Attach preseason stat bag
-            pre_entry = preseason_lookup.get(norm)
-            if pre_entry and pre_entry.rest_of_season:
-                player.preseason = pre_entry.rest_of_season
-
-            roster_players.append(player)
-
-        # Include unmatched players
-        for raw_player in roster_raw:
-            if normalize_name(raw_player["name"]) not in matched_names:
-                player = Player.from_dict({
-                    **raw_player,
-                    "player_type": PlayerType.PITCHER if set(raw_player.get("positions", [])) & PITCHER_POSITIONS else PlayerType.HITTER,
-                })
-                roster_players.append(player)
+        # Build Player objects from matched entries (+ any unmatched raw)
+        roster_players = merge_matched_and_raw_roster(
+            matched, roster_raw, preseason_lookup,
+        )
 
         _progress(f"Matched {len(roster_players)} players to projections")
 
@@ -546,26 +532,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # --- Step 8: Compare optimal to current, find moves ---
         _progress("Computing lineup moves...")
-        moves = []
-        for slot, player_name in optimal_hitters.items():
-            for player in roster_players:
-                if player.name == player_name:
-                    current_slot = player.selected_position or "BN"
-                    base_slot = slot.split("_")[0]
-                    # Position is StrEnum; comparison is direct after
-                    # enum normalization at the Player constructor
-                    # boundary. See feat/player-position-enum.
-                    bench_slots = {"BN", "IL", "DL"}
-                    if current_slot != base_slot and (
-                        current_slot in bench_slots or base_slot in bench_slots
-                    ):
-                        moves.append({
-                            "action": "START",
-                            "player": player_name,
-                            "slot": base_slot,
-                            "reason": f"wSGP: {player.wsgp:.1f}",
-                        })
-                    break
+        moves = compute_lineup_moves(optimal_hitters, roster_players)
 
         optimal_data = {
             "hitter_lineup": optimal_hitters,
@@ -603,16 +570,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         )
 
         # Cache positions for all known players (roster + opponents + FAs)
-        from fantasy_baseball.utils.name_utils import normalize_name as _norm
-        positions_map: dict[str, list[str]] = {}
-        for p in roster_players:
-            positions_map[_norm(p.name)] = list(p.positions)
-        for _opp_roster in opp_rosters.values():
-            for p in _opp_roster:
-                positions_map[_norm(p.name)] = list(p.positions)
-        for fa in fa_players:
-            if fa.positions:
-                positions_map[_norm(fa.name)] = list(fa.positions)
+        positions_map = build_positions_map(roster_players, opp_rosters, fa_players)
         write_cache("positions", positions_map, cache_dir)
         from fantasy_baseball.data.redis_store import set_positions, get_default_client
         set_positions(get_default_client(), positions_map)
