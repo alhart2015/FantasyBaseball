@@ -294,7 +294,7 @@ def patched_refresh_environment(
         try:
             set_game_log_totals(fake_redis, season_year, "hitters", hitter_game_logs())
             set_game_log_totals(fake_redis, season_year, "pitchers", pitcher_game_logs())
-        except Exception:
+        except (AttributeError, ImportError):
             # Function name may vary — this is a best-effort seed
             pass
 
