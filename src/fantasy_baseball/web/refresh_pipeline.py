@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import (
-    HITTER_PROJ_KEYS, IL_STATUSES, PITCHER_PROJ_KEYS,
+    IL_STATUSES,
 )
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 from fantasy_baseball.utils.time_utils import (
@@ -124,7 +124,6 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
         from fantasy_baseball.lineup.yahoo_roster import fetch_roster, fetch_standings, fetch_scoring_period
         from fantasy_baseball.utils.name_utils import normalize_name
-        from fantasy_baseball.analysis.pace import compute_player_pace
         from fantasy_baseball.lineup.roster_audit import audit_roster
 
         project_root = Path(__file__).resolve().parents[3]
@@ -470,26 +469,12 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # Attach pace data to each roster player (pace compares actuals vs preseason)
         from fantasy_baseball.sgp.denominators import get_sgp_denominators
+        from fantasy_baseball.analysis.pace import attach_pace_to_roster
         sgp_denoms = get_sgp_denominators(config.sgp_overrides)
-        for player in roster_players:
-            norm = normalize_name(player.name)
-            if player.player_type == PlayerType.HITTER:
-                actuals = hitter_logs.get(norm, {})
-                rest_of_season_keys = ["r", "hr", "rbi", "sb", "avg"]
-            else:
-                actuals = pitcher_logs.get(norm, {})
-                rest_of_season_keys = ["w", "k", "sv", "era", "whip"]
-            proj_keys = HITTER_PROJ_KEYS if player.player_type == PlayerType.HITTER else PITCHER_PROJ_KEYS
-            pre_player = preseason_lookup.get(norm)
-            if pre_player and pre_player.rest_of_season:
-                projected = {k: getattr(pre_player.rest_of_season, k, 0) for k in proj_keys}
-            else:
-                projected = {k: 0 for k in proj_keys}
-            rest_of_season_dict = {k: getattr(player.rest_of_season, k, 0) for k in rest_of_season_keys} if player.rest_of_season else None
-            player.pace = compute_player_pace(
-                actuals, projected, player.player_type,
-                rest_of_season_stats=rest_of_season_dict, sgp_denoms=sgp_denoms,
-            )
+        attach_pace_to_roster(
+            roster_players, hitter_logs, pitcher_logs,
+            preseason_lookup, sgp_denoms,
+        )
 
         # --- Step 6e: Compute wSGP on raw ROS stats ---
         # NOTE: recency blending was removed here because FanGraphs ROS
