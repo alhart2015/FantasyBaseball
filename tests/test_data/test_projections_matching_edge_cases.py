@@ -168,17 +168,19 @@ class TestShoheiOhtaniDualEntry:
         "k": 180, "ip": 140, "w": 12,
     }
 
-    def test_dual_roster_entries_produce_two_player_objects(self):
+    def test_dual_roster_entries_produce_two_player_objects(self, caplog):
         roster = [
             {"name": "Shohei Ohtani", "positions": ["Util"],
              "selected_position": "Util", "player_id": "100", "status": ""},
             {"name": "Shohei Ohtani (Pitcher)", "positions": ["SP"],
              "selected_position": "SP", "player_id": "200", "status": ""},
         ]
-        result = match_roster_to_projections(
-            roster, _hitters_df([self.HITTER_PROJ]), _pitchers_df([self.PITCHER_PROJ]),
-        )
+        with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.projections"):
+            result = match_roster_to_projections(
+                roster, _hitters_df([self.HITTER_PROJ]), _pitchers_df([self.PITCHER_PROJ]),
+            )
         assert len(result) == 2
+        assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 0
 
         by_yahoo_id = {p.yahoo_id: p for p in result}
         assert set(by_yahoo_id) == {"100", "200"}
