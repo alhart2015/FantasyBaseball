@@ -23,6 +23,7 @@ from fantasy_baseball.utils.constants import (
     INVERSE_STATS as INVERSE_CATS,  # noqa: F401
     PITCHING_COUNTING,
     STARTER_IP_THRESHOLD,
+    STAT_VARIANCE,
     safe_float as _safe,
 )
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
@@ -324,6 +325,68 @@ def project_team_stats(roster, *, displacement: bool = False) -> CategoryStats:
         era=calculate_era(er_total, ip_total),
         whip=calculate_whip(bb_total, ha_total, ip_total),
     )
+
+
+def project_team_sds(
+    roster,
+    *,
+    displacement: bool = True,
+) -> dict[str, float]:
+    """Aggregate per-player projection variance into team-level SDs.
+
+    Uses ``STAT_VARIANCE`` (per-stat CV calibrated from 2022-2024
+    Steamer+ZiPS vs actuals) under a player-independence assumption:
+
+        SD_cat_team = CV_cat * sqrt(sum_over_players(stat_i^2))
+
+    Rate stats propagate through their component totals:
+
+        SD_AVG  = CV_h * sqrt(sum h_i^2) / sum_AB
+        SD_ERA  = 9 * CV_er * sqrt(sum er_i^2) / sum_IP
+        SD_WHIP = sqrt(CV_bb^2 * sum bb_i^2 + CV_ha^2 * sum ha_i^2) / sum_IP
+
+    ``displacement`` matches :func:`project_team_stats` — bench excluded,
+    IL players displace their worst active positional match.
+
+    Returns ``{cat: sd}`` for every category in ``ALL_CATS``. Empty
+    roster returns zeros.
+    """
+    if displacement:
+        roster = _apply_displacement(roster)
+
+    h_sum_sq: dict[str, float] = {k: 0.0 for k in HITTING_COUNTING}
+    p_sum_sq: dict[str, float] = {k: 0.0 for k in PITCHING_COUNTING}
+    total_ab = 0.0
+    total_ip = 0.0
+
+    for p in roster:
+        ptype = _get(p, "player_type")
+        if ptype == PlayerType.HITTER:
+            for k in HITTING_COUNTING:
+                v = _stat(p, k)
+                h_sum_sq[k] += v * v
+            total_ab += _stat(p, "ab")
+        elif ptype == PlayerType.PITCHER:
+            for k in PITCHING_COUNTING:
+                v = _stat(p, k)
+                p_sum_sq[k] += v * v
+            total_ip += _stat(p, "ip")
+
+    sds: dict[str, float] = {c: 0.0 for c in ALL_CATS}
+    for stat_key, cat in [("r", "R"), ("hr", "HR"), ("rbi", "RBI"), ("sb", "SB")]:
+        sds[cat] = STAT_VARIANCE[stat_key] * sqrt(h_sum_sq[stat_key])
+    for stat_key, cat in [("w", "W"), ("k", "K"), ("sv", "SV")]:
+        sds[cat] = STAT_VARIANCE[stat_key] * sqrt(p_sum_sq[stat_key])
+    if total_ab > 0:
+        sds["AVG"] = STAT_VARIANCE["h"] * sqrt(h_sum_sq["h"]) / total_ab
+    if total_ip > 0:
+        sds["ERA"] = 9.0 * STAT_VARIANCE["er"] * sqrt(p_sum_sq["er"]) / total_ip
+        whip_var = (
+            (STAT_VARIANCE["bb"] ** 2) * p_sum_sq["bb"]
+            + (STAT_VARIANCE["h_allowed"] ** 2) * p_sum_sq["h_allowed"]
+        )
+        sds["WHIP"] = sqrt(whip_var) / total_ip
+    return sds
 
 
 def score_roto(

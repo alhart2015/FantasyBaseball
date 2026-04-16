@@ -148,6 +148,101 @@ class TestProbBeats:
         assert p_ab + p_ba == pytest.approx(1.0)
 
 
+from fantasy_baseball.scoring import project_team_sds
+from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
+from fantasy_baseball.utils.constants import STAT_VARIANCE
+
+
+def _make_hitter(name, **stats):
+    """Build a Player with HitterStats for unit tests."""
+    return Player(
+        name=name,
+        player_type=PlayerType.HITTER,
+        positions=["OF"],
+        selected_position="OF",
+        status="",
+        rest_of_season=HitterStats(**stats),
+    )
+
+
+def _make_pitcher(name, **stats):
+    return Player(
+        name=name,
+        player_type=PlayerType.PITCHER,
+        positions=["SP"],
+        selected_position="SP",
+        status="",
+        rest_of_season=PitcherStats(**stats),
+    )
+
+
+class TestProjectTeamSDs:
+    """Per-team-per-category SD from analytical variance propagation."""
+
+    def test_empty_roster_returns_zeros(self):
+        sds = project_team_sds([])
+        for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]:
+            assert sds[cat] == 0.0
+
+    def test_single_hitter_counting_stat(self):
+        p = _make_hitter("A", r=80, hr=20, rbi=70, sb=10, h=150, ab=500)
+        sds = project_team_sds([p])
+        # SD_R = CV_r * sqrt(r^2) = CV_r * r  (single player case)
+        assert sds["R"] == pytest.approx(STAT_VARIANCE["r"] * 80)
+        assert sds["HR"] == pytest.approx(STAT_VARIANCE["hr"] * 20)
+
+    def test_independence_aggregates_in_quadrature(self):
+        a = _make_hitter("A", r=100, hr=0, rbi=0, sb=0, h=0, ab=0)
+        b = _make_hitter("B", r=60, hr=0, rbi=0, sb=0, h=0, ab=0)
+        sds = project_team_sds([a, b])
+        expected = STAT_VARIANCE["r"] * math.sqrt(100**2 + 60**2)
+        assert sds["R"] == pytest.approx(expected)
+
+    def test_avg_uses_hits_variance_over_total_ab(self):
+        a = _make_hitter("A", r=0, hr=0, rbi=0, sb=0, h=150, ab=500)
+        b = _make_hitter("B", r=0, hr=0, rbi=0, sb=0, h=100, ab=400)
+        sds = project_team_sds([a, b])
+        expected = STAT_VARIANCE["h"] * math.sqrt(150**2 + 100**2) / (500 + 400)
+        assert sds["AVG"] == pytest.approx(expected)
+
+    def test_era_scales_by_nine_over_ip(self):
+        a = _make_pitcher("A", w=10, k=180, sv=0, ip=180, er=60, bb=40, h_allowed=140)
+        b = _make_pitcher("B", w=8, k=140, sv=0, ip=150, er=55, bb=35, h_allowed=130)
+        sds = project_team_sds([a, b])
+        expected = 9.0 * STAT_VARIANCE["er"] * math.sqrt(60**2 + 55**2) / (180 + 150)
+        assert sds["ERA"] == pytest.approx(expected)
+
+    def test_whip_combines_bb_and_h_allowed_variance(self):
+        a = _make_pitcher("A", w=0, k=0, sv=0, ip=100, er=0, bb=30, h_allowed=90)
+        sds = project_team_sds([a])
+        expected = math.sqrt(
+            STAT_VARIANCE["bb"]**2 * 30**2
+            + STAT_VARIANCE["h_allowed"]**2 * 90**2
+        ) / 100
+        assert sds["WHIP"] == pytest.approx(expected)
+
+    def test_all_ten_categories_present(self):
+        p = _make_hitter("A", r=50, hr=10, rbi=40, sb=5, h=100, ab=400)
+        sds = project_team_sds([p])
+        assert set(sds.keys()) == {"R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"}
+
+    def test_displacement_kwarg_defaults_true(self):
+        # Bench players excluded by default. A bench-slot hitter should
+        # not contribute to SDs when displacement=True (default).
+        active = _make_hitter("A", r=80, hr=20, rbi=70, sb=10, h=150, ab=500)
+        bench = Player(
+            name="B",
+            player_type=PlayerType.HITTER,
+            positions=["OF"],
+            selected_position="BN",
+            status="",
+            rest_of_season=HitterStats(r=80, hr=20, rbi=70, sb=10, h=150, ab=500),
+        )
+        sds_with_bench = project_team_sds([active, bench])
+        sds_active_only = project_team_sds([active])
+        assert sds_with_bench["R"] == pytest.approx(sds_active_only["R"])
+
+
 class TestScoreRoto:
     def test_two_teams_simple(self):
         stats = {
