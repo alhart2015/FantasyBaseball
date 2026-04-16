@@ -5,7 +5,7 @@ import logging
 import os
 import tempfile
 import threading
-from datetime import date, datetime, timedelta
+from datetime import date
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -18,7 +18,6 @@ from fantasy_baseball.utils.constants import (
     PITCHER_PROJ_KEYS,
 )
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
-from fantasy_baseball.utils.time_utils import local_now, local_today, next_tuesday
 
 _opponent_cache: dict = {}
 OPPONENT_CACHE_TTL_SECONDS = 900  # 15 minutes
