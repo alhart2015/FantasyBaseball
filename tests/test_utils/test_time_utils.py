@@ -4,6 +4,8 @@ from datetime import date, datetime
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
+import pytest
+
 
 class TestLocalNow:
     def test_returns_timezone_aware_datetime(self):
@@ -168,3 +170,35 @@ class TestNextTuesday:
         from fantasy_baseball.utils.time_utils import next_tuesday
         # Tue Dec 29 → next Tue Jan 5
         assert next_tuesday(date(2026, 12, 29)) == date(2027, 1, 5)
+
+
+class TestComputeFractionRemaining:
+    def test_mid_season(self):
+        from fantasy_baseball.utils.time_utils import compute_fraction_remaining
+        season_start = date(2026, 4, 1)
+        season_end = date(2026, 9, 30)  # 182 days total
+        today = date(2026, 7, 1)        # 91 days remaining
+        result = compute_fraction_remaining(season_start, season_end, today)
+        assert result == pytest.approx(91 / 182)
+
+    def test_today_after_season_end_returns_zero(self):
+        from fantasy_baseball.utils.time_utils import compute_fraction_remaining
+        result = compute_fraction_remaining(
+            date(2026, 4, 1), date(2026, 9, 30), date(2026, 10, 15),
+        )
+        assert result == 0.0
+
+    def test_today_equals_season_start_returns_one(self):
+        from fantasy_baseball.utils.time_utils import compute_fraction_remaining
+        result = compute_fraction_remaining(
+            date(2026, 4, 1), date(2026, 9, 30), date(2026, 4, 1),
+        )
+        assert result == 1.0
+
+    def test_zero_total_days_returns_zero(self):
+        # Defensive: avoid divide-by-zero if season_end == season_start
+        from fantasy_baseball.utils.time_utils import compute_fraction_remaining
+        result = compute_fraction_remaining(
+            date(2026, 4, 1), date(2026, 4, 1), date(2026, 4, 1),
+        )
+        assert result == 0.0
