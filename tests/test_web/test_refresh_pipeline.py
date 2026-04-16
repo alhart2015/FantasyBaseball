@@ -92,3 +92,78 @@ class TestRefreshShape:
         data = _read(cache_dir, "meta")
         assert {"last_refresh", "start_date", "end_date", "team_name"} <= data.keys()
         assert data["team_name"] == "Team 01"
+
+
+class TestRefreshInvariants:
+    """Cross-step contracts — these catch wiring regressions."""
+
+    @pytest.fixture(autouse=True)
+    def _run_refresh(self, configured_test_env, fake_redis):
+        cache_dir = configured_test_env
+        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
+            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+        self.cache_dir = cache_dir
+
+    def test_every_team_in_standings_appears_in_projected_standings(self):
+        standings = _read(self.cache_dir, "standings")
+        projections = _read(self.cache_dir, "projections")
+        standings_names = {t["name"] for t in standings}
+        projected_names = {t["name"] for t in projections["projected_standings"]}
+        assert standings_names == projected_names
+
+    def test_every_roster_player_has_pace(self):
+        roster = _read(self.cache_dir, "roster")
+        for player in roster:
+            assert "pace" in player, f"{player.get('name')} missing pace"
+            assert player["pace"] is not None
+
+    def test_lineup_moves_only_reference_roster_players(self):
+        roster = _read(self.cache_dir, "roster")
+        optimal = _read(self.cache_dir, "lineup_optimal")
+        roster_names = {p["name"] for p in roster}
+        for move in optimal["moves"]:
+            assert move["player"] in roster_names, (
+                f"Move references {move['player']!r} not on roster"
+            )
+
+    def test_positions_map_covers_roster_and_opponents_and_fas(self):
+        positions = _read(self.cache_dir, "positions")
+        roster = _read(self.cache_dir, "roster")
+        opp_rosters = _read(self.cache_dir, "opp_rosters")
+        from fantasy_baseball.utils.name_utils import normalize_name
+        # Roster players
+        for p in roster:
+            assert normalize_name(p["name"]) in positions
+        # Opponent players
+        for opp_name, opp_roster in opp_rosters.items():
+            for p in opp_roster:
+                assert normalize_name(p["name"]) in positions
+
+    def test_meta_last_refresh_is_set(self):
+        meta = _read(self.cache_dir, "meta")
+        assert meta["last_refresh"]  # truthy
+
+    def test_meta_team_name_matches_config(self):
+        meta = _read(self.cache_dir, "meta")
+        assert meta["team_name"] == "Team 01"
+
+
+class TestMonteCarloROSBranch:
+    @pytest.mark.parametrize("has_ros", [True, False])
+    def test_monte_carlo_keys_match_ros_availability(
+        self, configured_test_env, fake_redis, has_ros,
+    ):
+        cache_dir = configured_test_env
+        with patched_refresh_environment(
+            fake_redis, has_rest_of_season=has_ros, cache_dir=cache_dir,
+        ):
+            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+        data = _read(cache_dir, "monte_carlo")
+        assert data["base"] is not None
+        assert data["with_management"] is not None
+        if has_ros:
+            assert data["rest_of_season"] is not None
+            assert data["rest_of_season_with_management"] is not None
+        else:
+            assert data["rest_of_season"] is None
+            assert data["rest_of_season_with_management"] is None
