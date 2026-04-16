@@ -391,40 +391,52 @@ def project_team_sds(
 
 def score_roto(
     all_team_stats: dict,
+    *,
+    team_sds: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, dict[str, float]]:
-    """Assign roto points with fractional tie-breaking.
+    """Assign expected-value roto points per team per category.
+
+    For each team in each category, points equal
+
+        pts = 1 + Σ_{j≠me} P(me > j)
+
+    where ``P(A > B) = Φ((μ_A - μ_B) / √(σ_A² + σ_B²))`` under Gaussian
+    independence of team totals (Φ is the standard-normal CDF). When
+    ``team_sds`` is ``None`` or every σ is zero, this reduces to the
+    step function that recovers the standard rank-based scoring,
+    including the averaged-ranks convention on exact ties.
 
     Args:
-        all_team_stats: ``{team_name: stats}`` for all teams. Each
-            ``stats`` value can be either a plain ``dict[str, float]``
-            (legacy callers in draft/trade code) or a
-            :class:`CategoryStats` instance (callers that went through
-            ``project_team_stats``). Both shapes support ``[cat]``
-            indexing, which is all this function needs.
+        all_team_stats: ``{team: stats}``. Values can be ``dict`` or
+            ``CategoryStats`` — both support ``[cat]`` indexing.
+        team_sds: optional ``{team: {cat: sd}}``. ``None`` disables
+            uncertainty (exact-rank behavior).
 
     Returns:
-        ``{team_name: {cat_pts: float, ..., "total": float}}`` where
-        ``cat_pts`` keys are ``"R_pts"``, ``"HR_pts"``, etc. Points
-        range from 1 (worst) to N (best) for N teams.
+        ``{team: {R_pts, HR_pts, ..., total}}``. All values are floats.
+        Points range from 1 (last) to N (first) for N teams.
     """
     teams = list(all_team_stats.keys())
-    n = len(teams)
     results: dict[str, dict[str, float]] = {t: {} for t in teams}
 
     for cat in ALL_CATS:
-        rev = cat not in INVERSE_CATS
-        ranked = sorted(teams, key=lambda t: all_team_stats[t][cat], reverse=rev)
-        i = 0
-        while i < n:
-            j = i + 1
-            while j < n and abs(all_team_stats[ranked[j]][cat] - all_team_stats[ranked[i]][cat]) < 1e-9:
-                j += 1
-            avg_pts = sum(n - k for k in range(i, j)) / (j - i)
-            for k in range(i, j):
-                results[ranked[k]][f"{cat}_pts"] = avg_pts
-            i = j
+        higher_is_better = cat not in INVERSE_CATS
+        for me in teams:
+            mu_me = all_team_stats[me][cat]
+            sd_me = team_sds.get(me, {}).get(cat, 0.0) if team_sds else 0.0
+            pts = 1.0
+            for other in teams:
+                if other is me:
+                    continue
+                mu_o = all_team_stats[other][cat]
+                sd_o = team_sds.get(other, {}).get(cat, 0.0) if team_sds else 0.0
+                pts += _prob_beats(
+                    mu_me, mu_o, sd_me, sd_o,
+                    higher_is_better=higher_is_better,
+                )
+            results[me][f"{cat}_pts"] = pts
 
     for t in results:
-        results[t]["total"] = sum(results[t].get(f"{c}_pts", 0) for c in ALL_CATS)
+        results[t]["total"] = sum(results[t].get(f"{c}_pts", 0.0) for c in ALL_CATS)
 
     return results

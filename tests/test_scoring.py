@@ -595,3 +595,116 @@ class TestDisplacementNoRos:
         # IL player has 0 ab -> 0 displacement
         assert stats["R"] == 80
         assert stats["HR"] == 20
+
+
+from fantasy_baseball.scoring import score_roto
+
+
+def _twelve_team_stats(r_values):
+    """Build ``{team: {R: value, other cats: 0}}`` for 12 teams."""
+    teams = {}
+    for i, r in enumerate(r_values):
+        teams[f"T{i+1}"] = {
+            "R": r, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0.0,
+            "W": 0, "K": 0, "SV": 0, "ERA": 0.0, "WHIP": 0.0,
+        }
+    return teams
+
+
+class TestScoreRotoEV:
+    """Expected-value roto scoring with projection uncertainty."""
+
+    def test_no_sds_matches_rank_scoring_distinct(self):
+        # 12 distinct values → integer points 1..12.
+        stats = _twelve_team_stats([100 + i for i in range(12)])
+        roto = score_roto(stats)
+        # T12 has highest R (111), gets 12 pts.
+        assert roto["T12"]["R_pts"] == pytest.approx(12.0)
+        assert roto["T1"]["R_pts"] == pytest.approx(1.0)
+
+    def test_no_sds_exact_tie_averages_ranks(self):
+        # Two teams tied at top: both get avg of 12 and 11 → 11.5.
+        vals = [111, 111] + [100 + i for i in range(10)]
+        stats = _twelve_team_stats(vals)
+        roto = score_roto(stats)
+        assert roto["T1"]["R_pts"] == pytest.approx(11.5)
+        assert roto["T2"]["R_pts"] == pytest.approx(11.5)
+
+    def test_no_sds_three_way_tie_averages(self):
+        # Three teams tied at top: avg of 12+11+10 = 11.
+        vals = [111, 111, 111] + [100 + i for i in range(9)]
+        stats = _twelve_team_stats(vals)
+        roto = score_roto(stats)
+        for t in ["T1", "T2", "T3"]:
+            assert roto[t]["R_pts"] == pytest.approx(11.0)
+
+    def test_zero_sds_matches_none_path(self):
+        stats = _twelve_team_stats([100 + i for i in range(12)])
+        roto_none = score_roto(stats)
+        zero_sds = {t: {c: 0.0 for c in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
+                    for t in stats}
+        roto_zero = score_roto(stats, team_sds=zero_sds)
+        for t in stats:
+            for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]:
+                assert roto_zero[t][f"{cat}_pts"] == pytest.approx(
+                    roto_none[t][f"{cat}_pts"]
+                )
+
+    def test_large_sds_collapse_toward_middle(self):
+        # Huge σ >> any μ gap → every team's pairwise P ≈ 0.5 → pts ≈ (N+1)/2 = 6.5.
+        stats = _twelve_team_stats([100 + i for i in range(12)])
+        huge_sds = {t: {c: 1_000_000 for c in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
+                    for t in stats}
+        roto = score_roto(stats, team_sds=huge_sds)
+        for t in stats:
+            assert roto[t]["R_pts"] == pytest.approx(6.5, abs=0.01)
+
+    def test_monotone_in_own_stat(self):
+        # Increasing team i's stat never decreases its EV points.
+        stats = _twelve_team_stats([100 + i for i in range(12)])
+        sds = {t: {c: 5.0 for c in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
+               for t in stats}
+        before = score_roto(stats, team_sds=sds)["T5"]["R_pts"]
+        stats["T5"]["R"] = 108  # was 104, now 108
+        after = score_roto(stats, team_sds=sds)["T5"]["R_pts"]
+        assert after > before
+
+    def test_total_pts_per_category_invariant(self):
+        # Σ pts across teams in a category = N*(N+1)/2 = 78 for N=12.
+        stats = _twelve_team_stats([100 + i for i in range(12)])
+        sds = {t: {c: 5.0 for c in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
+               for t in stats}
+        roto = score_roto(stats, team_sds=sds)
+        total_r = sum(roto[t]["R_pts"] for t in stats)
+        assert total_r == pytest.approx(78.0, abs=1e-6)
+
+    def test_inverse_category_direction(self):
+        # ERA: lower is better. Team with lowest ERA gets highest pts.
+        stats = _twelve_team_stats([0] * 12)
+        for i, t in enumerate(stats):
+            stats[t]["ERA"] = 3.0 + i * 0.1
+        roto = score_roto(stats)
+        assert roto["T1"]["ERA_pts"] == pytest.approx(12.0)
+        assert roto["T12"]["ERA_pts"] == pytest.approx(1.0)
+
+    def test_small_swap_within_uncertainty_produces_small_delta(self):
+        # Two teams tied at 100 R with σ=10 each. Moving 1 R changes
+        # pts by only ~0.03, not the full 1.0 of a rank flip.
+        stats = _twelve_team_stats([100, 100, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50])
+        sds = {t: {c: 10.0 if c == "R" else 1.0
+                   for c in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
+               for t in stats}
+        before = score_roto(stats, team_sds=sds)["T1"]["R_pts"]
+        stats["T1"]["R"] = 101  # tiny edge
+        after = score_roto(stats, team_sds=sds)["T1"]["R_pts"]
+        delta = after - before
+        assert 0 < delta < 0.1  # smooth, not a rank flip
+
+    def test_total_includes_all_categories(self):
+        stats = _twelve_team_stats([100 + i for i in range(12)])
+        roto = score_roto(stats)
+        for t in stats:
+            assert roto[t]["total"] == pytest.approx(
+                sum(roto[t][f"{cat}_pts"] for cat in
+                    ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"])
+            )
