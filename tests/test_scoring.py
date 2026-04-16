@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from fantasy_baseball.models.player import (
@@ -7,7 +9,7 @@ from fantasy_baseball.models.player import (
     PlayerType,
 )
 from fantasy_baseball.models.positions import Position
-from fantasy_baseball.scoring import ALL_CATS, project_team_stats, score_roto
+from fantasy_baseball.scoring import ALL_CATS, _prob_beats, project_team_stats, score_roto
 
 
 def _hitter(name, r=0, hr=0, rbi=0, sb=0, h=0, ab=0, pa=0,
@@ -103,6 +105,47 @@ class TestProjectTeamStats:
         assert stats["R"] == 80
         assert stats["HR"] == 25
         assert stats["AVG"] == pytest.approx(130 / 500)
+
+
+class TestProbBeats:
+    """Unit tests for the pairwise Gaussian win-probability helper."""
+
+    def test_equal_means_zero_sd_returns_half(self):
+        assert _prob_beats(100, 100, 0, 0, higher_is_better=True) == 0.5
+
+    def test_deterministic_win_when_ahead_with_zero_sd(self):
+        assert _prob_beats(110, 100, 0, 0, higher_is_better=True) == 1.0
+
+    def test_deterministic_loss_when_behind_with_zero_sd(self):
+        assert _prob_beats(90, 100, 0, 0, higher_is_better=True) == 0.0
+
+    def test_equal_means_positive_sd_returns_half(self):
+        assert _prob_beats(100, 100, 10, 10, higher_is_better=True) == pytest.approx(0.5)
+
+    def test_one_sd_ahead_equal_variance(self):
+        # μ_a - μ_b = 14.14, combined sd = sqrt(100 + 100) = 14.14
+        # z = 14.14 / 14.14 = 1.0 → Φ(1.0) ≈ 0.8413
+        assert _prob_beats(114.14, 100, 10, 10, higher_is_better=True) == pytest.approx(
+            0.8413, abs=1e-3
+        )
+
+    def test_inverse_flips_direction(self):
+        # Lower is better: A has smaller μ, so A "beats" B.
+        assert _prob_beats(3.50, 4.00, 0, 0, higher_is_better=False) == 1.0
+        assert _prob_beats(4.00, 3.50, 0, 0, higher_is_better=False) == 0.0
+
+    def test_inverse_equal_means_still_half(self):
+        assert _prob_beats(3.75, 3.75, 0.2, 0.2, higher_is_better=False) == pytest.approx(0.5)
+
+    def test_zero_sd_with_negative_diff_returns_zero(self):
+        # Degenerate case: combined sd == 0 and μ_a < μ_b.
+        assert _prob_beats(50, 100, 0, 0, higher_is_better=True) == 0.0
+
+    def test_complementary_probabilities_sum_to_one(self):
+        # P(A > B) + P(B > A) == 1 when means differ.
+        p_ab = _prob_beats(110, 100, 5, 5, higher_is_better=True)
+        p_ba = _prob_beats(100, 110, 5, 5, higher_is_better=True)
+        assert p_ab + p_ba == pytest.approx(1.0)
 
 
 class TestScoreRoto:

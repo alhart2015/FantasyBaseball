@@ -10,6 +10,8 @@ Provides two core functions:
 
 from __future__ import annotations
 
+from math import erf, sqrt
+
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS, Position
 from fantasy_baseball.models.standings import CategoryStats
@@ -45,6 +47,34 @@ def _stat(p, key):
     if isinstance(p, dict):
         return _safe(p.get(key, 0))
     return 0.0
+
+
+def _prob_beats(
+    mu_a: float,
+    mu_b: float,
+    sd_a: float,
+    sd_b: float,
+    *,
+    higher_is_better: bool,
+) -> float:
+    """P(team A's category total exceeds team B's) under Gaussian independence.
+
+    When combined SD is zero, this is a step function: 1.0 if A is ahead,
+    0.0 if behind, 0.5 on exact equality. Positive combined SD smooths the
+    step into a continuous sigmoid. The ``higher_is_better`` flag flips
+    the direction for inverse categories (ERA, WHIP).
+
+    This is the pairwise primitive the EV-based ``score_roto`` sums over.
+    """
+    diff = (mu_a - mu_b) if higher_is_better else (mu_b - mu_a)
+    combined = sqrt(sd_a * sd_a + sd_b * sd_b)
+    if combined == 0.0:
+        if diff > 0:
+            return 1.0
+        if diff < 0:
+            return 0.0
+        return 0.5
+    return 0.5 * (1.0 + erf(diff / (combined * sqrt(2.0))))
 
 
 # ── Displacement helpers ────────────────────────────────────────────
