@@ -116,6 +116,27 @@ def compute_combined_sgp_rankings(
     return rankings
 
 
+def build_rankings_lookup(
+    ros: dict, preseason: dict, current: dict,
+) -> dict[str, dict]:
+    """Three-way merge of player ranking dicts keyed by ``name::player_type``.
+
+    The output is a dict mapping each player key to a dict with three
+    keys (``rest_of_season``, ``preseason``, ``current``); missing
+    entries are ``None``. The union of keys from all three inputs is
+    represented.
+    """
+    all_keys = set(ros) | set(preseason) | set(current)
+    return {
+        key: {
+            "rest_of_season": ros.get(key),
+            "preseason": preseason.get(key),
+            "current": current.get(key),
+        }
+        for key in all_keys
+    }
+
+
 def compute_rankings_from_game_logs(
     hitter_logs: dict[str, dict],
     pitcher_logs: dict[str, dict],

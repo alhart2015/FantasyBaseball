@@ -1,6 +1,6 @@
 import pytest
 import pandas as pd
-from fantasy_baseball.sgp.rankings import compute_sgp_rankings, rank_key
+from fantasy_baseball.sgp.rankings import build_rankings_lookup, compute_sgp_rankings, rank_key
 
 
 class TestComputeSgpRankings:
@@ -94,3 +94,61 @@ class TestRankingsFromGameLogs:
     def test_empty_logs_return_empty_dict(self):
         from fantasy_baseball.sgp.rankings import compute_rankings_from_game_logs
         assert compute_rankings_from_game_logs({}, {}) == {}
+
+
+class TestBuildRankingsLookup:
+    def test_player_in_all_three(self):
+        ros = {"Soto::hitter": {"overall": 5}}
+        pre = {"Soto::hitter": {"overall": 3}}
+        cur = {"Soto::hitter": {"overall": 7}}
+        result = build_rankings_lookup(ros, pre, cur)
+        assert result["Soto::hitter"] == {
+            "rest_of_season": {"overall": 5},
+            "preseason": {"overall": 3},
+            "current": {"overall": 7},
+        }
+
+    def test_player_only_in_ros_has_none_for_others(self):
+        result = build_rankings_lookup(
+            ros={"Newbie::hitter": {"overall": 100}},
+            preseason={},
+            current={},
+        )
+        assert result["Newbie::hitter"] == {
+            "rest_of_season": {"overall": 100},
+            "preseason": None,
+            "current": None,
+        }
+
+    def test_player_only_in_preseason_has_none_for_others(self):
+        # E.g. preseason hype guy who didn't end up on the ROS list
+        result = build_rankings_lookup(
+            ros={}, preseason={"Bust::hitter": {"overall": 50}}, current={},
+        )
+        assert result["Bust::hitter"] == {
+            "rest_of_season": None,
+            "preseason": {"overall": 50},
+            "current": None,
+        }
+
+    def test_player_only_in_current_has_none_for_others(self):
+        # Surprise breakout with no projection on either side
+        result = build_rankings_lookup(
+            ros={}, preseason={}, current={"Surprise::hitter": {"overall": 25}},
+        )
+        assert result["Surprise::hitter"] == {
+            "rest_of_season": None,
+            "preseason": None,
+            "current": {"overall": 25},
+        }
+
+    def test_union_includes_keys_from_all_three(self):
+        result = build_rankings_lookup(
+            ros={"A::hitter": {"o": 1}},
+            preseason={"B::hitter": {"o": 2}},
+            current={"C::hitter": {"o": 3}},
+        )
+        assert set(result.keys()) == {"A::hitter", "B::hitter", "C::hitter"}
+
+    def test_empty_inputs_yield_empty_dict(self):
+        assert build_rankings_lookup({}, {}, {}) == {}
