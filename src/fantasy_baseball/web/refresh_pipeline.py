@@ -173,6 +173,7 @@ class RefreshRun:
             self._authenticate()
             self._find_user_team()
             self._fetch_standings_and_roster()
+            self._fetch_game_logs()
             self._load_projections()
             self._fetch_opponent_rosters()
             self._write_snapshots_and_load_league()
@@ -180,7 +181,6 @@ class RefreshRun:
             self._build_projected_standings()
             self._compute_leverage()
             self._match_roster_to_projections()
-            self._fetch_game_logs()
             self._compute_pace()
             self._compute_wsgp()
             self._compute_rankings()
@@ -319,6 +319,9 @@ class RefreshRun:
         )
         try:
             rest_of_season_roster_names = get_latest_roster_names(get_default_client())
+            # _fetch_game_logs must run before this step so game_log_totals in
+            # Redis reflect this refresh; otherwise the ROS blend normalizes
+            # against last-refresh actuals and cache:ros_projections is stale.
             blend_and_cache_ros(
                 projections_dir,
                 self.config.projection_systems, self.config.projection_weights,
@@ -547,7 +550,7 @@ class RefreshRun:
 
         self._progress(f"Matched {len(self.roster_players)} players to projections")
 
-    # --- Step 6b: Fetch MLB game logs ---
+    # --- Step 3b: Fetch MLB game logs (must precede ROS blend) ---
     def _fetch_game_logs(self):
         from fantasy_baseball.data.mlb_game_logs import fetch_game_log_totals
 
