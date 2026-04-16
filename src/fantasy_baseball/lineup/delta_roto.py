@@ -22,12 +22,6 @@ if TYPE_CHECKING:
 class CategoryDelta:
     roto_delta: float
 
-    @property
-    def score(self) -> float:
-        """Deprecated alias for ``roto_delta``. Kept for any consumers
-        reading ``.score`` directly; remove in a follow-up."""
-        return self.roto_delta
-
 
 @dataclass
 class DeltaRotoResult:

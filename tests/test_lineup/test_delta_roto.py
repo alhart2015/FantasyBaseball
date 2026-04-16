@@ -1,12 +1,9 @@
 import pytest
 
-from fantasy_baseball.lineup.delta_roto import (
-    CategoryDelta, DeltaRotoResult, compute_delta_roto, score_swap,
-)
+from fantasy_baseball.lineup.delta_roto import DeltaRotoResult, compute_delta_roto
 from fantasy_baseball.models.player import (
     HitterStats, PitcherStats, Player, PlayerType,
 )
-from fantasy_baseball.utils.constants import ALL_CATEGORIES
 
 
 def _make_hitter(name, **stats):
