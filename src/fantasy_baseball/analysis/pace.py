@@ -15,7 +15,13 @@ only legitimate use of in-season game logs for display.
 """
 
 from fantasy_baseball.models.player import PlayerType
-from fantasy_baseball.utils.constants import INVERSE_STATS, STAT_VARIANCE
+from fantasy_baseball.utils.constants import (
+    HITTER_PROJ_KEYS,
+    INVERSE_STATS,
+    PITCHER_PROJ_KEYS,
+    STAT_VARIANCE,
+)
+from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 # Roto categories by player type
@@ -214,6 +220,45 @@ def compute_player_pace(
         }
 
     return result
+
+
+def attach_pace_to_roster(
+    players: list,
+    hitter_logs: dict,
+    pitcher_logs: dict,
+    preseason_lookup: dict,
+    sgp_denoms: dict,
+) -> None:
+    """Attach a ``pace`` attribute to every player in ``players``.
+
+    For each player, picks the right log dict (hitter_logs vs pitcher_logs)
+    by player_type, builds projected stats from ``preseason_lookup`` (zero-
+    filled if no preseason entry), pulls current ROS stats from the player
+    if present, and calls ``compute_player_pace``. Mutates each player.
+    """
+    for player in players:
+        norm = normalize_name(player.name)
+        if player.player_type == PlayerType.HITTER:
+            actuals = hitter_logs.get(norm, {})
+            ros_keys = ["r", "hr", "rbi", "sb", "avg"]
+            proj_keys = HITTER_PROJ_KEYS
+        else:
+            actuals = pitcher_logs.get(norm, {})
+            ros_keys = ["w", "k", "sv", "era", "whip"]
+            proj_keys = PITCHER_PROJ_KEYS
+        pre_player = preseason_lookup.get(norm)
+        if pre_player and pre_player.rest_of_season:
+            projected = {k: getattr(pre_player.rest_of_season, k, 0) for k in proj_keys}
+        else:
+            projected = {k: 0 for k in proj_keys}
+        ros_dict = (
+            {k: getattr(player.rest_of_season, k, 0) for k in ros_keys}
+            if player.rest_of_season else None
+        )
+        player.pace = compute_player_pace(
+            actuals, projected, player.player_type,
+            rest_of_season_stats=ros_dict, sgp_denoms=sgp_denoms,
+        )
 
 
 def compute_overall_pace(pace: dict | None) -> dict:
