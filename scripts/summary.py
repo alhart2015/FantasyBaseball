@@ -95,7 +95,9 @@ def main():
     # ── Match rosters to projections ──────────────────────────────────
     all_rosters = {}
     for name, raw in all_rosters_raw.items():
-        all_rosters[name] = match_roster_to_projections(raw, hitters_proj, pitchers_proj)
+        all_rosters[name] = match_roster_to_projections(
+            raw, hitters_proj, pitchers_proj, context=f"summary:{name}",
+        )
 
     user_roster = all_rosters[team_name]
     print(f"  {team_name}: {len(user_roster)} players matched")

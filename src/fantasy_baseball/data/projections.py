@@ -472,6 +472,8 @@ def hydrate_roster_entries(
     roster: Roster,
     hitters_proj: pd.DataFrame,
     pitchers_proj: pd.DataFrame,
+    *,
+    context: str = "",
 ) -> list[Player]:
     """Convert a :class:`Roster`'s entries into ``list[Player]`` with
     projection stats populated.
@@ -484,6 +486,8 @@ def hydrate_roster_entries(
 
     Unmatched entries are omitted, matching
     :func:`match_roster_to_projections`'s contract.
+
+    The ``context`` kwarg is forwarded for log clarity.
     """
     roster_dicts = [
         {
@@ -496,5 +500,5 @@ def hydrate_roster_entries(
         for entry in roster.entries
     ]
     return match_roster_to_projections(
-        roster_dicts, hitters_proj, pitchers_proj,
+        roster_dicts, hitters_proj, pitchers_proj, context=context,
     )

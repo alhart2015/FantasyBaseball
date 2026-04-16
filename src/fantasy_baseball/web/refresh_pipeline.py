@@ -464,6 +464,7 @@ class RefreshRun:
         user_roster_model = user_team_model.latest_roster()
         self.matched = hydrate_roster_entries(
             user_roster_model, self.hitters_proj, self.pitchers_proj,
+            context="user",
         )
 
         self.opp_rosters: dict[str, list[Player]] = {}
@@ -475,6 +476,7 @@ class RefreshRun:
             latest = team.latest_roster()
             hydrated = hydrate_roster_entries(
                 latest, self.hitters_proj, self.pitchers_proj,
+                context=f"opp:{team.name}",
             )
             if hydrated:
                 self.opp_rosters[team.name] = hydrated
@@ -540,6 +542,7 @@ class RefreshRun:
         # Match preseason projections for tooltip comparison
         preseason_matched = match_roster_to_projections(
             self.roster_raw, self.preseason_hitters, self.preseason_pitchers,
+            context="preseason",
         )
         self.preseason_lookup = {normalize_name(p.name): p for p in preseason_matched}
 

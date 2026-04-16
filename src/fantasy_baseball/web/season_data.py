@@ -326,12 +326,18 @@ def build_opponent_lineup(
     from fantasy_baseball.utils.name_utils import normalize_name
 
     # Match roster to projections
-    matched = match_roster_to_projections(roster, hitters_proj, pitchers_proj)
+    matched = match_roster_to_projections(
+        roster, hitters_proj, pitchers_proj,
+        context=f"opp-lineup:{opponent_name}",
+    )
 
     # ROS projection lookup
     has_rest_of_season = not rest_of_season_hitters.empty or not rest_of_season_pitchers.empty
     if has_rest_of_season:
-        rest_of_season_matched = match_roster_to_projections(roster, rest_of_season_hitters, rest_of_season_pitchers)
+        rest_of_season_matched = match_roster_to_projections(
+            roster, rest_of_season_hitters, rest_of_season_pitchers,
+            context=f"opp-lineup:{opponent_name}:ros",
+        )
         rest_of_season_lookup = {normalize_name(p.name): p for p in rest_of_season_matched}
     else:
         rest_of_season_lookup = {}
