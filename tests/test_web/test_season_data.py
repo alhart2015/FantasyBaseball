@@ -781,3 +781,38 @@ class TestComparisonEV:
             team_sds=team_sds,
         )
         assert abs(result["delta_roto"]["categories"]["SB"]["roto_delta"]) < 0.5
+
+    def test_ev_roto_key_present_in_response(self):
+        from fantasy_baseball.web.season_data import compute_comparison_standings
+        from fantasy_baseball.models.player import Player, HitterStats
+        projected_standings = [
+            {"name": "User", "team_key": "", "rank": 0, "stats": {
+                "R": 0, "HR": 0, "RBI": 0, "SB": 100, "AVG": 0,
+                "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0}},
+            {"name": "Rival", "team_key": "", "rank": 0, "stats": {
+                "R": 0, "HR": 0, "RBI": 0, "SB": 99, "AVG": 0,
+                "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0}},
+        ]
+        team_sds = {
+            "User":  {"R": 0, "HR": 0, "RBI": 0, "SB": 10.0, "AVG": 0,
+                      "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0},
+            "Rival": {"R": 0, "HR": 0, "RBI": 0, "SB": 10.0, "AVG": 0,
+                      "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0},
+        }
+        drop_hitter = Player(name="Drop", player_type="hitter",
+            rest_of_season=HitterStats(pa=100, ab=100, h=0, r=0, hr=0, rbi=0, sb=20))
+        add_hitter = Player(name="Add", player_type="hitter",
+            rest_of_season=HitterStats(pa=100, ab=100, h=0, r=0, hr=0, rbi=0, sb=10))
+        result = compute_comparison_standings(
+            roster_player_name="Drop",
+            other_player=add_hitter,
+            user_roster=[drop_hitter],
+            projected_standings=projected_standings,
+            user_team_name="User",
+            team_sds=team_sds,
+        )
+        assert "ev_roto" in result["before"]
+        assert "ev_roto" in result["after"]
+        ev_sb = result["before"]["ev_roto"]["User"]["SB_pts"]
+        rank_sb = result["before"]["roto"]["User"]["SB_pts"]
+        assert ev_sb != pytest.approx(rank_sb, abs=0.01)

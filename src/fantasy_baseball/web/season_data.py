@@ -726,21 +726,26 @@ def compute_comparison_standings(
         all_stats_before[user_team_name], loses_ros, gains_ros,
     )
 
-    roto_before = score_roto(all_stats_before, team_sds=team_sds)
-    roto_after = score_roto(all_stats_after, team_sds=team_sds)
+    roto_before = score_roto(all_stats_before)
+    roto_after = score_roto(all_stats_after)
+
+    ev_roto_before = score_roto(all_stats_before, team_sds=team_sds)
+    ev_roto_after = score_roto(all_stats_after, team_sds=team_sds)
 
     from fantasy_baseball.lineup.delta_roto import score_swap
 
-    delta_roto = score_swap(roto_before, roto_after, user_team_name)
+    delta_roto = score_swap(ev_roto_before, ev_roto_after, user_team_name)
 
     return {
         "before": {
             "stats": all_stats_before,
             "roto": roto_before,
+            "ev_roto": ev_roto_before,
         },
         "after": {
             "stats": all_stats_after,
             "roto": roto_after,
+            "ev_roto": ev_roto_after,
         },
         "delta_roto": delta_roto.to_dict(),
         "categories": ALL_CATEGORIES,
