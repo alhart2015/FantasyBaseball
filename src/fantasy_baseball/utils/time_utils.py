@@ -74,3 +74,33 @@ def next_tuesday(ref: date) -> date:
     if days_ahead == 0:
         days_ahead = 7
     return ref + timedelta(days=days_ahead)
+
+
+def compute_effective_date(end_date: str) -> date:
+    """Return the next lineup-lock Tuesday strictly after ``end_date``.
+
+    Yahoo's scoring period ends on a Sunday (``end_date``). The user's
+    league locks lineups on Tuesday morning, so the effective date for
+    fetching post-lock rosters is the next Tuesday strictly after that
+    Sunday — ``end_date + 1`` would land on Monday, one day too early.
+    """
+    return next_tuesday(date.fromisoformat(end_date))
+
+
+def compute_fraction_remaining(
+    season_start: date, season_end: date, today: date
+) -> float:
+    """Return the fraction of the regular season still ahead of ``today``.
+
+    Used for SD scaling on projected standings (``sqrt`` damps variance
+    as the season progresses) and for ROS Monte Carlo weighting.
+
+    Returns 0.0 if the season has not started (season_end == season_start)
+    or if ``today`` is on/after ``season_end``. Lower bound only — does
+    not clamp the upper bound, matching existing behavior.
+    """
+    total_days = (season_end - season_start).days
+    if total_days <= 0:
+        return 0.0
+    remaining_days = max(0, (season_end - today).days)
+    return remaining_days / total_days

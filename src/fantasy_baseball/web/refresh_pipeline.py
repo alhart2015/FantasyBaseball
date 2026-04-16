@@ -22,12 +22,16 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import (
-    HITTER_PROJ_KEYS, IL_STATUSES, PITCHER_PROJ_KEYS,
+    IL_STATUSES,
 )
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
-from fantasy_baseball.utils.time_utils import local_now, local_today, next_tuesday
+from fantasy_baseball.utils.time_utils import (
+    compute_effective_date,
+    compute_fraction_remaining,
+    local_now,
+    local_today,
+)
 
 from fantasy_baseball.web.season_data import (
     CACHE_DIR,
@@ -88,66 +92,154 @@ def _write_spoe_snapshot(spoe_result: dict) -> None:
         log.warning(f"Failed to write spoe_snapshot:{snapshot_date}: {exc}")
 
 
-def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
-    """Connect to Yahoo, fetch all data, run computations, and write cache files.
+class RefreshRun:
+    """Encapsulates one execution of the season dashboard refresh.
 
-    Sets refresh status throughout so the UI can poll progress.
+    Each step from the original ``run_full_refresh`` is now a private
+    method. The class holds shared state as instance attributes so
+    methods don't need 10-arg signatures. Methods are NOT individually
+    unit-tested; the integration test in
+    ``tests/test_web/test_refresh_pipeline.py`` covers them collectively.
+
+    Module-level state (``_refresh_lock``, ``_refresh_status``) is shared
+    across threads and stays at module scope.
     """
-    with _refresh_lock:
-        _refresh_status["running"] = True
-        _refresh_status["progress"] = "Starting..."
-        _refresh_status["error"] = None
 
-    from fantasy_baseball.web.job_logger import JobLogger
-    logger = JobLogger("refresh")
+    def __init__(self, cache_dir: Path = CACHE_DIR):
+        from fantasy_baseball.web.job_logger import JobLogger
+        self.cache_dir = cache_dir
+        self.logger = JobLogger("refresh")
 
-    def _progress(msg):
+        # Shared state — populated as steps run. All initialized to None
+        # so attribute access errors surface as clear AttributeErrors
+        # rather than silent fall-through to the wrong type.
+        self.config = None
+        self.league = None              # Yahoo session-bound league
+        self.league_model = None        # League dataclass loaded from Redis
+        self.user_team_key = None
+        self.standings = None
+        self.standings_snap = None
+        self.projected_standings = None
+        self.projected_standings_snap = None
+        self.team_sds = None
+        self.fraction_remaining = None
+        self.sd_scale = None
+        self.effective_date = None
+        self.start_date = None
+        self.end_date = None
+        self.roster_raw = None
+        self.raw_rosters_by_team = None
+        self.opp_rosters = None
+        self.matched = None
+        self.roster_players = None
+        self.preseason_lookup = None
+        self.preseason_hitters = None
+        self.preseason_pitchers = None
+        self.hitters_proj = None
+        self.pitchers_proj = None
+        self.has_rest_of_season = False
+        self.hitter_logs = None
+        self.pitcher_logs = None
+        self.leverage = None
+        self.rankings_lookup = None
+        self.optimal_hitters = None
+        self.optimal_pitchers_starters = None
+        self.optimal_pitchers_bench = None
+        self.fa_players = None
+        self.base_mc = None
+        self.mgmt_mc = None
+        self.rest_of_season_mc = None
+        self.rest_of_season_mgmt_mc = None
+
+    def _progress(self, msg: str) -> None:
         _set_refresh_progress(msg)
-        logger.log(msg)
+        self.logger.log(msg)
         log.info(msg)
 
-    try:
-        # Lazy imports — only loaded when refresh actually runs
+    def run(self) -> None:
+        """Run the full refresh pipeline.
+
+        Same try/except/finally protocol as the legacy ``run_full_refresh``:
+        sets ``_refresh_status`` throughout, captures errors into
+        ``_refresh_status['error']`` while still raising, and clears
+        ``running`` in the ``finally`` block.
+        """
+        with _refresh_lock:
+            _refresh_status["running"] = True
+            _refresh_status["progress"] = "Starting..."
+            _refresh_status["error"] = None
+
+        try:
+            self._authenticate()
+            self._find_user_team()
+            self._fetch_standings_and_roster()
+            self._load_projections()
+            self._fetch_opponent_rosters()
+            self._write_snapshots_and_load_league()
+            self._hydrate_rosters()
+            self._build_projected_standings()
+            self._compute_leverage()
+            self._match_roster_to_projections()
+            self._fetch_game_logs()
+            self._compute_pace()
+            self._compute_wsgp()
+            self._compute_rankings()
+            self._optimize_lineup()
+            self._compute_moves()
+            self._fetch_probable_starters()
+            self._audit_roster()
+            self._compute_per_team_leverage()
+            self._run_monte_carlo()
+            self._run_ros_monte_carlo()
+            self._compute_spoe()
+            self._analyze_transactions()
+            self._write_meta()
+
+            self.logger.finish("ok")
+            self._progress("Done")
+            from fantasy_baseball.web.season_data import clear_opponent_cache
+            clear_opponent_cache()
+        except Exception as exc:
+            with _refresh_lock:
+                _refresh_status["error"] = str(exc)
+            self.logger.finish("error", str(exc))
+            raise
+        finally:
+            with _refresh_lock:
+                _refresh_status["running"] = False
+
+    # --- Step 1: Auth + league ---
+    def _authenticate(self):
         from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
         from fantasy_baseball.config import load_config
-        from fantasy_baseball.data.mlb_schedule import get_week_schedule
-        from fantasy_baseball.data.mlb_game_logs import fetch_game_log_totals
-        from fantasy_baseball.lineup.leverage import calculate_leverage
-        from fantasy_baseball.lineup.matchups import calculate_matchup_factors, get_team_batting_stats
-        from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
-        from fantasy_baseball.lineup.waivers import fetch_and_match_free_agents
-        from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
-        from fantasy_baseball.lineup.yahoo_roster import fetch_roster, fetch_standings, fetch_scoring_period
-        from fantasy_baseball.utils.name_utils import normalize_name
-        from fantasy_baseball.analysis.pace import compute_player_pace
-        from fantasy_baseball.lineup.roster_audit import audit_roster
 
-        project_root = Path(__file__).resolve().parents[3]
-
-        # --- Step 1: Auth + league ---
-        _progress("Authenticating with Yahoo...")
+        self._progress("Authenticating with Yahoo...")
         sc = get_yahoo_session()
-        config = load_config(project_root / "config" / "league.yaml")
-        league = get_league(sc, config.league_id, config.game_code)
+        project_root = Path(__file__).resolve().parents[3]
+        self.config = load_config(project_root / "config" / "league.yaml")
+        self.league = get_league(sc, self.config.league_id, self.config.game_code)
 
-        # --- Step 2: Find user's team key ---
-        _progress("Finding team...")
-        teams = league.teams()
-        user_team_key = None
+    # --- Step 2: Find user's team key ---
+    def _find_user_team(self):
+        self._progress("Finding team...")
+        teams = self.league.teams()
         for key, team_info in teams.items():
-            if team_info.get("name") == config.team_name:
-                user_team_key = key
+            if team_info.get("name") == self.config.team_name:
+                self.user_team_key = key
                 break
-        if user_team_key is None:
+        if self.user_team_key is None:
             # Fall back to first team if not found by name
-            user_team_key = next(iter(teams))
+            self.user_team_key = next(iter(teams))
 
-        # --- Step 3: Fetch standings + roster ---
-        _progress("Fetching standings...")
-        standings = fetch_standings(league)
-        _fill_stat_defaults(standings)
-        write_cache("standings", standings, cache_dir)
-        _progress(f"Fetched standings for {len(standings)} teams")
+    # --- Step 3: Fetch standings + roster ---
+    def _fetch_standings_and_roster(self):
+        from fantasy_baseball.lineup.yahoo_roster import fetch_roster, fetch_standings, fetch_scoring_period
+
+        self._progress("Fetching standings...")
+        self.standings = fetch_standings(self.league)
+        _fill_stat_defaults(self.standings)
+        write_cache("standings", self.standings, self.cache_dir)
+        self._progress(f"Fetched standings for {len(self.standings)} teams")
 
         # Compute the effective date for the next lineup lock. We fetch
         # all rosters at this date (via Yahoo's team.roster(day=...)) so
@@ -158,33 +250,36 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         # Tuesday morning, so the effective date is the next Tuesday
         # strictly after end_date — end_date + 1 would land on Monday,
         # one day too early.
-        _progress("Computing effective date...")
-        start_date, end_date = fetch_scoring_period(league)
-        effective_date = next_tuesday(date.fromisoformat(end_date))
-        _progress(f"Effective date (next lock): {effective_date}")
+        self._progress("Computing effective date...")
+        self.start_date, self.end_date = fetch_scoring_period(self.league)
+        self.effective_date = compute_effective_date(self.end_date)
+        self._progress(f"Effective date (next lock): {self.effective_date}")
 
-        standings_snap = _standings_to_snapshot(standings, effective_date)
+        self.standings_snap = _standings_to_snapshot(self.standings, self.effective_date)
 
-        _progress("Fetching today's roster (for pending-moves diff)...")
-        today_roster_raw = fetch_roster(league, user_team_key)
+        self._progress("Fetching today's roster (for pending-moves diff)...")
+        today_roster_raw = fetch_roster(self.league, self.user_team_key)
 
-        _progress(f"Fetching future-dated roster for {effective_date}...")
-        roster_raw = fetch_roster(league, user_team_key, day=effective_date)
-        _progress(f"Fetched future roster: {len(roster_raw)} players")
+        self._progress(f"Fetching future-dated roster for {self.effective_date}...")
+        self.roster_raw = fetch_roster(self.league, self.user_team_key, day=self.effective_date)
+        self._progress(f"Fetched future roster: {len(self.roster_raw)} players")
 
         pending_moves = _compute_pending_moves_diff(
-            today_roster_raw, roster_raw,
-            team_name=config.team_name, team_key=user_team_key,
+            today_roster_raw, self.roster_raw,
+            team_name=self.config.team_name, team_key=self.user_team_key,
         )
-        write_cache("pending_moves", pending_moves, cache_dir)
+        write_cache("pending_moves", pending_moves, self.cache_dir)
         if pending_moves:
             total_changes = sum(
                 len(m["adds"]) + len(m["drops"]) for m in pending_moves
             )
-            _progress(f"Pending moves: {total_changes} change(s) detected")
+            self._progress(f"Pending moves: {total_changes} change(s) detected")
 
-        # --- Step 4: Read preseason projections from Redis ---
-        _progress("Loading projections...")
+    # --- Step 4: Read preseason projections from Redis ---
+    def _load_projections(self):
+        from fantasy_baseball.utils.name_utils import normalize_name
+
+        self._progress("Loading projections...")
         import pandas as pd
         from fantasy_baseball.data.redis_store import (
             get_blended_projections as redis_get_blended,
@@ -208,14 +303,15 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                 "Run `python scripts/build_db.py` once to populate them from "
                 "the CSVs under data/projections/{season}/."
             )
-        hitters_proj = pd.DataFrame(_hitters_rows)
-        pitchers_proj = pd.DataFrame(_pitchers_rows)
+        self.hitters_proj = pd.DataFrame(_hitters_rows)
+        self.pitchers_proj = pd.DataFrame(_pitchers_rows)
 
         # Load ROS projections — blend latest dated CSV into Redis
         # (cache:ros_projections). No-op if no CSV dir exists locally
         # (Render has no CSVs on disk; the daily admin-triggered
         # _run_rest_of_season_fetch keeps Redis populated).
-        _progress("Loading ROS projections...")
+        self._progress("Loading ROS projections...")
+        project_root = Path(__file__).resolve().parents[3]
         projections_dir = project_root / "data" / "projections"
         from fantasy_baseball.data.ros_pipeline import blend_and_cache_ros
         from fantasy_baseball.data.redis_store import (
@@ -225,17 +321,17 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             rest_of_season_roster_names = get_latest_roster_names(get_default_client())
             blend_and_cache_ros(
                 projections_dir,
-                config.projection_systems, config.projection_weights,
-                rest_of_season_roster_names, config.season_year,
-                progress_cb=_progress,
+                self.config.projection_systems, self.config.projection_weights,
+                rest_of_season_roster_names, self.config.season_year,
+                progress_cb=self._progress,
             )
         except FileNotFoundError:
             # No local CSVs — fine on Render; the admin job keeps Redis populated.
-            _progress("No local ROS CSV dir; relying on Redis cache")
+            self._progress("No local ROS CSV dir; relying on Redis cache")
 
-        hitters_proj["_name_norm"] = hitters_proj["name"].apply(normalize_name)
-        pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
-        _progress(f"Loaded {len(hitters_proj)} hitter + {len(pitchers_proj)} pitcher projections")
+        self.hitters_proj["_name_norm"] = self.hitters_proj["name"].apply(normalize_name)
+        self.pitchers_proj["_name_norm"] = self.pitchers_proj["name"].apply(normalize_name)
+        self._progress(f"Loaded {len(self.hitters_proj)} hitter + {len(self.pitchers_proj)} pitcher projections")
 
         # ROS projections live in Redis (cache:ros_projections). The
         # blend above just refreshed that key if local CSVs were
@@ -244,75 +340,77 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         import pandas as pd
         rest_of_season_hitters = pd.DataFrame()
         rest_of_season_pitchers = pd.DataFrame()
-        ros_cached = read_cache("ros_projections", cache_dir)
+        ros_cached = read_cache("ros_projections", self.cache_dir)
         if ros_cached:
             rest_of_season_hitters = pd.DataFrame(ros_cached.get("hitters", []))
             rest_of_season_pitchers = pd.DataFrame(ros_cached.get("pitchers", []))
-        has_rest_of_season = not rest_of_season_hitters.empty or not rest_of_season_pitchers.empty
-        if has_rest_of_season:
-            _progress(f"Loaded ROS projections from Redis "
+        self.has_rest_of_season = not rest_of_season_hitters.empty or not rest_of_season_pitchers.empty
+        if self.has_rest_of_season:
+            self._progress(f"Loaded ROS projections from Redis "
                       f"({len(rest_of_season_hitters)} hitters + {len(rest_of_season_pitchers)} pitchers)")
 
-        preseason_hitters = hitters_proj
-        preseason_pitchers = pitchers_proj
-        if has_rest_of_season:
+        self.preseason_hitters = self.hitters_proj
+        self.preseason_pitchers = self.pitchers_proj
+        if self.has_rest_of_season:
             rest_of_season_hitters["_name_norm"] = rest_of_season_hitters["name"].apply(normalize_name)
             rest_of_season_pitchers["_name_norm"] = rest_of_season_pitchers["name"].apply(normalize_name)
-            _progress(f"Loaded {len(rest_of_season_hitters)} ROS hitters + {len(rest_of_season_pitchers)} ROS pitchers")
+            self._progress(f"Loaded {len(rest_of_season_hitters)} ROS hitters + {len(rest_of_season_pitchers)} ROS pitchers")
             # Use ROS projections as primary — they're the most current estimates
-            hitters_proj = rest_of_season_hitters
-            pitchers_proj = rest_of_season_pitchers
+            self.hitters_proj = rest_of_season_hitters
+            self.pitchers_proj = rest_of_season_pitchers
         else:
-            _progress("WARNING: No ROS projections available — falling back to preseason")
+            self._progress("WARNING: No ROS projections available — falling back to preseason")
 
-        # --- Step 4b: Fetch opponent rosters (raw) ---
-        _progress("Fetching opponent rosters...")
-        from fantasy_baseball.data.projections import (
-            hydrate_roster_entries,
-            match_roster_to_projections,
-        )
-        from fantasy_baseball.models.league import League
+    # --- Step 4b: Fetch opponent rosters (raw) ---
+    def _fetch_opponent_rosters(self):
+        from fantasy_baseball.lineup.yahoo_roster import fetch_roster
+
+        self._progress("Fetching opponent rosters...")
 
         # Collect raw rosters keyed by team name — used only to feed the
         # Redis write below. League.from_redis will then be our source
         # of truth for roster data for the rest of the refresh.
-        raw_rosters_by_team: dict[str, list[dict]] = {
-            config.team_name: roster_raw,
+        self.raw_rosters_by_team = {
+            self.config.team_name: self.roster_raw,
         }
 
         def _fetch_opp(key_and_info):
             key, team_info = key_and_info
             tname = team_info.get("name", "")
             try:
-                opp_raw = fetch_roster(league, key, day=effective_date)
+                opp_raw = fetch_roster(self.league, key, day=self.effective_date)
                 return (tname, opp_raw)
             except Exception:
                 return None
 
+        teams = self.league.teams()
         opp_items = [
             (key, info) for key, info in teams.items()
-            if info.get("name", "") != config.team_name and key != user_team_key
+            if info.get("name", "") != self.config.team_name and key != self.user_team_key
         ]
         with ThreadPoolExecutor(max_workers=6) as pool:
             for result in pool.map(_fetch_opp, opp_items):
                 if result is None:
                     continue
                 tname, opp_raw = result
-                raw_rosters_by_team[tname] = opp_raw
-        _progress(
-            f"Fetched {len(raw_rosters_by_team)} rosters (user + opponents)"
+                self.raw_rosters_by_team[tname] = opp_raw
+        self._progress(
+            f"Fetched {len(self.raw_rosters_by_team)} rosters (user + opponents)"
         )
 
-        # --- Step 4c: Write rosters + standings to Redis, then load League ---
-        _progress("Writing roster snapshots to Redis...")
+    # --- Step 4c: Write rosters + standings to Redis, then load League ---
+    def _write_snapshots_and_load_league(self):
+        from fantasy_baseball.models.league import League
+
+        self._progress("Writing roster snapshots to Redis...")
         from fantasy_baseball.data.redis_store import (
             get_default_client,
             write_roster_snapshot,
             write_standings_snapshot,
         )
 
-        snapshot_date = effective_date.isoformat()
-        for tname, team_raw in raw_rosters_by_team.items():
+        snapshot_date = self.effective_date.isoformat()
+        for tname, team_raw in self.raw_rosters_by_team.items():
             # team_raw rows come from parse_roster: keys are "name",
             # "positions" (list), "selected_position", "player_id",
             # "status". Convert to the serialized shape the old
@@ -343,221 +441,191 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
                     "rank": entry.get("rank") or 0,
                     **{k.lower(): v for k, v in entry.get("stats", {}).items()},
                 }
-                for entry in standings
+                for entry in self.standings
             ],
         }
         write_standings_snapshot(
             get_default_client(), snapshot_date, snapshot_payload,
         )
 
-        _progress("Loading League from Redis...")
-        league_model = League.from_redis(config.season_year)
+        self._progress("Loading League from Redis...")
+        self.league_model = League.from_redis(self.config.season_year)
 
-        # --- Step 4d: Hydrate user roster + opponent rosters from League ---
-        _progress("Hydrating user and opponent rosters...")
-        user_team_model = league_model.team_by_name(config.team_name)
+    # --- Step 4d: Hydrate user roster + opponent rosters from League ---
+    def _hydrate_rosters(self):
+        from fantasy_baseball.data.projections import hydrate_roster_entries
+        from fantasy_baseball.models.player import Player
+
+        self._progress("Hydrating user and opponent rosters...")
+        user_team_model = self.league_model.team_by_name(self.config.team_name)
         user_roster_model = user_team_model.latest_roster()
-        matched = hydrate_roster_entries(
-            user_roster_model, hitters_proj, pitchers_proj,
+        self.matched = hydrate_roster_entries(
+            user_roster_model, self.hitters_proj, self.pitchers_proj,
         )
 
-        opp_rosters: dict[str, list[Player]] = {}
-        for team in league_model.teams:
-            if team.name == config.team_name:
+        self.opp_rosters: dict[str, list[Player]] = {}
+        for team in self.league_model.teams:
+            if team.name == self.config.team_name:
                 continue
             if not team.rosters:
                 continue
             latest = team.latest_roster()
             hydrated = hydrate_roster_entries(
-                latest, hitters_proj, pitchers_proj,
+                latest, self.hitters_proj, self.pitchers_proj,
             )
             if hydrated:
-                opp_rosters[team.name] = hydrated
-        _progress(f"Hydrated {len(opp_rosters)} opponent rosters")
+                self.opp_rosters[team.name] = hydrated
+        self._progress(f"Hydrated {len(self.opp_rosters)} opponent rosters")
 
         # Cache opponent rosters for on-demand trade search
         opp_rosters_flat = {
             tname: [p.to_dict() for p in roster]
-            for tname, roster in opp_rosters.items()
+            for tname, roster in self.opp_rosters.items()
         }
-        write_cache("opp_rosters", opp_rosters_flat, cache_dir)
+        write_cache("opp_rosters", opp_rosters_flat, self.cache_dir)
 
-        # --- Step 4e: Build projected standings ---
-        _progress("Projecting end-of-season standings...")
-        from fantasy_baseball.scoring import project_team_stats
+    # --- Step 4e: Build projected standings ---
+    def _build_projected_standings(self):
+        self._progress("Projecting end-of-season standings...")
+        from fantasy_baseball.scoring import build_projected_standings, build_team_sds
 
-        all_team_rosters = {config.team_name: matched}
-        all_team_rosters.update(opp_rosters)
+        all_team_rosters = {self.config.team_name: self.matched}
+        all_team_rosters.update(self.opp_rosters)
 
-        projected_standings = []
-        for tname, roster in all_team_rosters.items():
-            proj_stats = project_team_stats(roster, displacement=True)
-            projected_standings.append({
-                "name": tname,
-                "team_key": "",
-                "rank": 0,
-                # project_team_stats returns a CategoryStats (dataclass);
-                # serialize to a plain dict for the JSON cache write.
-                "stats": proj_stats.to_dict(),
-            })
+        self.projected_standings = build_projected_standings(all_team_rosters)
 
-        import math
-        _season_start = date.fromisoformat(config.season_start)
-        _season_end = date.fromisoformat(config.season_end)
-        _total_days = (_season_end - _season_start).days
-        _remaining_days = max(0, (_season_end - local_today()).days)
-        fraction_remaining = (_remaining_days / _total_days) if _total_days > 0 else 0.0
-        _sd_scale = math.sqrt(fraction_remaining)
+        self.fraction_remaining = compute_fraction_remaining(
+            date.fromisoformat(self.config.season_start),
+            date.fromisoformat(self.config.season_end),
+            local_today(),
+        )
+        self.sd_scale = math.sqrt(self.fraction_remaining)
 
-        from fantasy_baseball.scoring import project_team_sds
-        team_sds: dict[str, dict[str, float]] = {}
-        for _tname, _troster in all_team_rosters.items():
-            _raw_sds = project_team_sds(_troster, displacement=True)
-            team_sds[_tname] = {c: sd * _sd_scale for c, sd in _raw_sds.items()}
+        self.team_sds = build_team_sds(all_team_rosters, self.sd_scale)
 
         write_cache(
             "projections",
             {
-                "projected_standings": projected_standings,
-                "team_sds": team_sds,
-                "fraction_remaining": fraction_remaining,
+                "projected_standings": self.projected_standings,
+                "team_sds": self.team_sds,
+                "fraction_remaining": self.fraction_remaining,
             },
-            cache_dir,
+            self.cache_dir,
         )
-        _progress(f"Projected standings for {len(projected_standings)} teams")
+        self._progress(f"Projected standings for {len(self.projected_standings)} teams")
 
-        projected_standings_snap = _standings_to_snapshot(projected_standings, effective_date)
+        self.projected_standings_snap = _standings_to_snapshot(self.projected_standings, self.effective_date)
 
-        # --- Step 5: Leverage weights ---
-        _progress("Calculating leverage weights...")
-        leverage = calculate_leverage(
-            standings_snap, config.team_name,
-            projected_standings=projected_standings_snap,
+    # --- Step 5: Leverage weights ---
+    def _compute_leverage(self):
+        from fantasy_baseball.lineup.leverage import calculate_leverage
+
+        self._progress("Calculating leverage weights...")
+        self.leverage = calculate_leverage(
+            self.standings_snap, self.config.team_name,
+            projected_standings=self.projected_standings_snap,
         )
 
-        # --- Step 6: Match roster players to projections, compute wSGP ---
-        _progress("Matching roster to projections...")
-        from fantasy_baseball.models.player import Player
+    # --- Step 6: Match roster players to projections, compute wSGP ---
+    def _match_roster_to_projections(self):
+        from fantasy_baseball.data.projections import match_roster_to_projections
+        from fantasy_baseball.utils.name_utils import normalize_name
+        from fantasy_baseball.web.refresh_steps import merge_matched_and_raw_roster
+
+        self._progress("Matching roster to projections...")
 
         # Match preseason projections for tooltip comparison
         preseason_matched = match_roster_to_projections(
-            roster_raw, preseason_hitters, preseason_pitchers,
+            self.roster_raw, self.preseason_hitters, self.preseason_pitchers,
         )
-        preseason_lookup = {normalize_name(p.name): p for p in preseason_matched}
+        self.preseason_lookup = {normalize_name(p.name): p for p in preseason_matched}
 
-        # Build Player objects from matched entries
-        matched_names = set()
-        roster_players: list[Player] = []
-        for player in matched:
-            norm = normalize_name(player.name)
-            matched_names.add(norm)
+        # Build Player objects from matched entries (+ any unmatched raw)
+        self.roster_players = merge_matched_and_raw_roster(
+            self.matched, self.roster_raw, self.preseason_lookup,
+        )
 
-            # Attach preseason stat bag
-            pre_entry = preseason_lookup.get(norm)
-            if pre_entry and pre_entry.rest_of_season:
-                player.preseason = pre_entry.rest_of_season
+        self._progress(f"Matched {len(self.roster_players)} players to projections")
 
-            roster_players.append(player)
+    # --- Step 6b: Fetch MLB game logs ---
+    def _fetch_game_logs(self):
+        from fantasy_baseball.data.mlb_game_logs import fetch_game_log_totals
 
-        # Include unmatched players
-        for raw_player in roster_raw:
-            if normalize_name(raw_player["name"]) not in matched_names:
-                player = Player.from_dict({
-                    **raw_player,
-                    "player_type": PlayerType.PITCHER if set(raw_player.get("positions", [])) & PITCHER_POSITIONS else PlayerType.HITTER,
-                })
-                roster_players.append(player)
+        self._progress("Fetching MLB game logs...")
+        fetch_game_log_totals(self.config.season_year, progress_cb=self._progress)
 
-        _progress(f"Matched {len(roster_players)} players to projections")
-
-        # --- Step 6b: Fetch MLB game logs ---
-        _progress("Fetching MLB game logs...")
-        fetch_game_log_totals(config.season_year, progress_cb=_progress)
-
-        # --- Step 6c: Compute season-to-date pace vs projections ---
-        _progress("Computing player pace...")
-        hitter_logs, pitcher_logs = _load_game_log_totals(config.season_year)
+    # --- Step 6c: Compute season-to-date pace vs projections ---
+    def _compute_pace(self):
+        self._progress("Computing player pace...")
+        self.hitter_logs, self.pitcher_logs = _load_game_log_totals(self.config.season_year)
 
         # Attach pace data to each roster player (pace compares actuals vs preseason)
         from fantasy_baseball.sgp.denominators import get_sgp_denominators
-        sgp_denoms = get_sgp_denominators(config.sgp_overrides)
-        for player in roster_players:
-            norm = normalize_name(player.name)
-            if player.player_type == PlayerType.HITTER:
-                actuals = hitter_logs.get(norm, {})
-                rest_of_season_keys = ["r", "hr", "rbi", "sb", "avg"]
-            else:
-                actuals = pitcher_logs.get(norm, {})
-                rest_of_season_keys = ["w", "k", "sv", "era", "whip"]
-            proj_keys = HITTER_PROJ_KEYS if player.player_type == PlayerType.HITTER else PITCHER_PROJ_KEYS
-            pre_player = preseason_lookup.get(norm)
-            if pre_player and pre_player.rest_of_season:
-                projected = {k: getattr(pre_player.rest_of_season, k, 0) for k in proj_keys}
-            else:
-                projected = {k: 0 for k in proj_keys}
-            rest_of_season_dict = {k: getattr(player.rest_of_season, k, 0) for k in rest_of_season_keys} if player.rest_of_season else None
-            player.pace = compute_player_pace(
-                actuals, projected, player.player_type,
-                rest_of_season_stats=rest_of_season_dict, sgp_denoms=sgp_denoms,
-            )
+        from fantasy_baseball.analysis.pace import attach_pace_to_roster
+        sgp_denoms = get_sgp_denominators(self.config.sgp_overrides)
+        attach_pace_to_roster(
+            self.roster_players, self.hitter_logs, self.pitcher_logs,
+            self.preseason_lookup, sgp_denoms,
+        )
 
-        # --- Step 6e: Compute wSGP on raw ROS stats ---
+    # --- Step 6e: Compute wSGP on raw ROS stats ---
+    def _compute_wsgp(self):
         # NOTE: recency blending was removed here because FanGraphs ROS
         # projections already incorporate early-season performance, and a
         # second layer of reliability weighting on top created inconsistencies
         # with projected_standings (see docs/superpowers/plans/2026-04-10-remove-recency-blending.md).
-        for player in roster_players:
+        for player in self.roster_players:
             if player.rest_of_season is not None:
-                player.compute_wsgp(leverage)
+                player.compute_wsgp(self.leverage)
 
-        # --- Step 6d: Compute SGP rankings ---
-        _progress("Computing SGP rankings...")
+    # --- Step 6d: Compute SGP rankings ---
+    def _compute_rankings(self):
+        self._progress("Computing SGP rankings...")
         from fantasy_baseball.sgp.rankings import (
             compute_sgp_rankings, compute_combined_sgp_rankings,
             compute_rankings_from_game_logs,
             rank_key, rank_key_from_positions, lookup_rank,
         )
 
-        rest_of_season_ranks = compute_sgp_rankings(hitters_proj, pitchers_proj)
-        preseason_ranks = compute_sgp_rankings(preseason_hitters, preseason_pitchers)
-        current_ranks = compute_rankings_from_game_logs(hitter_logs, pitcher_logs)
+        rest_of_season_ranks = compute_sgp_rankings(self.hitters_proj, self.pitchers_proj)
+        preseason_ranks = compute_sgp_rankings(self.preseason_hitters, self.preseason_pitchers)
+        current_ranks = compute_rankings_from_game_logs(self.hitter_logs, self.pitcher_logs)
 
         # Build combined lookup: {name::player_type: {ros, preseason, current}}
-        all_keys = set(rest_of_season_ranks) | set(preseason_ranks) | set(current_ranks)
-        rankings_lookup = {}
-        for key in all_keys:
-            rankings_lookup[key] = {
-                "rest_of_season": rest_of_season_ranks.get(key),
-                "preseason": preseason_ranks.get(key),
-                "current": current_ranks.get(key),
-            }
+        from fantasy_baseball.sgp.rankings import build_rankings_lookup
+        self.rankings_lookup = build_rankings_lookup(
+            rest_of_season_ranks, preseason_ranks, current_ranks,
+        )
 
-        write_cache("rankings", rankings_lookup, cache_dir)
-        _progress(f"Ranked {len(rest_of_season_ranks)} ROS, {len(preseason_ranks)} preseason, {len(current_ranks)} current")
+        write_cache("rankings", self.rankings_lookup, self.cache_dir)
+        self._progress(f"Ranked {len(rest_of_season_ranks)} ROS, {len(preseason_ranks)} preseason, {len(current_ranks)} current")
 
         # Attach ranks to roster players
         from fantasy_baseball.models.player import RankInfo
-        for player in roster_players:
-            rank_data = lookup_rank(rankings_lookup, player.fg_id, player.name, player.player_type)
+        for player in self.roster_players:
+            rank_data = lookup_rank(self.rankings_lookup, player.fg_id, player.name, player.player_type)
             player.rank = RankInfo.from_dict(rank_data) if rank_data else RankInfo()
 
         # Classify roster players by league-wide value vs team fit
         from fantasy_baseball.lineup.player_classification import classify_roster
         rest_of_season_rank_lookup = {}
-        for key, rank_data in rankings_lookup.items():
+        for key, rank_data in self.rankings_lookup.items():
             ros = rank_data.get("rest_of_season")
             if ros is not None:
                 rest_of_season_rank_lookup[key] = ros
-        classifications = classify_roster(roster_players, rest_of_season_rank_lookup)
-        for player in roster_players:
+        classifications = classify_roster(self.roster_players, rest_of_season_rank_lookup)
+        for player in self.roster_players:
             player.classification = classifications.get(player.name, "")
 
-        roster_flat = [p.to_flat_dict() for p in roster_players]
-        write_cache("roster", roster_flat, cache_dir)
+        roster_flat = [p.to_flat_dict() for p in self.roster_players]
+        write_cache("roster", roster_flat, self.cache_dir)
 
-        # --- Step 7: Run lineup optimizer ---
-        _progress("Optimizing lineup...")
-        active_players = [p for p in roster_players if p.status not in IL_STATUSES]
+    # --- Step 7: Run lineup optimizer ---
+    def _optimize_lineup(self):
+        from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
+
+        self._progress("Optimizing lineup...")
+        active_players = [p for p in self.roster_players if p.status not in IL_STATUSES]
         hitter_players = []
         pitcher_players = []
         for player in active_players:
@@ -566,56 +634,45 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             else:
                 hitter_players.append(player)
 
-        optimal_hitters = optimize_hitter_lineup(
-            hitter_players, leverage, config.roster_slots
+        self.optimal_hitters = optimize_hitter_lineup(
+            hitter_players, self.leverage, self.config.roster_slots
         )
-        optimal_pitchers_starters, optimal_pitchers_bench = optimize_pitcher_lineup(
-            pitcher_players, leverage
+        self.optimal_pitchers_starters, self.optimal_pitchers_bench = optimize_pitcher_lineup(
+            pitcher_players, self.leverage
         )
 
-        # --- Step 8: Compare optimal to current, find moves ---
-        _progress("Computing lineup moves...")
-        moves = []
-        for slot, player_name in optimal_hitters.items():
-            for player in roster_players:
-                if player.name == player_name:
-                    current_slot = player.selected_position or "BN"
-                    base_slot = slot.split("_")[0]
-                    # Position is StrEnum; comparison is direct after
-                    # enum normalization at the Player constructor
-                    # boundary. See feat/player-position-enum.
-                    bench_slots = {"BN", "IL", "DL"}
-                    if current_slot != base_slot and (
-                        current_slot in bench_slots or base_slot in bench_slots
-                    ):
-                        moves.append({
-                            "action": "START",
-                            "player": player_name,
-                            "slot": base_slot,
-                            "reason": f"wSGP: {player.wsgp:.1f}",
-                        })
-                    break
+    # --- Step 8: Compare optimal to current, find moves ---
+    def _compute_moves(self):
+        from fantasy_baseball.web.refresh_steps import compute_lineup_moves
+
+        self._progress("Computing lineup moves...")
+        moves = compute_lineup_moves(self.optimal_hitters, self.roster_players)
 
         optimal_data = {
-            "hitter_lineup": optimal_hitters,
-            "pitcher_starters": [p["name"] for p in optimal_pitchers_starters],
-            "pitcher_bench": [p["name"] for p in optimal_pitchers_bench],
+            "hitter_lineup": self.optimal_hitters,
+            "pitcher_starters": [p["name"] for p in self.optimal_pitchers_starters],
+            "pitcher_bench": [p["name"] for p in self.optimal_pitchers_bench],
             "moves": moves,
         }
-        write_cache("lineup_optimal", optimal_data, cache_dir)
+        write_cache("lineup_optimal", optimal_data, self.cache_dir)
 
-        # --- Step 9: Probable starters ---
-        _progress("Fetching schedule and matchup data...")
+    # --- Step 9: Probable starters ---
+    def _fetch_probable_starters(self):
+        from fantasy_baseball.data.mlb_schedule import get_week_schedule
+        from fantasy_baseball.lineup.matchups import calculate_matchup_factors, get_team_batting_stats
+
+        self._progress("Fetching schedule and matchup data...")
         # start_date and end_date were fetched earlier to compute effective_date
+        project_root = Path(__file__).resolve().parents[3]
         schedule_cache_path = project_root / "data" / "weekly_schedule.json"
-        schedule = get_week_schedule(start_date, end_date, schedule_cache_path)
+        schedule = get_week_schedule(self.start_date, self.end_date, schedule_cache_path)
 
         batting_stats_cache_path = project_root / "data" / "team_batting_stats.json"
         team_stats = get_team_batting_stats(batting_stats_cache_path)
         matchup_factors = calculate_matchup_factors(team_stats)
 
         pitcher_roster_for_schedule = [
-            p for p in roster_players
+            p for p in self.roster_players
             if set(p.positions) & PITCHER_POSITIONS
         ]
         from fantasy_baseball.lineup.matchups import get_probable_starters
@@ -623,159 +680,167 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             pitcher_roster_for_schedule, schedule or {},
             matchup_factors=matchup_factors, team_stats=team_stats,
         )
-        write_cache("probable_starters", probable_starters, cache_dir)
+        write_cache("probable_starters", probable_starters, self.cache_dir)
 
-        # --- Step 10: Roster audit ---
-        _progress("Running roster audit...")
-        fa_players, _ = fetch_and_match_free_agents(
-            league, hitters_proj, pitchers_proj
+    # --- Step 10: Roster audit ---
+    def _audit_roster(self):
+        from fantasy_baseball.lineup.roster_audit import audit_roster
+        from fantasy_baseball.lineup.waivers import fetch_and_match_free_agents
+        from fantasy_baseball.web.refresh_steps import build_positions_map
+
+        self._progress("Running roster audit...")
+        self.fa_players, _ = fetch_and_match_free_agents(
+            self.league, self.hitters_proj, self.pitchers_proj
         )
 
         # Cache positions for all known players (roster + opponents + FAs)
-        from fantasy_baseball.utils.name_utils import normalize_name as _norm
-        positions_map: dict[str, list[str]] = {}
-        for p in roster_players:
-            positions_map[_norm(p.name)] = list(p.positions)
-        for _opp_roster in opp_rosters.values():
-            for p in _opp_roster:
-                positions_map[_norm(p.name)] = list(p.positions)
-        for fa in fa_players:
-            if fa.positions:
-                positions_map[_norm(fa.name)] = list(fa.positions)
-        write_cache("positions", positions_map, cache_dir)
+        positions_map = build_positions_map(self.roster_players, self.opp_rosters, self.fa_players)
+        write_cache("positions", positions_map, self.cache_dir)
         from fantasy_baseball.data.redis_store import set_positions, get_default_client
         set_positions(get_default_client(), positions_map)
-        _progress(f"Cached positions for {len(positions_map)} players")
+        self._progress(f"Cached positions for {len(positions_map)} players")
 
         audit_results = audit_roster(
-            roster_players, fa_players, leverage, config.roster_slots,
-            projected_standings=projected_standings,
-            team_name=config.team_name,
-            team_sds=team_sds,
+            self.roster_players, self.fa_players, self.leverage, self.config.roster_slots,
+            projected_standings=self.projected_standings,
+            team_name=self.config.team_name,
+            team_sds=self.team_sds,
         )
-        write_cache("roster_audit", [e.to_dict() for e in audit_results], cache_dir)
+        write_cache("roster_audit", [e.to_dict() for e in audit_results], self.cache_dir)
         upgrades = sum(1 for e in audit_results if e.gap > 0)
-        _progress(f"Roster audit: {upgrades} upgrade(s) found")
+        self._progress(f"Roster audit: {upgrades} upgrade(s) found")
 
-        # --- Step 11: Compute per-team leverage ---
-        _progress("Computing leverage...")
+    # --- Step 11: Compute per-team leverage ---
+    def _compute_per_team_leverage(self):
+        from fantasy_baseball.lineup.leverage import calculate_leverage
+
+        self._progress("Computing leverage...")
         leverage_by_team: dict[str, dict] = {}
-        for entry in standings_snap.entries:
+        for entry in self.standings_snap.entries:
             leverage_by_team[entry.team_name] = calculate_leverage(
-                standings_snap, entry.team_name,
-                projected_standings=projected_standings_snap,
+                self.standings_snap, entry.team_name,
+                projected_standings=self.projected_standings_snap,
             )
-        write_cache("leverage", leverage_by_team, cache_dir)
+        write_cache("leverage", leverage_by_team, self.cache_dir)
 
-        # --- Step 12: Monte Carlo simulation ---
+    # --- Step 12: Monte Carlo simulation ---
+    def _run_monte_carlo(self):
         from fantasy_baseball.simulation import run_monte_carlo
 
-        h_slots = sum(v for k, v in config.roster_slots.items()
+        h_slots = sum(v for k, v in self.config.roster_slots.items()
                       if k not in ("P", "BN", "IL", "DL"))
-        p_slots = config.roster_slots.get("P", 9)
+        p_slots = self.config.roster_slots.get("P", 9)
 
+        all_team_rosters = {self.config.team_name: self.matched}
+        all_team_rosters.update(self.opp_rosters)
         mc_rosters = all_team_rosters
 
-        base_mc = run_monte_carlo(
-            mc_rosters, h_slots, p_slots, config.team_name,
+        self.base_mc = run_monte_carlo(
+            mc_rosters, h_slots, p_slots, self.config.team_name,
             n_iterations=1000, use_management=False,
-            progress_cb=lambda i: _progress(f"Monte Carlo: iteration {i}/1000..."),
+            progress_cb=lambda i: self._progress(f"Monte Carlo: iteration {i}/1000..."),
         )
-        _progress("Pre-season Monte Carlo complete")
-        mgmt_mc = run_monte_carlo(
-            mc_rosters, h_slots, p_slots, config.team_name,
+        self._progress("Pre-season Monte Carlo complete")
+        self.mgmt_mc = run_monte_carlo(
+            mc_rosters, h_slots, p_slots, self.config.team_name,
             n_iterations=1000, use_management=True,
-            progress_cb=lambda i: _progress(f"MC + Roster Mgmt: iteration {i}/1000..."),
+            progress_cb=lambda i: self._progress(f"MC + Roster Mgmt: iteration {i}/1000..."),
         )
-        _progress("Pre-season + Mgmt Monte Carlo complete")
+        self._progress("Pre-season + Mgmt Monte Carlo complete")
 
-        # --- Step 13b: ROS Monte Carlo simulation ---
-        rest_of_season_mc = None
-        rest_of_season_mgmt_mc = None
-        if has_rest_of_season:
+    # --- Step 13b: ROS Monte Carlo simulation ---
+    def _run_ros_monte_carlo(self):
+        self.rest_of_season_mc = None
+        self.rest_of_season_mgmt_mc = None
+        if self.has_rest_of_season:
             from fantasy_baseball.simulation import run_ros_monte_carlo
 
-            season_start = date.fromisoformat(config.season_start)
-            season_end = date.fromisoformat(config.season_end)
-            total_days = (season_end - season_start).days
-            remaining_days = max(0, (season_end - local_today()).days)
-            fraction_remaining = remaining_days / total_days if total_days > 0 else 0
+            # fraction_remaining was computed in Step 4e and is reused here
+
+            h_slots = sum(v for k, v in self.config.roster_slots.items()
+                          if k not in ("P", "BN", "IL", "DL"))
+            p_slots = self.config.roster_slots.get("P", 9)
+
+            all_team_rosters = {self.config.team_name: self.matched}
+            all_team_rosters.update(self.opp_rosters)
 
             # Build ROS rosters for all teams. hitters_proj/pitchers_proj
             # already ARE rest_of_season_hitters/rest_of_season_pitchers when has_rest_of_season is True
             # (see the assignment above), so opp_rosters is already
             # matched against ROS projections — just reuse it.
             rest_of_season_mc_rosters = {}
-            if matched:
-                rest_of_season_mc_rosters[config.team_name] = all_team_rosters.get(config.team_name, [])
-            for tname, opp_players in opp_rosters.items():
+            if self.matched:
+                rest_of_season_mc_rosters[self.config.team_name] = all_team_rosters.get(self.config.team_name, [])
+            for tname, opp_players in self.opp_rosters.items():
                 rest_of_season_mc_rosters[tname] = opp_players
 
             # Build actual standings dict
             actual_standings_dict = {
-                s["name"]: s["stats"] for s in standings
+                s["name"]: s["stats"] for s in self.standings
             }
 
             if rest_of_season_mc_rosters:
-                rest_of_season_mc = run_ros_monte_carlo(
+                self.rest_of_season_mc = run_ros_monte_carlo(
                     team_rosters=rest_of_season_mc_rosters,
                     actual_standings=actual_standings_dict,
-                    fraction_remaining=fraction_remaining,
+                    fraction_remaining=self.fraction_remaining,
                     h_slots=h_slots, p_slots=p_slots,
-                    user_team_name=config.team_name,
+                    user_team_name=self.config.team_name,
                     n_iterations=1000, use_management=False,
-                    progress_cb=lambda i: _progress(
+                    progress_cb=lambda i: self._progress(
                         f"Current MC: iteration {i}/1000..."
                     ),
                 )
-                _progress("Current Monte Carlo complete")
-                rest_of_season_mgmt_mc = run_ros_monte_carlo(
+                self._progress("Current Monte Carlo complete")
+                self.rest_of_season_mgmt_mc = run_ros_monte_carlo(
                     team_rosters=rest_of_season_mc_rosters,
                     actual_standings=actual_standings_dict,
-                    fraction_remaining=fraction_remaining,
+                    fraction_remaining=self.fraction_remaining,
                     h_slots=h_slots, p_slots=p_slots,
-                    user_team_name=config.team_name,
+                    user_team_name=self.config.team_name,
                     n_iterations=1000, use_management=True,
-                    progress_cb=lambda i: _progress(
+                    progress_cb=lambda i: self._progress(
                         f"Current MC + Mgmt: iteration {i}/1000..."
                     ),
                 )
-                _progress("Current + Mgmt Monte Carlo complete")
+                self._progress("Current + Mgmt Monte Carlo complete")
 
         write_cache("monte_carlo", {
-            "base": base_mc,
-            "with_management": mgmt_mc,
-            "rest_of_season": rest_of_season_mc,
-            "rest_of_season_with_management": rest_of_season_mgmt_mc,
-        }, cache_dir)
+            "base": self.base_mc,
+            "with_management": self.mgmt_mc,
+            "rest_of_season": self.rest_of_season_mc,
+            "rest_of_season_with_management": self.rest_of_season_mgmt_mc,
+        }, self.cache_dir)
 
-        # --- Step 14: Compute season-to-date SPoE (luck analysis) ---
+    # --- Step 14: Compute season-to-date SPoE (luck analysis) ---
+    def _compute_spoe(self):
         # Reuses the league_model loaded in Step 4c. No separate DB
         # connection needed — SPoE walks Team.ownership_periods() on
         # the in-memory League object.
-        _progress("Computing SPoE...")
+        self._progress("Computing SPoE...")
         from fantasy_baseball.analysis.spoe import (
             build_preseason_lookup,
             compute_current_spoe,
         )
 
         preseason_lookup = build_preseason_lookup(
-            preseason_hitters, preseason_pitchers,
+            self.preseason_hitters, self.preseason_pitchers,
         )
         spoe_result = compute_current_spoe(
-            league_model,
-            standings,
+            self.league_model,
+            self.standings,
             preseason_lookup,
-            config.season_start,
-            config.season_end,
+            self.config.season_start,
+            self.config.season_end,
         )
 
-        write_cache("spoe", spoe_result, cache_dir)
+        write_cache("spoe", spoe_result, self.cache_dir)
         _write_spoe_snapshot(spoe_result)
-        _progress(f"SPoE computed for snapshot {spoe_result.get('snapshot_date')}")
+        self._progress(f"SPoE computed for snapshot {spoe_result.get('snapshot_date')}")
 
-        # --- Step 15: Transaction analyzer ---
-        _progress("Analyzing transactions...")
+    # --- Step 15: Transaction analyzer ---
+    def _analyze_transactions(self):
+        self._progress("Analyzing transactions...")
         from fantasy_baseball.lineup.yahoo_roster import fetch_all_transactions
         from fantasy_baseball.analysis.transactions import (
             pair_standalone_moves,
@@ -783,26 +848,26 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
             build_cache_output,
         )
 
-        raw_txns = fetch_all_transactions(league)
+        raw_txns = fetch_all_transactions(self.league)
         if raw_txns:
             # Load previously scored transactions from Redis/disk cache
-            stored_txns = read_cache("transactions", cache_dir) or []
+            stored_txns = read_cache("transactions", self.cache_dir) or []
             existing_ids = {t["transaction_id"] for t in stored_txns}
             new_txns = [t for t in raw_txns
                         if t["transaction_id"] not in existing_ids]
 
             if new_txns:
-                _progress(f"Scoring {len(new_txns)} new transaction(s)...")
+                self._progress(f"Scoring {len(new_txns)} new transaction(s)...")
                 from fantasy_baseball.data.redis_store import (
                     get_default_client as _txn_redis_client,
                 )
                 _txn_client = _txn_redis_client()
                 for txn in new_txns:
                     scores = score_transaction(
-                        league_model, _txn_client, txn, config.season_year,
+                        self.league_model, _txn_client, txn, self.config.season_year,
                     )
                     stored_txns.append({
-                        "year": config.season_year,
+                        "year": self.config.season_year,
                         **txn,
                         **scores,
                         "paired_with": None,
@@ -818,30 +883,27 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
             # Persist scored transactions to Redis and build display cache
             stored_txns.sort(key=lambda t: t.get("timestamp") or "")
-            write_cache("transactions", stored_txns, cache_dir)
+            write_cache("transactions", stored_txns, self.cache_dir)
             cache_data = build_cache_output(stored_txns)
-            write_cache("transaction_analyzer", cache_data, cache_dir)
-            _progress(f"Analyzed {len(stored_txns)} total transaction(s)")
+            write_cache("transaction_analyzer", cache_data, self.cache_dir)
+            self._progress(f"Analyzed {len(stored_txns)} total transaction(s)")
 
-        # --- Step 16: Write meta ---
-        _progress("Finalizing...")
+    # --- Step 16: Write meta ---
+    def _write_meta(self):
+        self._progress("Finalizing...")
         meta = {
             "last_refresh": local_now().strftime("%Y-%m-%d %H:%M"),
-            "start_date": start_date,
-            "end_date": end_date,
-            "team_name": config.team_name,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "team_name": self.config.team_name,
         }
-        write_cache("meta", meta, cache_dir)
+        write_cache("meta", meta, self.cache_dir)
 
-        logger.finish("ok")
-        _progress("Done")
-        clear_opponent_cache()
 
-    except Exception as exc:
-        with _refresh_lock:
-            _refresh_status["error"] = str(exc)
-        logger.finish("error", str(exc))
-        raise
-    finally:
-        with _refresh_lock:
-            _refresh_status["running"] = False
+def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
+    """Connect to Yahoo, fetch all data, run computations, and write cache files.
+
+    Thin wrapper around RefreshRun for backward compatibility with
+    existing callers (scripts/run_lineup.py, season_routes.py).
+    """
+    RefreshRun(cache_dir).run()

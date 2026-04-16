@@ -635,10 +635,31 @@ class TestComparisonProjectionOverride:
         assert fresh_sv_delta == pytest.approx(-18)
 
 
-class TestRunFullRefreshAttributeAccess:
+def _refresh_run_source() -> str:
+    """Concatenate the source of every RefreshRun method.
+
+    The pre-class regression guards inspected ``run_full_refresh``
+    directly. After the RefreshRun refactor, the same logic lives in
+    methods on the class — this helper rebuilds the equivalent source
+    blob so the guards keep working.
+    """
+    import inspect
+
+    from fantasy_baseball.web import refresh_pipeline
+
+    cls = refresh_pipeline.RefreshRun
+    return "\n".join(
+        inspect.getsource(getattr(cls, name))
+        for name in dir(cls)
+        if callable(getattr(cls, name))
+        and not name.startswith("__")
+    )
+
+
+class TestRefreshRunAttributeAccess:
     """Catch typos like config.sgp_denominators (should be sgp_overrides).
 
-    run_full_refresh accesses attributes on LeagueConfig, Player, and other
+    RefreshRun methods access attributes on LeagueConfig, Player, and other
     dataclasses. A typo compiles fine but crashes at runtime — often only
     discovered after a 15-minute deploy + refresh cycle on Render.
 
@@ -647,14 +668,12 @@ class TestRunFullRefreshAttributeAccess:
     """
 
     def test_config_attribute_access_valid(self):
-        """Every `config.<attr>` in run_full_refresh must exist on LeagueConfig."""
-        import inspect
+        """Every `config.<attr>` in RefreshRun methods must exist on LeagueConfig."""
         import re
 
         from fantasy_baseball.config import LeagueConfig
-        from fantasy_baseball.web import refresh_pipeline
 
-        src = inspect.getsource(refresh_pipeline.run_full_refresh)
+        src = _refresh_run_source()
         valid_attrs = {f.name for f in LeagueConfig.__dataclass_fields__.values()}
 
         # Match config.something (not config = or config: or config[)
@@ -662,49 +681,47 @@ class TestRunFullRefreshAttributeAccess:
 
         bad = refs - valid_attrs
         assert not bad, (
-            f"run_full_refresh references config attributes that don't exist "
+            f"RefreshRun references config attributes that don't exist "
             f"on LeagueConfig: {bad}. Valid attributes: {sorted(valid_attrs)}"
         )
 
 
-class TestRunFullRefreshScopingGuards:
-    """Regression guards for Python scoping bugs in run_full_refresh.
+class TestRefreshRunScopingGuards:
+    """Regression guards for Python scoping bugs in RefreshRun.
 
-    run_full_refresh is a long function that imports modules lazily
-    inside conditional branches. Any local ``from X import Y`` that
-    shadows a module-level name promotes that name to a local variable
-    for the entire function scope (LEGB rule), causing UnboundLocalError
+    RefreshRun methods import modules lazily inside conditional
+    branches. Any local ``from X import Y`` that shadows a
+    module-level name promotes that name to a local variable for
+    the entire function scope (LEGB rule), causing UnboundLocalError
     when the name is referenced earlier in the function.
 
     Production bug landed on 2026-04-12: Step 2 of the League data
     model refactor started using ``date.fromisoformat(end_date)`` near
-    the top of run_full_refresh to compute effective_date. A
+    the top of what is now RefreshRun to compute effective_date. A
     pre-existing local ``from datetime import date`` inside the
     Monte Carlo block shadowed the module-level import, so the
     function crashed with ``UnboundLocalError: cannot access local
     variable 'date' where it is not associated with a value``.
     """
 
-    def test_no_local_datetime_import_inside_run_full_refresh(self):
-        import inspect
-
-        from fantasy_baseball.web import refresh_pipeline
-
-        src = inspect.getsource(refresh_pipeline.run_full_refresh)
+    def test_no_local_datetime_import_inside_refresh_run(self):
+        src = _refresh_run_source()
         assert "from datetime import date" not in src, (
-            "Local `from datetime import date` found in run_full_refresh. "
+            "Local `from datetime import date` found in a RefreshRun method. "
             "This shadows the module-level import on line 9 and causes "
             "UnboundLocalError when date is used earlier in the function. "
             "If you need to import date inside the function, rename it "
             "(e.g. `from datetime import date as _date`) to avoid shadowing."
         )
         assert "from datetime import datetime" not in src, (
-            "Local `from datetime import datetime` would shadow the "
-            "module-level import for the same reason as the date case."
+            "Local `from datetime import datetime` in a RefreshRun method "
+            "would shadow the module-level import for the same reason as "
+            "the date case."
         )
         assert "from datetime import timedelta" not in src, (
-            "Local `from datetime import timedelta` would shadow the "
-            "module-level import for the same reason as the date case."
+            "Local `from datetime import timedelta` in a RefreshRun method "
+            "would shadow the module-level import for the same reason as "
+            "the date case."
         )
 
     def test_module_level_date_import_is_present(self):

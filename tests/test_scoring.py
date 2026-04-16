@@ -9,7 +9,14 @@ from fantasy_baseball.models.player import (
     PlayerType,
 )
 from fantasy_baseball.models.positions import Position
-from fantasy_baseball.scoring import ALL_CATS, _prob_beats, project_team_stats, score_roto
+from fantasy_baseball.scoring import (
+    ALL_CATS,
+    _prob_beats,
+    build_projected_standings,
+    build_team_sds,
+    project_team_stats,
+    score_roto,
+)
 
 
 def _hitter(name, r=0, hr=0, rbi=0, sb=0, h=0, ab=0, pa=0,
@@ -708,3 +715,82 @@ class TestScoreRotoEV:
                 sum(roto[t][f"{cat}_pts"] for cat in
                     ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"])
             )
+
+
+# ── build_projected_standings / build_team_sds ──────────────────────
+
+
+class TestBuildProjectedStandings:
+    """Pure helper wrapping ``project_team_stats`` for cache output."""
+
+    def test_returns_one_entry_per_team(self):
+        rosters = {
+            "Team A": [_make_hitter("Player1", r=80, hr=20, rbi=70, sb=10,
+                                    h=140, ab=500, pa=500)],
+            "Team B": [_make_hitter("Player2", r=70, hr=15, rbi=60, sb=8,
+                                    h=130, ab=490, pa=490)],
+        }
+        result = build_projected_standings(rosters)
+        assert len(result) == 2
+        team_names = {entry["name"] for entry in result}
+        assert team_names == {"Team A", "Team B"}
+
+    def test_each_entry_has_expected_keys(self):
+        rosters = {
+            "Team A": [_make_hitter("Player1", r=80, hr=20, rbi=70, sb=10,
+                                    h=140, ab=500, pa=500)],
+        }
+        result = build_projected_standings(rosters)
+        entry = result[0]
+        assert set(entry.keys()) == {"name", "team_key", "rank", "stats"}
+        assert entry["team_key"] == ""
+        assert entry["rank"] == 0
+        assert isinstance(entry["stats"], dict)
+
+    def test_stats_dict_has_all_categories(self):
+        rosters = {
+            "Team A": [
+                _make_hitter("H1", r=80, hr=20, rbi=70, sb=10,
+                             h=140, ab=500, pa=500),
+                _make_pitcher("P1", w=10, k=180, sv=0, ip=180,
+                              er=70, bb=55, h_allowed=155),
+            ],
+        }
+        result = build_projected_standings(rosters)
+        stats = result[0]["stats"]
+        # CategoryStats.to_dict yields all 10 5x5 categories (uppercase keys)
+        for cat in ("R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"):
+            assert cat in stats
+
+
+class TestBuildTeamSDs:
+    """Pure helper wrapping ``project_team_sds`` with scale factor."""
+
+    def test_returns_one_dict_per_team(self):
+        rosters = {
+            "Team A": [_make_hitter("P1", r=80, hr=20, rbi=70, sb=10,
+                                    h=140, ab=500, pa=500)],
+            "Team B": [_make_hitter("P2", r=70, hr=15, rbi=60, sb=8,
+                                    h=130, ab=490, pa=490)],
+        }
+        result = build_team_sds(rosters, sd_scale=1.0)
+        assert set(result.keys()) == {"Team A", "Team B"}
+
+    def test_sd_scale_multiplies_each_value(self):
+        rosters = {
+            "Team A": [_make_hitter("P1", r=80, hr=20, rbi=70, sb=10,
+                                    h=140, ab=500, pa=500)],
+        }
+        unscaled = build_team_sds(rosters, sd_scale=1.0)
+        scaled = build_team_sds(rosters, sd_scale=0.5)
+        for cat, sd in unscaled["Team A"].items():
+            assert scaled["Team A"][cat] == pytest.approx(sd * 0.5)
+
+    def test_sd_scale_zero_yields_zero_sds(self):
+        rosters = {
+            "Team A": [_make_hitter("P1", r=80, hr=20, rbi=70, sb=10,
+                                    h=140, ab=500, pa=500)],
+        }
+        result = build_team_sds(rosters, sd_scale=0.0)
+        for sd in result["Team A"].values():
+            assert sd == 0.0

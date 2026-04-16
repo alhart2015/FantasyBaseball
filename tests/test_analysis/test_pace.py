@@ -1,6 +1,8 @@
 import pytest
 
-from fantasy_baseball.analysis.pace import compute_player_pace
+from fantasy_baseball.analysis.pace import compute_player_pace, attach_pace_to_roster
+from fantasy_baseball.models.player import Player, PlayerType, HitterStats, PitcherStats
+from fantasy_baseball.models.positions import Position
 
 
 def test_hitter_counting_on_pace():
@@ -230,3 +232,92 @@ def test_rest_of_season_deviation_zero_when_no_ros():
     result = compute_player_pace(actual, preseason, "hitter")
     assert result["HR"]["rest_of_season_deviation_sgp"] == 0.0
     assert result["AVG"]["rest_of_season_deviation_sgp"] == 0.0
+
+
+def _hitter_with_ros(name="Soto", r=80, hr=25, rbi=80, sb=5, avg=0.290, ab=500):
+    p = Player(
+        name=name, positions=[Position.OF], player_type=PlayerType.HITTER,
+        selected_position=Position.OF, yahoo_id=f"{name}::hitter",
+    )
+    p.rest_of_season = HitterStats(
+        r=r, hr=hr, rbi=rbi, sb=sb, avg=avg, h=int(avg * ab), ab=ab, pa=ab,
+    )
+    return p
+
+
+def _pitcher_with_ros(name="Cole", w=12, k=200, sv=0, era=3.0, whip=1.10, ip=180):
+    p = Player(
+        name=name, positions=[Position.SP], player_type=PlayerType.PITCHER,
+        selected_position=Position.P, yahoo_id=f"{name}::pitcher",
+    )
+    p.rest_of_season = PitcherStats(
+        w=w, k=k, sv=sv, era=era, whip=whip, ip=ip,
+        er=era * ip / 9, bb=int(whip * ip * 0.3), h_allowed=int(whip * ip * 0.7),
+    )
+    return p
+
+
+class TestAttachPaceToRoster:
+    def test_hitter_pace_uses_hitter_logs(self):
+        h = _hitter_with_ros()
+        hitter_logs = {"soto": {"r": 40, "hr": 15, "rbi": 50, "sb": 2, "avg": 0.310}}
+        attach_pace_to_roster(
+            [h], hitter_logs, pitcher_logs={},
+            preseason_lookup={},
+            sgp_denoms={"r": 25, "hr": 8, "rbi": 25, "sb": 8, "avg": 0.012,
+                        "w": 5, "k": 80, "sv": 12, "era": 0.30, "whip": 0.05},
+        )
+        assert h.pace is not None
+
+    def test_pitcher_pace_uses_pitcher_logs(self):
+        p = _pitcher_with_ros()
+        pitcher_logs = {"cole": {"w": 6, "k": 110, "sv": 0, "era": 2.80, "whip": 1.05}}
+        attach_pace_to_roster(
+            [p], hitter_logs={}, pitcher_logs=pitcher_logs,
+            preseason_lookup={},
+            sgp_denoms={"r": 25, "hr": 8, "rbi": 25, "sb": 8, "avg": 0.012,
+                        "w": 5, "k": 80, "sv": 12, "era": 0.30, "whip": 0.05},
+        )
+        assert p.pace is not None
+
+    def test_missing_actuals_uses_empty_dict(self):
+        # Player with no game logs (e.g. just-called-up rookie) should
+        # still get a pace attached — compute_player_pace handles empty.
+        h = _hitter_with_ros(name="Newbie")
+        attach_pace_to_roster(
+            [h], hitter_logs={}, pitcher_logs={},
+            preseason_lookup={},
+            sgp_denoms={"r": 25, "hr": 8, "rbi": 25, "sb": 8, "avg": 0.012,
+                        "w": 5, "k": 80, "sv": 12, "era": 0.30, "whip": 0.05},
+        )
+        assert h.pace is not None
+
+    def test_preseason_projections_used_when_available(self):
+        # If preseason_lookup has the player, projected stats come from
+        # there rather than zero-filled.
+        h = _hitter_with_ros(name="Soto")
+        pre = _hitter_with_ros(name="Soto", r=100, hr=35)
+        attach_pace_to_roster(
+            [h], hitter_logs={"soto": {"r": 50, "hr": 18}},
+            pitcher_logs={},
+            preseason_lookup={"soto": pre},
+            sgp_denoms={"r": 25, "hr": 8, "rbi": 25, "sb": 8, "avg": 0.012,
+                        "w": 5, "k": 80, "sv": 12, "era": 0.30, "whip": 0.05},
+        )
+        assert h.pace is not None
+
+    def test_player_without_rest_of_season_still_processed(self):
+        # Player.rest_of_season can be None for unmatched FAs etc.
+        h = Player(
+            name="NoProj", positions=[Position.OF], player_type=PlayerType.HITTER,
+            selected_position=Position.OF, yahoo_id="NoProj::hitter",
+        )
+        # h.rest_of_season is None
+        attach_pace_to_roster(
+            [h], hitter_logs={}, pitcher_logs={},
+            preseason_lookup={},
+            sgp_denoms={"r": 25, "hr": 8, "rbi": 25, "sb": 8, "avg": 0.012,
+                        "w": 5, "k": 80, "sv": 12, "era": 0.30, "whip": 0.05},
+        )
+        # Should not raise; pace is set (compute_player_pace handles None)
+        assert h.pace is not None
