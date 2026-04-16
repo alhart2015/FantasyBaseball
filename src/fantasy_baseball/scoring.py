@@ -1,11 +1,16 @@
 """Roto scoring and team stat projection — shared across all modules.
 
-Provides two core functions:
+Provides core functions:
 - project_team_stats: sum projected stats for a roster into a
   CategoryStats. Accepts Player dataclass objects OR flat dicts for
   backwards compatibility with draft/script callers that still build
   rosters as plain dicts.
-- score_roto: assign roto points (1-N) with fractional tie-breaking
+- project_team_sds: analytical team-level standard deviations for
+  each category under player-independence, used to price projection
+  uncertainty into score_roto.
+- score_roto: assign expected roto points via pairwise Gaussian
+  win-probabilities. With team_sds=None, collapses to rank-based
+  scoring with averaged ties (backwards-compatible default).
 """
 
 from __future__ import annotations
