@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -7,6 +8,8 @@ from fantasy_baseball.utils.positions import is_hitter, is_pitcher
 from fantasy_baseball.models.player import Player, PlayerType, HitterStats, PitcherStats
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.roster import Roster
+
+logger = logging.getLogger(__name__)
 
 # Counting stats to blend directly (weighted average)
 HITTING_COUNTING_COLS: list[str] = ["r", "hr", "rbi", "sb", "h", "ab", "pa"]
@@ -360,6 +363,8 @@ def match_roster_to_projections(
     roster: list[dict],
     hitters_proj: pd.DataFrame,
     pitchers_proj: pd.DataFrame,
+    *,
+    context: str = "",
 ) -> list[Player]:
     """Match roster players to blended projections by normalized name.
 
@@ -369,7 +374,19 @@ def match_roster_to_projections(
     Returns a list of :class:`Player` objects with ``.rest_of_season`` populated as
     :class:`HitterStats` or :class:`PitcherStats`. Unmatched players are
     omitted.
+
+    Emits ``WARNING`` logs for three matching anomalies so silent failures
+    surface in the refresh log:
+
+    - Unmatched roster player (no projection found in either DataFrame)
+    - Ambiguous match (multiple projection rows share a normalized name)
+    - Fallback match (positions did not disambiguate hitter vs pitcher)
+
+    The ``context`` kwarg is included in log messages as a ``[context]``
+    prefix to identify which call site produced the warning (e.g.
+    ``"user"``, ``"opp:Sharks"``, ``"preseason"``, ``"ros"``).
     """
+    prefix = f"[{context}] " if context else ""
     matched: list[Player] = []
     for player in roster:
         name = player["name"].replace(" (Batter)", "").replace(" (Pitcher)", "")
@@ -398,35 +415,41 @@ def match_roster_to_projections(
                     ptype = pt
                     break
 
-        if proj is not None:
-            if ptype == PlayerType.HITTER:
-                ros = HitterStats.from_dict(proj.to_dict())
-            else:
-                ros = PitcherStats.from_dict(proj.to_dict())
-
-            # Parse positions and selected_position explicitly
-            parsed_positions = [
-                p if isinstance(p, Position) else Position.parse(p)
-                for p in positions
-            ]
-            raw_slot = player.get("selected_position", "")
-            if raw_slot is None or raw_slot == "":
-                parsed_slot = None
-            elif isinstance(raw_slot, Position):
-                parsed_slot = raw_slot
-            else:
-                parsed_slot = Position.parse(raw_slot)
-
-            p = Player(
-                name=name,
-                player_type=ptype,
-                positions=parsed_positions,
-                yahoo_id=player.get("player_id", ""),
-                selected_position=parsed_slot,
-                status=player.get("status", ""),
-                rest_of_season=ros,
+        if proj is None:
+            logger.warning(
+                "%sno projection match for %r (positions=%r)",
+                prefix, name, positions,
             )
-            matched.append(p)
+            continue
+
+        if ptype == PlayerType.HITTER:
+            ros = HitterStats.from_dict(proj.to_dict())
+        else:
+            ros = PitcherStats.from_dict(proj.to_dict())
+
+        # Parse positions and selected_position explicitly
+        parsed_positions = [
+            p if isinstance(p, Position) else Position.parse(p)
+            for p in positions
+        ]
+        raw_slot = player.get("selected_position", "")
+        if raw_slot is None or raw_slot == "":
+            parsed_slot = None
+        elif isinstance(raw_slot, Position):
+            parsed_slot = raw_slot
+        else:
+            parsed_slot = Position.parse(raw_slot)
+
+        p = Player(
+            name=name,
+            player_type=ptype,
+            positions=parsed_positions,
+            yahoo_id=player.get("player_id", ""),
+            selected_position=parsed_slot,
+            status=player.get("status", ""),
+            rest_of_season=ros,
+        )
+        matched.append(p)
 
     return matched
 

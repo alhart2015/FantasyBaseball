@@ -193,3 +193,46 @@ class TestShoheiOhtaniDualEntry:
         # Suffix stripped from the stored Player.name as well
         assert pitcher.name == "Shohei Ohtani"
         assert pitcher.rest_of_season.k == 180
+
+
+# --- Observability ---
+
+class TestMatchObservability:
+    """Verify match_roster_to_projections emits WARNING logs for the three
+    insidious cases (unmatched, ambiguous, fallback) so future matching
+    regressions surface immediately instead of silently dropping or
+    mis-matching players.
+    """
+
+    def test_unmatched_player_logs_warning(self, caplog):
+        roster = [{"name": "Nobody Special", "positions": ["OF"]}]
+        with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.projections"):
+            result = match_roster_to_projections(
+                roster, _empty_hitters(), _empty_pitchers(),
+            )
+        assert result == []
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        msg = warnings[0].getMessage()
+        assert "no projection match" in msg
+        assert "Nobody Special" in msg
+        assert "OF" in msg
+
+    def test_unmatched_player_with_context_includes_context_in_log(self, caplog):
+        roster = [{"name": "Nobody Special", "positions": ["OF"]}]
+        with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.projections"):
+            match_roster_to_projections(
+                roster, _empty_hitters(), _empty_pitchers(), context="opp:Sharks",
+            )
+        msg = caplog.records[0].getMessage()
+        assert "[opp:Sharks]" in msg
+
+    def test_unmatched_player_without_context_omits_brackets(self, caplog):
+        roster = [{"name": "Nobody Special", "positions": ["OF"]}]
+        with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.projections"):
+            match_roster_to_projections(
+                roster, _empty_hitters(), _empty_pitchers(),
+            )
+        msg = caplog.records[0].getMessage()
+        assert "[]" not in msg
+        assert not msg.startswith("[")
