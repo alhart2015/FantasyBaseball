@@ -45,3 +45,34 @@ def merge_matched_and_raw_roster(
             out.append(Player.from_dict({**raw_player, "player_type": inferred_type}))
 
     return out
+
+
+def compute_lineup_moves(
+    optimal_hitters: dict[str, str],
+    roster_players: list[Player],
+) -> list[dict]:
+    """Compare optimizer output to current slots; emit START moves.
+
+    Only emits a move when the player is crossing the bench/active
+    boundary. Bench-like slots: BN, IL, DL. Slot keys may have suffixes
+    like ``OF_1`` — only the prefix before ``_`` matters for comparison.
+    """
+    bench_slots = {"BN", "IL", "DL"}
+    moves: list[dict] = []
+    for slot, player_name in optimal_hitters.items():
+        for player in roster_players:
+            if player.name != player_name:
+                continue
+            current_slot = player.selected_position or "BN"
+            base_slot = slot.split("_")[0]
+            if current_slot != base_slot and (
+                current_slot in bench_slots or base_slot in bench_slots
+            ):
+                moves.append({
+                    "action": "START",
+                    "player": player_name,
+                    "slot": base_slot,
+                    "reason": f"wSGP: {player.wsgp:.1f}",
+                })
+            break
+    return moves
