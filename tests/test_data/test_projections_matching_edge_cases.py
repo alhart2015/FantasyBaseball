@@ -236,3 +236,40 @@ class TestMatchObservability:
         msg = caplog.records[0].getMessage()
         assert "[]" not in msg
         assert not msg.startswith("[")
+
+    def test_ambiguous_hitter_match_logs_warning(self, caplog):
+        # Two projection rows with the same normalized name and matching positions
+        hitters = _hitters_df([
+            {"name": "John Smith", "_name_norm": "john smith", "hr": 25},
+            {"name": "John Smith", "_name_norm": "john smith", "hr": 12},
+        ])
+        roster = [{"name": "John Smith", "positions": ["OF"]}]
+        with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.projections"):
+            result = match_roster_to_projections(roster, hitters, _empty_pitchers())
+        assert len(result) == 1
+        # First row wins (matches.iloc[0])
+        assert result[0].rest_of_season.hr == 25
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        msg = warnings[0].getMessage()
+        assert "ambiguous" in msg
+        assert "hitter" in msg
+        assert "John Smith" in msg
+        assert "2 candidates" in msg
+
+    def test_ambiguous_pitcher_match_logs_warning(self, caplog):
+        pitchers = _pitchers_df([
+            {"name": "Joe Pitcher", "_name_norm": "joe pitcher", "k": 200},
+            {"name": "Joe Pitcher", "_name_norm": "joe pitcher", "k": 50},
+        ])
+        roster = [{"name": "Joe Pitcher", "positions": ["SP"]}]
+        with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.projections"):
+            result = match_roster_to_projections(roster, _empty_hitters(), pitchers)
+        assert len(result) == 1
+        assert result[0].rest_of_season.k == 200
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        msg = warnings[0].getMessage()
+        assert "ambiguous" in msg
+        assert "pitcher" in msg
+        assert "2 candidates" in msg

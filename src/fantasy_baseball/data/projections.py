@@ -398,11 +398,21 @@ def match_roster_to_projections(
         if is_hitter(positions) and not hitters_proj.empty:
             matches = hitters_proj[hitters_proj["_name_norm"] == name_norm]
             if not matches.empty:
+                if len(matches) > 1:
+                    logger.warning(
+                        "%sambiguous hitter match for %r — %d candidates, picked first",
+                        prefix, name, len(matches),
+                    )
                 proj = matches.iloc[0]
                 ptype = PlayerType.HITTER
         if proj is None and is_pitcher(positions) and not pitchers_proj.empty:
             matches = pitchers_proj[pitchers_proj["_name_norm"] == name_norm]
             if not matches.empty:
+                if len(matches) > 1:
+                    logger.warning(
+                        "%sambiguous pitcher match for %r — %d candidates, picked first",
+                        prefix, name, len(matches),
+                    )
                 proj = matches.iloc[0]
                 ptype = PlayerType.PITCHER
         if proj is None:
