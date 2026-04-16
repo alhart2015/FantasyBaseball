@@ -76,3 +76,27 @@ def compute_lineup_moves(
                 })
             break
     return moves
+
+
+def build_positions_map(
+    roster_players: list[Player],
+    opp_rosters: dict[str, list[Player]],
+    fa_players: list[Player],
+) -> dict[str, list[str]]:
+    """Build a normalized-name → positions-list map from three sources.
+
+    Iteration order is roster → opponents → FAs, so a player appearing
+    in multiple sources gets the FA positions if present, then opponent,
+    then user roster. FAs with empty positions are skipped (Yahoo
+    sometimes returns no position data for them).
+    """
+    out: dict[str, list[str]] = {}
+    for p in roster_players:
+        out[normalize_name(p.name)] = list(p.positions)
+    for opp_roster in opp_rosters.values():
+        for p in opp_roster:
+            out[normalize_name(p.name)] = list(p.positions)
+    for fa in fa_players:
+        if fa.positions:
+            out[normalize_name(fa.name)] = list(fa.positions)
+    return out
