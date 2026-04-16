@@ -126,6 +126,7 @@
             <h4 style="margin:0; font-size:14px;">Projected Standings Impact</h4>
             <div>
                 <button class="standings-toggle active" data-mode="roto">Roto Points</button>
+                <button class="standings-toggle" data-mode="ev_roto">ERoto</button>
                 <button class="standings-toggle" data-mode="stats">Stat Totals</button>
             </div>
         </div>
@@ -548,10 +549,10 @@ function renderDeltaRoto(dr) {
     const cats = dr.categories;
     for (const cat of Object.keys(cats)) {
         const c = cats[cat];
-        if (Math.abs(c.score) > 0.01) {
-            const cc = c.score > 0 ? 'var(--success)' : 'var(--danger)';
+        if (Math.abs(c.roto_delta) > 0.01) {
+            const cc = c.roto_delta > 0 ? 'var(--success)' : 'var(--danger)';
             catParts.push('<span style="color:' + cc + '">' + cat + ' ' +
-                (c.score > 0 ? '+' : '') + c.score.toFixed(2) + '</span>');
+                (c.roto_delta > 0 ? '+' : '') + c.roto_delta.toFixed(2) + '</span>');
         }
     }
     if (catParts.length > 0) {
@@ -578,37 +579,41 @@ function renderStandings() {
         standingsData.before.roto[b].total - standingsData.before.roto[a].total
     );
 
+    const isRotoLike = mode === 'roto' || mode === 'ev_roto';
+    const rotoKey = mode === 'ev_roto' ? 'ev_roto' : 'roto';
+    const fmtPts = mode === 'ev_roto' ? 1 : 0;
+
     function renderBody(container, view, diffView, userTeam) {
         container.innerHTML = sorted.map(team => {
-            const roto = view.roto[team];
+            const roto = view[rotoKey][team];
             const stats = view.stats[team];
             const rowStyle = team === userTeam ? 'color:var(--accent); font-weight:600' : '';
 
-            const total = roto.total.toFixed(0);
+            const total = roto.total.toFixed(fmtPts);
             let totalDiff = '';
             if (diffView) {
-                const d = roto.total - diffView.roto[team].total;
+                const d = roto.total - diffView[rotoKey][team].total;
                 if (Math.abs(d) > 0.01) {
                     const cls = d > 0 ? 'diff-positive' : 'diff-negative';
                     totalDiff = ' <span class="' + cls + '" style="font-size:11px">' +
-                        (d > 0 ? '+' : '') + d.toFixed(0) + '</span>';
+                        (d > 0 ? '+' : '') + d.toFixed(fmtPts) + '</span>';
                 }
             }
 
             const cells = cats.map(c => {
-                const val = mode === 'roto' ? roto[c + '_pts'] : stats[c];
-                const fmtVal = mode === 'roto' ? val.toFixed(0) : fmt(val, c);
+                const val = isRotoLike ? roto[c + '_pts'] : stats[c];
+                const fmtVal = isRotoLike ? val.toFixed(fmtPts) : fmt(val, c);
                 let delta = '';
                 if (diffView) {
-                    const dVal = mode === 'roto'
-                        ? roto[c + '_pts'] - diffView.roto[team][c + '_pts']
+                    const dVal = isRotoLike
+                        ? roto[c + '_pts'] - diffView[rotoKey][team][c + '_pts']
                         : stats[c] - diffView.stats[team][c];
                     if (Math.abs(dVal) > 0.01) {
-                        const isGood = mode === 'roto' ? dVal > 0
+                        const isGood = isRotoLike ? dVal > 0
                             : (INVERSE_CATS.has(c) ? dVal < 0 : dVal > 0);
                         const cls = isGood ? 'diff-positive' : 'diff-negative';
                         const sign = dVal > 0 ? '+' : '';
-                        const fmtD = mode === 'roto' ? sign + dVal.toFixed(0) : sign + fmt(dVal, c);
+                        const fmtD = isRotoLike ? sign + dVal.toFixed(fmtPts) : sign + fmt(dVal, c);
                         delta = ' <span class="' + cls + '" style="font-size:11px">' + fmtD + '</span>';
                     }
                 }

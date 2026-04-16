@@ -1,3 +1,5 @@
+import pytest
+
 from fantasy_baseball.models.player import Player, PlayerType, HitterStats, PitcherStats
 from fantasy_baseball.lineup.roster_audit import audit_roster
 
@@ -631,3 +633,52 @@ class TestRegressionFixtures:
         # Ward is the only viable candidate
         assert "Ward" in cand_names
         assert adolis.best_fa == "Ward"
+
+
+class TestAuditRosterTeamSDs:
+    """audit_roster threads team_sds into compute_delta_roto so within-
+    uncertainty swaps produce fractional deltas instead of rank flips."""
+
+    def _twelve_team_sb_standings(self):
+        cats = {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
+                "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0}
+        return [
+            {"name": TEAM_NAME, "stats": {**cats, "SB": 100}},
+            {"name": "Rival", "stats": {**cats, "SB": 99}},
+        ] + [
+            {"name": f"T{i}", "stats": {**cats, "SB": 10 + i}}
+            for i in range(10)
+        ]
+
+    def test_team_sds_none_produces_full_rank_flip(self):
+        roster = [_hitter("Drop", ["OF"], r=0, hr=0, rbi=0, sb=20, ab=100, h=0, avg=0.0)]
+        fas = [_hitter("Add", ["OF"], r=0, hr=0, rbi=0, sb=10, ab=100, h=0, avg=0.0)]
+        entries = audit_roster(
+            roster, fas, EQUAL_LEVERAGE, {"OF": 1, "P": 0, "BN": 0, "IL": 0},
+            projected_standings=self._twelve_team_sb_standings(),
+            team_name=TEAM_NAME, team_sds=None,
+        )
+        drop_entry = next(e for e in entries if e.player == "Drop")
+        assert drop_entry.candidates[0]["delta_roto"]["categories"]["SB"][
+            "roto_delta"
+        ] == pytest.approx(-1.0)
+
+    def test_team_sds_wide_produces_fractional_delta(self):
+        roster = [_hitter("Drop", ["OF"], r=0, hr=0, rbi=0, sb=20, ab=100, h=0, avg=0.0)]
+        fas = [_hitter("Add", ["OF"], r=0, hr=0, rbi=0, sb=10, ab=100, h=0, avg=0.0)]
+        standings = self._twelve_team_sb_standings()
+        zero = {c: 0.0 for c in ["R", "HR", "RBI", "SB", "AVG",
+                                  "W", "K", "SV", "ERA", "WHIP"]}
+        team_sds = {t["name"]: dict(zero) for t in standings}
+        team_sds[TEAM_NAME]["SB"] = 10.0
+        team_sds["Rival"]["SB"] = 10.0
+        entries = audit_roster(
+            roster, fas, EQUAL_LEVERAGE, {"OF": 1, "P": 0, "BN": 0, "IL": 0},
+            projected_standings=standings,
+            team_name=TEAM_NAME, team_sds=team_sds,
+        )
+        drop_entry = next(e for e in entries if e.player == "Drop")
+        sb_delta = drop_entry.candidates[0]["delta_roto"]["categories"]["SB"][
+            "roto_delta"
+        ]
+        assert abs(sb_delta) < 0.5

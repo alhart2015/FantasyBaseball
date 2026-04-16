@@ -1,14 +1,21 @@
 """Roto scoring and team stat projection — shared across all modules.
 
-Provides two core functions:
+Provides core functions:
 - project_team_stats: sum projected stats for a roster into a
   CategoryStats. Accepts Player dataclass objects OR flat dicts for
   backwards compatibility with draft/script callers that still build
   rosters as plain dicts.
-- score_roto: assign roto points (1-N) with fractional tie-breaking
+- project_team_sds: analytical team-level standard deviations for
+  each category under player-independence, used to price projection
+  uncertainty into score_roto.
+- score_roto: assign expected roto points via pairwise Gaussian
+  win-probabilities. With team_sds=None, collapses to rank-based
+  scoring with averaged ties (backwards-compatible default).
 """
 
 from __future__ import annotations
+
+from math import erf, sqrt
 
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS, Position
@@ -21,6 +28,7 @@ from fantasy_baseball.utils.constants import (
     INVERSE_STATS as INVERSE_CATS,  # noqa: F401
     PITCHING_COUNTING,
     STARTER_IP_THRESHOLD,
+    STAT_VARIANCE,
     safe_float as _safe,
 )
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
@@ -45,6 +53,34 @@ def _stat(p, key):
     if isinstance(p, dict):
         return _safe(p.get(key, 0))
     return 0.0
+
+
+def _prob_beats(
+    mu_a: float,
+    mu_b: float,
+    sd_a: float,
+    sd_b: float,
+    *,
+    higher_is_better: bool,
+) -> float:
+    """P(team A's category total exceeds team B's) under Gaussian independence.
+
+    When combined SD is zero, this is a step function: 1.0 if A is ahead,
+    0.0 if behind, 0.5 on exact equality. Positive combined SD smooths the
+    step into a continuous sigmoid. The ``higher_is_better`` flag flips
+    the direction for inverse categories (ERA, WHIP).
+
+    This is the pairwise primitive the EV-based ``score_roto`` sums over.
+    """
+    diff = (mu_a - mu_b) if higher_is_better else (mu_b - mu_a)
+    combined = sqrt(sd_a * sd_a + sd_b * sd_b)
+    if combined == 0.0:
+        if diff > 0:
+            return 1.0
+        if diff < 0:
+            return 0.0
+        return 0.5
+    return 0.5 * (1.0 + erf(diff / (combined * sqrt(2.0))))
 
 
 # ── Displacement helpers ────────────────────────────────────────────
@@ -296,42 +332,116 @@ def project_team_stats(roster, *, displacement: bool = False) -> CategoryStats:
     )
 
 
+def project_team_sds(
+    roster,
+    *,
+    displacement: bool = True,
+) -> dict[str, float]:
+    """Aggregate per-player projection variance into team-level SDs.
+
+    Uses ``STAT_VARIANCE`` (per-stat CV calibrated from 2022-2024
+    Steamer+ZiPS vs actuals) under a player-independence assumption:
+
+        SD_cat_team = CV_cat * sqrt(sum_over_players(stat_i^2))
+
+    Rate stats propagate through their component totals:
+
+        SD_AVG  = CV_h * sqrt(sum h_i^2) / sum_AB
+        SD_ERA  = 9 * CV_er * sqrt(sum er_i^2) / sum_IP
+        SD_WHIP = sqrt(CV_bb^2 * sum bb_i^2 + CV_ha^2 * sum ha_i^2) / sum_IP
+
+    ``displacement`` matches :func:`project_team_stats` — bench excluded,
+    IL players displace their worst active positional match.
+
+    Returns ``{cat: sd}`` for every category in ``ALL_CATS``. Empty
+    roster returns zeros.
+    """
+    if displacement:
+        roster = _apply_displacement(roster)
+
+    h_sum_sq: dict[str, float] = {k: 0.0 for k in HITTING_COUNTING}
+    p_sum_sq: dict[str, float] = {k: 0.0 for k in PITCHING_COUNTING}
+    total_ab = 0.0
+    total_ip = 0.0
+
+    for p in roster:
+        ptype = _get(p, "player_type")
+        if ptype == PlayerType.HITTER:
+            for k in HITTING_COUNTING:
+                v = _stat(p, k)
+                h_sum_sq[k] += v * v
+            total_ab += _stat(p, "ab")
+        elif ptype == PlayerType.PITCHER:
+            for k in PITCHING_COUNTING:
+                v = _stat(p, k)
+                p_sum_sq[k] += v * v
+            total_ip += _stat(p, "ip")
+
+    sds: dict[str, float] = {c: 0.0 for c in ALL_CATS}
+    for stat_key, cat in [("r", "R"), ("hr", "HR"), ("rbi", "RBI"), ("sb", "SB")]:
+        sds[cat] = STAT_VARIANCE[stat_key] * sqrt(h_sum_sq[stat_key])
+    for stat_key, cat in [("w", "W"), ("k", "K"), ("sv", "SV")]:
+        sds[cat] = STAT_VARIANCE[stat_key] * sqrt(p_sum_sq[stat_key])
+    if total_ab > 0:
+        sds["AVG"] = STAT_VARIANCE["h"] * sqrt(h_sum_sq["h"]) / total_ab
+    if total_ip > 0:
+        sds["ERA"] = 9.0 * STAT_VARIANCE["er"] * sqrt(p_sum_sq["er"]) / total_ip
+        whip_var = (
+            (STAT_VARIANCE["bb"] ** 2) * p_sum_sq["bb"]
+            + (STAT_VARIANCE["h_allowed"] ** 2) * p_sum_sq["h_allowed"]
+        )
+        sds["WHIP"] = sqrt(whip_var) / total_ip
+    return sds
+
+
 def score_roto(
     all_team_stats: dict,
+    *,
+    team_sds: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, dict[str, float]]:
-    """Assign roto points with fractional tie-breaking.
+    """Assign expected-value roto points per team per category.
+
+    For each team in each category, points equal
+
+        pts = 1 + Σ_{j≠me} P(me > j)
+
+    where ``P(A > B) = Φ((μ_A - μ_B) / √(σ_A² + σ_B²))`` under Gaussian
+    independence of team totals (Φ is the standard-normal CDF). When
+    ``team_sds`` is ``None`` or every σ is zero, this reduces to the
+    step function that recovers the standard rank-based scoring,
+    including the averaged-ranks convention on exact ties.
 
     Args:
-        all_team_stats: ``{team_name: stats}`` for all teams. Each
-            ``stats`` value can be either a plain ``dict[str, float]``
-            (legacy callers in draft/trade code) or a
-            :class:`CategoryStats` instance (callers that went through
-            ``project_team_stats``). Both shapes support ``[cat]``
-            indexing, which is all this function needs.
+        all_team_stats: ``{team: stats}``. Values can be ``dict`` or
+            ``CategoryStats`` — both support ``[cat]`` indexing.
+        team_sds: optional ``{team: {cat: sd}}``. ``None`` disables
+            uncertainty (exact-rank behavior).
 
     Returns:
-        ``{team_name: {cat_pts: float, ..., "total": float}}`` where
-        ``cat_pts`` keys are ``"R_pts"``, ``"HR_pts"``, etc. Points
-        range from 1 (worst) to N (best) for N teams.
+        ``{team: {R_pts, HR_pts, ..., total}}``. All values are floats.
+        Points range from 1 (last) to N (first) for N teams.
     """
     teams = list(all_team_stats.keys())
-    n = len(teams)
     results: dict[str, dict[str, float]] = {t: {} for t in teams}
 
     for cat in ALL_CATS:
-        rev = cat not in INVERSE_CATS
-        ranked = sorted(teams, key=lambda t: all_team_stats[t][cat], reverse=rev)
-        i = 0
-        while i < n:
-            j = i + 1
-            while j < n and abs(all_team_stats[ranked[j]][cat] - all_team_stats[ranked[i]][cat]) < 1e-9:
-                j += 1
-            avg_pts = sum(n - k for k in range(i, j)) / (j - i)
-            for k in range(i, j):
-                results[ranked[k]][f"{cat}_pts"] = avg_pts
-            i = j
+        higher_is_better = cat not in INVERSE_CATS
+        for me in teams:
+            mu_me = all_team_stats[me][cat]
+            sd_me = team_sds.get(me, {}).get(cat, 0.0) if team_sds else 0.0
+            pts = 1.0
+            for other in teams:
+                if other is me:
+                    continue
+                mu_o = all_team_stats[other][cat]
+                sd_o = team_sds.get(other, {}).get(cat, 0.0) if team_sds else 0.0
+                pts += _prob_beats(
+                    mu_me, mu_o, sd_me, sd_o,
+                    higher_is_better=higher_is_better,
+                )
+            results[me][f"{cat}_pts"] = pts
 
     for t in results:
-        results[t]["total"] = sum(results[t].get(f"{c}_pts", 0) for c in ALL_CATS)
+        results[t]["total"] = sum(results[t].get(f"{c}_pts", 0.0) for c in ALL_CATS)
 
     return results

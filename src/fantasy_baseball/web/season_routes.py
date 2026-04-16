@@ -764,6 +764,7 @@ def register_routes(app: Flask) -> None:
             projected_standings=projected_standings,
             user_team_name=config.team_name,
             roster_player_projection=roster_player_projection,
+            team_sds=proj_cache.get("team_sds"),
         )
 
         if "error" in result:
