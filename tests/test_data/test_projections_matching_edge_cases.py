@@ -96,3 +96,53 @@ class TestJulioRodriguezAccentEncoding:
         )
         assert len(result) == 1
         assert result[0].rest_of_season.hr == 32
+
+
+# --- Mason Miller: cross-type same-name collision ---
+
+class TestMasonMillerCrossTypeCollision:
+    """Verify the matcher uses positions to pick the right Mason Miller
+    when both hitter and pitcher entries exist in projections.
+    """
+
+    HITTER_PROJ = {
+        "name": "Mason Miller", "_name_norm": "mason miller",
+        "hr": 18, "ab": 480,
+    }
+    PITCHER_PROJ = {
+        "name": "Mason Miller", "_name_norm": "mason miller",
+        "k": 95, "sv": 28, "ip": 65,
+    }
+
+    def test_hitter_position_picks_hitter_projection(self):
+        roster = [{"name": "Mason Miller", "positions": ["3B"]}]
+        result = match_roster_to_projections(
+            roster, _hitters_df([self.HITTER_PROJ]), _pitchers_df([self.PITCHER_PROJ]),
+        )
+        assert len(result) == 1
+        assert result[0].player_type == PlayerType.HITTER
+        assert isinstance(result[0].rest_of_season, HitterStats)
+        assert result[0].rest_of_season.hr == 18
+
+    def test_pitcher_position_picks_pitcher_projection(self):
+        roster = [{"name": "Mason Miller", "positions": ["SP"]}]
+        result = match_roster_to_projections(
+            roster, _hitters_df([self.HITTER_PROJ]), _pitchers_df([self.PITCHER_PROJ]),
+        )
+        assert len(result) == 1
+        assert result[0].player_type == PlayerType.PITCHER
+        assert isinstance(result[0].rest_of_season, PitcherStats)
+        assert result[0].rest_of_season.sv == 28
+
+    def test_empty_positions_falls_back_to_hitter_first(self, caplog):
+        """Empty positions: matcher falls through both branches and uses
+        the 'any' fallback, which checks hitters first.
+        """
+        roster = [{"name": "Mason Miller", "positions": []}]
+        with caplog.at_level(logging.WARNING):
+            result = match_roster_to_projections(
+                roster, _hitters_df([self.HITTER_PROJ]), _pitchers_df([self.PITCHER_PROJ]),
+            )
+        assert len(result) == 1
+        assert result[0].player_type == PlayerType.HITTER
+        # Fallback warning is asserted in TestMatchObservability — not here.
