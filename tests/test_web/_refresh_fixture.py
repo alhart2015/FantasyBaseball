@@ -4,8 +4,6 @@ produced by Yahoo (post-parse) and the projection CSVs (post-blend).
 """
 import json
 from contextlib import contextmanager
-from datetime import date
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 
@@ -174,16 +172,6 @@ def transactions() -> list[dict]:
     ]
 
 
-def schedule_payload(start_date: date, end_date: date) -> dict:
-    """Empty schedule — get_probable_starters tolerates this."""
-    return {}
-
-
-def team_batting_stats() -> dict[str, Any]:
-    """Empty team batting stats — matchup factors fall back to defaults."""
-    return {}
-
-
 def scoring_period() -> tuple[str, str]:
     """Sunday-ending scoring week."""
     return ("2026-04-13", "2026-04-19")  # Mon-Sun
@@ -228,7 +216,7 @@ def patched_refresh_environment(
     - fetch_roster, fetch_standings, fetch_scoring_period: canned data
     - fetch_all_transactions: returns transactions() (empty by default)
     - fetch_and_match_free_agents: returns ([Player...], None)
-    - fetch_game_log_totals: writes nothing (Redis seeded already)
+    - fetch_game_log_totals: seeds canned game logs into fake Redis
     - get_week_schedule, get_team_batting_stats: return canned/empty
     - run_monte_carlo, run_ros_monte_carlo: 10 iters instead of 1000
     - get_default_client (data.redis_store): returns fake_redis
