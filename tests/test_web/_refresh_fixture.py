@@ -19,6 +19,7 @@ def _hitter_proj_row(name: str, fg_id: str, **stats) -> dict:
         "name": name, "fg_id": fg_id, "team": "TBD",
         "positions": "OF", "ab": 500, "pa": 580,
         "r": 80, "hr": 25, "rbi": 80, "sb": 8, "h": 145, "avg": 0.290,
+        "player_type": "hitter",
     }
     base.update(stats)
     return base
@@ -30,6 +31,7 @@ def _pitcher_proj_row(name: str, fg_id: str, **stats) -> dict:
         "positions": "SP", "ip": 180.0,
         "w": 12, "k": 200, "sv": 0, "era": 3.50, "whip": 1.15,
         "er": 70, "bb": 50, "h_allowed": 160,
+        "player_type": "pitcher",
     }
     base.update(stats)
     return base
@@ -157,8 +159,19 @@ def free_agents() -> list[dict]:
 
 
 def transactions() -> list[dict]:
-    """Empty by default — transaction analyzer handles this."""
-    return []
+    """At least one transaction so transaction_analyzer.json gets written."""
+    return [
+        {
+            "transaction_id": "tx-1",
+            "type": "add/drop",
+            "timestamp": 1744636800,  # 2026-04-14 epoch
+            "team": USER_TEAM_NAME,
+            "add_name": "Hitter072",
+            "add_positions": "OF",
+            "drop_name": "Hitter071",
+            "drop_positions": "OF",
+        },
+    ]
 
 
 def schedule_payload(start_date: date, end_date: date) -> dict:
@@ -221,7 +234,7 @@ def patched_refresh_environment(
     - get_default_client (data.redis_store): returns fake_redis
     - read_cache("ros_projections"): returns ROS proj rows or None
     """
-    from fantasy_baseball.models.player import Player, PlayerType
+    from fantasy_baseball.models.player import HitterStats, Player, PlayerType
     rosters = all_rosters()
     team_keys = _team_keys_to_names()
 
@@ -260,17 +273,22 @@ def patched_refresh_environment(
         ]},
     )
 
-    # FA players
-    fa_player_objs = [
-        Player(
-            name=fa["name"],
-            positions=fa["positions"],
-            player_type=PlayerType.HITTER,
-            selected_position=fa.get("selected_position", "BN"),
-            yahoo_id=fa.get("player_id", ""),
+    # FA players — attach ROS stats so audit_roster's wSGP calculation
+    # sees real numbers instead of None.
+    from fantasy_baseball.utils.positions import Position
+    fa_player_objs = []
+    for fa in free_agents():
+        stats = HitterStats(
+            pa=580, ab=500, h=145, r=80, hr=20, rbi=75, sb=6, avg=0.280,
         )
-        for fa in free_agents()
-    ]
+        fa_player_objs.append(Player(
+            name=fa["name"],
+            positions=[Position.parse(p) for p in fa["positions"]],
+            player_type=PlayerType.HITTER,
+            selected_position=Position.parse(fa.get("selected_position", "BN")),
+            yahoo_id=fa.get("player_id", ""),
+            rest_of_season=stats,
+        ))
 
     def _fetch_roster(league, team_key, day=None):
         tname = team_keys.get(team_key)
@@ -289,14 +307,11 @@ def patched_refresh_environment(
         return (fa_player_objs, None)
 
     def _fetch_game_logs(season_year, progress_cb=None):
-        # Seed game logs into Redis using the data.redis_store API
+        # Seed game logs into Redis using the data.redis_store API.
+        # set_game_log_totals signature: (client, player_type, totals)
         from fantasy_baseball.data.redis_store import set_game_log_totals
-        try:
-            set_game_log_totals(fake_redis, season_year, "hitters", hitter_game_logs())
-            set_game_log_totals(fake_redis, season_year, "pitchers", pitcher_game_logs())
-        except (AttributeError, ImportError):
-            # Function name may vary — this is a best-effort seed
-            pass
+        set_game_log_totals(fake_redis, "hitters", hitter_game_logs())
+        set_game_log_totals(fake_redis, "pitchers", pitcher_game_logs())
 
     def _ros_pipeline_blend(*args, **kwargs):
         if has_rest_of_season:
@@ -308,10 +323,16 @@ def patched_refresh_environment(
                 cache_dir,
             )
 
+    # Capture the real Monte Carlo functions BEFORE patching them,
+    # otherwise the scaled wrapper calls itself recursively.
+    from fantasy_baseball.simulation import (
+        run_monte_carlo as _real_mc,
+        run_ros_monte_carlo as _real_ros_mc,
+    )
+
     def _scaled_mc(team_rosters, h_slots, p_slots, user_team_name,
                    n_iterations=1000, use_management=False, progress_cb=None):
-        from fantasy_baseball.simulation import run_monte_carlo as real_mc
-        return real_mc(
+        return _real_mc(
             team_rosters, h_slots, p_slots, user_team_name,
             n_iterations=10, use_management=use_management,
             progress_cb=progress_cb,
@@ -320,8 +341,7 @@ def patched_refresh_environment(
     def _scaled_ros_mc(*, team_rosters, actual_standings, fraction_remaining,
                        h_slots, p_slots, user_team_name,
                        n_iterations=1000, use_management=False, progress_cb=None):
-        from fantasy_baseball.simulation import run_ros_monte_carlo as real_ros_mc
-        return real_ros_mc(
+        return _real_ros_mc(
             team_rosters=team_rosters, actual_standings=actual_standings,
             fraction_remaining=fraction_remaining,
             h_slots=h_slots, p_slots=p_slots, user_team_name=user_team_name,
@@ -329,22 +349,59 @@ def patched_refresh_environment(
             progress_cb=progress_cb,
         )
 
+    # Build a test LeagueConfig so team_name/num_teams match the fixture data.
+    from fantasy_baseball.config import LeagueConfig
+    test_config = LeagueConfig(
+        league_id=123,
+        num_teams=12,
+        game_code="mlb",
+        team_name=USER_TEAM_NAME,
+        draft_position=1,
+        keepers=[],
+        roster_slots={
+            "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1,
+            "OF": 3, "Util": 1, "P": 9, "BN": 3, "IL": 2,
+        },
+        projection_systems=["atc"],
+        projection_weights={"atc": 1.0},
+        sgp_overrides={},
+        teams={i: name for i, name in enumerate(TEAM_NAMES, start=1)},
+        strategy="no_punt_opp",
+        scoring_mode="var",
+        season_year=2026,
+        season_start="2026-03-27",
+        season_end="2026-09-28",
+    )
+
     patches = [
-        patch("fantasy_baseball.web.refresh_pipeline.get_yahoo_session", return_value=MagicMock()),
-        patch("fantasy_baseball.web.refresh_pipeline.get_league", return_value=league_mock),
-        patch("fantasy_baseball.web.refresh_pipeline.fetch_standings", side_effect=_fetch_standings),
-        patch("fantasy_baseball.web.refresh_pipeline.fetch_scoring_period", side_effect=_fetch_scoring_period),
-        patch("fantasy_baseball.web.refresh_pipeline.fetch_roster", side_effect=_fetch_roster),
-        patch("fantasy_baseball.web.refresh_pipeline.fetch_all_transactions", side_effect=_fetch_all_transactions),
-        patch("fantasy_baseball.web.refresh_pipeline.fetch_and_match_free_agents", side_effect=_fetch_and_match_fa),
-        patch("fantasy_baseball.web.refresh_pipeline.fetch_game_log_totals", side_effect=_fetch_game_logs),
-        patch("fantasy_baseball.web.refresh_pipeline.get_week_schedule", return_value={}),
-        patch("fantasy_baseball.web.refresh_pipeline.get_team_batting_stats", return_value={}),
-        patch("fantasy_baseball.web.refresh_pipeline.blend_and_cache_ros", side_effect=_ros_pipeline_blend),
-        patch("fantasy_baseball.web.refresh_pipeline.run_monte_carlo", side_effect=_scaled_mc),
-        patch("fantasy_baseball.web.refresh_pipeline.run_ros_monte_carlo", side_effect=_scaled_ros_mc),
+        # Yahoo auth is imported lazily inside run_full_refresh from auth.yahoo_auth
+        patch("fantasy_baseball.auth.yahoo_auth.get_yahoo_session", return_value=MagicMock()),
+        patch("fantasy_baseball.auth.yahoo_auth.get_league", return_value=league_mock),
+        # load_config is lazy-imported from fantasy_baseball.config
+        patch("fantasy_baseball.config.load_config", return_value=test_config),
+        # Roster/standings fetchers come from lineup.yahoo_roster
+        patch("fantasy_baseball.lineup.yahoo_roster.fetch_standings", side_effect=_fetch_standings),
+        patch("fantasy_baseball.lineup.yahoo_roster.fetch_scoring_period", side_effect=_fetch_scoring_period),
+        patch("fantasy_baseball.lineup.yahoo_roster.fetch_roster", side_effect=_fetch_roster),
+        patch("fantasy_baseball.lineup.yahoo_roster.fetch_all_transactions", side_effect=_fetch_all_transactions),
+        # Free agents live in lineup.waivers
+        patch("fantasy_baseball.lineup.waivers.fetch_and_match_free_agents", side_effect=_fetch_and_match_fa),
+        # MLB game logs + schedule
+        patch("fantasy_baseball.data.mlb_game_logs.fetch_game_log_totals", side_effect=_fetch_game_logs),
+        patch("fantasy_baseball.data.mlb_schedule.get_week_schedule", return_value={}),
+        # Matchups (team batting stats)
+        patch("fantasy_baseball.lineup.matchups.get_team_batting_stats", return_value={}),
+        # ROS blend pipeline
+        patch("fantasy_baseball.data.ros_pipeline.blend_and_cache_ros", side_effect=_ros_pipeline_blend),
+        # Monte Carlo: patch at the source module
+        patch("fantasy_baseball.simulation.run_monte_carlo", side_effect=_scaled_mc),
+        patch("fantasy_baseball.simulation.run_ros_monte_carlo", side_effect=_scaled_ros_mc),
+        # Redis clients
         patch("fantasy_baseball.data.redis_store.get_default_client", return_value=fake_redis),
         patch("fantasy_baseball.web.season_data._get_redis", return_value=fake_redis),
+        # refresh_pipeline imports _get_redis at module level, so we also
+        # have to patch the local name there (`_write_spoe_snapshot` uses it).
+        patch("fantasy_baseball.web.refresh_pipeline._get_redis", return_value=fake_redis),
     ]
 
     started = []
