@@ -389,22 +389,12 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
 
         # --- Step 4e: Build projected standings ---
         _progress("Projecting end-of-season standings...")
-        from fantasy_baseball.scoring import project_team_stats
+        from fantasy_baseball.scoring import build_projected_standings, build_team_sds
 
         all_team_rosters = {config.team_name: matched}
         all_team_rosters.update(opp_rosters)
 
-        projected_standings = []
-        for tname, roster in all_team_rosters.items():
-            proj_stats = project_team_stats(roster, displacement=True)
-            projected_standings.append({
-                "name": tname,
-                "team_key": "",
-                "rank": 0,
-                # project_team_stats returns a CategoryStats (dataclass);
-                # serialize to a plain dict for the JSON cache write.
-                "stats": proj_stats.to_dict(),
-            })
+        projected_standings = build_projected_standings(all_team_rosters)
 
         fraction_remaining = compute_fraction_remaining(
             date.fromisoformat(config.season_start),
@@ -413,11 +403,7 @@ def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
         )
         _sd_scale = math.sqrt(fraction_remaining)
 
-        from fantasy_baseball.scoring import project_team_sds
-        team_sds: dict[str, dict[str, float]] = {}
-        for _tname, _troster in all_team_rosters.items():
-            _raw_sds = project_team_sds(_troster, displacement=True)
-            team_sds[_tname] = {c: sd * _sd_scale for c, sd in _raw_sds.items()}
+        team_sds = build_team_sds(all_team_rosters, _sd_scale)
 
         write_cache(
             "projections",
