@@ -273,3 +273,21 @@ class TestMatchObservability:
         assert "ambiguous" in msg
         assert "pitcher" in msg
         assert "2 candidates" in msg
+
+    def test_fallback_match_logs_warning(self, caplog):
+        # Position list doesn't qualify as hitter or pitcher (empty),
+        # but name matches a hitter projection via fallback.
+        hitters = _hitters_df([
+            {"name": "Mystery Player", "_name_norm": "mystery player", "hr": 10},
+        ])
+        roster = [{"name": "Mystery Player", "positions": []}]
+        with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.projections"):
+            result = match_roster_to_projections(roster, hitters, _empty_pitchers())
+        assert len(result) == 1
+        assert result[0].player_type == PlayerType.HITTER
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        msg = warnings[0].getMessage()
+        assert "fallback" in msg
+        assert "Mystery Player" in msg
+        assert "did not disambiguate" in msg

@@ -423,6 +423,10 @@ def match_roster_to_projections(
                 if not matches.empty:
                     proj = matches.iloc[0]
                     ptype = pt
+                    logger.warning(
+                        "%s%r matched via fallback branch — positions=%r did not disambiguate",
+                        prefix, name, positions,
+                    )
                     break
 
         if proj is None:
