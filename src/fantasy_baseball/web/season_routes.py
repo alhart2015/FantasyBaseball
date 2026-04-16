@@ -937,7 +937,7 @@ def register_routes(app: Flask) -> None:
     @app.route("/api/refresh", methods=["POST"])
     @_require_auth
     def api_refresh():
-        from fantasy_baseball.web.season_data import get_refresh_status, run_full_refresh
+        from fantasy_baseball.web.refresh_pipeline import get_refresh_status, run_full_refresh
         status = get_refresh_status()
         if status["running"]:
             return jsonify({"status": "already_running"})
@@ -947,7 +947,7 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/refresh-status")
     def api_refresh_status():
-        from fantasy_baseball.web.season_data import get_refresh_status
+        from fantasy_baseball.web.refresh_pipeline import get_refresh_status
         return jsonify(get_refresh_status())
 
     @app.route("/api/fetch-ros-projections", methods=["POST"])

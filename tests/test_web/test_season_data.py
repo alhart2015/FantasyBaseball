@@ -652,9 +652,9 @@ class TestRunFullRefreshAttributeAccess:
         import re
 
         from fantasy_baseball.config import LeagueConfig
-        from fantasy_baseball.web import season_data
+        from fantasy_baseball.web import refresh_pipeline
 
-        src = inspect.getsource(season_data.run_full_refresh)
+        src = inspect.getsource(refresh_pipeline.run_full_refresh)
         valid_attrs = {f.name for f in LeagueConfig.__dataclass_fields__.values()}
 
         # Match config.something (not config = or config: or config[)
@@ -688,9 +688,9 @@ class TestRunFullRefreshScopingGuards:
     def test_no_local_datetime_import_inside_run_full_refresh(self):
         import inspect
 
-        from fantasy_baseball.web import season_data
+        from fantasy_baseball.web import refresh_pipeline
 
-        src = inspect.getsource(season_data.run_full_refresh)
+        src = inspect.getsource(refresh_pipeline.run_full_refresh)
         assert "from datetime import date" not in src, (
             "Local `from datetime import date` found in run_full_refresh. "
             "This shadows the module-level import on line 9 and causes "
@@ -712,9 +712,9 @@ class TestRunFullRefreshScopingGuards:
         rely on ``date`` being available without a local import."""
         import inspect
 
-        from fantasy_baseball.web import season_data
+        from fantasy_baseball.web import refresh_pipeline
 
-        module_src = inspect.getsource(season_data)
+        module_src = inspect.getsource(refresh_pipeline)
         # The module-level import must appear before the run_full_refresh
         # definition, not inside it.
         first_refresh_idx = module_src.find("def run_full_refresh")

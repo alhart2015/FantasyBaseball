@@ -11,6 +11,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from fantasy_baseball.web.season_data import run_full_refresh
+from fantasy_baseball.web.refresh_pipeline import run_full_refresh
 
 run_full_refresh()
