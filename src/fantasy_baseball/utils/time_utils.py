@@ -74,3 +74,14 @@ def next_tuesday(ref: date) -> date:
     if days_ahead == 0:
         days_ahead = 7
     return ref + timedelta(days=days_ahead)
+
+
+def compute_effective_date(end_date: str) -> date:
+    """Return the next lineup-lock Tuesday strictly after ``end_date``.
+
+    Yahoo's scoring period ends on a Sunday (``end_date``). The user's
+    league locks lineups on Tuesday morning, so the effective date for
+    fetching post-lock rosters is the next Tuesday strictly after that
+    Sunday — ``end_date + 1`` would land on Monday, one day too early.
+    """
+    return next_tuesday(date.fromisoformat(end_date))
