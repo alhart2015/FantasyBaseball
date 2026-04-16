@@ -493,6 +493,7 @@ class RefreshRun:
     def _build_projected_standings(self):
         self._progress("Projecting end-of-season standings...")
         from fantasy_baseball.scoring import build_projected_standings, build_team_sds
+        from fantasy_baseball.data.projections import hydrate_roster_entries
 
         all_team_rosters = {self.config.team_name: self.matched}
         all_team_rosters.update(self.opp_rosters)
@@ -508,12 +509,35 @@ class RefreshRun:
 
         self.team_sds = build_team_sds(all_team_rosters, self.sd_scale)
 
+        # Build preseason projected standings for the ERoto "Preseason" view.
+        # When ROS projections are active, all_team_rosters are matched against
+        # ROS — we need a separate pass against preseason projections.
+        if self.has_rest_of_season:
+            preseason_rosters: dict[str, list] = {}
+            for team in self.league_model.teams:
+                if not team.rosters:
+                    continue
+                latest = team.latest_roster()
+                hydrated = hydrate_roster_entries(
+                    latest, self.preseason_hitters, self.preseason_pitchers,
+                    context=f"preseason:{team.name}",
+                )
+                if hydrated:
+                    preseason_rosters[team.name] = hydrated
+            self.preseason_projected_standings = build_projected_standings(preseason_rosters)
+            self.preseason_team_sds = build_team_sds(preseason_rosters, 1.0)
+        else:
+            self.preseason_projected_standings = self.projected_standings
+            self.preseason_team_sds = build_team_sds(all_team_rosters, 1.0)
+
         write_cache(
             "projections",
             {
                 "projected_standings": self.projected_standings,
                 "team_sds": self.team_sds,
                 "fraction_remaining": self.fraction_remaining,
+                "preseason_standings": self.preseason_projected_standings,
+                "preseason_team_sds": self.preseason_team_sds,
             },
             self.cache_dir,
         )

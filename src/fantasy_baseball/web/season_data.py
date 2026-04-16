@@ -201,13 +201,17 @@ def _load_game_log_totals(season_year: int) -> tuple[dict, dict]:
 
 
 def format_standings_for_display(
-    standings: StandingsSnapshot, user_team_name: str
+    standings: StandingsSnapshot, user_team_name: str,
+    *, team_sds: dict[str, dict[str, float]] | None = None,
 ) -> dict:
     """Transform standings snapshot into display-ready structure with roto points and color codes.
 
     Args:
         standings: StandingsSnapshot with typed StandingsEntry objects.
         user_team_name: The authenticated user's team name for highlighting.
+        team_sds: Per-team per-category standard deviations for ERoto scoring.
+            When provided, ``score_roto`` uses Gaussian pairwise win
+            probabilities instead of deterministic rank-based scoring.
 
     Returns:
         {"teams": [...]} where each team has roto_points, is_user flag, color_classes, and rank.
@@ -218,7 +222,7 @@ def format_standings_for_display(
     # CategoryStats defaults (0.0 for counting, 99.0 for ERA/WHIP)
     # handle early-season missing data — no _fill_stat_defaults needed.
     all_stats = {e.team_name: e.stats for e in standings.entries}
-    roto = score_roto(all_stats)
+    roto = score_roto(all_stats, team_sds=team_sds)
 
     cat_ranks = _compute_category_ranks(standings)
 
@@ -249,6 +253,7 @@ def format_standings_for_display(
             "roto_points": roto_pts,
             "is_user": is_user,
             "color_classes": color_classes,
+            "sds": team_sds.get(name, {}) if team_sds else {},
         })
 
     teams.sort(key=lambda t: t["roto_points"]["total"], reverse=True)

@@ -253,7 +253,8 @@ def register_routes(app: Flask) -> None:
         raw_standings = read_cache("standings")
         config = _load_config()
         standings_data = None
-        projected_data = None
+        preseason_data = None
+        current_projected_data = None
         mc_data = None
         mc_mgmt_data = None
         rest_of_season_mc_data = None
@@ -271,11 +272,23 @@ def register_routes(app: Flask) -> None:
             )
 
             raw_projected = read_cache("projections")
-            if raw_projected and "projected_standings" in raw_projected:
-                projected_data = format_standings_for_display(
-                    _standings_to_snapshot(raw_projected["projected_standings"]),
-                    config.team_name,
+            if raw_projected:
+                preseason_standings = raw_projected.get(
+                    "preseason_standings",
+                    raw_projected.get("projected_standings"),
                 )
+                if preseason_standings:
+                    preseason_data = format_standings_for_display(
+                        _standings_to_snapshot(preseason_standings),
+                        config.team_name,
+                        team_sds=raw_projected.get("preseason_team_sds"),
+                    )
+                if "projected_standings" in raw_projected:
+                    current_projected_data = format_standings_for_display(
+                        _standings_to_snapshot(raw_projected["projected_standings"]),
+                        config.team_name,
+                        team_sds=raw_projected.get("team_sds"),
+                    )
 
             raw_mc = read_cache("monte_carlo")
             if raw_mc:
@@ -300,7 +313,8 @@ def register_routes(app: Flask) -> None:
             meta=meta,
             active_page="standings",
             standings=standings_data,
-            projected=projected_data,
+            preseason=preseason_data,
+            current_projected=current_projected_data,
             mc=mc_data,
             mc_mgmt=mc_mgmt_data,
             rest_of_season_mc=rest_of_season_mc_data,

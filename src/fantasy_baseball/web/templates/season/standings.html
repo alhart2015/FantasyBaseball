@@ -13,11 +13,13 @@
 {% else %}
 
 <div class="pill-group" id="standings-top-toggle">
-    <button class="pill active" data-view="current" onclick="toggleStandingsView(this)">Current</button>
-    <button class="pill" data-view="projected" onclick="toggleStandingsView(this)">Projected</button>
+    <button class="pill active" data-view="current" onclick="toggleTopView(this)">Current</button>
+    <button class="pill" data-view="projected" onclick="toggleTopView(this)">Projected</button>
+    <button class="pill" data-view="montecarlo" onclick="toggleTopView(this)">Monte Carlo</button>
 </div>
 
-<div id="current-view">
+{# ── Current (actual standings, unchanged) ── #}
+<div id="view-current">
     <div class="pill-group" id="current-sub-toggle">
         <button class="pill active" data-sub="points" onclick="toggleCurrentSub(this)">Roto Points</button>
         <button class="pill" data-sub="stats" onclick="toggleCurrentSub(this)">Stat Totals</button>
@@ -54,57 +56,83 @@
     </table>
 </div>
 
-<div id="projected-view" style="display: none;">
-    <div class="pill-group" id="projected-sub-toggle">
-        <button class="pill active" data-psub="static" onclick="toggleProjectedSub(this)">Static</button>
-        <button class="pill" data-psub="mc" onclick="toggleProjectedSub(this)">Pre-Season</button>
-        <button class="pill" data-psub="mc-mgmt" onclick="toggleProjectedSub(this)">Pre-Season + Mgmt</button>
-        <button class="pill" data-psub="ros-mc" onclick="toggleProjectedSub(this)">Current</button>
-        <button class="pill" data-psub="ros-mgmt-mc" onclick="toggleProjectedSub(this)">Current + Mgmt</button>
+{# ── Projected (Preseason / Current ERoto) ── #}
+<div id="view-projected" style="display: none;">
+    <div class="pill-group" id="proj-tab-toggle">
+        <button class="pill active" data-ptab="preseason" onclick="toggleProjTab(this)">Preseason</button>
+        <button class="pill" data-ptab="current" onclick="toggleProjTab(this)">Current</button>
     </div>
 
-    {# Static projected view #}
-    <div id="proj-static">
-        {% if projected %}
-        <div class="pill-group" id="proj-static-sub-toggle">
-            <button class="pill active" data-pssub="points" onclick="toggleProjStaticSub(this)">Roto Points</button>
-            <button class="pill" data-pssub="stats" onclick="toggleProjStaticSub(this)">Stat Totals</button>
+    {# Macro: ERoto table with optional ± error bounds on stat totals #}
+    {% macro eroto_table(data, cell_class) %}
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Team</th>
+                {% for cat in categories %}
+                <th>{{ cat }}</th>
+                {% endfor %}
+                <th class="total-col">Total</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for team in data.teams %}
+            <tr class="{% if team.is_user %}user-team{% endif %}">
+                <td>{{ team.rank }}</td>
+                <td class="team-name">{{ team.name }}</td>
+                {% for cat in categories %}
+                <td class="{{ team.color_classes[cat] }} {{ cell_class }}"
+                    data-points="{{ team.roto_points[cat ~ '_pts'] | round(1) }}"
+                    data-stat="{{ team.stats[cat] }}"
+                    data-sd="{{ team.sds.get(cat, 0) }}"
+                    data-cat="{{ cat }}">
+                    {{ team.roto_points[cat ~ '_pts'] | round(1) }}
+                </td>
+                {% endfor %}
+                <td class="total-col">{{ team.roto_points.total | round(1) }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endmacro %}
+
+    {# Preseason ERoto #}
+    <div id="proj-preseason">
+        {% if preseason %}
+        <div class="pill-group" id="proj-preseason-sub">
+            <button class="pill active" data-mode="points" onclick="toggleProjMode(this, '.proj-preseason-cell')">ERoto Points</button>
+            <button class="pill" data-mode="stats" onclick="toggleProjMode(this, '.proj-preseason-cell')">Stat Totals</button>
         </div>
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>#</th>
-                    <th>Team</th>
-                    {% for cat in categories %}
-                    <th>{{ cat }}</th>
-                    {% endfor %}
-                    <th class="total-col">Total</th>
-                </tr>
-            </thead>
-            <tbody>
-            {% for team in projected.teams %}
-                <tr class="{% if team.is_user %}user-team{% endif %}">
-                    <td>{{ team.rank }}</td>
-                    <td class="team-name">{{ team.name }}</td>
-                    {% for cat in categories %}
-                    <td class="{{ team.color_classes[cat] }} proj-stat-cell"
-                        data-points="{{ team.roto_points[cat ~ '_pts'] | round(1) }}"
-                        data-stat="{{ team.stats[cat] }}"
-                        data-cat="{{ cat }}">
-                        {{ team.roto_points[cat ~ '_pts'] | round(1) }}
-                    </td>
-                    {% endfor %}
-                    <td class="total-col">{{ team.roto_points.total | round(1) }}</td>
-                </tr>
-            {% endfor %}
-            </tbody>
-        </table>
+        {{ eroto_table(preseason, "proj-preseason-cell") }}
         {% else %}
-        <p class="placeholder-text">No projected standings data available.</p>
+        <p class="placeholder-text">No preseason projected standings data available.</p>
         {% endif %}
     </div>
 
-    {# Macro for MC team table (reused by both MC and MC+Mgmt) #}
+    {# Current ERoto (ROS projections) #}
+    <div id="proj-current" style="display: none;">
+        {% if current_projected %}
+        <div class="pill-group" id="proj-current-sub">
+            <button class="pill active" data-mode="points" onclick="toggleProjMode(this, '.proj-current-cell')">ERoto Points</button>
+            <button class="pill" data-mode="stats" onclick="toggleProjMode(this, '.proj-current-cell')">Stat Totals</button>
+        </div>
+        {{ eroto_table(current_projected, "proj-current-cell") }}
+        {% else %}
+        <p class="placeholder-text">No ROS projections loaded. Download ROS projections from FanGraphs and place them in data/projections/&lt;year&gt;/rest_of_season/YYYY-MM-DD/.</p>
+        {% endif %}
+    </div>
+</div>
+
+{# ── Monte Carlo ── #}
+<div id="view-montecarlo" style="display: none;">
+    <div class="pill-group" id="mc-tab-toggle">
+        <button class="pill active" data-mctab="preseason" onclick="toggleMcTab(this)">Preseason</button>
+        <button class="pill" data-mctab="preseason-mgmt" onclick="toggleMcTab(this)">Preseason + Mgmt</button>
+        <button class="pill" data-mctab="current" onclick="toggleMcTab(this)">Current</button>
+        <button class="pill" data-mctab="current-mgmt" onclick="toggleMcTab(this)">Current + Mgmt</button>
+    </div>
+
     {% macro mc_team_table(mc_data) %}
     <table class="data-table">
         <thead>
@@ -132,7 +160,6 @@
     </table>
     {% endmacro %}
 
-    {# Macro for category risk table #}
     {% macro cat_risk_table(mc_data) %}
     {% if mc_data.category_risk %}
     <div class="card" style="margin-top: 1.5rem;">
@@ -165,8 +192,7 @@
     {% endif %}
     {% endmacro %}
 
-    {# Monte Carlo view #}
-    <div id="proj-mc" style="display: none;">
+    <div id="mc-preseason">
         {% if mc %}
         {{ mc_team_table(mc) }}
         {{ cat_risk_table(mc) }}
@@ -175,8 +201,7 @@
         {% endif %}
     </div>
 
-    {# MC + Roster Mgmt view #}
-    <div id="proj-mc-mgmt" style="display: none;">
+    <div id="mc-preseason-mgmt" style="display: none;">
         {% if mc_mgmt %}
         {{ mc_team_table(mc_mgmt) }}
         {{ cat_risk_table(mc_mgmt) }}
@@ -185,23 +210,21 @@
         {% endif %}
     </div>
 
-    {# Current MC (ROS) view #}
-    <div id="proj-ros-mc" style="display: none;">
+    <div id="mc-current" style="display: none;">
         {% if rest_of_season_mc %}
         {{ mc_team_table(rest_of_season_mc) }}
         {{ cat_risk_table(rest_of_season_mc) }}
         {% else %}
-        <p class="placeholder-text">No ROS projections loaded. Download ROS projections from FanGraphs and place them in data/projections/&lt;year&gt;/ros/YYYY-MM-DD/.</p>
+        <p class="placeholder-text">No ROS projections loaded. Download ROS projections from FanGraphs and place them in data/projections/&lt;year&gt;/rest_of_season/YYYY-MM-DD/.</p>
         {% endif %}
     </div>
 
-    {# Current MC + Mgmt (ROS) view #}
-    <div id="proj-ros-mgmt-mc" style="display: none;">
+    <div id="mc-current-mgmt" style="display: none;">
         {% if rest_of_season_mgmt_mc %}
         {{ mc_team_table(rest_of_season_mgmt_mc) }}
         {{ cat_risk_table(rest_of_season_mgmt_mc) }}
         {% else %}
-        <p class="placeholder-text">No ROS projections loaded. Download ROS projections from FanGraphs and place them in data/projections/&lt;year&gt;/ros/YYYY-MM-DD/.</p>
+        <p class="placeholder-text">No ROS projections loaded. Download ROS projections from FanGraphs and place them in data/projections/&lt;year&gt;/rest_of_season/YYYY-MM-DD/.</p>
         {% endif %}
     </div>
 </div>
@@ -210,8 +233,6 @@
 const RATE_CATS = new Set(['AVG', 'ERA', 'WHIP']);
 const DEFAULT_PREC = {AVG: 3, ERA: 2, WHIP: 2};
 
-/* Format stat-total cells, bumping decimal places for rate stats when
-   distinct values would otherwise display identically (Yahoo behaviour). */
 function formatStatCells(selector) {
     const byCol = {};
     document.querySelectorAll(selector).forEach(cell => {
@@ -239,45 +260,108 @@ function formatStatCells(selector) {
     }
 }
 
-function toggleStandingsView(el) {
-    document.querySelectorAll('#standings-top-toggle .pill').forEach(p => p.classList.remove('active'));
-    el.classList.add('active');
-    const view = el.dataset.view;
-    document.getElementById('current-view').style.display = view === 'current' ? '' : 'none';
-    document.getElementById('projected-view').style.display = view === 'projected' ? '' : 'none';
+function formatStatCellsWithBounds(selector) {
+    const byCol = {};
+    document.querySelectorAll(selector).forEach(cell => {
+        const cat = cell.dataset.cat;
+        (byCol[cat] ||= []).push(cell);
+    });
+    for (const [cat, cells] of Object.entries(byCol)) {
+        const isRate = RATE_CATS.has(cat);
+        const vals = cells.map(c => parseFloat(c.dataset.stat));
+        const sds = cells.map(c => parseFloat(c.dataset.sd) || 0);
+
+        let prec = isRate ? (DEFAULT_PREC[cat] || 2) : 0;
+        if (isRate) {
+            while (prec < 6) {
+                const fmtd = vals.map(v => v.toFixed(prec));
+                let hasTie = false;
+                for (let i = 0; i < vals.length && !hasTie; i++)
+                    for (let j = i + 1; j < vals.length && !hasTie; j++)
+                        if (Math.abs(vals[i] - vals[j]) > 1e-9 && fmtd[i] === fmtd[j])
+                            hasTie = true;
+                if (!hasTie) break;
+                prec++;
+            }
+        }
+
+        cells.forEach((c, i) => {
+            const v = isRate ? vals[i].toFixed(prec) : Math.round(vals[i]);
+            const sd = sds[i];
+            if (sd > 0) {
+                const sdFmt = isRate ? sd.toFixed(prec) : Math.round(sd);
+                c.innerHTML = v + ' <span class="sd-bound">\u00b1' + sdFmt + '</span>';
+            } else {
+                c.textContent = v;
+            }
+        });
+    }
 }
 
-function toggleStatSub(el, toggleSelector, attrName, cellSelector) {
-    document.querySelectorAll(toggleSelector + ' .pill').forEach(p => p.classList.remove('active'));
+/* ── Top-level toggle ── */
+function toggleTopView(el) {
+    document.querySelectorAll('#standings-top-toggle .pill').forEach(p => p.classList.remove('active'));
     el.classList.add('active');
-    if (el.dataset[attrName] === 'points') {
+    const v = el.dataset.view;
+    document.getElementById('view-current').style.display = v === 'current' ? '' : 'none';
+    document.getElementById('view-projected').style.display = v === 'projected' ? '' : 'none';
+    document.getElementById('view-montecarlo').style.display = v === 'montecarlo' ? '' : 'none';
+}
+
+/* ── Current standings sub-toggle ── */
+function toggleCurrentSub(el) {
+    document.querySelectorAll('#current-sub-toggle .pill').forEach(p => p.classList.remove('active'));
+    el.classList.add('active');
+    if (el.dataset.sub === 'points') {
+        document.querySelectorAll('.stat-cell').forEach(cell => {
+            cell.textContent = cell.dataset.points;
+        });
+    } else {
+        formatStatCells('.stat-cell');
+    }
+}
+
+/* ── Projected tab toggle (Preseason / Current) ── */
+function toggleProjTab(el) {
+    document.querySelectorAll('#proj-tab-toggle .pill').forEach(p => p.classList.remove('active'));
+    el.classList.add('active');
+    const tab = el.dataset.ptab;
+    document.getElementById('proj-preseason').style.display = tab === 'preseason' ? '' : 'none';
+    document.getElementById('proj-current').style.display = tab === 'current' ? '' : 'none';
+}
+
+/* ── Projected mode toggle (ERoto / Stat Totals) ── */
+function toggleProjMode(el, cellSelector) {
+    const group = el.parentElement;
+    group.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+    el.classList.add('active');
+    if (el.dataset.mode === 'points') {
         document.querySelectorAll(cellSelector).forEach(cell => {
             cell.textContent = cell.dataset.points;
         });
     } else {
-        formatStatCells(cellSelector);
+        formatStatCellsWithBounds(cellSelector);
     }
 }
 
-function toggleCurrentSub(el) {
-    toggleStatSub(el, '#current-sub-toggle', 'sub', '.stat-cell');
-}
-
-function toggleProjectedSub(el) {
-    document.querySelectorAll('#projected-sub-toggle .pill').forEach(p => p.classList.remove('active'));
+/* ── Monte Carlo tab toggle ── */
+function toggleMcTab(el) {
+    document.querySelectorAll('#mc-tab-toggle .pill').forEach(p => p.classList.remove('active'));
     el.classList.add('active');
-    const sub = el.dataset.psub;
-    document.getElementById('proj-static').style.display = sub === 'static' ? '' : 'none';
-    document.getElementById('proj-mc').style.display = sub === 'mc' ? '' : 'none';
-    document.getElementById('proj-mc-mgmt').style.display = sub === 'mc-mgmt' ? '' : 'none';
-    document.getElementById('proj-ros-mc').style.display = sub === 'ros-mc' ? '' : 'none';
-    document.getElementById('proj-ros-mgmt-mc').style.display = sub === 'ros-mgmt-mc' ? '' : 'none';
-}
-
-function toggleProjStaticSub(el) {
-    toggleStatSub(el, '#proj-static-sub-toggle', 'pssub', '.proj-stat-cell');
+    const tab = el.dataset.mctab;
+    document.getElementById('mc-preseason').style.display = tab === 'preseason' ? '' : 'none';
+    document.getElementById('mc-preseason-mgmt').style.display = tab === 'preseason-mgmt' ? '' : 'none';
+    document.getElementById('mc-current').style.display = tab === 'current' ? '' : 'none';
+    document.getElementById('mc-current-mgmt').style.display = tab === 'current-mgmt' ? '' : 'none';
 }
 </script>
+
+<style>
+.sd-bound {
+    opacity: 0.45;
+    font-size: 0.85em;
+}
+</style>
 
 {% endif %}
 {% endblock %}
