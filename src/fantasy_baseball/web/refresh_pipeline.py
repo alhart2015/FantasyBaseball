@@ -886,50 +886,72 @@ class RefreshRun:
         self._progress("Analyzing transactions...")
         from fantasy_baseball.lineup.yahoo_roster import fetch_all_transactions
         from fantasy_baseball.analysis.transactions import (
+            _load_projections_for_date_redis,
+            build_cache_output,
             pair_standalone_moves,
             score_transaction,
-            build_cache_output,
         )
 
         raw_txns = fetch_all_transactions(self.league)
-        if raw_txns:
-            # Load previously scored transactions from Redis/disk cache
-            stored_txns = read_cache("transactions", self.cache_dir) or []
-            existing_ids = {t["transaction_id"] for t in stored_txns}
-            new_txns = [t for t in raw_txns
-                        if t["transaction_id"] not in existing_ids]
+        if not raw_txns:
+            return
 
-            if new_txns:
-                self._progress(f"Scoring {len(new_txns)} new transaction(s)...")
-                from fantasy_baseball.data.redis_store import (
-                    get_default_client as _txn_redis_client,
+        stored_txns = read_cache("transactions", self.cache_dir) or []
+        existing_ids = {t["transaction_id"] for t in stored_txns}
+        new_txns = [t for t in raw_txns
+                    if t["transaction_id"] not in existing_ids]
+
+        if new_txns:
+            self._progress(f"Scoring {len(new_txns)} new transaction(s)...")
+            # Append unscored placeholders so pairing can match new-vs-stored.
+            # ΔRoto is non-linear so we must pair BEFORE scoring — a paired
+            # drop+add is one swap, not two independent scores that sum.
+            for txn in new_txns:
+                stored_txns.append({
+                    "year": self.config.season_year,
+                    **txn,
+                    "paired_with": None,
+                })
+
+            unpaired = [t for t in stored_txns if not t.get("paired_with")]
+            pairs = pair_standalone_moves(unpaired)
+            by_id = {t["transaction_id"]: t for t in stored_txns}
+            for drop_id, add_id in pairs:
+                by_id[drop_id]["paired_with"] = add_id
+                by_id[add_id]["paired_with"] = drop_id
+
+            from fantasy_baseball.data.redis_store import (
+                get_default_client as _txn_redis_client,
+            )
+            _txn_client = _txn_redis_client()
+            hitters_proj, pitchers_proj = _load_projections_for_date_redis(
+                _txn_client,
+            )
+            season_start = date.fromisoformat(self.config.season_start)
+            season_end = date.fromisoformat(self.config.season_end)
+
+            for txn in new_txns:
+                entry = by_id[txn["transaction_id"]]
+                partner_id = entry.get("paired_with")
+                partner = by_id.get(partner_id) if partner_id else None
+                scores = score_transaction(
+                    self.league_model,
+                    entry,
+                    self.projected_standings,
+                    hitters_proj,
+                    pitchers_proj,
+                    season_start,
+                    season_end,
+                    partner=partner,
+                    team_sds=self.team_sds,
                 )
-                _txn_client = _txn_redis_client()
-                for txn in new_txns:
-                    scores = score_transaction(
-                        self.league_model, _txn_client, txn, self.config.season_year,
-                    )
-                    stored_txns.append({
-                        "year": self.config.season_year,
-                        **txn,
-                        **scores,
-                        "paired_with": None,
-                    })
+                entry.update(scores)
 
-                # Re-pair all unpaired standalone moves
-                unpaired = [t for t in stored_txns if not t.get("paired_with")]
-                pairs = pair_standalone_moves(unpaired)
-                by_id = {t["transaction_id"]: t for t in stored_txns}
-                for drop_id, add_id in pairs:
-                    by_id[drop_id]["paired_with"] = add_id
-                    by_id[add_id]["paired_with"] = drop_id
-
-            # Persist scored transactions to Redis and build display cache
-            stored_txns.sort(key=lambda t: t.get("timestamp") or "")
-            write_cache("transactions", stored_txns, self.cache_dir)
-            cache_data = build_cache_output(stored_txns)
-            write_cache("transaction_analyzer", cache_data, self.cache_dir)
-            self._progress(f"Analyzed {len(stored_txns)} total transaction(s)")
+        stored_txns.sort(key=lambda t: t.get("timestamp") or "")
+        write_cache("transactions", stored_txns, self.cache_dir)
+        cache_data = build_cache_output(stored_txns)
+        write_cache("transaction_analyzer", cache_data, self.cache_dir)
+        self._progress(f"Analyzed {len(stored_txns)} total transaction(s)")
 
     # --- Step 16: Write meta ---
     def _write_meta(self):

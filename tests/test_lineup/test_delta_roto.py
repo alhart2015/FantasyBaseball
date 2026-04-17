@@ -54,6 +54,7 @@ class TestComputeDeltaRoto:
             user_roster=roster,
             projected_standings=standings,
             team_name="My Team",
+            team_sds=None,
         )
 
         assert isinstance(result, DeltaRotoResult)
@@ -72,7 +73,10 @@ class TestComputeDeltaRoto:
                       "stats": {"R": 800, "HR": 200, "RBI": 800, "SB": 100, "AVG": 0.260,
                                 "W": 70, "K": 1200, "SV": 50, "ERA": 3.50, "WHIP": 1.20}}]
         with pytest.raises(ValueError, match="not found"):
-            compute_delta_roto("Nobody", add_player, roster, standings, "My Team")
+            compute_delta_roto(
+                "Nobody", add_player, roster, standings, "My Team",
+                team_sds=None,
+            )
 
     def test_team_sds_produces_small_delta_for_within_uncertainty_swap(self):
         """With wide σ, a 10-unit SB swap across two tied teams produces |ΔRoto| < 0.5,

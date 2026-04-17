@@ -1,13 +1,19 @@
 #!/usr/bin/env python
-"""One-time rescore of all transactions with corrected leverage formula.
+"""Clear transaction scores so the next refresh re-computes them.
 
-Clears the transactions table and Redis cache so the next refresh
-re-fetches all transactions from Yahoo and re-scores them using
-score_transaction() with the fixed per-category, SGP-normalized leverage.
+Use this after changing ``score_transaction`` — most recently, the
+migration from wSGP to ΔRoto. The script clears the legacy SQLite
+``transactions`` table and (with ``--redis``) the Redis
+``cache:transactions`` + ``cache:transaction_analyzer`` keys so the
+next refresh re-fetches every transaction from Yahoo and re-scores
+against today's projected standings. Historical scores are an
+approximation in both directions — ROS projections aren't frozen
+per-day — but this is the only way to pick up scoring-logic changes
+retroactively.
 
 Usage:
-    python scripts/rescore_transactions.py          # local DB only
-    python scripts/rescore_transactions.py --redis   # also clear Redis cache
+    python scripts/rescore_transactions.py           # local DB only
+    python scripts/rescore_transactions.py --redis    # also clear Redis cache
 """
 import argparse
 import sys
@@ -36,6 +42,16 @@ def main():
 
     conn.close()
 
+    # Clear local disk cache too — read_cache() reads local first, so
+    # stale JSON here would make the refresh see every txn as already-known
+    # and skip re-scoring (the whole point of this script).
+    project_root = Path(__file__).resolve().parents[1]
+    for fname in ("transactions.json", "transaction_analyzer.json"):
+        p = project_root / "data" / "cache" / fname
+        if p.exists():
+            p.unlink()
+            print(f"Removed local cache {p.relative_to(project_root)}.")
+
     if args.redis:
         import os
         # Load .env if available
@@ -54,9 +70,10 @@ def main():
         from upstash_redis import Redis
         redis = Redis(url=url, token=token)
         redis.delete("cache:transaction_analyzer")
-        print("Cleared transaction_analyzer cache from Redis.")
+        redis.delete("cache:transactions")
+        print("Cleared cache:transactions and cache:transaction_analyzer from Redis.")
 
-    print("\nDone. Run a refresh to re-score all transactions with corrected leverage.")
+    print("\nDone. Run a refresh to re-score all transactions.")
 
 
 if __name__ == "__main__":

@@ -27,15 +27,15 @@
         <tr>
             <th>Team</th>
             <th>Moves</th>
-            <th>Net wSGP</th>
+            <th>Net ΔRoto</th>
             <th>Best Move</th>
             <th>Worst Move</th>
         </tr>
     </thead>
     <tbody>
     {% for team in txn_data %}
-        {% set best = team.transactions | sort(attribute='value', reverse=true) | first %}
-        {% set worst = team.transactions | sort(attribute='value') | first %}
+        {% set best = team.transactions | sort(attribute='delta_roto', reverse=true) | first %}
+        {% set worst = team.transactions | sort(attribute='delta_roto') | first %}
         <tr class="txn-summary {% if team.team == user_team %}user-team{% endif %}" onclick="toggleTxnDetail(this)">
             <td class="team-name">{{ team.team }}</td>
             <td>{{ team.transaction_count }}</td>
@@ -43,16 +43,16 @@
                 {{ '%+.1f'|format(team.net_value) }}
             </td>
             <td>
-                {% if best and best.value > 0 %}
-                <span class="value-positive">{{ '%+.1f'|format(best.value) }}</span>
+                {% if best and best.delta_roto > 0 %}
+                <span class="value-positive">{{ '%+.1f'|format(best.delta_roto) }}</span>
                 <span style="color:var(--text-secondary);font-size:11px;">
                     {% if best.add_name %}+{{ best.add_name }}{% endif %}
                 </span>
                 {% else %}—{% endif %}
             </td>
             <td>
-                {% if worst and worst.value < 0 %}
-                <span class="value-negative">{{ '%+.1f'|format(worst.value) }}</span>
+                {% if worst and worst.delta_roto < 0 %}
+                <span class="value-negative">{{ '%+.1f'|format(worst.delta_roto) }}</span>
                 <span style="color:var(--text-secondary);font-size:11px;">
                     {% if worst.drop_name %}-{{ worst.drop_name }}{% endif %}
                 </span>
@@ -67,7 +67,7 @@
                             <th style="text-align:left">Date</th>
                             <th style="text-align:left">Added</th>
                             <th style="text-align:left">Dropped</th>
-                            <th style="text-align:right">Value</th>
+                            <th style="text-align:right">ΔRoto</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -78,18 +78,16 @@
                                 {% if txn.add_name %}
                                 {{ txn.add_name }}
                                 <span style="color:var(--text-secondary);font-size:11px;">({{ txn.add_positions | join(', ') }})</span>
-                                <span class="value-positive" style="font-size:11px;">{{ '%.1f'|format(txn.add_wsgp) }}</span>
                                 {% else %}—{% endif %}
                             </td>
                             <td>
                                 {% if txn.drop_name %}
                                 {{ txn.drop_name }}
                                 <span style="color:var(--text-secondary);font-size:11px;">({{ txn.drop_positions | join(', ') }})</span>
-                                <span class="value-negative" style="font-size:11px;">{{ '%.1f'|format(txn.drop_wsgp) }}</span>
                                 {% else %}—{% endif %}
                             </td>
-                            <td style="text-align:right" class="{{ 'value-positive' if txn.value > 0 else 'value-negative' if txn.value < 0 else '' }}">
-                                {{ '%+.1f'|format(txn.value) }}
+                            <td style="text-align:right" class="{{ 'value-positive' if txn.delta_roto > 0 else 'value-negative' if txn.delta_roto < 0 else '' }}">
+                                {{ '%+.1f'|format(txn.delta_roto) }}
                             </td>
                         </tr>
                     {% endfor %}
