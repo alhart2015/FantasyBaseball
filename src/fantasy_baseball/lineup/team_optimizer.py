@@ -7,10 +7,22 @@ simple ranking (pitchers).
 
 from __future__ import annotations
 
+import dataclasses
+from dataclasses import dataclass
+
 import numpy as np
 from scipy.optimize import linear_sum_assignment
+
+from fantasy_baseball.lineup.optimizer import (
+    HitterAssignment,
+    PitcherStarter,
+    optimize_hitter_lineup_roto,
+    optimize_pitcher_lineup_roto,
+)
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import Player, PlayerType
+from fantasy_baseball.models.positions import HITTER_ELIGIBLE, Position
+from fantasy_baseball.scoring import project_team_stats, score_roto
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS
 from fantasy_baseball.utils.positions import can_fill_slot
@@ -184,3 +196,84 @@ def build_lineup_summary(
 
     summary.sort(key=lambda e: (slot_rank.get(e["slot"], 99), -e["wsgp"]))
     return summary
+
+
+# ---------------------------------------------------------------------------
+# ERoto-based team optimizer (Task 5 — alongside compute_team_wsgp)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TeamRotoResult:
+    total_roto: float
+    hitter_lineup: list[HitterAssignment]
+    pitcher_starters: list[PitcherStarter]
+    pitcher_bench: list[Player]
+
+    def to_dict(self) -> dict:
+        return {
+            "total_roto": round(self.total_roto, 2),
+            "hitter_lineup": [a.to_dict() for a in self.hitter_lineup],
+            "pitcher_starters": [s.to_dict() for s in self.pitcher_starters],
+            "pitcher_bench": [p.name for p in self.pitcher_bench],
+        }
+
+
+def compute_team_roto(
+    roster: list[Player],
+    projected_standings: list[dict],
+    team_name: str,
+    roster_slots: dict[str, int],
+    team_sds: dict[str, dict[str, float]] | None = None,
+) -> TeamRotoResult:
+    """Optimize both hitter and pitcher lineups by ERoto and return the team total."""
+    hitters = [p for p in roster if p.player_type != PlayerType.PITCHER]
+    pitchers = [p for p in roster if p.player_type == PlayerType.PITCHER]
+
+    hitter_lineup = optimize_hitter_lineup_roto(
+        hitters=hitters, full_roster=roster,
+        projected_standings=projected_standings, team_name=team_name,
+        roster_slots=roster_slots, team_sds=team_sds,
+    )
+    p_slots = roster_slots.get("P", 9)
+    pitcher_starters, pitcher_bench = optimize_pitcher_lineup_roto(
+        pitchers=pitchers, full_roster=roster,
+        projected_standings=projected_standings, team_name=team_name,
+        slots=p_slots, team_sds=team_sds,
+    )
+
+    # Final total: recompute on the combined optimal lineup.
+    active_hitters = {a.name for a in hitter_lineup}
+    bench_hitters = {h.name for h in hitters} - active_hitters
+    active_pitchers = {s.name for s in pitcher_starters}
+    bench_pitchers = {p.name for p in pitcher_bench}
+
+    hypothetical: list[Player] = []
+    for p in roster:
+        if p.name in bench_hitters or p.name in bench_pitchers:
+            hypothetical.append(dataclasses.replace(p, selected_position=Position.BN))
+        elif p.name in active_hitters:
+            new_slot = next(
+                (pos for pos in p.positions if pos in HITTER_ELIGIBLE),
+                Position.UTIL,
+            )
+            hypothetical.append(dataclasses.replace(p, selected_position=new_slot))
+        elif p.name in active_pitchers:
+            new_slot = next(
+                (pos for pos in p.positions if pos in {Position.SP, Position.RP, Position.P}),
+                Position.P,
+            )
+            hypothetical.append(dataclasses.replace(p, selected_position=new_slot))
+        else:
+            hypothetical.append(p)
+
+    my_stats = project_team_stats(hypothetical, displacement=True).to_dict()
+    all_stats = {t["name"]: dict(t["stats"]) for t in projected_standings}
+    all_stats[team_name] = my_stats
+    total_roto = score_roto(all_stats, team_sds=team_sds)[team_name]["total"]
+
+    return TeamRotoResult(
+        total_roto=total_roto,
+        hitter_lineup=hitter_lineup,
+        pitcher_starters=pitcher_starters,
+        pitcher_bench=pitcher_bench,
+    )
