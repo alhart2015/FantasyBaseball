@@ -1,9 +1,36 @@
 import numpy as np
+from dataclasses import dataclass
 from scipy.optimize import linear_sum_assignment
 from fantasy_baseball.models.player import Player
+from fantasy_baseball.models.positions import Position
 from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS
 from fantasy_baseball.utils.positions import can_fill_slot
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
+
+
+@dataclass
+class HitterAssignment:
+    slot: Position
+    name: str
+    player: Player
+    roto_delta: float
+
+    def to_dict(self) -> dict:
+        return {
+            "slot": self.slot.value,
+            "name": self.name,
+            "roto_delta": round(self.roto_delta, 2),
+        }
+
+
+@dataclass
+class PitcherStarter:
+    name: str
+    player: Player
+    roto_delta: float
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "roto_delta": round(self.roto_delta, 2)}
 
 
 def _build_hitter_slots(roster_slots: dict[str, int]) -> list[str]:
