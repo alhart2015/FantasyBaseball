@@ -199,7 +199,7 @@ def build_lineup_summary(
 
 
 # ---------------------------------------------------------------------------
-# ERoto-based team optimizer (Task 5 — alongside compute_team_wsgp)
+# ERoto-based team optimizer
 # ---------------------------------------------------------------------------
 
 @dataclass

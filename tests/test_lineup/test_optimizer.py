@@ -1,9 +1,8 @@
-from itertools import combinations
-import pytest
 from fantasy_baseball.models.player import Player, PlayerType, HitterStats, PitcherStats
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.lineup.optimizer import (
-    HitterAssignment, optimize_hitter_lineup,
+    HitterAssignment, PitcherStarter,
+    optimize_hitter_lineup, optimize_pitcher_lineup,
 )
 
 
@@ -206,11 +205,6 @@ class TestERotoMaximization:
         # Without Only, no feasible lineup exists → alt_best is None → delta = best_total.
         # best_total > 0 here (we beat Rival on R, HR, RBI, SB, AVG by having any stats vs 0).
         assert lineup[0].roto_delta > 0
-
-
-from fantasy_baseball.lineup.optimizer import (
-    PitcherStarter, optimize_pitcher_lineup,
-)
 
 
 class TestPitcherOptimizer:
