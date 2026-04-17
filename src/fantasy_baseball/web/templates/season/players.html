@@ -247,8 +247,9 @@ function deltaRotoCell(p) {
         return '<span style="font-weight:600;color:' + color + '">' +
             sign + v.toFixed(2) + '</span>';
     }
-    // FAs without precomputed data get a compute button; others get em-dash.
-    if (p.owner == null) {
+    // Non-roster players (FAs + opp-owned) get a compute button; your
+    // own roster gets em-dash.
+    if (p.owner !== 'roster') {
         const safeName = p.name.replace(/"/g, '&quot;');
         return '<button class="dr-compute" data-name="' + safeName +
             '" data-ptype="' + p.player_type +
