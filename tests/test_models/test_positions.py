@@ -216,8 +216,7 @@ class TestInteropWithUtilsPositions:
         assert can_fill_slot(["OF"], "UTIL")
 
     def test_is_pitcher_empty_string_returns_false(self):
-        """waivers.detect_open_slots passes selected_position="" for
-        unfilled Yahoo slots. Must not raise."""
+        """Unfilled Yahoo slots pass selected_position="". Must not raise."""
         from fantasy_baseball.utils.positions import is_hitter, is_pitcher
         assert is_pitcher([""]) is False
         assert is_hitter([""]) is False

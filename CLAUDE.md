@@ -48,11 +48,11 @@ These apply everywhere; subsystem-specific rules live in the relevant subdirecto
 
 Before writing new logic, check whether the codebase already solves the problem. This project has been built incrementally and many patterns exist in scripts or library modules that handle edge cases you'll miss if you rewrite from scratch.
 
-- **Search `src/` and `scripts/` for existing functions** before implementing computation logic. If `summary.py` or `run_lineup.py` already does what you need, extract a shared function into the appropriate library module rather than duplicating the code.
+- **Search `src/` and `scripts/` for existing functions** before implementing computation logic. If `run_lineup.py` or `run_season_dashboard.py` already does what you need, extract a shared function into the appropriate library module rather than duplicating the code.
 - **Check how existing scripts handle the same data.** Yahoo API data has quirks (case mismatches like `"Util"` vs `"UTIL"`, missing stats in early season, inconsistent stat-ID mappings). Existing scripts have already solved these — read them before writing new Yahoo integration code.
 - **`simulation.py` is the shared Monte Carlo module.** Use `run_monte_carlo()` and `apply_management_adjustment()` — don't rewrite MC loops.
 
-When building a new feature that orchestrates existing modules (like the season dashboard refresh pipeline), read the scripts that already do similar orchestration (`summary.py`, `run_lineup.py`) and follow their patterns for data loading, projection matching, and edge-case handling.
+When building a new feature that orchestrates existing modules (like the season dashboard refresh pipeline), read the scripts that already do similar orchestration (`run_lineup.py`, `run_season_dashboard.py`) and follow their patterns for data loading, projection matching, and edge-case handling.
 
 ## Config
 
