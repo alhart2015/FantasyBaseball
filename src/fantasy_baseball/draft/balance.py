@@ -1,7 +1,7 @@
 import pandas as pd
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import (
-    HITTING_CATEGORIES, PITCHING_CATEGORIES, ALL_CATEGORIES, INVERSE_STATS,
+    HITTING_CATEGORIES, PITCHING_CATEGORIES,
 )
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
@@ -9,12 +9,6 @@ TEAM_TARGETS: dict[str, float] = {
     "R": 900, "HR": 265, "RBI": 890, "SB": 145, "AVG": 0.260,
     "W": 78, "K": 1250, "ERA": 3.80, "WHIP": 1.20, "SV": 55,
 }
-# NOTE: Targets derived from 10-team simulation averages (2026-03-24).
-# SV=55 reflects a 2-closer team (~28 SV each).  The old SV=80 caused
-# leverage to perpetually see SV as "behind pace," over-weighting saves.
-# HR, RBI, SB old targets (220, 830, 100) were far below actual sim
-# averages (270, 899, 151), so hitting categories were always "ahead of
-# pace" — compounding the closer-heavy bias.
 
 WARNING_THRESHOLD: float = 0.6
 
@@ -96,87 +90,3 @@ class CategoryBalance:
         return warnings
 
 
-def calculate_draft_leverage(
-    totals: dict[str, float | None],
-    picks_made: int,
-    total_picks: int,
-    targets: dict[str, float] | None = None,
-) -> dict[str, float]:
-    """Calculate category leverage weights for draft recommendations.
-
-    Categories where the team is behind pace get higher weight, so the
-    recommender steers toward balanced rosters instead of stacking one
-    player type.
-
-    The weight is based on how far behind target pace the team is in
-    each category.  Early in the draft (few picks made), weights are
-    nearly equal.  As the draft progresses and imbalances grow, the
-    weights diverge.
-
-    Returns weights normalized to sum to 1.0.
-    """
-    if targets is None:
-        targets = TEAM_TARGETS
-
-    if total_picks <= 0 or picks_made <= 0:
-        # No data yet — equal weights
-        return {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
-
-    # What fraction of the draft is complete?
-    progress = min(picks_made / total_picks, 1.0)
-
-    epsilon = 0.001
-    raw: dict[str, float] = {}
-
-    for cat in ALL_CATEGORIES:
-        target = targets.get(cat, 0)
-        current = totals.get(cat)
-        if current is None:
-            # No pitchers yet — pitching cats are maximally behind
-            raw[cat] = 1.0 / epsilon
-            continue
-
-        if target == 0:
-            raw[cat] = 1.0
-            continue
-
-        if cat in INVERSE_STATS or cat == "AVG":
-            # Rate stats don't accumulate, so progress-based pacing
-            # doesn't apply.  Instead, compare current value directly
-            # to the target and boost weight when behind.
-            if current is None or current < epsilon:
-                # No data yet (e.g., no hitters or no pitchers) —
-                # use neutral weight to avoid degenerate leverage.
-                raw[cat] = 1.0
-            elif cat == "AVG":
-                # Lower AVG = worse.  Below target -> weight > 1.
-                gap = target / current
-                raw[cat] = max(gap, 0.1)
-            else:
-                # ERA/WHIP: higher = worse.  Above target -> weight > 1.
-                gap = current / target if target > 0 else 1.0
-                raw[cat] = max(gap, 0.1)
-        else:
-            # How far behind pace? Expected = target * progress
-            expected = target * progress
-            if expected < epsilon:
-                raw[cat] = 1.0
-                continue
-            # Ratio < 1 means behind pace, > 1 means ahead
-            ratio = current / expected
-            # Zero in a counting category past 15% is urgent, but capped
-            # to prevent any single group of categories from drowning out
-            # the rest.  Without this cap, starting with 3 hitter keepers
-            # and 0 pitchers makes W+K+SV+ERA+WHIP consume ~99.7% of
-            # leverage weight, causing the recommender to draft nothing
-            # but pitchers for 9+ rounds.
-            if current < epsilon and progress > 0.15:
-                raw[cat] = 10.0
-            else:
-                # Invert: behind pace -> high weight, ahead -> low weight
-                raw[cat] = 1.0 / max(ratio, 0.1)
-
-    total = sum(raw.values())
-    if total > 0:
-        return {cat: val / total for cat, val in raw.items()}
-    return {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}

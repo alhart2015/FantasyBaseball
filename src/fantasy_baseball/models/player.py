@@ -168,12 +168,10 @@ class Player:
     preseason: "HitterStats | PitcherStats | None" = None
     current: "HitterStats | PitcherStats | None" = None
 
-    wsgp: float = 0.0
     rank: RankInfo = field(default_factory=RankInfo)
 
     selected_position: Position | None = None
     status: str = ""
-    classification: str = ""
     pace: Optional[dict] = None
 
     # ------------------------------------------------------------------
@@ -230,11 +228,9 @@ class Player:
             rest_of_season=ros,
             preseason=preseason,
             current=current,
-            wsgp=d.get("wsgp", 0.0),
             rank=rank,
             selected_position=parsed_slot,
             status=d.get("status", ""),
-            classification=d.get("classification", ""),
             pace=d.get("pace"),
         )
 
@@ -261,14 +257,11 @@ class Player:
             d["preseason"] = self.preseason.to_dict()
         if self.current is not None:
             d["current"] = self.current.to_dict()
-        d["wsgp"] = self.wsgp
         d["rank"] = self.rank.to_dict()
         if self.selected_position:
             d["selected_position"] = self.selected_position
         if self.status:
             d["status"] = self.status
-        if self.classification:
-            d["classification"] = self.classification
         if self.pace is not None:
             d["pace"] = self.pace
         return d
@@ -284,11 +277,3 @@ class Player:
         if self.rest_of_season is not None:
             d.update(self.rest_of_season.to_dict())
         return d
-
-    def compute_wsgp(self, leverage: dict[str, float]) -> float:
-        from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
-        if self.rest_of_season is None:
-            self.wsgp = 0.0
-            return 0.0
-        self.wsgp = calculate_weighted_sgp(self.rest_of_season, leverage)
-        return self.wsgp

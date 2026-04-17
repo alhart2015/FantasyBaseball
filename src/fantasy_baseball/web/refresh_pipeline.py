@@ -182,7 +182,6 @@ class RefreshRun:
             self._compute_leverage()
             self._match_roster_to_projections()
             self._compute_pace()
-            self._compute_wsgp()
             self._compute_rankings()
             self._optimize_lineup()
             self._compute_moves()
@@ -555,7 +554,7 @@ class RefreshRun:
             projected_standings=self.projected_standings_snap,
         )
 
-    # --- Step 6: Match roster players to projections, compute wSGP ---
+    # --- Step 6: Match roster players to projections ---
     def _match_roster_to_projections(self):
         from fantasy_baseball.data.projections import match_roster_to_projections
         from fantasy_baseball.utils.name_utils import normalize_name
@@ -598,16 +597,6 @@ class RefreshRun:
             self.preseason_lookup, sgp_denoms,
         )
 
-    # --- Step 6e: Compute wSGP on raw ROS stats ---
-    def _compute_wsgp(self):
-        # NOTE: recency blending was removed here because FanGraphs ROS
-        # projections already incorporate early-season performance, and a
-        # second layer of reliability weighting on top created inconsistencies
-        # with projected_standings (see docs/superpowers/plans/2026-04-10-remove-recency-blending.md).
-        for player in self.roster_players:
-            if player.rest_of_season is not None:
-                player.compute_wsgp(self.leverage)
-
     # --- Step 6d: Compute SGP rankings ---
     def _compute_rankings(self):
         self._progress("Computing SGP rankings...")
@@ -635,17 +624,6 @@ class RefreshRun:
         for player in self.roster_players:
             rank_data = lookup_rank(self.rankings_lookup, player.fg_id, player.name, player.player_type)
             player.rank = RankInfo.from_dict(rank_data) if rank_data else RankInfo()
-
-        # Classify roster players by league-wide value vs team fit
-        from fantasy_baseball.lineup.player_classification import classify_roster
-        rest_of_season_rank_lookup = {}
-        for key, rank_data in self.rankings_lookup.items():
-            ros = rank_data.get("rest_of_season")
-            if ros is not None:
-                rest_of_season_rank_lookup[key] = ros
-        classifications = classify_roster(self.roster_players, rest_of_season_rank_lookup)
-        for player in self.roster_players:
-            player.classification = classifications.get(player.name, "")
 
         roster_flat = [p.to_flat_dict() for p in self.roster_players]
         write_cache("roster", roster_flat, self.cache_dir)

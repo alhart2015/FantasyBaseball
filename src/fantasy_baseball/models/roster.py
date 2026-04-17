@@ -7,7 +7,7 @@ payload: name, positions, selected_position, status, and yahoo_id. This
 is the same information stored in the ``weekly_rosters`` SQLite table
 after the Step 0 schema migration.
 
-Callers that need projection-backed fields (ros/preseason stats, wSGP,
+Callers that need projection-backed fields (ros/preseason stats,
 pace, rank) hydrate entries into ``Player`` objects via
 ``hydrate_roster_entries`` (added later in the migration).
 """

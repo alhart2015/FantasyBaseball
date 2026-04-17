@@ -140,8 +140,6 @@ CREATE TABLE IF NOT EXISTS transactions (
     drop_name       TEXT,
     drop_player_id  TEXT,
     drop_positions  TEXT,
-    add_wsgp        REAL,
-    drop_wsgp       REAL,
     value           REAL,
     paired_with     TEXT,
     PRIMARY KEY (year, transaction_id)
@@ -611,7 +609,7 @@ def insert_transactions(conn, transactions):
             t["team"], t.get("team_key"), t["type"],
             t.get("add_name"), t.get("add_player_id"), t.get("add_positions"),
             t.get("drop_name"), t.get("drop_player_id"), t.get("drop_positions"),
-            t.get("add_wsgp"), t.get("drop_wsgp"), t.get("value"),
+            t.get("value"),
             t.get("paired_with"),
         ))
     conn.executemany(
@@ -619,8 +617,8 @@ def insert_transactions(conn, transactions):
         "(year, transaction_id, timestamp, team, team_key, type, "
         "add_name, add_player_id, add_positions, "
         "drop_name, drop_player_id, drop_positions, "
-        "add_wsgp, drop_wsgp, value, paired_with) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "value, paired_with) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()

@@ -149,7 +149,7 @@ def _sample_optimal():
         "hitters": {"C": "Adley Rutschman", "OF": "Masataka Yoshida"},
         "pitchers": {},
         "moves": [
-            {"action": "START", "player": "Masataka Yoshida", "slot": "OF", "reason": "wSGP: 1.9"},
+            {"action": "START", "player": "Masataka Yoshida", "slot": "OF", "reason": "SGP: 1.9"},
             {"action": "BENCH", "player": "Mike Trout", "slot": "IL", "reason": "IL-eligible"},
         ],
     }
@@ -183,10 +183,10 @@ def test_format_lineup_passes_ros_data_through():
     """
     roster = [
         {"name": "Aaron Judge", "positions": ["OF"], "selected_position": "OF",
-         "player_id": "1", "status": "", "wsgp": 5.0,
+         "player_id": "1", "status": "",
          "rest_of_season": {"r": 90, "hr": 40, "rbi": 100, "sb": 5, "avg": 0.280}},
         {"name": "No ROS Player", "positions": ["1B"], "selected_position": "1B",
-         "player_id": "2", "status": "", "wsgp": 2.0},
+         "player_id": "2", "status": ""},
     ]
     data = format_lineup_for_display(roster, {"moves": []})
     judge = next(h for h in data["hitters"] if h["name"] == "Aaron Judge")
@@ -206,7 +206,7 @@ def test_roster_cache_includes_stats(tmp_path, monkeypatch):
     """After refresh, roster entries should include a 'pace' dict."""
     roster = [
         {"name": "Juan Soto", "positions": ["OF"], "selected_position": "OF",
-         "player_id": "1", "status": "", "wsgp": 3.0, "player_type": "hitter",
+         "player_id": "1", "status": "", "player_type": "hitter",
          "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "pa": 600, "avg": 0.278,
          "pace": {
              "PA": {"actual": 102, "color_class": "stat-neutral"},

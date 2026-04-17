@@ -24,7 +24,7 @@ from fantasy_baseball.config import load_config
 from fantasy_baseball.data.db import get_connection
 from fantasy_baseball.draft.board import build_draft_board, apply_keepers
 from fantasy_baseball.draft.tracker import DraftTracker
-from fantasy_baseball.draft.balance import CategoryBalance, calculate_draft_leverage
+from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.recommender import (
     get_recommendations,
     get_filled_positions,
@@ -371,11 +371,6 @@ def run_simulation(
                         tracker.user_roster_ids, full_board,
                         roster_slots=config.roster_slots,
                     )
-                    leverage = calculate_draft_leverage(
-                        balance.get_totals(),
-                        picks_made=len(tracker.user_roster),
-                        total_picks=rounds,
-                    )
                     recs = get_recommendations(
                         board, drafted=tracker.drafted_ids,
                         user_roster=tracker.user_roster,
@@ -384,7 +379,6 @@ def run_simulation(
                             tracker, "picks_until_next_turn", None),
                         roster_slots=config.roster_slots,
                         num_teams=config.num_teams,
-                        draft_leverage=leverage,
                         scoring_mode=scoring_mode,
                     )
                     if len(recs) > skip:

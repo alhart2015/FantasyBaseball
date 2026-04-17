@@ -13,14 +13,11 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from simulate_draft import build_board_and_context
-from fantasy_baseball.draft.balance import CategoryBalance, calculate_draft_leverage
+from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.recommender import (
     get_recommendations, get_filled_positions, calculate_vona_scores,
-    _vona_leverage_weight,
 )
 from fantasy_baseball.draft.strategy import CLOSER_SV_THRESHOLD
-from fantasy_baseball.sgp.denominators import get_sgp_denominators
-from fantasy_baseball.utils.name_utils import normalize_name
 
 HART = None  # set from draft metadata
 
@@ -44,7 +41,6 @@ def main():
     config = ctx["config"]
     full_board = ctx["full_board"]
     board = ctx["board"]
-    denoms = get_sgp_denominators()
 
     # Determine user's team from metadata
     global HART
@@ -85,18 +81,12 @@ def main():
             # Get the actual recommendation
             filled = get_filled_positions(user_roster_ids, full_board,
                                          roster_slots=config.roster_slots)
-            leverage = calculate_draft_leverage(
-                balance.get_totals(),
-                picks_made=len(user_roster),
-                total_picks=23,
-            )
             recs = get_recommendations(
                 board, drafted=drafted_ids,
                 user_roster=user_roster,
                 n=5, filled_positions=filled,
                 roster_slots=config.roster_slots,
                 num_teams=config.num_teams,
-                draft_leverage=leverage,
                 scoring_mode="vona",
             )
 
@@ -106,7 +96,6 @@ def main():
 
             # Get scoring details for the picked player
             picked_vona = vona_scores.get(entry["player_id"], 0)
-            picked_vona_wt = _vona_leverage_weight(picked_player, leverage, denoms) if picked_player is not None else 1.0
             picked_sv = picked_player.get("sv", 0) if picked_player is not None else 0
             picked_var = picked_player.get("var", 0) if picked_player is not None else 0
             picked_sgp = picked_player.get("total_sgp", 0) if picked_player is not None else 0
@@ -149,13 +138,6 @@ def main():
                 right = _fmt_row(vo["name"], vo["player_type"], vo["vona"], vo["positions"], vo.get("sv",0)) if vo is not None else ""
                 print(f"  {i+1}. {left:<48} {i+1}. {right}")
 
-            # Show leverage needs
-            sorted_lev = sorted(leverage.items(), key=lambda x: x[1], reverse=True)
-            top_needs = [f"{c}({w:.0%})" for c, w in sorted_lev[:3]]
-            low_needs = [f"{c}({w:.0%})" for c, w in sorted_lev[-3:]]
-
-            print(f"\n  Leverage: needs {', '.join(top_needs)}  |  saturated {', '.join(low_needs)}")
-
             # Show what strategy recommended
             print(f"\n  Strategy recommendation: {recs[0]['name'] if recs else 'N/A'}")
             print(f"  >>> PICKED: {picked}")
@@ -163,14 +145,13 @@ def main():
                 pos = "/".join(picked_player["positions"][:3])
                 print(f"      {picked_player['player_type']} | {pos} | "
                       f"VAR={picked_var:.2f} | SGP={picked_sgp:.2f} | "
-                      f"VONA={picked_vona:.2f} | VONA_wt={picked_vona_wt:.2f}")
+                      f"VONA={picked_vona:.2f}")
 
             # Explanation
             is_closer = picked_sv and picked_sv >= CLOSER_SV_THRESHOLD
             explanation = _explain_pick(
-                picked, picked_player, picked_var, picked_vona, picked_vona_wt,
-                is_closer, closer_count, rnd, leverage, recs, by_var, by_vona,
-                balance, filled,
+                picked, picked_player, picked_var, picked_vona,
+                is_closer, closer_count, rnd, by_var, balance,
             )
             print(f"      Why: {explanation}")
 
@@ -185,15 +166,13 @@ def main():
                 balance.add_player(rows.iloc[0])
 
 
-def _explain_pick(name, player, var, vona, vona_wt, is_closer, closer_count,
-                  rnd, leverage, recs, by_var, by_vona, balance, filled):
+def _explain_pick(name, player, var, vona, is_closer, closer_count,
+                  rnd, by_var, balance):
     """Generate a brief explanation of why this player was recommended."""
     if player is None:
         return "Player not found on board"
 
     ptype = player["player_type"]
-    sorted_lev = sorted(leverage.items(), key=lambda x: x[1], reverse=True)
-    top_need = sorted_lev[0][0]
 
     # Check if this was a forced closer deadline
     from fantasy_baseball.draft.strategy import NO_PUNT_STAGGER_DEADLINES
@@ -204,19 +183,15 @@ def _explain_pick(name, player, var, vona, vona_wt, is_closer, closer_count,
                     f"Best available closer by VAR ({var:.2f}).")
 
     if is_closer:
-        sv_lev = leverage.get("SV", 0)
-        return (f"VONA urgency ({vona:.2f}) boosted by SV need (leverage wt {vona_wt:.2f}x). "
-                f"Closer scarcity makes this pick more urgent than higher-VAR alternatives.")
+        return (f"VONA urgency ({vona:.2f}) — closer scarcity makes this pick "
+                f"more urgent than higher-VAR alternatives.")
 
     if ptype == "pitcher":
         top_var = by_var.iloc[0]
         if name == top_var["name"]:
-            return (f"Top pitcher by both VAR ({var:.2f}) and leverage-weighted score. "
-                    f"Top category need: {top_need}.")
-        else:
-            return (f"Leverage-weighted VONA score ({vona:.2f} * {vona_wt:.2f}x wt) "
-                    f"combined with VAR ({var:.2f}) makes this the best available. "
-                    f"Top need: {top_need}.")
+            return f"Top pitcher by VAR ({var:.2f})."
+        return (f"VONA score ({vona:.2f}) combined with VAR ({var:.2f}) "
+                f"makes this the best available.")
 
     # Hitter
     avg = player.get("avg", 0)
@@ -232,17 +207,17 @@ def _explain_pick(name, player, var, vona, vona_wt, is_closer, closer_count,
         strengths.append(f"AVG={avg:.3f}")
 
     totals = balance.get_totals()
-    weakness = ""
+    reason = ""
     if totals.get("SB", 0) < 100 and sb >= 15:
-        weakness = "SB is a top category need"
+        reason = "SB is a top category need"
     elif totals.get("AVG", 0) < 0.255 and avg >= 0.260:
-        weakness = "protects AVG floor"
+        reason = "protects AVG floor"
     elif totals.get("HR", 0) < 100 and hr >= 20:
-        weakness = "HR contribution needed"
+        reason = "HR contribution needed"
 
     strength_str = f" ({', '.join(strengths)})" if strengths else ""
-    reason = weakness if weakness else f"top need: {top_need}"
-    return (f"Best hitter by leverage-weighted VONA. VAR={var:.2f}{strength_str}. {reason}.")
+    tail = f" — {reason}" if reason else ""
+    return f"Best hitter by VONA. VAR={var:.2f}{strength_str}{tail}."
 
 
 if __name__ == "__main__":

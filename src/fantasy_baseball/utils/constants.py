@@ -59,7 +59,7 @@ CLOSER_SV_THRESHOLD: int = 20
 HITTING_COUNTING: list[str] = ["r", "hr", "rbi", "sb", "h", "ab"]
 PITCHING_COUNTING: list[str] = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
 
-# Full projection key lists (counting + rate + opportunity stats, used by pace/buy-low)
+# Full projection key lists (counting + rate + opportunity stats, used by pace)
 HITTER_PROJ_KEYS: list[str] = ["pa", "r", "hr", "rbi", "sb", "h", "ab", "avg"]
 PITCHER_PROJ_KEYS: list[str] = ["ip", "w", "k", "sv", "er", "bb", "h_allowed", "era", "whip"]
 

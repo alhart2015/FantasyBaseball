@@ -16,7 +16,6 @@ PRODUCTION_FILES_TO_CHECK = [
     "src/fantasy_baseball/lineup/waivers.py",
     "src/fantasy_baseball/lineup/optimizer.py",
     "src/fantasy_baseball/lineup/roster_audit.py",
-    "src/fantasy_baseball/analysis/buy_low.py",
     "src/fantasy_baseball/simulation.py",
     "scripts/run_lineup.py",
 ]

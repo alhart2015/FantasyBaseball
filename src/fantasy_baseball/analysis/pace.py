@@ -2,8 +2,8 @@
 
 DISPLAY ONLY. The output of this module is used for hot/cold color
 highlighting on the lineup page and nowhere else. It is NOT a projection
-and must NOT be fed into roster decisions, wSGP, trade evaluation,
-waiver scoring, or projected standings. Those all rely on the raw ROS
+and must NOT be fed into roster decisions, trade evaluation, waiver
+scoring, or projected standings. Those all rely on the raw ROS
 projections from the `ros_blended_projections` SQLite table.
 
 History: recency blending used to run over roster players and overwrite

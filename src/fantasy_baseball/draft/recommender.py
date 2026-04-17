@@ -9,18 +9,6 @@ from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot, is_hitter
 from fantasy_baseball.sgp.replacement import calculate_replacement_levels
 from fantasy_baseball.sgp.var import calculate_var
-from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
-from fantasy_baseball.sgp.denominators import get_sgp_denominators
-from fantasy_baseball.sgp.player_value import (
-    calculate_counting_sgp,
-    calculate_hitting_rate_sgp,
-    calculate_pitching_rate_sgp,
-    DEFAULT_TEAM_AB,
-    DEFAULT_TEAM_IP,
-    REPLACEMENT_AVG,
-    REPLACEMENT_ERA,
-    REPLACEMENT_WHIP,
-)
 
 def compute_slot_scarcity_order(
     board: pd.DataFrame,
@@ -108,63 +96,6 @@ def calculate_vona_scores(
 
 
 
-def _vona_leverage_weight(player, leverage, denoms=None):
-    """Scale factor for VONA based on alignment with team category needs.
-
-    Returns a multiplier (~0.5-2.0) that adjusts VONA urgency by how
-    relevant the player's stat contributions are to the team's current
-    category gaps.
-
-    A closer when SV isn't needed gets ~0.5x; an SP when W/K are
-    needed gets ~1.5x.  When leverage is uniform (all categories
-    equally needed), returns ~1.0 for all players.
-    """
-    if not leverage:
-        return 1.0
-    if denoms is None:
-        denoms = get_sgp_denominators()
-
-    # Compute absolute SGP contribution per category
-    cat_abs = {}
-    if player.get("player_type") == PlayerType.HITTER:
-        for stat, col in [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")]:
-            cat_abs[stat] = abs(calculate_counting_sgp(player.get(col, 0), denoms[stat]))
-        cat_abs["AVG"] = abs(calculate_hitting_rate_sgp(
-            player.get("avg", 0), int(player.get("ab", 0)),
-            REPLACEMENT_AVG, denoms["AVG"], DEFAULT_TEAM_AB,
-        ))
-    elif player.get("player_type") == PlayerType.PITCHER:
-        for stat, col in [("W", "w"), ("K", "k"), ("SV", "sv")]:
-            cat_abs[stat] = abs(calculate_counting_sgp(player.get(col, 0), denoms[stat]))
-        ip = player.get("ip", 0)
-        if ip > 0:
-            cat_abs["ERA"] = abs(calculate_pitching_rate_sgp(
-                player.get("era", 0), ip, REPLACEMENT_ERA,
-                denoms["ERA"], DEFAULT_TEAM_IP, 9,
-            ))
-            cat_abs["WHIP"] = abs(calculate_pitching_rate_sgp(
-                player.get("whip", 0), ip, REPLACEMENT_WHIP,
-                denoms["WHIP"], DEFAULT_TEAM_IP, 1,
-            ))
-
-    total_abs = sum(cat_abs.values())
-    if total_abs == 0:
-        return 1.0
-
-    # Weighted average: how much do leverage weights favor this player's categories?
-    alignment = sum(
-        cat_abs.get(cat, 0) * leverage.get(cat, 0)
-        for cat in leverage
-    ) / total_abs
-
-    # Normalize so that uniform leverage → multiplier of 1.0
-    mean_leverage = sum(leverage.values()) / len(leverage)
-    if mean_leverage == 0:
-        return 1.0
-
-    return alignment / mean_leverage
-
-
 def get_recommendations(
     board: pd.DataFrame,
     drafted: list[str],
@@ -174,17 +105,12 @@ def get_recommendations(
     picks_until_next: int | None = None,
     roster_slots: dict[str, int] | None = None,
     num_teams: int | None = None,
-    draft_leverage: dict[str, float] | None = None,
     scoring_mode: str = "var",
 ) -> list[dict]:
     """Get top draft pick recommendations.
 
     Recalculates replacement levels from the undrafted pool so that
     positional scarcity (e.g. a run on catchers) is reflected in VAR.
-
-    If *draft_leverage* is provided (category weights from balance
-    analysis), candidates are scored by leverage-weighted SGP instead
-    of raw VAR, steering picks toward categories the team needs most.
 
     *scoring_mode*: "var" (default) uses Value Above Replacement for
     ranking; "vona" uses Value Over Next Available, which accounts for
@@ -259,20 +185,7 @@ def get_recommendations(
 
     recs = []
     for _, player in candidates.iterrows():
-        # Use leverage-weighted SGP if available, otherwise base score
-        if draft_leverage:
-            score = calculate_weighted_sgp(player, draft_leverage)
-            # In VONA mode, blend urgency into the score, weighted by
-            # how much the player's category profile aligns with what
-            # the team currently needs.  A closer when SV is saturated
-            # gets its VONA discounted; an SP when W/K are needed gets
-            # boosted.
-            if scoring_mode == "vona" and vona_scores is not None:
-                vona = vona_scores.get(player["player_id"], 0)
-                vona_wt = _vona_leverage_weight(player, draft_leverage)
-                score = score + vona * vona_wt
-        else:
-            score = player.get("vona", 0) if scoring_mode == "vona" else player["var"]
+        score = player.get("vona", 0) if scoring_mode == "vona" else player["var"]
         rec = {
             "name": player["name"],
             "var": player["var"],
@@ -305,7 +218,7 @@ def get_recommendations(
     need_recs = []
     other_recs = []
     seen_need_slots: set[str] = set()
-    # Sort all by score (leverage-weighted if available, else VAR)
+    # Sort all by score (VAR or VONA)
     recs.sort(key=lambda r: r["score"], reverse=True)
     for rec in recs:
         if rec["need_flag"] and rec["best_position"] not in seen_need_slots:

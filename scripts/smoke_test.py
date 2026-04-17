@@ -130,13 +130,6 @@ def check_audit():
         "found mixed-case 'Util' in audit positions",
     )
 
-    # Every entry has numeric wsgp
-    all_wsgp = [e.get("player_wsgp") for e in audit]
-    check(
-        "all entries have numeric wSGP",
-        all(isinstance(w, (int, float)) for w in all_wsgp),
-    )
-
 
 # -- 4. Pending moves -----------------------------------------
 

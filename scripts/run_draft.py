@@ -20,7 +20,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from fantasy_baseball.config import load_config
 from fantasy_baseball.draft.board import build_draft_board, apply_keepers
 from fantasy_baseball.draft.tracker import DraftTracker
-from fantasy_baseball.draft.balance import CategoryBalance, calculate_draft_leverage
+from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.search import find_player, split_team_and_player
 from fantasy_baseball.draft.recommender import (
     get_recommendations,
@@ -96,14 +96,6 @@ def _load_draft_order(path, num_teams):
                 "original_team": trade_info["from"] if trade_info else None,
             })
     return picks
-
-
-def _get_draft_leverage(balance, tracker):
-    """Compute category leverage weights from the user's current roster balance."""
-    totals = balance.get_totals()
-    picks_made = len(tracker.user_roster)
-    total_picks = tracker.rounds
-    return calculate_draft_leverage(totals, picks_made, total_picks)
 
 
 def _save_draft_log(tracker, balance, config, full_board, mock=False,
@@ -314,13 +306,11 @@ def main():
                                   roster_slots=config.roster_slots)
     by_pos = get_roster_by_position(tracker.user_roster_ids, full_board,
                                     roster_slots=config.roster_slots)
-    leverage = _get_draft_leverage(balance, tracker)
     recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
                                n=5, filled_positions=filled,
                                picks_until_next=tracker.picks_until_next_turn,
                                roster_slots=config.roster_slots,
                                num_teams=num_teams,
-                               draft_leverage=leverage,
                                scoring_mode=scoring_mode)
     available = board[~board["player_id"].isin(tracker.drafted_ids)]
     vona = calculate_vona_scores(available, tracker.picks_until_next_turn)
@@ -415,13 +405,11 @@ def main():
                                           roster_slots=config.roster_slots)
             by_pos = get_roster_by_position(tracker.user_roster_ids, full_board,
                                             roster_slots=config.roster_slots)
-            leverage = _get_draft_leverage(balance, tracker)
             recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
                                        n=5, filled_positions=filled,
                                        picks_until_next=tracker.picks_until_next_turn,
                                        roster_slots=config.roster_slots,
                                        num_teams=num_teams,
-                                       draft_leverage=leverage,
                                        scoring_mode=scoring_mode)
 
             available = board[~board["player_id"].isin(tracker.drafted_ids)]
@@ -490,7 +478,6 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
             peek_pick += 1
             picks_gap += 1
 
-    leverage = _get_draft_leverage(balance, tracker)
     recs = get_recommendations(
         board,
         drafted=tracker.drafted_ids,
@@ -500,7 +487,6 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
         picks_until_next=picks_gap,
         roster_slots=roster_slots,
         num_teams=num_teams,
-        draft_leverage=leverage,
         scoring_mode=scoring_mode,
     )
 

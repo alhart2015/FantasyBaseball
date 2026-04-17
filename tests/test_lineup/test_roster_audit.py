@@ -353,7 +353,7 @@ class TestAuditRoster:
                 )
 
     def test_candidates_list_sorted_by_delta_roto(self):
-        """candidates list is sorted by delta_roto.total descending (not wSGP)."""
+        """candidates list is sorted by delta_roto.total descending."""
         roster = [
             _hitter("Weak OF", ["OF"], r=30, hr=5, rbi=20, sb=1, avg=0.220, ab=300, h=66),
             _pitcher("SP1", ["SP"], ip=180, w=12, k=180, era=3.50, whip=1.20,
@@ -587,14 +587,15 @@ class TestRegressionFixtures:
 
     def test_adolis_style_of_row_never_recommends_pitcher(self):
         """Adolis-like OF row must never get a pitcher candidate, even when
-        the FA pool is pitcher-heavy and wSGP might have ranked pitchers above
-        the true best OF upgrade (this was the 'hidden Ward' bug)."""
+        the FA pool is pitcher-heavy and a scoring bug might have ranked
+        pitchers above the true best OF upgrade (this was the 'hidden Ward'
+        bug)."""
         roster = [
             _hitter("Adolis", ["OF"], r=70, hr=25, rbi=75, sb=6, avg=0.235, ab=541, h=127),
             _pitcher("SP", ["SP"], ip=180, w=12, k=180, era=3.20, whip=1.10,
                      er=64, bb=30, h_allowed=168),
         ]
-        # FA pool contains pitchers that could have high swap-wSGP but are
+        # FA pool contains pitchers that could have high swap value but are
         # invalid as hitter-row candidates. And one legitimate OF upgrade.
         free_agents = [
             _pitcher("Wacha", ["SP"], ip=170, w=11, k=160, era=3.40, whip=1.15,

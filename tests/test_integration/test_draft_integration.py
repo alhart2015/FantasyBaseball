@@ -11,7 +11,7 @@ from fantasy_baseball.config import load_config, LeagueConfig
 from fantasy_baseball.draft.board import build_draft_board, apply_keepers
 from fantasy_baseball.draft.recommender import get_recommendations
 from fantasy_baseball.draft.tracker import DraftTracker
-from fantasy_baseball.draft.balance import CategoryBalance, calculate_draft_leverage
+from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.strategy import (
     STRATEGIES,
     build_player_lookup,
