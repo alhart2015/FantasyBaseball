@@ -305,35 +305,29 @@ def get_teams_list(
 def build_opponent_lineup(
     roster: list[dict],
     opponent_name: str,
-    standings: list[dict],
     hitters_proj: "pd.DataFrame",
     pitchers_proj: "pd.DataFrame",
     rest_of_season_hitters: "pd.DataFrame",
     rest_of_season_pitchers: "pd.DataFrame",
-    user_leverage: dict[str, float],
     season_year: int,
 ) -> dict:
-    """Build a fully enriched opponent lineup (projections, pace, dual wSGP).
+    """Build a fully enriched opponent lineup (projections, pace, SGP).
 
     Args:
         roster: Raw roster from fetch_roster().
-        opponent_name: Opponent team name (for leverage calculation).
-        standings: Raw standings cache.
+        opponent_name: Opponent team name (used for logging/context).
         hitters_proj: Blended hitter projections (with _name_norm column).
         pitchers_proj: Blended pitcher projections (with _name_norm column).
         rest_of_season_hitters: ROS hitter projections (may be empty DataFrame).
         rest_of_season_pitchers: ROS pitcher projections (may be empty DataFrame).
-        user_leverage: User's leverage weights.
         season_year: Season year for game log lookup.
 
     Returns:
         Dict with "hitters" and "pitchers" lists, each entry containing
-        projection stats, pace data, and dual wSGP (wsgp_them, wsgp_you).
+        projection stats, pace data, and per-player SGP.
     """
     from fantasy_baseball.analysis.pace import compute_overall_pace, compute_player_pace
     from fantasy_baseball.data.projections import match_roster_to_projections
-    from fantasy_baseball.lineup.leverage import calculate_leverage
-    from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
     from fantasy_baseball.utils.name_utils import normalize_name
 
     # Match roster to projections
@@ -353,10 +347,6 @@ def build_opponent_lineup(
     else:
         rest_of_season_lookup = {}
 
-    # Opponent leverage
-    standings_snap = _standings_to_snapshot(standings)
-    opp_leverage = calculate_leverage(standings_snap, opponent_name)
-
     # Load game log totals for pace
     hitter_logs, pitcher_logs = _load_game_log_totals(season_year)
 
@@ -364,14 +354,13 @@ def build_opponent_lineup(
     matched_names = set()
     enriched = []
     for player in matched:
-        wsgp_them = calculate_weighted_sgp(player.rest_of_season, opp_leverage) if player.rest_of_season else 0.0
-        wsgp_you = calculate_weighted_sgp(player.rest_of_season, user_leverage) if player.rest_of_season else 0.0
+        if player.rest_of_season is not None:
+            player.rest_of_season.compute_sgp()
         norm = normalize_name(player.name)
         matched_names.add(norm)
 
         entry = player.to_flat_dict()
-        entry["wsgp_them"] = wsgp_them
-        entry["wsgp_you"] = wsgp_you
+        entry.setdefault("sgp", 0.0)
 
         # ROS projection tooltip data
         rest_of_season_entry = rest_of_season_lookup.get(norm)
@@ -398,8 +387,7 @@ def build_opponent_lineup(
     for raw_player in roster:
         if normalize_name(raw_player["name"]) not in matched_names:
             entry = dict(raw_player)
-            entry["wsgp_them"] = 0.0
-            entry["wsgp_you"] = 0.0
+            entry["sgp"] = 0.0
             entry["pace"] = {}
             entry["overall_pace"] = compute_overall_pace(entry["pace"])
             enriched.append(entry)
@@ -422,9 +410,9 @@ def build_opponent_lineup(
 
     slot_rank = {s: i for i, s in enumerate(HITTER_SLOTS_ORDER)}
     hitters.sort(key=lambda h: (slot_rank.get(h.get("selected_position", ""), 99),
-                                -h.get("wsgp_them", 0)))
+                                -h.get("sgp", 0)))
     pitchers.sort(key=lambda p: (p.get("selected_position", "") in ("BN", "IL", "DL"),
-                                 -p.get("wsgp_them", 0)))
+                                 -p.get("sgp", 0)))
 
     return {
         "hitters": hitters,
