@@ -36,6 +36,12 @@ def test_trades_page_renders(client):
     assert b"Trades" in resp.data
 
 
+def test_players_page_renders(client):
+    resp = client.get("/players")
+    assert resp.status_code == 200
+    assert b"pos-filter" in resp.data
+
+
 def test_sidebar_nav_links_present(client):
     resp = client.get("/standings")
     html = resp.data.decode()

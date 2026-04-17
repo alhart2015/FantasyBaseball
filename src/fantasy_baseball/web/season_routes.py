@@ -53,45 +53,6 @@ def _load_config():
     return _config
 
 
-def _build_roster_maps(team_name: str):
-    """Build position and ownership maps.
-
-    Positions come from the Redis ``positions`` key (broad coverage
-    including free agents) overlaid with the latest
-    ``weekly_rosters_history`` snapshot (more current for rostered
-    players).  Returns (pos_map, owner_map) where pos_map maps
-    normalized names to position lists and owner_map maps normalized
-    names to ``"roster"`` (user's team) or an opponent team name.
-    """
-    from fantasy_baseball.utils.name_utils import normalize_name
-    from fantasy_baseball.data.redis_store import (
-        get_default_client,
-        get_latest_weekly_rosters,
-        get_positions,
-    )
-
-    # Base positions from Redis (covers FAs)
-    client = get_default_client()
-    pos_map: dict[str, list[str]] = {
-        normalize_name(k): v for k, v in get_positions(client).items()
-    }
-
-    owner_map: dict[str, str] = {}
-
-    for p in (read_cache("roster") or []):
-        owner_map[normalize_name(p["name"])] = "roster"
-
-    # Weekly rosters override positions (fresher) and provide ownership
-    for entry in get_latest_weekly_rosters(client):
-        norm = normalize_name(entry["player_name"])
-        if entry.get("positions"):
-            pos_map[norm] = [p.strip() for p in entry["positions"].split(",")]
-        if entry.get("team") != team_name and norm not in owner_map:
-            owner_map[norm] = entry["team"]
-
-    return pos_map, owner_map
-
-
 def _compute_worst_roster_by_position() -> dict[str, str]:
     """Cache-backed ``{pool_pos: worst_roster_player_name}``. Empty if roster
     cache is missing."""
@@ -103,25 +64,6 @@ def _compute_worst_roster_by_position() -> dict[str, str]:
         return {}
     roster = [Player.from_dict(p) for p in roster_raw]
     return worst_roster_by_position(roster)
-
-
-def _get_leverage() -> dict[str, float]:
-    """Return per-category leverage weights (uniform fallback if no standings)."""
-    from fantasy_baseball.lineup.leverage import calculate_leverage
-    from fantasy_baseball.web.season_data import _standings_to_snapshot
-
-    standings_raw = read_cache("standings") or []
-    config = _load_config()
-    proj_cache = read_cache("projections") or {}
-    if standings_raw:
-        standings_snap = _standings_to_snapshot(standings_raw)
-        proj_raw = proj_cache.get("projected_standings")
-        proj_snap = _standings_to_snapshot(proj_raw) if proj_raw else None
-        return calculate_leverage(
-            standings_snap, config.team_name,
-            projected_standings=proj_snap,
-        )
-    return {c: 1.0 / 10 for c in ALL_CATEGORIES}
 
 
 def _load_yahoo_league():
@@ -499,134 +441,6 @@ def register_routes(app: Flask) -> None:
             meta=meta,
             active_page="players",
         )
-
-    @app.route("/api/players/search")
-    def api_player_search():
-        from fantasy_baseball.utils.name_utils import normalize_name
-        from fantasy_baseball.analysis.pace import compute_player_pace
-        from fantasy_baseball.utils.constants import HITTER_PROJ_KEYS, PITCHER_PROJ_KEYS
-        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats, RankInfo
-        from fantasy_baseball.sgp.rankings import lookup_rank
-        from fantasy_baseball.data.redis_store import (
-            get_blended_projections as redis_get_blended,
-            get_default_client,
-            get_game_log_totals,
-            get_ros_projections,
-        )
-
-        query = request.args.get("q", "").strip()
-        if len(query) < 2:
-            return jsonify([])
-
-        # --- ROS rows from Redis (cache:ros_projections) ---
-        ros_cache = get_ros_projections(get_default_client()) or {}
-        ros_rows = list(ros_cache.get("hitters", [])) + list(ros_cache.get("pitchers", []))
-        if not ros_rows:
-            return jsonify([])
-
-        # Case-insensitive substring match on name (replaces SQL LIKE)
-        query_norm = normalize_name(query)
-        matched = [
-            r for r in ros_rows
-            if r.get("name") and query_norm in normalize_name(r["name"])
-        ]
-        if not matched:
-            return jsonify([])
-
-        # Sort by ADP ascending with NULL/missing last (replaces SQL ORDER BY),
-        # then cap at 25 (replaces SQL LIMIT).
-        def _adp_key(r):
-            adp = r.get("adp")
-            return adp if adp is not None else 9999
-        matched.sort(key=_adp_key)
-        rest_of_season_rows = matched[:25]
-
-        # --- Preseason projections by fg_id from Redis ---
-        client = get_default_client()
-        preseason_hitters = redis_get_blended(client, "hitters") or []
-        preseason_pitchers = redis_get_blended(client, "pitchers") or []
-        preseason_map: dict[str, dict] = {}
-        for row in preseason_hitters + preseason_pitchers:
-            fid = row.get("fg_id")
-            if fid:
-                preseason_map[fid] = row
-
-        # --- Game log totals for pace (keyed by normalized name) ---
-        hitter_totals = get_game_log_totals(client, "hitters")
-        pitcher_totals = get_game_log_totals(client, "pitchers")
-        hitter_logs: dict[str, dict] = {}
-        for _mid, row in hitter_totals.items():
-            nm = row.get("name")
-            if nm:
-                hitter_logs[normalize_name(nm)] = row
-        pitcher_logs: dict[str, dict] = {}
-        for _mid, row in pitcher_totals.items():
-            nm = row.get("name")
-            if nm:
-                pitcher_logs[normalize_name(nm)] = row
-
-        config = _load_config()
-        leverage = _get_leverage()
-        pos_map, owner_map = _build_roster_maps(config.team_name)
-        rankings_cache = read_cache("rankings") or {}
-
-        # Use cached roster wSGP for rostered players (includes recency blending)
-        roster_wsgp: dict[str, float] = {}
-        roster_cache = read_cache("roster") or []
-        for rp in roster_cache:
-            rn = normalize_name(rp.get("name", ""))
-            if rp.get("wsgp"):
-                roster_wsgp[rn] = rp["wsgp"]
-
-        # Build results
-        results = []
-        for rest_of_season_dict in rest_of_season_rows:
-            name = rest_of_season_dict["name"]
-            norm = normalize_name(name)
-            ptype = rest_of_season_dict.get("player_type")
-            fg_id = rest_of_season_dict.get("fg_id")
-
-            # Preseason stats
-            pre = preseason_map.get(fg_id, {})
-
-            # Pace
-            pace = None
-            logs = hitter_logs if ptype == PlayerType.HITTER else pitcher_logs
-            actuals = logs.get(norm)
-            if actuals:
-                proj_keys = HITTER_PROJ_KEYS if ptype == PlayerType.HITTER else PITCHER_PROJ_KEYS
-                projected = {k: pre.get(k, 0) or 0 for k in proj_keys}
-                if any(v > 0 for v in projected.values()):
-                    pace = compute_player_pace(actuals, projected, ptype)
-
-            # Ownership
-            owner = owner_map.get(norm)
-            ownership = "Your roster" if owner == "roster" else (owner or "Free Agent")
-
-            rank = lookup_rank(rankings_cache, fg_id, name, ptype)
-
-            stats_cls = HitterStats if ptype == PlayerType.HITTER else PitcherStats
-            player = Player(
-                name=name,
-                player_type=ptype,
-                team=rest_of_season_dict.get("team", "") or "",
-                positions=pos_map.get(norm, []),
-                rest_of_season=stats_cls.from_dict(rest_of_season_dict),
-                preseason=stats_cls.from_dict(pre) if pre else None,
-                rank=RankInfo.from_dict(rank),
-                pace=pace,
-            )
-            cached = roster_wsgp.get(norm)
-            if cached is not None:
-                player.wsgp = cached
-            else:
-                player.compute_wsgp(leverage)
-
-            result = player.to_dict()
-            result["ownership"] = ownership
-            results.append(result)
-
-        return jsonify(results)
 
     @app.route("/api/players/browse")
     def api_player_browse():
