@@ -7,6 +7,7 @@ import tempfile
 import threading
 from datetime import date
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 log = logging.getLogger(__name__)
 
@@ -18,6 +19,11 @@ from fantasy_baseball.utils.constants import (
     PITCHER_PROJ_KEYS,
 )
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+    from fantasy_baseball.models.player import Player
 
 _opponent_cache: dict = {}
 OPPONENT_CACHE_TTL_SECONDS = 900  # 15 minutes
