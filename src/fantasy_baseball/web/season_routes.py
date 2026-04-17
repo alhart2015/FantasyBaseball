@@ -998,11 +998,9 @@ def register_routes(app: Flask) -> None:
     @_require_auth
     def api_opponent_lineup(team_key):
         import time
-        from fantasy_baseball.lineup.leverage import calculate_leverage
         from fantasy_baseball.lineup.yahoo_roster import fetch_roster
         from fantasy_baseball.web.season_data import (
             _opponent_cache, OPPONENT_CACHE_TTL_SECONDS,
-            _standings_to_snapshot,
             build_opponent_lineup,
         )
 
@@ -1011,7 +1009,7 @@ def register_routes(app: Flask) -> None:
         if cached and (time.time() - cached["fetched_at"]) < OPPONENT_CACHE_TTL_SECONDS:
             return jsonify(cached["data"])
 
-        # Need standings for leverage + team name lookup
+        # Need standings for team name lookup
         standings = read_cache("standings")
         if not standings:
             return jsonify({"error": "No standings data. Run a refresh first."}), 404
@@ -1034,18 +1032,13 @@ def register_routes(app: Flask) -> None:
         except Exception as e:
             return jsonify({"error": f"Failed to load projections: {e}"}), 500
 
-        standings_snap = _standings_to_snapshot(standings)
-        user_leverage = calculate_leverage(standings_snap, config.team_name)
-
         lineup = build_opponent_lineup(
             roster=roster,
             opponent_name=opponent["name"],
-            standings=standings,
             hitters_proj=hitters_proj,
             pitchers_proj=pitchers_proj,
             rest_of_season_hitters=rest_of_season_hitters,
             rest_of_season_pitchers=rest_of_season_pitchers,
-            user_leverage=user_leverage,
             season_year=config.season_year,
         )
 

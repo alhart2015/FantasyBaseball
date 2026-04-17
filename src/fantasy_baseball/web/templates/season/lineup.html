@@ -443,8 +443,7 @@ function buildTableHtml(players, cats, volumeCol, includeElig, totals) {
     var html = '<thead><tr><th>Slot</th><th>Player</th>';
     if (includeElig) html += '<th>Elig</th>';
     cats.forEach(function(c) { html += '<th>' + c + '</th>'; });
-    html += '<th style="font-size:11px;">wSGP<br><span style="color:#6a8adf;">them</span></th>';
-    html += '<th style="font-size:11px;">wSGP<br><span style="color:#dfb06a;">you</span></th>';
+    html += '<th style="font-size:11px;">SGP</th>';
     html += '<th></th></tr></thead><tbody>';
 
     if (totals) {
@@ -466,7 +465,7 @@ function buildTableHtml(players, cats, volumeCol, includeElig, totals) {
             }
             html += '<td class="stat-cell ' + colorClass + (cat === volumeCol ? ' pa-col' : '') + '" style="font-weight:600;">' + val + tooltip + '</td>';
         });
-        html += '<td></td><td></td><td></td>';
+        html += '<td></td><td></td>';
         html += '</tr>';
     }
 
@@ -488,8 +487,7 @@ function buildTableHtml(players, cats, volumeCol, includeElig, totals) {
             var val = st.actual !== undefined && st.actual !== null ? fmtStat(st.actual, cat) : '\u2014';
             html += '<td class="' + colorClass + (cat === volumeCol ? ' pa-col' : '') + '">' + val + '</td>';
         });
-        html += '<td style="color:#6a8adf;">' + (p.wsgp_them ? p.wsgp_them.toFixed(2) : '\u2014') + '</td>';
-        html += '<td style="color:#dfb06a;">' + (p.wsgp_you ? p.wsgp_you.toFixed(2) : '\u2014') + '</td>';
+        html += '<td>' + (p.sgp ? p.sgp.toFixed(2) : '\u2014') + '</td>';
         html += '<td>' + (p.status ? '<span class="badge badge-il">' + p.status + '</span>' : '') + '</td>';
         html += '</tr>';
     });

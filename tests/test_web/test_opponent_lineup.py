@@ -129,20 +129,14 @@ class TestBuildOpponentLineup:
              "selected_position": "SP", "player_id": "200", "status": ""},
         ]
         hitters_proj, pitchers_proj = _sample_projections()
-        standings = _sample_standings()
-        user_leverage = {"R": 0.1, "HR": 0.1, "RBI": 0.1, "SB": 0.1,
-                         "AVG": 0.1, "W": 0.1, "K": 0.1, "SV": 0.1,
-                         "ERA": 0.1, "WHIP": 0.1}
 
         result = build_opponent_lineup(
             roster=roster,
             opponent_name="Springfield Isotopes",
-            standings=standings,
             hitters_proj=hitters_proj,
             pitchers_proj=pitchers_proj,
             rest_of_season_hitters=pd.DataFrame(),
             rest_of_season_pitchers=pd.DataFrame(),
-            user_leverage=user_leverage,
             season_year=2026,
         )
 
@@ -151,34 +145,26 @@ class TestBuildOpponentLineup:
         assert result["hitters"][0]["name"] == "Salvador Perez"
         assert result["pitchers"][0]["name"] == "Corbin Burnes"
 
-    def test_dual_wsgp_columns(self):
+    def test_sgp_column(self):
         roster = [
             {"name": "Salvador Perez", "positions": ["C", "Util"],
              "selected_position": "C", "player_id": "100", "status": ""},
         ]
         hitters_proj, pitchers_proj = _sample_projections()
-        standings = _sample_standings()
-        user_leverage = {"R": 0.2, "HR": 0.2, "RBI": 0.2, "SB": 0.1,
-                         "AVG": 0.1, "W": 0.05, "K": 0.05, "SV": 0.05,
-                         "ERA": 0.025, "WHIP": 0.025}
 
         result = build_opponent_lineup(
             roster=roster,
             opponent_name="Springfield Isotopes",
-            standings=standings,
             hitters_proj=hitters_proj,
             pitchers_proj=pitchers_proj,
             rest_of_season_hitters=pd.DataFrame(),
             rest_of_season_pitchers=pd.DataFrame(),
-            user_leverage=user_leverage,
             season_year=2026,
         )
 
         perez = result["hitters"][0]
-        assert "wsgp_them" in perez
-        assert "wsgp_you" in perez
-        assert isinstance(perez["wsgp_them"], float)
-        assert isinstance(perez["wsgp_you"], float)
+        assert "sgp" in perez
+        assert isinstance(perez["sgp"], float)
 
     def test_pace_key_not_stats_key(self):
         """build_opponent_lineup must write pace data under 'pace', not 'stats'.
@@ -194,20 +180,14 @@ class TestBuildOpponentLineup:
              "selected_position": "SP", "player_id": "200", "status": ""},
         ]
         hitters_proj, pitchers_proj = _sample_projections()
-        standings = _sample_standings()
-        user_leverage = {"R": 0.1, "HR": 0.1, "RBI": 0.1, "SB": 0.1,
-                         "AVG": 0.1, "W": 0.1, "K": 0.1, "SV": 0.1,
-                         "ERA": 0.1, "WHIP": 0.1}
 
         result = build_opponent_lineup(
             roster=roster,
             opponent_name="Springfield Isotopes",
-            standings=standings,
             hitters_proj=hitters_proj,
             pitchers_proj=pitchers_proj,
             rest_of_season_hitters=pd.DataFrame(),
             rest_of_season_pitchers=pd.DataFrame(),
-            user_leverage=user_leverage,
             season_year=2026,
         )
 
@@ -267,7 +247,7 @@ class TestApiOpponentLineup:
             mock_cfg.return_value.team_name = "Hart of the Order"
             mock_cfg.return_value.season_year = 2026
             mock_build.return_value = {
-                "hitters": [{"name": "Salvador Perez", "wsgp_them": 1.8, "wsgp_you": 2.1}],
+                "hitters": [{"name": "Salvador Perez", "sgp": 3.5}],
                 "pitchers": [],
                 "hitter_totals": {},
                 "pitcher_totals": {},
