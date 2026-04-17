@@ -742,10 +742,12 @@ class RefreshRun:
         self._progress(f"Cached positions for {len(positions_map)} players")
 
         audit_results = audit_roster(
-            self.roster_players, self.fa_players, self.leverage, self.config.roster_slots,
+            self.roster_players, self.fa_players, self.config.roster_slots,
             projected_standings=self.projected_standings,
             team_name=self.config.team_name,
             team_sds=self.team_sds,
+            optimal_hitters=self.optimal_hitters,
+            optimal_pitchers=self.optimal_pitchers_starters,
         )
         write_cache("roster_audit", [e.to_dict() for e in audit_results], self.cache_dir)
         upgrades = sum(1 for e in audit_results if e.gap > 0)

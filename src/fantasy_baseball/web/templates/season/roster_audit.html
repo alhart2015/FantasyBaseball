@@ -68,9 +68,9 @@
         <tr>
             <th>Slot</th>
             <th>Your Player</th>
-            <th>wSGP</th>
+            <th>SGP</th>
             <th>Best Available</th>
-            <th>FA wSGP</th>
+            <th>FA SGP</th>
             <th>ΔRoto</th>
         </tr>
     </thead>
@@ -88,7 +88,7 @@
             {% elif entry.classification == "droppable" %}<span class="badge-drop">droppable</span>
             {% endif %}
         </td>
-        <td>{{ "%.2f"|format(entry.player_wsgp) }}</td>
+        <td>{{ "%.2f"|format(entry.player_sgp) }}</td>
         {% if entry.best_fa %}
         <td>
             {{ entry.best_fa }}
@@ -97,7 +97,7 @@
             <span class="player-type-tag">{{ entry.best_fa_type }}</span>
             {% endif %}
         </td>
-        <td>{{ "%.2f"|format(entry.best_fa_wsgp) }}</td>
+        <td>{{ "%.2f"|format(entry.best_fa_sgp) }}</td>
         <td>
             {% if entry.candidates and entry.candidates[0].delta_roto %}
             {% set dr = entry.candidates[0].delta_roto.total %}
@@ -123,8 +123,8 @@
                 <thead>
                     <tr>
                         <th>Player</th>
-                        <th style="text-align:right">wSGP</th>
-                        <th style="text-align:right">wSGP Gap</th>
+                        <th style="text-align:right">SGP</th>
+                        <th style="text-align:right">SGP Gap</th>
                         <th style="text-align:right">deltaRoto</th>
                         <th></th>
                     </tr>
@@ -136,10 +136,10 @@
                         {{ c.name }}
                         <span class="player-pos">({{ c.positions | join(", ") }})</span>
                     </td>
-                    <td style="text-align:right">{{ "%.2f"|format(c.wsgp) }}</td>
+                    <td style="text-align:right">{{ "%.2f"|format(c.sgp) }}</td>
                     <td style="text-align:right">
                         <span class="gap-badge {% if c.gap >= 0.5 %}gap-high{% elif c.gap >= 0.2 %}gap-medium{% else %}gap-low{% endif %}">
-                            +{{ "%.2f"|format(c.gap) }}
+                            {{ "%+.2f"|format(c.gap) }}
                         </span>
                     </td>
                     <td style="text-align:right">

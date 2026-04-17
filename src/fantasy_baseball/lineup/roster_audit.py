@@ -7,9 +7,10 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from fantasy_baseball.lineup.delta_roto import compute_delta_roto
-from fantasy_baseball.lineup.team_optimizer import compute_team_wsgp, build_lineup_summary
-from fantasy_baseball.lineup.waivers import evaluate_pickup
-from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
+from fantasy_baseball.lineup.optimizer import (
+    HitterAssignment, PitcherStarter,
+    optimize_hitter_lineup, optimize_pitcher_lineup,
+)
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
@@ -116,15 +117,14 @@ class AuditEntry:
     player_type: str
     positions: list[str]
     slot: str
-    player_wsgp: float
+    player_sgp: float
     player_id: Optional[str] = None
     best_fa: Optional[str] = None
     best_fa_type: Optional[str] = None
     best_fa_positions: Optional[list[str]] = None
-    best_fa_wsgp: Optional[float] = None
+    best_fa_sgp: Optional[float] = None
     best_fa_id: Optional[str] = None
     gap: float = 0.0
-    categories: dict[str, float] = field(default_factory=dict)
     classification: str = ""
     candidates: list[dict] = field(default_factory=list)
 
@@ -134,15 +134,14 @@ class AuditEntry:
             "player_type": self.player_type,
             "positions": self.positions,
             "slot": self.slot,
-            "player_wsgp": self.player_wsgp,
+            "player_sgp": self.player_sgp,
             "player_id": self.player_id,
             "best_fa": self.best_fa,
             "best_fa_type": self.best_fa_type,
             "best_fa_positions": self.best_fa_positions,
-            "best_fa_wsgp": self.best_fa_wsgp,
+            "best_fa_sgp": self.best_fa_sgp,
             "best_fa_id": self.best_fa_id,
             "gap": self.gap,
-            "categories": self.categories,
             "classification": self.classification,
             "candidates": self.candidates,
         }
@@ -151,27 +150,34 @@ class AuditEntry:
 def audit_roster(
     roster: list[Player],
     free_agents: list[Player],
-    leverage: dict[str, float],
     roster_slots: dict[str, int],
     *,
     projected_standings: list[dict],
     team_name: str,
     team_sds: dict[str, dict[str, float]] | None = None,
+    optimal_hitters: list[HitterAssignment] | None = None,
+    optimal_pitchers: list[PitcherStarter] | None = None,
 ) -> list[AuditEntry]:
     """Evaluate every roster slot against the best available FA.
 
     For each roster player, finds the FA that produces the largest team
-    wSGP gain when swapped in.  Returns an entry for every roster player,
-    sorted by gap descending (biggest problems first).  Entries with no
-    upgrade available have gap=0.0 and best_fa=None.
+    ΔRoto when swapped in.  Returns an entry for every roster player,
+    sorted by top-candidate ΔRoto descending (biggest upgrades first).
+    Entries with no upgrade available have gap=0.0 and best_fa=None.
 
     IL players are excluded from lineup optimization (they can't play)
     but still appear in the output with slot="IL".
 
-    When ``team_sds`` is provided, deltaRoto for each candidate uses
-    EV-based ``score_roto`` so within-uncertainty swaps produce
-    fractional deltas instead of full ±1.0 rank flips. ``None``
-    preserves exact-rank semantics.
+    The ``optimal_hitters`` / ``optimal_pitchers`` inputs are the outputs
+    of :func:`optimize_hitter_lineup` / :func:`optimize_pitcher_lineup`
+    on the active roster. They drive the per-player "slot" column. When
+    omitted they're computed here; callers that already solved the
+    lineup (e.g. the refresh pipeline) should pass them in to avoid
+    duplicate work.
+
+    ``team_sds`` is threaded into ``compute_delta_roto`` so within-
+    uncertainty swaps produce fractional deltas instead of full ±1.0
+    rank flips. ``None`` preserves exact-rank semantics.
     """
     if not roster:
         return []
@@ -202,21 +208,44 @@ def audit_roster(
 
     denoms = get_sgp_denominators()
 
-    # Baseline optimal lineup (active players only)
-    baseline = compute_team_wsgp(active_roster, leverage, roster_slots, denoms=denoms)
-    baseline_wsgp = baseline["total_wsgp"]
-    baseline_summary = build_lineup_summary(
-        baseline["hitter_lineup"], baseline["pitcher_starters"],
-        baseline["player_wsgp"], [p.name for p in roster],
-    )
+    # Slot assignments come from the already-solved ERoto lineup. Compute
+    # here only if the caller didn't pass them.
+    if optimal_hitters is None:
+        active_hitters = [p for p in active_roster if p.player_type != PlayerType.PITCHER]
+        optimal_hitters = optimize_hitter_lineup(
+            hitters=active_hitters,
+            full_roster=roster,
+            projected_standings=projected_standings,
+            team_name=team_name,
+            roster_slots=roster_slots,
+            team_sds=team_sds,
+        )
+    if optimal_pitchers is None:
+        active_pitchers = [p for p in active_roster if p.player_type == PlayerType.PITCHER]
+        optimal_pitchers, _ = optimize_pitcher_lineup(
+            pitchers=active_pitchers,
+            full_roster=roster,
+            projected_standings=projected_standings,
+            team_name=team_name,
+            slots=roster_slots.get("P", 9),
+            team_sds=team_sds,
+        )
 
-    # Map player name → assigned slot from baseline
-    slot_lookup = {e["name"]: e["slot"] for e in baseline_summary}
+    slot_lookup: dict[str, str] = {a.name: a.slot.value for a in optimal_hitters}
+    for s in optimal_pitchers:
+        slot_lookup[s.name] = "P"
 
-    # Pre-compute FA wSGP (kept as informational column alongside deltaRoto)
-    fa_wsgp: dict[str, float] = {}
-    for fa in active_fas:
-        fa_wsgp[fa.name] = calculate_weighted_sgp(fa.rest_of_season, leverage, denoms=denoms)
+    # Pre-compute per-player raw SGP for roster + FAs (used for display).
+    player_sgp: dict[str, float] = {
+        p.name: calculate_player_sgp(p.rest_of_season, denoms)
+        for p in active_roster
+        if p.rest_of_season is not None
+    }
+    fa_sgp: dict[str, float] = {
+        fa.name: calculate_player_sgp(fa.rest_of_season, denoms)
+        for fa in active_fas
+        if fa.rest_of_season is not None
+    }
 
     # Build per-position SGP pools once for this audit
     pools = build_position_pools(active_fas, denoms=denoms)
@@ -230,7 +259,7 @@ def audit_roster(
             player_type=player.player_type.value,
             positions=list(player.positions),
             slot=slot_lookup.get(player.name, "BN"),
-            player_wsgp=round(baseline["player_wsgp"].get(player.name, 0.0), 2),
+            player_sgp=round(player_sgp.get(player.name, 0.0), 2),
             player_id=player.yahoo_id,
             classification=player.classification,
         )
@@ -240,16 +269,9 @@ def audit_roster(
             entries.append(entry)
             continue
 
-        # Gather candidates from the per-position pools
         candidates = candidates_for_player(player, pools)
 
-        # Pre-build wSGP dict without this player for swap simulation
-        base_wsgp = {k: v for k, v in baseline["player_wsgp"].items()
-                     if k != player.name}
-
-        # scored: list of (candidate_dict, Player) tuples — Player retained so
-        # we can pass it to evaluate_pickup when selecting the top candidate.
-        scored: list[tuple[dict, Player]] = []
+        scored: list[dict] = []
 
         for fa in candidates:
             new_roster = [p for p in active_roster if p.name != player.name] + [fa]
@@ -280,40 +302,30 @@ def audit_roster(
                 )
                 continue
 
-            # wSGP gap (informational column)
-            swap_wsgp = dict(base_wsgp)
-            swap_wsgp[fa.name] = fa_wsgp[fa.name]
-            new_result = compute_team_wsgp(
-                new_roster, leverage, roster_slots,
-                denoms=denoms, player_wsgp=swap_wsgp,
-            )
-            gap = round(new_result["total_wsgp"] - baseline_wsgp, 2)
+            sgp_gap = round(fa_sgp.get(fa.name, 0.0) - player_sgp.get(player.name, 0.0), 2)
 
-            cand_dict = {
+            scored.append({
                 "name": fa.name,
                 "player_type": fa.player_type.value,
                 "positions": list(fa.positions),
-                "wsgp": round(fa_wsgp.get(fa.name, 0.0), 2),
-                "gap": gap,
+                "sgp": round(fa_sgp.get(fa.name, 0.0), 2),
+                "gap": sgp_gap,
                 "delta_roto": dr.to_dict(),
                 "player_id": fa.yahoo_id,
-            }
-            scored.append((cand_dict, fa))
+            })
 
-        scored.sort(key=lambda t: t[0]["delta_roto"]["total"], reverse=True)
-        entry.candidates = [cand for cand, _ in scored]
+        scored.sort(key=lambda c: c["delta_roto"]["total"], reverse=True)
+        entry.candidates = scored
 
         # Top-1 becomes the recommendation only if it's a real upgrade.
-        if scored and scored[0][0]["delta_roto"]["total"] > 0:
-            top_dict, top_player = scored[0]
-            cat_result = evaluate_pickup(top_player, player, leverage)
-            entry.best_fa = top_dict["name"]
-            entry.best_fa_type = top_dict["player_type"]
-            entry.best_fa_positions = top_dict["positions"]
-            entry.best_fa_wsgp = top_dict["wsgp"]
-            entry.best_fa_id = top_dict["player_id"]
-            entry.gap = top_dict["gap"]
-            entry.categories = cat_result["categories"]
+        if scored and scored[0]["delta_roto"]["total"] > 0:
+            top = scored[0]
+            entry.best_fa = top["name"]
+            entry.best_fa_type = top["player_type"]
+            entry.best_fa_positions = top["positions"]
+            entry.best_fa_sgp = top["sgp"]
+            entry.best_fa_id = top["player_id"]
+            entry.gap = top["gap"]
         # else: best_fa stays None, gap stays 0.0 — "No upgrade available"
 
         entries.append(entry)
@@ -336,7 +348,7 @@ def audit_roster(
             player_type=player.player_type.value,
             positions=list(player.positions),
             slot="IL",
-            player_wsgp=0.0,
+            player_sgp=0.0,
             player_id=player.yahoo_id,
             classification=player.classification,
         ))

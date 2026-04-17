@@ -261,7 +261,7 @@ def patched_refresh_environment(
         ]},
     )
 
-    # FA players — attach ROS stats so audit_roster's wSGP calculation
+    # FA players — attach ROS stats so audit_roster's SGP calculation
     # sees real numbers instead of None.
     from fantasy_baseball.utils.positions import Position
     fa_player_objs = []

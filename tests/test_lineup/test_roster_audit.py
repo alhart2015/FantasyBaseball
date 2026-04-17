@@ -4,8 +4,6 @@ from fantasy_baseball.models.player import Player, PlayerType, HitterStats, Pitc
 from fantasy_baseball.lineup.roster_audit import audit_roster
 
 
-EQUAL_LEVERAGE = {cat: 0.1 for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
-
 TEAM_NAME = "Test Team"
 
 
@@ -199,7 +197,7 @@ class TestAuditRoster:
             _hitter("Better OF", ["OF"], r=80, hr=28, rbi=85, sb=12, avg=0.280, ab=550, h=154),
         ]
         results = audit_roster(
-            roster, free_agents, EQUAL_LEVERAGE,
+            roster, free_agents,
             {"OF": 1, "P": 3, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
@@ -221,7 +219,7 @@ class TestAuditRoster:
             _hitter("Scrub", ["OF"], r=30, hr=5, rbi=20, sb=1, avg=0.220, ab=300, h=66),
         ]
         results = audit_roster(
-            roster, free_agents, EQUAL_LEVERAGE,
+            roster, free_agents,
             {"OF": 1, "P": 0, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
@@ -242,7 +240,7 @@ class TestAuditRoster:
             _hitter("Great OF", ["OF"], r=90, hr=30, rbi=85, sb=10, avg=0.285, ab=550, h=157),
         ]
         results = audit_roster(
-            roster, free_agents, EQUAL_LEVERAGE,
+            roster, free_agents,
             {"1B": 1, "OF": 1, "P": 0, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
@@ -261,7 +259,7 @@ class TestAuditRoster:
             _hitter("Solo", ["OF"], r=70, hr=20, rbi=65, sb=8, avg=0.270, ab=500, h=135),
         ]
         results = audit_roster(
-            roster, [], EQUAL_LEVERAGE,
+            roster, [],
             {"OF": 1, "P": 0, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
@@ -271,7 +269,7 @@ class TestAuditRoster:
         assert results[0].gap == 0.0
 
     def test_cross_type_swap_pitcher_slot(self):
-        """A starter could replace a weak reliever if it produces more team wSGP."""
+        """A starter could replace a weak reliever if it produces more team ERoto."""
         roster = [
             _hitter("Hitter", ["OF"], r=80, hr=25, rbi=80, sb=10, avg=0.275, ab=540, h=149),
             _pitcher("Bad RP", ["RP"], ip=30, w=1, k=20, sv=2, era=5.50, whip=1.60,
@@ -284,7 +282,7 @@ class TestAuditRoster:
                      er=64, bb=30, h_allowed=168),
         ]
         results = audit_roster(
-            roster, free_agents, EQUAL_LEVERAGE,
+            roster, free_agents,
             {"OF": 1, "P": 2, "BN": 1, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
@@ -310,7 +308,7 @@ class TestAuditRoster:
             _hitter("FA Hitter", ["OF"], r=80, hr=25, rbi=80, sb=10, avg=0.280, ab=540, h=151),
         ]
         results = audit_roster(
-            roster, free_agents, EQUAL_LEVERAGE,
+            roster, free_agents,
             {"OF": 1, "P": 1, "BN": 1, "IL": 1},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
@@ -340,7 +338,7 @@ class TestAuditRoster:
                      er=62, bb=35, h_allowed=161),
         ]
         results = audit_roster(
-            roster, free_agents, EQUAL_LEVERAGE,
+            roster, free_agents,
             {"C": 1, "OF": 1, "P": 1, "BN": 1, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
@@ -371,7 +369,7 @@ class TestAuditRoster:
             _hitter("FA OF 3", ["OF"], r=60, hr=18, rbi=65, sb=5, avg=0.250, ab=500, h=125),
         ]
         results = audit_roster(
-            roster, free_agents, EQUAL_LEVERAGE,
+            roster, free_agents,
             {"OF": 1, "P": 3, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
@@ -387,7 +385,7 @@ class TestAuditRoster:
             assert "name" in c
             assert "delta_roto" in c
             assert "gap" in c
-            assert "wsgp" in c
+            assert "sgp" in c
             assert "player_type" in c
             assert "positions" in c
 
@@ -403,7 +401,7 @@ class TestAuditRoster:
             _hitter("Downgrade", ["OF"], r=40, hr=8, rbi=30, sb=2, avg=0.220, ab=400, h=88),
         ]
         results = audit_roster(
-            roster, free_agents, EQUAL_LEVERAGE,
+            roster, free_agents,
             {"OF": 1, "P": 1, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
@@ -428,7 +426,7 @@ class TestAuditRoster:
             _hitter("FA OF", ["OF"], r=80, hr=25, rbi=75, sb=8, avg=0.275, ab=520, h=143),
         ]
         results = audit_roster(
-            roster, free_agents, EQUAL_LEVERAGE,
+            roster, free_agents,
             {"OF": 1, "P": 1, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
@@ -449,7 +447,7 @@ class TestAuditRoster:
             _hitter("Scrub", ["OF"], r=30, hr=5, rbi=20, sb=1, avg=0.220, ab=300, h=66),
         ]
         results = audit_roster(
-            roster, free_agents, EQUAL_LEVERAGE,
+            roster, free_agents,
             {"OF": 1, "P": 0, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
@@ -497,13 +495,11 @@ class TestAuditILFilterUsesSlotOrStatus:
             self._player("IL Pitcher", "IL", status="", player_type="pitcher"),
         ]
         free_agents = []
-        leverage = {cat: 0.1 for cat in
-                    ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
         roster_slots = {"OF": 3, "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1,
                         "IF": 1, "UTIL": 2, "P": 9, "BN": 2, "IL": 2}
 
         entries = audit_roster(
-            roster, free_agents, leverage, roster_slots,
+            roster, free_agents, roster_slots,
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
         )
@@ -520,13 +516,11 @@ class TestAuditILFilterUsesSlotOrStatus:
             self._player("IL Pitcher", "IL", status="IL15", player_type="pitcher"),
         ]
         free_agents = []
-        leverage = {cat: 0.1 for cat in
-                    ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
         roster_slots = {"OF": 3, "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1,
                         "IF": 1, "UTIL": 2, "P": 9, "BN": 2, "IL": 2}
 
         entries = audit_roster(
-            roster, free_agents, leverage, roster_slots,
+            roster, free_agents, roster_slots,
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
         )
@@ -544,13 +538,11 @@ class TestAuditILFilterUsesSlotOrStatus:
             self._player("Bench IL Hitter", "BN", status="IL10", player_type="hitter"),
         ]
         free_agents = []
-        leverage = {cat: 0.1 for cat in
-                    ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
         roster_slots = {"OF": 3, "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1,
                         "IF": 1, "UTIL": 2, "P": 9, "BN": 2, "IL": 2}
 
         entries = audit_roster(
-            roster, free_agents, leverage, roster_slots,
+            roster, free_agents, roster_slots,
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
         )
@@ -579,7 +571,7 @@ class TestRegressionFixtures:
             _hitter("Perez", ["C"], r=55, hr=18, rbi=65, sb=1, avg=0.239, ab=554, h=132),
         ]
         results = audit_roster(
-            roster, free_agents, EQUAL_LEVERAGE,
+            roster, free_agents,
             {"C": 1, "OF": 1, "P": 1, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
@@ -618,7 +610,7 @@ class TestRegressionFixtures:
             _hitter("Ward", ["OF"], r=80, hr=28, rbi=80, sb=10, avg=0.275, ab=569, h=156),
         ]
         results = audit_roster(
-            roster, free_agents, EQUAL_LEVERAGE,
+            roster, free_agents,
             {"OF": 1, "P": 1, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
@@ -654,7 +646,7 @@ class TestAuditRosterTeamSDs:
         roster = [_hitter("Drop", ["OF"], r=0, hr=0, rbi=0, sb=20, ab=100, h=0, avg=0.0)]
         fas = [_hitter("Add", ["OF"], r=0, hr=0, rbi=0, sb=10, ab=100, h=0, avg=0.0)]
         entries = audit_roster(
-            roster, fas, EQUAL_LEVERAGE, {"OF": 1, "P": 0, "BN": 0, "IL": 0},
+            roster, fas, {"OF": 1, "P": 0, "BN": 0, "IL": 0},
             projected_standings=self._twelve_team_sb_standings(),
             team_name=TEAM_NAME, team_sds=None,
         )
@@ -673,7 +665,7 @@ class TestAuditRosterTeamSDs:
         team_sds[TEAM_NAME]["SB"] = 10.0
         team_sds["Rival"]["SB"] = 10.0
         entries = audit_roster(
-            roster, fas, EQUAL_LEVERAGE, {"OF": 1, "P": 0, "BN": 0, "IL": 0},
+            roster, fas, {"OF": 1, "P": 0, "BN": 0, "IL": 0},
             projected_standings=standings,
             team_name=TEAM_NAME, team_sds=team_sds,
         )

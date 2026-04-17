@@ -25,7 +25,6 @@ def _pitcher(name, w=10, k=150, sv=0, era=3.50, whip=1.20, ip=180, classificatio
     return p
 
 
-EQUAL_LEVERAGE = {cat: 0.1 for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
 
 TEAM_NAME = "Test Team"
 
@@ -57,7 +56,7 @@ class TestClassificationProtection:
         fa = [_hitter("BetterFA", r=50, hr=30, rbi=90, avg=0.280)]
 
         entries = audit_roster(
-            roster, fa, EQUAL_LEVERAGE, ROSTER_SLOTS,
+            roster, fa, ROSTER_SLOTS,
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
         )
@@ -74,7 +73,7 @@ class TestClassificationProtection:
         fa = [_hitter("FA", r=60, hr=20, rbi=70)]
 
         entries = audit_roster(
-            roster, fa, EQUAL_LEVERAGE, ROSTER_SLOTS,
+            roster, fa, ROSTER_SLOTS,
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
         )
@@ -90,7 +89,7 @@ class TestClassificationProtection:
         fa = [_hitter("GoodFA", r=80, hr=25, rbi=80, sb=15, avg=0.270)]
 
         entries = audit_roster(
-            roster, fa, EQUAL_LEVERAGE, ROSTER_SLOTS,
+            roster, fa, ROSTER_SLOTS,
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
         )
