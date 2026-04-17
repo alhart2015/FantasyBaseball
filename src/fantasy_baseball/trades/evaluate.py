@@ -6,12 +6,9 @@ rest-of-season (ROS) projections for the players involved.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import Any, TypedDict
 
-from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import HitterStats, Player, PlayerType
-from fantasy_baseball.models.positions import Position
 from fantasy_baseball.sgp.rankings import rank_key_from_positions
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
@@ -38,12 +35,13 @@ _TEAM_IP = 1450
 class OpponentGroup(TypedDict):
     """One opponent's trade-candidate group, as returned by search_trades_away."""
     opponent: str
-    positional_weakness: float
     candidates: list[dict[str, Any]]
 
 
 def compute_roto_points_by_cat(
     standings: list[dict[str, Any]],
+    *,
+    team_sds: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Return per-category roto points for each team.
 
@@ -51,6 +49,10 @@ def compute_roto_points_by_cat(
 
     Args:
         standings: list of {"name": str, "stats": {cat: float}} dicts.
+        team_sds: optional per-team per-category standard deviations.
+            When provided, ``score_roto`` returns fractional ERoto points
+            (EV under Gaussian pairwise win-probabilities) instead of
+            hard integer ranks.
 
     Returns:
         {team_name: {cat: points}} where points range from 1 (worst) to
@@ -67,7 +69,7 @@ def compute_roto_points_by_cat(
 
     # Convert to score_roto input format and call canonical implementation
     all_stats = {t["name"]: t["stats"] for t in standings}
-    roto = score_roto(all_stats)
+    roto = score_roto(all_stats, team_sds=team_sds)
 
     # Convert "R_pts" keys back to bare "R" keys (drop "total")
     return {
@@ -159,6 +161,8 @@ def compute_trade_impact(
     opp_loses_ros: dict[str, Any],
     opp_gains_ros: dict[str, Any],
     projected_standings: list[dict[str, Any]] | None = None,
+    *,
+    team_sds: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, Any]:
     """Compute roto point impact of a proposed trade for both teams.
 
@@ -178,19 +182,22 @@ def compute_trade_impact(
         opp_gains_ros: ROS stats for the player the opponent receives.
         projected_standings: projected end-of-season standings for all teams.
             When provided, used as baseline instead of current standings.
+        team_sds: optional per-team per-category standard deviations.
+            When provided, deltas are fractional ERoto points rather than
+            integer rank changes.
 
     Returns:
         {
-            "hart_delta": int,          # net roto point change for Hart
-            "opp_delta": int,           # net roto point change for opponent
-            "hart_cat_deltas": {cat: int},
-            "opp_cat_deltas": {cat: int},
+            "hart_delta": float,        # net roto point change for Hart
+            "opp_delta": float,         # net roto point change for opponent
+            "hart_cat_deltas": {cat: float},
+            "opp_cat_deltas": {cat: float},
         }
     """
     baseline = projected_standings if projected_standings is not None else standings
 
     # Baseline points (from projected end-of-season or current standings)
-    baseline_by_cat = compute_roto_points_by_cat(baseline)
+    baseline_by_cat = compute_roto_points_by_cat(baseline, team_sds=team_sds)
 
     # Apply trade swap to the baseline
     post_trade = []
@@ -208,7 +215,7 @@ def compute_trade_impact(
         else:
             post_trade.append(team)
 
-    post_trade_by_cat = compute_roto_points_by_cat(post_trade)
+    post_trade_by_cat = compute_roto_points_by_cat(post_trade, team_sds=team_sds)
 
     # Compute deltas
     hart_base = sum(baseline_by_cat[hart_name].values())
@@ -282,50 +289,6 @@ def _can_roster_without(roster: list[Player], remove: Player, add: Player,
     return False
 
 
-def _score_positional_weakness(
-    player_positions: Sequence[Position | str],
-    opp_roster: list[Player],
-    opp_leverage: dict[str, float],
-    all_opp_rosters: dict[str, list[Player]],
-    all_leverage: dict[str, dict[str, float]],
-) -> float:
-    """Score how badly an opponent needs the offered positions.
-
-    Compares the opponent's best starter at the offered position (by wSGP)
-    against the league median at that position. Returns a score where higher
-    means the opponent has a bigger need.
-    """
-    # Find the opponent's best player at any of the offered positions
-    opp_best_wsgp = None
-    for p in opp_roster:
-        if set(p.positions) & set(player_positions):
-            wsgp = calculate_weighted_sgp(p.rest_of_season, opp_leverage) if p.rest_of_season else 0.0
-            if opp_best_wsgp is None or wsgp > opp_best_wsgp:
-                opp_best_wsgp = wsgp
-
-    if opp_best_wsgp is None:
-        # Opponent has no one at this position — maximum weakness
-        return 999.0
-
-    # Gather wSGP at this position across all teams for the median
-    all_wsgps = []
-    for tname, roster in all_opp_rosters.items():
-        team_lev = all_leverage.get(tname, {})
-        for p in roster:
-            if set(p.positions) & set(player_positions) and p.rest_of_season:
-                all_wsgps.append(calculate_weighted_sgp(p.rest_of_season, team_lev))
-
-    if not all_wsgps:
-        return 0.0
-
-    all_wsgps.sort()
-    median_wsgp = all_wsgps[len(all_wsgps) // 2]
-
-    # Weakness = how far below median the opponent's best is
-    # Positive means they're weak; higher is weaker
-    return median_wsgp - opp_best_wsgp
-
-
 def search_trades_away(
     player_name: str,
     hart_name: str,
@@ -336,12 +299,15 @@ def search_trades_away(
     roster_slots: dict[str, int],
     rankings: dict[str, int],
     projected_standings: list[dict] | None = None,
+    *,
+    team_sds: dict[str, dict[str, float]] | None = None,
 ) -> list[OpponentGroup]:
     """Find trade candidates for a player the user wants to trade away.
 
     Searches all opponent rosters for players the user could receive in
-    exchange. Results are grouped by opponent and sorted by positional
-    weakness (teams that need the offered position most appear first).
+    exchange. Results are grouped by opponent and sorted alphabetically
+    by opponent name. Candidates within each group are sorted by the
+    user's projected roto-point gain (hart_delta).
 
     Args:
         player_name: name of the player to trade away (on user's roster).
@@ -353,12 +319,14 @@ def search_trades_away(
         roster_slots: league roster slot configuration.
         rankings: {rank_key: int} unweighted SGP ROS rankings.
         projected_standings: optional projected end-of-season standings.
+        team_sds: optional per-team per-category standard deviations for
+            fractional ERoto scoring (passed through to compute_trade_impact).
 
     Returns:
         List of opponent groups:
-        [{"opponent": str, "positional_weakness": float, "candidates": [...]}, ...]
-        Groups sorted by positional_weakness descending (neediest teams first).
-        Candidates sorted by hart_wsgp_gain descending within each group.
+        [{"opponent": str, "candidates": [...]}, ...]
+        Groups sorted alphabetically by opponent name.
+        Candidates sorted by hart_delta descending within each group.
     """
     hart_player = find_player_by_name(player_name, hart_roster)
     if hart_player is None:
@@ -368,9 +336,6 @@ def search_trades_away(
         rank_key_from_positions(hart_player.name, hart_player.positions))
     if send_rank is None:
         return []
-
-    hart_leverage = leverage_by_team.get(hart_name, {})
-    hart_wsgp = calculate_weighted_sgp(hart_player.rest_of_season, hart_leverage)
 
     grouped: dict[str, list[dict]] = {}
 
@@ -390,11 +355,6 @@ def search_trades_away(
             if rank_gap > MAX_RANK_GAP:
                 continue
 
-            gain_wsgp = calculate_weighted_sgp(opp_player.rest_of_season, hart_leverage)
-            hart_wsgp_gain = gain_wsgp - hart_wsgp
-            if hart_wsgp_gain <= 0:
-                continue
-
             hart_ros = player_rest_of_season_stats(hart_player)
             opp_ros = player_rest_of_season_stats(opp_player)
 
@@ -402,6 +362,7 @@ def search_trades_away(
                 standings, hart_name, opp_name,
                 hart_ros, opp_ros, opp_ros, hart_ros,
                 projected_standings=projected_standings,
+                team_sds=team_sds,
             )
 
             if impact["hart_delta"] < 0:
@@ -414,34 +375,21 @@ def search_trades_away(
                 "receive": opp_player.name,
                 "receive_positions": opp_player.positions,
                 "receive_rank": receive_rank,
-                "hart_wsgp_gain": round(hart_wsgp_gain, 2),
                 "hart_delta": impact["hart_delta"],
                 "opp_delta": impact["opp_delta"],
                 "hart_cat_deltas": impact["hart_cat_deltas"],
                 "opp_cat_deltas": impact["opp_cat_deltas"],
             })
 
-    # Sort candidates within each group by wSGP gain descending
+    # Sort candidates within each group by hart_delta descending
     for candidates in grouped.values():
-        candidates.sort(key=lambda c: -c["hart_wsgp_gain"])
+        candidates.sort(key=lambda c: -c["hart_delta"])
 
-    # Score positional weakness per opponent and build result
-    results: list[OpponentGroup] = []
-    for opp_name, candidates in grouped.items():
-        opp_roster = opp_rosters[opp_name]
-        opp_leverage = leverage_by_team.get(opp_name, {})
-        weakness = _score_positional_weakness(
-            hart_player.positions, opp_roster, opp_leverage,
-            opp_rosters, leverage_by_team,
-        )
-        results.append({
-            "opponent": opp_name,
-            "positional_weakness": round(weakness, 2),
-            "candidates": candidates,
-        })
-
-    # Sort groups by positional weakness descending (neediest first)
-    results.sort(key=lambda g: -g["positional_weakness"])
+    # Build result sorted alphabetically by opponent name
+    results: list[OpponentGroup] = [
+        {"opponent": opp_name, "candidates": candidates}
+        for opp_name, candidates in sorted(grouped.items())
+    ]
     return results
 
 
@@ -455,11 +403,13 @@ def search_trades_for(
     roster_slots: dict[str, int],
     rankings: dict[str, int],
     projected_standings: list[dict] | None = None,
+    *,
+    team_sds: dict[str, dict[str, float]] | None = None,
 ) -> list[dict]:
     """Find trade offers the user can make to acquire a specific opponent player.
 
     Searches the user's roster for players they could send that pass
-    the rank proximity filter and produce positive wSGP gain.
+    the rank proximity filter and project a non-negative roto-point gain.
 
     Args:
         player_name: name of the player to acquire (on an opponent's roster).
@@ -471,11 +421,13 @@ def search_trades_for(
         roster_slots: league roster slot configuration.
         rankings: {rank_key: int} unweighted SGP ROS rankings.
         projected_standings: optional projected end-of-season standings.
+        team_sds: optional per-team per-category standard deviations for
+            fractional ERoto scoring (passed through to compute_trade_impact).
 
     Returns:
         List with a single opponent group (or empty if player not found):
         [{"opponent": str, "candidates": [...]}]
-        Candidates sorted by hart_wsgp_gain descending.
+        Candidates sorted by hart_delta descending.
     """
     # Find which opponent owns the target player
     target_player = None
@@ -495,8 +447,6 @@ def search_trades_for(
     if receive_rank is None:
         return []
 
-    hart_leverage = leverage_by_team.get(hart_name, {})
-    gain_wsgp = calculate_weighted_sgp(target_player.rest_of_season, hart_leverage)
     opp_roster = opp_rosters[target_opp]
 
     candidates = []
@@ -515,11 +465,6 @@ def search_trades_for(
         if rank_gap > MAX_RANK_GAP:
             continue
 
-        hart_wsgp = calculate_weighted_sgp(hart_player.rest_of_season, hart_leverage)
-        hart_wsgp_gain = gain_wsgp - hart_wsgp
-        if hart_wsgp_gain <= 0:
-            continue
-
         hart_ros = player_rest_of_season_stats(hart_player)
         target_ros = player_rest_of_season_stats(target_player)
 
@@ -527,6 +472,7 @@ def search_trades_for(
             standings, hart_name, target_opp,
             hart_ros, target_ros, target_ros, hart_ros,
             projected_standings=projected_standings,
+            team_sds=team_sds,
         )
 
         if impact["hart_delta"] < 0:
@@ -539,14 +485,13 @@ def search_trades_for(
             "receive": target_player.name,
             "receive_positions": target_player.positions,
             "receive_rank": receive_rank,
-            "hart_wsgp_gain": round(hart_wsgp_gain, 2),
             "hart_delta": impact["hart_delta"],
             "opp_delta": impact["opp_delta"],
             "hart_cat_deltas": impact["hart_cat_deltas"],
             "opp_cat_deltas": impact["opp_cat_deltas"],
         })
 
-    candidates.sort(key=lambda c: -c["hart_wsgp_gain"])
+    candidates.sort(key=lambda c: -c["hart_delta"])
 
     if not candidates:
         return []

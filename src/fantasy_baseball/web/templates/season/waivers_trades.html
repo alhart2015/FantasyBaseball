@@ -123,13 +123,6 @@ function renderTradeResults(groups, mode) {
         html += '<div style="margin-bottom: 20px;">';
         html += '<div style="font-weight: 600; font-size: 15px; margin-bottom: 8px;">';
         html += esc(group.opponent);
-        if (mode === 'away' && group.positional_weakness != null) {
-            var wk = group.positional_weakness;
-            var wkClass = wk > 0 ? 'cat-gain' : 'cat-loss';
-            html += ' <span class="' + wkClass + '" style="font-size: 11px; font-weight: 500;">';
-            html += wk > 0 ? 'Needs this position' : 'Stacked here';
-            html += '</span>';
-        }
         html += '</div>';
 
         for (var c = 0; c < group.candidates.length; c++) {
@@ -159,11 +152,8 @@ function renderTradeCard(t, gIdx, cIdx) {
     }
     html += '</div>';
     html += '<div style="display: flex; gap: 12px; align-items: center;">';
-    html += '<span style="color: var(--success); font-weight: bold; font-size: 13px;">+' + t.hart_wsgp_gain.toFixed(2) + ' wSGP</span>';
-    if (t.hart_delta !== 0) {
-        var dc = t.hart_delta > 0 ? 'var(--success)' : 'var(--danger)';
-        html += '<span style="color: ' + dc + '; font-weight: bold; font-size: 13px;">' + (t.hart_delta > 0 ? '+' : '') + t.hart_delta + ' roto</span>';
-    }
+    var dc = t.hart_delta >= 0 ? 'var(--success)' : 'var(--danger)';
+    html += '<span style="color: ' + dc + '; font-weight: bold; font-size: 13px;">' + (t.hart_delta >= 0 ? '+' : '') + t.hart_delta.toFixed(2) + ' \u0394Roto</span>';
     html += '</div></div>';
 
     html += '<div id="' + id + '-detail" class="trade-details">';
@@ -190,9 +180,9 @@ function renderCatDeltas(deltas) {
     var html = '';
     for (var i = 0; i < cats.length; i++) {
         var cat = cats[i];
-        var d = deltas[cat] || 0;
-        if (d > 0) html += '<span class="cat-gain">' + cat + ' +' + d + '</span>';
-        else if (d < 0) html += '<span class="cat-loss">' + cat + ' ' + d + '</span>';
+        var d = Number((deltas[cat] || 0).toFixed(2));
+        if (d > 0) html += '<span class="cat-gain">' + cat + ' +' + d.toFixed(2) + '</span>';
+        else if (d < 0) html += '<span class="cat-loss">' + cat + ' ' + d.toFixed(2) + '</span>';
     }
     return html;
 }

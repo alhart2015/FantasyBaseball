@@ -77,7 +77,7 @@ class TestSearchTradesAway:
         assert results == []
 
     def test_candidates_have_required_fields(self):
-        """Each candidate should include send, receive, ranks, wSGP gain, and deltas."""
+        """Each candidate should include send, receive, ranks, and roto deltas."""
         hart_roster = [_make_hitter("Hart OF", ["OF"], hr=15, sb=5)]
         opp_rosters = {"Rival": [_make_hitter("Opp OF", ["OF"], hr=25, sb=15)]}
         rankings = {
@@ -95,7 +95,7 @@ class TestSearchTradesAway:
         candidate = results[0]["candidates"][0]
         for key in ("send", "receive", "send_rank", "receive_rank",
                     "send_positions", "receive_positions",
-                    "hart_wsgp_gain", "hart_delta", "opp_delta",
+                    "hart_delta", "opp_delta",
                     "hart_cat_deltas", "opp_cat_deltas"):
             assert key in candidate, f"Missing key: {key}"
 
@@ -118,23 +118,27 @@ class TestSearchTradesAway:
         all_candidates = [c for g in results for c in g["candidates"]]
         assert not any(c["receive"] == "Opp OF" for c in all_candidates)
 
-    def test_positional_weakness_included(self):
-        """Each opponent group should include a positional_weakness score."""
-        hart_roster = [_make_hitter("Hart SS", ["SS"], hr=15, sb=5)]
-        opp_rosters = {"Rival": [_make_hitter("Opp SS", ["SS"], hr=25, sb=15)]}
+    def test_opponent_groups_sorted_alphabetically(self):
+        """Opponent groups should be sorted alphabetically by opponent name."""
+        hart_roster = [_make_hitter("Hart OF", ["OF"], hr=15, sb=5)]
+        opp_rosters = {
+            "Rival":   [_make_hitter("Opp OF",   ["OF"], hr=25, sb=15)],
+            "Rival A": [_make_hitter("Opp A OF", ["OF"], hr=22, sb=12)],
+        }
         rankings = {
-            rank_key("Hart SS", "hitter"): 55,
-            rank_key("Opp SS", "hitter"): 50,
+            rank_key("Hart OF", "hitter"): 55,
+            rank_key("Opp OF", "hitter"): 50,
+            rank_key("Opp A OF", "hitter"): 52,
         }
         results = search_trades_away(
-            player_name="Hart SS",
+            player_name="Hart OF",
             hart_name="Hart", hart_roster=hart_roster, opp_rosters=opp_rosters,
             standings=SAMPLE_STANDINGS,
-            leverage_by_team={"Hart": _EQUAL_LEVERAGE, "Rival": _EQUAL_LEVERAGE},
+            leverage_by_team={"Hart": _EQUAL_LEVERAGE, "Rival": _EQUAL_LEVERAGE, "Rival A": _EQUAL_LEVERAGE},
             roster_slots=ROSTER_SLOTS, rankings=rankings,
         )
-        for group in results:
-            assert "positional_weakness" in group
+        names = [g["opponent"] for g in results]
+        assert names == sorted(names)
 
 
 class TestSearchTradesFor:
@@ -173,8 +177,8 @@ class TestSearchTradesFor:
         )
         assert results == []
 
-    def test_candidates_sorted_by_wsgp_gain(self):
-        """Candidates should be sorted by wSGP gain descending."""
+    def test_candidates_sorted_by_hart_delta(self):
+        """Candidates should be sorted by hart_delta descending."""
         hart_roster = [
             _make_hitter("Hart A", ["OF"], hr=25, sb=5),
             _make_hitter("Hart B", ["OF"], hr=22, sb=3),
@@ -196,8 +200,8 @@ class TestSearchTradesFor:
             roster_slots=ROSTER_SLOTS, rankings=rankings,
         )
         if results and len(results[0]["candidates"]) >= 2:
-            gains = [c["hart_wsgp_gain"] for c in results[0]["candidates"]]
-            assert gains == sorted(gains, reverse=True)
+            deltas = [c["hart_delta"] for c in results[0]["candidates"]]
+            assert deltas == sorted(deltas, reverse=True)
 
     def test_candidates_have_required_fields(self):
         """Each candidate should include the standard trade proposal fields."""
@@ -218,6 +222,6 @@ class TestSearchTradesFor:
         candidate = results[0]["candidates"][0]
         for key in ("send", "receive", "send_rank", "receive_rank",
                     "send_positions", "receive_positions",
-                    "hart_wsgp_gain", "hart_delta", "opp_delta",
+                    "hart_delta", "opp_delta",
                     "hart_cat_deltas", "opp_cat_deltas"):
             assert key in candidate, f"Missing key: {key}"

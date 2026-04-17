@@ -452,6 +452,7 @@ def register_routes(app: Flask) -> None:
 
         proj_cache = read_cache("projections") or {}
         projected_standings = proj_cache.get("projected_standings")
+        team_sds = proj_cache.get("team_sds")
 
         hart_roster = [Player.from_dict(p) for p in roster_raw]
         opp_rosters = {
@@ -480,6 +481,7 @@ def register_routes(app: Flask) -> None:
             roster_slots=config.roster_slots,
             rankings=flat_rankings,
             projected_standings=projected_standings,
+            team_sds=team_sds,
         )
 
         if mode == "away":
