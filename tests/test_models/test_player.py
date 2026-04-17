@@ -94,7 +94,6 @@ class TestPlayer:
             "positions": ["OF", "DH"], "team": "NYY",
             "fg_id": "15640", "mlbam_id": 592450,
             "selected_position": "OF", "status": "",
-            "wsgp": 12.5,
             "rank": {"rest_of_season": 2, "preseason": 1, "current": 3},
             "rest_of_season": {"pa": 600, "ab": 500, "h": 145, "r": 95, "hr": 38, "rbi": 92, "sb": 7, "avg": 0.290},
             "preseason": {"pa": 650, "ab": 550, "h": 160, "r": 110, "hr": 45, "rbi": 120, "sb": 5, "avg": 0.291},
@@ -109,7 +108,6 @@ class TestPlayer:
         assert isinstance(p.preseason, HitterStats)
         assert p.preseason.hr == 45
         assert p.current is None
-        assert p.wsgp == 12.5
         assert p.rank.rest_of_season == 2
 
     def test_from_dict_pitcher(self):
@@ -130,7 +128,6 @@ class TestPlayer:
             "name": "Aaron Judge", "player_type": "hitter",
             "positions": ["OF"], "team": "NYY",
             "fg_id": "15640", "mlbam_id": 592450,
-            "wsgp": 12.5,
             "rank": {"rest_of_season": 2, "preseason": 1, "current": 3},
             "rest_of_season": {"pa": 600, "ab": 500, "h": 145, "r": 95, "hr": 38, "rbi": 92, "sb": 7, "avg": 0.290},
         }
@@ -139,7 +136,6 @@ class TestPlayer:
         assert result["name"] == "Aaron Judge"
         assert result["rest_of_season"]["hr"] == 38
         assert result["rank"]["rest_of_season"] == 2
-        assert result["wsgp"] == 12.5
 
     def test_from_dict_flat_stats_hitter(self):
         """Player.from_dict handles flat dicts where stats are top-level keys."""
@@ -180,7 +176,6 @@ class TestCacheCompatibility:
             selected_position="OF",
             rest_of_season=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
             preseason=HitterStats(pa=650, ab=550, h=160, r=110, hr=45, rbi=120, sb=5, avg=0.291),
-            wsgp=12.5,
             rank=RankInfo(rest_of_season=2, preseason=1, current=3),
             pace={"R": {"actual": 15, "expected": 14, "z_score": 0.5}},
         )
@@ -193,8 +188,6 @@ class TestCacheCompatibility:
         assert d["rest_of_season"]["hr"] == 38
         # Preseason in nested dict
         assert d["preseason"]["hr"] == 45
-        # wSGP
-        assert d["wsgp"] == 12.5
         # Rank
         assert d["rank"]["rest_of_season"] == 2
         # Pace stored as "pace"
@@ -215,7 +208,6 @@ class TestCacheCompatibility:
             status="",
             rest_of_season=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
             preseason=HitterStats(pa=650, ab=550, h=160, r=110, hr=45, rbi=120, sb=5, avg=0.291),
-            wsgp=12.5,
             rank=RankInfo(rest_of_season=2, preseason=1, current=3),
         )
         d = original.to_dict()
@@ -224,7 +216,6 @@ class TestCacheCompatibility:
         assert restored.player_type == original.player_type
         assert restored.rest_of_season.hr == original.rest_of_season.hr
         assert restored.preseason.hr == original.preseason.hr
-        assert restored.wsgp == original.wsgp
         assert restored.rank.rest_of_season == original.rank.rest_of_season
 
 
@@ -271,25 +262,6 @@ class TestSgpComputation:
         sgp = stats.compute_sgp()
         assert sgp > 0
         assert stats.sgp == sgp
-
-    def test_player_compute_wsgp(self):
-        from fantasy_baseball.models.player import Player, HitterStats
-        p = Player(
-            name="Aaron Judge", player_type="hitter",
-            rest_of_season=HitterStats(pa=650, ab=550, h=160, r=100, hr=40, rbi=100, sb=5, avg=0.291),
-        )
-        leverage = {"R": 0.1, "HR": 0.1, "RBI": 0.1, "SB": 0.1, "AVG": 0.1,
-                    "W": 0.1, "K": 0.1, "SV": 0.1, "ERA": 0.1, "WHIP": 0.1}
-        wsgp = p.compute_wsgp(leverage)
-        assert wsgp > 0
-        assert p.wsgp == wsgp
-
-    def test_player_compute_wsgp_no_ros_returns_zero(self):
-        from fantasy_baseball.models.player import Player
-        p = Player(name="Unknown", player_type="hitter")
-        wsgp = p.compute_wsgp({"R": 0.1, "HR": 0.1, "RBI": 0.1, "SB": 0.1, "AVG": 0.1,
-                               "W": 0.1, "K": 0.1, "SV": 0.1, "ERA": 0.1, "WHIP": 0.1})
-        assert wsgp == 0.0
 
     def test_hitter_sgp_matches_calculate_player_sgp(self):
         """Verify our compute_sgp produces same result as the standalone function."""

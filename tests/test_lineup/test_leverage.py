@@ -332,8 +332,7 @@ class TestCalculateLeverage:
 
 
     def test_cliff_risk_multiple_roto_points_at_stake(self):
-        """Regression test for the cliff-risk bug (TODO: wSGP underweights
-        cliff risk in packed categories).
+        """Regression test for the cliff-risk bug in packed categories.
 
         User is 1st in SB at 100, teams 2-6 are packed at 93-97.
         Losing one SB denom (8) drops to 92, falling behind all 5.

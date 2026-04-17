@@ -612,7 +612,6 @@ def format_lineup_for_display(
             "status": player.status,
             "sgp": ros_sgp,
             "delta_roto": roto_delta_by_name.get(player.name),
-            "classification": player.classification,
             "games": p.get("games_this_week", 0),
             "is_bench": pos in ("BN", "IL", "DL"),
             "is_il": "IL" in player.status or pos == "IL",

@@ -43,8 +43,6 @@ files = [
     "src/fantasy_baseball/trades/evaluate.py",
     "src/fantasy_baseball/lineup/delta_roto.py",
     "src/fantasy_baseball/lineup/leverage.py",
-    "src/fantasy_baseball/lineup/player_classification.py",
-    "src/fantasy_baseball/lineup/weighted_sgp.py",
     "src/fantasy_baseball/sgp/denominators.py",
     "src/fantasy_baseball/sgp/rankings.py",
 ]

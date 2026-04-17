@@ -15,9 +15,8 @@ Strategies:
     anti_fragile     — Discounts high-IP pitchers, prefers durable mid-tier arms.
 """
 import pandas as pd
-from fantasy_baseball.draft.balance import CategoryBalance, calculate_draft_leverage
+from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.recommender import get_recommendations, get_filled_positions
-from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.positions import can_fill_slot
@@ -87,7 +86,7 @@ def pick_default(
     board, full_board, tracker, balance, config, team_filled, **kwargs,
 ):
     """Default strategy: take the #1 leverage-weighted recommendation."""
-    recs = _get_recs(board, full_board, tracker, balance, config, n=5, **kwargs)
+    recs = _get_recs(board, full_board, tracker, config, n=5, **kwargs)
     if recs:
         return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
     return None, None
@@ -134,7 +133,7 @@ def pick_avg_hedge(
     board, full_board, tracker, balance, config, team_filled, **kwargs,
 ):
     """Penalize hitters that would drag team AVG below the floor."""
-    recs = _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs)
+    recs = _get_recs(board, full_board, tracker, config, n=10, **kwargs)
     if not recs:
         return None, None
     return _pick_with_avg_floor(recs, board, balance, AVG_FLOOR)
@@ -198,7 +197,7 @@ def pick_no_punt_opp(
                         return best["name"], best["player_id"]
 
     # Default with AVG floor
-    recs = _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs)
+    recs = _get_recs(board, full_board, tracker, config, n=10, **kwargs)
     if not recs:
         return None, None
     return _pick_with_avg_floor(recs, board, balance, NO_PUNT_AVG_FLOOR)
@@ -369,19 +368,13 @@ def _fallback_non_closer(board, tracker, full_board, config):
     return None, None
 
 
-def _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs):
-    """Get leverage-weighted recommendations (shared helper)."""
+def _get_recs(board, full_board, tracker, config, n=10, **kwargs):
+    """Get recommendations (shared helper)."""
     filled = get_filled_positions(
         tracker.user_roster_ids, full_board,
         roster_slots=config.roster_slots,
         player_lookup=kwargs.get("player_lookup"),
     )
-    leverage = calculate_draft_leverage(
-        balance.get_totals(),
-        picks_made=len(tracker.user_roster),
-        total_picks=kwargs.get("total_rounds", 22),
-    )
-    # Use the tracker's snake-draft calculation for picks until next turn
     picks_until_next = getattr(tracker, "picks_until_next_turn", None)
     return get_recommendations(
         board, drafted=tracker.drafted_ids,
@@ -390,7 +383,6 @@ def _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs):
         picks_until_next=picks_until_next,
         roster_slots=config.roster_slots,
         num_teams=config.num_teams,
-        draft_leverage=leverage,
         scoring_mode=kwargs.get("scoring_mode", "var"),
     )
 
@@ -427,7 +419,7 @@ def pick_no_punt(
             return result
 
     # Get recommendations with AVG floor
-    recs = _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs)
+    recs = _get_recs(board, full_board, tracker, config, n=10, **kwargs)
     if not recs:
         return None, None
     return _pick_with_avg_floor(recs, board, balance, NO_PUNT_AVG_FLOOR)
@@ -472,7 +464,7 @@ def pick_no_punt_stagger(
             return result
 
     # Get recommendations with AVG floor protection
-    recs = _get_recs(board, full_board, tracker, balance, config, n=10, **kwargs)
+    recs = _get_recs(board, full_board, tracker, config, n=10, **kwargs)
     if not recs:
         return None, None
     return _pick_with_avg_floor(recs, board, balance, NO_PUNT_AVG_FLOOR)
@@ -514,7 +506,7 @@ def pick_no_punt_cap3(
             return result
 
     # Get recommendations
-    recs = _get_recs(board, full_board, tracker, balance, config, n=15, **kwargs)
+    recs = _get_recs(board, full_board, tracker, config, n=15, **kwargs)
 
     # If recs is empty (late-draft roster nearly full), fall back to
     # board search that respects the closer cap.
@@ -573,7 +565,7 @@ def pick_avg_anchor(
 
     # If no anchor and we're within the hitter deadline, prefer high-AVG hitters
     if not has_anchor and hitter_count < AVG_ANCHOR_DEADLINE_HITTER:
-        recs = _get_recs(board, full_board, tracker, balance, config, n=15, **kwargs)
+        recs = _get_recs(board, full_board, tracker, config, n=15, **kwargs)
         if recs:
             # Try to find a high-AVG hitter in the recommendations
             for rec in recs:
@@ -644,7 +636,7 @@ def pick_balanced(
     n_hitters = _count_hitters(tracker, board, full_board, player_lookup)
     n_pitchers = _count_pitchers(tracker, board, full_board, player_lookup)
 
-    recs = _get_recs(board, full_board, tracker, balance, config, n=15, **kwargs)
+    recs = _get_recs(board, full_board, tracker, config, n=15, **kwargs)
     if not recs:
         return None, None
 
@@ -671,7 +663,7 @@ def pick_anti_fragile(
     Applies a VAR discount to pitchers with high IP projections,
     then re-ranks recommendations.
     """
-    recs = _get_recs(board, full_board, tracker, balance, config, n=15, **kwargs)
+    recs = _get_recs(board, full_board, tracker, config, n=15, **kwargs)
     if not recs:
         return None, None
 

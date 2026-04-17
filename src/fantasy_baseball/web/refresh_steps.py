@@ -68,11 +68,20 @@ def compute_lineup_moves(
             if current_slot != base_slot and (
                 current_slot in bench_slots or base_slot in bench_slots
             ):
+                if player.rest_of_season is not None:
+                    sgp = (
+                        player.rest_of_season.sgp
+                        if player.rest_of_season.sgp is not None
+                        else player.rest_of_season.compute_sgp()
+                    )
+                    reason = f"SGP: {sgp:.1f}"
+                else:
+                    reason = "Optimal slot"
                 moves.append({
                     "action": "START",
                     "player": player_name,
                     "slot": base_slot,
-                    "reason": f"wSGP: {player.wsgp:.1f}",
+                    "reason": reason,
                 })
             break
     return moves

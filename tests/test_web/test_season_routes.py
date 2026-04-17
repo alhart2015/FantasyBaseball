@@ -36,6 +36,12 @@ def test_trades_page_renders(client):
     assert b"Trades" in resp.data
 
 
+def test_players_page_renders(client):
+    resp = client.get("/players")
+    assert resp.status_code == 200
+    assert b"pos-filter" in resp.data
+
+
 def test_sidebar_nav_links_present(client):
     resp = client.get("/standings")
     html = resp.data.decode()
@@ -159,7 +165,7 @@ def test_full_lineup_page_with_cached_data(client, tmp_path):
 
 
 def test_full_trades_page_renders(client):
-    """Integration test: trades page renders without waiver/buy-low data."""
+    """Integration test: trades page renders without waiver data."""
     resp = client.get("/waivers-trades")
     assert resp.status_code == 200
     html = resp.data.decode()

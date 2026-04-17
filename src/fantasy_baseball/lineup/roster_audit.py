@@ -191,7 +191,6 @@ class AuditEntry:
     best_fa_sgp: Optional[float] = None
     best_fa_id: Optional[str] = None
     gap: float = 0.0
-    classification: str = ""
     candidates: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -208,7 +207,6 @@ class AuditEntry:
             "best_fa_sgp": self.best_fa_sgp,
             "best_fa_id": self.best_fa_id,
             "gap": self.gap,
-            "classification": self.classification,
             "candidates": self.candidates,
         }
 
@@ -327,13 +325,7 @@ def audit_roster(
             slot=slot_lookup.get(player.name, "BN"),
             player_sgp=round(player_sgp.get(player.name, 0.0), 2),
             player_id=player.yahoo_id,
-            classification=player.classification,
         )
-
-        # Protected players: high league-wide value, skip FA comparison
-        if player.classification in ("core", "trade_candidate"):
-            entries.append(entry)
-            continue
 
         candidates = candidates_for_player(player, pools)
 
@@ -416,7 +408,6 @@ def audit_roster(
             slot="IL",
             player_sgp=0.0,
             player_id=player.yahoo_id,
-            classification=player.classification,
         ))
 
     return entries

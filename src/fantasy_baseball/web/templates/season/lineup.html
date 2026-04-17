@@ -1,19 +1,9 @@
 {% extends "season/base.html" %}
 {% from "season/macros.html" import rank_badge %}
 {% block title %}Lineup — Season Dashboard{% endblock %}
-{% macro class_badge(player) %}
-{% if player.classification == "core" %}<span class="badge-core">core</span>
-{% elif player.classification == "trade_candidate" %}<span class="badge-trade">trade candidate</span>
-{% elif player.classification == "role_player" %}<span class="badge-role">role player</span>
-{% elif player.classification == "droppable" %}<span class="badge-drop">droppable</span>
-{% endif %}{% endmacro %}
 {% block content %}
 
 <style>
-.badge-core { background: rgba(34, 197, 94, 0.15); color: #86efac; font-size: 10px; padding: 1px 6px; border-radius: 4px; margin-left: 4px; }
-.badge-trade { background: rgba(251, 191, 36, 0.15); color: #fcd34d; font-size: 10px; padding: 1px 6px; border-radius: 4px; margin-left: 4px; }
-.badge-role { background: rgba(148, 163, 184, 0.15); color: #94a3b8; font-size: 10px; padding: 1px 6px; border-radius: 4px; margin-left: 4px; }
-.badge-drop { background: rgba(239, 68, 68, 0.15); color: #fca5a5; font-size: 10px; padding: 1px 6px; border-radius: 4px; margin-left: 4px; }
 .section-header {
     display: flex;
     align-items: center;
@@ -205,7 +195,7 @@
                 {% endif %}
             </td>
             {% endfor %}
-            <td>{{ "%.2f" | format(h.sgp) if h.sgp is not none else "—" }}{{ class_badge(h) }}</td>
+            <td>{{ "%.2f" | format(h.sgp) if h.sgp is not none else "—" }}</td>
             <td>{{ "%+.2f" | format(h.delta_roto) if h.delta_roto is not none else "—" }}</td>
             <td>
                 {% if h.status %}
@@ -303,7 +293,7 @@
                 {% endif %}
             </td>
             {% endfor %}
-            <td>{{ "%.2f" | format(p.sgp) if p.sgp is not none else "—" }}{{ class_badge(p) }}</td>
+            <td>{{ "%.2f" | format(p.sgp) if p.sgp is not none else "—" }}</td>
             <td>{{ "%+.2f" | format(p.delta_roto) if p.delta_roto is not none else "—" }}</td>
             <td>
                 {% if p.status %}

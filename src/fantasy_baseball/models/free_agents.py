@@ -4,7 +4,7 @@ A :class:`FreeAgentPool` is a point-in-time list of
 :class:`RosterEntry` objects representing players who aren't on any
 team's latest roster. It has its own loaders (``from_yahoo``,
 ``from_cache``) and is passed explicitly to any analysis function that
-needs it (audit, waivers, buy-low).
+needs it (audit, waivers).
 """
 
 from __future__ import annotations

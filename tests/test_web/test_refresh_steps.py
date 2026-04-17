@@ -21,7 +21,7 @@ _UNSET = object()
 
 
 def _player(name, player_type=PlayerType.HITTER, positions=_UNSET,
-            selected_position=_UNSET, wsgp=0.0, ros=None):
+            selected_position=_UNSET, ros=None):
     """Build a Player fixture.
 
     Accepts either ``HitterStats`` / ``PitcherStats`` for ``ros`` (the
@@ -44,7 +44,6 @@ def _player(name, player_type=PlayerType.HITTER, positions=_UNSET,
         yahoo_id=f"{name}::{player_type.value}",
     )
     p.rest_of_season = ros
-    p.wsgp = wsgp
     return p
 
 
@@ -127,7 +126,8 @@ class TestMergeMatchedAndRawRoster:
 class TestComputeLineupMoves:
     def test_bench_to_starter_emits_start_move(self):
         # Player on BN; optimizer wants them at OF
-        p = _player("Soto", selected_position="BN", wsgp=12.5)
+        ros = HitterStats(sgp=12.5)
+        p = _player("Soto", selected_position="BN", ros=ros)
         optimal = {"OF_1": "Soto"}
         moves = compute_lineup_moves(optimal, [p])
         assert len(moves) == 1
@@ -138,13 +138,13 @@ class TestComputeLineupMoves:
 
     def test_starter_to_starter_emits_no_move(self):
         # Player already at OF; optimizer keeps them at OF — no move
-        p = _player("Soto", selected_position="OF", wsgp=12.5)
+        p = _player("Soto", selected_position="OF")
         optimal = {"OF_1": "Soto"}
         assert compute_lineup_moves(optimal, [p]) == []
 
     def test_il_to_starter_emits_start_move(self):
         # IL counts as bench-like
-        p = _player("Soto", selected_position="IL", wsgp=10.0)
+        p = _player("Soto", selected_position="IL")
         optimal = {"OF_1": "Soto"}
         moves = compute_lineup_moves(optimal, [p])
         assert len(moves) == 1
@@ -154,7 +154,7 @@ class TestComputeLineupMoves:
         # Optimizer demoting a starter to bench also counts
         # (loop only iterates optimal slots, so this case fires when
         # the same player appears in optimal under a BN_x slot).
-        p = _player("Soto", selected_position="OF", wsgp=12.5)
+        p = _player("Soto", selected_position="OF")
         optimal = {"BN_1": "Soto"}
         moves = compute_lineup_moves(optimal, [p])
         assert len(moves) == 1
@@ -168,7 +168,7 @@ class TestComputeLineupMoves:
 
     def test_player_with_no_selected_position_treated_as_bench(self):
         # selected_position is None → falls back to "BN"
-        p = _player("Soto", selected_position=None, wsgp=12.5)
+        p = _player("Soto", selected_position=None)
         # With no current slot and optimizer wanting OF, it's bench→starter
         optimal = {"OF_1": "Soto"}
         moves = compute_lineup_moves(optimal, [p])
@@ -176,7 +176,7 @@ class TestComputeLineupMoves:
 
     def test_slot_suffix_stripped(self):
         # OF_1 vs OF_2 — both should be treated as OF
-        p = _player("Soto", selected_position="OF", wsgp=12.5)
+        p = _player("Soto", selected_position="OF")
         optimal = {"OF_2": "Soto"}
         # Current is OF, target is OF (after stripping _2) → no move
         assert compute_lineup_moves(optimal, [p]) == []

@@ -28,10 +28,6 @@
 .cat-impact { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .cat-gain { color: var(--success); font-size: 11px; font-weight: 600; }
 .cat-loss { color: var(--danger); font-size: 11px; font-weight: 600; }
-.badge-core { background: rgba(34, 197, 94, 0.15); color: #86efac; font-size: 10px; padding: 1px 6px; border-radius: 4px; margin-left: 4px; }
-.badge-trade { background: rgba(251, 191, 36, 0.15); color: #fcd34d; font-size: 10px; padding: 1px 6px; border-radius: 4px; margin-left: 4px; }
-.badge-role { background: rgba(148, 163, 184, 0.15); color: #94a3b8; font-size: 10px; padding: 1px 6px; border-radius: 4px; margin-left: 4px; }
-.badge-drop { background: rgba(239, 68, 68, 0.15); color: #fca5a5; font-size: 10px; padding: 1px 6px; border-radius: 4px; margin-left: 4px; }
 .player-pos { color: var(--text-secondary); font-size: 11px; margin-left: 4px; }
 .player-type-tag {
     font-size: 10px; padding: 1px 5px; border-radius: 3px;
@@ -82,11 +78,6 @@
         <td>
             {{ entry.player }}
             <span class="player-pos">({{ entry.positions | join(", ") }})</span>
-            {% if entry.classification == "core" %}<span class="badge-core">core</span>
-            {% elif entry.classification == "trade_candidate" %}<span class="badge-trade">trade candidate</span>
-            {% elif entry.classification == "role_player" %}<span class="badge-role">role player</span>
-            {% elif entry.classification == "droppable" %}<span class="badge-drop">droppable</span>
-            {% endif %}
         </td>
         <td>{{ "%.2f"|format(entry.player_sgp) }}</td>
         {% if entry.best_fa %}
