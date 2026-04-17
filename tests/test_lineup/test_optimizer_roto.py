@@ -206,3 +206,81 @@ class TestERotoMaximization:
         # Without Only, no feasible lineup exists → alt_best is None → delta = best_total.
         # best_total > 0 here (we beat Rival on R, HR, RBI, SB, AVG by having any stats vs 0).
         assert lineup[0].roto_delta > 0
+
+
+from fantasy_baseball.lineup.optimizer import (
+    PitcherStarter, optimize_pitcher_lineup_roto,
+)
+
+
+class TestPitcherOptimizer:
+    def test_returns_requested_starter_count(self):
+        pitchers = [
+            _pitcher("P1", ["SP"], ip=180, w=15, k=200, era=3.00, whip=1.05),
+            _pitcher("P2", ["SP"], ip=170, w=12, k=170, era=3.40, whip=1.15),
+            _pitcher("P3", ["SP"], ip=160, w=10, k=150, era=3.80, whip=1.22),
+            _pitcher("P4", ["SP"], ip=150, w=8, k=130, era=4.20, whip=1.30),
+        ]
+        standings = [_standing("Us"), _standing("Rival", W=1, K=1, ERA=0.1, WHIP=0.1)]
+        starters, bench = optimize_pitcher_lineup_roto(
+            pitchers=pitchers, full_roster=pitchers,
+            projected_standings=standings, team_name="Us", slots=3,
+        )
+        assert len(starters) == 3
+        assert len(bench) == 1
+        for s in starters:
+            assert isinstance(s, PitcherStarter)
+
+    def test_picks_highest_impact_pitcher_not_just_highest_stats(self):
+        """We're tied with Rival on SV. A has more K but starting him doesn't
+        move SV; C has fewer K but his SV contribution flips the tiebreak.
+        With only 1 P slot, must start C."""
+        a = _pitcher("A", ["SP"], ip=200, w=15, k=230, sv=0, era=3.00, whip=1.05)
+        c = _pitcher("C", ["RP"], ip=65, w=3, k=80, sv=35, era=2.50, whip=1.00)
+        pitchers = [a, c]
+        slots_cfg = 1
+        standings = [
+            _standing("Us", W=0, K=0, SV=0, ERA=0, WHIP=0),
+            _standing("Rival", W=0, K=0, SV=20, ERA=0, WHIP=0),
+        ]
+        starters, bench = optimize_pitcher_lineup_roto(
+            pitchers=pitchers, full_roster=pitchers,
+            projected_standings=standings, team_name="Us", slots=slots_cfg,
+        )
+        assert len(starters) == 1
+        assert starters[0].name == "C"
+
+    def test_roto_delta_non_negative_for_every_starter(self):
+        pitchers = [
+            _pitcher(f"P{i}", ["SP"], ip=180 - i*10, w=15 - i, k=200 - i*20)
+            for i in range(5)
+        ]
+        standings = [_standing("Us"), _standing("Rival", W=1, K=1)]
+        starters, _ = optimize_pitcher_lineup_roto(
+            pitchers=pitchers, full_roster=pitchers,
+            projected_standings=standings, team_name="Us", slots=3,
+        )
+        for s in starters:
+            assert s.roto_delta >= 0
+
+    def test_roto_delta_positive_when_starter_is_decisive(self):
+        """Mirror of the hitter-side regression test: the dropped starter must
+        actually drop out of the counterfactual, otherwise roto_delta can be
+        negative or zero. Closer C is decisive on SV; dropping him must
+        strictly reduce ERoto."""
+        a = _pitcher("A", ["SP"], ip=200, w=15, k=230, sv=0, era=3.00, whip=1.05)
+        c = _pitcher("C", ["RP"], ip=65, w=3, k=80, sv=35, era=2.50, whip=1.00)
+        pitchers = [a, c]
+        standings = [
+            _standing("Us"),
+            _standing("Rival", W=0, K=0, SV=20, ERA=0, WHIP=0),
+        ]
+        starters, _ = optimize_pitcher_lineup_roto(
+            pitchers=pitchers, full_roster=pitchers,
+            projected_standings=standings, team_name="Us", slots=1,
+        )
+        assert len(starters) == 1
+        assert starters[0].name == "C"
+        assert starters[0].roto_delta > 0, (
+            f"decisive closer C must have positive roto_delta, got {starters[0].roto_delta}"
+        )

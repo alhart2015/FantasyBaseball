@@ -302,3 +302,98 @@ def optimize_hitter_lineup_roto(
         )
         for p, slot in zip(active_subset, assignment)
     ]
+
+
+# ---------------------------------------------------------------------------
+# ERoto-based pitcher optimizer (Task 4 — staged as _roto suffix)
+# ---------------------------------------------------------------------------
+
+def _hypothetical_roster_with_pitcher_statuses(
+    full_roster: list[Player],
+    active_pitchers: set[str],
+    bench_pitchers: set[str],
+) -> list[Player]:
+    result: list[Player] = []
+    for p in full_roster:
+        if p.name in bench_pitchers:
+            result.append(dataclasses.replace(p, selected_position=Position.BN))
+        elif p.name in active_pitchers:
+            new_slot = next(
+                (pos for pos in p.positions if pos in {Position.SP, Position.RP, Position.P}),
+                Position.P,
+            )
+            result.append(dataclasses.replace(p, selected_position=new_slot))
+        else:
+            result.append(p)
+    return result
+
+
+def _team_total_after_pitcher_swap(
+    full_roster: list[Player],
+    active_subset: list[Player],
+    bench_subset: list[Player],
+    projected_standings: list[dict],
+    team_name: str,
+    team_sds: dict[str, dict[str, float]] | None,
+) -> float:
+    hypothetical = _hypothetical_roster_with_pitcher_statuses(
+        full_roster,
+        active_pitchers={p.name for p in active_subset},
+        bench_pitchers={p.name for p in bench_subset},
+    )
+    my_stats = project_team_stats(hypothetical, displacement=True).to_dict()
+    all_stats = {t["name"]: dict(t["stats"]) for t in projected_standings}
+    all_stats[team_name] = my_stats
+    return score_roto(all_stats, team_sds=team_sds)[team_name]["total"]
+
+
+def optimize_pitcher_lineup_roto(
+    pitchers: list[Player],
+    full_roster: list[Player],
+    projected_standings: list[dict],
+    team_name: str,
+    slots: int = 9,
+    team_sds: dict[str, dict[str, float]] | None = None,
+) -> tuple[list[PitcherStarter], list[Player]]:
+    """Return (starters with roto_delta, bench) maximizing ERoto."""
+    if not pitchers or slots <= 0:
+        return [], list(pitchers)
+    k = min(slots, len(pitchers))
+
+    best = None
+    for subset in combinations(pitchers, k):
+        bench = [p for p in pitchers if p not in subset]
+        total = _team_total_after_pitcher_swap(
+            full_roster, list(subset), bench,
+            projected_standings, team_name, team_sds,
+        )
+        if best is None or total > best[0]:
+            best = (total, list(subset), bench)
+
+    best_total, active_subset, bench = best  # type: ignore[misc]
+
+    # roto_delta per starter: demote them to bench, pick best remaining subset.
+    roto_deltas: dict[str, float] = {}
+    for starter in active_subset:
+        remaining = [p for p in pitchers if p is not starter]
+        if len(remaining) < k:
+            # Irreplaceable: no feasible replacement lineup of size k.
+            # Credit the starter with the full best_total (versus 0 for no valid lineup).
+            roto_deltas[starter.name] = best_total
+            continue
+        alt_best = None
+        for sub in combinations(remaining, k):
+            sub_bench = [p for p in remaining if p not in sub] + [starter]
+            t = _team_total_after_pitcher_swap(
+                full_roster, list(sub), sub_bench,
+                projected_standings, team_name, team_sds,
+            )
+            if alt_best is None or t > alt_best:
+                alt_best = t
+        roto_deltas[starter.name] = best_total - (alt_best if alt_best is not None else 0.0)
+
+    starters = [
+        PitcherStarter(name=p.name, player=p, roto_delta=roto_deltas[p.name])
+        for p in active_subset
+    ]
+    return starters, bench
