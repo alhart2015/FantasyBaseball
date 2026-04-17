@@ -275,7 +275,7 @@ def optimize_hitter_lineup_roto(
 
     best_total, active_subset, assignment, bench = best
 
-    # Compute roto_delta for each starter: drop them, pick best remaining subset.
+    # Compute roto_delta for each starter: drop them to bench, pick best remaining subset.
     roto_deltas: dict[str, float] = {}
     for starter in active_subset:
         remaining_hitters = [h for h in hitters if h is not starter]
@@ -284,14 +284,16 @@ def optimize_hitter_lineup_roto(
             assn = _feasible_assignment(list(sub), slot_positions)
             if assn is None:
                 continue
-            sub_bench = [h for h in remaining_hitters if h not in sub]
+            sub_bench = [h for h in remaining_hitters if h not in sub] + [starter]
             t = _team_total_after_hitter_swap(
                 full_roster, list(sub), sub_bench,
                 projected_standings, team_name, team_sds,
             )
             if alt_best is None or t > alt_best:
                 alt_best = t
-        roto_deltas[starter.name] = best_total - (alt_best if alt_best is not None else best_total)
+        # If no feasible replacement lineup exists, the starter is irreplaceable:
+        # credit them with the full best_total (versus 0 for "no valid lineup").
+        roto_deltas[starter.name] = best_total - (alt_best if alt_best is not None else 0.0)
 
     return [
         HitterAssignment(

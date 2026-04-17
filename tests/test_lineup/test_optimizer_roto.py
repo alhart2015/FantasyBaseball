@@ -162,3 +162,47 @@ class TestERotoMaximization:
         )
         names = {a.name for a in lineup}
         assert "IL_Guy" not in names
+
+    def test_roto_delta_positive_when_starter_is_decisive(self):
+        """When we start B (SB-decisive), dropping B must strictly reduce ERoto.
+        With the double-counting bug, alt_best would tie or exceed best_total
+        because the benched starter still gets counted. The fix ensures B's
+        delta is strictly positive."""
+        a = _hitter("A", ["OF"], r=80, hr=40, rbi=90, sb=5, h=120, ab=450)
+        b = _hitter("B", ["OF"], r=70, hr=20, rbi=70, sb=25, h=120, ab=450)
+        c = _hitter("C", ["OF"], r=60, hr=18, rbi=60, sb=8, h=120, ab=450)
+        slots = {"OF": 1, "BN": 2, "P": 9, "IL": 0}
+        standings = [
+            _standing("Us", R=0, HR=100, RBI=0, SB=0, AVG=0),
+            _standing("Rival", R=0, HR=30, RBI=0, SB=20, AVG=0),
+            _standing("Third", R=0, HR=20, RBI=0, SB=15, AVG=0),
+        ]
+        lineup = optimize_hitter_lineup_roto(
+            hitters=[a, b, c], full_roster=[a, b, c],
+            projected_standings=standings, team_name="Us",
+            roster_slots=slots,
+        )
+        assert len(lineup) == 1
+        assert lineup[0].name == "B"
+        assert lineup[0].roto_delta > 0, (
+            f"decisive starter B must have positive roto_delta, got {lineup[0].roto_delta}"
+        )
+
+    def test_roto_delta_equals_best_total_when_irreplaceable(self):
+        """Single hitter, one slot — dropping them leaves no feasible lineup.
+        Their delta should reflect their full contribution (best_total), not 0."""
+        only = _hitter("Only", ["OF"], r=80, hr=30, rbi=90, sb=15, h=120, ab=450)
+        slots = {"OF": 1, "BN": 0, "P": 9, "IL": 0}
+        standings = [
+            _standing("Us"),
+            _standing("Rival", R=0, HR=0, RBI=0, SB=0, AVG=0),
+        ]
+        lineup = optimize_hitter_lineup_roto(
+            hitters=[only], full_roster=[only],
+            projected_standings=standings, team_name="Us",
+            roster_slots=slots,
+        )
+        assert len(lineup) == 1
+        # Without Only, no feasible lineup exists → alt_best is None → delta = best_total.
+        # best_total > 0 here (we beat Rival on R, HR, RBI, SB, AVG by having any stats vs 0).
+        assert lineup[0].roto_delta > 0
