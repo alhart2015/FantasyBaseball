@@ -270,3 +270,29 @@ def optimize_pitcher_lineup(
         for p in active_subset
     ]
     return starters, bench
+
+
+def combined_team_roto(
+    roster: list[Player],
+    hitters: list[Player],
+    hitter_lineup: list[HitterAssignment],
+    pitcher_starters: list[PitcherStarter],
+    pitcher_bench: list[Player],
+    projected_standings: list[dict],
+    team_name: str,
+    team_sds: dict[str, dict[str, float]] | None = None,
+) -> float:
+    """Score a combined hitter + pitcher lineup as a single ERoto total.
+
+    The per-side optimizers score independently; this recomputes once on the
+    combined lineup so the reported total reflects both sides together.
+    """
+    active_slots: dict[str, Position] = {a.name: a.slot for a in hitter_lineup}
+    active_slots.update(_pitcher_active_slots([s.player for s in pitcher_starters]))
+    bench_names = (
+        {h.name for h in hitters} - {a.name for a in hitter_lineup}
+        | {p.name for p in pitcher_bench}
+    )
+    hypothetical = apply_lineup_to_roster(roster, active_slots, bench_names)
+    ctx = _TeamContext(roster, projected_standings, team_name, team_sds)
+    return team_roto_total(hypothetical, ctx)

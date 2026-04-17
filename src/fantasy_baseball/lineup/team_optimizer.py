@@ -17,12 +17,9 @@ from scipy.optimize import linear_sum_assignment
 from fantasy_baseball.lineup.optimizer import (
     HitterAssignment,
     PitcherStarter,
-    _TeamContext,
-    _pitcher_active_slots,
-    apply_lineup_to_roster,
+    combined_team_roto,
     optimize_hitter_lineup,
     optimize_pitcher_lineup,
-    team_roto_total,
 )
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import Player, PlayerType
@@ -244,17 +241,16 @@ def compute_team_roto(
         slots=p_slots, team_sds=team_sds,
     )
 
-    # The two optimizers score independently; recompute once on the combined
-    # lineup so the reported total reflects both sides together.
-    active_slots = {a.name: a.slot for a in hitter_lineup}
-    active_slots.update(_pitcher_active_slots([s.player for s in pitcher_starters]))
-    bench_names = (
-        {h.name for h in hitters} - {a.name for a in hitter_lineup}
-        | {p.name for p in pitcher_bench}
+    total_roto = combined_team_roto(
+        roster=roster,
+        hitters=hitters,
+        hitter_lineup=hitter_lineup,
+        pitcher_starters=pitcher_starters,
+        pitcher_bench=pitcher_bench,
+        projected_standings=projected_standings,
+        team_name=team_name,
+        team_sds=team_sds,
     )
-    hypothetical = apply_lineup_to_roster(roster, active_slots, bench_names)
-    ctx = _TeamContext(roster, projected_standings, team_name, team_sds)
-    total_roto = team_roto_total(hypothetical, ctx)
 
     return TeamRotoResult(
         total_roto=total_roto,
