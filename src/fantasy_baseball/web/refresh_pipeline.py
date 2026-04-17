@@ -665,10 +665,18 @@ class RefreshRun:
                 hitter_players.append(player)
 
         self.optimal_hitters = optimize_hitter_lineup(
-            hitter_players, self.leverage, self.config.roster_slots
+            hitters=hitter_players,
+            full_roster=self.roster_players,
+            projected_standings=self.projected_standings,
+            team_name=self.config.team_name,
+            roster_slots=self.config.roster_slots,
         )
         self.optimal_pitchers_starters, self.optimal_pitchers_bench = optimize_pitcher_lineup(
-            pitcher_players, self.leverage
+            pitchers=pitcher_players,
+            full_roster=self.roster_players,
+            projected_standings=self.projected_standings,
+            team_name=self.config.team_name,
+            slots=self.config.roster_slots.get("P", 9),
         )
 
     # --- Step 8: Compare optimal to current, find moves ---
@@ -676,12 +684,13 @@ class RefreshRun:
         from fantasy_baseball.web.refresh_steps import compute_lineup_moves
 
         self._progress("Computing lineup moves...")
-        moves = compute_lineup_moves(self.optimal_hitters, self.roster_players)
+        legacy_shape = {a.slot.value: a.name for a in self.optimal_hitters}
+        moves = compute_lineup_moves(legacy_shape, self.roster_players)
 
         optimal_data = {
-            "hitter_lineup": self.optimal_hitters,
-            "pitcher_starters": [p["name"] for p in self.optimal_pitchers_starters],
-            "pitcher_bench": [p["name"] for p in self.optimal_pitchers_bench],
+            "hitter_lineup": [a.to_dict() for a in self.optimal_hitters],
+            "pitcher_starters": [s.to_dict() for s in self.optimal_pitchers_starters],
+            "pitcher_bench": [p.name for p in self.optimal_pitchers_bench],
             "moves": moves,
         }
         write_cache("lineup_optimal", optimal_data, self.cache_dir)

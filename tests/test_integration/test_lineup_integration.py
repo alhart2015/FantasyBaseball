@@ -10,7 +10,6 @@ import pytest
 
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
-from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
 from fantasy_baseball.utils.constants import (
@@ -34,6 +33,13 @@ def _list_to_snapshot(standings_list: list[dict]) -> StandingsSnapshot:
             for t in standings_list
         ],
     )
+
+
+def _snapshot_to_list(snap: StandingsSnapshot) -> list[dict]:
+    return [
+        {"name": e.team_name, "team_key": e.team_key, "rank": e.rank, "stats": e.stats.to_dict()}
+        for e in snap.entries
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -271,11 +277,11 @@ class TestHitterOptimizerIntegration:
         self, midseason_standings, full_hitter_roster
     ):
         """With 14 hitters and 12 active slots, every slot should be assigned."""
-        leverage = calculate_leverage(
-            midseason_standings, "Hart of the Order"
-        )
+        projected_standings = _snapshot_to_list(midseason_standings)
         lineup = optimize_hitter_lineup(
-            full_hitter_roster, leverage, roster_slots=DEFAULT_ROSTER_SLOTS
+            hitters=full_hitter_roster, full_roster=full_hitter_roster,
+            projected_standings=projected_standings, team_name="Hart of the Order",
+            roster_slots=DEFAULT_ROSTER_SLOTS,
         )
 
         # Active hitter slots: C(1), 1B(1), 2B(1), 3B(1), SS(1), IF(1),
@@ -290,87 +296,46 @@ class TestHitterOptimizerIntegration:
             f"{lineup}"
         )
 
-    def test_starters_have_higher_wsgp_than_bench(
+    def test_all_starters_have_non_negative_roto_delta(
         self, midseason_standings, full_hitter_roster
     ):
-        """Every starting hitter should have wSGP >= the best bench hitter.
-
-        The Hungarian algorithm may make small tradeoffs for position
-        constraints, so we allow a tolerance of 0.5 SGP.
-        """
-        leverage = calculate_leverage(
-            midseason_standings, "Hart of the Order"
-        )
+        """Every starter's roto_delta must be non-negative: the optimizer
+        should never include a starter whose removal strictly improves the
+        team's ERoto total."""
+        projected_standings = _snapshot_to_list(midseason_standings)
         lineup = optimize_hitter_lineup(
-            full_hitter_roster, leverage, roster_slots=DEFAULT_ROSTER_SLOTS
+            hitters=full_hitter_roster, full_roster=full_hitter_roster,
+            projected_standings=projected_standings, team_name="Hart of the Order",
+            roster_slots=DEFAULT_ROSTER_SLOTS,
         )
-
-        starter_names = set(lineup.values())
-        bench_players = [
-            h for h in full_hitter_roster if h.name not in starter_names
-        ]
-        starters = [
-            h for h in full_hitter_roster if h.name in starter_names
-        ]
-
-        # Compute wSGP for each group
-        bench_wsgps = [
-            calculate_weighted_sgp(h.rest_of_season, leverage) for h in bench_players
-        ]
-        starter_wsgps = [
-            calculate_weighted_sgp(h.rest_of_season, leverage) for h in starters
-        ]
-
-        if not bench_wsgps:
-            return  # All players are starting, nothing to check
-
-        best_bench = max(bench_wsgps)
-        worst_starter = min(starter_wsgps)
-
-        # Allow small tolerance for position-constraint tradeoffs
-        tolerance = 0.5
-        assert worst_starter >= best_bench - tolerance, (
-            f"Worst starter wSGP ({worst_starter:.3f}) is significantly below "
-            f"best bench wSGP ({best_bench:.3f}). The optimizer may be "
-            f"misassigning players."
-        )
+        for a in lineup:
+            assert a.roto_delta >= 0, (
+                f"{a.name} has negative roto_delta {a.roto_delta}"
+            )
 
     def test_position_eligibility_respected(
         self, midseason_standings, full_hitter_roster
     ):
         """Every player assigned to a slot must be eligible for that slot."""
-        leverage = calculate_leverage(
-            midseason_standings, "Hart of the Order"
-        )
+        projected_standings = _snapshot_to_list(midseason_standings)
         lineup = optimize_hitter_lineup(
-            full_hitter_roster, leverage, roster_slots=DEFAULT_ROSTER_SLOTS
+            hitters=full_hitter_roster, full_roster=full_hitter_roster,
+            projected_standings=projected_standings, team_name="Hart of the Order",
+            roster_slots=DEFAULT_ROSTER_SLOTS,
         )
 
-        # Build name -> positions lookup
-        pos_by_name = {
-            h.name: h.positions for h in full_hitter_roster
-        }
-
-        for slot_key, player_name in lineup.items():
-            # Strip suffix from duplicate slot keys like "OF_2", "OF_3"
-            base_slot = slot_key.split("_")[0]
-            positions = pos_by_name[player_name]
-            assert can_fill_slot(positions, base_slot), (
-                f"{player_name} (positions={positions}) cannot fill "
-                f"slot '{base_slot}' (key='{slot_key}')"
+        pos_by_name = {h.name: h.positions for h in full_hitter_roster}
+        for a in lineup:
+            positions = pos_by_name[a.name]
+            assert can_fill_slot(positions, a.slot.value), (
+                f"{a.name} (positions={positions}) cannot fill slot '{a.slot.value}'"
             )
 
     def test_multi_position_player_optimally_placed(self):
         """A player eligible for SS and UTIL should be placed at SS
         when he is the ONLY SS-eligible player, freeing UTIL for a
         DH-only hitter who cannot play any other position.
-
-        The Hungarian algorithm should recognise that putting the
-        multi-position player at UTIL would leave SS empty while a
-        DH-only player could have filled UTIL instead.
         """
-        leverage = {cat: 0.1 for cat in ALL_CATEGORIES}
-
         hitters = [
             # Only SS-eligible player on the roster — also UTIL-eligible
             _make_hitter("Bobby Witt", ["SS"], 95, 28, 88, 30, .285, 560),
@@ -388,24 +353,29 @@ class TestHitterOptimizerIntegration:
             _make_hitter("OF Guy 4", ["OF"], 72, 18, 62, 10, .260, 490),
             _make_hitter("Util Filler", ["1B", "DH"], 60, 15, 55, 2, .252, 460),
         ]
+        standings = [
+            {"name": "Us", "team_key": "", "rank": 0, "stats": {c: 0.0 for c in ALL_CATEGORIES}},
+            {"name": "Rival", "team_key": "", "rank": 1, "stats": {c: 1.0 for c in ALL_CATEGORIES}},
+        ]
 
         lineup = optimize_hitter_lineup(
-            hitters, leverage, roster_slots=DEFAULT_ROSTER_SLOTS
+            hitters=hitters, full_roster=hitters,
+            projected_standings=standings, team_name="Us",
+            roster_slots=DEFAULT_ROSTER_SLOTS,
         )
 
         # Bobby Witt is the only SS-eligible player, so the optimizer
         # must place him at SS (not waste him at UTIL).
-        assert lineup.get("SS") == "Bobby Witt", (
-            f"Bobby Witt (only SS-eligible player) should be at SS, not at "
-            f"another slot. Lineup: {lineup}"
+        ss_names = [a.name for a in lineup if a.slot.value == "SS"]
+        assert "Bobby Witt" in ss_names, (
+            f"Bobby Witt (only SS-eligible player) should be at SS. "
+            f"SS names: {ss_names}. Lineup: {[(a.slot.value, a.name) for a in lineup]}"
         )
         # Yordan (DH-only) should end up in a UTIL slot
-        util_players = [
-            v for k, v in lineup.items() if k.startswith("UTIL")
-        ]
-        assert "Yordan Alvarez" in util_players, (
+        util_names = [a.name for a in lineup if a.slot.value == "UTIL"]
+        assert "Yordan Alvarez" in util_names, (
             f"Yordan Alvarez (DH only) should be in UTIL. "
-            f"UTIL players: {util_players}. Lineup: {lineup}"
+            f"UTIL names: {util_names}. Lineup: {[(a.slot.value, a.name) for a in lineup]}"
         )
 
 
@@ -414,13 +384,13 @@ class TestPitcherOptimizerIntegration:
         self, midseason_standings, full_pitcher_roster
     ):
         """optimize_pitcher_lineup returns exactly P slots starters."""
-        leverage = calculate_leverage(
-            midseason_standings, "Hart of the Order"
-        )
+        projected_standings = _snapshot_to_list(midseason_standings)
         p_slots = DEFAULT_ROSTER_SLOTS["P"]  # 9
 
         starters, bench = optimize_pitcher_lineup(
-            full_pitcher_roster, leverage, slots=p_slots
+            pitchers=full_pitcher_roster, full_roster=full_pitcher_roster,
+            projected_standings=projected_standings, team_name="Hart of the Order",
+            slots=p_slots,
         )
 
         assert len(starters) == p_slots, (
@@ -431,24 +401,17 @@ class TestPitcherOptimizerIntegration:
             f"got {len(bench)}"
         )
 
-    def test_pitcher_starters_outrank_bench(
+    def test_pitcher_starters_have_non_negative_roto_delta(
         self, midseason_standings, full_pitcher_roster
     ):
-        """Every starting pitcher should have wSGP >= every bench pitcher."""
-        leverage = calculate_leverage(
-            midseason_standings, "Hart of the Order"
+        """Every pitcher starter's roto_delta must be non-negative."""
+        projected_standings = _snapshot_to_list(midseason_standings)
+        starters, _ = optimize_pitcher_lineup(
+            pitchers=full_pitcher_roster, full_roster=full_pitcher_roster,
+            projected_standings=projected_standings, team_name="Hart of the Order",
+            slots=DEFAULT_ROSTER_SLOTS["P"],
         )
-        starters, bench = optimize_pitcher_lineup(
-            full_pitcher_roster, leverage, slots=DEFAULT_ROSTER_SLOTS["P"]
-        )
-
-        if not bench:
-            return
-
-        worst_starter_wsgp = min(s["wsgp"] for s in starters)
-        best_bench_wsgp = max(b["wsgp"] for b in bench)
-
-        assert worst_starter_wsgp >= best_bench_wsgp, (
-            f"Worst starter wSGP ({worst_starter_wsgp:.3f}) < best bench "
-            f"wSGP ({best_bench_wsgp:.3f})"
-        )
+        for s in starters:
+            assert s.roto_delta >= 0, (
+                f"{s.name} has negative roto_delta {s.roto_delta}"
+            )

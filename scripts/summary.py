@@ -13,6 +13,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
@@ -21,16 +24,14 @@ from fantasy_baseball.config import load_config
 from fantasy_baseball.data.db import get_connection, get_blended_projections
 from fantasy_baseball.lineup.yahoo_roster import fetch_injuries, fetch_roster, fetch_standings
 from fantasy_baseball.lineup.leverage import calculate_leverage
-from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.lineup.waivers import scan_waivers, detect_open_slots, fetch_and_match_free_agents
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.rankings import compute_combined_sgp_rankings
 from fantasy_baseball.data.projections import match_roster_to_projections
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter, is_pitcher
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD, IL_STATUSES
-from fantasy_baseball.sgp.player_value import calculate_player_sgp
-from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.scoring import project_team_stats, score_roto, ALL_CATS, INVERSE_CATS
 from fantasy_baseball.simulation import simulate_season, apply_management_adjustment, run_monte_carlo
 
@@ -227,42 +228,31 @@ def main():
         for p in il_players:
             print(f"  {p.name} ({p.status})")
 
-    user_hitters = []
-    user_pitchers = []
-    denoms = get_sgp_denominators()
-    for p in active_roster:
-        p_series = pd.Series(p)
-        p_series["total_sgp"] = calculate_player_sgp(p_series, denoms=denoms)
-        wsgp = calculate_weighted_sgp(p_series, leverage)
-        p["wsgp"] = wsgp
-        if p["player_type"] == "hitter":
-            user_hitters.append(p)
-        else:
-            user_pitchers.append(p)
+    user_hitters = [p for p in active_roster if p.player_type == PlayerType.HITTER]
+    user_pitchers = [p for p in active_roster if p.player_type == PlayerType.PITCHER]
 
-    # Hitter lineup
     hitter_lineup = optimize_hitter_lineup(
-        [pd.Series(h) for h in user_hitters], leverage,
-        roster_slots=config.roster_slots,
+        hitters=user_hitters, full_roster=user_roster,
+        projected_standings=projected_standings,
+        team_name=team_name, roster_slots=config.roster_slots,
     )
 
     print("\nOptimal hitter lineup:")
-    for slot, name in hitter_lineup.items():
-        wsgp = next((h["wsgp"] for h in user_hitters if h["name"] == name), 0)
-        print(f"  {slot:<5} {name:<28} wSGP: {wsgp:>5.2f}")
+    for a in hitter_lineup:
+        print(f"  {a.slot.value:<5} {a.name:<28} \u0394Roto: {a.roto_delta:>5.2f}")
 
-    # Pitcher lineup
     starter_pitchers, bench_pitchers = optimize_pitcher_lineup(
-        [pd.Series(p) for p in user_pitchers], leverage,
-        slots=config.roster_slots.get("P", 9),
+        pitchers=user_pitchers, full_roster=user_roster,
+        projected_standings=projected_standings,
+        team_name=team_name, slots=config.roster_slots.get("P", 9),
     )
 
     print("\nOptimal pitcher lineup:")
-    for p in starter_pitchers:
-        print(f"  P    {p['name']:<28} wSGP: {p['wsgp']:>5.2f}")
+    for s in starter_pitchers:
+        print(f"  P    {s.name:<28} \u0394Roto: {s.roto_delta:>5.2f}")
     if bench_pitchers:
         for p in bench_pitchers:
-            print(f"  BN   {p['name']:<28} wSGP: {p['wsgp']:>5.2f}")
+            print(f"  BN   {p.name:<28}")
 
     # Check for start/sit changes vs current Yahoo positions
     yahoo_roster = all_rosters_raw[team_name]
@@ -271,9 +261,10 @@ def main():
     current_il = {p["name"].replace(" (Batter)", "").replace(" (Pitcher)", "")
                   for p in yahoo_roster if p["selected_position"] == "IL"}
 
-    opt_active_names = set(hitter_lineup.values()) | {p["name"] for p in starter_pitchers}
-    opt_bench_names = {h["name"] for h in user_hitters if h["name"] not in hitter_lineup.values()}
-    opt_bench_names |= {p["name"] for p in bench_pitchers}
+    hitter_starter_names = {a.name for a in hitter_lineup}
+    opt_active_names = hitter_starter_names | {s.name for s in starter_pitchers}
+    opt_bench_names = {h.name for h in user_hitters if h.name not in hitter_starter_names}
+    opt_bench_names |= {p.name for p in bench_pitchers}
 
     should_bench = (current_bench | current_il) - opt_bench_names - current_il
     should_start = current_bench & opt_active_names
