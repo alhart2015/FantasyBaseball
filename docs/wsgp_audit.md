@@ -73,6 +73,6 @@ For each display context, choose one:
 | 2. Lineup page — opponent |  | ✓ |  | shipped — dropped wSGP them/you, show single SGP col |
 | 3. Players browse |  | ✓ |  | shipped (template clean; API still returns `wsgp` — see #7) |
 | 4. Roster audit |  | ✓ |  | shipped — deltaroto was already alongside, wSGP cols removed |
-| 5. Transactions | ? | ? | ? | **open** |
+| 5. Transactions | ✓ |  |  | shipped — ΔRoto per txn, net ΔRoto per team |
 | 6. Waivers/Trades | ✓ |  |  | shipped (commits a553fc9, b0e0c7e) |
 | 7. API responses | ? | ? | ? | **open** |

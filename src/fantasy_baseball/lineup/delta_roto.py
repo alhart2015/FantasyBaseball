@@ -75,13 +75,15 @@ def compute_delta_roto(
     projected_standings: list[dict],
     team_name: str,
     *,
-    team_sds: dict[str, dict[str, float]] | None = None,
+    team_sds: dict[str, dict[str, float]] | None,
 ) -> DeltaRotoResult:
     """Compute deltaRoto for dropping one player and adding another.
 
-    When ``team_sds`` is provided, ``score_roto`` uses pairwise Gaussian
+    When ``team_sds`` is a dict, ``score_roto`` uses pairwise Gaussian
     win-probabilities so a swap's impact reflects projection
-    uncertainty. ``None`` preserves exact-rank semantics.
+    uncertainty (ERoto). Pass ``None`` explicitly for exact-rank
+    semantics — no default: callers must make the choice so we can't
+    silently fall back to integer roto by forgetting the argument.
 
     Args:
         drop_name: roster player to drop.
@@ -89,7 +91,8 @@ def compute_delta_roto(
         user_roster: current roster (used to resolve the dropped player's ROS).
         projected_standings: end-of-season stats for all teams.
         team_name: user's team name.
-        team_sds: optional ``{team: {cat: sd}}`` for EV scoring.
+        team_sds: ``{team: {cat: sd}}`` for EV scoring, or ``None`` for
+            rank-based. Required keyword — no default.
 
     Raises:
         ValueError: if drop_name is not found on the roster.
