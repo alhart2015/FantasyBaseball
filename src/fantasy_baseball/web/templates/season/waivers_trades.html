@@ -180,9 +180,9 @@ function renderCatDeltas(deltas) {
     var html = '';
     for (var i = 0; i < cats.length; i++) {
         var cat = cats[i];
-        var d = deltas[cat] || 0;
-        if (d > 0) html += '<span class="cat-gain">' + cat + ' +' + d + '</span>';
-        else if (d < 0) html += '<span class="cat-loss">' + cat + ' ' + d + '</span>';
+        var d = Number((deltas[cat] || 0).toFixed(2));
+        if (d > 0) html += '<span class="cat-gain">' + cat + ' +' + d.toFixed(2) + '</span>';
+        else if (d < 0) html += '<span class="cat-loss">' + cat + ' ' + d.toFixed(2) + '</span>';
     }
     return html;
 }
