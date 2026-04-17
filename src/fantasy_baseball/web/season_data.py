@@ -584,6 +584,17 @@ def format_lineup_for_display(
     hitters = []
     pitchers = []
 
+    # Name -> roto_delta lookup built from optimizer output. Starters get a
+    # delta; bench/IL players are absent (rendered as "—").
+    roto_delta_by_name: dict[str, float] = {}
+    if optimal:
+        for a in optimal.get("hitter_lineup", []) or []:
+            if "name" in a and "roto_delta" in a:
+                roto_delta_by_name[a["name"]] = a["roto_delta"]
+        for s in optimal.get("pitcher_starters", []) or []:
+            if "name" in s and "roto_delta" in s:
+                roto_delta_by_name[s["name"]] = s["roto_delta"]
+
     for p in roster:
         player = Player.from_dict(p)
         pos = player.selected_position or "BN"
@@ -591,13 +602,22 @@ def format_lineup_for_display(
             pos == "BN" and set(player.positions).issubset(PITCHER_POSITIONS | {"BN"})
         )
 
+        ros_sgp = None
+        if player.rest_of_season is not None:
+            ros_sgp = (
+                player.rest_of_season.sgp
+                if player.rest_of_season.sgp is not None
+                else player.rest_of_season.compute_sgp()
+            )
+
         entry = {
             "name": player.name,
             "positions": player.positions,
             "selected_position": pos,
             "player_id": player.yahoo_id or "",
             "status": player.status,
-            "wsgp": player.wsgp,
+            "sgp": ros_sgp,
+            "delta_roto": roto_delta_by_name.get(player.name),
             "classification": player.classification,
             "games": p.get("games_this_week", 0),
             "is_bench": pos in ("BN", "IL", "DL"),
@@ -610,6 +630,9 @@ def format_lineup_for_display(
         # Flatten ROS stats for template tooltip (h[rest_of_season_key] access pattern)
         if player.rest_of_season is not None:
             entry.update(player.rest_of_season.to_dict())
+        # Preserve ros_sgp after the flatten (to_dict omits sgp if None, but
+        # may overwrite with its own computed value — keep ours for display).
+        entry["sgp"] = ros_sgp
 
         if is_pitcher:
             pitchers.append(entry)
@@ -617,8 +640,8 @@ def format_lineup_for_display(
             hitters.append(entry)
 
     slot_rank = {s: i for i, s in enumerate(HITTER_SLOTS_ORDER)}
-    hitters.sort(key=lambda h: (slot_rank.get(h["selected_position"], 99), -h["wsgp"]))
-    pitchers.sort(key=lambda p: (p["is_bench"], -p["wsgp"]))
+    hitters.sort(key=lambda h: (slot_rank.get(h["selected_position"], 99), -(h["sgp"] or 0)))
+    pitchers.sort(key=lambda p: (p["is_bench"], -(p["sgp"] or 0)))
 
     moves = optimal.get("moves", []) if optimal else []
 

@@ -213,9 +213,17 @@ def optimize_hitter_lineup(
             t = _score_hitter_subset(ctx, list(sub), assn, sub_bench)
             if alt_best is None or t > alt_best:
                 alt_best = t
-        # Irreplaceable starter (no feasible replacement lineup): credit the
-        # full best_total rather than 0, otherwise they'd look replaceable.
-        roto_deltas[starter.name] = best_total - (alt_best if alt_best is not None else 0.0)
+        if alt_best is None:
+            # No feasible full-size replacement lineup (the roster is too
+            # thin to cover every slot without this starter). Counterfactual
+            # is "starter benched, their slot left empty" — score the rest
+            # of the optimal lineup without them.
+            no_rep_subset = [p for p in active_subset if p is not starter]
+            no_rep_assn = [a for p, a in zip(active_subset, assignment) if p is not starter]
+            alt_best = _score_hitter_subset(
+                ctx, no_rep_subset, no_rep_assn, bench + [starter]
+            )
+        roto_deltas[starter.name] = best_total - alt_best
 
     return [
         HitterAssignment(
@@ -252,18 +260,20 @@ def optimize_pitcher_lineup(
     roto_deltas: dict[str, float] = {}
     for starter in active_subset:
         remaining = [p for p in pitchers if p is not starter]
-        if len(remaining) < k:
-            # Irreplaceable (no feasible replacement lineup of size k): credit
-            # full best_total rather than 0, matching the hitter-side rule.
-            roto_deltas[starter.name] = best_total
-            continue
         alt_best = None
-        for sub in combinations(remaining, k):
-            sub_bench = [p for p in remaining if p not in sub] + [starter]
-            t = _score_pitcher_subset(ctx, list(sub), sub_bench)
-            if alt_best is None or t > alt_best:
-                alt_best = t
-        roto_deltas[starter.name] = best_total - (alt_best if alt_best is not None else 0.0)
+        if len(remaining) >= k:
+            for sub in combinations(remaining, k):
+                sub_bench = [p for p in remaining if p not in sub] + [starter]
+                t = _score_pitcher_subset(ctx, list(sub), sub_bench)
+                if alt_best is None or t > alt_best:
+                    alt_best = t
+        if alt_best is None:
+            # No feasible full-size replacement (roster has exactly k
+            # pitchers, no bench). Counterfactual is "starter benched,
+            # their slot left empty" — score the other k-1 starters alone.
+            no_rep_subset = [p for p in active_subset if p is not starter]
+            alt_best = _score_pitcher_subset(ctx, no_rep_subset, bench + [starter])
+        roto_deltas[starter.name] = best_total - alt_best
 
     starters = [
         PitcherStarter(name=p.name, player=p, roto_delta=roto_deltas[p.name])

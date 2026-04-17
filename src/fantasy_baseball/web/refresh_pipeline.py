@@ -670,6 +670,7 @@ class RefreshRun:
             projected_standings=self.projected_standings,
             team_name=self.config.team_name,
             roster_slots=self.config.roster_slots,
+            team_sds=self.team_sds,
         )
         self.optimal_pitchers_starters, self.optimal_pitchers_bench = optimize_pitcher_lineup(
             pitchers=pitcher_players,
@@ -677,6 +678,7 @@ class RefreshRun:
             projected_standings=self.projected_standings,
             team_name=self.config.team_name,
             slots=self.config.roster_slots.get("P", 9),
+            team_sds=self.team_sds,
         )
 
     # --- Step 8: Compare optimal to current, find moves ---

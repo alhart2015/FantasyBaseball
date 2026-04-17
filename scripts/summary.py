@@ -7,7 +7,9 @@ Usage:
     python scripts/summary.py [--iterations N] [--seed S]
 """
 import argparse
+import math
 import sys
+from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -32,7 +34,10 @@ from fantasy_baseball.data.projections import match_roster_to_projections
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter, is_pitcher
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD, IL_STATUSES
-from fantasy_baseball.scoring import project_team_stats, score_roto, ALL_CATS, INVERSE_CATS
+from fantasy_baseball.scoring import (
+    build_team_sds, project_team_stats, score_roto, ALL_CATS, INVERSE_CATS,
+)
+from fantasy_baseball.utils.time_utils import compute_fraction_remaining, local_today
 from fantasy_baseball.simulation import simulate_season, apply_management_adjustment, run_monte_carlo
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
@@ -132,6 +137,13 @@ def main():
     print("=" * 90)
     print("PROJECTED ROTO STANDINGS (static)")
     print("=" * 90)
+
+    sd_scale = math.sqrt(compute_fraction_remaining(
+        date.fromisoformat(config.season_start),
+        date.fromisoformat(config.season_end),
+        local_today(),
+    ))
+    team_sds = build_team_sds(all_rosters, sd_scale)
 
     all_stats = {}
     for name, roster in all_rosters.items():
@@ -235,6 +247,7 @@ def main():
         hitters=user_hitters, full_roster=user_roster,
         projected_standings=projected_standings,
         team_name=team_name, roster_slots=config.roster_slots,
+        team_sds=team_sds,
     )
 
     print("\nOptimal hitter lineup:")
@@ -245,6 +258,7 @@ def main():
         pitchers=user_pitchers, full_roster=user_roster,
         projected_standings=projected_standings,
         team_name=team_name, slots=config.roster_slots.get("P", 9),
+        team_sds=team_sds,
     )
 
     print("\nOptimal pitcher lineup:")

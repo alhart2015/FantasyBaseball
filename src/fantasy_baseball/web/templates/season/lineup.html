@@ -131,7 +131,8 @@
             <th>RBI</th>
             <th>SB</th>
             <th>AVG</th>
-            <th>wSGP</th>
+            <th>SGP</th>
+            <th>ΔRoto</th>
             <th></th>
         </tr>
     </thead>
@@ -158,6 +159,7 @@
             {% endif %}
         </td>
         {% endfor %}
+        <td></td>
         <td></td>
         <td></td>
     </tr>
@@ -203,7 +205,8 @@
                 {% endif %}
             </td>
             {% endfor %}
-            <td>{{ "%.2f" | format(h.wsgp) if h.wsgp else "—" }}{{ class_badge(h) }}</td>
+            <td>{{ "%.2f" | format(h.sgp) if h.sgp is not none else "—" }}{{ class_badge(h) }}</td>
+            <td>{{ "%+.2f" | format(h.delta_roto) if h.delta_roto is not none else "—" }}</td>
             <td>
                 {% if h.status %}
                 <span class="badge badge-il">{{ h.status }}</span>
@@ -230,7 +233,8 @@
             <th>SV</th>
             <th>ERA</th>
             <th>WHIP</th>
-            <th>wSGP</th>
+            <th>SGP</th>
+            <th>ΔRoto</th>
             <th></th>
         </tr>
     </thead>
@@ -256,6 +260,7 @@
             {% endif %}
         </td>
         {% endfor %}
+        <td></td>
         <td></td>
         <td></td>
     </tr>
@@ -298,7 +303,8 @@
                 {% endif %}
             </td>
             {% endfor %}
-            <td>{{ "%.2f" | format(p.wsgp) if p.wsgp else "—" }}{{ class_badge(p) }}</td>
+            <td>{{ "%.2f" | format(p.sgp) if p.sgp is not none else "—" }}{{ class_badge(p) }}</td>
+            <td>{{ "%+.2f" | format(p.delta_roto) if p.delta_roto is not none else "—" }}</td>
             <td>
                 {% if p.status %}
                 <span class="badge badge-il">{{ p.status }}</span>

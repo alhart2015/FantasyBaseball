@@ -187,9 +187,10 @@ class TestERotoMaximization:
             f"decisive starter B must have positive roto_delta, got {lineup[0].roto_delta}"
         )
 
-    def test_roto_delta_equals_best_total_when_irreplaceable(self):
-        """Single hitter, one slot — dropping them leaves no feasible lineup.
-        Their delta should reflect their full contribution (best_total), not 0."""
+    def test_roto_delta_positive_when_irreplaceable(self):
+        """Single hitter, one slot — dropping them leaves no feasible
+        replacement. Their delta should reflect their marginal contribution
+        (best_total − team_with_slot_empty), not the full best_total."""
         only = _hitter("Only", ["OF"], r=80, hr=30, rbi=90, sb=15, h=120, ab=450)
         slots = {"OF": 1, "BN": 0, "P": 9, "IL": 0}
         standings = [
@@ -202,8 +203,8 @@ class TestERotoMaximization:
             roster_slots=slots,
         )
         assert len(lineup) == 1
-        # Without Only, no feasible lineup exists → alt_best is None → delta = best_total.
-        # best_total > 0 here (we beat Rival on R, HR, RBI, SB, AVG by having any stats vs 0).
+        # Without Only, no feasible full-size lineup exists → fallback scores
+        # the team with the slot left empty. Delta = best_total − fallback.
         assert lineup[0].roto_delta > 0
 
 
