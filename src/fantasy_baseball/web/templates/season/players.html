@@ -239,6 +239,26 @@ function fmt(val, cat) {
     return Math.round(val);
 }
 
+function deltaRotoCell(p) {
+    if (p.delta_roto && typeof p.delta_roto.total === 'number') {
+        const v = p.delta_roto.total;
+        const color = v > 0.01 ? 'var(--success)' : (v < -0.01 ? 'var(--danger)' : 'var(--text-secondary)');
+        const sign = v > 0 ? '+' : '';
+        return '<span style="font-weight:600;color:' + color + '">' +
+            sign + v.toFixed(2) + '</span>';
+    }
+    // FAs without precomputed data get a compute button; others get em-dash.
+    if (p.owner == null) {
+        const safeName = p.name.replace(/"/g, '&quot;');
+        return '<button class="dr-compute" data-name="' + safeName +
+            '" data-ptype="' + p.player_type +
+            '" style="font-size:11px;padding:2px 8px;background:none;' +
+            'border:1px solid var(--panel-border);color:var(--text-secondary);' +
+            'border-radius:4px;cursor:pointer">Compute</button>';
+    }
+    return '\u2014';
+}
+
 function render() {
     if (!allPlayers) return;
     const pos = posFilter.value;
@@ -259,7 +279,7 @@ function render() {
     const effectivePos = pos || 'ALL';
     const isHitter = !mixed && isHitterFilter(pos);
     const cats = mixed ? [] : (isHitter ? HITTING_CATS : PITCHING_CATS);
-    const validCols = new Set(['rank', 'name', 'positions', 'team', 'owner', 'sgp', 'wsgp', ...cats]);
+    const validCols = new Set(['rank', 'name', 'positions', 'team', 'owner', 'sgp', 'delta_roto', ...cats]);
     if (!validCols.has(sortCol)) {
         sortCol = 'rank';
         sortAsc = true;
@@ -275,8 +295,17 @@ function render() {
 
     // Sort
     filtered.sort((a, b) => {
-        let va = sortCol === 'positions' ? (a.positions || []).join(',') : a[sortCol];
-        let vb = sortCol === 'positions' ? (b.positions || []).join(',') : b[sortCol];
+        let va, vb;
+        if (sortCol === 'positions') {
+            va = (a.positions || []).join(',');
+            vb = (b.positions || []).join(',');
+        } else if (sortCol === 'delta_roto') {
+            va = a.delta_roto ? a.delta_roto.total : null;
+            vb = b.delta_roto ? b.delta_roto.total : null;
+        } else {
+            va = a[sortCol];
+            vb = b[sortCol];
+        }
         if (va == null && vb == null) return 0;
         if (va == null) return 1;
         if (vb == null) return -1;
@@ -294,7 +323,7 @@ function render() {
         {key: 'owner', label: 'Owner'},
         ...cats.map(c => ({key: c, label: c})),
         {key: 'sgp', label: 'SGP'},
-        {key: 'wsgp', label: 'wSGP'},
+        {key: 'delta_roto', label: 'ΔRoto'},
     ];
 
     headEl.innerHTML = cols.map(c => {
@@ -342,7 +371,7 @@ function render() {
             cells += '<td class="' + sig + '">' + fmt(p[c], c) + '</td>';
         });
         cells += '<td>' + (p.sgp != null ? p.sgp.toFixed(1) : '\u2014') + '</td>';
-        cells += '<td>' + (p.wsgp != null ? p.wsgp.toFixed(1) : '\u2014') + '</td>';
+        cells += '<td>' + deltaRotoCell(p) + '</td>';
 
         return '<tr>' + cells + '</tr>';
     }).join('');
@@ -363,6 +392,34 @@ function render() {
             }
             render();
             updateComparison();
+        });
+    });
+
+    document.querySelectorAll('.dr-compute').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const name = btn.dataset.name;
+            const ptype = btn.dataset.ptype;
+            btn.disabled = true;
+            btn.textContent = '...';
+            const qs = new URLSearchParams({ player: name, player_type: ptype });
+            fetch('/api/players/delta_roto?' + qs)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.error) {
+                        btn.textContent = 'N/A';
+                        btn.title = data.error;
+                        return;
+                    }
+                    // Cache on the allPlayers record so sorts pick it up
+                    const record = allPlayers.find(p => p.name === name && p.player_type === ptype);
+                    if (record) record.delta_roto = data.delta_roto;
+                    const td = btn.closest('td');
+                    if (td) td.innerHTML = deltaRotoCell(record || { delta_roto: data.delta_roto, owner: null });
+                })
+                .catch(() => {
+                    btn.textContent = 'Error';
+                    btn.disabled = false;
+                });
         });
     });
 
@@ -440,7 +497,6 @@ function renderStatComparison(roster, other) {
         {label: 'ROS Rank', key: 'rank', inverse: true},
         ...cats.map(c => ({label: c, key: c, inverse: INVERSE_CATS.has(c)})),
         {label: 'Total SGP', key: 'sgp', inverse: false},
-        {label: 'wSGP', key: 'wsgp', inverse: false},
     ];
 
     const rLabel = roster.name + (roster.owner === 'roster' ? ' (Yours)' : (roster.owner ? '' : ' (FA)'));
@@ -469,7 +525,7 @@ function renderStatComparison(roster, other) {
             diffClass = better ? 'diff-positive' : (worse ? 'diff-negative' : '');
             const sign = diff > 0 ? '+' : '';
             diffFmt = isRate ? sign + diff.toFixed(r.key === 'AVG' ? 3 : 2)
-                     : r.key === 'sgp' || r.key === 'wsgp' ? sign + diff.toFixed(1)
+                     : r.key === 'sgp' ? sign + diff.toFixed(1)
                      : sign + Math.round(diff);
         }
 

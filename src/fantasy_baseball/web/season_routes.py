@@ -92,6 +92,19 @@ def _build_roster_maps(team_name: str):
     return pos_map, owner_map
 
 
+def _compute_worst_roster_by_position() -> dict[str, str]:
+    """Cache-backed ``{pool_pos: worst_roster_player_name}``. Empty if roster
+    cache is missing."""
+    from fantasy_baseball.lineup.roster_audit import worst_roster_by_position
+    from fantasy_baseball.models.player import Player
+
+    roster_raw = read_cache("roster") or []
+    if not roster_raw:
+        return {}
+    roster = [Player.from_dict(p) for p in roster_raw]
+    return worst_roster_by_position(roster)
+
+
 def _get_leverage() -> dict[str, float]:
     """Return per-category leverage weights (uniform fallback if no standings)."""
     from fantasy_baseball.lineup.leverage import calculate_leverage
@@ -615,39 +628,54 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/players/browse")
     def api_player_browse():
-        """Return all ROS-projected players with stats, rank, SGP, wSGP, ownership.
+        """Return all ROS-projected players with stats, rank, SGP, ownership,
+        and — for FAs — precomputed ΔRoto vs the worst roster player at
+        their position (pulled from the roster_audit cache).
 
         Reads from Redis caches (ros_projections, roster, opp_rosters,
-        rankings, leverage) so the page works without a local SQLite DB.
+        rankings, roster_audit) so the page works without a local SQLite DB.
         """
         from fantasy_baseball.utils.name_utils import normalize_name
         from fantasy_baseball.sgp.rankings import lookup_rank
         from fantasy_baseball.models.player import Player, HitterStats, PitcherStats, RankInfo
+        from fantasy_baseball.lineup.roster_audit import fa_target_positions
 
         ros_cache = read_cache("ros_projections")
         if not ros_cache:
             return jsonify([])
 
-        config = _load_config()
         rankings_cache = read_cache("rankings") or {}
-        leverage = _get_leverage()
 
         # Build position and ownership maps from Redis caches
         pos_map: dict[str, list[str]] = read_cache("positions") or {}
         owner_map: dict[str, str] = {}
-        roster_wsgp: dict[str, float] = {}
 
         for rp in (read_cache("roster") or []):
             norm = normalize_name(rp.get("name", ""))
             owner_map[norm] = "roster"
-            if rp.get("wsgp"):
-                roster_wsgp[norm] = rp["wsgp"]
 
         for team_name_opp, team_roster in (read_cache("opp_rosters") or {}).items():
             for rp in team_roster:
                 norm = normalize_name(rp.get("name", ""))
                 if norm not in owner_map:
                     owner_map[norm] = team_name_opp
+
+        # Precomputed ΔRoto: roster_audit already evaluated the top-N FAs at
+        # each roster slot.  Index every (drop_player, fa) pair so the browse
+        # page can surface ΔRoto directly without recomputation, then pair
+        # each FA with the worst-SGP roster player at their position.
+        audit_raw = read_cache("roster_audit") or []
+        audit_index: dict[tuple[str, str], dict] = {}
+        for entry in audit_raw:
+            drop_name = entry.get("player")
+            if not drop_name:
+                continue
+            for c in entry.get("candidates") or []:
+                fa_name = c.get("name")
+                dr = c.get("delta_roto")
+                if fa_name and dr:
+                    audit_index[(drop_name, fa_name)] = dr
+        worst_by_pos = _compute_worst_roster_by_position()
 
         players = []
         for pool in [ros_cache.get("hitters", []), ros_cache.get("pitchers", [])]:
@@ -677,11 +705,22 @@ def register_routes(app: Flask) -> None:
                     rest_of_season=ros,
                     rank=RankInfo.from_dict(rank_info),
                 )
-                cached = roster_wsgp.get(norm)
-                if cached is not None:
-                    p.wsgp = cached
-                else:
-                    p.compute_wsgp(leverage)
+
+                # ΔRoto: FAs only, max over eligible positions against the
+                # worst roster player at each pool position.
+                owner = owner_map.get(norm)
+                delta_roto = None
+                if owner is None:
+                    targets = fa_target_positions(ptype, p.positions, ros.sv if ptype == PlayerType.PITCHER else 0.0)
+                    for target_pos in targets:
+                        drop_name = worst_by_pos.get(target_pos)
+                        if not drop_name:
+                            continue
+                        dr = audit_index.get((drop_name, name))
+                        if dr is None:
+                            continue
+                        if delta_roto is None or dr["total"] > delta_roto["total"]:
+                            delta_roto = dr
 
                 result = {
                     "name": name,
@@ -689,10 +728,10 @@ def register_routes(app: Flask) -> None:
                     "player_type": ptype,
                     "fg_id": fg_id,
                     "positions": p.positions,
-                    "owner": owner_map.get(norm),
+                    "owner": owner,
                     "rank": p.rank.rest_of_season,
                     "sgp": round(ros.sgp, 2),
-                    "wsgp": round(p.wsgp, 2),
+                    "delta_roto": delta_roto,
                 }
 
                 if ptype == PlayerType.HITTER:
@@ -785,6 +824,83 @@ def register_routes(app: Flask) -> None:
             return jsonify(result), 404
 
         return jsonify(result)
+
+    @app.route("/api/players/delta_roto")
+    def api_player_delta_roto():
+        """Live-compute ΔRoto for an FA vs the worst-SGP roster player at
+        that FA's position.
+
+        Used by the players page for FAs outside the precomputed roster_audit
+        pools (top 5 C/1B/2B/3B/SS, top 15 OF, top 20 SP, top 10 RP). Returns
+        the best delta_roto.to_dict() across the FA's eligible positions.
+        """
+        from fantasy_baseball.lineup.delta_roto import compute_delta_roto
+        from fantasy_baseball.lineup.roster_audit import fa_target_positions
+        from fantasy_baseball.models.player import Player
+        from fantasy_baseball.utils.name_utils import normalize_name
+
+        player_name = request.args.get("player")
+        player_type = request.args.get("player_type")
+        if not player_name or not player_type:
+            return jsonify({"error": "player and player_type are required"}), 400
+
+        roster_raw = read_cache("roster")
+        if not roster_raw:
+            return jsonify({"error": "No roster data available"}), 404
+        user_roster = [Player.from_dict(p) for p in roster_raw]
+
+        proj_cache = read_cache("projections") or {}
+        projected_standings = proj_cache.get("projected_standings")
+        if not projected_standings:
+            return jsonify({"error": "No projected standings available"}), 404
+
+        # Resolve the FA's ROS projection from ros_projections (same source
+        # the browse page uses, so totals line up with the table row).
+        ros_cache = read_cache("ros_projections") or {}
+        pool_key = "pitchers" if player_type == "pitcher" else "hitters"
+        target_norm = normalize_name(player_name)
+        fa_player = None
+        for d in ros_cache.get(pool_key, []):
+            if normalize_name(d.get("name", "")) == target_norm:
+                fa_player = Player.from_dict({**d, "player_type": player_type})
+                break
+        if fa_player is None:
+            return jsonify({"error": f"{player_name} not found in projections"}), 404
+
+        # Worst roster player at the FA's target positions
+        pos_map = read_cache("positions") or {}
+        fa_positions = pos_map.get(target_norm, [])
+        sv = fa_player.rest_of_season.sv if player_type == "pitcher" else 0.0
+        targets = fa_target_positions(player_type, fa_positions, sv)
+
+        worst_by_pos = _compute_worst_roster_by_position()
+        config = _load_config()
+        team_sds = proj_cache.get("team_sds")
+
+        best = None
+        for target_pos in targets:
+            drop_name = worst_by_pos.get(target_pos)
+            if not drop_name:
+                continue
+            try:
+                dr = compute_delta_roto(
+                    drop_name=drop_name,
+                    add_player=fa_player,
+                    user_roster=user_roster,
+                    projected_standings=projected_standings,
+                    team_name=config.team_name,
+                    team_sds=team_sds,
+                )
+            except (ValueError, KeyError) as exc:
+                log.warning("live ΔRoto failed for %s vs %s: %s", player_name, drop_name, exc)
+                continue
+            d = dr.to_dict()
+            if best is None or d["total"] > best["total"]:
+                best = d
+
+        if best is None:
+            return jsonify({"error": "No comparable roster player at this position"}), 404
+        return jsonify({"delta_roto": best})
 
     @app.route("/luck")
     def luck():

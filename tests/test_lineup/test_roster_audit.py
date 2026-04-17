@@ -674,3 +674,62 @@ class TestAuditRosterTeamSDs:
             "roto_delta"
         ]
         assert abs(sb_delta) < 0.5
+
+
+class TestWorstRosterByPosition:
+    """worst_roster_by_position picks the lowest-SGP roster player eligible
+    at each pool position — the canonical drop target for FA evaluation."""
+
+    def test_single_position_picks_lowest_sgp(self):
+        from fantasy_baseball.lineup.roster_audit import worst_roster_by_position
+        roster = [
+            _hitter("Strong", ["OF"], r=100, hr=30, rbi=100, sb=20, avg=0.290, ab=500, h=145),
+            _hitter("Weak", ["OF"], r=40, hr=5, rbi=40, sb=2, avg=0.230, ab=300, h=69),
+        ]
+        worst = worst_roster_by_position(roster)
+        assert worst["OF"] == "Weak"
+
+    def test_multi_position_player_ranked_at_every_position(self):
+        from fantasy_baseball.lineup.roster_audit import worst_roster_by_position
+        roster = [
+            _hitter("Dual", ["2B", "SS"], r=40, hr=5, rbi=40, sb=2, avg=0.230, ab=300, h=69),
+            _hitter("SSOnly", ["SS"], r=100, hr=30, rbi=100, sb=20, avg=0.290, ab=500, h=145),
+        ]
+        worst = worst_roster_by_position(roster)
+        assert worst["2B"] == "Dual"  # only 2B-eligible player
+        assert worst["SS"] == "Dual"  # lower SGP than SSOnly
+
+    def test_pitchers_bucket_by_saves_threshold(self):
+        from fantasy_baseball.lineup.roster_audit import worst_roster_by_position
+        roster = [
+            _pitcher("Closer", ["P"], ip=60, sv=30, k=70, w=3, era=2.80),
+            _pitcher("WeakCloser", ["P"], ip=40, sv=10, k=40, w=1, era=4.20),
+            _pitcher("Ace", ["P"], ip=180, sv=0, k=200, w=15, era=2.90),
+            _pitcher("WeakSP", ["P"], ip=120, sv=0, k=90, w=5, era=4.80),
+        ]
+        worst = worst_roster_by_position(roster)
+        assert worst["RP"] == "WeakCloser"
+        assert worst["SP"] == "WeakSP"
+
+    def test_positions_with_no_eligible_player_are_absent(self):
+        from fantasy_baseball.lineup.roster_audit import worst_roster_by_position
+        roster = [_hitter("OFGuy", ["OF"], r=50, hr=10, rbi=50, sb=5, avg=0.250, ab=400, h=100)]
+        worst = worst_roster_by_position(roster)
+        assert worst == {"OF": "OFGuy"}  # no C/1B/2B/3B/SS/SP/RP keys
+
+
+class TestFATargetPositions:
+    """fa_target_positions drives ΔRoto lookup for the players page."""
+
+    def test_hitter_keeps_only_source_positions(self):
+        from fantasy_baseball.lineup.roster_audit import fa_target_positions
+        # Util / IF should not produce a ΔRoto target — they're lineup-only slots.
+        assert fa_target_positions("hitter", ["2B", "SS", "IF", "Util"], 0.0) == ["2B", "SS"]
+
+    def test_pitcher_sv_below_threshold_is_sp(self):
+        from fantasy_baseball.lineup.roster_audit import fa_target_positions
+        assert fa_target_positions("pitcher", ["P"], 2.0) == ["SP"]
+
+    def test_pitcher_sv_at_or_above_threshold_is_rp(self):
+        from fantasy_baseball.lineup.roster_audit import fa_target_positions
+        assert fa_target_positions("pitcher", ["P"], 25.0) == ["RP"]

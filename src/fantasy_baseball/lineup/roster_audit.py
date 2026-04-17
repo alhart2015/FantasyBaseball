@@ -77,6 +77,72 @@ def build_position_pools(
 LINEUP_ONLY_SLOTS: set[str] = {"IF", "UTIL", "Util", "P", "BN", "IL"}
 
 
+HITTER_SOURCE_POSITIONS: tuple[str, ...] = ("C", "1B", "2B", "3B", "SS", "OF")
+
+
+def worst_roster_by_position(
+    roster: list[Player],
+    denoms: dict[str, float] | None = None,
+) -> dict[str, str]:
+    """Return ``{pool_pos: worst_roster_player_name}`` — the lowest-SGP
+    roster player eligible at each pool position.
+
+    Buckets mirror :func:`build_position_pools`: hitter source positions
+    (C/1B/2B/3B/SS/OF) pick the lowest-SGP roster hitter eligible there,
+    pitchers split on ``RP_SV_THRESHOLD`` into SP/RP buckets. This is the
+    "drop candidate" used when pricing an FA's impact on the browse page.
+    """
+    if denoms is None:
+        denoms = get_sgp_denominators()
+
+    def _sgp(p: Player) -> float:
+        if p.rest_of_season is None:
+            return 0.0
+        return calculate_player_sgp(p.rest_of_season, denoms)
+
+    result: dict[str, str] = {}
+    for pos in HITTER_SOURCE_POSITIONS:
+        eligible = [
+            p for p in roster
+            if p.player_type == PlayerType.HITTER and pos in p.positions
+        ]
+        if eligible:
+            result[pos] = min(eligible, key=_sgp).name
+
+    sps = [
+        p for p in roster
+        if p.player_type == PlayerType.PITCHER
+        and p.rest_of_season is not None
+        and p.rest_of_season.sv < RP_SV_THRESHOLD
+    ]
+    rps = [
+        p for p in roster
+        if p.player_type == PlayerType.PITCHER
+        and p.rest_of_season is not None
+        and p.rest_of_season.sv >= RP_SV_THRESHOLD
+    ]
+    if sps:
+        result["SP"] = min(sps, key=_sgp).name
+    if rps:
+        result["RP"] = min(rps, key=_sgp).name
+    return result
+
+
+def fa_target_positions(
+    player_type: str,
+    positions: list[str],
+    sv: float,
+) -> list[str]:
+    """Return the pool positions an FA should be compared against.
+
+    Hitters: their Yahoo positions intersected with hitter source positions.
+    Pitchers: SP or RP based on projected saves (``RP_SV_THRESHOLD``).
+    """
+    if player_type == PlayerType.PITCHER.value or player_type == "pitcher":
+        return ["SP" if sv < RP_SV_THRESHOLD else "RP"]
+    return [p for p in positions if p in HITTER_SOURCE_POSITIONS]
+
+
 def candidates_for_player(
     player: Player,
     pools: dict[str, list[Player]],
