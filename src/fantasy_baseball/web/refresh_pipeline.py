@@ -652,10 +652,7 @@ class RefreshRun:
 
     # --- Step 7: Run lineup optimizer ---
     def _optimize_lineup(self):
-        from fantasy_baseball.lineup.optimizer import (
-            optimize_hitter_lineup_roto as optimize_hitter_lineup,
-            optimize_pitcher_lineup_roto as optimize_pitcher_lineup,
-        )
+        from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 
         self._progress("Optimizing lineup...")
         active_players = [p for p in self.roster_players if p.status not in IL_STATUSES]

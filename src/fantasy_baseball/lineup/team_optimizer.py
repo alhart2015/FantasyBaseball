@@ -16,8 +16,8 @@ from scipy.optimize import linear_sum_assignment
 from fantasy_baseball.lineup.optimizer import (
     HitterAssignment,
     PitcherStarter,
-    optimize_hitter_lineup_roto,
-    optimize_pitcher_lineup_roto,
+    optimize_hitter_lineup,
+    optimize_pitcher_lineup,
 )
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import Player, PlayerType
@@ -229,13 +229,13 @@ def compute_team_roto(
     hitters = [p for p in roster if p.player_type != PlayerType.PITCHER]
     pitchers = [p for p in roster if p.player_type == PlayerType.PITCHER]
 
-    hitter_lineup = optimize_hitter_lineup_roto(
+    hitter_lineup = optimize_hitter_lineup(
         hitters=hitters, full_roster=roster,
         projected_standings=projected_standings, team_name=team_name,
         roster_slots=roster_slots, team_sds=team_sds,
     )
     p_slots = roster_slots.get("P", 9)
-    pitcher_starters, pitcher_bench = optimize_pitcher_lineup_roto(
+    pitcher_starters, pitcher_bench = optimize_pitcher_lineup(
         pitchers=pitchers, full_roster=roster,
         projected_standings=projected_standings, team_name=team_name,
         slots=p_slots, team_sds=team_sds,

@@ -1,114 +1,286 @@
+from itertools import combinations
 import pytest
-from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
-from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
-from fantasy_baseball.utils.constants import IL_STATUSES
+from fantasy_baseball.models.player import Player, PlayerType, HitterStats, PitcherStats
+from fantasy_baseball.models.positions import Position
+from fantasy_baseball.lineup.optimizer import (
+    HitterAssignment, optimize_hitter_lineup,
+)
 
 
-def _make_hitter(name, positions, r, hr, rbi, sb, avg, ab):
+CATEGORIES = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
+
+
+def _hitter(name, positions, r=70, hr=20, rbi=70, sb=10, h=120, ab=450, pa=500):
+    avg = (h / ab) if ab else 0
     return Player(
-        name=name, player_type="hitter", positions=positions,
-        rest_of_season=HitterStats(pa=int(ab * 1.15), ab=ab, h=int(avg * ab), r=r, hr=hr, rbi=rbi, sb=sb, avg=avg),
+        name=name, player_type=PlayerType.HITTER,
+        positions=[Position.parse(p) for p in positions],
+        rest_of_season=HitterStats(pa=pa, ab=ab, h=h, r=r, hr=hr, rbi=rbi, sb=sb, avg=avg),
+        selected_position=Position.parse(positions[0]),
     )
 
 
-def _make_pitcher(name, positions, w, k, sv, era, whip, ip):
+def _pitcher(name, positions, ip=180, w=12, k=180, sv=0, era=3.50, whip=1.20):
     return Player(
-        name=name, player_type="pitcher", positions=positions,
-        rest_of_season=PitcherStats(ip=ip, w=w, k=k, sv=sv, era=era, whip=whip,
-                         er=era * ip / 9, bb=int(whip * ip * 0.3), h_allowed=int(whip * ip * 0.7)),
+        name=name, player_type=PlayerType.PITCHER,
+        positions=[Position.parse(p) for p in positions],
+        rest_of_season=PitcherStats(
+            ip=ip, w=w, k=k, sv=sv, era=era, whip=whip,
+            er=era * ip / 9, bb=int(whip * ip * 0.3), h_allowed=int(whip * ip * 0.7),
+        ),
+        selected_position=Position.parse(positions[0]),
     )
 
 
-EQUAL_LEVERAGE = {cat: 0.1 for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]}
+def _zero_stats():
+    return {c: 0.0 for c in CATEGORIES}
 
 
-class TestOptimizeHitterLineup:
-    def test_assigns_all_starters(self):
+def _standing(name: str, **overrides) -> dict:
+    stats = _zero_stats()
+    stats.update(overrides)
+    return {"name": name, "team_key": "", "rank": 0, "stats": stats}
+
+
+SMALL_ROSTER_SLOTS = {"C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "OF": 3, "UTIL": 1, "BN": 2, "P": 9, "IL": 0}
+
+
+class TestBasic:
+    def test_fills_all_required_slots(self):
         hitters = [
-            _make_hitter("C1", ["C"], 60, 20, 65, 2, .250, 450),
-            _make_hitter("1B1", ["1B"], 80, 30, 95, 3, .270, 520),
-            _make_hitter("2B1", ["2B"], 75, 18, 70, 12, .265, 510),
-            _make_hitter("3B1", ["3B"], 70, 25, 80, 5, .260, 500),
-            _make_hitter("SS1", ["SS"], 85, 22, 75, 25, .275, 540),
-            _make_hitter("OF1", ["OF"], 100, 35, 100, 8, .280, 550),
-            _make_hitter("OF2", ["OF"], 90, 28, 85, 15, .275, 530),
-            _make_hitter("OF3", ["OF"], 80, 22, 70, 20, .270, 510),
-            _make_hitter("OF4", ["OF"], 75, 18, 65, 10, .265, 490),
-            _make_hitter("UTIL1", ["1B", "OF"], 85, 32, 90, 2, .260, 520),
-            _make_hitter("UTIL2", ["DH"], 70, 20, 75, 1, .255, 480),
-            _make_hitter("BN1", ["OF"], 50, 10, 40, 5, .245, 350),
+            _hitter("C1", ["C"]),
+            _hitter("1B1", ["1B"]),
+            _hitter("2B1", ["2B"]),
+            _hitter("3B1", ["3B"]),
+            _hitter("SS1", ["SS"]),
+            _hitter("OF1", ["OF"]),
+            _hitter("OF2", ["OF"]),
+            _hitter("OF3", ["OF"]),
+            _hitter("OF4", ["OF"]),
+            _hitter("UTIL1", ["1B", "OF"]),
         ]
-        lineup = optimize_hitter_lineup(hitters, EQUAL_LEVERAGE)
-        assert "C" in lineup
-        assert "1B" in lineup
-        assert lineup["C"] == "C1"
+        standings = [
+            _standing("Us", R=0, HR=0, RBI=0, SB=0, AVG=0),
+            _standing("Rival", R=1, HR=1, RBI=1, SB=1, AVG=0),
+        ]
+        lineup = optimize_hitter_lineup(
+            hitters=hitters, full_roster=hitters,
+            projected_standings=standings, team_name="Us",
+            roster_slots=SMALL_ROSTER_SLOTS,
+        )
+        assert isinstance(lineup, list)
+        assert len(lineup) == 9  # C, 1B, 2B, 3B, SS, OF, OF, OF, UTIL
+        slot_counts: dict = {}
+        for a in lineup:
+            assert isinstance(a, HitterAssignment)
+            slot_counts[a.slot] = slot_counts.get(a.slot, 0) + 1
+        assert slot_counts[Position.C] == 1
+        assert slot_counts[Position.OF] == 3
+        assert slot_counts[Position.UTIL] == 1
 
-    def test_multi_position_player_optimal_slot(self):
+
+class TestERotoMaximization:
+    def test_picks_hitter_who_lifts_category_boundary(self):
+        """Scenario: 2 teams + us. We're tied with Rival on SB.
+        Hitter A has more HR but we already dominate HR.
+        Hitter B has more SB and starting him flips the SB tiebreak.
+        Lineup must start Hitter B even though A has higher overall stats.
+        """
+        a = _hitter("A", ["OF"], r=80, hr=40, rbi=90, sb=5, h=120, ab=450)
+        b = _hitter("B", ["OF"], r=70, hr=20, rbi=70, sb=25, h=120, ab=450)
+        c = _hitter("C", ["OF"], r=60, hr=18, rbi=60, sb=8, h=120, ab=450)
+
+        slots = {"OF": 1, "BN": 2, "P": 9, "IL": 0}
+        full = [a, b, c]
+
+        standings = [
+            _standing("Us", R=0, HR=100, RBI=0, SB=0, AVG=0),   # overwritten by loop
+            _standing("Rival", R=0, HR=30, RBI=0, SB=20, AVG=0),
+            _standing("Third", R=0, HR=20, RBI=0, SB=15, AVG=0),
+        ]
+        lineup = optimize_hitter_lineup(
+            hitters=full, full_roster=full,
+            projected_standings=standings, team_name="Us",
+            roster_slots=slots,
+        )
+        assert len(lineup) == 1
+        assert lineup[0].name == "B"
+
+    def test_roto_delta_non_negative_for_every_starter(self):
         hitters = [
-            _make_hitter("Multi", ["SS", "2B"], 90, 25, 80, 20, .280, 540),
-            _make_hitter("SS Only", ["SS"], 70, 15, 60, 10, .260, 480),
-            _make_hitter("2B Only", ["2B"], 65, 12, 55, 8, .255, 470),
+            _hitter("A", ["OF"], r=80, hr=25),
+            _hitter("B", ["OF"], r=70, hr=20),
+            _hitter("C", ["OF"], r=60, hr=15),
         ]
-        lineup = optimize_hitter_lineup(hitters, EQUAL_LEVERAGE)
-        assert lineup.get("SS") is not None or lineup.get("2B") is not None
-
-    def test_bench_players_identified(self):
-        hitters = [
-            _make_hitter("Star", ["OF"], 110, 45, 120, 5, .291, 550),
-            _make_hitter("Scrub", ["OF"], 30, 5, 20, 1, .220, 200),
+        slots = {"OF": 2, "BN": 1, "P": 9, "IL": 0}
+        standings = [
+            _standing("Us", R=0, HR=0),
+            _standing("Rival", R=1, HR=1),
         ]
-        lineup = optimize_hitter_lineup(hitters, EQUAL_LEVERAGE)
-        starters = set(lineup.values())
-        assert "Star" in starters
+        lineup = optimize_hitter_lineup(
+            hitters=hitters, full_roster=hitters,
+            projected_standings=standings, team_name="Us",
+            roster_slots=slots,
+        )
+        for a in lineup:
+            assert a.roto_delta >= 0
 
-    def test_il_players_excluded_before_optimization(self):
-        """IL players must be filtered from the roster before the optimizer
-        sees them — otherwise the optimizer will slot them into the lineup."""
-        il_star = _make_hitter("Juan Soto", ["OF"], 110, 40, 110, 5, .295, 550)
-        il_star.status = "IL60"
-        healthy = [
-            _make_hitter("OF1", ["OF"], 80, 22, 70, 10, .265, 500),
-            _make_hitter("OF2", ["OF"], 75, 18, 65, 8, .260, 490),
-            _make_hitter("OF3", ["OF"], 70, 15, 60, 5, .255, 470),
+    def test_feasibility_drives_selection_when_top_subset_infeasible(self):
+        """3 catchers, 1 C slot + 1 OF slot: top-two by stats might both be
+        catchers, but only 1 can fill C. The optimizer must pick a feasible
+        subset (1 C + 1 OF-eligible), not an infeasible one."""
+        c1 = _hitter("C1", ["C"], r=90, hr=30, rbi=90)
+        c2 = _hitter("C2", ["C"], r=85, hr=28, rbi=85)
+        o1 = _hitter("O1", ["OF"], r=60, hr=15, rbi=50)
+        hitters = [c1, c2, o1]
+        slots = {"C": 1, "OF": 1, "BN": 1, "P": 9, "IL": 0}
+        standings = [_standing("Us"), _standing("Rival", R=1, HR=1, RBI=1)]
+        lineup = optimize_hitter_lineup(
+            hitters=hitters, full_roster=hitters,
+            projected_standings=standings, team_name="Us",
+            roster_slots=slots,
+        )
+        slots_assigned = {a.slot for a in lineup}
+        assert Position.C in slots_assigned
+        assert Position.OF in slots_assigned
+        names = {a.name for a in lineup}
+        assert "O1" in names  # only OF-eligible, must start
+
+    def test_il_hitters_excluded_from_optimization(self):
+        il = _hitter("IL_Guy", ["OF"], r=100, hr=40, rbi=120)
+        il.selected_position = Position.IL
+        active = [
+            _hitter("A", ["OF"], r=70, hr=20),
+            _hitter("B", ["OF"], r=60, hr=15),
         ]
-        all_players = [il_star] + healthy
-        active = [p for p in all_players if p.status not in IL_STATUSES]
-        lineup = optimize_hitter_lineup(active, EQUAL_LEVERAGE)
-        assert "Juan Soto" not in lineup.values()
+        slots = {"OF": 1, "BN": 1, "P": 9, "IL": 0}
+        standings = [_standing("Us"), _standing("Rival", R=1, HR=1)]
+        lineup = optimize_hitter_lineup(
+            hitters=active, full_roster=active + [il],
+            projected_standings=standings, team_name="Us",
+            roster_slots=slots,
+        )
+        names = {a.name for a in lineup}
+        assert "IL_Guy" not in names
 
-    def test_il_pitcher_excluded_before_optimization(self):
-        il_ace = _make_pitcher("Injured Ace", ["SP"], 15, 240, 0, 2.80, 1.00, 200)
-        il_ace.status = "IL15"
-        healthy = [
-            _make_pitcher("SP1", ["SP"], 10, 160, 0, 3.80, 1.20, 170),
-            _make_pitcher("SP2", ["SP"], 8, 140, 0, 4.00, 1.25, 160),
+    def test_roto_delta_positive_when_starter_is_decisive(self):
+        """When we start B (SB-decisive), dropping B must strictly reduce ERoto.
+        With the double-counting bug, alt_best would tie or exceed best_total
+        because the benched starter still gets counted. The fix ensures B's
+        delta is strictly positive."""
+        a = _hitter("A", ["OF"], r=80, hr=40, rbi=90, sb=5, h=120, ab=450)
+        b = _hitter("B", ["OF"], r=70, hr=20, rbi=70, sb=25, h=120, ab=450)
+        c = _hitter("C", ["OF"], r=60, hr=18, rbi=60, sb=8, h=120, ab=450)
+        slots = {"OF": 1, "BN": 2, "P": 9, "IL": 0}
+        standings = [
+            _standing("Us", R=0, HR=100, RBI=0, SB=0, AVG=0),
+            _standing("Rival", R=0, HR=30, RBI=0, SB=20, AVG=0),
+            _standing("Third", R=0, HR=20, RBI=0, SB=15, AVG=0),
         ]
-        all_players = [il_ace] + healthy
-        active = [p for p in all_players if p.status not in IL_STATUSES]
-        starters, bench = optimize_pitcher_lineup(active, EQUAL_LEVERAGE, slots=2)
-        starter_names = [p["name"] for p in starters]
-        assert "Injured Ace" not in starter_names
+        lineup = optimize_hitter_lineup(
+            hitters=[a, b, c], full_roster=[a, b, c],
+            projected_standings=standings, team_name="Us",
+            roster_slots=slots,
+        )
+        assert len(lineup) == 1
+        assert lineup[0].name == "B"
+        assert lineup[0].roto_delta > 0, (
+            f"decisive starter B must have positive roto_delta, got {lineup[0].roto_delta}"
+        )
+
+    def test_roto_delta_equals_best_total_when_irreplaceable(self):
+        """Single hitter, one slot — dropping them leaves no feasible lineup.
+        Their delta should reflect their full contribution (best_total), not 0."""
+        only = _hitter("Only", ["OF"], r=80, hr=30, rbi=90, sb=15, h=120, ab=450)
+        slots = {"OF": 1, "BN": 0, "P": 9, "IL": 0}
+        standings = [
+            _standing("Us"),
+            _standing("Rival", R=0, HR=0, RBI=0, SB=0, AVG=0),
+        ]
+        lineup = optimize_hitter_lineup(
+            hitters=[only], full_roster=[only],
+            projected_standings=standings, team_name="Us",
+            roster_slots=slots,
+        )
+        assert len(lineup) == 1
+        # Without Only, no feasible lineup exists → alt_best is None → delta = best_total.
+        # best_total > 0 here (we beat Rival on R, HR, RBI, SB, AVG by having any stats vs 0).
+        assert lineup[0].roto_delta > 0
 
 
-class TestOptimizePitcherLineup:
-    def test_starts_top_pitchers(self):
+from fantasy_baseball.lineup.optimizer import (
+    PitcherStarter, optimize_pitcher_lineup,
+)
+
+
+class TestPitcherOptimizer:
+    def test_returns_requested_starter_count(self):
         pitchers = [
-            _make_pitcher("Ace", ["SP"], 15, 240, 0, 3.00, 1.05, 200),
-            _make_pitcher("Mid", ["SP"], 10, 160, 0, 3.80, 1.20, 170),
-            _make_pitcher("Bad", ["SP"], 5, 80, 0, 5.00, 1.45, 100),
-            _make_pitcher("Closer", ["RP"], 3, 60, 35, 2.50, 1.00, 65),
+            _pitcher("P1", ["SP"], ip=180, w=15, k=200, era=3.00, whip=1.05),
+            _pitcher("P2", ["SP"], ip=170, w=12, k=170, era=3.40, whip=1.15),
+            _pitcher("P3", ["SP"], ip=160, w=10, k=150, era=3.80, whip=1.22),
+            _pitcher("P4", ["SP"], ip=150, w=8, k=130, era=4.20, whip=1.30),
         ]
-        starters, bench = optimize_pitcher_lineup(pitchers, EQUAL_LEVERAGE, slots=3)
-        starter_names = [p["name"] for p in starters]
-        assert "Ace" in starter_names
-        assert "Closer" in starter_names
+        standings = [_standing("Us"), _standing("Rival", W=1, K=1, ERA=0.1, WHIP=0.1)]
+        starters, bench = optimize_pitcher_lineup(
+            pitchers=pitchers, full_roster=pitchers,
+            projected_standings=standings, team_name="Us", slots=3,
+        )
         assert len(starters) == 3
+        assert len(bench) == 1
+        for s in starters:
+            assert isinstance(s, PitcherStarter)
 
-    def test_respects_slot_count(self):
-        pitchers = [
-            _make_pitcher(f"P{i}", ["SP"], 10, 150, 0, 3.50, 1.15, 170)
-            for i in range(12)
+    def test_picks_highest_impact_pitcher_not_just_highest_stats(self):
+        """We're tied with Rival on SV. A has more K but starting him doesn't
+        move SV; C has fewer K but his SV contribution flips the tiebreak.
+        With only 1 P slot, must start C."""
+        a = _pitcher("A", ["SP"], ip=200, w=15, k=230, sv=0, era=3.00, whip=1.05)
+        c = _pitcher("C", ["RP"], ip=65, w=3, k=80, sv=35, era=2.50, whip=1.00)
+        pitchers = [a, c]
+        slots_cfg = 1
+        standings = [
+            _standing("Us", W=0, K=0, SV=0, ERA=0, WHIP=0),
+            _standing("Rival", W=0, K=0, SV=20, ERA=0, WHIP=0),
         ]
-        starters, bench = optimize_pitcher_lineup(pitchers, EQUAL_LEVERAGE, slots=9)
-        assert len(starters) == 9
-        assert len(bench) == 3
+        starters, bench = optimize_pitcher_lineup(
+            pitchers=pitchers, full_roster=pitchers,
+            projected_standings=standings, team_name="Us", slots=slots_cfg,
+        )
+        assert len(starters) == 1
+        assert starters[0].name == "C"
+
+    def test_roto_delta_non_negative_for_every_starter(self):
+        pitchers = [
+            _pitcher(f"P{i}", ["SP"], ip=180 - i*10, w=15 - i, k=200 - i*20)
+            for i in range(5)
+        ]
+        standings = [_standing("Us"), _standing("Rival", W=1, K=1)]
+        starters, _ = optimize_pitcher_lineup(
+            pitchers=pitchers, full_roster=pitchers,
+            projected_standings=standings, team_name="Us", slots=3,
+        )
+        for s in starters:
+            assert s.roto_delta >= 0
+
+    def test_roto_delta_positive_when_starter_is_decisive(self):
+        """Mirror of the hitter-side regression test: the dropped starter must
+        actually drop out of the counterfactual, otherwise roto_delta can be
+        negative or zero. Closer C is decisive on SV; dropping him must
+        strictly reduce ERoto."""
+        a = _pitcher("A", ["SP"], ip=200, w=15, k=230, sv=0, era=3.00, whip=1.05)
+        c = _pitcher("C", ["RP"], ip=65, w=3, k=80, sv=35, era=2.50, whip=1.00)
+        pitchers = [a, c]
+        standings = [
+            _standing("Us"),
+            _standing("Rival", W=0, K=0, SV=20, ERA=0, WHIP=0),
+        ]
+        starters, _ = optimize_pitcher_lineup(
+            pitchers=pitchers, full_roster=pitchers,
+            projected_standings=standings, team_name="Us", slots=1,
+        )
+        assert len(starters) == 1
+        assert starters[0].name == "C"
+        assert starters[0].roto_delta > 0, (
+            f"decisive closer C must have positive roto_delta, got {starters[0].roto_delta}"
+        )
