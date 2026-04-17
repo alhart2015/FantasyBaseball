@@ -22,7 +22,9 @@ from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.simulation import simulate_season
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
+    HITTING_COUNTING,
     INVERSE_STATS as INVERSE,
+    PITCHING_COUNTING,
 )
 ITERS = 1000
 
@@ -181,7 +183,7 @@ def main():
         roster = []
         for p in team_players[tn]:
             entry = {"player_type": p["player_type"]}
-            for s in HITTING_STATS + PITCHING_STATS:
+            for s in HITTING_COUNTING + PITCHING_COUNTING:
                 v = p.get(s, 0)
                 entry[s] = float(v) if v is not None and not (isinstance(v, float) and math.isnan(v)) else 0.0
             roster.append(entry)
