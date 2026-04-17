@@ -26,6 +26,7 @@ from fantasy_baseball.lineup.yahoo_roster import fetch_injuries, fetch_roster, f
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.lineup.waivers import scan_waivers, detect_open_slots, fetch_and_match_free_agents
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.rankings import compute_combined_sgp_rankings
 from fantasy_baseball.data.projections import match_roster_to_projections
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -227,12 +228,9 @@ def main():
         for p in il_players:
             print(f"  {p.name} ({p.status})")
 
-    from fantasy_baseball.models.player import PlayerType
-
     user_hitters = [p for p in active_roster if p.player_type == PlayerType.HITTER]
     user_pitchers = [p for p in active_roster if p.player_type == PlayerType.PITCHER]
 
-    # Hitter lineup (ERoto-max)
     hitter_lineup = optimize_hitter_lineup(
         hitters=user_hitters, full_roster=user_roster,
         projected_standings=projected_standings,
@@ -243,7 +241,6 @@ def main():
     for a in hitter_lineup:
         print(f"  {a.slot.value:<5} {a.name:<28} \u0394Roto: {a.roto_delta:>5.2f}")
 
-    # Pitcher lineup (ERoto-max)
     starter_pitchers, bench_pitchers = optimize_pitcher_lineup(
         pitchers=user_pitchers, full_roster=user_roster,
         projected_standings=projected_standings,

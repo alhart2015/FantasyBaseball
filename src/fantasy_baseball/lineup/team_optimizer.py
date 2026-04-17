@@ -1,13 +1,14 @@
-"""Shared team lineup optimization and wSGP computation.
+"""Shared team lineup optimization.
 
-Used by both the waiver scanner and the roster audit to evaluate
-lineup configurations via the Hungarian algorithm (hitters) and
-simple ranking (pitchers).
+Exposes two optimizers:
+  - ``compute_team_wsgp``: legacy leverage-weighted SGP (used by waivers +
+    roster audit).
+  - ``compute_team_roto``: ERoto-max optimizer, returning a team total and
+    both lineups.
 """
 
 from __future__ import annotations
 
-import dataclasses
 from dataclasses import dataclass
 
 import numpy as np
@@ -16,13 +17,15 @@ from scipy.optimize import linear_sum_assignment
 from fantasy_baseball.lineup.optimizer import (
     HitterAssignment,
     PitcherStarter,
+    _TeamContext,
+    _pitcher_active_slots,
+    apply_lineup_to_roster,
     optimize_hitter_lineup,
     optimize_pitcher_lineup,
+    team_roto_total,
 )
 from fantasy_baseball.lineup.weighted_sgp import calculate_weighted_sgp
 from fantasy_baseball.models.player import Player, PlayerType
-from fantasy_baseball.models.positions import HITTER_ELIGIBLE, Position
-from fantasy_baseball.scoring import project_team_stats, score_roto
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS
 from fantasy_baseball.utils.positions import can_fill_slot
@@ -241,35 +244,17 @@ def compute_team_roto(
         slots=p_slots, team_sds=team_sds,
     )
 
-    # Final total: recompute on the combined optimal lineup.
-    active_hitters = {a.name for a in hitter_lineup}
-    bench_hitters = {h.name for h in hitters} - active_hitters
-    active_pitchers = {s.name for s in pitcher_starters}
-    bench_pitchers = {p.name for p in pitcher_bench}
-
-    hypothetical: list[Player] = []
-    for p in roster:
-        if p.name in bench_hitters or p.name in bench_pitchers:
-            hypothetical.append(dataclasses.replace(p, selected_position=Position.BN))
-        elif p.name in active_hitters:
-            new_slot = next(
-                (pos for pos in p.positions if pos in HITTER_ELIGIBLE),
-                Position.UTIL,
-            )
-            hypothetical.append(dataclasses.replace(p, selected_position=new_slot))
-        elif p.name in active_pitchers:
-            new_slot = next(
-                (pos for pos in p.positions if pos in {Position.SP, Position.RP, Position.P}),
-                Position.P,
-            )
-            hypothetical.append(dataclasses.replace(p, selected_position=new_slot))
-        else:
-            hypothetical.append(p)
-
-    my_stats = project_team_stats(hypothetical, displacement=True).to_dict()
-    all_stats = {t["name"]: dict(t["stats"]) for t in projected_standings}
-    all_stats[team_name] = my_stats
-    total_roto = score_roto(all_stats, team_sds=team_sds)[team_name]["total"]
+    # The two optimizers score independently; recompute once on the combined
+    # lineup so the reported total reflects both sides together.
+    active_slots = {a.name: a.slot for a in hitter_lineup}
+    active_slots.update(_pitcher_active_slots([s.player for s in pitcher_starters]))
+    bench_names = (
+        {h.name for h in hitters} - {a.name for a in hitter_lineup}
+        | {p.name for p in pitcher_bench}
+    )
+    hypothetical = apply_lineup_to_roster(roster, active_slots, bench_names)
+    ctx = _TeamContext(roster, projected_standings, team_name, team_sds)
+    total_roto = team_roto_total(hypothetical, ctx)
 
     return TeamRotoResult(
         total_roto=total_roto,
