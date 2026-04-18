@@ -82,13 +82,13 @@ def simulate_season(
         - team_stats: {team_key: {R, HR, RBI, SB, AVG, W, K, SV, ERA, WHIP}}
         - injuries: {team_key: [(player_name, frac_missed), ...]}
     """
-    team_stats = {}
-    injuries = {}
+    team_stats: dict[str, dict[str, float]] = {}
+    injuries: dict[str, list[tuple[str, float]]] = {}
 
     for team_key, players in team_rosters.items():
         hitters = [p for p in players if p.get("player_type") == PlayerType.HITTER]
         pitchers = [p for p in players if p.get("player_type") == PlayerType.PITCHER]
-        team_injuries = []
+        team_injuries: list[tuple[str, float]] = []
 
         adj_hitters = _apply_variance(
             hitters, PlayerType.HITTER, rng, team_injuries,
@@ -184,8 +184,8 @@ def simulate_remaining_season(
         - team_stats: {team_key: {R, HR, RBI, SB, AVG, W, K, SV, ERA, WHIP}}
         - injuries: {team_key: [(player_name, frac_missed), ...]}
     """
-    team_stats = {}
-    injuries = {}
+    team_stats: dict[str, dict[str, float]] = {}
+    injuries: dict[str, list[tuple[str, float]]] = {}
 
     # Season over — just return actuals, no simulation needed
     if fraction_remaining <= 0:
@@ -198,7 +198,7 @@ def simulate_remaining_season(
         actuals = actual_standings.get(team_key, {})
         hitters = [p for p in players if p.get("player_type") == PlayerType.HITTER]
         pitchers = [p for p in players if p.get("player_type") == PlayerType.PITCHER]
-        team_injuries = []
+        team_injuries: list[tuple[str, float]] = []
 
         # Apply variance to full-season projections (covariance scaled down)
         adj_hitters = _apply_variance(
@@ -461,10 +461,10 @@ def run_monte_carlo(
     rng = np.random.default_rng(seed)
     team_names = list(flat_rosters.keys())
 
-    all_totals = {name: [] for name in team_names}
+    all_totals: dict[str, list[float]] = {name: [] for name in team_names}
     mc_wins = {name: 0 for name in team_names}
     mc_top3 = {name: 0 for name in team_names}
-    user_cat_pts = {c: [] for c in ALL_CATS}
+    user_cat_pts: dict[str, list[float]] = {c: [] for c in ALL_CATS}
 
     for i in range(n_iterations):
         if progress_cb and i % 200 == 0:
@@ -555,10 +555,10 @@ def run_ros_monte_carlo(
     rng = np.random.default_rng(seed)
     team_names = list(flat_rosters.keys())
 
-    all_totals = {name: [] for name in team_names}
+    all_totals: dict[str, list[float]] = {name: [] for name in team_names}
     mc_wins = {name: 0 for name in team_names}
     mc_top3 = {name: 0 for name in team_names}
-    user_cat_pts = {c: [] for c in ALL_CATS}
+    user_cat_pts: dict[str, list[float]] = {c: [] for c in ALL_CATS}
 
     for i in range(n_iterations):
         if progress_cb and i % 200 == 0:
