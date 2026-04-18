@@ -146,8 +146,6 @@ class RefreshRun:
         self.optimal_pitchers_starters = None
         self.optimal_pitchers_bench = None
         self.fa_players = None
-        self.base_mc = None
-        self.mgmt_mc = None
         self.rest_of_season_mc = None
         self.rest_of_season_mgmt_mc = None
 
@@ -188,7 +186,6 @@ class RefreshRun:
             self._fetch_probable_starters()
             self._audit_roster()
             self._compute_per_team_leverage()
-            self._run_monte_carlo()
             self._run_ros_monte_carlo()
             self._compute_spoe()
             self._analyze_transactions()
@@ -744,31 +741,6 @@ class RefreshRun:
             )
         write_cache("leverage", leverage_by_team, self.cache_dir)
 
-    # --- Step 12: Monte Carlo simulation ---
-    def _run_monte_carlo(self):
-        from fantasy_baseball.simulation import run_monte_carlo
-
-        h_slots = sum(v for k, v in self.config.roster_slots.items()
-                      if k not in ("P", "BN", "IL", "DL"))
-        p_slots = self.config.roster_slots.get("P", 9)
-
-        all_team_rosters = {self.config.team_name: self.matched}
-        all_team_rosters.update(self.opp_rosters)
-        mc_rosters = all_team_rosters
-
-        self.base_mc = run_monte_carlo(
-            mc_rosters, h_slots, p_slots, self.config.team_name,
-            n_iterations=1000, use_management=False,
-            progress_cb=lambda i: self._progress(f"Monte Carlo: iteration {i}/1000..."),
-        )
-        self._progress("Pre-season Monte Carlo complete")
-        self.mgmt_mc = run_monte_carlo(
-            mc_rosters, h_slots, p_slots, self.config.team_name,
-            n_iterations=1000, use_management=True,
-            progress_cb=lambda i: self._progress(f"MC + Roster Mgmt: iteration {i}/1000..."),
-        )
-        self._progress("Pre-season + Mgmt Monte Carlo complete")
-
     # --- Step 13b: ROS Monte Carlo simulation ---
     def _run_ros_monte_carlo(self):
         self.rest_of_season_mc = None
@@ -826,9 +798,27 @@ class RefreshRun:
                 )
                 self._progress("Current + Mgmt Monte Carlo complete")
 
+        from fantasy_baseball.data.redis_store import (
+            get_default_client as _get_redis_client,
+        )
+        from fantasy_baseball.data.redis_store import (
+            get_preseason_baseline,
+        )
+        _redis_client = _get_redis_client()
+        baseline = (
+            get_preseason_baseline(_redis_client, self.config.season_year)
+            if _redis_client is not None else None
+        ) or {}
+        if not baseline:
+            self._progress(
+                "Preseason baseline missing — "
+                "run scripts/freeze_preseason_baseline.py"
+            )
+
         write_cache("monte_carlo", {
-            "base": self.base_mc,
-            "with_management": self.mgmt_mc,
+            "base": baseline.get("base"),
+            "with_management": baseline.get("with_management"),
+            "baseline_meta": baseline.get("meta"),
             "rest_of_season": self.rest_of_season_mc,
             "rest_of_season_with_management": self.rest_of_season_mgmt_mc,
         }, self.cache_dir)

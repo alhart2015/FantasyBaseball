@@ -167,3 +167,34 @@ class TestMonteCarloROSBranch:
         else:
             assert data["rest_of_season"] is None
             assert data["rest_of_season_with_management"] is None
+
+
+class TestPreseasonBaseline:
+    """The refresh reads preseason_baseline:{year} from Redis; if
+    missing, the base/with_management cache fields are None but the
+    refresh still completes."""
+
+    def test_baseline_present_populates_cache(
+        self, configured_test_env, fake_redis,
+    ):
+        cache_dir = configured_test_env
+        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
+            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+        data = _read(cache_dir, "monte_carlo")
+        assert data["base"] is not None
+        assert data["with_management"] is not None
+        assert "team_results" in data["base"]
+        assert data["baseline_meta"]["roster_date"] == "2026-03-27"
+
+    def test_baseline_missing_leaves_none(
+        self, configured_test_env, fake_redis,
+    ):
+        cache_dir = configured_test_env
+        # Intentionally strip the baseline that the fixture seeds.
+        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
+            fake_redis.delete("preseason_baseline:2026")
+            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+        data = _read(cache_dir, "monte_carlo")
+        assert data["base"] is None
+        assert data["with_management"] is None
+        assert data["baseline_meta"] is None

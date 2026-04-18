@@ -218,7 +218,7 @@ def patched_refresh_environment(
     - fetch_and_match_free_agents: returns ([Player...], None)
     - fetch_game_log_totals: seeds canned game logs into fake Redis
     - get_week_schedule, get_team_batting_stats: return canned/empty
-    - run_monte_carlo, run_ros_monte_carlo: 10 iters instead of 1000
+    - run_ros_monte_carlo: 10 iters instead of 1000; preseason baseline seeded in Redis
     - get_default_client (data.redis_store): returns fake_redis
     - read_cache("ros_projections"): returns ROS proj rows or None
     """
@@ -311,20 +311,40 @@ def patched_refresh_environment(
                 cache_dir,
             )
 
-    # Capture the real Monte Carlo functions BEFORE patching them,
+    # Capture the real Monte Carlo function BEFORE patching it,
     # otherwise the scaled wrapper calls itself recursively.
     from fantasy_baseball.simulation import (
-        run_monte_carlo as _real_mc,
         run_ros_monte_carlo as _real_ros_mc,
     )
 
-    def _scaled_mc(team_rosters, h_slots, p_slots, user_team_name,
-                   n_iterations=1000, use_management=False, progress_cb=None):
-        return _real_mc(
-            team_rosters, h_slots, p_slots, user_team_name,
-            n_iterations=10, use_management=use_management,
-            progress_cb=progress_cb,
-        )
+    # Seed a canned preseason baseline so refresh reads it from Redis
+    # instead of running the (now-deleted) preseason MC live.
+    from fantasy_baseball.data.redis_store import set_preseason_baseline
+    _canned_mc = {
+        "team_results": {
+            tname: {
+                "median_pts": 70.0, "p10": 60.0, "p90": 80.0,
+                "first_pct": 8.0, "top3_pct": 25.0,
+            }
+            for tname in rosters
+        },
+        "category_risk": {
+            cat: {"median_pts": 7.0, "p10": 4.0, "p90": 10.0,
+                  "top3_pct": 25.0, "bot3_pct": 20.0}
+            for cat in ("R", "HR", "RBI", "SB", "AVG",
+                        "W", "K", "SV", "ERA", "WHIP")
+        },
+    }
+    set_preseason_baseline(fake_redis, 2026, {
+        "base": _canned_mc,
+        "with_management": _canned_mc,
+        "meta": {
+            "frozen_at": "2026-04-17T00:00:00Z",
+            "season_year": 2026,
+            "roster_date": "2026-03-27",
+            "projections_source": "blended",
+        },
+    })
 
     def _scaled_ros_mc(*, team_rosters, actual_standings, fraction_remaining,
                        h_slots, p_slots, user_team_name,
@@ -382,7 +402,6 @@ def patched_refresh_environment(
         # ROS blend pipeline
         patch("fantasy_baseball.data.ros_pipeline.blend_and_cache_ros", side_effect=_ros_pipeline_blend),
         # Monte Carlo: patch at the source module
-        patch("fantasy_baseball.simulation.run_monte_carlo", side_effect=_scaled_mc),
         patch("fantasy_baseball.simulation.run_ros_monte_carlo", side_effect=_scaled_ros_mc),
         # Redis clients
         patch("fantasy_baseball.data.redis_store.get_default_client", return_value=fake_redis),
