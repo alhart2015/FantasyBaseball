@@ -77,6 +77,7 @@ def _standings_to_snapshot(
                 team_key=t.get("team_key", ""),
                 rank=t.get("rank", 0),
                 stats=CategoryStats.from_dict(t.get("stats", {})),
+                yahoo_points_for=t.get("points_for"),
             )
             for t in standings
         ],
@@ -222,6 +223,13 @@ def format_standings_for_display(
 
     Returns:
         {"teams": [...]} where each team has roto_points, is_user flag, color_classes, and rank.
+
+    When every entry has ``yahoo_points_for`` set (live Yahoo standings
+    path), the displayed total and rank come from Yahoo to match the
+    official standings page exactly — display-precision ties in our
+    rounded rate stats can't be broken locally. Per-category points
+    still come from ``score_roto``, so category cells may not sum to
+    the headline total; the gap is ±0.5 per tie and nets to zero.
     """
     if not standings.entries:
         return {"teams": []}
@@ -231,13 +239,21 @@ def format_standings_for_display(
     all_stats = {e.team_name: e.stats for e in standings.entries}
     roto = score_roto(all_stats, team_sds=team_sds)
 
+    has_yahoo_totals = all(
+        e.yahoo_points_for is not None for e in standings.entries
+    )
+    yahoo_rank_by_name = {e.team_name: e.rank for e in standings.entries}
+
     cat_ranks = _compute_category_ranks(standings)
 
     teams = []
     for entry in standings.entries:
         name = entry.team_name
-        is_user = name == user_team_name
-        roto_pts = roto[name]
+        roto_pts = dict(roto[name])
+
+        if has_yahoo_totals:
+            roto_pts["score_roto_total"] = roto_pts["total"]
+            roto_pts["total"] = entry.yahoo_points_for
 
         color_classes = {}
         for cat in ALL_CATEGORIES:
@@ -258,15 +274,20 @@ def format_standings_for_display(
             "team_key": entry.team_key,
             "stats": entry.stats,
             "roto_points": roto_pts,
-            "is_user": is_user,
+            "is_user": name == user_team_name,
             "color_classes": color_classes,
             "sds": team_sds.get(name, {}) if team_sds else {},
         })
 
-    teams.sort(key=lambda t: t["roto_points"]["total"], reverse=True)
-
-    for i, t in enumerate(teams):
-        t["rank"] = i + 1
+    if has_yahoo_totals:
+        teams.sort(key=lambda t: (-t["roto_points"]["total"],
+                                  yahoo_rank_by_name[t["name"]]))
+        for t in teams:
+            t["rank"] = yahoo_rank_by_name[t["name"]]
+    else:
+        teams.sort(key=lambda t: t["roto_points"]["total"], reverse=True)
+        for i, t in enumerate(teams):
+            t["rank"] = i + 1
 
     return {"teams": teams}
 

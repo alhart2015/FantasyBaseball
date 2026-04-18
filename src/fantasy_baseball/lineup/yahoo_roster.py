@@ -2,6 +2,7 @@
 
 import datetime
 import logging
+from dataclasses import dataclass, field
 
 from fantasy_baseball.utils.time_utils import local_today
 
@@ -20,6 +21,34 @@ YAHOO_STAT_ID_MAP: dict[str, str] = {
     "26": "ERA",
     "27": "WHIP",
 }
+
+
+@dataclass
+class ParsedStandingsTeam:
+    """One team as parsed from Yahoo's raw standings JSON.
+
+    Mirrors the wire-format dict emitted by :func:`parse_standings_raw`
+    — ``to_dict()`` is the single source for that mapping. ``stats`` is
+    a sparse ``{cat: value}`` mapping (empty pre-season; filled via
+    ``_fill_stat_defaults`` at the refresh boundary). ``points_for`` is
+    Yahoo's authoritative roto total and is ``None`` when Yahoo hasn't
+    scored the week yet (e.g. projected standings).
+    """
+
+    name: str = ""
+    team_key: str = ""
+    rank: int = 0
+    stats: dict[str, float] = field(default_factory=dict)
+    points_for: float | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "team_key": self.team_key,
+            "rank": self.rank,
+            "stats": self.stats,
+            "points_for": self.points_for,
+        }
 
 
 def fetch_roster(
@@ -145,7 +174,8 @@ def parse_standings_raw(
     """Parse raw Yahoo standings JSON into a list of team dicts.
 
     The library's ``standings()`` method omits per-category stat totals,
-    so we parse the raw JSON directly.
+    so we parse the raw JSON directly. See ``ParsedStandingsTeam`` for
+    the emitted shape.
     """
     # Navigate: fantasy_content.league[1].standings[0].teams
     league_data = raw.get("fantasy_content", {}).get("league", [])
@@ -156,7 +186,7 @@ def parse_standings_raw(
         return []
     raw_teams = standings_block[0].get("teams", {})
 
-    teams = []
+    teams: list[ParsedStandingsTeam] = []
     for key in sorted(raw_teams.keys()):
         if key == "count":
             continue
@@ -164,28 +194,44 @@ def parse_standings_raw(
         if not team_entry or len(team_entry) < 2:
             continue
 
+        team = ParsedStandingsTeam()
+
         # First element is a list of metadata dicts
         meta_list = team_entry[0] if isinstance(team_entry[0], list) else []
-        team: dict = {"name": "", "team_key": "", "rank": 0, "stats": {}}
         for item in meta_list:
             if isinstance(item, dict):
                 if "team_key" in item:
-                    team["team_key"] = item["team_key"]
+                    team.team_key = item["team_key"]
                 if "name" in item:
-                    team["name"] = item["name"]
+                    team.name = item["name"]
 
-        # Second element has team_stats and team_standings
+        # team_standings may live at team_entry[1] or team_entry[2] depending on
+        # the Yahoo response shape; check both positions.
+        standings_candidates: list[dict] = []
         detail = team_entry[1] if len(team_entry) > 1 else {}
-        if isinstance(detail, dict):
-            # Parse rank from team_standings
-            ts = detail.get("team_standings", {})
-            if ts:
-                try:
-                    team["rank"] = int(ts.get("rank", 0))
-                except (ValueError, TypeError):
-                    team["rank"] = 0
+        if isinstance(detail, dict) and detail.get("team_standings"):
+            standings_candidates.append(detail["team_standings"])
+        if len(team_entry) > 2 and isinstance(team_entry[2], dict):
+            extra = team_entry[2].get("team_standings")
+            if extra:
+                standings_candidates.append(extra)
 
-            # Parse per-category stats from team_stats
+        for ts in standings_candidates:
+            if team.rank == 0:
+                try:
+                    team.rank = int(ts.get("rank", 0))
+                except (ValueError, TypeError):
+                    team.rank = 0
+            if team.points_for is None:
+                raw_pts = ts.get("points_for")
+                if raw_pts not in (None, ""):
+                    try:
+                        team.points_for = float(raw_pts)
+                    except (ValueError, TypeError):
+                        pass
+
+        # Parse per-category stats from team_stats
+        if isinstance(detail, dict):
             team_stats = detail.get("team_stats", {})
             for stat_entry in team_stats.get("stats", []):
                 stat = stat_entry.get("stat", {})
@@ -193,22 +239,13 @@ def parse_standings_raw(
                 val = stat.get("value", "")
                 if sid in stat_id_map and val != "":
                     try:
-                        team["stats"][stat_id_map[sid]] = float(val)
+                        team.stats[stat_id_map[sid]] = float(val)
                     except (ValueError, TypeError):
                         pass
 
-        # Third element (if present) may also have team_standings
-        if len(team_entry) > 2 and isinstance(team_entry[2], dict):
-            ts = team_entry[2].get("team_standings", {})
-            if ts and team["rank"] == 0:
-                try:
-                    team["rank"] = int(ts.get("rank", 0))
-                except (ValueError, TypeError):
-                    pass
-
         teams.append(team)
 
-    return teams
+    return [t.to_dict() for t in teams]
 
 
 def fetch_free_agents(league, position: str, count: int = 50) -> list[dict]:

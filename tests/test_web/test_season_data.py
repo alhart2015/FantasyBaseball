@@ -74,6 +74,59 @@ def test_format_standings_color_codes_all_teams():
     assert skel["color_classes"]["SB"] != ""
 
 
+def test_format_standings_prefers_yahoo_points_for():
+    """When every entry carries points_for, displayed total matches Yahoo exactly.
+
+    Guards against the bug where display-level ties (two teams shown
+    WHIP=1.03) made our score_roto diverge from Yahoo by ±0.5. The
+    fix: when points_for is present, use it directly for total and
+    rank instead of recomputing.
+    """
+    # Two teams with display-level tied WHIP (1.03) but Yahoo-reported
+    # points_for that tie-breaks in favor of Team A. Our score_roto alone
+    # would give each 9.5 (averaged); Yahoo gives 10 / 9.
+    standings = [
+        {"name": "Team A", "team_key": "a", "rank": 1,
+         "stats": {"R": 100, "HR": 30, "RBI": 90, "SB": 20, "AVG": 0.260,
+                   "W": 10, "K": 200, "SV": 10, "ERA": 3.50, "WHIP": 1.03},
+         "points_for": 20.0},
+        {"name": "Team B", "team_key": "b", "rank": 2,
+         "stats": {"R": 90, "HR": 25, "RBI": 80, "SB": 15, "AVG": 0.255,
+                   "W": 8, "K": 180, "SV": 8, "ERA": 3.80, "WHIP": 1.03},
+         "points_for": 11.0},
+    ]
+    data = format_standings_for_display(_standings_to_snapshot(standings), "Team A")
+    by_name = {t["name"]: t for t in data["teams"]}
+
+    # Totals are Yahoo's, not score_roto's averaged-tie output.
+    assert by_name["Team A"]["roto_points"]["total"] == 20.0
+    assert by_name["Team B"]["roto_points"]["total"] == 11.0
+    # score_roto's original total preserved for diagnostics.
+    assert "score_roto_total" in by_name["Team A"]["roto_points"]
+    # Ranking comes from Yahoo's rank.
+    assert by_name["Team A"]["rank"] == 1
+    assert by_name["Team B"]["rank"] == 2
+
+
+def test_format_standings_falls_back_without_points_for():
+    """Projected standings (no points_for) still use score_roto."""
+    standings = [
+        {"name": "Team A", "team_key": "a", "rank": 0,
+         "stats": {"R": 100, "HR": 30, "RBI": 90, "SB": 20, "AVG": 0.260,
+                   "W": 10, "K": 200, "SV": 10, "ERA": 3.50, "WHIP": 1.20}},
+        {"name": "Team B", "team_key": "b", "rank": 0,
+         "stats": {"R": 90, "HR": 25, "RBI": 80, "SB": 15, "AVG": 0.255,
+                   "W": 8, "K": 180, "SV": 8, "ERA": 3.80, "WHIP": 1.25}},
+    ]
+    data = format_standings_for_display(_standings_to_snapshot(standings), "Team A")
+    by_name = {t["name"]: t for t in data["teams"]}
+    # Team A dominates every category → score_roto total = 2 * 10 = 20
+    assert by_name["Team A"]["roto_points"]["total"] == 20.0
+    assert by_name["Team B"]["roto_points"]["total"] == 10.0
+    assert by_name["Team A"]["rank"] == 1
+    assert "score_roto_total" not in by_name["Team A"]["roto_points"]
+
+
 def test_format_standings_tied_teams_same_color():
     """Teams tied in a category should get the same rank-based color class."""
     standings = _standings_to_snapshot([

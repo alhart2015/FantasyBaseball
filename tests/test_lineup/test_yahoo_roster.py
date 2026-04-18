@@ -51,8 +51,11 @@ def _make_raw_standings(teams_data):
             {"name": td.get("name", f"Team {i+1}")},
         ]
         detail = {}
-        if "rank" in td or "stats" in td:
-            detail["team_standings"] = {"rank": td.get("rank", 0)}
+        if "rank" in td or "stats" in td or "points_for" in td:
+            ts: dict = {"rank": td.get("rank", 0)}
+            if "points_for" in td:
+                ts["points_for"] = td["points_for"]
+            detail["team_standings"] = ts
         if "stats" in td:
             detail["team_stats"] = {
                 "coverage_type": "season",
@@ -101,6 +104,28 @@ class TestParseStandings:
         }])
         standings = parse_standings_raw(raw, stat_id_map={"60": "R", "7": "HR"})
         assert standings[0]["stats"] == {}
+
+    def test_extracts_points_for(self):
+        """Yahoo's authoritative roto total must be pulled off team_standings."""
+        raw = _make_raw_standings([{
+            "name": "Spacemen",
+            "team_key": "469.l.5652.t.7",
+            "rank": 1,
+            "stats": {"7": 136},
+            "points_for": "74.5",
+        }])
+        standings = parse_standings_raw(raw, stat_id_map={"7": "R"})
+        assert standings[0]["points_for"] == 74.5
+
+    def test_points_for_absent_is_none(self):
+        """Pre-season / projected standings have no points_for — must be None."""
+        raw = _make_raw_standings([{
+            "name": "Team A",
+            "rank": 1,
+            "stats": {"7": 10},
+        }])
+        standings = parse_standings_raw(raw, stat_id_map={"7": "R"})
+        assert standings[0]["points_for"] is None
 
 
 def _make_raw_roster_players(players_data):
