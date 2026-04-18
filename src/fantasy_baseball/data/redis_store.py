@@ -135,6 +135,56 @@ def set_blended_projections(
     client.set(key, json.dumps(rows))
 
 
+def _preseason_baseline_key(season_year: int) -> str:
+    return f"preseason_baseline:{season_year}"
+
+
+def get_preseason_baseline(client, season_year: int) -> dict | None:
+    """Read the frozen preseason Monte Carlo baseline for ``season_year``.
+
+    Returns ``None`` on missing key, corrupt JSON, non-dict payload, or
+    ``client is None``. Shape on success::
+
+        {"base": {...}, "with_management": {...}, "meta": {...}}
+
+    where ``base`` / ``with_management`` are ``run_monte_carlo`` outputs
+    captured once per season against Opening-Day rosters + preseason
+    projections.
+    """
+    if client is None:
+        return None
+    raw = client.get(_preseason_baseline_key(season_year))
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning(
+            "Corrupt JSON at Redis key %r; ignoring",
+            _preseason_baseline_key(season_year),
+        )
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def set_preseason_baseline(
+    client, season_year: int, payload: dict
+) -> None:
+    """Overwrite the frozen preseason baseline for ``season_year``.
+
+    The caller is responsible for the payload shape; this helper just
+    serializes and stores. No-op when ``client is None`` (e.g. in
+    unconfigured environments).
+    """
+    if client is None:
+        return
+    client.set(
+        _preseason_baseline_key(season_year), json.dumps(payload)
+    )
+
+
 ROS_PROJECTIONS_KEY = "cache:ros_projections"
 
 
