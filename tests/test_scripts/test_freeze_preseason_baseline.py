@@ -1,6 +1,7 @@
 """Tests for scripts/freeze_preseason_baseline.py."""
 
 import sys
+from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -10,7 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 
-def _mk_config(monkeypatch):
+def _mk_config():
     from fantasy_baseball.config import LeagueConfig
 
     return LeagueConfig(
@@ -118,7 +119,7 @@ def patched_script_env(fake_redis, monkeypatch):
     }
 
     def _fetch_roster(league, team_key, day=None):
-        assert day == "2026-03-27"
+        assert day == date(2026, 3, 27)
         if team_key == "t.1":
             return [_fake_hitter("H1", "1"), _fake_pitcher("P1", "2")]
         return [_fake_hitter("H2", "3"), _fake_pitcher("P2", "4")]
@@ -139,7 +140,7 @@ def patched_script_env(fake_redis, monkeypatch):
         }
 
     patches = [
-        patch("fantasy_baseball.config.load_config", return_value=_mk_config(monkeypatch)),
+        patch("fantasy_baseball.config.load_config", return_value=_mk_config()),
         patch("fantasy_baseball.auth.yahoo_auth.get_yahoo_session", return_value=MagicMock()),
         patch("fantasy_baseball.auth.yahoo_auth.get_league", return_value=league_mock),
         patch("fantasy_baseball.lineup.yahoo_roster.fetch_roster", side_effect=_fetch_roster),

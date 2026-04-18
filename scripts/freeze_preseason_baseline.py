@@ -76,10 +76,11 @@ def main(argv: list[str] | None = None) -> None:
     league = get_league(sc, config.league_id, config.game_code)
 
     print(f"Fetching Opening-Day rosters (day={config.season_start})...")
+    _roster_date = _dt.date.fromisoformat(config.season_start)
     team_rosters_raw: dict[str, list[dict]] = {}
     for team_key, team_info in league.teams().items():
         tname = team_info.get("name", team_key)
-        team_rosters_raw[tname] = fetch_roster(league, team_key, day=config.season_start)
+        team_rosters_raw[tname] = fetch_roster(league, team_key, day=_roster_date)
         print(f"  {tname}: {len(team_rosters_raw[tname])} players")
 
     print("Loading preseason projections from Redis...")
