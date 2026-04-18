@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch
-from fantasy_baseball.web.season_data import format_standings_for_display, get_teams_list, _opponent_cache, clear_opponent_cache, _standings_to_snapshot
+from fantasy_baseball.web.season_data import CacheKey, format_standings_for_display, get_teams_list, _opponent_cache, clear_opponent_cache, _standings_to_snapshot
 from fantasy_baseball.web.season_app import create_app
 
 
@@ -65,7 +65,7 @@ class TestApiTeams:
     def test_returns_teams_from_standings_cache(self, client):
         with patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc, \
              patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
-            mock_rc.side_effect = lambda k: _sample_standings() if k == "standings" else None
+            mock_rc.side_effect = lambda k: _sample_standings() if k == CacheKey.STANDINGS else None
             mock_cfg.return_value.team_name = "Hart of the Order"
             resp = client.get("/api/teams")
         assert resp.status_code == 200
@@ -235,7 +235,7 @@ class TestApiOpponentLineup:
         hitters_proj, pitchers_proj = _sample_projections()
 
         def mock_cache(key):
-            if key == "standings":
+            if key == CacheKey.STANDINGS:
                 return _sample_standings()
             return None
 
@@ -269,7 +269,7 @@ class TestStandingsLinks:
         with patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc, \
              patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm, \
              patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
-            mock_rc.side_effect = lambda k: standings if k == "standings" else {}
+            mock_rc.side_effect = lambda k: standings if k == CacheKey.STANDINGS else {}
             mock_rm.return_value = {"last_refresh": "9:00 AM", "week": "1"}
             mock_cfg.return_value.team_name = "Hart of the Order"
             resp = client.get("/standings")
