@@ -69,7 +69,7 @@ def main():
 
         from upstash_redis import Redis
 
-        from fantasy_baseball.web.season_data import CacheKey, redis_key
+        from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 
         redis = Redis(url=url, token=token)
         redis.delete(redis_key(CacheKey.TRANSACTION_ANALYZER))

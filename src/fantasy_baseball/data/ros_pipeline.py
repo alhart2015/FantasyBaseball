@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from fantasy_baseball.data.cache_keys import CacheKey
 from fantasy_baseball.data.projections import (
     blend_projections,
     normalize_rest_of_season_to_full_season,
@@ -109,7 +110,7 @@ def blend_and_cache_ros(
     # data-layer import time (circular-ish; narrower coupling here).
     # TODO(task-11): move write_cache into the data layer so this shim
     # (and the lazy import) can go away.
-    from fantasy_baseball.web.season_data import CacheKey, write_cache
+    from fantasy_baseball.web.season_data import write_cache
     write_cache(CacheKey.ROS_PROJECTIONS, {
         "hitters": hitters_df.to_dict(orient="records"),
         "pitchers": pitchers_df.to_dict(orient="records"),

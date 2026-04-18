@@ -6,12 +6,12 @@ import os
 import tempfile
 import threading
 from datetime import date
-from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 log = logging.getLogger(__name__)
 
+from fantasy_baseball.data.cache_keys import CacheKey, redis_key  # noqa: E402
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
 from fantasy_baseball.scoring import score_roto
@@ -81,38 +81,6 @@ def _standings_to_snapshot(
             for t in standings
         ],
     )
-
-
-class CacheKey(StrEnum):
-    """Canonical names of every cached payload.
-
-    Typos on member access (e.g. ``CacheKey.LEVARAGE``) raise
-    ``AttributeError`` at import time instead of silently reading or writing
-    the wrong cache entry.
-    """
-
-    STANDINGS = "standings"
-    ROSTER = "roster"
-    PROJECTIONS = "projections"
-    LINEUP_OPTIMAL = "lineup_optimal"
-    PROBABLE_STARTERS = "probable_starters"
-    MONTE_CARLO = "monte_carlo"
-    META = "meta"
-    RANKINGS = "rankings"
-    ROSTER_AUDIT = "roster_audit"
-    SPOE = "spoe"
-    OPP_ROSTERS = "opp_rosters"
-    LEVERAGE = "leverage"
-    PENDING_MOVES = "pending_moves"
-    TRANSACTION_ANALYZER = "transaction_analyzer"
-    TRANSACTIONS = "transactions"
-    ROS_PROJECTIONS = "ros_projections"
-    POSITIONS = "positions"
-
-
-def redis_key(key: "CacheKey") -> str:
-    """Return the Redis key for a cache entry (``cache:<name>``)."""
-    return f"cache:{key}"
 
 
 CACHE_FILES: dict[CacheKey, str] = {

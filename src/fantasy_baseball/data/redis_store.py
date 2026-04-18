@@ -20,7 +20,7 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
 
-from fantasy_baseball.web.season_data import CacheKey, redis_key
+from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 
 if TYPE_CHECKING:
     from upstash_redis import Redis
