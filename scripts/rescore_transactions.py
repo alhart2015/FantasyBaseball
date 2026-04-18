@@ -68,9 +68,12 @@ def main():
             sys.exit(1)
 
         from upstash_redis import Redis
+
+        from fantasy_baseball.data.cache_keys import CacheKey, redis_key
+
         redis = Redis(url=url, token=token)
-        redis.delete("cache:transaction_analyzer")
-        redis.delete("cache:transactions")
+        redis.delete(redis_key(CacheKey.TRANSACTION_ANALYZER))
+        redis.delete(redis_key(CacheKey.TRANSACTIONS))
         print("Cleared cache:transactions and cache:transaction_analyzer from Redis.")
 
     print("\nDone. Run a refresh to re-score all transactions.")

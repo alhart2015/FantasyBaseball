@@ -5,25 +5,25 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from fantasy_baseball.web import season_data
-from fantasy_baseball.web.season_data import read_cache, write_cache, read_meta, format_standings_for_display, format_monte_carlo_for_display, format_lineup_for_display, _standings_to_snapshot
+from fantasy_baseball.web.season_data import CacheKey, read_cache, write_cache, read_meta, format_standings_for_display, format_monte_carlo_for_display, format_lineup_for_display, _standings_to_snapshot
 
 
 def test_write_and_read_cache(tmp_path):
     data = {"teams": [{"name": "Hart of the Order", "total": 67}]}
-    write_cache("standings", data, cache_dir=tmp_path)
-    result = read_cache("standings", cache_dir=tmp_path)
+    write_cache(CacheKey.STANDINGS, data, cache_dir=tmp_path)
+    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result == data
 
 
 def test_read_cache_missing_file(tmp_path):
-    result = read_cache("standings", cache_dir=tmp_path)
+    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result is None
 
 
 def test_read_cache_corrupt_json(tmp_path):
     path = tmp_path / "standings.json"
     path.write_text("not json", encoding="utf-8")
-    result = read_cache("standings", cache_dir=tmp_path)
+    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result is None
 
 
@@ -33,9 +33,9 @@ def test_read_meta_missing(tmp_path):
 
 
 def test_write_cache_overwrites(tmp_path):
-    write_cache("standings", {"v": 1}, cache_dir=tmp_path)
-    write_cache("standings", {"v": 2}, cache_dir=tmp_path)
-    result = read_cache("standings", cache_dir=tmp_path)
+    write_cache(CacheKey.STANDINGS, {"v": 1}, cache_dir=tmp_path)
+    write_cache(CacheKey.STANDINGS, {"v": 2}, cache_dir=tmp_path)
+    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result == {"v": 2}
 
 
@@ -259,7 +259,7 @@ def test_write_cache_writes_to_redis(tmp_path, monkeypatch):
     monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
 
     data = {"teams": [1, 2, 3]}
-    write_cache("standings", data, cache_dir=tmp_path)
+    write_cache(CacheKey.STANDINGS, data, cache_dir=tmp_path)
 
     assert mock_redis._last_set[0] == "cache:standings"
     assert json.loads(mock_redis._last_set[1]) == data
@@ -271,9 +271,9 @@ def test_write_cache_skips_redis_non_default_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
     # tmp_path != CACHE_DIR, so Redis should be skipped
     data = {"v": 1}
-    write_cache("standings", data, cache_dir=tmp_path)
+    write_cache(CacheKey.STANDINGS, data, cache_dir=tmp_path)
     mock_redis.set.assert_not_called()
-    assert read_cache("standings", cache_dir=tmp_path) == data
+    assert read_cache(CacheKey.STANDINGS, cache_dir=tmp_path) == data
 
 
 def test_write_cache_handles_redis_error(tmp_path, monkeypatch):
@@ -284,9 +284,9 @@ def test_write_cache_handles_redis_error(tmp_path, monkeypatch):
     monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
 
     data = {"teams": [1, 2, 3]}
-    write_cache("standings", data, cache_dir=tmp_path)
+    write_cache(CacheKey.STANDINGS, data, cache_dir=tmp_path)
     # Local write still succeeded
-    assert read_cache("standings", cache_dir=tmp_path) == data
+    assert read_cache(CacheKey.STANDINGS, cache_dir=tmp_path) == data
 
 
 # --- read_cache Redis fallback tests ---
@@ -298,7 +298,7 @@ def test_read_cache_falls_back_to_redis(tmp_path, monkeypatch):
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
     monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
 
-    result = read_cache("standings", cache_dir=tmp_path)
+    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result == data
     # Verify it wrote back to local disk
     local = json.loads((tmp_path / "standings.json").read_text(encoding="utf-8"))
@@ -311,7 +311,7 @@ def test_read_cache_returns_none_when_both_miss(tmp_path, monkeypatch):
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
     monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
 
-    result = read_cache("standings", cache_dir=tmp_path)
+    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result is None
 
 
@@ -321,7 +321,7 @@ def test_read_cache_handles_corrupt_redis_data(tmp_path, monkeypatch):
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
     monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
 
-    result = read_cache("standings", cache_dir=tmp_path)
+    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result is None
 
 
@@ -330,7 +330,7 @@ def test_read_cache_skips_redis_non_default_dir(tmp_path, monkeypatch):
     mock_redis = MagicMock()
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
     # tmp_path != CACHE_DIR, so Redis should be skipped
-    result = read_cache("standings", cache_dir=tmp_path)
+    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result is None
     mock_redis.get.assert_not_called()
 
@@ -342,7 +342,7 @@ def test_read_cache_handles_redis_error(tmp_path, monkeypatch):
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
     monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
 
-    result = read_cache("standings", cache_dir=tmp_path)
+    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result is None
 
 

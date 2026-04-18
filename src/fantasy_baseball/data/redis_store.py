@@ -20,6 +20,8 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
 
+from fantasy_baseball.data.cache_keys import CacheKey, redis_key
+
 if TYPE_CHECKING:
     from upstash_redis import Redis
 
@@ -185,7 +187,7 @@ def set_preseason_baseline(client, season_year: int, payload: dict) -> None:
     client.set(_preseason_baseline_key(season_year), json.dumps(payload))
 
 
-ROS_PROJECTIONS_KEY = "cache:ros_projections"
+ROS_PROJECTIONS_KEY = redis_key(CacheKey.ROS_PROJECTIONS)
 
 
 def get_ros_projections(client) -> dict | None:

@@ -304,9 +304,9 @@ def patched_refresh_environment(
     def _ros_pipeline_blend(*args, **kwargs):
         if has_rest_of_season:
             # Write ROS projections into the cache so read_cache picks them up
-            from fantasy_baseball.web.season_data import write_cache
+            from fantasy_baseball.web.season_data import CacheKey, write_cache
             write_cache(
-                "ros_projections",
+                CacheKey.ROS_PROJECTIONS,
                 {"hitters": hitter_projections(), "pitchers": pitcher_projections()},
                 cache_dir,
             )

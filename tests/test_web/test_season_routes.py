@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import patch
 
 from fantasy_baseball.web.season_app import create_app
+from fantasy_baseball.web.season_data import CacheKey
 
 
 @pytest.fixture
@@ -70,7 +71,7 @@ def _mock_standings():
 def test_standings_renders_table_with_data(client):
     with patch("fantasy_baseball.web.season_routes.read_cache") as mock_cache, \
          patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
-        mock_cache.side_effect = lambda k: _mock_standings() if k == "standings" else {}
+        mock_cache.side_effect = lambda k: _mock_standings() if k == CacheKey.STANDINGS else {}
         mock_cfg.return_value.team_name = "Hart of the Order"
         resp = client.get("/standings")
         assert resp.status_code == 200
@@ -110,8 +111,8 @@ def test_full_standings_page_with_cached_data(client, tmp_path):
              "stats": {"R": 310, "HR": 85, "RBI": 295, "SB": 40, "AVG": 0.265,
                        "W": 38, "K": 580, "SV": 30, "ERA": 3.40, "WHIP": 1.15}},
         ]
-        season_data.write_cache("standings", standings, tmp_path)
-        season_data.write_cache("meta", {"last_refresh": "8:32 AM", "week": "3"}, tmp_path)
+        season_data.write_cache(CacheKey.STANDINGS, standings, tmp_path)
+        season_data.write_cache(CacheKey.META, {"last_refresh": "8:32 AM", "week": "3"}, tmp_path)
 
         with patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc, \
              patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm, \
@@ -145,9 +146,9 @@ def test_full_lineup_page_with_cached_data(client, tmp_path):
              "player_id": "456", "status": ""},
         ]
         optimal = {"hitters": {}, "pitchers": {}, "moves": []}
-        season_data.write_cache("roster", roster, tmp_path)
-        season_data.write_cache("lineup_optimal", optimal, tmp_path)
-        season_data.write_cache("meta", {"last_refresh": "9:00 AM"}, tmp_path)
+        season_data.write_cache(CacheKey.ROSTER, roster, tmp_path)
+        season_data.write_cache(CacheKey.LINEUP_OPTIMAL, optimal, tmp_path)
+        season_data.write_cache(CacheKey.META, {"last_refresh": "9:00 AM"}, tmp_path)
 
         with patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc, \
              patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm:
@@ -189,7 +190,7 @@ def test_standings_passes_baseline_meta_to_template(client, tmp_path):
     old_cache_dir = season_data.CACHE_DIR
     season_data.CACHE_DIR = tmp_path
     try:
-        season_data.write_cache("monte_carlo", {
+        season_data.write_cache(CacheKey.MONTE_CARLO, {
             "base": {"team_results": {}, "category_risk": {}},
             "with_management": {"team_results": {}, "category_risk": {}},
             "baseline_meta": {
@@ -200,7 +201,7 @@ def test_standings_passes_baseline_meta_to_template(client, tmp_path):
             "rest_of_season": None,
             "rest_of_season_with_management": None,
         }, tmp_path)
-        season_data.write_cache("standings", _mock_standings(), tmp_path)
+        season_data.write_cache(CacheKey.STANDINGS, _mock_standings(), tmp_path)
 
         with patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc, \
              patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm, \
