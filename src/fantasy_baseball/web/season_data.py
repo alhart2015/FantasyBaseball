@@ -6,6 +6,7 @@ import os
 import tempfile
 import threading
 from datetime import date
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -82,28 +83,60 @@ def _standings_to_snapshot(
     )
 
 
-CACHE_FILES = {
-    "standings": "standings.json",
-    "roster": "roster.json",
-    "projections": "projections.json",
-    "lineup_optimal": "lineup_optimal.json",
-    "probable_starters": "probable_starters.json",
-    "monte_carlo": "monte_carlo.json",
-    "meta": "meta.json",
-    "rankings": "rankings.json",
-    "roster_audit": "roster_audit.json",
-    "spoe": "spoe.json",
-    "opp_rosters": "opp_rosters.json",
-    "leverage": "leverage.json",
-    "pending_moves": "pending_moves.json",
-    "transaction_analyzer": "transaction_analyzer.json",
-    "transactions": "transactions.json",
-    "ros_projections": "ros_projections.json",
-    "positions": "positions.json",
+class CacheKey(StrEnum):
+    """Canonical names of every cached payload.
+
+    Typos on member access (e.g. ``CacheKey.LEVARAGE``) raise
+    ``AttributeError`` at import time instead of silently reading or writing
+    the wrong cache entry.
+    """
+
+    STANDINGS = "standings"
+    ROSTER = "roster"
+    PROJECTIONS = "projections"
+    LINEUP_OPTIMAL = "lineup_optimal"
+    PROBABLE_STARTERS = "probable_starters"
+    MONTE_CARLO = "monte_carlo"
+    META = "meta"
+    RANKINGS = "rankings"
+    ROSTER_AUDIT = "roster_audit"
+    SPOE = "spoe"
+    OPP_ROSTERS = "opp_rosters"
+    LEVERAGE = "leverage"
+    PENDING_MOVES = "pending_moves"
+    TRANSACTION_ANALYZER = "transaction_analyzer"
+    TRANSACTIONS = "transactions"
+    ROS_PROJECTIONS = "ros_projections"
+    POSITIONS = "positions"
+
+
+def redis_key(key: "CacheKey") -> str:
+    """Return the Redis key for a cache entry (``cache:<name>``)."""
+    return f"cache:{key}"
+
+
+CACHE_FILES: dict[CacheKey, str] = {
+    CacheKey.STANDINGS: "standings.json",
+    CacheKey.ROSTER: "roster.json",
+    CacheKey.PROJECTIONS: "projections.json",
+    CacheKey.LINEUP_OPTIMAL: "lineup_optimal.json",
+    CacheKey.PROBABLE_STARTERS: "probable_starters.json",
+    CacheKey.MONTE_CARLO: "monte_carlo.json",
+    CacheKey.META: "meta.json",
+    CacheKey.RANKINGS: "rankings.json",
+    CacheKey.ROSTER_AUDIT: "roster_audit.json",
+    CacheKey.SPOE: "spoe.json",
+    CacheKey.OPP_ROSTERS: "opp_rosters.json",
+    CacheKey.LEVERAGE: "leverage.json",
+    CacheKey.PENDING_MOVES: "pending_moves.json",
+    CacheKey.TRANSACTION_ANALYZER: "transaction_analyzer.json",
+    CacheKey.TRANSACTIONS: "transactions.json",
+    CacheKey.ROS_PROJECTIONS: "ros_projections.json",
+    CacheKey.POSITIONS: "positions.json",
 }
 
 
-def read_cache(key: str, cache_dir: Path = CACHE_DIR) -> dict | list | None:
+def read_cache(key: CacheKey, cache_dir: Path = CACHE_DIR) -> dict | list | None:
     """Read a cached JSON file. Falls back to Redis on local miss."""
     path = cache_dir / CACHE_FILES[key]
     try:
@@ -120,7 +153,7 @@ def read_cache(key: str, cache_dir: Path = CACHE_DIR) -> dict | list | None:
         return None
 
     try:
-        raw = redis.get(f"cache:{key}")
+        raw = redis.get(redis_key(key))
         if raw is None:
             return None
         data = json.loads(raw)
@@ -141,7 +174,7 @@ def read_cache(key: str, cache_dir: Path = CACHE_DIR) -> dict | list | None:
     return data
 
 
-def write_cache(key: str, data: dict | list, cache_dir: Path = CACHE_DIR) -> None:
+def write_cache(key: CacheKey, data: dict | list, cache_dir: Path = CACHE_DIR) -> None:
     """Atomically write a cached JSON file (tmpfile + rename), with Redis write-through."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     path = cache_dir / CACHE_FILES[key]
@@ -159,14 +192,14 @@ def write_cache(key: str, data: dict | list, cache_dir: Path = CACHE_DIR) -> Non
         redis = _get_redis()
         if redis:
             try:
-                redis.set(f"cache:{key}", json.dumps(data))
+                redis.set(redis_key(key), json.dumps(data))
             except Exception as e:
                 print(f"[redis] write_cache({key}) failed: {e}")
 
 
 def read_meta(cache_dir: Path = CACHE_DIR) -> dict:
     """Read cache metadata (last refresh time, week, etc.). Returns empty dict if missing."""
-    return read_cache("meta", cache_dir) or {}
+    return read_cache(CacheKey.META, cache_dir) or {}
 
 
 def _load_game_log_totals(season_year: int) -> tuple[dict, dict]:
@@ -493,7 +526,7 @@ def _compute_team_totals_pace(
     if team_name is None:
         meta = read_meta() or {}
         team_name = meta.get("team_name", "")
-    standings = read_cache("standings") or []
+    standings = read_cache(CacheKey.STANDINGS) or []
     team_stats: dict = {}
     for t in standings:
         if t.get("name") == team_name:
@@ -650,7 +683,7 @@ def format_lineup_for_display(
 
 def run_optimize() -> dict:
     """Re-run lineup optimizer from cached data. Returns moves list."""
-    optimal = read_cache("lineup_optimal")
+    optimal = read_cache(CacheKey.LINEUP_OPTIMAL)
     if optimal:
         return {"moves": optimal.get("moves", []), "is_optimal": len(optimal.get("moves", [])) == 0}
     return {"moves": [], "is_optimal": True}

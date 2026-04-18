@@ -109,8 +109,8 @@ def blend_and_cache_ros(
     # data-layer import time (circular-ish; narrower coupling here).
     # TODO(task-11): move write_cache into the data layer so this shim
     # (and the lazy import) can go away.
-    from fantasy_baseball.web.season_data import write_cache
-    write_cache("ros_projections", {
+    from fantasy_baseball.web.season_data import CacheKey, write_cache
+    write_cache(CacheKey.ROS_PROJECTIONS, {
         "hitters": hitters_df.to_dict(orient="records"),
         "pitchers": pitchers_df.to_dict(orient="records"),
     })
