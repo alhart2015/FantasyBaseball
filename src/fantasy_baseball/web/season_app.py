@@ -6,6 +6,7 @@ from pathlib import Path
 
 from flask import Flask
 
+from fantasy_baseball.utils.rate_stats import format_ip
 from fantasy_baseball.web.season_routes import register_routes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
@@ -18,5 +19,6 @@ def create_app() -> Flask:
         static_folder=str(Path(__file__).parent / "static"),
     )
     app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-change-me")
+    app.jinja_env.filters["format_ip"] = format_ip
     register_routes(app)
     return app
