@@ -4,6 +4,7 @@ import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from typing import Any, cast
 
 from fantasy_baseball.utils.time_utils import local_today
 from pathlib import Path
@@ -246,7 +247,7 @@ def load_batting_stats_cache(path: Path) -> dict[str, dict] | None:
         logger.debug("Batting stats cache is stale (%.1fh old); ignoring", age_hours)
         return None
 
-    return payload.get("stats")
+    return cast("dict[str, dict[Any, Any]] | None", payload.get("stats"))
 
 
 def get_team_batting_stats(
@@ -379,7 +380,7 @@ def get_probable_starters(
             pitcher_starts[pitcher_name].append(start_entry)
 
     # Flatten into per-pitcher summaries
-    result = []
+    result: list[dict[str, Any]] = []
     for pitcher_name, starts in pitcher_starts.items():
         starts.sort(key=lambda s: s["date"])
         result.append({
