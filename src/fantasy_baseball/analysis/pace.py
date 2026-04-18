@@ -113,7 +113,7 @@ def compute_player_pace(
         dev = (rest_of_season_val - pre_val) / denom
         if cat in INVERSE_STATS:
             dev = -dev
-        return round(dev, 2)
+        return float(round(dev, 2))
 
     # Opportunity column (PA or IP) — always neutral
     result[opp_key.upper()] = {

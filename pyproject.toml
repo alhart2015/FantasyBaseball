@@ -40,11 +40,26 @@ mypy_path = ["src"]
 files = [
     "src/fantasy_baseball/models/",
     "src/fantasy_baseball/scoring.py",
+    "src/fantasy_baseball/simulation.py",
     "src/fantasy_baseball/trades/evaluate.py",
     "src/fantasy_baseball/lineup/delta_roto.py",
     "src/fantasy_baseball/lineup/leverage.py",
+    "src/fantasy_baseball/lineup/matchups.py",
+    "src/fantasy_baseball/lineup/optimizer.py",
     "src/fantasy_baseball/sgp/denominators.py",
     "src/fantasy_baseball/sgp/rankings.py",
+    "src/fantasy_baseball/sgp/replacement.py",
+    "src/fantasy_baseball/sgp/var.py",
+    "src/fantasy_baseball/sgp/player_value.py",
+    "src/fantasy_baseball/analysis/pace.py",
+    "src/fantasy_baseball/analysis/recency.py",
+    "src/fantasy_baseball/analysis/spoe.py",
+    "src/fantasy_baseball/analysis/transactions.py",
+    "src/fantasy_baseball/utils/constants.py",
+    "src/fantasy_baseball/utils/name_utils.py",
+    "src/fantasy_baseball/utils/positions.py",
+    "src/fantasy_baseball/utils/rate_stats.py",
+    "src/fantasy_baseball/utils/time_utils.py",
 ]
 warn_return_any = true
 warn_unused_ignores = true

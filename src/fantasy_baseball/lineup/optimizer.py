@@ -167,7 +167,7 @@ def optimize_hitter_lineup(
 
     if n_slots == 0 or len(hitters) < n_slots:
         # Fewer hitters than slots — fall back to the best feasible partial lineup.
-        best = None
+        partial_best: tuple[float, list[Player], list[Position]] | None = None
         for size in range(min(len(hitters), n_slots), 0, -1):
             for subset in combinations(hitters, size):
                 assn = _feasible_assignment(list(subset), slot_positions[:size])
@@ -175,18 +175,18 @@ def optimize_hitter_lineup(
                     continue
                 bench = [h for h in hitters if h not in subset]
                 total = _score_hitter_subset(ctx, list(subset), assn, bench)
-                if best is None or total > best[0]:
-                    best = (total, list(subset), assn)
-            if best is not None:
+                if partial_best is None or total > partial_best[0]:
+                    partial_best = (total, list(subset), assn)
+            if partial_best is not None:
                 break
-        if best is None:
+        if partial_best is None:
             return []
         return [
             HitterAssignment(slot=slot, name=p.name, player=p, roto_delta=0.0)
-            for p, slot in zip(best[1], best[2])
+            for p, slot in zip(partial_best[1], partial_best[2])
         ]
 
-    best = None
+    best: tuple[float, list[Player], list[Position], list[Player]] | None = None
     for subset in combinations(hitters, n_slots):
         assn = _feasible_assignment(list(subset), slot_positions)
         if assn is None:
