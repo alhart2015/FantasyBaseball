@@ -146,6 +146,12 @@ def parse_standings_raw(
 
     The library's ``standings()`` method omits per-category stat totals,
     so we parse the raw JSON directly.
+
+    Each team dict also carries ``points_for`` — Yahoo's own authoritative
+    roto total. Yahoo computes it from full-precision internal stats, so
+    it correctly breaks display-level ties (e.g. two teams shown with
+    WHIP=1.03 that differ in the fourth decimal) that our local
+    ``score_roto`` cannot distinguish.
     """
     # Navigate: fantasy_content.league[1].standings[0].teams
     league_data = raw.get("fantasy_content", {}).get("league", [])
@@ -166,7 +172,10 @@ def parse_standings_raw(
 
         # First element is a list of metadata dicts
         meta_list = team_entry[0] if isinstance(team_entry[0], list) else []
-        team: dict = {"name": "", "team_key": "", "rank": 0, "stats": {}}
+        team: dict = {
+            "name": "", "team_key": "", "rank": 0,
+            "stats": {}, "points_for": None,
+        }
         for item in meta_list:
             if isinstance(item, dict):
                 if "team_key" in item:
@@ -174,18 +183,33 @@ def parse_standings_raw(
                 if "name" in item:
                     team["name"] = item["name"]
 
-        # Second element has team_stats and team_standings
+        # team_standings may live at team_entry[1] or team_entry[2] depending on
+        # the Yahoo response shape; check both positions.
+        standings_candidates: list[dict] = []
         detail = team_entry[1] if len(team_entry) > 1 else {}
-        if isinstance(detail, dict):
-            # Parse rank from team_standings
-            ts = detail.get("team_standings", {})
-            if ts:
+        if isinstance(detail, dict) and detail.get("team_standings"):
+            standings_candidates.append(detail["team_standings"])
+        if len(team_entry) > 2 and isinstance(team_entry[2], dict):
+            extra = team_entry[2].get("team_standings")
+            if extra:
+                standings_candidates.append(extra)
+
+        for ts in standings_candidates:
+            if team["rank"] == 0:
                 try:
                     team["rank"] = int(ts.get("rank", 0))
                 except (ValueError, TypeError):
                     team["rank"] = 0
+            if team["points_for"] is None:
+                raw_pts = ts.get("points_for")
+                if raw_pts not in (None, ""):
+                    try:
+                        team["points_for"] = float(raw_pts)
+                    except (ValueError, TypeError):
+                        pass
 
-            # Parse per-category stats from team_stats
+        # Parse per-category stats from team_stats
+        if isinstance(detail, dict):
             team_stats = detail.get("team_stats", {})
             for stat_entry in team_stats.get("stats", []):
                 stat = stat_entry.get("stat", {})
@@ -196,15 +220,6 @@ def parse_standings_raw(
                         team["stats"][stat_id_map[sid]] = float(val)
                     except (ValueError, TypeError):
                         pass
-
-        # Third element (if present) may also have team_standings
-        if len(team_entry) > 2 and isinstance(team_entry[2], dict):
-            ts = team_entry[2].get("team_standings", {})
-            if ts and team["rank"] == 0:
-                try:
-                    team["rank"] = int(ts.get("rank", 0))
-                except (ValueError, TypeError):
-                    pass
 
         teams.append(team)
 

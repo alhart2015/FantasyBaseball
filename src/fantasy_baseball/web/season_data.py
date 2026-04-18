@@ -68,18 +68,32 @@ def _standings_to_snapshot(
 
     Used at the boundary between Yahoo fetch / cache read and typed
     consumers (calculate_leverage, format_standings_for_display).
+
+    ``points_for`` (when present — live Yahoo standings only; projected
+    snapshots don't populate it) is passed through to
+    ``StandingsEntry.yahoo_points_for`` so the display layer can prefer
+    Yahoo's authoritative total over our ``score_roto`` recomputation.
     """
-    return StandingsSnapshot(
-        effective_date=effective_date or date.min,
-        entries=[
+    entries = []
+    for t in standings:
+        raw_pf = t.get("points_for")
+        pf: float | None
+        try:
+            pf = float(raw_pf) if raw_pf not in (None, "") else None
+        except (TypeError, ValueError):
+            pf = None
+        entries.append(
             StandingsEntry(
                 team_name=t["name"],
                 team_key=t.get("team_key", ""),
                 rank=t.get("rank", 0),
                 stats=CategoryStats.from_dict(t.get("stats", {})),
+                yahoo_points_for=pf,
             )
-            for t in standings
-        ],
+        )
+    return StandingsSnapshot(
+        effective_date=effective_date or date.min,
+        entries=entries,
     )
 
 
@@ -222,6 +236,15 @@ def format_standings_for_display(
 
     Returns:
         {"teams": [...]} where each team has roto_points, is_user flag, color_classes, and rank.
+
+    When every entry has ``yahoo_points_for`` set (live Yahoo standings
+    path), the displayed total and rank come from Yahoo — this matches
+    Yahoo's standings page exactly, including ties broken by internal
+    full-precision stats that our rounded inputs can't replicate. The
+    per-category points still come from ``score_roto`` (which averages
+    display-level ties), so the category cells may not sum to the
+    Yahoo-authoritative total; the difference is ±0.5 per tie and sums
+    to zero across the league.
     """
     if not standings.entries:
         return {"teams": []}
@@ -231,13 +254,26 @@ def format_standings_for_display(
     all_stats = {e.team_name: e.stats for e in standings.entries}
     roto = score_roto(all_stats, team_sds=team_sds)
 
+    # Yahoo's authoritative total is only usable when every team has one.
+    # Projected snapshots (built from our own projections) have None and
+    # fall through to score_roto's total.
+    has_yahoo_totals = all(
+        e.yahoo_points_for is not None for e in standings.entries
+    )
+
     cat_ranks = _compute_category_ranks(standings)
 
     teams = []
     for entry in standings.entries:
         name = entry.team_name
         is_user = name == user_team_name
-        roto_pts = roto[name]
+        roto_pts = dict(roto[name])
+
+        if has_yahoo_totals:
+            # Preserve the score_roto total under a separate key so callers
+            # that need the recomputed value (diagnostics) can still reach it.
+            roto_pts["score_roto_total"] = roto_pts["total"]
+            roto_pts["total"] = entry.yahoo_points_for
 
         color_classes = {}
         for cat in ALL_CATEGORIES:
@@ -261,12 +297,28 @@ def format_standings_for_display(
             "is_user": is_user,
             "color_classes": color_classes,
             "sds": team_sds.get(name, {}) if team_sds else {},
+            # Preserve Yahoo's authoritative rank for live standings so the
+            # displayed rank matches the official standings page (including
+            # Yahoo's tie handling). Projected snapshots have rank=0, so we
+            # fall back to ordering by total below.
+            "_yahoo_rank": entry.rank if has_yahoo_totals else 0,
         })
 
-    teams.sort(key=lambda t: t["roto_points"]["total"], reverse=True)
+    if has_yahoo_totals:
+        # Rank by Yahoo total first (authoritative), tie-break by Yahoo's
+        # own rank so teams genuinely tied in points_for stay grouped the
+        # way Yahoo presents them.
+        teams.sort(key=lambda t: (-t["roto_points"]["total"], t["_yahoo_rank"]))
+        for t in teams:
+            t["rank"] = t["_yahoo_rank"]
+    else:
+        teams.sort(key=lambda t: t["roto_points"]["total"], reverse=True)
+        for i, t in enumerate(teams):
+            t["rank"] = i + 1
 
-    for i, t in enumerate(teams):
-        t["rank"] = i + 1
+    # Drop the private key before returning.
+    for t in teams:
+        t.pop("_yahoo_rank", None)
 
     return {"teams": teams}
 

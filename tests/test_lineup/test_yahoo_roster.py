@@ -102,6 +102,37 @@ class TestParseStandings:
         standings = parse_standings_raw(raw, stat_id_map={"60": "R", "7": "HR"})
         assert standings[0]["stats"] == {}
 
+    def test_extracts_points_for(self):
+        """Yahoo's authoritative roto total must be pulled off team_standings.
+
+        Guards against regressing the fix for the standings-mismatch bug
+        (where display-rounded ties made our score_roto diverge from Yahoo
+        by ±0.5). points_for is the ground truth for the live standings
+        page.
+        """
+        raw = _make_raw_standings([{
+            "name": "Spacemen",
+            "team_key": "469.l.5652.t.7",
+            "rank": 1,
+            "stats": {"7": 136},
+        }])
+        # Inject points_for into team_standings — the helper doesn't set it.
+        raw["fantasy_content"]["league"][1]["standings"][0]["teams"]["0"]["team"][1][
+            "team_standings"
+        ]["points_for"] = "74.5"
+        standings = parse_standings_raw(raw, stat_id_map={"7": "R"})
+        assert standings[0]["points_for"] == 74.5
+
+    def test_points_for_absent_is_none(self):
+        """Pre-season / projected standings have no points_for — must be None."""
+        raw = _make_raw_standings([{
+            "name": "Team A",
+            "rank": 1,
+            "stats": {"7": 10},
+        }])
+        standings = parse_standings_raw(raw, stat_id_map={"7": "R"})
+        assert standings[0]["points_for"] is None
+
 
 def _make_raw_roster_players(players_data):
     """Build raw Yahoo roster JSON from simplified player dicts.

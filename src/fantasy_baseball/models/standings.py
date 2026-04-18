@@ -101,11 +101,21 @@ class CategoryStats:
 
 @dataclass
 class StandingsEntry:
-    """One team's standings row at a point in time."""
+    """One team's standings row at a point in time.
+
+    ``yahoo_points_for`` is Yahoo's authoritative roto total, computed
+    internally from full-precision stats. It's set only for snapshots
+    built from live Yahoo standings (not for projected snapshots). When
+    present, the display layer prefers it over ``score_roto``'s total so
+    our UI exactly matches Yahoo's standings page — otherwise display
+    ties in rounded rate stats (AVG, ERA, WHIP) make our averaged-rank
+    scoring differ by up to ±0.5 points per tie from Yahoo's real total.
+    """
     team_name: str
     team_key: str
     rank: int
     stats: CategoryStats
+    yahoo_points_for: float | None = None
 
 
 @dataclass
