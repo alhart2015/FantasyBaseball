@@ -1,5 +1,8 @@
 """Tests for game_log_totals + season_progress helpers."""
+import json
+
 import pytest
+
 from fantasy_baseball.data import redis_store
 
 
@@ -65,6 +68,18 @@ def test_season_progress_ignores_corrupt_json(fake_redis):
     assert redis_store.get_season_progress(fake_redis) == {
         "games_elapsed": 0, "total": 162, "as_of": None,
     }
+
+
+def test_get_season_progress_coerces_non_str_as_of_to_none(fake_redis):
+    """Redis payloads with non-str, non-None as_of values coerce to None."""
+    fake_redis.set(
+        "season_progress",
+        json.dumps({"games_elapsed": 10, "total": 162, "as_of": 12345}),
+    )
+    result = redis_store.get_season_progress(fake_redis)
+    assert result["as_of"] is None
+    assert result["games_elapsed"] == 10
+    assert result["total"] == 162
 
 
 def test_season_progress_returns_default_when_client_none():
