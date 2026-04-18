@@ -127,8 +127,8 @@
 {# ── Monte Carlo ── #}
 <div id="view-montecarlo" style="display: none;">
     <div class="pill-group" id="mc-tab-toggle">
-        <button class="pill active" data-mctab="preseason" onclick="toggleMcTab(this)">Preseason</button>
-        <button class="pill" data-mctab="preseason-mgmt" onclick="toggleMcTab(this)">Preseason + Mgmt</button>
+        <button class="pill active" data-mctab="preseason" onclick="toggleMcTab(this)">Opening Day</button>
+        <button class="pill" data-mctab="preseason-mgmt" onclick="toggleMcTab(this)">Opening Day + Mgmt</button>
         <button class="pill" data-mctab="current" onclick="toggleMcTab(this)">Current</button>
         <button class="pill" data-mctab="current-mgmt" onclick="toggleMcTab(this)">Current + Mgmt</button>
     </div>
@@ -194,19 +194,29 @@
 
     <div id="mc-preseason">
         {% if mc %}
+        {% if baseline_meta and baseline_meta.roster_date %}
+        <p class="baseline-caption" style="opacity: 0.7; margin-bottom: 0.5em;">
+            Frozen at Opening Day rosters ({{ baseline_meta.roster_date }}).
+        </p>
+        {% endif %}
         {{ mc_team_table(mc) }}
         {{ cat_risk_table(mc) }}
         {% else %}
-        <p class="placeholder-text">No Monte Carlo data available.</p>
+        <p class="placeholder-text">No Opening Day baseline available. Run <code>scripts/freeze_preseason_baseline.py</code>.</p>
         {% endif %}
     </div>
 
     <div id="mc-preseason-mgmt" style="display: none;">
         {% if mc_mgmt %}
+        {% if baseline_meta and baseline_meta.roster_date %}
+        <p class="baseline-caption" style="opacity: 0.7; margin-bottom: 0.5em;">
+            Frozen at Opening Day rosters ({{ baseline_meta.roster_date }}).
+        </p>
+        {% endif %}
         {{ mc_team_table(mc_mgmt) }}
         {{ cat_risk_table(mc_mgmt) }}
         {% else %}
-        <p class="placeholder-text">No MC + Roster Mgmt data available.</p>
+        <p class="placeholder-text">No Opening Day baseline available. Run <code>scripts/freeze_preseason_baseline.py</code>.</p>
         {% endif %}
     </div>
 

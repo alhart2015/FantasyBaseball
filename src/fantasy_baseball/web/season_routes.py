@@ -214,6 +214,7 @@ def register_routes(app: Flask) -> None:
         mc_mgmt_data = None
         rest_of_season_mc_data = None
         rest_of_season_mgmt_mc_data = None
+        baseline_meta = None
 
         if raw_standings:
             from fantasy_baseball.web.season_data import (
@@ -247,10 +248,12 @@ def register_routes(app: Flask) -> None:
 
             raw_mc = read_cache("monte_carlo")
             if raw_mc:
-                mc_data = format_monte_carlo_for_display(
-                    raw_mc.get("base", raw_mc), config.team_name
-                )
-                if "with_management" in raw_mc:
+                baseline_meta = raw_mc.get("baseline_meta")
+                if raw_mc.get("base"):
+                    mc_data = format_monte_carlo_for_display(
+                        raw_mc["base"], config.team_name
+                    )
+                if raw_mc.get("with_management"):
                     mc_mgmt_data = format_monte_carlo_for_display(
                         raw_mc["with_management"], config.team_name
                     )
@@ -272,6 +275,7 @@ def register_routes(app: Flask) -> None:
             current_projected=current_projected_data,
             mc=mc_data,
             mc_mgmt=mc_mgmt_data,
+            baseline_meta=baseline_meta,
             rest_of_season_mc=rest_of_season_mc_data,
             rest_of_season_mgmt_mc=rest_of_season_mgmt_mc_data,
             categories=ALL_CATEGORIES,

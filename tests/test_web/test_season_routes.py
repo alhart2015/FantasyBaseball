@@ -179,3 +179,38 @@ def test_compare_missing_params(client):
 
     resp2 = client.get("/api/players/compare?roster_player=X")
     assert resp2.status_code == 400
+
+
+def test_standings_passes_baseline_meta_to_template(client, tmp_path):
+    """When monte_carlo.baseline_meta is present in the cache, it is
+    rendered into the page as the freeze-date caption."""
+    from fantasy_baseball.web import season_data
+
+    old_cache_dir = season_data.CACHE_DIR
+    season_data.CACHE_DIR = tmp_path
+    try:
+        season_data.write_cache("monte_carlo", {
+            "base": {"team_results": {}, "category_risk": {}},
+            "with_management": {"team_results": {}, "category_risk": {}},
+            "baseline_meta": {
+                "frozen_at": "2026-04-17T00:00:00Z",
+                "roster_date": "2026-03-27",
+                "season_year": 2026,
+            },
+            "rest_of_season": None,
+            "rest_of_season_with_management": None,
+        }, tmp_path)
+        season_data.write_cache("standings", _mock_standings(), tmp_path)
+
+        with patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc, \
+             patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm, \
+             patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+            mock_rc.side_effect = lambda k: season_data.read_cache(k, tmp_path)
+            mock_rm.return_value = season_data.read_meta(tmp_path)
+            mock_cfg.return_value.team_name = "Team 01"
+
+            resp = client.get("/standings")
+            assert resp.status_code == 200
+            assert b"2026-03-27" in resp.data
+    finally:
+        season_data.CACHE_DIR = old_cache_dir
