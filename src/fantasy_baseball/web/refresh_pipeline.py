@@ -35,6 +35,7 @@ from fantasy_baseball.utils.time_utils import (
 
 from fantasy_baseball.web.season_data import (
     CACHE_DIR,
+    CacheKey,
     _compute_pending_moves_diff,
     _get_redis,
     _load_game_log_totals,
@@ -234,7 +235,7 @@ class RefreshRun:
         self._progress("Fetching standings...")
         self.standings = fetch_standings(self.league)
         _fill_stat_defaults(self.standings)
-        write_cache("standings", self.standings, self.cache_dir)
+        write_cache(CacheKey.STANDINGS, self.standings, self.cache_dir)
         self._progress(f"Fetched standings for {len(self.standings)} teams")
 
         # Compute the effective date for the next lineup lock. We fetch
@@ -264,7 +265,7 @@ class RefreshRun:
             today_roster_raw, self.roster_raw,
             team_name=self.config.team_name, team_key=self.user_team_key,
         )
-        write_cache("pending_moves", pending_moves, self.cache_dir)
+        write_cache(CacheKey.PENDING_MOVES, pending_moves, self.cache_dir)
         if pending_moves:
             total_changes = sum(
                 len(m["adds"]) + len(m["drops"]) for m in pending_moves
@@ -339,7 +340,7 @@ class RefreshRun:
         import pandas as pd
         rest_of_season_hitters = pd.DataFrame()
         rest_of_season_pitchers = pd.DataFrame()
-        ros_cached = read_cache("ros_projections", self.cache_dir)
+        ros_cached = read_cache(CacheKey.ROS_PROJECTIONS, self.cache_dir)
         if ros_cached:
             rest_of_season_hitters = pd.DataFrame(ros_cached.get("hitters", []))
             rest_of_season_pitchers = pd.DataFrame(ros_cached.get("pitchers", []))
@@ -483,7 +484,7 @@ class RefreshRun:
             tname: [p.to_dict() for p in roster]
             for tname, roster in self.opp_rosters.items()
         }
-        write_cache("opp_rosters", opp_rosters_flat, self.cache_dir)
+        write_cache(CacheKey.OPP_ROSTERS, opp_rosters_flat, self.cache_dir)
 
     # --- Step 4e: Build projected standings ---
     def _build_projected_standings(self):
@@ -527,7 +528,7 @@ class RefreshRun:
             self.preseason_team_sds = build_team_sds(all_team_rosters, 1.0)
 
         write_cache(
-            "projections",
+            CacheKey.PROJECTIONS,
             {
                 "projected_standings": self.projected_standings,
                 "team_sds": self.team_sds,
@@ -613,7 +614,7 @@ class RefreshRun:
             rest_of_season_ranks, preseason_ranks, current_ranks,
         )
 
-        write_cache("rankings", self.rankings_lookup, self.cache_dir)
+        write_cache(CacheKey.RANKINGS, self.rankings_lookup, self.cache_dir)
         self._progress(f"Ranked {len(rest_of_season_ranks)} ROS, {len(preseason_ranks)} preseason, {len(current_ranks)} current")
 
         # Attach ranks to roster players
@@ -623,7 +624,7 @@ class RefreshRun:
             player.rank = RankInfo.from_dict(rank_data) if rank_data else RankInfo()
 
         roster_flat = [p.to_flat_dict() for p in self.roster_players]
-        write_cache("roster", roster_flat, self.cache_dir)
+        write_cache(CacheKey.ROSTER, roster_flat, self.cache_dir)
 
     # --- Step 7: Run lineup optimizer ---
     def _optimize_lineup(self):
@@ -670,7 +671,7 @@ class RefreshRun:
             "pitcher_bench": [p.name for p in self.optimal_pitchers_bench],
             "moves": moves,
         }
-        write_cache("lineup_optimal", optimal_data, self.cache_dir)
+        write_cache(CacheKey.LINEUP_OPTIMAL, optimal_data, self.cache_dir)
 
     # --- Step 9: Probable starters ---
     def _fetch_probable_starters(self):
@@ -696,7 +697,7 @@ class RefreshRun:
             pitcher_roster_for_schedule, schedule or {},
             matchup_factors=matchup_factors, team_stats=team_stats,
         )
-        write_cache("probable_starters", probable_starters, self.cache_dir)
+        write_cache(CacheKey.PROBABLE_STARTERS, probable_starters, self.cache_dir)
 
     # --- Step 10: Roster audit ---
     def _audit_roster(self):
@@ -711,7 +712,7 @@ class RefreshRun:
 
         # Cache positions for all known players (roster + opponents + FAs)
         positions_map = build_positions_map(self.roster_players, self.opp_rosters, self.fa_players)
-        write_cache("positions", positions_map, self.cache_dir)
+        write_cache(CacheKey.POSITIONS, positions_map, self.cache_dir)
         from fantasy_baseball.data.redis_store import set_positions, get_default_client
         set_positions(get_default_client(), positions_map)
         self._progress(f"Cached positions for {len(positions_map)} players")
@@ -724,7 +725,7 @@ class RefreshRun:
             optimal_hitters=self.optimal_hitters,
             optimal_pitchers=self.optimal_pitchers_starters,
         )
-        write_cache("roster_audit", [e.to_dict() for e in audit_results], self.cache_dir)
+        write_cache(CacheKey.ROSTER_AUDIT, [e.to_dict() for e in audit_results], self.cache_dir)
         upgrades = sum(1 for e in audit_results if e.gap > 0)
         self._progress(f"Roster audit: {upgrades} upgrade(s) found")
 
@@ -739,7 +740,7 @@ class RefreshRun:
                 self.standings_snap, entry.team_name,
                 projected_standings=self.projected_standings_snap,
             )
-        write_cache("leverage", leverage_by_team, self.cache_dir)
+        write_cache(CacheKey.LEVERAGE, leverage_by_team, self.cache_dir)
 
     # --- Step 13b: ROS Monte Carlo simulation ---
     def _run_ros_monte_carlo(self):
@@ -815,7 +816,7 @@ class RefreshRun:
                 "run scripts/freeze_preseason_baseline.py"
             )
 
-        write_cache("monte_carlo", {
+        write_cache(CacheKey.MONTE_CARLO, {
             "base": baseline.get("base"),
             "with_management": baseline.get("with_management"),
             "baseline_meta": baseline.get("meta"),
@@ -845,7 +846,7 @@ class RefreshRun:
             self.config.season_end,
         )
 
-        write_cache("spoe", spoe_result, self.cache_dir)
+        write_cache(CacheKey.SPOE, spoe_result, self.cache_dir)
         _write_spoe_snapshot(spoe_result)
         self._progress(f"SPoE computed for snapshot {spoe_result.get('snapshot_date')}")
 
@@ -864,7 +865,7 @@ class RefreshRun:
         if not raw_txns:
             return
 
-        stored_txns = read_cache("transactions", self.cache_dir) or []
+        stored_txns = read_cache(CacheKey.TRANSACTIONS, self.cache_dir) or []
         existing_ids = {t["transaction_id"] for t in stored_txns}
         new_txns = [t for t in raw_txns
                     if t["transaction_id"] not in existing_ids]
@@ -916,9 +917,9 @@ class RefreshRun:
                 entry.update(scores)
 
         stored_txns.sort(key=lambda t: t.get("timestamp") or "")
-        write_cache("transactions", stored_txns, self.cache_dir)
+        write_cache(CacheKey.TRANSACTIONS, stored_txns, self.cache_dir)
         cache_data = build_cache_output(stored_txns)
-        write_cache("transaction_analyzer", cache_data, self.cache_dir)
+        write_cache(CacheKey.TRANSACTION_ANALYZER, cache_data, self.cache_dir)
         self._progress(f"Analyzed {len(stored_txns)} total transaction(s)")
 
     # --- Step 16: Write meta ---
@@ -930,7 +931,7 @@ class RefreshRun:
             "end_date": self.end_date,
             "team_name": self.config.team_name,
         }
-        write_cache("meta", meta, self.cache_dir)
+        write_cache(CacheKey.META, meta, self.cache_dir)
 
 
 def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
