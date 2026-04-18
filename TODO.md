@@ -73,6 +73,8 @@
 
 # TODO — Postseason / Offseason
 
+- [ ] **`initialize_season()` — preseason-to-season transition helper** — Bundle all prep steps that run once between draft completion and Opening Day into a single callable entry point: freeze preseason baseline MC (via `scripts/freeze_preseason_baseline.py` logic), archive prior-season artifacts, warm any preseason caches, validate `season_start` / `season_year` config drift. Individual scripts stay runnable on their own; `initialize_season()` orchestrates them with a checklist so future seasons don't drift as new preseason steps are added. See `docs/superpowers/specs/2026-04-17-preseason-baseline-design.md` for the first subroutine.
+
 - [ ] **Post-draft Monte Carlo analysis** — Run Monte Carlo simulations on the actual completed draft results (real rosters from Yahoo) to assess win probability and category risk. Currently `simulate_draft.py --monte-carlo` only works on simulated drafts. Need a script or mode that takes real Yahoo rosters post-draft and feeds them through the shared `simulate_season` engine. Low priority since `summary.py` covers this during the season.
 
 - [ ] **Evaluate pitcher VAR overstatement with actual draft outcomes** — The unified P replacement level makes every decent SP show high VAR. Compare projected VAR rankings vs actual roto contribution for pitchers drafted in rounds 1-5. Track how much SP production came from streaming vs drafted starters. If drafted SPs underperformed their VAR relative to drafted hitters, consider a `PITCHER_VAR_DISCOUNT` (~0.85) or separate SP/RP replacement levels. Also measure the gap between VAR-only and VONA rankings against actual outcomes to quantify how much correction VONA provides.
