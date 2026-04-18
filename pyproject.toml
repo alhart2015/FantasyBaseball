@@ -49,6 +49,7 @@ files = [
     "src/fantasy_baseball/sgp/replacement.py",
     "src/fantasy_baseball/sgp/var.py",
     "src/fantasy_baseball/sgp/player_value.py",
+    "src/fantasy_baseball/analysis/pace.py",
     "src/fantasy_baseball/analysis/recency.py",
     "src/fantasy_baseball/analysis/spoe.py",
     "src/fantasy_baseball/analysis/transactions.py",
