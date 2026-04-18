@@ -54,6 +54,7 @@ files = [
     "src/fantasy_baseball/analysis/transactions.py",
     "src/fantasy_baseball/utils/constants.py",
     "src/fantasy_baseball/utils/name_utils.py",
+    "src/fantasy_baseball/utils/positions.py",
     "src/fantasy_baseball/utils/rate_stats.py",
     "src/fantasy_baseball/utils/time_utils.py",
 ]

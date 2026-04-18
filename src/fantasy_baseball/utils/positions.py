@@ -86,8 +86,11 @@ def can_cover_slots(player_positions_list, roster_slots) -> bool:
     for pos_key, count in roster_slots.items():
         if pos_key in skip:
             continue
+        coerced = _coerce(pos_key)
+        if coerced is None:
+            continue
         for _ in range(count):
-            slots.append(_coerce(pos_key))
+            slots.append(coerced)
 
     if not slots:
         return True
