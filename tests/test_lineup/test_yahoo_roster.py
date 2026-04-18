@@ -51,8 +51,11 @@ def _make_raw_standings(teams_data):
             {"name": td.get("name", f"Team {i+1}")},
         ]
         detail = {}
-        if "rank" in td or "stats" in td:
-            detail["team_standings"] = {"rank": td.get("rank", 0)}
+        if "rank" in td or "stats" in td or "points_for" in td:
+            ts: dict = {"rank": td.get("rank", 0)}
+            if "points_for" in td:
+                ts["points_for"] = td["points_for"]
+            detail["team_standings"] = ts
         if "stats" in td:
             detail["team_stats"] = {
                 "coverage_type": "season",
@@ -103,23 +106,14 @@ class TestParseStandings:
         assert standings[0]["stats"] == {}
 
     def test_extracts_points_for(self):
-        """Yahoo's authoritative roto total must be pulled off team_standings.
-
-        Guards against regressing the fix for the standings-mismatch bug
-        (where display-rounded ties made our score_roto diverge from Yahoo
-        by ±0.5). points_for is the ground truth for the live standings
-        page.
-        """
+        """Yahoo's authoritative roto total must be pulled off team_standings."""
         raw = _make_raw_standings([{
             "name": "Spacemen",
             "team_key": "469.l.5652.t.7",
             "rank": 1,
             "stats": {"7": 136},
+            "points_for": "74.5",
         }])
-        # Inject points_for into team_standings — the helper doesn't set it.
-        raw["fantasy_content"]["league"][1]["standings"][0]["teams"]["0"]["team"][1][
-            "team_standings"
-        ]["points_for"] = "74.5"
         standings = parse_standings_raw(raw, stat_id_map={"7": "R"})
         assert standings[0]["points_for"] == 74.5
 

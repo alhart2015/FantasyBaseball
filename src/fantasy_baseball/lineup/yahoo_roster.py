@@ -174,13 +174,8 @@ def parse_standings_raw(
     """Parse raw Yahoo standings JSON into a list of team dicts.
 
     The library's ``standings()`` method omits per-category stat totals,
-    so we parse the raw JSON directly.
-
-    Each team dict also carries ``points_for`` — Yahoo's own authoritative
-    roto total. Yahoo computes it from full-precision internal stats, so
-    it correctly breaks display-level ties (e.g. two teams shown with
-    WHIP=1.03 that differ in the fourth decimal) that our local
-    ``score_roto`` cannot distinguish.
+    so we parse the raw JSON directly. See ``ParsedStandingsTeam`` for
+    the emitted shape.
     """
     # Navigate: fantasy_content.league[1].standings[0].teams
     league_data = raw.get("fantasy_content", {}).get("league", [])
