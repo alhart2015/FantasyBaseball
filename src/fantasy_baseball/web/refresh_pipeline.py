@@ -600,7 +600,7 @@ class RefreshRun:
         from fantasy_baseball.sgp.rankings import (
             compute_sgp_rankings, compute_combined_sgp_rankings,
             compute_rankings_from_game_logs,
-            rank_key, rank_key_from_positions, lookup_rank,
+            lookup_rank,
         )
 
         rest_of_season_ranks = compute_sgp_rankings(self.hitters_proj, self.pitchers_proj)

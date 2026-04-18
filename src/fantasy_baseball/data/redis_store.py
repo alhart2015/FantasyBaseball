@@ -9,6 +9,7 @@ fakeredis client. Production code uses `get_default_client()` which
 lazily reads UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN from the
 environment.
 """
+
 from __future__ import annotations
 
 import json
@@ -48,7 +49,7 @@ def _load_dotenv_if_present() -> None:
         os.environ.setdefault(key.strip(), value.strip())
 
 
-def get_default_client() -> "Redis | None":
+def get_default_client() -> Redis | None:
     """Lazy Upstash client for production use. Returns None if unconfigured.
 
     Thread-safe: uses double-checked locking so concurrent first-access
@@ -69,6 +70,7 @@ def get_default_client() -> "Redis | None":
         token = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
         if url and token:
             from upstash_redis import Redis
+
             _default_client = Redis(url=url, token=token)
         _default_client_initialized = True
     return _default_client
@@ -105,9 +107,7 @@ _BLENDED_PROJ_TYPES = ("hitters", "pitchers")
 
 def _blended_key(player_type: str) -> str:
     if player_type not in _BLENDED_PROJ_TYPES:
-        raise ValueError(
-            f"player_type must be one of {_BLENDED_PROJ_TYPES}, got {player_type!r}"
-        )
+        raise ValueError(f"player_type must be one of {_BLENDED_PROJ_TYPES}, got {player_type!r}")
     return f"blended_projections:{player_type}"
 
 
@@ -125,9 +125,7 @@ def get_blended_projections(client, player_type: str) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
-def set_blended_projections(
-    client, player_type: str, rows: list[dict]
-) -> None:
+def set_blended_projections(client, player_type: str, rows: list[dict]) -> None:
     """Overwrite blended preseason projections for hitters or pitchers."""
     key = _blended_key(player_type)  # validates player_type
     if client is None:
@@ -169,9 +167,7 @@ def get_preseason_baseline(client, season_year: int) -> dict | None:
     return data
 
 
-def set_preseason_baseline(
-    client, season_year: int, payload: dict
-) -> None:
+def set_preseason_baseline(client, season_year: int, payload: dict) -> None:
     """Overwrite the frozen preseason baseline for ``season_year``.
 
     The caller is responsible for the payload shape; this helper just
@@ -180,9 +176,7 @@ def set_preseason_baseline(
     """
     if client is None:
         return
-    client.set(
-        _preseason_baseline_key(season_year), json.dumps(payload)
-    )
+    client.set(_preseason_baseline_key(season_year), json.dumps(payload))
 
 
 ROS_PROJECTIONS_KEY = "cache:ros_projections"
@@ -206,9 +200,7 @@ def get_ros_projections(client) -> dict | None:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        logger.warning(
-            "Corrupt JSON at Redis key %r; ignoring", ROS_PROJECTIONS_KEY
-        )
+        logger.warning("Corrupt JSON at Redis key %r; ignoring", ROS_PROJECTIONS_KEY)
         return None
     if not isinstance(data, dict):
         return None
@@ -217,9 +209,7 @@ def get_ros_projections(client) -> dict | None:
 
 def _game_log_totals_key(player_type: str) -> str:
     if player_type not in _BLENDED_PROJ_TYPES:
-        raise ValueError(
-            f"player_type must be one of {_BLENDED_PROJ_TYPES}, got {player_type!r}"
-        )
+        raise ValueError(f"player_type must be one of {_BLENDED_PROJ_TYPES}, got {player_type!r}")
     return f"game_log_totals:{player_type}"
 
 
@@ -238,9 +228,7 @@ def get_game_log_totals(client, player_type: str) -> dict[str, dict]:
     return data if isinstance(data, dict) else {}
 
 
-def set_game_log_totals(
-    client, player_type: str, totals: dict[str, dict]
-) -> None:
+def set_game_log_totals(client, player_type: str, totals: dict[str, dict]) -> None:
     """Overwrite aggregated game log totals for hitters or pitchers."""
     key = _game_log_totals_key(player_type)
     if client is None:
@@ -313,9 +301,7 @@ def write_roster_snapshot(
             day_rows = []
     day_rows = [row for row in day_rows if row.get("team") != team]
     day_rows.extend({**entry, "team": team} for entry in entries)
-    client.hset(
-        WEEKLY_ROSTERS_HISTORY_KEY, snapshot_date, json.dumps(day_rows)
-    )
+    client.hset(WEEKLY_ROSTERS_HISTORY_KEY, snapshot_date, json.dumps(day_rows))
 
 
 def get_weekly_roster_day(client, snapshot_date: str) -> list[dict]:
@@ -360,15 +346,13 @@ def get_latest_roster_names(client) -> set[str] | None:
     snapshots exist, or when *client* is ``None`` (unconfigured Redis).
     """
     from fantasy_baseball.utils.name_utils import normalize_name
+
     if client is None:
         return None
     entries = get_latest_weekly_rosters(client)
     if not entries:
         return None
-    return {
-        normalize_name(_PLAYER_SUFFIX_RE.sub("", e["player_name"]))
-        for e in entries
-    }
+    return {normalize_name(_PLAYER_SUFFIX_RE.sub("", e["player_name"])) for e in entries}
 
 
 def get_weekly_roster_history(client) -> dict[str, list[dict]]:
@@ -392,9 +376,7 @@ def get_weekly_roster_history(client) -> dict[str, list[dict]]:
 STANDINGS_HISTORY_KEY = "standings_history"
 
 
-def write_standings_snapshot(
-    client, snapshot_date: str, snapshot: dict
-) -> None:
+def write_standings_snapshot(client, snapshot_date: str, snapshot: dict) -> None:
     """Write a standings snapshot for a given date. Idempotent overwrite.
 
     ``snapshot`` is the full payload for the day; conventionally
