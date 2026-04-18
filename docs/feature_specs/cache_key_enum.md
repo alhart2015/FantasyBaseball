@@ -37,7 +37,7 @@ the set of valid cache keys has no single source of truth.
 ### `CacheKey` enum
 
 Add a `CacheKey(StrEnum)` in `season_data.py` with one member per current
-`CACHE_FILES` entry (18 members):
+`CACHE_FILES` entry (17 members):
 
 ```python
 from enum import StrEnum

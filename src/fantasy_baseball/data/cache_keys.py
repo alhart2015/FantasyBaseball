@@ -34,8 +34,4 @@ class CacheKey(StrEnum):
 
 def redis_key(key: CacheKey) -> str:
     """Return the Redis key for a cache entry (``cache:<name>``)."""
-    # Uses ``{key}`` (not ``{key.value}``) so bare-string callers still
-    # produce the correct Redis key during the Phase 2/3 migration;
-    # StrEnum.__str__ returns the value, so both forms are equivalent
-    # for enum inputs.
     return f"cache:{key}"
