@@ -303,41 +303,24 @@ class RefreshRun:
         self.hitters_proj = pd.DataFrame(_hitters_rows)
         self.pitchers_proj = pd.DataFrame(_pitchers_rows)
 
-        # Load ROS projections — blend latest dated CSV into Redis
-        # (cache:ros_projections). No-op if no CSV dir exists locally
-        # (Render has no CSVs on disk; the daily admin-triggered
-        # _run_rest_of_season_fetch keeps Redis populated).
-        self._progress("Loading ROS projections...")
-        project_root = Path(__file__).resolve().parents[3]
-        projections_dir = project_root / "data" / "projections"
-        from fantasy_baseball.data.ros_pipeline import blend_and_cache_ros
-        from fantasy_baseball.data.redis_store import (
-            get_default_client, get_latest_roster_names,
-        )
-        try:
-            rest_of_season_roster_names = get_latest_roster_names(get_default_client())
-            # _fetch_game_logs must run before this step so game_log_totals in
-            # Redis reflect this refresh; otherwise the ROS blend normalizes
-            # against last-refresh actuals and cache:ros_projections is stale.
-            blend_and_cache_ros(
-                projections_dir,
-                self.config.projection_systems, self.config.projection_weights,
-                rest_of_season_roster_names, self.config.season_year,
-                progress_cb=self._progress,
-            )
-        except FileNotFoundError:
-            # No local CSVs — fine on Render; the admin job keeps Redis populated.
-            self._progress("No local ROS CSV dir; relying on Redis cache")
-
         self.hitters_proj["_name_norm"] = self.hitters_proj["name"].apply(normalize_name)
         self.pitchers_proj["_name_norm"] = self.pitchers_proj["name"].apply(normalize_name)
         self._progress(f"Loaded {len(self.hitters_proj)} hitter + {len(self.pitchers_proj)} pitcher projections")
 
         # ROS projections live in Redis (cache:ros_projections). The
-        # blend above just refreshed that key if local CSVs were
-        # present; otherwise we fall back to whatever the daily admin
-        # job wrote. Disk CSVs are no longer a fallback path.
-        import pandas as pd
+        # daily admin-triggered _run_rest_of_season_fetch is the sole
+        # authoritative writer — it downloads fresh CSVs from FanGraphs,
+        # blends them, and writes the result to Redis. The refresh only
+        # READS that key; it must not blend from disk CSVs, because the
+        # only dated snapshot committed to git is stale (e.g. 2026-03-30)
+        # and on Render the admin fetch and refresh frequently run on
+        # different instances, so today's CSVs aren't on this instance's
+        # disk. Blending here would overwrite fresh Redis with stale
+        # March projections and regress the player-comparison tool back
+        # to preseason values (see commit history: 2a11c1e established
+        # Redis as authoritative, 9592b63 accidentally re-introduced the
+        # overwrite).
+        self._progress("Loading ROS projections from Redis...")
         rest_of_season_hitters = pd.DataFrame()
         rest_of_season_pitchers = pd.DataFrame()
         ros_cached = read_cache(CacheKey.ROS_PROJECTIONS, self.cache_dir)

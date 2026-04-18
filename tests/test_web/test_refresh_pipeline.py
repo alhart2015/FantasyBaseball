@@ -169,6 +169,66 @@ class TestMonteCarloROSBranch:
             assert data["rest_of_season_with_management"] is None
 
 
+class TestROSProjectionsRedisAuthoritative:
+    """The refresh must NEVER overwrite cache:ros_projections.
+
+    The daily admin-triggered ROS fetch is the sole authoritative
+    writer. Blending from disk CSVs in the refresh path regressed
+    Jakob Junis from ~19 saves (fresh FanGraphs data in Redis) back
+    to preseason-era ~4 saves (committed git snapshot from March 30),
+    which broke the player-comparison tool downstream.
+    """
+
+    def test_refresh_does_not_call_blend_and_cache_ros(
+        self, configured_test_env, fake_redis, monkeypatch,
+    ):
+        """Regression guard: refresh must not invoke blend_and_cache_ros.
+
+        Blending from disk CSVs on Render overwrites fresh Redis data
+        with stale git-committed snapshots whenever admin fetch and
+        refresh run on different instances.
+        """
+        from fantasy_baseball.data import ros_pipeline
+
+        call_count = {"n": 0}
+
+        def _blow_up(*args, **kwargs):
+            call_count["n"] += 1
+            raise AssertionError(
+                "refresh must not call blend_and_cache_ros; see "
+                "comment in refresh_pipeline._load_projections"
+            )
+
+        monkeypatch.setattr(ros_pipeline, "blend_and_cache_ros", _blow_up)
+        cache_dir = configured_test_env
+        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
+            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+        assert call_count["n"] == 0
+
+    def test_refresh_preserves_existing_ros_projections(
+        self, configured_test_env, fake_redis,
+    ):
+        """Redis ros_projections must be unchanged after refresh runs.
+
+        Simulates: admin fetch wrote today's ROS blend (Junis sv=19).
+        Running refresh must not clobber that with a stale disk blend.
+        """
+        from fantasy_baseball.data.cache_keys import CacheKey, redis_key
+        cache_dir = configured_test_env
+
+        # The fixture seeds its own ros_projections. Run the refresh
+        # and assert whatever the fixture wrote is still there afterward
+        # (byte-for-byte — no second write).
+        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
+            before = fake_redis.get(redis_key(CacheKey.ROS_PROJECTIONS))
+            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+            after = fake_redis.get(redis_key(CacheKey.ROS_PROJECTIONS))
+        assert before == after, (
+            "Refresh modified cache:ros_projections — it must be read-only "
+            "for the refresh path (only the admin fetch writes this key)"
+        )
+
+
 class TestPreseasonBaseline:
     """The refresh reads preseason_baseline:{year} from Redis; if
     missing, the base/with_management cache fields are None but the

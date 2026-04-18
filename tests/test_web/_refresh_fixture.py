@@ -301,15 +301,18 @@ def patched_refresh_environment(
         set_game_log_totals(fake_redis, "hitters", hitter_game_logs())
         set_game_log_totals(fake_redis, "pitchers", pitcher_game_logs())
 
-    def _ros_pipeline_blend(*args, **kwargs):
-        if has_rest_of_season:
-            # Write ROS projections into the cache so read_cache picks them up
-            from fantasy_baseball.web.season_data import CacheKey, write_cache
-            write_cache(
-                CacheKey.ROS_PROJECTIONS,
-                {"hitters": hitter_projections(), "pitchers": pitcher_projections()},
-                cache_dir,
-            )
+    # Refresh no longer calls blend_and_cache_ros — it only READS
+    # cache:ros_projections from Redis (the admin fetch is the sole
+    # authoritative writer on Render). Seed the cache up front so the
+    # refresh can find it, or leave it empty when has_rest_of_season
+    # is False.
+    if has_rest_of_season:
+        from fantasy_baseball.web.season_data import CacheKey, write_cache
+        write_cache(
+            CacheKey.ROS_PROJECTIONS,
+            {"hitters": hitter_projections(), "pitchers": pitcher_projections()},
+            cache_dir,
+        )
 
     # Capture the real Monte Carlo function BEFORE patching it,
     # otherwise the scaled wrapper calls itself recursively.
@@ -399,8 +402,6 @@ def patched_refresh_environment(
         patch("fantasy_baseball.data.mlb_schedule.get_week_schedule", return_value={}),
         # Matchups (team batting stats)
         patch("fantasy_baseball.lineup.matchups.get_team_batting_stats", return_value={}),
-        # ROS blend pipeline
-        patch("fantasy_baseball.data.ros_pipeline.blend_and_cache_ros", side_effect=_ros_pipeline_blend),
         # Monte Carlo: patch at the source module
         patch("fantasy_baseball.simulation.run_ros_monte_carlo", side_effect=_scaled_ros_mc),
         # Redis clients
