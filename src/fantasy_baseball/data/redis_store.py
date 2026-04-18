@@ -18,7 +18,7 @@ import os
 import re as _re
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
     from upstash_redis import Redis
@@ -30,6 +30,12 @@ _default_client_initialized = False
 _default_client_lock = threading.Lock()
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+class SeasonProgress(TypedDict):
+    games_elapsed: int
+    total: int
+    as_of: str | None
 
 
 def _load_dotenv_if_present() -> None:
@@ -237,26 +243,30 @@ def set_game_log_totals(client, player_type: str, totals: dict[str, dict]) -> No
 
 
 SEASON_PROGRESS_KEY = "season_progress"
-_DEFAULT_SEASON_PROGRESS = {"games_elapsed": 0, "total": 162, "as_of": None}
 
 
-def get_season_progress(client) -> dict:
+def _default_season_progress() -> SeasonProgress:
+    return {"games_elapsed": 0, "total": 162, "as_of": None}
+
+
+def get_season_progress(client) -> SeasonProgress:
     """Read season progress ({games_elapsed, total, as_of}). Returns defaults on missing or corrupt."""
     if client is None:
-        return dict(_DEFAULT_SEASON_PROGRESS)
+        return _default_season_progress()
     raw = client.get(SEASON_PROGRESS_KEY)
     if raw is None:
-        return dict(_DEFAULT_SEASON_PROGRESS)
+        return _default_season_progress()
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        return dict(_DEFAULT_SEASON_PROGRESS)
+        return _default_season_progress()
     if not isinstance(data, dict):
-        return dict(_DEFAULT_SEASON_PROGRESS)
+        return _default_season_progress()
+    as_of = data.get("as_of")
     return {
         "games_elapsed": int(data.get("games_elapsed", 0)),
         "total": int(data.get("total", 162)),
-        "as_of": data.get("as_of"),
+        "as_of": as_of if isinstance(as_of, str) else None,
     }
 
 
