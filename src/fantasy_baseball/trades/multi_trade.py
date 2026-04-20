@@ -159,7 +159,14 @@ def evaluate_multi_trade(
         )
 
     # --- 3. Build active-set deltas ------------------------------------------
-    all_mine_by_key = {**my_idx, **{player_key(p): p for p in my_adds}}
+    # Combine all players that may appear in `after_mine`: current roster
+    # (my_idx), incoming trade pieces (received), and waiver adds (my_adds).
+    # Omitting `received` would silently drop incoming players from my_gains.
+    all_mine_by_key = {
+        **my_idx,
+        **{player_key(p): p for p in received},
+        **{player_key(p): p for p in my_adds},
+    }
     before_mine = _current_active_set(hart_roster)
     after_mine = set(proposal.my_active_ids)
 
