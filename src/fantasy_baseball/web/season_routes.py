@@ -470,6 +470,79 @@ def register_routes(app: Flask) -> None:
         matches.sort(key=lambda m: m["name"])
         return jsonify(matches[:20])
 
+    @app.route("/api/evaluate-trade", methods=["POST"])
+    @_require_auth
+    def api_evaluate_trade():
+        from fantasy_baseball.models.player import Player
+        from fantasy_baseball.trades.multi_trade import (
+            TradeProposal,
+            build_waiver_pool,
+            evaluate_multi_trade,
+        )
+
+        data = request.get_json(silent=True) or {}
+        opponent = (data.get("opponent") or "").strip()
+        if not opponent:
+            return jsonify({"error": "opponent is required"}), 400
+
+        config = _load_config()
+        roster_raw = read_cache(CacheKey.ROSTER)
+        opp_rosters_raw = read_cache(CacheKey.OPP_ROSTERS)
+        if roster_raw is None or opp_rosters_raw is None:
+            return jsonify({"error": "No roster data. Run a refresh first."}), 404
+        if opponent not in opp_rosters_raw:
+            return jsonify({"error": f"Unknown opponent: {opponent}"}), 400
+
+        proj_cache = read_cache(CacheKey.PROJECTIONS) or {}
+        projected_standings = proj_cache.get("projected_standings")
+        team_sds = proj_cache.get("team_sds")
+        if not projected_standings:
+            return jsonify({"error": "No projected standings. Run a refresh first."}), 404
+
+        ros_cache = read_cache(CacheKey.ROS_PROJECTIONS) or {}
+
+        hart_roster = [Player.from_dict(p) for p in roster_raw]
+        opp_rosters = {
+            n: [Player.from_dict(p) for p in ps] for n, ps in opp_rosters_raw.items()
+        }
+        waiver_pool = build_waiver_pool(hart_roster, opp_rosters, ros_cache)
+
+        proposal = TradeProposal(
+            opponent=opponent,
+            send=list(data.get("send") or []),
+            receive=list(data.get("receive") or []),
+            my_drops=list(data.get("my_drops") or []),
+            opp_drops=list(data.get("opp_drops") or []),
+            my_adds=list(data.get("my_adds") or []),
+            my_active_ids=set(data.get("my_active_ids") or []),
+        )
+
+        result = evaluate_multi_trade(
+            proposal=proposal,
+            hart_name=config.team_name,
+            hart_roster=hart_roster,
+            opp_rosters=opp_rosters,
+            waiver_pool=waiver_pool,
+            projected_standings=projected_standings,
+            team_sds=team_sds,
+            roster_slots=config.roster_slots,
+        )
+        return jsonify(
+            {
+                "legal": result.legal,
+                "reason": result.reason,
+                "delta_total": round(result.delta_total, 2),
+                "categories": {
+                    cat: {
+                        "before": round(cd.before, 2),
+                        "after": round(cd.after, 2),
+                        "delta": round(cd.delta, 2),
+                    }
+                    for cat, cd in result.categories.items()
+                },
+            }
+        )
+
     @app.route("/players")
     def player_search():
         meta = read_meta()
