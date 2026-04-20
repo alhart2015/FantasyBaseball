@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from fantasy_baseball.models.player import Player
+
 
 @dataclass
 class TradeProposal:
@@ -48,3 +50,49 @@ class MultiTradeResult:
 
 def evaluate_multi_trade(*args, **kwargs) -> MultiTradeResult:  # pragma: no cover - placeholder
     raise NotImplementedError("evaluate_multi_trade is implemented in Task 3")
+
+
+def player_key(player: Player) -> str:
+    """Canonical player identifier: ``name::player_type`` (hitter|pitcher)."""
+    return f"{player.name}::{player.player_type}"
+
+
+def _non_il_size(roster: list[Player]) -> int:
+    return sum(1 for p in roster if (getattr(p, "selected_position", None) or "") != "IL")
+
+
+def _target_size(roster_slots: dict) -> int:
+    """Total active + bench slots (excludes IL)."""
+    return sum(v for k, v in roster_slots.items() if k != "IL")
+
+
+def _can_roster_after(
+    roster: list[Player],
+    removals: list[str],
+    additions: list[Player],
+    roster_slots: dict,
+) -> tuple[bool, str | None]:
+    """Size-only legality check for a multi-player proposal.
+
+    ``roster`` is the current roster including IL players.
+    ``removals`` is a list of ``player_key()`` strings for players leaving
+    (traded away or dropped).  ``additions`` is a list of Player objects
+    coming in (traded in or picked up from waivers).
+
+    The roster is considered legal iff
+    ``non_il_count - |removals| + |additions| == target_size``,
+    where ``target_size = sum(roster_slots) - roster_slots["IL"]``
+    (23 in this league: 12 active hitters + 9 pitchers + 2 bench).
+    IL-listed players neither count in the baseline nor are removed by
+    this trade.
+
+    Returns ``(True, None)`` if legal, otherwise ``(False, reason)``.
+    """
+    target = _target_size(roster_slots)
+    non_il = _non_il_size(roster)
+    new_size = non_il - len(removals) + len(additions)
+    if new_size != target:
+        return False, (
+            f"Roster would have {new_size} non-IL players; league requires exactly {target}"
+        )
+    return True, None
