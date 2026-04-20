@@ -100,8 +100,10 @@ def evaluate_multi_trade(
     # --- 1. Resolve keys -----------------------------------------------------
     if proposal.opponent not in opp_rosters:
         return MultiTradeResult(
-            legal=False, reason=f"Unknown opponent: {proposal.opponent}",
-            delta_total=0.0, categories={},
+            legal=False,
+            reason=f"Unknown opponent: {proposal.opponent}",
+            delta_total=0.0,
+            categories={},
         )
 
     my_idx = _index_roster(hart_roster)
@@ -117,31 +119,43 @@ def evaluate_multi_trade(
         my_adds = _resolve_keys(proposal.my_adds, waiver_pool)
     except KeyError as exc:
         return MultiTradeResult(
-            legal=False, reason=str(exc),
-            delta_total=0.0, categories={},
+            legal=False,
+            reason=str(exc),
+            delta_total=0.0,
+            categories={},
         )
 
     # --- 2. Legality ---------------------------------------------------------
     my_removals = proposal.send + proposal.my_drops
     my_additions = received + my_adds
     my_ok, my_reason = _can_roster_after(
-        hart_roster, my_removals, my_additions, roster_slots,
+        hart_roster,
+        my_removals,
+        my_additions,
+        roster_slots,
     )
     if not my_ok:
         return MultiTradeResult(
-            legal=False, reason=f"My team: {my_reason}",
-            delta_total=0.0, categories={},
+            legal=False,
+            reason=f"My team: {my_reason}",
+            delta_total=0.0,
+            categories={},
         )
 
     opp_removals = proposal.receive + proposal.opp_drops
     opp_additions = sent
     opp_ok, opp_reason = _can_roster_after(
-        opp_rosters[proposal.opponent], opp_removals, opp_additions, roster_slots,
+        opp_rosters[proposal.opponent],
+        opp_removals,
+        opp_additions,
+        roster_slots,
     )
     if not opp_ok:
         return MultiTradeResult(
-            legal=False, reason=f"Opponent: {opp_reason}",
-            delta_total=0.0, categories={},
+            legal=False,
+            reason=f"Opponent: {opp_reason}",
+            delta_total=0.0,
+            categories={},
         )
 
     # --- 3. Build active-set deltas ------------------------------------------
@@ -149,10 +163,8 @@ def evaluate_multi_trade(
     before_mine = _current_active_set(hart_roster)
     after_mine = set(proposal.my_active_ids)
 
-    mine_leaving = [all_mine_by_key[k] for k in before_mine - after_mine
-                    if k in all_mine_by_key]
-    mine_entering = [all_mine_by_key[k] for k in after_mine - before_mine
-                     if k in all_mine_by_key]
+    mine_leaving = [all_mine_by_key[k] for k in before_mine - after_mine if k in all_mine_by_key]
+    mine_entering = [all_mine_by_key[k] for k in after_mine - before_mine if k in all_mine_by_key]
     my_loses = aggregate_player_stats(mine_leaving)
     my_gains = aggregate_player_stats(mine_entering)
 
@@ -163,26 +175,32 @@ def evaluate_multi_trade(
     # --- 4. Apply deltas to baseline and score -------------------------------
     if not any(t["name"] == hart_name for t in projected_standings):
         return MultiTradeResult(
-            legal=False, reason=f"Team {hart_name} missing from projected_standings",
-            delta_total=0.0, categories={},
+            legal=False,
+            reason=f"Team {hart_name} missing from projected_standings",
+            delta_total=0.0,
+            categories={},
         )
 
     post = []
     for t in projected_standings:
         if t["name"] == hart_name:
-            post.append({"name": t["name"],
-                         "stats": apply_swap_delta(t["stats"], my_loses, my_gains)})
+            post.append(
+                {"name": t["name"], "stats": apply_swap_delta(t["stats"], my_loses, my_gains)}
+            )
         elif t["name"] == proposal.opponent:
-            post.append({"name": t["name"],
-                         "stats": apply_swap_delta(t["stats"], opp_loses, opp_gains)})
+            post.append(
+                {"name": t["name"], "stats": apply_swap_delta(t["stats"], opp_loses, opp_gains)}
+            )
         else:
             post.append(t)
 
     before_roto = score_roto(
-        {t["name"]: t["stats"] for t in projected_standings}, team_sds=team_sds,
+        {t["name"]: t["stats"] for t in projected_standings},
+        team_sds=team_sds,
     )
     after_roto = score_roto(
-        {t["name"]: t["stats"] for t in post}, team_sds=team_sds,
+        {t["name"]: t["stats"] for t in post},
+        team_sds=team_sds,
     )
 
     categories: dict[str, CategoryDelta] = {}
@@ -192,13 +210,17 @@ def evaluate_multi_trade(
         after_pts = after_roto[hart_name][f"{cat}_pts"]
         delta = after_pts - before_pts
         categories[cat] = CategoryDelta(
-            before=before_pts, after=after_pts, delta=delta,
+            before=before_pts,
+            after=after_pts,
+            delta=delta,
         )
         total_delta += delta
 
     return MultiTradeResult(
-        legal=True, reason=None,
-        delta_total=total_delta, categories=categories,
+        legal=True,
+        reason=None,
+        delta_total=total_delta,
+        categories=categories,
     )
 
 
