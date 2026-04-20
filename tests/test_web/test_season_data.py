@@ -69,17 +69,21 @@ def test_format_standings_has_roto_points():
     assert "total" in hart["roto_points"]
 
 
-def test_format_standings_color_codes_all_teams():
+def test_format_standings_color_intensity_per_team():
     data = format_standings_for_display(_standings_to_snapshot(_sample_standings()), "Hart of the Order")
     hart = next(t for t in data["teams"] if t["name"] == "Hart of the Order")
-    assert hart["is_user"] is True
-    assert "color_classes" in hart
-    # With 3 teams, ranks 1-2 = rank-top, 3 = rank-high
-    # Hart has highest SB (50) → rank 1 → rank-top
-    assert hart["color_classes"]["SB"] == "rank-top"
-    # Non-user teams also get color classes
     skel = next(t for t in data["teams"] if t["name"] == "SkeleThor")
-    assert skel["color_classes"]["SB"] != ""
+    cav = next(t for t in data["teams"] if t["name"] == "Send in the Cavalli")
+
+    assert hart["is_user"] is True
+    assert "color_intensity" in hart
+    # SB: Hart=50, SkeleThor=40, Cavalli=55 → Cavalli leads, SkeleThor trails.
+    assert cav["color_intensity"]["SB"] == pytest.approx(1.0)
+    assert skel["color_intensity"]["SB"] == pytest.approx(-1.0)
+    # Hart sits in between: (50-40)/(55-40) = 0.667, intensity = 2*0.667-1 ≈ 0.333
+    assert hart["color_intensity"]["SB"] == pytest.approx(0.333, abs=0.01)
+    # Total column gets an intensity too.
+    assert "total" in hart["color_intensity"]
 
 
 def test_format_standings_prefers_yahoo_points_for():
@@ -135,8 +139,8 @@ def test_format_standings_falls_back_without_points_for():
     assert "score_roto_total" not in by_name["Team A"]["roto_points"]
 
 
-def test_format_standings_tied_teams_same_color():
-    """Teams tied in a category should get the same rank-based color class."""
+def test_format_standings_tied_category_has_no_intensity():
+    """When every team is tied in a category (max == min), the key is absent."""
     standings = _standings_to_snapshot([
         {"name": "Team A", "team_key": "a", "rank": 1,
          "stats": {"R": 100, "HR": 30, "RBI": 90, "SB": 20, "AVG": 0.260,
@@ -148,9 +152,66 @@ def test_format_standings_tied_teams_same_color():
     data = format_standings_for_display(standings, "Team A")
     a = next(t for t in data["teams"] if t["name"] == "Team A")
     b = next(t for t in data["teams"] if t["name"] == "Team B")
-    # R and RBI are tied — must get the same color class
-    assert a["color_classes"]["R"] == b["color_classes"]["R"]
-    assert a["color_classes"]["RBI"] == b["color_classes"]["RBI"]
+    # R and RBI are tied across all teams — the key is absent for everyone.
+    assert "R" not in a["color_intensity"]
+    assert "R" not in b["color_intensity"]
+    assert "RBI" not in a["color_intensity"]
+    assert "RBI" not in b["color_intensity"]
+    # Non-tied categories still populated.
+    assert "HR" in a["color_intensity"]
+
+
+def test_format_standings_era_whip_inverted():
+    """Lower ERA/WHIP → higher intensity (+1.0 at the min, not the max)."""
+    standings = _standings_to_snapshot([
+        {"name": "LowEra", "team_key": "a", "rank": 1,
+         "stats": {"R": 100, "HR": 30, "RBI": 90, "SB": 20, "AVG": 0.260,
+                   "W": 10, "K": 200, "SV": 10, "ERA": 2.50, "WHIP": 1.00}},
+        {"name": "HighEra", "team_key": "b", "rank": 2,
+         "stats": {"R": 90, "HR": 25, "RBI": 80, "SB": 15, "AVG": 0.255,
+                   "W": 8, "K": 180, "SV": 8, "ERA": 5.00, "WHIP": 1.50}},
+    ])
+    data = format_standings_for_display(standings, "LowEra")
+    low = next(t for t in data["teams"] if t["name"] == "LowEra")
+    high = next(t for t in data["teams"] if t["name"] == "HighEra")
+    # Lowest ERA / WHIP should read as the leader (+1.0).
+    assert low["color_intensity"]["ERA"] == pytest.approx(1.0)
+    assert low["color_intensity"]["WHIP"] == pytest.approx(1.0)
+    assert high["color_intensity"]["ERA"] == pytest.approx(-1.0)
+    assert high["color_intensity"]["WHIP"] == pytest.approx(-1.0)
+
+
+def test_format_standings_clustered_leaders_share_intensity():
+    """Three teams at 99 HR (one behind 100) should get the same intensity."""
+    hr_values = [100, 99, 99, 99, 70, 65, 55, 50, 45, 40]
+    teams = []
+    for i, hr in enumerate(hr_values):
+        teams.append({
+            "name": f"Team{i}", "team_key": f"k{i}", "rank": i + 1,
+            "stats": {"R": 100, "HR": hr, "RBI": 90, "SB": 20, "AVG": 0.260,
+                      "W": 10, "K": 200, "SV": 10, "ERA": 3.50, "WHIP": 1.20},
+        })
+    data = format_standings_for_display(_standings_to_snapshot(teams), "Team0")
+    by_name = {t["name"]: t for t in data["teams"]}
+    # Leader at 100 → +1.0. Trailer at 40 → -1.0.
+    assert by_name["Team0"]["color_intensity"]["HR"] == pytest.approx(1.0)
+    assert by_name["Team9"]["color_intensity"]["HR"] == pytest.approx(-1.0)
+    # The three 99s share the same intensity: (99-40)/(100-40)=0.9833, intensity=0.9667.
+    expected = pytest.approx(0.9667, abs=0.001)
+    assert by_name["Team1"]["color_intensity"]["HR"] == expected
+    assert by_name["Team2"]["color_intensity"]["HR"] == expected
+    assert by_name["Team3"]["color_intensity"]["HR"] == expected
+
+
+def test_format_standings_total_column_intensity():
+    """Total column intensity tracks distance from top/bottom total roto points."""
+    data = format_standings_for_display(_standings_to_snapshot(_sample_standings()), "Hart of the Order")
+    teams = data["teams"]
+    # Team with highest total → +1.0; lowest → -1.0.
+    top = max(teams, key=lambda t: t["roto_points"]["total"])
+    bot = min(teams, key=lambda t: t["roto_points"]["total"])
+    assert top["color_intensity"]["total"] == pytest.approx(1.0)
+    assert bot["color_intensity"]["total"] == pytest.approx(-1.0)
 
 
 def _sample_monte_carlo():

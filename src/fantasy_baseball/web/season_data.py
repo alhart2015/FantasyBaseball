@@ -215,7 +215,10 @@ def format_standings_for_display(
             probabilities instead of deterministic rank-based scoring.
 
     Returns:
-        {"teams": [...]} where each team has roto_points, is_user flag, color_classes, and rank.
+        {"teams": [...]} where each team has roto_points, is_user flag,
+        color_intensity, and rank. color_intensity is a dict of
+        {category: float in [-1, 1]} plus a "total" key; categories
+        where all teams tie are absent.
 
     When every entry has ``yahoo_points_for`` set (live Yahoo standings
     path), the displayed total and rank come from Yahoo to match the
@@ -237,9 +240,8 @@ def format_standings_for_display(
     )
     yahoo_rank_by_name = {e.team_name: e.rank for e in standings.entries}
 
-    cat_ranks = _compute_category_ranks(standings)
-
     teams = []
+    team_totals: dict[str, float] = {}
     for entry in standings.entries:
         name = entry.team_name
         roto_pts = dict(roto[name])
@@ -248,29 +250,19 @@ def format_standings_for_display(
             roto_pts["score_roto_total"] = roto_pts["total"]
             roto_pts["total"] = entry.yahoo_points_for
 
-        color_classes = {}
-        for cat in ALL_CATEGORIES:
-            rank = cat_ranks[cat][name]
-            if rank <= 2:
-                color_classes[cat] = "rank-top"
-            elif rank <= 4:
-                color_classes[cat] = "rank-high"
-            elif rank <= 6:
-                color_classes[cat] = "rank-mid"
-            elif rank <= 8:
-                color_classes[cat] = "rank-low"
-            else:
-                color_classes[cat] = "rank-bottom"
-
+        team_totals[name] = float(roto_pts["total"])
         teams.append({
             "name": name,
             "team_key": entry.team_key,
             "stats": entry.stats,
             "roto_points": roto_pts,
             "is_user": name == user_team_name,
-            "color_classes": color_classes,
             "sds": team_sds.get(name, {}) if team_sds else {},
         })
+
+    intensity = _compute_color_intensity(standings, team_totals)
+    for team in teams:
+        team["color_intensity"] = intensity[team["name"]]
 
     if has_yahoo_totals:
         teams.sort(key=lambda t: (-t["roto_points"]["total"],
@@ -748,27 +740,43 @@ def compute_comparison_standings(
     }
 
 
-def _compute_category_ranks(standings: StandingsSnapshot) -> dict[str, dict[str, int]]:
-    """Compute per-category rank for each team (1 = best).
+def _compute_color_intensity(
+    standings: StandingsSnapshot,
+    team_totals: dict[str, float],
+) -> dict[str, dict[str, float]]:
+    """Per-team, per-category signed intensity in [-1, 1].
 
-    For inverse categories (ERA, WHIP), lower value = rank 1.
-    Uses epsilon comparison for float tie detection in rate stats.
+    For each category, intensity = 2 * ((value - min) / (max - min)) - 1,
+    with ERA / WHIP (``INVERSE_CATS``) flipped so the lowest value is +1.0.
+    Categories where every team is tied (``max == min``) are omitted —
+    callers render those cells neutral.
+
+    The ``"total"`` key is populated from ``team_totals`` using the same
+    formula (leader of total roto points = +1.0, no inversion).
     """
-    ranks = {}
+    out: dict[str, dict[str, float]] = {e.team_name: {} for e in standings.entries}
+
     for cat in ALL_CATEGORIES:
-        reverse = cat not in INVERSE_CATS
-        sorted_entries = sorted(standings.entries, key=lambda e: e.stats[cat], reverse=reverse)
-        cat_ranks = {}
-        prev_val = None
-        prev_rank = 0
-        for i, entry in enumerate(sorted_entries):
-            val = entry.stats[cat]
-            if prev_val is None or abs(val - prev_val) >= 1e-9:
-                prev_rank = i + 1
-                prev_val = val
-            cat_ranks[entry.team_name] = prev_rank
-        ranks[cat] = cat_ranks
-    return ranks
+        vals = {e.team_name: float(e.stats[cat]) for e in standings.entries}
+        lo, hi = min(vals.values()), max(vals.values())
+        if hi - lo < 1e-12:
+            continue  # tied category — omit the key for every team
+        span = hi - lo
+        for name, v in vals.items():
+            t = (v - lo) / span
+            if cat in INVERSE_CATS:
+                t = 1.0 - t
+            out[name][cat] = 2.0 * t - 1.0
+
+    # Total column
+    lo_t, hi_t = min(team_totals.values()), max(team_totals.values())
+    if hi_t - lo_t >= 1e-12:
+        span = hi_t - lo_t
+        for name, v in team_totals.items():
+            t = (v - lo_t) / span
+            out[name]["total"] = 2.0 * t - 1.0
+
+    return out
 
 
 def _compute_pending_moves_diff(
