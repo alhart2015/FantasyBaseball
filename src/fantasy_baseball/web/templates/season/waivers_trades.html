@@ -125,8 +125,13 @@
 
 <script>
   window.BT_DATA = {
-    myRoster: {{ my_roster_data | safe }},
-    oppRosters: {{ opp_rosters_data | safe }}
+    myRoster: {{ my_roster_data | tojson }},
+    oppRosters: {{ opp_rosters_data | tojson }}
+  };
+  window.bt = window.bt || {
+    onOpponentChange: function() {},
+    onWaiverQuery: function() {},
+    evaluate: function() {},
   };
 </script>
 
