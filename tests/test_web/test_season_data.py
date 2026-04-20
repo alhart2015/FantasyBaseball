@@ -310,6 +310,7 @@ def test_write_cache_writes_to_redis(tmp_path, monkeypatch):
     mock_redis.set = lambda k, v: setattr(mock_redis, "_last_set", (k, v))
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
     monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(season_data, "_DEFAULT_CACHE_DIR", tmp_path)
 
     data = {"teams": [1, 2, 3]}
     write_cache(CacheKey.STANDINGS, data, cache_dir=tmp_path)
@@ -333,12 +334,14 @@ def test_write_cache_handles_redis_error(tmp_path, monkeypatch):
     """write_cache continues if Redis raises a network error."""
     mock_redis = MagicMock()
     mock_redis.set.side_effect = ConnectionError("Upstash unreachable")
+    mock_redis.get.side_effect = ConnectionError("Upstash unreachable")
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
     monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(season_data, "_DEFAULT_CACHE_DIR", tmp_path)
 
     data = {"teams": [1, 2, 3]}
     write_cache(CacheKey.STANDINGS, data, cache_dir=tmp_path)
-    # Local write still succeeded
+    # Local write still succeeded; read falls back to disk after Redis error.
     assert read_cache(CacheKey.STANDINGS, cache_dir=tmp_path) == data
 
 
@@ -350,6 +353,7 @@ def test_read_cache_falls_back_to_redis(tmp_path, monkeypatch):
     mock_redis = type("MockRedis", (), {"get": lambda self, k: json.dumps(data)})()
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
     monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(season_data, "_DEFAULT_CACHE_DIR", tmp_path)
 
     result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result == data
@@ -363,6 +367,7 @@ def test_read_cache_returns_none_when_both_miss(tmp_path, monkeypatch):
     mock_redis = type("MockRedis", (), {"get": lambda self, k: None})()
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
     monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(season_data, "_DEFAULT_CACHE_DIR", tmp_path)
 
     result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result is None
@@ -373,6 +378,7 @@ def test_read_cache_handles_corrupt_redis_data(tmp_path, monkeypatch):
     mock_redis = type("MockRedis", (), {"get": lambda self, k: "not-json{{"})()
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
     monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(season_data, "_DEFAULT_CACHE_DIR", tmp_path)
 
     result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result is None
@@ -394,6 +400,7 @@ def test_read_cache_handles_redis_error(tmp_path, monkeypatch):
     mock_redis.get.side_effect = ConnectionError("Upstash unreachable")
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
     monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(season_data, "_DEFAULT_CACHE_DIR", tmp_path)
 
     result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result is None
