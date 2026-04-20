@@ -1,4 +1,6 @@
+from fantasy_baseball.models.player import HitterStats, PitcherStats, Player
 from fantasy_baseball.trades.evaluate import (
+    aggregate_player_stats,
     compute_roto_points,
     compute_roto_points_by_cat,
     compute_trade_impact,
@@ -76,4 +78,44 @@ def test_compute_roto_points_by_cat_missing_stats():
     # "No Pitching" should rank last in ERA/WHIP (got default 99.0)
     assert result["Full"]["ERA"] > result["No Pitching"]["ERA"]
     assert result["Full"]["WHIP"] > result["No Pitching"]["WHIP"]
+
+
+def test_aggregate_two_hitters_sums_counts_and_weights_avg():
+    h1 = Player(name="A", player_type="hitter", positions=["OF"],
+                rest_of_season=HitterStats(pa=600, ab=500, h=150,
+                                            r=80, hr=25, rbi=70, sb=10, avg=0.300))
+    h2 = Player(name="B", player_type="hitter", positions=["2B"],
+                rest_of_season=HitterStats(pa=500, ab=400, h=100,
+                                            r=50, hr=10, rbi=40, sb=5, avg=0.250))
+    agg = aggregate_player_stats([h1, h2])
+    assert agg["R"] == 130
+    assert agg["HR"] == 35
+    assert agg["ab"] == 900
+    assert abs(agg["AVG"] - 250/900) < 1e-9
+    assert agg["ip"] == 0
+
+
+def test_aggregate_two_pitchers_weights_era_and_whip():
+    p1 = Player(name="P1", player_type="pitcher", positions=["P"],
+                rest_of_season=PitcherStats(ip=100, w=8, k=100, sv=0,
+                                             era=3.60, whip=1.20,
+                                             er=40, bb=30, h_allowed=90))
+    p2 = Player(name="P2", player_type="pitcher", positions=["P"],
+                rest_of_season=PitcherStats(ip=50, w=3, k=60, sv=20,
+                                             era=2.70, whip=1.00,
+                                             er=15, bb=10, h_allowed=40))
+    agg = aggregate_player_stats([p1, p2])
+    assert agg["W"] == 11
+    assert agg["K"] == 160
+    assert agg["SV"] == 20
+    assert agg["ip"] == 150
+    assert abs(agg["ERA"] - 3.30) < 1e-6
+    assert abs(agg["WHIP"] - 170/150) < 1e-6
+
+
+def test_aggregate_empty_list_returns_zeros():
+    agg = aggregate_player_stats([])
+    assert agg == {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0.0,
+                   "W": 0, "K": 0, "SV": 0, "ERA": 0.0, "WHIP": 0.0,
+                   "ab": 0, "ip": 0}
 

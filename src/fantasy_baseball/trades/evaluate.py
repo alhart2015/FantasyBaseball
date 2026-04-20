@@ -265,6 +265,44 @@ def player_rest_of_season_stats(player: Player) -> dict:
         }
 
 
+def aggregate_player_stats(players: list[Player]) -> dict:
+    """Aggregate ROS stats across multiple players into one dict.
+
+    Returns the same shape as :func:`player_rest_of_season_stats`. Counting
+    stats sum; rate stats are weighted (AVG by AB, ERA/WHIP by IP). An
+    empty list returns all zeros.
+
+    This lets multi-player trades call :func:`apply_swap_delta` exactly
+    once per team with combined loses/gains stats.
+    """
+    total = {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0.0,
+             "W": 0, "K": 0, "SV": 0, "ERA": 0.0, "WHIP": 0.0,
+             "ab": 0, "ip": 0}
+    if not players:
+        return total
+
+    total_hits = 0.0
+    total_er = 0.0
+    total_bh = 0.0
+
+    for p in players:
+        s = player_rest_of_season_stats(p)
+        for cat in ("R", "HR", "RBI", "SB", "W", "K", "SV"):
+            total[cat] += s[cat]
+        total["ab"] += s["ab"]
+        total["ip"] += s["ip"]
+        total_hits += s["AVG"] * s["ab"]
+        total_er += s["ERA"] * s["ip"] / 9.0
+        total_bh += s["WHIP"] * s["ip"]
+
+    if total["ab"] > 0:
+        total["AVG"] = total_hits / total["ab"]
+    if total["ip"] > 0:
+        total["ERA"] = 9.0 * total_er / total["ip"]
+        total["WHIP"] = total_bh / total["ip"]
+    return total
+
+
 def find_player_by_name(name: str, roster: list[Player]) -> Player | None:
     """Find a player in a roster by normalized name (accent-safe)."""
     target = normalize_name(name)
