@@ -357,9 +357,38 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
 
+  function attachWaiverListeners() {
+    const sugg = document.getElementById("bt-waiver-suggestions");
+    if (sugg) {
+      sugg.addEventListener("click", (e) => {
+        const li = e.target.closest("li[data-bt-add-key]");
+        if (!li) return;
+        window.bt.addWaiver(
+          li.dataset.btAddKey,
+          li.dataset.btAddName,
+          li.dataset.btAddPositions,
+        );
+      });
+    }
+    const chips = document.getElementById("bt-waiver-chips");
+    if (chips) {
+      chips.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-bt-waiver-remove]");
+        if (!btn) return;
+        window.bt.removeWaiver(btn.dataset.btWaiverRemove);
+      });
+      chips.addEventListener("change", (e) => {
+        const cb = e.target.closest("input[data-bt-waiver-toggle]");
+        if (!cb) return;
+        window.bt.toggleWaiverActive(cb.dataset.btWaiverToggle);
+      });
+    }
+  }
+
   window.bt = {
     init() {
       attachRosterListeners();
+      attachWaiverListeners();
       populateOpponents();
       renderRosters();
       updateLegality();
@@ -385,7 +414,62 @@ document.addEventListener('DOMContentLoaded', function() {
 
   document.addEventListener("DOMContentLoaded", () => window.bt.init());
 
-  window.bt.onWaiverQuery = () => {};
+  let _waiverTimer = null;
+
+  window.bt.onWaiverQuery = (ev) => {
+    const q = ev.target.value.trim();
+    const sugg = document.getElementById("bt-waiver-suggestions");
+    clearTimeout(_waiverTimer);
+    if (q.length < 2) { sugg.innerHTML = ""; return; }
+    _waiverTimer = setTimeout(async () => {
+      const resp = await fetch(`/api/waiver-search?q=${encodeURIComponent(q)}`);
+      if (!resp.ok) { sugg.innerHTML = ""; return; }
+      const matches = await resp.json();
+      sugg.innerHTML = matches.map(m => {
+        const positions = (m.positions || []).join("/");
+        return `<li data-bt-add-key="${esc(m.key)}"
+                    data-bt-add-name="${esc(m.name)}"
+                    data-bt-add-positions="${esc(positions)}">
+                  ${esc(m.name)} <small>(${esc(positions)})</small>
+                </li>`;
+      }).join("");
+    }, 250);
+  };
+
+  window.bt.addWaiver = (key, name, positions) => {
+    if (state.waiverAdds.has(key)) return;
+    state.waiverAdds.set(key, { name, positions, bench: false });
+    document.getElementById("bt-waiver-search").value = "";
+    document.getElementById("bt-waiver-suggestions").innerHTML = "";
+    renderWaiverChips();
+    updateLegality();
+  };
+
+  window.bt.removeWaiver = (key) => {
+    state.waiverAdds.delete(key);
+    renderWaiverChips();
+    updateLegality();
+  };
+
+  window.bt.toggleWaiverActive = (key) => {
+    const add = state.waiverAdds.get(key);
+    if (add) { add.bench = !add.bench; renderWaiverChips(); }
+  };
+
+  function renderWaiverChips() {
+    const chips = document.getElementById("bt-waiver-chips");
+    chips.innerHTML = [...state.waiverAdds.entries()].map(([k, v]) => `
+      <span class="bt-chip" data-key="${esc(k)}">
+        ${esc(v.name)} <small>${esc(v.positions)}</small>
+        <label class="bt-active-toggle">
+          <input type="checkbox" ${v.bench ? "" : "checked"}
+                 data-bt-waiver-toggle="${esc(k)}" /> active
+        </label>
+        <button type="button" data-bt-waiver-remove="${esc(k)}"
+                style="background:none;border:none;color:var(--danger);cursor:pointer">&times;</button>
+      </span>`).join("");
+  }
+
   window.bt.evaluate = () => {};
 
   window.bt._state = state;
