@@ -190,12 +190,18 @@ body {
 td.cat-top { color: var(--success); font-weight: bold; }
 td.cat-bottom { color: var(--danger); font-weight: bold; }
 
-/* Rank-based background colors for standings cells */
-td.rank-top    { background: rgba(34, 197, 94, 0.25); color: #4ade80; font-weight: 600; }
-td.rank-high   { background: rgba(34, 197, 94, 0.10); color: #86efac; }
-td.rank-mid    { }
-td.rank-low    { background: rgba(239, 68, 68, 0.10); color: #fca5a5; }
-td.rank-bottom { background: rgba(239, 68, 68, 0.25); color: #f87171; font-weight: 600; }
+/* Stat-distance coloring for standings cells.
+   Template sets exactly one of --pos / --neg in [0, 1] per cell;
+   cells with neither render neutral. Peak alpha 0.25 matches the
+   prior rank-top / rank-bottom look. */
+td[style*="--pos"] {
+    background: rgba(34, 197, 94, calc(var(--pos) * 0.25));
+    color: color-mix(in srgb, var(--text-primary), #4ade80 calc(var(--pos) * 70%));
+}
+td[style*="--neg"] {
+    background: rgba(239, 68, 68, calc(var(--neg) * 0.25));
+    color: color-mix(in srgb, var(--text-primary), #f87171 calc(var(--neg) * 70%));
+}
 
 .total-col { color: var(--accent); font-weight: bold; }
 

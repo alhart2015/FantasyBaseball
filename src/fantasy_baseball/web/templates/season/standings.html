@@ -12,6 +12,10 @@
 <p class="placeholder-text">No standings data. Click "Refresh Data" to fetch from Yahoo.</p>
 {% else %}
 
+{% macro intensity_style(i) -%}
+{%- if i is not none and i > 0 %}style="--pos: {{ i | round(3) }}"{% elif i is not none and i < 0 %}style="--neg: {{ (-i) | round(3) }}"{% endif -%}
+{%- endmacro %}
+
 <div class="pill-group" id="standings-top-toggle">
     <button class="pill active" data-view="current" onclick="toggleTopView(this)">Current</button>
     <button class="pill" data-view="projected" onclick="toggleTopView(this)">Projected</button>
@@ -42,14 +46,18 @@
                 <td>{{ team.rank }}</td>
                 <td class="team-name"><a href="/lineup?team={{ team.team_key }}" style="color: inherit; text-decoration: none; border-bottom: 1px dotted var(--text-secondary);">{{ team.name }}</a></td>
                 {% for cat in categories %}
-                <td class="{{ team.color_classes[cat] }} stat-cell"
+                {% set i = team.color_intensity.get(cat) %}
+                <td class="stat-cell" {{ intensity_style(i) }}
                     data-points="{{ team.roto_points[cat ~ '_pts'] | round(1) }}"
                     data-stat="{{ team.stats[cat] }}"
                     data-cat="{{ cat }}">
                     {{ team.roto_points[cat ~ '_pts'] | round(1) }}
                 </td>
                 {% endfor %}
-                <td class="total-col">{{ team.roto_points.total | round(1) }}</td>
+                {% set i = team.color_intensity.get("total") %}
+                <td class="total-col" {{ intensity_style(i) }}>
+                    {{ team.roto_points.total | round(1) }}
+                </td>
             </tr>
         {% endfor %}
         </tbody>
@@ -82,7 +90,8 @@
                 <td>{{ team.rank }}</td>
                 <td class="team-name">{{ team.name }}</td>
                 {% for cat in categories %}
-                <td class="{{ team.color_classes[cat] }} {{ cell_class }}"
+                {% set i = team.color_intensity.get(cat) %}
+                <td class="stat-cell {{ cell_class }}" {{ intensity_style(i) }}
                     data-points="{{ team.roto_points[cat ~ '_pts'] | round(1) }}"
                     data-stat="{{ team.stats[cat] }}"
                     data-sd="{{ team.sds.get(cat, 0) }}"
@@ -90,7 +99,10 @@
                     {{ team.roto_points[cat ~ '_pts'] | round(1) }}
                 </td>
                 {% endfor %}
-                <td class="total-col">{{ team.roto_points.total | round(1) }}</td>
+                {% set i = team.color_intensity.get("total") %}
+                <td class="total-col" {{ intensity_style(i) }}>
+                    {{ team.roto_points.total | round(1) }}
+                </td>
             </tr>
         {% endfor %}
         </tbody>
@@ -323,11 +335,11 @@ function toggleCurrentSub(el) {
     document.querySelectorAll('#current-sub-toggle .pill').forEach(p => p.classList.remove('active'));
     el.classList.add('active');
     if (el.dataset.sub === 'points') {
-        document.querySelectorAll('.stat-cell').forEach(cell => {
+        document.querySelectorAll('#standings-table .stat-cell').forEach(cell => {
             cell.textContent = cell.dataset.points;
         });
     } else {
-        formatStatCells('.stat-cell');
+        formatStatCells('#standings-table .stat-cell');
     }
 }
 
