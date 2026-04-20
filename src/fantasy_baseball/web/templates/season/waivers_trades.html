@@ -27,23 +27,9 @@
 .section-body.collapsed { display: none; }
 .mb-2 { margin-bottom: 0.5rem; }
 .mt-2 { margin-top: 0.5rem; }
-.bt-roster { max-height: 420px; overflow-y: auto; border: 1px solid var(--panel-bg); padding: 0.25rem; }
-.bt-row { display: grid; grid-template-columns: 1fr auto auto; gap: 0.4rem; padding: 0.2rem 0.4rem;
-          border-bottom: 1px solid rgba(255,255,255,0.06); align-items: center; }
-.bt-row.il { opacity: 0.4; }
-.bt-row-name { font-size: 0.9rem; }
-.bt-seg { display: inline-flex; gap: 2px; }
-.bt-seg button { font-size: 0.75rem; padding: 1px 6px; background: transparent;
-                  border: 1px solid var(--panel-bg); color: var(--text); cursor: pointer; }
-.bt-seg button.active { background: var(--text); color: var(--panel-bg); }
-.bt-seg button.trade.active { background: var(--success); color: #000; }
-.bt-seg button.drop.active { background: var(--danger); color: #fff; }
-.bt-active-toggle { font-size: 0.7rem; cursor: pointer; }
 .bt-suggestions { list-style: none; padding: 0; margin: 0.25rem 0; max-height: 160px; overflow-y: auto; }
 .bt-suggestions li { padding: 0.2rem 0.4rem; cursor: pointer; background: var(--panel-bg); }
 .bt-suggestions li:hover { background: var(--text); color: var(--panel-bg); }
-.bt-chips { display: flex; gap: 0.25rem; flex-wrap: wrap; margin-top: 0.25rem; }
-.bt-chip { background: var(--panel-bg); padding: 0.2rem 0.4rem; border-radius: 3px; font-size: 0.8rem; }
 .bt-legality { font-family: monospace; font-size: 0.85rem; }
 .bt-legality.illegal { color: var(--danger); }
 .bt-result { margin-top: 1rem; }
@@ -117,7 +103,7 @@
 
     <div class="mb-2">
         <label for="bt-opponent">Opponent</label>
-        <select id="bt-opponent" onchange="bt.onOpponentChange()"></select>
+        <select id="bt-opponent"></select>
     </div>
 
     <div class="build-trade-rosters" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
