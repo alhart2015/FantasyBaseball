@@ -1,9 +1,45 @@
-HITTING_CATEGORIES: list[str] = ["R", "HR", "RBI", "SB", "AVG"]
-PITCHING_CATEGORIES: list[str] = ["W", "K", "ERA", "WHIP", "SV"]
-ALL_CATEGORIES: list[str] = HITTING_CATEGORIES + PITCHING_CATEGORIES
+from enum import StrEnum
 
-RATE_STATS: set[str] = {"AVG", "ERA", "WHIP"}
-INVERSE_STATS: set[str] = {"ERA", "WHIP"}  # Lower is better
+
+class Category(StrEnum):
+    """Roto scoring category.
+
+    ``StrEnum`` members *are* strings, so existing code that compares
+    category values to bare strings (``cat == "HR"``, ``cat in {"ERA",
+    "WHIP"}``, dict lookups keyed on ``"R"``) continues to work
+    unchanged. New code should prefer the enum members for type safety.
+    """
+
+    R = "R"
+    HR = "HR"
+    RBI = "RBI"
+    SB = "SB"
+    AVG = "AVG"
+    W = "W"
+    K = "K"
+    ERA = "ERA"
+    WHIP = "WHIP"
+    SV = "SV"
+
+
+HITTING_CATEGORIES: list[Category] = [
+    Category.R,
+    Category.HR,
+    Category.RBI,
+    Category.SB,
+    Category.AVG,
+]
+PITCHING_CATEGORIES: list[Category] = [
+    Category.W,
+    Category.K,
+    Category.ERA,
+    Category.WHIP,
+    Category.SV,
+]
+ALL_CATEGORIES: list[Category] = HITTING_CATEGORIES + PITCHING_CATEGORIES
+
+RATE_STATS: frozenset[Category] = frozenset({Category.AVG, Category.ERA, Category.WHIP})
+INVERSE_STATS: frozenset[Category] = frozenset({Category.ERA, Category.WHIP})  # Lower is better
 
 DEFAULT_ROSTER_SLOTS: dict[str, int] = {
     "C": 1,
@@ -41,9 +77,7 @@ def compute_starters_per_position(
     if num_teams is None:
         num_teams = DEFAULT_NUM_TEAMS
     return {
-        pos: count * num_teams
-        for pos, count in roster_slots.items()
-        if pos not in ("BN", "IL")
+        pos: count * num_teams for pos, count in roster_slots.items() if pos not in ("BN", "IL")
     }
 
 
@@ -149,26 +183,60 @@ MANAGEMENT_ADJUSTMENT_DEFAULT: tuple[float, float] = (0.0, 10.0)
 
 # Replacement-level full-season stats for waiver pickups
 REPLACEMENT_HITTER: dict[str, int] = {
-    "r": 55, "hr": 12, "rbi": 50, "sb": 5, "h": 125, "ab": 500,
+    "r": 55,
+    "hr": 12,
+    "rbi": 50,
+    "sb": 5,
+    "h": 125,
+    "ab": 500,
 }
 REPLACEMENT_SP: dict[str, int] = {
-    "w": 7, "k": 120, "sv": 0, "ip": 140, "er": 70, "bb": 50, "h_allowed": 139,
+    "w": 7,
+    "k": 120,
+    "sv": 0,
+    "ip": 140,
+    "er": 70,
+    "bb": 50,
+    "h_allowed": 139,
 }
 REPLACEMENT_RP: dict[str, int] = {
-    "w": 2, "k": 55, "sv": 5, "ip": 60, "er": 30, "bb": 21, "h_allowed": 60,
+    "w": 2,
+    "k": 55,
+    "sv": 5,
+    "ip": 60,
+    "er": 30,
+    "bb": 21,
+    "h_allowed": 60,
 }
 
 # Waiver-quality stats for injury backfill blending (10-team league).
 # Separate from REPLACEMENT_* (used by Monte Carlo) — these model what
 # you'd actually stream from waivers, which is slightly better quality.
 WAIVER_SP: dict[str, float] = {
-    "w": 7, "k": 120, "sv": 0, "ip": 140, "er": 65, "bb": 48, "h_allowed": 133,
+    "w": 7,
+    "k": 120,
+    "sv": 0,
+    "ip": 140,
+    "er": 65,
+    "bb": 48,
+    "h_allowed": 133,
 }
 WAIVER_RP: dict[str, float] = {
-    "w": 2, "k": 55, "sv": 5, "ip": 60, "er": 30, "bb": 21, "h_allowed": 60,
+    "w": 2,
+    "k": 55,
+    "sv": 5,
+    "ip": 60,
+    "er": 30,
+    "bb": 21,
+    "h_allowed": 60,
 }
 WAIVER_HITTER: dict[str, float] = {
-    "r": 55, "hr": 12, "rbi": 50, "sb": 5, "h": 150, "ab": 600,
+    "r": 55,
+    "hr": 12,
+    "rbi": 50,
+    "sb": 5,
+    "h": 150,
+    "ab": 600,
 }
 
 # Healthy baselines for backfill blending
@@ -196,15 +264,15 @@ def safe_float(value) -> float:
 # Yahoo player statuses that indicate a player is on the injured list.
 IL_STATUSES = frozenset({"IL", "IL+", "IL10", "IL15", "IL60", "DL", "DL+"})
 
-DEFAULT_SGP_DENOMINATORS: dict[str, float] = {
-    "R": 20.0,
-    "HR": 9.0,
-    "RBI": 20.0,
-    "SB": 8.0,
-    "AVG": 0.005,
-    "W": 3.0,
-    "K": 30.0,
-    "ERA": 0.15,
-    "WHIP": 0.015,
-    "SV": 7.0,
+DEFAULT_SGP_DENOMINATORS: dict[Category, float] = {
+    Category.R: 20.0,
+    Category.HR: 9.0,
+    Category.RBI: 20.0,
+    Category.SB: 8.0,
+    Category.AVG: 0.005,
+    Category.W: 3.0,
+    Category.K: 30.0,
+    Category.ERA: 0.15,
+    Category.WHIP: 0.015,
+    Category.SV: 7.0,
 }

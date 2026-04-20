@@ -1,5 +1,5 @@
 from fantasy_baseball.models.standings import StandingsSnapshot
-from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS, Category
 
 FULL_CONFIDENCE_GAMES: int = 81
 
@@ -14,6 +14,7 @@ def _estimate_season_progress(standings: StandingsSnapshot) -> float:
     try:
         from fantasy_baseball.data.kv_store import get_kv
         from fantasy_baseball.data.redis_store import get_season_progress
+
         progress = get_season_progress(get_kv())
         games = progress["games_elapsed"]
         if games > 0:
@@ -35,7 +36,7 @@ def _leverage_from_standings(
     user_team_name: str,
     attack_weight: float,
     defense_weight: float,
-) -> dict[str, float] | None:
+) -> dict[Category, float] | None:
     """Compute normalized leverage weights via marginal roto-point impact.
 
     For each category, asks: "If my stat changed by one SGP denominator,
@@ -63,7 +64,7 @@ def _leverage_from_standings(
 
     sgp_denoms = get_sgp_denominators()
 
-    raw_leverage: dict[str, float] = {}
+    raw_leverage: dict[Category, float] = {}
     for cat in ALL_CATEGORIES:
         reverse = cat not in INVERSE_STATS  # higher is better for most cats
         user_val = user_entry.stats.get(cat, 0)
@@ -136,7 +137,7 @@ def calculate_leverage(
     defense_weight: float = 0.4,
     season_progress: float | None = None,
     projected_standings: StandingsSnapshot | None = None,
-) -> dict[str, float]:
+) -> dict[Category, float]:
     """Calculate leverage weights for each stat category based on standings gaps.
 
     For each category, ranks all teams independently and finds the
@@ -176,7 +177,10 @@ def calculate_leverage(
     # to raw current standings.
     source = projected_standings if projected_standings is not None else standings
     standings_leverage = _leverage_from_standings(
-        source, user_team_name, attack_weight, defense_weight,
+        source,
+        user_team_name,
+        attack_weight,
+        defense_weight,
     )
     if standings_leverage is None:
         return uniform
