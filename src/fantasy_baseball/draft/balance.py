@@ -61,7 +61,7 @@ class CategoryBalance:
             # No pitchers: all pitching categories are None so leverage
             # treats them uniformly (avoids 100:1 asymmetry where ERA/WHIP
             # get emergency weight but W/K/SV get zero weight).
-            for stat in ("W", "K", "SV", "ERA", "WHIP"):
+            for stat in PITCHING_CATEGORIES:
                 totals[stat] = None
         return totals
 

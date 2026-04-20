@@ -65,11 +65,9 @@ def compute_roto_points_by_cat(
             if cat not in stats:
                 stats[cat] = _STAT_DEFAULTS.get(cat, 0.0)
 
-    # Convert to score_roto input format and call canonical implementation
     all_stats = {t["name"]: t["stats"] for t in standings}
     roto = score_roto(all_stats, team_sds=team_sds)
 
-    # Convert "R_pts" keys back to bare "R" keys (drop "total")
     return {name: {cat: pts[f"{cat}_pts"] for cat in ALL_CATS} for name, pts in roto.items()}
 
 
