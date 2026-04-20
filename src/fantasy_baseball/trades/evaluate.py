@@ -8,16 +8,13 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-from fantasy_baseball.models.player import HitterStats, Player, PlayerType
+from fantasy_baseball.models.player import HitterStats, Player
+from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.sgp.rankings import rank_key_from_positions
+from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
+from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
-
-from fantasy_baseball.scoring import score_roto
-from fantasy_baseball.utils.constants import (
-    ALL_CATEGORIES as ALL_CATS,
-    INVERSE_STATS as INVERSE_CATS,
-)
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era
 
 COUNTING_CATS = ["R", "HR", "RBI", "SB", "W", "K", "SV"]
@@ -34,6 +31,7 @@ _TEAM_IP = 1450
 
 class OpponentGroup(TypedDict):
     """One opponent's trade-candidate group, as returned by search_trades_away."""
+
     opponent: str
     candidates: list[dict[str, Any]]
 
@@ -41,7 +39,7 @@ class OpponentGroup(TypedDict):
 def compute_roto_points_by_cat(
     standings: list[dict[str, Any]],
     *,
-    team_sds: dict[str, dict[str, float]] | None = None,
+    team_sds: dict[str, dict[Category, float]] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Return per-category roto points for each team.
 
@@ -72,10 +70,7 @@ def compute_roto_points_by_cat(
     roto = score_roto(all_stats, team_sds=team_sds)
 
     # Convert "R_pts" keys back to bare "R" keys (drop "total")
-    return {
-        name: {cat: pts[f"{cat}_pts"] for cat in ALL_CATS}
-        for name, pts in roto.items()
-    }
+    return {name: {cat: pts[f"{cat}_pts"] for cat in ALL_CATS} for name, pts in roto.items()}
 
 
 def compute_roto_points(standings: list[dict[str, Any]]) -> dict[str, float]:
@@ -162,7 +157,7 @@ def compute_trade_impact(
     opp_gains_ros: dict[str, Any],
     projected_standings: list[dict[str, Any]] | None = None,
     *,
-    team_sds: dict[str, dict[str, float]] | None = None,
+    team_sds: dict[str, dict[Category, float]] | None = None,
 ) -> dict[str, Any]:
     """Compute roto point impact of a proposed trade for both teams.
 
@@ -203,14 +198,10 @@ def compute_trade_impact(
     post_trade = []
     for team in baseline:
         if team["name"] == hart_name:
-            new_stats = apply_swap_delta(
-                team["stats"], hart_loses_ros, hart_gains_ros
-            )
+            new_stats = apply_swap_delta(team["stats"], hart_loses_ros, hart_gains_ros)
             post_trade.append({"name": team["name"], "stats": new_stats})
         elif team["name"] == opp_name:
-            new_stats = apply_swap_delta(
-                team["stats"], opp_loses_ros, opp_gains_ros
-            )
+            new_stats = apply_swap_delta(team["stats"], opp_loses_ros, opp_gains_ros)
             post_trade.append({"name": team["name"], "stats": new_stats})
         else:
             post_trade.append(team)
@@ -224,12 +215,10 @@ def compute_trade_impact(
     opp_proj = sum(post_trade_by_cat[opp_name].values())
 
     hart_cat_deltas = {
-        cat: post_trade_by_cat[hart_name][cat] - baseline_by_cat[hart_name][cat]
-        for cat in ALL_CATS
+        cat: post_trade_by_cat[hart_name][cat] - baseline_by_cat[hart_name][cat] for cat in ALL_CATS
     }
     opp_cat_deltas = {
-        cat: post_trade_by_cat[opp_name][cat] - baseline_by_cat[opp_name][cat]
-        for cat in ALL_CATS
+        cat: post_trade_by_cat[opp_name][cat] - baseline_by_cat[opp_name][cat] for cat in ALL_CATS
     }
 
     return {
@@ -248,20 +237,39 @@ def player_rest_of_season_stats(player: Player) -> dict:
     """
     ros = player.rest_of_season
     if ros is None:
-        return {cat: 0 for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP", "ab", "ip"]}
+        return {
+            cat: 0
+            for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP", "ab", "ip"]
+        }
     if isinstance(ros, HitterStats):
         return {
-            "R": ros.r, "HR": ros.hr, "RBI": ros.rbi, "SB": ros.sb,
+            "R": ros.r,
+            "HR": ros.hr,
+            "RBI": ros.rbi,
+            "SB": ros.sb,
             "AVG": ros.avg,
-            "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0,
-            "ab": ros.ab, "ip": 0,
+            "W": 0,
+            "K": 0,
+            "SV": 0,
+            "ERA": 0,
+            "WHIP": 0,
+            "ab": ros.ab,
+            "ip": 0,
         }
     else:
         return {
-            "R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
-            "W": ros.w, "K": ros.k, "SV": ros.sv,
-            "ERA": ros.era, "WHIP": ros.whip,
-            "ab": 0, "ip": ros.ip,
+            "R": 0,
+            "HR": 0,
+            "RBI": 0,
+            "SB": 0,
+            "AVG": 0,
+            "W": ros.w,
+            "K": ros.k,
+            "SV": ros.sv,
+            "ERA": ros.era,
+            "WHIP": ros.whip,
+            "ab": 0,
+            "ip": ros.ip,
         }
 
 
@@ -275,9 +283,20 @@ def aggregate_player_stats(players: list[Player]) -> dict:
     This lets multi-player trades call :func:`apply_swap_delta` exactly
     once per team with combined loses/gains stats.
     """
-    total = {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0.0,
-             "W": 0, "K": 0, "SV": 0, "ERA": 0.0, "WHIP": 0.0,
-             "ab": 0, "ip": 0}
+    total = {
+        "R": 0,
+        "HR": 0,
+        "RBI": 0,
+        "SB": 0,
+        "AVG": 0.0,
+        "W": 0,
+        "K": 0,
+        "SV": 0,
+        "ERA": 0.0,
+        "WHIP": 0.0,
+        "ab": 0,
+        "ip": 0,
+    }
     if not players:
         return total
 
@@ -312,8 +331,9 @@ def find_player_by_name(name: str, roster: list[Player]) -> Player | None:
     return None
 
 
-def _can_roster_without(roster: list[Player], remove: Player, add: Player,
-                        roster_slots: dict) -> bool:
+def _can_roster_without(
+    roster: list[Player], remove: Player, add: Player, roster_slots: dict
+) -> bool:
     """Check if a roster remains legal after swapping one player.
 
     Simple check: the incoming player must be able to fill at least one
@@ -338,7 +358,7 @@ def search_trades_away(
     rankings: dict[str, int],
     projected_standings: list[dict] | None = None,
     *,
-    team_sds: dict[str, dict[str, float]] | None = None,
+    team_sds: dict[str, dict[Category, float]] | None = None,
 ) -> list[OpponentGroup]:
     """Find trade candidates for a player the user wants to trade away.
 
@@ -370,8 +390,7 @@ def search_trades_away(
     if hart_player is None:
         return []
 
-    send_rank = rankings.get(
-        rank_key_from_positions(hart_player.name, hart_player.positions))
+    send_rank = rankings.get(rank_key_from_positions(hart_player.name, hart_player.positions))
     if send_rank is None:
         return []
 
@@ -380,7 +399,8 @@ def search_trades_away(
     for opp_name, opp_roster in opp_rosters.items():
         for opp_player in opp_roster:
             receive_rank = rankings.get(
-                rank_key_from_positions(opp_player.name, opp_player.positions))
+                rank_key_from_positions(opp_player.name, opp_player.positions)
+            )
             if receive_rank is None:
                 continue
 
@@ -397,8 +417,13 @@ def search_trades_away(
             opp_ros = player_rest_of_season_stats(opp_player)
 
             impact = compute_trade_impact(
-                standings, hart_name, opp_name,
-                hart_ros, opp_ros, opp_ros, hart_ros,
+                standings,
+                hart_name,
+                opp_name,
+                hart_ros,
+                opp_ros,
+                opp_ros,
+                hart_ros,
                 projected_standings=projected_standings,
                 team_sds=team_sds,
             )
@@ -406,18 +431,20 @@ def search_trades_away(
             if impact["hart_delta"] < 0:
                 continue
 
-            grouped.setdefault(opp_name, []).append({
-                "send": hart_player.name,
-                "send_positions": hart_player.positions,
-                "send_rank": send_rank,
-                "receive": opp_player.name,
-                "receive_positions": opp_player.positions,
-                "receive_rank": receive_rank,
-                "hart_delta": impact["hart_delta"],
-                "opp_delta": impact["opp_delta"],
-                "hart_cat_deltas": impact["hart_cat_deltas"],
-                "opp_cat_deltas": impact["opp_cat_deltas"],
-            })
+            grouped.setdefault(opp_name, []).append(
+                {
+                    "send": hart_player.name,
+                    "send_positions": hart_player.positions,
+                    "send_rank": send_rank,
+                    "receive": opp_player.name,
+                    "receive_positions": opp_player.positions,
+                    "receive_rank": receive_rank,
+                    "hart_delta": impact["hart_delta"],
+                    "opp_delta": impact["opp_delta"],
+                    "hart_cat_deltas": impact["hart_cat_deltas"],
+                    "opp_cat_deltas": impact["opp_cat_deltas"],
+                }
+            )
 
     # Sort candidates within each group by hart_delta descending
     for candidates in grouped.values():
@@ -442,7 +469,7 @@ def search_trades_for(
     rankings: dict[str, int],
     projected_standings: list[dict] | None = None,
     *,
-    team_sds: dict[str, dict[str, float]] | None = None,
+    team_sds: dict[str, dict[Category, float]] | None = None,
 ) -> list[dict]:
     """Find trade offers the user can make to acquire a specific opponent player.
 
@@ -481,7 +508,8 @@ def search_trades_for(
         return []
 
     receive_rank = rankings.get(
-        rank_key_from_positions(target_player.name, target_player.positions))
+        rank_key_from_positions(target_player.name, target_player.positions)
+    )
     if receive_rank is None:
         return []
 
@@ -489,8 +517,7 @@ def search_trades_for(
 
     candidates = []
     for hart_player in hart_roster:
-        send_rank = rankings.get(
-            rank_key_from_positions(hart_player.name, hart_player.positions))
+        send_rank = rankings.get(rank_key_from_positions(hart_player.name, hart_player.positions))
         if send_rank is None:
             continue
 
@@ -507,8 +534,13 @@ def search_trades_for(
         target_ros = player_rest_of_season_stats(target_player)
 
         impact = compute_trade_impact(
-            standings, hart_name, target_opp,
-            hart_ros, target_ros, target_ros, hart_ros,
+            standings,
+            hart_name,
+            target_opp,
+            hart_ros,
+            target_ros,
+            target_ros,
+            hart_ros,
             projected_standings=projected_standings,
             team_sds=team_sds,
         )
@@ -516,18 +548,20 @@ def search_trades_for(
         if impact["hart_delta"] < 0:
             continue
 
-        candidates.append({
-            "send": hart_player.name,
-            "send_positions": hart_player.positions,
-            "send_rank": send_rank,
-            "receive": target_player.name,
-            "receive_positions": target_player.positions,
-            "receive_rank": receive_rank,
-            "hart_delta": impact["hart_delta"],
-            "opp_delta": impact["opp_delta"],
-            "hart_cat_deltas": impact["hart_cat_deltas"],
-            "opp_cat_deltas": impact["opp_cat_deltas"],
-        })
+        candidates.append(
+            {
+                "send": hart_player.name,
+                "send_positions": hart_player.positions,
+                "send_rank": send_rank,
+                "receive": target_player.name,
+                "receive_positions": target_player.positions,
+                "receive_rank": receive_rank,
+                "hart_delta": impact["hart_delta"],
+                "opp_delta": impact["opp_delta"],
+                "hart_cat_deltas": impact["hart_cat_deltas"],
+                "opp_cat_deltas": impact["opp_cat_deltas"],
+            }
+        )
 
     candidates.sort(key=lambda c: -c["hart_delta"])
 

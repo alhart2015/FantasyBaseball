@@ -25,6 +25,7 @@ from fantasy_baseball.utils.constants import (
     REPLACEMENT_HITTER,
     REPLACEMENT_RP,
     REPLACEMENT_SP,
+    Category,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_era, calculate_whip
@@ -101,8 +102,9 @@ def pair_standalone_moves(transactions: list[dict]) -> list[tuple[str, str]]:
             overlap = drop_pos & add_pos
             if overlap:
                 score = 2 + len(overlap)
-            elif (drop_is_hitter and _is_hitter(add_pos)) or \
-                 (drop_is_pitcher and _is_pitcher(add_pos)):
+            elif (drop_is_hitter and _is_hitter(add_pos)) or (
+                drop_is_pitcher and _is_pitcher(add_pos)
+            ):
                 score = 1
             else:
                 score = 0
@@ -125,9 +127,18 @@ def pair_standalone_moves(transactions: list[dict]) -> list[tuple[str, str]]:
 
 # Empty ROS dict shared by the rare case where both sides are missing.
 _ZERO_ROS = {
-    "R": 0.0, "HR": 0.0, "RBI": 0.0, "SB": 0.0, "AVG": 0.0,
-    "W": 0.0, "K": 0.0, "SV": 0.0, "ERA": 0.0, "WHIP": 0.0,
-    "ab": 0.0, "ip": 0.0,
+    "R": 0.0,
+    "HR": 0.0,
+    "RBI": 0.0,
+    "SB": 0.0,
+    "AVG": 0.0,
+    "W": 0.0,
+    "K": 0.0,
+    "SV": 0.0,
+    "ERA": 0.0,
+    "WHIP": 0.0,
+    "ab": 0.0,
+    "ip": 0.0,
 }
 
 
@@ -158,19 +169,35 @@ def _frac_remaining(txn_date: date, season_start: date, season_end: date) -> flo
 
 def _hitter_ros(stats: HitterStats) -> dict:
     return {
-        "R": stats.r, "HR": stats.hr, "RBI": stats.rbi, "SB": stats.sb,
+        "R": stats.r,
+        "HR": stats.hr,
+        "RBI": stats.rbi,
+        "SB": stats.sb,
         "AVG": stats.avg,
-        "W": 0.0, "K": 0.0, "SV": 0.0, "ERA": 0.0, "WHIP": 0.0,
-        "ab": stats.ab, "ip": 0.0,
+        "W": 0.0,
+        "K": 0.0,
+        "SV": 0.0,
+        "ERA": 0.0,
+        "WHIP": 0.0,
+        "ab": stats.ab,
+        "ip": 0.0,
     }
 
 
 def _pitcher_ros(stats: PitcherStats) -> dict:
     return {
-        "R": 0.0, "HR": 0.0, "RBI": 0.0, "SB": 0.0, "AVG": 0.0,
-        "W": stats.w, "K": stats.k, "SV": stats.sv,
-        "ERA": stats.era, "WHIP": stats.whip,
-        "ab": 0.0, "ip": stats.ip,
+        "R": 0.0,
+        "HR": 0.0,
+        "RBI": 0.0,
+        "SB": 0.0,
+        "AVG": 0.0,
+        "W": stats.w,
+        "K": stats.k,
+        "SV": stats.sv,
+        "ERA": stats.era,
+        "WHIP": stats.whip,
+        "ab": 0.0,
+        "ip": stats.ip,
     }
 
 
@@ -184,11 +211,18 @@ def _prorated_replacement_hitter(frac: float) -> dict:
     h = REPLACEMENT_HITTER
     avg = h["h"] / h["ab"] if h["ab"] else 0.0
     return {
-        "R": h["r"] * frac, "HR": h["hr"] * frac,
-        "RBI": h["rbi"] * frac, "SB": h["sb"] * frac,
+        "R": h["r"] * frac,
+        "HR": h["hr"] * frac,
+        "RBI": h["rbi"] * frac,
+        "SB": h["sb"] * frac,
         "AVG": avg,
-        "W": 0.0, "K": 0.0, "SV": 0.0, "ERA": 0.0, "WHIP": 0.0,
-        "ab": h["ab"] * frac, "ip": 0.0,
+        "W": 0.0,
+        "K": 0.0,
+        "SV": 0.0,
+        "ERA": 0.0,
+        "WHIP": 0.0,
+        "ab": h["ab"] * frac,
+        "ip": 0.0,
     }
 
 
@@ -204,10 +238,18 @@ def _prorated_replacement_pitcher(positions: set[str], frac: float) -> dict:
     era = calculate_era(p["er"], p["ip"], default=0.0)
     whip = calculate_whip(p["bb"], p["h_allowed"], p["ip"], default=0.0)
     return {
-        "R": 0.0, "HR": 0.0, "RBI": 0.0, "SB": 0.0, "AVG": 0.0,
-        "W": p["w"] * frac, "K": p["k"] * frac, "SV": p["sv"] * frac,
-        "ERA": era, "WHIP": whip,
-        "ab": 0.0, "ip": p["ip"] * frac,
+        "R": 0.0,
+        "HR": 0.0,
+        "RBI": 0.0,
+        "SB": 0.0,
+        "AVG": 0.0,
+        "W": p["w"] * frac,
+        "K": p["k"] * frac,
+        "SV": p["sv"] * frac,
+        "ERA": era,
+        "WHIP": whip,
+        "ab": 0.0,
+        "ip": p["ip"] * frac,
     }
 
 
@@ -264,7 +306,10 @@ def _worst_at_position(
         if not (entry_positions & add_positions):
             continue
         ros, _, sgp = _lookup_player(
-            entry.name, entry_positions, hitters_proj, pitchers_proj,
+            entry.name,
+            entry_positions,
+            hitters_proj,
+            pitchers_proj,
         )
         if ros is None:
             continue
@@ -280,7 +325,7 @@ def _delta_roto(
     loses_ros: dict,
     gains_ros: dict,
     projected_standings: list[dict],
-    team_sds: dict[str, dict[str, float]] | None,
+    team_sds: dict[str, dict[Category, float]] | None,
 ) -> float:
     """Return the team's total-ΔRoto from swapping ``loses_ros`` → ``gains_ros``.
 
@@ -298,7 +343,9 @@ def _delta_roto(
 
     all_after = dict(all_before)
     all_after[team_name] = apply_swap_delta(
-        all_before[team_name], loses_ros, gains_ros,
+        all_before[team_name],
+        loses_ros,
+        gains_ros,
     )
 
     roto_before = score_roto(all_before, team_sds=team_sds)
@@ -316,7 +363,7 @@ def score_transaction(
     season_end: date,
     *,
     partner: dict | None = None,
-    team_sds: dict[str, dict[str, float]] | None,
+    team_sds: dict[str, dict[Category, float]] | None,
 ) -> dict:
     """Compute ΔRoto for a transaction.
 
@@ -369,10 +416,16 @@ def score_transaction(
         add_positions = _parse_positions(partner.get("add_positions"))
 
         loses_ros, _, _ = _lookup_player(
-            drop_name, drop_positions, hitters_proj, pitchers_proj,
+            drop_name,
+            drop_positions,
+            hitters_proj,
+            pitchers_proj,
         )
         gains_ros, _, _ = _lookup_player(
-            add_name, add_positions, hitters_proj, pitchers_proj,
+            add_name,
+            add_positions,
+            hitters_proj,
+            pitchers_proj,
         )
         if loses_ros is None:
             loses_ros = (
@@ -391,7 +444,10 @@ def score_transaction(
         add_name = txn.get("add_name")
         add_positions = _parse_positions(txn.get("add_positions"))
         gains_ros, _, _ = _lookup_player(
-            add_name, add_positions, hitters_proj, pitchers_proj,
+            add_name,
+            add_positions,
+            hitters_proj,
+            pitchers_proj,
         )
         if gains_ros is None:
             return {"delta_roto": 0.0}
@@ -402,7 +458,10 @@ def score_transaction(
             team = None
         roster = team.roster_as_of(txn_d) if team else None
         loses_ros = _worst_at_position(
-            roster, add_positions, hitters_proj, pitchers_proj,
+            roster,
+            add_positions,
+            hitters_proj,
+            pitchers_proj,
         )
         if loses_ros is None:
             loses_ros = (
@@ -419,7 +478,10 @@ def score_transaction(
         drop_name = txn.get("drop_name")
         drop_positions = _parse_positions(txn.get("drop_positions"))
         loses_ros, _, _ = _lookup_player(
-            drop_name, drop_positions, hitters_proj, pitchers_proj,
+            drop_name,
+            drop_positions,
+            hitters_proj,
+            pitchers_proj,
         )
         if loses_ros is None:
             return {"delta_roto": 0.0}
@@ -440,10 +502,16 @@ def score_transaction(
     drop_positions = _parse_positions(txn.get("drop_positions"))
 
     loses_ros, _, _ = _lookup_player(
-        drop_name, drop_positions, hitters_proj, pitchers_proj,
+        drop_name,
+        drop_positions,
+        hitters_proj,
+        pitchers_proj,
     )
     gains_ros, _, _ = _lookup_player(
-        add_name, add_positions, hitters_proj, pitchers_proj,
+        add_name,
+        add_positions,
+        hitters_proj,
+        pitchers_proj,
     )
     if loses_ros is None:
         loses_ros = (
@@ -501,6 +569,7 @@ def _load_projections_for_date_redis(client):
 # Display-cache builder
 # --------------------------------------------------------------------------
 
+
 def build_cache_output(transactions: list[dict]) -> dict:
     """Build the JSON cache structure for the Transactions tab.
 
@@ -556,9 +625,7 @@ def build_cache_output(transactions: list[dict]) -> dict:
             rendered.add(tid)
 
         teams[team]["transactions"].append(entry)
-        teams[team]["net_value"] = round(
-            teams[team]["net_value"] + entry["delta_roto"], 2
-        )
+        teams[team]["net_value"] = round(teams[team]["net_value"] + entry["delta_roto"], 2)
 
     team_list = sorted(teams.values(), key=lambda t: t["net_value"], reverse=True)
     for t in team_list:
