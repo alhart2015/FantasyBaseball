@@ -9,6 +9,7 @@ from fantasy_baseball.trades.multi_trade import (
     MultiTradeResult,
     TradeProposal,
     _can_roster_after,
+    build_waiver_pool,
     evaluate_multi_trade,
     player_key,
 )
@@ -436,3 +437,82 @@ def test_unknown_player_key_returns_illegal_with_reason():
     )
     assert result.legal is False
     assert "Ghost" in result.reason
+
+
+def test_build_waiver_pool_excludes_rostered_players():
+    a = _make_hitter("Alice")
+    b = _make_hitter("Bob")
+    my_roster = [a]
+    opp_rosters = {"Rival": [b]}
+    ros_projections = {
+        "hitters": [
+            {
+                "name": "Alice",
+                "player_type": "hitter",
+                "positions": ["OF"],
+                "rest_of_season": {
+                    "ab": 500,
+                    "h": 125,
+                    "r": 70,
+                    "hr": 20,
+                    "rbi": 60,
+                    "sb": 5,
+                    "avg": 0.25,
+                    "pa": 575,
+                },
+            },
+            {
+                "name": "Bob",
+                "player_type": "hitter",
+                "positions": ["OF"],
+                "rest_of_season": {
+                    "ab": 500,
+                    "h": 125,
+                    "r": 70,
+                    "hr": 20,
+                    "rbi": 60,
+                    "sb": 5,
+                    "avg": 0.25,
+                    "pa": 575,
+                },
+            },
+            {
+                "name": "Carol",
+                "player_type": "hitter",
+                "positions": ["OF"],
+                "rest_of_season": {
+                    "ab": 500,
+                    "h": 125,
+                    "r": 70,
+                    "hr": 20,
+                    "rbi": 60,
+                    "sb": 5,
+                    "avg": 0.25,
+                    "pa": 575,
+                },
+            },
+        ],
+        "pitchers": [
+            {
+                "name": "Dan",
+                "player_type": "pitcher",
+                "positions": ["P"],
+                "rest_of_season": {
+                    "ip": 150,
+                    "w": 9,
+                    "k": 140,
+                    "sv": 0,
+                    "era": 3.80,
+                    "whip": 1.25,
+                    "er": 63,
+                    "bb": 40,
+                    "h_allowed": 147,
+                },
+            },
+        ],
+    }
+    pool = build_waiver_pool(my_roster, opp_rosters, ros_projections)
+    assert "Carol::hitter" in pool
+    assert "Dan::pitcher" in pool
+    assert "Alice::hitter" not in pool
+    assert "Bob::hitter" not in pool

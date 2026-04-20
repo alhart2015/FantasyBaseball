@@ -437,6 +437,39 @@ def register_routes(app: Flask) -> None:
 
         return jsonify(results)
 
+    @app.route("/api/waiver-search")
+    @_require_auth
+    def api_waiver_search():
+        from fantasy_baseball.models.player import Player
+        from fantasy_baseball.trades.multi_trade import build_waiver_pool
+        from fantasy_baseball.utils.name_utils import normalize_name
+
+        query = (request.args.get("q") or "").strip()
+        if len(query) < 2:
+            return jsonify([])
+
+        roster_raw = read_cache(CacheKey.ROSTER) or []
+        opp_rosters_raw = read_cache(CacheKey.OPP_ROSTERS) or {}
+        ros_cache = read_cache(CacheKey.ROS_PROJECTIONS) or {}
+
+        hart_roster = [Player.from_dict(p) for p in roster_raw]
+        opp_rosters = {n: [Player.from_dict(p) for p in ps] for n, ps in opp_rosters_raw.items()}
+        pool = build_waiver_pool(hart_roster, opp_rosters, ros_cache)
+
+        q_norm = normalize_name(query)
+        matches = [
+            {
+                "key": key,
+                "name": p.name,
+                "player_type": p.player_type,
+                "positions": p.positions,
+            }
+            for key, p in pool.items()
+            if q_norm in normalize_name(p.name)
+        ]
+        matches.sort(key=lambda m: m["name"])
+        return jsonify(matches[:20])
+
     @app.route("/players")
     def player_search():
         meta = read_meta()

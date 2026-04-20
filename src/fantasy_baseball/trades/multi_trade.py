@@ -266,3 +266,34 @@ def _can_roster_after(
             f"Roster would have {new_size} non-IL players; league requires exactly {target}"
         )
     return True, None
+
+
+def build_waiver_pool(
+    hart_roster: list[Player],
+    opp_rosters: dict[str, list[Player]],
+    ros_projections: dict,
+) -> dict[str, Player]:
+    """Build a keyed player pool of everyone with ROS projections who is
+    not on any roster.
+
+    ``ros_projections`` is the cached ROS projection dict: ``{"hitters":
+    [{...}], "pitchers": [{...}]}``. Each entry is in the format accepted
+    by :meth:`Player.from_dict`.
+
+    Returned dict is keyed by :func:`player_key` (``"name::player_type"``).
+    """
+    rostered = {player_key(p) for p in hart_roster}
+    for roster in opp_rosters.values():
+        rostered |= {player_key(p) for p in roster}
+
+    pool: dict[str, Player] = {}
+    for bucket, player_type in (("hitters", "hitter"), ("pitchers", "pitcher")):
+        for d in ros_projections.get(bucket, []):
+            payload = dict(d)
+            payload.setdefault("player_type", player_type)
+            player = Player.from_dict(payload)
+            key = player_key(player)
+            if key in rostered:
+                continue
+            pool[key] = player
+    return pool
