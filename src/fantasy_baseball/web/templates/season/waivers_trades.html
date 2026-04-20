@@ -25,6 +25,37 @@
 .section-toggle .chevron.collapsed { transform: rotate(-90deg); }
 .section-body { overflow: hidden; }
 .section-body.collapsed { display: none; }
+.mb-2 { margin-bottom: 0.5rem; }
+.mt-2 { margin-top: 0.5rem; }
+.bt-suggestions { list-style: none; padding: 0; margin: 0.25rem 0; max-height: 160px; overflow-y: auto; }
+.bt-suggestions li { padding: 0.2rem 0.4rem; cursor: pointer; background: var(--panel-bg); }
+.bt-suggestions li:hover { background: var(--text); color: var(--panel-bg); }
+.bt-legality { font-family: monospace; font-size: 0.85rem; }
+.bt-legality.illegal { color: var(--danger); }
+.bt-result { margin-top: 1rem; }
+.bt-result-bad { color: var(--danger); padding: 0.5rem; }
+.bt-panel { border: 1px solid var(--panel-bg); padding: 0.4rem; border-radius: 4px; }
+.bt-panel h4 { margin: 0 0 0.4rem; font-size: 0.85rem; }
+.bt-slot-grid { display: grid; grid-template-columns: 60px 1fr; gap: 2px;
+                align-items: center; font-size: 0.8rem; }
+.bt-slot-label { color: var(--text-secondary); font-family: monospace; padding: 0 0.3rem; }
+.bt-slot { min-height: 22px; padding: 2px 4px; border: 1px dashed rgba(255,255,255,0.1);
+           border-radius: 2px; background: rgba(255,255,255,0.02); }
+.bt-slot.drag-over { background: var(--success); opacity: 0.5; }
+.bt-zone { border: 1px dashed rgba(255,255,255,0.1); padding: 0.3rem;
+           min-height: 30px; border-radius: 3px; margin-top: 0.3rem; }
+.bt-zone.drag-over { background: var(--success); opacity: 0.3; }
+.bt-zone-label { font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;
+                 letter-spacing: 1px; margin-bottom: 0.2rem; }
+.bt-drops-zone { border-color: rgba(255, 70, 70, 0.3); }
+.bt-drops-zone .bt-zone-label { color: var(--danger); }
+.bt-chip-player { display: inline-block; padding: 2px 6px; margin: 2px;
+                  background: var(--panel-bg); border: 1px solid rgba(255,255,255,0.1);
+                  border-radius: 3px; cursor: grab; font-size: 0.8rem; user-select: none; }
+.bt-chip-player.dragging { opacity: 0.4; }
+.bt-chip-player.foreign { border-color: var(--success); }
+.bt-chip-player.il { opacity: 0.4; cursor: default; }
+.bt-chip-player small { color: var(--text-secondary); margin-left: 4px; }
 </style>
 
 <div class="page-header">
@@ -62,6 +93,71 @@
 <div id="trade-search-results"></div>
 
 </div>
+
+{# === Build a Trade === #}
+<div class="section-toggle" onclick="toggleSection('build-trade')">
+    <span>Build a Trade</span>
+    <span class="chevron" id="chevron-build-trade">&#9660;</span>
+</div>
+<div class="section-body collapsed" id="section-build-trade">
+
+    <div class="mb-2">
+        <label for="bt-opponent">Opponent</label>
+        <select id="bt-opponent"></select>
+    </div>
+
+    <div class="build-trade-rosters" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+        <div class="bt-panel">
+            <h4>My Team</h4>
+            <div id="bt-my-slots" class="bt-slot-grid"></div>
+            <div id="bt-my-bench" class="bt-zone" data-bt-side="my" data-bt-zone="BN">
+                <div class="bt-zone-label">Bench</div>
+            </div>
+            <div id="bt-my-il" class="bt-zone">
+                <div class="bt-zone-label">IL (read-only)</div>
+            </div>
+            <div id="bt-my-drops" class="bt-zone bt-drops-zone" data-bt-side="my" data-bt-zone="DROP">
+                <div class="bt-zone-label">Drops</div>
+            </div>
+            <div class="mt-2">
+                <label for="bt-waiver-search">Add from Waivers</label>
+                <input type="text" id="bt-waiver-search" placeholder="Type &ge;2 letters&hellip;"
+                       autocomplete="off" />
+                <ul id="bt-waiver-suggestions" class="bt-suggestions"></ul>
+            </div>
+        </div>
+        <div class="bt-panel">
+            <h4>Opponent Team</h4>
+            <div id="bt-opp-slots" class="bt-slot-grid"></div>
+            <div id="bt-opp-bench" class="bt-zone" data-bt-side="opp" data-bt-zone="BN">
+                <div class="bt-zone-label">Bench</div>
+            </div>
+            <div id="bt-opp-il" class="bt-zone">
+                <div class="bt-zone-label">IL (read-only)</div>
+            </div>
+            <div id="bt-opp-drops" class="bt-zone bt-drops-zone" data-bt-side="opp" data-bt-zone="DROP">
+                <div class="bt-zone-label">Drops</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="bt-legality" class="bt-legality mt-2"></div>
+    <button type="button" id="bt-evaluate" class="pill" disabled
+            onclick="bt.evaluate()">Evaluate Trade</button>
+    <button type="button" id="bt-reset" class="pill"
+            onclick="bt.reset()">Reset</button>
+
+    <div id="bt-result" class="bt-result"></div>
+
+</div>
+
+<script>
+  window.BT_DATA = {
+    myRoster: {{ my_roster_data | tojson }},
+    oppRosters: {{ opp_rosters_data | tojson }},
+    rosterSlots: {{ roster_slots | tojson }}
+  };
+</script>
 
 <script>
 function toggleSection(id) {
@@ -204,6 +300,395 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
+
+(function() {
+  // Placements: key -> { currentSide: "my"|"opp", zone: slotId|"BN"|"IL"|"DROP", origin: "my"|"opp"|"waiver" }
+  const state = {
+    opponent: null,
+    placements: new Map(),
+    waiverMeta: new Map(),  // key -> {name, positions} for waiver-origin players
+  };
+
+  function playerKey(p) { return `${p.name}::${p.player_type}`; }
+  function isIL(p) { return (p.selected_position || "") === "IL"; }
+
+  // Build the ordered list of slot IDs from rosterSlots config.
+  // Hitter order first, then pitcher. For slots with count > 1 (OF×4, UTIL×2, P×9),
+  // append an index (OF1..OF4, UTIL1..UTIL2, P1..P9). Single-count slots get no suffix (C, 1B, etc.).
+  function slotList() {
+    const rs = window.BT_DATA.rosterSlots || {};
+    const order = ["C", "1B", "2B", "3B", "SS", "IF", "OF", "UTIL", "P"];
+    const out = [];
+    for (const lbl of order) {
+      const n = rs[lbl] || 0;
+      if (n === 1) out.push(lbl);
+      else for (let i = 1; i <= n; i++) out.push(`${lbl}${i}`);
+    }
+    return out;
+  }
+
+  // Normalize a Yahoo selected_position string to our canonical label.
+  function normalizeSlot(pos) {
+    if (!pos) return "BN";
+    const p = String(pos).toUpperCase();
+    if (p === "BN") return "BN";
+    if (p === "IL" || p === "IL+" || p === "DL" || p === "DL+") return "IL";
+    return p;  // C, 1B, ..., UTIL, P
+  }
+
+  // Assign a player to the first free slot matching their canonical position.
+  // A canonical label like "OF" matches slot IDs "OF", "OF1", "OF2", etc. (base match by stripping trailing digits).
+  // If no free slot matches, returns "BN".
+  function assignToFirstFreeSlot(side, slotLabel, occupied) {
+    for (const s of slotList()) {
+      const base = s.replace(/\d+$/, "");
+      if (base === slotLabel && !occupied.has(`${side}:${s}`)) {
+        occupied.add(`${side}:${s}`);
+        return s;
+      }
+    }
+    return "BN";
+  }
+
+  function rebuildPlacements() {
+    state.placements.clear();
+    state.waiverMeta.clear();  // opponent change wipes waiver adds too
+    const occupied = new Set();
+    for (const p of window.BT_DATA.myRoster || []) {
+      const k = playerKey(p);
+      if (isIL(p)) { state.placements.set(k, { currentSide: "my", zone: "IL", origin: "my" }); continue; }
+      const canon = normalizeSlot(p.selected_position);
+      const zone = canon === "BN" ? "BN" : assignToFirstFreeSlot("my", canon, occupied);
+      state.placements.set(k, { currentSide: "my", zone, origin: "my" });
+    }
+    const oppRoster = state.opponent ? (window.BT_DATA.oppRosters[state.opponent] || []) : [];
+    for (const p of oppRoster) {
+      const k = playerKey(p);
+      if (isIL(p)) { state.placements.set(k, { currentSide: "opp", zone: "IL", origin: "opp" }); continue; }
+      const canon = normalizeSlot(p.selected_position);
+      const zone = canon === "BN" ? "BN" : assignToFirstFreeSlot("opp", canon, occupied);
+      state.placements.set(k, { currentSide: "opp", zone, origin: "opp" });
+    }
+  }
+
+  function playerByKey(key) {
+    for (const p of window.BT_DATA.myRoster || []) if (playerKey(p) === key) return p;
+    for (const roster of Object.values(window.BT_DATA.oppRosters || {}))
+      for (const p of roster) if (playerKey(p) === key) return p;
+    const meta = state.waiverMeta.get(key);
+    if (!meta) return null;
+    return {
+      name: meta.name,
+      positions: meta.positions ? String(meta.positions).split("/") : [],
+      player_type: key.split("::")[1] || "hitter",
+    };
+  }
+
+  function renderChip(key) {
+    const p = playerByKey(key);
+    if (!p) return "";
+    const place = state.placements.get(key);
+    const foreign = place && (
+      (place.currentSide === "my" && place.origin !== "my") ||
+      (place.currentSide === "opp" && place.origin !== "opp")
+    );
+    const il = place && place.zone === "IL";
+    const cls = ["bt-chip-player"];
+    if (foreign) cls.push("foreign");
+    if (il) cls.push("il");
+    const dragAttr = il ? "" : `draggable="true" data-bt-drag-key="${esc(key)}"`;
+    const positions = (p.positions || []).join("/");
+    return `<span class="${cls.join(" ")}" ${dragAttr}>${esc(p.name)} <small>${esc(positions)}</small></span>`;
+  }
+
+  function renderPanels() {
+    const slots = slotList();
+    for (const side of ["my", "opp"]) {
+      const grid = document.getElementById(`bt-${side}-slots`);
+      if (!grid) continue;
+      grid.innerHTML = slots.map(s => {
+        const holder = [...state.placements.entries()]
+          .find(([, pl]) => pl.currentSide === side && pl.zone === s);
+        const chip = holder ? renderChip(holder[0]) : "";
+        return `<div class="bt-slot-label">${esc(s)}</div>
+                <div class="bt-slot" data-bt-side="${side}" data-bt-zone="${esc(s)}">${chip}</div>`;
+      }).join("");
+      for (const zone of ["BN", "IL", "DROP"]) {
+        const domId = zone === "DROP" ? `bt-${side}-drops`
+                    : zone === "BN" ? `bt-${side}-bench`
+                    : `bt-${side}-il`;
+        const el = document.getElementById(domId);
+        if (!el) continue;
+        const chips = [...state.placements.entries()]
+          .filter(([, pl]) => pl.currentSide === side && pl.zone === zone)
+          .map(([k]) => renderChip(k)).join("");
+        const label = zone === "DROP" ? "Drops"
+                    : zone === "IL" ? "IL (read-only)"
+                    : "Bench";
+        el.innerHTML = `<div class="bt-zone-label">${label}</div>${chips}`;
+      }
+    }
+  }
+
+  function populateOpponents() {
+    const sel = document.getElementById("bt-opponent");
+    if (!sel) return;
+    const names = Object.keys(window.BT_DATA.oppRosters || {}).sort();
+    sel.innerHTML = `<option value="">— select —</option>` +
+      names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+    sel.addEventListener("change", () => {
+      state.opponent = sel.value || null;
+      rebuildPlacements();
+      renderPanels();
+      updateLegality();
+    });
+  }
+
+  function placeAt(key, side, zone) {
+    let cur = state.placements.get(key);
+    // Seed a waiver-origin placement on first drop onto my side.
+    if (!cur && state.waiverMeta.has(key)) {
+      if (side !== "my") return;  // waiver adds can only land on my side
+      cur = { currentSide: "my", zone: "BN", origin: "waiver" };
+      state.placements.set(key, cur);
+      // Clear the search UI so the suggestion list doesn't linger.
+      const input = document.getElementById("bt-waiver-search");
+      if (input) input.value = "";
+      const sugg = document.getElementById("bt-waiver-suggestions");
+      if (sugg) sugg.innerHTML = "";
+    }
+    if (!cur) return;
+    if (cur.zone === "IL") return;  // IL is read-only
+
+    // If the target slot is occupied (positional slot only, not BN/DROP), displace the incumbent to BN on target side.
+    if (zone !== "BN" && zone !== "DROP") {
+      const incumbent = [...state.placements.entries()]
+        .find(([k, pl]) => k !== key && pl.currentSide === side && pl.zone === zone);
+      if (incumbent) {
+        state.placements.set(incumbent[0], { ...incumbent[1], currentSide: side, zone: "BN" });
+      }
+    }
+    state.placements.set(key, { ...cur, currentSide: side, zone });
+    renderPanels();
+    updateLegality();
+  }
+
+  let _waiverTimer = null;
+  function attachWaiverInputListener() {
+    const input = document.getElementById("bt-waiver-search");
+    if (!input) return;
+    input.addEventListener("input", (ev) => {
+      const q = ev.target.value.trim();
+      const sugg = document.getElementById("bt-waiver-suggestions");
+      if (!sugg) return;
+      clearTimeout(_waiverTimer);
+      if (q.length < 2) { sugg.innerHTML = ""; return; }
+      _waiverTimer = setTimeout(async () => {
+        let resp;
+        try {
+          resp = await fetch(`/api/waiver-search?q=${encodeURIComponent(q)}`);
+        } catch {
+          sugg.innerHTML = "";
+          return;
+        }
+        if (!resp.ok) { sugg.innerHTML = ""; return; }
+        const matches = await resp.json();
+        sugg.innerHTML = matches.map(m => {
+          const positions = (m.positions || []).join("/");
+          return `<li draggable="true"
+                     data-bt-drag-key="${esc(m.key)}"
+                     data-bt-waiver-name="${esc(m.name)}"
+                     data-bt-waiver-positions="${esc(positions)}">${esc(m.name)} <small>(${esc(positions)})</small></li>`;
+        }).join("");
+      }, 250);
+    });
+  }
+
+  function attachDragHandlers() {
+    let draggingKey = null;
+
+    document.addEventListener("dragstart", (e) => {
+      const chip = e.target.closest("[data-bt-drag-key]");
+      if (!chip) return;
+      draggingKey = chip.dataset.btDragKey;
+      chip.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", draggingKey);
+
+      // Waiver suggestion — stash metadata so placeAt can seed a placement on drop.
+      if (chip.dataset.btWaiverName) {
+        state.waiverMeta.set(draggingKey, {
+          name: chip.dataset.btWaiverName,
+          positions: chip.dataset.btWaiverPositions || "",
+        });
+      }
+    });
+
+    document.addEventListener("dragend", (e) => {
+      const chip = e.target.closest("[data-bt-drag-key]");
+      if (chip) chip.classList.remove("dragging");
+      draggingKey = null;
+    });
+
+    document.addEventListener("dragover", (e) => {
+      const zone = e.target.closest("[data-bt-zone][data-bt-side]");
+      if (!zone) return;
+      e.preventDefault();
+      zone.classList.add("drag-over");
+    });
+
+    document.addEventListener("dragleave", (e) => {
+      const zone = e.target.closest("[data-bt-zone][data-bt-side]");
+      if (zone) zone.classList.remove("drag-over");
+    });
+
+    document.addEventListener("drop", (e) => {
+      const zone = e.target.closest("[data-bt-zone][data-bt-side]");
+      if (!zone) return;
+      e.preventDefault();
+      zone.classList.remove("drag-over");
+      const key = draggingKey || e.dataTransfer.getData("text/plain");
+      if (!key) return;
+      placeAt(key, zone.dataset.btSide, zone.dataset.btZone);
+    });
+  }
+
+  function buildPayload() {
+    const send = [], receive = [], myDrops = [], oppDrops = [], myAdds = [], myActive = [];
+    for (const [k, pl] of state.placements) {
+      if (pl.zone === "DROP") {
+        if (pl.origin === "my") myDrops.push(k);
+        else if (pl.origin === "opp") oppDrops.push(k);
+        // waiver-origin DROP = user dropped a waiver suggestion directly on drops: discard (no contribution)
+        continue;
+      }
+      if (pl.zone === "IL") continue;
+      if (pl.currentSide === "opp" && pl.origin === "my") send.push(k);
+      if (pl.currentSide === "my" && pl.origin === "opp") receive.push(k);
+      if (pl.currentSide === "my" && pl.origin === "waiver") myAdds.push(k);
+      if (pl.currentSide === "my" && pl.zone !== "BN") myActive.push(k);
+    }
+    return {
+      opponent: state.opponent,
+      send, receive,
+      my_drops: myDrops,
+      opp_drops: oppDrops,
+      my_adds: myAdds,
+      my_active_ids: myActive,
+    };
+  }
+
+  function renderResult(data) {
+    const el = document.getElementById("bt-result");
+    if (!el) return;
+    const cats = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"];
+    const rows = cats.map(cat => {
+      const c = data.categories[cat] || { before: 0, after: 0, delta: 0 };
+      const cls = c.delta > 0 ? "cat-gain" : c.delta < 0 ? "cat-loss" : "";
+      const sign = c.delta >= 0 ? "+" : "";
+      return `<tr><th>${cat}</th><td>${c.before.toFixed(2)}</td>
+              <td>${c.after.toFixed(2)}</td>
+              <td class="${cls}">${sign}${c.delta.toFixed(2)}</td></tr>`;
+    }).join("");
+    const totalCls = data.delta_total > 0 ? "cat-gain" : data.delta_total < 0 ? "cat-loss" : "";
+    const totalSign = data.delta_total >= 0 ? "+" : "";
+    el.innerHTML = `
+      <div class="card" style="margin-top: 1rem;">
+        <h4>Proposed trade &Delta;Roto:
+          <span class="${totalCls}">${totalSign}${data.delta_total.toFixed(2)}</span>
+        </h4>
+        <table class="trade-details open">
+          <thead><tr><th>Cat</th><th>Before</th><th>After</th><th>&Delta;</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+
+  // --- Stubs filled in by later tasks ---------------------------------------
+  function updateLegality() {
+    const banner = document.getElementById("bt-legality");
+    const btn = document.getElementById("bt-evaluate");
+    if (!banner || !btn) return;
+    if (!state.opponent) {
+      banner.textContent = "";
+      banner.classList.remove("illegal");
+      btn.disabled = true;
+      return;
+    }
+    const TARGET = 23;
+    let myCount = 0, oppCount = 0;
+    let mySend = 0, oppSend = 0;
+    for (const [, pl] of state.placements) {
+      if (pl.zone === "IL" || pl.zone === "DROP") continue;
+      if (pl.currentSide === "my") myCount++;
+      else oppCount++;
+      if (pl.currentSide === "opp" && pl.origin === "my") mySend++;
+      if (pl.currentSide === "my" && pl.origin === "opp") oppSend++;
+    }
+    const illegal = myCount !== TARGET || oppCount !== TARGET;
+    banner.classList.toggle("illegal", illegal);
+    banner.innerHTML = `
+      <div>My team: ${myCount} (need ${TARGET})</div>
+      <div>Opp: ${oppCount} (need ${TARGET})</div>
+    `;
+    const hasTrade = mySend >= 1 && oppSend >= 1;
+    btn.disabled = !(hasTrade && illegal === false);
+  }
+
+  window.bt = {
+    init() {
+      attachDragHandlers();
+      attachWaiverInputListener();
+      populateOpponents();
+      rebuildPlacements();   // with opponent=null this fills only my side
+      renderPanels();
+      updateLegality();
+    },
+    reset() {
+      rebuildPlacements();
+      renderPanels();
+      updateLegality();
+      const resultEl = document.getElementById("bt-result");
+      if (resultEl) resultEl.innerHTML = "";
+      const waiverInput = document.getElementById("bt-waiver-search");
+      if (waiverInput) waiverInput.value = "";
+      const waiverSugg = document.getElementById("bt-waiver-suggestions");
+      if (waiverSugg) waiverSugg.innerHTML = "";
+    },
+    evaluate: async () => {
+      if (!state.opponent) return;
+      const payload = buildPayload();
+      const resultEl = document.getElementById("bt-result");
+      if (!resultEl) return;
+      resultEl.innerHTML = "<em>Evaluating&hellip;</em>";
+      let resp;
+      try {
+        resp = await fetch("/api/evaluate-trade", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload),
+        });
+      } catch (err) {
+        resultEl.innerHTML = `<div class="bt-result-bad">Evaluate failed: ${esc(String(err))}</div>`;
+        return;
+      }
+      const data = await resp.json();
+      if (!resp.ok || !data.legal) {
+        const msg = data.reason || data.error || "unknown";
+        resultEl.innerHTML = `<div class="bt-result-bad">Trade is not legal: ${esc(msg)}</div>`;
+        return;
+      }
+      renderResult(data);
+    },
+  };
+
+  // Debug exports (stable across tasks)
+  window.bt._state = state;
+  window.bt._playerKey = playerKey;
+  window.bt._isIL = isIL;
+
+  document.addEventListener("DOMContentLoaded", () => window.bt.init());
+})();
 </script>
 
 {% endblock %}
