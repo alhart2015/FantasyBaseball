@@ -11,8 +11,8 @@ import json
 from datetime import date
 from pathlib import Path
 
+from fantasy_baseball.data.kv_store import get_kv
 from fantasy_baseball.data.redis_store import (
-    get_default_client,
     get_standings_history,
     get_weekly_roster_history,
 )
@@ -27,12 +27,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    client = get_default_client()
-    if client is None:
-        raise SystemExit(
-            "No Redis client configured. Set UPSTASH_REDIS_REST_URL "
-            "and UPSTASH_REDIS_REST_TOKEN."
-        )
+    client = get_kv()
 
     args.out.mkdir(parents=True, exist_ok=True)
 

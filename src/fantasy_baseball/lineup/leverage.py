@@ -12,8 +12,9 @@ def _estimate_season_progress(standings: StandingsSnapshot) -> float:
     estimation if Redis has no data.
     """
     try:
-        from fantasy_baseball.data.redis_store import get_default_client, get_season_progress
-        progress = get_season_progress(get_default_client())
+        from fantasy_baseball.data.kv_store import get_kv
+        from fantasy_baseball.data.redis_store import get_season_progress
+        progress = get_season_progress(get_kv())
         games = progress["games_elapsed"]
         if games > 0:
             return min(1.0, games / FULL_CONFIDENCE_GAMES)

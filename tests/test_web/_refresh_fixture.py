@@ -6,7 +6,6 @@ import json
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
-
 TEAM_NAMES = [f"Team {i:02d}" for i in range(1, 13)]  # 12 teams
 USER_TEAM_NAME = "Team 01"
 
@@ -219,7 +218,7 @@ def patched_refresh_environment(
     - fetch_game_log_totals: seeds canned game logs into fake Redis
     - get_week_schedule, get_team_batting_stats: return canned/empty
     - run_ros_monte_carlo: 10 iters instead of 1000; preseason baseline seeded in Redis
-    - get_default_client (data.redis_store): returns fake_redis
+    - get_kv (data.kv_store): returns fake_redis
     - read_cache("ros_projections"): returns ROS proj rows or None
     """
     from fantasy_baseball.models.player import HitterStats, Player, PlayerType
@@ -233,7 +232,8 @@ def patched_refresh_environment(
 
     # Build League dataclass from rosters by writing snapshot keys
     from fantasy_baseball.data.redis_store import (
-        write_roster_snapshot, write_standings_snapshot,
+        write_roster_snapshot,
+        write_standings_snapshot,
     )
     snapshot_date = "2026-04-21"  # next_tuesday after 2026-04-19
     for tname, team_roster in rosters.items():
@@ -316,13 +316,12 @@ def patched_refresh_environment(
 
     # Capture the real Monte Carlo function BEFORE patching it,
     # otherwise the scaled wrapper calls itself recursively.
-    from fantasy_baseball.simulation import (
-        run_ros_monte_carlo as _real_ros_mc,
-    )
-
     # Seed a canned preseason baseline so refresh reads it from Redis
     # instead of running the (now-deleted) preseason MC live.
     from fantasy_baseball.data.redis_store import set_preseason_baseline
+    from fantasy_baseball.simulation import (
+        run_ros_monte_carlo as _real_ros_mc,
+    )
     _canned_mc = {
         "team_results": {
             tname: {
@@ -404,11 +403,15 @@ def patched_refresh_environment(
         patch("fantasy_baseball.lineup.matchups.get_team_batting_stats", return_value={}),
         # Monte Carlo: patch at the source module
         patch("fantasy_baseball.simulation.run_ros_monte_carlo", side_effect=_scaled_ros_mc),
-        # Redis clients
-        patch("fantasy_baseball.data.redis_store.get_default_client", return_value=fake_redis),
+        # Redis clients. The central singleton owner is ``kv_store.get_kv``;
+        # patching it covers every call site that does ``from kv_store
+        # import get_kv`` inside a function body (most refresh_pipeline
+        # entry points). ``season_data._get_redis`` is a thin wrapper that
+        # also has to be patched because tests don't set RENDER=true.
+        patch("fantasy_baseball.data.kv_store.get_kv", return_value=fake_redis),
         patch("fantasy_baseball.web.season_data._get_redis", return_value=fake_redis),
         # refresh_pipeline imports _get_redis at module level, so we also
-        # have to patch the local name there (`_write_spoe_snapshot` uses it).
+        # have to patch the local name there (``_write_spoe_snapshot`` uses it).
         patch("fantasy_baseball.web.refresh_pipeline._get_redis", return_value=fake_redis),
     ]
 

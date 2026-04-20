@@ -2,12 +2,10 @@
 import shutil
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 from fantasy_baseball.data import redis_store
 from fantasy_baseball.data.ros_pipeline import blend_and_cache_ros
-
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 
@@ -49,7 +47,7 @@ def test_blend_and_cache_ros_raises_when_ros_dir_missing(projections_dir, monkey
     """Root dir exists but no rest_of_season subdir → FileNotFoundError."""
     # Nothing created under projections_dir — the year dir is absent.
     monkeypatch.setattr(
-        "fantasy_baseball.data.ros_pipeline.get_default_client",
+        "fantasy_baseball.data.ros_pipeline.get_kv",
         lambda: None,
     )
     with pytest.raises(FileNotFoundError, match="ROS snapshot dir missing"):
@@ -63,7 +61,7 @@ def test_blend_and_cache_ros_raises_when_no_date_dirs(projections_dir, monkeypat
     """rest_of_season/ exists but contains no date subdirs → FileNotFoundError."""
     (projections_dir / "2026" / "rest_of_season").mkdir(parents=True)
     monkeypatch.setattr(
-        "fantasy_baseball.data.ros_pipeline.get_default_client",
+        "fantasy_baseball.data.ros_pipeline.get_kv",
         lambda: None,
     )
     with pytest.raises(FileNotFoundError, match="No ROS snapshot dirs"):
@@ -81,7 +79,7 @@ def test_blend_and_cache_ros_blends_latest_snapshot_and_writes_cache(
     _make_ros_tree(projections_dir, year=2026, date="2026-04-14")
 
     monkeypatch.setattr(
-        "fantasy_baseball.data.ros_pipeline.get_default_client",
+        "fantasy_baseball.data.ros_pipeline.get_kv",
         lambda: fake_redis,
     )
     # Point write_cache's Redis singleton at fake_redis so the
@@ -140,7 +138,7 @@ def test_blend_and_cache_ros_normalizes_using_redis_totals(
     )
 
     monkeypatch.setattr(
-        "fantasy_baseball.data.ros_pipeline.get_default_client",
+        "fantasy_baseball.data.ros_pipeline.get_kv",
         lambda: fake_redis,
     )
     import fantasy_baseball.web.season_data as season_data
@@ -178,7 +176,7 @@ def test_blend_and_cache_ros_still_returns_dfs_when_redis_unconfigured(
     _make_ros_tree(projections_dir, year=2026, date="2026-04-07")
 
     monkeypatch.setattr(
-        "fantasy_baseball.data.ros_pipeline.get_default_client",
+        "fantasy_baseball.data.ros_pipeline.get_kv",
         lambda: None,
     )
     import fantasy_baseball.web.season_data as season_data

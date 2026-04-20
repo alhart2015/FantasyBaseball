@@ -1,87 +1,32 @@
-"""Typed read/write helpers for all Redis keys used by this app.
+"""Typed read/write helpers for every Redis key used by this app.
 
-This module owns the full Redis schema. Every non-cache Redis access in
-the codebase should go through here — no inline `redis.get(...)` calls
+This module owns the Redis schema. Every non-``CacheKey`` Redis access
+in the codebase goes through here — no inline ``kv.get(...)`` calls
 elsewhere.
 
-Helpers take an explicit client argument so tests can inject a
-fakeredis client. Production code uses `get_default_client()` which
-lazily reads UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN from the
-environment.
+Helpers take an explicit ``client`` argument (anything satisfying
+``KVStore``). Production callers pass ``get_kv()`` from
+``fantasy_baseball.data.kv_store``; tests inject a fresh
+``SqliteKVStore`` at a ``tmp_path``. On Render ``get_kv()`` resolves
+to Upstash; off Render it resolves to ``data/local.db``.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import re as _re
-import threading
-from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict
+from typing import TypedDict
 
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 
-if TYPE_CHECKING:
-    from upstash_redis import Redis
-
 logger = logging.getLogger(__name__)
-
-_default_client = None
-_default_client_initialized = False
-_default_client_lock = threading.Lock()
-
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 class SeasonProgress(TypedDict):
     games_elapsed: int
     total: int
     as_of: str | None
-
-
-def _load_dotenv_if_present() -> None:
-    """Best-effort load of .env at project root into os.environ.
-
-    Local dev only: Render sets UPSTASH_* directly in the service env,
-    so .env does not exist there. Uses setdefault so real env vars win.
-    """
-    env_path = _PROJECT_ROOT / ".env"
-    if not env_path.exists():
-        return
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
-
-
-def get_default_client() -> Redis | None:
-    """Lazy Upstash client for production use. Returns None if unconfigured.
-
-    Thread-safe: uses double-checked locking so concurrent first-access
-    from multiple Flask worker threads does not construct the client
-    twice. Mirrors the pattern in web/season_data.py::_get_redis().
-
-    Loads project-root .env on first call so local scripts/dashboards
-    work without the caller needing to source it.
-    """
-    global _default_client, _default_client_initialized
-    if _default_client_initialized:
-        return _default_client
-    with _default_client_lock:
-        if _default_client_initialized:
-            return _default_client
-        _load_dotenv_if_present()
-        url = os.environ.get("UPSTASH_REDIS_REST_URL")
-        token = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
-        if url and token:
-            from upstash_redis import Redis
-
-            _default_client = Redis(url=url, token=token)
-        _default_client_initialized = True
-    return _default_client
 
 
 POSITIONS_KEY = "positions"

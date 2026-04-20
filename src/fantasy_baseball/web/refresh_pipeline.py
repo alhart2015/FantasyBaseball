@@ -32,7 +32,6 @@ from fantasy_baseball.utils.time_utils import (
     local_now,
     local_today,
 )
-
 from fantasy_baseball.web.season_data import (
     CACHE_DIR,
     CacheKey,
@@ -40,7 +39,6 @@ from fantasy_baseball.web.season_data import (
     _get_redis,
     _load_game_log_totals,
     _standings_to_snapshot,
-    clear_opponent_cache,
     read_cache,
     write_cache,
 )
@@ -230,7 +228,11 @@ class RefreshRun:
 
     # --- Step 3: Fetch standings + roster ---
     def _fetch_standings_and_roster(self):
-        from fantasy_baseball.lineup.yahoo_roster import fetch_roster, fetch_standings, fetch_scoring_period
+        from fantasy_baseball.lineup.yahoo_roster import (
+            fetch_roster,
+            fetch_scoring_period,
+            fetch_standings,
+        )
 
         self._progress("Fetching standings...")
         self.standings = fetch_standings(self.league)
@@ -278,19 +280,12 @@ class RefreshRun:
 
         self._progress("Loading projections...")
         import pandas as pd
+
+        from fantasy_baseball.data.kv_store import get_kv
         from fantasy_baseball.data.redis_store import (
             get_blended_projections as redis_get_blended,
-            get_default_client as _redis_default_client,
         )
-        _redis_client = _redis_default_client()
-        if _redis_client is None:
-            raise RuntimeError(
-                "Redis client not configured: UPSTASH_REDIS_REST_URL / "
-                "UPSTASH_REDIS_REST_TOKEN are not set in the environment. "
-                "For local dev, put them in a .env file at the project root "
-                "(get_default_client auto-loads it). On Render, set them in "
-                "the service's environment variables."
-            )
+        _redis_client = get_kv()
         _hitters_rows = redis_get_blended(_redis_client, "hitters") or []
         _pitchers_rows = redis_get_blended(_redis_client, "pitchers") or []
         if not _hitters_rows or not _pitchers_rows:
@@ -386,12 +381,13 @@ class RefreshRun:
         from fantasy_baseball.models.league import League
 
         self._progress("Writing roster snapshots to Redis...")
+        from fantasy_baseball.data.kv_store import get_kv
         from fantasy_baseball.data.redis_store import (
-            get_default_client,
             write_roster_snapshot,
             write_standings_snapshot,
         )
 
+        client = get_kv()
         snapshot_date = self.effective_date.isoformat()
         for tname, team_raw in self.raw_rosters_by_team.items():
             # team_raw rows come from parse_roster: keys are "name",
@@ -410,7 +406,7 @@ class RefreshRun:
                 for row in team_raw
             ]
             write_roster_snapshot(
-                get_default_client(), snapshot_date, tname, entries,
+                client, snapshot_date, tname, entries,
             )
 
         # Stat keys on the source dicts are UPPERCASE (R/HR/.../WHIP); the
@@ -428,7 +424,7 @@ class RefreshRun:
             ],
         }
         write_standings_snapshot(
-            get_default_client(), snapshot_date, snapshot_payload,
+            client, snapshot_date, snapshot_payload,
         )
 
         self._progress("Loading League from Redis...")
@@ -472,8 +468,8 @@ class RefreshRun:
     # --- Step 4e: Build projected standings ---
     def _build_projected_standings(self):
         self._progress("Projecting end-of-season standings...")
-        from fantasy_baseball.scoring import build_projected_standings, build_team_sds
         from fantasy_baseball.data.projections import hydrate_roster_entries
+        from fantasy_baseball.scoring import build_projected_standings, build_team_sds
 
         all_team_rosters = {self.config.team_name: self.matched}
         all_team_rosters.update(self.opp_rosters)
@@ -570,8 +566,8 @@ class RefreshRun:
         self.hitter_logs, self.pitcher_logs = _load_game_log_totals(self.config.season_year)
 
         # Attach pace data to each roster player (pace compares actuals vs preseason)
-        from fantasy_baseball.sgp.denominators import get_sgp_denominators
         from fantasy_baseball.analysis.pace import attach_pace_to_roster
+        from fantasy_baseball.sgp.denominators import get_sgp_denominators
         sgp_denoms = get_sgp_denominators(self.config.sgp_overrides)
         attach_pace_to_roster(
             self.roster_players, self.hitter_logs, self.pitcher_logs,
@@ -582,8 +578,8 @@ class RefreshRun:
     def _compute_rankings(self):
         self._progress("Computing SGP rankings...")
         from fantasy_baseball.sgp.rankings import (
-            compute_sgp_rankings, compute_combined_sgp_rankings,
             compute_rankings_from_game_logs,
+            compute_sgp_rankings,
             lookup_rank,
         )
 
@@ -611,7 +607,10 @@ class RefreshRun:
 
     # --- Step 7: Run lineup optimizer ---
     def _optimize_lineup(self):
-        from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
+        from fantasy_baseball.lineup.optimizer import (
+            optimize_hitter_lineup,
+            optimize_pitcher_lineup,
+        )
 
         self._progress("Optimizing lineup...")
         active_players = [p for p in self.roster_players if p.status not in IL_STATUSES]
@@ -659,7 +658,10 @@ class RefreshRun:
     # --- Step 9: Probable starters ---
     def _fetch_probable_starters(self):
         from fantasy_baseball.data.mlb_schedule import get_week_schedule
-        from fantasy_baseball.lineup.matchups import calculate_matchup_factors, get_team_batting_stats
+        from fantasy_baseball.lineup.matchups import (
+            calculate_matchup_factors,
+            get_team_batting_stats,
+        )
 
         self._progress("Fetching schedule and matchup data...")
         # start_date and end_date were fetched earlier to compute effective_date
@@ -696,8 +698,9 @@ class RefreshRun:
         # Cache positions for all known players (roster + opponents + FAs)
         positions_map = build_positions_map(self.roster_players, self.opp_rosters, self.fa_players)
         write_cache(CacheKey.POSITIONS, positions_map, self.cache_dir)
-        from fantasy_baseball.data.redis_store import set_positions, get_default_client
-        set_positions(get_default_client(), positions_map)
+        from fantasy_baseball.data.kv_store import get_kv
+        from fantasy_baseball.data.redis_store import set_positions
+        set_positions(get_kv(), positions_map)
         self._progress(f"Cached positions for {len(positions_map)} players")
 
         audit_results = audit_roster(
@@ -782,17 +785,10 @@ class RefreshRun:
                 )
                 self._progress("Current + Mgmt Monte Carlo complete")
 
-        from fantasy_baseball.data.redis_store import (
-            get_default_client as _get_redis_client,
-        )
-        from fantasy_baseball.data.redis_store import (
-            get_preseason_baseline,
-        )
-        _redis_client = _get_redis_client()
-        baseline = (
-            get_preseason_baseline(_redis_client, self.config.season_year)
-            if _redis_client is not None else None
-        ) or {}
+        from fantasy_baseball.data.kv_store import get_kv
+        from fantasy_baseball.data.redis_store import get_preseason_baseline
+        _redis_client = get_kv()
+        baseline = get_preseason_baseline(_redis_client, self.config.season_year) or {}
         if not baseline:
             self._progress(
                 "Preseason baseline missing — "
@@ -836,13 +832,13 @@ class RefreshRun:
     # --- Step 15: Transaction analyzer ---
     def _analyze_transactions(self):
         self._progress("Analyzing transactions...")
-        from fantasy_baseball.lineup.yahoo_roster import fetch_all_transactions
         from fantasy_baseball.analysis.transactions import (
             _load_projections_for_date_redis,
             build_cache_output,
             pair_standalone_moves,
             score_transaction,
         )
+        from fantasy_baseball.lineup.yahoo_roster import fetch_all_transactions
 
         raw_txns = fetch_all_transactions(self.league)
         if not raw_txns:
@@ -872,10 +868,8 @@ class RefreshRun:
                 by_id[drop_id]["paired_with"] = add_id
                 by_id[add_id]["paired_with"] = drop_id
 
-            from fantasy_baseball.data.redis_store import (
-                get_default_client as _txn_redis_client,
-            )
-            _txn_client = _txn_redis_client()
+            from fantasy_baseball.data.kv_store import get_kv
+            _txn_client = get_kv()
             hitters_proj, pitchers_proj = _load_projections_for_date_redis(
                 _txn_client,
             )

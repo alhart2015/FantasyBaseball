@@ -86,13 +86,13 @@ def _load_yahoo_league():
 def _load_projections():
     """Load projections from Redis. Returns (hitters, pitchers, rest_of_season_hitters, rest_of_season_pitchers)."""
     import pandas as pd
-    from fantasy_baseball.data.redis_store import (
-        get_blended_projections, get_default_client,
-    )
+
+    from fantasy_baseball.data.kv_store import get_kv
+    from fantasy_baseball.data.redis_store import get_blended_projections
     from fantasy_baseball.utils.name_utils import normalize_name
     from fantasy_baseball.web.season_data import read_cache
 
-    client = get_default_client()
+    client = get_kv()
     hitters_raw = get_blended_projections(client, "hitters")
     pitchers_raw = get_blended_projections(client, "pitchers")
     if client is not None and not hitters_raw and not pitchers_raw:
@@ -160,10 +160,9 @@ def _run_rest_of_season_fetch() -> None:
             if msg.startswith("QUALITY:"):
                 quality_warnings.append(msg)
 
-        from fantasy_baseball.data.redis_store import (
-            get_default_client, get_latest_roster_names,
-        )
-        roster_names = get_latest_roster_names(get_default_client())
+        from fantasy_baseball.data.kv_store import get_kv
+        from fantasy_baseball.data.redis_store import get_latest_roster_names
+        roster_names = get_latest_roster_names(get_kv())
         if roster_names:
             logger.log(f"Loaded {len(roster_names)} rostered players for quality checks")
 
@@ -218,9 +217,9 @@ def register_routes(app: Flask) -> None:
 
         if raw_standings:
             from fantasy_baseball.web.season_data import (
-                format_standings_for_display,
-                format_monte_carlo_for_display,
                 _standings_to_snapshot,
+                format_monte_carlo_for_display,
+                format_standings_for_display,
             )
 
             standings_data = format_standings_for_display(
@@ -257,11 +256,11 @@ def register_routes(app: Flask) -> None:
                     mc_mgmt_data = format_monte_carlo_for_display(
                         raw_mc["with_management"], config.team_name
                     )
-                if "rest_of_season" in raw_mc and raw_mc["rest_of_season"]:
+                if raw_mc.get("rest_of_season"):
                     rest_of_season_mc_data = format_monte_carlo_for_display(
                         raw_mc["rest_of_season"], config.team_name
                     )
-                if "rest_of_season_with_management" in raw_mc and raw_mc["rest_of_season_with_management"]:
+                if raw_mc.get("rest_of_season_with_management"):
                     rest_of_season_mgmt_mc_data = format_monte_carlo_for_display(
                         raw_mc["rest_of_season_with_management"], config.team_name
                     )
@@ -366,7 +365,8 @@ def register_routes(app: Flask) -> None:
     def api_trade_search():
         from fantasy_baseball.models.player import Player
         from fantasy_baseball.trades.evaluate import (
-            search_trades_away, search_trades_for,
+            search_trades_away,
+            search_trades_for,
         )
 
         data = request.get_json(silent=True) or {}
@@ -564,10 +564,10 @@ def register_routes(app: Flask) -> None:
         Reads from Redis caches (ros_projections, roster, opp_rosters,
         rankings, roster_audit) so the page works without a local SQLite DB.
         """
-        from fantasy_baseball.utils.name_utils import normalize_name
-        from fantasy_baseball.sgp.rankings import lookup_rank
-        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats, RankInfo
         from fantasy_baseball.lineup.roster_audit import fa_target_positions
+        from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, RankInfo
+        from fantasy_baseball.sgp.rankings import lookup_rank
+        from fantasy_baseball.utils.name_utils import normalize_name
 
         ros_cache = read_cache(CacheKey.ROS_PROJECTIONS)
         if not ros_cache:
@@ -680,7 +680,7 @@ def register_routes(app: Flask) -> None:
     @app.route("/api/players/compare")
     def api_player_compare():
         """Return projected standings before/after swapping a roster player."""
-        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
+        from fantasy_baseball.models.player import Player
         from fantasy_baseball.utils.name_utils import normalize_name
 
         roster_player = request.args.get("roster_player")
@@ -925,9 +925,11 @@ def register_routes(app: Flask) -> None:
     @_require_auth
     def api_opponent_lineup(team_key):
         import time
+
         from fantasy_baseball.lineup.yahoo_roster import fetch_roster
         from fantasy_baseball.web.season_data import (
-            _opponent_cache, OPPONENT_CACHE_TTL_SECONDS,
+            OPPONENT_CACHE_TTL_SECONDS,
+            _opponent_cache,
             build_opponent_lineup,
         )
 

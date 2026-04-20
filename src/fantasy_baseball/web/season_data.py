@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import tempfile
-import threading
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -12,12 +11,30 @@ from typing import TYPE_CHECKING
 log = logging.getLogger(__name__)
 
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key  # noqa: E402
+from fantasy_baseball.data.kv_store import KVStore, get_kv, is_remote  # noqa: E402
+
+
+def _get_redis() -> KVStore | None:
+    """Return the remote KV client on Render, ``None`` off-Render.
+
+    Thin compatibility helper over ``kv_store.get_kv()``. The cache:*
+    semantics in this module and in ``refresh_pipeline`` / ``job_logger``
+    historically treated "Redis" as "remote or nothing" — off-Render,
+    cache:* keys have dedicated JSON files on disk, so they don't need
+    a local KV fallback. This helper preserves that semantic while
+    keeping the RENDER gate in a single place (``kv_store.is_remote``).
+    """
+    return get_kv() if is_remote() else None
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
 from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.utils.constants import (
-    ALL_CATEGORIES, HITTER_PROJ_KEYS, IL_STATUSES, INVERSE_STATS as INVERSE_CATS,
+    ALL_CATEGORIES,
+    HITTER_PROJ_KEYS,
     PITCHER_PROJ_KEYS,
+)
+from fantasy_baseball.utils.constants import (
+    INVERSE_STATS as INVERSE_CATS,
 )
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 
@@ -35,35 +52,7 @@ def clear_opponent_cache() -> None:
     _opponent_cache.clear()
 
 
-_redis_client = None
-_redis_initialized = False
-_redis_lock = threading.Lock()
-
-
-def _get_redis():
-    """Lazy Upstash Redis client. Returns None if not configured."""
-    global _redis_client, _redis_initialized
-    if _redis_initialized:
-        return _redis_client
-    with _redis_lock:
-        if _redis_initialized:
-            return _redis_client
-        url = os.environ.get("UPSTASH_REDIS_REST_URL")
-        token = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
-        if url and token:
-            from upstash_redis import Redis
-            _redis_client = Redis(url=url, token=token)
-        _redis_initialized = True
-    return _redis_client
-
-
 CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache"
-# Snapshot of the production cache dir at import, used to gate Redis
-# write-through. Tests sometimes assign ``season_data.CACHE_DIR = tmp_path``
-# so `cache_dir == CACHE_DIR` cannot be trusted for the guard — that bug
-# has shipped fixture data (Rutschman/Burnes roster, Hart-of-the-Order
-# standings) to production Redis. Compare against this sentinel instead.
-_DEFAULT_CACHE_DIR = CACHE_DIR
 
 
 def _standings_to_snapshot(
@@ -114,37 +103,34 @@ CACHE_FILES: dict[CacheKey, str] = {
 def read_cache(key: CacheKey, cache_dir: Path = CACHE_DIR) -> dict | list | None:
     """Read a cached JSON payload.
 
-    Redis is the source of truth: when a client is configured, we read
-    from it first and fall back to local disk only on miss or error. On
-    Render the local filesystem is ephemeral (wiped on deploy) and can
-    only be stale; on dev the fallback covers Upstash outages. Tests
-    that pass a non-default ``cache_dir`` stay on the disk-only path so
-    they never touch real Redis.
+    On Render: Upstash is the source of truth; local disk serves as
+    last-known-good fallback when Redis is unreachable. Off-Render
+    (local dashboard, tests): disk only. The ``is_remote()`` gate in
+    ``kv_store`` makes the remote path unreachable without
+    ``RENDER=true``, so there is no code path from local to prod.
     """
     path = cache_dir / CACHE_FILES[key]
 
-    if cache_dir == _DEFAULT_CACHE_DIR:
-        redis = _get_redis()
-        if redis is not None:
+    redis = _get_redis()
+    if redis is not None:
+        try:
+            raw = redis.get(redis_key(key))
+        except Exception as e:
+            print(f"[redis] read_cache({key}) failed: {e}")
+            raw = None
+        if raw is not None:
             try:
-                raw = redis.get(redis_key(key))
-            except Exception as e:
-                print(f"[redis] read_cache({key}) failed: {e}")
-                raw = None
-            if raw is not None:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                print(f"[redis] read_cache({key}) corrupt data, treating as miss")
+                data = None
+            if data is not None:
                 try:
-                    data = json.loads(raw)
-                except json.JSONDecodeError:
-                    print(f"[redis] read_cache({key}) corrupt data, treating as miss")
-                    data = None
-                if data is not None:
-                    # Warm local disk so a Redis outage degrades to last-known-good.
-                    try:
-                        cache_dir.mkdir(parents=True, exist_ok=True)
-                        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-                    except OSError as e:
-                        print(f"[redis] local write-back for {key} failed: {e}")
-                    return data
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                except OSError as e:
+                    print(f"[redis] local write-back for {key} failed: {e}")
+                return data
 
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -153,7 +139,7 @@ def read_cache(key: CacheKey, cache_dir: Path = CACHE_DIR) -> dict | list | None
 
 
 def write_cache(key: CacheKey, data: dict | list, cache_dir: Path = CACHE_DIR) -> None:
-    """Atomically write a cached JSON file (tmpfile + rename), with Redis write-through."""
+    """Atomically write a cached JSON payload. Writes to Redis only on Render."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     path = cache_dir / CACHE_FILES[key]
     fd, tmp = tempfile.mkstemp(dir=cache_dir, suffix=".json")
@@ -165,17 +151,12 @@ def write_cache(key: CacheKey, data: dict | list, cache_dir: Path = CACHE_DIR) -
         Path(tmp).unlink(missing_ok=True)
         raise
 
-    # Write-through to Redis only for the production cache dir. Comparing
-    # against the import-time sentinel means monkey-patching
-    # ``season_data.CACHE_DIR`` in tests no longer lets fixture data leak
-    # into real Upstash.
-    if cache_dir == _DEFAULT_CACHE_DIR:
-        redis = _get_redis()
-        if redis:
-            try:
-                redis.set(redis_key(key), json.dumps(data))
-            except Exception as e:
-                print(f"[redis] write_cache({key}) failed: {e}")
+    redis = _get_redis()
+    if redis is not None:
+        try:
+            redis.set(redis_key(key), json.dumps(data))
+        except Exception as e:
+            print(f"[redis] write_cache({key}) failed: {e}")
 
 
 def read_meta(cache_dir: Path = CACHE_DIR) -> dict:
@@ -190,10 +171,10 @@ def _load_game_log_totals(season_year: int) -> tuple[dict, dict]:
     The season_year parameter is accepted for signature compatibility but unused —
     Redis keys are not year-partitioned (current season only).
     """
-    from fantasy_baseball.data.redis_store import get_default_client, get_game_log_totals
+    from fantasy_baseball.data.redis_store import get_game_log_totals
     from fantasy_baseball.utils.name_utils import normalize_name
 
-    client = get_default_client()
+    client = get_kv()
     raw_h = get_game_log_totals(client, "hitters")
     raw_p = get_game_log_totals(client, "pitchers")
 
@@ -519,7 +500,7 @@ def _compute_team_totals_pace(
     correctly accounts for players added/dropped mid-season). Expected values
     are PA/IP-weighted averages of individual player projections.
     """
-    from fantasy_baseball.analysis.pace import _z_to_color, STAT_VARIANCE
+    from fantasy_baseball.analysis.pace import STAT_VARIANCE, _z_to_color
 
     active = [p for p in players if not p.get("is_bench", False)]
 
@@ -722,7 +703,9 @@ def compute_comparison_standings(
     """
     from fantasy_baseball.scoring import score_roto
     from fantasy_baseball.trades.evaluate import (
-        apply_swap_delta, find_player_by_name, player_rest_of_season_stats,
+        apply_swap_delta,
+        find_player_by_name,
+        player_rest_of_season_stats,
     )
 
     dropped = find_player_by_name(roster_player_name, user_roster)

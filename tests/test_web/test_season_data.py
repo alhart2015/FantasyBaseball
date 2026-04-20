@@ -1,11 +1,19 @@
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from fantasy_baseball.web import season_data
-from fantasy_baseball.web.season_data import CacheKey, read_cache, write_cache, read_meta, format_standings_for_display, format_monte_carlo_for_display, format_lineup_for_display, _standings_to_snapshot
+from fantasy_baseball.web.season_data import (
+    CacheKey,
+    _standings_to_snapshot,
+    format_lineup_for_display,
+    format_monte_carlo_for_display,
+    format_standings_for_display,
+    read_cache,
+    read_meta,
+    write_cache,
+)
 
 
 def test_write_and_read_cache(tmp_path):
@@ -275,42 +283,18 @@ def test_roster_cache_includes_stats(tmp_path, monkeypatch):
     assert result["hitters"][0]["pace"]["HR"]["actual"] == 9
 
 
-@pytest.fixture()
-def reset_redis_singleton():
-    """Reset Redis singleton state before and after each test."""
-    season_data._redis_client = None
-    season_data._redis_initialized = False
-    yield
-    season_data._redis_client = None
-    season_data._redis_initialized = False
-
-
-def test_get_redis_returns_none_when_unconfigured(monkeypatch, reset_redis_singleton):
-    """With no env vars, _get_redis() returns None."""
-    monkeypatch.delenv("UPSTASH_REDIS_REST_URL", raising=False)
-    monkeypatch.delenv("UPSTASH_REDIS_REST_TOKEN", raising=False)
-    result = season_data._get_redis()
-    assert result is None
-
-
-def test_get_redis_returns_client_when_configured(monkeypatch, reset_redis_singleton):
-    """With env vars set, _get_redis() returns a Redis client."""
-    monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://fake.upstash.io")
-    monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "fake-token")
-    with patch("upstash_redis.Redis") as MockRedis:
-        MockRedis.return_value = "mock-client"
-        result = season_data._get_redis()
-        assert result == "mock-client"
-        MockRedis.assert_called_once_with(url="https://fake.upstash.io", token="fake-token")
+# Note: the leak-prevention invariant for _get_redis (off-Render returns
+# None regardless of env creds) is enforced by kv_store.get_kv and is
+# tested in tests/test_data/test_kv_store.py against a real fixture
+# store. The tests below cover read_cache/write_cache's Redis path by
+# monkeypatching season_data._get_redis directly.
 
 
 def test_write_cache_writes_to_redis(tmp_path, monkeypatch):
-    """write_cache with default cache_dir writes to Redis."""
+    """write_cache pushes to Redis when _get_redis returns a client."""
     mock_redis = type("MockRedis", (), {"set": lambda self, k, v: None})()
     mock_redis.set = lambda k, v: setattr(mock_redis, "_last_set", (k, v))
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
-    monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(season_data, "_DEFAULT_CACHE_DIR", tmp_path)
 
     data = {"teams": [1, 2, 3]}
     write_cache(CacheKey.STANDINGS, data, cache_dir=tmp_path)
@@ -319,14 +303,11 @@ def test_write_cache_writes_to_redis(tmp_path, monkeypatch):
     assert json.loads(mock_redis._last_set[1]) == data
 
 
-def test_write_cache_skips_redis_non_default_dir(tmp_path, monkeypatch):
-    """write_cache with non-default cache_dir does not touch Redis."""
-    mock_redis = MagicMock()
-    monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
-    # tmp_path != CACHE_DIR, so Redis should be skipped
+def test_write_cache_skips_redis_when_get_redis_is_none(tmp_path, monkeypatch):
+    """With no Redis client (off-Render default), write_cache stays on disk."""
+    monkeypatch.setattr(season_data, "_get_redis", lambda: None)
     data = {"v": 1}
     write_cache(CacheKey.STANDINGS, data, cache_dir=tmp_path)
-    mock_redis.set.assert_not_called()
     assert read_cache(CacheKey.STANDINGS, cache_dir=tmp_path) == data
 
 
@@ -336,8 +317,6 @@ def test_write_cache_handles_redis_error(tmp_path, monkeypatch):
     mock_redis.set.side_effect = ConnectionError("Upstash unreachable")
     mock_redis.get.side_effect = ConnectionError("Upstash unreachable")
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
-    monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(season_data, "_DEFAULT_CACHE_DIR", tmp_path)
 
     data = {"teams": [1, 2, 3]}
     write_cache(CacheKey.STANDINGS, data, cache_dir=tmp_path)
@@ -345,19 +324,14 @@ def test_write_cache_handles_redis_error(tmp_path, monkeypatch):
     assert read_cache(CacheKey.STANDINGS, cache_dir=tmp_path) == data
 
 
-# --- read_cache Redis fallback tests ---
-
 def test_read_cache_falls_back_to_redis(tmp_path, monkeypatch):
     """When local disk has no file, read_cache fetches from Redis and writes back locally."""
     data = {"teams": [1, 2, 3]}
     mock_redis = type("MockRedis", (), {"get": lambda self, k: json.dumps(data)})()
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
-    monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(season_data, "_DEFAULT_CACHE_DIR", tmp_path)
 
     result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result == data
-    # Verify it wrote back to local disk
     local = json.loads((tmp_path / "standings.json").read_text(encoding="utf-8"))
     assert local == data
 
@@ -366,8 +340,6 @@ def test_read_cache_returns_none_when_both_miss(tmp_path, monkeypatch):
     """When local disk and Redis both miss, returns None."""
     mock_redis = type("MockRedis", (), {"get": lambda self, k: None})()
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
-    monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(season_data, "_DEFAULT_CACHE_DIR", tmp_path)
 
     result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result is None
@@ -377,21 +349,16 @@ def test_read_cache_handles_corrupt_redis_data(tmp_path, monkeypatch):
     """When Redis returns non-JSON, treat as miss."""
     mock_redis = type("MockRedis", (), {"get": lambda self, k: "not-json{{"})()
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
-    monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(season_data, "_DEFAULT_CACHE_DIR", tmp_path)
 
     result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result is None
 
 
-def test_read_cache_skips_redis_non_default_dir(tmp_path, monkeypatch):
-    """read_cache with non-default cache_dir does not touch Redis."""
-    mock_redis = MagicMock()
-    monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
-    # tmp_path != CACHE_DIR, so Redis should be skipped
+def test_read_cache_skips_redis_when_get_redis_is_none(tmp_path, monkeypatch):
+    """With no Redis client (off-Render default), read_cache stays on disk."""
+    monkeypatch.setattr(season_data, "_get_redis", lambda: None)
     result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result is None
-    mock_redis.get.assert_not_called()
 
 
 def test_read_cache_handles_redis_error(tmp_path, monkeypatch):
@@ -399,8 +366,6 @@ def test_read_cache_handles_redis_error(tmp_path, monkeypatch):
     mock_redis = MagicMock()
     mock_redis.get.side_effect = ConnectionError("Upstash unreachable")
     monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
-    monkeypatch.setattr(season_data, "CACHE_DIR", tmp_path)
-    monkeypatch.setattr(season_data, "_DEFAULT_CACHE_DIR", tmp_path)
 
     result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
     assert result is None
@@ -409,8 +374,8 @@ def test_read_cache_handles_redis_error(tmp_path, monkeypatch):
 class TestComputeComparisonStandings:
     def test_swap_changes_user_team_stats(self):
         """Swapping a hitter should change the user's projected stats but not other teams'."""
+        from fantasy_baseball.models.player import HitterStats, PitcherStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 
         projected_standings = [
             {"name": "My Team", "team_key": "", "rank": 0, "stats": {
@@ -461,8 +426,8 @@ class TestComputeComparisonStandings:
 
     def test_swap_not_found_returns_error(self):
         """If roster_player_name doesn't match anyone in user_roster, return error."""
+        from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats
 
         result = compute_comparison_standings(
             roster_player_name="Nobody",
@@ -498,7 +463,7 @@ class TestComparisonConsistencyInvariant:
     """
 
     def _build_roster(self):
-        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
+        from fantasy_baseball.models.player import HitterStats, PitcherStats, Player
         return [
             Player(name="Star Hitter", player_type="hitter",
                    rest_of_season=HitterStats(pa=650, ab=567, h=150, r=90, hr=30, rbi=95, sb=25, avg=0.265)),
@@ -513,9 +478,9 @@ class TestComparisonConsistencyInvariant:
         """The comparison "before" for the user team must equal the value stored
         in projected_standings (otherwise UI shows one number on the standings
         page and a different number on the comparison page for the same team)."""
-        from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats
+        from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.scoring import project_team_stats
+        from fantasy_baseball.web.season_data import compute_comparison_standings
 
         roster = self._build_roster()
         user_stats = project_team_stats(roster)
@@ -551,9 +516,9 @@ class TestComparisonConsistencyInvariant:
         """The team-stat drop from swapping must equal the counting-stat
         difference between the two players. If it doesn't, the UI's stat
         comparison row will disagree with the team standings panel."""
-        from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats
+        from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.scoring import project_team_stats
+        from fantasy_baseball.web.season_data import compute_comparison_standings
 
         roster = self._build_roster()
         user_stats = project_team_stats(roster)
@@ -590,8 +555,8 @@ class TestComparisonConsistencyInvariant:
         it never recomputes from user_roster.  This guarantees the
         "before" on the comparison page always matches the standings page,
         regardless of whether cache:roster and cache:projections diverge."""
+        from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats
 
         roster = self._build_roster()
 
@@ -633,8 +598,8 @@ class TestComparisonProjectionOverride:
 
     def test_override_uses_projection_stats_for_delta(self):
         """roster_player_projection's stats drive the delta, not roster cache."""
+        from fantasy_baseball.models.player import HitterStats, PitcherStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 
         # Roster cache has stale pitcher stats (sv=1)
         stale_pitcher = Player(
@@ -804,8 +769,8 @@ class TestComparisonEV:
     """compute_comparison_standings with EV-based scoring."""
 
     def test_team_sds_none_matches_rank_based(self):
+        from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats
         projected_standings = [
             {"name": "User", "team_key": "", "rank": 0, "stats": {
                 "R": 0, "HR": 0, "RBI": 0, "SB": 100, "AVG": 0,
@@ -829,8 +794,8 @@ class TestComparisonEV:
         assert result["delta_roto"]["categories"]["SB"]["roto_delta"] == pytest.approx(-1.0)
 
     def test_team_sds_produces_fractional_delta_under_uncertainty(self):
+        from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats
         projected_standings = [
             {"name": "User", "team_key": "", "rank": 0, "stats": {
                 "R": 0, "HR": 0, "RBI": 0, "SB": 100, "AVG": 0,
@@ -860,8 +825,8 @@ class TestComparisonEV:
         assert abs(result["delta_roto"]["categories"]["SB"]["roto_delta"]) < 0.5
 
     def test_ev_roto_key_present_in_response(self):
+        from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats
         projected_standings = [
             {"name": "User", "team_key": "", "rank": 0, "stats": {
                 "R": 0, "HR": 0, "RBI": 0, "SB": 100, "AVG": 0,
