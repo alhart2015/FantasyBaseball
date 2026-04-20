@@ -104,11 +104,9 @@ def main():
         if roster_names:
             print(f"  Found {len(roster_names)} rostered players for quality checks")
 
+    from fantasy_baseball.data.kv_store import get_kv
     from fantasy_baseball.data.projections import blend_projections
-    from fantasy_baseball.data.redis_store import (
-        set_blended_projections,
-        get_default_client,
-    )
+    from fantasy_baseball.data.redis_store import set_blended_projections
     from fantasy_baseball.utils.time_utils import local_today
 
     current_year = local_today().year
@@ -121,7 +119,7 @@ def main():
             roster_names=roster_names,
             progress_cb=print,
         )
-        client = get_default_client()
+        client = get_kv()
         set_blended_projections(
             client, "hitters", hitters_df.to_dict(orient="records")
         )

@@ -169,8 +169,7 @@ class SqliteKVStore:
         now = time.time()
         with self._lock:
             rows = self._conn.execute(
-                "SELECT key FROM kv WHERE key LIKE ? "
-                "AND (expires_at IS NULL OR expires_at >= ?)",
+                "SELECT key FROM kv WHERE key LIKE ? AND (expires_at IS NULL OR expires_at >= ?)",
                 (like, now),
             ).fetchall()
         return [r[0] for r in rows]
@@ -270,6 +269,7 @@ def _build_upstash_kv() -> UpstashKVStore:
             "live in .env)."
         )
     from upstash_redis import Redis
+
     return UpstashKVStore(Redis(url=url, token=token))
 
 

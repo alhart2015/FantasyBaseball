@@ -10,7 +10,9 @@ def _team(name: str, team_key: str = ""):
 
 def _snap(d: date, *teams: tuple[str, int]):
     from fantasy_baseball.models.standings import (
-        CategoryStats, StandingsEntry, StandingsSnapshot,
+        CategoryStats,
+        StandingsEntry,
+        StandingsSnapshot,
     )
     entries = [
         StandingsEntry(name, f"k-{name}", rank, CategoryStats(r=100 + rank))
@@ -129,14 +131,12 @@ def _standings_payload(teams: list[tuple]) -> dict:
 def redis_with_data(fake_redis, monkeypatch):
     """fake_redis pre-populated with fixture data for from_redis tests.
 
-    Patches ``redis_store._default_client`` + ``_default_client_initialized``
-    so ``get_default_client()`` returns the fake client. Mirrors
-    Tasks 2-5 Redis-store test patterns.
+    Patches ``kv_store.get_kv`` so ``League.from_redis`` reads test data
+    via the central KV entry point.
     """
-    from fantasy_baseball.data import redis_store
+    from fantasy_baseball.data import kv_store, redis_store
 
-    monkeypatch.setattr(redis_store, "_default_client", fake_redis)
-    monkeypatch.setattr(redis_store, "_default_client_initialized", True)
+    monkeypatch.setattr(kv_store, "get_kv", lambda: fake_redis)
 
     # --- Rosters: two teams, three snapshots (Hart x2 + Rivals x1) ---
     redis_store.write_roster_snapshot(

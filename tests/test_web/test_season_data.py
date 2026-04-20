@@ -1,11 +1,19 @@
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from fantasy_baseball.web import season_data
-from fantasy_baseball.web.season_data import CacheKey, read_cache, write_cache, read_meta, format_standings_for_display, format_monte_carlo_for_display, format_lineup_for_display, _standings_to_snapshot
+from fantasy_baseball.web.season_data import (
+    CacheKey,
+    _standings_to_snapshot,
+    format_lineup_for_display,
+    format_monte_carlo_for_display,
+    format_standings_for_display,
+    read_cache,
+    read_meta,
+    write_cache,
+)
 
 
 def test_write_and_read_cache(tmp_path):
@@ -275,47 +283,11 @@ def test_roster_cache_includes_stats(tmp_path, monkeypatch):
     assert result["hitters"][0]["pace"]["HR"]["actual"] == 9
 
 
-@pytest.fixture()
-def reset_redis_singleton():
-    """Reset Redis singleton state before and after each test."""
-    season_data._redis_client = None
-    season_data._redis_initialized = False
-    yield
-    season_data._redis_client = None
-    season_data._redis_initialized = False
-
-
-def test_get_redis_returns_none_off_render(monkeypatch, reset_redis_singleton):
-    """Off-Render, _get_redis() is None even with Upstash creds set.
-
-    This is the core leak-prevention invariant: a local dashboard or
-    pytest process has no reachable Redis client regardless of what is
-    in its environment. Only RENDER=true unlocks the hop.
-    """
-    monkeypatch.delenv("RENDER", raising=False)
-    monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://fake.upstash.io")
-    monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "fake-token")
-    assert season_data._get_redis() is None
-
-
-def test_get_redis_returns_none_on_render_without_creds(monkeypatch, reset_redis_singleton):
-    """On Render with no Upstash creds (misconfigured env), _get_redis() is None."""
-    monkeypatch.setenv("RENDER", "true")
-    monkeypatch.delenv("UPSTASH_REDIS_REST_URL", raising=False)
-    monkeypatch.delenv("UPSTASH_REDIS_REST_TOKEN", raising=False)
-    assert season_data._get_redis() is None
-
-
-def test_get_redis_returns_client_on_render_with_creds(monkeypatch, reset_redis_singleton):
-    """On Render with creds, _get_redis() returns a Redis client."""
-    monkeypatch.setenv("RENDER", "true")
-    monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://fake.upstash.io")
-    monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "fake-token")
-    with patch("upstash_redis.Redis") as MockRedis:
-        MockRedis.return_value = "mock-client"
-        result = season_data._get_redis()
-        assert result == "mock-client"
-        MockRedis.assert_called_once_with(url="https://fake.upstash.io", token="fake-token")
+# Note: the leak-prevention invariant for _get_redis (off-Render returns
+# None regardless of env creds) is enforced by kv_store.get_kv and is
+# tested in tests/test_data/test_kv_store.py against a real fixture
+# store. The tests below cover read_cache/write_cache's Redis path by
+# monkeypatching season_data._get_redis directly.
 
 
 def test_write_cache_writes_to_redis(tmp_path, monkeypatch):
@@ -402,8 +374,8 @@ def test_read_cache_handles_redis_error(tmp_path, monkeypatch):
 class TestComputeComparisonStandings:
     def test_swap_changes_user_team_stats(self):
         """Swapping a hitter should change the user's projected stats but not other teams'."""
+        from fantasy_baseball.models.player import HitterStats, PitcherStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 
         projected_standings = [
             {"name": "My Team", "team_key": "", "rank": 0, "stats": {
@@ -454,8 +426,8 @@ class TestComputeComparisonStandings:
 
     def test_swap_not_found_returns_error(self):
         """If roster_player_name doesn't match anyone in user_roster, return error."""
+        from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats
 
         result = compute_comparison_standings(
             roster_player_name="Nobody",
@@ -491,7 +463,7 @@ class TestComparisonConsistencyInvariant:
     """
 
     def _build_roster(self):
-        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
+        from fantasy_baseball.models.player import HitterStats, PitcherStats, Player
         return [
             Player(name="Star Hitter", player_type="hitter",
                    rest_of_season=HitterStats(pa=650, ab=567, h=150, r=90, hr=30, rbi=95, sb=25, avg=0.265)),
@@ -506,9 +478,9 @@ class TestComparisonConsistencyInvariant:
         """The comparison "before" for the user team must equal the value stored
         in projected_standings (otherwise UI shows one number on the standings
         page and a different number on the comparison page for the same team)."""
-        from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats
+        from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.scoring import project_team_stats
+        from fantasy_baseball.web.season_data import compute_comparison_standings
 
         roster = self._build_roster()
         user_stats = project_team_stats(roster)
@@ -544,9 +516,9 @@ class TestComparisonConsistencyInvariant:
         """The team-stat drop from swapping must equal the counting-stat
         difference between the two players. If it doesn't, the UI's stat
         comparison row will disagree with the team standings panel."""
-        from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats
+        from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.scoring import project_team_stats
+        from fantasy_baseball.web.season_data import compute_comparison_standings
 
         roster = self._build_roster()
         user_stats = project_team_stats(roster)
@@ -583,8 +555,8 @@ class TestComparisonConsistencyInvariant:
         it never recomputes from user_roster.  This guarantees the
         "before" on the comparison page always matches the standings page,
         regardless of whether cache:roster and cache:projections diverge."""
+        from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats
 
         roster = self._build_roster()
 
@@ -626,8 +598,8 @@ class TestComparisonProjectionOverride:
 
     def test_override_uses_projection_stats_for_delta(self):
         """roster_player_projection's stats drive the delta, not roster cache."""
+        from fantasy_baseball.models.player import HitterStats, PitcherStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
 
         # Roster cache has stale pitcher stats (sv=1)
         stale_pitcher = Player(
@@ -797,8 +769,8 @@ class TestComparisonEV:
     """compute_comparison_standings with EV-based scoring."""
 
     def test_team_sds_none_matches_rank_based(self):
+        from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats
         projected_standings = [
             {"name": "User", "team_key": "", "rank": 0, "stats": {
                 "R": 0, "HR": 0, "RBI": 0, "SB": 100, "AVG": 0,
@@ -822,8 +794,8 @@ class TestComparisonEV:
         assert result["delta_roto"]["categories"]["SB"]["roto_delta"] == pytest.approx(-1.0)
 
     def test_team_sds_produces_fractional_delta_under_uncertainty(self):
+        from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats
         projected_standings = [
             {"name": "User", "team_key": "", "rank": 0, "stats": {
                 "R": 0, "HR": 0, "RBI": 0, "SB": 100, "AVG": 0,
@@ -853,8 +825,8 @@ class TestComparisonEV:
         assert abs(result["delta_roto"]["categories"]["SB"]["roto_delta"]) < 0.5
 
     def test_ev_roto_key_present_in_response(self):
+        from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
-        from fantasy_baseball.models.player import Player, HitterStats
         projected_standings = [
             {"name": "User", "team_key": "", "rank": 0, "stats": {
                 "R": 0, "HR": 0, "RBI": 0, "SB": 100, "AVG": 0,

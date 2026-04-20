@@ -144,7 +144,7 @@ def patched_script_env(fake_redis, monkeypatch):
         patch("fantasy_baseball.auth.yahoo_auth.get_yahoo_session", return_value=MagicMock()),
         patch("fantasy_baseball.auth.yahoo_auth.get_league", return_value=league_mock),
         patch("fantasy_baseball.lineup.yahoo_roster.fetch_roster", side_effect=_fetch_roster),
-        patch("fantasy_baseball.data.redis_store.get_default_client", return_value=fake_redis),
+        patch("fantasy_baseball.data.kv_store.get_kv", return_value=fake_redis),
         patch("fantasy_baseball.simulation.run_monte_carlo", side_effect=_scaled_mc),
     ]
     for p in patches:

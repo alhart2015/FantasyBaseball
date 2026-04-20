@@ -14,14 +14,12 @@ from pathlib import Path
 import pandas as pd
 
 from fantasy_baseball.data.cache_keys import CacheKey
+from fantasy_baseball.data.kv_store import get_kv
 from fantasy_baseball.data.projections import (
     blend_projections,
     normalize_rest_of_season_to_full_season,
 )
-from fantasy_baseball.data.redis_store import (
-    get_default_client,
-    get_game_log_totals,
-)
+from fantasy_baseball.data.redis_store import get_game_log_totals
 from fantasy_baseball.models.player import PlayerType
 
 
@@ -71,7 +69,7 @@ def blend_and_cache_ros(
         raise FileNotFoundError(f"No ROS snapshot dirs under {ros_root}")
     latest = date_dirs[-1]
 
-    client = get_default_client()
+    client = get_kv()
     # JSON round-trips coerce int keys to str;
     # normalize_rest_of_season_to_full_season looks up actuals with
     # int(mlbam_id), so we reverse the coercion at the boundary.

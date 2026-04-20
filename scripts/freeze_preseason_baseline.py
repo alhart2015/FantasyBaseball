@@ -41,10 +41,10 @@ def main(argv: list[str] | None = None) -> None:
 
     from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
     from fantasy_baseball.config import load_config
+    from fantasy_baseball.data.kv_store import get_kv
     from fantasy_baseball.data.projections import match_roster_to_projections
     from fantasy_baseball.data.redis_store import (
         get_blended_projections,
-        get_default_client,
         get_preseason_baseline,
         set_preseason_baseline,
     )
@@ -55,12 +55,7 @@ def main(argv: list[str] | None = None) -> None:
     config = load_config(_PROJECT_ROOT / "config" / "league.yaml")
     season_year = args.season_year or config.season_year
 
-    client = get_default_client()
-    if client is None:
-        raise RuntimeError(
-            "Redis client not configured: set UPSTASH_REDIS_REST_URL / "
-            "UPSTASH_REDIS_REST_TOKEN in the environment (or .env)."
-        )
+    client = get_kv()
 
     existing = get_preseason_baseline(client, season_year)
     if existing and not args.force:

@@ -13,7 +13,6 @@ from fantasy_baseball.analysis.spoe import (
 from fantasy_baseball.data import redis_store
 from fantasy_baseball.models.league import League
 
-
 # --- Fixtures --------------------------------------------------------------
 
 SEASON_START = "2026-03-27"
@@ -23,11 +22,11 @@ TOTAL_DAYS = (date.fromisoformat(SEASON_END) - date.fromisoformat(SEASON_START))
 
 @pytest.fixture
 def redis_league(fake_redis, monkeypatch):
-    """Redirect ``redis_store.get_default_client()`` at the patched fake
-    client so ``League.from_redis`` reads test data.
+    """Redirect ``kv_store.get_kv()`` at the patched fake client so
+    ``League.from_redis`` reads test data.
     """
-    monkeypatch.setattr(redis_store, "_default_client", fake_redis)
-    monkeypatch.setattr(redis_store, "_default_client_initialized", True)
+    from fantasy_baseball.data import kv_store
+    monkeypatch.setattr(kv_store, "get_kv", lambda: fake_redis)
     yield fake_redis
 
 

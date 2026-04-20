@@ -64,7 +64,7 @@ class League:
         return max(candidates, key=lambda s: s.effective_date)
 
     @classmethod
-    def from_redis(cls, season_year: int) -> "League":
+    def from_redis(cls, season_year: int) -> League:
         """Load complete league state for a season from Redis.
 
         Reads two hashes:
@@ -81,13 +81,13 @@ class League:
         Raises:
             ValueError: if any stored position token is unknown.
         """
+        from fantasy_baseball.data.kv_store import get_kv
         from fantasy_baseball.data.redis_store import (
-            get_default_client,
             get_standings_history,
             get_weekly_roster_history,
         )
 
-        client = get_default_client()
+        client = get_kv()
         all_rosters = get_weekly_roster_history(client)
         all_standings = get_standings_history(client)
 
@@ -152,7 +152,7 @@ class League:
         by_team_snap: dict[str, dict[str, list[RosterEntry]]],
         snapshots_by_date: dict[str, list[StandingsEntry]],
         team_key_by_name: dict[str, str],
-    ) -> "League":
+    ) -> League:
         """Shared stitching step for ``from_redis``.
 
         Takes already-grouped intermediate structures and builds the

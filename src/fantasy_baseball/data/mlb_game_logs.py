@@ -46,8 +46,8 @@ def fetch_game_log_totals(
     import statsapi
 
     from fantasy_baseball.analysis.game_logs import fetch_player_game_log
+    from fantasy_baseball.data.kv_store import get_kv
     from fantasy_baseball.data.redis_store import (
-        get_default_client,
         set_game_log_totals,
         set_season_progress,
     )
@@ -143,7 +143,7 @@ def fetch_game_log_totals(
             if done_count % 50 == 0 and progress_cb:
                 progress_cb(f"Game logs: {done_count}/{len(players)} players...")
 
-    client = get_default_client()
+    client = get_kv()
     set_game_log_totals(client, "hitters", hitters_totals)
     set_game_log_totals(client, "pitchers", pitchers_totals)
     set_season_progress(
