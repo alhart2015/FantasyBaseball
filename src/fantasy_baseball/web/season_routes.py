@@ -2,6 +2,7 @@
 
 import functools
 import hmac
+import json
 import logging
 import os
 import threading
@@ -357,6 +358,8 @@ def register_routes(app: Flask) -> None:
             active_page="waivers_trades",
             my_players=my_players,
             opp_players=opp_players,
+            my_roster_data=json.dumps(roster_raw or []),
+            opp_rosters_data=json.dumps(opp_rosters_raw or {}),
         )
 
     @app.route("/api/trade-search", methods=["POST"])

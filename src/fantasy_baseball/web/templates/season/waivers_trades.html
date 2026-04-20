@@ -25,6 +25,28 @@
 .section-toggle .chevron.collapsed { transform: rotate(-90deg); }
 .section-body { overflow: hidden; }
 .section-body.collapsed { display: none; }
+.mb-2 { margin-bottom: 0.5rem; }
+.mt-2 { margin-top: 0.5rem; }
+.bt-roster { max-height: 420px; overflow-y: auto; border: 1px solid var(--panel-bg); padding: 0.25rem; }
+.bt-row { display: grid; grid-template-columns: 1fr auto auto; gap: 0.4rem; padding: 0.2rem 0.4rem;
+          border-bottom: 1px solid rgba(255,255,255,0.06); align-items: center; }
+.bt-row.il { opacity: 0.4; }
+.bt-row-name { font-size: 0.9rem; }
+.bt-seg { display: inline-flex; gap: 2px; }
+.bt-seg button { font-size: 0.75rem; padding: 1px 6px; background: transparent;
+                  border: 1px solid var(--panel-bg); color: var(--text); cursor: pointer; }
+.bt-seg button.active { background: var(--text); color: var(--panel-bg); }
+.bt-seg button.trade.active { background: var(--success); color: #000; }
+.bt-seg button.drop.active { background: var(--danger); color: #fff; }
+.bt-active-toggle { font-size: 0.7rem; cursor: pointer; }
+.bt-suggestions { list-style: none; padding: 0; margin: 0.25rem 0; max-height: 160px; overflow-y: auto; }
+.bt-suggestions li { padding: 0.2rem 0.4rem; cursor: pointer; background: var(--panel-bg); }
+.bt-suggestions li:hover { background: var(--text); color: var(--panel-bg); }
+.bt-chips { display: flex; gap: 0.25rem; flex-wrap: wrap; margin-top: 0.25rem; }
+.bt-chip { background: var(--panel-bg); padding: 0.2rem 0.4rem; border-radius: 3px; font-size: 0.8rem; }
+.bt-legality { font-family: monospace; font-size: 0.85rem; }
+.bt-legality.illegal { color: var(--danger); }
+.bt-result { margin-top: 1rem; }
 </style>
 
 <div class="page-header">
@@ -62,6 +84,51 @@
 <div id="trade-search-results"></div>
 
 </div>
+
+{# === Build a Trade === #}
+<div class="section-toggle" onclick="toggleSection('build-trade')">
+    <span>Build a Trade</span>
+    <span class="chevron" id="chevron-build-trade">&#9660;</span>
+</div>
+<div class="section-body collapsed" id="section-build-trade">
+
+    <div class="mb-2">
+        <label for="bt-opponent">Opponent</label>
+        <select id="bt-opponent" onchange="bt.onOpponentChange()"></select>
+    </div>
+
+    <div class="build-trade-rosters" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+        <div>
+            <h4>My Team</h4>
+            <div id="bt-my-roster" class="bt-roster"></div>
+            <div class="mt-2">
+                <label for="bt-waiver-search">Add from Waivers</label>
+                <input type="text" id="bt-waiver-search" placeholder="Type &ge;2 letters&hellip;"
+                       oninput="bt.onWaiverQuery(event)" autocomplete="off" />
+                <ul id="bt-waiver-suggestions" class="bt-suggestions"></ul>
+                <div id="bt-waiver-chips" class="bt-chips"></div>
+            </div>
+        </div>
+        <div>
+            <h4>Opponent Team</h4>
+            <div id="bt-opp-roster" class="bt-roster"></div>
+        </div>
+    </div>
+
+    <div id="bt-legality" class="bt-legality mt-2"></div>
+    <button type="button" id="bt-evaluate" class="pill" disabled
+            onclick="bt.evaluate()">Evaluate Trade</button>
+
+    <div id="bt-result" class="bt-result"></div>
+
+</div>
+
+<script>
+  window.BT_DATA = {
+    myRoster: {{ my_roster_data | safe }},
+    oppRosters: {{ opp_rosters_data | safe }}
+  };
+</script>
 
 <script>
 function toggleSection(id) {
