@@ -218,3 +218,221 @@ def test_evaluate_2_for_2_legal_returns_delta():
         "ERA",
         "WHIP",
     }
+
+
+def _build_league():
+    """Helper: build a 4-team league with me=Hart, opp=Rival, and valid rosters.
+
+    Returns (hart_roster, rival_roster, standings).
+    """
+    me = (
+        [_make_hitter(f"Me{i}", r=80 - i) for i in range(11)]
+        + [_make_pitcher(f"MeP{i}") for i in range(9)]
+        + [_make_hitter(f"MeBN{i}") for i in range(3)]
+    )
+    for p in me:
+        p.selected_position = (
+            "BN" if p.name.startswith("MeBN") else "P" if p.player_type == "pitcher" else "OF"
+        )
+    riv = (
+        [_make_hitter(f"Riv{i}", r=70 - i) for i in range(11)]
+        + [_make_pitcher(f"RivP{i}") for i in range(9)]
+        + [_make_hitter(f"RivBN{i}") for i in range(3)]
+    )
+    for p in riv:
+        p.selected_position = (
+            "BN" if p.name.startswith("RivBN") else "P" if p.player_type == "pitcher" else "OF"
+        )
+    t3 = [_make_hitter(f"T3_{i}", r=60) for i in range(20)] + [
+        _make_pitcher(f"T3P{i}") for i in range(3)
+    ]
+    t4 = [_make_hitter(f"T4_{i}", r=50) for i in range(20)] + [
+        _make_pitcher(f"T4P{i}") for i in range(3)
+    ]
+    standings = _standings_of({"Hart": me, "Rival": riv, "T3": t3, "T4": t4})
+    return me, riv, standings
+
+
+def test_2_for_3_with_drop_is_legal_and_scores():
+    me, riv, standings = _build_league()
+    proposal = TradeProposal(
+        opponent="Rival",
+        send=["Me0::hitter", "Me1::hitter"],
+        receive=["Riv0::hitter", "Riv1::hitter", "Riv2::hitter"],
+        my_drops=["MeBN0::hitter"],
+        opp_drops=[],
+        my_active_ids={
+            player_key(p)
+            for p in me
+            if p.selected_position not in ("BN", "IL") and p.name not in ("Me0", "Me1")
+        }
+        | {"Riv0::hitter", "Riv1::hitter", "Riv2::hitter"},
+    )
+    result = evaluate_multi_trade(
+        proposal=proposal,
+        hart_name="Hart",
+        hart_roster=me,
+        opp_rosters={"Rival": riv},
+        waiver_pool={},
+        projected_standings=standings,
+        team_sds=None,
+        roster_slots=ROSTER_SLOTS_STANDARD,
+    )
+    assert result.legal is False
+    assert "Opponent" in result.reason
+
+
+def test_2_for_3_drop_on_both_sides_is_legal():
+    me, riv, standings = _build_league()
+    proposal = TradeProposal(
+        opponent="Rival",
+        send=["Me0::hitter", "Me1::hitter"],
+        receive=["Riv0::hitter", "Riv1::hitter"],
+        my_drops=["MeBN0::hitter"],
+        opp_drops=["RivBN0::hitter"],
+        my_active_ids={
+            player_key(p)
+            for p in me
+            if p.selected_position not in ("BN", "IL") and p.name not in ("Me0", "Me1")
+        }
+        | {"Riv0::hitter", "Riv1::hitter"},
+    )
+    result = evaluate_multi_trade(
+        proposal=proposal,
+        hart_name="Hart",
+        hart_roster=me,
+        opp_rosters={"Rival": riv},
+        waiver_pool={},
+        projected_standings=standings,
+        team_sds=None,
+        roster_slots=ROSTER_SLOTS_STANDARD,
+    )
+    assert result.legal is False
+    assert "22" in result.reason
+
+
+def test_2_for_2_plus_drop_plus_waiver_add_is_legal():
+    me, riv, standings = _build_league()
+    waiver = _make_hitter("Waiver1", r=75)
+    proposal = TradeProposal(
+        opponent="Rival",
+        send=["Me0::hitter", "Me1::hitter"],
+        receive=["Riv0::hitter", "Riv1::hitter"],
+        my_drops=["MeBN0::hitter"],
+        my_adds=["Waiver1::hitter"],
+        my_active_ids={
+            player_key(p)
+            for p in me
+            if p.selected_position not in ("BN", "IL") and p.name not in ("Me0", "Me1")
+        }
+        | {"Riv0::hitter", "Riv1::hitter", "Waiver1::hitter"},
+    )
+    result = evaluate_multi_trade(
+        proposal=proposal,
+        hart_name="Hart",
+        hart_roster=me,
+        opp_rosters={"Rival": riv},
+        waiver_pool={"Waiver1::hitter": waiver},
+        projected_standings=standings,
+        team_sds=None,
+        roster_slots=ROSTER_SLOTS_STANDARD,
+    )
+    assert result.legal is True, result.reason
+    assert set(result.categories.keys()) >= {"R", "HR"}
+
+
+def test_received_player_marked_bench_does_not_contribute():
+    me, riv, standings = _build_league()
+    active_set_all = {
+        player_key(p)
+        for p in me
+        if p.selected_position not in ("BN", "IL") and p.name not in ("Me0", "Me1")
+    } | {"Riv0::hitter", "Riv1::hitter"}
+    active_set_bench_riv1 = active_set_all - {"Riv1::hitter"}
+
+    proposal_all = TradeProposal(
+        opponent="Rival",
+        send=["Me0::hitter", "Me1::hitter"],
+        receive=["Riv0::hitter", "Riv1::hitter"],
+        my_active_ids=active_set_all,
+    )
+    proposal_bench = TradeProposal(
+        opponent="Rival",
+        send=["Me0::hitter", "Me1::hitter"],
+        receive=["Riv0::hitter", "Riv1::hitter"],
+        my_active_ids=active_set_bench_riv1,
+    )
+
+    r_all = evaluate_multi_trade(
+        proposal=proposal_all,
+        hart_name="Hart",
+        hart_roster=me,
+        opp_rosters={"Rival": riv},
+        waiver_pool={},
+        projected_standings=standings,
+        team_sds=None,
+        roster_slots=ROSTER_SLOTS_STANDARD,
+    )
+    r_bench = evaluate_multi_trade(
+        proposal=proposal_bench,
+        hart_name="Hart",
+        hart_roster=me,
+        opp_rosters={"Rival": riv},
+        waiver_pool={},
+        projected_standings=standings,
+        team_sds=None,
+        roster_slots=ROSTER_SLOTS_STANDARD,
+    )
+    assert r_all.legal is True
+    assert r_bench.legal is True
+    assert r_all.delta_total != r_bench.delta_total
+
+
+def test_il_players_excluded_from_size_count():
+    me, riv, standings = _build_league()
+    me.append(_make_hitter("MeIL", r=10))
+    me[-1].selected_position = "IL"
+    me.append(_make_hitter("MeIL2", r=10))
+    me[-1].selected_position = "IL"
+    proposal = TradeProposal(
+        opponent="Rival",
+        send=["Me0::hitter"],
+        receive=["Riv0::hitter"],
+        my_active_ids={
+            player_key(p) for p in me if p.selected_position not in ("BN", "IL") and p.name != "Me0"
+        }
+        | {"Riv0::hitter"},
+    )
+    result = evaluate_multi_trade(
+        proposal=proposal,
+        hart_name="Hart",
+        hart_roster=me,
+        opp_rosters={"Rival": riv},
+        waiver_pool={},
+        projected_standings=standings,
+        team_sds=None,
+        roster_slots=ROSTER_SLOTS_STANDARD,
+    )
+    assert result.legal is True, result.reason
+
+
+def test_unknown_player_key_returns_illegal_with_reason():
+    me, riv, standings = _build_league()
+    proposal = TradeProposal(
+        opponent="Rival",
+        send=["Ghost::hitter"],
+        receive=["Riv0::hitter"],
+        my_active_ids=set(),
+    )
+    result = evaluate_multi_trade(
+        proposal=proposal,
+        hart_name="Hart",
+        hart_roster=me,
+        opp_rosters={"Rival": riv},
+        waiver_pool={},
+        projected_standings=standings,
+        team_sds=None,
+        roster_slots=ROSTER_SLOTS_STANDARD,
+    )
+    assert result.legal is False
+    assert "Ghost" in result.reason
