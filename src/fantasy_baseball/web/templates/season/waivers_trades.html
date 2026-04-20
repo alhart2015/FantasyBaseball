@@ -457,7 +457,18 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   function placeAt(key, side, zone) {
-    const cur = state.placements.get(key);
+    let cur = state.placements.get(key);
+    // Seed a waiver-origin placement on first drop onto my side.
+    if (!cur && state.waiverMeta.has(key)) {
+      if (side !== "my") return;  // waiver adds can only land on my side
+      cur = { currentSide: "my", zone: "BN", origin: "waiver" };
+      state.placements.set(key, cur);
+      // Clear the search UI so the suggestion list doesn't linger.
+      const input = document.getElementById("bt-waiver-search");
+      if (input) input.value = "";
+      const sugg = document.getElementById("bt-waiver-suggestions");
+      if (sugg) sugg.innerHTML = "";
+    }
     if (!cur) return;
     if (cur.zone === "IL") return;  // IL is read-only
 
@@ -474,6 +485,37 @@ document.addEventListener('DOMContentLoaded', function() {
     updateLegality();
   }
 
+  let _waiverTimer = null;
+  function attachWaiverInputListener() {
+    const input = document.getElementById("bt-waiver-search");
+    if (!input) return;
+    input.addEventListener("input", (ev) => {
+      const q = ev.target.value.trim();
+      const sugg = document.getElementById("bt-waiver-suggestions");
+      if (!sugg) return;
+      clearTimeout(_waiverTimer);
+      if (q.length < 2) { sugg.innerHTML = ""; return; }
+      _waiverTimer = setTimeout(async () => {
+        let resp;
+        try {
+          resp = await fetch(`/api/waiver-search?q=${encodeURIComponent(q)}`);
+        } catch {
+          sugg.innerHTML = "";
+          return;
+        }
+        if (!resp.ok) { sugg.innerHTML = ""; return; }
+        const matches = await resp.json();
+        sugg.innerHTML = matches.map(m => {
+          const positions = (m.positions || []).join("/");
+          return `<li draggable="true"
+                     data-bt-drag-key="${esc(m.key)}"
+                     data-bt-waiver-name="${esc(m.name)}"
+                     data-bt-waiver-positions="${esc(positions)}">${esc(m.name)} <small>(${esc(positions)})</small></li>`;
+        }).join("");
+      }, 250);
+    });
+  }
+
   function attachDragHandlers() {
     let draggingKey = null;
 
@@ -484,6 +526,14 @@ document.addEventListener('DOMContentLoaded', function() {
       chip.classList.add("dragging");
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", draggingKey);
+
+      // Waiver suggestion — stash metadata so placeAt can seed a placement on drop.
+      if (chip.dataset.btWaiverName) {
+        state.waiverMeta.set(draggingKey, {
+          name: chip.dataset.btWaiverName,
+          positions: chip.dataset.btWaiverPositions || "",
+        });
+      }
     });
 
     document.addEventListener("dragend", (e) => {
@@ -521,6 +571,7 @@ document.addEventListener('DOMContentLoaded', function() {
   window.bt = {
     init() {
       attachDragHandlers();
+      attachWaiverInputListener();
       populateOpponents();
       rebuildPlacements();   // with opponent=null this fills only my side
       renderPanels();
