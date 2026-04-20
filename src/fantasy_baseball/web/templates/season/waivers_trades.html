@@ -276,6 +276,104 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
+
+(function() {
+  const state = {
+    opponent: null,
+    myActions: new Map(),    // key -> "TRADE" | "DROP" | null
+    oppActions: new Map(),
+    myBench: new Map(),      // key -> bool (true = bench)
+    oppBench: new Map(),
+    waiverAdds: new Map(),
+  };
+
+  function playerKey(p) { return `${p.name}::${p.player_type}`; }
+  function isIL(p) { return (p.selected_position || "") === "IL"; }
+  function isBN(p) { return (p.selected_position || "") === "BN"; }
+
+  function renderRow(p, side) {
+    const key = playerKey(p);
+    const il = isIL(p);
+    const action = side === "my" ? state.myActions.get(key) : state.oppActions.get(key);
+    const benchDefault = side === "my" ? (isBN(p) || il) : il;
+    const bench = side === "my"
+      ? (state.myBench.has(key) ? state.myBench.get(key) : benchDefault)
+      : benchDefault;
+    const bencheable = side === "my";
+
+    const benchControl = bencheable && !il ? `
+      <label class="bt-active-toggle">
+        <input type="checkbox" ${bench ? "" : "checked"}
+               onchange="bt.toggleActive('${key}')" />
+        active
+      </label>` : "";
+
+    return `
+      <div class="bt-row ${il ? "il" : ""}" data-key="${key}">
+        <span class="bt-row-name">${p.name} <small>${(p.positions||[]).join("/")}</small></span>
+        <span class="bt-seg">
+          <button class="trade ${action === "TRADE" ? "active" : ""}"
+                  ${il ? "disabled" : ""}
+                  onclick="bt.setAction('${side}','${key}','TRADE')">T</button>
+          <button class="drop ${action === "DROP" ? "active" : ""}"
+                  ${il ? "disabled" : ""}
+                  onclick="bt.setAction('${side}','${key}','DROP')">D</button>
+          <button class="${action == null ? "active" : ""}"
+                  onclick="bt.setAction('${side}','${key}',null)">—</button>
+        </span>
+        ${benchControl}
+      </div>`;
+  }
+
+  function renderRosters() {
+    const myDiv = document.getElementById("bt-my-roster");
+    myDiv.innerHTML = window.BT_DATA.myRoster.map(p => renderRow(p, "my")).join("");
+    const oppDiv = document.getElementById("bt-opp-roster");
+    if (!state.opponent) { oppDiv.innerHTML = "<em>Select opponent</em>"; return; }
+    const opp = window.BT_DATA.oppRosters[state.opponent] || [];
+    oppDiv.innerHTML = opp.map(p => renderRow(p, "opp")).join("");
+  }
+
+  function populateOpponents() {
+    const sel = document.getElementById("bt-opponent");
+    const names = Object.keys(window.BT_DATA.oppRosters || {}).sort();
+    sel.innerHTML = "<option value=''>— choose —</option>" +
+      names.map(n => `<option value="${n}">${n}</option>`).join("");
+  }
+
+  window.bt = {
+    init() { populateOpponents(); renderRosters(); updateLegality(); },
+    onOpponentChange() {
+      state.opponent = document.getElementById("bt-opponent").value || null;
+      state.oppActions.clear();
+      renderRosters(); updateLegality();
+    },
+    setAction(side, key, action) {
+      const bag = side === "my" ? state.myActions : state.oppActions;
+      if (action == null) bag.delete(key); else bag.set(key, action);
+      renderRosters(); updateLegality();
+    },
+    toggleActive(key) {
+      const cur = state.myBench.has(key)
+        ? state.myBench.get(key)
+        : (window.BT_DATA.myRoster.find(p => playerKey(p) === key)?.selected_position === "BN");
+      state.myBench.set(key, !cur);
+      updateLegality();
+    },
+  };
+
+  document.addEventListener("DOMContentLoaded", () => window.bt.init());
+
+  window.bt.onWaiverQuery = () => {};
+  window.bt.evaluate = () => {};
+
+  window.bt._state = state;
+  window.bt._playerKey = playerKey;
+  window.bt._isIL = isIL;
+
+  function updateLegality() { /* implemented in Task 10 */ }
+  window.bt._updateLegality = updateLegality;
+})();
 </script>
 
 {% endblock %}
