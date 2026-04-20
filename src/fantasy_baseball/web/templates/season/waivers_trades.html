@@ -392,7 +392,47 @@ document.addEventListener('DOMContentLoaded', function() {
   window.bt._playerKey = playerKey;
   window.bt._isIL = isIL;
 
-  function updateLegality() { /* implemented in Task 10 */ }
+  function updateLegality() {
+    const banner = document.getElementById("bt-legality");
+    const btn = document.getElementById("bt-evaluate");
+    if (!state.opponent) {
+      banner.textContent = "";
+      banner.classList.remove("illegal");
+      btn.disabled = true;
+      return;
+    }
+    const myRoster = window.BT_DATA.myRoster;
+    const oppRoster = window.BT_DATA.oppRosters[state.opponent] || [];
+
+    const myNonIL = myRoster.filter(p => !isIL(p)).length;
+    const oppNonIL = oppRoster.filter(p => !isIL(p)).length;
+
+    const mySend = [...state.myActions.entries()].filter(([, a]) => a === "TRADE").length;
+    const myDrop = [...state.myActions.entries()].filter(([, a]) => a === "DROP").length;
+    const oppSend = [...state.oppActions.entries()].filter(([, a]) => a === "TRADE").length;
+    const oppDrop = [...state.oppActions.entries()].filter(([, a]) => a === "DROP").length;
+    const waivers = state.waiverAdds.size;
+
+    // Me: -(send + drop) + (oppSend + waivers)
+    const myAfter = myNonIL - mySend - myDrop + oppSend + waivers;
+    const oppAfter = oppNonIL - oppSend - oppDrop + mySend;
+
+    const myNetRx = oppSend + waivers;
+    const myNetTx = mySend + myDrop;
+    const oppNetRx = mySend;
+    const oppNetTx = oppSend + oppDrop;
+
+    const TARGET = 23;
+    const illegal = (myAfter !== TARGET) || (oppAfter !== TARGET);
+    banner.classList.toggle("illegal", illegal);
+    banner.innerHTML = `
+      <div>My team: +${myNetRx} / -${myNetTx} &rarr; ${myAfter} (need ${TARGET})</div>
+      <div>Opp: +${oppNetRx} / -${oppNetTx} &rarr; ${oppAfter} (need ${TARGET})</div>
+    `;
+
+    const hasTrade = mySend >= 1 && oppSend >= 1;
+    btn.disabled = !(hasTrade && !illegal);
+  }
   window.bt._updateLegality = updateLegality;
 })();
 </script>
