@@ -25,6 +25,8 @@ def _get_redis() -> KVStore | None:
     keeping the RENDER gate in a single place (``kv_store.is_remote``).
     """
     return get_kv() if is_remote() else None
+
+
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
 from fantasy_baseball.scoring import score_roto
@@ -32,6 +34,7 @@ from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
     HITTER_PROJ_KEYS,
     PITCHER_PROJ_KEYS,
+    Category,
 )
 from fantasy_baseball.utils.constants import (
     INVERSE_STATS as INVERSE_CATS,
@@ -202,8 +205,10 @@ def _load_game_log_totals(season_year: int) -> tuple[dict, dict]:
 
 
 def format_standings_for_display(
-    standings: StandingsSnapshot, user_team_name: str,
-    *, team_sds: dict[str, dict[str, float]] | None = None,
+    standings: StandingsSnapshot,
+    user_team_name: str,
+    *,
+    team_sds: dict[str, dict[Category, float]] | None = None,
 ) -> dict:
     """Transform standings snapshot into display-ready structure with roto points and color codes.
 
@@ -235,9 +240,7 @@ def format_standings_for_display(
     all_stats = {e.team_name: e.stats for e in standings.entries}
     roto = score_roto(all_stats, team_sds=team_sds)
 
-    has_yahoo_totals = all(
-        e.yahoo_points_for is not None for e in standings.entries
-    )
+    has_yahoo_totals = all(e.yahoo_points_for is not None for e in standings.entries)
     yahoo_rank_by_name = {e.team_name: e.rank for e in standings.entries}
 
     teams = []
@@ -251,22 +254,23 @@ def format_standings_for_display(
             roto_pts["total"] = entry.yahoo_points_for
 
         team_totals[name] = float(roto_pts["total"])
-        teams.append({
-            "name": name,
-            "team_key": entry.team_key,
-            "stats": entry.stats,
-            "roto_points": roto_pts,
-            "is_user": name == user_team_name,
-            "sds": team_sds.get(name, {}) if team_sds else {},
-        })
+        teams.append(
+            {
+                "name": name,
+                "team_key": entry.team_key,
+                "stats": entry.stats,
+                "roto_points": roto_pts,
+                "is_user": name == user_team_name,
+                "sds": team_sds.get(name, {}) if team_sds else {},
+            }
+        )
 
     intensity = _compute_color_intensity(standings, team_totals)
     for team in teams:
         team["color_intensity"] = intensity[team["name"]]
 
     if has_yahoo_totals:
-        teams.sort(key=lambda t: (-t["roto_points"]["total"],
-                                  yahoo_rank_by_name[t["name"]]))
+        teams.sort(key=lambda t: (-t["roto_points"]["total"], yahoo_rank_by_name[t["name"]]))
         for t in teams:
             t["rank"] = yahoo_rank_by_name[t["name"]]
     else:
@@ -277,9 +281,7 @@ def format_standings_for_display(
     return {"teams": teams}
 
 
-def get_teams_list(
-    standings: list[dict], user_team_name: str
-) -> dict:
+def get_teams_list(standings: list[dict], user_team_name: str) -> dict:
     """Build a team list for the opponent selector dropdown.
 
     Args:
@@ -298,12 +300,14 @@ def get_teams_list(
         is_user = t["name"] == user_team_name
         if is_user:
             user_team_key = t.get("team_key", "")
-        teams.append({
-            "name": t["name"],
-            "team_key": t.get("team_key", ""),
-            "rank": t.get("rank", 0),
-            "is_user": is_user,
-        })
+        teams.append(
+            {
+                "name": t["name"],
+                "team_key": t.get("team_key", ""),
+                "rank": t.get("rank", 0),
+                "is_user": is_user,
+            }
+        )
 
     teams.sort(key=lambda t: t["rank"])
     return {"teams": teams, "user_team_key": user_team_key}
@@ -339,7 +343,9 @@ def build_opponent_lineup(
 
     # Match roster to projections
     matched = match_roster_to_projections(
-        roster, hitters_proj, pitchers_proj,
+        roster,
+        hitters_proj,
+        pitchers_proj,
         context=f"opp-lineup:{opponent_name}",
     )
 
@@ -347,7 +353,9 @@ def build_opponent_lineup(
     has_rest_of_season = not rest_of_season_hitters.empty or not rest_of_season_pitchers.empty
     if has_rest_of_season:
         rest_of_season_matched = match_roster_to_projections(
-            roster, rest_of_season_hitters, rest_of_season_pitchers,
+            roster,
+            rest_of_season_hitters,
+            rest_of_season_pitchers,
             context=f"opp-lineup:{opponent_name}:ros",
         )
         rest_of_season_lookup = {normalize_name(p.name): p for p in rest_of_season_matched}
@@ -373,9 +381,15 @@ def build_opponent_lineup(
         rest_of_season_entry = rest_of_season_lookup.get(norm)
         if rest_of_season_entry and rest_of_season_entry.rest_of_season:
             if player.player_type == PlayerType.HITTER:
-                entry["rest_of_season"] = {k: getattr(rest_of_season_entry.rest_of_season, k, 0) for k in ["r", "hr", "rbi", "sb", "avg"]}
+                entry["rest_of_season"] = {
+                    k: getattr(rest_of_season_entry.rest_of_season, k, 0)
+                    for k in ["r", "hr", "rbi", "sb", "avg"]
+                }
             else:
-                entry["rest_of_season"] = {k: getattr(rest_of_season_entry.rest_of_season, k, 0) for k in ["w", "k", "sv", "era", "whip"]}
+                entry["rest_of_season"] = {
+                    k: getattr(rest_of_season_entry.rest_of_season, k, 0)
+                    for k in ["w", "k", "sv", "era", "whip"]
+                }
 
         # Pace data
         ptype = player.player_type
@@ -384,7 +398,10 @@ def build_opponent_lineup(
         else:
             actuals = pitcher_logs.get(norm, {})
         proj_keys = HITTER_PROJ_KEYS if ptype == PlayerType.HITTER else PITCHER_PROJ_KEYS
-        projected = {k: getattr(player.rest_of_season, k, 0) if player.rest_of_season else 0 for k in proj_keys}
+        projected = {
+            k: getattr(player.rest_of_season, k, 0) if player.rest_of_season else 0
+            for k in proj_keys
+        }
         entry["pace"] = compute_player_pace(actuals, projected, ptype)
         entry["overall_pace"] = compute_overall_pace(entry["pace"])
 
@@ -406,9 +423,7 @@ def build_opponent_lineup(
         pos = p.get("selected_position", "BN")
         p["is_bench"] = pos in ("BN", "IL", "DL")
         is_pitcher = pos in PITCHER_POSITIONS or (
-            pos == "BN" and set(p.get("positions", [])).issubset(
-                PITCHER_POSITIONS | {"BN"}
-            )
+            pos == "BN" and set(p.get("positions", [])).issubset(PITCHER_POSITIONS | {"BN"})
         )
         if is_pitcher:
             pitchers.append(p)
@@ -416,10 +431,12 @@ def build_opponent_lineup(
             hitters.append(p)
 
     slot_rank = {s: i for i, s in enumerate(HITTER_SLOTS_ORDER)}
-    hitters.sort(key=lambda h: (slot_rank.get(h.get("selected_position", ""), 99),
-                                -h.get("sgp", 0)))
-    pitchers.sort(key=lambda p: (p.get("selected_position", "") in ("BN", "IL", "DL"),
-                                 -p.get("sgp", 0)))
+    hitters.sort(
+        key=lambda h: (slot_rank.get(h.get("selected_position", ""), 99), -h.get("sgp", 0))
+    )
+    pitchers.sort(
+        key=lambda p: (p.get("selected_position", "") in ("BN", "IL", "DL"), -p.get("sgp", 0))
+    )
 
     return {
         "hitters": hitters,
@@ -429,9 +446,7 @@ def build_opponent_lineup(
     }
 
 
-def format_monte_carlo_for_display(
-    mc_data: dict, user_team_name: str
-) -> dict:
+def format_monte_carlo_for_display(mc_data: dict, user_team_name: str) -> dict:
     """Format Monte Carlo results for template display.
 
     Returns dict with:
@@ -445,15 +460,17 @@ def format_monte_carlo_for_display(
 
     teams = []
     for name, res in mc_data["team_results"].items():
-        teams.append({
-            "name": name,
-            "median_pts": res["median_pts"],
-            "p10": res["p10"],
-            "p90": res["p90"],
-            "first_pct": res["first_pct"],
-            "top3_pct": res["top3_pct"],
-            "is_user": name == user_team_name,
-        })
+        teams.append(
+            {
+                "name": name,
+                "median_pts": res["median_pts"],
+                "p10": res["p10"],
+                "p90": res["p90"],
+                "first_pct": res["first_pct"],
+                "top3_pct": res["top3_pct"],
+                "is_user": name == user_team_name,
+            }
+        )
     teams.sort(key=lambda t: t["median_pts"], reverse=True)
 
     risk = []
@@ -464,21 +481,37 @@ def format_monte_carlo_for_display(
             risk_class = "cat-bottom"
         else:
             risk_class = ""
-        risk.append({
-            "cat": cat,
-            "median_pts": data["median_pts"],
-            "p10": data["p10"],
-            "p90": data["p90"],
-            "top3_pct": data["top3_pct"],
-            "bot3_pct": data["bot3_pct"],
-            "risk_class": risk_class,
-        })
+        risk.append(
+            {
+                "cat": cat,
+                "median_pts": data["median_pts"],
+                "p10": data["p10"],
+                "p90": data["p90"],
+                "top3_pct": data["top3_pct"],
+                "bot3_pct": data["bot3_pct"],
+                "risk_class": risk_class,
+            }
+        )
 
     return {"teams": teams, "category_risk": risk}
 
 
-HITTER_SLOTS_ORDER = ["C", "1B", "2B", "3B", "SS", "IF", "OF", "OF", "OF", "OF",
-                       "UTIL", "UTIL", "BN", "IL"]
+HITTER_SLOTS_ORDER = [
+    "C",
+    "1B",
+    "2B",
+    "3B",
+    "SS",
+    "IF",
+    "OF",
+    "OF",
+    "OF",
+    "OF",
+    "UTIL",
+    "UTIL",
+    "BN",
+    "IL",
+]
 
 
 def _compute_team_totals_pace(
@@ -526,10 +559,7 @@ def _compute_team_totals_pace(
     # Counting stats — actuals from standings, expected from player pace sums
     for cat in counting_cats:
         actual = team_stats.get(cat, 0)
-        expected = sum(
-            p.get("pace", {}).get(cat, {}).get("expected", 0) or 0
-            for p in active
-        )
+        expected = sum(p.get("pace", {}).get(cat, {}).get("expected", 0) or 0 for p in active)
         if expected > 0:
             ratio = actual / expected
             variance = STAT_VARIANCE.get(cat.lower(), 0.0)
@@ -548,9 +578,12 @@ def _compute_team_totals_pace(
         actual_val = team_stats.get(rate_cat, 0.0)
         opp_key = "IP" if player_type != "hitter" else "PA"
         proj_vals = [
-            (p.get("pace", {}).get(rate_cat, {}).get("expected", 0),
-             p.get("pace", {}).get(opp_key, {}).get("actual", 0))
-            for p in active if p.get("pace", {}).get(rate_cat, {}).get("expected")
+            (
+                p.get("pace", {}).get(rate_cat, {}).get("expected", 0),
+                p.get("pace", {}).get(opp_key, {}).get("actual", 0),
+            )
+            for p in active
+            if p.get("pace", {}).get(rate_cat, {}).get("expected")
         ]
         weighted = sum(v * opp for v, opp in proj_vals)
         total_opp = sum(opp for _, opp in proj_vals)
@@ -575,9 +608,7 @@ def _compute_team_totals_pace(
     return totals
 
 
-def format_lineup_for_display(
-    roster: list[dict], optimal: dict | None
-) -> dict:
+def format_lineup_for_display(roster: list[dict], optimal: dict | None) -> dict:
     """Format roster + optimizer output for the lineup template."""
     from fantasy_baseball.analysis.pace import compute_overall_pace
     from fantasy_baseball.models.player import Player
@@ -663,7 +694,6 @@ def run_optimize() -> dict:
     return {"moves": [], "is_optimal": True}
 
 
-
 def compute_comparison_standings(
     roster_player_name: str,
     other_player: "Player",
@@ -672,7 +702,7 @@ def compute_comparison_standings(
     user_team_name: str,
     *,
     roster_player_projection: "Player | None" = None,
-    team_sds: dict[str, dict[str, float]] | None = None,
+    team_sds: dict[str, dict[Category, float]] | None = None,
 ) -> dict:
     """Compute before/after roto standings for a player swap.
 
@@ -710,7 +740,9 @@ def compute_comparison_standings(
     all_stats_before = {t["name"]: dict(t["stats"]) for t in projected_standings}
     all_stats_after = dict(all_stats_before)
     all_stats_after[user_team_name] = apply_swap_delta(
-        all_stats_before[user_team_name], loses_ros, gains_ros,
+        all_stats_before[user_team_name],
+        loses_ros,
+        gains_ros,
     )
 
     roto_before = score_roto(all_stats_before)
@@ -802,12 +834,8 @@ def _compute_pending_moves_diff(
     """
     from fantasy_baseball.utils.name_utils import normalize_name
 
-    today_by_norm = {
-        normalize_name(p["name"]): p for p in today_roster
-    }
-    future_by_norm = {
-        normalize_name(p["name"]): p for p in future_roster
-    }
+    today_by_norm = {normalize_name(p["name"]): p for p in today_roster}
+    future_by_norm = {normalize_name(p["name"]): p for p in future_roster}
 
     added_norms = set(future_by_norm) - set(today_by_norm)
     dropped_norms = set(today_by_norm) - set(future_by_norm)
@@ -830,9 +858,11 @@ def _compute_pending_moves_diff(
         for n in sorted(dropped_norms)
     ]
 
-    return [{
-        "team": team_name,
-        "team_key": team_key,
-        "adds": adds,
-        "drops": drops,
-    }]
+    return [
+        {
+            "team": team_name,
+            "team_key": team_key,
+            "adds": adds,
+            "drops": drops,
+        }
+    ]

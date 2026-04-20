@@ -7,15 +7,16 @@ the season dashboard (web/season_data.py).
 
 import numpy as np
 
-from fantasy_baseball.models.player import Player, PlayerType
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto
-from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
-
+from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES as ALL_CATS,
+)
 from fantasy_baseball.utils.constants import (
     CLOSER_SV_THRESHOLD,
-    HITTING_COUNTING,
     HITTER_CORR_STATS,
     HITTER_CORRELATION,
+    HITTING_COUNTING,
     INJURY_PROB,
     INJURY_SEVERITY,
     MANAGEMENT_ADJUSTMENT,
@@ -27,11 +28,14 @@ from fantasy_baseball.utils.constants import (
     REPLACEMENT_RP,
     REPLACEMENT_SP,
     STAT_VARIANCE,
+    Category,
 )
+from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 
 def _build_cov_matrix(
-    stats: list[str], correlation: list[list[float]],
+    stats: list[str],
+    correlation: list[list[float]],
 ) -> np.ndarray:
     """Build a covariance matrix from per-stat sigmas and a correlation matrix.
 
@@ -91,10 +95,16 @@ def simulate_season(
         team_injuries: list[tuple[str, float]] = []
 
         adj_hitters = _apply_variance(
-            hitters, PlayerType.HITTER, rng, team_injuries,
+            hitters,
+            PlayerType.HITTER,
+            rng,
+            team_injuries,
         )
         adj_pitchers = _apply_variance(
-            pitchers, PlayerType.PITCHER, rng, team_injuries,
+            pitchers,
+            PlayerType.PITCHER,
+            rng,
+            team_injuries,
         )
 
         # Select active roster (bench excluded)
@@ -202,10 +212,18 @@ def simulate_remaining_season(
 
         # Apply variance to full-season projections (covariance scaled down)
         adj_hitters = _apply_variance(
-            hitters, PlayerType.HITTER, rng, team_injuries, fraction_remaining,
+            hitters,
+            PlayerType.HITTER,
+            rng,
+            team_injuries,
+            fraction_remaining,
         )
         adj_pitchers = _apply_variance(
-            pitchers, PlayerType.PITCHER, rng, team_injuries, fraction_remaining,
+            pitchers,
+            PlayerType.PITCHER,
+            rng,
+            team_injuries,
+            fraction_remaining,
         )
 
         # Select active roster (bench excluded) — same logic as simulate_season
@@ -389,7 +407,8 @@ def apply_management_adjustment(
     adjusted = {}
     for team, stats in team_stats.items():
         mean, sd = MANAGEMENT_ADJUSTMENT.get(
-            team, MANAGEMENT_ADJUSTMENT_DEFAULT,
+            team,
+            MANAGEMENT_ADJUSTMENT_DEFAULT,
         )
         draw = rng.normal(mean, sd)
         factor = 1.0 + draw * ROTO_TO_STAT
@@ -416,9 +435,6 @@ def apply_management_adjustment(
             "WHIP": calculate_whip(0, bh / factor, _TYPICAL_TEAM_IP),
         }
     return adjusted
-
-
-from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
 
 
 def run_monte_carlo(
@@ -454,8 +470,7 @@ def run_monte_carlo(
     flat_rosters: dict[str, list[dict]] = {}
     for team_key, players in team_rosters.items():
         flat_rosters[team_key] = [
-            p.to_flat_dict() if hasattr(p, "to_flat_dict") else p
-            for p in players
+            p.to_flat_dict() if hasattr(p, "to_flat_dict") else p for p in players
         ]
 
     rng = np.random.default_rng(seed)
@@ -464,7 +479,7 @@ def run_monte_carlo(
     all_totals: dict[str, list[float]] = {name: [] for name in team_names}
     mc_wins = {name: 0 for name in team_names}
     mc_top3 = {name: 0 for name in team_names}
-    user_cat_pts: dict[str, list[float]] = {c: [] for c in ALL_CATS}
+    user_cat_pts: dict[Category, list[float]] = {c: [] for c in ALL_CATS}
 
     for i in range(n_iterations):
         if progress_cb and i % 200 == 0:
@@ -548,8 +563,7 @@ def run_ros_monte_carlo(
     flat_rosters: dict[str, list[dict]] = {}
     for team_key, players in team_rosters.items():
         flat_rosters[team_key] = [
-            p.to_flat_dict() if hasattr(p, "to_flat_dict") else p
-            for p in players
+            p.to_flat_dict() if hasattr(p, "to_flat_dict") else p for p in players
         ]
 
     rng = np.random.default_rng(seed)
@@ -558,13 +572,18 @@ def run_ros_monte_carlo(
     all_totals: dict[str, list[float]] = {name: [] for name in team_names}
     mc_wins = {name: 0 for name in team_names}
     mc_top3 = {name: 0 for name in team_names}
-    user_cat_pts: dict[str, list[float]] = {c: [] for c in ALL_CATS}
+    user_cat_pts: dict[Category, list[float]] = {c: [] for c in ALL_CATS}
 
     for i in range(n_iterations):
         if progress_cb and i % 200 == 0:
             progress_cb(i)
         sim_stats, _ = simulate_remaining_season(
-            actual_standings, flat_rosters, fraction_remaining, rng, h_slots, p_slots,
+            actual_standings,
+            flat_rosters,
+            fraction_remaining,
+            rng,
+            h_slots,
+            p_slots,
         )
         if use_management:
             sim_stats = apply_management_adjustment(sim_stats, rng)

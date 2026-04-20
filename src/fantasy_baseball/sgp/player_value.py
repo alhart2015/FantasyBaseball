@@ -1,7 +1,10 @@
 import pandas as pd
-from fantasy_baseball.utils.constants import DEFAULT_SGP_DENOMINATORS, safe_float as _safe
-from .denominators import get_sgp_denominators
+
 from fantasy_baseball.models.player import HitterStats, PitcherStats, PlayerType
+from fantasy_baseball.utils.constants import Category
+from fantasy_baseball.utils.constants import safe_float as _safe
+
+from .denominators import get_sgp_denominators
 
 DEFAULT_TEAM_AB: int = 5500
 DEFAULT_TEAM_IP: int = 1450
@@ -16,8 +19,11 @@ def calculate_counting_sgp(stat_value: float, sgp_denominator: float) -> float:
 
 
 def calculate_hitting_rate_sgp(
-    player_avg: float, player_ab: int, replacement_avg: float,
-    sgp_denominator: float, team_ab: int,
+    player_avg: float,
+    player_ab: int,
+    replacement_avg: float,
+    sgp_denominator: float,
+    team_ab: int,
 ) -> float:
     """SGP for AVG using marginal hits approach."""
     marginal_hits = (player_avg - replacement_avg) * player_ab
@@ -26,8 +32,12 @@ def calculate_hitting_rate_sgp(
 
 
 def calculate_pitching_rate_sgp(
-    player_rate: float, player_ip: float, replacement_rate: float,
-    sgp_denominator: float, team_ip: float, innings_divisor: float,
+    player_rate: float,
+    player_ip: float,
+    replacement_rate: float,
+    sgp_denominator: float,
+    team_ip: float,
+    innings_divisor: float,
 ) -> float:
     """SGP for ERA/WHIP using marginal value. Positive = better than replacement."""
     marginal = (replacement_rate - player_rate) * player_ip / innings_divisor
@@ -37,7 +47,7 @@ def calculate_pitching_rate_sgp(
 
 def calculate_player_sgp(
     player: "HitterStats | PitcherStats | pd.Series",
-    denoms: dict[str, float] | None = None,
+    denoms: dict[Category, float] | None = None,
     team_ab: int = DEFAULT_TEAM_AB,
     team_ip: int = DEFAULT_TEAM_IP,
     replacement_avg: float = REPLACEMENT_AVG,
@@ -51,58 +61,88 @@ def calculate_player_sgp(
     total_sgp = 0.0
 
     if isinstance(player, HitterStats):
-        for stat, val in [("R", player.r), ("HR", player.hr), ("RBI", player.rbi), ("SB", player.sb)]:
-            total_sgp += calculate_counting_sgp(val, denoms[stat])
+        for cat, val in [
+            (Category.R, player.r),
+            (Category.HR, player.hr),
+            (Category.RBI, player.rbi),
+            (Category.SB, player.sb),
+        ]:
+            total_sgp += calculate_counting_sgp(val, denoms[cat])
         total_sgp += calculate_hitting_rate_sgp(
             player_avg=player.avg,
             player_ab=int(player.ab),
             replacement_avg=replacement_avg,
-            sgp_denominator=denoms["AVG"],
+            sgp_denominator=denoms[Category.AVG],
             team_ab=team_ab,
         )
 
     elif isinstance(player, PitcherStats):
-        for stat, val in [("W", player.w), ("K", player.k), ("SV", player.sv)]:
-            total_sgp += calculate_counting_sgp(val, denoms[stat])
+        for cat, val in [
+            (Category.W, player.w),
+            (Category.K, player.k),
+            (Category.SV, player.sv),
+        ]:
+            total_sgp += calculate_counting_sgp(val, denoms[cat])
         if player.ip > 0:
             total_sgp += calculate_pitching_rate_sgp(
-                player_rate=player.era, player_ip=player.ip,
+                player_rate=player.era,
+                player_ip=player.ip,
                 replacement_rate=replacement_era,
-                sgp_denominator=denoms["ERA"], team_ip=team_ip, innings_divisor=9,
+                sgp_denominator=denoms[Category.ERA],
+                team_ip=team_ip,
+                innings_divisor=9,
             )
             total_sgp += calculate_pitching_rate_sgp(
-                player_rate=player.whip, player_ip=player.ip,
+                player_rate=player.whip,
+                player_ip=player.ip,
                 replacement_rate=replacement_whip,
-                sgp_denominator=denoms["WHIP"], team_ip=team_ip, innings_divisor=1,
+                sgp_denominator=denoms[Category.WHIP],
+                team_ip=team_ip,
+                innings_divisor=1,
             )
 
     elif player.get("player_type") == PlayerType.HITTER:
-        for stat, col in [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")]:
+        for cat, col in [
+            (Category.R, "r"),
+            (Category.HR, "hr"),
+            (Category.RBI, "rbi"),
+            (Category.SB, "sb"),
+        ]:
             val = _safe(player.get(col, 0))
-            total_sgp += calculate_counting_sgp(val, denoms[stat])
+            total_sgp += calculate_counting_sgp(val, denoms[cat])
         total_sgp += calculate_hitting_rate_sgp(
             player_avg=_safe(player.get("avg", 0)),
             player_ab=int(_safe(player.get("ab", 0))),
             replacement_avg=replacement_avg,
-            sgp_denominator=denoms["AVG"],
+            sgp_denominator=denoms[Category.AVG],
             team_ab=team_ab,
         )
 
     elif player.get("player_type") == PlayerType.PITCHER:
-        for stat, col in [("W", "w"), ("K", "k"), ("SV", "sv")]:
+        for cat, col in [
+            (Category.W, "w"),
+            (Category.K, "k"),
+            (Category.SV, "sv"),
+        ]:
             val = _safe(player.get(col, 0))
-            total_sgp += calculate_counting_sgp(val, denoms[stat])
+            total_sgp += calculate_counting_sgp(val, denoms[cat])
         ip = _safe(player.get("ip", 0))
         if ip > 0:
             total_sgp += calculate_pitching_rate_sgp(
-                player_rate=_safe(player.get("era", 0)), player_ip=ip,
+                player_rate=_safe(player.get("era", 0)),
+                player_ip=ip,
                 replacement_rate=replacement_era,
-                sgp_denominator=denoms["ERA"], team_ip=team_ip, innings_divisor=9,
+                sgp_denominator=denoms[Category.ERA],
+                team_ip=team_ip,
+                innings_divisor=9,
             )
             total_sgp += calculate_pitching_rate_sgp(
-                player_rate=_safe(player.get("whip", 0)), player_ip=ip,
+                player_rate=_safe(player.get("whip", 0)),
+                player_ip=ip,
                 replacement_rate=replacement_whip,
-                sgp_denominator=denoms["WHIP"], team_ip=team_ip, innings_divisor=1,
+                sgp_denominator=denoms[Category.WHIP],
+                team_ip=team_ip,
+                innings_divisor=1,
             )
 
     else:

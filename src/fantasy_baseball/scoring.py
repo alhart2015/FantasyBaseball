@@ -17,18 +17,25 @@ from __future__ import annotations
 
 from math import erf, sqrt
 
-from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
+from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS, Position
 from fantasy_baseball.models.standings import CategoryStats
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import (
-    ALL_CATEGORIES as ALL_CATS,  # noqa: F401
+    ALL_CATEGORIES as ALL_CATS,
+)
+from fantasy_baseball.utils.constants import (
     HITTING_COUNTING,
     IL_STATUSES,
-    INVERSE_STATS as INVERSE_CATS,  # noqa: F401
     PITCHING_COUNTING,
     STARTER_IP_THRESHOLD,
     STAT_VARIANCE,
+    Category,
+)
+from fantasy_baseball.utils.constants import (
+    INVERSE_STATS as INVERSE_CATS,
+)
+from fantasy_baseball.utils.constants import (
     safe_float as _safe,
 )
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
@@ -86,10 +93,19 @@ def _prob_beats(
 # ── Displacement helpers ────────────────────────────────────────────
 
 # Generic slots that are ignored when matching positions for displacement.
-_GENERIC_SLOTS: frozenset[Position] = frozenset({
-    Position.P, Position.UTIL, Position.IF, Position.DH,
-    Position.BN, Position.IL, Position.IL_PLUS, Position.DL, Position.DL_PLUS,
-})
+_GENERIC_SLOTS: frozenset[Position] = frozenset(
+    {
+        Position.P,
+        Position.UTIL,
+        Position.IF,
+        Position.DH,
+        Position.BN,
+        Position.IL,
+        Position.IL_PLUS,
+        Position.DL,
+        Position.DL_PLUS,
+    }
+)
 
 
 def _is_il(p: Player) -> bool:
@@ -324,9 +340,14 @@ def project_team_stats(roster, *, displacement: bool = False) -> CategoryStats:
             ha_total += _stat(p, "h_allowed")
 
     return CategoryStats(
-        r=r, hr=hr, rbi=rbi, sb=sb,
+        r=r,
+        hr=hr,
+        rbi=rbi,
+        sb=sb,
         avg=calculate_avg(h_total, ab_total),
-        w=w, k=k, sv=sv,
+        w=w,
+        k=k,
+        sv=sv,
         era=calculate_era(er_total, ip_total),
         whip=calculate_whip(bb_total, ha_total, ip_total),
     )
@@ -336,7 +357,7 @@ def project_team_sds(
     roster,
     *,
     displacement: bool = True,
-) -> dict[str, float]:
+) -> dict[Category, float]:
     """Aggregate per-player projection variance into team-level SDs.
 
     Uses ``STAT_VARIANCE`` (per-stat CV calibrated from 2022-2024
@@ -377,20 +398,24 @@ def project_team_sds(
                 p_sum_sq[k] += v * v
             total_ip += _stat(p, "ip")
 
-    sds: dict[str, float] = {c: 0.0 for c in ALL_CATS}
-    for stat_key, cat in [("r", "R"), ("hr", "HR"), ("rbi", "RBI"), ("sb", "SB")]:
+    sds: dict[Category, float] = {c: 0.0 for c in ALL_CATS}
+    for stat_key, cat in [
+        ("r", Category.R),
+        ("hr", Category.HR),
+        ("rbi", Category.RBI),
+        ("sb", Category.SB),
+    ]:
         sds[cat] = STAT_VARIANCE[stat_key] * sqrt(h_sum_sq[stat_key])
-    for stat_key, cat in [("w", "W"), ("k", "K"), ("sv", "SV")]:
+    for stat_key, cat in [("w", Category.W), ("k", Category.K), ("sv", Category.SV)]:
         sds[cat] = STAT_VARIANCE[stat_key] * sqrt(p_sum_sq[stat_key])
     if total_ab > 0:
-        sds["AVG"] = STAT_VARIANCE["h"] * sqrt(h_sum_sq["h"]) / total_ab
+        sds[Category.AVG] = STAT_VARIANCE["h"] * sqrt(h_sum_sq["h"]) / total_ab
     if total_ip > 0:
-        sds["ERA"] = 9.0 * STAT_VARIANCE["er"] * sqrt(p_sum_sq["er"]) / total_ip
-        whip_var = (
-            (STAT_VARIANCE["bb"] ** 2) * p_sum_sq["bb"]
-            + (STAT_VARIANCE["h_allowed"] ** 2) * p_sum_sq["h_allowed"]
-        )
-        sds["WHIP"] = sqrt(whip_var) / total_ip
+        sds[Category.ERA] = 9.0 * STAT_VARIANCE["er"] * sqrt(p_sum_sq["er"]) / total_ip
+        whip_var = (STAT_VARIANCE["bb"] ** 2) * p_sum_sq["bb"] + (
+            STAT_VARIANCE["h_allowed"] ** 2
+        ) * p_sum_sq["h_allowed"]
+        sds[Category.WHIP] = sqrt(whip_var) / total_ip
     return sds
 
 
@@ -419,7 +444,7 @@ def build_projected_standings(
 def build_team_sds(
     team_rosters: dict[str, list],
     sd_scale: float,
-) -> dict[str, dict[str, float]]:
+) -> dict[str, dict[Category, float]]:
     """Build the team_sds dict written to the projections cache.
 
     Each team's per-category SDs from :func:`project_team_sds` are
@@ -429,8 +454,7 @@ def build_team_sds(
     """
     return {
         tname: {
-            cat: sd * sd_scale
-            for cat, sd in project_team_sds(roster, displacement=True).items()
+            cat: sd * sd_scale for cat, sd in project_team_sds(roster, displacement=True).items()
         }
         for tname, roster in team_rosters.items()
     }
@@ -439,7 +463,7 @@ def build_team_sds(
 def score_roto(
     all_team_stats: dict,
     *,
-    team_sds: dict[str, dict[str, float]] | None = None,
+    team_sds: dict[str, dict[Category, float]] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Assign expected-value roto points per team per category.
 
@@ -478,7 +502,10 @@ def score_roto(
                 mu_o = all_team_stats[other][cat]
                 sd_o = team_sds.get(other, {}).get(cat, 0.0) if team_sds else 0.0
                 pts += _prob_beats(
-                    mu_me, mu_o, sd_me, sd_o,
+                    mu_me,
+                    mu_o,
+                    sd_me,
+                    sd_o,
                     higher_is_better=higher_is_better,
                 )
             results[me][f"{cat}_pts"] = pts

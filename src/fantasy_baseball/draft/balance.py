@@ -1,13 +1,24 @@
 import pandas as pd
+
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import (
-    HITTING_CATEGORIES, PITCHING_CATEGORIES,
+    HITTING_CATEGORIES,
+    PITCHING_CATEGORIES,
+    Category,
 )
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
-TEAM_TARGETS: dict[str, float] = {
-    "R": 900, "HR": 265, "RBI": 890, "SB": 145, "AVG": 0.260,
-    "W": 78, "K": 1250, "ERA": 3.80, "WHIP": 1.20, "SV": 55,
+TEAM_TARGETS: dict[Category, float] = {
+    Category.R: 900,
+    Category.HR: 265,
+    Category.RBI: 890,
+    Category.SB: 145,
+    Category.AVG: 0.260,
+    Category.W: 78,
+    Category.K: 1250,
+    Category.ERA: 3.80,
+    Category.WHIP: 1.20,
+    Category.SV: 55,
 }
 
 WARNING_THRESHOLD: float = 0.6
@@ -50,7 +61,7 @@ class CategoryBalance:
             # No pitchers: all pitching categories are None so leverage
             # treats them uniformly (avoids 100:1 asymmetry where ERA/WHIP
             # get emergency weight but W/K/SV get zero weight).
-            for stat in ("W", "K", "SV", "ERA", "WHIP"):
+            for stat in PITCHING_CATEGORIES:
                 totals[stat] = None
         return totals
 
@@ -88,5 +99,3 @@ class CategoryBalance:
                 if num_pitchers >= min_pitchers and totals[cat] < target * WARNING_THRESHOLD:
                     warnings.append(f"{cat} is low ({totals[cat]:.0f}, target ~{target:.0f})")
         return warnings
-
-

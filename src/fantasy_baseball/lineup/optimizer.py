@@ -1,13 +1,15 @@
 import dataclasses
-import numpy as np
 from dataclasses import dataclass
 from itertools import combinations
+
+import numpy as np
 from scipy.optimize import linear_sum_assignment
+
 from fantasy_baseball.models.player import Player
-from fantasy_baseball.models.positions import Position, HITTER_ELIGIBLE, PITCHER_ELIGIBLE
-from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS
-from fantasy_baseball.utils.positions import can_fill_slot
+from fantasy_baseball.models.positions import HITTER_ELIGIBLE, PITCHER_ELIGIBLE, Position
 from fantasy_baseball.scoring import project_team_stats, score_roto
+from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS, Category
+from fantasy_baseball.utils.positions import can_fill_slot
 
 
 @dataclass
@@ -79,10 +81,11 @@ def _feasible_assignment(
 @dataclass
 class _TeamContext:
     """Scoring-side inputs passed through every ERoto evaluation."""
+
     full_roster: list[Player]
     projected_standings: list[dict]
     team_name: str
-    team_sds: dict[str, dict[str, float]] | None = None
+    team_sds: dict[str, dict[Category, float]] | None = None
 
 
 def apply_lineup_to_roster(
@@ -154,7 +157,7 @@ def optimize_hitter_lineup(
     projected_standings: list[dict],
     team_name: str,
     roster_slots: dict[str, int] | None = None,
-    team_sds: dict[str, dict[str, float]] | None = None,
+    team_sds: dict[str, dict[Category, float]] | None = None,
 ) -> list[HitterAssignment]:
     """Return the ERoto-maximizing active hitter lineup."""
     if not hitters:
@@ -220,14 +223,14 @@ def optimize_hitter_lineup(
             # of the optimal lineup without them.
             no_rep_subset = [p for p in active_subset if p is not starter]
             no_rep_assn = [a for p, a in zip(active_subset, assignment) if p is not starter]
-            alt_best = _score_hitter_subset(
-                ctx, no_rep_subset, no_rep_assn, bench + [starter]
-            )
+            alt_best = _score_hitter_subset(ctx, no_rep_subset, no_rep_assn, bench + [starter])
         roto_deltas[starter.name] = best_total - alt_best
 
     return [
         HitterAssignment(
-            slot=slot, name=p.name, player=p,
+            slot=slot,
+            name=p.name,
+            player=p,
             roto_delta=roto_deltas.get(p.name, 0.0),
         )
         for p, slot in zip(active_subset, assignment)
@@ -240,7 +243,7 @@ def optimize_pitcher_lineup(
     projected_standings: list[dict],
     team_name: str,
     slots: int = 9,
-    team_sds: dict[str, dict[str, float]] | None = None,
+    team_sds: dict[str, dict[Category, float]] | None = None,
 ) -> tuple[list[PitcherStarter], list[Player]]:
     """Return (starters with roto_delta, bench) maximizing ERoto."""
     if not pitchers or slots <= 0:
@@ -276,8 +279,7 @@ def optimize_pitcher_lineup(
         roto_deltas[starter.name] = best_total - alt_best
 
     starters = [
-        PitcherStarter(name=p.name, player=p, roto_delta=roto_deltas[p.name])
-        for p in active_subset
+        PitcherStarter(name=p.name, player=p, roto_delta=roto_deltas[p.name]) for p in active_subset
     ]
     return starters, bench
 
@@ -290,7 +292,7 @@ def combined_team_roto(
     pitcher_bench: list[Player],
     projected_standings: list[dict],
     team_name: str,
-    team_sds: dict[str, dict[str, float]] | None = None,
+    team_sds: dict[str, dict[Category, float]] | None = None,
 ) -> float:
     """Score a combined hitter + pitcher lineup as a single ERoto total.
 
@@ -299,10 +301,9 @@ def combined_team_roto(
     """
     active_slots: dict[str, Position] = {a.name: a.slot for a in hitter_lineup}
     active_slots.update(_pitcher_active_slots([s.player for s in pitcher_starters]))
-    bench_names = (
-        {h.name for h in hitters} - {a.name for a in hitter_lineup}
-        | {p.name for p in pitcher_bench}
-    )
+    bench_names = {h.name for h in hitters} - {a.name for a in hitter_lineup} | {
+        p.name for p in pitcher_bench
+    }
     hypothetical = apply_lineup_to_roster(roster, active_slots, bench_names)
     ctx = _TeamContext(roster, projected_standings, team_name, team_sds)
     return team_roto_total(hypothetical, ctx)

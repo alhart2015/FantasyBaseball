@@ -9,7 +9,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from fantasy_baseball.scoring import project_team_stats, score_roto, ALL_CATS
+from fantasy_baseball.scoring import project_team_stats, score_roto
 from fantasy_baseball.simulation import simulate_season
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
@@ -20,13 +20,18 @@ from fantasy_baseball.utils.constants import (
 # Helpers to build realistic player dicts
 # ---------------------------------------------------------------------------
 
+
 def _hitter(name, r, hr, rbi, sb, avg, ab=550):
     h = round(avg * ab)
     return {
         "name": name,
         "player_type": "hitter",
-        "r": r, "hr": hr, "rbi": rbi, "sb": sb,
-        "h": h, "ab": ab,
+        "r": r,
+        "hr": hr,
+        "rbi": rbi,
+        "sb": sb,
+        "h": h,
+        "ab": ab,
     }
 
 
@@ -38,14 +43,20 @@ def _pitcher(name, w, k, sv, era, whip, ip=180):
     return {
         "name": name,
         "player_type": "pitcher",
-        "w": w, "k": k, "sv": sv,
-        "ip": ip, "er": er, "bb": bb, "h_allowed": h_allowed,
+        "w": w,
+        "k": k,
+        "sv": sv,
+        "ip": ip,
+        "er": er,
+        "bb": bb,
+        "h_allowed": h_allowed,
     }
 
 
 # ---------------------------------------------------------------------------
 # Fixture: 10 teams with different strengths, ~15 players each
 # ---------------------------------------------------------------------------
+
 
 def _build_team_rosters():
     """Build 10 teams with ~15 players each (mix of hitters and pitchers).
@@ -57,16 +68,16 @@ def _build_team_rosters():
 
     # Team 1 - HR heavy (power bats, less speed)
     rosters["hr_heavy"] = [
-        _hitter("Aaron Judge", 100, 45, 120, 5, .275),
-        _hitter("Pete Alonso", 80, 40, 110, 2, .255),
-        _hitter("Kyle Schwarber", 90, 38, 95, 3, .230),
-        _hitter("Matt Olson", 85, 35, 100, 1, .260),
-        _hitter("Yordan Alvarez", 85, 33, 105, 0, .280),
-        _hitter("Marcell Ozuna", 75, 30, 90, 1, .270),
-        _hitter("Rhys Hoskins", 70, 28, 85, 2, .240),
-        _hitter("Anthony Rizzo", 60, 22, 75, 1, .250),
-        _hitter("Ryan Mountcastle", 65, 25, 80, 2, .265),
-        _hitter("Joc Pederson", 55, 20, 55, 0, .235),
+        _hitter("Aaron Judge", 100, 45, 120, 5, 0.275),
+        _hitter("Pete Alonso", 80, 40, 110, 2, 0.255),
+        _hitter("Kyle Schwarber", 90, 38, 95, 3, 0.230),
+        _hitter("Matt Olson", 85, 35, 100, 1, 0.260),
+        _hitter("Yordan Alvarez", 85, 33, 105, 0, 0.280),
+        _hitter("Marcell Ozuna", 75, 30, 90, 1, 0.270),
+        _hitter("Rhys Hoskins", 70, 28, 85, 2, 0.240),
+        _hitter("Anthony Rizzo", 60, 22, 75, 1, 0.250),
+        _hitter("Ryan Mountcastle", 65, 25, 80, 2, 0.265),
+        _hitter("Joc Pederson", 55, 20, 55, 0, 0.235),
         _pitcher("Zack Wheeler", 14, 210, 0, 3.10, 1.05),
         _pitcher("Logan Webb", 12, 170, 0, 3.30, 1.10),
         _pitcher("Sonny Gray", 10, 180, 0, 3.40, 1.15),
@@ -76,16 +87,16 @@ def _build_team_rosters():
 
     # Team 2 - SB heavy (speed demons)
     rosters["sb_heavy"] = [
-        _hitter("Elly De La Cruz", 90, 20, 65, 60, .250),
-        _hitter("Bobby Witt Jr", 95, 25, 80, 40, .280),
-        _hitter("Trea Turner", 85, 18, 65, 30, .275),
-        _hitter("Ronald Acuna Jr", 90, 22, 70, 45, .285),
-        _hitter("Cedric Mullins", 70, 15, 55, 30, .260),
-        _hitter("Esteury Ruiz", 60, 5, 35, 50, .245),
-        _hitter("Jose Caballero", 50, 8, 40, 35, .230),
-        _hitter("Corbin Carroll", 75, 18, 60, 35, .265),
-        _hitter("Jazz Chisholm", 70, 16, 55, 25, .255),
-        _hitter("Jorge Mateo", 45, 8, 35, 30, .225),
+        _hitter("Elly De La Cruz", 90, 20, 65, 60, 0.250),
+        _hitter("Bobby Witt Jr", 95, 25, 80, 40, 0.280),
+        _hitter("Trea Turner", 85, 18, 65, 30, 0.275),
+        _hitter("Ronald Acuna Jr", 90, 22, 70, 45, 0.285),
+        _hitter("Cedric Mullins", 70, 15, 55, 30, 0.260),
+        _hitter("Esteury Ruiz", 60, 5, 35, 50, 0.245),
+        _hitter("Jose Caballero", 50, 8, 40, 35, 0.230),
+        _hitter("Corbin Carroll", 75, 18, 60, 35, 0.265),
+        _hitter("Jazz Chisholm", 70, 16, 55, 25, 0.255),
+        _hitter("Jorge Mateo", 45, 8, 35, 30, 0.225),
         _pitcher("Gerrit Cole", 15, 220, 0, 2.90, 1.00),
         _pitcher("Spencer Strider", 13, 230, 0, 3.00, 1.05),
         _pitcher("Tyler Glasnow", 11, 200, 0, 3.20, 1.08),
@@ -95,16 +106,16 @@ def _build_team_rosters():
 
     # Team 3 - AVG heavy (contact hitters, balanced counting)
     rosters["avg_heavy"] = [
-        _hitter("Luis Arraez", 70, 5, 50, 3, .320, ab=600),
-        _hitter("Freddie Freeman", 85, 22, 90, 5, .310, ab=600),
-        _hitter("Mookie Betts", 90, 25, 85, 12, .305),
-        _hitter("Steven Kwan", 75, 8, 50, 10, .305, ab=580),
-        _hitter("Corey Seager", 80, 28, 85, 3, .295),
-        _hitter("Vladimir Guerrero Jr", 80, 26, 90, 2, .300),
-        _hitter("Rafael Devers", 78, 27, 88, 3, .290),
-        _hitter("Bo Bichette", 70, 18, 70, 8, .290),
-        _hitter("Yandy Diaz", 65, 15, 65, 1, .285),
-        _hitter("Xander Bogaerts", 60, 14, 60, 3, .275),
+        _hitter("Luis Arraez", 70, 5, 50, 3, 0.320, ab=600),
+        _hitter("Freddie Freeman", 85, 22, 90, 5, 0.310, ab=600),
+        _hitter("Mookie Betts", 90, 25, 85, 12, 0.305),
+        _hitter("Steven Kwan", 75, 8, 50, 10, 0.305, ab=580),
+        _hitter("Corey Seager", 80, 28, 85, 3, 0.295),
+        _hitter("Vladimir Guerrero Jr", 80, 26, 90, 2, 0.300),
+        _hitter("Rafael Devers", 78, 27, 88, 3, 0.290),
+        _hitter("Bo Bichette", 70, 18, 70, 8, 0.290),
+        _hitter("Yandy Diaz", 65, 15, 65, 1, 0.285),
+        _hitter("Xander Bogaerts", 60, 14, 60, 3, 0.275),
         _pitcher("Corbin Burnes", 13, 195, 0, 3.20, 1.08),
         _pitcher("Framber Valdez", 12, 165, 0, 3.30, 1.15),
         _pitcher("Joe Musgrove", 10, 155, 0, 3.50, 1.12),
@@ -114,16 +125,16 @@ def _build_team_rosters():
 
     # Team 4 - K/pitching heavy (aces and strikeouts)
     rosters["k_heavy"] = [
-        _hitter("Shohei Ohtani", 85, 30, 90, 10, .270),
-        _hitter("Juan Soto", 90, 28, 85, 5, .280),
-        _hitter("Bryce Harper", 80, 25, 80, 5, .270),
-        _hitter("Jose Ramirez", 85, 28, 95, 15, .275),
-        _hitter("Marcus Semien", 75, 22, 70, 12, .260),
-        _hitter("Brandon Nimmo", 70, 18, 65, 5, .265),
-        _hitter("Wilyer Abreu", 60, 14, 55, 8, .255),
-        _hitter("Nick Castellanos", 65, 20, 75, 2, .260),
-        _hitter("Alex Bregman", 70, 18, 70, 3, .265),
-        _hitter("J.P. Crawford", 55, 8, 45, 5, .250),
+        _hitter("Shohei Ohtani", 85, 30, 90, 10, 0.270),
+        _hitter("Juan Soto", 90, 28, 85, 5, 0.280),
+        _hitter("Bryce Harper", 80, 25, 80, 5, 0.270),
+        _hitter("Jose Ramirez", 85, 28, 95, 15, 0.275),
+        _hitter("Marcus Semien", 75, 22, 70, 12, 0.260),
+        _hitter("Brandon Nimmo", 70, 18, 65, 5, 0.265),
+        _hitter("Wilyer Abreu", 60, 14, 55, 8, 0.255),
+        _hitter("Nick Castellanos", 65, 20, 75, 2, 0.260),
+        _hitter("Alex Bregman", 70, 18, 70, 3, 0.265),
+        _hitter("J.P. Crawford", 55, 8, 45, 5, 0.250),
         _pitcher("Max Scherzer", 12, 210, 0, 3.30, 1.08),
         _pitcher("Kevin Gausman", 13, 205, 0, 3.10, 1.05),
         _pitcher("Dylan Cease", 11, 215, 0, 3.60, 1.20),
@@ -133,16 +144,16 @@ def _build_team_rosters():
 
     # Team 5 - SV heavy (closers galore, solid bats and SP to stay competitive)
     rosters["sv_heavy"] = [
-        _hitter("Mike Trout", 80, 28, 80, 5, .270),
-        _hitter("Julio Rodriguez", 80, 24, 80, 22, .270),
-        _hitter("Wander Franco", 75, 20, 70, 12, .280),
-        _hitter("CJ Abrams", 75, 18, 60, 28, .265),
-        _hitter("Ozzie Albies", 80, 22, 75, 14, .270),
-        _hitter("Cal Raleigh", 60, 25, 78, 1, .240),
-        _hitter("Ke'Bryan Hayes", 60, 14, 60, 10, .270),
-        _hitter("Tommy Edman", 65, 12, 50, 20, .260),
-        _hitter("Tyler O'Neill", 60, 24, 65, 6, .250),
-        _hitter("Josh Naylor", 65, 20, 75, 2, .265),
+        _hitter("Mike Trout", 80, 28, 80, 5, 0.270),
+        _hitter("Julio Rodriguez", 80, 24, 80, 22, 0.270),
+        _hitter("Wander Franco", 75, 20, 70, 12, 0.280),
+        _hitter("CJ Abrams", 75, 18, 60, 28, 0.265),
+        _hitter("Ozzie Albies", 80, 22, 75, 14, 0.270),
+        _hitter("Cal Raleigh", 60, 25, 78, 1, 0.240),
+        _hitter("Ke'Bryan Hayes", 60, 14, 60, 10, 0.270),
+        _hitter("Tommy Edman", 65, 12, 50, 20, 0.260),
+        _hitter("Tyler O'Neill", 60, 24, 65, 6, 0.250),
+        _hitter("Josh Naylor", 65, 20, 75, 2, 0.265),
         _pitcher("Cristian Javier", 11, 175, 0, 3.40, 1.10),
         _pitcher("Jordan Montgomery", 11, 150, 0, 3.50, 1.15),
         _pitcher("Robert Suarez", 3, 65, 35, 2.20, 0.90, ip=65),
@@ -152,16 +163,16 @@ def _build_team_rosters():
 
     # Team 6 - R heavy (runs scored focus)
     rosters["r_heavy"] = [
-        _hitter("Marcus Semien 2", 105, 22, 70, 15, .270),
-        _hitter("Francisco Lindor", 100, 25, 85, 20, .275),
-        _hitter("Manny Machado", 90, 28, 90, 5, .270),
-        _hitter("Trea Turner 2", 95, 20, 65, 25, .275),
-        _hitter("Kyle Tucker", 95, 28, 90, 18, .280),
-        _hitter("Randy Arozarena", 80, 20, 70, 15, .265),
-        _hitter("Spencer Torkelson", 65, 18, 60, 2, .245),
-        _hitter("Jeremy Pena", 70, 15, 55, 12, .260),
-        _hitter("Gleyber Torres", 75, 20, 65, 5, .260),
-        _hitter("Lane Thomas", 70, 15, 55, 12, .255),
+        _hitter("Marcus Semien 2", 105, 22, 70, 15, 0.270),
+        _hitter("Francisco Lindor", 100, 25, 85, 20, 0.275),
+        _hitter("Manny Machado", 90, 28, 90, 5, 0.270),
+        _hitter("Trea Turner 2", 95, 20, 65, 25, 0.275),
+        _hitter("Kyle Tucker", 95, 28, 90, 18, 0.280),
+        _hitter("Randy Arozarena", 80, 20, 70, 15, 0.265),
+        _hitter("Spencer Torkelson", 65, 18, 60, 2, 0.245),
+        _hitter("Jeremy Pena", 70, 15, 55, 12, 0.260),
+        _hitter("Gleyber Torres", 75, 20, 65, 5, 0.260),
+        _hitter("Lane Thomas", 70, 15, 55, 12, 0.255),
         _pitcher("Shane McClanahan", 12, 185, 0, 3.20, 1.05),
         _pitcher("MacKenzie Gore", 10, 170, 0, 3.50, 1.15),
         _pitcher("Nick Pivetta", 9, 165, 0, 3.80, 1.20),
@@ -171,16 +182,16 @@ def _build_team_rosters():
 
     # Team 7 - ERA/WHIP heavy (pitching ratios, low-count bats)
     rosters["era_heavy"] = [
-        _hitter("Gunnar Henderson", 85, 25, 80, 10, .270),
-        _hitter("Adley Rutschman", 70, 18, 75, 2, .275),
-        _hitter("Dansby Swanson", 70, 20, 70, 10, .260),
-        _hitter("Matt Chapman", 65, 22, 70, 3, .250),
-        _hitter("Jonah Heim", 50, 15, 60, 1, .245),
-        _hitter("Christian Walker", 65, 25, 80, 3, .255),
-        _hitter("Isaac Paredes", 55, 18, 65, 1, .250),
-        _hitter("Andres Gimenez", 65, 12, 55, 18, .270),
-        _hitter("Bryson Stott", 55, 10, 50, 12, .260),
-        _hitter("Nico Hoerner", 60, 8, 45, 15, .270),
+        _hitter("Gunnar Henderson", 85, 25, 80, 10, 0.270),
+        _hitter("Adley Rutschman", 70, 18, 75, 2, 0.275),
+        _hitter("Dansby Swanson", 70, 20, 70, 10, 0.260),
+        _hitter("Matt Chapman", 65, 22, 70, 3, 0.250),
+        _hitter("Jonah Heim", 50, 15, 60, 1, 0.245),
+        _hitter("Christian Walker", 65, 25, 80, 3, 0.255),
+        _hitter("Isaac Paredes", 55, 18, 65, 1, 0.250),
+        _hitter("Andres Gimenez", 65, 12, 55, 18, 0.270),
+        _hitter("Bryson Stott", 55, 10, 50, 12, 0.260),
+        _hitter("Nico Hoerner", 60, 8, 45, 15, 0.270),
         _pitcher("Blake Snell", 12, 200, 0, 2.60, 0.95, ip=170),
         _pitcher("Yoshinobu Yamamoto", 13, 175, 0, 2.80, 0.98),
         _pitcher("Justin Verlander", 11, 160, 0, 3.00, 1.00),
@@ -190,16 +201,16 @@ def _build_team_rosters():
 
     # Team 8 - W heavy (workhorse pitchers, wins)
     rosters["w_heavy"] = [
-        _hitter("Cody Bellinger", 70, 20, 70, 10, .260),
-        _hitter("Nolan Arenado", 65, 22, 80, 2, .265),
-        _hitter("Will Smith C", 60, 18, 65, 1, .260),
-        _hitter("Ketel Marte", 75, 22, 75, 8, .275),
-        _hitter("Luis Robert Jr", 70, 25, 75, 15, .265),
-        _hitter("Seiya Suzuki", 60, 18, 65, 8, .270),
-        _hitter("Brandon Marsh", 55, 12, 50, 5, .260),
-        _hitter("Nolan Jones", 60, 20, 65, 8, .255),
-        _hitter("Austin Riley", 75, 30, 90, 2, .270),
-        _hitter("Ha-seong Kim", 55, 10, 45, 12, .255),
+        _hitter("Cody Bellinger", 70, 20, 70, 10, 0.260),
+        _hitter("Nolan Arenado", 65, 22, 80, 2, 0.265),
+        _hitter("Will Smith C", 60, 18, 65, 1, 0.260),
+        _hitter("Ketel Marte", 75, 22, 75, 8, 0.275),
+        _hitter("Luis Robert Jr", 70, 25, 75, 15, 0.265),
+        _hitter("Seiya Suzuki", 60, 18, 65, 8, 0.270),
+        _hitter("Brandon Marsh", 55, 12, 50, 5, 0.260),
+        _hitter("Nolan Jones", 60, 20, 65, 8, 0.255),
+        _hitter("Austin Riley", 75, 30, 90, 2, 0.270),
+        _hitter("Ha-seong Kim", 55, 10, 45, 12, 0.255),
         _pitcher("Aaron Nola", 15, 195, 0, 3.30, 1.08),
         _pitcher("Julio Urias", 14, 170, 0, 3.40, 1.10),
         _pitcher("Marcus Stroman", 12, 140, 0, 3.60, 1.18),
@@ -209,16 +220,16 @@ def _build_team_rosters():
 
     # Team 9 - RBI heavy (run producers)
     rosters["rbi_heavy"] = [
-        _hitter("Vladimir Guerrero 2", 80, 30, 110, 2, .285),
-        _hitter("Rafael Devers 2", 78, 28, 105, 3, .280),
-        _hitter("Nolan Arenado 2", 70, 25, 95, 2, .270),
-        _hitter("Matt Olson 2", 80, 32, 105, 1, .255),
-        _hitter("Pete Alonso 2", 75, 35, 100, 1, .250),
-        _hitter("Eloy Jimenez", 50, 18, 70, 0, .260, ab=400),
-        _hitter("Anthony Santander", 70, 25, 85, 3, .260),
-        _hitter("Christian Encarnacion", 55, 15, 60, 8, .255),
-        _hitter("Willson Contreras", 55, 18, 70, 1, .255),
-        _hitter("Salvador Perez", 55, 22, 80, 1, .250),
+        _hitter("Vladimir Guerrero 2", 80, 30, 110, 2, 0.285),
+        _hitter("Rafael Devers 2", 78, 28, 105, 3, 0.280),
+        _hitter("Nolan Arenado 2", 70, 25, 95, 2, 0.270),
+        _hitter("Matt Olson 2", 80, 32, 105, 1, 0.255),
+        _hitter("Pete Alonso 2", 75, 35, 100, 1, 0.250),
+        _hitter("Eloy Jimenez", 50, 18, 70, 0, 0.260, ab=400),
+        _hitter("Anthony Santander", 70, 25, 85, 3, 0.260),
+        _hitter("Christian Encarnacion", 55, 15, 60, 8, 0.255),
+        _hitter("Willson Contreras", 55, 18, 70, 1, 0.255),
+        _hitter("Salvador Perez", 55, 22, 80, 1, 0.250),
         _pitcher("Yu Darvish", 12, 185, 0, 3.40, 1.10),
         _pitcher("Charlie Morton", 10, 175, 0, 3.70, 1.20),
         _pitcher("Nestor Cortes", 10, 155, 0, 3.60, 1.15),
@@ -228,16 +239,16 @@ def _build_team_rosters():
 
     # Team 10 - Balanced (no extreme strength, average everywhere)
     rosters["balanced"] = [
-        _hitter("Willy Adames", 75, 22, 75, 10, .260),
-        _hitter("Lars Nootbaar", 60, 15, 55, 5, .265),
-        _hitter("Teoscar Hernandez", 70, 25, 80, 5, .260),
-        _hitter("Whit Merrifield", 65, 12, 55, 15, .270),
-        _hitter("Anthony Volpe", 70, 18, 60, 15, .255),
-        _hitter("Hunter Renfroe", 55, 22, 65, 2, .245),
-        _hitter("Andrew Benintendi", 60, 12, 55, 5, .275),
-        _hitter("Brandon Drury", 55, 18, 60, 3, .255),
-        _hitter("Josh Jung", 60, 20, 65, 3, .260),
-        _hitter("MJ Melendez", 50, 16, 55, 5, .240),
+        _hitter("Willy Adames", 75, 22, 75, 10, 0.260),
+        _hitter("Lars Nootbaar", 60, 15, 55, 5, 0.265),
+        _hitter("Teoscar Hernandez", 70, 25, 80, 5, 0.260),
+        _hitter("Whit Merrifield", 65, 12, 55, 15, 0.270),
+        _hitter("Anthony Volpe", 70, 18, 60, 15, 0.255),
+        _hitter("Hunter Renfroe", 55, 22, 65, 2, 0.245),
+        _hitter("Andrew Benintendi", 60, 12, 55, 5, 0.275),
+        _hitter("Brandon Drury", 55, 18, 60, 3, 0.255),
+        _hitter("Josh Jung", 60, 20, 65, 3, 0.260),
+        _hitter("MJ Melendez", 50, 16, 55, 5, 0.240),
         _pitcher("Luis Castillo", 12, 185, 0, 3.30, 1.10),
         _pitcher("Mitch Keller", 11, 170, 0, 3.50, 1.15),
         _pitcher("Jeffrey Springs", 10, 155, 0, 3.60, 1.18),
@@ -251,6 +262,7 @@ def _build_team_rosters():
 # ---------------------------------------------------------------------------
 # Shared fixture
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def team_rosters():
@@ -276,7 +288,8 @@ class TestMonteCarloDeterminism:
         for team in team_rosters:
             for cat in ALL_CATEGORIES:
                 assert stats1[team][cat] == pytest.approx(
-                    stats2[team][cat], abs=1e-12,
+                    stats2[team][cat],
+                    abs=1e-12,
                 ), f"{team} {cat}: {stats1[team][cat]} != {stats2[team][cat]}"
 
         # Injuries should also be identical
@@ -315,8 +328,7 @@ class TestWinRateDistribution:
         wins = self._run_sims(team_rosters)
         total_wins = sum(wins.values())
         assert total_wins == self.NUM_SIMS, (
-            f"Total wins {total_wins} != {self.NUM_SIMS} sims. "
-            f"Wins by team: {wins}"
+            f"Total wins {total_wins} != {self.NUM_SIMS} sims. Wins by team: {wins}"
         )
 
     def test_no_team_has_zero_or_hundred_percent_win_rate(self, team_rosters):
@@ -332,8 +344,7 @@ class TestWinRateDistribution:
         )
         for team, count in wins.items():
             assert count < self.NUM_SIMS, (
-                f"Team '{team}' won all {self.NUM_SIMS} sims. "
-                f"Distribution: {wins}"
+                f"Team '{team}' won all {self.NUM_SIMS} sims. Distribution: {wins}"
             )
 
 
@@ -364,10 +375,12 @@ class TestInjuryEffects:
 
             # No injury run (patch INJURY_PROB to zero)
             with patch(
-                "fantasy_baseball.simulation.INJURY_PROB", no_injury_probs,
+                "fantasy_baseball.simulation.INJURY_PROB",
+                no_injury_probs,
             ):
                 stats_ni, injuries_ni = simulate_season(
-                    team_rosters, rng_no_inj,
+                    team_rosters,
+                    rng_no_inj,
                 )
             for team in team_rosters:
                 for cat in counting_cats:
@@ -376,8 +389,7 @@ class TestInjuryEffects:
             # Verify no injuries occurred in the patched run
             for team in team_rosters:
                 assert len(injuries_ni[team]) == 0, (
-                    f"Injuries should not occur with prob=0, "
-                    f"but {team} had {injuries_ni[team]}"
+                    f"Injuries should not occur with prob=0, but {team} had {injuries_ni[team]}"
                 )
 
         # With injuries, aggregate counting stats should be lower
@@ -400,9 +412,7 @@ class TestInjuryEffects:
 
         # Every team should have injuries
         for team in team_rosters:
-            assert len(injuries[team]) > 0, (
-                f"Team '{team}' should have injuries with prob=1.0"
-            )
+            assert len(injuries[team]) > 0, f"Team '{team}' should have injuries with prob=1.0"
 
         # Even with all players injured, stats should not be zero because
         # replacement players backfill during the missed fraction
@@ -440,16 +450,13 @@ class TestRateStatPlausibility:
                 whip = ts["WHIP"]
 
                 assert 0.150 <= avg <= 0.350, (
-                    f"Sim {sim_idx}, {team}: AVG={avg:.4f} out of "
-                    f"[.150, .350] range"
+                    f"Sim {sim_idx}, {team}: AVG={avg:.4f} out of [.150, .350] range"
                 )
                 assert 1.0 <= era <= 15.0, (
-                    f"Sim {sim_idx}, {team}: ERA={era:.3f} out of "
-                    f"[1.0, 15.0] range"
+                    f"Sim {sim_idx}, {team}: ERA={era:.3f} out of [1.0, 15.0] range"
                 )
                 assert 0.5 <= whip <= 3.0, (
-                    f"Sim {sim_idx}, {team}: WHIP={whip:.4f} out of "
-                    f"[0.5, 3.0] range"
+                    f"Sim {sim_idx}, {team}: WHIP={whip:.4f} out of [0.5, 3.0] range"
                 )
 
 
@@ -464,10 +471,7 @@ class TestRotoScoring:
     @pytest.fixture
     def team_stats(self, team_rosters):
         """Project stats for all 10 teams (no variance, just raw projections)."""
-        return {
-            team: project_team_stats(players)
-            for team, players in team_rosters.items()
-        }
+        return {team: project_team_stats(players) for team, players in team_rosters.items()}
 
     def test_roto_points_sum_correctly(self, team_stats):
         """Each team's total roto points must equal the sum of its
@@ -475,12 +479,9 @@ class TestRotoScoring:
         """
         roto = score_roto(team_stats)
         for team, scores in roto.items():
-            expected_total = sum(
-                scores[f"{cat}_pts"] for cat in ALL_CATEGORIES
-            )
+            expected_total = sum(scores[f"{cat}_pts"] for cat in ALL_CATEGORIES)
             assert scores["total"] == pytest.approx(expected_total, abs=1e-9), (
-                f"Team '{team}': total={scores['total']:.2f} != "
-                f"sum of cat_pts={expected_total:.2f}"
+                f"Team '{team}': total={scores['total']:.2f} != sum of cat_pts={expected_total:.2f}"
             )
 
     def test_inverse_stats_scored_correctly(self, team_stats):
@@ -518,21 +519,17 @@ class TestRotoScoring:
 
         for team, scores in roto.items():
             assert scores["total"] <= max_possible + 1e-9, (
-                f"Team '{team}': total={scores['total']:.1f} exceeds "
-                f"max possible {max_possible}"
+                f"Team '{team}': total={scores['total']:.1f} exceeds max possible {max_possible}"
             )
 
         # Conservation: sum of all teams' totals must equal
         # num_categories * (1 + 2 + ... + n_teams)
         # = 10 * (10 * 11 / 2) = 550
-        expected_league_total = len(ALL_CATEGORIES) * (
-            n_teams * (n_teams + 1) / 2
-        )
-        actual_league_total = sum(
-            scores["total"] for scores in roto.values()
-        )
+        expected_league_total = len(ALL_CATEGORIES) * (n_teams * (n_teams + 1) / 2)
+        actual_league_total = sum(scores["total"] for scores in roto.values())
         assert actual_league_total == pytest.approx(
-            expected_league_total, abs=1e-6,
+            expected_league_total,
+            abs=1e-6,
         ), (
             f"League total {actual_league_total:.2f} != "
             f"expected {expected_league_total:.0f} "

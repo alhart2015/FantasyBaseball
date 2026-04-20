@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from fantasy_baseball.utils.constants import ALL_CATEGORIES
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
 
 if TYPE_CHECKING:
     from fantasy_baseball.models.player import Player
@@ -26,7 +26,7 @@ class CategoryDelta:
 @dataclass
 class DeltaRotoResult:
     total: float
-    categories: dict[str, CategoryDelta]
+    categories: dict[Category, CategoryDelta]
     before_total: float
     after_total: float
 
@@ -36,8 +36,7 @@ class DeltaRotoResult:
             "before_total": round(self.before_total, 2),
             "after_total": round(self.after_total, 2),
             "categories": {
-                cat: {"roto_delta": round(cd.roto_delta, 2)}
-                for cat, cd in self.categories.items()
+                cat: {"roto_delta": round(cd.roto_delta, 2)} for cat, cd in self.categories.items()
             },
         }
 
@@ -55,7 +54,7 @@ def score_swap(
     projection uncertainty, defensive vulnerability, and boundary
     proximity via the sigmoid on pairwise win probabilities.
     """
-    categories: dict[str, CategoryDelta] = {}
+    categories: dict[Category, CategoryDelta] = {}
     for cat in ALL_CATEGORIES:
         rd = roto_after[team_name][f"{cat}_pts"] - roto_before[team_name][f"{cat}_pts"]
         categories[cat] = CategoryDelta(roto_delta=rd)
@@ -70,12 +69,12 @@ def score_swap(
 
 def compute_delta_roto(
     drop_name: str,
-    add_player: "Player",
-    user_roster: "list[Player]",
+    add_player: Player,
+    user_roster: list[Player],
     projected_standings: list[dict],
     team_name: str,
     *,
-    team_sds: dict[str, dict[str, float]] | None,
+    team_sds: dict[str, dict[Category, float]] | None,
 ) -> DeltaRotoResult:
     """Compute deltaRoto for dropping one player and adding another.
 
@@ -99,7 +98,9 @@ def compute_delta_roto(
     """
     from fantasy_baseball.scoring import score_roto
     from fantasy_baseball.trades.evaluate import (
-        apply_swap_delta, find_player_by_name, player_rest_of_season_stats,
+        apply_swap_delta,
+        find_player_by_name,
+        player_rest_of_season_stats,
     )
 
     dropped = find_player_by_name(drop_name, user_roster)
@@ -112,7 +113,9 @@ def compute_delta_roto(
     all_before = {t["name"]: dict(t["stats"]) for t in projected_standings}
     all_after = dict(all_before)
     all_after[team_name] = apply_swap_delta(
-        all_before[team_name], loses_ros, gains_ros,
+        all_before[team_name],
+        loses_ros,
+        gains_ros,
     )
 
     roto_before = score_roto(all_before, team_sds=team_sds)

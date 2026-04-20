@@ -4,12 +4,19 @@ Provides reusable simulation functions for projecting roto standings
 from partial or complete rosters. Used by both the live draft predictor
 and the simulate_draft.py --monte-carlo mode.
 """
+
 import numpy as np
 import pandas as pd
+
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.simulation import (
+    HITTER_COV,
+    HITTER_IDX,
+    PITCHER_COV,
+    PITCHER_IDX,
+)
 from fantasy_baseball.utils.constants import (
-    ALL_CATEGORIES as ALL_CATS,
     CLOSER_SV_THRESHOLD,
     HITTING_COUNTING,
     INJURY_PROB,
@@ -18,13 +25,6 @@ from fantasy_baseball.utils.constants import (
     REPLACEMENT_HITTER,
     REPLACEMENT_RP,
     REPLACEMENT_SP,
-    STAT_VARIANCE,
-)
-from fantasy_baseball.simulation import (
-    HITTER_COV,
-    HITTER_IDX,
-    PITCHER_COV,
-    PITCHER_IDX,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
@@ -44,10 +44,7 @@ def pad_roster_to_full(
     n_pitchers = sum(1 for p in players if p.get("player_type") == PlayerType.PITCHER)
 
     # Target hitter slots: C + 1B + 2B + 3B + SS + IF + OF + UTIL
-    hitter_slots = sum(
-        v for k, v in roster_slots.items()
-        if k not in ("P", "BN", "IL")
-    )
+    hitter_slots = sum(v for k, v in roster_slots.items() if k not in ("P", "BN", "IL"))
     pitcher_slots = roster_slots.get("P", 9)
 
     padded = list(players)
@@ -56,7 +53,7 @@ def pad_roster_to_full(
     for i in range(max(0, hitter_slots - n_hitters)):
         repl = dict(REPLACEMENT_HITTER)
         repl["player_type"] = PlayerType.HITTER
-        repl["name"] = f"Repl Hitter {i+1}"
+        repl["name"] = f"Repl Hitter {i + 1}"
         repl["positions"] = ["OF"]
         padded.append(repl)
 
@@ -64,7 +61,7 @@ def pad_roster_to_full(
     for i in range(max(0, pitcher_slots - n_pitchers)):
         repl = dict(REPLACEMENT_SP)
         repl["player_type"] = PlayerType.PITCHER
-        repl["name"] = f"Repl SP {i+1}"
+        repl["name"] = f"Repl SP {i + 1}"
         repl["positions"] = ["SP"]
         padded.append(repl)
 
@@ -164,13 +161,19 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
         whip = calculate_whip(total_bb, total_ha, total_ip)
 
         team_stats[team_num] = {
-            "R": r, "HR": hr, "RBI": rbi, "SB": sb, "AVG": avg,
-            "W": w, "K": k, "SV": sv, "ERA": era, "WHIP": whip,
+            "R": r,
+            "HR": hr,
+            "RBI": rbi,
+            "SB": sb,
+            "AVG": avg,
+            "W": w,
+            "K": k,
+            "SV": sv,
+            "ERA": era,
+            "WHIP": whip,
         }
 
     return team_stats
-
-
 
 
 def run_projections(
@@ -192,9 +195,7 @@ def run_projections(
     rng = np.random.default_rng(seed)
 
     # Compute active roster slot counts
-    h_slots = sum(
-        v for k, v in roster_slots.items() if k not in ("P", "BN", "IL")
-    )
+    h_slots = sum(v for k, v in roster_slots.items() if k not in ("P", "BN", "IL"))
     p_slots = roster_slots.get("P", 9)
 
     # Pad all rosters
@@ -220,22 +221,23 @@ def run_projections(
     for tn in sorted(padded.keys()):
         totals = np.array(all_totals[tn])
         finishes = np.array(all_finishes[tn])
-        standings.append({
-            "team_num": tn,
-            "median": int(np.median(totals)),
-            "p10": int(np.percentile(totals, 10)),
-            "p90": int(np.percentile(totals, 90)),
-            "win_pct": round(float(np.mean(finishes == 1) * 100), 1),
-            "top3_pct": round(float(np.mean(finishes <= 3) * 100), 1),
-            "bot3_pct": round(float(np.mean(finishes >= num_teams - 2) * 100), 1),
-        })
+        standings.append(
+            {
+                "team_num": tn,
+                "median": int(np.median(totals)),
+                "p10": int(np.percentile(totals, 10)),
+                "p90": int(np.percentile(totals, 90)),
+                "win_pct": round(float(np.mean(finishes == 1) * 100), 1),
+                "top3_pct": round(float(np.mean(finishes <= 3) * 100), 1),
+                "bot3_pct": round(float(np.mean(finishes >= num_teams - 2) * 100), 1),
+            }
+        )
 
     standings.sort(key=lambda s: s["median"], reverse=True)
     return {"standings": standings}
 
 
-def reconstruct_rosters_from_draft(config, board, tracker, num_teams_override=None,
-                                   keepers=None):
+def reconstruct_rosters_from_draft(config, board, tracker, num_teams_override=None, keepers=None):
     """Build per-team player lists from in-progress draft tracker.
 
     *keepers* overrides ``config.keepers`` — pass an empty list for mock
