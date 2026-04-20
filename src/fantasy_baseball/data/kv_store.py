@@ -290,9 +290,14 @@ def build_explicit_upstash_kv() -> UpstashKVStore:
     return _build_upstash_kv()
 
 
-def _reset_singleton_for_tests() -> None:
+def _reset_singleton() -> None:
     """Clear the cached singleton so the next ``get_kv()`` rebuilds
-    against the current environment. Test use only."""
+    against the current environment.
+
+    Two legitimate callers: pytest fixtures (per-test isolation) and
+    ``scripts/refresh_remote.py`` (flips ``RENDER`` mid-process). App
+    code should never need this — ``get_kv()`` is a singleton by
+    design."""
     global _kv_singleton
     with _kv_singleton_lock:
         _kv_singleton = None

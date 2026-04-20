@@ -28,9 +28,9 @@ from fantasy_baseball.data.kv_store import (
 
 @pytest.fixture(autouse=True)
 def reset_kv_singleton():
-    kv_store._reset_singleton_for_tests()
+    kv_store._reset_singleton()
     yield
-    kv_store._reset_singleton_for_tests()
+    kv_store._reset_singleton()
 
 
 @pytest.fixture
