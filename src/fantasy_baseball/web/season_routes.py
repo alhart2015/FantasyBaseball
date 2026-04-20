@@ -359,6 +359,7 @@ def register_routes(app: Flask) -> None:
             opp_players=opp_players,
             my_roster_data=roster_raw or [],
             opp_rosters_data=opp_rosters_raw or {},
+            roster_slots=dict(_load_config().roster_slots),
         )
 
     @app.route("/api/trade-search", methods=["POST"])
