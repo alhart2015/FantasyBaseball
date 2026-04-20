@@ -128,11 +128,6 @@
     myRoster: {{ my_roster_data | tojson }},
     oppRosters: {{ opp_rosters_data | tojson }}
   };
-  window.bt = window.bt || {
-    onOpponentChange: function() {},
-    onWaiverQuery: function() {},
-    evaluate: function() {},
-  };
 </script>
 
 <script>
@@ -300,26 +295,29 @@ document.addEventListener('DOMContentLoaded', function() {
       ? (state.myBench.has(key) ? state.myBench.get(key) : benchDefault)
       : benchDefault;
     const bencheable = side === "my";
+    const keyAttr = esc(key);
+    const sideAttr = esc(side);
 
     const benchControl = bencheable && !il ? `
       <label class="bt-active-toggle">
         <input type="checkbox" ${bench ? "" : "checked"}
-               onchange="bt.toggleActive('${key}')" />
+               data-bt-toggle="${keyAttr}" />
         active
       </label>` : "";
 
+    const disabled = il ? "disabled" : "";
     return `
-      <div class="bt-row ${il ? "il" : ""}" data-key="${key}">
-        <span class="bt-row-name">${p.name} <small>${(p.positions||[]).join("/")}</small></span>
+      <div class="bt-row ${il ? "il" : ""}" data-key="${keyAttr}">
+        <span class="bt-row-name">${esc(p.name)} <small>${esc((p.positions||[]).join("/"))}</small></span>
         <span class="bt-seg">
           <button class="trade ${action === "TRADE" ? "active" : ""}"
-                  ${il ? "disabled" : ""}
-                  onclick="bt.setAction('${side}','${key}','TRADE')">T</button>
+                  ${disabled}
+                  data-bt-action="TRADE" data-bt-side="${sideAttr}" data-bt-key="${keyAttr}">T</button>
           <button class="drop ${action === "DROP" ? "active" : ""}"
-                  ${il ? "disabled" : ""}
-                  onclick="bt.setAction('${side}','${key}','DROP')">D</button>
+                  ${disabled}
+                  data-bt-action="DROP" data-bt-side="${sideAttr}" data-bt-key="${keyAttr}">D</button>
           <button class="${action == null ? "active" : ""}"
-                  onclick="bt.setAction('${side}','${key}',null)">—</button>
+                  data-bt-action="CLEAR" data-bt-side="${sideAttr}" data-bt-key="${keyAttr}">—</button>
         </span>
         ${benchControl}
       </div>`;
@@ -341,8 +339,31 @@ document.addEventListener('DOMContentLoaded', function() {
       names.map(n => `<option value="${n}">${n}</option>`).join("");
   }
 
+  function attachRosterListeners() {
+    for (const divId of ["bt-my-roster", "bt-opp-roster"]) {
+      const div = document.getElementById(divId);
+      if (!div) continue;
+      div.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-bt-action]");
+        if (!btn) return;
+        const action = btn.dataset.btAction === "CLEAR" ? null : btn.dataset.btAction;
+        window.bt.setAction(btn.dataset.btSide, btn.dataset.btKey, action);
+      });
+      div.addEventListener("change", (e) => {
+        const cb = e.target.closest("input[data-bt-toggle]");
+        if (!cb) return;
+        window.bt.toggleActive(cb.dataset.btToggle);
+      });
+    }
+  }
+
   window.bt = {
-    init() { populateOpponents(); renderRosters(); updateLegality(); },
+    init() {
+      attachRosterListeners();
+      populateOpponents();
+      renderRosters();
+      updateLegality();
+    },
     onOpponentChange() {
       state.opponent = document.getElementById("bt-opponent").value || null;
       state.oppActions.clear();
