@@ -40,9 +40,23 @@ _redis_initialized = False
 _redis_lock = threading.Lock()
 
 
+def _is_remote() -> bool:
+    """True when the process is running on Render.
+
+    Render sets ``RENDER=true`` in every service's environment. The flag
+    is the sole gate on Redis access from web code: local dashboards and
+    pytest runs are disk-only and have no path to prod Upstash. Scripts
+    under ``scripts/`` that need to cross the boundary (sync, refresh)
+    use ``redis_sync`` with explicit credentials instead.
+    """
+    return os.environ.get("RENDER") == "true"
+
+
 def _get_redis():
-    """Lazy Upstash Redis client. Returns None if not configured."""
+    """Lazy Upstash Redis client. Returns None off-Render or unconfigured."""
     global _redis_client, _redis_initialized
+    if not _is_remote():
+        return None
     if _redis_initialized:
         return _redis_client
     with _redis_lock:
@@ -58,12 +72,6 @@ def _get_redis():
 
 
 CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache"
-# Snapshot of the production cache dir at import, used to gate Redis
-# write-through. Tests sometimes assign ``season_data.CACHE_DIR = tmp_path``
-# so `cache_dir == CACHE_DIR` cannot be trusted for the guard — that bug
-# has shipped fixture data (Rutschman/Burnes roster, Hart-of-the-Order
-# standings) to production Redis. Compare against this sentinel instead.
-_DEFAULT_CACHE_DIR = CACHE_DIR
 
 
 def _standings_to_snapshot(
@@ -114,37 +122,33 @@ CACHE_FILES: dict[CacheKey, str] = {
 def read_cache(key: CacheKey, cache_dir: Path = CACHE_DIR) -> dict | list | None:
     """Read a cached JSON payload.
 
-    Redis is the source of truth: when a client is configured, we read
-    from it first and fall back to local disk only on miss or error. On
-    Render the local filesystem is ephemeral (wiped on deploy) and can
-    only be stale; on dev the fallback covers Upstash outages. Tests
-    that pass a non-default ``cache_dir`` stay on the disk-only path so
-    they never touch real Redis.
+    On Render: Redis is the source of truth; local disk serves as
+    last-known-good fallback when Upstash is unreachable. Off-Render
+    (local dashboard, tests): disk only. ``_get_redis`` returns None
+    unless ``RENDER=true`` so there is no code path from local to prod.
     """
     path = cache_dir / CACHE_FILES[key]
 
-    if cache_dir == _DEFAULT_CACHE_DIR:
-        redis = _get_redis()
-        if redis is not None:
+    redis = _get_redis()
+    if redis is not None:
+        try:
+            raw = redis.get(redis_key(key))
+        except Exception as e:
+            print(f"[redis] read_cache({key}) failed: {e}")
+            raw = None
+        if raw is not None:
             try:
-                raw = redis.get(redis_key(key))
-            except Exception as e:
-                print(f"[redis] read_cache({key}) failed: {e}")
-                raw = None
-            if raw is not None:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                print(f"[redis] read_cache({key}) corrupt data, treating as miss")
+                data = None
+            if data is not None:
                 try:
-                    data = json.loads(raw)
-                except json.JSONDecodeError:
-                    print(f"[redis] read_cache({key}) corrupt data, treating as miss")
-                    data = None
-                if data is not None:
-                    # Warm local disk so a Redis outage degrades to last-known-good.
-                    try:
-                        cache_dir.mkdir(parents=True, exist_ok=True)
-                        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-                    except OSError as e:
-                        print(f"[redis] local write-back for {key} failed: {e}")
-                    return data
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                except OSError as e:
+                    print(f"[redis] local write-back for {key} failed: {e}")
+                return data
 
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -153,7 +157,7 @@ def read_cache(key: CacheKey, cache_dir: Path = CACHE_DIR) -> dict | list | None
 
 
 def write_cache(key: CacheKey, data: dict | list, cache_dir: Path = CACHE_DIR) -> None:
-    """Atomically write a cached JSON file (tmpfile + rename), with Redis write-through."""
+    """Atomically write a cached JSON payload. Writes to Redis only on Render."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     path = cache_dir / CACHE_FILES[key]
     fd, tmp = tempfile.mkstemp(dir=cache_dir, suffix=".json")
@@ -165,17 +169,12 @@ def write_cache(key: CacheKey, data: dict | list, cache_dir: Path = CACHE_DIR) -
         Path(tmp).unlink(missing_ok=True)
         raise
 
-    # Write-through to Redis only for the production cache dir. Comparing
-    # against the import-time sentinel means monkey-patching
-    # ``season_data.CACHE_DIR`` in tests no longer lets fixture data leak
-    # into real Upstash.
-    if cache_dir == _DEFAULT_CACHE_DIR:
-        redis = _get_redis()
-        if redis:
-            try:
-                redis.set(redis_key(key), json.dumps(data))
-            except Exception as e:
-                print(f"[redis] write_cache({key}) failed: {e}")
+    redis = _get_redis()
+    if redis:
+        try:
+            redis.set(redis_key(key), json.dumps(data))
+        except Exception as e:
+            print(f"[redis] write_cache({key}) failed: {e}")
 
 
 def read_meta(cache_dir: Path = CACHE_DIR) -> dict:
