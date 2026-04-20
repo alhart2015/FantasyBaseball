@@ -453,7 +453,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
   window.bt.toggleWaiverActive = (key) => {
     const add = state.waiverAdds.get(key);
-    if (add) { add.bench = !add.bench; renderWaiverChips(); }
+    if (add) { add.bench = !add.bench; renderWaiverChips(); updateLegality(); }
   };
 
   function renderWaiverChips() {
