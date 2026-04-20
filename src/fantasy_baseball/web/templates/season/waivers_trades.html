@@ -456,11 +456,71 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
 
+  function placeAt(key, side, zone) {
+    const cur = state.placements.get(key);
+    if (!cur) return;
+    if (cur.zone === "IL") return;  // IL is read-only
+
+    // If the target slot is occupied (positional slot only, not BN/DROP), displace the incumbent to BN on target side.
+    if (zone !== "BN" && zone !== "DROP") {
+      const incumbent = [...state.placements.entries()]
+        .find(([k, pl]) => k !== key && pl.currentSide === side && pl.zone === zone);
+      if (incumbent) {
+        state.placements.set(incumbent[0], { ...incumbent[1], currentSide: side, zone: "BN" });
+      }
+    }
+    state.placements.set(key, { ...cur, currentSide: side, zone });
+    renderPanels();
+    updateLegality();
+  }
+
+  function attachDragHandlers() {
+    let draggingKey = null;
+
+    document.addEventListener("dragstart", (e) => {
+      const chip = e.target.closest("[data-bt-drag-key]");
+      if (!chip) return;
+      draggingKey = chip.dataset.btDragKey;
+      chip.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", draggingKey);
+    });
+
+    document.addEventListener("dragend", (e) => {
+      const chip = e.target.closest("[data-bt-drag-key]");
+      if (chip) chip.classList.remove("dragging");
+      draggingKey = null;
+    });
+
+    document.addEventListener("dragover", (e) => {
+      const zone = e.target.closest("[data-bt-zone][data-bt-side]");
+      if (!zone) return;
+      e.preventDefault();
+      zone.classList.add("drag-over");
+    });
+
+    document.addEventListener("dragleave", (e) => {
+      const zone = e.target.closest("[data-bt-zone][data-bt-side]");
+      if (zone) zone.classList.remove("drag-over");
+    });
+
+    document.addEventListener("drop", (e) => {
+      const zone = e.target.closest("[data-bt-zone][data-bt-side]");
+      if (!zone) return;
+      e.preventDefault();
+      zone.classList.remove("drag-over");
+      const key = draggingKey || e.dataTransfer.getData("text/plain");
+      if (!key) return;
+      placeAt(key, zone.dataset.btSide, zone.dataset.btZone);
+    });
+  }
+
   // --- Stubs filled in by later tasks ---------------------------------------
   function updateLegality() { /* Task 6 */ }
 
   window.bt = {
     init() {
+      attachDragHandlers();
       populateOpponents();
       rebuildPlacements();   // with opponent=null this fills only my side
       renderPanels();
