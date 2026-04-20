@@ -9,6 +9,7 @@ Usage:
 
 Outputs projected roto standings at the end.
 """
+
 import argparse
 import json
 import sys
@@ -31,7 +32,8 @@ from fantasy_baseball.draft.recommender import (
     compute_slot_scarcity_order,
 )
 from fantasy_baseball.draft.strategy import STRATEGIES, build_player_lookup
-from fantasy_baseball.scoring import project_team_stats, score_roto, ALL_CATS
+from fantasy_baseball.scoring import project_team_stats, score_roto
+from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 
@@ -70,9 +72,7 @@ class TeamTrackerProxy:
 
 def _active_slot_counts(roster_slots):
     """Return (active_hitter_slots, active_pitcher_slots) from config."""
-    hitter_slots = sum(
-        v for k, v in roster_slots.items() if k not in ("P", "BN", "IL")
-    )
+    hitter_slots = sum(v for k, v in roster_slots.items() if k not in ("P", "BN", "IL"))
     pitcher_slots = roster_slots.get("P", 9)
     return hitter_slots, pitcher_slots
 
@@ -149,7 +149,9 @@ def _score_roto(team_players, config, full_board, board):
         all_hitters = [p for p in team_players[tn] if p["player_type"] == "hitter"]
         all_pitchers = [p for p in team_players[tn] if p["player_type"] == "pitcher"]
         hitters, pitchers = _select_active_players(
-            all_hitters, all_pitchers, config.roster_slots,
+            all_hitters,
+            all_pitchers,
+            config.roster_slots,
         )
         team_stats[tname] = project_team_stats(list(hitters) + list(pitchers))
         team_meta[tname] = {"nh": len(hitters), "np": len(pitchers)}
@@ -310,10 +312,10 @@ def run_simulation(
                     is_user = keeper.get("team") == config.team_name
                     if is_user:
                         balance.add_player(best)
-                    tracker.draft_player(best["name"], is_user=is_user,
-                                         player_id=best["player_id"])
-                    _assign_slot(best["positions"], team_filled[num],
-                                 config.roster_slots, scarcity_order)
+                    tracker.draft_player(best["name"], is_user=is_user, player_id=best["player_id"])
+                    _assign_slot(
+                        best["positions"], team_filled[num], config.roster_slots, scarcity_order
+                    )
                     team_rosters[num].append(best["player_id"])
                 break
 
@@ -350,11 +352,16 @@ def run_simulation(
             team_num = pick_order[pick_idx]
         else:
             team_num = tracker.picking_team
-        is_user = (team_num == user_team_num)
+        is_user = team_num == user_team_num
 
         if is_user:
             pick_name, pid = strategy_fn(
-                board, full_board, tracker, balance, config, team_filled,
+                board,
+                full_board,
+                tracker,
+                balance,
+                config,
+                team_filled,
                 total_rounds=rounds,
                 scoring_mode=scoring_mode,
                 team_rosters=team_rosters,
@@ -364,19 +371,20 @@ def run_simulation(
             # Strategy noise: sometimes take the 2nd or 3rd rec instead.
             # Normal distribution: ~68% take #1, ~27% take #2, ~4% take #3.
             if strategy_noise > 0 and pick_name is not None:
-                skip = min(abs(int(round(rng.normal(0, strategy_noise)))),
-                           4)  # cap at 5th-best
+                skip = min(abs(int(round(rng.normal(0, strategy_noise)))), 4)  # cap at 5th-best
                 if skip > 0:
                     filled = get_filled_positions(
-                        tracker.user_roster_ids, full_board,
+                        tracker.user_roster_ids,
+                        full_board,
                         roster_slots=config.roster_slots,
                     )
                     recs = get_recommendations(
-                        board, drafted=tracker.drafted_ids,
+                        board,
+                        drafted=tracker.drafted_ids,
                         user_roster=tracker.user_roster,
-                        n=skip + 3, filled_positions=filled,
-                        picks_until_next=getattr(
-                            tracker, "picks_until_next_turn", None),
+                        n=skip + 3,
+                        filled_positions=filled,
+                        picks_until_next=getattr(tracker, "picks_until_next_turn", None),
                         roster_slots=config.roster_slots,
                         num_teams=config.num_teams,
                         scoring_mode=scoring_mode,
@@ -401,9 +409,9 @@ def run_simulation(
                 p = player_lookup.get(pid)
                 if p is not None:
                     balance.add_player(p)
-                    _assign_slot(p["positions"],
-                                 team_filled[team_num], config.roster_slots,
-                                 scarcity_order)
+                    _assign_slot(
+                        p["positions"], team_filled[team_num], config.roster_slots, scarcity_order
+                    )
                 team_rosters[team_num].append(pid)
             else:
                 pick_name = "(no pick)"
@@ -411,11 +419,18 @@ def run_simulation(
         elif team_num in opp_strategies:
             opp_fn = opp_strategies[team_num]
             proxy = TeamTrackerProxy(
-                tracker, opp_roster_names[team_num], opp_rosters[team_num],
+                tracker,
+                opp_roster_names[team_num],
+                opp_rosters[team_num],
             )
             pick_name, pid = opp_fn(
-                board, full_board, proxy, opp_balances[team_num],
-                config, team_filled, total_rounds=rounds,
+                board,
+                full_board,
+                proxy,
+                opp_balances[team_num],
+                config,
+                team_filled,
+                total_rounds=rounds,
             )
             if pick_name is None:
                 for _, row in adp_board.iterrows():
@@ -432,9 +447,9 @@ def run_simulation(
                     opp_balances[team_num].add_player(p)
                     opp_rosters[team_num].append(pid)
                     opp_roster_names[team_num].append(pick_name)
-                    _assign_slot(p["positions"],
-                                 team_filled[team_num], config.roster_slots,
-                                 scarcity_order)
+                    _assign_slot(
+                        p["positions"], team_filled[team_num], config.roster_slots, scarcity_order
+                    )
                 team_rosters[team_num].append(pid)
             else:
                 pick_name = "(no pick)"
@@ -446,14 +461,13 @@ def run_simulation(
                 if row["player_id"] in drafted_set:
                     continue
                 positions = row["positions"]
-                if _can_fill_active_slot(positions, team_filled[team_num],
-                                         config.roster_slots):
+                if _can_fill_active_slot(positions, team_filled[team_num], config.roster_slots):
                     pick_name = row["name"]
                     pid = row["player_id"]
-                    tracker.draft_player(pick_name, is_user=False,
-                                         player_id=pid)
-                    _assign_slot(positions, team_filled[team_num],
-                                 config.roster_slots, scarcity_order)
+                    tracker.draft_player(pick_name, is_user=False, player_id=pid)
+                    _assign_slot(
+                        positions, team_filled[team_num], config.roster_slots, scarcity_order
+                    )
                     drafted_set.add(pid)
                     team_rosters[team_num].append(pid)
                     break
@@ -463,15 +477,14 @@ def run_simulation(
                     if row["player_id"] in drafted_set:
                         continue
                     positions = row["positions"]
-                    if _can_roster(positions, team_filled[team_num],
-                                   config.roster_slots):
+                    if _can_roster(positions, team_filled[team_num], config.roster_slots):
                         pick_name = row["name"]
                         pid = row["player_id"]
-                        tracker.draft_player(pick_name, is_user=False,
-                                             player_id=pid)
+                        tracker.draft_player(pick_name, is_user=False, player_id=pid)
                         drafted_set.add(pid)
-                        _assign_slot(positions, team_filled[team_num],
-                                     config.roster_slots, scarcity_order)
+                        _assign_slot(
+                            positions, team_filled[team_num], config.roster_slots, scarcity_order
+                        )
                         team_rosters[team_num].append(pid)
                         break
 
@@ -494,10 +507,12 @@ def run_simulation(
                 break
 
     num_keepers = len(config.keepers)
-    draft_entries = list(zip(
-        tracker.drafted_players[num_keepers:],
-        tracker.drafted_ids[num_keepers:],
-    ))
+    draft_entries = list(
+        zip(
+            tracker.drafted_players[num_keepers:],
+            tracker.drafted_ids[num_keepers:],
+        )
+    )
     for pick_num, (name, pid) in enumerate(draft_entries):
         if pick_order and pick_num < len(pick_order):
             team = pick_order[pick_num]
@@ -527,8 +542,9 @@ def run_simulation(
     }
 
 
-def save_simulation_output(result, strategy_name, scoring_mode,
-                           opponent_strategies_str=None, run_timestamp=None):
+def save_simulation_output(
+    result, strategy_name, scoring_mode, opponent_strategies_str=None, run_timestamp=None
+):
     """Save complete simulation output for later re-analysis.
 
     Writes all team rosters, standings, and draft log to a JSON file
@@ -560,8 +576,22 @@ def save_simulation_output(result, strategy_name, scoring_mode,
                 "var": round(float(p.get("var", 0)), 2),
                 "total_sgp": round(float(p.get("total_sgp", 0)), 2),
             }
-            for stat in ["r", "hr", "rbi", "sb", "h", "ab", "avg",
-                          "w", "k", "sv", "ip", "er", "bb", "h_allowed"]:
+            for stat in [
+                "r",
+                "hr",
+                "rbi",
+                "sb",
+                "h",
+                "ab",
+                "avg",
+                "w",
+                "k",
+                "sv",
+                "ip",
+                "er",
+                "bb",
+                "h_allowed",
+            ]:
                 val = p.get(stat, 0)
                 if val is not None and val != 0:
                     entry[stat] = round(float(val), 4)
@@ -591,23 +621,27 @@ def save_simulation_output(result, strategy_name, scoring_mode,
     tracker = result["tracker"]
     num_keepers = len(config.keepers)
     draft_log = []
-    draft_entries = list(zip(
-        tracker.drafted_players[num_keepers:],
-        tracker.drafted_ids[num_keepers:],
-    ))
+    draft_entries = list(
+        zip(
+            tracker.drafted_players[num_keepers:],
+            tracker.drafted_ids[num_keepers:],
+        )
+    )
     for pick_num, (name, pid) in enumerate(draft_entries, 1):
         rnd = (pick_num - 1) // config.num_teams + 1
         pos = (pick_num - 1) % config.num_teams + 1
         team_num = pos if rnd % 2 == 1 else config.num_teams - pos + 1
         team_name = config.teams.get(team_num, f"Team {team_num}")
-        draft_log.append({
-            "pick": pick_num,
-            "round": rnd,
-            "team_num": team_num,
-            "team": team_name,
-            "player": name,
-            "player_id": pid,
-        })
+        draft_log.append(
+            {
+                "pick": pick_num,
+                "round": rnd,
+                "team_num": team_num,
+                "team": team_name,
+                "player": name,
+                "player_id": pid,
+            }
+        )
 
     output = {
         "metadata": {
@@ -632,50 +666,72 @@ def save_simulation_output(result, strategy_name, scoring_mode,
 def main():
     parser = argparse.ArgumentParser(description="Simulate a fantasy baseball draft")
     parser.add_argument(
-        "--strategy", "-s", choices=list(STRATEGIES.keys()),
+        "--strategy",
+        "-s",
+        choices=list(STRATEGIES.keys()),
         default="no_punt_cap3",
         help="Draft strategy for your team (default: %(default)s)",
     )
     parser.add_argument(
-        "--closer-deadlines", type=str, default=None,
+        "--closer-deadlines",
+        type=str,
+        default=None,
         help="Comma-separated closer deadline rounds for three_closers strategy (e.g. 4,8,12)",
     )
     parser.add_argument(
-        "--no-punt-deadline", type=int, default=None,
+        "--no-punt-deadline",
+        type=int,
+        default=None,
         help="Override the no_punt closer deadline round (default: 8)",
     )
     parser.add_argument(
-        "--adp-noise", type=float, default=0.0,
+        "--adp-noise",
+        type=float,
+        default=0.0,
         help="Std dev of noise added to opponent ADP (e.g. 20 = +/- ~20 ADP spots)",
     )
     parser.add_argument(
-        "--strategy-noise", type=float, default=0.0,
+        "--strategy-noise",
+        type=float,
+        default=0.0,
         help="Pick uncertainty: ~68%% take #1 rec, ~27%% take #2, ~4%% take #3 (default: 0 = always #1)",
     )
     parser.add_argument(
-        "--seed", type=int, default=None,
+        "--seed",
+        type=int,
+        default=None,
         help="Random seed for ADP noise",
     )
     parser.add_argument(
-        "--opponent-strategies", type=str, default=None,
+        "--opponent-strategies",
+        type=str,
+        default=None,
         help="Assign strategies to opponents: '3:default,5:three_closers' (team_num:strategy)",
     )
     parser.add_argument(
-        "--scoring", choices=["var", "vona"], default="vona",
+        "--scoring",
+        choices=["var", "vona"],
+        default="vona",
         help="Scoring mode: 'var' (Value Above Replacement) or 'vona' (Value Over Next Available)",
     )
     parser.add_argument(
-        "--monte-carlo", type=int, default=0, metavar="N",
+        "--monte-carlo",
+        type=int,
+        default=0,
+        metavar="N",
         help="Run N Monte Carlo simulations on the drafted rosters (injuries + variance)",
     )
     parser.add_argument(
-        "--mc-seed", type=int, default=None,
+        "--mc-seed",
+        type=int,
+        default=None,
         help="Random seed for Monte Carlo simulations",
     )
     args = parser.parse_args()
 
     # Apply custom closer deadlines if provided
     import fantasy_baseball.draft.strategy as strat_mod
+
     if args.closer_deadlines:
         deadlines = [int(r.strip()) for r in args.closer_deadlines.split(",")]
         strat_mod.THREE_CLOSERS_DEADLINES = deadlines
@@ -721,7 +777,10 @@ def main():
 
     # Save full simulation output for re-analysis
     sim_path = save_simulation_output(
-        result, args.strategy, args.scoring, args.opponent_strategies,
+        result,
+        args.strategy,
+        args.scoring,
+        args.opponent_strategies,
     )
     print(f"Full sim output saved to {sim_path}")
 
@@ -737,8 +796,10 @@ def main():
         rows = full_board[full_board["name"] == name]
         if not rows.empty:
             r = rows.iloc[0]
-            print(f"  {r['name']:<25} {'/'.join(r['positions'][:3]):<12} "
-                  f"{'hitter' if r['player_type']=='hitter' else 'pitcher'}")
+            print(
+                f"  {r['name']:<25} {'/'.join(r['positions'][:3]):<12} "
+                f"{'hitter' if r['player_type'] == 'hitter' else 'pitcher'}"
+            )
 
     results = result["results"]
     all_cats = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
@@ -746,19 +807,23 @@ def main():
     # Print standings
     print(f"\nPROJECTED ROTO STANDINGS")
     print("=" * 132)
-    print(f"{'Rk':<3} {'Team':<32} {'Pts':>4}  "
-          f"{'R':>5} {'HR':>4} {'RBI':>5} {'SB':>4} {'AVG':>6}  "
-          f"{'W':>4} {'K':>5} {'SV':>4} {'ERA':>5} {'WHIP':>6}  "
-          f"{'H':>2}/{'P':>2}")
+    print(
+        f"{'Rk':<3} {'Team':<32} {'Pts':>4}  "
+        f"{'R':>5} {'HR':>4} {'RBI':>5} {'SB':>4} {'AVG':>6}  "
+        f"{'W':>4} {'K':>5} {'SV':>4} {'ERA':>5} {'WHIP':>6}  "
+        f"{'H':>2}/{'P':>2}"
+    )
     print("-" * 132)
     for i, t in enumerate(results, 1):
         m = " <<<" if t["team"] == config.team_name else ""
-        print(f"{i:<3} {t['team']:<32} {t['tot']:>4}  "
-              f"{t['R']:>5.0f} {t['HR']:>4.0f} {t['RBI']:>5.0f} "
-              f"{t['SB']:>4.0f} {t['AVG']:>6.3f}  "
-              f"{t['W']:>4.0f} {t['K']:>5.0f} {t['SV']:>4.0f} "
-              f"{t['ERA']:>5.2f} {t['WHIP']:>6.3f}  "
-              f"{t['nh']:>2}/{t['np']:>2}{m}")
+        print(
+            f"{i:<3} {t['team']:<32} {t['tot']:>4}  "
+            f"{t['R']:>5.0f} {t['HR']:>4.0f} {t['RBI']:>5.0f} "
+            f"{t['SB']:>4.0f} {t['AVG']:>6.3f}  "
+            f"{t['W']:>4.0f} {t['K']:>5.0f} {t['SV']:>4.0f} "
+            f"{t['ERA']:>5.2f} {t['WHIP']:>6.3f}  "
+            f"{t['nh']:>2}/{t['np']:>2}{m}"
+        )
 
     # Category breakdown
     print(f"\nROTO POINTS BY CATEGORY (10=best, 1=worst)")
@@ -808,9 +873,7 @@ def main():
     if args.monte_carlo > 0:
         from fantasy_baseball.simulation import simulate_season
 
-        h_slots = sum(
-            v for k, v in config.roster_slots.items() if k not in ("P", "BN", "IL")
-        )
+        h_slots = sum(v for k, v in config.roster_slots.items() if k not in ("P", "BN", "IL"))
         p_slots = config.roster_slots.get("P", 9)
 
         team_players = result["team_players"]
@@ -830,7 +893,10 @@ def main():
 
         for _ in range(n):
             sim_stats, sim_injuries = simulate_season(
-                team_players, mc_rng, h_slots, p_slots,
+                team_players,
+                mc_rng,
+                h_slots,
+                p_slots,
             )
             sim_roto = score_roto(sim_stats)
             ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
