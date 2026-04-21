@@ -1488,3 +1488,104 @@ class TestComparisonEV:
         ev_sb = result["before"]["ev_roto"]["User"]["SB_pts"]
         rank_sb = result["before"]["roto"]["User"]["SB_pts"]
         assert ev_sb != pytest.approx(rank_sb, abs=0.01)
+
+
+class TestComputeTeamTotalsPace:
+    """Regression for _compute_team_totals_pace after the canonical
+    Standings cache shape landed (commit 4d88479). The cache is now
+    ``{"effective_date", "teams": [...]}`` — iterating it as list[dict]
+    (old shape) blew up the /lineup route with AttributeError."""
+
+    def _canonical_standings_json(self, team_name, *, ip=None, pa=None):
+        from fantasy_baseball.models.standings import (
+            CategoryStats,
+            Standings,
+            StandingsEntry,
+        )
+        from fantasy_baseball.utils.constants import OpportunityStat
+
+        extras: dict[OpportunityStat, float] = {}
+        if ip is not None:
+            extras[OpportunityStat.IP] = ip
+        if pa is not None:
+            extras[OpportunityStat.PA] = pa
+        s = Standings(
+            effective_date=date(2026, 4, 21),
+            entries=[
+                StandingsEntry(
+                    team_name=team_name,
+                    team_key="469.l.5652.t.4",
+                    rank=2,
+                    stats=CategoryStats(
+                        r=146,
+                        hr=44,
+                        rbi=140,
+                        sb=26,
+                        avg=0.262,
+                        w=12,
+                        k=200,
+                        sv=11,
+                        era=4.02,
+                        whip=1.18,
+                    ),
+                    yahoo_points_for=73.5,
+                    extras=extras,
+                ),
+            ],
+        )
+        return s.to_json()
+
+    def _patch_read_cache(self, monkeypatch, payload):
+        def fake_read_cache(key, *_args, **_kwargs):
+            if key == CacheKey.STANDINGS:
+                return payload
+            return None
+
+        monkeypatch.setattr(season_data, "read_cache", fake_read_cache)
+
+    def test_reads_canonical_standings_cache_without_crashing(self, monkeypatch):
+        """The /lineup route calls into this helper; the canonical cache
+        shape must not raise AttributeError."""
+        payload = self._canonical_standings_json("Hart of the Order", ip=198.2)
+        self._patch_read_cache(monkeypatch, payload)
+
+        totals = season_data._compute_team_totals_pace(
+            players=[],
+            player_type="pitcher",
+            team_name="Hart of the Order",
+        )
+
+        # No crash; actuals come from typed standings.
+        assert totals["IP"]["actual"] == pytest.approx(198.2)
+        assert totals["W"]["actual"] == pytest.approx(12)
+        assert totals["K"]["actual"] == pytest.approx(200)
+        assert totals["ERA"]["actual"] == pytest.approx(4.02)
+
+    def test_missing_cache_is_silent(self, monkeypatch):
+        """Empty cache path (unit tests, pre-refresh): actuals default to 0."""
+        self._patch_read_cache(monkeypatch, None)
+
+        totals = season_data._compute_team_totals_pace(
+            players=[],
+            player_type="hitter",
+            team_name="Hart of the Order",
+        )
+
+        assert totals["PA"]["actual"] == 0
+        assert totals["R"]["actual"] == 0
+
+    def test_opportunity_stat_absent_when_yahoo_omits_it(self, monkeypatch):
+        """PA isn't a standard Yahoo stat in this league's standings
+        response — extras is empty, actual falls back to 0 cleanly."""
+        payload = self._canonical_standings_json("Hart of the Order")
+        self._patch_read_cache(monkeypatch, payload)
+
+        totals = season_data._compute_team_totals_pace(
+            players=[],
+            player_type="hitter",
+            team_name="Hart of the Order",
+        )
+
+        assert totals["PA"]["actual"] == 0.0
+        # Counting actuals still come through from CategoryStats.
+        assert totals["R"]["actual"] == pytest.approx(146)

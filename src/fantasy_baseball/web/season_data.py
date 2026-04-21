@@ -27,13 +27,14 @@ def _get_redis() -> KVStore | None:
 
 
 from fantasy_baseball.models.player import PlayerType
-from fantasy_baseball.models.standings import ProjectedStandings, Standings
+from fantasy_baseball.models.standings import ProjectedStandings, Standings, StandingsEntry
 from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
     HITTER_PROJ_KEYS,
     PITCHER_PROJ_KEYS,
     Category,
+    OpportunityStat,
 )
 from fantasy_baseball.utils.constants import (
     INVERSE_STATS as INVERSE_CATS,
@@ -525,47 +526,57 @@ def _compute_team_totals_pace(
     Actuals come from Yahoo standings (the source of truth for team totals —
     correctly accounts for players added/dropped mid-season). Expected values
     are PA/IP-weighted averages of individual player projections.
+
+    Typed access: the standings cache deserializes into :class:`Standings`
+    and we index by :class:`Category` / :class:`OpportunityStat` enum
+    all the way to the template boundary, where we emit UPPERCASE
+    stat-code keys (``"R"``, ``"HR"``, ``"PA"``, ...) because the Jinja
+    template iterates fixed string lists.
     """
     from fantasy_baseball.analysis.pace import STAT_VARIANCE, _z_to_color
 
     active = [p for p in players if not p.get("is_bench", False)]
 
-    # Look up team stats from standings
+    # Look up this team's standings entry. Missing cache (unit tests,
+    # pre-refresh) is fine — consumers get zero actuals.
     if team_name is None:
         meta = read_meta() or {}
         team_name = meta.get("team_name", "")
-    standings = read_cache(CacheKey.STANDINGS) or []
-    team_stats: dict = {}
-    for t in standings:
-        if t.get("name") == team_name:
-            team_stats = t.get("stats", {})
-            break
+    team_entry: StandingsEntry | None = None
+    raw = read_cache(CacheKey.STANDINGS)
+    if raw:
+        standings = Standings.from_json(raw)
+        for entry in standings.entries:
+            if entry.team_name == team_name:
+                team_entry = entry
+                break
 
     if player_type == "hitter":
-        counting_cats = ["R", "HR", "RBI", "SB"]
-        rate_cats = {"AVG": ("h", False)}
-        opp_cat = "PA"
+        counting_cats: list[Category] = [Category.R, Category.HR, Category.RBI, Category.SB]
+        rate_cats: dict[Category, tuple[str, bool]] = {Category.AVG: ("h", False)}
+        opp_stat = OpportunityStat.PA
     else:
-        counting_cats = ["W", "K", "SV"]
-        rate_cats = {"ERA": ("er", True), "WHIP": ("h_allowed", True)}
-        opp_cat = "IP"
+        counting_cats = [Category.W, Category.K, Category.SV]
+        rate_cats = {Category.ERA: ("er", True), Category.WHIP: ("h_allowed", True)}
+        opp_stat = OpportunityStat.IP
 
     totals: dict = {}
 
-    # Opportunity stat (PA / IP) — from standings
-    totals[opp_cat] = {"actual": team_stats.get(opp_cat, 0), "color_class": "stat-neutral"}
+    # Opportunity stat (PA / IP) — pulled from StandingsEntry.extras.
+    opp_actual = team_entry.extras.get(opp_stat, 0.0) if team_entry else 0.0
+    totals[opp_stat.value] = {"actual": opp_actual, "color_class": "stat-neutral"}
 
     # Counting stats — actuals from standings, expected from player pace sums
     for cat in counting_cats:
-        actual = team_stats.get(cat, 0)
-        expected = sum(p.get("pace", {}).get(cat, {}).get("expected", 0) or 0 for p in active)
+        actual = team_entry.stats[cat] if team_entry else 0.0
+        expected = sum(p.get("pace", {}).get(cat.value, {}).get("expected", 0) or 0 for p in active)
         if expected > 0:
             ratio = actual / expected
-            variance = STAT_VARIANCE.get(cat.lower(), 0.0)
+            variance = STAT_VARIANCE.get(cat.value.lower(), 0.0)
             z = (ratio - 1.0) / variance if variance > 0 else 0.0
         else:
             z = 0.0
-        totals[cat] = {
+        totals[cat.value] = {
             "actual": actual,
             "expected": round(expected, 1),
             "z_score": round(z, 2),
@@ -574,15 +585,15 @@ def _compute_team_totals_pace(
 
     # Rate stats — actuals from standings, expected as IP/PA-weighted proj avg
     for rate_cat, (component, is_inverse) in rate_cats.items():
-        actual_val = team_stats.get(rate_cat, 0.0)
-        opp_key = "IP" if player_type != "hitter" else "PA"
+        actual_val = team_entry.stats[rate_cat] if team_entry else 0.0
+        opp_key = opp_stat.value
         proj_vals = [
             (
-                p.get("pace", {}).get(rate_cat, {}).get("expected", 0),
+                p.get("pace", {}).get(rate_cat.value, {}).get("expected", 0),
                 p.get("pace", {}).get(opp_key, {}).get("actual", 0),
             )
             for p in active
-            if p.get("pace", {}).get(rate_cat, {}).get("expected")
+            if p.get("pace", {}).get(rate_cat.value, {}).get("expected")
         ]
         weighted = sum(v * opp for v, opp in proj_vals)
         total_opp = sum(opp for _, opp in proj_vals)
@@ -596,8 +607,8 @@ def _compute_team_totals_pace(
         else:
             z = 0.0
 
-        fmt_precision = 3 if rate_cat == "AVG" else 2
-        totals[rate_cat] = {
+        fmt_precision = 3 if rate_cat == Category.AVG else 2
+        totals[rate_cat.value] = {
             "actual": round(actual_val, fmt_precision),
             "expected": round(expected_val, fmt_precision),
             "z_score": round(z, 2),

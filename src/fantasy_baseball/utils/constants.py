@@ -22,6 +22,21 @@ class Category(Enum):
     SV = "SV"
 
 
+class OpportunityStat(Enum):
+    """Non-roto volume stats preserved from Yahoo standings (PA, IP).
+
+    These aren't scoring categories, but they ride alongside
+    :class:`CategoryStats` on :class:`StandingsEntry.extras` so
+    team-level opportunity totals survive the typed round-trip for
+    UI consumers like the lineup pace display (``_compute_team_totals_pace``).
+    Same contract as ``Category``: compare members directly, use
+    ``.value`` only at JSON/Redis/template boundaries.
+    """
+
+    PA = "PA"
+    IP = "IP"
+
+
 HITTING_CATEGORIES: list[Category] = [
     Category.R,
     Category.HR,

@@ -7,17 +7,20 @@ effective_date). :class:`ProjectedStandings` is the projected twin of
 ``Standings`` built from rosters.
 
 ``CategoryStats`` is keyed exclusively by :class:`Category` enum. Bare
-string access raises ``TypeError``.
+string access raises ``TypeError``. ``StandingsEntry.extras`` is
+keyed by :class:`OpportunityStat` on the same contract — non-roto
+volume stats (PA, IP) from Yahoo standings that ride alongside the
+ten roto categories.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
-from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category, OpportunityStat
 
 # Private: single source of truth for Category <-> attribute mapping.
 _CAT_TO_FIELD: dict[Category, str] = {
@@ -114,12 +117,18 @@ class StandingsEntry:
     our UI exactly matches Yahoo's standings page — otherwise display
     ties in rounded rate stats (AVG, ERA, WHIP) make our averaged-rank
     scoring differ by up to ±0.5 points per tie from Yahoo's real total.
+
+    ``extras`` holds non-roto volume stats (PA, IP) that Yahoo ships
+    alongside the scoring categories in ``team_stats``. Keyed by
+    :class:`OpportunityStat` enum — bare-string access is deliberately
+    not supported (same contract as :class:`CategoryStats`).
     """
     team_name: str
     team_key: str
     rank: int
     stats: CategoryStats
     yahoo_points_for: float | None = None
+    extras: dict[OpportunityStat, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -170,12 +179,22 @@ class Standings:
                     f"Standings.from_json: row missing 'stats' wrapper "
                     f"(likely legacy flat-lowercase shape): {row.get('name')!r}"
                 )
+            raw_extras = row.get("extras") or {}
+            extras: dict[OpportunityStat, float] = {}
+            for k, v in raw_extras.items():
+                try:
+                    extras[OpportunityStat(k)] = float(v)
+                except ValueError:
+                    # Unknown key — ignore to keep legacy/in-flight
+                    # writers from breaking the read path.
+                    continue
             entries.append(StandingsEntry(
                 team_name=row["name"],
                 team_key=row["team_key"],
                 rank=int(row["rank"]),
                 stats=CategoryStats.from_dict(row["stats"]),
                 yahoo_points_for=row.get("yahoo_points_for"),
+                extras=extras,
             ))
         return cls(effective_date=eff, entries=entries)
 
@@ -189,6 +208,7 @@ class Standings:
                     "rank": e.rank,
                     "yahoo_points_for": e.yahoo_points_for,
                     "stats": e.stats.to_dict(),
+                    "extras": {k.value: float(v) for k, v in e.extras.items()},
                 }
                 for e in self.entries
             ],

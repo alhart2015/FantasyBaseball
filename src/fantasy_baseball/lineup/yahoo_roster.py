@@ -1,5 +1,6 @@
 """Fetch roster, standings, and free agents from Yahoo Fantasy API."""
 
+import contextlib
 import datetime
 import logging
 from dataclasses import dataclass, field
@@ -10,6 +11,7 @@ from fantasy_baseball.models.standings import (
     Standings,
     StandingsEntry,
 )
+from fantasy_baseball.utils.constants import OpportunityStat
 from fantasy_baseball.utils.time_utils import local_today
 
 logger = logging.getLogger(__name__)
@@ -28,6 +30,19 @@ YAHOO_STAT_ID_MAP: dict[str, str] = {
     "27": "WHIP",
 }
 
+# Yahoo stat IDs for non-roto opportunity volume stats (PA, IP).
+# Kept separate from YAHOO_STAT_ID_MAP so the 10 roto categories stay
+# the unique source of truth for CategoryStats. Extras land on
+# StandingsEntry.extras so the lineup pace UI can show real team IP
+# / PA instead of zero. "50" = IP is a universal Yahoo MLB stat ID;
+# PA (stat_id "0") is not guaranteed in every league's standings
+# response, so it's mapped best-effort — consumers must treat a
+# missing OpportunityStat as 0.
+YAHOO_OPP_STAT_ID_MAP: dict[str, OpportunityStat] = {
+    "50": OpportunityStat.IP,
+    "0": OpportunityStat.PA,
+}
+
 
 @dataclass
 class ParsedStandingsTeam:
@@ -38,8 +53,10 @@ class ParsedStandingsTeam:
     :class:`CategoryStats` defaults — 0 for counting stats, 99 for
     ERA/WHIP — at conversion time). ``points_for`` is Yahoo's
     authoritative roto total and is ``None`` when Yahoo hasn't scored
-    the week yet (e.g. projected standings). This row is converted to
-    a :class:`StandingsEntry` before leaving the parser.
+    the week yet (e.g. projected standings). ``extras`` carries
+    non-roto opportunity volume stats (PA / IP) keyed by
+    :class:`OpportunityStat`. This row is converted to a
+    :class:`StandingsEntry` before leaving the parser.
     """
 
     name: str = ""
@@ -47,6 +64,7 @@ class ParsedStandingsTeam:
     rank: int = 0
     stats: dict[str, float] = field(default_factory=dict)
     points_for: float | None = None
+    extras: dict[OpportunityStat, float] = field(default_factory=dict)
 
 
 def fetch_roster(
@@ -164,7 +182,10 @@ def fetch_standings(league, effective_date: date) -> Standings:
     """Fetch league standings with cumulative roto stats."""
     raw = league.yhandler.get_standings_raw(league.league_id)
     return parse_standings_raw(
-        raw, YAHOO_STAT_ID_MAP, effective_date=effective_date
+        raw,
+        YAHOO_STAT_ID_MAP,
+        effective_date=effective_date,
+        opp_stat_id_map=YAHOO_OPP_STAT_ID_MAP,
     )
 
 
@@ -173,14 +194,19 @@ def parse_standings_raw(
     stat_id_map: dict[str, str],
     *,
     effective_date: date,
+    opp_stat_id_map: dict[str, OpportunityStat] | None = None,
 ) -> Standings:
     """Parse raw Yahoo standings JSON into a typed :class:`Standings`.
 
     The library's ``standings()`` method omits per-category stat totals,
     so we parse the raw JSON directly. ``ParsedStandingsTeam`` is the
     internal wire-level row; we convert to :class:`StandingsEntry` at
-    the boundary.
+    the boundary. ``opp_stat_id_map`` optionally picks up non-roto
+    volume stats (PA, IP) into ``StandingsEntry.extras``; callers
+    wanting live Yahoo standings should pass :data:`YAHOO_OPP_STAT_ID_MAP`.
     """
+    if opp_stat_id_map is None:
+        opp_stat_id_map = {}
     # Navigate: fantasy_content.league[1].standings[0].teams
     league_data = raw.get("fantasy_content", {}).get("league", [])
     if len(league_data) < 2:
@@ -229,10 +255,8 @@ def parse_standings_raw(
             if team.points_for is None:
                 raw_pts = ts.get("points_for")
                 if raw_pts not in (None, ""):
-                    try:
+                    with contextlib.suppress(ValueError, TypeError):
                         team.points_for = float(raw_pts)
-                    except (ValueError, TypeError):
-                        pass
 
         # Parse per-category stats from team_stats
         if isinstance(detail, dict):
@@ -241,11 +265,14 @@ def parse_standings_raw(
                 stat = stat_entry.get("stat", {})
                 sid = str(stat.get("stat_id", ""))
                 val = stat.get("value", "")
-                if sid in stat_id_map and val != "":
-                    try:
+                if val == "":
+                    continue
+                if sid in stat_id_map:
+                    with contextlib.suppress(ValueError, TypeError):
                         team.stats[stat_id_map[sid]] = float(val)
-                    except (ValueError, TypeError):
-                        pass
+                elif sid in opp_stat_id_map:
+                    with contextlib.suppress(ValueError, TypeError):
+                        team.extras[opp_stat_id_map[sid]] = float(val)
 
         teams.append(team)
 
@@ -256,6 +283,7 @@ def parse_standings_raw(
             rank=t.rank,
             stats=CategoryStats.from_dict(t.stats),
             yahoo_points_for=t.points_for,
+            extras=dict(t.extras),
         )
         for t in teams
     ]
