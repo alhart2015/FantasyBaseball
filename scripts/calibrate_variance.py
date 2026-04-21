@@ -355,12 +355,12 @@ def main():
             corr = corr_df.corr()
             labels = hitter_cats
             print(f"  {'':>5}", end="")
-            for l in labels:
-                print(f" {l:>7}", end="")
+            for label in labels:
+                print(f" {label:>7}", end="")
             print()
             for i, row_label in enumerate(labels):
                 print(f"  {row_label:>5}", end="")
-                for j, col_label in enumerate(labels):
+                for j, _col_label in enumerate(labels):
                     val = corr.iloc[i, j]
                     print(f" {val:>+7.3f}", end="")
                 print()
@@ -427,8 +427,8 @@ def main():
             corr = corr_df.corr()
             labels = [c.replace("_residual", "") for c in corr_cols]
             print(f"  {'':>5}", end="")
-            for l in labels:
-                print(f" {l:>7}", end="")
+            for label in labels:
+                print(f" {label:>7}", end="")
             print()
             for i, row_label in enumerate(labels):
                 print(f"  {row_label:>5}", end="")

@@ -140,7 +140,7 @@ class TestRefreshInvariants:
         for p in roster:
             assert normalize_name(p["name"]) in positions
         # Opponent players
-        for opp_name, opp_roster in opp_rosters.items():
+        for _opp_name, opp_roster in opp_rosters.items():
             for p in opp_roster:
                 assert normalize_name(p["name"]) in positions
 

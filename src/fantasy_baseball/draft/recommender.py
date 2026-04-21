@@ -280,7 +280,7 @@ def _collect_roster_entries(
     if player_lookup is None:
         # Build a pid lookup dict for O(1) lookups instead of O(n) per player
         pid_index = {}
-        for idx, row in board.iterrows():
+        for _idx, row in board.iterrows():
             pid_index[row["player_id"]] = row
     else:
         pid_index = player_lookup

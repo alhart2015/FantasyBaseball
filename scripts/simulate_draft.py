@@ -513,7 +513,7 @@ def run_simulation(
             tracker.drafted_ids[num_keepers:],
         )
     )
-    for pick_num, (name, pid) in enumerate(draft_entries):
+    for pick_num, (_name, pid) in enumerate(draft_entries):
         if pick_order and pick_num < len(pick_order):
             team = pick_order[pick_num]
         else:

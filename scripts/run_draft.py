@@ -351,14 +351,12 @@ def main():
                 is_user = (team_label == config.team_name)
                 is_traded = pick_info["traded"]
                 pick_round = pick_info["round"]
-                pick_slot = pick_info["slot"]
             else:
                 team_num = tracker.picking_team
                 team_label = config.teams.get(team_num, f"Team {team_num}")
                 is_user = tracker.is_user_pick
                 is_traded = False
                 pick_round = tracker.current_round + keeper_rounds
-                pick_slot = None
 
             print("=" * 70)
             if is_traded:

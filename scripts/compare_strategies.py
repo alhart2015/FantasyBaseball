@@ -43,8 +43,6 @@ def _run_strategy_batch(strat, scoring, iterations, opp_str, adp_noise,
     from simulate_draft import build_board_and_context, run_simulation
     ctx = build_board_and_context()
     config = ctx["config"]
-    board = ctx["board"]
-    full_board = ctx["full_board"]
 
     pts_list = []
     rank_list = []

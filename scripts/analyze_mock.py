@@ -60,7 +60,7 @@ def main():
                     break
 
     # Draft picks (after keepers) follow snake order
-    for pick_num, (name, pid) in enumerate(
+    for pick_num, (_name, pid) in enumerate(
         zip(drafted[num_keepers:], drafted_ids[num_keepers:]), 1
     ):
         rnd = (pick_num - 1) // num_teams + 1

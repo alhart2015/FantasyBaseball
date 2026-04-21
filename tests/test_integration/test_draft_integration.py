@@ -128,7 +128,6 @@ def _simulate_n_picks(
         if tracker.is_user_pick:
             # Build player lookup for strategy
             player_lookup = build_player_lookup(board, board)
-            filled_positions = {}
             name, pid = strategy_fn(
                 board=board,
                 full_board=board,

@@ -199,7 +199,7 @@ def main():
     all_ranks = {tn: [] for tn in team_names}
 
     t0 = time.time()
-    for it in range(ITERS):
+    for _it in range(ITERS):
         team_stats, _ = simulate_season(rosters, rng, h_slots, p_slots)
         roto = score_roto_dict(team_stats)
 

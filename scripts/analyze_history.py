@@ -649,7 +649,6 @@ def main():
     picks_2025 = parse_draft(DRAFT_2025, CLOSERS_2025, PITCHERS_2025)
     picks_2024 = parse_draft(DRAFT_2024, CLOSERS_2024, PITCHERS_2024)
 
-    all_teams = set(p["team"] for p in picks_2025) | set(p["team"] for p in picks_2024)
     # Only analyze teams present in both years
     common = set(p["team"] for p in picks_2025) & set(p["team"] for p in picks_2024)
 
@@ -697,13 +696,17 @@ def main():
 
         # Classify
         avg_first_cl = []
-        if a25["first_cl"]: avg_first_cl.append(a25["first_cl"])
-        if a24["first_cl"]: avg_first_cl.append(a24["first_cl"])
+        if a25["first_cl"]:
+            avg_first_cl.append(a25["first_cl"])
+        if a24["first_cl"]:
+            avg_first_cl.append(a24["first_cl"])
         avg_cl_round = sum(avg_first_cl) / len(avg_first_cl) if avg_first_cl else 99
 
         avg_first_sp = []
-        if a25["first_sp"]: avg_first_sp.append(a25["first_sp"])
-        if a24["first_sp"]: avg_first_sp.append(a24["first_sp"])
+        if a25["first_sp"]:
+            avg_first_sp.append(a25["first_sp"])
+        if a24["first_sp"]:
+            avg_first_sp.append(a24["first_sp"])
         avg_sp_round = sum(avg_first_sp) / len(avg_first_sp) if avg_first_sp else 99
 
         total_cl = a25["closers"] + a24["closers"]

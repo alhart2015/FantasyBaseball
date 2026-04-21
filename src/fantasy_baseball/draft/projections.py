@@ -271,7 +271,7 @@ def reconstruct_rosters_from_draft(config, board, tracker, num_teams_override=No
     drafted_names = tracker.drafted_players[num_keepers:]
     drafted_ids = tracker.drafted_ids[num_keepers:]
 
-    for pick_num, (name, pid) in enumerate(zip(drafted_names, drafted_ids), 1):
+    for pick_num, (_name, pid) in enumerate(zip(drafted_names, drafted_ids), 1):
         rnd = (pick_num - 1) // num_teams + 1
         pos = (pick_num - 1) % num_teams + 1
         team = pos if rnd % 2 == 1 else num_teams - pos + 1

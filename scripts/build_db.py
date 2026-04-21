@@ -52,7 +52,7 @@ def export_snapshots():
     """Export in-season data from SQLite to JSON files for git."""
     conn = get_connection(DB_PATH)
     conn.row_factory = __import__("sqlite3").Row
-    for table, path, label, query in SNAPSHOT_TABLES:
+    for _table, path, label, query in SNAPSHOT_TABLES:
         rows = conn.execute(query).fetchall()
         data = [dict(r) for r in rows]
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")

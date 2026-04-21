@@ -373,7 +373,7 @@ def main():
     team_rosters = {}
     matched = 0
     missed = 0
-    for rnd, player, team in DRAFT_2025:
+    for _rnd, player, team in DRAFT_2025:
         if team not in team_rosters:
             team_rosters[team] = []
         key = ascii_name(player)
