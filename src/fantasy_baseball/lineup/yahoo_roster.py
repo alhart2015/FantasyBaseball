@@ -3,7 +3,13 @@
 import datetime
 import logging
 from dataclasses import dataclass, field
+from datetime import date
 
+from fantasy_baseball.models.standings import (
+    CategoryStats,
+    Standings,
+    StandingsEntry,
+)
 from fantasy_baseball.utils.time_utils import local_today
 
 logger = logging.getLogger(__name__)
@@ -25,14 +31,14 @@ YAHOO_STAT_ID_MAP: dict[str, str] = {
 
 @dataclass
 class ParsedStandingsTeam:
-    """One team as parsed from Yahoo's raw standings JSON.
+    """Internal wire-level row used during :func:`parse_standings_raw`.
 
-    Mirrors the wire-format dict emitted by :func:`parse_standings_raw`
-    — ``to_dict()`` is the single source for that mapping. ``stats`` is
-    a sparse ``{cat: value}`` mapping (empty pre-season; filled via
-    ``_fill_stat_defaults`` at the refresh boundary). ``points_for`` is
-    Yahoo's authoritative roto total and is ``None`` when Yahoo hasn't
-    scored the week yet (e.g. projected standings).
+    ``stats`` is a sparse UPPERCASE-keyed ``{cat: value}`` mapping
+    (empty pre-season; filled via ``_fill_stat_defaults`` at the refresh
+    boundary). ``points_for`` is Yahoo's authoritative roto total and is
+    ``None`` when Yahoo hasn't scored the week yet (e.g. projected
+    standings). This row is converted to a :class:`StandingsEntry`
+    before leaving the parser.
     """
 
     name: str = ""
@@ -40,15 +46,6 @@ class ParsedStandingsTeam:
     rank: int = 0
     stats: dict[str, float] = field(default_factory=dict)
     points_for: float | None = None
-
-    def to_dict(self) -> dict:
-        return {
-            "name": self.name,
-            "team_key": self.team_key,
-            "rank": self.rank,
-            "stats": self.stats,
-            "points_for": self.points_for,
-        }
 
 
 def fetch_roster(
@@ -162,28 +159,34 @@ def parse_injuries_raw(raw: dict) -> list[dict]:
     return injured
 
 
-def fetch_standings(league) -> list[dict]:
+def fetch_standings(league, effective_date: date) -> Standings:
     """Fetch league standings with cumulative roto stats."""
     raw = league.yhandler.get_standings_raw(league.league_id)
-    return parse_standings_raw(raw, YAHOO_STAT_ID_MAP)
+    return parse_standings_raw(
+        raw, YAHOO_STAT_ID_MAP, effective_date=effective_date
+    )
 
 
 def parse_standings_raw(
-    raw: dict, stat_id_map: dict[str, str],
-) -> list[dict]:
-    """Parse raw Yahoo standings JSON into a list of team dicts.
+    raw: dict,
+    stat_id_map: dict[str, str],
+    *,
+    effective_date: date,
+) -> Standings:
+    """Parse raw Yahoo standings JSON into a typed :class:`Standings`.
 
     The library's ``standings()`` method omits per-category stat totals,
-    so we parse the raw JSON directly. See ``ParsedStandingsTeam`` for
-    the emitted shape.
+    so we parse the raw JSON directly. ``ParsedStandingsTeam`` is the
+    internal wire-level row; we convert to :class:`StandingsEntry` at
+    the boundary.
     """
     # Navigate: fantasy_content.league[1].standings[0].teams
     league_data = raw.get("fantasy_content", {}).get("league", [])
     if len(league_data) < 2:
-        return []
+        return Standings(effective_date=effective_date, entries=[])
     standings_block = league_data[1].get("standings", [{}])
     if not standings_block:
-        return []
+        return Standings(effective_date=effective_date, entries=[])
     raw_teams = standings_block[0].get("teams", {})
 
     teams: list[ParsedStandingsTeam] = []
@@ -245,7 +248,17 @@ def parse_standings_raw(
 
         teams.append(team)
 
-    return [t.to_dict() for t in teams]
+    entries = [
+        StandingsEntry(
+            team_name=t.name,
+            team_key=t.team_key,
+            rank=t.rank,
+            stats=CategoryStats.from_dict(t.stats),
+            yahoo_points_for=t.points_for,
+        )
+        for t in teams
+    ]
+    return Standings(effective_date=effective_date, entries=entries)
 
 
 def fetch_free_agents(league, position: str, count: int = 50) -> list[dict]:
