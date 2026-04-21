@@ -1,6 +1,6 @@
 import pytest
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
-from fantasy_baseball.utils.constants import DEFAULT_SGP_DENOMINATORS, ALL_CATEGORIES
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, DEFAULT_SGP_DENOMINATORS, Category
 
 
 def test_returns_defaults_with_no_overrides():
@@ -11,9 +11,9 @@ def test_returns_defaults_with_no_overrides():
 def test_overrides_specific_categories():
     overrides = {"HR": 10.0, "SV": 8.0}
     denoms = get_sgp_denominators(overrides)
-    assert denoms["HR"] == 10.0
-    assert denoms["SV"] == 8.0
-    assert denoms["R"] == DEFAULT_SGP_DENOMINATORS["R"]
+    assert denoms[Category.HR] == 10.0
+    assert denoms[Category.SV] == 8.0
+    assert denoms[Category.R] == DEFAULT_SGP_DENOMINATORS[Category.R]
 
 
 def test_all_categories_present():

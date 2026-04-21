@@ -287,11 +287,11 @@ class TestScoreRoto:
 
     def test_all_categories_present(self):
         stats = {
-            "A": {c: 1 for c in ALL_CATS},
+            "A": {c.value: 1 for c in ALL_CATS},
         }
         roto = score_roto(stats)
         for c in ALL_CATS:
-            assert f"{c}_pts" in roto["A"]
+            assert f"{c.value}_pts" in roto["A"]
         assert "total" in roto["A"]
 
 

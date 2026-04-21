@@ -12,7 +12,6 @@ from fantasy_baseball.models.player import HitterStats, Player
 from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.sgp.rankings import rank_key_from_positions
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
-from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era
@@ -39,7 +38,7 @@ class OpponentGroup(TypedDict):
 def compute_roto_points_by_cat(
     standings: list[dict[str, Any]],
     *,
-    team_sds: dict[str, dict[Category, float]] | None = None,
+    team_sds: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Return per-category roto points for each team.
 
@@ -62,13 +61,16 @@ def compute_roto_points_by_cat(
     for t in standings:
         stats = t.get("stats", {})
         for cat in ALL_CATS:
-            if cat not in stats:
-                stats[cat] = _STAT_DEFAULTS.get(cat, 0.0)
+            key = cat.value
+            if key not in stats:
+                stats[key] = _STAT_DEFAULTS.get(key, 0.0)
 
     all_stats = {t["name"]: t["stats"] for t in standings}
     roto = score_roto(all_stats, team_sds=team_sds)
 
-    return {name: {cat: pts[f"{cat}_pts"] for cat in ALL_CATS} for name, pts in roto.items()}
+    return {
+        name: {cat.value: pts[f"{cat.value}_pts"] for cat in ALL_CATS} for name, pts in roto.items()
+    }
 
 
 def compute_roto_points(standings: list[dict[str, Any]]) -> dict[str, float]:
@@ -155,7 +157,7 @@ def compute_trade_impact(
     opp_gains_ros: dict[str, Any],
     projected_standings: list[dict[str, Any]] | None = None,
     *,
-    team_sds: dict[str, dict[Category, float]] | None = None,
+    team_sds: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, Any]:
     """Compute roto point impact of a proposed trade for both teams.
 
@@ -213,10 +215,12 @@ def compute_trade_impact(
     opp_proj = sum(post_trade_by_cat[opp_name].values())
 
     hart_cat_deltas = {
-        cat: post_trade_by_cat[hart_name][cat] - baseline_by_cat[hart_name][cat] for cat in ALL_CATS
+        cat.value: post_trade_by_cat[hart_name][cat.value] - baseline_by_cat[hart_name][cat.value]
+        for cat in ALL_CATS
     }
     opp_cat_deltas = {
-        cat: post_trade_by_cat[opp_name][cat] - baseline_by_cat[opp_name][cat] for cat in ALL_CATS
+        cat.value: post_trade_by_cat[opp_name][cat.value] - baseline_by_cat[opp_name][cat.value]
+        for cat in ALL_CATS
     }
 
     return {
@@ -356,7 +360,7 @@ def search_trades_away(
     rankings: dict[str, int],
     projected_standings: list[dict] | None = None,
     *,
-    team_sds: dict[str, dict[Category, float]] | None = None,
+    team_sds: dict[str, dict[str, float]] | None = None,
 ) -> list[OpponentGroup]:
     """Find trade candidates for a player the user wants to trade away.
 
@@ -467,7 +471,7 @@ def search_trades_for(
     rankings: dict[str, int],
     projected_standings: list[dict] | None = None,
     *,
-    team_sds: dict[str, dict[Category, float]] | None = None,
+    team_sds: dict[str, dict[str, float]] | None = None,
 ) -> list[dict]:
     """Find trade offers the user can make to acquire a specific opponent player.
 

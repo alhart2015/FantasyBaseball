@@ -163,7 +163,7 @@ def _score_roto(team_players, config, full_board, board):
     for tname in team_stats:
         entry = {"team": tname, **team_stats[tname], **team_meta[tname]}
         for cat in ALL_CATS:
-            entry[f"{cat}_p"] = roto[tname].get(f"{cat}_pts", 0)
+            entry[f"{cat.value}_p"] = roto[tname].get(f"{cat.value}_pts", 0)
         entry["tot"] = roto[tname]["total"]
         results.append(entry)
 

@@ -1,13 +1,13 @@
-from enum import StrEnum
+from enum import Enum
 
 
-class Category(StrEnum):
+class Category(Enum):
     """Roto scoring category.
 
-    ``StrEnum`` members *are* strings, so existing code that compares
-    category values to bare strings (``cat == "HR"``, ``cat in {"ERA",
-    "WHIP"}``, dict lookups keyed on ``"R"``) continues to work
-    unchanged. New code should prefer the enum members for type safety.
+    Plain ``Enum`` (not ``StrEnum``): members are not strings. Compare
+    against ``Category`` members directly (``cat == Category.HR``), and
+    use ``.value`` at I/O boundaries when you need the uppercase
+    string form for JSON/Redis.
     """
 
     R = "R"

@@ -357,7 +357,7 @@ def project_team_sds(
     roster,
     *,
     displacement: bool = True,
-) -> dict[Category, float]:
+) -> dict[str, float]:
     """Aggregate per-player projection variance into team-level SDs.
 
     Uses ``STAT_VARIANCE`` (per-stat CV calibrated from 2022-2024
@@ -374,8 +374,10 @@ def project_team_sds(
     ``displacement`` matches :func:`project_team_stats` — bench excluded,
     IL players displace their worst active positional match.
 
-    Returns ``{cat: sd}`` for every category in ``ALL_CATS``. Empty
-    roster returns zeros.
+    Returns ``{cat: sd}`` keyed by the uppercase string form (``"R"``,
+    ``"HR"``, …) for every category in ``ALL_CATS``. String keys keep the
+    result JSON-serializable at the cache boundary. Empty roster returns
+    zeros.
     """
     if displacement:
         roster = _apply_displacement(roster)
@@ -398,24 +400,24 @@ def project_team_sds(
                 p_sum_sq[k] += v * v
             total_ip += _stat(p, "ip")
 
-    sds: dict[Category, float] = {c: 0.0 for c in ALL_CATS}
+    sds: dict[str, float] = {c.value: 0.0 for c in ALL_CATS}
     for stat_key, cat in [
         ("r", Category.R),
         ("hr", Category.HR),
         ("rbi", Category.RBI),
         ("sb", Category.SB),
     ]:
-        sds[cat] = STAT_VARIANCE[stat_key] * sqrt(h_sum_sq[stat_key])
+        sds[cat.value] = STAT_VARIANCE[stat_key] * sqrt(h_sum_sq[stat_key])
     for stat_key, cat in [("w", Category.W), ("k", Category.K), ("sv", Category.SV)]:
-        sds[cat] = STAT_VARIANCE[stat_key] * sqrt(p_sum_sq[stat_key])
+        sds[cat.value] = STAT_VARIANCE[stat_key] * sqrt(p_sum_sq[stat_key])
     if total_ab > 0:
-        sds[Category.AVG] = STAT_VARIANCE["h"] * sqrt(h_sum_sq["h"]) / total_ab
+        sds[Category.AVG.value] = STAT_VARIANCE["h"] * sqrt(h_sum_sq["h"]) / total_ab
     if total_ip > 0:
-        sds[Category.ERA] = 9.0 * STAT_VARIANCE["er"] * sqrt(p_sum_sq["er"]) / total_ip
+        sds[Category.ERA.value] = 9.0 * STAT_VARIANCE["er"] * sqrt(p_sum_sq["er"]) / total_ip
         whip_var = (STAT_VARIANCE["bb"] ** 2) * p_sum_sq["bb"] + (
             STAT_VARIANCE["h_allowed"] ** 2
         ) * p_sum_sq["h_allowed"]
-        sds[Category.WHIP] = sqrt(whip_var) / total_ip
+        sds[Category.WHIP.value] = sqrt(whip_var) / total_ip
     return sds
 
 
@@ -444,13 +446,17 @@ def build_projected_standings(
 def build_team_sds(
     team_rosters: dict[str, list],
     sd_scale: float,
-) -> dict[str, dict[Category, float]]:
+) -> dict[str, dict[str, float]]:
     """Build the team_sds dict written to the projections cache.
 
     Each team's per-category SDs from :func:`project_team_sds` are
     scaled by ``sd_scale`` — typically ``sqrt(fraction_remaining)`` so
     variance damps as the season progresses and less of the roto total
     is still up for grabs.
+
+    Keys are the uppercase string category codes (``"R"``, ``"HR"``, …)
+    so the result is JSON-serializable for the projections cache. In
+    memory, callers index by ``cat.value`` where ``cat: Category``.
     """
     return {
         tname: {
@@ -463,7 +469,7 @@ def build_team_sds(
 def score_roto(
     all_team_stats: dict,
     *,
-    team_sds: dict[str, dict[Category, float]] | None = None,
+    team_sds: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Assign expected-value roto points per team per category.
 
@@ -492,15 +498,16 @@ def score_roto(
 
     for cat in ALL_CATS:
         higher_is_better = cat not in INVERSE_CATS
+        cat_key = cat.value
         for me in teams:
-            mu_me = all_team_stats[me][cat]
-            sd_me = team_sds.get(me, {}).get(cat, 0.0) if team_sds else 0.0
+            mu_me = all_team_stats[me][cat_key]
+            sd_me = team_sds.get(me, {}).get(cat_key, 0.0) if team_sds else 0.0
             pts = 1.0
             for other in teams:
                 if other is me:
                     continue
-                mu_o = all_team_stats[other][cat]
-                sd_o = team_sds.get(other, {}).get(cat, 0.0) if team_sds else 0.0
+                mu_o = all_team_stats[other][cat_key]
+                sd_o = team_sds.get(other, {}).get(cat_key, 0.0) if team_sds else 0.0
                 pts += _prob_beats(
                     mu_me,
                     mu_o,
@@ -508,9 +515,9 @@ def score_roto(
                     sd_o,
                     higher_is_better=higher_is_better,
                 )
-            results[me][f"{cat}_pts"] = pts
+            results[me][f"{cat.value}_pts"] = pts
 
     for t in results:
-        results[t]["total"] = sum(results[t].get(f"{c}_pts", 0.0) for c in ALL_CATS)
+        results[t]["total"] = sum(results[t].get(f"{c.value}_pts", 0.0) for c in ALL_CATS)
 
     return results

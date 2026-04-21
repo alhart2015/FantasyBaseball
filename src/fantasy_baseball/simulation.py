@@ -28,7 +28,6 @@ from fantasy_baseball.utils.constants import (
     REPLACEMENT_RP,
     REPLACEMENT_SP,
     STAT_VARIANCE,
-    Category,
 )
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
@@ -479,7 +478,7 @@ def run_monte_carlo(
     all_totals: dict[str, list[float]] = {name: [] for name in team_names}
     mc_wins = {name: 0 for name in team_names}
     mc_top3 = {name: 0 for name in team_names}
-    user_cat_pts: dict[Category, list[float]] = {c: [] for c in ALL_CATS}
+    user_cat_pts: dict[str, list[float]] = {c.value: [] for c in ALL_CATS}
 
     for i in range(n_iterations):
         if progress_cb and i % 200 == 0:
@@ -497,7 +496,7 @@ def run_monte_carlo(
                 mc_top3[name] += 1
             if name == user_team_name:
                 for c in ALL_CATS:
-                    user_cat_pts[c].append(pts.get(f"{c}_pts", 0))
+                    user_cat_pts[c.value].append(pts.get(f"{c.value}_pts", 0))
 
     n = n_iterations
     team_results = {}
@@ -513,8 +512,8 @@ def run_monte_carlo(
 
     category_risk = {}
     for c in ALL_CATS:
-        arr = np.array(user_cat_pts[c])
-        category_risk[c] = {
+        arr = np.array(user_cat_pts[c.value])
+        category_risk[c.value] = {
             "median_pts": round(float(np.median(arr)), 1),
             "p10": round(float(np.percentile(arr, 10)), 1),
             "p90": round(float(np.percentile(arr, 90)), 1),
@@ -572,7 +571,7 @@ def run_ros_monte_carlo(
     all_totals: dict[str, list[float]] = {name: [] for name in team_names}
     mc_wins = {name: 0 for name in team_names}
     mc_top3 = {name: 0 for name in team_names}
-    user_cat_pts: dict[Category, list[float]] = {c: [] for c in ALL_CATS}
+    user_cat_pts: dict[str, list[float]] = {c.value: [] for c in ALL_CATS}
 
     for i in range(n_iterations):
         if progress_cb and i % 200 == 0:
@@ -597,7 +596,7 @@ def run_ros_monte_carlo(
                 mc_top3[name] += 1
             if name == user_team_name:
                 for c in ALL_CATS:
-                    user_cat_pts[c].append(pts.get(f"{c}_pts", 0))
+                    user_cat_pts[c.value].append(pts.get(f"{c.value}_pts", 0))
 
     n = n_iterations
     team_results = {}
@@ -613,8 +612,8 @@ def run_ros_monte_carlo(
 
     category_risk = {}
     for c in ALL_CATS:
-        arr = np.array(user_cat_pts[c])
-        category_risk[c] = {
+        arr = np.array(user_cat_pts[c.value])
+        category_risk[c.value] = {
             "median_pts": round(float(np.median(arr)), 1),
             "p10": round(float(np.percentile(arr, 10)), 1),
             "p90": round(float(np.percentile(arr, 90)), 1),

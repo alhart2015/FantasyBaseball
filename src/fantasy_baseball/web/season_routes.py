@@ -277,7 +277,7 @@ def register_routes(app: Flask) -> None:
             baseline_meta=baseline_meta,
             rest_of_season_mc=rest_of_season_mc_data,
             rest_of_season_mgmt_mc=rest_of_season_mgmt_mc_data,
-            categories=ALL_CATEGORIES,
+            categories=[c.value for c in ALL_CATEGORIES],
         )
 
     @app.route("/lineup")
@@ -332,7 +332,7 @@ def register_routes(app: Flask) -> None:
             meta=meta,
             active_page="roster_audit",
             audit=audit_raw or [],
-            categories=ALL_CATEGORIES,
+            categories=[c.value for c in ALL_CATEGORIES],
         )
 
     @app.route("/waivers-trades")
@@ -864,8 +864,8 @@ def register_routes(app: Flask) -> None:
             active_page="luck",
             spoe_data=spoe_data,
             snapshot_date=meta.get("last_refresh", latest),
-            categories=ALL_CATEGORIES,
-            rate_stats=RATE_STATS,
+            categories=[c.value for c in ALL_CATEGORIES],
+            rate_stats={c.value for c in RATE_STATS},
         )
 
     @app.route("/transactions")

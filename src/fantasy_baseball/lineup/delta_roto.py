@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
+from fantasy_baseball.utils.constants import ALL_CATEGORIES
 
 if TYPE_CHECKING:
     from fantasy_baseball.models.player import Player
@@ -26,7 +26,7 @@ class CategoryDelta:
 @dataclass
 class DeltaRotoResult:
     total: float
-    categories: dict[Category, CategoryDelta]
+    categories: dict[str, CategoryDelta]
     before_total: float
     after_total: float
 
@@ -54,10 +54,10 @@ def score_swap(
     projection uncertainty, defensive vulnerability, and boundary
     proximity via the sigmoid on pairwise win probabilities.
     """
-    categories: dict[Category, CategoryDelta] = {}
+    categories: dict[str, CategoryDelta] = {}
     for cat in ALL_CATEGORIES:
-        rd = roto_after[team_name][f"{cat}_pts"] - roto_before[team_name][f"{cat}_pts"]
-        categories[cat] = CategoryDelta(roto_delta=rd)
+        rd = roto_after[team_name][f"{cat.value}_pts"] - roto_before[team_name][f"{cat.value}_pts"]
+        categories[cat.value] = CategoryDelta(roto_delta=rd)
 
     return DeltaRotoResult(
         total=roto_after[team_name]["total"] - roto_before[team_name]["total"],
@@ -74,7 +74,7 @@ def compute_delta_roto(
     projected_standings: list[dict],
     team_name: str,
     *,
-    team_sds: dict[str, dict[Category, float]] | None,
+    team_sds: dict[str, dict[str, float]] | None,
 ) -> DeltaRotoResult:
     """Compute deltaRoto for dropping one player and adding another.
 

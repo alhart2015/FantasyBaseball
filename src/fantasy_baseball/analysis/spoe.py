@@ -226,16 +226,17 @@ def compute_current_spoe(
     for team in sorted(common):
         total_spoe = 0.0
         for cat in ALL_CATEGORIES:
-            proj_pts = projected_roto[team].get(f"{cat}_pts", 0)
-            act_pts = actual_roto[team].get(f"{cat}_pts", 0)
+            key = cat.value
+            proj_pts = projected_roto[team].get(f"{key}_pts", 0)
+            act_pts = actual_roto[team].get(f"{key}_pts", 0)
             spoe = act_pts - proj_pts
             total_spoe += spoe
             results.append(
                 {
                     "team": team,
-                    "category": cat,
-                    "projected_stat": expected_stats[team][cat],
-                    "actual_stat": actual_stats[team][cat],
+                    "category": key,
+                    "projected_stat": expected_stats[team][key],
+                    "actual_stat": actual_stats[team][key],
                     "projected_pts": proj_pts,
                     "actual_pts": act_pts,
                     "spoe": spoe,

@@ -34,7 +34,6 @@ from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
     HITTER_PROJ_KEYS,
     PITCHER_PROJ_KEYS,
-    Category,
 )
 from fantasy_baseball.utils.constants import (
     INVERSE_STATS as INVERSE_CATS,
@@ -208,7 +207,7 @@ def format_standings_for_display(
     standings: StandingsSnapshot,
     user_team_name: str,
     *,
-    team_sds: dict[str, dict[Category, float]] | None = None,
+    team_sds: dict[str, dict[str, float]] | None = None,
 ) -> dict:
     """Transform standings snapshot into display-ready structure with roto points and color codes.
 
@@ -700,7 +699,7 @@ def compute_comparison_standings(
     user_team_name: str,
     *,
     roster_player_projection: "Player | None" = None,
-    team_sds: dict[str, dict[Category, float]] | None = None,
+    team_sds: dict[str, dict[str, float]] | None = None,
 ) -> dict:
     """Compute before/after roto standings for a player swap.
 
@@ -796,7 +795,7 @@ def _compute_color_intensity(
             t = (v - lo) / span
             if cat in INVERSE_CATS:
                 t = 1.0 - t
-            out[name][cat] = 2.0 * t - 1.0
+            out[name][cat.value] = 2.0 * t - 1.0
 
     # Total column
     lo_t, hi_t = min(team_totals.values()), max(team_totals.values())

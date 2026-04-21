@@ -16,7 +16,7 @@ from fantasy_baseball.trades.evaluate import (
     aggregate_player_stats,
     apply_swap_delta,
 )
-from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
+from fantasy_baseball.utils.constants import ALL_CATEGORIES
 
 
 @dataclass
@@ -52,7 +52,7 @@ class MultiTradeResult:
     legal: bool
     reason: str | None
     delta_total: float
-    categories: dict[Category, CategoryDelta]
+    categories: dict[str, CategoryDelta]
 
 
 def player_key(player: Player) -> str:
@@ -88,7 +88,7 @@ def evaluate_multi_trade(
     opp_rosters: dict[str, list[Player]],
     waiver_pool: dict[str, Player],
     projected_standings: list[dict],
-    team_sds: dict[str, dict[Category, float]] | None,
+    team_sds: dict[str, dict[str, float]] | None,
     roster_slots: dict,
 ) -> MultiTradeResult:
     """Evaluate an arbitrary N-for-M trade with optional drops and adds.
@@ -210,13 +210,13 @@ def evaluate_multi_trade(
         team_sds=team_sds,
     )
 
-    categories: dict[Category, CategoryDelta] = {}
+    categories: dict[str, CategoryDelta] = {}
     total_delta = 0.0
     for cat in ALL_CATEGORIES:
-        before_pts = before_roto[hart_name][f"{cat}_pts"]
-        after_pts = after_roto[hart_name][f"{cat}_pts"]
+        before_pts = before_roto[hart_name][f"{cat.value}_pts"]
+        after_pts = after_roto[hart_name][f"{cat.value}_pts"]
         delta = after_pts - before_pts
-        categories[cat] = CategoryDelta(
+        categories[cat.value] = CategoryDelta(
             before=before_pts,
             after=after_pts,
             delta=delta,

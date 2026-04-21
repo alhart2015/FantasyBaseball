@@ -3,6 +3,7 @@ from datetime import date
 import pytest
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
+from fantasy_baseball.utils.constants import Category
 
 
 def _list_to_snapshot(standings_list: list[dict]) -> StandingsSnapshot:
@@ -188,24 +189,24 @@ class TestCalculateLeverage:
         denoms = get_sgp_denominators()
         standings = _list_to_snapshot([
             {"name": "Above", "rank": 1, "stats": {
-                "R": 100 + denoms["R"], "HR": 100 + denoms["HR"],
-                "RBI": 100 + denoms["RBI"], "SB": 100 + denoms["SB"],
-                "AVG": 0.270 + denoms["AVG"],
-                "W": 100 + denoms["W"], "K": 100 + denoms["K"],
-                "SV": 100 + denoms["SV"],
-                "ERA": 3.50 - denoms["ERA"], "WHIP": 1.20 - denoms["WHIP"],
+                "R": 100 + denoms[Category.R], "HR": 100 + denoms[Category.HR],
+                "RBI": 100 + denoms[Category.RBI], "SB": 100 + denoms[Category.SB],
+                "AVG": 0.270 + denoms[Category.AVG],
+                "W": 100 + denoms[Category.W], "K": 100 + denoms[Category.K],
+                "SV": 100 + denoms[Category.SV],
+                "ERA": 3.50 - denoms[Category.ERA], "WHIP": 1.20 - denoms[Category.WHIP],
             }},
             {"name": "User", "rank": 2, "stats": {
                 "R": 100, "HR": 100, "RBI": 100, "SB": 100, "AVG": 0.270,
                 "W": 100, "K": 100, "SV": 100, "ERA": 3.50, "WHIP": 1.20,
             }},
             {"name": "Below", "rank": 3, "stats": {
-                "R": 100 - denoms["R"], "HR": 100 - denoms["HR"],
-                "RBI": 100 - denoms["RBI"], "SB": 100 - denoms["SB"],
-                "AVG": 0.270 - denoms["AVG"],
-                "W": 100 - denoms["W"], "K": 100 - denoms["K"],
-                "SV": 100 - denoms["SV"],
-                "ERA": 3.50 + denoms["ERA"], "WHIP": 1.20 + denoms["WHIP"],
+                "R": 100 - denoms[Category.R], "HR": 100 - denoms[Category.HR],
+                "RBI": 100 - denoms[Category.RBI], "SB": 100 - denoms[Category.SB],
+                "AVG": 0.270 - denoms[Category.AVG],
+                "W": 100 - denoms[Category.W], "K": 100 - denoms[Category.K],
+                "SV": 100 - denoms[Category.SV],
+                "ERA": 3.50 + denoms[Category.ERA], "WHIP": 1.20 + denoms[Category.WHIP],
             }},
         ])
         leverage = calculate_leverage(standings, "User", season_progress=1.0)

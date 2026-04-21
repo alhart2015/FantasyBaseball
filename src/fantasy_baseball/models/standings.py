@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Iterator
 
+from fantasy_baseball.utils.constants import Category
+
 # Canonical category order — used for iteration and display
 CATEGORY_ORDER: tuple[str, ...] = (
     "R", "HR", "RBI", "SB", "AVG",
@@ -28,6 +30,21 @@ _KEY_TO_FIELD: dict[str, str] = {
     "R": "r", "HR": "hr", "RBI": "rbi", "SB": "sb", "AVG": "avg",
     "W": "w", "K": "k", "SV": "sv", "ERA": "era", "WHIP": "whip",
 }
+
+
+def _normalize_key(key: Any) -> str | None:
+    """Return the uppercase string form of a category key, or None if unknown.
+
+    Accepts either a ``Category`` enum member or a bare uppercase string
+    (``"R"``, ``"HR"``, …) — during the StrEnum→Enum migration, the
+    dict-compat surface needs to keep working for callers that still
+    pass strings while also accepting the new enum-typed keys.
+    """
+    if isinstance(key, Category):
+        return key.value
+    if isinstance(key, str):
+        return key
+    return None
 
 
 @dataclass
@@ -45,14 +62,16 @@ class CategoryStats:
 
     # -- Dict-compat surface (deleted in Step 9 of the migration) --
 
-    def __getitem__(self, key: str) -> float:
-        field_name = _KEY_TO_FIELD.get(key)
+    def __getitem__(self, key: str | Category) -> float:
+        normalized = _normalize_key(key)
+        field_name = _KEY_TO_FIELD.get(normalized) if normalized is not None else None
         if field_name is None:
             raise KeyError(key)
         return float(getattr(self, field_name))
 
-    def get(self, key: str, default: float = 0.0) -> float:
-        field_name = _KEY_TO_FIELD.get(key)
+    def get(self, key: str | Category, default: float = 0.0) -> float:
+        normalized = _normalize_key(key)
+        field_name = _KEY_TO_FIELD.get(normalized) if normalized is not None else None
         if field_name is None:
             return default
         return float(getattr(self, field_name))

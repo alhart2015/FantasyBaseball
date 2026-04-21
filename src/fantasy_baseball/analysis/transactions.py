@@ -25,7 +25,6 @@ from fantasy_baseball.utils.constants import (
     REPLACEMENT_HITTER,
     REPLACEMENT_RP,
     REPLACEMENT_SP,
-    Category,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_era, calculate_whip
@@ -325,7 +324,7 @@ def _delta_roto(
     loses_ros: dict,
     gains_ros: dict,
     projected_standings: list[dict],
-    team_sds: dict[str, dict[Category, float]] | None,
+    team_sds: dict[str, dict[str, float]] | None,
 ) -> float:
     """Return the team's total-ΔRoto from swapping ``loses_ros`` → ``gains_ros``.
 
@@ -363,7 +362,7 @@ def score_transaction(
     season_end: date,
     *,
     partner: dict | None = None,
-    team_sds: dict[str, dict[Category, float]] | None,
+    team_sds: dict[str, dict[str, float]] | None,
 ) -> dict:
     """Compute ΔRoto for a transaction.
 

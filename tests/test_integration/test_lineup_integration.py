@@ -262,8 +262,8 @@ class TestLeverageIntegration:
         )
         expected = 1.0 / len(ALL_CATEGORIES)  # 0.1 for 10 categories
         for cat in ALL_CATEGORIES:
-            assert leverage[cat] == pytest.approx(expected, abs=0.02), (
-                f"Pre-season {cat} leverage {leverage[cat]:.4f} deviates "
+            assert leverage[cat.value] == pytest.approx(expected, abs=0.02), (
+                f"Pre-season {cat} leverage {leverage[cat.value]:.4f} deviates "
                 f"from expected equal weight {expected:.4f}"
             )
 
@@ -354,8 +354,8 @@ class TestHitterOptimizerIntegration:
             _make_hitter("Util Filler", ["1B", "DH"], 60, 15, 55, 2, .252, 460),
         ]
         standings = [
-            {"name": "Us", "team_key": "", "rank": 0, "stats": {c: 0.0 for c in ALL_CATEGORIES}},
-            {"name": "Rival", "team_key": "", "rank": 1, "stats": {c: 1.0 for c in ALL_CATEGORIES}},
+            {"name": "Us", "team_key": "", "rank": 0, "stats": {c.value: 0.0 for c in ALL_CATEGORIES}},
+            {"name": "Rival", "team_key": "", "rank": 1, "stats": {c.value: 1.0 for c in ALL_CATEGORIES}},
         ]
 
         lineup = optimize_hitter_lineup(

@@ -20,6 +20,7 @@ from fantasy_baseball.utils.constants import (
     INVERSE_STATS,
     PITCHER_PROJ_KEYS,
     STAT_VARIANCE,
+    Category,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
@@ -107,11 +108,19 @@ def compute_player_pace(
         rest_of_season_key = cat.lower()
         rest_of_season_val = rest_of_season_stats.get(rest_of_season_key)
         pre_val = projected_stats.get(rest_of_season_key)
-        denom = sgp_denoms.get(cat)
+        try:
+            cat_enum = Category(cat)
+        except ValueError:
+            return 0.0
+        # sgp_denoms may be keyed by Category (library callers) or by the
+        # uppercase string form (tests, external callers) — check both.
+        denom = sgp_denoms.get(cat_enum)
+        if denom is None:
+            denom = sgp_denoms.get(cat)
         if rest_of_season_val is None or pre_val is None or not denom:
             return 0.0
         dev = (rest_of_season_val - pre_val) / denom
-        if cat in INVERSE_STATS:
+        if cat_enum in INVERSE_STATS:
             dev = -dev
         return float(round(dev, 2))
 
