@@ -303,7 +303,7 @@ class TestBlendWithQualityChecks:
                                "RBI", "SB", "AVG", "playerid"]).to_csv(
             tmp_path / "systemb-hitters.csv", index=False)
 
-        hitters, pitchers, report = blend_projections(
+        _hitters, pitchers, report = blend_projections(
             tmp_path, systems=["systema", "systemb"],
         )
         closer = pitchers[pitchers["name"] == "Closer X"].iloc[0]
@@ -315,7 +315,7 @@ class TestBlendWithQualityChecks:
     def test_progress_cb_receives_warnings(self, fixtures_dir):
         """progress_cb is called with each warning."""
         messages = []
-        hitters, pitchers, report = blend_projections(
+        _hitters, _pitchers, _report = blend_projections(
             fixtures_dir, systems=["steamer", "zips"],
             progress_cb=messages.append,
         )

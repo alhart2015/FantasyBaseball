@@ -80,7 +80,7 @@ class TestVonaPicksUntilNext:
                 scoring_mode="vona", picks_until_next=4,
             )
             mock_vona.assert_called_once()
-            _, kwargs = mock_vona.call_args
+            _, _kwargs = mock_vona.call_args
             # picks_until_next should be passed as positional arg #2
             args = mock_vona.call_args[0]
             assert args[1] == 4

@@ -257,7 +257,6 @@ def run_simulation(
     strategy_noise=0.0,
     seed=None,
     opponent_strategies_str=None,
-    verbose=False,
 ):
     """Run a single draft simulation and return results.
 
@@ -526,7 +525,7 @@ def run_simulation(
         if p is not None:
             team_players[team].append(p)
 
-    results, all_cats = _score_roto(team_players, config, full_board, board)
+    results, _all_cats = _score_roto(team_players, config, full_board, board)
 
     hart = next(t for t in results if t["team"] == config.team_name)
     rank = next(i + 1 for i, t in enumerate(results) if t["team"] == config.team_name)
@@ -894,7 +893,7 @@ def main():
         user_worst = None
 
         for _ in range(n):
-            sim_stats, sim_injuries = simulate_season(
+            sim_stats, _sim_injuries = simulate_season(
                 team_players,
                 mc_rng,
                 h_slots,
