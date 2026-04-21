@@ -34,11 +34,12 @@ class ParsedStandingsTeam:
     """Internal wire-level row used during :func:`parse_standings_raw`.
 
     ``stats`` is a sparse UPPERCASE-keyed ``{cat: value}`` mapping
-    (empty pre-season; filled via ``_fill_stat_defaults`` at the refresh
-    boundary). ``points_for`` is Yahoo's authoritative roto total and is
-    ``None`` when Yahoo hasn't scored the week yet (e.g. projected
-    standings). This row is converted to a :class:`StandingsEntry`
-    before leaving the parser.
+    (empty pre-season; missing categories fall back to
+    :class:`CategoryStats` defaults — 0 for counting stats, 99 for
+    ERA/WHIP — at conversion time). ``points_for`` is Yahoo's
+    authoritative roto total and is ``None`` when Yahoo hasn't scored
+    the week yet (e.g. projected standings). This row is converted to
+    a :class:`StandingsEntry` before leaving the parser.
     """
 
     name: str = ""
