@@ -80,6 +80,29 @@ class CategoryStats:
 
 
 @dataclass
+class CategoryPoints:
+    """Per-category roto points plus total, for one team.
+
+    Replaces the ``{"R_pts": ..., "HR_pts": ..., "total": ...}`` dict
+    returned by the old ``score_roto``. ``values`` is the per-category
+    map; ``total`` is the sum of ``values`` by default, but ``score_roto``
+    may override it with ``yahoo_points_for`` when the display layer
+    needs an exact match with Yahoo's official standings page.
+    """
+
+    values: dict[Category, float]
+    total: float
+
+    def __getitem__(self, cat: Category) -> float:
+        if not isinstance(cat, Category):
+            raise TypeError(
+                f"CategoryPoints indexing requires a Category enum, got "
+                f"{type(cat).__name__}"
+            )
+        return self.values[cat]
+
+
+@dataclass
 class StandingsEntry:
     """One team's standings row at a point in time.
 
@@ -123,3 +146,144 @@ class StandingsSnapshot:
                 )
             out[entry.team_name] = entry
         return out
+
+
+@dataclass
+class Standings:
+    """All teams' live standings at a single effective_date.
+
+    ``entries`` carry real Yahoo ``team_key`` and ``rank`` (non-optional)
+    plus ``yahoo_points_for`` when Yahoo has scored the week.
+    """
+
+    effective_date: date
+    entries: list[StandingsEntry]
+
+    def by_team(self) -> dict[str, StandingsEntry]:
+        out: dict[str, StandingsEntry] = {}
+        for entry in self.entries:
+            if entry.team_name in out:
+                raise ValueError(f"duplicate team in standings: {entry.team_name!r}")
+            out[entry.team_name] = entry
+        return out
+
+    def sorted_by_rank(self) -> list[StandingsEntry]:
+        return sorted(self.entries, key=lambda e: e.rank)
+
+    @classmethod
+    def from_json(cls, d: Mapping[str, Any]) -> Standings:
+        """Canonical shape only: {'effective_date', 'teams': [{'name', ...}]}.
+
+        Raises ``ValueError`` on legacy shapes ('team' instead of
+        'name', lowercase stat keys, missing wrapper date).
+        """
+        if not isinstance(d, Mapping) or "teams" not in d or "effective_date" not in d:
+            got = sorted(d) if isinstance(d, Mapping) else type(d).__name__
+            raise ValueError(
+                f"Standings.from_json: legacy or unknown payload shape — "
+                f"missing 'effective_date' or 'teams' wrapper (got keys: {got})"
+            )
+        eff = date.fromisoformat(d["effective_date"])
+        entries: list[StandingsEntry] = []
+        for row in d["teams"]:
+            if "team" in row and "name" not in row:
+                raise ValueError(
+                    "Standings.from_json: legacy row shape detected ('team' field "
+                    "instead of 'name') — run scripts/migrate_standings_history.py"
+                )
+            if "stats" not in row:
+                raise ValueError(
+                    f"Standings.from_json: row missing 'stats' wrapper "
+                    f"(likely legacy flat-lowercase shape): {row.get('name')!r}"
+                )
+            entries.append(StandingsEntry(
+                team_name=row["name"],
+                team_key=row["team_key"],
+                rank=int(row["rank"]),
+                stats=CategoryStats.from_dict(row["stats"]),
+                yahoo_points_for=row.get("yahoo_points_for"),
+            ))
+        return cls(effective_date=eff, entries=entries)
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "effective_date": self.effective_date.isoformat(),
+            "teams": [
+                {
+                    "name": e.team_name,
+                    "team_key": e.team_key,
+                    "rank": e.rank,
+                    "yahoo_points_for": e.yahoo_points_for,
+                    "stats": e.stats.to_dict(),
+                }
+                for e in self.entries
+            ],
+        }
+
+
+@dataclass
+class ProjectedStandingsEntry:
+    team_name: str
+    stats: CategoryStats
+
+
+@dataclass
+class ProjectedStandings:
+    effective_date: date
+    entries: list[ProjectedStandingsEntry]
+
+    def by_team(self) -> dict[str, ProjectedStandingsEntry]:
+        out: dict[str, ProjectedStandingsEntry] = {}
+        for entry in self.entries:
+            if entry.team_name in out:
+                raise ValueError(
+                    f"duplicate team in projected standings: {entry.team_name!r}"
+                )
+            out[entry.team_name] = entry
+        return out
+
+    @classmethod
+    def from_json(cls, d: Mapping[str, Any]) -> ProjectedStandings:
+        if not isinstance(d, Mapping) or "teams" not in d or "effective_date" not in d:
+            raise ValueError(
+                "ProjectedStandings.from_json: missing 'effective_date' or 'teams'"
+            )
+        return cls(
+            effective_date=date.fromisoformat(d["effective_date"]),
+            entries=[
+                ProjectedStandingsEntry(
+                    team_name=row["name"],
+                    stats=CategoryStats.from_dict(row["stats"]),
+                )
+                for row in d["teams"]
+            ],
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "effective_date": self.effective_date.isoformat(),
+            "teams": [
+                {"name": e.team_name, "stats": e.stats.to_dict()}
+                for e in self.entries
+            ],
+        }
+
+    @classmethod
+    def from_rosters(
+        cls,
+        team_rosters: Mapping[str, Any],
+        effective_date: date,
+    ) -> ProjectedStandings:
+        """Build from {team_name: roster_list} using project_team_stats."""
+        from fantasy_baseball.scoring import project_team_stats
+
+        return cls(
+            effective_date=effective_date,
+            entries=[
+                ProjectedStandingsEntry(
+                    team_name=tname,
+                    stats=project_team_stats(roster, displacement=True),
+                )
+                for tname, roster in team_rosters.items()
+            ],
+        )

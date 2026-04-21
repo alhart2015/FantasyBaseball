@@ -129,3 +129,94 @@ class TestStandingsSnapshot:
         snap = StandingsSnapshot(date(2026, 4, 14), [e1, e2])
         with pytest.raises(ValueError, match="duplicate team"):
             snap.by_team()
+
+
+class TestStandingsJSON:
+    def _canonical_payload(self):
+        return {
+            "effective_date": "2026-04-15",
+            "teams": [
+                {
+                    "name": "Alpha",
+                    "team_key": "431.l.1.t.1",
+                    "rank": 1,
+                    "yahoo_points_for": 78.5,
+                    "stats": {
+                        "R": 45, "HR": 12, "RBI": 40, "SB": 8, "AVG": 0.268,
+                        "W": 3, "K": 85, "SV": 4, "ERA": 3.21, "WHIP": 1.14,
+                    },
+                },
+            ],
+        }
+
+    def test_from_json_canonical_round_trip(self):
+        from fantasy_baseball.models.standings import Standings
+        payload = self._canonical_payload()
+        s = Standings.from_json(payload)
+        assert s.effective_date == date(2026, 4, 15)
+        assert len(s.entries) == 1
+        e = s.entries[0]
+        assert e.team_name == "Alpha"
+        assert e.team_key == "431.l.1.t.1"
+        assert e.rank == 1
+        assert e.yahoo_points_for == 78.5
+        assert e.stats.r == 45
+        assert e.stats.whip == pytest.approx(1.14)
+        assert s.to_json() == payload
+
+    def test_from_json_rejects_legacy_shape(self):
+        from fantasy_baseball.models.standings import Standings
+        legacy = {
+            "teams": [
+                {
+                    "team": "Alpha",
+                    "team_key": "431.l.1.t.1",
+                    "rank": 1,
+                    "r": 45, "hr": 12, "rbi": 40, "sb": 8, "avg": 0.268,
+                    "w": 3, "k": 85, "sv": 4, "era": 3.21, "whip": 1.14,
+                },
+            ],
+        }
+        with pytest.raises(ValueError, match=r"legacy|unknown|name"):
+            Standings.from_json(legacy)
+
+
+class TestProjectedStandingsJSON:
+    def test_round_trip(self):
+        from fantasy_baseball.models.standings import (
+            CategoryStats,
+            ProjectedStandings,
+            ProjectedStandingsEntry,
+        )
+
+        ps = ProjectedStandings(
+            effective_date=date(2026, 4, 15),
+            entries=[
+                ProjectedStandingsEntry(
+                    team_name="Alpha",
+                    stats=CategoryStats(r=600, hr=250, era=3.8, whip=1.18),
+                ),
+            ],
+        )
+        round_tripped = ProjectedStandings.from_json(ps.to_json())
+        assert round_tripped == ps
+
+
+class TestCategoryPoints:
+    def test_getitem_and_total(self):
+        from fantasy_baseball.models.standings import CategoryPoints
+        from fantasy_baseball.utils.constants import Category
+
+        cp = CategoryPoints(
+            values={Category.R: 7.0, Category.HR: 4.5},
+            total=11.5,
+        )
+        assert cp[Category.R] == 7.0
+        assert cp[Category.HR] == 4.5
+        assert cp.total == 11.5
+
+    def test_getitem_rejects_string(self):
+        from fantasy_baseball.models.standings import CategoryPoints
+        cp = CategoryPoints(values={}, total=0.0)
+        with pytest.raises(TypeError, match="Category"):
+            _ = cp["R"]
