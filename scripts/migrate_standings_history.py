@@ -40,14 +40,14 @@ def _from_legacy_json(payload: dict, *, snapshot_date: str) -> Standings:
         if "team" not in row:
             raise ValueError(f"{snapshot_date}: row missing 'team' field — not legacy shape either")
         stats = CategoryStats(
-            r=float(row.get("r") or 0.0),
-            hr=float(row.get("hr") or 0.0),
-            rbi=float(row.get("rbi") or 0.0),
-            sb=float(row.get("sb") or 0.0),
-            avg=float(row.get("avg") or 0.0),
-            w=float(row.get("w") or 0.0),
-            k=float(row.get("k") or 0.0),
-            sv=float(row.get("sv") or 0.0),
+            r=float(row["r"]) if row.get("r") is not None else 0.0,
+            hr=float(row["hr"]) if row.get("hr") is not None else 0.0,
+            rbi=float(row["rbi"]) if row.get("rbi") is not None else 0.0,
+            sb=float(row["sb"]) if row.get("sb") is not None else 0.0,
+            avg=float(row["avg"]) if row.get("avg") is not None else 0.0,
+            w=float(row["w"]) if row.get("w") is not None else 0.0,
+            k=float(row["k"]) if row.get("k") is not None else 0.0,
+            sv=float(row["sv"]) if row.get("sv") is not None else 0.0,
             era=float(row["era"]) if row.get("era") is not None else 99.0,
             whip=float(row["whip"]) if row.get("whip") is not None else 99.0,
         )
@@ -89,7 +89,10 @@ def rewrite_hash(client) -> dict[str, int]:
             print(f"[{snap_date}] already canonical — skip")
             stats["skipped"] += 1
             continue
-        except ValueError:
+        except (ValueError, KeyError, TypeError):
+            # Partially-canonical rows (missing team_key/rank) raise KeyError;
+            # malformed types raise TypeError. Fall through to the legacy parser
+            # in all cases so a single bad row does not halt the migration.
             pass
 
         try:

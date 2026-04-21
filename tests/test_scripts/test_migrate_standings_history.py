@@ -2,6 +2,7 @@
 
 import json
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,11 @@ from migrate_standings_history import (  # type: ignore[import-not-found]  # noq
 )
 
 from fantasy_baseball.data import redis_store  # noqa: E402
-from fantasy_baseball.models.standings import Standings  # noqa: E402
+from fantasy_baseball.models.standings import (  # noqa: E402
+    CategoryStats,
+    Standings,
+    StandingsEntry,
+)
 
 LEGACY_DAY = {
     "teams": [
@@ -65,3 +70,99 @@ def test_rewrite_hash_is_idempotent(fake_redis):
     stats = rewrite_hash(fake_redis)
     assert stats["rewritten"] == 0
     assert stats["skipped"] == 1
+
+
+def test_rewrite_hash_counts_corrupt_json_as_error(fake_redis):
+    fake_redis.hset(redis_store.STANDINGS_HISTORY_KEY, "2026-04-15", "not-json")
+    stats = rewrite_hash(fake_redis)
+    assert stats["errors"] == 1
+    assert stats["rewritten"] == 0
+    assert stats["skipped"] == 0
+
+
+def test_rewrite_hash_counts_non_dict_payload_as_error(fake_redis):
+    fake_redis.hset(redis_store.STANDINGS_HISTORY_KEY, "2026-04-15", json.dumps([1, 2, 3]))
+    stats = rewrite_hash(fake_redis)
+    assert stats["errors"] == 1
+    assert stats["rewritten"] == 0
+    assert stats["skipped"] == 0
+
+
+def test_rewrite_hash_handles_mixed_hash(fake_redis):
+    canonical = Standings(
+        effective_date=date(2026, 4, 16),
+        entries=[
+            StandingsEntry(
+                team_name="Beta",
+                team_key="431.l.1.t.2",
+                rank=1,
+                stats=CategoryStats(r=10),
+                yahoo_points_for=None,
+            )
+        ],
+    ).to_json()
+    fake_redis.hset(redis_store.STANDINGS_HISTORY_KEY, "2026-04-15", json.dumps(LEGACY_DAY))
+    fake_redis.hset(redis_store.STANDINGS_HISTORY_KEY, "2026-04-16", json.dumps(canonical))
+    stats = rewrite_hash(fake_redis)
+    assert stats["rewritten"] == 1
+    assert stats["skipped"] == 1
+    assert stats["errors"] == 0
+
+
+def test_rewrite_hash_handles_legacy_row_missing_era(fake_redis):
+    legacy_no_era = {
+        "teams": [
+            {
+                "team": "Delta",
+                "team_key": "431.l.1.t.3",
+                "rank": 2,
+                "r": 30,
+                "hr": 5,
+                "rbi": 22,
+                "sb": 1,
+                "avg": 0.240,
+                "w": 2,
+                "k": 40,
+                "sv": 0,
+                # era and whip intentionally omitted
+            },
+        ],
+    }
+    fake_redis.hset(
+        redis_store.STANDINGS_HISTORY_KEY,
+        "2026-04-17",
+        json.dumps(legacy_no_era),
+    )
+    stats = rewrite_hash(fake_redis)
+    assert stats["rewritten"] == 1
+    reloaded = redis_store.get_standings_day(fake_redis, "2026-04-17")
+    assert reloaded is not None
+    assert reloaded.entries[0].stats.era == 99.0
+    assert reloaded.entries[0].stats.whip == 99.0
+
+
+def test_rewrite_hash_survives_partially_canonical_row(fake_redis):
+    # Canonical wrapper + canonical field names on the row (has 'name',
+    # has 'stats'), but MISSING team_key and rank. Standings.from_json
+    # raises KeyError on this shape. Before the broaden-except fix, this
+    # would halt the migration; now the canonical probe falls through
+    # to the legacy parser, which fails ValueError (no 'team' key) and
+    # gets counted as an error without raising.
+    partial = {
+        "effective_date": "2026-04-16",
+        "teams": [
+            {
+                "name": "Gamma",
+                "stats": {"R": 5},
+            }
+        ],
+    }
+    fake_redis.hset(
+        redis_store.STANDINGS_HISTORY_KEY,
+        "2026-04-16",
+        json.dumps(partial),
+    )
+    stats = rewrite_hash(fake_redis)
+    assert stats["errors"] == 1
+    assert stats["rewritten"] == 0
+    assert stats["skipped"] == 0
