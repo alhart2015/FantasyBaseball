@@ -1,10 +1,10 @@
-from fantasy_baseball.models.standings import StandingsSnapshot
+from fantasy_baseball.models.standings import Standings
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS, Category
 
 FULL_CONFIDENCE_GAMES: int = 81
 
 
-def _estimate_season_progress(standings: StandingsSnapshot) -> float:
+def _estimate_season_progress(standings: Standings) -> float:
     """Estimate season progress (0.0 to 1.0) from Redis game log data.
 
     Reads the season_progress Redis key (written during game log fetch).
@@ -32,7 +32,7 @@ def _estimate_season_progress(standings: StandingsSnapshot) -> float:
 
 
 def _leverage_from_standings(
-    standings: StandingsSnapshot,
+    standings: Standings,
     user_team_name: str,
     attack_weight: float,
     defense_weight: float,
@@ -129,13 +129,13 @@ def _leverage_from_standings(
 
 
 def calculate_leverage(
-    standings: StandingsSnapshot,
+    standings: Standings,
     user_team_name: str,
     *,
     attack_weight: float = 0.6,
     defense_weight: float = 0.4,
     season_progress: float | None = None,
-    projected_standings: StandingsSnapshot | None = None,
+    projected_standings: Standings | None = None,
 ) -> dict[str, float]:
     """Calculate leverage weights for each stat category based on standings gaps.
 

@@ -2,13 +2,13 @@ from datetime import date
 
 import pytest
 from fantasy_baseball.lineup.leverage import calculate_leverage
-from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
+from fantasy_baseball.models.standings import CategoryStats, Standings, StandingsEntry
 from fantasy_baseball.utils.constants import Category
 
 
-def _list_to_snapshot(standings_list: list[dict]) -> StandingsSnapshot:
-    """Convert a test standings list[dict] to StandingsSnapshot."""
-    return StandingsSnapshot(
+def _list_to_snapshot(standings_list: list[dict]) -> Standings:
+    """Convert a test standings list[dict] to Standings."""
+    return Standings(
         effective_date=date.min,
         entries=[
             StandingsEntry(
@@ -122,7 +122,7 @@ class TestCalculateLeverage:
             if e.team_name == "User Team" else e
             for e in base.entries
         ]
-        standings = StandingsSnapshot(effective_date=base.effective_date, entries=entries)
+        standings = Standings(effective_date=base.effective_date, entries=entries)
         # Next best is Team 1 with 90 — gap of 110
         leverage = calculate_leverage(standings, "User Team", season_progress=1.0)
         # SB should have the lowest or near-lowest leverage
@@ -143,7 +143,7 @@ class TestCalculateLeverage:
             if e.team_name == "User Team" else e
             for e in base.entries
         ]
-        standings = StandingsSnapshot(effective_date=base.effective_date, entries=entries)
+        standings = Standings(effective_date=base.effective_date, entries=entries)
         # Next worst is Team 10 with 20 — gap of 19
         leverage = calculate_leverage(standings, "User Team", season_progress=1.0)
         min_lev = min(leverage.values())
@@ -174,7 +174,7 @@ class TestCalculateLeverage:
             elif e.team_name == "Team 6":
                 e = dataclasses.replace(e, stats=dataclasses.replace(e.stats, sb=51))
             entries.append(e)
-        standings = StandingsSnapshot(effective_date=base.effective_date, entries=entries)
+        standings = Standings(effective_date=base.effective_date, entries=entries)
         leverage = calculate_leverage(standings, "User Team", season_progress=1.0)
         assert leverage["SB"] == max(leverage.values()) or leverage["SB"] > 0.15, (
             f"SB leverage ({leverage['SB']:.4f}) should be high when 5 teams "
@@ -228,7 +228,7 @@ class TestCalculateLeverage:
             elif e.team_name == "User Team":
                 e = dataclasses.replace(e, stats=dataclasses.replace(e.stats, sb=50.00))
             entries.append(e)
-        standings = StandingsSnapshot(effective_date=base.effective_date, entries=entries)
+        standings = Standings(effective_date=base.effective_date, entries=entries)
         leverage = calculate_leverage(standings, "User Team", season_progress=1.0)
         assert leverage["SB"] < 0.35, (
             f"SB leverage {leverage['SB']:.3f} too dominant for a single tied category"
