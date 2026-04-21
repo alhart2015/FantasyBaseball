@@ -19,6 +19,7 @@ import re as _re
 from typing import TypedDict
 
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key
+from fantasy_baseball.models.standings import Standings
 
 logger = logging.getLogger(__name__)
 
@@ -333,56 +334,70 @@ def get_weekly_roster_history(client) -> dict[str, list[dict]]:
 STANDINGS_HISTORY_KEY = "standings_history"
 
 
-def write_standings_snapshot(client, snapshot_date: str, snapshot: dict) -> None:
-    """Write a standings snapshot for a given date. Idempotent overwrite.
+def write_standings_snapshot(client, standings: Standings) -> None:
+    """Write a Standings snapshot keyed by its effective_date. Idempotent overwrite.
 
-    ``snapshot`` is the full payload for the day; conventionally
-    ``{"teams": [{...}, ...]}`` where each team dict has lowercase stat
-    keys (``r``, ``hr``, ...) plus ``team``, ``team_key``, ``rank``.
-    No-op when the client is None.
+    Canonical shape on disk: ``standings.to_json()`` — see spec. No-op
+    when ``client`` is None.
     """
     if client is None:
         return
-    client.hset(STANDINGS_HISTORY_KEY, snapshot_date, json.dumps(snapshot))
+    client.hset(
+        STANDINGS_HISTORY_KEY,
+        standings.effective_date.isoformat(),
+        json.dumps(standings.to_json()),
+    )
 
 
-def get_standings_day(client, snapshot_date: str) -> dict:
-    """Return the payload for one snapshot date. Empty dict on missing/corrupt/None."""
+def get_standings_day(client, snapshot_date: str) -> Standings | None:
+    """Return the Standings for one snapshot date, or None if missing/corrupt.
+
+    Raises ValueError if the stored payload is legacy-shape (see
+    ``Standings.from_json``); run scripts/migrate_standings_history.py
+    to rewrite.
+    """
     if client is None:
-        return {}
+        return None
     raw = client.hget(STANDINGS_HISTORY_KEY, snapshot_date)
     if raw is None:
-        return {}
+        return None
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        return {}
-    return data if isinstance(data, dict) else {}
+        return None
+    if not isinstance(data, dict):
+        return None
+    return Standings.from_json(data)
 
 
-def get_latest_standings(client) -> dict:
-    """Return the payload for the maximum snapshot_date in the hash."""
+def get_latest_standings(client) -> Standings | None:
+    """Return the Standings for the maximum snapshot_date in the hash."""
     if client is None:
-        return {}
+        return None
     dates = client.hkeys(STANDINGS_HISTORY_KEY)
     if not dates:
-        return {}
+        return None
     return get_standings_day(client, max(dates))
 
 
-def get_standings_history(client) -> dict[str, dict]:
-    """Return the entire history as {snapshot_date: payload}."""
+def get_standings_history(client) -> dict[str, Standings]:
+    """Return the entire history as {snapshot_date: Standings}.
+
+    Corrupt JSON entries are silently skipped (matches previous behavior).
+    Legacy-shape entries raise ValueError — by design; migration script
+    rewrites them.
+    """
     if client is None:
         return {}
     raw_map = client.hgetall(STANDINGS_HISTORY_KEY)
     if not raw_map:
         return {}
-    out: dict[str, dict] = {}
-    for date, raw in raw_map.items():
+    out: dict[str, Standings] = {}
+    for d, raw in raw_map.items():
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
             continue
         if isinstance(data, dict):
-            out[date] = data
+            out[d] = Standings.from_json(data)
     return out
