@@ -26,36 +26,6 @@ class TestCategoryStats:
         assert stats.avg == pytest.approx(0.275)
         assert stats.era == pytest.approx(3.80)
 
-    def test_getitem_compat_uppercase(self):
-        """Dict-compat access using uppercase category names (for migration)."""
-        from fantasy_baseball.models.standings import CategoryStats
-        stats = CategoryStats(r=100, hr=40, era=3.5)
-        assert stats["R"] == 100
-        assert stats["HR"] == 40
-        assert stats["ERA"] == pytest.approx(3.5)
-
-    def test_get_with_default(self):
-        from fantasy_baseball.models.standings import CategoryStats
-        stats = CategoryStats(r=100)
-        assert stats.get("R") == 100
-        assert stats.get("UNKNOWN", 42) == 42
-
-    def test_items_yields_all_categories(self):
-        from fantasy_baseball.models.standings import CategoryStats
-        stats = CategoryStats(r=100, hr=40, rbi=120, sb=15, avg=0.280,
-                              w=50, k=700, sv=20, era=3.9, whip=1.20)
-        d = dict(stats.items())
-        assert d == {
-            "R": 100, "HR": 40, "RBI": 120, "SB": 15, "AVG": pytest.approx(0.280),
-            "W": 50, "K": 700, "SV": 20, "ERA": pytest.approx(3.9), "WHIP": pytest.approx(1.20),
-        }
-
-    def test_getitem_unknown_raises(self):
-        from fantasy_baseball.models.standings import CategoryStats
-        stats = CategoryStats()
-        with pytest.raises(KeyError):
-            _ = stats["UNKNOWN"]
-
     def test_from_dict(self):
         from fantasy_baseball.models.standings import CategoryStats
         stats = CategoryStats.from_dict({
@@ -71,6 +41,44 @@ class TestCategoryStats:
         assert stats.r == 100
         assert stats.hr == 0.0
         assert stats.era == 99.0
+
+
+class TestCategoryStatsTypedAccess:
+    def test_getitem_accepts_category_enum(self):
+        from fantasy_baseball.models.standings import CategoryStats
+        from fantasy_baseball.utils.constants import Category
+
+        stats = CategoryStats(r=100, hr=40, era=3.5)
+        assert stats[Category.R] == 100
+        assert stats[Category.HR] == 40
+        assert stats[Category.ERA] == pytest.approx(3.5)
+
+    def test_getitem_rejects_bare_string(self):
+        from fantasy_baseball.models.standings import CategoryStats
+
+        stats = CategoryStats(r=100)
+        with pytest.raises(TypeError, match="Category enum"):
+            _ = stats["R"]
+
+    def test_getitem_rejects_other_types(self):
+        from fantasy_baseball.models.standings import CategoryStats
+
+        stats = CategoryStats()
+        with pytest.raises(TypeError, match="Category enum"):
+            _ = stats[0]
+
+    def test_items_yields_category_enums(self):
+        from fantasy_baseball.models.standings import CategoryStats
+        from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
+
+        stats = CategoryStats(r=100, hr=40, rbi=120, sb=15, avg=0.280,
+                              w=50, k=700, sv=20, era=3.9, whip=1.20)
+        items = list(stats.items())
+        assert [k for k, _ in items] == ALL_CATEGORIES
+        as_map = dict(items)
+        assert as_map[Category.R] == 100
+        assert as_map[Category.HR] == 40
+        assert as_map[Category.WHIP] == pytest.approx(1.20)
 
 
 from datetime import date

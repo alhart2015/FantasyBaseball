@@ -471,8 +471,14 @@ class TestRotoScoring:
 
     @pytest.fixture
     def team_stats(self, team_rosters):
-        """Project stats for all 10 teams (no variance, just raw projections)."""
-        return {team: project_team_stats(players) for team, players in team_rosters.items()}
+        """Project stats for all 10 teams (no variance, just raw projections).
+
+        Returns string-keyed dicts at the ``score_roto`` I/O boundary —
+        ``CategoryStats`` itself requires ``Category`` enum indexing.
+        """
+        return {
+            team: project_team_stats(players).to_dict() for team, players in team_rosters.items()
+        }
 
     def test_roto_points_sum_correctly(self, team_stats):
         """Each team's total roto points must equal the sum of its

@@ -546,7 +546,7 @@ class TestComparisonConsistencyInvariant:
         roster = self._build_roster()
         user_stats = project_team_stats(roster)
         projected_standings = [
-            {"name": "My Team", "team_key": "", "rank": 0, "stats": dict(user_stats)},
+            {"name": "My Team", "team_key": "", "rank": 0, "stats": user_stats.to_dict()},
             {"name": "Rival", "team_key": "", "rank": 0, "stats": {
                 "R": 680, "HR": 190, "RBI": 680, "SB": 110, "AVG": 0.255,
                 "W": 85, "K": 1100, "SV": 40, "ERA": 3.80, "WHIP": 1.25,
@@ -568,9 +568,9 @@ class TestComparisonConsistencyInvariant:
         # Invariant: "before" uses projected_standings directly — the single
         # source of truth.  No recomputation, so no drift possible.
         for cat, val in user_stats.items():
-            assert result["before"]["stats"]["My Team"][cat] == val, (
-                f"before[{cat}] diverged from projected_standings "
-                f"({result['before']['stats']['My Team'][cat]} vs {val})"
+            assert result["before"]["stats"]["My Team"][cat.value] == val, (
+                f"before[{cat.value}] diverged from projected_standings "
+                f"({result['before']['stats']['My Team'][cat.value]} vs {val})"
             )
 
     def test_swap_delta_equals_player_stat_difference(self):
@@ -584,7 +584,7 @@ class TestComparisonConsistencyInvariant:
         roster = self._build_roster()
         user_stats = project_team_stats(roster)
         projected_standings = [
-            {"name": "My Team", "team_key": "", "rank": 0, "stats": dict(user_stats)},
+            {"name": "My Team", "team_key": "", "rank": 0, "stats": user_stats.to_dict()},
         ]
 
         dropped = roster[0]  # Star Hitter

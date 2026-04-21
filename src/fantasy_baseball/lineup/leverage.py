@@ -1,5 +1,5 @@
 from fantasy_baseball.models.standings import StandingsSnapshot
-from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS, Category
 
 FULL_CONFIDENCE_GAMES: int = 81
 
@@ -25,7 +25,7 @@ def _estimate_season_progress(standings: StandingsSnapshot) -> float:
     # Fallback: estimate from league-average R (~4.6 R/game/team)
     if not standings.entries:
         return 0.0
-    total_r = sum(e.stats.get("R", 0) for e in standings.entries)
+    total_r = sum(e.stats[Category.R] for e in standings.entries)
     avg_r = total_r / len(standings.entries)
     approx_games = avg_r / 4.6
     return min(1.0, approx_games / FULL_CONFIDENCE_GAMES)
@@ -68,13 +68,11 @@ def _leverage_from_standings(
     for cat in ALL_CATEGORIES:
         key = cat.value
         reverse = cat not in INVERSE_STATS  # higher is better for most cats
-        user_val = user_entry.stats.get(cat, 0)
+        user_val = user_entry.stats[cat]
         denom = sgp_denoms.get(cat, 1.0)
 
         other_vals = [
-            entry.stats.get(cat, 0)
-            for entry in standings.entries
-            if entry.team_name != user_team_name
+            entry.stats[cat] for entry in standings.entries if entry.team_name != user_team_name
         ]
 
         if not other_vals:

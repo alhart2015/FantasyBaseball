@@ -298,10 +298,11 @@ def check_scoring():
         parsed = json.loads(blob)
         check("CategoryStats JSON round-trip", parsed["HR"] == stats.hr)
 
-        # score_roto with CategoryStats
-        roto = score_roto({"Team A": stats, "Team B": stats})
+        # score_roto consumes string-keyed dicts at the I/O boundary
+        stats_dict = stats.to_dict()
+        roto = score_roto({"Team A": stats_dict, "Team B": stats_dict})
         check(
-            "score_roto accepts CategoryStats",
+            "score_roto accepts CategoryStats.to_dict()",
             "total" in roto["Team A"],
         )
 

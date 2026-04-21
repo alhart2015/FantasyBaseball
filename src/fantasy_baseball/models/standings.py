@@ -1,50 +1,36 @@
 """League-level roto category statistics.
 
-Defines the three snapshot-layer dataclasses used by League:
+Three snapshot-layer dataclasses used by League:
 :class:`CategoryStats` (the ten roto totals), :class:`StandingsEntry`
 (one team's stats + rank), and :class:`StandingsSnapshot` (all teams
 at an effective_date).
 
-``CategoryStats`` has a small dict-compat surface (``__getitem__``,
-``get``, ``items``) so call sites that currently do
-``stats["R"]``-style access keep working during the migration. These
-compat methods get deleted in Step 9 of the spec.
+``CategoryStats`` is keyed exclusively by :class:`Category` enum. Bare
+string access raises ``TypeError``.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Iterator
+from typing import Any
 
-from fantasy_baseball.utils.constants import Category
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
 
-# Canonical category order — used for iteration and display
-CATEGORY_ORDER: tuple[str, ...] = (
-    "R", "HR", "RBI", "SB", "AVG",
-    "W", "K", "SV", "ERA", "WHIP",
-)
-
-# Map between uppercase category key and dataclass field name
-_KEY_TO_FIELD: dict[str, str] = {
-    "R": "r", "HR": "hr", "RBI": "rbi", "SB": "sb", "AVG": "avg",
-    "W": "w", "K": "k", "SV": "sv", "ERA": "era", "WHIP": "whip",
+# Private: single source of truth for Category <-> attribute mapping.
+_CAT_TO_FIELD: dict[Category, str] = {
+    Category.R:    "r",
+    Category.HR:   "hr",
+    Category.RBI:  "rbi",
+    Category.SB:   "sb",
+    Category.AVG:  "avg",
+    Category.W:    "w",
+    Category.K:    "k",
+    Category.SV:   "sv",
+    Category.ERA:  "era",
+    Category.WHIP: "whip",
 }
-
-
-def _normalize_key(key: Any) -> str | None:
-    """Return the uppercase string form of a category key, or None if unknown.
-
-    Accepts either a ``Category`` enum member or a bare uppercase string
-    (``"R"``, ``"HR"``, …) — during the StrEnum→Enum migration, the
-    dict-compat surface needs to keep working for callers that still
-    pass strings while also accepting the new enum-typed keys.
-    """
-    if isinstance(key, Category):
-        return key.value
-    if isinstance(key, str):
-        return key
-    return None
 
 
 @dataclass
@@ -60,61 +46,37 @@ class CategoryStats:
     era:  float = 99.0
     whip: float = 99.0
 
-    # -- Dict-compat surface (deleted in Step 9 of the migration) --
+    def __getitem__(self, cat: Category) -> float:
+        if not isinstance(cat, Category):
+            raise TypeError(
+                f"CategoryStats indexing requires a Category enum, got "
+                f"{type(cat).__name__}"
+            )
+        return float(getattr(self, _CAT_TO_FIELD[cat]))
 
-    def __getitem__(self, key: str | Category) -> float:
-        normalized = _normalize_key(key)
-        field_name = _KEY_TO_FIELD.get(normalized) if normalized is not None else None
-        if field_name is None:
-            raise KeyError(key)
-        return float(getattr(self, field_name))
-
-    def get(self, key: str | Category, default: float = 0.0) -> float:
-        normalized = _normalize_key(key)
-        field_name = _KEY_TO_FIELD.get(normalized) if normalized is not None else None
-        if field_name is None:
-            return default
-        return float(getattr(self, field_name))
-
-    def keys(self) -> list[str]:
-        """Return the category keys in canonical order.
-
-        Present so ``dict(cs)`` and ``**cs`` unpacking work in legacy
-        call sites (e.g. ``scripts/simulate_draft.py``) that treat the
-        return of ``project_team_stats`` as a plain mapping. Step 9
-        cleanup removes this along with the rest of the dict-compat
-        surface.
-        """
-        return list(CATEGORY_ORDER)
-
-    def __iter__(self) -> Iterator[str]:
-        """Iterate keys in canonical order (mapping protocol)."""
-        return iter(CATEGORY_ORDER)
-
-    def items(self) -> Iterator[tuple[str, float]]:
-        for key in CATEGORY_ORDER:
-            yield key, getattr(self, _KEY_TO_FIELD[key])
-
-    # -- Constructors --
+    def items(self) -> Iterator[tuple[Category, float]]:
+        for cat in ALL_CATEGORIES:
+            yield cat, float(getattr(self, _CAT_TO_FIELD[cat]))
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "CategoryStats":
-        """Build from a ``{"R": val, "HR": val, ...}`` dict.
+    def from_dict(cls, d: Mapping[str, Any]) -> CategoryStats:
+        """Build from an UPPERCASE-string-keyed dict (I/O boundary only).
 
-        Missing keys fall back to the dataclass defaults (0 for counting
-        stats, 99 for ERA/WHIP which are inverse and shouldn't default
-        to 0 — that would make a missing team rank first).
+        Missing keys fall back to dataclass defaults (0 for counting
+        stats, 99 for ERA/WHIP).
         """
         kwargs: dict[str, Any] = {}
-        for key, field_name in _KEY_TO_FIELD.items():
-            if key in d:
-                kwargs[field_name] = float(d[key])
+        for cat in ALL_CATEGORIES:
+            if cat.value in d:
+                kwargs[_CAT_TO_FIELD[cat]] = float(d[cat.value])
         return cls(**kwargs)
 
     def to_dict(self) -> dict[str, float]:
-        """Return the dict form used by cache JSON."""
-        return {key: getattr(self, field_name)
-                for key, field_name in _KEY_TO_FIELD.items()}
+        """Produce an UPPERCASE-string-keyed dict (I/O boundary only)."""
+        return {
+            cat.value: float(getattr(self, _CAT_TO_FIELD[cat]))
+            for cat in ALL_CATEGORIES
+        }
 
 
 @dataclass

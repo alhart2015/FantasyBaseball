@@ -153,7 +153,7 @@ def _score_roto(team_players, config, full_board, board):
             all_pitchers,
             config.roster_slots,
         )
-        team_stats[tname] = project_team_stats(list(hitters) + list(pitchers))
+        team_stats[tname] = project_team_stats(list(hitters) + list(pitchers)).to_dict()
         team_meta[tname] = {"nh": len(hitters), "np": len(pitchers)}
 
     roto = score_roto(team_stats)

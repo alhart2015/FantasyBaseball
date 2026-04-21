@@ -236,7 +236,8 @@ def format_standings_for_display(
 
     # CategoryStats defaults (0.0 for counting, 99.0 for ERA/WHIP)
     # handle early-season missing data — no _fill_stat_defaults needed.
-    all_stats = {e.team_name: e.stats for e in standings.entries}
+    # ``score_roto`` indexes by string cat keys, so serialize at the boundary.
+    all_stats = {e.team_name: e.stats.to_dict() for e in standings.entries}
     roto = score_roto(all_stats, team_sds=team_sds)
 
     has_yahoo_totals = all(e.yahoo_points_for is not None for e in standings.entries)
