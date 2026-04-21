@@ -19,10 +19,11 @@ from fantasy_baseball.scoring import (
     ALL_CATS,
     _prob_beats,
     build_team_sds,
+    project_team_sds,
     project_team_stats,
     score_roto,
 )
-from fantasy_baseball.utils.constants import Category
+from fantasy_baseball.utils.constants import STAT_VARIANCE, Category
 
 
 def _stats_table(stats_by_team):
@@ -179,10 +180,6 @@ class TestProbBeats:
         p_ab = _prob_beats(110, 100, 5, 5, higher_is_better=True)
         p_ba = _prob_beats(100, 110, 5, 5, higher_is_better=True)
         assert p_ab + p_ba == pytest.approx(1.0)
-
-
-from fantasy_baseball.scoring import project_team_sds
-from fantasy_baseball.utils.constants import STAT_VARIANCE
 
 
 def _make_hitter(name, **stats):

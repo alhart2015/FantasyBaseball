@@ -124,7 +124,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ARG", "B011"]           # unused fixtures / assert False ok in tests
-"scripts/**" = ["F401"]                # scripts often import for side effects
+"scripts/**" = ["E402", "F401"]        # scripts inject sys.path before imports
+"tests/test_draft/test_run_draft_integration.py" = ["E402"]  # sys.path injection to import scripts/
+"tests/test_scripts/**" = ["E402"]     # these tests import scripts/ modules via sys.path
 
 [tool.ruff.lint.isort]
 known-first-party = ["fantasy_baseball"]

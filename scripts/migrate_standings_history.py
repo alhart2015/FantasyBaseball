@@ -25,9 +25,9 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
-from fantasy_baseball.data import redis_store  # noqa: E402
-from fantasy_baseball.data.kv_store import build_explicit_upstash_kv  # noqa: E402
-from fantasy_baseball.models.standings import (  # noqa: E402
+from fantasy_baseball.data import redis_store
+from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
+from fantasy_baseball.models.standings import (
     CategoryStats,
     Standings,
     StandingsEntry,

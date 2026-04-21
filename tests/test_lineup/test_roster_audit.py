@@ -1,6 +1,11 @@
 import pytest
 
-from fantasy_baseball.lineup.roster_audit import audit_roster
+from fantasy_baseball.lineup.roster_audit import (
+    POSITION_POOL_SIZES,
+    audit_roster,
+    build_position_pools,
+    candidates_for_player,
+)
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
 
@@ -89,9 +94,6 @@ def _pitcher(name, positions, **stats):
     )
 
 
-from fantasy_baseball.lineup.roster_audit import POSITION_POOL_SIZES, build_position_pools
-
-
 class TestBuildPositionPools:
     def test_hitter_buckets_by_all_positions(self):
         """A 2B/OF-eligible hitter appears in both 2B and OF pools."""
@@ -176,9 +178,6 @@ class TestBuildPositionPools:
         # Hitters never leak into pitcher pools even if the pool is sparse
         assert hitter not in pools["SP"]
         assert hitter not in pools["RP"]
-
-
-from fantasy_baseball.lineup.roster_audit import candidates_for_player
 
 
 class TestCandidatesForPlayer:

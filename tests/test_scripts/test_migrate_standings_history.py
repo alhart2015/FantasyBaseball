@@ -11,13 +11,13 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from migrate_standings_history import (  # type: ignore[import-not-found]  # noqa: E402
+from migrate_standings_history import (  # type: ignore[import-not-found]
     _from_legacy_json,
     rewrite_hash,
 )
 
-from fantasy_baseball.data import redis_store  # noqa: E402
-from fantasy_baseball.models.standings import (  # noqa: E402
+from fantasy_baseball.data import redis_store
+from fantasy_baseball.models.standings import (
     CategoryStats,
     Standings,
     StandingsEntry,
