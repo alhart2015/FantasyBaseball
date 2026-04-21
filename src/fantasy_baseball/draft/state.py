@@ -19,6 +19,7 @@ import os
 import tempfile
 import threading
 from pathlib import Path
+from typing import Any, cast
 
 import pandas as pd
 
@@ -331,7 +332,7 @@ def read_state(path: Path) -> dict:
     """Read state dict from JSON. Returns empty dict on decode error or missing file."""
     try:
         with open(path) as f:
-            return json.load(f)
+            return cast(dict[str, Any], json.load(f))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
 
@@ -340,7 +341,7 @@ def read_board(path: Path) -> list[dict]:
     """Read the board list from JSON. Returns empty list on error or missing file."""
     try:
         with open(path) as f:
-            return json.load(f)
+            return cast(list[dict[str, Any]], json.load(f))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return []
 
@@ -349,7 +350,7 @@ def read_delta(path: Path) -> dict:
     """Read the most recent delta from JSON. Returns empty dict on error."""
     try:
         with open(path) as f:
-            return json.load(f)
+            return cast(dict[str, Any], json.load(f))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
 

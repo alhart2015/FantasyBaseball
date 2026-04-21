@@ -2,11 +2,12 @@ import json
 import logging
 from collections import defaultdict
 from datetime import datetime
-
-from fantasy_baseball.utils.time_utils import local_now
 from pathlib import Path
+from typing import Any, cast
 
 import statsapi
+
+from fantasy_baseball.utils.time_utils import local_now
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ def load_schedule_cache(path: Path) -> dict | None:
     if not path.exists():
         return None
     with open(path) as f:
-        return json.load(f)
+        return cast(dict[str, Any], json.load(f))
 
 
 def get_week_schedule(start_date: str, end_date: str, cache_path: Path) -> dict | None:

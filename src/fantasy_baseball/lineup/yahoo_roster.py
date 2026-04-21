@@ -5,6 +5,7 @@ import datetime
 import logging
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Any
 
 from fantasy_baseball.models.standings import (
     CategoryStats,
@@ -254,7 +255,7 @@ def parse_standings_raw(
                     team.rank = 0
             if team.points_for is None:
                 raw_pts = ts.get("points_for")
-                if raw_pts not in (None, ""):
+                if raw_pts is not None and raw_pts != "":
                     with contextlib.suppress(ValueError, TypeError):
                         team.points_for = float(raw_pts)
 
@@ -379,7 +380,7 @@ def _extract_player_info(player_data: dict) -> tuple[dict, dict]:
             ]
 
     # transaction_data lives in player[1], not at the player_data level
-    tdata = {}
+    tdata: dict[str, Any] = {}
     if len(raw_player) > 1 and isinstance(raw_player[1], dict):
         td_raw = raw_player[1].get("transaction_data", {})
         if isinstance(td_raw, list):

@@ -5,6 +5,7 @@ import re
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -1164,6 +1165,7 @@ def fetch_and_load_game_logs(
 
                 if games:
                     common = (season, mid, player["name"], player["team"])
+                    rows: list[tuple[Any, ...]]
                     if player["player_type"] == PlayerType.HITTER:
                         rows = [
                             (*common, g["date"], g.get("pa"), g.get("ab"), g.get("h"),

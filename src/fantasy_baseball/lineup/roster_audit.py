@@ -14,7 +14,7 @@ from fantasy_baseball.lineup.optimizer import (
     optimize_hitter_lineup,
     optimize_pitcher_lineup,
 )
-from fantasy_baseball.models.player import Player, PlayerType
+from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
@@ -45,7 +45,7 @@ RP_SV_THRESHOLD = 5
 
 def build_position_pools(
     free_agents: list[Player],
-    denoms: dict[str, float] | None = None,
+    denoms: dict[Category, float] | None = None,
 ) -> dict[str, list[Player]]:
     """Bucket FAs into per-position pools, each sorted by raw SGP desc
     and truncated to POSITION_POOL_SIZES[pos].
@@ -65,18 +65,20 @@ def build_position_pools(
             eligible = [
                 fa
                 for fa in free_agents
-                if fa.player_type == PlayerType.PITCHER and fa.rest_of_season.sv < RP_SV_THRESHOLD
+                if isinstance(fa.rest_of_season, PitcherStats)
+                and fa.rest_of_season.sv < RP_SV_THRESHOLD
             ]
         elif pos == "RP":
             eligible = [
                 fa
                 for fa in free_agents
-                if fa.player_type == PlayerType.PITCHER and fa.rest_of_season.sv >= RP_SV_THRESHOLD
+                if isinstance(fa.rest_of_season, PitcherStats)
+                and fa.rest_of_season.sv >= RP_SV_THRESHOLD
             ]
         else:
             eligible = [fa for fa in free_agents if pos in fa.positions]
         eligible.sort(
-            key=lambda p: calculate_player_sgp(p.rest_of_season, denoms),
+            key=lambda p: calculate_player_sgp(p.rest_of_season, denoms) if p.rest_of_season else 0.0,
             reverse=True,
         )
         pools[pos] = eligible[:n]
@@ -91,7 +93,7 @@ HITTER_SOURCE_POSITIONS: tuple[str, ...] = ("C", "1B", "2B", "3B", "SS", "OF")
 
 def worst_roster_by_position(
     roster: list[Player],
-    denoms: dict[str, float] | None = None,
+    denoms: dict[Category, float] | None = None,
 ) -> dict[str, str]:
     """Return ``{pool_pos: worst_roster_player_name}`` — the lowest-SGP
     roster player eligible at each pool position.
@@ -118,15 +120,13 @@ def worst_roster_by_position(
     sps = [
         p
         for p in roster
-        if p.player_type == PlayerType.PITCHER
-        and p.rest_of_season is not None
+        if isinstance(p.rest_of_season, PitcherStats)
         and p.rest_of_season.sv < RP_SV_THRESHOLD
     ]
     rps = [
         p
         for p in roster
-        if p.player_type == PlayerType.PITCHER
-        and p.rest_of_season is not None
+        if isinstance(p.rest_of_season, PitcherStats)
         and p.rest_of_season.sv >= RP_SV_THRESHOLD
     ]
     if sps:

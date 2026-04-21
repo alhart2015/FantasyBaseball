@@ -1,6 +1,7 @@
 import json
 import logging
 from pathlib import Path
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +134,7 @@ def _get_full_name(player: dict, fallback: str) -> str:
     """Extract the full name string from a player_details result."""
     full_name = player.get("name", {})
     if isinstance(full_name, dict):
-        return full_name.get("full", fallback)
+        return cast(str, full_name.get("full", fallback))
     return full_name if full_name else fallback
 
 
@@ -172,4 +173,4 @@ def load_positions_cache(path: Path) -> dict[str, list[str]]:
     if not path.exists():
         raise FileNotFoundError(f"Position cache not found: {path}")
     with open(path) as f:
-        return json.load(f)
+        return cast(dict[str, list[str]], json.load(f))

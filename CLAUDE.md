@@ -77,7 +77,7 @@ You are operating within a constrained context window and strict system prompts.
    - `ruff check .` — zero violations. (Lint config and per-file ignores live in `pyproject.toml`.)
    - `ruff format --check .` — no formatting drift (run `ruff format .` to fix).
    - `vulture` — no NEW dead-code findings introduced by your change. Pre-existing findings unrelated to your work are acceptable; call them out when you see them.
-   - `mypy` — required when any file you touched is listed under `[tool.mypy].files` in `pyproject.toml` (currently covers `models/`, `scoring.py`, `trades/evaluate.py`, and parts of `lineup/` and `sgp/`).
+   - `mypy` — required when any file you touched is listed under `[tool.mypy].files` in `pyproject.toml` (coverage is expanding; check the current list before assuming a file is uncovered).
 
    Paste the output (or a concise summary) into your final message as evidence. Never just claim "checks pass" — show the commands you ran and what they returned.
 

@@ -147,7 +147,7 @@ class SqliteKVStore:
             if expires_at is not None and expires_at < time.time():
                 self._conn.execute("DELETE FROM kv WHERE key = ?", (key,))
                 return None
-            return value
+            return value if value is None else str(value)
 
     def set(self, key: str, value: str, *, ex: int | None = None) -> None:
         expires_at = (time.time() + ex) if ex is not None else None

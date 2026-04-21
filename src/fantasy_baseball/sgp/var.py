@@ -1,5 +1,23 @@
+from typing import Literal, overload
+
 import pandas as pd
 from fantasy_baseball.utils.positions import is_pitcher
+
+
+@overload
+def calculate_var(
+    player: pd.Series,
+    replacement_levels: dict[str, float],
+    return_position: Literal[False] = False,
+) -> float: ...
+
+
+@overload
+def calculate_var(
+    player: pd.Series,
+    replacement_levels: dict[str, float],
+    return_position: Literal[True],
+) -> tuple[float, str]: ...
 
 
 def calculate_var(

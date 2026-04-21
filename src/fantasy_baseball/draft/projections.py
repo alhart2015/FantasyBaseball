@@ -5,6 +5,8 @@ from partial or complete rosters. Used by both the live draft predictor
 and the simulate_draft.py --monte-carlo mode.
 """
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 
@@ -51,7 +53,7 @@ def pad_roster_to_full(
 
     # Add replacement hitters
     for i in range(max(0, hitter_slots - n_hitters)):
-        repl = dict(REPLACEMENT_HITTER)
+        repl: dict[str, Any] = dict(REPLACEMENT_HITTER)
         repl["player_type"] = PlayerType.HITTER
         repl["name"] = f"Repl Hitter {i + 1}"
         repl["positions"] = ["OF"]
@@ -204,16 +206,20 @@ def run_projections(
         padded[tn] = pad_roster_to_full(players, roster_slots, board)
 
     # Run simulations
-    all_totals = {tn: [] for tn in padded}
-    all_finishes = {tn: [] for tn in padded}
+    all_totals: dict[int, list[float]] = {tn: [] for tn in padded}
+    all_finishes: dict[int, list[int]] = {tn: [] for tn in padded}
 
     for _ in range(iterations):
         stats = simulate_season(padded, rng, h_slots=h_slots, p_slots=p_slots)
-        roto = score_roto_dict(stats)
+        # score_roto_dict wants str keys (they flow into team_name: str on
+        # ProjectedStandingsEntry); convert here and back since draft teams
+        # are numbered internally.
+        stats_by_name = {str(tn): s for tn, s in stats.items()}
+        roto = score_roto_dict(stats_by_name)
         for tn in padded:
-            total = roto[tn]["total"]
+            total = roto[str(tn)]["total"]
             all_totals[tn].append(total)
-            rank = 1 + sum(1 for otn in padded if roto[otn]["total"] > total)
+            rank = 1 + sum(1 for otn in padded if roto[str(otn)]["total"] > total)
             all_finishes[tn].append(rank)
 
     # Build results
@@ -244,7 +250,7 @@ def reconstruct_rosters_from_draft(config, board, tracker, num_teams_override=No
     drafts that don't use keepers.
     """
     num_teams = num_teams_override or config.num_teams
-    team_players = {i: [] for i in range(1, num_teams + 1)}
+    team_players: dict[int, list[Any]] = {i: [] for i in range(1, num_teams + 1)}
 
     if keepers is None:
         keepers = config.keepers

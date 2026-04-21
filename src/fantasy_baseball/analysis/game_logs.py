@@ -54,7 +54,7 @@ def parse_pitcher_game_log(split: dict) -> dict:
 def fetch_player_game_log(mlbam_id: int, season: int, group: str = "hitting") -> list[dict]:
     """Fetch game log from MLB Stats API for one player."""
     url = f"{MLB_API_BASE}/people/{mlbam_id}/stats"
-    params = {"stats": "gameLog", "group": group, "season": season}
+    params: dict[str, str | int] = {"stats": "gameLog", "group": group, "season": season}
     resp = requests.get(url, params=params, timeout=15)
     resp.raise_for_status()
     data = resp.json()

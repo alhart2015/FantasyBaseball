@@ -55,7 +55,7 @@ def fetch_and_match_free_agents(
             seen_names.add(fa_name_norm)
 
             proj_row = None
-            ptype = None
+            ptype: PlayerType | None = None
             for df in search_order:
                 if df.empty:
                     continue
@@ -65,7 +65,8 @@ def fetch_and_match_free_agents(
                     ptype = PlayerType.PITCHER if df is pitchers_proj else PlayerType.HITTER
                     break
 
-            if proj_row is not None:
+            if proj_row is not None and ptype is not None:
+                ros: HitterStats | PitcherStats
                 if ptype == PlayerType.HITTER:
                     ros = HitterStats.from_dict(proj_row.to_dict())
                 else:

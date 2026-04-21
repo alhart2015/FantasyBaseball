@@ -6,7 +6,7 @@ import os
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 log = logging.getLogger(__name__)
 
@@ -110,10 +110,10 @@ def read_cache(key: CacheKey, cache_dir: Path = CACHE_DIR) -> dict | list | None
                     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
                 except OSError as e:
                     print(f"[redis] local write-back for {key} failed: {e}")
-                return data
+                return cast("dict | list", data)
 
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return cast("dict | list", json.loads(path.read_text(encoding="utf-8")))
     except (FileNotFoundError, json.JSONDecodeError):
         return None
 
@@ -141,7 +141,8 @@ def write_cache(key: CacheKey, data: dict | list, cache_dir: Path = CACHE_DIR) -
 
 def read_meta(cache_dir: Path = CACHE_DIR) -> dict:
     """Read cache metadata (last refresh time, week, etc.). Returns empty dict if missing."""
-    return read_cache(CacheKey.META, cache_dir) or {}
+    payload = read_cache(CacheKey.META, cache_dir)
+    return payload if isinstance(payload, dict) else {}
 
 
 def _load_game_log_totals(season_year: int) -> tuple[dict, dict]:
@@ -222,8 +223,10 @@ def format_standings_for_display(
         return {"teams": []}
 
     # CategoryStats defaults (0.0 for counting, 99.0 for ERA/WHIP)
-    # handle early-season missing data.
-    roto = score_roto(standings, team_sds=team_sds)
+    # handle early-season missing data. Standings is structurally a
+    # TeamStatsTable (team_name/stats on each entry); mypy can't see the
+    # protocol variance through list[StandingsEntry] vs Sequence[TeamStatsRow].
+    roto = score_roto(cast("Any", standings), team_sds=team_sds)
 
     has_yahoo_totals = all(e.yahoo_points_for is not None for e in standings.entries)
     yahoo_rank_by_name = {e.team_name: e.rank for e in standings.entries}
@@ -535,7 +538,7 @@ def _compute_team_totals_pace(
         team_name = meta.get("team_name", "")
     team_entry: StandingsEntry | None = None
     raw = read_cache(CacheKey.STANDINGS)
-    if raw:
+    if isinstance(raw, dict):
         standings = Standings.from_json(raw)
         for entry in standings.entries:
             if entry.team_name == team_name:
@@ -690,7 +693,7 @@ def format_lineup_for_display(roster: list[dict], optimal: dict | None) -> dict:
 def run_optimize() -> dict:
     """Re-run lineup optimizer from cached data. Returns moves list."""
     optimal = read_cache(CacheKey.LINEUP_OPTIMAL)
-    if optimal:
+    if isinstance(optimal, dict):
         return {"moves": optimal.get("moves", []), "is_optimal": len(optimal.get("moves", [])) == 0}
     return {"moves": [], "is_optimal": True}
 
