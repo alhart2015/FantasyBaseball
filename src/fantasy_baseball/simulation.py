@@ -183,7 +183,7 @@ def simulate_remaining_season(
         actual_standings: {team_key: {R, HR, RBI, SB, AVG, W, K, SV, ERA, WHIP}}
             — actual YTD stats for each team.
         team_rosters: {team_key: [player dicts]} with full-season ROS projections.
-        fraction_remaining: Float 0.0–1.0, portion of season left to simulate.
+        fraction_remaining: Float 0.0-1.0, portion of season left to simulate.
         rng: NumPy random generator for reproducibility.
         h_slots: Number of active hitter slots.
         p_slots: Number of active pitcher slots.
@@ -545,7 +545,7 @@ def run_ros_monte_carlo(
         team_rosters: {team_name: [player dicts]} with ROS projections.
         actual_standings: {team_name: {R, HR, RBI, SB, AVG, W, K, SV, ERA, WHIP}}
             — actual YTD stats for each team.
-        fraction_remaining: Float 0.0–1.0, portion of season left.
+        fraction_remaining: Float 0.0-1.0, portion of season left.
         h_slots: Number of active hitter slots.
         p_slots: Number of active pitcher slots.
         user_team_name: Name of user's team (for category risk).

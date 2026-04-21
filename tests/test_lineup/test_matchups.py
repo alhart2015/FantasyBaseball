@@ -1,11 +1,12 @@
-import pytest
-import pandas as pd
 from unittest.mock import patch
+
+import pandas as pd
+
 from fantasy_baseball.lineup.matchups import (
-    normalize_team_batting_stats,
-    calculate_matchup_factors,
     adjust_pitcher_projection,
+    calculate_matchup_factors,
     fetch_team_batting_stats,
+    normalize_team_batting_stats,
 )
 
 

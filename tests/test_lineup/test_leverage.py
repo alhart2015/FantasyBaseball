@@ -1,6 +1,7 @@
 from datetime import date
 
 import pytest
+
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.models.standings import CategoryStats, Standings, StandingsEntry
 from fantasy_baseball.utils.constants import Category

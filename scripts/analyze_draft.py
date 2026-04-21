@@ -16,16 +16,21 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
-from simulate_draft import build_board_and_context, _select_active_players, _active_slot_counts
+from simulate_draft import _active_slot_counts, _select_active_players, build_board_and_context
 
 from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.simulation import simulate_season
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
+)
+from fantasy_baseball.utils.constants import (
     HITTING_COUNTING,
-    INVERSE_STATS as INVERSE,
     PITCHING_COUNTING,
 )
+from fantasy_baseball.utils.constants import (
+    INVERSE_STATS as INVERSE,
+)
+
 ITERS = 1000
 
 
@@ -194,7 +199,7 @@ def main():
     all_ranks = {tn: [] for tn in team_names}
 
     t0 = time.time()
-    for it in range(ITERS):
+    for _it in range(ITERS):
         team_stats, _ = simulate_season(rosters, rng, h_slots, p_slots)
         roto = score_roto_dict(team_stats)
 
@@ -237,7 +242,7 @@ def main():
 
     hart_mc = next(r for r in mc_results if r["team"] == HART)
     hart_mc_rank = next(i + 1 for i, r in enumerate(mc_results) if r["team"] == HART)
-    print(f"\nHart of the Order MC summary:")
+    print("\nHart of the Order MC summary:")
     print(f"  Mean: {hart_mc['mean']:.1f} pts | Median: {hart_mc['median']:.0f} | Std: {hart_mc['std']:.1f}")
     print(f"  Win rate: {hart_mc['win_pct']:.1f}% | Top 3: {hart_mc['top3']:.1f}% | Bottom 3: {hart_mc['bot3']:.1f}%")
     print(f"  Floor (P10): {hart_mc['p10']:.0f} | Ceiling (P90): {hart_mc['p90']:.0f}")

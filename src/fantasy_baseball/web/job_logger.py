@@ -81,7 +81,7 @@ def get_all_logs() -> list[dict]:
         for raw in values:
             if raw:
                 logs.append(json.loads(raw))
-        logs.sort(key=lambda l: l.get("started_at", ""), reverse=True)
+        logs.sort(key=lambda log: log.get("started_at", ""), reverse=True)
         return logs
     except Exception:
         return []

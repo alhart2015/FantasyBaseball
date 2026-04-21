@@ -1,21 +1,17 @@
 """Tests for refresh_steps.py — pure helpers extracted from
 run_full_refresh that are specific to the refresh orchestration
 (not general enough to push into a domain module)."""
-import pytest
 
 from fantasy_baseball.models.player import (
     HitterStats,
-    PitcherStats,
     Player,
     PlayerType,
 )
-from fantasy_baseball.models.positions import Position
 from fantasy_baseball.web.refresh_steps import (
     build_positions_map,
     compute_lineup_moves,
     merge_matched_and_raw_roster,
 )
-
 
 _UNSET = object()
 

@@ -9,9 +9,9 @@ needs it (audit, waivers).
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Iterator
 
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.roster import RosterEntry
@@ -68,7 +68,7 @@ class FreeAgentPool:
     @classmethod
     def from_yahoo(
         cls, yahoo_league, positions: list[Position] | None = None,
-    ) -> "FreeAgentPool":
+    ) -> FreeAgentPool:
         """Fetch the free-agent pool live from Yahoo.
 
         Args:

@@ -1,11 +1,11 @@
 """End-to-end smoke test: serialize state -> write file -> Flask reads it -> API returns it."""
 import json
-import pytest
+
 import pandas as pd
-from pathlib import Path
-from fantasy_baseball.draft.tracker import DraftTracker
+
 from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.state import serialize_state, write_state
+from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.web.app import create_app
 
 

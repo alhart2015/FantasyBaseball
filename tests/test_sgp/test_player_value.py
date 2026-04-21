@@ -1,12 +1,13 @@
-import pytest
 import pandas as pd
+import pytest
+
+from fantasy_baseball.models.player import HitterStats, PitcherStats
 from fantasy_baseball.sgp.player_value import (
     calculate_counting_sgp,
     calculate_hitting_rate_sgp,
     calculate_pitching_rate_sgp,
     calculate_player_sgp,
 )
-from fantasy_baseball.models.player import HitterStats, PitcherStats
 
 
 class TestCountingSgp:

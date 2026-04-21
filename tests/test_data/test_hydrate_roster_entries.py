@@ -1,7 +1,6 @@
 from datetime import date
 
 import pandas as pd
-import pytest
 
 
 def _hitters_df():

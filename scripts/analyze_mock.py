@@ -1,6 +1,6 @@
 """Analyze the most recent mock draft results."""
-import sys
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +15,8 @@ from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.simulation import simulate_season
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
+)
+from fantasy_baseball.utils.constants import (
     INVERSE_STATS as INVERSE,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -58,8 +60,8 @@ def main():
                     break
 
     # Draft picks (after keepers) follow snake order
-    for pick_num, (name, pid) in enumerate(
-        zip(drafted[num_keepers:], drafted_ids[num_keepers:]), 1
+    for pick_num, (_name, pid) in enumerate(
+        zip(drafted[num_keepers:], drafted_ids[num_keepers:], strict=False), 1
     ):
         rnd = (pick_num - 1) // num_teams + 1
         pos = (pick_num - 1) % num_teams + 1

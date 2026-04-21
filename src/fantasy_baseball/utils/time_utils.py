@@ -26,7 +26,6 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-
 # The user is in Eastern time. Using a named zone (not a fixed offset)
 # so DST transitions are handled automatically.
 LOCAL_TZ = ZoneInfo("America/New_York")
@@ -56,7 +55,7 @@ def next_tuesday(ref: date) -> date:
     """Return the next Tuesday strictly after ``ref``.
 
     The user's Yahoo league locks lineups on Tuesday morning.
-    ``fetch_scoring_period`` returns Yahoo's Mon–Sun scoring week,
+    ``fetch_scoring_period`` returns Yahoo's Mon-Sun scoring week,
     so ``end + 1`` lands on Monday — one day before the actual lock.
     This helper computes the Tuesday that comes *after* ``ref``:
 

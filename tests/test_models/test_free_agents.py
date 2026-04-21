@@ -1,7 +1,5 @@
 from datetime import date
 
-import pytest
-
 
 class TestFreeAgentPoolBasics:
     def test_construction(self):

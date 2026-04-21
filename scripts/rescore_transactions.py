@@ -27,7 +27,7 @@ def main():
     parser.add_argument("--redis", action="store_true", help="Also clear Redis transaction_analyzer cache")
     args = parser.parse_args()
 
-    from fantasy_baseball.data.db import get_connection, create_tables
+    from fantasy_baseball.data.db import create_tables, get_connection
 
     conn = get_connection()
     create_tables(conn)

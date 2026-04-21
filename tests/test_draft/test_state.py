@@ -1,10 +1,11 @@
 import json
-import pytest
+
 import pandas as pd
-from pathlib import Path
-from fantasy_baseball.draft.tracker import DraftTracker
+import pytest
+
 from fantasy_baseball.draft.balance import CategoryBalance
-from fantasy_baseball.draft.state import serialize_state, write_state, read_state
+from fantasy_baseball.draft.state import read_state, serialize_state, write_state
+from fantasy_baseball.draft.tracker import DraftTracker
 
 
 def _make_hitter(name, positions, var, best_position, r, hr, rbi, sb, avg, ab):
@@ -121,7 +122,7 @@ class TestSerializeState:
         extra_hitter = _make_hitter("Pete Alonso", ["1B"], 5.0, "1B", 88, 35, 95, 2, .254, 520)
         board = pd.concat([sample_board, pd.DataFrame([extra_hitter])], ignore_index=True)
         state = serialize_state(sample_tracker, sample_balance, board, sample_recs, {})
-        alonso = [p for p in state["available_players"] if p["name"] == "Pete Alonso"][0]
+        alonso = next(p for p in state["available_players"] if p["name"] == "Pete Alonso")
         assert alonso["player_type"] == "hitter"
         assert alonso["hr"] == 35
         assert alonso["r"] == 88
@@ -129,7 +130,7 @@ class TestSerializeState:
 
     def test_pitcher_fields(self, sample_tracker, sample_balance, sample_board, sample_recs):
         state = serialize_state(sample_tracker, sample_balance, sample_board, sample_recs, {})
-        cole = [p for p in state["available_players"] if p["name"] == "Gerrit Cole"][0]
+        cole = next(p for p in state["available_players"] if p["name"] == "Gerrit Cole")
         assert cole["player_type"] == "pitcher"
         assert cole["k"] == 250
         assert cole["w"] == 16

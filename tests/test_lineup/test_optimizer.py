@@ -1,10 +1,11 @@
-from fantasy_baseball.models.player import Player, PlayerType, HitterStats, PitcherStats
-from fantasy_baseball.models.positions import Position
 from fantasy_baseball.lineup.optimizer import (
-    HitterAssignment, PitcherStarter,
-    optimize_hitter_lineup, optimize_pitcher_lineup,
+    HitterAssignment,
+    PitcherStarter,
+    optimize_hitter_lineup,
+    optimize_pitcher_lineup,
 )
-
+from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
+from fantasy_baseball.models.positions import Position
 
 CATEGORIES = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
 
@@ -155,7 +156,7 @@ class TestERotoMaximization:
         slots = {"OF": 1, "BN": 1, "P": 9, "IL": 0}
         standings = [_standing("Us"), _standing("Rival", R=1, HR=1)]
         lineup = optimize_hitter_lineup(
-            hitters=active, full_roster=active + [il],
+            hitters=active, full_roster=[*active, il],
             projected_standings=standings, team_name="Us",
             roster_slots=slots,
         )
@@ -188,9 +189,9 @@ class TestERotoMaximization:
         )
 
     def test_roto_delta_positive_when_irreplaceable(self):
-        """Single hitter, one slot — dropping them leaves no feasible
+        """Single hitter, one slot -- dropping them leaves no feasible
         replacement. Their delta should reflect their marginal contribution
-        (best_total − team_with_slot_empty), not the full best_total."""
+        (best_total - team_with_slot_empty), not the full best_total."""
         only = _hitter("Only", ["OF"], r=80, hr=30, rbi=90, sb=15, h=120, ab=450)
         slots = {"OF": 1, "BN": 0, "P": 9, "IL": 0}
         standings = [
@@ -204,7 +205,7 @@ class TestERotoMaximization:
         )
         assert len(lineup) == 1
         # Without Only, no feasible full-size lineup exists → fallback scores
-        # the team with the slot left empty. Delta = best_total − fallback.
+        # the team with the slot left empty. Delta = best_total - fallback.
         assert lineup[0].roto_delta > 0
 
 

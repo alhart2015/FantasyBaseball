@@ -1,8 +1,8 @@
-import json
 import threading
-import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+
+import pytest
+
 from fantasy_baseball.draft.state import read_state, write_state
 
 

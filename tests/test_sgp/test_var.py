@@ -1,5 +1,6 @@
-import pytest
 import pandas as pd
+import pytest
+
 from fantasy_baseball.sgp.var import calculate_var
 
 

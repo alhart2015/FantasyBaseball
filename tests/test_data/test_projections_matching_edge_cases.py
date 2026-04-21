@@ -10,12 +10,12 @@ and fallback matches so future regressions surface immediately instead
 of silently dropping or mis-matching players.
 """
 import logging
+from typing import ClassVar
+
 import pandas as pd
-import pytest
 
 from fantasy_baseball.data.projections import match_roster_to_projections
 from fantasy_baseball.models.player import HitterStats, PitcherStats, PlayerType
-
 
 # --- Tiny in-memory DataFrame builders ---
 
@@ -60,7 +60,7 @@ class TestJulioRodriguezAccentEncoding:
     variants Yahoo and FanGraphs have been observed to send.
     """
 
-    PROJECTION = {"name": "Julio Rodríguez", "_name_norm": "julio rodriguez", "hr": 32}
+    PROJECTION: ClassVar[dict] = {"name": "Julio Rodríguez", "_name_norm": "julio rodriguez", "hr": 32}
 
     def test_roster_nfc_precomposed_matches(self):
         roster = [{"name": "Julio Rodríguez", "positions": ["OF"]}]
@@ -105,11 +105,11 @@ class TestMasonMillerCrossTypeCollision:
     when both hitter and pitcher entries exist in projections.
     """
 
-    HITTER_PROJ = {
+    HITTER_PROJ: ClassVar[dict] = {
         "name": "Mason Miller", "_name_norm": "mason miller",
         "hr": 18, "ab": 480,
     }
-    PITCHER_PROJ = {
+    PITCHER_PROJ: ClassVar[dict] = {
         "name": "Mason Miller", "_name_norm": "mason miller",
         "k": 95, "sv": 28, "ip": 65,
     }
@@ -159,11 +159,11 @@ class TestShoheiOhtaniDualEntry:
     name normalization so both find the right projection by name.
     """
 
-    HITTER_PROJ = {
+    HITTER_PROJ: ClassVar[dict] = {
         "name": "Shohei Ohtani", "_name_norm": "shohei ohtani",
         "hr": 44, "r": 110,
     }
-    PITCHER_PROJ = {
+    PITCHER_PROJ: ClassVar[dict] = {
         "name": "Shohei Ohtani", "_name_norm": "shohei ohtani",
         "k": 180, "ip": 140, "w": 12,
     }

@@ -3,26 +3,29 @@
 These tests use the ACTUAL projection files in data/projections/ and the
 ACTUAL config/league.yaml to exercise the full draft pipeline end-to-end.
 """
-import pytest
-import pandas as pd
 from pathlib import Path
+from typing import ClassVar
 
-from fantasy_baseball.config import load_config, LeagueConfig
-from fantasy_baseball.draft.board import build_draft_board, apply_keepers
-from fantasy_baseball.draft.recommender import get_recommendations
-from fantasy_baseball.draft.tracker import DraftTracker
+import pandas as pd
+import pytest
+
+from fantasy_baseball.config import LeagueConfig, load_config
+from fantasy_baseball.data.db import (
+    create_tables,
+    get_connection,
+    load_blended_projections,
+    load_positions,
+)
+from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.draft.balance import CategoryBalance
+from fantasy_baseball.draft.board import apply_keepers, build_draft_board
+from fantasy_baseball.draft.recommender import get_recommendations
 from fantasy_baseball.draft.strategy import (
     STRATEGIES,
     build_player_lookup,
 )
-from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD, DEFAULT_ROSTER_SLOTS
-from fantasy_baseball.data.db import (
-    get_connection, create_tables,
-    load_blended_projections, load_positions,
-)
-from fantasy_baseball.data.yahoo_players import load_positions_cache
-
+from fantasy_baseball.draft.tracker import DraftTracker
+from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 
 # ---------------------------------------------------------------------------
 # Paths — resolved once, reused across fixtures
@@ -126,7 +129,6 @@ def _simulate_n_picks(
         if tracker.is_user_pick:
             # Build player lookup for strategy
             player_lookup = build_player_lookup(board, board)
-            filled_positions = {}
             name, pid = strategy_fn(
                 board=board,
                 full_board=board,
@@ -281,7 +283,7 @@ class TestNoDuplicatePlayerIds:
 class TestAllStrategiesRegistered:
     """Every strategy name in STRATEGIES dict should map to a callable."""
 
-    EXPECTED_STRATEGIES = [
+    EXPECTED_STRATEGIES: ClassVar[list[str]] = [
         "default", "nonzero_sv", "avg_hedge", "two_closers",
         "three_closers", "four_closers", "no_punt", "no_punt_opp",
         "no_punt_stagger", "no_punt_cap3", "avg_anchor", "closers_avg",
@@ -407,10 +409,9 @@ class TestVonaModeProducesDifferentRankingThanVar:
                 picks_until_next=12,
             )
 
-            if var_recs and vona_recs:
-                if var_recs[0]["name"] != vona_recs[0]["name"]:
-                    found_difference = True
-                    break
+            if var_recs and vona_recs and var_recs[0]["name"] != vona_recs[0]["name"]:
+                found_difference = True
+                break
 
         assert found_difference, (
             "VONA and VAR produced the same #1 recommendation across all "

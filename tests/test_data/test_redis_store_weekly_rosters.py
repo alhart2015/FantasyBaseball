@@ -1,7 +1,6 @@
 """Tests for weekly_rosters_history helpers."""
 from fantasy_baseball.data import redis_store
 
-
 ENTRY_A_TEAM_1 = {
     "slot": "SS", "player_name": "Bobby Witt Jr.",
     "positions": "SS", "status": "", "yahoo_id": "10764",

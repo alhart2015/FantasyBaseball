@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from fantasy_baseball.lineup.delta_roto import compute_delta_roto
 from fantasy_baseball.lineup.optimizer import (
@@ -20,7 +20,6 @@ from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import IL_STATUSES, Category
 from fantasy_baseball.utils.positions import can_cover_slots
-
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +159,7 @@ def candidates_for_player(
     - Hitters: union of pools for each of player's Yahoo positions (lineup-only
       slots like ``UTIL``/``IF`` don't contribute pools because they're not
       Yahoo source positions).
-    - Pitchers: SP pool ∪ RP pool (all Yahoo roster pitchers come through as
+    - Pitchers: SP pool + RP pool (all Yahoo roster pitchers come through as
       ``positions=["P"]``; we don't distinguish SP/RP on the user's roster).
     - Dedup key: ``yahoo_id`` when present, else ``name::player_type``.
     """
@@ -190,12 +189,12 @@ class AuditEntry:
     positions: list[str]
     slot: str
     player_sgp: float
-    player_id: Optional[str] = None
-    best_fa: Optional[str] = None
-    best_fa_type: Optional[str] = None
-    best_fa_positions: Optional[list[str]] = None
-    best_fa_sgp: Optional[float] = None
-    best_fa_id: Optional[str] = None
+    player_id: str | None = None
+    best_fa: str | None = None
+    best_fa_type: str | None = None
+    best_fa_positions: list[str] | None = None
+    best_fa_sgp: float | None = None
+    best_fa_id: str | None = None
     gap: float = 0.0
     candidates: list[dict] = field(default_factory=list)
 
@@ -351,9 +350,12 @@ def audit_roster(
             # count. Same-type pitcher swaps preserve it — gating on p_slots
             # would reject every upgrade when the user's active pitcher count
             # is already below p_slots (common with IL pitchers).
-            if player.player_type == PlayerType.PITCHER and fa.player_type == PlayerType.HITTER:
-                if len(new_pitchers) < p_slots:
-                    continue
+            if (
+                player.player_type == PlayerType.PITCHER
+                and fa.player_type == PlayerType.HITTER
+                and len(new_pitchers) < p_slots
+            ):
+                continue
 
             try:
                 dr = compute_delta_roto(

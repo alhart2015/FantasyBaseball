@@ -296,7 +296,7 @@ class TestMonteCarloDeterminism:
         # Injuries should also be identical
         for team in team_rosters:
             assert len(inj1[team]) == len(inj2[team])
-            for (n1, f1), (n2, f2) in zip(inj1[team], inj2[team]):
+            for (n1, f1), (n2, f2) in zip(inj1[team], inj2[team], strict=False):
                 assert n1 == n2
                 assert f1 == pytest.approx(f2, abs=1e-12)
 

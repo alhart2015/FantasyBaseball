@@ -13,9 +13,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from simulate_draft import build_board_and_context
+
 from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.recommender import (
-    get_recommendations, get_filled_positions, calculate_vona_scores,
+    calculate_vona_scores,
+    get_filled_positions,
+    get_recommendations,
 )
 from fantasy_baseball.draft.strategy import CLOSER_SV_THRESHOLD
 

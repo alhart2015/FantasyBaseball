@@ -1,5 +1,6 @@
 import datetime
 from unittest.mock import MagicMock
+
 from fantasy_baseball.lineup.yahoo_roster import fetch_scoring_period
 
 

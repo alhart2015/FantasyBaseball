@@ -1,10 +1,9 @@
-import json
 import os
 import tempfile
 from pathlib import Path
 
-from yahoo_oauth import OAuth2
 import yahoo_fantasy_api as yfa
+from yahoo_oauth import OAuth2
 
 CONFIG_PATH: Path = Path(__file__).resolve().parents[3] / "config" / "oauth.json"
 

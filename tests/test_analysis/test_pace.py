@@ -1,7 +1,7 @@
 import pytest
 
-from fantasy_baseball.analysis.pace import compute_player_pace, attach_pace_to_roster
-from fantasy_baseball.models.player import Player, PlayerType, HitterStats, PitcherStats
+from fantasy_baseball.analysis.pace import attach_pace_to_roster, compute_player_pace
+from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import Position
 
 

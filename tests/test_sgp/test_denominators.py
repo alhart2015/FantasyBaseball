@@ -1,4 +1,3 @@
-import pytest
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, DEFAULT_SGP_DENOMINATORS, Category
 

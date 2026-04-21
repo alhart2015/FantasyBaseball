@@ -19,9 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 
-log = logging.getLogger(__name__)
-
-from fantasy_baseball.utils.constants import (  # noqa: E402
+from fantasy_baseball.utils.constants import (
     IL_STATUSES,
 )
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
@@ -40,6 +38,8 @@ from fantasy_baseball.web.season_data import (
     read_cache,
     write_cache,
 )
+
+log = logging.getLogger(__name__)
 
 _refresh_lock = threading.Lock()
 _refresh_status = {"running": False, "progress": "", "error": None}
@@ -226,7 +226,7 @@ class RefreshRun:
         # team.roster(day=...)) so the audit/optimizer/waivers see the
         # post-lock future state without having to simulate pending
         # transactions locally. fetch_scoring_period returns Yahoo's
-        # Mon–Sun scoring week (end_date is Sunday). The user's league
+        # Mon-Sun scoring week (end_date is Sunday). The user's league
         # locks lineups on Tuesday morning, so the effective date is the
         # next Tuesday strictly after end_date — end_date + 1 would land
         # on Monday, one day too early.

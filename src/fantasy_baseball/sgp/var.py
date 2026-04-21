@@ -1,7 +1,6 @@
 from typing import Literal, overload
 
 import pandas as pd
-from fantasy_baseball.utils.positions import is_pitcher
 
 
 @overload

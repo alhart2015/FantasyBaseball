@@ -15,12 +15,13 @@ Strategies:
     anti_fragile     — Discounts high-IP pitchers, prefers durable mid-tier arms.
 """
 import pandas as pd
-from fantasy_baseball.draft.balance import CategoryBalance
-from fantasy_baseball.draft.recommender import get_recommendations, get_filled_positions
+
+from fantasy_baseball.draft.recommender import get_filled_positions, get_recommendations
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.positions import can_fill_slot
 from fantasy_baseball.utils.rate_stats import calculate_avg
+
 # Draft a closer by this round if you have none
 CLOSER_DEADLINE_ROUND = 10
 # Don't let team AVG fall below this
@@ -69,10 +70,10 @@ def build_player_lookup(
     """
     # full_board first, then board overrides (board has live VAR)
     lookup: dict[str, pd.Series] = dict(zip(
-        full_board["player_id"], (row for _, row in full_board.iterrows())
+        full_board["player_id"], (row for _, row in full_board.iterrows()), strict=False
     ))
     lookup.update(dict(zip(
-        board["player_id"], (row for _, row in board.iterrows())
+        board["player_id"], (row for _, row in board.iterrows()), strict=False
     )))
     return lookup
 
@@ -558,10 +559,9 @@ def pick_avg_anchor(
     has_anchor = False
     for pid in tracker.user_roster_ids:
         row = player_lookup.get(pid)
-        if row is not None:
-            if row.get("player_type") == PlayerType.HITTER and row.get("avg", 0) >= AVG_ANCHOR_MIN:
-                has_anchor = True
-                break
+        if row is not None and row.get("player_type") == PlayerType.HITTER and row.get("avg", 0) >= AVG_ANCHOR_MIN:
+            has_anchor = True
+            break
 
     # If no anchor and we're within the hitter deadline, prefer high-AVG hitters
     if not has_anchor and hitter_count < AVG_ANCHOR_DEADLINE_HITTER:

@@ -3,52 +3,42 @@
 Tests cover 14 strategy functions + 6 helper functions with happy paths,
 constraint-triggering paths, and edge cases.
 """
-import pytest
 import pandas as pd
-from unittest.mock import patch
 
 from fantasy_baseball.config import LeagueConfig
-from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.strategy import (
-    pick_default,
-    pick_nonzero_sv,
-    pick_avg_hedge,
-    pick_no_punt_opp,
-    pick_two_closers,
-    pick_three_closers,
-    pick_four_closers,
-    pick_no_punt,
-    pick_no_punt_stagger,
-    pick_no_punt_cap3,
-    pick_avg_anchor,
-    pick_closers_avg,
-    pick_balanced,
+    AVG_ANCHOR_MIN,
+    CLOSER_DEADLINE_ROUND,
+    FOUR_CLOSERS_DEADLINES,
+    NO_PUNT_STAGGER_DEADLINES,
+    NO_PUNT_SV_DEADLINE,
+    STRATEGIES,
+    THREE_CLOSERS_DEADLINES,
+    TWO_CLOSERS_DEADLINES,
+    _can_roster_player,
     _count_closers,
     _count_hitters,
     _count_pitchers,
-    _sv_in_danger,
-    _force_closer,
     _fallback_non_closer,
-    _can_roster_player,
-    CLOSER_DEADLINE_ROUND,
-    AVG_FLOOR,
-    TWO_CLOSERS_DEADLINES,
-    THREE_CLOSERS_DEADLINES,
-    FOUR_CLOSERS_DEADLINES,
-    NO_PUNT_AVG_FLOOR,
-    NO_PUNT_SV_DEADLINE,
-    NO_PUNT_SV_MIN_TEAMS_WITH_CLOSERS,
-    NO_PUNT_SV_DANGER_ZONE,
-    NO_PUNT_STAGGER_DEADLINES,
-    NO_PUNT_CAP3_TARGET,
-    AVG_ANCHOR_MIN,
-    AVG_ANCHOR_DEADLINE_HITTER,
-    BALANCED_MAX_SKEW,
-    STRATEGIES,
+    _force_closer,
+    _sv_in_danger,
+    pick_avg_anchor,
+    pick_avg_hedge,
+    pick_balanced,
+    pick_closers_avg,
+    pick_default,
+    pick_four_closers,
+    pick_no_punt,
+    pick_no_punt_cap3,
+    pick_no_punt_opp,
+    pick_no_punt_stagger,
+    pick_nonzero_sv,
+    pick_three_closers,
+    pick_two_closers,
 )
+from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD, DEFAULT_ROSTER_SLOTS
-
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers

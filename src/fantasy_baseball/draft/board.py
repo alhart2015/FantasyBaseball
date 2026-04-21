@@ -1,18 +1,31 @@
 import logging
+
 import pandas as pd
+
 from fantasy_baseball.data.db import get_blended_projections, get_positions
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
-from fantasy_baseball.sgp.replacement import calculate_replacement_levels, calculate_replacement_rates
+from fantasy_baseball.sgp.replacement import (
+    calculate_replacement_levels,
+    calculate_replacement_rates,
+)
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
-    compute_starters_per_position,
+    BACKFILL_CLOSER_THRESHOLD,
+    BACKFILL_HITTER_THRESHOLD,
+    BACKFILL_SP_THRESHOLD,
     CLOSER_SV_THRESHOLD,
-    WAIVER_SP, WAIVER_RP, WAIVER_HITTER,
-    HEALTHY_SP_IP, HEALTHY_CLOSER_IP, HEALTHY_HITTER_AB,
-    BACKFILL_SP_THRESHOLD, BACKFILL_CLOSER_THRESHOLD, BACKFILL_HITTER_THRESHOLD,
+    HEALTHY_CLOSER_IP,
+    HEALTHY_HITTER_AB,
+    HEALTHY_SP_IP,
     STARTER_IP_THRESHOLD,
+    WAIVER_HITTER,
+    WAIVER_RP,
+    WAIVER_SP,
+    compute_starters_per_position,
+)
+from fantasy_baseball.utils.constants import (
     safe_float as _safe,
 )
 from fantasy_baseball.utils.name_utils import normalize_name

@@ -1,9 +1,9 @@
 from fantasy_baseball.data.db import (
     create_tables,
-    get_connection,
-    insert_transactions,
-    get_transaction_ids,
     get_all_transactions,
+    get_connection,
+    get_transaction_ids,
+    insert_transactions,
     update_transaction_pairing,
 )
 

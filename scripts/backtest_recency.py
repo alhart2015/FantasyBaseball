@@ -6,9 +6,9 @@ rest-of-season predictions against actual MLB game log data.
 Usage:
     python scripts/backtest_recency.py
 """
-import sys
 import csv
 import json
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -17,21 +17,21 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 import pandas as pd
+from backtest_2025 import DRAFT_2025
 
 from fantasy_baseball.analysis.game_logs import fetch_all_game_logs
 from fantasy_baseball.analysis.recency import (
-    predict_preseason,
-    predict_season_to_date,
-    predict_fixed_blend,
-    predict_reliability_blend,
-    predict_exponential_decay,
+    HITTER_STAT_KEYS,
+    PITCHER_STAT_KEYS,
     _aggregate_hitter_games,
     _aggregate_pitcher_games,
     _parse_date,
-    HITTER_STAT_KEYS,
-    PITCHER_STAT_KEYS,
+    predict_exponential_decay,
+    predict_fixed_blend,
+    predict_preseason,
+    predict_reliability_blend,
+    predict_season_to_date,
 )
-from backtest_2025 import DRAFT_2025
 from fantasy_baseball.utils.name_utils import normalize_name
 
 # ---------------------------------------------------------------------------

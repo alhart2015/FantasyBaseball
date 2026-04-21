@@ -1,4 +1,3 @@
-import pytest
 from fantasy_baseball.draft.tracker import DraftTracker
 
 

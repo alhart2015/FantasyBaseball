@@ -3,9 +3,11 @@
 Migrated from tests/test_integration.py to resolve the naming conflict
 between that standalone module and the tests/test_integration/ package.
 """
-import pytest
-import pandas as pd
 from pathlib import Path
+
+import pandas as pd
+import pytest
+
 from fantasy_baseball.data.projections import blend_projections
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.replacement import calculate_replacement_levels

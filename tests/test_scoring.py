@@ -19,10 +19,11 @@ from fantasy_baseball.scoring import (
     ALL_CATS,
     _prob_beats,
     build_team_sds,
+    project_team_sds,
     project_team_stats,
     score_roto,
 )
-from fantasy_baseball.utils.constants import Category
+from fantasy_baseball.utils.constants import STAT_VARIANCE, Category
 
 
 def _stats_table(stats_by_team):
@@ -179,11 +180,6 @@ class TestProbBeats:
         p_ab = _prob_beats(110, 100, 5, 5, higher_is_better=True)
         p_ba = _prob_beats(100, 110, 5, 5, higher_is_better=True)
         assert p_ab + p_ba == pytest.approx(1.0)
-
-
-from fantasy_baseball.scoring import project_team_sds
-from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
-from fantasy_baseball.utils.constants import STAT_VARIANCE
 
 
 def _make_hitter(name, **stats):
@@ -1081,7 +1077,7 @@ class TestScoreRotoEV:
                 assert roto_zero[t][cat] == pytest.approx(roto_none[t][cat])
 
     def test_large_sds_collapse_toward_middle(self):
-        # Huge σ >> any μ gap → every team's pairwise P ≈ 0.5 → pts ≈ (N+1)/2 = 6.5.
+        # Huge sd >> any mu gap → every team's pairwise P ≈ 0.5 → pts ≈ (N+1)/2 = 6.5.
         stats = _twelve_team_stats([100 + i for i in range(12)])
         team_names = [e.team_name for e in stats.entries]
         huge_sds = _all_cat_sds(team_names, 1_000_000)
@@ -1118,7 +1114,7 @@ class TestScoreRotoEV:
         assert roto["T12"][Category.ERA] == pytest.approx(1.0)
 
     def test_small_swap_within_uncertainty_produces_small_delta(self):
-        # Two teams tied at 100 R with σ=10 each. Moving 1 R changes
+        # Two teams tied at 100 R with sd=10 each. Moving 1 R changes
         # pts by only ~0.03, not the full 1.0 of a rank flip.
         dict_stats = _twelve_team_dict([100, 100, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50])
         team_names = list(dict_stats.keys())

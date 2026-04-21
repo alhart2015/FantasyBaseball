@@ -1,14 +1,14 @@
 """Tests for custom draft order with traded picks."""
 import json
-import pytest
 from pathlib import Path
 
-from fantasy_baseball.config import load_config, LeagueConfig
-from fantasy_baseball.draft.tracker import DraftTracker
-from fantasy_baseball.draft.state import serialize_state
-from fantasy_baseball.draft.balance import CategoryBalance
 import pandas as pd
+import pytest
 
+from fantasy_baseball.config import LeagueConfig, load_config
+from fantasy_baseball.draft.balance import CategoryBalance
+from fantasy_baseball.draft.state import serialize_state
+from fantasy_baseball.draft.tracker import DraftTracker
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -395,9 +395,9 @@ class TestStrategyRegistration:
             assert callable(fn), f"Strategy '{name}' is not callable"
 
     def test_closer_threshold_consistent(self):
-        from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
-        from fantasy_baseball.draft.strategy import CLOSER_SV_THRESHOLD as strat_threshold
         from fantasy_baseball.draft.recommender import CLOSER_SV_THRESHOLD as rec_threshold
+        from fantasy_baseball.draft.strategy import CLOSER_SV_THRESHOLD as strat_threshold
+        from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
         assert strat_threshold == CLOSER_SV_THRESHOLD == rec_threshold == 20
 
 

@@ -1,7 +1,6 @@
 """Tests for blended_projections helpers."""
 from fantasy_baseball.data import redis_store
 
-
 HITTER_ROW = {
     "fg_id": "sa3001523",
     "name": "Juan Soto",

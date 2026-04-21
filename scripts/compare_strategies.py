@@ -1,4 +1,4 @@
-"""Strategy comparison — all strategies × 2 scoring modes.
+"""Strategy comparison -- all strategies x 2 scoring modes.
 
 Parallelized across CPU cores. Each strategy+mode combo runs its
 iterations in a worker process.
@@ -43,8 +43,6 @@ def _run_strategy_batch(strat, scoring, iterations, opp_str, adp_noise,
     from simulate_draft import build_board_and_context, run_simulation
     ctx = build_board_and_context()
     config = ctx["config"]
-    board = ctx["board"]
-    full_board = ctx["full_board"]
 
     pts_list = []
     rank_list = []
@@ -95,7 +93,7 @@ def main():
 
     print(f"Strategies: {len(strategy_names)}, modes: {len(scoring_modes)}, "
           f"workers: {MAX_WORKERS}")
-    print(f"Each worker builds its own board (~10s startup)\n")
+    print("Each worker builds its own board (~10s startup)\n")
 
     # ---------------------------------------------------------------
     # PART 1: Strategic opponents with pick noise

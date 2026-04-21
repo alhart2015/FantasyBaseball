@@ -128,7 +128,7 @@ class TestComputeEffectiveDate:
 
 class TestNextTuesday:
     def test_sunday_advances_two_days(self):
-        """The canonical production case: Yahoo returns a Mon–Sun
+        """The canonical production case: Yahoo returns a Mon-Sun
         scoring week ending on Sunday. next_tuesday(Sunday) must
         produce the Tuesday two days later."""
         from fantasy_baseball.utils.time_utils import next_tuesday

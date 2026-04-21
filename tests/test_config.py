@@ -1,6 +1,8 @@
-import pytest
 from pathlib import Path
-from fantasy_baseball.config import load_config, LeagueConfig
+
+import pytest
+
+from fantasy_baseball.config import load_config
 
 
 @pytest.fixture

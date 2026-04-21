@@ -1,14 +1,16 @@
 import pandas as pd
+
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.sgp.replacement import calculate_replacement_levels
+from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
     CLOSER_SV_THRESHOLD,
     DEFAULT_ROSTER_SLOTS,
     compute_starters_per_position,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
-from fantasy_baseball.utils.positions import can_fill_slot, is_hitter
-from fantasy_baseball.sgp.replacement import calculate_replacement_levels
-from fantasy_baseball.sgp.var import calculate_var
+from fantasy_baseball.utils.positions import can_fill_slot
+
 
 def compute_slot_scarcity_order(
     board: pd.DataFrame,
@@ -26,7 +28,7 @@ def compute_slot_scarcity_order(
     for slot, n_slots in roster_slots.items():
         if slot in ("BN", "IL"):
             continue
-        eligible = board[board["positions"].apply(lambda p: can_fill_slot(p, slot))]
+        eligible = board[board["positions"].apply(lambda p, slot=slot: can_fill_slot(p, slot))]
         total_sgp = eligible["total_sgp"].sum() if "total_sgp" in eligible.columns else 0
         scarcity[slot] = total_sgp / n_slots if n_slots > 0 else float("inf")
     return sorted(scarcity.keys(), key=lambda s: scarcity[s])
@@ -92,14 +94,14 @@ def calculate_vona_scores(
     best_for_bucket = avail_buckets.map(best_remaining)
     vona_series = avail_sgp - best_for_bucket
 
-    return dict(zip(available["player_id"], vona_series))
+    return dict(zip(available["player_id"], vona_series, strict=False))
 
 
 
 def get_recommendations(
     board: pd.DataFrame,
     drafted: list[str],
-    user_roster: list[str],
+    user_roster: list[str],  # noqa: ARG001  (kept for API; used by callers positionally)
     n: int = 5,
     filled_positions: dict[str, int] | None = None,
     picks_until_next: int | None = None,
@@ -128,7 +130,7 @@ def get_recommendations(
     # Only recompute VAR for top candidates (by pre-computed VAR).
     # The full pool sets replacement levels accurately, but iterating
     # all ~3000 players per pick is the main performance bottleneck.
-    # 300 covers all draftable players (10 teams × 23 slots = 230) plus
+    # 300 covers all draftable players (10 teams x 23 slots = 230) plus
     # padding for positional scarcity shifts at C/SS/1B.
     _VAR_CANDIDATE_LIMIT = 300
     candidates = available.nlargest(_VAR_CANDIDATE_LIMIT, "var")
@@ -250,10 +252,7 @@ def _filter_rosterable(
         return available.iloc[0:0]  # no room at all
 
     def has_open_slot(positions):
-        for slot in open_slots:
-            if can_fill_slot(positions, slot):
-                return True
-        return False
+        return any(can_fill_slot(positions, slot) for slot in open_slots)
 
     mask = available["positions"].apply(has_open_slot)
     return available[mask]
@@ -281,7 +280,7 @@ def _collect_roster_entries(
     if player_lookup is None:
         # Build a pid lookup dict for O(1) lookups instead of O(n) per player
         pid_index = {}
-        for idx, row in board.iterrows():
+        for _idx, row in board.iterrows():
             pid_index[row["player_id"]] = row
     else:
         pid_index = player_lookup

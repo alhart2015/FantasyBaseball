@@ -349,14 +349,8 @@ def find_player_by_name(name: str, roster: list[Player]) -> Player | None:
     return None
 
 
-def _can_roster_without(
-    roster: list[Player], remove: Player, add: Player, roster_slots: dict
-) -> bool:
-    """Check if a roster remains legal after swapping one player.
-
-    Simple check: the incoming player must be able to fill at least one
-    non-bench active slot.
-    """
+def _can_roster_without(add: Player, roster_slots: dict) -> bool:
+    """Check if the incoming player can fill at least one non-bench active slot."""
     for slot in roster_slots:
         if slot in ("BN", "IL"):
             continue
@@ -371,7 +365,7 @@ def search_trades_away(
     hart_roster: list[Player],
     opp_rosters: dict[str, list[Player]],
     standings: Standings,
-    leverage_by_team: dict[str, dict],
+    leverage_by_team: dict[str, dict],  # noqa: ARG001  (kept for API; planned for future weighting)
     roster_slots: dict[str, int],
     rankings: dict[str, int],
     projected_standings: ProjectedStandings | None = None,
@@ -423,9 +417,9 @@ def search_trades_away(
             if receive_rank is None:
                 continue
 
-            if not _can_roster_without(hart_roster, hart_player, opp_player, roster_slots):
+            if not _can_roster_without(opp_player, roster_slots):
                 continue
-            if not _can_roster_without(opp_roster, opp_player, hart_player, roster_slots):
+            if not _can_roster_without(hart_player, roster_slots):
                 continue
 
             rank_gap = send_rank - receive_rank
@@ -483,7 +477,7 @@ def search_trades_for(
     hart_roster: list[Player],
     opp_rosters: dict[str, list[Player]],
     standings: Standings,
-    leverage_by_team: dict[str, dict],
+    leverage_by_team: dict[str, dict],  # noqa: ARG001  (kept for API; planned for future weighting)
     roster_slots: dict[str, int],
     rankings: dict[str, int],
     projected_standings: ProjectedStandings | None = None,
@@ -541,9 +535,9 @@ def search_trades_for(
         if send_rank is None:
             continue
 
-        if not _can_roster_without(hart_roster, hart_player, target_player, roster_slots):
+        if not _can_roster_without(target_player, roster_slots):
             continue
-        if not _can_roster_without(opp_roster, target_player, hart_player, roster_slots):
+        if not _can_roster_without(hart_player, roster_slots):
             continue
 
         rank_gap = send_rank - receive_rank

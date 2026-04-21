@@ -8,25 +8,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-log = logging.getLogger(__name__)
-
-from fantasy_baseball.data.cache_keys import CacheKey, redis_key  # noqa: E402
-from fantasy_baseball.data.kv_store import KVStore, get_kv, is_remote  # noqa: E402
-
-
-def _get_redis() -> KVStore | None:
-    """Return the remote KV client on Render, ``None`` off-Render.
-
-    Thin compatibility helper over ``kv_store.get_kv()``. The cache:*
-    semantics in this module and in ``refresh_pipeline`` / ``job_logger``
-    historically treated "Redis" as "remote or nothing" — off-Render,
-    cache:* keys have dedicated JSON files on disk, so they don't need
-    a local KV fallback. This helper preserves that semantic while
-    keeping the RENDER gate in a single place (``kv_store.is_remote``).
-    """
-    return get_kv() if is_remote() else None
-
-
+from fantasy_baseball.data.cache_keys import CacheKey, redis_key
+from fantasy_baseball.data.kv_store import KVStore, get_kv, is_remote
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.standings import ProjectedStandings, Standings, StandingsEntry
 from fantasy_baseball.scoring import score_roto
@@ -41,6 +24,21 @@ from fantasy_baseball.utils.constants import (
     INVERSE_STATS as INVERSE_CATS,
 )
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
+
+log = logging.getLogger(__name__)
+
+
+def _get_redis() -> KVStore | None:
+    """Return the remote KV client on Render, ``None`` off-Render.
+
+    Thin compatibility helper over ``kv_store.get_kv()``. The cache:*
+    semantics in this module and in ``refresh_pipeline`` / ``job_logger``
+    historically treated "Redis" as "remote or nothing" — off-Render,
+    cache:* keys have dedicated JSON files on disk, so they don't need
+    a local KV fallback. This helper preserves that semantic while
+    keeping the RENDER gate in a single place (``kv_store.is_remote``).
+    """
+    return get_kv() if is_remote() else None
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -145,7 +143,7 @@ def read_meta(cache_dir: Path = CACHE_DIR) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-def _load_game_log_totals(season_year: int) -> tuple[dict, dict]:
+def _load_game_log_totals(season_year: int) -> tuple[dict, dict]:  # noqa: ARG001
     """Load aggregated game log totals from Redis, keyed by normalized name.
 
     Returns (hitter_logs, pitcher_logs) where each is {normalized_name: {stat: value}}.

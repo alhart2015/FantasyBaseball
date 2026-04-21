@@ -1,6 +1,10 @@
-import pytest
 import pandas as pd
-from fantasy_baseball.sgp.replacement import calculate_replacement_levels, calculate_replacement_rates
+import pytest
+
+from fantasy_baseball.sgp.replacement import (
+    calculate_replacement_levels,
+    calculate_replacement_rates,
+)
 
 
 def _make_player_pool():

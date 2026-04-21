@@ -10,7 +10,7 @@ import pytest
 
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
-from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
+from fantasy_baseball.models.player import HitterStats, PitcherStats, Player
 from fantasy_baseball.models.standings import CategoryStats, Standings, StandingsEntry
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
