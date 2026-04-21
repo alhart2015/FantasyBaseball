@@ -11,6 +11,7 @@ attributing the full delta to the drop side (add side gets 0).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date, datetime
 
 import pandas as pd
@@ -25,6 +26,7 @@ from fantasy_baseball.utils.constants import (
     REPLACEMENT_HITTER,
     REPLACEMENT_RP,
     REPLACEMENT_SP,
+    Category,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_era, calculate_whip
@@ -324,7 +326,7 @@ def _delta_roto(
     loses_ros: dict,
     gains_ros: dict,
     projected_standings: list[dict],
-    team_sds: dict[str, dict[str, float]] | None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
 ) -> float:
     """Return the team's total-ΔRoto from swapping ``loses_ros`` → ``gains_ros``.
 
@@ -362,7 +364,7 @@ def score_transaction(
     season_end: date,
     *,
     partner: dict | None = None,
-    team_sds: dict[str, dict[str, float]] | None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
 ) -> dict:
     """Compute ΔRoto for a transaction.
 
@@ -391,9 +393,9 @@ def score_transaction(
         partner: the paired transaction, when this txn is part of a
             drop+add pair. Presence is what makes this a "paired" score.
         team_sds: per-team per-category standard deviations (``{team:
-            {cat: sd}}``) for fractional ERoto scoring, or ``None`` for
-            integer rank-based roto. Required keyword — no default, so
-            callers can't silently get integer roto by forgetting the
+            {Category: sd}}``) for fractional ERoto scoring, or ``None``
+            for integer rank-based roto. Required keyword — no default,
+            so callers can't silently get integer roto by forgetting the
             argument.
 
     Returns:

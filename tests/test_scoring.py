@@ -36,8 +36,9 @@ def _stats_table(stats_by_team):
     )
 
 
-def _hitter(name, r=0, hr=0, rbi=0, sb=0, h=0, ab=0, pa=0,
-            positions=None, selected_position=None, status=""):
+def _hitter(
+    name, r=0, hr=0, rbi=0, sb=0, h=0, ab=0, pa=0, positions=None, selected_position=None, status=""
+):
     return Player(
         name=name,
         player_type=PlayerType.HITTER,
@@ -48,8 +49,19 @@ def _hitter(name, r=0, hr=0, rbi=0, sb=0, h=0, ab=0, pa=0,
     )
 
 
-def _pitcher(name, w=0, k=0, sv=0, ip=0, er=0, bb=0, h_allowed=0,
-             positions=None, selected_position=None, status=""):
+def _pitcher(
+    name,
+    w=0,
+    k=0,
+    sv=0,
+    ip=0,
+    er=0,
+    bb=0,
+    h_allowed=0,
+    positions=None,
+    selected_position=None,
+    status="",
+):
     return Player(
         name=name,
         player_type=PlayerType.PITCHER,
@@ -69,8 +81,7 @@ class TestProjectTeamStats:
         """
         roster = [
             _hitter("Hitter A", r=100, hr=30, rbi=90, sb=10, h=150, ab=550),
-            _pitcher("Pitcher With Util", w=15, k=200, sv=0, ip=180, er=60,
-                     bb=50, h_allowed=150),
+            _pitcher("Pitcher With Util", w=15, k=200, sv=0, ip=180, er=60, bb=50, h_allowed=150),
         ]
         stats = project_team_stats(roster)
         assert stats[Category.W] == 15
@@ -80,8 +91,7 @@ class TestProjectTeamStats:
     def test_hitter_and_pitcher_both_counted(self):
         roster = [
             _hitter("Hitter", r=80, hr=25, rbi=70, sb=5, h=130, ab=500),
-            _pitcher("Pitcher", w=10, k=150, sv=30, ip=60, er=20, bb=15,
-                     h_allowed=50),
+            _pitcher("Pitcher", w=10, k=150, sv=30, ip=60, er=20, bb=15, h_allowed=50),
         ]
         stats = project_team_stats(roster)
         assert stats[Category.R] == 80
@@ -101,8 +111,7 @@ class TestProjectTeamStats:
 
     def test_pitchers_only(self):
         roster = [
-            _pitcher("SP", w=12, k=180, sv=0, ip=200, er=70, bb=50,
-                     h_allowed=170),
+            _pitcher("SP", w=12, k=180, sv=0, ip=200, er=70, bb=50, h_allowed=170),
         ]
         stats = project_team_stats(roster)
         assert stats[Category.R] == 0
@@ -205,50 +214,50 @@ class TestProjectTeamSDs:
 
     def test_empty_roster_returns_zeros(self):
         sds = project_team_sds([])
-        for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]:
+        for cat in ALL_CATS:
             assert sds[cat] == 0.0
 
     def test_single_hitter_counting_stat(self):
         p = _make_hitter("A", r=80, hr=20, rbi=70, sb=10, h=150, ab=500)
         sds = project_team_sds([p])
         # SD_R = CV_r * sqrt(r^2) = CV_r * r  (single player case)
-        assert sds["R"] == pytest.approx(STAT_VARIANCE["r"] * 80)
-        assert sds["HR"] == pytest.approx(STAT_VARIANCE["hr"] * 20)
+        assert sds[Category.R] == pytest.approx(STAT_VARIANCE["r"] * 80)
+        assert sds[Category.HR] == pytest.approx(STAT_VARIANCE["hr"] * 20)
 
     def test_independence_aggregates_in_quadrature(self):
         a = _make_hitter("A", r=100, hr=0, rbi=0, sb=0, h=0, ab=0)
         b = _make_hitter("B", r=60, hr=0, rbi=0, sb=0, h=0, ab=0)
         sds = project_team_sds([a, b])
         expected = STAT_VARIANCE["r"] * math.sqrt(100**2 + 60**2)
-        assert sds["R"] == pytest.approx(expected)
+        assert sds[Category.R] == pytest.approx(expected)
 
     def test_avg_uses_hits_variance_over_total_ab(self):
         a = _make_hitter("A", r=0, hr=0, rbi=0, sb=0, h=150, ab=500)
         b = _make_hitter("B", r=0, hr=0, rbi=0, sb=0, h=100, ab=400)
         sds = project_team_sds([a, b])
         expected = STAT_VARIANCE["h"] * math.sqrt(150**2 + 100**2) / (500 + 400)
-        assert sds["AVG"] == pytest.approx(expected)
+        assert sds[Category.AVG] == pytest.approx(expected)
 
     def test_era_scales_by_nine_over_ip(self):
         a = _make_pitcher("A", w=10, k=180, sv=0, ip=180, er=60, bb=40, h_allowed=140)
         b = _make_pitcher("B", w=8, k=140, sv=0, ip=150, er=55, bb=35, h_allowed=130)
         sds = project_team_sds([a, b])
         expected = 9.0 * STAT_VARIANCE["er"] * math.sqrt(60**2 + 55**2) / (180 + 150)
-        assert sds["ERA"] == pytest.approx(expected)
+        assert sds[Category.ERA] == pytest.approx(expected)
 
     def test_whip_combines_bb_and_h_allowed_variance(self):
         a = _make_pitcher("A", w=0, k=0, sv=0, ip=100, er=0, bb=30, h_allowed=90)
         sds = project_team_sds([a])
-        expected = math.sqrt(
-            STAT_VARIANCE["bb"]**2 * 30**2
-            + STAT_VARIANCE["h_allowed"]**2 * 90**2
-        ) / 100
-        assert sds["WHIP"] == pytest.approx(expected)
+        expected = (
+            math.sqrt(STAT_VARIANCE["bb"] ** 2 * 30**2 + STAT_VARIANCE["h_allowed"] ** 2 * 90**2)
+            / 100
+        )
+        assert sds[Category.WHIP] == pytest.approx(expected)
 
     def test_all_ten_categories_present(self):
         p = _make_hitter("A", r=50, hr=10, rbi=40, sb=5, h=100, ab=400)
         sds = project_team_sds([p])
-        assert set(sds.keys()) == {"R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"}
+        assert set(sds.keys()) == set(ALL_CATS)
 
     def test_displacement_kwarg_defaults_true(self):
         # Bench players excluded by default. A bench-slot hitter should
@@ -264,40 +273,106 @@ class TestProjectTeamSDs:
         )
         sds_with_bench = project_team_sds([active, bench])
         sds_active_only = project_team_sds([active])
-        assert sds_with_bench["R"] == pytest.approx(sds_active_only["R"])
+        assert sds_with_bench[Category.R] == pytest.approx(sds_active_only[Category.R])
 
 
 class TestScoreRoto:
     def test_two_teams_simple(self):
-        stats = _stats_table({
-            "A": {"R": 900, "HR": 250, "RBI": 850, "SB": 100, "AVG": 0.270,
-                   "W": 80, "K": 1200, "SV": 50, "ERA": 3.50, "WHIP": 1.15},
-            "B": {"R": 800, "HR": 200, "RBI": 750, "SB": 80, "AVG": 0.260,
-                   "W": 70, "K": 1100, "SV": 40, "ERA": 4.00, "WHIP": 1.25},
-        })
+        stats = _stats_table(
+            {
+                "A": {
+                    "R": 900,
+                    "HR": 250,
+                    "RBI": 850,
+                    "SB": 100,
+                    "AVG": 0.270,
+                    "W": 80,
+                    "K": 1200,
+                    "SV": 50,
+                    "ERA": 3.50,
+                    "WHIP": 1.15,
+                },
+                "B": {
+                    "R": 800,
+                    "HR": 200,
+                    "RBI": 750,
+                    "SB": 80,
+                    "AVG": 0.260,
+                    "W": 70,
+                    "K": 1100,
+                    "SV": 40,
+                    "ERA": 4.00,
+                    "WHIP": 1.25,
+                },
+            }
+        )
         roto = score_roto(stats)
         assert roto["A"].total == 20  # wins every category
         assert roto["B"].total == 10
 
     def test_fractional_tiebreaker(self):
-        stats = _stats_table({
-            "A": {"R": 900, "HR": 250, "RBI": 850, "SB": 100, "AVG": 0.270,
-                   "W": 80, "K": 1200, "SV": 50, "ERA": 3.50, "WHIP": 1.15},
-            "B": {"R": 900, "HR": 250, "RBI": 850, "SB": 100, "AVG": 0.270,
-                   "W": 80, "K": 1200, "SV": 50, "ERA": 3.50, "WHIP": 1.15},
-        })
+        stats = _stats_table(
+            {
+                "A": {
+                    "R": 900,
+                    "HR": 250,
+                    "RBI": 850,
+                    "SB": 100,
+                    "AVG": 0.270,
+                    "W": 80,
+                    "K": 1200,
+                    "SV": 50,
+                    "ERA": 3.50,
+                    "WHIP": 1.15,
+                },
+                "B": {
+                    "R": 900,
+                    "HR": 250,
+                    "RBI": 850,
+                    "SB": 100,
+                    "AVG": 0.270,
+                    "W": 80,
+                    "K": 1200,
+                    "SV": 50,
+                    "ERA": 3.50,
+                    "WHIP": 1.15,
+                },
+            }
+        )
         roto = score_roto(stats)
         # Tied in everything — both get 1.5 per cat (avg of 1 and 2)
         assert roto["A"].total == pytest.approx(15.0)
         assert roto["B"].total == pytest.approx(15.0)
 
     def test_inverse_stats_lower_is_better(self):
-        stats = _stats_table({
-            "A": {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
-                   "W": 0, "K": 0, "SV": 0, "ERA": 3.00, "WHIP": 1.10},
-            "B": {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
-                   "W": 0, "K": 0, "SV": 0, "ERA": 4.50, "WHIP": 1.30},
-        })
+        stats = _stats_table(
+            {
+                "A": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 0,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 3.00,
+                    "WHIP": 1.10,
+                },
+                "B": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 0,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 4.50,
+                    "WHIP": 1.30,
+                },
+            }
+        )
         roto = score_roto(stats)
         assert roto["A"][Category.ERA] == 2  # lower ERA = better = more points
         assert roto["B"][Category.ERA] == 1
@@ -318,11 +393,20 @@ class TestDisplacementOff:
 
     def test_default_displacement_false(self):
         """displacement defaults to False; bench players are counted."""
-        bench = _hitter("Bench Guy", r=50, hr=10, rbi=40, sb=5, h=80, ab=300,
-                        selected_position=Position.BN)
-        active = _hitter("Active", r=80, hr=20, rbi=70, sb=10, h=140, ab=500,
-                         selected_position=Position.OF,
-                         positions=[Position.OF])
+        bench = _hitter(
+            "Bench Guy", r=50, hr=10, rbi=40, sb=5, h=80, ab=300, selected_position=Position.BN
+        )
+        active = _hitter(
+            "Active",
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            h=140,
+            ab=500,
+            selected_position=Position.OF,
+            positions=[Position.OF],
+        )
         stats = project_team_stats([active, bench])
         assert stats[Category.R] == 130  # 80 + 50
         assert stats[Category.HR] == 30  # 20 + 10
@@ -332,21 +416,48 @@ class TestDisplacementBenchExclusion:
     """Bench players (BN slot, not IL) are excluded when displacement=True."""
 
     def test_bench_hitter_excluded(self):
-        bench = _hitter("Bench", r=50, hr=10, rbi=40, sb=5, h=80, ab=300,
-                        selected_position=Position.BN)
-        active = _hitter("Active", r=80, hr=20, rbi=70, sb=10, h=140, ab=500,
-                         selected_position=Position.OF,
-                         positions=[Position.OF])
+        bench = _hitter(
+            "Bench", r=50, hr=10, rbi=40, sb=5, h=80, ab=300, selected_position=Position.BN
+        )
+        active = _hitter(
+            "Active",
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            h=140,
+            ab=500,
+            selected_position=Position.OF,
+            positions=[Position.OF],
+        )
         stats = project_team_stats([active, bench], displacement=True)
         assert stats[Category.R] == 80
         assert stats[Category.HR] == 20
 
     def test_bench_pitcher_excluded(self):
-        bench = _pitcher("BenchP", w=5, k=60, sv=0, ip=80, er=30, bb=20,
-                         h_allowed=70, selected_position=Position.BN)
-        active = _pitcher("ActiveP", w=10, k=150, sv=0, ip=180, er=60, bb=50,
-                          h_allowed=150, selected_position=Position.SP,
-                          positions=[Position.SP])
+        bench = _pitcher(
+            "BenchP",
+            w=5,
+            k=60,
+            sv=0,
+            ip=80,
+            er=30,
+            bb=20,
+            h_allowed=70,
+            selected_position=Position.BN,
+        )
+        active = _pitcher(
+            "ActiveP",
+            w=10,
+            k=150,
+            sv=0,
+            ip=180,
+            er=60,
+            bb=50,
+            h_allowed=150,
+            selected_position=Position.SP,
+            positions=[Position.SP],
+        )
         stats = project_team_stats([active, bench], displacement=True)
         assert stats[Category.W] == 10
         assert stats[Category.K] == 150
@@ -354,11 +465,28 @@ class TestDisplacementBenchExclusion:
     def test_il_player_on_bench_slot_with_il_status_not_excluded_as_bench(self):
         """A player on BN slot but with IL status is NOT treated as bench —
         they're treated as IL (for displacement purposes)."""
-        il_player = _hitter("IL Guy", r=40, hr=8, rbi=30, sb=3, h=60, ab=200,
-                            selected_position=Position.BN, status="IL")
-        active = _hitter("Active", r=80, hr=20, rbi=70, sb=10, h=140, ab=500,
-                         selected_position=Position.OF,
-                         positions=[Position.OF])
+        il_player = _hitter(
+            "IL Guy",
+            r=40,
+            hr=8,
+            rbi=30,
+            sb=3,
+            h=60,
+            ab=200,
+            selected_position=Position.BN,
+            status="IL",
+        )
+        active = _hitter(
+            "Active",
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            h=140,
+            ab=500,
+            selected_position=Position.OF,
+            positions=[Position.OF],
+        )
         # IL Guy is not excluded as bench (has IL status), so displacement
         # logic applies instead. Since Active is the only option, his stats
         # get scaled down. IL Guy counted at full scale.
@@ -374,16 +502,41 @@ class TestDisplacementILHitter:
     def test_basic_hitter_displacement(self):
         """IL hitter displaces worst active hitter sharing a position."""
         # Active hitters: one good OF, one bad OF
-        good_of = _hitter("Good OF", r=90, hr=30, rbi=90, sb=10, h=160, ab=550,
-                          positions=[Position.OF],
-                          selected_position=Position.OF)
-        bad_of = _hitter("Bad OF", r=40, hr=8, rbi=30, sb=2, h=80, ab=300,
-                         positions=[Position.OF],
-                         selected_position=Position.OF)
+        good_of = _hitter(
+            "Good OF",
+            r=90,
+            hr=30,
+            rbi=90,
+            sb=10,
+            h=160,
+            ab=550,
+            positions=[Position.OF],
+            selected_position=Position.OF,
+        )
+        bad_of = _hitter(
+            "Bad OF",
+            r=40,
+            hr=8,
+            rbi=30,
+            sb=2,
+            h=80,
+            ab=300,
+            positions=[Position.OF],
+            selected_position=Position.OF,
+        )
         # IL hitter: OF eligible, 200 PA on IL
-        il_of = _hitter("IL OF", r=30, hr=5, rbi=20, sb=1, h=50, ab=200,
-                        positions=[Position.OF],
-                        selected_position=Position.IL, status="IL")
+        il_of = _hitter(
+            "IL OF",
+            r=30,
+            hr=5,
+            rbi=20,
+            sb=1,
+            h=50,
+            ab=200,
+            positions=[Position.OF],
+            selected_position=Position.IL,
+            status="IL",
+        )
 
         stats = project_team_stats([good_of, bad_of, il_of], displacement=True)
 
@@ -395,16 +548,41 @@ class TestDisplacementILHitter:
 
     def test_il_hitter_fallback_to_worst_hitter_overall(self):
         """When no active hitter shares a position, fallback to worst hitter."""
-        ss = _hitter("SS guy", r=50, hr=10, rbi=40, sb=5, h=90, ab=350,
-                     positions=[Position.SS],
-                     selected_position=Position.SS)
-        first = _hitter("1B guy", r=70, hr=25, rbi=80, sb=2, h=130, ab=480,
-                        positions=[Position.FIRST_BASE],
-                        selected_position=Position.FIRST_BASE)
+        ss = _hitter(
+            "SS guy",
+            r=50,
+            hr=10,
+            rbi=40,
+            sb=5,
+            h=90,
+            ab=350,
+            positions=[Position.SS],
+            selected_position=Position.SS,
+        )
+        first = _hitter(
+            "1B guy",
+            r=70,
+            hr=25,
+            rbi=80,
+            sb=2,
+            h=130,
+            ab=480,
+            positions=[Position.FIRST_BASE],
+            selected_position=Position.FIRST_BASE,
+        )
         # IL hitter is OF eligible — no active OF exists
-        il_of = _hitter("IL OF", r=20, hr=4, rbi=15, sb=1, h=40, ab=150,
-                        positions=[Position.OF],
-                        selected_position=Position.IL, status="IL10")
+        il_of = _hitter(
+            "IL OF",
+            r=20,
+            hr=4,
+            rbi=15,
+            sb=1,
+            h=40,
+            ab=150,
+            positions=[Position.OF],
+            selected_position=Position.IL,
+            status="IL10",
+        )
 
         stats = project_team_stats([ss, first, il_of], displacement=True)
 
@@ -415,12 +593,29 @@ class TestDisplacementILHitter:
 
     def test_displacement_caps_at_zero(self):
         """When IL player has more playing time than active, factor is 0."""
-        active = _hitter("Active", r=40, hr=8, rbi=30, sb=2, h=60, ab=200,
-                         positions=[Position.OF],
-                         selected_position=Position.OF)
-        il_player = _hitter("IL Big", r=50, hr=10, rbi=40, sb=5, h=100, ab=400,
-                            positions=[Position.OF],
-                            selected_position=Position.IL, status="IL60")
+        active = _hitter(
+            "Active",
+            r=40,
+            hr=8,
+            rbi=30,
+            sb=2,
+            h=60,
+            ab=200,
+            positions=[Position.OF],
+            selected_position=Position.OF,
+        )
+        il_player = _hitter(
+            "IL Big",
+            r=50,
+            hr=10,
+            rbi=40,
+            sb=5,
+            h=100,
+            ab=400,
+            positions=[Position.OF],
+            selected_position=Position.IL,
+            status="IL60",
+        )
 
         stats = project_team_stats([active, il_player], displacement=True)
 
@@ -431,15 +626,41 @@ class TestDisplacementILHitter:
 
     def test_each_active_displaced_at_most_once(self):
         """Two IL hitters can't both displace the same active player."""
-        active = _hitter("Only Active", r=80, hr=20, rbi=70, sb=10, h=140, ab=500,
-                         positions=[Position.OF],
-                         selected_position=Position.OF)
-        il1 = _hitter("IL1", r=30, hr=5, rbi=20, sb=1, h=50, ab=200,
-                       positions=[Position.OF],
-                       selected_position=Position.IL, status="IL")
-        il2 = _hitter("IL2", r=20, hr=3, rbi=15, sb=1, h=40, ab=150,
-                       positions=[Position.OF],
-                       selected_position=Position.IL_PLUS, status="IL+")
+        active = _hitter(
+            "Only Active",
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            h=140,
+            ab=500,
+            positions=[Position.OF],
+            selected_position=Position.OF,
+        )
+        il1 = _hitter(
+            "IL1",
+            r=30,
+            hr=5,
+            rbi=20,
+            sb=1,
+            h=50,
+            ab=200,
+            positions=[Position.OF],
+            selected_position=Position.IL,
+            status="IL",
+        )
+        il2 = _hitter(
+            "IL2",
+            r=20,
+            hr=3,
+            rbi=15,
+            sb=1,
+            h=40,
+            ab=150,
+            positions=[Position.OF],
+            selected_position=Position.IL_PLUS,
+            status="IL+",
+        )
 
         stats = project_team_stats([active, il1, il2], displacement=True)
 
@@ -456,15 +677,43 @@ class TestDisplacementILPitcher:
 
     def test_sp_displaces_sp(self):
         """IL SP (ip>100) displaces worst active SP."""
-        good_sp = _pitcher("Good SP", w=15, k=200, sv=0, ip=190, er=55, bb=40,
-                           h_allowed=150, positions=[Position.SP],
-                           selected_position=Position.SP)
-        bad_sp = _pitcher("Bad SP", w=5, k=80, sv=0, ip=120, er=55, bb=40,
-                          h_allowed=110, positions=[Position.SP],
-                          selected_position=Position.SP)
-        il_sp = _pitcher("IL SP", w=8, k=100, sv=0, ip=130, er=40, bb=30,
-                         h_allowed=100, positions=[Position.SP],
-                         selected_position=Position.IL, status="IL15")
+        good_sp = _pitcher(
+            "Good SP",
+            w=15,
+            k=200,
+            sv=0,
+            ip=190,
+            er=55,
+            bb=40,
+            h_allowed=150,
+            positions=[Position.SP],
+            selected_position=Position.SP,
+        )
+        bad_sp = _pitcher(
+            "Bad SP",
+            w=5,
+            k=80,
+            sv=0,
+            ip=120,
+            er=55,
+            bb=40,
+            h_allowed=110,
+            positions=[Position.SP],
+            selected_position=Position.SP,
+        )
+        il_sp = _pitcher(
+            "IL SP",
+            w=8,
+            k=100,
+            sv=0,
+            ip=130,
+            er=40,
+            bb=30,
+            h_allowed=100,
+            positions=[Position.SP],
+            selected_position=Position.IL,
+            status="IL15",
+        )
 
         stats = project_team_stats([good_sp, bad_sp, il_sp], displacement=True)
 
@@ -475,15 +724,43 @@ class TestDisplacementILPitcher:
 
     def test_rp_displaces_rp(self):
         """IL RP (ip<=100) displaces worst active RP, not an SP."""
-        sp = _pitcher("SP", w=12, k=180, sv=0, ip=180, er=60, bb=45,
-                      h_allowed=150, positions=[Position.SP],
-                      selected_position=Position.SP)
-        rp = _pitcher("RP", w=3, k=50, sv=20, ip=60, er=20, bb=15,
-                      h_allowed=50, positions=[Position.RP],
-                      selected_position=Position.RP)
-        il_rp = _pitcher("IL RP", w=1, k=20, sv=10, ip=30, er=10, bb=8,
-                         h_allowed=25, positions=[Position.RP],
-                         selected_position=Position.IL, status="IL")
+        sp = _pitcher(
+            "SP",
+            w=12,
+            k=180,
+            sv=0,
+            ip=180,
+            er=60,
+            bb=45,
+            h_allowed=150,
+            positions=[Position.SP],
+            selected_position=Position.SP,
+        )
+        rp = _pitcher(
+            "RP",
+            w=3,
+            k=50,
+            sv=20,
+            ip=60,
+            er=20,
+            bb=15,
+            h_allowed=50,
+            positions=[Position.RP],
+            selected_position=Position.RP,
+        )
+        il_rp = _pitcher(
+            "IL RP",
+            w=1,
+            k=20,
+            sv=10,
+            ip=30,
+            er=10,
+            bb=8,
+            h_allowed=25,
+            positions=[Position.RP],
+            selected_position=Position.IL,
+            status="IL",
+        )
 
         stats = project_team_stats([sp, rp, il_rp], displacement=True)
 
@@ -498,13 +775,30 @@ class TestDisplacementILSlotAndStatus:
 
     def test_il_slot_triggers_displacement(self):
         """Player on IL slot is treated as IL even without status string."""
-        active = _hitter("Active", r=80, hr=20, rbi=70, sb=10, h=140, ab=500,
-                         positions=[Position.OF],
-                         selected_position=Position.OF)
+        active = _hitter(
+            "Active",
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            h=140,
+            ab=500,
+            positions=[Position.OF],
+            selected_position=Position.OF,
+        )
         # selected_position=IL but status="" — still counts as IL
-        il_player = _hitter("IL slot", r=20, hr=4, rbi=15, sb=1, h=40, ab=150,
-                            positions=[Position.OF],
-                            selected_position=Position.IL, status="")
+        il_player = _hitter(
+            "IL slot",
+            r=20,
+            hr=4,
+            rbi=15,
+            sb=1,
+            h=40,
+            ab=150,
+            positions=[Position.OF],
+            selected_position=Position.IL,
+            status="",
+        )
 
         stats = project_team_stats([active, il_player], displacement=True)
         # factor = (500 - 150) / 500 = 0.7
@@ -514,13 +808,30 @@ class TestDisplacementILSlotAndStatus:
     def test_il_status_on_active_slot_triggers_displacement(self):
         """Player with IL status but on an active slot (e.g., Yahoo quirk)
         is treated as IL."""
-        active = _hitter("Active", r=80, hr=20, rbi=70, sb=10, h=140, ab=500,
-                         positions=[Position.OF],
-                         selected_position=Position.OF)
+        active = _hitter(
+            "Active",
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            h=140,
+            ab=500,
+            positions=[Position.OF],
+            selected_position=Position.OF,
+        )
         # selected_position=OF but status="IL60" — still IL
-        il_player = _hitter("IL status", r=30, hr=6, rbi=20, sb=2, h=60, ab=250,
-                            positions=[Position.OF],
-                            selected_position=Position.OF, status="IL60")
+        il_player = _hitter(
+            "IL status",
+            r=30,
+            hr=6,
+            rbi=20,
+            sb=2,
+            h=60,
+            ab=250,
+            positions=[Position.OF],
+            selected_position=Position.OF,
+            status="IL60",
+        )
 
         stats = project_team_stats([active, il_player], displacement=True)
         # factor = (500 - 250) / 500 = 0.5
@@ -533,10 +844,25 @@ class TestDisplacementDictInputUnaffected:
 
     def test_dict_roster_ignores_displacement(self):
         roster = [
-            {"player_type": PlayerType.HITTER, "r": 80, "hr": 20, "rbi": 70,
-             "sb": 10, "h": 140, "ab": 500},
-            {"player_type": PlayerType.HITTER, "r": 50, "hr": 10, "rbi": 40,
-             "sb": 5, "h": 80, "ab": 300, "selected_position": "BN"},
+            {
+                "player_type": PlayerType.HITTER,
+                "r": 80,
+                "hr": 20,
+                "rbi": 70,
+                "sb": 10,
+                "h": 140,
+                "ab": 500,
+            },
+            {
+                "player_type": PlayerType.HITTER,
+                "r": 50,
+                "hr": 10,
+                "rbi": 40,
+                "sb": 5,
+                "h": 80,
+                "ab": 300,
+                "selected_position": "BN",
+            },
         ]
         stats = project_team_stats(roster, displacement=True)
         # Dicts are never filtered — all summed naively
@@ -549,19 +875,53 @@ class TestDisplacementProcessingOrder:
 
     def test_higher_playing_time_il_processed_first(self):
         """The IL player with more playing time gets first pick of displacement."""
-        of1 = _hitter("OF1", r=60, hr=15, rbi=50, sb=8, h=100, ab=400,
-                      positions=[Position.OF],
-                      selected_position=Position.OF)
-        of2 = _hitter("OF2", r=40, hr=8, rbi=30, sb=2, h=70, ab=280,
-                      positions=[Position.OF],
-                      selected_position=Position.OF)
+        of1 = _hitter(
+            "OF1",
+            r=60,
+            hr=15,
+            rbi=50,
+            sb=8,
+            h=100,
+            ab=400,
+            positions=[Position.OF],
+            selected_position=Position.OF,
+        )
+        of2 = _hitter(
+            "OF2",
+            r=40,
+            hr=8,
+            rbi=30,
+            sb=2,
+            h=70,
+            ab=280,
+            positions=[Position.OF],
+            selected_position=Position.OF,
+        )
         # IL1 has 300 ab, IL2 has 100 ab
-        il1 = _hitter("IL1", r=50, hr=12, rbi=40, sb=5, h=90, ab=300,
-                      positions=[Position.OF],
-                      selected_position=Position.IL, status="IL")
-        il2 = _hitter("IL2", r=20, hr=3, rbi=10, sb=1, h=30, ab=100,
-                      positions=[Position.OF],
-                      selected_position=Position.IL, status="IL")
+        il1 = _hitter(
+            "IL1",
+            r=50,
+            hr=12,
+            rbi=40,
+            sb=5,
+            h=90,
+            ab=300,
+            positions=[Position.OF],
+            selected_position=Position.IL,
+            status="IL",
+        )
+        il2 = _hitter(
+            "IL2",
+            r=20,
+            hr=3,
+            rbi=10,
+            sb=1,
+            h=30,
+            ab=100,
+            positions=[Position.OF],
+            selected_position=Position.IL,
+            status="IL",
+        )
 
         stats = project_team_stats([of1, of2, il1, il2], displacement=True)
 
@@ -580,16 +940,41 @@ class TestDisplacementRoleMatching:
     def test_generic_positions_ignored_in_matching(self):
         """Players with only UTIL/DH/etc. in their positions list use
         fallback (worst hitter overall)."""
-        active1 = _hitter("1B", r=60, hr=15, rbi=50, sb=3, h=100, ab=400,
-                          positions=[Position.FIRST_BASE],
-                          selected_position=Position.FIRST_BASE)
-        active2 = _hitter("Worst", r=30, hr=5, rbi=20, sb=1, h=50, ab=250,
-                          positions=[Position.SECOND_BASE],
-                          selected_position=Position.SECOND_BASE)
+        active1 = _hitter(
+            "1B",
+            r=60,
+            hr=15,
+            rbi=50,
+            sb=3,
+            h=100,
+            ab=400,
+            positions=[Position.FIRST_BASE],
+            selected_position=Position.FIRST_BASE,
+        )
+        active2 = _hitter(
+            "Worst",
+            r=30,
+            hr=5,
+            rbi=20,
+            sb=1,
+            h=50,
+            ab=250,
+            positions=[Position.SECOND_BASE],
+            selected_position=Position.SECOND_BASE,
+        )
         # IL player only has UTIL in positions — no "real" position overlap
-        il_util = _hitter("IL Util", r=20, hr=4, rbi=15, sb=1, h=35, ab=150,
-                          positions=[Position.UTIL],
-                          selected_position=Position.IL, status="IL")
+        il_util = _hitter(
+            "IL Util",
+            r=20,
+            hr=4,
+            rbi=15,
+            sb=1,
+            h=35,
+            ab=150,
+            positions=[Position.UTIL],
+            selected_position=Position.IL,
+            status="IL",
+        )
 
         stats = project_team_stats([active1, active2, il_util], displacement=True)
 
@@ -604,13 +989,23 @@ class TestDisplacementNoRos:
 
     def test_il_player_without_ros_no_displacement(self):
         """IL player with rest_of_season=None has 0 playing time — no displacement."""
-        active = _hitter("Active", r=80, hr=20, rbi=70, sb=10, h=140, ab=500,
-                         positions=[Position.OF],
-                         selected_position=Position.OF)
-        il_no_ros = Player(
-            name="No ROS", player_type=PlayerType.HITTER,
+        active = _hitter(
+            "Active",
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            h=140,
+            ab=500,
             positions=[Position.OF],
-            selected_position=Position.IL, status="IL",
+            selected_position=Position.OF,
+        )
+        il_no_ros = Player(
+            name="No ROS",
+            player_type=PlayerType.HITTER,
+            positions=[Position.OF],
+            selected_position=Position.IL,
+            status="IL",
             rest_of_season=None,
         )
         stats = project_team_stats([active, il_no_ros], displacement=True)
@@ -623,9 +1018,17 @@ def _twelve_team_dict(r_values):
     """Build ``{team: {R: value, other cats: 0}}`` for 12 teams (mutable)."""
     teams = {}
     for i, r in enumerate(r_values):
-        teams[f"T{i+1}"] = {
-            "R": r, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0.0,
-            "W": 0, "K": 0, "SV": 0, "ERA": 0.0, "WHIP": 0.0,
+        teams[f"T{i + 1}"] = {
+            "R": r,
+            "HR": 0,
+            "RBI": 0,
+            "SB": 0,
+            "AVG": 0.0,
+            "W": 0,
+            "K": 0,
+            "SV": 0,
+            "ERA": 0.0,
+            "WHIP": 0.0,
         }
     return teams
 
@@ -717,14 +1120,9 @@ class TestScoreRotoEV:
     def test_small_swap_within_uncertainty_produces_small_delta(self):
         # Two teams tied at 100 R with σ=10 each. Moving 1 R changes
         # pts by only ~0.03, not the full 1.0 of a rank flip.
-        dict_stats = _twelve_team_dict(
-            [100, 100, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50]
-        )
+        dict_stats = _twelve_team_dict([100, 100, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50])
         team_names = list(dict_stats.keys())
-        sds = {
-            t: {c: (10.0 if c == Category.R else 1.0) for c in ALL_CATS}
-            for t in team_names
-        }
+        sds = {t: {c: (10.0 if c == Category.R else 1.0) for c in ALL_CATS} for t in team_names}
         before = score_roto(_stats_table(dict_stats), team_sds=sds)["T1"][Category.R]
         dict_stats["T1"]["R"] = 101  # tiny edge
         after = score_roto(_stats_table(dict_stats), team_sds=sds)["T1"][Category.R]
@@ -747,19 +1145,15 @@ class TestProjectedStandingsFromRosters:
 
     def test_returns_projected_standings(self):
         team_rosters: dict[str, list] = {"Alpha": [], "Beta": []}
-        result = ProjectedStandings.from_rosters(
-            team_rosters, effective_date=date(2026, 4, 15)
-        )
+        result = ProjectedStandings.from_rosters(team_rosters, effective_date=date(2026, 4, 15))
         assert isinstance(result, ProjectedStandings)
         assert result.effective_date == date(2026, 4, 15)
         assert {e.team_name for e in result.entries} == {"Alpha", "Beta"}
 
     def test_returns_one_entry_per_team(self):
         rosters = {
-            "Team A": [_make_hitter("Player1", r=80, hr=20, rbi=70, sb=10,
-                                    h=140, ab=500, pa=500)],
-            "Team B": [_make_hitter("Player2", r=70, hr=15, rbi=60, sb=8,
-                                    h=130, ab=490, pa=490)],
+            "Team A": [_make_hitter("Player1", r=80, hr=20, rbi=70, sb=10, h=140, ab=500, pa=500)],
+            "Team B": [_make_hitter("Player2", r=70, hr=15, rbi=60, sb=8, h=130, ab=490, pa=490)],
         }
         result = ProjectedStandings.from_rosters(rosters, effective_date=date(2026, 4, 15))
         assert len(result.entries) == 2
@@ -768,8 +1162,7 @@ class TestProjectedStandingsFromRosters:
 
     def test_each_entry_has_team_name_and_stats(self):
         rosters = {
-            "Team A": [_make_hitter("Player1", r=80, hr=20, rbi=70, sb=10,
-                                    h=140, ab=500, pa=500)],
+            "Team A": [_make_hitter("Player1", r=80, hr=20, rbi=70, sb=10, h=140, ab=500, pa=500)],
         }
         result = ProjectedStandings.from_rosters(rosters, effective_date=date(2026, 4, 15))
         entry = result.entries[0]
@@ -781,10 +1174,8 @@ class TestProjectedStandingsFromRosters:
 
         rosters = {
             "Team A": [
-                _make_hitter("H1", r=80, hr=20, rbi=70, sb=10,
-                             h=140, ab=500, pa=500),
-                _make_pitcher("P1", w=10, k=180, sv=0, ip=180,
-                              er=70, bb=55, h_allowed=155),
+                _make_hitter("H1", r=80, hr=20, rbi=70, sb=10, h=140, ab=500, pa=500),
+                _make_pitcher("P1", w=10, k=180, sv=0, ip=180, er=70, bb=55, h_allowed=155),
             ],
         }
         result = ProjectedStandings.from_rosters(rosters, effective_date=date(2026, 4, 15))
@@ -799,18 +1190,15 @@ class TestBuildTeamSDs:
 
     def test_returns_one_dict_per_team(self):
         rosters = {
-            "Team A": [_make_hitter("P1", r=80, hr=20, rbi=70, sb=10,
-                                    h=140, ab=500, pa=500)],
-            "Team B": [_make_hitter("P2", r=70, hr=15, rbi=60, sb=8,
-                                    h=130, ab=490, pa=490)],
+            "Team A": [_make_hitter("P1", r=80, hr=20, rbi=70, sb=10, h=140, ab=500, pa=500)],
+            "Team B": [_make_hitter("P2", r=70, hr=15, rbi=60, sb=8, h=130, ab=490, pa=490)],
         }
         result = build_team_sds(rosters, sd_scale=1.0)
         assert set(result.keys()) == {"Team A", "Team B"}
 
     def test_sd_scale_multiplies_each_value(self):
         rosters = {
-            "Team A": [_make_hitter("P1", r=80, hr=20, rbi=70, sb=10,
-                                    h=140, ab=500, pa=500)],
+            "Team A": [_make_hitter("P1", r=80, hr=20, rbi=70, sb=10, h=140, ab=500, pa=500)],
         }
         unscaled = build_team_sds(rosters, sd_scale=1.0)
         scaled = build_team_sds(rosters, sd_scale=0.5)
@@ -819,8 +1207,7 @@ class TestBuildTeamSDs:
 
     def test_sd_scale_zero_yields_zero_sds(self):
         rosters = {
-            "Team A": [_make_hitter("P1", r=80, hr=20, rbi=70, sb=10,
-                                    h=140, ab=500, pa=500)],
+            "Team A": [_make_hitter("P1", r=80, hr=20, rbi=70, sb=10, h=140, ab=500, pa=500)],
         }
         result = build_team_sds(rosters, sd_scale=0.0)
         for sd in result["Team A"].values():

@@ -7,6 +7,7 @@ the user's side. Reports delta-roto for the user's team only.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from fantasy_baseball.models.player import Player
@@ -16,7 +17,7 @@ from fantasy_baseball.trades.evaluate import (
     aggregate_player_stats,
     apply_swap_delta,
 )
-from fantasy_baseball.utils.constants import ALL_CATEGORIES
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
 
 
 @dataclass
@@ -88,7 +89,7 @@ def evaluate_multi_trade(
     opp_rosters: dict[str, list[Player]],
     waiver_pool: dict[str, Player],
     projected_standings: list[dict],
-    team_sds: dict[str, dict[str, float]] | None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
     roster_slots: dict,
 ) -> MultiTradeResult:
     """Evaluate an arbitrary N-for-M trade with optional drops and adds.

@@ -9,10 +9,11 @@ directly into the score.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from fantasy_baseball.utils.constants import ALL_CATEGORIES
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
 
 if TYPE_CHECKING:
     from fantasy_baseball.models.player import Player
@@ -74,11 +75,11 @@ def compute_delta_roto(
     projected_standings: list[dict],
     team_name: str,
     *,
-    team_sds: dict[str, dict[str, float]] | None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
 ) -> DeltaRotoResult:
     """Compute deltaRoto for dropping one player and adding another.
 
-    When ``team_sds`` is a dict, ``score_roto`` uses pairwise Gaussian
+    When ``team_sds`` is provided, ``score_roto`` uses pairwise Gaussian
     win-probabilities so a swap's impact reflects projection
     uncertainty (ERoto). Pass ``None`` explicitly for exact-rank
     semantics — no default: callers must make the choice so we can't
@@ -90,8 +91,8 @@ def compute_delta_roto(
         user_roster: current roster (used to resolve the dropped player's ROS).
         projected_standings: end-of-season stats for all teams.
         team_name: user's team name.
-        team_sds: ``{team: {cat: sd}}`` for EV scoring, or ``None`` for
-            rank-based. Required keyword — no default.
+        team_sds: ``{team: {Category: sd}}`` for EV scoring, or ``None``
+            for rank-based. Required keyword — no default.
 
     Raises:
         ValueError: if drop_name is not found on the roster.

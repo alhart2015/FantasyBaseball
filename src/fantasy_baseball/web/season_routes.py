@@ -16,7 +16,8 @@ from fantasy_baseball.models.standings import (
     Standings,
     StandingsEntry,
 )
-from fantasy_baseball.utils.constants import ALL_CATEGORIES, RATE_STATS
+from fantasy_baseball.scoring import team_sds_from_json
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, RATE_STATS, Category
 from fantasy_baseball.web.season_data import CacheKey, read_cache, read_meta
 
 
@@ -33,6 +34,11 @@ def _standings_from_cache(raw: dict) -> Standings:
 def _projected_from_cache(raw: dict) -> ProjectedStandings:
     """Build a typed ``ProjectedStandings`` from the canonical cache payload."""
     return ProjectedStandings.from_json(raw)
+
+
+def _team_sds_from_cache(raw: dict | None) -> dict[str, dict[Category, float]] | None:
+    """Deserialize a cached ``team_sds`` payload (or ``None``) into typed form."""
+    return team_sds_from_json(raw) if raw else None
 
 
 def _projected_as_standings(raw: dict) -> Standings:
@@ -294,13 +300,13 @@ def register_routes(app: Flask) -> None:
                     preseason_data = format_standings_for_display(
                         _projected_as_standings(preseason_standings),
                         config.team_name,
-                        team_sds=raw_projected.get("preseason_team_sds"),
+                        team_sds=_team_sds_from_cache(raw_projected.get("preseason_team_sds")),
                     )
                 if "projected_standings" in raw_projected:
                     current_projected_data = format_standings_for_display(
                         _projected_as_standings(raw_projected["projected_standings"]),
                         config.team_name,
-                        team_sds=raw_projected.get("team_sds"),
+                        team_sds=_team_sds_from_cache(raw_projected.get("team_sds")),
                     )
 
             raw_mc = read_cache(CacheKey.MONTE_CARLO)
@@ -469,7 +475,6 @@ def register_routes(app: Flask) -> None:
 
         proj_cache = read_cache(CacheKey.PROJECTIONS) or {}
         projected_standings_raw = proj_cache.get("projected_standings")
-        team_sds_raw = proj_cache.get("team_sds")
 
         # Convert cached list[dict] to typed Standings / ProjectedStandings
         # at the boundary. The trades/evaluate API takes typed objects so
@@ -478,14 +483,7 @@ def register_routes(app: Flask) -> None:
         projected_standings = (
             _projected_from_cache(projected_standings_raw) if projected_standings_raw else None
         )
-        # team_sds cache is {team: {cat_string: sd}}; score_roto wants
-        # Category-enum keys.
-        team_sds = None
-        if team_sds_raw:
-            team_sds = {
-                team: {cat: float(sds.get(cat.value, 0.0)) for cat in ALL_CATEGORIES}
-                for team, sds in team_sds_raw.items()
-            }
+        team_sds = _team_sds_from_cache(proj_cache.get("team_sds"))
 
         hart_roster = [Player.from_dict(p) for p in roster_raw]
         opp_rosters = {
@@ -582,7 +580,7 @@ def register_routes(app: Flask) -> None:
 
         proj_cache = read_cache(CacheKey.PROJECTIONS) or {}
         projected_standings_raw = proj_cache.get("projected_standings")
-        team_sds = proj_cache.get("team_sds")
+        team_sds = _team_sds_from_cache(proj_cache.get("team_sds"))
         if not projected_standings_raw:
             return jsonify({"error": "No projected standings. Run a refresh first."}), 404
 
@@ -863,7 +861,7 @@ def register_routes(app: Flask) -> None:
             projected_standings=_projected_from_cache(projected_standings),
             user_team_name=config.team_name,
             roster_player_projection=roster_player_projection,
-            team_sds=proj_cache.get("team_sds"),
+            team_sds=_team_sds_from_cache(proj_cache.get("team_sds")),
         )
 
         if "error" in result:
@@ -921,7 +919,7 @@ def register_routes(app: Flask) -> None:
 
         worst_by_pos = _compute_worst_roster_by_position()
         config = _load_config()
-        team_sds = proj_cache.get("team_sds")
+        team_sds = _team_sds_from_cache(proj_cache.get("team_sds"))
         # compute_delta_roto still consumes the legacy list[dict] shape.
         projected_rows = projected_standings_raw["teams"]
 

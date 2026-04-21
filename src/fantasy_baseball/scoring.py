@@ -380,7 +380,7 @@ def project_team_sds(
     roster,
     *,
     displacement: bool = True,
-) -> dict[str, float]:
+) -> dict[Category, float]:
     """Aggregate per-player projection variance into team-level SDs.
 
     Uses ``STAT_VARIANCE`` (per-stat CV calibrated from 2022-2024
@@ -397,10 +397,9 @@ def project_team_sds(
     ``displacement`` matches :func:`project_team_stats` — bench excluded,
     IL players displace their worst active positional match.
 
-    Returns ``{cat: sd}`` keyed by the uppercase string form (``"R"``,
-    ``"HR"``, …) for every category in ``ALL_CATS``. String keys keep the
-    result JSON-serializable at the cache boundary. Empty roster returns
-    zeros.
+    Returns ``{Category: sd}`` keyed by :class:`Category` enum for every
+    category in ``ALL_CATS``. Use :func:`team_sds_to_json` at the cache
+    boundary for JSON serialization. Empty roster returns zeros.
     """
     if displacement:
         roster = _apply_displacement(roster)
@@ -423,47 +422,73 @@ def project_team_sds(
                 p_sum_sq[k] += v * v
             total_ip += _stat(p, "ip")
 
-    sds: dict[str, float] = {c.value: 0.0 for c in ALL_CATS}
+    sds: dict[Category, float] = dict.fromkeys(ALL_CATS, 0.0)
     for stat_key, cat in [
         ("r", Category.R),
         ("hr", Category.HR),
         ("rbi", Category.RBI),
         ("sb", Category.SB),
     ]:
-        sds[cat.value] = STAT_VARIANCE[stat_key] * sqrt(h_sum_sq[stat_key])
+        sds[cat] = STAT_VARIANCE[stat_key] * sqrt(h_sum_sq[stat_key])
     for stat_key, cat in [("w", Category.W), ("k", Category.K), ("sv", Category.SV)]:
-        sds[cat.value] = STAT_VARIANCE[stat_key] * sqrt(p_sum_sq[stat_key])
+        sds[cat] = STAT_VARIANCE[stat_key] * sqrt(p_sum_sq[stat_key])
     if total_ab > 0:
-        sds[Category.AVG.value] = STAT_VARIANCE["h"] * sqrt(h_sum_sq["h"]) / total_ab
+        sds[Category.AVG] = STAT_VARIANCE["h"] * sqrt(h_sum_sq["h"]) / total_ab
     if total_ip > 0:
-        sds[Category.ERA.value] = 9.0 * STAT_VARIANCE["er"] * sqrt(p_sum_sq["er"]) / total_ip
+        sds[Category.ERA] = 9.0 * STAT_VARIANCE["er"] * sqrt(p_sum_sq["er"]) / total_ip
         whip_var = (STAT_VARIANCE["bb"] ** 2) * p_sum_sq["bb"] + (
             STAT_VARIANCE["h_allowed"] ** 2
         ) * p_sum_sq["h_allowed"]
-        sds[Category.WHIP.value] = sqrt(whip_var) / total_ip
+        sds[Category.WHIP] = sqrt(whip_var) / total_ip
     return sds
 
 
 def build_team_sds(
     team_rosters: dict[str, list],
     sd_scale: float,
-) -> dict[str, dict[str, float]]:
-    """Build the team_sds dict written to the projections cache.
+) -> dict[str, dict[Category, float]]:
+    """Build the typed ``team_sds`` table for a set of team rosters.
 
     Each team's per-category SDs from :func:`project_team_sds` are
     scaled by ``sd_scale`` — typically ``sqrt(fraction_remaining)`` so
     variance damps as the season progresses and less of the roto total
     is still up for grabs.
 
-    Keys are the uppercase string category codes (``"R"``, ``"HR"``, …)
-    so the result is JSON-serializable for the projections cache. In
-    memory, callers index by ``cat.value`` where ``cat: Category``.
+    Returns ``{team_name: {Category: sd}}``. Use
+    :func:`team_sds_to_json` / :func:`team_sds_from_json` at the cache
+    I/O boundary; in-memory consumers index by :class:`Category` enum.
     """
     return {
         tname: {
             cat: sd * sd_scale for cat, sd in project_team_sds(roster, displacement=True).items()
         }
         for tname, roster in team_rosters.items()
+    }
+
+
+def team_sds_to_json(
+    team_sds: Mapping[str, Mapping[Category, float]],
+) -> dict[str, dict[str, float]]:
+    """Serialize a typed ``team_sds`` table for JSON-backed caches.
+
+    Inverse of :func:`team_sds_from_json`. Inner keys become the
+    uppercase string form of :class:`Category` (``"R"``, ``"HR"``, …).
+    """
+    return {
+        team: {cat.value: float(sd) for cat, sd in sds.items()} for team, sds in team_sds.items()
+    }
+
+
+def team_sds_from_json(
+    raw: Mapping[str, Mapping[str, float]],
+) -> dict[str, dict[Category, float]]:
+    """Deserialize a JSON-shaped ``team_sds`` payload into the typed form.
+
+    Inverse of :func:`team_sds_to_json`. Missing category keys default
+    to 0.0; unknown keys are ignored.
+    """
+    return {
+        team: {cat: float(sds.get(cat.value, 0.0)) for cat in ALL_CATS} for team, sds in raw.items()
     }
 
 
@@ -560,36 +585,21 @@ def _dict_table(
     return _AdHocStatsTable(entries=entries)
 
 
-def _legacy_team_sds(
-    team_sds: Mapping[str, Mapping[str, float]] | None,
-) -> Mapping[str, Mapping[Category, float]] | None:
-    """Re-key a ``{team: {cat_str: sd}}`` mapping to ``{team: {Category: sd}}``.
-
-    Temporary bridge for callers that still build SDs with uppercase
-    string keys (the cache shape). Returns ``None`` on ``None`` input.
-    """
-    if team_sds is None:
-        return None
-    out: dict[str, dict[Category, float]] = {}
-    for team, sds in team_sds.items():
-        out[team] = {cat: float(sds.get(cat.value, 0.0)) for cat in ALL_CATS}
-    return out
-
-
 def score_roto_dict(
     all_team_stats: Mapping[str, Mapping[str, float] | CategoryStats],
     *,
-    team_sds: Mapping[str, Mapping[str, float]] | None = None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None,
 ) -> dict[str, dict[str, float]]:
-    """Legacy-shape wrapper around :func:`score_roto`.
+    """Dict-shaped wrapper around :func:`score_roto`.
 
-    Returns ``{team: {"R_pts": ..., "HR_pts": ..., ..., "total": ...}}``
-    so Phase-2 callers that still hold dict-shaped stats keep working
-    while Phase 3 consumer migrations land. Delete once all callers use
-    typed :class:`TeamStatsTable` inputs and unpack ``CategoryPoints``
-    directly.
+    Takes stats as ``{team: {stat_str: value}}`` (used by
+    swap-simulation sites that mutate one team's row in-place) and
+    returns ``{team: {"R_pts": ..., "HR_pts": ..., ..., "total": ...}}``
+    for :mod:`delta_roto` and friends that still compare via
+    string-keyed per-category deltas. ``team_sds`` is the typed
+    :class:`Category`-keyed form — no string-keyed fallback.
     """
-    roto = score_roto(_dict_table(all_team_stats), team_sds=_legacy_team_sds(team_sds))
+    roto = score_roto(_dict_table(all_team_stats), team_sds=team_sds)
     return {
         team: {
             **{f"{cat.value}_pts": cp.values[cat] for cat in ALL_CATS},

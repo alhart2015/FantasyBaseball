@@ -94,7 +94,7 @@
                 <td class="stat-cell {{ cell_class }}" {{ intensity_style(i) }}
                     data-points="{{ team.roto_points[cat] | round(1) }}"
                     data-stat="{{ team.stats[cat] }}"
-                    data-sd="{{ team.sds.get(cat.value, 0) }}"
+                    data-sd="{{ team.sds.get(cat, 0) }}"
                     data-cat="{{ cat.value }}">
                     {{ team.roto_points[cat] | round(1) }}
                 </td>

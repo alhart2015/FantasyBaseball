@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -184,18 +185,17 @@ def format_standings_for_display(
     standings: Standings,
     user_team_name: str,
     *,
-    team_sds: dict[str, dict[str, float]] | None = None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None,
 ) -> dict:
     """Transform typed Standings into a display-ready structure with roto points and color codes.
 
     Args:
         standings: typed :class:`Standings` object.
         user_team_name: The authenticated user's team name for highlighting.
-        team_sds: Per-team per-category standard deviations for ERoto scoring,
-            keyed by the uppercase string form (``"R"``, ``"HR"``, …) matching
-            the projections-cache shape. When provided, ``score_roto`` uses
-            Gaussian pairwise win probabilities instead of deterministic
-            rank-based scoring.
+        team_sds: Per-team per-category standard deviations (``{team:
+            {Category: sd}}``) for ERoto scoring. When provided,
+            ``score_roto`` uses Gaussian pairwise win probabilities
+            instead of deterministic rank-based scoring.
 
     Returns:
         ``{"teams": [...]}`` where each team dict contains:
@@ -209,7 +209,7 @@ def format_standings_for_display(
           tied categories are absent.
         - ``total_intensity``: float in [-1, 1] for the total column (absent
           when all teams tie on total).
-        - ``rank``, ``is_user``, ``team_key``, ``sds`` as before.
+        - ``rank``, ``is_user``, ``team_key``, ``sds`` (``{Category: sd}``).
 
     When every entry has ``yahoo_points_for`` set (live Yahoo standings
     path), the displayed total and rank come from Yahoo to match the
@@ -221,18 +221,9 @@ def format_standings_for_display(
     if not standings.entries:
         return {"teams": []}
 
-    # ``score_roto`` expects team_sds keyed by Category; convert from the
-    # cache's uppercase-string shape here.
-    typed_team_sds: dict[str, dict[Category, float]] | None = None
-    if team_sds is not None:
-        typed_team_sds = {
-            team: {cat: float(sds.get(cat.value, 0.0)) for cat in ALL_CATEGORIES}
-            for team, sds in team_sds.items()
-        }
-
     # CategoryStats defaults (0.0 for counting, 99.0 for ERA/WHIP)
     # handle early-season missing data.
-    roto = score_roto(standings, team_sds=typed_team_sds)
+    roto = score_roto(standings, team_sds=team_sds)
 
     has_yahoo_totals = all(e.yahoo_points_for is not None for e in standings.entries)
     yahoo_rank_by_name = {e.team_name: e.rank for e in standings.entries}
@@ -712,7 +703,7 @@ def compute_comparison_standings(
     user_team_name: str,
     *,
     roster_player_projection: "Player | None" = None,
-    team_sds: dict[str, dict[str, float]] | None = None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None,
 ) -> dict:
     """Compute before/after roto standings for a player swap.
 
@@ -727,10 +718,9 @@ def compute_comparison_standings(
     cache entry.  This keeps the delta consistent with the browse page
     (which reads from ``ros_projections``).
 
-    When ``team_sds`` is provided (uppercase-string-keyed as in the
-    projections cache), ``score_roto`` uses EV-based pairwise Gaussian
-    scoring so the comparison matches the roster audit for the same
-    swap.
+    When ``team_sds`` is provided, ``score_roto`` uses EV-based
+    pairwise Gaussian scoring so the comparison matches the roster
+    audit for the same swap.
 
     Returns dict with before/after stats and roto, or {"error": ...}.
     The ``stats`` entries inside before/after are uppercase-string-keyed

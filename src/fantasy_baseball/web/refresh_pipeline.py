@@ -458,7 +458,7 @@ class RefreshRun:
         self._progress("Projecting end-of-season standings...")
         from fantasy_baseball.data.projections import hydrate_roster_entries
         from fantasy_baseball.models.standings import ProjectedStandings
-        from fantasy_baseball.scoring import build_team_sds
+        from fantasy_baseball.scoring import build_team_sds, team_sds_to_json
 
         all_team_rosters = {self.config.team_name: self.matched}
         all_team_rosters.update(self.opp_rosters)
@@ -505,10 +505,10 @@ class RefreshRun:
             CacheKey.PROJECTIONS,
             {
                 "projected_standings": self.projected_standings.to_json(),
-                "team_sds": self.team_sds,
+                "team_sds": team_sds_to_json(self.team_sds),
                 "fraction_remaining": self.fraction_remaining,
                 "preseason_standings": self.preseason_projected_standings.to_json(),
-                "preseason_team_sds": self.preseason_team_sds,
+                "preseason_team_sds": team_sds_to_json(self.preseason_team_sds),
             },
             self.cache_dir,
         )

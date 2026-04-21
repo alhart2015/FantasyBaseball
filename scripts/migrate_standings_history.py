@@ -8,7 +8,11 @@ Run once after the refactor is merged:
 
     python scripts/migrate_standings_history.py
 
-Requires Upstash creds via the usual kv_store env vars.
+Writes directly to prod Upstash via ``build_explicit_upstash_kv`` — the
+whole point of this migration is to repair the remote hash that the
+Render refresh reads. ``get_kv()`` would silently target the local
+SQLite backend when ``RENDER`` is unset, making the script a no-op
+against prod. Requires Upstash creds via the usual kv_store env vars.
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
 from fantasy_baseball.data import redis_store  # noqa: E402
-from fantasy_baseball.data.kv_store import get_kv  # noqa: E402
+from fantasy_baseball.data.kv_store import build_explicit_upstash_kv  # noqa: E402
 from fantasy_baseball.models.standings import (  # noqa: E402
     CategoryStats,
     Standings,
@@ -95,12 +99,23 @@ def rewrite_hash(client) -> dict[str, int]:
             # in all cases so a single bad row does not halt the migration.
             pass
 
-        try:
-            s = _from_legacy_json(payload, snapshot_date=snap_date)
-        except (ValueError, KeyError, TypeError) as e:
-            print(f"[{snap_date}] legacy parse failed: {e} — SKIPPING (fix manually)")
-            stats["errors"] += 1
-            continue
+        # Intermediate shape: rows already canonical ({"name", "stats": {...}})
+        # but outer effective_date wrapper missing. Inject from hash key and
+        # retry canonical parse before falling through to the flat-row parser.
+        s: Standings | None = None
+        if "effective_date" not in payload and "teams" in payload:
+            try:
+                s = Standings.from_json({"effective_date": snap_date, **payload})
+            except (ValueError, KeyError, TypeError):
+                s = None
+
+        if s is None:
+            try:
+                s = _from_legacy_json(payload, snapshot_date=snap_date)
+            except (ValueError, KeyError, TypeError) as e:
+                print(f"[{snap_date}] legacy parse failed: {e} — SKIPPING (fix manually)")
+                stats["errors"] += 1
+                continue
 
         client.hset(
             redis_store.STANDINGS_HISTORY_KEY,
@@ -114,11 +129,13 @@ def rewrite_hash(client) -> dict[str, int]:
 
 
 def main() -> int:
-    client = get_kv()
-    if client is None:
-        print("ERROR: no KV client available — is Upstash configured?")
+    try:
+        client = build_explicit_upstash_kv()
+    except RuntimeError as e:
+        print(f"ERROR: {e}")
         return 1
 
+    print("Migrating standings_history on prod Upstash...")
     stats = rewrite_hash(client)
     print()
     print(f"Rewritten: {stats['rewritten']}")

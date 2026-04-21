@@ -282,10 +282,11 @@ def _build_sqlite_kv() -> SqliteKVStore:
 def build_explicit_upstash_kv() -> UpstashKVStore:
     """Build an Upstash KV regardless of ``RENDER``.
 
-    The ONLY legitimate callers are ``scripts/refresh_remote.py`` and
-    ``fantasy_baseball.data.kv_sync``: both explicitly need to reach
-    prod Upstash from a local process. Every other caller must use
-    ``get_kv()`` so the environment gate holds.
+    Legitimate callers are tools whose job is explicitly to reach prod
+    Upstash from a local process: ``scripts/refresh_remote.py``,
+    ``fantasy_baseball.data.kv_sync``, and
+    ``scripts/migrate_standings_history.py``. Every other caller must
+    use ``get_kv()`` so the environment gate holds.
     """
     return _build_upstash_kv()
 

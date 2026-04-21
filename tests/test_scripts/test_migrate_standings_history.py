@@ -141,6 +141,48 @@ def test_rewrite_hash_handles_legacy_row_missing_era(fake_redis):
     assert reloaded.entries[0].stats.whip == 99.0
 
 
+def test_rewrite_hash_rewrites_intermediate_shape_without_effective_date(fake_redis):
+    """Canonical rows inside ``{"teams": [...]}`` but no ``effective_date``
+    wrapper. Migrator should inject the hash key as ``effective_date`` and
+    rewrite in canonical form — this is the shape that survived the first
+    migration pass and kept crashing ``League.from_redis`` afterwards.
+    """
+    intermediate = {
+        "teams": [
+            {
+                "name": "Epsilon",
+                "team_key": "431.l.1.t.4",
+                "rank": 3,
+                "stats": {
+                    "R": 50,
+                    "HR": 15,
+                    "RBI": 45,
+                    "SB": 10,
+                    "AVG": 0.270,
+                    "W": 4,
+                    "K": 90,
+                    "SV": 5,
+                    "ERA": 3.10,
+                    "WHIP": 1.12,
+                },
+            }
+        ],
+    }
+    fake_redis.hset(
+        redis_store.STANDINGS_HISTORY_KEY,
+        "2026-04-18",
+        json.dumps(intermediate),
+    )
+    stats = rewrite_hash(fake_redis)
+    assert stats["rewritten"] == 1
+    assert stats["errors"] == 0
+    reloaded = redis_store.get_standings_day(fake_redis, "2026-04-18")
+    assert reloaded is not None
+    assert reloaded.effective_date == date(2026, 4, 18)
+    assert reloaded.entries[0].team_name == "Epsilon"
+    assert reloaded.entries[0].stats.r == 50
+
+
 def test_rewrite_hash_survives_partially_canonical_row(fake_redis):
     # Canonical wrapper + canonical field names on the row (has 'name',
     # has 'stats'), but MISSING team_key and rank. Standings.from_json
