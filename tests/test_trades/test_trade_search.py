@@ -1,41 +1,129 @@
-import pytest
-from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
+from datetime import date
+
+from fantasy_baseball.models.player import HitterStats, PitcherStats, Player
+from fantasy_baseball.models.standings import (
+    CategoryStats,
+    Standings,
+    StandingsEntry,
+)
 from fantasy_baseball.sgp.rankings import rank_key
 from fantasy_baseball.trades.evaluate import search_trades_away, search_trades_for
 
 ALL_CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
 _EQUAL_LEVERAGE = {cat: 0.1 for cat in ALL_CATS}
 
-ROSTER_SLOTS = {"C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1,
-                "OF": 4, "UTIL": 2, "P": 9, "BN": 2, "IL": 2}
+ROSTER_SLOTS = {
+    "C": 1,
+    "1B": 1,
+    "2B": 1,
+    "3B": 1,
+    "SS": 1,
+    "IF": 1,
+    "OF": 4,
+    "UTIL": 2,
+    "P": 9,
+    "BN": 2,
+    "IL": 2,
+}
 
-SAMPLE_STANDINGS = [
-    {"name": "Hart", "team_key": "t.1", "rank": 3,
-     "stats": {"R": 900, "HR": 280, "RBI": 880, "SB": 120,
-               "AVG": .260, "W": 80, "K": 1300, "SV": 80, "ERA": 3.50, "WHIP": 1.15}},
-    {"name": "Rival", "team_key": "t.2", "rank": 5,
-     "stats": {"R": 850, "HR": 250, "RBI": 870, "SB": 180,
-               "AVG": .255, "W": 85, "K": 1400, "SV": 40, "ERA": 3.80, "WHIP": 1.20}},
-    {"name": "Rival A", "team_key": "t.3", "rank": 4,
-     "stats": {"R": 870, "HR": 260, "RBI": 860, "SB": 140,
-               "AVG": .258, "W": 82, "K": 1350, "SV": 50, "ERA": 3.60, "WHIP": 1.18}},
-]
+
+def _standings(teams: list[tuple[str, str, int, dict]]) -> Standings:
+    """Build a typed Standings from ``[(name, team_key, rank, stats_dict), ...]``."""
+    return Standings(
+        effective_date=date(2026, 4, 15),
+        entries=[
+            StandingsEntry(
+                team_name=name,
+                team_key=team_key,
+                rank=rank,
+                stats=CategoryStats.from_dict(stats),
+            )
+            for name, team_key, rank, stats in teams
+        ],
+    )
 
 
-def _make_hitter(name, positions, r=70, hr=20, rbi=65, sb=8, avg=.270, ab=500):
+SAMPLE_STANDINGS = _standings(
+    [
+        (
+            "Hart",
+            "t.1",
+            3,
+            {
+                "R": 900,
+                "HR": 280,
+                "RBI": 880,
+                "SB": 120,
+                "AVG": 0.260,
+                "W": 80,
+                "K": 1300,
+                "SV": 80,
+                "ERA": 3.50,
+                "WHIP": 1.15,
+            },
+        ),
+        (
+            "Rival",
+            "t.2",
+            5,
+            {
+                "R": 850,
+                "HR": 250,
+                "RBI": 870,
+                "SB": 180,
+                "AVG": 0.255,
+                "W": 85,
+                "K": 1400,
+                "SV": 40,
+                "ERA": 3.80,
+                "WHIP": 1.20,
+            },
+        ),
+        (
+            "Rival A",
+            "t.3",
+            4,
+            {
+                "R": 870,
+                "HR": 260,
+                "RBI": 860,
+                "SB": 140,
+                "AVG": 0.258,
+                "W": 82,
+                "K": 1350,
+                "SV": 50,
+                "ERA": 3.60,
+                "WHIP": 1.18,
+            },
+        ),
+    ]
+)
+
+
+def _make_hitter(name, positions, r=70, hr=20, rbi=65, sb=8, avg=0.270, ab=500):
     h = int(avg * ab)
-    return Player(name=name, player_type="hitter", positions=positions,
-                  rest_of_season=HitterStats(pa=int(ab * 1.15), ab=ab, h=h,
-                                  r=r, hr=hr, rbi=rbi, sb=sb, avg=avg))
+    return Player(
+        name=name,
+        player_type="hitter",
+        positions=positions,
+        rest_of_season=HitterStats(
+            pa=int(ab * 1.15), ab=ab, h=h, r=r, hr=hr, rbi=rbi, sb=sb, avg=avg
+        ),
+    )
 
 
 def _make_pitcher(name, positions, ip=150, w=9, k=140, sv=0, era=3.80, whip=1.25):
     er = int(era * ip / 9)
     bb = int((whip * ip - ip * 0.8) / 1)
     h_allowed = int(whip * ip - bb)
-    return Player(name=name, player_type="pitcher", positions=positions,
-                  rest_of_season=PitcherStats(ip=ip, w=w, k=k, sv=sv, era=era, whip=whip,
-                                   er=er, bb=bb, h_allowed=h_allowed))
+    return Player(
+        name=name,
+        player_type="pitcher",
+        positions=positions,
+        rest_of_season=PitcherStats(
+            ip=ip, w=w, k=k, sv=sv, era=era, whip=whip, er=er, bb=bb, h_allowed=h_allowed
+        ),
+    )
 
 
 class TestSearchTradesAway:
@@ -53,10 +141,17 @@ class TestSearchTradesAway:
         }
         results = search_trades_away(
             player_name="Hart OF",
-            hart_name="Hart", hart_roster=hart_roster, opp_rosters=opp_rosters,
+            hart_name="Hart",
+            hart_roster=hart_roster,
+            opp_rosters=opp_rosters,
             standings=SAMPLE_STANDINGS,
-            leverage_by_team={"Hart": _EQUAL_LEVERAGE, "Rival": _EQUAL_LEVERAGE, "Rival A": _EQUAL_LEVERAGE},
-            roster_slots=ROSTER_SLOTS, rankings=rankings,
+            leverage_by_team={
+                "Hart": _EQUAL_LEVERAGE,
+                "Rival": _EQUAL_LEVERAGE,
+                "Rival A": _EQUAL_LEVERAGE,
+            },
+            roster_slots=ROSTER_SLOTS,
+            rankings=rankings,
         )
         assert isinstance(results, list)
         for group in results:
@@ -69,10 +164,13 @@ class TestSearchTradesAway:
         hart_roster = [_make_hitter("Hart OF", ["OF"])]
         results = search_trades_away(
             player_name="Nonexistent Player",
-            hart_name="Hart", hart_roster=hart_roster, opp_rosters={},
+            hart_name="Hart",
+            hart_roster=hart_roster,
+            opp_rosters={},
             standings=SAMPLE_STANDINGS,
             leverage_by_team={"Hart": _EQUAL_LEVERAGE},
-            roster_slots=ROSTER_SLOTS, rankings={},
+            roster_slots=ROSTER_SLOTS,
+            rankings={},
         )
         assert results == []
 
@@ -86,17 +184,28 @@ class TestSearchTradesAway:
         }
         results = search_trades_away(
             player_name="Hart OF",
-            hart_name="Hart", hart_roster=hart_roster, opp_rosters=opp_rosters,
+            hart_name="Hart",
+            hart_roster=hart_roster,
+            opp_rosters=opp_rosters,
             standings=SAMPLE_STANDINGS,
             leverage_by_team={"Hart": _EQUAL_LEVERAGE, "Rival": _EQUAL_LEVERAGE},
-            roster_slots=ROSTER_SLOTS, rankings=rankings,
+            roster_slots=ROSTER_SLOTS,
+            rankings=rankings,
         )
         assert len(results) > 0
         candidate = results[0]["candidates"][0]
-        for key in ("send", "receive", "send_rank", "receive_rank",
-                    "send_positions", "receive_positions",
-                    "hart_delta", "opp_delta",
-                    "hart_cat_deltas", "opp_cat_deltas"):
+        for key in (
+            "send",
+            "receive",
+            "send_rank",
+            "receive_rank",
+            "send_positions",
+            "receive_positions",
+            "hart_delta",
+            "opp_delta",
+            "hart_cat_deltas",
+            "opp_cat_deltas",
+        ):
             assert key in candidate, f"Missing key: {key}"
 
     def test_rank_filter_applied(self):
@@ -109,10 +218,13 @@ class TestSearchTradesAway:
         }
         results = search_trades_away(
             player_name="Hart OF",
-            hart_name="Hart", hart_roster=hart_roster, opp_rosters=opp_rosters,
+            hart_name="Hart",
+            hart_roster=hart_roster,
+            opp_rosters=opp_rosters,
             standings=SAMPLE_STANDINGS,
             leverage_by_team={"Hart": _EQUAL_LEVERAGE, "Rival": _EQUAL_LEVERAGE},
-            roster_slots=ROSTER_SLOTS, rankings=rankings,
+            roster_slots=ROSTER_SLOTS,
+            rankings=rankings,
         )
         # rank gap = 10 > 5, should be excluded
         all_candidates = [c for g in results for c in g["candidates"]]
@@ -122,7 +234,7 @@ class TestSearchTradesAway:
         """Opponent groups should be sorted alphabetically by opponent name."""
         hart_roster = [_make_hitter("Hart OF", ["OF"], hr=15, sb=5)]
         opp_rosters = {
-            "Rival":   [_make_hitter("Opp OF",   ["OF"], hr=25, sb=15)],
+            "Rival": [_make_hitter("Opp OF", ["OF"], hr=25, sb=15)],
             "Rival A": [_make_hitter("Opp A OF", ["OF"], hr=22, sb=12)],
         }
         rankings = {
@@ -132,10 +244,17 @@ class TestSearchTradesAway:
         }
         results = search_trades_away(
             player_name="Hart OF",
-            hart_name="Hart", hart_roster=hart_roster, opp_rosters=opp_rosters,
+            hart_name="Hart",
+            hart_roster=hart_roster,
+            opp_rosters=opp_rosters,
             standings=SAMPLE_STANDINGS,
-            leverage_by_team={"Hart": _EQUAL_LEVERAGE, "Rival": _EQUAL_LEVERAGE, "Rival A": _EQUAL_LEVERAGE},
-            roster_slots=ROSTER_SLOTS, rankings=rankings,
+            leverage_by_team={
+                "Hart": _EQUAL_LEVERAGE,
+                "Rival": _EQUAL_LEVERAGE,
+                "Rival A": _EQUAL_LEVERAGE,
+            },
+            roster_slots=ROSTER_SLOTS,
+            rankings=rankings,
         )
         names = [g["opponent"] for g in results]
         assert names == sorted(names)
@@ -156,10 +275,13 @@ class TestSearchTradesFor:
         }
         results = search_trades_for(
             player_name="Target",
-            hart_name="Hart", hart_roster=hart_roster, opp_rosters=opp_rosters,
+            hart_name="Hart",
+            hart_roster=hart_roster,
+            opp_rosters=opp_rosters,
             standings=SAMPLE_STANDINGS,
             leverage_by_team={"Hart": _EQUAL_LEVERAGE, "Rival": _EQUAL_LEVERAGE},
-            roster_slots=ROSTER_SLOTS, rankings=rankings,
+            roster_slots=ROSTER_SLOTS,
+            rankings=rankings,
         )
         assert len(results) == 1
         assert results[0]["opponent"] == "Rival"
@@ -170,10 +292,13 @@ class TestSearchTradesFor:
         opp_rosters = {"Rival": [_make_hitter("Other", ["OF"])]}
         results = search_trades_for(
             player_name="Nonexistent",
-            hart_name="Hart", hart_roster=hart_roster, opp_rosters=opp_rosters,
+            hart_name="Hart",
+            hart_roster=hart_roster,
+            opp_rosters=opp_rosters,
             standings=SAMPLE_STANDINGS,
             leverage_by_team={"Hart": _EQUAL_LEVERAGE, "Rival": _EQUAL_LEVERAGE},
-            roster_slots=ROSTER_SLOTS, rankings={},
+            roster_slots=ROSTER_SLOTS,
+            rankings={},
         )
         assert results == []
 
@@ -189,15 +314,30 @@ class TestSearchTradesFor:
             rank_key("Hart B", "hitter"): 42,
             rank_key("Target", "hitter"): 46,
         }
-        leverage = {"Hart": {"R": .05, "HR": .05, "RBI": .05, "SB": .3, "AVG": .05,
-                             "W": .1, "K": .1, "SV": .1, "ERA": .1, "WHIP": .1},
-                    "Rival": _EQUAL_LEVERAGE}
+        leverage = {
+            "Hart": {
+                "R": 0.05,
+                "HR": 0.05,
+                "RBI": 0.05,
+                "SB": 0.3,
+                "AVG": 0.05,
+                "W": 0.1,
+                "K": 0.1,
+                "SV": 0.1,
+                "ERA": 0.1,
+                "WHIP": 0.1,
+            },
+            "Rival": _EQUAL_LEVERAGE,
+        }
         results = search_trades_for(
             player_name="Target",
-            hart_name="Hart", hart_roster=hart_roster, opp_rosters=opp_rosters,
+            hart_name="Hart",
+            hart_roster=hart_roster,
+            opp_rosters=opp_rosters,
             standings=SAMPLE_STANDINGS,
             leverage_by_team=leverage,
-            roster_slots=ROSTER_SLOTS, rankings=rankings,
+            roster_slots=ROSTER_SLOTS,
+            rankings=rankings,
         )
         if results and len(results[0]["candidates"]) >= 2:
             deltas = [c["hart_delta"] for c in results[0]["candidates"]]
@@ -213,15 +353,26 @@ class TestSearchTradesFor:
         }
         results = search_trades_for(
             player_name="Target",
-            hart_name="Hart", hart_roster=hart_roster, opp_rosters=opp_rosters,
+            hart_name="Hart",
+            hart_roster=hart_roster,
+            opp_rosters=opp_rosters,
             standings=SAMPLE_STANDINGS,
             leverage_by_team={"Hart": _EQUAL_LEVERAGE, "Rival": _EQUAL_LEVERAGE},
-            roster_slots=ROSTER_SLOTS, rankings=rankings,
+            roster_slots=ROSTER_SLOTS,
+            rankings=rankings,
         )
         assert len(results) > 0
         candidate = results[0]["candidates"][0]
-        for key in ("send", "receive", "send_rank", "receive_rank",
-                    "send_positions", "receive_positions",
-                    "hart_delta", "opp_delta",
-                    "hart_cat_deltas", "opp_cat_deltas"):
+        for key in (
+            "send",
+            "receive",
+            "send_rank",
+            "receive_rank",
+            "send_positions",
+            "receive_positions",
+            "hart_delta",
+            "opp_delta",
+            "hart_cat_deltas",
+            "opp_cat_deltas",
+        ):
             assert key in candidate, f"Missing key: {key}"
