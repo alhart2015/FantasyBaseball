@@ -1,5 +1,4 @@
 import pytest
-import pandas as pd
 
 
 class TestHitterStats:
@@ -88,7 +87,7 @@ class TestRankInfo:
 
 class TestPlayer:
     def test_from_dict_hitter(self):
-        from fantasy_baseball.models.player import Player, HitterStats
+        from fantasy_baseball.models.player import HitterStats, Player
         d = {
             "name": "Aaron Judge", "player_type": "hitter",
             "positions": ["OF", "DH"], "team": "NYY",
@@ -111,7 +110,7 @@ class TestPlayer:
         assert p.rank.rest_of_season == 2
 
     def test_from_dict_pitcher(self):
-        from fantasy_baseball.models.player import Player, PitcherStats
+        from fantasy_baseball.models.player import PitcherStats, Player
         d = {
             "name": "Gerrit Cole", "player_type": "pitcher",
             "positions": ["P"], "team": "NYY",
@@ -165,7 +164,7 @@ class TestPlayer:
 class TestCacheCompatibility:
     def test_to_dict_preserves_nested_ros_and_preseason(self):
         """Verify to_dict includes nested ros and preseason dicts."""
-        from fantasy_baseball.models.player import Player, HitterStats, RankInfo
+        from fantasy_baseball.models.player import HitterStats, Player, RankInfo
         p = Player(
             name="Aaron Judge",
             player_type="hitter",
@@ -195,7 +194,7 @@ class TestCacheCompatibility:
 
     def test_player_from_dict_roundtrip_with_all_fields(self):
         """Full roundtrip: construct Player, serialize, reconstruct, compare."""
-        from fantasy_baseball.models.player import Player, HitterStats, RankInfo
+        from fantasy_baseball.models.player import HitterStats, Player, RankInfo
         original = Player(
             name="Aaron Judge",
             player_type="hitter",
@@ -221,7 +220,7 @@ class TestCacheCompatibility:
 
 class TestToFlatDict:
     def test_flat_dict_has_rest_of_season_stats_at_top_level(self):
-        from fantasy_baseball.models.player import Player, HitterStats
+        from fantasy_baseball.models.player import HitterStats, Player
         p = Player(
             name="Aaron Judge", player_type="hitter",
             rest_of_season=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
@@ -232,7 +231,7 @@ class TestToFlatDict:
         assert d["name"] == "Aaron Judge"
 
     def test_flat_dict_also_has_nested_ros(self):
-        from fantasy_baseball.models.player import Player, HitterStats
+        from fantasy_baseball.models.player import HitterStats, Player
         p = Player(
             name="Aaron Judge", player_type="hitter",
             rest_of_season=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
@@ -326,6 +325,7 @@ class TestPlayerPositionEnum:
         not enum repr. StrEnum values ARE strings, so json.dumps works
         without a custom encoder."""
         import json
+
         from fantasy_baseball.models.player import Player, PlayerType
         from fantasy_baseball.models.positions import Position
 

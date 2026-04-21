@@ -1,6 +1,6 @@
-from fantasy_baseball.models.player import Player, PlayerType, HitterStats, PitcherStats
-from fantasy_baseball.models.positions import Position
 from fantasy_baseball.lineup.optimizer import HitterAssignment, PitcherStarter
+from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
+from fantasy_baseball.models.positions import Position
 
 
 def _hitter(name="H"):

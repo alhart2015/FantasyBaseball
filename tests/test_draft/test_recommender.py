@@ -1,6 +1,8 @@
 from unittest.mock import patch
+
 import pandas as pd
-from fantasy_baseball.draft.recommender import get_recommendations, calculate_vona_scores
+
+from fantasy_baseball.draft.recommender import calculate_vona_scores, get_recommendations
 
 
 def _make_board():

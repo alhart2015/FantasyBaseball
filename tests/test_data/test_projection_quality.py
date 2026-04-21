@@ -1,5 +1,6 @@
-import pytest
 import pandas as pd
+import pytest
+
 from fantasy_baseball.data.projection_quality import QualityReport, check_projection_quality
 from fantasy_baseball.data.projections import blend_projections
 

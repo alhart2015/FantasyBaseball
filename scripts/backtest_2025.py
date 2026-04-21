@@ -1,7 +1,7 @@
 """Backtest: compare 2025 draft simulation to actual 2025 results."""
+import re
 import sys
 import unicodedata
-import re
 from pathlib import Path
 
 import numpy as np
@@ -9,15 +9,27 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from fantasy_baseball.draft.board import build_draft_board
-from fantasy_baseball.data.db import get_connection, create_tables, load_blended_projections, load_positions
-from fantasy_baseball.data.yahoo_players import load_positions_cache
-from fantasy_baseball.utils.name_utils import normalize_name
-from fantasy_baseball.utils.constants import (
-    ALL_CATEGORIES, INVERSE_STATS, INJURY_PROB, INJURY_SEVERITY,
-    STAT_VARIANCE, HITTING_COUNTING, PITCHING_COUNTING,
-    REPLACEMENT_HITTER, REPLACEMENT_SP, REPLACEMENT_RP,
+from fantasy_baseball.data.db import (
+    create_tables,
+    get_connection,
+    load_blended_projections,
+    load_positions,
 )
+from fantasy_baseball.data.yahoo_players import load_positions_cache
+from fantasy_baseball.draft.board import build_draft_board
+from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES,
+    HITTING_COUNTING,
+    INJURY_PROB,
+    INJURY_SEVERITY,
+    INVERSE_STATS,
+    PITCHING_COUNTING,
+    REPLACEMENT_HITTER,
+    REPLACEMENT_RP,
+    REPLACEMENT_SP,
+    STAT_VARIANCE,
+)
+from fantasy_baseball.utils.name_utils import normalize_name
 
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"

@@ -1,12 +1,15 @@
 import shutil
-import pytest
+
 import pandas as pd
-from pathlib import Path
-from fantasy_baseball.draft.board import build_draft_board, apply_keepers, apply_backfill_blending
+import pytest
+
 from fantasy_baseball.data.db import (
-    get_connection, create_tables,
-    load_blended_projections, load_positions,
+    create_tables,
+    get_connection,
+    load_blended_projections,
+    load_positions,
 )
+from fantasy_baseball.draft.board import apply_backfill_blending, apply_keepers, build_draft_board
 
 
 @pytest.fixture

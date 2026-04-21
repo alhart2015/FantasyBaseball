@@ -1,10 +1,11 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+
 from fantasy_baseball.auth.yahoo_auth import (
-    get_yahoo_session,
-    get_league,
     CONFIG_PATH,
+    get_league,
+    get_yahoo_session,
 )
 
 

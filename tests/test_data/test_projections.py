@@ -1,8 +1,9 @@
-import pytest
+
 import pandas as pd
-from pathlib import Path
+import pytest
+
 from fantasy_baseball.data.projections import blend_projections, match_roster_to_projections
-from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
+from fantasy_baseball.models.player import HitterStats, PitcherStats, Player
 from fantasy_baseball.utils.name_utils import normalize_name
 
 
@@ -182,7 +183,7 @@ class TestMatchRosterToProjections:
 class TestNormalizeRosToFullSeason:
     def test_adds_hitter_actuals_to_remaining_games(self):
         from fantasy_baseball.data.projections import (
-            normalize_rest_of_season_to_full_season, HITTING_COUNTING_COLS,
+            normalize_rest_of_season_to_full_season,
         )
         df = pd.DataFrame([{
             "name": "Aaron Judge", "mlbam_id": 592450, "player_type": "hitter",

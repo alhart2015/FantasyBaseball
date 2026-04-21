@@ -15,12 +15,13 @@ Strategies:
     anti_fragile     — Discounts high-IP pitchers, prefers durable mid-tier arms.
 """
 import pandas as pd
-from fantasy_baseball.draft.balance import CategoryBalance
-from fantasy_baseball.draft.recommender import get_recommendations, get_filled_positions
+
+from fantasy_baseball.draft.recommender import get_filled_positions, get_recommendations
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.positions import can_fill_slot
 from fantasy_baseball.utils.rate_stats import calculate_avg
+
 # Draft a closer by this round if you have none
 CLOSER_DEADLINE_ROUND = 10
 # Don't let team AVG fall below this

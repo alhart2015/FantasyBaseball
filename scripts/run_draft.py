@@ -18,23 +18,27 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.config import load_config
-from fantasy_baseball.draft.board import build_draft_board, apply_keepers
-from fantasy_baseball.draft.tracker import DraftTracker
+from fantasy_baseball.data.db import get_connection
 from fantasy_baseball.draft.balance import CategoryBalance
-from fantasy_baseball.draft.search import find_player, split_team_and_player
+from fantasy_baseball.draft.board import apply_keepers, build_draft_board
 from fantasy_baseball.draft.recommender import (
-    get_recommendations,
+    calculate_vona_scores,
     get_filled_positions,
+    get_recommendations,
     get_roster_by_position,
 )
-from fantasy_baseball.draft.recommender import calculate_vona_scores
-from fantasy_baseball.draft.state import serialize_state, serialize_board, write_state, write_board
+from fantasy_baseball.draft.search import find_player, split_team_and_player
+from fantasy_baseball.draft.state import serialize_board, serialize_state, write_board, write_state
 from fantasy_baseball.draft.strategy import (
-    STRATEGIES, NO_PUNT_AVG_FLOOR, _sv_in_danger, _count_closers,
-    _force_closer, OPP_CLOSER_ADP_BUFFER,
+    NO_PUNT_AVG_FLOOR,
+    OPP_CLOSER_ADP_BUFFER,
+    STRATEGIES,
+    _count_closers,
+    _force_closer,
+    _sv_in_danger,
 )
+from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
-from fantasy_baseball.data.db import get_connection
 from fantasy_baseball.web.app import create_app
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
@@ -359,9 +363,9 @@ def main():
             print("=" * 70)
             if is_traded:
                 original = pick_info.get("original_team", "???")
-                print(f"  !!!!! TRADED PICK !!!!!")
+                print("  !!!!! TRADED PICK !!!!!")
                 print(f"  Originally {original}'s pick -> now {team_label}'s")
-                print(f"  !!!!! TRADED PICK !!!!!")
+                print("  !!!!! TRADED PICK !!!!!")
             print(f"ROUND {pick_round} | Pick {overall_pick} "
                   f"| {team_label}", end="")
             if is_user:
@@ -383,7 +387,7 @@ def main():
                 # Peek at input — if "mine", treat as user pick (traded pick)
                 raw = input("\nPick (player, 'team player', or 'mine'): ").strip()
                 if raw.lower() == "mine":
-                    print(f"  >>> YOUR PICK (traded to you)")
+                    print("  >>> YOUR PICK (traded to you)")
                     _handle_user_pick(board, full_board, tracker, balance,
                                       roster_slots=config.roster_slots,
                                       num_teams=num_teams,
@@ -624,7 +628,7 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
     # Show category balance
     totals = balance.get_totals()
     warnings = balance.get_warnings()
-    print(f"\nROSTER BALANCE:")
+    print("\nROSTER BALANCE:")
     print(f"  R:{totals['R']:.0f} HR:{totals['HR']:.0f} RBI:{totals['RBI']:.0f} "
           f"SB:{totals['SB']:.0f} AVG:{totals['AVG']:.3f}")
     era_str = f"{totals['ERA']:.2f}" if totals["ERA"] is not None else "N/A"

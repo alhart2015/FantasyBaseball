@@ -10,12 +10,11 @@ and fallback matches so future regressions surface immediately instead
 of silently dropping or mis-matching players.
 """
 import logging
+
 import pandas as pd
-import pytest
 
 from fantasy_baseball.data.projections import match_roster_to_projections
 from fantasy_baseball.models.player import HitterStats, PitcherStats, PlayerType
-
 
 # --- Tiny in-memory DataFrame builders ---
 

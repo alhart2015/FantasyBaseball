@@ -1,9 +1,8 @@
 import pytest
 
-from fantasy_baseball.models.player import Player, PlayerType, HitterStats, PitcherStats
 from fantasy_baseball.lineup.roster_audit import audit_roster
+from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
-
 
 TEAM_NAME = "Test Team"
 
@@ -90,7 +89,7 @@ def _pitcher(name, positions, **stats):
     )
 
 
-from fantasy_baseball.lineup.roster_audit import build_position_pools, POSITION_POOL_SIZES
+from fantasy_baseball.lineup.roster_audit import POSITION_POOL_SIZES, build_position_pools
 
 
 class TestBuildPositionPools:

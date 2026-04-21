@@ -1,5 +1,6 @@
-import pytest
 import pandas as pd
+import pytest
+
 from fantasy_baseball.draft.balance import CategoryBalance
 
 

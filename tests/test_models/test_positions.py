@@ -141,7 +141,8 @@ class TestPositionParse:
 class TestPositionSets:
     def test_hitter_eligible_contains_all_hitter_positions(self):
         from fantasy_baseball.models.positions import (
-            HITTER_ELIGIBLE, Position,
+            HITTER_ELIGIBLE,
+            Position,
         )
         assert Position.C in HITTER_ELIGIBLE
         assert Position.FIRST_BASE in HITTER_ELIGIBLE
@@ -152,7 +153,8 @@ class TestPositionSets:
 
     def test_hitter_eligible_excludes_pitcher_positions(self):
         from fantasy_baseball.models.positions import (
-            HITTER_ELIGIBLE, Position,
+            HITTER_ELIGIBLE,
+            Position,
         )
         assert Position.P not in HITTER_ELIGIBLE
         assert Position.SP not in HITTER_ELIGIBLE
@@ -160,13 +162,15 @@ class TestPositionSets:
 
     def test_pitcher_eligible(self):
         from fantasy_baseball.models.positions import (
-            PITCHER_ELIGIBLE, Position,
+            PITCHER_ELIGIBLE,
+            Position,
         )
-        assert PITCHER_ELIGIBLE == frozenset({Position.P, Position.SP, Position.RP})
+        assert frozenset({Position.P, Position.SP, Position.RP}) == PITCHER_ELIGIBLE
 
     def test_bench_slots(self):
         from fantasy_baseball.models.positions import (
-            BENCH_SLOTS, Position,
+            BENCH_SLOTS,
+            Position,
         )
         assert Position.BN in BENCH_SLOTS
         assert Position.IL in BENCH_SLOTS
@@ -177,7 +181,8 @@ class TestPositionSets:
 
     def test_il_slots(self):
         from fantasy_baseball.models.positions import (
-            IL_SLOTS, Position,
+            IL_SLOTS,
+            Position,
         )
         assert Position.IL in IL_SLOTS
         assert Position.IL_PLUS in IL_SLOTS

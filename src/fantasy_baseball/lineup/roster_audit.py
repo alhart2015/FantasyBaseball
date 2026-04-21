@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from fantasy_baseball.lineup.delta_roto import compute_delta_roto
 from fantasy_baseball.lineup.optimizer import (
@@ -20,7 +20,6 @@ from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import IL_STATUSES, Category
 from fantasy_baseball.utils.positions import can_cover_slots
-
 
 logger = logging.getLogger(__name__)
 
@@ -190,12 +189,12 @@ class AuditEntry:
     positions: list[str]
     slot: str
     player_sgp: float
-    player_id: Optional[str] = None
-    best_fa: Optional[str] = None
-    best_fa_type: Optional[str] = None
-    best_fa_positions: Optional[list[str]] = None
-    best_fa_sgp: Optional[float] = None
-    best_fa_id: Optional[str] = None
+    player_id: str | None = None
+    best_fa: str | None = None
+    best_fa_type: str | None = None
+    best_fa_positions: list[str] | None = None
+    best_fa_sgp: float | None = None
+    best_fa_id: str | None = None
     gap: float = 0.0
     candidates: list[dict] = field(default_factory=list)
 

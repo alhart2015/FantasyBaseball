@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from fantasy_baseball.web.season_app import create_app
 from fantasy_baseball.web.season_data import CacheKey

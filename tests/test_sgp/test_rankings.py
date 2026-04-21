@@ -1,5 +1,5 @@
-import pytest
 import pandas as pd
+
 from fantasy_baseball.sgp.rankings import build_rankings_lookup, compute_sgp_rankings, rank_key
 
 

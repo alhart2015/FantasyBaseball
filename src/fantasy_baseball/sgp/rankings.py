@@ -8,13 +8,13 @@ Use ``rank_key()`` to build name-based lookup keys.
 from collections.abc import Sequence
 
 import pandas as pd
+
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.name_utils import normalize_name
-from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
-
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
+from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 
 def rank_key(name: str, player_type: str) -> str:

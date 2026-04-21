@@ -1,4 +1,3 @@
-import pytest
 from fantasy_baseball.draft.search import find_player
 
 PLAYER_NAMES = [

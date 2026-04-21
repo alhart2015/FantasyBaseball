@@ -23,9 +23,9 @@ from typing import Any, cast
 
 import pandas as pd
 
-from fantasy_baseball.models.player import PlayerType
-from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.draft.balance import CategoryBalance
+from fantasy_baseball.draft.tracker import DraftTracker
+from fantasy_baseball.models.player import PlayerType
 
 # ---------------------------------------------------------------------------
 # Module-level version counter (monotonically increasing, thread-safe)

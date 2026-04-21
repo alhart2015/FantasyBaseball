@@ -41,7 +41,7 @@ class Position(StrEnum):
     DL_PLUS     = "DL+"
 
     @classmethod
-    def parse(cls, s: str) -> "Position":
+    def parse(cls, s: str) -> Position:
         """Parse a position string, normalizing casing and numbered slots.
 
         Yahoo returns ``"Util"`` in eligible_positions but ``"UTIL"`` in
@@ -71,7 +71,7 @@ class Position(StrEnum):
             raise ValueError(f"Unknown position: {s!r}") from None
 
     @classmethod
-    def parse_list(cls, s: str | None) -> list["Position"]:
+    def parse_list(cls, s: str | None) -> list[Position]:
         """Parse a comma-separated position string into a list.
 
         Empty string and ``None`` return ``[]``. Used by the DB loader

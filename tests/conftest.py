@@ -1,6 +1,7 @@
+from pathlib import Path
+
 import fakeredis
 import pytest
-from pathlib import Path
 
 # Ignore the old test_integration.py file to avoid naming conflict
 # with the test_integration/ package directory. Tests were migrated

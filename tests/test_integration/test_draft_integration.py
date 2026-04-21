@@ -3,26 +3,28 @@
 These tests use the ACTUAL projection files in data/projections/ and the
 ACTUAL config/league.yaml to exercise the full draft pipeline end-to-end.
 """
-import pytest
-import pandas as pd
 from pathlib import Path
 
-from fantasy_baseball.config import load_config, LeagueConfig
-from fantasy_baseball.draft.board import build_draft_board, apply_keepers
-from fantasy_baseball.draft.recommender import get_recommendations
-from fantasy_baseball.draft.tracker import DraftTracker
+import pandas as pd
+import pytest
+
+from fantasy_baseball.config import LeagueConfig, load_config
+from fantasy_baseball.data.db import (
+    create_tables,
+    get_connection,
+    load_blended_projections,
+    load_positions,
+)
+from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.draft.balance import CategoryBalance
+from fantasy_baseball.draft.board import apply_keepers, build_draft_board
+from fantasy_baseball.draft.recommender import get_recommendations
 from fantasy_baseball.draft.strategy import (
     STRATEGIES,
     build_player_lookup,
 )
-from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD, DEFAULT_ROSTER_SLOTS
-from fantasy_baseball.data.db import (
-    get_connection, create_tables,
-    load_blended_projections, load_positions,
-)
-from fantasy_baseball.data.yahoo_players import load_positions_cache
-
+from fantasy_baseball.draft.tracker import DraftTracker
+from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 
 # ---------------------------------------------------------------------------
 # Paths — resolved once, reused across fixtures

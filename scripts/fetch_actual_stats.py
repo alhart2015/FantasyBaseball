@@ -11,8 +11,8 @@ import argparse
 import json
 import sys
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

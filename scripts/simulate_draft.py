@@ -23,15 +23,15 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.db import get_connection
-from fantasy_baseball.draft.board import build_draft_board, apply_keepers
-from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.draft.balance import CategoryBalance
+from fantasy_baseball.draft.board import apply_keepers, build_draft_board
 from fantasy_baseball.draft.recommender import (
-    get_recommendations,
-    get_filled_positions,
     compute_slot_scarcity_order,
+    get_filled_positions,
+    get_recommendations,
 )
 from fantasy_baseball.draft.strategy import STRATEGIES, build_player_lookup
+from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.scoring import project_team_stats, score_roto_dict
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -738,7 +738,7 @@ def main():
     if args.no_punt_deadline is not None:
         strat_mod.NO_PUNT_SV_DEADLINE = args.no_punt_deadline
 
-    print(f"Building draft board...")
+    print("Building draft board...")
     ctx = build_board_and_context()
     config = ctx["config"]
 
@@ -805,7 +805,7 @@ def main():
     all_cats = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
 
     # Print standings
-    print(f"\nPROJECTED ROTO STANDINGS")
+    print("\nPROJECTED ROTO STANDINGS")
     print("=" * 132)
     print(
         f"{'Rk':<3} {'Team':<32} {'Pts':>4}  "
@@ -826,7 +826,7 @@ def main():
         )
 
     # Category breakdown
-    print(f"\nROTO POINTS BY CATEGORY (10=best, 1=worst)")
+    print("\nROTO POINTS BY CATEGORY (10=best, 1=worst)")
     print("=" * 97)
     print(f"{'Team':<32} ", end="")
     for c in all_cats:

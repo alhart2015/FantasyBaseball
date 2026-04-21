@@ -344,11 +344,11 @@ def main():
         if counting_sds:
             overall_h = np.mean(counting_sds)
             print(f"\n  Overall hitter counting stat SD: {overall_h:.3f}")
-            print(f"  Current STAT_VARIANCE['hitter']: 0.100")
+            print("  Current STAT_VARIANCE['hitter']: 0.100")
             print(f"  Recommended:                     {overall_h:.3f}")
 
         # Correlation matrix
-        print(f"\n  Residual correlation matrix (hitters):")
+        print("\n  Residual correlation matrix (hitters):")
         corr_cols = [f"{s}_residual" for s in hitter_cats]
         corr_df = h_df[corr_cols].dropna()
         if len(corr_df) >= 20:
@@ -403,11 +403,11 @@ def main():
                 counting_sds.append((stat, vals.std()))
         if counting_sds:
             overall_p = np.mean([sd for _, sd in counting_sds])
-            print(f"\n  Per-stat pitcher counting SDs:")
+            print("\n  Per-stat pitcher counting SDs:")
             for stat, sd in counting_sds:
                 print(f"    {stat:>4}: {sd:.3f}")
             print(f"\n  Overall pitcher counting stat SD: {overall_p:.3f}")
-            print(f"  Current STAT_VARIANCE['pitcher']: 0.180")
+            print("  Current STAT_VARIANCE['pitcher']: 0.180")
             print(f"  Recommended:                      {overall_p:.3f}")
 
         # SV separately (closers only — very different from SP stats)
@@ -416,10 +416,10 @@ def main():
             sv_vals = p_df[sv_col].dropna()
             if len(sv_vals) >= 5:
                 print(f"\n  SV variance (n={len(sv_vals)}): SD={sv_vals.std():.3f}")
-                print(f"  (Saves are far more volatile than other pitching stats)")
+                print("  (Saves are far more volatile than other pitching stats)")
 
         # Correlation matrix
-        print(f"\n  Residual correlation matrix (pitchers):")
+        print("\n  Residual correlation matrix (pitchers):")
         p_corr_stats = ["W", "SO", "SV", "ERA", "WHIP"]
         corr_cols = [f"{s}_residual" for s in p_corr_stats if f"{s}_residual" in p_df.columns]
         corr_df = p_df[corr_cols].dropna()

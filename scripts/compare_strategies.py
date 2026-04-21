@@ -95,7 +95,7 @@ def main():
 
     print(f"Strategies: {len(strategy_names)}, modes: {len(scoring_modes)}, "
           f"workers: {MAX_WORKERS}")
-    print(f"Each worker builds its own board (~10s startup)\n")
+    print("Each worker builds its own board (~10s startup)\n")
 
     # ---------------------------------------------------------------
     # PART 1: Strategic opponents with pick noise

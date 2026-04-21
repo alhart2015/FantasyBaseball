@@ -1,10 +1,11 @@
-from fantasy_baseball.models.player import Player, PlayerType, HitterStats, PitcherStats
-from fantasy_baseball.models.positions import Position
 from fantasy_baseball.lineup.optimizer import (
-    HitterAssignment, PitcherStarter,
-    optimize_hitter_lineup, optimize_pitcher_lineup,
+    HitterAssignment,
+    PitcherStarter,
+    optimize_hitter_lineup,
+    optimize_pitcher_lineup,
 )
-
+from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
+from fantasy_baseball.models.positions import Position
 
 CATEGORIES = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
 

@@ -1,6 +1,7 @@
 import json
+
 import pytest
-from pathlib import Path
+
 from fantasy_baseball.web.app import create_app
 
 

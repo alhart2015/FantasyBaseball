@@ -1,22 +1,22 @@
 import json
 import sqlite3
 from pathlib import Path
+
 from fantasy_baseball.data.db import (
-    create_tables,
-    get_connection,
-    load_raw_projections,
-    load_blended_projections,
-    get_blended_projections,
-    load_rest_of_season_projections,
-    get_rest_of_season_projections,
-    load_draft_results,
-    load_standings,
-    load_weekly_rosters,
-    load_positions,
-    get_positions,
     append_roster_snapshot,
     append_standings_snapshot,
-    DB_PATH,
+    create_tables,
+    get_blended_projections,
+    get_connection,
+    get_positions,
+    get_rest_of_season_projections,
+    load_blended_projections,
+    load_draft_results,
+    load_positions,
+    load_raw_projections,
+    load_rest_of_season_projections,
+    load_standings,
+    load_weekly_rosters,
 )
 
 
@@ -766,7 +766,7 @@ def test_get_rest_of_season_projections_empty_when_no_data(tmp_path):
 
 class TestGetSeasonTotals:
     def test_returns_hitter_totals_by_mlbam_id(self):
-        from fantasy_baseball.data.db import get_connection, create_tables, get_season_totals
+        from fantasy_baseball.data.db import create_tables, get_connection, get_season_totals
         conn = get_connection(":memory:")
         create_tables(conn)
         conn.execute(
@@ -793,7 +793,7 @@ class TestGetSeasonTotals:
         assert len(pitcher_totals) == 0
 
     def test_returns_pitcher_totals_by_mlbam_id(self):
-        from fantasy_baseball.data.db import get_connection, create_tables, get_season_totals
+        from fantasy_baseball.data.db import create_tables, get_connection, get_season_totals
         conn = get_connection(":memory:")
         create_tables(conn)
         conn.execute(
@@ -820,7 +820,7 @@ class TestGetSeasonTotals:
         assert t["sv"] == 0
 
     def test_empty_when_no_data(self):
-        from fantasy_baseball.data.db import get_connection, create_tables, get_season_totals
+        from fantasy_baseball.data.db import create_tables, get_connection, get_season_totals
         conn = get_connection(":memory:")
         create_tables(conn)
         hitter_totals, pitcher_totals = get_season_totals(conn, 2026)
@@ -839,7 +839,9 @@ class TestLoadRosNormalizationAppliesToAllSystems:
         ROS counting stats incremented by accumulated actuals.
         """
         from fantasy_baseball.data.db import (
-            get_connection, create_tables, load_rest_of_season_projections,
+            create_tables,
+            get_connection,
+            load_rest_of_season_projections,
         )
 
         _make_ros_dir(tmp_path, year=2026, date="2026-04-07")

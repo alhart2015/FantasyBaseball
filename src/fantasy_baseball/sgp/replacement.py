@@ -1,8 +1,9 @@
 import pandas as pd
+
+from fantasy_baseball.sgp.player_value import REPLACEMENT_AVG, REPLACEMENT_ERA, REPLACEMENT_WHIP
 from fantasy_baseball.utils.constants import STARTERS_PER_POSITION
-from fantasy_baseball.utils.positions import is_hitter, is_pitcher
+from fantasy_baseball.utils.positions import is_hitter
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
-from fantasy_baseball.sgp.player_value import REPLACEMENT_ERA, REPLACEMENT_WHIP, REPLACEMENT_AVG
 
 
 def calculate_replacement_levels(

@@ -1,10 +1,11 @@
 import pytest
+
 from fantasy_baseball.analysis.recency import (
-    predict_preseason,
-    predict_season_to_date,
-    predict_fixed_blend,
-    predict_reliability_blend,
     predict_exponential_decay,
+    predict_fixed_blend,
+    predict_preseason,
+    predict_reliability_blend,
+    predict_season_to_date,
 )
 
 PROJ_HITTER = {

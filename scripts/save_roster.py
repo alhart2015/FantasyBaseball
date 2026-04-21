@@ -18,7 +18,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from fantasy_baseball.auth.yahoo_auth import get_yahoo_session, get_league
+from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
 from fantasy_baseball.config import load_config
 from fantasy_baseball.lineup.yahoo_roster import fetch_roster
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -37,7 +37,7 @@ def main():
     config = load_config(CONFIG_PATH)
     team_name = config.team_name
 
-    print(f"Connecting to Yahoo...")
+    print("Connecting to Yahoo...")
     session = get_yahoo_session()
     league = get_league(session, config.league_id, config.game_code)
 

@@ -1,14 +1,16 @@
 import pandas as pd
+
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.sgp.replacement import calculate_replacement_levels
+from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
     CLOSER_SV_THRESHOLD,
     DEFAULT_ROSTER_SLOTS,
     compute_starters_per_position,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
-from fantasy_baseball.utils.positions import can_fill_slot, is_hitter
-from fantasy_baseball.sgp.replacement import calculate_replacement_levels
-from fantasy_baseball.sgp.var import calculate_var
+from fantasy_baseball.utils.positions import can_fill_slot
+
 
 def compute_slot_scarcity_order(
     board: pd.DataFrame,

@@ -26,7 +26,6 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-
 # The user is in Eastern time. Using a named zone (not a fixed offset)
 # so DST transitions are handled automatically.
 LOCAL_TZ = ZoneInfo("America/New_York")

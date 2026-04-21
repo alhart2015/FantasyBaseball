@@ -1,17 +1,14 @@
 import json
-import pytest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from fantasy_baseball.data.mlb_schedule import (
     MLB_TO_FANGRAPHS_ABBREV,
-    normalize_team_abbrev,
     fetch_week_schedule,
-    save_schedule_cache,
-    load_schedule_cache,
     get_week_schedule,
+    load_schedule_cache,
+    normalize_team_abbrev,
+    save_schedule_cache,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

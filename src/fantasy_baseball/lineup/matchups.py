@@ -3,17 +3,16 @@
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
-from typing import Any, cast
-
-from fantasy_baseball.utils.time_utils import local_today
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import pandas as pd
 import statsapi
 
 from fantasy_baseball.data.mlb_schedule import normalize_team_abbrev
 from fantasy_baseball.utils.name_utils import normalize_name
+from fantasy_baseball.utils.time_utils import local_today
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +205,7 @@ def save_batting_stats_cache(stats: dict[str, dict], path: Path) -> None:
     """
     payload = {
         "stats": stats,
-        "fetched_at": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
+        "fetched_at": datetime.now(tz=UTC).isoformat(timespec="seconds"),
     }
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -240,9 +239,9 @@ def load_batting_stats_cache(path: Path) -> dict[str, dict] | None:
     fetched_at = datetime.fromisoformat(fetched_at_str)
     # Ensure timezone-aware comparison
     if fetched_at.tzinfo is None:
-        fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+        fetched_at = fetched_at.replace(tzinfo=UTC)
 
-    age_hours = (datetime.now(tz=timezone.utc) - fetched_at).total_seconds() / 3600
+    age_hours = (datetime.now(tz=UTC) - fetched_at).total_seconds() / 3600
     if age_hours > 24:
         logger.debug("Batting stats cache is stale (%.1fh old); ignoring", age_hours)
         return None

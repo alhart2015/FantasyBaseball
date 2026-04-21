@@ -1,10 +1,11 @@
 import json
-import pytest
+
 import pandas as pd
-from pathlib import Path
-from fantasy_baseball.draft.tracker import DraftTracker
+import pytest
+
 from fantasy_baseball.draft.balance import CategoryBalance
-from fantasy_baseball.draft.state import serialize_state, write_state, read_state
+from fantasy_baseball.draft.state import read_state, serialize_state, write_state
+from fantasy_baseball.draft.tracker import DraftTracker
 
 
 def _make_hitter(name, positions, var, best_position, r, hr, rbi, sb, avg, ab):

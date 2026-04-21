@@ -1,5 +1,4 @@
-import pytest
-from fantasy_baseball.utils.positions import can_fill_slot, can_cover_slots, is_hitter, is_pitcher
+from fantasy_baseball.utils.positions import can_cover_slots, can_fill_slot, is_hitter, is_pitcher
 
 
 class TestCanFillSlot:

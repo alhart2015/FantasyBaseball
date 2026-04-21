@@ -1,11 +1,9 @@
 """Tests for fantasy_baseball.data.fangraphs_fetch."""
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
 
 from fantasy_baseball.data.fangraphs_fetch import (
     _fetch_fangraphs_data,

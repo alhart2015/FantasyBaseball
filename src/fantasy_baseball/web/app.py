@@ -30,7 +30,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request
 
-from fantasy_baseball.draft.state import read_state, read_board, read_delta
+from fantasy_baseball.draft.state import read_board, read_delta, read_state
 
 DEFAULT_STATE_PATH = Path(__file__).resolve().parents[3] / "data" / "draft_state.json"
 

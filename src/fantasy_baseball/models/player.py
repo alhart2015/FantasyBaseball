@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
-from typing import Any, Optional
+from typing import Any
 
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
@@ -23,17 +23,17 @@ class HitterStats:
     rbi: float = 0
     sb: float = 0
     avg: float = 0
-    sgp: Optional[float] = None
+    sgp: float | None = None
 
     # ------------------------------------------------------------------
     # Constructors
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "HitterStats":
+    def from_dict(cls, d: dict[str, Any]) -> HitterStats:
         stat_fields = {f.name for f in fields(cls) if f.name != "sgp"}
         kwargs: dict[str, Any] = {k: float(d.get(k, 0) or 0) for k in stat_fields}
-        kwargs["sgp"] = d.get("sgp", None)
+        kwargs["sgp"] = d.get("sgp")
 
         # Compute avg from h/ab if avg not provided or is zero
         if kwargs["avg"] == 0:
@@ -71,17 +71,17 @@ class PitcherStats:
     h_allowed: float = 0
     era: float = 0
     whip: float = 0
-    sgp: Optional[float] = None
+    sgp: float | None = None
 
     # ------------------------------------------------------------------
     # Constructors
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "PitcherStats":
+    def from_dict(cls, d: dict[str, Any]) -> PitcherStats:
         stat_fields = {f.name for f in fields(cls) if f.name != "sgp"}
         kwargs: dict[str, Any] = {k: float(d.get(k, 0) or 0) for k in stat_fields}
-        kwargs["sgp"] = d.get("sgp", None)
+        kwargs["sgp"] = d.get("sgp")
 
         # Compute ERA and WHIP from components if not provided
         ip = kwargs["ip"]
@@ -116,12 +116,12 @@ class PitcherStats:
 
 @dataclass
 class RankInfo:
-    rest_of_season: Optional[int] = None
-    preseason: Optional[int] = None
-    current: Optional[int] = None
+    rest_of_season: int | None = None
+    preseason: int | None = None
+    current: int | None = None
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "RankInfo":
+    def from_dict(cls, d: dict[str, Any]) -> RankInfo:
         return cls(rest_of_season=d.get("rest_of_season"), preseason=d.get("preseason"), current=d.get("current"))
 
     def to_dict(self) -> dict[str, Any]:
@@ -141,7 +141,7 @@ def _has_stat_keys(d: dict[str, Any], player_type: PlayerType) -> bool:
 
 def _make_stats(
     d: dict[str, Any], player_type: PlayerType
-) -> "HitterStats | PitcherStats | None":
+) -> HitterStats | PitcherStats | None:
     """Build the appropriate stats object from a sub-dict."""
     if not d:
         return None
@@ -160,26 +160,26 @@ class Player:
     player_type: PlayerType
     positions: list[Position] = field(default_factory=list)
     team: str = ""
-    fg_id: Optional[str] = None
-    mlbam_id: Optional[int] = None
-    yahoo_id: Optional[str] = None
+    fg_id: str | None = None
+    mlbam_id: int | None = None
+    yahoo_id: str | None = None
 
-    rest_of_season: "HitterStats | PitcherStats | None" = None
-    preseason: "HitterStats | PitcherStats | None" = None
-    current: "HitterStats | PitcherStats | None" = None
+    rest_of_season: HitterStats | PitcherStats | None = None
+    preseason: HitterStats | PitcherStats | None = None
+    current: HitterStats | PitcherStats | None = None
 
     rank: RankInfo = field(default_factory=RankInfo)
 
     selected_position: Position | None = None
     status: str = ""
-    pace: Optional[dict] = None
+    pace: dict | None = None
 
     # ------------------------------------------------------------------
     # Constructor
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Player":
+    def from_dict(cls, d: dict[str, Any]) -> Player:
         name = d.get("name", "")
         player_type = PlayerType(d.get("player_type", "hitter"))
 

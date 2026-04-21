@@ -1,19 +1,21 @@
-import pytest
 from datetime import date
 from unittest.mock import patch
+
+import pytest
+
 from fantasy_baseball.models.standings import (
     CategoryStats,
     Standings,
     StandingsEntry,
 )
+from fantasy_baseball.web.season_app import create_app
 from fantasy_baseball.web.season_data import (
     CacheKey,
-    format_standings_for_display,
-    get_teams_list,
     _opponent_cache,
     clear_opponent_cache,
+    format_standings_for_display,
+    get_teams_list,
 )
-from fantasy_baseball.web.season_app import create_app
 
 
 def _sample_teams() -> list[dict]:
@@ -174,8 +176,10 @@ class TestStandingsTeamKey:
         assert isotopes["team_key"] == "469.l.5652.t.8"
 
 
-import pandas as pd
 from unittest.mock import MagicMock
+
+import pandas as pd
+
 from fantasy_baseball.web.season_data import build_opponent_lineup
 
 
