@@ -335,6 +335,7 @@ def register_routes(app: Flask) -> None:
             rest_of_season_mc=rest_of_season_mc_data,
             rest_of_season_mgmt_mc=rest_of_season_mgmt_mc_data,
             categories=[c.value for c in ALL_CATEGORIES],
+            all_categories=ALL_CATEGORIES,
         )
 
     @app.route("/lineup")
@@ -398,6 +399,7 @@ def register_routes(app: Flask) -> None:
             active_page="roster_audit",
             audit=audit_raw or [],
             categories=[c.value for c in ALL_CATEGORIES],
+            all_categories=ALL_CATEGORIES,
         )
 
     @app.route("/waivers-trades")
@@ -430,21 +432,11 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/trade-search", methods=["POST"])
     def api_trade_search():
-        from datetime import date
-
         from fantasy_baseball.models.player import Player
-        from fantasy_baseball.models.standings import (
-            CategoryStats,
-            ProjectedStandings,
-            ProjectedStandingsEntry,
-            Standings,
-            StandingsEntry,
-        )
         from fantasy_baseball.trades.evaluate import (
             search_trades_away,
             search_trades_for,
         )
-        from fantasy_baseball.utils.constants import ALL_CATEGORIES
 
         data = request.get_json(silent=True) or {}
         player_name = data.get("player_name", "").strip()
@@ -483,31 +475,10 @@ def register_routes(app: Flask) -> None:
         # Convert cached list[dict] to typed Standings / ProjectedStandings
         # at the boundary. The trades/evaluate API takes typed objects so
         # post-Phase-3.2 callers no longer pass raw cache dicts through.
-        standings = Standings(
-            effective_date=date.min,
-            entries=[
-                StandingsEntry(
-                    team_name=t["name"],
-                    team_key=t.get("team_key", ""),
-                    rank=t.get("rank", 0),
-                    stats=CategoryStats.from_dict(t.get("stats", {})),
-                    yahoo_points_for=t.get("points_for"),
-                )
-                for t in standings_raw
-            ],
+        standings = _standings_from_cache(standings_raw)
+        projected_standings = (
+            _projected_from_cache(projected_standings_raw) if projected_standings_raw else None
         )
-        projected_standings = None
-        if projected_standings_raw:
-            projected_standings = ProjectedStandings(
-                effective_date=date.min,
-                entries=[
-                    ProjectedStandingsEntry(
-                        team_name=t["name"],
-                        stats=CategoryStats.from_dict(t.get("stats", {})),
-                    )
-                    for t in projected_standings_raw
-                ],
-            )
         # team_sds cache is {team: {cat_string: sd}}; score_roto wants
         # Category-enum keys.
         team_sds = None
@@ -1010,6 +981,7 @@ def register_routes(app: Flask) -> None:
             spoe_data=spoe_data,
             snapshot_date=meta.get("last_refresh", latest),
             categories=[c.value for c in ALL_CATEGORIES],
+            all_categories=ALL_CATEGORIES,
             rate_stats={c.value for c in RATE_STATS},
         )
 
@@ -1086,13 +1058,15 @@ def register_routes(app: Flask) -> None:
             return jsonify(cached["data"])
 
         # Need standings for team name lookup
-        standings = read_cache(CacheKey.STANDINGS)
-        if not standings:
+        standings_raw = read_cache(CacheKey.STANDINGS)
+        if not standings_raw:
             return jsonify({"error": "No standings data. Run a refresh first."}), 404
 
-        # Find opponent name from team_key
-        opponent = next((t for t in standings if t.get("team_key") == team_key), None)
-        if not opponent:
+        standings = _standings_from_cache(standings_raw)
+
+        # Find opponent entry from team_key
+        opponent = next((e for e in standings.entries if e.team_key == team_key), None)
+        if opponent is None:
             return jsonify({"error": f"Team key {team_key} not found"}), 404
 
         config = _load_config()
@@ -1112,7 +1086,7 @@ def register_routes(app: Flask) -> None:
 
         lineup = build_opponent_lineup(
             roster=roster,
-            opponent_name=opponent["name"],
+            opponent_name=opponent.team_name,
             hitters_proj=hitters_proj,
             pitchers_proj=pitchers_proj,
             rest_of_season_hitters=rest_of_season_hitters,
@@ -1121,9 +1095,9 @@ def register_routes(app: Flask) -> None:
         )
 
         response_data = {
-            "team_name": opponent["name"],
+            "team_name": opponent.team_name,
             "team_key": team_key,
-            "rank": opponent.get("rank", 0),
+            "rank": opponent.rank,
             "hitters": lineup["hitters"],
             "pitchers": lineup["pitchers"],
             "hitter_totals": lineup["hitter_totals"],
