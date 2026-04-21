@@ -457,12 +457,13 @@ class RefreshRun:
     def _build_projected_standings(self):
         self._progress("Projecting end-of-season standings...")
         from fantasy_baseball.data.projections import hydrate_roster_entries
-        from fantasy_baseball.scoring import build_projected_standings, build_team_sds
+        from fantasy_baseball.models.standings import ProjectedStandings
+        from fantasy_baseball.scoring import build_team_sds
 
         all_team_rosters = {self.config.team_name: self.matched}
         all_team_rosters.update(self.opp_rosters)
 
-        self.projected_standings = build_projected_standings(
+        self.projected_standings = ProjectedStandings.from_rosters(
             all_team_rosters, effective_date=self.effective_date
         )
 
@@ -492,7 +493,7 @@ class RefreshRun:
                 )
                 if hydrated:
                     preseason_rosters[team.name] = hydrated
-            self.preseason_projected_standings = build_projected_standings(
+            self.preseason_projected_standings = ProjectedStandings.from_rosters(
                 preseason_rosters, effective_date=self.effective_date
             )
             self.preseason_team_sds = build_team_sds(preseason_rosters, 1.0)

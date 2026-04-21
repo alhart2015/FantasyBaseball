@@ -17,7 +17,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
 from math import erf, sqrt
 from typing import Protocol
 
@@ -26,7 +25,6 @@ from fantasy_baseball.models.positions import IL_SLOTS, Position
 from fantasy_baseball.models.standings import (
     CategoryPoints,
     CategoryStats,
-    ProjectedStandings,
     ProjectedStandingsEntry,
 )
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
@@ -444,20 +442,6 @@ def project_team_sds(
         ) * p_sum_sq["h_allowed"]
         sds[Category.WHIP.value] = sqrt(whip_var) / total_ip
     return sds
-
-
-def build_projected_standings(
-    team_rosters: dict[str, list],
-    *,
-    effective_date: date,
-) -> ProjectedStandings:
-    """Thin wrapper around :meth:`ProjectedStandings.from_rosters`.
-
-    Kept for the duration of the standings dataclass migration; deleted
-    in Phase 5 once all callers construct ``ProjectedStandings``
-    directly.
-    """
-    return ProjectedStandings.from_rosters(team_rosters, effective_date=effective_date)
 
 
 def build_team_sds(

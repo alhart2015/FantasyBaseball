@@ -101,36 +101,6 @@ class TestStandingsEntry:
         assert entry.stats.r == 100
 
 
-class TestStandingsSnapshot:
-    def test_empty_snapshot(self):
-        from fantasy_baseball.models.standings import StandingsSnapshot
-        snap = StandingsSnapshot(effective_date=date(2026, 4, 14), entries=[])
-        assert snap.effective_date == date(2026, 4, 14)
-        assert snap.entries == []
-
-    def test_by_team_lookup(self):
-        from fantasy_baseball.models.standings import (
-            CategoryStats, StandingsEntry, StandingsSnapshot,
-        )
-        e1 = StandingsEntry("Hart of the Order", "k1", 1, CategoryStats(r=120))
-        e2 = StandingsEntry("Rivals", "k2", 2, CategoryStats(r=100))
-        snap = StandingsSnapshot(date(2026, 4, 14), [e1, e2])
-
-        lookup = snap.by_team()
-        assert lookup["Hart of the Order"] is e1
-        assert lookup["Rivals"] is e2
-
-    def test_by_team_duplicate_names_raises(self):
-        from fantasy_baseball.models.standings import (
-            CategoryStats, StandingsEntry, StandingsSnapshot,
-        )
-        e1 = StandingsEntry("Dupe", "k1", 1, CategoryStats())
-        e2 = StandingsEntry("Dupe", "k2", 2, CategoryStats())
-        snap = StandingsSnapshot(date(2026, 4, 14), [e1, e2])
-        with pytest.raises(ValueError, match="duplicate team"):
-            snap.by_team()
-
-
 class TestStandingsJSON:
     def _canonical_payload(self):
         return {

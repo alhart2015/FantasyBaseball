@@ -1,9 +1,10 @@
 """League-level roto category statistics.
 
-Three snapshot-layer dataclasses used by League:
+Snapshot-layer dataclasses used by League:
 :class:`CategoryStats` (the ten roto totals), :class:`StandingsEntry`
-(one team's stats + rank), and :class:`StandingsSnapshot` (all teams
-at an effective_date).
+(one team's stats + rank), and :class:`Standings` (all teams at an
+effective_date). :class:`ProjectedStandings` is the projected twin of
+``Standings`` built from rosters.
 
 ``CategoryStats`` is keyed exclusively by :class:`Category` enum. Bare
 string access raises ``TypeError``.
@@ -119,33 +120,6 @@ class StandingsEntry:
     rank: int
     stats: CategoryStats
     yahoo_points_for: float | None = None
-
-
-@dataclass
-class StandingsSnapshot:
-    """All teams' standings at a single effective_date.
-
-    ``effective_date`` is the lineup-lock date the snapshot represents
-    (typically the Tuesday the scoring week begins). Entries are not
-    required to be in rank order — call :meth:`by_team` for lookup.
-    """
-    effective_date: date
-    entries: list[StandingsEntry]
-
-    def by_team(self) -> dict[str, StandingsEntry]:
-        """Return a {team_name: entry} lookup.
-
-        Raises:
-            ValueError: if any team name is duplicated in ``entries``.
-        """
-        out: dict[str, StandingsEntry] = {}
-        for entry in self.entries:
-            if entry.team_name in out:
-                raise ValueError(
-                    f"duplicate team in snapshot: {entry.team_name!r}"
-                )
-            out[entry.team_name] = entry
-        return out
 
 
 @dataclass
