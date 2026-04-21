@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import tempfile
-from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -28,12 +27,13 @@ def _get_redis() -> KVStore | None:
 
 
 from fantasy_baseball.models.player import PlayerType
-from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
-from fantasy_baseball.scoring import score_roto_dict
+from fantasy_baseball.models.standings import ProjectedStandings, Standings
+from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
     HITTER_PROJ_KEYS,
     PITCHER_PROJ_KEYS,
+    Category,
 )
 from fantasy_baseball.utils.constants import (
     INVERSE_STATS as INVERSE_CATS,
@@ -55,30 +55,6 @@ def clear_opponent_cache() -> None:
 
 
 CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache"
-
-
-def _standings_to_snapshot(
-    standings: list[dict],
-    effective_date: date | None = None,
-) -> StandingsSnapshot:
-    """Convert a raw standings list[dict] to a StandingsSnapshot.
-
-    Used at the boundary between Yahoo fetch / cache read and typed
-    consumers (calculate_leverage, format_standings_for_display).
-    """
-    return StandingsSnapshot(
-        effective_date=effective_date or date.min,
-        entries=[
-            StandingsEntry(
-                team_name=t["name"],
-                team_key=t.get("team_key", ""),
-                rank=t.get("rank", 0),
-                stats=CategoryStats.from_dict(t.get("stats", {})),
-                yahoo_points_for=t.get("points_for"),
-            )
-            for t in standings
-        ],
-    )
 
 
 CACHE_FILES: dict[CacheKey, str] = {
@@ -204,25 +180,35 @@ def _load_game_log_totals(season_year: int) -> tuple[dict, dict]:
 
 
 def format_standings_for_display(
-    standings: StandingsSnapshot,
+    standings: Standings,
     user_team_name: str,
     *,
     team_sds: dict[str, dict[str, float]] | None = None,
 ) -> dict:
-    """Transform standings snapshot into display-ready structure with roto points and color codes.
+    """Transform typed Standings into a display-ready structure with roto points and color codes.
 
     Args:
-        standings: StandingsSnapshot with typed StandingsEntry objects.
+        standings: typed :class:`Standings` object.
         user_team_name: The authenticated user's team name for highlighting.
-        team_sds: Per-team per-category standard deviations for ERoto scoring.
-            When provided, ``score_roto`` uses Gaussian pairwise win
-            probabilities instead of deterministic rank-based scoring.
+        team_sds: Per-team per-category standard deviations for ERoto scoring,
+            keyed by the uppercase string form (``"R"``, ``"HR"``, …) matching
+            the projections-cache shape. When provided, ``score_roto`` uses
+            Gaussian pairwise win probabilities instead of deterministic
+            rank-based scoring.
 
     Returns:
-        {"teams": [...]} where each team has roto_points, is_user flag,
-        color_intensity, and rank. color_intensity is a dict of
-        {category: float in [-1, 1]} plus a "total" key; categories
-        where all teams tie are absent.
+        ``{"teams": [...]}`` where each team dict contains:
+
+        - ``stats``: a :class:`CategoryStats` object (Jinja indexes with
+          ``Category`` enum).
+        - ``roto_points``: ``{Category: float}`` per-category roto points.
+        - ``roto_total``: the total roto points (Yahoo's when available).
+        - ``score_roto_total``: always the raw ``score_roto`` total (diagnostic).
+        - ``color_intensity``: ``{Category: float}`` with values in [-1, 1];
+          tied categories are absent.
+        - ``total_intensity``: float in [-1, 1] for the total column (absent
+          when all teams tie on total).
+        - ``rank``, ``is_user``, ``team_key``, ``sds`` as before.
 
     When every entry has ``yahoo_points_for`` set (live Yahoo standings
     path), the displayed total and rank come from Yahoo to match the
@@ -234,77 +220,92 @@ def format_standings_for_display(
     if not standings.entries:
         return {"teams": []}
 
+    # ``score_roto`` expects team_sds keyed by Category; convert from the
+    # cache's uppercase-string shape here.
+    typed_team_sds: dict[str, dict[Category, float]] | None = None
+    if team_sds is not None:
+        typed_team_sds = {
+            team: {cat: float(sds.get(cat.value, 0.0)) for cat in ALL_CATEGORIES}
+            for team, sds in team_sds.items()
+        }
+
     # CategoryStats defaults (0.0 for counting, 99.0 for ERA/WHIP)
-    # handle early-season missing data — no _fill_stat_defaults needed.
-    # ``score_roto`` indexes by string cat keys, so serialize at the boundary.
-    all_stats = {e.team_name: e.stats.to_dict() for e in standings.entries}
-    roto = score_roto_dict(all_stats, team_sds=team_sds)
+    # handle early-season missing data.
+    roto = score_roto(standings, team_sds=typed_team_sds)
 
     has_yahoo_totals = all(e.yahoo_points_for is not None for e in standings.entries)
     yahoo_rank_by_name = {e.team_name: e.rank for e in standings.entries}
 
-    teams = []
+    teams: list[dict] = []
     team_totals: dict[str, float] = {}
     for entry in standings.entries:
         name = entry.team_name
-        roto_pts = dict(roto[name])
+        roto_cat_pts = roto[name]  # CategoryPoints
+        score_roto_total = float(roto_cat_pts.total)
 
         if has_yahoo_totals:
-            roto_pts["score_roto_total"] = roto_pts["total"]
-            roto_pts["total"] = entry.yahoo_points_for
+            # yahoo_points_for is guaranteed non-None by has_yahoo_totals check.
+            team_total = float(entry.yahoo_points_for)  # type: ignore[arg-type]
+        else:
+            team_total = score_roto_total
 
-        team_totals[name] = float(roto_pts["total"])
+        team_totals[name] = team_total
         teams.append(
             {
                 "name": name,
                 "team_key": entry.team_key,
                 "stats": entry.stats,
-                "roto_points": roto_pts,
+                "roto_points": {cat: roto_cat_pts[cat] for cat in ALL_CATEGORIES},
+                "roto_total": team_total,
+                "score_roto_total": score_roto_total,
                 "is_user": name == user_team_name,
                 "sds": team_sds.get(name, {}) if team_sds else {},
             }
         )
 
-    intensity = _compute_color_intensity(standings, team_totals)
+    intensity, total_intensity = _compute_color_intensity(standings, team_totals)
     for team in teams:
         team["color_intensity"] = intensity[team["name"]]
+        if team["name"] in total_intensity:
+            team["total_intensity"] = total_intensity[team["name"]]
 
     if has_yahoo_totals:
-        teams.sort(key=lambda t: (-t["roto_points"]["total"], yahoo_rank_by_name[t["name"]]))
+        teams.sort(key=lambda t: (-t["roto_total"], yahoo_rank_by_name[t["name"]]))
         for t in teams:
             t["rank"] = yahoo_rank_by_name[t["name"]]
     else:
-        teams.sort(key=lambda t: t["roto_points"]["total"], reverse=True)
+        teams.sort(key=lambda t: t["roto_total"], reverse=True)
         for i, t in enumerate(teams):
             t["rank"] = i + 1
 
     return {"teams": teams}
 
 
-def get_teams_list(standings: list[dict], user_team_name: str) -> dict:
+def get_teams_list(standings: Standings, user_team_name: str) -> dict:
     """Build a team list for the opponent selector dropdown.
 
     Args:
-        standings: Raw standings cache (list of team dicts with name, team_key, rank).
+        standings: typed :class:`Standings` (empty ``entries`` produces an
+            empty result).
         user_team_name: The user's team name for flagging.
 
     Returns:
         {"teams": [...], "user_team_key": str | None}
     """
-    if not standings:
+    if not standings.entries:
         return {"teams": [], "user_team_key": None}
 
-    user_team_key = None
-    teams = []
-    for t in standings:
-        is_user = t["name"] == user_team_name
+    user_team_key: str | None = None
+    teams: list[dict] = []
+    for entry in standings.entries:
+        is_user = entry.team_name == user_team_name
         if is_user:
-            user_team_key = t.get("team_key", "")
+            user_team_key = entry.team_key
         teams.append(
             {
-                "name": t["name"],
-                "team_key": t.get("team_key", ""),
-                "rank": t.get("rank", 0),
+                "name": entry.team_name,
+                "team_key": entry.team_key,
+                "rank": entry.rank,
                 "is_user": is_user,
             }
         )
@@ -696,7 +697,7 @@ def compute_comparison_standings(
     roster_player_name: str,
     other_player: "Player",
     user_roster: "list[Player]",
-    projected_standings: list[dict],
+    projected_standings: ProjectedStandings,
     user_team_name: str,
     *,
     roster_player_projection: "Player | None" = None,
@@ -704,7 +705,7 @@ def compute_comparison_standings(
 ) -> dict:
     """Compute before/after roto standings for a player swap.
 
-    Uses the cached ``projected_standings`` as the single source of
+    Uses the typed ``projected_standings`` as the single source of
     truth for team stats (built once during the refresh pipeline).
     The swap delta is applied via :func:`apply_swap_delta` rather than
     recomputing from the roster — this guarantees the "before" totals
@@ -715,11 +716,15 @@ def compute_comparison_standings(
     cache entry.  This keeps the delta consistent with the browse page
     (which reads from ``ros_projections``).
 
-    When ``team_sds`` is provided, ``score_roto`` uses EV-based pairwise
-    Gaussian scoring so the comparison matches the roster audit for the
-    same swap.
+    When ``team_sds`` is provided (uppercase-string-keyed as in the
+    projections cache), ``score_roto`` uses EV-based pairwise Gaussian
+    scoring so the comparison matches the roster audit for the same
+    swap.
 
     Returns dict with before/after stats and roto, or {"error": ...}.
+    The ``stats`` entries inside before/after are uppercase-string-keyed
+    dicts (the shape :func:`apply_swap_delta` operates on and that the
+    Flask/JSON boundary expects).
     """
     from fantasy_baseball.scoring import score_roto_dict
     from fantasy_baseball.trades.evaluate import (
@@ -735,7 +740,7 @@ def compute_comparison_standings(
     loses_ros = player_rest_of_season_stats(roster_player_projection or dropped)
     gains_ros = player_rest_of_season_stats(other_player)
 
-    all_stats_before = {t["name"]: dict(t["stats"]) for t in projected_standings}
+    all_stats_before = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
     all_stats_after = dict(all_stats_before)
     all_stats_after[user_team_name] = apply_swap_delta(
         all_stats_before[user_team_name],
@@ -771,9 +776,9 @@ def compute_comparison_standings(
 
 
 def _compute_color_intensity(
-    standings: StandingsSnapshot,
+    standings: Standings,
     team_totals: dict[str, float],
-) -> dict[str, dict[str, float]]:
+) -> tuple[dict[str, dict[Category, float]], dict[str, float]]:
     """Per-team, per-category signed intensity in [-1, 1].
 
     For each category, intensity = 2 * ((value - min) / (max - min)) - 1,
@@ -781,10 +786,12 @@ def _compute_color_intensity(
     Categories where every team is tied (``max == min``) are omitted —
     callers render those cells neutral.
 
-    The ``"total"`` key is populated from ``team_totals`` using the same
-    formula (leader of total roto points = +1.0, no inversion).
+    Returns a tuple:
+        - ``per_cat``: ``{team_name: {Category: float}}`` — category intensities.
+        - ``total``: ``{team_name: float}`` — intensity for the total column;
+          teams are absent when every total is tied.
     """
-    out: dict[str, dict[str, float]] = {e.team_name: {} for e in standings.entries}
+    per_cat: dict[str, dict[Category, float]] = {e.team_name: {} for e in standings.entries}
 
     for cat in ALL_CATEGORIES:
         vals = {e.team_name: float(e.stats[cat]) for e in standings.entries}
@@ -796,17 +803,18 @@ def _compute_color_intensity(
             t = (v - lo) / span
             if cat in INVERSE_CATS:
                 t = 1.0 - t
-            out[name][cat.value] = 2.0 * t - 1.0
+            per_cat[name][cat] = 2.0 * t - 1.0
 
-    # Total column
-    lo_t, hi_t = min(team_totals.values()), max(team_totals.values())
-    if hi_t - lo_t >= 1e-12:
-        span = hi_t - lo_t
-        for name, v in team_totals.items():
-            t = (v - lo_t) / span
-            out[name]["total"] = 2.0 * t - 1.0
+    total: dict[str, float] = {}
+    if team_totals:
+        lo_t, hi_t = min(team_totals.values()), max(team_totals.values())
+        if hi_t - lo_t >= 1e-12:
+            span_t = hi_t - lo_t
+            for name, v in team_totals.items():
+                t = (v - lo_t) / span_t
+                total[name] = 2.0 * t - 1.0
 
-    return out
+    return per_cat, total
 
 
 def _compute_pending_moves_diff(

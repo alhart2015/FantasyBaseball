@@ -5,13 +5,59 @@ import hmac
 import logging
 import os
 import threading
+from datetime import date
 from pathlib import Path
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.models.standings import (
+    CategoryStats,
+    ProjectedStandings,
+    ProjectedStandingsEntry,
+    Standings,
+    StandingsEntry,
+)
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, RATE_STATS
 from fantasy_baseball.web.season_data import CacheKey, read_cache, read_meta
+
+
+def _standings_from_cache(raw: list[dict]) -> Standings:
+    """Build a typed ``Standings`` from a raw cache ``list[dict]``.
+
+    Transitional boundary helper: Yahoo fetch still writes
+    ``list[dict]`` into ``cache:standings`` / ``cache:projections``.
+    Phase 4.3 will migrate the refresh pipeline to store typed
+    ``Standings.to_json()`` payloads; until then, routes convert here.
+    """
+    return Standings(
+        effective_date=date.min,
+        entries=[
+            StandingsEntry(
+                team_name=t["name"],
+                team_key=t.get("team_key", ""),
+                rank=t.get("rank", 0),
+                stats=CategoryStats.from_dict(t.get("stats", {})),
+                yahoo_points_for=t.get("points_for"),
+            )
+            for t in raw
+        ],
+    )
+
+
+def _projected_from_cache(raw: list[dict]) -> ProjectedStandings:
+    """Build a typed ``ProjectedStandings`` from raw cache ``list[dict]``."""
+    return ProjectedStandings(
+        effective_date=date.min,
+        entries=[
+            ProjectedStandingsEntry(
+                team_name=t["name"],
+                stats=CategoryStats.from_dict(t.get("stats", {})),
+            )
+            for t in raw
+        ],
+    )
+
 
 log = logging.getLogger(__name__)
 
@@ -231,13 +277,12 @@ def register_routes(app: Flask) -> None:
 
         if raw_standings:
             from fantasy_baseball.web.season_data import (
-                _standings_to_snapshot,
                 format_monte_carlo_for_display,
                 format_standings_for_display,
             )
 
             standings_data = format_standings_for_display(
-                _standings_to_snapshot(raw_standings), config.team_name
+                _standings_from_cache(raw_standings), config.team_name
             )
 
             raw_projected = read_cache(CacheKey.PROJECTIONS)
@@ -248,13 +293,13 @@ def register_routes(app: Flask) -> None:
                 )
                 if preseason_standings:
                     preseason_data = format_standings_for_display(
-                        _standings_to_snapshot(preseason_standings),
+                        _standings_from_cache(preseason_standings),
                         config.team_name,
                         team_sds=raw_projected.get("preseason_team_sds"),
                     )
                 if "projected_standings" in raw_projected:
                     current_projected_data = format_standings_for_display(
-                        _standings_to_snapshot(raw_projected["projected_standings"]),
+                        _standings_from_cache(raw_projected["projected_standings"]),
                         config.team_name,
                         team_sds=raw_projected.get("team_sds"),
                     )
@@ -311,7 +356,12 @@ def register_routes(app: Flask) -> None:
 
         standings_raw = read_cache(CacheKey.STANDINGS)
         config = _load_config()
-        teams_data = get_teams_list(standings_raw or [], config.team_name)
+        standings_typed = (
+            _standings_from_cache(standings_raw)
+            if standings_raw
+            else Standings(effective_date=date.min, entries=[])
+        )
+        teams_data = get_teams_list(standings_typed, config.team_name)
 
         # Check if a specific team was requested via query param
         selected_team_key = request.args.get("team", teams_data.get("user_team_key", ""))
@@ -838,7 +888,7 @@ def register_routes(app: Flask) -> None:
             roster_player_name=roster_player,
             other_player=other_player,
             user_roster=user_roster,
-            projected_standings=projected_standings,
+            projected_standings=_projected_from_cache(projected_standings),
             user_team_name=config.team_name,
             roster_player_projection=roster_player_projection,
             team_sds=proj_cache.get("team_sds"),
@@ -1016,7 +1066,7 @@ def register_routes(app: Flask) -> None:
         config = _load_config()
         if not standings:
             return jsonify({"teams": [], "user_team_key": None})
-        return jsonify(get_teams_list(standings, config.team_name))
+        return jsonify(get_teams_list(_standings_from_cache(standings), config.team_name))
 
     @app.route("/api/opponent/<team_key>/lineup")
     @_require_auth
