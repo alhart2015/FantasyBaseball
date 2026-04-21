@@ -11,7 +11,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.db import get_connection
 from fantasy_baseball.draft.board import build_draft_board
-from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.simulation import simulate_season
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
@@ -83,7 +83,7 @@ def main():
 
     for _ in range(N):
         stats, _ = simulate_season(team_players, rng, h_slots, p_slots)
-        results = score_roto(stats)
+        results = score_roto_dict(stats)
         ranked = sorted(results.items(), key=lambda x: x[1]["total"], reverse=True)
         for rank, (t, pts) in enumerate(ranked, 1):
             all_totals[t].append(pts["total"])

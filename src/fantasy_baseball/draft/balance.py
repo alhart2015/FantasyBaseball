@@ -62,7 +62,7 @@ class CategoryBalance:
             # treats them uniformly (avoids 100:1 asymmetry where ERA/WHIP
             # get emergency weight but W/K/SV get zero weight).
             for stat in PITCHING_CATEGORIES:
-                totals[stat] = None
+                totals[stat.value] = None
         return totals
 
     def get_avg_components(self) -> tuple[float, float]:
@@ -82,20 +82,22 @@ class CategoryBalance:
         min_pitchers = 3
         for cat in HITTING_CATEGORIES:
             target = TEAM_TARGETS[cat]
-            if cat == "AVG":
-                if num_hitters >= min_hitters and totals[cat] < target * WARNING_THRESHOLD:
-                    warnings.append(f"{cat} is low ({totals[cat]:.3f}, target ~{target:.3f})")
+            key = cat.value
+            if cat == Category.AVG:
+                if num_hitters >= min_hitters and totals[key] < target * WARNING_THRESHOLD:
+                    warnings.append(f"{key} is low ({totals[key]:.3f}, target ~{target:.3f})")
             else:
-                if num_hitters >= min_hitters and totals[cat] < target * WARNING_THRESHOLD:
-                    warnings.append(f"{cat} is low ({totals[cat]:.0f}, target ~{target:.0f})")
+                if num_hitters >= min_hitters and totals[key] < target * WARNING_THRESHOLD:
+                    warnings.append(f"{key} is low ({totals[key]:.0f}, target ~{target:.0f})")
         for cat in PITCHING_CATEGORIES:
             target = TEAM_TARGETS[cat]
-            if totals[cat] is None:
+            key = cat.value
+            if totals[key] is None:
                 continue
-            if cat in ("ERA", "WHIP"):
-                if num_pitchers >= min_pitchers and totals[cat] > target / WARNING_THRESHOLD:
-                    warnings.append(f"{cat} is high ({totals[cat]:.2f}, target ~{target:.2f})")
+            if cat in (Category.ERA, Category.WHIP):
+                if num_pitchers >= min_pitchers and totals[key] > target / WARNING_THRESHOLD:
+                    warnings.append(f"{key} is high ({totals[key]:.2f}, target ~{target:.2f})")
             else:
-                if num_pitchers >= min_pitchers and totals[cat] < target * WARNING_THRESHOLD:
-                    warnings.append(f"{cat} is low ({totals[cat]:.0f}, target ~{target:.0f})")
+                if num_pitchers >= min_pitchers and totals[key] < target * WARNING_THRESHOLD:
+                    warnings.append(f"{key} is low ({totals[key]:.0f}, target ~{target:.0f})")
         return warnings

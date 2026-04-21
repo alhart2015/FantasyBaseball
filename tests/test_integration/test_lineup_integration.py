@@ -11,7 +11,7 @@ import pytest
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.models.player import Player, HitterStats, PitcherStats
-from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
+from fantasy_baseball.models.standings import CategoryStats, Standings, StandingsEntry
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
     DEFAULT_ROSTER_SLOTS,
@@ -19,9 +19,9 @@ from fantasy_baseball.utils.constants import (
 from fantasy_baseball.utils.positions import can_fill_slot
 
 
-def _list_to_snapshot(standings_list: list[dict]) -> StandingsSnapshot:
-    """Convert a test standings list[dict] to StandingsSnapshot."""
-    return StandingsSnapshot(
+def _list_to_standings(standings_list: list[dict]) -> Standings:
+    """Convert a test standings list[dict] to Standings."""
+    return Standings(
         effective_date=date.min,
         entries=[
             StandingsEntry(
@@ -35,7 +35,7 @@ def _list_to_snapshot(standings_list: list[dict]) -> StandingsSnapshot:
     )
 
 
-def _snapshot_to_list(snap: StandingsSnapshot) -> list[dict]:
+def _snapshot_to_list(snap: Standings) -> list[dict]:
     return [
         {"name": e.team_name, "team_key": e.team_key, "rank": e.rank, "stats": e.stats.to_dict()}
         for e in snap.entries
@@ -70,7 +70,7 @@ def _make_pitcher(name, positions, w, k, sv, era, whip, ip):
 @pytest.fixture
 def midseason_standings():
     """10-team league at mid-season. User team 'Hart of the Order' is rank 5."""
-    return _list_to_snapshot([
+    return _list_to_standings([
         {"name": "Power Hitters", "rank": 1, "stats": {
             "R": 512, "HR": 158, "RBI": 495, "SB": 88, "AVG": 0.274,
             "W": 54, "K": 862, "SV": 58, "ERA": 3.38, "WHIP": 1.14,
@@ -123,7 +123,7 @@ def preseason_standings():
         "Last Rounders", "Cellar Dwellers",
     ]
     zero_stats = {cat: 0 for cat in ALL_CATEGORIES}
-    return _list_to_snapshot([
+    return _list_to_standings([
         {"name": name, "rank": i + 1, "stats": dict(zero_stats)}
         for i, name in enumerate(teams)
     ])
@@ -223,7 +223,7 @@ class TestLeverageIntegration:
             elif entry.team_name == "Hart of the Order":
                 entry = dataclasses.replace(entry, stats=dataclasses.replace(entry.stats, sb=52.00))
             modified.append(entry)
-        tied_standings = StandingsSnapshot(
+        tied_standings = Standings(
             effective_date=midseason_standings.effective_date, entries=modified,
         )
 
@@ -262,8 +262,8 @@ class TestLeverageIntegration:
         )
         expected = 1.0 / len(ALL_CATEGORIES)  # 0.1 for 10 categories
         for cat in ALL_CATEGORIES:
-            assert leverage[cat] == pytest.approx(expected, abs=0.02), (
-                f"Pre-season {cat} leverage {leverage[cat]:.4f} deviates "
+            assert leverage[cat.value] == pytest.approx(expected, abs=0.02), (
+                f"Pre-season {cat} leverage {leverage[cat.value]:.4f} deviates "
                 f"from expected equal weight {expected:.4f}"
             )
 
@@ -354,8 +354,8 @@ class TestHitterOptimizerIntegration:
             _make_hitter("Util Filler", ["1B", "DH"], 60, 15, 55, 2, .252, 460),
         ]
         standings = [
-            {"name": "Us", "team_key": "", "rank": 0, "stats": {c: 0.0 for c in ALL_CATEGORIES}},
-            {"name": "Rival", "team_key": "", "rank": 1, "stats": {c: 1.0 for c in ALL_CATEGORIES}},
+            {"name": "Us", "team_key": "", "rank": 0, "stats": {c.value: 0.0 for c in ALL_CATEGORIES}},
+            {"name": "Rival", "team_key": "", "rank": 1, "stats": {c.value: 1.0 for c in ALL_CATEGORIES}},
         ]
 
         lineup = optimize_hitter_lineup(

@@ -1,13 +1,13 @@
-from enum import StrEnum
+from enum import Enum
 
 
-class Category(StrEnum):
+class Category(Enum):
     """Roto scoring category.
 
-    ``StrEnum`` members *are* strings, so existing code that compares
-    category values to bare strings (``cat == "HR"``, ``cat in {"ERA",
-    "WHIP"}``, dict lookups keyed on ``"R"``) continues to work
-    unchanged. New code should prefer the enum members for type safety.
+    Plain ``Enum`` (not ``StrEnum``): members are not strings. Compare
+    against ``Category`` members directly (``cat == Category.HR``), and
+    use ``.value`` at I/O boundaries when you need the uppercase
+    string form for JSON/Redis.
     """
 
     R = "R"
@@ -20,6 +20,21 @@ class Category(StrEnum):
     ERA = "ERA"
     WHIP = "WHIP"
     SV = "SV"
+
+
+class OpportunityStat(Enum):
+    """Non-roto volume stats preserved from Yahoo standings (PA, IP).
+
+    These aren't scoring categories, but they ride alongside
+    :class:`CategoryStats` on :class:`StandingsEntry.extras` so
+    team-level opportunity totals survive the typed round-trip for
+    UI consumers like the lineup pace display (``_compute_team_totals_pace``).
+    Same contract as ``Category``: compare members directly, use
+    ``.value`` only at JSON/Redis/template boundaries.
+    """
+
+    PA = "PA"
+    IP = "IP"
 
 
 HITTING_CATEGORIES: list[Category] = [

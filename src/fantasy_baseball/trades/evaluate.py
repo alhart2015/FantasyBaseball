@@ -6,13 +6,19 @@ rest-of-season (ROS) projections for the players involved.
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from collections.abc import Mapping
+from typing import Any, TypedDict, cast
 
 from fantasy_baseball.models.player import HitterStats, Player
-from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.models.standings import (
+    CategoryStats,
+    ProjectedStandings,
+    ProjectedStandingsEntry,
+    Standings,
+)
+from fantasy_baseball.scoring import TeamStatsTable, score_roto
 from fantasy_baseball.sgp.rankings import rank_key_from_positions
-from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
-from fantasy_baseball.utils.constants import Category
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era
@@ -37,48 +43,40 @@ class OpponentGroup(TypedDict):
 
 
 def compute_roto_points_by_cat(
-    standings: list[dict[str, Any]],
+    standings: TeamStatsTable,
     *,
-    team_sds: dict[str, dict[Category, float]] | None = None,
-) -> dict[str, dict[str, float]]:
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None,
+) -> dict[str, dict[Category, float]]:
     """Return per-category roto points for each team.
 
-    Delegates to ``scoring.score_roto`` for the actual ranking logic.
+    Delegates to :func:`scoring.score_roto` for the actual ranking logic.
 
     Args:
-        standings: list of {"name": str, "stats": {cat: float}} dicts.
+        standings: any :class:`TeamStatsTable` — concretely
+            :class:`Standings` or :class:`ProjectedStandings`.
         team_sds: optional per-team per-category standard deviations.
             When provided, ``score_roto`` returns fractional ERoto points
             (EV under Gaussian pairwise win-probabilities) instead of
             hard integer ranks.
 
     Returns:
-        {team_name: {cat: points}} where points range from 1 (worst) to
-        N (best) for N teams.  ERA and WHIP are inverse (lower is better).
+        ``{team_name: {Category: points}}`` where points range from 1
+        (worst) to N (best) for N teams.  ERA and WHIP are inverse
+        (lower is better).
     """
-    _STAT_DEFAULTS = {"ERA": 99.0, "WHIP": 99.0}
-
-    # Fill missing stats with defaults so all teams can be ranked
-    for t in standings:
-        stats = t.get("stats", {})
-        for cat in ALL_CATS:
-            if cat not in stats:
-                stats[cat] = _STAT_DEFAULTS.get(cat, 0.0)
-
-    all_stats = {t["name"]: t["stats"] for t in standings}
-    roto = score_roto(all_stats, team_sds=team_sds)
-
-    return {name: {cat: pts[f"{cat}_pts"] for cat in ALL_CATS} for name, pts in roto.items()}
+    roto = score_roto(standings, team_sds=team_sds)
+    return {name: dict(cp.values) for name, cp in roto.items()}
 
 
-def compute_roto_points(standings: list[dict[str, Any]]) -> dict[str, float]:
+def compute_roto_points(standings: TeamStatsTable) -> dict[str, float]:
     """Return total roto points for each team.
 
     Args:
-        standings: list of {"name": str, "stats": {cat: float}} dicts.
+        standings: any :class:`TeamStatsTable` — concretely
+            :class:`Standings` or :class:`ProjectedStandings`.
 
     Returns:
-        {team_name: total_points}
+        ``{team_name: total_points}``.
     """
     by_cat = compute_roto_points_by_cat(standings)
     return {name: sum(cat_pts.values()) for name, cat_pts in by_cat.items()}
@@ -146,16 +144,16 @@ def apply_swap_delta(
 
 
 def compute_trade_impact(
-    standings: list[dict[str, Any]],
+    standings: Standings,
     hart_name: str,
     opp_name: str,
     hart_loses_ros: dict[str, Any],
     hart_gains_ros: dict[str, Any],
     opp_loses_ros: dict[str, Any],
     opp_gains_ros: dict[str, Any],
-    projected_standings: list[dict[str, Any]] | None = None,
+    projected_standings: ProjectedStandings | None = None,
     *,
-    team_sds: dict[str, dict[Category, float]] | None = None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None,
 ) -> dict[str, Any]:
     """Compute roto point impact of a proposed trade for both teams.
 
@@ -166,7 +164,7 @@ def compute_trade_impact(
     Falls back to current standings when projected_standings is not provided.
 
     Args:
-        standings: current league standings (list of team dicts).
+        standings: current league standings.
         hart_name: name of Hart's team in standings.
         opp_name: name of the trade partner's team.
         hart_loses_ros: ROS stats for the player Hart trades away.
@@ -180,43 +178,65 @@ def compute_trade_impact(
             integer rank changes.
 
     Returns:
-        {
-            "hart_delta": float,        # net roto point change for Hart
-            "opp_delta": float,         # net roto point change for opponent
-            "hart_cat_deltas": {cat: float},
-            "opp_cat_deltas": {cat: float},
-        }
+        ``{
+            "hart_delta": float,
+            "opp_delta": float,
+            "hart_cat_deltas": {cat_string: float},
+            "opp_cat_deltas": {cat_string: float},
+        }``. Category deltas use uppercase-string keys so Flask/JS
+        consumers can index by the category code.
     """
-    baseline = projected_standings if projected_standings is not None else standings
+    baseline: Standings | ProjectedStandings = (
+        projected_standings if projected_standings is not None else standings
+    )
+    # mypy: Standings/ProjectedStandings declare list[...] entries while the
+    # TeamStatsTable protocol uses Sequence[TeamStatsRow]; protocol attrs
+    # are checked invariantly so cast closes the gap.
+    baseline_by_cat = compute_roto_points_by_cat(cast(TeamStatsTable, baseline), team_sds=team_sds)
 
-    # Baseline points (from projected end-of-season or current standings)
-    baseline_by_cat = compute_roto_points_by_cat(baseline, team_sds=team_sds)
-
-    # Apply trade swap to the baseline
-    post_trade = []
-    for team in baseline:
-        if team["name"] == hart_name:
-            new_stats = apply_swap_delta(team["stats"], hart_loses_ros, hart_gains_ros)
-            post_trade.append({"name": team["name"], "stats": new_stats})
-        elif team["name"] == opp_name:
-            new_stats = apply_swap_delta(team["stats"], opp_loses_ros, opp_gains_ros)
-            post_trade.append({"name": team["name"], "stats": new_stats})
+    post_trade_entries: list[ProjectedStandingsEntry] = []
+    for entry in baseline.entries:
+        if entry.team_name == hart_name:
+            new_stats_dict = apply_swap_delta(entry.stats.to_dict(), hart_loses_ros, hart_gains_ros)
+            post_trade_entries.append(
+                ProjectedStandingsEntry(
+                    team_name=entry.team_name,
+                    stats=CategoryStats.from_dict(new_stats_dict),
+                )
+            )
+        elif entry.team_name == opp_name:
+            new_stats_dict = apply_swap_delta(entry.stats.to_dict(), opp_loses_ros, opp_gains_ros)
+            post_trade_entries.append(
+                ProjectedStandingsEntry(
+                    team_name=entry.team_name,
+                    stats=CategoryStats.from_dict(new_stats_dict),
+                )
+            )
         else:
-            post_trade.append(team)
+            post_trade_entries.append(
+                ProjectedStandingsEntry(team_name=entry.team_name, stats=entry.stats)
+            )
 
-    post_trade_by_cat = compute_roto_points_by_cat(post_trade, team_sds=team_sds)
+    post_trade = ProjectedStandings(
+        effective_date=baseline.effective_date,
+        entries=post_trade_entries,
+    )
+    post_trade_by_cat = compute_roto_points_by_cat(
+        cast(TeamStatsTable, post_trade), team_sds=team_sds
+    )
 
-    # Compute deltas
     hart_base = sum(baseline_by_cat[hart_name].values())
     hart_proj = sum(post_trade_by_cat[hart_name].values())
     opp_base = sum(baseline_by_cat[opp_name].values())
     opp_proj = sum(post_trade_by_cat[opp_name].values())
 
     hart_cat_deltas = {
-        cat: post_trade_by_cat[hart_name][cat] - baseline_by_cat[hart_name][cat] for cat in ALL_CATS
+        cat.value: post_trade_by_cat[hart_name][cat] - baseline_by_cat[hart_name][cat]
+        for cat in ALL_CATEGORIES
     }
     opp_cat_deltas = {
-        cat: post_trade_by_cat[opp_name][cat] - baseline_by_cat[opp_name][cat] for cat in ALL_CATS
+        cat.value: post_trade_by_cat[opp_name][cat] - baseline_by_cat[opp_name][cat]
+        for cat in ALL_CATEGORIES
     }
 
     return {
@@ -350,13 +370,13 @@ def search_trades_away(
     hart_name: str,
     hart_roster: list[Player],
     opp_rosters: dict[str, list[Player]],
-    standings: list[dict],
+    standings: Standings,
     leverage_by_team: dict[str, dict],
     roster_slots: dict[str, int],
     rankings: dict[str, int],
-    projected_standings: list[dict] | None = None,
+    projected_standings: ProjectedStandings | None = None,
     *,
-    team_sds: dict[str, dict[Category, float]] | None = None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None,
 ) -> list[OpponentGroup]:
     """Find trade candidates for a player the user wants to trade away.
 
@@ -370,11 +390,12 @@ def search_trades_away(
         hart_name: user's team name in standings.
         hart_roster: user's roster as Player objects.
         opp_rosters: {opponent_name: [Player]} for each opponent.
-        standings: current league standings.
+        standings: current league :class:`Standings`.
         leverage_by_team: {team_name: {cat: weight}} leverage weights.
         roster_slots: league roster slot configuration.
         rankings: {rank_key: int} unweighted SGP ROS rankings.
-        projected_standings: optional projected end-of-season standings.
+        projected_standings: optional :class:`ProjectedStandings`
+            end-of-season baseline.
         team_sds: optional per-team per-category standard deviations for
             fractional ERoto scoring (passed through to compute_trade_impact).
 
@@ -461,13 +482,13 @@ def search_trades_for(
     hart_name: str,
     hart_roster: list[Player],
     opp_rosters: dict[str, list[Player]],
-    standings: list[dict],
+    standings: Standings,
     leverage_by_team: dict[str, dict],
     roster_slots: dict[str, int],
     rankings: dict[str, int],
-    projected_standings: list[dict] | None = None,
+    projected_standings: ProjectedStandings | None = None,
     *,
-    team_sds: dict[str, dict[Category, float]] | None = None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None,
 ) -> list[dict]:
     """Find trade offers the user can make to acquire a specific opponent player.
 
@@ -479,11 +500,12 @@ def search_trades_for(
         hart_name: user's team name in standings.
         hart_roster: user's roster as Player objects.
         opp_rosters: {opponent_name: [Player]} for each opponent.
-        standings: current league standings.
+        standings: current league :class:`Standings`.
         leverage_by_team: {team_name: {cat: weight}} leverage weights.
         roster_slots: league roster slot configuration.
         rankings: {rank_key: int} unweighted SGP ROS rankings.
-        projected_standings: optional projected end-of-season standings.
+        projected_standings: optional :class:`ProjectedStandings`
+            end-of-season baseline.
         team_sds: optional per-team per-category standard deviations for
             fractional ERoto scoring (passed through to compute_trade_impact).
 

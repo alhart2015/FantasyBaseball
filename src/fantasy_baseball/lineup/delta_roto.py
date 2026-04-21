@@ -9,6 +9,7 @@ directly into the score.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -26,7 +27,7 @@ class CategoryDelta:
 @dataclass
 class DeltaRotoResult:
     total: float
-    categories: dict[Category, CategoryDelta]
+    categories: dict[str, CategoryDelta]
     before_total: float
     after_total: float
 
@@ -54,10 +55,10 @@ def score_swap(
     projection uncertainty, defensive vulnerability, and boundary
     proximity via the sigmoid on pairwise win probabilities.
     """
-    categories: dict[Category, CategoryDelta] = {}
+    categories: dict[str, CategoryDelta] = {}
     for cat in ALL_CATEGORIES:
-        rd = roto_after[team_name][f"{cat}_pts"] - roto_before[team_name][f"{cat}_pts"]
-        categories[cat] = CategoryDelta(roto_delta=rd)
+        rd = roto_after[team_name][f"{cat.value}_pts"] - roto_before[team_name][f"{cat.value}_pts"]
+        categories[cat.value] = CategoryDelta(roto_delta=rd)
 
     return DeltaRotoResult(
         total=roto_after[team_name]["total"] - roto_before[team_name]["total"],
@@ -74,11 +75,11 @@ def compute_delta_roto(
     projected_standings: list[dict],
     team_name: str,
     *,
-    team_sds: dict[str, dict[Category, float]] | None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
 ) -> DeltaRotoResult:
     """Compute deltaRoto for dropping one player and adding another.
 
-    When ``team_sds`` is a dict, ``score_roto`` uses pairwise Gaussian
+    When ``team_sds`` is provided, ``score_roto`` uses pairwise Gaussian
     win-probabilities so a swap's impact reflects projection
     uncertainty (ERoto). Pass ``None`` explicitly for exact-rank
     semantics — no default: callers must make the choice so we can't
@@ -90,13 +91,13 @@ def compute_delta_roto(
         user_roster: current roster (used to resolve the dropped player's ROS).
         projected_standings: end-of-season stats for all teams.
         team_name: user's team name.
-        team_sds: ``{team: {cat: sd}}`` for EV scoring, or ``None`` for
-            rank-based. Required keyword — no default.
+        team_sds: ``{team: {Category: sd}}`` for EV scoring, or ``None``
+            for rank-based. Required keyword — no default.
 
     Raises:
         ValueError: if drop_name is not found on the roster.
     """
-    from fantasy_baseball.scoring import score_roto
+    from fantasy_baseball.scoring import score_roto_dict
     from fantasy_baseball.trades.evaluate import (
         apply_swap_delta,
         find_player_by_name,
@@ -118,7 +119,7 @@ def compute_delta_roto(
         gains_ros,
     )
 
-    roto_before = score_roto(all_before, team_sds=team_sds)
-    roto_after = score_roto(all_after, team_sds=team_sds)
+    roto_before = score_roto_dict(all_before, team_sds=team_sds)
+    roto_after = score_roto_dict(all_after, team_sds=team_sds)
 
     return score_swap(roto_before, roto_after, team_name)

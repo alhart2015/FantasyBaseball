@@ -11,6 +11,7 @@ attributing the full delta to the drop side (add side gets 0).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date, datetime
 
 import pandas as pd
@@ -18,7 +19,7 @@ import pandas as pd
 from fantasy_baseball.models.league import League
 from fantasy_baseball.models.player import HitterStats, PitcherStats, PlayerType
 from fantasy_baseball.models.roster import Roster
-from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.trades.evaluate import apply_swap_delta
 from fantasy_baseball.utils.constants import (
@@ -325,7 +326,7 @@ def _delta_roto(
     loses_ros: dict,
     gains_ros: dict,
     projected_standings: list[dict],
-    team_sds: dict[str, dict[Category, float]] | None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
 ) -> float:
     """Return the team's total-ΔRoto from swapping ``loses_ros`` → ``gains_ros``.
 
@@ -348,8 +349,8 @@ def _delta_roto(
         gains_ros,
     )
 
-    roto_before = score_roto(all_before, team_sds=team_sds)
-    roto_after = score_roto(all_after, team_sds=team_sds)
+    roto_before = score_roto_dict(all_before, team_sds=team_sds)
+    roto_after = score_roto_dict(all_after, team_sds=team_sds)
     return roto_after[team_name]["total"] - roto_before[team_name]["total"]
 
 
@@ -363,7 +364,7 @@ def score_transaction(
     season_end: date,
     *,
     partner: dict | None = None,
-    team_sds: dict[str, dict[Category, float]] | None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
 ) -> dict:
     """Compute ΔRoto for a transaction.
 
@@ -392,9 +393,9 @@ def score_transaction(
         partner: the paired transaction, when this txn is part of a
             drop+add pair. Presence is what makes this a "paired" score.
         team_sds: per-team per-category standard deviations (``{team:
-            {cat: sd}}``) for fractional ERoto scoring, or ``None`` for
-            integer rank-based roto. Required keyword — no default, so
-            callers can't silently get integer roto by forgetting the
+            {Category: sd}}``) for fractional ERoto scoring, or ``None``
+            for integer rank-based roto. Required keyword — no default,
+            so callers can't silently get integer roto by forgetting the
             argument.
 
     Returns:

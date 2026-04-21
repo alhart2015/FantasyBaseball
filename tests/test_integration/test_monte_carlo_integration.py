@@ -9,7 +9,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from fantasy_baseball.scoring import project_team_stats, score_roto
+from fantasy_baseball.scoring import project_team_stats, score_roto_dict
 from fantasy_baseball.simulation import simulate_season
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
@@ -287,10 +287,11 @@ class TestMonteCarloDeterminism:
 
         for team in team_rosters:
             for cat in ALL_CATEGORIES:
-                assert stats1[team][cat] == pytest.approx(
-                    stats2[team][cat],
+                key = cat.value
+                assert stats1[team][key] == pytest.approx(
+                    stats2[team][key],
                     abs=1e-12,
-                ), f"{team} {cat}: {stats1[team][cat]} != {stats2[team][cat]}"
+                ), f"{team} {key}: {stats1[team][key]} != {stats2[team][key]}"
 
         # Injuries should also be identical
         for team in team_rosters:
@@ -312,7 +313,7 @@ class TestWinRateDistribution:
 
         for _ in range(self.NUM_SIMS):
             stats, _ = simulate_season(team_rosters, rng)
-            roto = score_roto(stats)
+            roto = score_roto_dict(stats)
             # Find the winner (highest total roto points)
             winner = max(roto, key=lambda t: roto[t]["total"])
             wins[winner] += 1
@@ -470,16 +471,22 @@ class TestRotoScoring:
 
     @pytest.fixture
     def team_stats(self, team_rosters):
-        """Project stats for all 10 teams (no variance, just raw projections)."""
-        return {team: project_team_stats(players) for team, players in team_rosters.items()}
+        """Project stats for all 10 teams (no variance, just raw projections).
+
+        Returns string-keyed dicts at the ``score_roto`` I/O boundary —
+        ``CategoryStats`` itself requires ``Category`` enum indexing.
+        """
+        return {
+            team: project_team_stats(players).to_dict() for team, players in team_rosters.items()
+        }
 
     def test_roto_points_sum_correctly(self, team_stats):
         """Each team's total roto points must equal the sum of its
         per-category point values.
         """
-        roto = score_roto(team_stats)
+        roto = score_roto_dict(team_stats)
         for team, scores in roto.items():
-            expected_total = sum(scores[f"{cat}_pts"] for cat in ALL_CATEGORIES)
+            expected_total = sum(scores[f"{cat.value}_pts"] for cat in ALL_CATEGORIES)
             assert scores["total"] == pytest.approx(expected_total, abs=1e-9), (
                 f"Team '{team}': total={scores['total']:.2f} != sum of cat_pts={expected_total:.2f}"
             )
@@ -488,22 +495,23 @@ class TestRotoScoring:
         """Lower ERA should yield MORE roto points than higher ERA.
         Similarly for WHIP.
         """
-        roto = score_roto(team_stats)
+        roto = score_roto_dict(team_stats)
         teams = list(team_stats.keys())
 
         for cat in INVERSE_STATS:
             # Find teams with the best (lowest) and worst (highest) raw value
-            best_team = min(teams, key=lambda t: team_stats[t][cat])
-            worst_team = max(teams, key=lambda t: team_stats[t][cat])
+            key = cat.value
+            best_team = min(teams, key=lambda t: team_stats[t][key])
+            worst_team = max(teams, key=lambda t: team_stats[t][key])
 
-            best_pts = roto[best_team][f"{cat}_pts"]
-            worst_pts = roto[worst_team][f"{cat}_pts"]
+            best_pts = roto[best_team][f"{key}_pts"]
+            worst_pts = roto[worst_team][f"{key}_pts"]
 
             assert best_pts > worst_pts, (
-                f"Inverse stat {cat}: best team '{best_team}' "
-                f"(val={team_stats[best_team][cat]:.3f}, pts={best_pts:.1f}) "
+                f"Inverse stat {key}: best team '{best_team}' "
+                f"(val={team_stats[best_team][key]:.3f}, pts={best_pts:.1f}) "
                 f"should have more roto pts than worst team '{worst_team}' "
-                f"(val={team_stats[worst_team][cat]:.3f}, pts={worst_pts:.1f})"
+                f"(val={team_stats[worst_team][key]:.3f}, pts={worst_pts:.1f})"
             )
 
     def test_ten_teams_max_100_points(self, team_stats):
@@ -513,7 +521,7 @@ class TestRotoScoring:
         Also, the sum of all teams' totals must equal 10 * (1+2+...+10) = 550
         (conservation of roto points).
         """
-        roto = score_roto(team_stats)
+        roto = score_roto_dict(team_stats)
         n_teams = len(team_stats)
         max_possible = n_teams * len(ALL_CATEGORIES)  # 10 * 10 = 100
 

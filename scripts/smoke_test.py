@@ -277,7 +277,7 @@ def check_scoring():
     try:
         from fantasy_baseball.models.player import Player
         from fantasy_baseball.models.standings import CategoryStats
-        from fantasy_baseball.scoring import project_team_stats, score_roto
+        from fantasy_baseball.scoring import project_team_stats, score_roto_dict
 
         roster_raw = json.loads(roster_path.read_text())
         players = [Player.from_dict(p) for p in roster_raw]
@@ -298,10 +298,11 @@ def check_scoring():
         parsed = json.loads(blob)
         check("CategoryStats JSON round-trip", parsed["HR"] == stats.hr)
 
-        # score_roto with CategoryStats
-        roto = score_roto({"Team A": stats, "Team B": stats})
+        # score_roto_dict consumes string-keyed dicts at the I/O boundary
+        stats_dict = stats.to_dict()
+        roto = score_roto_dict({"Team A": stats_dict, "Team B": stats_dict})
         check(
-            "score_roto accepts CategoryStats",
+            "score_roto_dict accepts CategoryStats.to_dict()",
             "total" in roto["Team A"],
         )
 

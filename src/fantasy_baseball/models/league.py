@@ -1,6 +1,6 @@
 """League dataclass — the root of the in-season data model.
 
-Owns a list of :class:`Team` and a list of :class:`StandingsSnapshot`.
+Owns a list of :class:`Team` and a list of :class:`Standings`.
 Per the Step-scoping decision in the design doc, League does NOT own
 free agents, projections, leverage, or schedule data — those remain
 separate inputs to analysis functions.
@@ -13,11 +13,7 @@ from datetime import date
 
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.roster import Roster, RosterEntry
-from fantasy_baseball.models.standings import (
-    CategoryStats,
-    StandingsEntry,
-    StandingsSnapshot,
-)
+from fantasy_baseball.models.standings import Standings
 from fantasy_baseball.models.team import Team
 
 
@@ -25,7 +21,7 @@ from fantasy_baseball.models.team import Team
 class League:
     season_year: int
     teams: list[Team] = field(default_factory=list)
-    standings: list[StandingsSnapshot] = field(default_factory=list)
+    standings: list[Standings] = field(default_factory=list)
 
     # -- Team lookups --
 
@@ -43,7 +39,7 @@ class League:
 
     # -- Standings lookups --
 
-    def latest_standings(self) -> StandingsSnapshot:
+    def latest_standings(self) -> Standings:
         """Return the snapshot with the greatest effective_date.
 
         Raises:
@@ -53,7 +49,7 @@ class League:
             raise ValueError("league has no standings snapshots")
         return max(self.standings, key=lambda s: s.effective_date)
 
-    def standings_as_of(self, d: date) -> StandingsSnapshot | None:
+    def standings_as_of(self, d: date) -> Standings | None:
         """Return the most recent standings with ``effective_date <= d``.
 
         Returns ``None`` if ``d`` is earlier than every known snapshot.
@@ -72,14 +68,15 @@ class League:
         - ``weekly_rosters_history`` — all snapshot dates that start
           with ``"{season_year}-"``; builds ``Team.rosters``.
         - ``standings_history`` — same date filter; builds
-          :class:`StandingsSnapshot` list.
+          :class:`Standings` list via ``Standings.from_json``.
 
         Team identity is joined by team name. ``Team.team_key`` is
         taken from the most recent standings row for that team, or
         ``""`` if the team appears only in ``weekly_rosters_history``.
 
         Raises:
-            ValueError: if any stored position token is unknown.
+            ValueError: if any stored position token is unknown, or any
+                stored standings payload is in legacy shape.
         """
         from fantasy_baseball.data.kv_store import get_kv
         from fantasy_baseball.data.redis_store import (
@@ -110,36 +107,22 @@ class League:
                     e["team"], {}
                 ).setdefault(snap_date, []).append(entry)
 
-        snapshots_by_date: dict[str, list[StandingsEntry]] = {}
+        snapshots_by_date: dict[str, Standings] = {}
         team_key_by_name: dict[str, str] = {}
         for snap_date in sorted(all_standings.keys()):
             if not snap_date.startswith(prefix):
                 continue
             payload = all_standings[snap_date]
-            entries_list: list[StandingsEntry] = []
-            for row in payload.get("teams", []):
-                stats = CategoryStats(
-                    r=row.get("r") or 0.0,
-                    hr=row.get("hr") or 0.0,
-                    rbi=row.get("rbi") or 0.0,
-                    sb=row.get("sb") or 0.0,
-                    avg=row.get("avg") or 0.0,
-                    w=row.get("w") or 0.0,
-                    k=row.get("k") or 0.0,
-                    sv=row.get("sv") or 0.0,
-                    era=row["era"] if row.get("era") is not None else 99.0,
-                    whip=row["whip"] if row.get("whip") is not None else 99.0,
-                )
-                standings_entry = StandingsEntry(
-                    team_name=row["team"],
-                    team_key=row.get("team_key") or "",
-                    rank=int(row.get("rank") or 0),
-                    stats=stats,
-                )
-                entries_list.append(standings_entry)
+            if isinstance(payload, Standings):
+                standings = payload
+            else:
+                standings = Standings.from_json(payload)
+            snapshots_by_date[snap_date] = standings
+            for standings_entry in standings.entries:
                 if standings_entry.team_key:
-                    team_key_by_name[row["team"]] = standings_entry.team_key
-            snapshots_by_date[snap_date] = entries_list
+                    team_key_by_name[standings_entry.team_name] = (
+                        standings_entry.team_key
+                    )
 
         return cls._assemble(
             season_year, by_team_snap, snapshots_by_date, team_key_by_name,
@@ -150,22 +133,18 @@ class League:
         cls,
         season_year: int,
         by_team_snap: dict[str, dict[str, list[RosterEntry]]],
-        snapshots_by_date: dict[str, list[StandingsEntry]],
+        snapshots_by_date: dict[str, Standings],
         team_key_by_name: dict[str, str],
     ) -> League:
         """Shared stitching step for ``from_redis``.
 
         Takes already-grouped intermediate structures and builds the
         final ``League`` object: ``Team`` list (sorted by name, each
-        with sorted ``Roster`` list) and ``StandingsSnapshot`` list
-        (sorted by effective_date).
+        with sorted ``Roster`` list) and ``Standings`` list (sorted
+        by effective_date).
         """
-        standings_snapshots = [
-            StandingsSnapshot(
-                effective_date=date.fromisoformat(snap_key),
-                entries=entries,
-            )
-            for snap_key, entries in sorted(snapshots_by_date.items())
+        standings_list = [
+            snapshots_by_date[k] for k in sorted(snapshots_by_date)
         ]
 
         # Build Team list (union of team names across both sources)
@@ -189,5 +168,5 @@ class League:
         return cls(
             season_year=season_year,
             teams=teams,
-            standings=standings_snapshots,
+            standings=standings_list,
         )

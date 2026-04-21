@@ -11,14 +11,14 @@ def _team(name: str, team_key: str = ""):
 def _snap(d: date, *teams: tuple[str, int]):
     from fantasy_baseball.models.standings import (
         CategoryStats,
+        Standings,
         StandingsEntry,
-        StandingsSnapshot,
     )
     entries = [
         StandingsEntry(name, f"k-{name}", rank, CategoryStats(r=100 + rank))
         for name, rank in teams
     ]
-    return StandingsSnapshot(effective_date=d, entries=entries)
+    return Standings(effective_date=d, entries=entries)
 
 
 class TestLeagueBasics:
@@ -108,23 +108,36 @@ class TestStandingsLookups:
         assert snap.effective_date == date(2026, 4, 14)
 
 
-def _standings_payload(teams: list[tuple]) -> dict:
-    """Build a standings_history payload from tuples matching the
-    lowercase stat-key shape written by the refresh pipeline.
+def _standings(effective_date: str, teams: list[tuple]):
+    """Build a canonical ``Standings`` object for fixture use.
 
     Each tuple is: ``(team, team_key, rank, r, hr, rbi, sb, avg,
     w, k, sv, era, whip)``.
     """
-    return {
-        "teams": [
-            {
-                "team": t, "team_key": tk, "rank": rk,
-                "r": r, "hr": hr, "rbi": rbi, "sb": sb, "avg": avg,
-                "w": w, "k": k, "sv": sv, "era": era, "whip": whip,
-            }
-            for (t, tk, rk, r, hr, rbi, sb, avg, w, k, sv, era, whip) in teams
-        ],
-    }
+    from datetime import date as _date
+
+    from fantasy_baseball.models.standings import (
+        CategoryStats,
+        Standings,
+        StandingsEntry,
+    )
+
+    entries = [
+        StandingsEntry(
+            team_name=t,
+            team_key=tk,
+            rank=rk,
+            stats=CategoryStats(
+                r=r, hr=hr, rbi=rbi, sb=sb, avg=avg,
+                w=w, k=k, sv=sv, era=era, whip=whip,
+            ),
+        )
+        for (t, tk, rk, r, hr, rbi, sb, avg, w, k, sv, era, whip) in teams
+    ]
+    return Standings(
+        effective_date=_date.fromisoformat(effective_date),
+        entries=entries,
+    )
 
 
 @pytest.fixture
@@ -164,7 +177,8 @@ def redis_with_data(fake_redis, monkeypatch):
 
     # --- Standings: two snapshots, two teams each ---
     redis_store.write_standings_snapshot(
-        fake_redis, "2026-04-07", _standings_payload([
+        fake_redis,
+        _standings("2026-04-07", [
             ("Hart of the Order", "k-hart", 3,
              100, 40, 110, 15, 0.270, 55, 750, 30, 3.90, 1.18),
             ("Rivals", "k-riv", 5,
@@ -172,7 +186,8 @@ def redis_with_data(fake_redis, monkeypatch):
         ]),
     )
     redis_store.write_standings_snapshot(
-        fake_redis, "2026-04-14", _standings_payload([
+        fake_redis,
+        _standings("2026-04-14", [
             ("Hart of the Order", "k-hart", 2,
              120, 45, 130, 20, 0.275, 60, 820, 33, 3.85, 1.15),
             ("Rivals", "k-riv", 4,
@@ -269,7 +284,8 @@ class TestLeagueFromRedis:
         from fantasy_baseball.data import redis_store
         # Merge into existing 2026-04-14 snapshot by re-writing the full payload.
         redis_store.write_standings_snapshot(
-            fake_redis, "2026-04-14", _standings_payload([
+            fake_redis,
+            _standings("2026-04-14", [
                 ("Hart of the Order", "k-hart", 2,
                  120, 45, 130, 20, 0.275, 60, 820, 33, 3.85, 1.15),
                 ("Rivals", "k-riv", 4,

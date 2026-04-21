@@ -1,4 +1,5 @@
 import dataclasses
+from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import combinations
 
@@ -7,7 +8,7 @@ from scipy.optimize import linear_sum_assignment
 
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.models.positions import HITTER_ELIGIBLE, PITCHER_ELIGIBLE, Position
-from fantasy_baseball.scoring import project_team_stats, score_roto
+from fantasy_baseball.scoring import project_team_stats, score_roto_dict
 from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS, Category
 from fantasy_baseball.utils.positions import can_fill_slot
 
@@ -85,7 +86,7 @@ class _TeamContext:
     full_roster: list[Player]
     projected_standings: list[dict]
     team_name: str
-    team_sds: dict[str, dict[Category, float]] | None = None
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None
 
 
 def apply_lineup_to_roster(
@@ -114,7 +115,7 @@ def team_roto_total(hypothetical: list[Player], ctx: _TeamContext) -> float:
     my_stats = project_team_stats(hypothetical, displacement=True).to_dict()
     all_stats = {t["name"]: dict(t["stats"]) for t in ctx.projected_standings}
     all_stats[ctx.team_name] = my_stats
-    return score_roto(all_stats, team_sds=ctx.team_sds)[ctx.team_name]["total"]
+    return score_roto_dict(all_stats, team_sds=ctx.team_sds)[ctx.team_name]["total"]
 
 
 def _score_hitter_subset(
@@ -157,7 +158,7 @@ def optimize_hitter_lineup(
     projected_standings: list[dict],
     team_name: str,
     roster_slots: dict[str, int] | None = None,
-    team_sds: dict[str, dict[Category, float]] | None = None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None,
 ) -> list[HitterAssignment]:
     """Return the ERoto-maximizing active hitter lineup."""
     if not hitters:
@@ -243,7 +244,7 @@ def optimize_pitcher_lineup(
     projected_standings: list[dict],
     team_name: str,
     slots: int = 9,
-    team_sds: dict[str, dict[Category, float]] | None = None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None,
 ) -> tuple[list[PitcherStarter], list[Player]]:
     """Return (starters with roto_delta, bench) maximizing ERoto."""
     if not pitchers or slots <= 0:
@@ -292,7 +293,7 @@ def combined_team_roto(
     pitcher_bench: list[Player],
     projected_standings: list[dict],
     team_name: str,
-    team_sds: dict[str, dict[Category, float]] | None = None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None,
 ) -> float:
     """Score a combined hitter + pitcher lineup as a single ERoto total.
 

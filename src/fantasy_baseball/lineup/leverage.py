@@ -1,10 +1,10 @@
-from fantasy_baseball.models.standings import StandingsSnapshot
+from fantasy_baseball.models.standings import ProjectedStandings, Standings
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS, Category
 
 FULL_CONFIDENCE_GAMES: int = 81
 
 
-def _estimate_season_progress(standings: StandingsSnapshot) -> float:
+def _estimate_season_progress(standings: Standings) -> float:
     """Estimate season progress (0.0 to 1.0) from Redis game log data.
 
     Reads the season_progress Redis key (written during game log fetch).
@@ -25,18 +25,18 @@ def _estimate_season_progress(standings: StandingsSnapshot) -> float:
     # Fallback: estimate from league-average R (~4.6 R/game/team)
     if not standings.entries:
         return 0.0
-    total_r = sum(e.stats.get("R", 0) for e in standings.entries)
+    total_r = sum(e.stats[Category.R] for e in standings.entries)
     avg_r = total_r / len(standings.entries)
     approx_games = avg_r / 4.6
     return min(1.0, approx_games / FULL_CONFIDENCE_GAMES)
 
 
 def _leverage_from_standings(
-    standings: StandingsSnapshot,
+    standings: Standings | ProjectedStandings,
     user_team_name: str,
     attack_weight: float,
     defense_weight: float,
-) -> dict[Category, float] | None:
+) -> dict[str, float] | None:
     """Compute normalized leverage weights via marginal roto-point impact.
 
     For each category, asks: "If my stat changed by one SGP denominator,
@@ -64,20 +64,19 @@ def _leverage_from_standings(
 
     sgp_denoms = get_sgp_denominators()
 
-    raw_leverage: dict[Category, float] = {}
+    raw_leverage: dict[str, float] = {}
     for cat in ALL_CATEGORIES:
+        key = cat.value
         reverse = cat not in INVERSE_STATS  # higher is better for most cats
-        user_val = user_entry.stats.get(cat, 0)
+        user_val = user_entry.stats[cat]
         denom = sgp_denoms.get(cat, 1.0)
 
         other_vals = [
-            entry.stats.get(cat, 0)
-            for entry in standings.entries
-            if entry.team_name != user_team_name
+            entry.stats[cat] for entry in standings.entries if entry.team_name != user_team_name
         ]
 
         if not other_vals:
-            raw_leverage[cat] = 0.0
+            raw_leverage[key] = 0.0
             continue
 
         # Current rank: count teams better than user (0 = best)
@@ -114,30 +113,30 @@ def _leverage_from_standings(
             w_attack = 0.0
             w_defense = 1.0
         else:
-            raw_leverage[cat] = 0.0
+            raw_leverage[key] = 0.0
             continue
 
         leverage = w_attack * positions_gained + w_defense * positions_lost
 
         # Floor: even categories with no teams within 1 denom get a small
         # positive value so they're never completely ignored.
-        raw_leverage[cat] = max(leverage, 0.1)
+        raw_leverage[key] = max(leverage, 0.1)
 
     total = sum(raw_leverage.values())
     if total > 0:
-        return {cat: val / total for cat, val in raw_leverage.items()}
+        return {k: val / total for k, val in raw_leverage.items()}
     return None
 
 
 def calculate_leverage(
-    standings: StandingsSnapshot,
+    standings: Standings,
     user_team_name: str,
     *,
     attack_weight: float = 0.6,
     defense_weight: float = 0.4,
     season_progress: float | None = None,
-    projected_standings: StandingsSnapshot | None = None,
-) -> dict[Category, float]:
+    projected_standings: Standings | ProjectedStandings | None = None,
+) -> dict[str, float]:
     """Calculate leverage weights for each stat category based on standings gaps.
 
     For each category, ranks all teams independently and finds the
@@ -170,7 +169,7 @@ def calculate_leverage(
     if season_progress is None:
         season_progress = _estimate_season_progress(standings)
 
-    uniform = {cat: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
+    uniform = {cat.value: 1.0 / len(ALL_CATEGORIES) for cat in ALL_CATEGORIES}
 
     # Use projected standings when available (they already incorporate
     # actual performance to date + ROS projections), otherwise fall back
@@ -189,6 +188,9 @@ def calculate_leverage(
     # uncertainty. Even projected standings have wide error bars with
     # only a few weeks of data.
     return {
-        cat: season_progress * standings_leverage[cat] + (1.0 - season_progress) * uniform[cat]
+        cat.value: (
+            season_progress * standings_leverage[cat.value]
+            + (1.0 - season_progress) * uniform[cat.value]
+        )
         for cat in ALL_CATEGORIES
     }

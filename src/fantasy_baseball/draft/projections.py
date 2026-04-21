@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from fantasy_baseball.models.player import PlayerType
-from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.simulation import (
     HITTER_COV,
     HITTER_IDX,
@@ -209,7 +209,7 @@ def run_projections(
 
     for _ in range(iterations):
         stats = simulate_season(padded, rng, h_slots=h_slots, p_slots=p_slots)
-        roto = score_roto(stats)
+        roto = score_roto_dict(stats)
         for tn in padded:
             total = roto[tn]["total"]
             all_totals[tn].append(total)

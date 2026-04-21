@@ -1,12 +1,20 @@
 import json
+from datetime import date
 from unittest.mock import MagicMock
 
 import pytest
 
+from fantasy_baseball.models.standings import (
+    CategoryStats,
+    ProjectedStandings,
+    ProjectedStandingsEntry,
+    Standings,
+    StandingsEntry,
+)
+from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.web import season_data
 from fantasy_baseball.web.season_data import (
     CacheKey,
-    _standings_to_snapshot,
     format_lineup_for_display,
     format_monte_carlo_for_display,
     format_standings_for_display,
@@ -14,6 +22,37 @@ from fantasy_baseball.web.season_data import (
     read_meta,
     write_cache,
 )
+
+
+def _standings_from_raw(raw: list[dict]) -> Standings:
+    """Build a Standings from a list[dict] fixture used by the old tests."""
+    return Standings(
+        effective_date=date(2026, 4, 1),
+        entries=[
+            StandingsEntry(
+                team_name=t["name"],
+                team_key=t.get("team_key", ""),
+                rank=t.get("rank", 0),
+                stats=CategoryStats.from_dict(t.get("stats", {})),
+                yahoo_points_for=t.get("points_for"),
+            )
+            for t in raw
+        ],
+    )
+
+
+def _projected_from_raw(raw: list[dict]) -> ProjectedStandings:
+    """Build a ProjectedStandings from a list[dict] fixture."""
+    return ProjectedStandings(
+        effective_date=date(2026, 4, 1),
+        entries=[
+            ProjectedStandingsEntry(
+                team_name=t["name"],
+                stats=CategoryStats.from_dict(t.get("stats", {})),
+            )
+            for t in raw
+        ],
+    )
 
 
 def test_write_and_read_cache(tmp_path):
@@ -50,27 +89,75 @@ def test_write_cache_overwrites(tmp_path):
 def _sample_standings():
     """10-team standings data as returned by yahoo_roster.fetch_standings()."""
     teams = [
-        ("Hart of the Order", {"R": 300, "HR": 90, "RBI": 290, "SB": 50, "AVG": 0.270,
-                               "W": 35, "K": 600, "SV": 25, "ERA": 3.50, "WHIP": 1.18}),
-        ("SkeleThor", {"R": 310, "HR": 85, "RBI": 295, "SB": 40, "AVG": 0.265,
-                       "W": 38, "K": 580, "SV": 30, "ERA": 3.40, "WHIP": 1.15}),
-        ("Send in the Cavalli", {"R": 280, "HR": 95, "RBI": 280, "SB": 55, "AVG": 0.260,
-                                 "W": 30, "K": 620, "SV": 20, "ERA": 3.60, "WHIP": 1.22}),
+        (
+            "Hart of the Order",
+            {
+                "R": 300,
+                "HR": 90,
+                "RBI": 290,
+                "SB": 50,
+                "AVG": 0.270,
+                "W": 35,
+                "K": 600,
+                "SV": 25,
+                "ERA": 3.50,
+                "WHIP": 1.18,
+            },
+        ),
+        (
+            "SkeleThor",
+            {
+                "R": 310,
+                "HR": 85,
+                "RBI": 295,
+                "SB": 40,
+                "AVG": 0.265,
+                "W": 38,
+                "K": 580,
+                "SV": 30,
+                "ERA": 3.40,
+                "WHIP": 1.15,
+            },
+        ),
+        (
+            "Send in the Cavalli",
+            {
+                "R": 280,
+                "HR": 95,
+                "RBI": 280,
+                "SB": 55,
+                "AVG": 0.260,
+                "W": 30,
+                "K": 620,
+                "SV": 20,
+                "ERA": 3.60,
+                "WHIP": 1.22,
+            },
+        ),
     ]
-    return [{"name": n, "team_key": f"key_{i}", "rank": i + 1, "stats": s}
-            for i, (n, s) in enumerate(teams)]
+    return [
+        {"name": n, "team_key": f"key_{i}", "rank": i + 1, "stats": s}
+        for i, (n, s) in enumerate(teams)
+    ]
 
 
 def test_format_standings_has_roto_points():
-    data = format_standings_for_display(_standings_to_snapshot(_sample_standings()), "Hart of the Order")
+    data = format_standings_for_display(
+        _standings_from_raw(_sample_standings()), "Hart of the Order"
+    )
     assert "teams" in data
     hart = next(t for t in data["teams"] if t["name"] == "Hart of the Order")
     assert "roto_points" in hart
-    assert "total" in hart["roto_points"]
+    # Per-category roto_points dict is now Category-enum-keyed; the total
+    # lives at the top-level "roto_total" key.
+    assert Category.R in hart["roto_points"]
+    assert "roto_total" in hart
 
 
 def test_format_standings_color_intensity_per_team():
-    data = format_standings_for_display(_standings_to_snapshot(_sample_standings()), "Hart of the Order")
+    data = format_standings_for_display(
+        _standings_from_raw(_sample_standings()), "Hart of the Order"
+    )
     hart = next(t for t in data["teams"] if t["name"] == "Hart of the Order")
     skel = next(t for t in data["teams"] if t["name"] == "SkeleThor")
     cav = next(t for t in data["teams"] if t["name"] == "Send in the Cavalli")
@@ -78,12 +165,12 @@ def test_format_standings_color_intensity_per_team():
     assert hart["is_user"] is True
     assert "color_intensity" in hart
     # SB: Hart=50, SkeleThor=40, Cavalli=55 → Cavalli leads, SkeleThor trails.
-    assert cav["color_intensity"]["SB"] == pytest.approx(1.0)
-    assert skel["color_intensity"]["SB"] == pytest.approx(-1.0)
+    assert cav["color_intensity"][Category.SB] == pytest.approx(1.0)
+    assert skel["color_intensity"][Category.SB] == pytest.approx(-1.0)
     # Hart sits in between: (50-40)/(55-40) = 0.667, intensity = 2*0.667-1 ≈ 0.333
-    assert hart["color_intensity"]["SB"] == pytest.approx(0.333, abs=0.01)
-    # Total column gets an intensity too.
-    assert "total" in hart["color_intensity"]
+    assert hart["color_intensity"][Category.SB] == pytest.approx(0.333, abs=0.01)
+    # Total column intensity lives at the top level, not inside color_intensity.
+    assert "total_intensity" in hart
 
 
 def test_format_standings_prefers_yahoo_points_for():
@@ -98,23 +185,51 @@ def test_format_standings_prefers_yahoo_points_for():
     # points_for that tie-breaks in favor of Team A. Our score_roto alone
     # would give each 9.5 (averaged); Yahoo gives 10 / 9.
     standings = [
-        {"name": "Team A", "team_key": "a", "rank": 1,
-         "stats": {"R": 100, "HR": 30, "RBI": 90, "SB": 20, "AVG": 0.260,
-                   "W": 10, "K": 200, "SV": 10, "ERA": 3.50, "WHIP": 1.03},
-         "points_for": 20.0},
-        {"name": "Team B", "team_key": "b", "rank": 2,
-         "stats": {"R": 90, "HR": 25, "RBI": 80, "SB": 15, "AVG": 0.255,
-                   "W": 8, "K": 180, "SV": 8, "ERA": 3.80, "WHIP": 1.03},
-         "points_for": 11.0},
+        {
+            "name": "Team A",
+            "team_key": "a",
+            "rank": 1,
+            "stats": {
+                "R": 100,
+                "HR": 30,
+                "RBI": 90,
+                "SB": 20,
+                "AVG": 0.260,
+                "W": 10,
+                "K": 200,
+                "SV": 10,
+                "ERA": 3.50,
+                "WHIP": 1.03,
+            },
+            "points_for": 20.0,
+        },
+        {
+            "name": "Team B",
+            "team_key": "b",
+            "rank": 2,
+            "stats": {
+                "R": 90,
+                "HR": 25,
+                "RBI": 80,
+                "SB": 15,
+                "AVG": 0.255,
+                "W": 8,
+                "K": 180,
+                "SV": 8,
+                "ERA": 3.80,
+                "WHIP": 1.03,
+            },
+            "points_for": 11.0,
+        },
     ]
-    data = format_standings_for_display(_standings_to_snapshot(standings), "Team A")
+    data = format_standings_for_display(_standings_from_raw(standings), "Team A")
     by_name = {t["name"]: t for t in data["teams"]}
 
     # Totals are Yahoo's, not score_roto's averaged-tie output.
-    assert by_name["Team A"]["roto_points"]["total"] == 20.0
-    assert by_name["Team B"]["roto_points"]["total"] == 11.0
-    # score_roto's original total preserved for diagnostics.
-    assert "score_roto_total" in by_name["Team A"]["roto_points"]
+    assert by_name["Team A"]["roto_total"] == 20.0
+    assert by_name["Team B"]["roto_total"] == 11.0
+    # score_roto's original total preserved for diagnostics (top-level key).
+    assert "score_roto_total" in by_name["Team A"]
     # Ranking comes from Yahoo's rank.
     assert by_name["Team A"]["rank"] == 1
     assert by_name["Team B"]["rank"] == 2
@@ -123,62 +238,151 @@ def test_format_standings_prefers_yahoo_points_for():
 def test_format_standings_falls_back_without_points_for():
     """Projected standings (no points_for) still use score_roto."""
     standings = [
-        {"name": "Team A", "team_key": "a", "rank": 0,
-         "stats": {"R": 100, "HR": 30, "RBI": 90, "SB": 20, "AVG": 0.260,
-                   "W": 10, "K": 200, "SV": 10, "ERA": 3.50, "WHIP": 1.20}},
-        {"name": "Team B", "team_key": "b", "rank": 0,
-         "stats": {"R": 90, "HR": 25, "RBI": 80, "SB": 15, "AVG": 0.255,
-                   "W": 8, "K": 180, "SV": 8, "ERA": 3.80, "WHIP": 1.25}},
+        {
+            "name": "Team A",
+            "team_key": "a",
+            "rank": 0,
+            "stats": {
+                "R": 100,
+                "HR": 30,
+                "RBI": 90,
+                "SB": 20,
+                "AVG": 0.260,
+                "W": 10,
+                "K": 200,
+                "SV": 10,
+                "ERA": 3.50,
+                "WHIP": 1.20,
+            },
+        },
+        {
+            "name": "Team B",
+            "team_key": "b",
+            "rank": 0,
+            "stats": {
+                "R": 90,
+                "HR": 25,
+                "RBI": 80,
+                "SB": 15,
+                "AVG": 0.255,
+                "W": 8,
+                "K": 180,
+                "SV": 8,
+                "ERA": 3.80,
+                "WHIP": 1.25,
+            },
+        },
     ]
-    data = format_standings_for_display(_standings_to_snapshot(standings), "Team A")
+    data = format_standings_for_display(_standings_from_raw(standings), "Team A")
     by_name = {t["name"]: t for t in data["teams"]}
     # Team A dominates every category → score_roto total = 2 * 10 = 20
-    assert by_name["Team A"]["roto_points"]["total"] == 20.0
-    assert by_name["Team B"]["roto_points"]["total"] == 10.0
+    assert by_name["Team A"]["roto_total"] == 20.0
+    assert by_name["Team B"]["roto_total"] == 10.0
     assert by_name["Team A"]["rank"] == 1
-    assert "score_roto_total" not in by_name["Team A"]["roto_points"]
+    # Without Yahoo override, roto_total == score_roto_total.
+    assert by_name["Team A"]["score_roto_total"] == 20.0
 
 
 def test_format_standings_tied_category_has_no_intensity():
     """When every team is tied in a category (max == min), the key is absent."""
-    standings = _standings_to_snapshot([
-        {"name": "Team A", "team_key": "a", "rank": 1,
-         "stats": {"R": 100, "HR": 30, "RBI": 90, "SB": 20, "AVG": 0.260,
-                   "W": 10, "K": 200, "SV": 10, "ERA": 3.50, "WHIP": 1.20}},
-        {"name": "Team B", "team_key": "b", "rank": 2,
-         "stats": {"R": 100, "HR": 25, "RBI": 90, "SB": 15, "AVG": 0.255,
-                   "W": 8, "K": 180, "SV": 8, "ERA": 3.80, "WHIP": 1.25}},
-    ])
+    standings = _standings_from_raw(
+        [
+            {
+                "name": "Team A",
+                "team_key": "a",
+                "rank": 1,
+                "stats": {
+                    "R": 100,
+                    "HR": 30,
+                    "RBI": 90,
+                    "SB": 20,
+                    "AVG": 0.260,
+                    "W": 10,
+                    "K": 200,
+                    "SV": 10,
+                    "ERA": 3.50,
+                    "WHIP": 1.20,
+                },
+            },
+            {
+                "name": "Team B",
+                "team_key": "b",
+                "rank": 2,
+                "stats": {
+                    "R": 100,
+                    "HR": 25,
+                    "RBI": 90,
+                    "SB": 15,
+                    "AVG": 0.255,
+                    "W": 8,
+                    "K": 180,
+                    "SV": 8,
+                    "ERA": 3.80,
+                    "WHIP": 1.25,
+                },
+            },
+        ]
+    )
     data = format_standings_for_display(standings, "Team A")
     a = next(t for t in data["teams"] if t["name"] == "Team A")
     b = next(t for t in data["teams"] if t["name"] == "Team B")
     # R and RBI are tied across all teams — the key is absent for everyone.
-    assert "R" not in a["color_intensity"]
-    assert "R" not in b["color_intensity"]
-    assert "RBI" not in a["color_intensity"]
-    assert "RBI" not in b["color_intensity"]
+    assert Category.R not in a["color_intensity"]
+    assert Category.R not in b["color_intensity"]
+    assert Category.RBI not in a["color_intensity"]
+    assert Category.RBI not in b["color_intensity"]
     # Non-tied categories still populated.
-    assert "HR" in a["color_intensity"]
+    assert Category.HR in a["color_intensity"]
 
 
 def test_format_standings_era_whip_inverted():
     """Lower ERA/WHIP → higher intensity (+1.0 at the min, not the max)."""
-    standings = _standings_to_snapshot([
-        {"name": "LowEra", "team_key": "a", "rank": 1,
-         "stats": {"R": 100, "HR": 30, "RBI": 90, "SB": 20, "AVG": 0.260,
-                   "W": 10, "K": 200, "SV": 10, "ERA": 2.50, "WHIP": 1.00}},
-        {"name": "HighEra", "team_key": "b", "rank": 2,
-         "stats": {"R": 90, "HR": 25, "RBI": 80, "SB": 15, "AVG": 0.255,
-                   "W": 8, "K": 180, "SV": 8, "ERA": 5.00, "WHIP": 1.50}},
-    ])
+    standings = _standings_from_raw(
+        [
+            {
+                "name": "LowEra",
+                "team_key": "a",
+                "rank": 1,
+                "stats": {
+                    "R": 100,
+                    "HR": 30,
+                    "RBI": 90,
+                    "SB": 20,
+                    "AVG": 0.260,
+                    "W": 10,
+                    "K": 200,
+                    "SV": 10,
+                    "ERA": 2.50,
+                    "WHIP": 1.00,
+                },
+            },
+            {
+                "name": "HighEra",
+                "team_key": "b",
+                "rank": 2,
+                "stats": {
+                    "R": 90,
+                    "HR": 25,
+                    "RBI": 80,
+                    "SB": 15,
+                    "AVG": 0.255,
+                    "W": 8,
+                    "K": 180,
+                    "SV": 8,
+                    "ERA": 5.00,
+                    "WHIP": 1.50,
+                },
+            },
+        ]
+    )
     data = format_standings_for_display(standings, "LowEra")
     low = next(t for t in data["teams"] if t["name"] == "LowEra")
     high = next(t for t in data["teams"] if t["name"] == "HighEra")
     # Lowest ERA / WHIP should read as the leader (+1.0).
-    assert low["color_intensity"]["ERA"] == pytest.approx(1.0)
-    assert low["color_intensity"]["WHIP"] == pytest.approx(1.0)
-    assert high["color_intensity"]["ERA"] == pytest.approx(-1.0)
-    assert high["color_intensity"]["WHIP"] == pytest.approx(-1.0)
+    assert low["color_intensity"][Category.ERA] == pytest.approx(1.0)
+    assert low["color_intensity"][Category.WHIP] == pytest.approx(1.0)
+    assert high["color_intensity"][Category.ERA] == pytest.approx(-1.0)
+    assert high["color_intensity"][Category.WHIP] == pytest.approx(-1.0)
 
 
 def test_format_standings_clustered_leaders_share_intensity():
@@ -186,44 +390,66 @@ def test_format_standings_clustered_leaders_share_intensity():
     hr_values = [100, 99, 99, 99, 70, 65, 55, 50, 45, 40]
     teams = []
     for i, hr in enumerate(hr_values):
-        teams.append({
-            "name": f"Team{i}", "team_key": f"k{i}", "rank": i + 1,
-            "stats": {"R": 100, "HR": hr, "RBI": 90, "SB": 20, "AVG": 0.260,
-                      "W": 10, "K": 200, "SV": 10, "ERA": 3.50, "WHIP": 1.20},
-        })
-    data = format_standings_for_display(_standings_to_snapshot(teams), "Team0")
+        teams.append(
+            {
+                "name": f"Team{i}",
+                "team_key": f"k{i}",
+                "rank": i + 1,
+                "stats": {
+                    "R": 100,
+                    "HR": hr,
+                    "RBI": 90,
+                    "SB": 20,
+                    "AVG": 0.260,
+                    "W": 10,
+                    "K": 200,
+                    "SV": 10,
+                    "ERA": 3.50,
+                    "WHIP": 1.20,
+                },
+            }
+        )
+    data = format_standings_for_display(_standings_from_raw(teams), "Team0")
     by_name = {t["name"]: t for t in data["teams"]}
     # Leader at 100 → +1.0. Trailer at 40 → -1.0.
-    assert by_name["Team0"]["color_intensity"]["HR"] == pytest.approx(1.0)
-    assert by_name["Team9"]["color_intensity"]["HR"] == pytest.approx(-1.0)
+    assert by_name["Team0"]["color_intensity"][Category.HR] == pytest.approx(1.0)
+    assert by_name["Team9"]["color_intensity"][Category.HR] == pytest.approx(-1.0)
     # The three 99s share the same intensity: (99-40)/(100-40)=0.9833, intensity=0.9667.
     expected = pytest.approx(0.9667, abs=0.001)
-    assert by_name["Team1"]["color_intensity"]["HR"] == expected
-    assert by_name["Team2"]["color_intensity"]["HR"] == expected
-    assert by_name["Team3"]["color_intensity"]["HR"] == expected
+    assert by_name["Team1"]["color_intensity"][Category.HR] == expected
+    assert by_name["Team2"]["color_intensity"][Category.HR] == expected
+    assert by_name["Team3"]["color_intensity"][Category.HR] == expected
 
 
 def test_format_standings_total_column_intensity():
     """Total column intensity tracks distance from top/bottom total roto points."""
-    data = format_standings_for_display(_standings_to_snapshot(_sample_standings()), "Hart of the Order")
+    data = format_standings_for_display(
+        _standings_from_raw(_sample_standings()), "Hart of the Order"
+    )
     teams = data["teams"]
     # Team with highest total → +1.0; lowest → -1.0.
-    top = max(teams, key=lambda t: t["roto_points"]["total"])
-    bot = min(teams, key=lambda t: t["roto_points"]["total"])
-    assert top["color_intensity"]["total"] == pytest.approx(1.0)
-    assert bot["color_intensity"]["total"] == pytest.approx(-1.0)
+    top = max(teams, key=lambda t: t["roto_total"])
+    bot = min(teams, key=lambda t: t["roto_total"])
+    assert top["total_intensity"] == pytest.approx(1.0)
+    assert bot["total_intensity"] == pytest.approx(-1.0)
 
 
 def _sample_monte_carlo():
     return {
         "team_results": {
             "Hart of the Order": {
-                "median_pts": 68.5, "p10": 58, "p90": 76,
-                "first_pct": 18.3, "top3_pct": 52.1,
+                "median_pts": 68.5,
+                "p10": 58,
+                "p90": 76,
+                "first_pct": 18.3,
+                "top3_pct": 52.1,
             },
             "SkeleThor": {
-                "median_pts": 65.0, "p10": 55, "p90": 73,
-                "first_pct": 14.7, "top3_pct": 41.8,
+                "median_pts": 65.0,
+                "p10": 55,
+                "p90": 73,
+                "first_pct": 14.7,
+                "top3_pct": 41.8,
             },
         },
         "category_risk": {
@@ -234,18 +460,14 @@ def _sample_monte_carlo():
 
 
 def test_format_monte_carlo_sorted_by_median():
-    data = format_monte_carlo_for_display(
-        _sample_monte_carlo(), "Hart of the Order"
-    )
+    data = format_monte_carlo_for_display(_sample_monte_carlo(), "Hart of the Order")
     assert data["teams"][0]["name"] == "Hart of the Order"
     assert data["teams"][0]["median_pts"] == 68.5
     assert data["teams"][0]["is_user"] is True
 
 
 def test_format_monte_carlo_category_risk_colors():
-    data = format_monte_carlo_for_display(
-        _sample_monte_carlo(), "Hart of the Order"
-    )
+    data = format_monte_carlo_for_display(_sample_monte_carlo(), "Hart of the Order")
     risk = data["category_risk"]
     sv = next(r for r in risk if r["cat"] == "SV")
     assert sv["risk_class"] == "cat-bottom"
@@ -255,14 +477,30 @@ def test_format_monte_carlo_category_risk_colors():
 
 # --- format_lineup_for_display tests ---
 
+
 def _sample_roster():
     return [
-        {"name": "Adley Rutschman", "positions": ["C"], "selected_position": "C",
-         "player_id": "123", "status": ""},
-        {"name": "Mike Trout", "positions": ["OF"], "selected_position": "OF",
-         "player_id": "456", "status": "IL"},
-        {"name": "Masataka Yoshida", "positions": ["OF", "UTIL"], "selected_position": "BN",
-         "player_id": "789", "status": ""},
+        {
+            "name": "Adley Rutschman",
+            "positions": ["C"],
+            "selected_position": "C",
+            "player_id": "123",
+            "status": "",
+        },
+        {
+            "name": "Mike Trout",
+            "positions": ["OF"],
+            "selected_position": "OF",
+            "player_id": "456",
+            "status": "IL",
+        },
+        {
+            "name": "Masataka Yoshida",
+            "positions": ["OF", "UTIL"],
+            "selected_position": "BN",
+            "player_id": "789",
+            "status": "",
+        },
     ]
 
 
@@ -304,11 +542,21 @@ def test_format_lineup_passes_ros_data_through():
     h[rest_of_season_key] — there is no longer a nested entry["rest_of_season"] dict.
     """
     roster = [
-        {"name": "Aaron Judge", "positions": ["OF"], "selected_position": "OF",
-         "player_id": "1", "status": "",
-         "rest_of_season": {"r": 90, "hr": 40, "rbi": 100, "sb": 5, "avg": 0.280}},
-        {"name": "No ROS Player", "positions": ["1B"], "selected_position": "1B",
-         "player_id": "2", "status": ""},
+        {
+            "name": "Aaron Judge",
+            "positions": ["OF"],
+            "selected_position": "OF",
+            "player_id": "1",
+            "status": "",
+            "rest_of_season": {"r": 90, "hr": 40, "rbi": 100, "sb": 5, "avg": 0.280},
+        },
+        {
+            "name": "No ROS Player",
+            "positions": ["1B"],
+            "selected_position": "1B",
+            "player_id": "2",
+            "status": "",
+        },
     ]
     data = format_lineup_for_display(roster, {"moves": []})
     judge = next(h for h in data["hitters"] if h["name"] == "Aaron Judge")
@@ -327,17 +575,60 @@ def test_format_lineup_passes_ros_data_through():
 def test_roster_cache_includes_stats(tmp_path, monkeypatch):
     """After refresh, roster entries should include a 'pace' dict."""
     roster = [
-        {"name": "Juan Soto", "positions": ["OF"], "selected_position": "OF",
-         "player_id": "1", "status": "", "player_type": "hitter",
-         "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "pa": 600, "avg": 0.278,
-         "pace": {
-             "PA": {"actual": 102, "color_class": "stat-neutral"},
-             "R": {"actual": 19, "expected": 15.3, "z_score": 1.2, "color_class": "stat-hot-2", "projection": 90},
-             "HR": {"actual": 9, "expected": 5.1, "z_score": 1.6, "color_class": "stat-hot-2", "projection": 30},
-             "RBI": {"actual": 18, "expected": 15.3, "z_score": 0.3, "color_class": "stat-neutral", "projection": 90},
-             "SB": {"actual": 2, "expected": 1.7, "z_score": 0.2, "color_class": "stat-neutral", "projection": 10},
-             "AVG": {"actual": 0.298, "expected": 0.278, "z_score": 0.7, "color_class": "stat-hot-1", "projection": 0.278},
-         }},
+        {
+            "name": "Juan Soto",
+            "positions": ["OF"],
+            "selected_position": "OF",
+            "player_id": "1",
+            "status": "",
+            "player_type": "hitter",
+            "r": 90,
+            "hr": 30,
+            "rbi": 90,
+            "sb": 10,
+            "h": 150,
+            "ab": 540,
+            "pa": 600,
+            "avg": 0.278,
+            "pace": {
+                "PA": {"actual": 102, "color_class": "stat-neutral"},
+                "R": {
+                    "actual": 19,
+                    "expected": 15.3,
+                    "z_score": 1.2,
+                    "color_class": "stat-hot-2",
+                    "projection": 90,
+                },
+                "HR": {
+                    "actual": 9,
+                    "expected": 5.1,
+                    "z_score": 1.6,
+                    "color_class": "stat-hot-2",
+                    "projection": 30,
+                },
+                "RBI": {
+                    "actual": 18,
+                    "expected": 15.3,
+                    "z_score": 0.3,
+                    "color_class": "stat-neutral",
+                    "projection": 90,
+                },
+                "SB": {
+                    "actual": 2,
+                    "expected": 1.7,
+                    "z_score": 0.2,
+                    "color_class": "stat-neutral",
+                    "projection": 10,
+                },
+                "AVG": {
+                    "actual": 0.298,
+                    "expected": 0.278,
+                    "z_score": 0.7,
+                    "color_class": "stat-hot-1",
+                    "projection": 0.278,
+                },
+            },
+        },
     ]
     result = format_lineup_for_display(roster, {"moves": []})
     assert "pace" in result["hitters"][0]
@@ -439,28 +730,69 @@ class TestComputeComparisonStandings:
         from fantasy_baseball.web.season_data import compute_comparison_standings
 
         projected_standings = [
-            {"name": "My Team", "team_key": "", "rank": 0, "stats": {
-                "R": 700, "HR": 200, "RBI": 700, "SB": 100, "AVG": 0.260,
-                "W": 80, "K": 1200, "SV": 50, "ERA": 3.50, "WHIP": 1.20,
-            }},
-            {"name": "Other Team", "team_key": "", "rank": 0, "stats": {
-                "R": 680, "HR": 190, "RBI": 680, "SB": 110, "AVG": 0.255,
-                "W": 85, "K": 1100, "SV": 40, "ERA": 3.80, "WHIP": 1.25,
-            }},
+            {
+                "name": "My Team",
+                "team_key": "",
+                "rank": 0,
+                "stats": {
+                    "R": 700,
+                    "HR": 200,
+                    "RBI": 700,
+                    "SB": 100,
+                    "AVG": 0.260,
+                    "W": 80,
+                    "K": 1200,
+                    "SV": 50,
+                    "ERA": 3.50,
+                    "WHIP": 1.20,
+                },
+            },
+            {
+                "name": "Other Team",
+                "team_key": "",
+                "rank": 0,
+                "stats": {
+                    "R": 680,
+                    "HR": 190,
+                    "RBI": 680,
+                    "SB": 110,
+                    "AVG": 0.255,
+                    "W": 85,
+                    "K": 1100,
+                    "SV": 40,
+                    "ERA": 3.80,
+                    "WHIP": 1.25,
+                },
+            },
         ]
 
         roster = [
-            Player(name="Willy Adames", player_type="hitter",
-                   rest_of_season=HitterStats(pa=650, ab=567, h=133, r=80, hr=25, rbi=81, sb=11, avg=0.235)),
-            Player(name="Other Hitter", player_type="hitter",
-                   rest_of_season=HitterStats(pa=630, ab=550, h=150, r=90, hr=30, rbi=95, sb=5, avg=0.273)),
-            Player(name="My Pitcher", player_type="pitcher",
-                   rest_of_season=PitcherStats(ip=180, w=12, k=180, sv=0, er=60, bb=50, h_allowed=150,
-                                    era=3.00, whip=1.11)),
+            Player(
+                name="Willy Adames",
+                player_type="hitter",
+                rest_of_season=HitterStats(
+                    pa=650, ab=567, h=133, r=80, hr=25, rbi=81, sb=11, avg=0.235
+                ),
+            ),
+            Player(
+                name="Other Hitter",
+                player_type="hitter",
+                rest_of_season=HitterStats(
+                    pa=630, ab=550, h=150, r=90, hr=30, rbi=95, sb=5, avg=0.273
+                ),
+            ),
+            Player(
+                name="My Pitcher",
+                player_type="pitcher",
+                rest_of_season=PitcherStats(
+                    ip=180, w=12, k=180, sv=0, er=60, bb=50, h_allowed=150, era=3.00, whip=1.11
+                ),
+            ),
         ]
 
         other_player = Player(
-            name="Ezequiel Tovar", player_type="hitter",
+            name="Ezequiel Tovar",
+            player_type="hitter",
             rest_of_season=HitterStats(pa=590, ab=513, h=135, r=73, hr=20, rbi=74, sb=8, avg=0.263),
         )
 
@@ -468,7 +800,7 @@ class TestComputeComparisonStandings:
             roster_player_name="Willy Adames",
             other_player=other_player,
             user_roster=roster,
-            projected_standings=projected_standings,
+            projected_standings=_projected_from_raw(projected_standings),
             user_team_name="My Team",
         )
 
@@ -492,14 +824,39 @@ class TestComputeComparisonStandings:
 
         result = compute_comparison_standings(
             roster_player_name="Nobody",
-            other_player=Player(name="X", player_type="hitter",
-                                rest_of_season=HitterStats(pa=0, ab=0, h=0, r=0, hr=0, rbi=0, sb=0)),
-            user_roster=[Player(name="A", player_type="hitter",
-                                rest_of_season=HitterStats(pa=350, ab=300, h=80, r=50, hr=10, rbi=40, sb=5))],
-            projected_standings=[{"name": "My Team", "team_key": "", "rank": 0,
-                                  "stats": {"R": 700, "HR": 200, "RBI": 700, "SB": 100,
-                                            "AVG": 0.260, "W": 80, "K": 1200, "SV": 50,
-                                            "ERA": 3.50, "WHIP": 1.20}}],
+            other_player=Player(
+                name="X",
+                player_type="hitter",
+                rest_of_season=HitterStats(pa=0, ab=0, h=0, r=0, hr=0, rbi=0, sb=0),
+            ),
+            user_roster=[
+                Player(
+                    name="A",
+                    player_type="hitter",
+                    rest_of_season=HitterStats(pa=350, ab=300, h=80, r=50, hr=10, rbi=40, sb=5),
+                )
+            ],
+            projected_standings=_projected_from_raw(
+                [
+                    {
+                        "name": "My Team",
+                        "team_key": "",
+                        "rank": 0,
+                        "stats": {
+                            "R": 700,
+                            "HR": 200,
+                            "RBI": 700,
+                            "SB": 100,
+                            "AVG": 0.260,
+                            "W": 80,
+                            "K": 1200,
+                            "SV": 50,
+                            "ERA": 3.50,
+                            "WHIP": 1.20,
+                        },
+                    }
+                ]
+            ),
             user_team_name="My Team",
         )
         assert "error" in result
@@ -525,14 +882,29 @@ class TestComparisonConsistencyInvariant:
 
     def _build_roster(self):
         from fantasy_baseball.models.player import HitterStats, PitcherStats, Player
+
         return [
-            Player(name="Star Hitter", player_type="hitter",
-                   rest_of_season=HitterStats(pa=650, ab=567, h=150, r=90, hr=30, rbi=95, sb=25, avg=0.265)),
-            Player(name="Role Hitter", player_type="hitter",
-                   rest_of_season=HitterStats(pa=500, ab=440, h=110, r=55, hr=15, rbi=55, sb=5, avg=0.250)),
-            Player(name="Ace", player_type="pitcher",
-                   rest_of_season=PitcherStats(ip=180, w=14, k=200, sv=0, er=60, bb=50,
-                                    h_allowed=150, era=3.00, whip=1.11)),
+            Player(
+                name="Star Hitter",
+                player_type="hitter",
+                rest_of_season=HitterStats(
+                    pa=650, ab=567, h=150, r=90, hr=30, rbi=95, sb=25, avg=0.265
+                ),
+            ),
+            Player(
+                name="Role Hitter",
+                player_type="hitter",
+                rest_of_season=HitterStats(
+                    pa=500, ab=440, h=110, r=55, hr=15, rbi=55, sb=5, avg=0.250
+                ),
+            ),
+            Player(
+                name="Ace",
+                player_type="pitcher",
+                rest_of_season=PitcherStats(
+                    ip=180, w=14, k=200, sv=0, er=60, bb=50, h_allowed=150, era=3.00, whip=1.11
+                ),
+            ),
         ]
 
     def test_before_stats_equal_projected_standings_entry(self):
@@ -546,14 +918,28 @@ class TestComparisonConsistencyInvariant:
         roster = self._build_roster()
         user_stats = project_team_stats(roster)
         projected_standings = [
-            {"name": "My Team", "team_key": "", "rank": 0, "stats": dict(user_stats)},
-            {"name": "Rival", "team_key": "", "rank": 0, "stats": {
-                "R": 680, "HR": 190, "RBI": 680, "SB": 110, "AVG": 0.255,
-                "W": 85, "K": 1100, "SV": 40, "ERA": 3.80, "WHIP": 1.25,
-            }},
+            {"name": "My Team", "team_key": "", "rank": 0, "stats": user_stats.to_dict()},
+            {
+                "name": "Rival",
+                "team_key": "",
+                "rank": 0,
+                "stats": {
+                    "R": 680,
+                    "HR": 190,
+                    "RBI": 680,
+                    "SB": 110,
+                    "AVG": 0.255,
+                    "W": 85,
+                    "K": 1100,
+                    "SV": 40,
+                    "ERA": 3.80,
+                    "WHIP": 1.25,
+                },
+            },
         ]
         other_player = Player(
-            name="Replacement", player_type="hitter",
+            name="Replacement",
+            player_type="hitter",
             rest_of_season=HitterStats(pa=600, ab=530, h=140, r=75, hr=28, rbi=85, sb=3, avg=0.264),
         )
 
@@ -561,16 +947,16 @@ class TestComparisonConsistencyInvariant:
             roster_player_name="Star Hitter",
             other_player=other_player,
             user_roster=roster,
-            projected_standings=projected_standings,
+            projected_standings=_projected_from_raw(projected_standings),
             user_team_name="My Team",
         )
 
         # Invariant: "before" uses projected_standings directly — the single
         # source of truth.  No recomputation, so no drift possible.
         for cat, val in user_stats.items():
-            assert result["before"]["stats"]["My Team"][cat] == val, (
-                f"before[{cat}] diverged from projected_standings "
-                f"({result['before']['stats']['My Team'][cat]} vs {val})"
+            assert result["before"]["stats"]["My Team"][cat.value] == val, (
+                f"before[{cat.value}] diverged from projected_standings "
+                f"({result['before']['stats']['My Team'][cat.value]} vs {val})"
             )
 
     def test_swap_delta_equals_player_stat_difference(self):
@@ -584,12 +970,13 @@ class TestComparisonConsistencyInvariant:
         roster = self._build_roster()
         user_stats = project_team_stats(roster)
         projected_standings = [
-            {"name": "My Team", "team_key": "", "rank": 0, "stats": dict(user_stats)},
+            {"name": "My Team", "team_key": "", "rank": 0, "stats": user_stats.to_dict()},
         ]
 
         dropped = roster[0]  # Star Hitter
         other_player = Player(
-            name="Replacement", player_type="hitter",
+            name="Replacement",
+            player_type="hitter",
             rest_of_season=HitterStats(pa=600, ab=530, h=140, r=75, hr=28, rbi=85, sb=3, avg=0.264),
         )
 
@@ -597,12 +984,14 @@ class TestComparisonConsistencyInvariant:
             roster_player_name=dropped.name,
             other_player=other_player,
             user_roster=roster,
-            projected_standings=projected_standings,
+            projected_standings=_projected_from_raw(projected_standings),
             user_team_name="My Team",
         )
 
         for cat_attr, roto_cat in [("r", "R"), ("hr", "HR"), ("rbi", "RBI"), ("sb", "SB")]:
-            player_delta = getattr(dropped.rest_of_season, cat_attr) - getattr(other_player.rest_of_season, cat_attr)
+            player_delta = getattr(dropped.rest_of_season, cat_attr) - getattr(
+                other_player.rest_of_season, cat_attr
+            )
             team_delta = (
                 result["before"]["stats"]["My Team"][roto_cat]
                 - result["after"]["stats"]["My Team"][roto_cat]
@@ -623,15 +1012,24 @@ class TestComparisonConsistencyInvariant:
 
         # projected_standings with specific values — these are the source of truth.
         canonical_stats = {
-            "R": 999, "HR": 888, "RBI": 777, "SB": 666, "AVG": 0.300,
-            "W": 99, "K": 1500, "SV": 55, "ERA": 3.50, "WHIP": 1.10,
+            "R": 999,
+            "HR": 888,
+            "RBI": 777,
+            "SB": 666,
+            "AVG": 0.300,
+            "W": 99,
+            "K": 1500,
+            "SV": 55,
+            "ERA": 3.50,
+            "WHIP": 1.10,
         }
         projected_standings = [
             {"name": "My Team", "team_key": "", "rank": 0, "stats": canonical_stats},
         ]
 
         other_player = Player(
-            name="Replacement", player_type="hitter",
+            name="Replacement",
+            player_type="hitter",
             rest_of_season=HitterStats(pa=600, ab=530, h=140, r=75, hr=28, rbi=85, sb=3, avg=0.264),
         )
 
@@ -639,7 +1037,7 @@ class TestComparisonConsistencyInvariant:
             roster_player_name="Star Hitter",
             other_player=other_player,
             user_roster=roster,
-            projected_standings=projected_standings,
+            projected_standings=_projected_from_raw(projected_standings),
             user_team_name="My Team",
         )
 
@@ -664,35 +1062,58 @@ class TestComparisonProjectionOverride:
 
         # Roster cache has stale pitcher stats (sv=1)
         stale_pitcher = Player(
-            name="Closer X", player_type="pitcher",
-            rest_of_season=PitcherStats(ip=60, w=3, k=55, sv=1, er=25, bb=15,
-                                        h_allowed=55, era=3.75, whip=1.17),
+            name="Closer X",
+            player_type="pitcher",
+            rest_of_season=PitcherStats(
+                ip=60, w=3, k=55, sv=1, er=25, bb=15, h_allowed=55, era=3.75, whip=1.17
+            ),
         )
         roster = [
-            Player(name="Hitter A", player_type="hitter",
-                   rest_of_season=HitterStats(pa=600, ab=530, h=140, r=80, hr=25,
-                                              rbi=80, sb=10, avg=0.264)),
+            Player(
+                name="Hitter A",
+                player_type="hitter",
+                rest_of_season=HitterStats(
+                    pa=600, ab=530, h=140, r=80, hr=25, rbi=80, sb=10, avg=0.264
+                ),
+            ),
             stale_pitcher,
         ]
 
         # ros_projections has updated stats (sv=18)
         fresh_pitcher = Player(
-            name="Closer X", player_type="pitcher",
-            rest_of_season=PitcherStats(ip=60, w=3, k=55, sv=18, er=25, bb=15,
-                                        h_allowed=55, era=3.75, whip=1.17),
+            name="Closer X",
+            player_type="pitcher",
+            rest_of_season=PitcherStats(
+                ip=60, w=3, k=55, sv=18, er=25, bb=15, h_allowed=55, era=3.75, whip=1.17
+            ),
         )
 
         projected_standings = [
-            {"name": "My Team", "team_key": "", "rank": 0, "stats": {
-                "R": 700, "HR": 200, "RBI": 700, "SB": 100, "AVG": 0.260,
-                "W": 80, "K": 1200, "SV": 50, "ERA": 3.50, "WHIP": 1.20,
-            }},
+            {
+                "name": "My Team",
+                "team_key": "",
+                "rank": 0,
+                "stats": {
+                    "R": 700,
+                    "HR": 200,
+                    "RBI": 700,
+                    "SB": 100,
+                    "AVG": 0.260,
+                    "W": 80,
+                    "K": 1200,
+                    "SV": 50,
+                    "ERA": 3.50,
+                    "WHIP": 1.20,
+                },
+            },
         ]
 
         replacement = Player(
-            name="Streamer", player_type="pitcher",
-            rest_of_season=PitcherStats(ip=80, w=5, k=70, sv=0, er=35, bb=25,
-                                        h_allowed=75, era=3.94, whip=1.25),
+            name="Streamer",
+            player_type="pitcher",
+            rest_of_season=PitcherStats(
+                ip=80, w=5, k=70, sv=0, er=35, bb=25, h_allowed=75, era=3.94, whip=1.25
+            ),
         )
 
         # Without override: uses stale sv=1 → delta = 0 - 1 = -1
@@ -700,11 +1121,13 @@ class TestComparisonProjectionOverride:
             roster_player_name="Closer X",
             other_player=replacement,
             user_roster=roster,
-            projected_standings=projected_standings,
+            projected_standings=_projected_from_raw(projected_standings),
             user_team_name="My Team",
         )
-        stale_sv_delta = (result_stale["after"]["stats"]["My Team"]["SV"]
-                          - result_stale["before"]["stats"]["My Team"]["SV"])
+        stale_sv_delta = (
+            result_stale["after"]["stats"]["My Team"]["SV"]
+            - result_stale["before"]["stats"]["My Team"]["SV"]
+        )
         assert stale_sv_delta == pytest.approx(-1)
 
         # With override: uses fresh sv=18 → delta = 0 - 18 = -18
@@ -712,12 +1135,14 @@ class TestComparisonProjectionOverride:
             roster_player_name="Closer X",
             other_player=replacement,
             user_roster=roster,
-            projected_standings=projected_standings,
+            projected_standings=_projected_from_raw(projected_standings),
             user_team_name="My Team",
             roster_player_projection=fresh_pitcher,
         )
-        fresh_sv_delta = (result_fresh["after"]["stats"]["My Team"]["SV"]
-                          - result_fresh["before"]["stats"]["My Team"]["SV"])
+        fresh_sv_delta = (
+            result_fresh["after"]["stats"]["My Team"]["SV"]
+            - result_fresh["before"]["stats"]["My Team"]["SV"]
+        )
         assert fresh_sv_delta == pytest.approx(-18)
 
 
@@ -737,8 +1162,7 @@ def _refresh_run_source() -> str:
     return "\n".join(
         inspect.getsource(getattr(cls, name))
         for name in dir(cls)
-        if callable(getattr(cls, name))
-        and not name.startswith("__")
+        if callable(getattr(cls, name)) and not name.startswith("__")
     )
 
 
@@ -763,7 +1187,7 @@ class TestRefreshRunAttributeAccess:
         valid_attrs = {f.name for f in LeagueConfig.__dataclass_fields__.values()}
 
         # Match config.something (not config = or config: or config[)
-        refs = set(re.findall(r'\bconfig\.([a-zA-Z_]\w*)', src))
+        refs = set(re.findall(r"\bconfig\.([a-zA-Z_]\w*)", src))
 
         bad = refs - valid_attrs
         assert not bad, (
@@ -832,23 +1256,58 @@ class TestComparisonEV:
     def test_team_sds_none_matches_rank_based(self):
         from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
+
         projected_standings = [
-            {"name": "User", "team_key": "", "rank": 0, "stats": {
-                "R": 0, "HR": 0, "RBI": 0, "SB": 100, "AVG": 0,
-                "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0}},
-            {"name": "Rival", "team_key": "", "rank": 0, "stats": {
-                "R": 0, "HR": 0, "RBI": 0, "SB": 99, "AVG": 0,
-                "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0}},
+            {
+                "name": "User",
+                "team_key": "",
+                "rank": 0,
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 100,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 0,
+                    "WHIP": 0,
+                },
+            },
+            {
+                "name": "Rival",
+                "team_key": "",
+                "rank": 0,
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 99,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 0,
+                    "WHIP": 0,
+                },
+            },
         ]
-        drop_hitter = Player(name="Drop", player_type="hitter",
-            rest_of_season=HitterStats(pa=100, ab=100, h=0, r=0, hr=0, rbi=0, sb=20))
-        add_hitter = Player(name="Add", player_type="hitter",
-            rest_of_season=HitterStats(pa=100, ab=100, h=0, r=0, hr=0, rbi=0, sb=10))
+        drop_hitter = Player(
+            name="Drop",
+            player_type="hitter",
+            rest_of_season=HitterStats(pa=100, ab=100, h=0, r=0, hr=0, rbi=0, sb=20),
+        )
+        add_hitter = Player(
+            name="Add",
+            player_type="hitter",
+            rest_of_season=HitterStats(pa=100, ab=100, h=0, r=0, hr=0, rbi=0, sb=10),
+        )
         result = compute_comparison_standings(
             roster_player_name="Drop",
             other_player=add_hitter,
             user_roster=[drop_hitter],
-            projected_standings=projected_standings,
+            projected_standings=_projected_from_raw(projected_standings),
             user_team_name="User",
             team_sds=None,
         )
@@ -857,29 +1316,84 @@ class TestComparisonEV:
     def test_team_sds_produces_fractional_delta_under_uncertainty(self):
         from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
+
         projected_standings = [
-            {"name": "User", "team_key": "", "rank": 0, "stats": {
-                "R": 0, "HR": 0, "RBI": 0, "SB": 100, "AVG": 0,
-                "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0}},
-            {"name": "Rival", "team_key": "", "rank": 0, "stats": {
-                "R": 0, "HR": 0, "RBI": 0, "SB": 99, "AVG": 0,
-                "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0}},
+            {
+                "name": "User",
+                "team_key": "",
+                "rank": 0,
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 100,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 0,
+                    "WHIP": 0,
+                },
+            },
+            {
+                "name": "Rival",
+                "team_key": "",
+                "rank": 0,
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 99,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 0,
+                    "WHIP": 0,
+                },
+            },
         ]
         team_sds = {
-            "User":  {"R": 0, "HR": 0, "RBI": 0, "SB": 10.0, "AVG": 0,
-                      "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0},
-            "Rival": {"R": 0, "HR": 0, "RBI": 0, "SB": 10.0, "AVG": 0,
-                      "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0},
+            "User": {
+                Category.R: 0,
+                Category.HR: 0,
+                Category.RBI: 0,
+                Category.SB: 10.0,
+                Category.AVG: 0,
+                Category.W: 0,
+                Category.K: 0,
+                Category.SV: 0,
+                Category.ERA: 0,
+                Category.WHIP: 0,
+            },
+            "Rival": {
+                Category.R: 0,
+                Category.HR: 0,
+                Category.RBI: 0,
+                Category.SB: 10.0,
+                Category.AVG: 0,
+                Category.W: 0,
+                Category.K: 0,
+                Category.SV: 0,
+                Category.ERA: 0,
+                Category.WHIP: 0,
+            },
         }
-        drop_hitter = Player(name="Drop", player_type="hitter",
-            rest_of_season=HitterStats(pa=100, ab=100, h=0, r=0, hr=0, rbi=0, sb=20))
-        add_hitter = Player(name="Add", player_type="hitter",
-            rest_of_season=HitterStats(pa=100, ab=100, h=0, r=0, hr=0, rbi=0, sb=10))
+        drop_hitter = Player(
+            name="Drop",
+            player_type="hitter",
+            rest_of_season=HitterStats(pa=100, ab=100, h=0, r=0, hr=0, rbi=0, sb=20),
+        )
+        add_hitter = Player(
+            name="Add",
+            player_type="hitter",
+            rest_of_season=HitterStats(pa=100, ab=100, h=0, r=0, hr=0, rbi=0, sb=10),
+        )
         result = compute_comparison_standings(
             roster_player_name="Drop",
             other_player=add_hitter,
             user_roster=[drop_hitter],
-            projected_standings=projected_standings,
+            projected_standings=_projected_from_raw(projected_standings),
             user_team_name="User",
             team_sds=team_sds,
         )
@@ -888,29 +1402,84 @@ class TestComparisonEV:
     def test_ev_roto_key_present_in_response(self):
         from fantasy_baseball.models.player import HitterStats, Player
         from fantasy_baseball.web.season_data import compute_comparison_standings
+
         projected_standings = [
-            {"name": "User", "team_key": "", "rank": 0, "stats": {
-                "R": 0, "HR": 0, "RBI": 0, "SB": 100, "AVG": 0,
-                "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0}},
-            {"name": "Rival", "team_key": "", "rank": 0, "stats": {
-                "R": 0, "HR": 0, "RBI": 0, "SB": 99, "AVG": 0,
-                "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0}},
+            {
+                "name": "User",
+                "team_key": "",
+                "rank": 0,
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 100,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 0,
+                    "WHIP": 0,
+                },
+            },
+            {
+                "name": "Rival",
+                "team_key": "",
+                "rank": 0,
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 99,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 0,
+                    "WHIP": 0,
+                },
+            },
         ]
         team_sds = {
-            "User":  {"R": 0, "HR": 0, "RBI": 0, "SB": 10.0, "AVG": 0,
-                      "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0},
-            "Rival": {"R": 0, "HR": 0, "RBI": 0, "SB": 10.0, "AVG": 0,
-                      "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0},
+            "User": {
+                Category.R: 0,
+                Category.HR: 0,
+                Category.RBI: 0,
+                Category.SB: 10.0,
+                Category.AVG: 0,
+                Category.W: 0,
+                Category.K: 0,
+                Category.SV: 0,
+                Category.ERA: 0,
+                Category.WHIP: 0,
+            },
+            "Rival": {
+                Category.R: 0,
+                Category.HR: 0,
+                Category.RBI: 0,
+                Category.SB: 10.0,
+                Category.AVG: 0,
+                Category.W: 0,
+                Category.K: 0,
+                Category.SV: 0,
+                Category.ERA: 0,
+                Category.WHIP: 0,
+            },
         }
-        drop_hitter = Player(name="Drop", player_type="hitter",
-            rest_of_season=HitterStats(pa=100, ab=100, h=0, r=0, hr=0, rbi=0, sb=20))
-        add_hitter = Player(name="Add", player_type="hitter",
-            rest_of_season=HitterStats(pa=100, ab=100, h=0, r=0, hr=0, rbi=0, sb=10))
+        drop_hitter = Player(
+            name="Drop",
+            player_type="hitter",
+            rest_of_season=HitterStats(pa=100, ab=100, h=0, r=0, hr=0, rbi=0, sb=20),
+        )
+        add_hitter = Player(
+            name="Add",
+            player_type="hitter",
+            rest_of_season=HitterStats(pa=100, ab=100, h=0, r=0, hr=0, rbi=0, sb=10),
+        )
         result = compute_comparison_standings(
             roster_player_name="Drop",
             other_player=add_hitter,
             user_roster=[drop_hitter],
-            projected_standings=projected_standings,
+            projected_standings=_projected_from_raw(projected_standings),
             user_team_name="User",
             team_sds=team_sds,
         )
@@ -919,3 +1488,104 @@ class TestComparisonEV:
         ev_sb = result["before"]["ev_roto"]["User"]["SB_pts"]
         rank_sb = result["before"]["roto"]["User"]["SB_pts"]
         assert ev_sb != pytest.approx(rank_sb, abs=0.01)
+
+
+class TestComputeTeamTotalsPace:
+    """Regression for _compute_team_totals_pace after the canonical
+    Standings cache shape landed (commit 4d88479). The cache is now
+    ``{"effective_date", "teams": [...]}`` — iterating it as list[dict]
+    (old shape) blew up the /lineup route with AttributeError."""
+
+    def _canonical_standings_json(self, team_name, *, ip=None, pa=None):
+        from fantasy_baseball.models.standings import (
+            CategoryStats,
+            Standings,
+            StandingsEntry,
+        )
+        from fantasy_baseball.utils.constants import OpportunityStat
+
+        extras: dict[OpportunityStat, float] = {}
+        if ip is not None:
+            extras[OpportunityStat.IP] = ip
+        if pa is not None:
+            extras[OpportunityStat.PA] = pa
+        s = Standings(
+            effective_date=date(2026, 4, 21),
+            entries=[
+                StandingsEntry(
+                    team_name=team_name,
+                    team_key="469.l.5652.t.4",
+                    rank=2,
+                    stats=CategoryStats(
+                        r=146,
+                        hr=44,
+                        rbi=140,
+                        sb=26,
+                        avg=0.262,
+                        w=12,
+                        k=200,
+                        sv=11,
+                        era=4.02,
+                        whip=1.18,
+                    ),
+                    yahoo_points_for=73.5,
+                    extras=extras,
+                ),
+            ],
+        )
+        return s.to_json()
+
+    def _patch_read_cache(self, monkeypatch, payload):
+        def fake_read_cache(key, *_args, **_kwargs):
+            if key == CacheKey.STANDINGS:
+                return payload
+            return None
+
+        monkeypatch.setattr(season_data, "read_cache", fake_read_cache)
+
+    def test_reads_canonical_standings_cache_without_crashing(self, monkeypatch):
+        """The /lineup route calls into this helper; the canonical cache
+        shape must not raise AttributeError."""
+        payload = self._canonical_standings_json("Hart of the Order", ip=198.2)
+        self._patch_read_cache(monkeypatch, payload)
+
+        totals = season_data._compute_team_totals_pace(
+            players=[],
+            player_type="pitcher",
+            team_name="Hart of the Order",
+        )
+
+        # No crash; actuals come from typed standings.
+        assert totals["IP"]["actual"] == pytest.approx(198.2)
+        assert totals["W"]["actual"] == pytest.approx(12)
+        assert totals["K"]["actual"] == pytest.approx(200)
+        assert totals["ERA"]["actual"] == pytest.approx(4.02)
+
+    def test_missing_cache_is_silent(self, monkeypatch):
+        """Empty cache path (unit tests, pre-refresh): actuals default to 0."""
+        self._patch_read_cache(monkeypatch, None)
+
+        totals = season_data._compute_team_totals_pace(
+            players=[],
+            player_type="hitter",
+            team_name="Hart of the Order",
+        )
+
+        assert totals["PA"]["actual"] == 0
+        assert totals["R"]["actual"] == 0
+
+    def test_opportunity_stat_absent_when_yahoo_omits_it(self, monkeypatch):
+        """PA isn't a standard Yahoo stat in this league's standings
+        response — extras is empty, actual falls back to 0 cleanly."""
+        payload = self._canonical_standings_json("Hart of the Order")
+        self._patch_read_cache(monkeypatch, payload)
+
+        totals = season_data._compute_team_totals_pace(
+            players=[],
+            player_type="hitter",
+            team_name="Hart of the Order",
+        )
+
+        assert totals["PA"]["actual"] == 0.0
+        # Counting actuals still come through from CategoryStats.
+        assert totals["R"]["actual"] == pytest.approx(146)

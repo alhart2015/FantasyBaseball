@@ -34,8 +34,8 @@
             <tr>
                 <th>#</th>
                 <th>Team</th>
-                {% for cat in categories %}
-                <th>{{ cat }}</th>
+                {% for cat in all_categories %}
+                <th>{{ cat.value }}</th>
                 {% endfor %}
                 <th class="total-col">Total</th>
             </tr>
@@ -45,18 +45,18 @@
             <tr class="{% if team.is_user %}user-team{% endif %}">
                 <td>{{ team.rank }}</td>
                 <td class="team-name"><a href="/lineup?team={{ team.team_key }}" style="color: inherit; text-decoration: none; border-bottom: 1px dotted var(--text-secondary);">{{ team.name }}</a></td>
-                {% for cat in categories %}
+                {% for cat in all_categories %}
                 {% set i = team.color_intensity.get(cat) %}
                 <td class="stat-cell" {{ intensity_style(i) }}
-                    data-points="{{ team.roto_points[cat ~ '_pts'] | round(1) }}"
+                    data-points="{{ team.roto_points[cat] | round(1) }}"
                     data-stat="{{ team.stats[cat] }}"
-                    data-cat="{{ cat }}">
-                    {{ team.roto_points[cat ~ '_pts'] | round(1) }}
+                    data-cat="{{ cat.value }}">
+                    {{ team.roto_points[cat] | round(1) }}
                 </td>
                 {% endfor %}
-                {% set i = team.color_intensity.get("total") %}
+                {% set i = team.total_intensity if team.total_intensity is defined else None %}
                 <td class="total-col" {{ intensity_style(i) }}>
-                    {{ team.roto_points.total | round(1) }}
+                    {{ team.roto_total | round(1) }}
                 </td>
             </tr>
         {% endfor %}
@@ -78,8 +78,8 @@
             <tr>
                 <th>#</th>
                 <th>Team</th>
-                {% for cat in categories %}
-                <th>{{ cat }}</th>
+                {% for cat in all_categories %}
+                <th>{{ cat.value }}</th>
                 {% endfor %}
                 <th class="total-col">Total</th>
             </tr>
@@ -89,19 +89,19 @@
             <tr class="{% if team.is_user %}user-team{% endif %}">
                 <td>{{ team.rank }}</td>
                 <td class="team-name">{{ team.name }}</td>
-                {% for cat in categories %}
+                {% for cat in all_categories %}
                 {% set i = team.color_intensity.get(cat) %}
                 <td class="stat-cell {{ cell_class }}" {{ intensity_style(i) }}
-                    data-points="{{ team.roto_points[cat ~ '_pts'] | round(1) }}"
+                    data-points="{{ team.roto_points[cat] | round(1) }}"
                     data-stat="{{ team.stats[cat] }}"
                     data-sd="{{ team.sds.get(cat, 0) }}"
-                    data-cat="{{ cat }}">
-                    {{ team.roto_points[cat ~ '_pts'] | round(1) }}
+                    data-cat="{{ cat.value }}">
+                    {{ team.roto_points[cat] | round(1) }}
                 </td>
                 {% endfor %}
-                {% set i = team.color_intensity.get("total") %}
+                {% set i = team.total_intensity if team.total_intensity is defined else None %}
                 <td class="total-col" {{ intensity_style(i) }}>
-                    {{ team.roto_points.total | round(1) }}
+                    {{ team.roto_total | round(1) }}
                 </td>
             </tr>
         {% endfor %}

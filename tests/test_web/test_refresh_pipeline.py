@@ -50,9 +50,11 @@ class TestRefreshShape:
         with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
             refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
         data = _read(cache_dir, "standings")
-        assert isinstance(data, list)
-        assert len(data) == 12
-        for entry in data:
+        # Canonical Standings.to_json() shape: {effective_date, teams: [...]}
+        assert isinstance(data, dict)
+        assert {"effective_date", "teams"} <= data.keys()
+        assert len(data["teams"]) == 12
+        for entry in data["teams"]:
             assert {"name", "team_key", "rank", "stats"}.issubset(entry.keys())
             assert {"R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"}.issubset(
                 entry["stats"].keys()
@@ -64,7 +66,10 @@ class TestRefreshShape:
             refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
         data = _read(cache_dir, "projections")
         assert {"projected_standings", "team_sds", "fraction_remaining"} <= data.keys()
-        assert isinstance(data["projected_standings"], list)
+        # projected_standings is now ProjectedStandings.to_json() shape:
+        # {effective_date, teams: [{name, stats}]}
+        assert isinstance(data["projected_standings"], dict)
+        assert {"effective_date", "teams"} <= data["projected_standings"].keys()
         assert isinstance(data["team_sds"], dict)
         assert isinstance(data["fraction_remaining"], (int, float))
 
@@ -107,8 +112,8 @@ class TestRefreshInvariants:
     def test_every_team_in_standings_appears_in_projected_standings(self):
         standings = _read(self.cache_dir, "standings")
         projections = _read(self.cache_dir, "projections")
-        standings_names = {t["name"] for t in standings}
-        projected_names = {t["name"] for t in projections["projected_standings"]}
+        standings_names = {t["name"] for t in standings["teams"]}
+        projected_names = {t["name"] for t in projections["projected_standings"]["teams"]}
         assert standings_names == projected_names
 
     def test_every_roster_player_has_pace(self):

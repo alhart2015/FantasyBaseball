@@ -14,11 +14,11 @@ from fantasy_baseball.utils.constants import (
 
 
 def test_hitting_categories():
-    assert HITTING_CATEGORIES == ["R", "HR", "RBI", "SB", "AVG"]
+    assert [c.value for c in HITTING_CATEGORIES] == ["R", "HR", "RBI", "SB", "AVG"]
 
 
 def test_pitching_categories():
-    assert PITCHING_CATEGORIES == ["W", "K", "ERA", "WHIP", "SV"]
+    assert [c.value for c in PITCHING_CATEGORIES] == ["W", "K", "ERA", "WHIP", "SV"]
 
 
 def test_all_categories_is_union():
@@ -27,12 +27,12 @@ def test_all_categories_is_union():
 
 
 def test_rate_stats():
-    assert {"AVG", "ERA", "WHIP"} == RATE_STATS
+    assert {Category.AVG, Category.ERA, Category.WHIP} == RATE_STATS
 
 
 def test_inverse_stats_subset_of_rate():
     assert INVERSE_STATS.issubset(RATE_STATS)
-    assert {"ERA", "WHIP"} == INVERSE_STATS
+    assert {Category.ERA, Category.WHIP} == INVERSE_STATS
 
 
 def test_roster_slots_total():
@@ -57,26 +57,30 @@ def test_num_teams():
     assert NUM_TEAMS == 10
 
 
-def test_category_members_are_strings():
-    # StrEnum members must compare equal to their string values so existing
-    # consumers that pass bare strings keep working during the migration.
-    assert Category.R == "R"
-    assert Category.HR == "HR"
-    assert Category.ERA in {"ERA", "WHIP"}
-    assert "WHIP" in INVERSE_STATS
+def test_category_members_are_not_strings():
+    # Plain Enum members are NOT strings. They must only compare equal to
+    # Category members, not bare strings. .value exposes the uppercase
+    # string for I/O boundaries.
+    assert Category.R != "R"
+    assert Category.HR != "HR"
+    assert Category.R.value == "R"
+    assert Category.HR.value == "HR"
+    assert Category.ERA in {Category.ERA, Category.WHIP}
+    assert Category.WHIP in INVERSE_STATS
 
 
-def test_category_members_hash_like_strings():
-    # Dicts keyed by Category must be lookup-able with bare strings.
+def test_category_dicts_keyed_by_enum_members():
+    # Dicts keyed by Category are looked up with Category members, not
+    # bare strings.
     d = {Category.R: 1, Category.HR: 2}
-    assert d["R"] == 1
-    assert d["HR"] == 2
-    assert DEFAULT_SGP_DENOMINATORS["R"] == 20.0
+    assert d[Category.R] == 1
+    assert d[Category.HR] == 2
+    assert DEFAULT_SGP_DENOMINATORS[Category.R] == 20.0
     assert DEFAULT_SGP_DENOMINATORS[Category.AVG] == 0.005
 
 
 def test_category_enum_covers_all_categories():
-    assert {c.value for c in Category} == set(ALL_CATEGORIES)
+    assert set(Category) == set(ALL_CATEGORIES)
     assert len(Category) == 10
 
 

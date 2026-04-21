@@ -7,11 +7,12 @@ the user's side. Reports delta-roto for the user's team only.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.models.positions import BENCH_SLOTS, IL_SLOTS
-from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.trades.evaluate import (
     aggregate_player_stats,
     apply_swap_delta,
@@ -52,7 +53,7 @@ class MultiTradeResult:
     legal: bool
     reason: str | None
     delta_total: float
-    categories: dict[Category, CategoryDelta]
+    categories: dict[str, CategoryDelta]
 
 
 def player_key(player: Player) -> str:
@@ -88,7 +89,7 @@ def evaluate_multi_trade(
     opp_rosters: dict[str, list[Player]],
     waiver_pool: dict[str, Player],
     projected_standings: list[dict],
-    team_sds: dict[str, dict[Category, float]] | None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
     roster_slots: dict,
 ) -> MultiTradeResult:
     """Evaluate an arbitrary N-for-M trade with optional drops and adds.
@@ -201,22 +202,22 @@ def evaluate_multi_trade(
         else:
             post.append(t)
 
-    before_roto = score_roto(
+    before_roto = score_roto_dict(
         {t["name"]: t["stats"] for t in projected_standings},
         team_sds=team_sds,
     )
-    after_roto = score_roto(
+    after_roto = score_roto_dict(
         {t["name"]: t["stats"] for t in post},
         team_sds=team_sds,
     )
 
-    categories: dict[Category, CategoryDelta] = {}
+    categories: dict[str, CategoryDelta] = {}
     total_delta = 0.0
     for cat in ALL_CATEGORIES:
-        before_pts = before_roto[hart_name][f"{cat}_pts"]
-        after_pts = after_roto[hart_name][f"{cat}_pts"]
+        before_pts = before_roto[hart_name][f"{cat.value}_pts"]
+        after_pts = after_roto[hart_name][f"{cat.value}_pts"]
         delta = after_pts - before_pts
-        categories[cat] = CategoryDelta(
+        categories[cat.value] = CategoryDelta(
             before=before_pts,
             after=after_pts,
             delta=delta,

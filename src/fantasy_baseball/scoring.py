@@ -15,11 +15,18 @@ Provides core functions:
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from math import erf, sqrt
+from typing import Protocol
 
 from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS, Position
-from fantasy_baseball.models.standings import CategoryStats
+from fantasy_baseball.models.standings import (
+    CategoryPoints,
+    CategoryStats,
+    ProjectedStandingsEntry,
+)
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
@@ -39,6 +46,22 @@ from fantasy_baseball.utils.constants import (
     safe_float as _safe,
 )
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
+
+
+class TeamStatsRow(Protocol):
+    """Minimal shape for a standings row: ``team_name`` plus ``CategoryStats``."""
+
+    team_name: str
+    stats: CategoryStats
+
+
+class TeamStatsTable(Protocol):
+    """Any object with a sequence of ``TeamStatsRow`` entries.
+
+    Concrete implementations: :class:`Standings`, :class:`ProjectedStandings`.
+    """
+
+    entries: Sequence[TeamStatsRow]
 
 
 def _get(p, key, default=0):
@@ -374,8 +397,9 @@ def project_team_sds(
     ``displacement`` matches :func:`project_team_stats` — bench excluded,
     IL players displace their worst active positional match.
 
-    Returns ``{cat: sd}`` for every category in ``ALL_CATS``. Empty
-    roster returns zeros.
+    Returns ``{Category: sd}`` keyed by :class:`Category` enum for every
+    category in ``ALL_CATS``. Use :func:`team_sds_to_json` at the cache
+    boundary for JSON serialization. Empty roster returns zeros.
     """
     if displacement:
         roster = _apply_displacement(roster)
@@ -398,7 +422,7 @@ def project_team_sds(
                 p_sum_sq[k] += v * v
             total_ip += _stat(p, "ip")
 
-    sds: dict[Category, float] = {c: 0.0 for c in ALL_CATS}
+    sds: dict[Category, float] = dict.fromkeys(ALL_CATS, 0.0)
     for stat_key, cat in [
         ("r", Category.R),
         ("hr", Category.HR),
@@ -419,38 +443,20 @@ def project_team_sds(
     return sds
 
 
-def build_projected_standings(
-    team_rosters: dict[str, list],
-) -> list[dict]:
-    """Build the projected_standings list written to the projections cache.
-
-    Each entry has keys ``name``, ``team_key`` (always empty — the
-    consumer fills it from standings if needed), ``rank`` (always 0 —
-    ranking is computed downstream), and ``stats`` (the team's projected
-    category totals from :func:`project_team_stats` with
-    ``displacement=True``, serialized via ``CategoryStats.to_dict``).
-    """
-    return [
-        {
-            "name": tname,
-            "team_key": "",
-            "rank": 0,
-            "stats": project_team_stats(roster, displacement=True).to_dict(),
-        }
-        for tname, roster in team_rosters.items()
-    ]
-
-
 def build_team_sds(
     team_rosters: dict[str, list],
     sd_scale: float,
 ) -> dict[str, dict[Category, float]]:
-    """Build the team_sds dict written to the projections cache.
+    """Build the typed ``team_sds`` table for a set of team rosters.
 
     Each team's per-category SDs from :func:`project_team_sds` are
     scaled by ``sd_scale`` — typically ``sqrt(fraction_remaining)`` so
     variance damps as the season progresses and less of the roto total
     is still up for grabs.
+
+    Returns ``{team_name: {Category: sd}}``. Use
+    :func:`team_sds_to_json` / :func:`team_sds_from_json` at the cache
+    I/O boundary; in-memory consumers index by :class:`Category` enum.
     """
     return {
         tname: {
@@ -460,11 +466,37 @@ def build_team_sds(
     }
 
 
-def score_roto(
-    all_team_stats: dict,
-    *,
-    team_sds: dict[str, dict[Category, float]] | None = None,
+def team_sds_to_json(
+    team_sds: Mapping[str, Mapping[Category, float]],
 ) -> dict[str, dict[str, float]]:
+    """Serialize a typed ``team_sds`` table for JSON-backed caches.
+
+    Inverse of :func:`team_sds_from_json`. Inner keys become the
+    uppercase string form of :class:`Category` (``"R"``, ``"HR"``, …).
+    """
+    return {
+        team: {cat.value: float(sd) for cat, sd in sds.items()} for team, sds in team_sds.items()
+    }
+
+
+def team_sds_from_json(
+    raw: Mapping[str, Mapping[str, float]],
+) -> dict[str, dict[Category, float]]:
+    """Deserialize a JSON-shaped ``team_sds`` payload into the typed form.
+
+    Inverse of :func:`team_sds_to_json`. Missing category keys default
+    to 0.0; unknown keys are ignored.
+    """
+    return {
+        team: {cat: float(sds.get(cat.value, 0.0)) for cat in ALL_CATS} for team, sds in raw.items()
+    }
+
+
+def score_roto(
+    standings: TeamStatsTable,
+    *,
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None,
+) -> dict[str, CategoryPoints]:
     """Assign expected-value roto points per team per category.
 
     For each team in each category, points equal
@@ -478,28 +510,33 @@ def score_roto(
     including the averaged-ranks convention on exact ties.
 
     Args:
-        all_team_stats: ``{team: stats}``. Values can be ``dict`` or
-            ``CategoryStats`` — both support ``[cat]`` indexing.
-        team_sds: optional ``{team: {cat: sd}}``. ``None`` disables
+        standings: any :class:`TeamStatsTable` — concretely
+            :class:`Standings` or :class:`ProjectedStandings`. Each
+            entry supplies ``team_name`` and a :class:`CategoryStats`
+            under ``.stats``.
+        team_sds: optional ``{team: {Category: sd}}``. ``None`` disables
             uncertainty (exact-rank behavior).
 
     Returns:
-        ``{team: {R_pts, HR_pts, ..., total}}``. All values are floats.
-        Points range from 1 (last) to N (first) for N teams.
+        ``{team_name: CategoryPoints}``. ``CategoryPoints.values`` is
+        the per-category map (keyed by :class:`Category` enum); ``total``
+        is the sum across all categories.
     """
-    teams = list(all_team_stats.keys())
-    results: dict[str, dict[str, float]] = {t: {} for t in teams}
+    teams = [e.team_name for e in standings.entries]
+    stats_by_team: dict[str, CategoryStats] = {e.team_name: e.stats for e in standings.entries}
+
+    per_team_cat: dict[str, dict[Category, float]] = {t: {} for t in teams}
 
     for cat in ALL_CATS:
         higher_is_better = cat not in INVERSE_CATS
         for me in teams:
-            mu_me = all_team_stats[me][cat]
+            mu_me = stats_by_team[me][cat]
             sd_me = team_sds.get(me, {}).get(cat, 0.0) if team_sds else 0.0
             pts = 1.0
             for other in teams:
-                if other is me:
+                if other == me:
                     continue
-                mu_o = all_team_stats[other][cat]
+                mu_o = stats_by_team[other][cat]
                 sd_o = team_sds.get(other, {}).get(cat, 0.0) if team_sds else 0.0
                 pts += _prob_beats(
                     mu_me,
@@ -508,9 +545,65 @@ def score_roto(
                     sd_o,
                     higher_is_better=higher_is_better,
                 )
-            results[me][f"{cat}_pts"] = pts
+            per_team_cat[me][cat] = pts
 
-    for t in results:
-        results[t]["total"] = sum(results[t].get(f"{c}_pts", 0.0) for c in ALL_CATS)
+    return {
+        t: CategoryPoints(
+            values=per_team_cat[t],
+            total=sum(per_team_cat[t].values()),
+        )
+        for t in teams
+    }
 
-    return results
+
+@dataclass
+class _AdHocStatsTable:
+    """Private adapter for callers that still hold a ``{team: stats}`` dict.
+
+    Implements the :class:`TeamStatsTable` protocol so those sites can
+    call ``score_roto`` without building a full ``ProjectedStandings``.
+    Phase 3.2+ migrates them to typed standings; until then, this keeps
+    the legacy path minimal and localized.
+    """
+
+    entries: Sequence[TeamStatsRow]
+
+
+def _dict_table(
+    stats_by_team: Mapping[str, Mapping[str, float] | CategoryStats],
+) -> _AdHocStatsTable:
+    """Wrap a ``{team: stats}`` dict in a :class:`TeamStatsTable`.
+
+    Accepts either ``CategoryStats`` values or uppercase-string-keyed
+    dicts. Used internally by :func:`score_roto_dict` and by legacy
+    callers that still operate on dict-shaped stats.
+    """
+    entries: list[TeamStatsRow] = []
+    for name, stats in stats_by_team.items():
+        cs = stats if isinstance(stats, CategoryStats) else CategoryStats.from_dict(stats)
+        entries.append(ProjectedStandingsEntry(team_name=name, stats=cs))
+    return _AdHocStatsTable(entries=entries)
+
+
+def score_roto_dict(
+    all_team_stats: Mapping[str, Mapping[str, float] | CategoryStats],
+    *,
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None,
+) -> dict[str, dict[str, float]]:
+    """Dict-shaped wrapper around :func:`score_roto`.
+
+    Takes stats as ``{team: {stat_str: value}}`` (used by
+    swap-simulation sites that mutate one team's row in-place) and
+    returns ``{team: {"R_pts": ..., "HR_pts": ..., ..., "total": ...}}``
+    for :mod:`delta_roto` and friends that still compare via
+    string-keyed per-category deltas. ``team_sds`` is the typed
+    :class:`Category`-keyed form — no string-keyed fallback.
+    """
+    roto = score_roto(_dict_table(all_team_stats), team_sds=team_sds)
+    return {
+        team: {
+            **{f"{cat.value}_pts": cp.values[cat] for cat in ALL_CATS},
+            "total": cp.total,
+        }
+        for team, cp in roto.items()
+    }

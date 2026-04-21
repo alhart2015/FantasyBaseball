@@ -22,7 +22,7 @@ from typing import Any
 import pandas as pd
 
 from fantasy_baseball.models.league import League
-from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
     HITTING_COUNTING,
@@ -219,23 +219,24 @@ def compute_current_spoe(
             "results": [],
         }
 
-    projected_roto = score_roto({t: expected_stats[t] for t in common})
-    actual_roto = score_roto({t: actual_stats[t] for t in common})
+    projected_roto = score_roto_dict({t: expected_stats[t] for t in common})
+    actual_roto = score_roto_dict({t: actual_stats[t] for t in common})
 
     results: list[dict] = []
     for team in sorted(common):
         total_spoe = 0.0
         for cat in ALL_CATEGORIES:
-            proj_pts = projected_roto[team].get(f"{cat}_pts", 0)
-            act_pts = actual_roto[team].get(f"{cat}_pts", 0)
+            key = cat.value
+            proj_pts = projected_roto[team].get(f"{key}_pts", 0)
+            act_pts = actual_roto[team].get(f"{key}_pts", 0)
             spoe = act_pts - proj_pts
             total_spoe += spoe
             results.append(
                 {
                     "team": team,
-                    "category": cat,
-                    "projected_stat": expected_stats[team][cat],
-                    "actual_stat": actual_stats[team][cat],
+                    "category": key,
+                    "projected_stat": expected_stats[team][key],
+                    "actual_stat": actual_stats[team][key],
                     "projected_pts": proj_pts,
                     "actual_pts": act_pts,
                     "spoe": spoe,

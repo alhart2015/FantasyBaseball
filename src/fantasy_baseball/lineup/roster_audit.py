@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from fantasy_baseball.lineup.delta_roto import compute_delta_roto
 from fantasy_baseball.lineup.optimizer import (
-    HitterAssignment, PitcherStarter,
-    optimize_hitter_lineup, optimize_pitcher_lineup,
+    HitterAssignment,
+    PitcherStarter,
+    optimize_hitter_lineup,
+    optimize_pitcher_lineup,
 )
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
-from fantasy_baseball.utils.constants import IL_STATUSES
+from fantasy_baseball.utils.constants import IL_STATUSES, Category
 from fantasy_baseball.utils.positions import can_cover_slots
 
 
@@ -23,8 +26,14 @@ logger = logging.getLogger(__name__)
 
 
 POSITION_POOL_SIZES: dict[str, int] = {
-    "C": 5, "1B": 5, "2B": 5, "3B": 5, "SS": 5,
-    "OF": 15, "SP": 20, "RP": 10,
+    "C": 5,
+    "1B": 5,
+    "2B": 5,
+    "3B": 5,
+    "SS": 5,
+    "OF": 15,
+    "SP": 20,
+    "RP": 10,
 }
 
 # Projected-SV threshold separating starters from relievers. Yahoo reports
@@ -54,15 +63,15 @@ def build_position_pools(
     for pos, n in POSITION_POOL_SIZES.items():
         if pos == "SP":
             eligible = [
-                fa for fa in free_agents
-                if fa.player_type == PlayerType.PITCHER
-                and fa.rest_of_season.sv < RP_SV_THRESHOLD
+                fa
+                for fa in free_agents
+                if fa.player_type == PlayerType.PITCHER and fa.rest_of_season.sv < RP_SV_THRESHOLD
             ]
         elif pos == "RP":
             eligible = [
-                fa for fa in free_agents
-                if fa.player_type == PlayerType.PITCHER
-                and fa.rest_of_season.sv >= RP_SV_THRESHOLD
+                fa
+                for fa in free_agents
+                if fa.player_type == PlayerType.PITCHER and fa.rest_of_season.sv >= RP_SV_THRESHOLD
             ]
         else:
             eligible = [fa for fa in free_agents if pos in fa.positions]
@@ -102,21 +111,20 @@ def worst_roster_by_position(
 
     result: dict[str, str] = {}
     for pos in HITTER_SOURCE_POSITIONS:
-        eligible = [
-            p for p in roster
-            if p.player_type == PlayerType.HITTER and pos in p.positions
-        ]
+        eligible = [p for p in roster if p.player_type == PlayerType.HITTER and pos in p.positions]
         if eligible:
             result[pos] = min(eligible, key=_sgp).name
 
     sps = [
-        p for p in roster
+        p
+        for p in roster
         if p.player_type == PlayerType.PITCHER
         and p.rest_of_season is not None
         and p.rest_of_season.sv < RP_SV_THRESHOLD
     ]
     rps = [
-        p for p in roster
+        p
+        for p in roster
         if p.player_type == PlayerType.PITCHER
         and p.rest_of_season is not None
         and p.rest_of_season.sv >= RP_SV_THRESHOLD
@@ -159,9 +167,7 @@ def candidates_for_player(
     if player.player_type == PlayerType.PITCHER:
         source_positions = ["SP", "RP"]
     else:
-        source_positions = [
-            p for p in player.positions if p not in LINEUP_ONLY_SLOTS
-        ]
+        source_positions = [p for p in player.positions if p not in LINEUP_ONLY_SLOTS]
 
     seen: set[str] = set()
     result: list[Player] = []
@@ -218,7 +224,7 @@ def audit_roster(
     *,
     projected_standings: list[dict],
     team_name: str,
-    team_sds: dict[str, dict[str, float]] | None = None,
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None,
     optimal_hitters: list[HitterAssignment] | None = None,
     optimal_pitchers: list[PitcherStarter] | None = None,
 ) -> list[AuditEntry]:
@@ -341,7 +347,11 @@ def audit_roster(
                 new_hitters = [p for p in new_roster if p.player_type != PlayerType.PITCHER]
                 if not can_cover_slots([list(p.positions) for p in new_hitters], roster_slots):
                     continue
-            if player.player_type == PlayerType.PITCHER or fa.player_type == PlayerType.PITCHER:
+            # Pitcher count threshold: only pitcher→hitter swaps reduce the
+            # count. Same-type pitcher swaps preserve it — gating on p_slots
+            # would reject every upgrade when the user's active pitcher count
+            # is already below p_slots (common with IL pitchers).
+            if player.player_type == PlayerType.PITCHER and fa.player_type == PlayerType.HITTER:
                 if len(new_pitchers) < p_slots:
                     continue
 
@@ -356,21 +366,26 @@ def audit_roster(
                 )
             except (ValueError, KeyError) as exc:
                 logger.warning(
-                    "deltaRoto failed for %s → %s: %s", player.name, fa.name, exc,
+                    "deltaRoto failed for %s → %s: %s",
+                    player.name,
+                    fa.name,
+                    exc,
                 )
                 continue
 
             sgp_gap = round(fa_sgp.get(fa.name, 0.0) - player_sgp.get(player.name, 0.0), 2)
 
-            scored.append({
-                "name": fa.name,
-                "player_type": fa.player_type.value,
-                "positions": list(fa.positions),
-                "sgp": round(fa_sgp.get(fa.name, 0.0), 2),
-                "gap": sgp_gap,
-                "delta_roto": dr.to_dict(),
-                "player_id": fa.yahoo_id,
-            })
+            scored.append(
+                {
+                    "name": fa.name,
+                    "player_type": fa.player_type.value,
+                    "positions": list(fa.positions),
+                    "sgp": round(fa_sgp.get(fa.name, 0.0), 2),
+                    "gap": sgp_gap,
+                    "delta_roto": dr.to_dict(),
+                    "player_id": fa.yahoo_id,
+                }
+            )
 
         scored.sort(key=lambda c: c["delta_roto"]["total"], reverse=True)
         entry.candidates = scored
@@ -392,22 +407,22 @@ def audit_roster(
     # sort to the bottom).
     entries.sort(
         key=lambda e: (
-            e.candidates[0]["delta_roto"]["total"]
-            if e.best_fa is not None
-            else float("-inf")
+            e.candidates[0]["delta_roto"]["total"] if e.best_fa is not None else float("-inf")
         ),
         reverse=True,
     )
 
     # Add IL players at the end — they can't be swapped
     for player in il_players:
-        entries.append(AuditEntry(
-            player=player.name,
-            player_type=player.player_type.value,
-            positions=list(player.positions),
-            slot="IL",
-            player_sgp=0.0,
-            player_id=player.yahoo_id,
-        ))
+        entries.append(
+            AuditEntry(
+                player=player.name,
+                player_type=player.player_type.value,
+                positions=list(player.positions),
+                slot="IL",
+                player_sgp=0.0,
+                player_id=player.yahoo_id,
+            )
+        )
 
     return entries

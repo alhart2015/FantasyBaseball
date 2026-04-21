@@ -32,7 +32,7 @@ from fantasy_baseball.draft.recommender import (
     compute_slot_scarcity_order,
 )
 from fantasy_baseball.draft.strategy import STRATEGIES, build_player_lookup
-from fantasy_baseball.scoring import project_team_stats, score_roto
+from fantasy_baseball.scoring import project_team_stats, score_roto_dict
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
@@ -153,17 +153,17 @@ def _score_roto(team_players, config, full_board, board):
             all_pitchers,
             config.roster_slots,
         )
-        team_stats[tname] = project_team_stats(list(hitters) + list(pitchers))
+        team_stats[tname] = project_team_stats(list(hitters) + list(pitchers)).to_dict()
         team_meta[tname] = {"nh": len(hitters), "np": len(pitchers)}
 
-    roto = score_roto(team_stats)
+    roto = score_roto_dict(team_stats)
 
     # Convert to legacy list-of-dicts format expected by callers
     results = []
     for tname in team_stats:
         entry = {"team": tname, **team_stats[tname], **team_meta[tname]}
         for cat in ALL_CATS:
-            entry[f"{cat}_p"] = roto[tname].get(f"{cat}_pts", 0)
+            entry[f"{cat.value}_p"] = roto[tname].get(f"{cat.value}_pts", 0)
         entry["tot"] = roto[tname]["total"]
         results.append(entry)
 
@@ -898,7 +898,7 @@ def main():
                 h_slots,
                 p_slots,
             )
-            sim_roto = score_roto(sim_stats)
+            sim_roto = score_roto_dict(sim_stats)
             ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
             for rk, (tn, pts) in enumerate(ranked, 1):
                 total = pts["total"]
