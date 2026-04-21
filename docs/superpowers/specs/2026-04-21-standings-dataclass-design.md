@@ -29,12 +29,12 @@ Goal: collapse the web pipeline (Yahoo fetch → cache → Flask routes → temp
 
 - Web/season pipeline standings: construction, cache I/O, consumers, Flask routes, Jinja template.
 - Redis persistence format: `write_standings_snapshot`, `get_standings_day`, `get_latest_standings`, `get_standings_history`, `League.from_redis`.
+- One-shot rewrite of the `standings_history` Redis hash (and the `cache:standings` key / `data/cache/standings.json` file) into the canonical shape. After the rewrite, the legacy parser is deleted — `Standings.from_json` accepts canonical only.
 - `Category` enum: flip from `StrEnum` to plain `Enum`.
 
 **Out of scope:**
 
 - `scripts/simulate_draft.py`'s nested standings shape. It's isolated from the main pipeline; leave alone.
-- Backfilling legacy Redis history entries. New writes use the canonical shape; `from_json` accepts both shapes transparently so reads continue to work. A rewrite pass can happen later if desired.
 
 ## Design
 
@@ -124,7 +124,7 @@ class Standings:
     def from_yahoo(cls, raw: list[dict], effective_date: date) -> "Standings": ...
     @classmethod
     def from_json(cls, d: dict) -> "Standings":
-        """Accept canonical + legacy shapes. Canonical: {'effective_date', 'teams': [{'name', 'team_key', 'rank', 'yahoo_points_for', 'stats': {UPPERCASE}}]}. Legacy: 'team' key, lowercase stats, no wrapper date."""
+        """Canonical shape only: {'effective_date', 'teams': [{'name', 'team_key', 'rank', 'yahoo_points_for', 'stats': {UPPERCASE}}]}. Raises ValueError on legacy/unknown shapes."""
     def to_json(self) -> dict: ...
 
 # Projected standings
@@ -187,10 +187,29 @@ def score_roto(
 ### Redis / cache I/O boundary
 
 - `redis_store.write_standings_snapshot(standings: Standings, key: str)` → calls `standings.to_json()`. Writes canonical shape (`"name"`, UPPERCASE stat keys, includes `yahoo_points_for`).
-- `redis_store.get_standings_day(key: str, effective_date: date) -> Standings | None` → calls `Standings.from_json()`. Accepts both canonical and legacy shapes.
+- `redis_store.get_standings_day(key: str, effective_date: date) -> Standings | None` → calls `Standings.from_json()`. Canonical shape only; legacy shapes raise.
 - `get_standings_history()` yields `list[Standings]`, ordered by effective_date.
 - `League.from_redis()` stops doing its own parsing — it calls `Standings.from_json()`.
 - `season_data.read_cache(CacheKey.STANDINGS)` / `write_cache(...)` use `Standings.to_json`/`from_json`. Cache JSON and Redis values are byte-identical.
+
+### One-shot Redis rewrite
+
+Before Phase 4 ships, run a migration script that rewrites every entry in the `standings_history` hash from the legacy shape to canonical:
+
+```
+scripts/migrate_standings_history.py
+```
+
+Behavior:
+
+- Read every field in the `standings_history` hash (each field is a `YYYY-MM-DD` snapshot date, each value is JSON).
+- Parse using a module-private `_from_legacy_json()` helper that lives in `migrate_standings_history.py` — **not** in `Standings`. Keeps the legacy parser off the production class's surface so nobody accidentally keeps reaching for it.
+- Construct a `Standings` object. Write back via `standings.to_json()` — same Redis field, canonical payload.
+- Skip entries that already parse cleanly via `Standings.from_json()` (idempotent: a second run is a no-op).
+- Log every rewrite and every skip, and a final count. No silent conversions.
+- Also rewrite the single `cache:standings` Redis key and the `data/cache/standings.json` file if they're still in the legacy shape.
+
+The script runs once against the live Redis (and dev/local instance, if any) in the same PR that deletes the legacy code paths. Use `redis_store` access patterns already present in the codebase — don't open a raw Redis client. After the rewrite, `Standings.from_json` contains no legacy-shape branch.
 
 `ProjectedStandings` gets the same `to_json`/`from_json` treatment; the projections cache writes `ProjectedStandings.to_json()`.
 
@@ -229,7 +248,7 @@ Each phase is its own commit, touches ≤5 files, and ends with `pytest -v && ru
 - Edit `src/fantasy_baseball/models/standings.py`: add `Standings`, `ProjectedStandings`, `StandingsEntry` (non-optional rank/team_key), `ProjectedStandingsEntry`, `CategoryPoints`. Rewrite `CategoryStats` with typed `__getitem__`. Delete `CATEGORY_ORDER`.
 - Edit `src/fantasy_baseball/utils/constants.py`: `Category(Enum)` instead of `Category(StrEnum)`. Update docstring.
 - Fix any `cat == "X"` / `stats["X"]` sites that blow up. Grep methodically (Rule 10): direct comparisons, `in {...}` sets, dict keys in tests, JSON serialization call sites.
-- Tests: unit tests for new types' `from_json`/`to_json` round-trip, including the legacy Redis shape acceptance.
+- Tests: unit tests for new types' `from_json`/`to_json` round-trip on the canonical shape; assert `from_json` raises `ValueError` on a legacy-shape fixture.
 
 **Phase 2 — construction sites.** Migrate every producer to return the new types.
 - `src/fantasy_baseball/lineup/yahoo_roster.py`: `fetch_standings()` returns `Standings`.
@@ -249,13 +268,15 @@ Each phase is its own commit, touches ≤5 files, and ends with `pytest -v && ru
 - `src/fantasy_baseball/web/templates/season/standings.html`: iterate `Category` enum, no string-keyed access.
 - `src/fantasy_baseball/web/refresh_pipeline.py`: `_fetch_standings_and_roster`, `_build_projected_standings`, and all the passthrough sites carry typed objects.
 
-**Phase 5 — deletion.**
+**Phase 5 — deletion + Redis rewrite.**
+- Run `scripts/migrate_standings_history.py` against live Redis. Verify every field parses via `Standings.from_json` afterward.
 - Remove `StandingsSnapshot` (no alias).
 - Remove `build_projected_standings()`.
 - Remove `_standings_to_snapshot()`.
 - Remove dict-compat `get`/`keys`/`__iter__`.
 - Grep for any remaining `list[dict]` standings annotations and tighten them.
 - `vulture` must report no new dead-code findings from this refactor.
+- The migration script itself can stay in `scripts/` as archival — it's self-contained and a one-shot tool like other `scripts/backfill_*.py` entries.
 
 **Verification per phase (CLAUDE.md Rule 4):**
 ```
@@ -271,7 +292,8 @@ Output pasted into the PR description. Refresh pipeline exercised end-to-end loc
 ## Testing
 
 - **Round-trip:** `Standings.from_json(standings.to_json()) == standings` for representative fixtures. Same for `ProjectedStandings`.
-- **Legacy shape acceptance:** `Standings.from_json(<legacy Redis shape>)` produces the same object as `Standings.from_json(<canonical shape>)` for equivalent data. Fixture stolen from `tests/test_data/test_redis_store_standings.py`.
+- **Legacy shape rejection:** `Standings.from_json(<legacy Redis shape>)` raises `ValueError`. Ensures no silent acceptance path remains.
+- **Migration idempotence:** running `scripts/migrate_standings_history.py` against a fake Redis prefilled with mixed legacy + canonical fields produces all-canonical output; a second run reports zero rewrites. Fixture stolen from `tests/test_data/test_redis_store_standings.py`.
 - **Typed access:** `stats["R"]` raises `TypeError`; `stats[Category.R]` returns the float.
 - **Enum comparisons:** `Category.HR == "HR"` is `False` after the `Enum` flip. Existing tests that assume `StrEnum` semantics get fixed, not deleted.
 - **Score_roto:** refactored `score_roto` produces identical `CategoryPoints` values to the current dict output for a fixed fixture, up to float precision.
@@ -280,4 +302,4 @@ Output pasted into the PR description. Refresh pipeline exercised end-to-end loc
 
 ## Open items
 
-None at time of writing. If the legacy Redis shape turns out to carry fields we didn't plan for (e.g., older schemas with fewer categories), `Standings.from_json` surfaces a validation error instead of silently zero-filling — handle case-by-case.
+None at time of writing. If the live `standings_history` hash turns out to carry fields outside the legacy schema we're expecting (e.g., older entries with fewer categories), the migration script surfaces a validation error on that entry instead of silently zero-filling — handle case-by-case before re-running.
