@@ -1,4 +1,4 @@
-from fantasy_baseball.models.standings import Standings
+from fantasy_baseball.models.standings import ProjectedStandings, Standings
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS, Category
 
 FULL_CONFIDENCE_GAMES: int = 81
@@ -32,7 +32,7 @@ def _estimate_season_progress(standings: Standings) -> float:
 
 
 def _leverage_from_standings(
-    standings: Standings,
+    standings: Standings | ProjectedStandings,
     user_team_name: str,
     attack_weight: float,
     defense_weight: float,
@@ -135,7 +135,7 @@ def calculate_leverage(
     attack_weight: float = 0.6,
     defense_weight: float = 0.4,
     season_progress: float | None = None,
-    projected_standings: Standings | None = None,
+    projected_standings: Standings | ProjectedStandings | None = None,
 ) -> dict[str, float]:
     """Calculate leverage weights for each stat category based on standings gaps.
 

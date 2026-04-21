@@ -81,6 +81,30 @@ def standings() -> list[dict]:
     return out
 
 
+def _standings_obj(effective_date_iso: str):
+    """Build a typed :class:`Standings` for the fixture data."""
+    from datetime import date
+
+    from fantasy_baseball.models.standings import (
+        CategoryStats,
+        Standings,
+        StandingsEntry,
+    )
+
+    return Standings(
+        effective_date=date.fromisoformat(effective_date_iso),
+        entries=[
+            StandingsEntry(
+                team_name=row["name"],
+                team_key=row["team_key"],
+                rank=row["rank"],
+                stats=CategoryStats.from_dict(row["stats"]),
+            )
+            for row in standings()
+        ],
+    )
+
+
 def roster_for_team(team_index: int) -> list[dict]:
     """One team's roster: 6 hitters, 5 pitchers (1 closer + 4 starters)."""
     base_h = team_index * 6
@@ -248,18 +272,7 @@ def patched_refresh_environment(
             for r in team_roster
         ]
         write_roster_snapshot(fake_redis, snapshot_date, tname, entries)
-    write_standings_snapshot(
-        fake_redis, snapshot_date,
-        {"teams": [
-            {
-                "team": s["name"],
-                "team_key": s["team_key"],
-                "rank": s["rank"],
-                **{k.lower(): v for k, v in s["stats"].items()},
-            }
-            for s in standings()
-        ]},
-    )
+    write_standings_snapshot(fake_redis, _standings_obj(snapshot_date))
 
     # FA players — attach ROS stats so audit_roster's SGP calculation
     # sees real numbers instead of None.
@@ -282,8 +295,9 @@ def patched_refresh_environment(
         tname = team_keys.get(team_key)
         return rosters.get(tname, [])
 
-    def _fetch_standings(league):
-        return standings()
+    def _fetch_standings(league, effective_date=None):
+        eff_iso = effective_date.isoformat() if effective_date is not None else snapshot_date
+        return _standings_obj(eff_iso)
 
     def _fetch_scoring_period(league):
         return scoring_period()

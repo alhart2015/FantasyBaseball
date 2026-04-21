@@ -20,19 +20,22 @@ def test_index_redirects_to_standings(client):
 
 
 def test_standings_page_renders(client):
-    resp = client.get("/standings")
+    with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
+        resp = client.get("/standings")
     assert resp.status_code == 200
     assert b"Standings" in resp.data
 
 
 def test_lineup_page_renders(client):
-    resp = client.get("/lineup")
+    with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
+        resp = client.get("/lineup")
     assert resp.status_code == 200
     assert b"Lineup" in resp.data
 
 
 def test_trades_page_renders(client):
-    resp = client.get("/waivers-trades")
+    with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
+        resp = client.get("/waivers-trades")
     assert resp.status_code == 200
     assert b"Trades" in resp.data
 
@@ -44,7 +47,8 @@ def test_players_page_renders(client):
 
 
 def test_sidebar_nav_links_present(client):
-    resp = client.get("/standings")
+    with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
+        resp = client.get("/standings")
     html = resp.data.decode()
     assert 'href="/standings"' in html
     assert 'href="/lineup"' in html
@@ -52,20 +56,27 @@ def test_sidebar_nav_links_present(client):
 
 
 def test_active_page_highlighted(client):
-    resp = client.get("/standings")
+    with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
+        resp = client.get("/standings")
     html = resp.data.decode()
     assert 'active' in html
 
 
 def _mock_standings():
+    """Canonical Standings.to_json() shape (post-refactor cache payload)."""
     teams = [
         ("Hart of the Order", {"R": 300, "HR": 90, "RBI": 290, "SB": 50, "AVG": 0.270,
                                "W": 35, "K": 600, "SV": 25, "ERA": 3.50, "WHIP": 1.18}),
         ("SkeleThor", {"R": 310, "HR": 85, "RBI": 295, "SB": 40, "AVG": 0.265,
                        "W": 38, "K": 580, "SV": 30, "ERA": 3.40, "WHIP": 1.15}),
     ]
-    return [{"name": n, "team_key": f"key_{i}", "rank": i + 1, "stats": s}
-            for i, (n, s) in enumerate(teams)]
+    return {
+        "effective_date": "2026-04-01",
+        "teams": [
+            {"name": n, "team_key": f"key_{i}", "rank": i + 1, "stats": s}
+            for i, (n, s) in enumerate(teams)
+        ],
+    }
 
 
 def test_standings_renders_table_with_data(client):
@@ -103,14 +114,17 @@ def test_full_standings_page_with_cached_data(client, tmp_path):
     season_data.CACHE_DIR = tmp_path
 
     try:
-        standings = [
-            {"name": "Hart of the Order", "team_key": "k1", "rank": 1,
-             "stats": {"R": 300, "HR": 90, "RBI": 290, "SB": 50, "AVG": 0.270,
-                       "W": 35, "K": 600, "SV": 25, "ERA": 3.50, "WHIP": 1.18}},
-            {"name": "SkeleThor", "team_key": "k2", "rank": 2,
-             "stats": {"R": 310, "HR": 85, "RBI": 295, "SB": 40, "AVG": 0.265,
-                       "W": 38, "K": 580, "SV": 30, "ERA": 3.40, "WHIP": 1.15}},
-        ]
+        standings = {
+            "effective_date": "2026-04-01",
+            "teams": [
+                {"name": "Hart of the Order", "team_key": "k1", "rank": 1,
+                 "stats": {"R": 300, "HR": 90, "RBI": 290, "SB": 50, "AVG": 0.270,
+                           "W": 35, "K": 600, "SV": 25, "ERA": 3.50, "WHIP": 1.18}},
+                {"name": "SkeleThor", "team_key": "k2", "rank": 2,
+                 "stats": {"R": 310, "HR": 85, "RBI": 295, "SB": 40, "AVG": 0.265,
+                           "W": 38, "K": 580, "SV": 30, "ERA": 3.40, "WHIP": 1.15}},
+            ],
+        }
         season_data.write_cache(CacheKey.STANDINGS, standings, tmp_path)
         season_data.write_cache(CacheKey.META, {"last_refresh": "8:32 AM", "week": "3"}, tmp_path)
 

@@ -16,8 +16,8 @@ from fantasy_baseball.web.season_data import (
 from fantasy_baseball.web.season_app import create_app
 
 
-def _sample_standings():
-    """Minimal 3-team standings for tests (raw list[dict] — cache shape)."""
+def _sample_teams() -> list[dict]:
+    """Raw ``{name, team_key, rank, stats}`` rows used in multiple tests."""
     teams = [
         (
             "Hart of the Order",
@@ -73,7 +73,16 @@ def _sample_standings():
     ]
 
 
-def _standings_from_raw(raw: list[dict]) -> Standings:
+def _sample_standings() -> dict:
+    """Canonical ``Standings.to_json()`` shape for cache fixtures."""
+    return {
+        "effective_date": "2026-04-01",
+        "teams": _sample_teams(),
+    }
+
+
+def _standings_from_raw(raw: list[dict] | dict) -> Standings:
+    rows = raw["teams"] if isinstance(raw, dict) else raw
     return Standings(
         effective_date=date(2026, 4, 1),
         entries=[
@@ -84,7 +93,7 @@ def _standings_from_raw(raw: list[dict]) -> Standings:
                 stats=CategoryStats.from_dict(t.get("stats", {})),
                 yahoo_points_for=t.get("points_for"),
             )
-            for t in raw
+            for t in rows
         ],
     )
 

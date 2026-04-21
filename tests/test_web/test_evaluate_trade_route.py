@@ -87,12 +87,15 @@ def test_evaluate_trade_returns_legal_result_shape(client, monkeypatch):
         "ERA": 3.80,
         "WHIP": 1.25,
     }
-    projected_standings = [
-        {"name": "Hart", "stats": dict(standings_stats)},
-        {"name": "Rival", "stats": dict(standings_stats)},
-        {"name": "T3", "stats": dict(standings_stats)},
-        {"name": "T4", "stats": dict(standings_stats)},
-    ]
+    projected_standings = {
+        "effective_date": "2026-04-01",
+        "teams": [
+            {"name": "Hart", "stats": dict(standings_stats)},
+            {"name": "Rival", "stats": dict(standings_stats)},
+            {"name": "T3", "stats": dict(standings_stats)},
+            {"name": "T4", "stats": dict(standings_stats)},
+        ],
+    }
 
     _fake_cache(
         monkeypatch,

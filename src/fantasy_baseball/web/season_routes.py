@@ -12,9 +12,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.standings import (
-    CategoryStats,
     ProjectedStandings,
-    ProjectedStandingsEntry,
     Standings,
     StandingsEntry,
 )
@@ -22,39 +20,40 @@ from fantasy_baseball.utils.constants import ALL_CATEGORIES, RATE_STATS
 from fantasy_baseball.web.season_data import CacheKey, read_cache, read_meta
 
 
-def _standings_from_cache(raw: list[dict]) -> Standings:
-    """Build a typed ``Standings`` from a raw cache ``list[dict]``.
+def _standings_from_cache(raw: dict) -> Standings:
+    """Build a typed ``Standings`` from the canonical cache payload.
 
-    Transitional boundary helper: Yahoo fetch still writes
-    ``list[dict]`` into ``cache:standings`` / ``cache:projections``.
-    Phase 4.3 will migrate the refresh pipeline to store typed
-    ``Standings.to_json()`` payloads; until then, routes convert here.
+    The refresh pipeline writes ``Standings.to_json()`` (shape
+    ``{"effective_date", "teams": [...]}``). Route handlers call this
+    to rehydrate on read.
     """
+    return Standings.from_json(raw)
+
+
+def _projected_from_cache(raw: dict) -> ProjectedStandings:
+    """Build a typed ``ProjectedStandings`` from the canonical cache payload."""
+    return ProjectedStandings.from_json(raw)
+
+
+def _projected_as_standings(raw: dict) -> Standings:
+    """Adapt a cached ``ProjectedStandings`` into a ``Standings`` for display.
+
+    ``format_standings_for_display`` takes a ``Standings``, but the
+    projected/preseason standings column renders the same shape from
+    a ``ProjectedStandings`` payload. We fill ``team_key``/``rank`` with
+    placeholders and let the display layer compute rank from roto totals.
+    """
+    projected = ProjectedStandings.from_json(raw)
     return Standings(
-        effective_date=date.min,
+        effective_date=projected.effective_date,
         entries=[
             StandingsEntry(
-                team_name=t["name"],
-                team_key=t.get("team_key", ""),
-                rank=t.get("rank", 0),
-                stats=CategoryStats.from_dict(t.get("stats", {})),
-                yahoo_points_for=t.get("points_for"),
+                team_name=e.team_name,
+                team_key="",
+                rank=0,
+                stats=e.stats,
             )
-            for t in raw
-        ],
-    )
-
-
-def _projected_from_cache(raw: list[dict]) -> ProjectedStandings:
-    """Build a typed ``ProjectedStandings`` from raw cache ``list[dict]``."""
-    return ProjectedStandings(
-        effective_date=date.min,
-        entries=[
-            ProjectedStandingsEntry(
-                team_name=t["name"],
-                stats=CategoryStats.from_dict(t.get("stats", {})),
-            )
-            for t in raw
+            for e in projected.entries
         ],
     )
 
@@ -293,13 +292,13 @@ def register_routes(app: Flask) -> None:
                 )
                 if preseason_standings:
                     preseason_data = format_standings_for_display(
-                        _standings_from_cache(preseason_standings),
+                        _projected_as_standings(preseason_standings),
                         config.team_name,
                         team_sds=raw_projected.get("preseason_team_sds"),
                     )
                 if "projected_standings" in raw_projected:
                     current_projected_data = format_standings_for_display(
-                        _standings_from_cache(raw_projected["projected_standings"]),
+                        _projected_as_standings(raw_projected["projected_standings"]),
                         config.team_name,
                         team_sds=raw_projected.get("team_sds"),
                     )
@@ -582,9 +581,9 @@ def register_routes(app: Flask) -> None:
             return jsonify({"error": f"Unknown opponent: {opponent}"}), 400
 
         proj_cache = read_cache(CacheKey.PROJECTIONS) or {}
-        projected_standings = proj_cache.get("projected_standings")
+        projected_standings_raw = proj_cache.get("projected_standings")
         team_sds = proj_cache.get("team_sds")
-        if not projected_standings:
+        if not projected_standings_raw:
             return jsonify({"error": "No projected standings. Run a refresh first."}), 404
 
         ros_cache = read_cache(CacheKey.ROS_PROJECTIONS) or {}
@@ -603,13 +602,15 @@ def register_routes(app: Flask) -> None:
             my_active_ids=set(data.get("my_active_ids") or []),
         )
 
+        # evaluate_multi_trade still consumes the legacy list[dict] shape;
+        # the canonical cache payload wraps those rows under "teams".
         result = evaluate_multi_trade(
             proposal=proposal,
             hart_name=config.team_name,
             hart_roster=hart_roster,
             opp_rosters=opp_rosters,
             waiver_pool=waiver_pool,
-            projected_standings=projected_standings,
+            projected_standings=projected_standings_raw["teams"],
             team_sds=team_sds,
             roster_slots=config.roster_slots,
         )
@@ -895,8 +896,8 @@ def register_routes(app: Flask) -> None:
         user_roster = [Player.from_dict(p) for p in roster_raw]
 
         proj_cache = read_cache(CacheKey.PROJECTIONS) or {}
-        projected_standings = proj_cache.get("projected_standings")
-        if not projected_standings:
+        projected_standings_raw = proj_cache.get("projected_standings")
+        if not projected_standings_raw:
             return jsonify({"error": "No projected standings available"}), 404
 
         # Resolve the FA's ROS projection from ros_projections (same source
@@ -921,6 +922,8 @@ def register_routes(app: Flask) -> None:
         worst_by_pos = _compute_worst_roster_by_position()
         config = _load_config()
         team_sds = proj_cache.get("team_sds")
+        # compute_delta_roto still consumes the legacy list[dict] shape.
+        projected_rows = projected_standings_raw["teams"]
 
         best = None
         for target_pos in targets:
@@ -932,7 +935,7 @@ def register_routes(app: Flask) -> None:
                     drop_name=drop_name,
                     add_player=fa_player,
                     user_roster=user_roster,
-                    projected_standings=projected_standings,
+                    projected_standings=projected_rows,
                     team_name=config.team_name,
                     team_sds=team_sds,
                 )

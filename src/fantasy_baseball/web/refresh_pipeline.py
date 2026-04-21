@@ -21,12 +21,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-from fantasy_baseball.models.standings import (  # noqa: E402
-    CategoryStats,
-    StandingsEntry,
-    StandingsSnapshot,
-)
-from fantasy_baseball.utils.constants import (
+from fantasy_baseball.utils.constants import (  # noqa: E402
     IL_STATUSES,
 )
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
@@ -46,50 +41,8 @@ from fantasy_baseball.web.season_data import (
     write_cache,
 )
 
-
-def _snapshot_from_list(
-    standings: list[dict],
-    effective_date: date,
-) -> StandingsSnapshot:
-    """Build a ``StandingsSnapshot`` from Yahoo's raw ``list[dict]`` shape.
-
-    Kept local to the refresh pipeline: Yahoo fetch + cache serialization
-    currently operate on dicts, so the pipeline converts to typed
-    snapshots here before handing off to ``calculate_leverage`` and
-    other typed consumers. Remove when the upstream fetch returns
-    typed ``Standings`` directly (Phase 4.3).
-    """
-    return StandingsSnapshot(
-        effective_date=effective_date,
-        entries=[
-            StandingsEntry(
-                team_name=t["name"],
-                team_key=t.get("team_key", ""),
-                rank=t.get("rank", 0),
-                stats=CategoryStats.from_dict(t.get("stats", {})),
-                yahoo_points_for=t.get("points_for"),
-            )
-            for t in standings
-        ],
-    )
-
-
 _refresh_lock = threading.Lock()
 _refresh_status = {"running": False, "progress": "", "error": None}
-
-# Defaults for early-season teams missing stats
-_STAT_DEFAULTS = {
-    "R": 0,
-    "HR": 0,
-    "RBI": 0,
-    "SB": 0,
-    "AVG": 0.0,
-    "W": 0,
-    "K": 0,
-    "SV": 0,
-    "ERA": 99.0,
-    "WHIP": 99.0,
-}
 
 
 def get_refresh_status() -> dict:
@@ -100,14 +53,6 @@ def get_refresh_status() -> dict:
 def _set_refresh_progress(msg: str) -> None:
     with _refresh_lock:
         _refresh_status["progress"] = msg
-
-
-def _fill_stat_defaults(standings: list[dict]) -> None:
-    """Ensure every team has all 10 stat keys (early season some are missing)."""
-    for t in standings:
-        filled = dict(_STAT_DEFAULTS)
-        filled.update(t["stats"])
-        t["stats"] = filled
 
 
 def _write_spoe_snapshot(spoe_result: dict) -> None:
@@ -158,10 +103,8 @@ class RefreshRun:
         self.league = None  # Yahoo session-bound league
         self.league_model = None  # League dataclass loaded from Redis
         self.user_team_key = None
-        self.standings = None
-        self.standings_snap = None
-        self.projected_standings = None
-        self.projected_standings_snap = None
+        self.standings = None  # Standings | None
+        self.projected_standings = None  # ProjectedStandings | None
         self.team_sds = None
         self.fraction_remaining = None
         self.sd_scale = None
@@ -277,27 +220,25 @@ class RefreshRun:
             fetch_standings,
         )
 
-        self._progress("Fetching standings...")
-        self.standings = fetch_standings(self.league)
-        _fill_stat_defaults(self.standings)
-        write_cache(CacheKey.STANDINGS, self.standings, self.cache_dir)
-        self._progress(f"Fetched standings for {len(self.standings)} teams")
-
-        # Compute the effective date for the next lineup lock. We fetch
-        # all rosters at this date (via Yahoo's team.roster(day=...)) so
-        # the audit/optimizer/waivers see the post-lock future state
-        # without having to simulate pending transactions locally.
-        # fetch_scoring_period returns Yahoo's Mon–Sun scoring week
-        # (end_date is Sunday). The user's league locks lineups on
-        # Tuesday morning, so the effective date is the next Tuesday
-        # strictly after end_date — end_date + 1 would land on Monday,
-        # one day too early.
+        # Compute the effective date for the next lineup lock BEFORE
+        # fetching standings so we can tag the Standings snapshot with
+        # it. We fetch all rosters at this date (via Yahoo's
+        # team.roster(day=...)) so the audit/optimizer/waivers see the
+        # post-lock future state without having to simulate pending
+        # transactions locally. fetch_scoring_period returns Yahoo's
+        # Mon–Sun scoring week (end_date is Sunday). The user's league
+        # locks lineups on Tuesday morning, so the effective date is the
+        # next Tuesday strictly after end_date — end_date + 1 would land
+        # on Monday, one day too early.
         self._progress("Computing effective date...")
         self.start_date, self.end_date = fetch_scoring_period(self.league)
         self.effective_date = compute_effective_date(self.end_date)
         self._progress(f"Effective date (next lock): {self.effective_date}")
 
-        self.standings_snap = _snapshot_from_list(self.standings, self.effective_date)
+        self._progress("Fetching standings...")
+        self.standings = fetch_standings(self.league, effective_date=self.effective_date)
+        write_cache(CacheKey.STANDINGS, self.standings.to_json(), self.cache_dir)
+        self._progress(f"Fetched standings for {len(self.standings.entries)} teams")
 
         self._progress("Fetching today's roster (for pending-moves diff)...")
         today_roster_raw = fetch_roster(self.league, self.user_team_key)
@@ -467,25 +408,9 @@ class RefreshRun:
                 entries,
             )
 
-        # Stat keys on the source dicts are UPPERCASE (R/HR/.../WHIP); the
-        # old append_standings_snapshot lowercased them before writing, so
-        # we preserve that shape here.
-        snapshot_payload = {
-            "teams": [
-                {
-                    "team": entry["name"],
-                    "team_key": entry.get("team_key") or "",
-                    "rank": entry.get("rank") or 0,
-                    **{k.lower(): v for k, v in entry.get("stats", {}).items()},
-                }
-                for entry in self.standings
-            ],
-        }
-        write_standings_snapshot(
-            client,
-            snapshot_date,
-            snapshot_payload,
-        )
+        # Canonical Standings snapshot — write_standings_snapshot keys
+        # off standings.effective_date and serializes via .to_json().
+        write_standings_snapshot(client, self.standings)
 
         self._progress("Loading League from Redis...")
         self.league_model = League.from_redis(self.config.season_year)
@@ -537,7 +462,9 @@ class RefreshRun:
         all_team_rosters = {self.config.team_name: self.matched}
         all_team_rosters.update(self.opp_rosters)
 
-        self.projected_standings = build_projected_standings(all_team_rosters)
+        self.projected_standings = build_projected_standings(
+            all_team_rosters, effective_date=self.effective_date
+        )
 
         self.fraction_remaining = compute_fraction_remaining(
             date.fromisoformat(self.config.season_start),
@@ -565,7 +492,9 @@ class RefreshRun:
                 )
                 if hydrated:
                     preseason_rosters[team.name] = hydrated
-            self.preseason_projected_standings = build_projected_standings(preseason_rosters)
+            self.preseason_projected_standings = build_projected_standings(
+                preseason_rosters, effective_date=self.effective_date
+            )
             self.preseason_team_sds = build_team_sds(preseason_rosters, 1.0)
         else:
             self.preseason_projected_standings = self.projected_standings
@@ -574,19 +503,15 @@ class RefreshRun:
         write_cache(
             CacheKey.PROJECTIONS,
             {
-                "projected_standings": self.projected_standings,
+                "projected_standings": self.projected_standings.to_json(),
                 "team_sds": self.team_sds,
                 "fraction_remaining": self.fraction_remaining,
-                "preseason_standings": self.preseason_projected_standings,
+                "preseason_standings": self.preseason_projected_standings.to_json(),
                 "preseason_team_sds": self.preseason_team_sds,
             },
             self.cache_dir,
         )
-        self._progress(f"Projected standings for {len(self.projected_standings)} teams")
-
-        self.projected_standings_snap = _snapshot_from_list(
-            self.projected_standings, self.effective_date
-        )
+        self._progress(f"Projected standings for {len(self.projected_standings.entries)} teams")
 
     # --- Step 5: Leverage weights ---
     def _compute_leverage(self):
@@ -594,9 +519,9 @@ class RefreshRun:
 
         self._progress("Calculating leverage weights...")
         self.leverage = calculate_leverage(
-            self.standings_snap,
+            self.standings,
             self.config.team_name,
-            projected_standings=self.projected_standings_snap,
+            projected_standings=self.projected_standings,
         )
 
     # --- Step 6: Match roster players to projections ---
@@ -706,10 +631,15 @@ class RefreshRun:
             else:
                 hitter_players.append(player)
 
+        # The optimizer still consumes the legacy list[dict] shape.
+        # Convert at the boundary via ``to_json()["teams"]`` so the
+        # typed object stays the source of truth inside this class.
+        projected_rows = self.projected_standings.to_json()["teams"]
+
         self.optimal_hitters = optimize_hitter_lineup(
             hitters=hitter_players,
             full_roster=self.roster_players,
-            projected_standings=self.projected_standings,
+            projected_standings=projected_rows,
             team_name=self.config.team_name,
             roster_slots=self.config.roster_slots,
             team_sds=self.team_sds,
@@ -717,7 +647,7 @@ class RefreshRun:
         self.optimal_pitchers_starters, self.optimal_pitchers_bench = optimize_pitcher_lineup(
             pitchers=pitcher_players,
             full_roster=self.roster_players,
-            projected_standings=self.projected_standings,
+            projected_standings=projected_rows,
             team_name=self.config.team_name,
             slots=self.config.roster_slots.get("P", 9),
             team_sds=self.team_sds,
@@ -794,7 +724,7 @@ class RefreshRun:
             self.roster_players,
             self.fa_players,
             self.config.roster_slots,
-            projected_standings=self.projected_standings,
+            projected_standings=self.projected_standings.to_json()["teams"],
             team_name=self.config.team_name,
             team_sds=self.team_sds,
             optimal_hitters=self.optimal_hitters,
@@ -810,11 +740,11 @@ class RefreshRun:
 
         self._progress("Computing leverage...")
         leverage_by_team: dict[str, dict] = {}
-        for entry in self.standings_snap.entries:
+        for entry in self.standings.entries:
             leverage_by_team[entry.team_name] = calculate_leverage(
-                self.standings_snap,
+                self.standings,
                 entry.team_name,
-                projected_standings=self.projected_standings_snap,
+                projected_standings=self.projected_standings,
             )
         write_cache(CacheKey.LEVERAGE, leverage_by_team, self.cache_dir)
 
@@ -847,8 +777,8 @@ class RefreshRun:
             for tname, opp_players in self.opp_rosters.items():
                 rest_of_season_mc_rosters[tname] = opp_players
 
-            # Build actual standings dict
-            actual_standings_dict = {s["name"]: s["stats"] for s in self.standings}
+            # Build actual standings dict (uppercase-string-keyed per category)
+            actual_standings_dict = {e.team_name: e.stats.to_dict() for e in self.standings.entries}
 
             if rest_of_season_mc_rosters:
                 self.rest_of_season_mc = run_ros_monte_carlo(
@@ -915,7 +845,7 @@ class RefreshRun:
         )
         spoe_result = compute_current_spoe(
             self.league_model,
-            self.standings,
+            self.standings.to_json()["teams"],
             preseason_lookup,
             self.config.season_start,
             self.config.season_end,
@@ -973,6 +903,7 @@ class RefreshRun:
             )
             season_start = date.fromisoformat(self.config.season_start)
             season_end = date.fromisoformat(self.config.season_end)
+            projected_rows = self.projected_standings.to_json()["teams"]
 
             for txn in new_txns:
                 entry = by_id[txn["transaction_id"]]
@@ -981,7 +912,7 @@ class RefreshRun:
                 scores = score_transaction(
                     self.league_model,
                     entry,
-                    self.projected_standings,
+                    projected_rows,
                     hitters_proj,
                     pitchers_proj,
                     season_start,
