@@ -138,7 +138,7 @@ class TestComputeDeltaRoto:
             )
 
     def test_team_sds_produces_small_delta_for_within_uncertainty_swap(self):
-        """With wide σ, a 10-unit SB swap across two tied teams produces |ΔRoto| < 0.5,
+        """With wide sd, a 10-unit SB swap across two tied teams produces |ΔRoto| < 0.5,
         not the full 1.0 of a rank flip."""
         projected_standings = [
             {

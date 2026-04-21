@@ -159,7 +159,7 @@ def candidates_for_player(
     - Hitters: union of pools for each of player's Yahoo positions (lineup-only
       slots like ``UTIL``/``IF`` don't contribute pools because they're not
       Yahoo source positions).
-    - Pitchers: SP pool ∪ RP pool (all Yahoo roster pitchers come through as
+    - Pitchers: SP pool + RP pool (all Yahoo roster pitchers come through as
       ``positions=["P"]``; we don't distinguish SP/RP on the user's roster).
     - Dedup key: ``yahoo_id`` when present, else ``name::player_type``.
     """

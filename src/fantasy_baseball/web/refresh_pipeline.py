@@ -226,7 +226,7 @@ class RefreshRun:
         # team.roster(day=...)) so the audit/optimizer/waivers see the
         # post-lock future state without having to simulate pending
         # transactions locally. fetch_scoring_period returns Yahoo's
-        # Mon–Sun scoring week (end_date is Sunday). The user's league
+        # Mon-Sun scoring week (end_date is Sunday). The user's league
         # locks lineups on Tuesday morning, so the effective date is the
         # next Tuesday strictly after end_date — end_date + 1 would land
         # on Monday, one day too early.

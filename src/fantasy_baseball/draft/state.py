@@ -6,12 +6,12 @@ atomic file I/O to prevent the Flask thread from reading partial writes.
 The module supports a **delta protocol** to avoid sending the full available-
 player board (300+ rows) on every 2-second poll:
 
-* ``serialize_board`` – one-time snapshot of the complete player board.
-* ``serialize_state``  – lightweight state (pick info, roster, recs, balance)
+* ``serialize_board`` - one-time snapshot of the complete player board.
+* ``serialize_state``  - lightweight state (pick info, roster, recs, balance)
   that includes a monotonic *version* counter.
-* ``write_state`` / ``read_state`` – atomic JSON I/O.  ``write_state`` also
+* ``write_state`` / ``read_state`` - atomic JSON I/O.  ``write_state`` also
   writes a companion ``*_board.json`` file on the first call.
-* ``read_delta`` – returns only the fields that changed between version *N*
+* ``read_delta`` - returns only the fields that changed between version *N*
   and the current version, or ``None`` when a full reload is required.
 """
 import contextlib

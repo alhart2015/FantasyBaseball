@@ -1077,7 +1077,7 @@ class TestScoreRotoEV:
                 assert roto_zero[t][cat] == pytest.approx(roto_none[t][cat])
 
     def test_large_sds_collapse_toward_middle(self):
-        # Huge σ >> any μ gap → every team's pairwise P ≈ 0.5 → pts ≈ (N+1)/2 = 6.5.
+        # Huge sd >> any mu gap → every team's pairwise P ≈ 0.5 → pts ≈ (N+1)/2 = 6.5.
         stats = _twelve_team_stats([100 + i for i in range(12)])
         team_names = [e.team_name for e in stats.entries]
         huge_sds = _all_cat_sds(team_names, 1_000_000)
@@ -1114,7 +1114,7 @@ class TestScoreRotoEV:
         assert roto["T12"][Category.ERA] == pytest.approx(1.0)
 
     def test_small_swap_within_uncertainty_produces_small_delta(self):
-        # Two teams tied at 100 R with σ=10 each. Moving 1 R changes
+        # Two teams tied at 100 R with sd=10 each. Moving 1 R changes
         # pts by only ~0.03, not the full 1.0 of a rank flip.
         dict_stats = _twelve_team_dict([100, 100, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50])
         team_names = list(dict_stats.keys())

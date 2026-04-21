@@ -501,9 +501,9 @@ def score_roto(
 
         pts = 1 + Σ_{j≠me} P(me > j)
 
-    where ``P(A > B) = Φ((μ_A - μ_B) / √(σ_A² + σ_B²))`` under Gaussian
-    independence of team totals (Φ is the standard-normal CDF). When
-    ``team_sds`` is ``None`` or every σ is zero, this reduces to the
+    where ``P(A > B) = Phi((mu_A - mu_B) / sqrt(sd_A^2 + sd_B^2))`` under
+    Gaussian independence of team totals (Phi is the standard-normal CDF).
+    When ``team_sds`` is ``None`` or every sd is zero, this reduces to the
     step function that recovers the standard rank-based scoring,
     including the averaged-ranks convention on exact ties.
 

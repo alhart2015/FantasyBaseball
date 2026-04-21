@@ -747,7 +747,7 @@ def test_get_rest_of_season_projections_returns_latest_snapshot(tmp_path):
     # that every row in the DB for the older snapshot was NOT selected alone.
     # We verify by counting: both snapshots each have 7 rows; result should be 7.
     total_in_db = conn.execute("SELECT COUNT(*) FROM ros_blended_projections").fetchone()[0]
-    assert total_in_db == 14  # 2 snapshots × 7 players
+    assert total_in_db == 14  # 2 snapshots x 7 players
     conn.close()
 
 

@@ -1,4 +1,4 @@
-"""Strategy comparison — all strategies × 2 scoring modes.
+"""Strategy comparison -- all strategies x 2 scoring modes.
 
 Parallelized across CPU cores. Each strategy+mode combo runs its
 iterations in a worker process.
