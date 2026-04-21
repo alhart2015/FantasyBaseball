@@ -15,11 +15,12 @@ Provides core functions:
 
 from __future__ import annotations
 
+from datetime import date
 from math import erf, sqrt
 
 from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS, Position
-from fantasy_baseball.models.standings import CategoryStats
+from fantasy_baseball.models.standings import CategoryStats, ProjectedStandings
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
@@ -423,24 +424,16 @@ def project_team_sds(
 
 def build_projected_standings(
     team_rosters: dict[str, list],
-) -> list[dict]:
-    """Build the projected_standings list written to the projections cache.
+    *,
+    effective_date: date,
+) -> ProjectedStandings:
+    """Thin wrapper around :meth:`ProjectedStandings.from_rosters`.
 
-    Each entry has keys ``name``, ``team_key`` (always empty — the
-    consumer fills it from standings if needed), ``rank`` (always 0 —
-    ranking is computed downstream), and ``stats`` (the team's projected
-    category totals from :func:`project_team_stats` with
-    ``displacement=True``, serialized via ``CategoryStats.to_dict``).
+    Kept for the duration of the standings dataclass migration; deleted
+    in Phase 5 once all callers construct ``ProjectedStandings``
+    directly.
     """
-    return [
-        {
-            "name": tname,
-            "team_key": "",
-            "rank": 0,
-            "stats": project_team_stats(roster, displacement=True).to_dict(),
-        }
-        for tname, roster in team_rosters.items()
-    ]
+    return ProjectedStandings.from_rosters(team_rosters, effective_date=effective_date)
 
 
 def build_team_sds(

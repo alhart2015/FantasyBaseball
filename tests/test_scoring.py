@@ -724,31 +724,52 @@ class TestScoreRotoEV:
 class TestBuildProjectedStandings:
     """Pure helper wrapping ``project_team_stats`` for cache output."""
 
+    def test_returns_projected_standings(self):
+        from datetime import date
+
+        from fantasy_baseball.models.standings import ProjectedStandings
+
+        team_rosters: dict[str, list] = {"Alpha": [], "Beta": []}
+        result = build_projected_standings(
+            team_rosters, effective_date=date(2026, 4, 15)
+        )
+        assert isinstance(result, ProjectedStandings)
+        assert result.effective_date == date(2026, 4, 15)
+        assert {e.team_name for e in result.entries} == {"Alpha", "Beta"}
+
     def test_returns_one_entry_per_team(self):
+        from datetime import date
+
         rosters = {
             "Team A": [_make_hitter("Player1", r=80, hr=20, rbi=70, sb=10,
                                     h=140, ab=500, pa=500)],
             "Team B": [_make_hitter("Player2", r=70, hr=15, rbi=60, sb=8,
                                     h=130, ab=490, pa=490)],
         }
-        result = build_projected_standings(rosters)
-        assert len(result) == 2
-        team_names = {entry["name"] for entry in result}
+        result = build_projected_standings(rosters, effective_date=date(2026, 4, 15))
+        assert len(result.entries) == 2
+        team_names = {entry.team_name for entry in result.entries}
         assert team_names == {"Team A", "Team B"}
 
-    def test_each_entry_has_expected_keys(self):
+    def test_each_entry_has_team_name_and_stats(self):
+        from datetime import date
+
+        from fantasy_baseball.models.standings import CategoryStats
+
         rosters = {
             "Team A": [_make_hitter("Player1", r=80, hr=20, rbi=70, sb=10,
                                     h=140, ab=500, pa=500)],
         }
-        result = build_projected_standings(rosters)
-        entry = result[0]
-        assert set(entry.keys()) == {"name", "team_key", "rank", "stats"}
-        assert entry["team_key"] == ""
-        assert entry["rank"] == 0
-        assert isinstance(entry["stats"], dict)
+        result = build_projected_standings(rosters, effective_date=date(2026, 4, 15))
+        entry = result.entries[0]
+        assert entry.team_name == "Team A"
+        assert isinstance(entry.stats, CategoryStats)
 
-    def test_stats_dict_has_all_categories(self):
+    def test_stats_covers_all_categories(self):
+        from datetime import date
+
+        from fantasy_baseball.utils.constants import ALL_CATEGORIES
+
         rosters = {
             "Team A": [
                 _make_hitter("H1", r=80, hr=20, rbi=70, sb=10,
@@ -757,11 +778,11 @@ class TestBuildProjectedStandings:
                               er=70, bb=55, h_allowed=155),
             ],
         }
-        result = build_projected_standings(rosters)
-        stats = result[0]["stats"]
-        # CategoryStats.to_dict yields all 10 5x5 categories (uppercase keys)
-        for cat in ("R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"):
-            assert cat in stats
+        result = build_projected_standings(rosters, effective_date=date(2026, 4, 15))
+        stats = result.entries[0].stats
+        # CategoryStats exposes every 5x5 roto category by enum.
+        for cat in ALL_CATEGORIES:
+            assert stats[cat] is not None
 
 
 class TestBuildTeamSDs:
