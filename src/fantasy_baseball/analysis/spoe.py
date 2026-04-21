@@ -16,7 +16,7 @@ projections by days owned, compare to live standings once per refresh.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date
 from typing import Any
 
 import pandas as pd
@@ -29,6 +29,7 @@ from fantasy_baseball.utils.constants import (
     PITCHING_COUNTING,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
+from fantasy_baseball.utils.positions import is_hitter, is_pitcher
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 from fantasy_baseball.utils.time_utils import local_today
 
@@ -39,14 +40,19 @@ ALL_COMPONENTS = HITTER_COMPONENTS + PITCHER_COMPONENTS
 
 def build_preseason_lookup(
     hitters_df: pd.DataFrame, pitchers_df: pd.DataFrame
-) -> dict[str, dict[str, Any]]:
-    """Build a {normalized_name: {stats..., player_type}} lookup for SPoE.
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Build a {(normalized_name, player_type): {stats..., player_type}} lookup for SPoE.
 
     Takes the preseason blend DataFrames from `get_blended_projections`
-    and produces a flat lookup so spoe can resolve per-player preseason
-    stats by name without pandas filtering per row.
+    and produces a lookup so spoe can resolve per-player preseason
+    stats without pandas filtering per row.
+
+    Keyed by (name, type) so same-name collisions across files (e.g. the
+    MLB hitter "Juan Soto" and a minor-league pitcher "Juan Soto") preserve
+    both entries. :func:`compute_current_spoe` disambiguates by the rostered
+    player's eligible positions.
     """
-    lookup: dict[str, dict[str, Any]] = {}
+    lookup: dict[tuple[str, str], dict[str, Any]] = {}
     for df, ptype, cols in [
         (hitters_df, "hitter", HITTER_COMPONENTS),
         (pitchers_df, "pitcher", PITCHER_COMPONENTS),
@@ -61,8 +67,36 @@ def build_preseason_lookup(
             entry: dict[str, Any] = {"player_type": ptype}
             for c in cols:
                 entry[c] = float(row_dict.get(c, 0) or 0)
-            lookup[normalize_name(name)] = entry
+            lookup[(normalize_name(name), ptype)] = entry
     return lookup
+
+
+def _resolve_preseason(
+    preseason_lookup: dict[tuple[str, str], dict[str, Any]],
+    name: str,
+    positions: list,
+) -> dict[str, Any] | None:
+    """Pick the projection entry matching the rostered player's positions.
+
+    Precedence mirrors :func:`match_roster_to_projections`: prefer hitter
+    when the player is hitter-eligible, pitcher when pitcher-eligible, then
+    fall back to whichever type has an entry. This keeps SPoE consistent
+    with how the rest of the pipeline resolves same-name collisions.
+    """
+    nkey = normalize_name(name)
+    if is_hitter(positions):
+        match = preseason_lookup.get((nkey, "hitter"))
+        if match is not None:
+            return match
+    if is_pitcher(positions):
+        match = preseason_lookup.get((nkey, "pitcher"))
+        if match is not None:
+            return match
+    for ptype in ("hitter", "pitcher"):
+        match = preseason_lookup.get((nkey, ptype))
+        if match is not None:
+            return match
+    return None
 
 
 def _components_to_stats(components: dict[str, float]) -> dict[str, float]:
@@ -93,7 +127,7 @@ def _empty_components() -> dict[str, float]:
 def compute_current_spoe(
     league: League,
     standings: list[dict],
-    preseason_lookup: dict[str, dict[str, Any]],
+    preseason_lookup: dict[tuple[str, str], dict[str, Any]],
     season_start: str,
     season_end: str,
     today: date | None = None,
@@ -153,14 +187,15 @@ def compute_current_spoe(
                 continue
             fraction = days_covered / total_days
 
-            preseason = preseason_lookup.get(normalize_name(entry.name))
+            preseason = _resolve_preseason(
+                preseason_lookup,
+                entry.name,
+                entry.positions,
+            )
             if preseason is None:
                 continue
             ptype = preseason.get("player_type")
-            relevant = (
-                HITTER_COMPONENTS if ptype == "hitter"
-                else PITCHER_COMPONENTS
-            )
+            relevant = HITTER_COMPONENTS if ptype == "hitter" else PITCHER_COMPONENTS
             for c in relevant:
                 comps[c] += preseason.get(c, 0.0) * fraction
 
@@ -195,24 +230,28 @@ def compute_current_spoe(
             act_pts = actual_roto[team].get(f"{cat}_pts", 0)
             spoe = act_pts - proj_pts
             total_spoe += spoe
-            results.append({
+            results.append(
+                {
+                    "team": team,
+                    "category": cat,
+                    "projected_stat": expected_stats[team][cat],
+                    "actual_stat": actual_stats[team][cat],
+                    "projected_pts": proj_pts,
+                    "actual_pts": act_pts,
+                    "spoe": spoe,
+                }
+            )
+        results.append(
+            {
                 "team": team,
-                "category": cat,
-                "projected_stat": expected_stats[team][cat],
-                "actual_stat": actual_stats[team][cat],
-                "projected_pts": proj_pts,
-                "actual_pts": act_pts,
-                "spoe": spoe,
-            })
-        results.append({
-            "team": team,
-            "category": "total",
-            "projected_stat": None,
-            "actual_stat": None,
-            "projected_pts": projected_roto[team]["total"],
-            "actual_pts": actual_roto[team]["total"],
-            "spoe": total_spoe,
-        })
+                "category": "total",
+                "projected_stat": None,
+                "actual_stat": None,
+                "projected_pts": projected_roto[team]["total"],
+                "actual_pts": actual_roto[team]["total"],
+                "spoe": total_spoe,
+            }
+        )
 
     return {
         "snapshot_date": today.isoformat(),

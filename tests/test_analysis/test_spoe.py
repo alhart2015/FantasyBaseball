@@ -1,4 +1,5 @@
 """Tests for current season-to-date SPoE computation."""
+
 from __future__ import annotations
 
 from datetime import date
@@ -26,6 +27,7 @@ def redis_league(fake_redis, monkeypatch):
     ``League.from_redis`` reads test data.
     """
     from fantasy_baseball.data import kv_store
+
     monkeypatch.setattr(kv_store, "get_kv", lambda: fake_redis)
     yield fake_redis
 
@@ -60,9 +62,16 @@ def _snapshot_roster(client, snapshot_date: str, team: str, players: list[dict])
 
 def _hitter_preseason(name: str, **overrides) -> dict:
     base = {
-        "name": name, "player_type": "hitter",
-        "pa": 650, "ab": 580, "h": 150, "r": 85, "hr": 25,
-        "rbi": 80, "sb": 10, "avg": 0.259,
+        "name": name,
+        "player_type": "hitter",
+        "pa": 650,
+        "ab": 580,
+        "h": 150,
+        "r": 85,
+        "hr": 25,
+        "rbi": 80,
+        "sb": 10,
+        "avg": 0.259,
     }
     base.update(overrides)
     return base
@@ -70,10 +79,17 @@ def _hitter_preseason(name: str, **overrides) -> dict:
 
 def _pitcher_preseason(name: str, **overrides) -> dict:
     base = {
-        "name": name, "player_type": "pitcher",
-        "ip": 180, "w": 12, "k": 180, "sv": 0,
-        "er": 70, "bb": 50, "h_allowed": 150,
-        "era": 3.50, "whip": 1.11,
+        "name": name,
+        "player_type": "pitcher",
+        "ip": 180,
+        "w": 12,
+        "k": 180,
+        "sv": 0,
+        "er": 70,
+        "bb": 50,
+        "h_allowed": 150,
+        "era": 3.50,
+        "whip": 1.11,
     }
     base.update(overrides)
     return base
@@ -87,31 +103,47 @@ def _preseason_lookup_from(*players) -> dict:
 
 # --- build_preseason_lookup tests ------------------------------------------
 
+
 class TestBuildPreseasonLookup:
     def test_normalized_name_is_key(self):
         hitters = pd.DataFrame([_hitter_preseason("Juan Soto")])
         lookup = build_preseason_lookup(hitters, pd.DataFrame())
-        assert "juan soto" in lookup
+        assert ("juan soto", "hitter") in lookup
 
     def test_accent_stripped(self):
         hitters = pd.DataFrame([_hitter_preseason("Julio Rodríguez", hr=30)])
         lookup = build_preseason_lookup(hitters, pd.DataFrame())
-        assert "julio rodriguez" in lookup
-        assert lookup["julio rodriguez"]["hr"] == 30
+        assert ("julio rodriguez", "hitter") in lookup
+        assert lookup[("julio rodriguez", "hitter")]["hr"] == 30
 
     def test_player_type_populated(self):
         hitters = pd.DataFrame([_hitter_preseason("Hitter A")])
         pitchers = pd.DataFrame([_pitcher_preseason("Pitcher B")])
         lookup = build_preseason_lookup(hitters, pitchers)
-        assert lookup["hitter a"]["player_type"] == "hitter"
-        assert lookup["pitcher b"]["player_type"] == "pitcher"
+        assert lookup[("hitter a", "hitter")]["player_type"] == "hitter"
+        assert lookup[("pitcher b", "pitcher")]["player_type"] == "pitcher"
 
     def test_empty_dataframes_return_empty_lookup(self):
         lookup = build_preseason_lookup(pd.DataFrame(), pd.DataFrame())
         assert lookup == {}
 
+    def test_hitter_and_pitcher_share_normalized_name(self):
+        """Real-world case: MLB hitter Juan Soto shares a normalized name
+        with a minor-league pitcher prospect in the pitcher projection file.
+        The lookup must preserve BOTH entries so callers can pick the one
+        that matches the rostered player's positions.
+        """
+        hitters = pd.DataFrame([_hitter_preseason("Juan Soto", hr=40, r=100, rbi=100)])
+        pitchers = pd.DataFrame([_pitcher_preseason("Juan Soto", ip=2, k=1)])
+        lookup = build_preseason_lookup(hitters, pitchers)
+        assert ("juan soto", "hitter") in lookup
+        assert ("juan soto", "pitcher") in lookup
+        assert lookup[("juan soto", "hitter")]["hr"] == 40
+        assert lookup[("juan soto", "pitcher")]["ip"] == 2
+
 
 # --- compute_current_spoe tests --------------------------------------------
+
 
 class TestComputeCurrentSpoe:
     def test_returns_empty_results_before_season_start(self, redis_league):
@@ -120,8 +152,11 @@ class TestComputeCurrentSpoe:
 
         # today BEFORE season_start → days_elapsed = 0 but season_fraction=0
         result = compute_current_spoe(
-            _league_from(conn), standings=[], preseason_lookup=lookup,
-            season_start=SEASON_START, season_end=SEASON_END,
+            _league_from(conn),
+            standings=[],
+            preseason_lookup=lookup,
+            season_start=SEASON_START,
+            season_end=SEASON_END,
             today=date.fromisoformat("2026-03-01"),
         )
         assert result["season_fraction"] == 0.0
@@ -130,31 +165,60 @@ class TestComputeCurrentSpoe:
     def test_one_team_one_week_ownership_credits_proportional(self, redis_league):
         conn = redis_league
         lookup = _preseason_lookup_from(
-            _hitter_preseason("Star", hr=30, r=90, rbi=90, sb=10,
-                              h=150, ab=580, pa=650),
+            _hitter_preseason("Star", hr=30, r=90, rbi=90, sb=10, h=150, ab=580, pa=650),
         )
 
         # Snapshot team A owning Star on the second Tuesday of the season
-        _snapshot_roster(conn, "2026-03-31", "Team A", [
-            {"name": "Star", "selected_position": "OF", "positions": ["OF"]},
-        ])
+        _snapshot_roster(
+            conn,
+            "2026-03-31",
+            "Team A",
+            [
+                {"name": "Star", "selected_position": "OF", "positions": ["OF"]},
+            ],
+        )
         _snapshot_roster(conn, "2026-03-31", "Team B", [])
 
         standings = [
-            {"name": "Team A", "stats": {
-                "R": 5, "HR": 2, "RBI": 4, "SB": 0, "AVG": 0.250,
-                "W": 0, "K": 0, "SV": 0, "ERA": 99.0, "WHIP": 99.0,
-            }},
-            {"name": "Team B", "stats": {
-                "R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0.0,
-                "W": 0, "K": 0, "SV": 0, "ERA": 99.0, "WHIP": 99.0,
-            }},
+            {
+                "name": "Team A",
+                "stats": {
+                    "R": 5,
+                    "HR": 2,
+                    "RBI": 4,
+                    "SB": 0,
+                    "AVG": 0.250,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 99.0,
+                    "WHIP": 99.0,
+                },
+            },
+            {
+                "name": "Team B",
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 0,
+                    "AVG": 0.0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 99.0,
+                    "WHIP": 99.0,
+                },
+            },
         ]
 
         # today = 2026-04-07 → snapshot covers 7 days (full week)
         result = compute_current_spoe(
-            _league_from(conn), standings=standings, preseason_lookup=lookup,
-            season_start=SEASON_START, season_end=SEASON_END,
+            _league_from(conn),
+            standings=standings,
+            preseason_lookup=lookup,
+            season_start=SEASON_START,
+            season_end=SEASON_END,
             today=date.fromisoformat("2026-04-07"),
         )
 
@@ -162,15 +226,13 @@ class TestComputeCurrentSpoe:
         # preseason HR (30) * (7 days / TOTAL_DAYS)
         expected_hr = 30 * 7 / TOTAL_DAYS
         hr_row = next(
-            r for r in result["results"]
-            if r["team"] == "Team A" and r["category"] == "HR"
+            r for r in result["results"] if r["team"] == "Team A" and r["category"] == "HR"
         )
         assert hr_row["projected_stat"] == pytest.approx(expected_hr, rel=1e-9)
 
         # Team B has no roster so projected_stat == 0
         hr_row_b = next(
-            r for r in result["results"]
-            if r["team"] == "Team B" and r["category"] == "HR"
+            r for r in result["results"] if r["team"] == "Team B" and r["category"] == "HR"
         )
         assert hr_row_b["projected_stat"] == 0.0
 
@@ -180,35 +242,69 @@ class TestComputeCurrentSpoe:
             _hitter_preseason("Star", sb=20),
         )
 
-        _snapshot_roster(conn, "2026-03-31", "Team A", [
-            {"name": "Star", "selected_position": "OF", "positions": ["OF"]},
-        ])
-        _snapshot_roster(conn, "2026-04-07", "Team A", [
-            {"name": "Star", "selected_position": "OF", "positions": ["OF"]},
-        ])
+        _snapshot_roster(
+            conn,
+            "2026-03-31",
+            "Team A",
+            [
+                {"name": "Star", "selected_position": "OF", "positions": ["OF"]},
+            ],
+        )
+        _snapshot_roster(
+            conn,
+            "2026-04-07",
+            "Team A",
+            [
+                {"name": "Star", "selected_position": "OF", "positions": ["OF"]},
+            ],
+        )
 
         standings = [
-            {"name": "Team A", "stats": {
-                "R": 0, "HR": 0, "RBI": 0, "SB": 3, "AVG": 0.250,
-                "W": 0, "K": 0, "SV": 0, "ERA": 99.0, "WHIP": 99.0,
-            }},
-            {"name": "Team B", "stats": {
-                "R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0.0,
-                "W": 0, "K": 0, "SV": 0, "ERA": 99.0, "WHIP": 99.0,
-            }},
+            {
+                "name": "Team A",
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 3,
+                    "AVG": 0.250,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 99.0,
+                    "WHIP": 99.0,
+                },
+            },
+            {
+                "name": "Team B",
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 0,
+                    "AVG": 0.0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 99.0,
+                    "WHIP": 99.0,
+                },
+            },
         ]
 
         # today = 2026-04-14 → first snapshot covers 7 days, second covers 7 days
         result = compute_current_spoe(
-            _league_from(conn), standings=standings, preseason_lookup=lookup,
-            season_start=SEASON_START, season_end=SEASON_END,
+            _league_from(conn),
+            standings=standings,
+            preseason_lookup=lookup,
+            season_start=SEASON_START,
+            season_end=SEASON_END,
             today=date.fromisoformat("2026-04-14"),
         )
 
         expected_sb = 20 * (14 / TOTAL_DAYS)
         sb_row = next(
-            r for r in result["results"]
-            if r["team"] == "Team A" and r["category"] == "SB"
+            r for r in result["results"] if r["team"] == "Team A" and r["category"] == "SB"
         )
         assert sb_row["projected_stat"] == pytest.approx(expected_sb, rel=1e-9)
 
@@ -225,26 +321,70 @@ class TestComputeCurrentSpoe:
             _hitter_preseason("Traded", hr=40),
         )
 
-        _snapshot_roster(conn, "2026-03-31", "Team A", [
-            {"name": "Traded", "selected_position": "OF", "positions": ["OF"]},
-        ])
-        _snapshot_roster(conn, "2026-04-07", "Team A", [
-            {"name": "UnknownPlayer", "selected_position": "OF", "positions": ["OF"]},
-        ])
-        _snapshot_roster(conn, "2026-04-07", "Team B", [
-            {"name": "Traded", "selected_position": "OF", "positions": ["OF"]},
-        ])
+        _snapshot_roster(
+            conn,
+            "2026-03-31",
+            "Team A",
+            [
+                {"name": "Traded", "selected_position": "OF", "positions": ["OF"]},
+            ],
+        )
+        _snapshot_roster(
+            conn,
+            "2026-04-07",
+            "Team A",
+            [
+                {"name": "UnknownPlayer", "selected_position": "OF", "positions": ["OF"]},
+            ],
+        )
+        _snapshot_roster(
+            conn,
+            "2026-04-07",
+            "Team B",
+            [
+                {"name": "Traded", "selected_position": "OF", "positions": ["OF"]},
+            ],
+        )
 
         standings = [
-            {"name": "Team A", "stats": {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
-                                         "W": 0, "K": 0, "SV": 0, "ERA": 99, "WHIP": 99}},
-            {"name": "Team B", "stats": {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
-                                         "W": 0, "K": 0, "SV": 0, "ERA": 99, "WHIP": 99}},
+            {
+                "name": "Team A",
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 0,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 99,
+                    "WHIP": 99,
+                },
+            },
+            {
+                "name": "Team B",
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 0,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 99,
+                    "WHIP": 99,
+                },
+            },
         ]
 
         result = compute_current_spoe(
-            _league_from(conn), standings=standings, preseason_lookup=lookup,
-            season_start=SEASON_START, season_end=SEASON_END,
+            _league_from(conn),
+            standings=standings,
+            preseason_lookup=lookup,
+            season_start=SEASON_START,
+            season_end=SEASON_END,
             today=date.fromisoformat("2026-04-14"),
         )
 
@@ -262,20 +402,54 @@ class TestComputeCurrentSpoe:
         lookup = _preseason_lookup_from(
             _hitter_preseason("Star", r=150),
         )
-        _snapshot_roster(conn, "2026-04-07", "Team A", [
-            {"name": "Star", "selected_position": "OF", "positions": ["OF"]},
-        ])
+        _snapshot_roster(
+            conn,
+            "2026-04-07",
+            "Team A",
+            [
+                {"name": "Star", "selected_position": "OF", "positions": ["OF"]},
+            ],
+        )
         standings = [
-            {"name": "Team A", "stats": {"R": 5, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
-                                         "W": 0, "K": 0, "SV": 0, "ERA": 99, "WHIP": 99}},
-            {"name": "Team B", "stats": {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
-                                         "W": 0, "K": 0, "SV": 0, "ERA": 99, "WHIP": 99}},
+            {
+                "name": "Team A",
+                "stats": {
+                    "R": 5,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 0,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 99,
+                    "WHIP": 99,
+                },
+            },
+            {
+                "name": "Team B",
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 0,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 99,
+                    "WHIP": 99,
+                },
+            },
         ]
 
         # today = 2026-04-10 → 3 days since snapshot, not 7
         result = compute_current_spoe(
-            _league_from(conn), standings=standings, preseason_lookup=lookup,
-            season_start=SEASON_START, season_end=SEASON_END,
+            _league_from(conn),
+            standings=standings,
+            preseason_lookup=lookup,
+            season_start=SEASON_START,
+            season_end=SEASON_END,
             today=date.fromisoformat("2026-04-10"),
         )
 
@@ -287,21 +461,55 @@ class TestComputeCurrentSpoe:
         conn = redis_league
         lookup = _preseason_lookup_from()  # empty
 
-        _snapshot_roster(conn, "2026-03-31", "Team A", [
-            {"name": "Unknown Player", "selected_position": "OF", "positions": ["OF"]},
-        ])
+        _snapshot_roster(
+            conn,
+            "2026-03-31",
+            "Team A",
+            [
+                {"name": "Unknown Player", "selected_position": "OF", "positions": ["OF"]},
+            ],
+        )
         _snapshot_roster(conn, "2026-03-31", "Team B", [])
 
         standings = [
-            {"name": "Team A", "stats": {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
-                                         "W": 0, "K": 0, "SV": 0, "ERA": 99, "WHIP": 99}},
-            {"name": "Team B", "stats": {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
-                                         "W": 0, "K": 0, "SV": 0, "ERA": 99, "WHIP": 99}},
+            {
+                "name": "Team A",
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 0,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 99,
+                    "WHIP": 99,
+                },
+            },
+            {
+                "name": "Team B",
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 0,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 99,
+                    "WHIP": 99,
+                },
+            },
         ]
 
         result = compute_current_spoe(
-            _league_from(conn), standings=standings, preseason_lookup=lookup,
-            season_start=SEASON_START, season_end=SEASON_END,
+            _league_from(conn),
+            standings=standings,
+            preseason_lookup=lookup,
+            season_start=SEASON_START,
+            season_end=SEASON_END,
             today=date.fromisoformat("2026-04-14"),
         )
 
@@ -323,25 +531,64 @@ class TestComputeCurrentSpoe:
         )
 
         # Pre-season snapshot 3 days before season_start
-        _snapshot_roster(conn, "2026-03-24", "Team A", [
-            {"name": "Star", "selected_position": "OF", "positions": ["OF"]},
-        ])
+        _snapshot_roster(
+            conn,
+            "2026-03-24",
+            "Team A",
+            [
+                {"name": "Star", "selected_position": "OF", "positions": ["OF"]},
+            ],
+        )
         # Regular-season snapshot (next Tuesday)
-        _snapshot_roster(conn, "2026-03-31", "Team A", [
-            {"name": "Star", "selected_position": "OF", "positions": ["OF"]},
-        ])
+        _snapshot_roster(
+            conn,
+            "2026-03-31",
+            "Team A",
+            [
+                {"name": "Star", "selected_position": "OF", "positions": ["OF"]},
+            ],
+        )
         _snapshot_roster(conn, "2026-03-31", "Team B", [])
 
         standings = [
-            {"name": "Team A", "stats": {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
-                                         "W": 0, "K": 0, "SV": 0, "ERA": 99, "WHIP": 99}},
-            {"name": "Team B", "stats": {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
-                                         "W": 0, "K": 0, "SV": 0, "ERA": 99, "WHIP": 99}},
+            {
+                "name": "Team A",
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 0,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 99,
+                    "WHIP": 99,
+                },
+            },
+            {
+                "name": "Team B",
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 0,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 99,
+                    "WHIP": 99,
+                },
+            },
         ]
 
         result = compute_current_spoe(
-            _league_from(conn), standings=standings, preseason_lookup=lookup,
-            season_start=SEASON_START, season_end=SEASON_END,
+            _league_from(conn),
+            standings=standings,
+            preseason_lookup=lookup,
+            season_start=SEASON_START,
+            season_end=SEASON_END,
             today=date.fromisoformat("2026-04-07"),
         )
 
@@ -362,24 +609,137 @@ class TestComputeCurrentSpoe:
             "the 14-day (un-clipped) calculation instead of 11 days."
         )
 
+    def test_hitter_with_same_name_as_pitcher_uses_hitter_projection(self, redis_league):
+        """Regression: MLB star hitter (e.g. Juan Soto) shares a normalized
+        name with a minor-league pitcher in the pitcher projection file.
+        SPoE must use the hitter projection when the rostered player is
+        listed at a hitter-eligible position, not silently collapse onto
+        the pitcher entry and zero out the hitting contribution.
+        """
+        conn = redis_league
+        hitters = pd.DataFrame(
+            [
+                _hitter_preseason("Juan Soto", hr=40, r=100, rbi=100, sb=10, h=160, ab=550, pa=650),
+            ]
+        )
+        pitchers = pd.DataFrame(
+            [
+                # Minor-league pitcher prospect who happens to share a name
+                _pitcher_preseason("Juan Soto", ip=2, k=1, w=0, sv=0, er=1, bb=1, h_allowed=2),
+            ]
+        )
+        lookup = build_preseason_lookup(hitters, pitchers)
+
+        _snapshot_roster(
+            conn,
+            "2026-03-31",
+            "Team A",
+            [
+                {"name": "Juan Soto", "selected_position": "OF", "positions": ["OF"]},
+            ],
+        )
+        _snapshot_roster(conn, "2026-03-31", "Team B", [])
+
+        standings = [
+            {
+                "name": "Team A",
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 0,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 99,
+                    "WHIP": 99,
+                },
+            },
+            {
+                "name": "Team B",
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 0,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 99,
+                    "WHIP": 99,
+                },
+            },
+        ]
+
+        result = compute_current_spoe(
+            _league_from(conn),
+            standings=standings,
+            preseason_lookup=lookup,
+            season_start=SEASON_START,
+            season_end=SEASON_END,
+            today=date.fromisoformat("2026-04-07"),
+        )
+
+        # Soto is rostered as OF → he must be credited with his HITTER
+        # projection (40 HR season) scaled by the 7 days owned.
+        expected_hr = 40 * 7 / TOTAL_DAYS
+        hr_a = next(r for r in result["results"] if r["team"] == "Team A" and r["category"] == "HR")
+        assert hr_a["projected_stat"] == pytest.approx(expected_hr, rel=1e-9)
+
     def test_result_shape_matches_luck_template(self, redis_league):
         """Backward-compatibility guard: the returned dict must have the
         keys the luck.html template expects."""
         conn = redis_league
         lookup = _preseason_lookup_from(_hitter_preseason("Star"))
-        _snapshot_roster(conn, "2026-03-31", "Team A", [
-            {"name": "Star", "selected_position": "OF", "positions": ["OF"]},
-        ])
+        _snapshot_roster(
+            conn,
+            "2026-03-31",
+            "Team A",
+            [
+                {"name": "Star", "selected_position": "OF", "positions": ["OF"]},
+            ],
+        )
         _snapshot_roster(conn, "2026-03-31", "Team B", [])
         standings = [
-            {"name": "Team A", "stats": {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
-                                         "W": 0, "K": 0, "SV": 0, "ERA": 99, "WHIP": 99}},
-            {"name": "Team B", "stats": {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
-                                         "W": 0, "K": 0, "SV": 0, "ERA": 99, "WHIP": 99}},
+            {
+                "name": "Team A",
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 0,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 99,
+                    "WHIP": 99,
+                },
+            },
+            {
+                "name": "Team B",
+                "stats": {
+                    "R": 0,
+                    "HR": 0,
+                    "RBI": 0,
+                    "SB": 0,
+                    "AVG": 0,
+                    "W": 0,
+                    "K": 0,
+                    "SV": 0,
+                    "ERA": 99,
+                    "WHIP": 99,
+                },
+            },
         ]
         result = compute_current_spoe(
-            _league_from(conn), standings=standings, preseason_lookup=lookup,
-            season_start=SEASON_START, season_end=SEASON_END,
+            _league_from(conn),
+            standings=standings,
+            preseason_lookup=lookup,
+            season_start=SEASON_START,
+            season_end=SEASON_END,
             today=date.fromisoformat("2026-04-07"),
         )
 
