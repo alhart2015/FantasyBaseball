@@ -541,12 +541,10 @@ def _compute_team_totals_pace(
             break
 
     if player_type == "hitter":
-        all_cats = ["PA", "R", "HR", "RBI", "SB", "AVG"]
         counting_cats = ["R", "HR", "RBI", "SB"]
         rate_cats = {"AVG": ("h", False)}
         opp_cat = "PA"
     else:
-        all_cats = ["IP", "W", "K", "SV", "ERA", "WHIP"]
         counting_cats = ["W", "K", "SV"]
         rate_cats = {"ERA": ("er", True), "WHIP": ("h_allowed", True)}
         opp_cat = "IP"

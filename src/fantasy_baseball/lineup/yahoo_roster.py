@@ -268,7 +268,7 @@ def fetch_free_agents(league, position: str, count: int = 50) -> list[dict]:
                 "status": p.get("status", ""),
             })
         return result
-    except (PermissionError, OSError) as exc:
+    except (PermissionError, OSError):
         # Auth failures and critical OS-level errors must surface
         logger.exception(
             "Critical error fetching free agents at position %s", position

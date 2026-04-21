@@ -11,7 +11,6 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 
-
 # Matches trailing digits used to disambiguate same-named slots in
 # historical roster JSON files and legacy DB rows (e.g. "OF2", "BN3",
 # "P5"). Leading digits in "1B"/"2B"/"3B" are preserved because the

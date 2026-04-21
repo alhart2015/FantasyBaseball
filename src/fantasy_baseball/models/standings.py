@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Iterator
 
-
 # Canonical category order — used for iteration and display
 CATEGORY_ORDER: tuple[str, ...] = (
     "R", "HR", "RBI", "SB", "AVG",
