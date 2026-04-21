@@ -70,10 +70,10 @@ def build_player_lookup(
     """
     # full_board first, then board overrides (board has live VAR)
     lookup: dict[str, pd.Series] = dict(zip(
-        full_board["player_id"], (row for _, row in full_board.iterrows())
+        full_board["player_id"], (row for _, row in full_board.iterrows()), strict=False
     ))
     lookup.update(dict(zip(
-        board["player_id"], (row for _, row in board.iterrows())
+        board["player_id"], (row for _, row in board.iterrows()), strict=False
     )))
     return lookup
 

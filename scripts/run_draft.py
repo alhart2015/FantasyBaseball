@@ -120,7 +120,7 @@ def _save_draft_log(tracker, balance, config, full_board, mock=False,
     draft_log = []
     draft_entries = list(zip(
         tracker.drafted_players[num_keepers:],
-        tracker.drafted_ids[num_keepers:],
+        tracker.drafted_ids[num_keepers:], strict=False,
     ))
     for pick_num, (name, pid) in enumerate(draft_entries, 1):
         rnd = (pick_num - 1) // num_teams + 1

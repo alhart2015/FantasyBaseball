@@ -35,7 +35,6 @@ from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calc
 def pad_roster_to_full(
     players: list,
     roster_slots: dict[str, int],
-    board: pd.DataFrame,
 ) -> list:
     """Pad a partial roster with replacement-level players to fill all slots.
 
@@ -181,7 +180,7 @@ def simulate_season(team_players, rng, h_slots=None, p_slots=None):
 def run_projections(
     team_players: dict[int, list],
     roster_slots: dict[str, int],
-    board: pd.DataFrame,
+    board: pd.DataFrame,  # noqa: ARG001  (unused; kept for API)
     num_teams: int,
     iterations: int = 1000,
     seed: int | None = None,
@@ -203,7 +202,7 @@ def run_projections(
     # Pad all rosters
     padded = {}
     for tn, players in team_players.items():
-        padded[tn] = pad_roster_to_full(players, roster_slots, board)
+        padded[tn] = pad_roster_to_full(players, roster_slots)
 
     # Run simulations
     all_totals: dict[int, list[float]] = {tn: [] for tn in padded}
@@ -271,7 +270,7 @@ def reconstruct_rosters_from_draft(config, board, tracker, num_teams_override=No
     drafted_names = tracker.drafted_players[num_keepers:]
     drafted_ids = tracker.drafted_ids[num_keepers:]
 
-    for pick_num, (_name, pid) in enumerate(zip(drafted_names, drafted_ids), 1):
+    for pick_num, (_name, pid) in enumerate(zip(drafted_names, drafted_ids, strict=False), 1):
         rnd = (pick_num - 1) // num_teams + 1
         pos = (pick_num - 1) % num_teams + 1
         team = pos if rnd % 2 == 1 else num_teams - pos + 1

@@ -124,9 +124,15 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ARG", "B011"]           # unused fixtures / assert False ok in tests
-"scripts/**" = ["E402", "F401"]        # scripts inject sys.path before imports
+"scripts/**" = ["E402", "F401", "ARG"] # scripts inject sys.path before imports; also allow interface-shaped args
 "tests/test_draft/test_run_draft_integration.py" = ["E402"]  # sys.path injection to import scripts/
 "tests/test_scripts/**" = ["E402"]     # these tests import scripts/ modules via sys.path
+# Strategy dispatcher: every pick_* function shares a fixed signature via
+# STRATEGIES dict, so unused params are an interface contract, not dead code.
+"src/fantasy_baseball/draft/strategy.py" = ["ARG001"]
+# predict_* recency models share a fixed (projection, games, cutoff) signature
+# so they can be swapped at the call site.
+"src/fantasy_baseball/analysis/recency.py" = ["ARG001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["fantasy_baseball"]

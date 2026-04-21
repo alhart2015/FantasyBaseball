@@ -72,7 +72,7 @@ def _feasible_assignment(
                 cost[i][j] = 0.0
     row_idx, col_idx = linear_sum_assignment(cost)
     assignments: list[Position | None] = [None] * n_players
-    for r, c in zip(row_idx, col_idx):
+    for r, c in zip(row_idx, col_idx, strict=False):
         if cost[r][c] > 0.5:
             return None
         assignments[r] = slot_positions[c]
@@ -126,7 +126,7 @@ def _score_hitter_subset(
 ) -> float:
     hypothetical = apply_lineup_to_roster(
         ctx.full_roster,
-        active_slots={p.name: slot for p, slot in zip(subset, assignment)},
+        active_slots={p.name: slot for p, slot in zip(subset, assignment, strict=False)},
         bench_names={h.name for h in bench},
     )
     return team_roto_total(hypothetical, ctx)
@@ -187,7 +187,7 @@ def optimize_hitter_lineup(
             return []
         return [
             HitterAssignment(slot=slot, name=p.name, player=p, roto_delta=0.0)
-            for p, slot in zip(partial_best[1], partial_best[2])
+            for p, slot in zip(partial_best[1], partial_best[2], strict=False)
         ]
 
     best: tuple[float, list[Player], list[Position], list[Player]] | None = None
@@ -223,7 +223,9 @@ def optimize_hitter_lineup(
             # is "starter benched, their slot left empty" — score the rest
             # of the optimal lineup without them.
             no_rep_subset = [p for p in active_subset if p is not starter]
-            no_rep_assn = [a for p, a in zip(active_subset, assignment) if p is not starter]
+            no_rep_assn = [
+                a for p, a in zip(active_subset, assignment, strict=False) if p is not starter
+            ]
             alt_best = _score_hitter_subset(ctx, no_rep_subset, no_rep_assn, [*bench, starter])
         roto_deltas[starter.name] = best_total - alt_best
 
@@ -234,7 +236,7 @@ def optimize_hitter_lineup(
             player=p,
             roto_delta=roto_deltas.get(p.name, 0.0),
         )
-        for p, slot in zip(active_subset, assignment)
+        for p, slot in zip(active_subset, assignment, strict=False)
     ]
 
 

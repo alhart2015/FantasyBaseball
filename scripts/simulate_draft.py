@@ -511,6 +511,7 @@ def run_simulation(
         zip(
             tracker.drafted_players[num_keepers:],
             tracker.drafted_ids[num_keepers:],
+            strict=False,
         )
     )
     for pick_num, (_name, pid) in enumerate(draft_entries):
@@ -625,6 +626,7 @@ def save_simulation_output(
         zip(
             tracker.drafted_players[num_keepers:],
             tracker.drafted_ids[num_keepers:],
+            strict=False,
         )
     )
     for pick_num, (name, pid) in enumerate(draft_entries, 1):

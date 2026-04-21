@@ -61,7 +61,7 @@ def main():
 
     # Draft picks (after keepers) follow snake order
     for pick_num, (_name, pid) in enumerate(
-        zip(drafted[num_keepers:], drafted_ids[num_keepers:]), 1
+        zip(drafted[num_keepers:], drafted_ids[num_keepers:], strict=False), 1
     ):
         rnd = (pick_num - 1) // num_teams + 1
         pos = (pick_num - 1) % num_teams + 1

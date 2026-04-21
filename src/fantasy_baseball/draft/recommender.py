@@ -94,14 +94,14 @@ def calculate_vona_scores(
     best_for_bucket = avail_buckets.map(best_remaining)
     vona_series = avail_sgp - best_for_bucket
 
-    return dict(zip(available["player_id"], vona_series))
+    return dict(zip(available["player_id"], vona_series, strict=False))
 
 
 
 def get_recommendations(
     board: pd.DataFrame,
     drafted: list[str],
-    user_roster: list[str],
+    user_roster: list[str],  # noqa: ARG001  (kept for API; used by callers positionally)
     n: int = 5,
     filled_positions: dict[str, int] | None = None,
     picks_until_next: int | None = None,

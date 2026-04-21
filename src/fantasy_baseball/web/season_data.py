@@ -143,7 +143,7 @@ def read_meta(cache_dir: Path = CACHE_DIR) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-def _load_game_log_totals(season_year: int) -> tuple[dict, dict]:
+def _load_game_log_totals(season_year: int) -> tuple[dict, dict]:  # noqa: ARG001
     """Load aggregated game log totals from Redis, keyed by normalized name.
 
     Returns (hitter_logs, pitcher_logs) where each is {normalized_name: {stat: value}}.
