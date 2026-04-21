@@ -224,7 +224,7 @@ def optimize_hitter_lineup(
             # of the optimal lineup without them.
             no_rep_subset = [p for p in active_subset if p is not starter]
             no_rep_assn = [a for p, a in zip(active_subset, assignment) if p is not starter]
-            alt_best = _score_hitter_subset(ctx, no_rep_subset, no_rep_assn, bench + [starter])
+            alt_best = _score_hitter_subset(ctx, no_rep_subset, no_rep_assn, [*bench, starter])
         roto_deltas[starter.name] = best_total - alt_best
 
     return [
@@ -276,7 +276,7 @@ def optimize_pitcher_lineup(
             # pitchers, no bench). Counterfactual is "starter benched,
             # their slot left empty" — score the other k-1 starters alone.
             no_rep_subset = [p for p in active_subset if p is not starter]
-            alt_best = _score_pitcher_subset(ctx, no_rep_subset, bench + [starter])
+            alt_best = _score_pitcher_subset(ctx, no_rep_subset, [*bench, starter])
         roto_deltas[starter.name] = best_total - alt_best
 
     starters = [

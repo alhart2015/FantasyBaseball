@@ -371,7 +371,7 @@ def run_simulation(
             # Strategy noise: sometimes take the 2nd or 3rd rec instead.
             # Normal distribution: ~68% take #1, ~27% take #2, ~4% take #3.
             if strategy_noise > 0 and pick_name is not None:
-                skip = min(abs(int(round(rng.normal(0, strategy_noise)))), 4)  # cap at 5th-best
+                skip = min(abs(round(rng.normal(0, strategy_noise))), 4)  # cap at 5th-best
                 if skip > 0:
                     filled = get_filled_positions(
                         tracker.user_roster_ids,

@@ -252,10 +252,7 @@ def _filter_rosterable(
         return available.iloc[0:0]  # no room at all
 
     def has_open_slot(positions):
-        for slot in open_slots:
-            if can_fill_slot(positions, slot):
-                return True
-        return False
+        return any(can_fill_slot(positions, slot) for slot in open_slots)
 
     mask = available["positions"].apply(has_open_slot)
     return available[mask]

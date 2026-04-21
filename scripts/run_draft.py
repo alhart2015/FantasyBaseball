@@ -606,7 +606,7 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
         closer_in_recs = any(r["name"] == closer_rec["name"] for r in recs)
         if closer_in_recs:
             recs = [r for r in recs if r["name"] != closer_rec["name"]]
-        recs = [closer_rec] + recs[:4]
+        recs = [closer_rec, *recs[:4]]
 
     # Show recommendations
     print(f"\nPicks until next turn: {picks_gap}")

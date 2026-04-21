@@ -318,7 +318,7 @@ def main():
         print(f"HITTER VARIANCE (n={len(h_df)} player-seasons)")
         print("=" * 70)
 
-        hitter_cats = HITTER_STATS + ["AVG"]
+        hitter_cats = [*HITTER_STATS, "AVG"]
         print(f"\n  {'Stat':>5} {'Mean':>7} {'SD':>7} {'Median':>7} {'P10':>7} {'P90':>7}  Current")
         print("  " + "-" * 60)
         for stat in hitter_cats:

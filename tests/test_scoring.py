@@ -181,7 +181,6 @@ class TestProbBeats:
         assert p_ab + p_ba == pytest.approx(1.0)
 
 
-from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.scoring import project_team_sds
 from fantasy_baseball.utils.constants import STAT_VARIANCE
 

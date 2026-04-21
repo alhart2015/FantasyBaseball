@@ -14,6 +14,7 @@ player board (300+ rows) on every 2-second poll:
 * ``read_delta`` – returns only the fields that changed between version *N*
   and the current version, or ``None`` when a full reload is required.
 """
+import contextlib
 import json
 import os
 import tempfile
@@ -321,10 +322,8 @@ def _atomic_write(data, path: Path) -> None:
                 else:
                     raise
     except BaseException:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
         raise
 
 

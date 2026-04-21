@@ -77,7 +77,7 @@ def fetch_all_game_logs(players: list[dict], season: int = 2025, cache_path: Pat
     if cache_path and cache_path.exists():
         with open(cache_path) as f:
             cached = json.load(f)
-        cached_ids = {int(k) for k in cached.keys()}
+        cached_ids = {int(k) for k in cached}
         requested_ids = {p["mlbam_id"] for p in players}
         if requested_ids.issubset(cached_ids):
             logger.info("Using cached game logs (%d players)", len(cached))

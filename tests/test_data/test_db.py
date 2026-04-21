@@ -584,7 +584,7 @@ def test_load_positions(tmp_path):
 
     rows = conn.execute("SELECT * FROM positions ORDER BY name").fetchall()
     assert len(rows) == 3
-    judge = [r for r in rows if r["name"] == "Aaron Judge"][0]
+    judge = next(r for r in rows if r["name"] == "Aaron Judge")
     assert judge["positions"] == "OF, DH"
     conn.close()
 

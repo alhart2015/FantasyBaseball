@@ -135,9 +135,7 @@ def _is_il(p: Player) -> bool:
     """True if the player is on the IL (by slot or by Yahoo status)."""
     if p.selected_position in IL_SLOTS:
         return True
-    if p.status in IL_STATUSES:
-        return True
-    return False
+    return p.status in IL_STATUSES
 
 
 def _is_bench(p: Player) -> bool:

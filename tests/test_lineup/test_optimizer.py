@@ -156,7 +156,7 @@ class TestERotoMaximization:
         slots = {"OF": 1, "BN": 1, "P": 9, "IL": 0}
         standings = [_standing("Us"), _standing("Rival", R=1, HR=1)]
         lineup = optimize_hitter_lineup(
-            hitters=active, full_roster=active + [il],
+            hitters=active, full_roster=[*active, il],
             projected_standings=standings, team_name="Us",
             roster_slots=slots,
         )
