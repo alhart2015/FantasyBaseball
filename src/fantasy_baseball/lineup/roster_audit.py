@@ -350,9 +350,12 @@ def audit_roster(
             # count. Same-type pitcher swaps preserve it — gating on p_slots
             # would reject every upgrade when the user's active pitcher count
             # is already below p_slots (common with IL pitchers).
-            if player.player_type == PlayerType.PITCHER and fa.player_type == PlayerType.HITTER:
-                if len(new_pitchers) < p_slots:
-                    continue
+            if (
+                player.player_type == PlayerType.PITCHER
+                and fa.player_type == PlayerType.HITTER
+                and len(new_pitchers) < p_slots
+            ):
+                continue
 
             try:
                 dr = compute_delta_roto(

@@ -559,10 +559,9 @@ def pick_avg_anchor(
     has_anchor = False
     for pid in tracker.user_roster_ids:
         row = player_lookup.get(pid)
-        if row is not None:
-            if row.get("player_type") == PlayerType.HITTER and row.get("avg", 0) >= AVG_ANCHOR_MIN:
-                has_anchor = True
-                break
+        if row is not None and row.get("player_type") == PlayerType.HITTER and row.get("avg", 0) >= AVG_ANCHOR_MIN:
+            has_anchor = True
+            break
 
     # If no anchor and we're within the hitter deadline, prefer high-AVG hitters
     if not has_anchor and hitter_count < AVG_ANCHOR_DEADLINE_HITTER:

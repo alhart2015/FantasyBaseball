@@ -28,7 +28,7 @@ def compute_slot_scarcity_order(
     for slot, n_slots in roster_slots.items():
         if slot in ("BN", "IL"):
             continue
-        eligible = board[board["positions"].apply(lambda p: can_fill_slot(p, slot))]
+        eligible = board[board["positions"].apply(lambda p, slot=slot: can_fill_slot(p, slot))]
         total_sgp = eligible["total_sgp"].sum() if "total_sgp" in eligible.columns else 0
         scarcity[slot] = total_sgp / n_slots if n_slots > 0 else float("inf")
     return sorted(scarcity.keys(), key=lambda s: scarcity[s])

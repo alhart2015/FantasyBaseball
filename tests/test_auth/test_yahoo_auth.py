@@ -15,9 +15,11 @@ def test_config_path_points_to_oauth_json():
 
 
 def test_get_yahoo_session_raises_if_no_config(tmp_path):
-    with patch("fantasy_baseball.auth.yahoo_auth.CONFIG_PATH", tmp_path / "nope.json"):
-        with pytest.raises(FileNotFoundError, match="oauth.json"):
-            get_yahoo_session()
+    with (
+        patch("fantasy_baseball.auth.yahoo_auth.CONFIG_PATH", tmp_path / "nope.json"),
+        pytest.raises(FileNotFoundError, match=r"oauth\.json"),
+    ):
+        get_yahoo_session()
 
 
 def test_get_league_returns_league_object():
