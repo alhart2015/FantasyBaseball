@@ -9,7 +9,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from fantasy_baseball.scoring import project_team_stats, score_roto
+from fantasy_baseball.scoring import project_team_stats, score_roto_dict
 from fantasy_baseball.simulation import simulate_season
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
@@ -313,7 +313,7 @@ class TestWinRateDistribution:
 
         for _ in range(self.NUM_SIMS):
             stats, _ = simulate_season(team_rosters, rng)
-            roto = score_roto(stats)
+            roto = score_roto_dict(stats)
             # Find the winner (highest total roto points)
             winner = max(roto, key=lambda t: roto[t]["total"])
             wins[winner] += 1
@@ -484,7 +484,7 @@ class TestRotoScoring:
         """Each team's total roto points must equal the sum of its
         per-category point values.
         """
-        roto = score_roto(team_stats)
+        roto = score_roto_dict(team_stats)
         for team, scores in roto.items():
             expected_total = sum(scores[f"{cat.value}_pts"] for cat in ALL_CATEGORIES)
             assert scores["total"] == pytest.approx(expected_total, abs=1e-9), (
@@ -495,7 +495,7 @@ class TestRotoScoring:
         """Lower ERA should yield MORE roto points than higher ERA.
         Similarly for WHIP.
         """
-        roto = score_roto(team_stats)
+        roto = score_roto_dict(team_stats)
         teams = list(team_stats.keys())
 
         for cat in INVERSE_STATS:
@@ -521,7 +521,7 @@ class TestRotoScoring:
         Also, the sum of all teams' totals must equal 10 * (1+2+...+10) = 550
         (conservation of roto points).
         """
-        roto = score_roto(team_stats)
+        roto = score_roto_dict(team_stats)
         n_teams = len(team_stats)
         max_possible = n_teams * len(ALL_CATEGORIES)  # 10 * 10 = 100
 

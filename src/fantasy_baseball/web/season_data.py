@@ -29,7 +29,7 @@ def _get_redis() -> KVStore | None:
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.standings import CategoryStats, StandingsEntry, StandingsSnapshot
-from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
     HITTER_PROJ_KEYS,
@@ -238,7 +238,7 @@ def format_standings_for_display(
     # handle early-season missing data — no _fill_stat_defaults needed.
     # ``score_roto`` indexes by string cat keys, so serialize at the boundary.
     all_stats = {e.team_name: e.stats.to_dict() for e in standings.entries}
-    roto = score_roto(all_stats, team_sds=team_sds)
+    roto = score_roto_dict(all_stats, team_sds=team_sds)
 
     has_yahoo_totals = all(e.yahoo_points_for is not None for e in standings.entries)
     yahoo_rank_by_name = {e.team_name: e.rank for e in standings.entries}
@@ -721,7 +721,7 @@ def compute_comparison_standings(
 
     Returns dict with before/after stats and roto, or {"error": ...}.
     """
-    from fantasy_baseball.scoring import score_roto
+    from fantasy_baseball.scoring import score_roto_dict
     from fantasy_baseball.trades.evaluate import (
         apply_swap_delta,
         find_player_by_name,
@@ -743,11 +743,11 @@ def compute_comparison_standings(
         gains_ros,
     )
 
-    roto_before = score_roto(all_stats_before)
-    roto_after = score_roto(all_stats_after)
+    roto_before = score_roto_dict(all_stats_before)
+    roto_after = score_roto_dict(all_stats_after)
 
-    ev_roto_before = score_roto(all_stats_before, team_sds=team_sds)
-    ev_roto_after = score_roto(all_stats_after, team_sds=team_sds)
+    ev_roto_before = score_roto_dict(all_stats_before, team_sds=team_sds)
+    ev_roto_after = score_roto_dict(all_stats_after, team_sds=team_sds)
 
     from fantasy_baseball.lineup.delta_roto import score_swap
 

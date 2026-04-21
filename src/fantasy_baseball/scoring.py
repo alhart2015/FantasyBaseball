@@ -15,12 +15,20 @@ Provides core functions:
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date
 from math import erf, sqrt
+from typing import Protocol
 
 from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS, Position
-from fantasy_baseball.models.standings import CategoryStats, ProjectedStandings
+from fantasy_baseball.models.standings import (
+    CategoryPoints,
+    CategoryStats,
+    ProjectedStandings,
+    ProjectedStandingsEntry,
+)
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
@@ -40,6 +48,22 @@ from fantasy_baseball.utils.constants import (
     safe_float as _safe,
 )
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
+
+
+class TeamStatsRow(Protocol):
+    """Minimal shape for a standings row: ``team_name`` plus ``CategoryStats``."""
+
+    team_name: str
+    stats: CategoryStats
+
+
+class TeamStatsTable(Protocol):
+    """Any object with a sequence of ``TeamStatsRow`` entries.
+
+    Concrete implementations: :class:`Standings`, :class:`ProjectedStandings`.
+    """
+
+    entries: Sequence[TeamStatsRow]
 
 
 def _get(p, key, default=0):
@@ -460,10 +484,10 @@ def build_team_sds(
 
 
 def score_roto(
-    all_team_stats: dict,
+    standings: TeamStatsTable,
     *,
-    team_sds: dict[str, dict[str, float]] | None = None,
-) -> dict[str, dict[str, float]]:
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None,
+) -> dict[str, CategoryPoints]:
     """Assign expected-value roto points per team per category.
 
     For each team in each category, points equal
@@ -477,30 +501,34 @@ def score_roto(
     including the averaged-ranks convention on exact ties.
 
     Args:
-        all_team_stats: ``{team: stats}``. Values can be ``dict`` or
-            ``CategoryStats`` — both support ``[cat]`` indexing.
-        team_sds: optional ``{team: {cat: sd}}``. ``None`` disables
+        standings: any :class:`TeamStatsTable` — concretely
+            :class:`Standings` or :class:`ProjectedStandings`. Each
+            entry supplies ``team_name`` and a :class:`CategoryStats`
+            under ``.stats``.
+        team_sds: optional ``{team: {Category: sd}}``. ``None`` disables
             uncertainty (exact-rank behavior).
 
     Returns:
-        ``{team: {R_pts, HR_pts, ..., total}}``. All values are floats.
-        Points range from 1 (last) to N (first) for N teams.
+        ``{team_name: CategoryPoints}``. ``CategoryPoints.values`` is
+        the per-category map (keyed by :class:`Category` enum); ``total``
+        is the sum across all categories.
     """
-    teams = list(all_team_stats.keys())
-    results: dict[str, dict[str, float]] = {t: {} for t in teams}
+    teams = [e.team_name for e in standings.entries]
+    stats_by_team: dict[str, CategoryStats] = {e.team_name: e.stats for e in standings.entries}
+
+    per_team_cat: dict[str, dict[Category, float]] = {t: {} for t in teams}
 
     for cat in ALL_CATS:
         higher_is_better = cat not in INVERSE_CATS
-        cat_key = cat.value
         for me in teams:
-            mu_me = all_team_stats[me][cat_key]
-            sd_me = team_sds.get(me, {}).get(cat_key, 0.0) if team_sds else 0.0
+            mu_me = stats_by_team[me][cat]
+            sd_me = team_sds.get(me, {}).get(cat, 0.0) if team_sds else 0.0
             pts = 1.0
             for other in teams:
-                if other is me:
+                if other == me:
                     continue
-                mu_o = all_team_stats[other][cat_key]
-                sd_o = team_sds.get(other, {}).get(cat_key, 0.0) if team_sds else 0.0
+                mu_o = stats_by_team[other][cat]
+                sd_o = team_sds.get(other, {}).get(cat, 0.0) if team_sds else 0.0
                 pts += _prob_beats(
                     mu_me,
                     mu_o,
@@ -508,9 +536,80 @@ def score_roto(
                     sd_o,
                     higher_is_better=higher_is_better,
                 )
-            results[me][f"{cat.value}_pts"] = pts
+            per_team_cat[me][cat] = pts
 
-    for t in results:
-        results[t]["total"] = sum(results[t].get(f"{c.value}_pts", 0.0) for c in ALL_CATS)
+    return {
+        t: CategoryPoints(
+            values=per_team_cat[t],
+            total=sum(per_team_cat[t].values()),
+        )
+        for t in teams
+    }
 
-    return results
+
+@dataclass
+class _AdHocStatsTable:
+    """Private adapter for callers that still hold a ``{team: stats}`` dict.
+
+    Implements the :class:`TeamStatsTable` protocol so those sites can
+    call ``score_roto`` without building a full ``ProjectedStandings``.
+    Phase 3.2+ migrates them to typed standings; until then, this keeps
+    the legacy path minimal and localized.
+    """
+
+    entries: Sequence[TeamStatsRow]
+
+
+def _dict_table(
+    stats_by_team: Mapping[str, Mapping[str, float] | CategoryStats],
+) -> _AdHocStatsTable:
+    """Wrap a ``{team: stats}`` dict in a :class:`TeamStatsTable`.
+
+    Accepts either ``CategoryStats`` values or uppercase-string-keyed
+    dicts. Used internally by :func:`score_roto_dict` and by legacy
+    callers that still operate on dict-shaped stats.
+    """
+    entries: list[TeamStatsRow] = []
+    for name, stats in stats_by_team.items():
+        cs = stats if isinstance(stats, CategoryStats) else CategoryStats.from_dict(stats)
+        entries.append(ProjectedStandingsEntry(team_name=name, stats=cs))
+    return _AdHocStatsTable(entries=entries)
+
+
+def _legacy_team_sds(
+    team_sds: Mapping[str, Mapping[str, float]] | None,
+) -> Mapping[str, Mapping[Category, float]] | None:
+    """Re-key a ``{team: {cat_str: sd}}`` mapping to ``{team: {Category: sd}}``.
+
+    Temporary bridge for callers that still build SDs with uppercase
+    string keys (the cache shape). Returns ``None`` on ``None`` input.
+    """
+    if team_sds is None:
+        return None
+    out: dict[str, dict[Category, float]] = {}
+    for team, sds in team_sds.items():
+        out[team] = {cat: float(sds.get(cat.value, 0.0)) for cat in ALL_CATS}
+    return out
+
+
+def score_roto_dict(
+    all_team_stats: Mapping[str, Mapping[str, float] | CategoryStats],
+    *,
+    team_sds: Mapping[str, Mapping[str, float]] | None = None,
+) -> dict[str, dict[str, float]]:
+    """Legacy-shape wrapper around :func:`score_roto`.
+
+    Returns ``{team: {"R_pts": ..., "HR_pts": ..., ..., "total": ...}}``
+    so Phase-2 callers that still hold dict-shaped stats keep working
+    while Phase 3 consumer migrations land. Delete once all callers use
+    typed :class:`TeamStatsTable` inputs and unpack ``CategoryPoints``
+    directly.
+    """
+    roto = score_roto(_dict_table(all_team_stats), team_sds=_legacy_team_sds(team_sds))
+    return {
+        team: {
+            **{f"{cat.value}_pts": cp.values[cat] for cat in ALL_CATS},
+            "total": cp.total,
+        }
+        for team, cp in roto.items()
+    }

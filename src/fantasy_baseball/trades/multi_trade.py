@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.models.positions import BENCH_SLOTS, IL_SLOTS
-from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.trades.evaluate import (
     aggregate_player_stats,
     apply_swap_delta,
@@ -201,11 +201,11 @@ def evaluate_multi_trade(
         else:
             post.append(t)
 
-    before_roto = score_roto(
+    before_roto = score_roto_dict(
         {t["name"]: t["stats"] for t in projected_standings},
         team_sds=team_sds,
     )
-    after_roto = score_roto(
+    after_roto = score_roto_dict(
         {t["name"]: t["stats"] for t in post},
         team_sds=team_sds,
     )

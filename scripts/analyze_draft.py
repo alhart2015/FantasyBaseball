@@ -18,7 +18,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from simulate_draft import build_board_and_context, _select_active_players, _active_slot_counts
 
-from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.simulation import simulate_season
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
@@ -196,7 +196,7 @@ def main():
     t0 = time.time()
     for it in range(ITERS):
         team_stats, _ = simulate_season(rosters, rng, h_slots, p_slots)
-        roto = score_roto(team_stats)
+        roto = score_roto_dict(team_stats)
 
         sorted_teams = sorted(roto.items(), key=lambda x: x[1]["total"], reverse=True)
         for rank_i, (tn, pts) in enumerate(sorted_teams, 1):

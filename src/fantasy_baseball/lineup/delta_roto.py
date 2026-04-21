@@ -96,7 +96,7 @@ def compute_delta_roto(
     Raises:
         ValueError: if drop_name is not found on the roster.
     """
-    from fantasy_baseball.scoring import score_roto
+    from fantasy_baseball.scoring import score_roto_dict
     from fantasy_baseball.trades.evaluate import (
         apply_swap_delta,
         find_player_by_name,
@@ -118,7 +118,7 @@ def compute_delta_roto(
         gains_ros,
     )
 
-    roto_before = score_roto(all_before, team_sds=team_sds)
-    roto_after = score_roto(all_after, team_sds=team_sds)
+    roto_before = score_roto_dict(all_before, team_sds=team_sds)
+    roto_after = score_roto_dict(all_after, team_sds=team_sds)
 
     return score_swap(roto_before, roto_after, team_name)

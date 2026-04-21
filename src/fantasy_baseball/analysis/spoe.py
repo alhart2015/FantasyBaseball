@@ -22,7 +22,7 @@ from typing import Any
 import pandas as pd
 
 from fantasy_baseball.models.league import League
-from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
     HITTING_COUNTING,
@@ -219,8 +219,8 @@ def compute_current_spoe(
             "results": [],
         }
 
-    projected_roto = score_roto({t: expected_stats[t] for t in common})
-    actual_roto = score_roto({t: actual_stats[t] for t in common})
+    projected_roto = score_roto_dict({t: expected_stats[t] for t in common})
+    actual_roto = score_roto_dict({t: actual_stats[t] for t in common})
 
     results: list[dict] = []
     for team in sorted(common):

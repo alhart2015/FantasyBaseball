@@ -8,7 +8,7 @@ the season dashboard (web/season_data.py).
 import numpy as np
 
 from fantasy_baseball.models.player import PlayerType
-from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
 )
@@ -486,7 +486,7 @@ def run_monte_carlo(
         sim_stats, _ = simulate_season(flat_rosters, rng, h_slots, p_slots)
         if use_management:
             sim_stats = apply_management_adjustment(sim_stats, rng)
-        sim_roto = score_roto(sim_stats)
+        sim_roto = score_roto_dict(sim_stats)
         ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
         for rank, (name, pts) in enumerate(ranked, 1):
             all_totals[name].append(pts["total"])
@@ -586,7 +586,7 @@ def run_ros_monte_carlo(
         )
         if use_management:
             sim_stats = apply_management_adjustment(sim_stats, rng)
-        sim_roto = score_roto(sim_stats)
+        sim_roto = score_roto_dict(sim_stats)
         ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
         for rank, (name, pts) in enumerate(ranked, 1):
             all_totals[name].append(pts["total"])

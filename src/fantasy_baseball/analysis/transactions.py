@@ -18,7 +18,7 @@ import pandas as pd
 from fantasy_baseball.models.league import League
 from fantasy_baseball.models.player import HitterStats, PitcherStats, PlayerType
 from fantasy_baseball.models.roster import Roster
-from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.trades.evaluate import apply_swap_delta
 from fantasy_baseball.utils.constants import (
@@ -347,8 +347,8 @@ def _delta_roto(
         gains_ros,
     )
 
-    roto_before = score_roto(all_before, team_sds=team_sds)
-    roto_after = score_roto(all_after, team_sds=team_sds)
+    roto_before = score_roto_dict(all_before, team_sds=team_sds)
+    roto_after = score_roto_dict(all_after, team_sds=team_sds)
     return roto_after[team_name]["total"] - roto_before[team_name]["total"]
 
 

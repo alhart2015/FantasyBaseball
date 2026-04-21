@@ -7,7 +7,7 @@ from scipy.optimize import linear_sum_assignment
 
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.models.positions import HITTER_ELIGIBLE, PITCHER_ELIGIBLE, Position
-from fantasy_baseball.scoring import project_team_stats, score_roto
+from fantasy_baseball.scoring import project_team_stats, score_roto_dict
 from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS
 from fantasy_baseball.utils.positions import can_fill_slot
 
@@ -114,7 +114,7 @@ def team_roto_total(hypothetical: list[Player], ctx: _TeamContext) -> float:
     my_stats = project_team_stats(hypothetical, displacement=True).to_dict()
     all_stats = {t["name"]: dict(t["stats"]) for t in ctx.projected_standings}
     all_stats[ctx.team_name] = my_stats
-    return score_roto(all_stats, team_sds=ctx.team_sds)[ctx.team_name]["total"]
+    return score_roto_dict(all_stats, team_sds=ctx.team_sds)[ctx.team_name]["total"]
 
 
 def _score_hitter_subset(

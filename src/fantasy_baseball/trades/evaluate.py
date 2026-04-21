@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, TypedDict
 
 from fantasy_baseball.models.player import HitterStats, Player
-from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.sgp.rankings import rank_key_from_positions
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -66,7 +66,7 @@ def compute_roto_points_by_cat(
                 stats[key] = _STAT_DEFAULTS.get(key, 0.0)
 
     all_stats = {t["name"]: t["stats"] for t in standings}
-    roto = score_roto(all_stats, team_sds=team_sds)
+    roto = score_roto_dict(all_stats, team_sds=team_sds)
 
     return {
         name: {cat.value: pts[f"{cat.value}_pts"] for cat in ALL_CATS} for name, pts in roto.items()
