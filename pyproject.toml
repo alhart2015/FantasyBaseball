@@ -52,6 +52,7 @@ files = [
     "src/fantasy_baseball/data/mlb_game_logs.py",
     "src/fantasy_baseball/data/mlb_schedule.py",
     "src/fantasy_baseball/data/projection_quality.py",
+    "src/fantasy_baseball/data/projections.py",
     "src/fantasy_baseball/data/redis_store.py",
     "src/fantasy_baseball/data/ros_pipeline.py",
     "src/fantasy_baseball/data/yahoo_players.py",
@@ -90,11 +91,17 @@ check_untyped_defs = true
 ignore_missing_imports = true
 warn_redundant_casts = true
 
-# Stricter rules for the draft subsystem, which was audited for type
-# completeness in the draft-parity refactor. Extend this list as other
-# subsystems are brought up to the same bar.
+# Stricter rules for subsystems that have been audited for type
+# completeness. Extend this list as other subsystems are brought up to
+# the same bar.
 [[tool.mypy.overrides]]
-module = "fantasy_baseball.draft.*"
+module = [
+    "fantasy_baseball.draft.*",
+    "fantasy_baseball.models.*",
+    "fantasy_baseball.sgp.*",
+    "fantasy_baseball.trades.*",
+    "fantasy_baseball.utils.*",
+]
 disallow_any_generics = true
 no_implicit_optional = true
 strict_equality = true

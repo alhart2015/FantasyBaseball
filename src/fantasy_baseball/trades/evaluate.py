@@ -247,7 +247,7 @@ def compute_trade_impact(
     }
 
 
-def player_rest_of_season_stats(player: Player) -> dict:
+def player_rest_of_season_stats(player: Player) -> dict[str, float]:
     """Extract ROS stats from a Player for swap projection.
 
     Returns a flat dict with keys R, HR, RBI, SB, AVG, W, K, SV, ERA,
@@ -291,7 +291,7 @@ def player_rest_of_season_stats(player: Player) -> dict:
         }
 
 
-def aggregate_player_stats(players: list[Player]) -> dict:
+def aggregate_player_stats(players: list[Player]) -> dict[str, float]:
     """Aggregate ROS stats across multiple players into one dict.
 
     Returns the same shape as :func:`player_rest_of_season_stats`. Counting
@@ -349,7 +349,7 @@ def find_player_by_name(name: str, roster: list[Player]) -> Player | None:
     return None
 
 
-def _can_roster_without(add: Player, roster_slots: dict) -> bool:
+def _can_roster_without(add: Player, roster_slots: dict[str, int]) -> bool:
     """Check if the incoming player can fill at least one non-bench active slot."""
     for slot in roster_slots:
         if slot in ("BN", "IL"):
@@ -365,7 +365,7 @@ def search_trades_away(
     hart_roster: list[Player],
     opp_rosters: dict[str, list[Player]],
     standings: Standings,
-    leverage_by_team: dict[str, dict],  # noqa: ARG001  (kept for API; planned for future weighting)
+    leverage_by_team: dict[str, dict[str, float]],  # noqa: ARG001  (kept for API; planned for future weighting)
     roster_slots: dict[str, int],
     rankings: dict[str, int],
     projected_standings: ProjectedStandings | None = None,
@@ -407,7 +407,7 @@ def search_trades_away(
     if send_rank is None:
         return []
 
-    grouped: dict[str, list[dict]] = {}
+    grouped: dict[str, list[dict[str, Any]]] = {}
 
     for opp_name, opp_roster in opp_rosters.items():
         for opp_player in opp_roster:
@@ -477,13 +477,13 @@ def search_trades_for(
     hart_roster: list[Player],
     opp_rosters: dict[str, list[Player]],
     standings: Standings,
-    leverage_by_team: dict[str, dict],  # noqa: ARG001  (kept for API; planned for future weighting)
+    leverage_by_team: dict[str, dict[str, float]],  # noqa: ARG001  (kept for API; planned for future weighting)
     roster_slots: dict[str, int],
     rankings: dict[str, int],
     projected_standings: ProjectedStandings | None = None,
     *,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Find trade offers the user can make to acquire a specific opponent player.
 
     Searches the user's roster for players they could send that pass

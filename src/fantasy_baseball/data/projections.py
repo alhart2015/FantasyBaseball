@@ -1,13 +1,20 @@
 import logging
+from pathlib import Path
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from .fangraphs import load_projection_set, _find_file
-from fantasy_baseball.utils.name_utils import normalize_name
-from fantasy_baseball.utils.positions import is_hitter, is_pitcher
-from fantasy_baseball.models.player import Player, PlayerType, HitterStats, PitcherStats
+
+from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.roster import Roster
+from fantasy_baseball.utils.name_utils import normalize_name
+from fantasy_baseball.utils.positions import is_hitter, is_pitcher
+
+from .fangraphs import _find_file, load_projection_set
+
+if TYPE_CHECKING:
+    from fantasy_baseball.data.projection_quality import QualityReport
 
 logger = logging.getLogger(__name__)
 
@@ -238,9 +245,9 @@ def blend_projections(
                 (all_pitchers, PITCHING_COUNTING_COLS),
             ]:
                 for df in df_list:
-                    system = df["_system"].iloc[0] if not df.empty else None
-                    if system and system in report.exclusions:
-                        excluded = report.exclusions[system]
+                    df_system = df["_system"].iloc[0] if not df.empty else None
+                    if df_system and df_system in report.exclusions:
+                        excluded = report.exclusions[df_system]
                         for stat in excluded:
                             if stat in df.columns and stat in stat_source:
                                 df[stat] = float("nan")
@@ -429,13 +436,14 @@ def match_roster_to_projections(
                     )
                     break
 
-        if proj is None:
+        if proj is None or ptype is None:
             logger.warning(
                 "%sno projection match for %r (positions=%r)",
                 prefix, name, positions,
             )
             continue
 
+        ros: HitterStats | PitcherStats
         if ptype == PlayerType.HITTER:
             ros = HitterStats.from_dict(proj.to_dict())
         else:

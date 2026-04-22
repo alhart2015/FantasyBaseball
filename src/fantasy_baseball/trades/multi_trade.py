@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.models.positions import BENCH_SLOTS, IL_SLOTS
@@ -88,9 +89,9 @@ def evaluate_multi_trade(
     hart_roster: list[Player],
     opp_rosters: dict[str, list[Player]],
     waiver_pool: dict[str, Player],
-    projected_standings: list[dict],
+    projected_standings: list[dict[str, Any]],
     team_sds: Mapping[str, Mapping[Category, float]] | None,
-    roster_slots: dict,
+    roster_slots: dict[str, int],
 ) -> MultiTradeResult:
     """Evaluate an arbitrary N-for-M trade with optional drops and adds.
 
@@ -232,7 +233,7 @@ def evaluate_multi_trade(
     )
 
 
-def _target_size(roster_slots: dict) -> int:
+def _target_size(roster_slots: dict[str, int]) -> int:
     """Total active + bench slots (excludes IL)."""
     return sum(v for k, v in roster_slots.items() if k != "IL")
 
@@ -241,7 +242,7 @@ def _can_roster_after(
     roster: list[Player],
     removals: list[str],
     additions: list[Player],
-    roster_slots: dict,
+    roster_slots: dict[str, int],
 ) -> tuple[bool, str | None]:
     """Size-only legality check for a multi-player proposal.
 
@@ -272,7 +273,7 @@ def _can_roster_after(
 def build_waiver_pool(
     hart_roster: list[Player],
     opp_rosters: dict[str, list[Player]],
-    ros_projections: dict,
+    ros_projections: dict[str, list[dict[str, Any]]],
 ) -> dict[str, Player]:
     """Build a keyed player pool of everyone with ROS projections who is
     not on any roster.

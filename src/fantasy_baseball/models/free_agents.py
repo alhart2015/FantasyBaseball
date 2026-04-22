@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Any
 
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.roster import RosterEntry
@@ -37,7 +38,7 @@ class FreeAgentPool:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _parse_yahoo_entries(raw_entries: list[dict]) -> list[RosterEntry]:
+    def _parse_yahoo_entries(raw_entries: list[dict[str, Any]]) -> list[RosterEntry]:
         """Convert raw Yahoo FA dicts to RosterEntry.
 
         Unknown position tokens are dropped silently (FA data quality
@@ -98,7 +99,7 @@ class FreeAgentPool:
                 Position.RP,
             ]
 
-        raw: list[dict] = []
+        raw: list[dict[str, Any]] = []
         seen_names: set[str] = set()
         for pos in positions:
             for player in fetch_free_agents(yahoo_league, pos.value):
