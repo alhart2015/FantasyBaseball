@@ -96,7 +96,9 @@ warn_redundant_casts = true
 # the same bar.
 [[tool.mypy.overrides]]
 module = [
+    "fantasy_baseball.analysis.*",
     "fantasy_baseball.draft.*",
+    "fantasy_baseball.lineup.*",
     "fantasy_baseball.models.*",
     "fantasy_baseball.sgp.*",
     "fantasy_baseball.trades.*",

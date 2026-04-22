@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import date, datetime
+from typing import Any
 
 import pandas as pd
 
@@ -51,7 +52,7 @@ def _is_pitcher(positions: set[str]) -> bool:
     return bool(positions & PITCHER_POSITIONS)
 
 
-def pair_standalone_moves(transactions: list[dict]) -> list[tuple[str, str]]:
+def pair_standalone_moves(transactions: list[dict[str, Any]]) -> list[tuple[str, str]]:
     """Find pairs of standalone drop + add from the same team within 24h.
 
     Only considers transactions with type "drop" or "add" (not "add/drop").
@@ -62,8 +63,8 @@ def pair_standalone_moves(transactions: list[dict]) -> list[tuple[str, str]]:
     2. Same player type (hitter/pitcher)
     3. No match — left unpaired
     """
-    drops = []
-    adds = []
+    drops: list[dict[str, Any]] = []
+    adds: list[dict[str, Any]] = []
     for txn in transactions:
         if txn.get("paired_with"):
             continue
@@ -82,7 +83,7 @@ def pair_standalone_moves(transactions: list[dict]) -> list[tuple[str, str]]:
         drop_is_hitter = _is_hitter(drop_pos)
         drop_is_pitcher = _is_pitcher(drop_pos)
 
-        candidates = []
+        candidates: list[dict[str, Any]] = []
         for add in adds:
             if add["transaction_id"] in paired_add_ids:
                 continue
@@ -96,7 +97,7 @@ def pair_standalone_moves(transactions: list[dict]) -> list[tuple[str, str]]:
         if not candidates:
             continue
 
-        best = None
+        best: dict[str, Any] | None = None
         best_score = 0
         for add in candidates:
             add_pos = _parse_positions(add.get("add_positions"))
@@ -168,7 +169,7 @@ def _frac_remaining(txn_date: date, season_start: date, season_end: date) -> flo
     return max(0.0, min(1.0, remaining / total))
 
 
-def _hitter_ros(stats: HitterStats) -> dict:
+def _hitter_ros(stats: HitterStats) -> dict[str, float]:
     return {
         "R": stats.r,
         "HR": stats.hr,
@@ -185,7 +186,7 @@ def _hitter_ros(stats: HitterStats) -> dict:
     }
 
 
-def _pitcher_ros(stats: PitcherStats) -> dict:
+def _pitcher_ros(stats: PitcherStats) -> dict[str, float]:
     return {
         "R": 0.0,
         "HR": 0.0,
@@ -202,7 +203,7 @@ def _pitcher_ros(stats: PitcherStats) -> dict:
     }
 
 
-def _prorated_replacement_hitter(frac: float) -> dict:
+def _prorated_replacement_hitter(frac: float) -> dict[str, float]:
     """Full-season ``REPLACEMENT_HITTER`` counting stats scaled by ``frac``.
 
     Rate stats (AVG) stay at their full-season value because
@@ -227,7 +228,7 @@ def _prorated_replacement_hitter(frac: float) -> dict:
     }
 
 
-def _prorated_replacement_pitcher(positions: set[str], frac: float) -> dict:
+def _prorated_replacement_pitcher(positions: set[str], frac: float) -> dict[str, float]:
     """Replacement pitcher ROS scaled by ``frac``.
 
     Pulls from ``REPLACEMENT_SP`` when the dropped player had SP
@@ -259,7 +260,7 @@ def _lookup_player(
     positions: set[str],
     hitters_proj: pd.DataFrame,
     pitchers_proj: pd.DataFrame,
-) -> tuple[dict | None, PlayerType | None, float]:
+) -> tuple[dict[str, float] | None, PlayerType | None, float]:
     """Find a player's ROS stats in the projection DataFrames.
 
     Checks hitter DF if the player has hitter-eligible positions, pitcher
@@ -290,7 +291,7 @@ def _worst_at_position(
     add_positions: set[str],
     hitters_proj: pd.DataFrame,
     pitchers_proj: pd.DataFrame,
-) -> dict | None:
+) -> dict[str, float] | None:
     """ROS stats of the worst rostered player with overlapping positions.
 
     Ranks candidates by ``calculate_player_sgp`` and picks the lowest.
@@ -300,7 +301,7 @@ def _worst_at_position(
     if roster is None or not add_positions:
         return None
 
-    worst_ros: dict | None = None
+    worst_ros: dict[str, float] | None = None
     worst_sgp = float("inf")
     for entry in roster.entries:
         entry_positions = {p.value for p in entry.positions}
@@ -323,9 +324,9 @@ def _worst_at_position(
 
 def _delta_roto(
     team_name: str,
-    loses_ros: dict,
-    gains_ros: dict,
-    projected_standings: list[dict],
+    loses_ros: dict[str, float],
+    gains_ros: dict[str, float],
+    projected_standings: list[dict[str, Any]],
     team_sds: Mapping[str, Mapping[Category, float]] | None,
 ) -> float:
     """Return the team's total-ΔRoto from swapping ``loses_ros`` → ``gains_ros``.
@@ -356,16 +357,16 @@ def _delta_roto(
 
 def score_transaction(
     league: League,
-    txn: dict,
-    projected_standings: list[dict],
+    txn: dict[str, Any],
+    projected_standings: list[dict[str, Any]],
     hitters_proj: pd.DataFrame,
     pitchers_proj: pd.DataFrame,
     season_start: date,
     season_end: date,
     *,
-    partner: dict | None = None,
+    partner: dict[str, Any] | None = None,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
-) -> dict:
+) -> dict[str, float]:
     """Compute ΔRoto for a transaction.
 
     Contract: a paired drop+add is scored as one swap; the full ΔRoto
@@ -548,8 +549,8 @@ def _load_projections_for_date_redis(client):
     )
 
     ros = get_ros_projections(client) or {}
-    hitters_rows: list = list(ros.get("hitters") or [])
-    pitchers_rows: list = list(ros.get("pitchers") or [])
+    hitters_rows: list[dict[str, Any]] = list(ros.get("hitters") or [])
+    pitchers_rows: list[dict[str, Any]] = list(ros.get("pitchers") or [])
 
     if not hitters_rows and not pitchers_rows:
         hitters_rows = get_blended_projections(client, "hitters") or []
@@ -571,7 +572,7 @@ def _load_projections_for_date_redis(client):
 # --------------------------------------------------------------------------
 
 
-def build_cache_output(transactions: list[dict]) -> dict:
+def build_cache_output(transactions: list[dict[str, Any]]) -> dict[str, Any]:
     """Build the JSON cache structure for the Transactions tab.
 
     Groups transactions by team, computes per-team net ΔRoto, and
@@ -581,7 +582,7 @@ def build_cache_output(transactions: list[dict]) -> dict:
     """
     by_id = {t["transaction_id"]: t for t in transactions}
     rendered = set()
-    teams: dict[str, dict] = {}
+    teams: dict[str, dict[str, Any]] = {}
 
     for txn in transactions:
         tid = txn["transaction_id"]

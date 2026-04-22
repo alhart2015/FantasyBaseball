@@ -6,6 +6,7 @@ predicted per-PA rates (hitters) or per-IP rates (pitchers).
 
 import math
 from datetime import date, timedelta
+from typing import Any
 
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
@@ -44,7 +45,7 @@ _DECAY_RATE = math.log(2) / DECAY_HALF_LIFE_DAYS
 # ---------------------------------------------------------------------------
 
 
-def _is_hitter(projection: dict) -> bool:
+def _is_hitter(projection: dict[str, float]) -> bool:
     return "hr_per_pa" in projection
 
 
@@ -59,13 +60,15 @@ def _parse_date(d) -> date:
     return date.fromisoformat(str(d))
 
 
-def _filter_games_before(games: list[dict], cutoff) -> list[dict]:
+def _filter_games_before(games: list[dict[str, Any]], cutoff) -> list[dict[str, Any]]:
     """Return games with date strictly before cutoff."""
     cutoff_date = _parse_date(cutoff)
     return [g for g in games if _parse_date(g["date"]) < cutoff_date]
 
 
-def _filter_games_window(games: list[dict], cutoff, window_days: int) -> list[dict]:
+def _filter_games_window(
+    games: list[dict[str, Any]], cutoff, window_days: int
+) -> list[dict[str, Any]]:
     """Return games in the N days before cutoff (date in [cutoff - window_days, cutoff))."""
     cutoff_date = _parse_date(cutoff)
     start_date = cutoff_date - timedelta(days=window_days)
@@ -77,7 +80,7 @@ def _filter_games_window(games: list[dict], cutoff, window_days: int) -> list[di
 # ---------------------------------------------------------------------------
 
 
-def _aggregate_hitter_games(games: list[dict]) -> dict:
+def _aggregate_hitter_games(games: list[dict[str, Any]]) -> dict[str, float]:
     """Sum totals and compute per-PA rates from a list of hitter game log dicts."""
     pa = sum(g["pa"] for g in games)
     ab = sum(g["ab"] for g in games)
@@ -119,7 +122,7 @@ def _aggregate_hitter_games(games: list[dict]) -> dict:
     }
 
 
-def _aggregate_pitcher_games(games: list[dict]) -> dict:
+def _aggregate_pitcher_games(games: list[dict[str, Any]]) -> dict[str, float]:
     """Sum totals and compute per-IP rates from a list of pitcher game log dicts."""
     ip = sum(g["ip"] for g in games)
     k = sum(g["k"] for g in games)
@@ -172,7 +175,9 @@ def _aggregate_pitcher_games(games: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def predict_preseason(projection: dict, games: list[dict], cutoff) -> dict:
+def predict_preseason(
+    projection: dict[str, float], games: list[dict[str, Any]], cutoff
+) -> dict[str, float]:
     """Return projection rates unchanged, ignoring all game log data."""
     if _is_hitter(projection):
         return {k: projection[k] for k in HITTER_STAT_KEYS}
@@ -184,7 +189,9 @@ def predict_preseason(projection: dict, games: list[dict], cutoff) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def predict_season_to_date(projection: dict, games: list[dict], cutoff) -> dict:
+def predict_season_to_date(
+    projection: dict[str, float], games: list[dict[str, Any]], cutoff
+) -> dict[str, float]:
     """Return rates computed purely from games before cutoff. Returns zeros if no games."""
     filtered = _filter_games_before(games, cutoff)
     if _is_hitter(projection):
@@ -200,7 +207,9 @@ def predict_season_to_date(projection: dict, games: list[dict], cutoff) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def predict_fixed_blend(projection: dict, games: list[dict], cutoff) -> dict:
+def predict_fixed_blend(
+    projection: dict[str, float], games: list[dict[str, Any]], cutoff
+) -> dict[str, float]:
     """Blend 30% of last-30-day rates with 70% projection. Falls back to projection if no games."""
     window_games = _filter_games_window(games, cutoff, FIXED_BLEND_WINDOW_DAYS)
 
@@ -227,7 +236,9 @@ def predict_fixed_blend(projection: dict, games: list[dict], cutoff) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def predict_reliability_blend(projection: dict, games: list[dict], cutoff) -> dict:
+def predict_reliability_blend(
+    projection: dict[str, float], games: list[dict[str, Any]], cutoff
+) -> dict[str, float]:
     """Blend actuals with projection using reliability-weighted actual weight.
 
     actual_weight = total_PA / (total_PA + reliability_constant)  per stat.
@@ -246,7 +257,7 @@ def predict_reliability_blend(projection: dict, games: list[dict], cutoff) -> di
         stat_keys = PITCHER_STAT_KEYS
         sample_size = agg["ip"]
 
-    result = {}
+    result: dict[str, float] = {}
     for k in stat_keys:
         rel_const = reliability[k]
         actual_weight = sample_size / (sample_size + rel_const)
@@ -260,7 +271,9 @@ def predict_reliability_blend(projection: dict, games: list[dict], cutoff) -> di
 # ---------------------------------------------------------------------------
 
 
-def predict_exponential_decay(projection: dict, games: list[dict], cutoff) -> dict:
+def predict_exponential_decay(
+    projection: dict[str, float], games: list[dict[str, Any]], cutoff
+) -> dict[str, float]:
     """Weight each game by exp(-decay_rate * days_ago), blend with projection via reliability.
 
     decay_rate = ln(2) / DECAY_HALF_LIFE_DAYS
@@ -274,7 +287,9 @@ def predict_exponential_decay(projection: dict, games: list[dict], cutoff) -> di
         return _decay_pitcher(projection, filtered, cutoff_date)
 
 
-def _decay_hitter(projection: dict, games: list[dict], cutoff_date: date) -> dict:
+def _decay_hitter(
+    projection: dict[str, float], games: list[dict[str, Any]], cutoff_date: date
+) -> dict[str, float]:
     """Compute exponential-decay weighted hitter rates, blended with projection.
 
     Decay weights determine which games' rates contribute most to the estimate.
@@ -322,7 +337,7 @@ def _decay_hitter(projection: dict, games: list[dict], cutoff_date: date) -> dic
 
     # Blend with projection using reliability constants and total unweighted PA
     # so that actual sample size governs trust in actuals, not the weight sum.
-    result = {}
+    result: dict[str, float] = {}
     for k in HITTER_STAT_KEYS:
         rel_const = HITTER_RELIABILITY[k]
         actual_weight = total_pa / (total_pa + rel_const)
@@ -330,7 +345,9 @@ def _decay_hitter(projection: dict, games: list[dict], cutoff_date: date) -> dic
     return result
 
 
-def _decay_pitcher(projection: dict, games: list[dict], cutoff_date: date) -> dict:
+def _decay_pitcher(
+    projection: dict[str, float], games: list[dict[str, Any]], cutoff_date: date
+) -> dict[str, float]:
     """Compute exponential-decay weighted pitcher rates, blended with projection.
 
     Decay weights determine which games' rates contribute most to the estimate.
@@ -380,7 +397,7 @@ def _decay_pitcher(projection: dict, games: list[dict], cutoff_date: date) -> di
         "sv_per_g": w_sv / w_g if w_g > 0 else 0,
     }
 
-    result = {}
+    result: dict[str, float] = {}
     for k in PITCHER_STAT_KEYS:
         rel_const = PITCHER_RELIABILITY[k]
         actual_weight = total_ip / (total_ip + rel_const)

@@ -83,7 +83,7 @@ You are operating within a constrained context window and strict system prompts.
 
 ## Context Management
 
-5. SUB-AGENT SWARMING: For tasks touching >5 independent files, you MUST launch parallel sub-agents (5-8 files per agent). Each agent gets its own context window. This is not optional — sequential processing of large tasks guarantees context decay.
+5. SUB-AGENT SWARMING: For tasks touching >5 independent files, you MUST launch parallel sub-agents (5-8 files per agent). Each agent gets its own context window. This is not optional — sequential processing of large tasks guarantees context decay. When launching parallel sub-agents, you MUST put all Agent tool calls in a single assistant message. Issuing them in separate messages is sequential, not parallel, and violates this rule even if the prompts are identical. If you catch yourself about to send one Agent call and wait for its result before sending another, stop — either batch them or explain why they must be sequential.
 
 6. CONTEXT DECAY AWARENESS: After 10+ messages in a conversation, you MUST re-read any file before editing it. Do not trust your memory of file contents. Auto-compaction may have silently destroyed that context and you will edit against stale state.
 

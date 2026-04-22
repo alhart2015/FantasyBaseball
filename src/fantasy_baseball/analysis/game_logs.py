@@ -3,6 +3,7 @@
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import requests
 
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 MLB_API_BASE = "https://statsapi.mlb.com/api/v1"
 
 
-def parse_hitter_game_log(split: dict) -> dict:
+def parse_hitter_game_log(split: dict[str, Any]) -> dict[str, Any]:
     """Parse a single hitter game log entry from the MLB API."""
     stat = split["stat"]
     return {
@@ -28,7 +29,7 @@ def parse_hitter_game_log(split: dict) -> dict:
     }
 
 
-def parse_pitcher_game_log(split: dict) -> dict:
+def parse_pitcher_game_log(split: dict[str, Any]) -> dict[str, Any]:
     """Parse a single pitcher game log entry from the MLB API."""
     stat = split["stat"]
     ip_str = str(stat.get("inningsPitched", "0"))
@@ -52,7 +53,9 @@ def parse_pitcher_game_log(split: dict) -> dict:
     }
 
 
-def fetch_player_game_log(mlbam_id: int, season: int, group: str = "hitting") -> list[dict]:
+def fetch_player_game_log(
+    mlbam_id: int, season: int, group: str = "hitting"
+) -> list[dict[str, Any]]:
     """Fetch game log from MLB Stats API for one player."""
     url = f"{MLB_API_BASE}/people/{mlbam_id}/stats"
     params: dict[str, str | int] = {"stats": "gameLog", "group": group, "season": season}
@@ -65,8 +68,8 @@ def fetch_player_game_log(mlbam_id: int, season: int, group: str = "hitting") ->
 
 
 def fetch_all_game_logs(
-    players: list[dict], season: int = 2025, cache_path: Path | None = None
-) -> dict[int, dict]:
+    players: list[dict[str, Any]], season: int = 2025, cache_path: Path | None = None
+) -> dict[int, dict[str, Any]]:
     """Fetch game logs for a list of players, with JSON caching.
 
     Args:
@@ -86,7 +89,7 @@ def fetch_all_game_logs(
             logger.info("Using cached game logs (%d players)", len(cached))
             return {int(k): v for k, v in cached.items()}
 
-    results = {}
+    results: dict[int, dict[str, Any]] = {}
     for i, player in enumerate(players):
         mid = player["mlbam_id"]
         name = player["name"]

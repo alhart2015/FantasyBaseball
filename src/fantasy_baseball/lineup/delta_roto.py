@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
 
@@ -31,7 +31,7 @@ class DeltaRotoResult:
     before_total: float
     after_total: float
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "total": round(self.total, 2),
             "before_total": round(self.before_total, 2),
@@ -43,8 +43,8 @@ class DeltaRotoResult:
 
 
 def score_swap(
-    roto_before: dict[str, dict],
-    roto_after: dict[str, dict],
+    roto_before: dict[str, dict[str, float]],
+    roto_after: dict[str, dict[str, float]],
     team_name: str,
 ) -> DeltaRotoResult:
     """Per-category deltaRoto from before/after ``score_roto`` outputs.
@@ -72,7 +72,7 @@ def compute_delta_roto(
     drop_name: str,
     add_player: Player,
     user_roster: list[Player],
-    projected_standings: list[dict],
+    projected_standings: list[dict[str, Any]],
     team_name: str,
     *,
     team_sds: Mapping[str, Mapping[Category, float]] | None,

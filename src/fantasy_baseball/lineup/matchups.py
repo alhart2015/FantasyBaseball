@@ -17,7 +17,7 @@ from fantasy_baseball.utils.time_utils import local_today
 logger = logging.getLogger(__name__)
 
 
-def normalize_team_batting_stats(raw_stats: list[dict]) -> dict[str, dict]:
+def normalize_team_batting_stats(raw_stats: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
     """Convert raw MLB API team batting data to {abbrev: {ops, k_pct}}.
 
     Args:
@@ -42,9 +42,9 @@ DEFAULT_DAMPENING = 0.5
 
 
 def calculate_matchup_factors(
-    team_stats: dict[str, dict],
+    team_stats: dict[str, dict[str, float]],
     dampening: float = DEFAULT_DAMPENING,
-) -> dict[str, dict]:
+) -> dict[str, dict[str, float]]:
     """Compute matchup adjustment factors for each team relative to league average.
 
     For each team, produces:
@@ -85,7 +85,7 @@ def calculate_matchup_factors(
 
 def adjust_pitcher_projection(
     pitcher: pd.Series,
-    factors: dict | list[dict],
+    factors: dict[str, float] | list[dict[str, float]],
 ) -> pd.Series:
     """Adjust a pitcher's projected stats based on matchup factors.
 
@@ -116,7 +116,7 @@ def adjust_pitcher_projection(
     return adjusted
 
 
-def fetch_team_batting_stats(season: int | None = None) -> dict[str, dict]:
+def fetch_team_batting_stats(season: int | None = None) -> dict[str, dict[str, float]]:
     """Fetch all 30 MLB teams' hitting stats via per-team API calls.
 
     Gets the team list from statsapi, then fetches season hitting stats
@@ -151,8 +151,8 @@ def fetch_team_batting_stats(season: int | None = None) -> dict[str, dict]:
 
 def _fetch_team_batting_stats_for_season(
     season: int,
-    teams: list[dict],
-) -> dict[str, dict]:
+    teams: list[dict[str, Any]],
+) -> dict[str, dict[str, float]]:
     """Fetch team batting stats for a specific season.
 
     Args:
@@ -198,7 +198,7 @@ def _fetch_team_batting_stats_for_season(
     return normalize_team_batting_stats(raw_stats)
 
 
-def save_batting_stats_cache(stats: dict[str, dict], path: Path) -> None:
+def save_batting_stats_cache(stats: dict[str, dict[str, float]], path: Path) -> None:
     """Save batting stats to a JSON cache file with a fetch timestamp.
 
     Args:
@@ -216,7 +216,7 @@ def save_batting_stats_cache(stats: dict[str, dict], path: Path) -> None:
     logger.debug("Saved batting stats cache to %s", path)
 
 
-def load_batting_stats_cache(path: Path) -> dict[str, dict] | None:
+def load_batting_stats_cache(path: Path) -> dict[str, dict[str, float]] | None:
     """Load batting stats from a JSON cache file.
 
     Returns None if the file is missing or was fetched more than 24 hours ago.
@@ -248,13 +248,13 @@ def load_batting_stats_cache(path: Path) -> dict[str, dict] | None:
         logger.debug("Batting stats cache is stale (%.1fh old); ignoring", age_hours)
         return None
 
-    return cast("dict[str, dict[Any, Any]] | None", payload.get("stats"))
+    return cast("dict[str, dict[str, float]] | None", payload.get("stats"))
 
 
 def get_team_batting_stats(
     cache_path: Path,
     season: int | None = None,
-) -> dict[str, dict]:
+) -> dict[str, dict[str, float]]:
     """Return team batting stats, using cache when fresh or fetching live.
 
     Tries to load from the cache first. If the cache is missing or stale,
@@ -279,11 +279,11 @@ def get_team_batting_stats(
 
 
 def get_probable_starters(
-    pitcher_roster: list,
-    schedule: dict,
-    matchup_factors: dict[str, dict] | None = None,
-    team_stats: dict[str, dict] | None = None,
-) -> list[dict]:
+    pitcher_roster: list[Any],
+    schedule: dict[str, Any],
+    matchup_factors: dict[str, dict[str, float]] | None = None,
+    team_stats: dict[str, dict[str, float]] | None = None,
+) -> list[dict[str, Any]]:
     """Cross-reference roster pitchers with the weekly schedule.
 
     Returns structured data for each start found, sorted by date.
@@ -315,7 +315,7 @@ def get_probable_starters(
         k_rank_map = {}
 
     # Collect starts per pitcher
-    pitcher_starts: dict[str, list[dict]] = {}
+    pitcher_starts: dict[str, list[dict[str, Any]]] = {}
 
     for game in schedule["probable_pitchers"]:
         for side in ("away", "home"):
