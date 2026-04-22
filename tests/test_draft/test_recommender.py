@@ -41,28 +41,28 @@ class TestGetRecommendations:
     def test_excludes_drafted_players(self):
         board = _make_board()
         recs = get_recommendations(board, drafted=["Player A::hitter"], user_roster=[], n=3)
-        names = [r["name"] for r in recs]
+        names = [r.name for r in recs]
         assert "Player A" not in names
 
     def test_recommendations_sorted_by_var(self):
         board = _make_board()
         recs = get_recommendations(board, drafted=[], user_roster=[], n=5)
-        vars_list = [r["var"] for r in recs]
+        vars_list = [r.var for r in recs]
         assert vars_list == sorted(vars_list, reverse=True)
 
     def test_flags_positional_need(self):
         board = _make_board()
         filled = {"OF": 1}
         recs = get_recommendations(board, drafted=[], user_roster=[], n=5, filled_positions=filled)
-        catcher_rec = next(r for r in recs if r["name"] == "Player C")
-        assert catcher_rec.get("need_flag") is True
+        catcher_rec = next(r for r in recs if r.name == "Player C")
+        assert catcher_rec.need_flag is True
 
     def test_includes_player_stats(self):
         board = _make_board()
         recs = get_recommendations(board, drafted=[], user_roster=[], n=1)
-        assert "var" in recs[0]
-        assert "best_position" in recs[0]
-        assert "name" in recs[0]
+        assert recs[0].var is not None
+        assert recs[0].best_position
+        assert recs[0].name
 
 
 class TestVonaPicksUntilNext:

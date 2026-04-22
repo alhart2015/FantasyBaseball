@@ -25,6 +25,7 @@ from typing import Any, cast
 import pandas as pd
 
 from fantasy_baseball.draft.balance import CategoryBalance
+from fantasy_baseball.draft.recommender import Recommendation
 from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import RATE_STATS, Category
@@ -102,7 +103,7 @@ def serialize_state(
     tracker: DraftTracker,
     balance: CategoryBalance,
     board: pd.DataFrame,
-    recommendations: list[dict],
+    recommendations: list[Recommendation],
     filled_positions: dict[str, int],
     roster_slots: dict[str, int] | None = None,
     roster_by_position: dict[str, list[str]] | None = None,
@@ -152,12 +153,12 @@ def serialize_state(
         "drafted_ids": list(tracker.drafted_ids),
         "recommendations": [
             {
-                "name": r["name"],
-                "var": round(float(r["var"]), 1),
-                "best_position": r["best_position"],
-                "positions": r["positions"] if isinstance(r["positions"], list) else [r["positions"]],
-                "need_flag": bool(r["need_flag"]),
-                "note": r.get("note", ""),
+                "name": r.name,
+                "var": round(float(r.var), 1),
+                "best_position": r.best_position,
+                "positions": list(r.positions),
+                "need_flag": bool(r.need_flag),
+                "note": r.note,
             }
             for r in recommendations
         ],

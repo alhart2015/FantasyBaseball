@@ -143,7 +143,7 @@ def main():
                 print(f"  {i+1}. {left:<48} {i+1}. {right}")
 
             # Show what strategy recommended
-            print(f"\n  Strategy recommendation: {recs[0]['name'] if recs else 'N/A'}")
+            print(f"\n  Strategy recommendation: {recs[0].name if recs else 'N/A'}")
             print(f"  >>> PICKED: {picked}")
             if picked_player is not None:
                 pos = "/".join(picked_player["positions"][:3])

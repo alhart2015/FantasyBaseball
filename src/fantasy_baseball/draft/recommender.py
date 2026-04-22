@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import pandas as pd
 
 from fantasy_baseball.models.player import PlayerType
@@ -10,6 +12,25 @@ from fantasy_baseball.utils.constants import (
 )
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
+
+
+@dataclass
+class Recommendation:
+    """A single draft pick recommendation.
+
+    ``score`` is the scoring-mode-specific ranking value (VAR or VONA) used
+    to sort recommendations; it is ``None`` for synthetic entries like the
+    strategy-layer closer alert in ``run_draft.py``.
+    """
+
+    name: str
+    var: float
+    score: float | None
+    best_position: str
+    positions: list[str]
+    player_type: PlayerType
+    need_flag: bool = False
+    note: str = ""
 
 
 def compute_slot_scarcity_order(
@@ -100,7 +121,7 @@ def get_recommendations(
     roster_slots: dict[str, int] | None = None,
     num_teams: int | None = None,
     scoring_mode: str = "var",
-) -> list[dict]:
+) -> list[Recommendation]:
     """Get top draft pick recommendations.
 
     Recalculates replacement levels from the undrafted pool so that
@@ -177,47 +198,47 @@ def get_recommendations(
                 candidate_ids.add(row["player_id"])
                 break  # only need the best one per slot
 
-    recs = []
+    recs: list[Recommendation] = []
     for _, player in candidates.iterrows():
-        score = player.get("vona", 0) if scoring_mode == "vona" else player["var"]
-        rec = {
-            "name": player["name"],
-            "var": player["var"],
-            "score": round(score, 2),
-            "best_position": player["best_position"],
-            "positions": player["positions"],
-            "player_type": player["player_type"],
-            "need_flag": False,
-            "note": "",
-        }
+        raw_score = player.get("vona", 0) if scoring_mode == "vona" else player["var"]
         positions = player["positions"]
+        if not isinstance(positions, list):
+            positions = [positions]
+        rec = Recommendation(
+            name=player["name"],
+            var=float(player["var"]),
+            score=round(float(raw_score), 2),
+            best_position=player["best_position"],
+            positions=list(positions),
+            player_type=player["player_type"],
+        )
         # Check specific positional slots before flex (IF/UTIL) so the note
         # shows "fills 3B need" rather than "fills IF need" when both are open.
         specific_unfilled = [s for s in unfilled if s not in ("IF", "UTIL")]
         flex_unfilled = [s for s in unfilled if s in ("IF", "UTIL")]
         for slot in specific_unfilled + flex_unfilled:
-            if can_fill_slot(positions, slot):
-                rec["need_flag"] = True
-                rec["note"] = f"fills {slot} need"
+            if can_fill_slot(rec.positions, slot):
+                rec.need_flag = True
+                rec.note = f"fills {slot} need"
                 break
         if picks_until_next and picks_until_next > 8:
-            pos = player["best_position"]
+            pos = rec.best_position
             remaining_at_pos = len(scarcity_pool[scarcity_pool["best_position"] == pos])
             if remaining_at_pos <= 3:
                 scarcity = f"scarce position — only {remaining_at_pos} left in top tier"
-                rec["note"] = f"{rec['note']}; {scarcity}" if rec["note"] else scarcity
+                rec.note = f"{rec.note}; {scarcity}" if rec.note else scarcity
         recs.append(rec)
     # Guarantee at least one player per unfilled position makes the final list.
     # Split into need-fills and pure-score, then merge.
-    need_recs = []
-    other_recs = []
+    need_recs: list[Recommendation] = []
+    other_recs: list[Recommendation] = []
     seen_need_slots: set[str] = set()
     # Sort all by score (VAR or VONA)
-    recs.sort(key=lambda r: r["score"], reverse=True)
+    recs.sort(key=lambda r: r.score if r.score is not None else float("-inf"), reverse=True)
     for rec in recs:
-        if rec["need_flag"] and rec["best_position"] not in seen_need_slots:
+        if rec.need_flag and rec.best_position not in seen_need_slots:
             need_recs.append(rec)
-            seen_need_slots.add(rec["best_position"])
+            seen_need_slots.add(rec.best_position)
         else:
             other_recs.append(rec)
     # Fill remaining slots with best-score players

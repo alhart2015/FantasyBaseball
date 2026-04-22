@@ -84,7 +84,7 @@ def pick_default(
     """Default strategy: take the #1 leverage-weighted recommendation."""
     recs = _get_recs(board, full_board, tracker, config, n=5, **kwargs)
     if recs:
-        return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
+        return recs[0].name, _lookup_pid(board, recs[0].name)
     return None, None
 
 
@@ -516,14 +516,14 @@ def pick_no_punt_cap3(
     for rec in recs:
         # Hard cap: skip closers once we have enough
         if closer_count >= NO_PUNT_CAP3_TARGET:
-            rows = board[board["name"] == rec["name"]]
+            rows = board[board["name"] == rec.name]
             if not rows.empty and rows.iloc[0].get("sv", 0) >= CLOSER_SV_THRESHOLD:
                 continue
 
-        if rec["player_type"] != PlayerType.HITTER:
-            return rec["name"], _lookup_pid(board, rec["name"])
+        if rec.player_type != PlayerType.HITTER:
+            return rec.name, _lookup_pid(board, rec.name)
 
-        rows = board[board["name"] == rec["name"]]
+        rows = board[board["name"] == rec.name]
         if rows.empty:
             continue
         player = rows.iloc[0]
@@ -532,12 +532,12 @@ def pick_no_punt_cap3(
         projected_avg = calculate_avg(new_h, new_ab)
 
         if projected_avg >= NO_PUNT_AVG_FLOOR or current_ab == 0:
-            return rec["name"], _lookup_pid(board, rec["name"])
+            return rec.name, _lookup_pid(board, rec.name)
 
     # All recs filtered — respect closer cap in fallback
     if closer_count >= NO_PUNT_CAP3_TARGET:
         return _fallback_non_closer(board, tracker, full_board, config)
-    return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
+    return recs[0].name, _lookup_pid(board, recs[0].name)
 
 
 def pick_avg_anchor(
@@ -564,13 +564,13 @@ def pick_avg_anchor(
         if recs:
             # Try to find a high-AVG hitter in the recommendations
             for rec in recs:
-                if rec["player_type"] != PlayerType.HITTER:
+                if rec.player_type != PlayerType.HITTER:
                     continue
-                rows = board[board["name"] == rec["name"]]
+                rows = board[board["name"] == rec.name]
                 if rows.empty:
                     continue
                 if rows.iloc[0].get("avg", 0) >= AVG_ANCHOR_MIN:
-                    return rec["name"], _lookup_pid(board, rec["name"])
+                    return rec.name, _lookup_pid(board, rec.name)
 
             # If none in recs, search the board for the best high-AVG hitter
             available = board[~board["player_id"].isin(tracker.drafted_ids)]
@@ -643,11 +643,11 @@ def pick_balanced(
 
     if force_type:
         for rec in recs:
-            if rec["player_type"] == force_type:
-                return rec["name"], _lookup_pid(board, rec["name"])
+            if rec.player_type == force_type:
+                return rec.name, _lookup_pid(board, rec.name)
 
     # No imbalance — take the best recommendation
-    return recs[0]["name"], _lookup_pid(board, recs[0]["name"])
+    return recs[0].name, _lookup_pid(board, recs[0].name)
 
 
 def pick_anti_fragile(
@@ -665,9 +665,9 @@ def pick_anti_fragile(
     # Re-score recommendations with durability discount
     scored = []
     for rec in recs:
-        rows = board[board["name"] == rec["name"]]
+        rows = board[board["name"] == rec.name]
         if rows.empty:
-            scored.append((rec, rec.get("var", 0)))
+            scored.append((rec, rec.var))
             continue
         player = rows.iloc[0]
         var = player.get("var", 0)
@@ -683,7 +683,7 @@ def pick_anti_fragile(
 
     scored.sort(key=lambda x: x[1], reverse=True)
     best = scored[0][0]
-    return best["name"], _lookup_pid(board, best["name"])
+    return best.name, _lookup_pid(board, best.name)
 
 
 def _pick_with_avg_floor(recs, board, balance, avg_floor, player_lookup=None):
@@ -695,10 +695,10 @@ def _pick_with_avg_floor(recs, board, balance, avg_floor, player_lookup=None):
     current_h, current_ab = balance.get_avg_components()
 
     for rec in recs:
-        if rec["player_type"] != PlayerType.HITTER:
-            return rec["name"], _lookup_pid(board, rec["name"], player_lookup)
+        if rec.player_type != PlayerType.HITTER:
+            return rec.name, _lookup_pid(board, rec.name, player_lookup)
 
-        rows = board[board["name"] == rec["name"]]
+        rows = board[board["name"] == rec.name]
         if rows.empty:
             continue
         player = rows.iloc[0]
@@ -707,9 +707,9 @@ def _pick_with_avg_floor(recs, board, balance, avg_floor, player_lookup=None):
         projected_avg = calculate_avg(new_h, new_ab)
 
         if projected_avg >= avg_floor or current_ab == 0:
-            return rec["name"], _lookup_pid(board, rec["name"], player_lookup)
+            return rec.name, _lookup_pid(board, rec.name, player_lookup)
 
-    return recs[0]["name"], _lookup_pid(board, recs[0]["name"], player_lookup)
+    return recs[0].name, _lookup_pid(board, recs[0].name, player_lookup)
 
 
 def _lookup_pid(board, name, name_to_pid=None):

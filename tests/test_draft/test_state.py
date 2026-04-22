@@ -4,8 +4,10 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.draft.balance import CategoryBalance
+from fantasy_baseball.draft.recommender import Recommendation
 from fantasy_baseball.draft.state import read_state, serialize_state, write_state
 from fantasy_baseball.draft.tracker import DraftTracker
+from fantasy_baseball.models.player import PlayerType
 
 
 def _make_hitter(name, positions, var, best_position, r, hr, rbi, sb, avg, ab):
@@ -61,14 +63,16 @@ def sample_balance(sample_board):
 @pytest.fixture
 def sample_recs():
     return [
-        {
-            "name": "Gerrit Cole",
-            "var": 8.2,
-            "best_position": "P",
-            "positions": ["SP"],
-            "need_flag": True,
-            "note": "fills P need",
-        },
+        Recommendation(
+            name="Gerrit Cole",
+            var=8.2,
+            score=8.2,
+            best_position="P",
+            positions=["SP"],
+            player_type=PlayerType.PITCHER,
+            need_flag=True,
+            note="fills P need",
+        ),
     ]
 
 

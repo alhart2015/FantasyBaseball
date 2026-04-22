@@ -4,8 +4,10 @@ import json
 import pandas as pd
 
 from fantasy_baseball.draft.balance import CategoryBalance
+from fantasy_baseball.draft.recommender import Recommendation
 from fantasy_baseball.draft.state import serialize_state, write_state
 from fantasy_baseball.draft.tracker import DraftTracker
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.web.app import create_app
 
 
@@ -57,8 +59,16 @@ class TestEndToEndSmoke:
         tracker.draft_player("Julio Rodriguez", is_user=True, player_id="Julio Rodriguez::hitter")
         balance.add_player(board.iloc[1])  # Julio
 
-        recs = [{"name": "Gerrit Cole", "var": 8.2, "best_position": "P",
-                 "positions": ["SP"], "need_flag": True, "note": "fills P need"}]
+        recs = [Recommendation(
+            name="Gerrit Cole",
+            var=8.2,
+            score=8.2,
+            best_position="P",
+            positions=["SP"],
+            player_type=PlayerType.PITCHER,
+            need_flag=True,
+            note="fills P need",
+        )]
         filled = {"OF": 1}
 
         # 2. Serialize
