@@ -284,6 +284,7 @@ def register_routes(app: Flask) -> None:
         rest_of_season_mc_data = None
         rest_of_season_mgmt_mc_data = None
         baseline_meta = None
+        raw_breakdown = None
 
         if raw_standings:
             from fantasy_baseball.web.season_data import (
@@ -314,6 +315,8 @@ def register_routes(app: Flask) -> None:
                         team_sds=_team_sds_from_cache(raw_projected.get("team_sds")),
                     )
 
+            raw_breakdown = read_cache_dict(CacheKey.STANDINGS_BREAKDOWN)
+
             raw_mc = read_cache_dict(CacheKey.MONTE_CARLO)
             if raw_mc:
                 baseline_meta = raw_mc.get("baseline_meta")
@@ -339,6 +342,7 @@ def register_routes(app: Flask) -> None:
             standings=standings_data,
             preseason=preseason_data,
             current_projected=current_projected_data,
+            standings_breakdown=raw_breakdown,
             mc=mc_data,
             mc_mgmt=mc_mgmt_data,
             baseline_meta=baseline_meta,
