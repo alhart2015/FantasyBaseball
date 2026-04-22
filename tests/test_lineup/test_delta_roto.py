@@ -7,7 +7,13 @@ from fantasy_baseball.models.player import (
     Player,
     PlayerType,
 )
+from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
+
+
+def _projected(rows):
+    """Build a ProjectedStandings from list-of-dicts test fixtures."""
+    return ProjectedStandings.from_json({"effective_date": "2026-04-01", "teams": rows})
 
 
 def _make_hitter(name, **stats):
@@ -91,7 +97,7 @@ class TestComputeDeltaRoto:
             drop_name="Hitter A",
             add_player=add_player,
             user_roster=roster,
-            projected_standings=standings,
+            projected_standings=_projected(standings),
             team_name="My Team",
             team_sds=None,
         )
@@ -132,7 +138,7 @@ class TestComputeDeltaRoto:
                 "Nobody",
                 add_player,
                 roster,
-                standings,
+                _projected(standings),
                 "My Team",
                 team_sds=None,
             )
@@ -199,7 +205,7 @@ class TestComputeDeltaRoto:
             drop_name="Drop",
             add_player=add_hitter,
             user_roster=roster,
-            projected_standings=projected_standings,
+            projected_standings=_projected(projected_standings),
             team_name="User",
             team_sds=team_sds,
         )
@@ -262,7 +268,7 @@ class TestComputeDeltaRoto:
             drop_name="Drop",
             add_player=add_hitter,
             user_roster=[drop_hitter],
-            projected_standings=projected_standings,
+            projected_standings=_projected(projected_standings),
             team_name="User",
             team_sds=None,
         )
@@ -308,7 +314,7 @@ class TestComputeDeltaRoto:
             drop_name="Drop",
             add_player=add_hitter,
             user_roster=[drop_hitter],
-            projected_standings=projected_standings,
+            projected_standings=_projected(projected_standings),
             team_name="User",
             team_sds=None,
         )

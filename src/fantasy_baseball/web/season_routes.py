@@ -931,8 +931,7 @@ def register_routes(app: Flask) -> None:
         worst_by_pos = _compute_worst_roster_by_position()
         config = _load_config()
         team_sds = _team_sds_from_cache(proj_cache.get("team_sds"))
-        # compute_delta_roto still consumes the legacy list[dict] shape.
-        projected_rows = projected_standings_raw["teams"]
+        projected_standings = _projected_from_cache(projected_standings_raw)
 
         best = None
         for target_pos in targets:
@@ -944,7 +943,7 @@ def register_routes(app: Flask) -> None:
                     drop_name=drop_name,
                     add_player=fa_player,
                     user_roster=user_roster,
-                    projected_standings=projected_rows,
+                    projected_standings=projected_standings,
                     team_name=config.team_name,
                     team_sds=team_sds,
                 )

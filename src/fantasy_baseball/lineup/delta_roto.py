@@ -17,6 +17,7 @@ from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
 
 if TYPE_CHECKING:
     from fantasy_baseball.models.player import Player
+    from fantasy_baseball.models.standings import ProjectedStandings
 
 
 @dataclass
@@ -72,7 +73,7 @@ def compute_delta_roto(
     drop_name: str,
     add_player: Player,
     user_roster: list[Player],
-    projected_standings: list[dict[str, Any]],
+    projected_standings: ProjectedStandings,
     team_name: str,
     *,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
@@ -111,7 +112,7 @@ def compute_delta_roto(
     loses_ros = player_rest_of_season_stats(dropped)
     gains_ros = player_rest_of_season_stats(add_player)
 
-    all_before = {t["name"]: dict(t["stats"]) for t in projected_standings}
+    all_before = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
     all_after = dict(all_before)
     all_after[team_name] = apply_swap_delta(
         all_before[team_name],

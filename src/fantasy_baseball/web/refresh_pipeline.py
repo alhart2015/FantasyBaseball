@@ -804,7 +804,7 @@ class RefreshRun:
             self.roster_players,
             self.fa_players,
             self.config.roster_slots,
-            projected_standings=self.projected_standings.to_json()["teams"],
+            projected_standings=self.projected_standings,
             team_name=self.config.team_name,
             team_sds=self.team_sds,
             optimal_hitters=self.optimal_hitters,

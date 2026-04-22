@@ -7,9 +7,15 @@ from fantasy_baseball.lineup.roster_audit import (
     candidates_for_player,
 )
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
+from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
 
 TEAM_NAME = "Test Team"
+
+
+def _projected(rows):
+    """Wrap a list-of-dicts standings fixture as a ProjectedStandings."""
+    return ProjectedStandings.from_json({"effective_date": "2026-04-01", "teams": rows})
 
 
 def _minimal_standings():
@@ -37,10 +43,12 @@ def _minimal_standings():
         "BB": 420,
         "H_ALLOWED": 1300,
     }
-    return [
-        {"name": TEAM_NAME, "stats": dict(base)},
-        {"name": "Opponent", "stats": {**base, "SV": 30, "ERA": 3.80}},
-    ]
+    return _projected(
+        [
+            {"name": TEAM_NAME, "stats": dict(base)},
+            {"name": "Opponent", "stats": {**base, "SV": 30, "ERA": 3.80}},
+        ]
+    )
 
 
 ROSTER_SLOTS = {
@@ -1036,10 +1044,11 @@ class TestAuditRosterTeamSDs:
             "ERA": 0,
             "WHIP": 0,
         }
-        return [
+        rows = [
             {"name": TEAM_NAME, "stats": {**cats, "SB": 100}},
             {"name": "Rival", "stats": {**cats, "SB": 99}},
         ] + [{"name": f"T{i}", "stats": {**cats, "SB": 10 + i}} for i in range(10)]
+        return _projected(rows)
 
     def test_team_sds_none_produces_full_rank_flip(self):
         roster = [_hitter("Drop", ["OF"], r=0, hr=0, rbi=0, sb=20, ab=100, h=0, avg=0.0)]
@@ -1061,7 +1070,7 @@ class TestAuditRosterTeamSDs:
         roster = [_hitter("Drop", ["OF"], r=0, hr=0, rbi=0, sb=20, ab=100, h=0, avg=0.0)]
         fas = [_hitter("Add", ["OF"], r=0, hr=0, rbi=0, sb=10, ab=100, h=0, avg=0.0)]
         standings = self._twelve_team_sb_standings()
-        team_sds = {t["name"]: dict.fromkeys(ALL_CATEGORIES, 0.0) for t in standings}
+        team_sds = {e.team_name: dict.fromkeys(ALL_CATEGORIES, 0.0) for e in standings.entries}
         team_sds[TEAM_NAME][Category.SB] = 10.0
         team_sds["Rival"][Category.SB] = 10.0
         entries = audit_roster(
