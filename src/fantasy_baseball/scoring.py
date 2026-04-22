@@ -247,12 +247,20 @@ def _scale_stats(p: Player, factor: float) -> dict[str, float | PlayerType]:
 def _apply_displacement(roster: list[Player]) -> list[Player | dict]:
     """Partition roster into active/bench/IL and apply displacement scaling.
 
+    Classification is slot-first:
+
+    - Any slot that is neither ``BN`` nor in ``IL_SLOTS`` → active.
+      Counted at face value; may be a displacement target. Yahoo IL
+      status on an active-slotted player is ignored — the manager's
+      slot choice wins.
+    - Slot in ``IL_SLOTS`` (IL, IL+, DL, DL+) → IL. Counted at full
+      ROS and displaces the worst SGP-matched active player.
+    - BN slot + IL status → IL (same displacement path).
+    - BN slot + healthy → excluded.
+
     Returns a list where each entry is either an unmodified Player
-    (active, unaffected) or a dict of scaled stats (active, displaced).
-    Bench players are excluded. IL players are included at full scale
-    (they will return and produce). The worst matching active player
-    has their stats scaled down to reflect the playing time the IL
-    player takes away.
+    (active, unaffected; or IL, full-scale) or a dict of scaled stats
+    (active, displaced).
     """
     # Separate players into categories
     active: list[Player] = []
@@ -263,11 +271,16 @@ def _apply_displacement(roster: list[Player]) -> list[Player | dict]:
             # Dict-input callers: pass through unmodified
             active.append(p)
             continue
-        if _is_bench(p):
-            continue  # exclude bench
-        if _is_il(p):
+        slot = p.selected_position
+        if slot == Position.BN:
+            # BN + IL status still displaces; healthy bench is excluded.
+            if _is_il(p):
+                il_players.append(p)
+            continue
+        if slot in IL_SLOTS:
             il_players.append(p)
             continue
+        # Active slot: treat at face value, regardless of Yahoo status.
         active.append(p)
 
     # Sort IL players by descending playing time (highest PT gets first pick)

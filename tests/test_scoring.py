@@ -766,8 +766,9 @@ class TestDisplacementILPitcher:
         assert stats[Category.SV] == pytest.approx(20 * 0.5 + 10)
 
 
-class TestDisplacementILSlotAndStatus:
-    """IL detection uses both selected_position in IL_SLOTS and status in IL_STATUSES."""
+class TestDisplacementClassification:
+    """Slot-first classification: active slot counts at face value;
+    IL slot or BN+IL-status triggers displacement."""
 
     def test_il_slot_triggers_displacement(self):
         """Player on IL slot is treated as IL even without status string."""
@@ -801,9 +802,13 @@ class TestDisplacementILSlotAndStatus:
         # Total = active*0.7 + IL full
         assert stats[Category.R] == pytest.approx(80 * 0.7 + 20)
 
-    def test_il_status_on_active_slot_triggers_displacement(self):
-        """Player with IL status but on an active slot (e.g., Yahoo quirk)
-        is treated as IL."""
+    def test_bn_slot_with_il_status_triggers_displacement(self):
+        """BN slot + IL status is still routed to displacement (unchanged).
+
+        Replaces the prior ``test_il_status_on_active_slot_triggers_displacement``,
+        whose behavior was intentionally changed by the
+        ``projected_standings_active_slot_face_value`` spec.
+        """
         active = _hitter(
             "Active",
             r=80,
@@ -815,9 +820,9 @@ class TestDisplacementILSlotAndStatus:
             positions=[Position.OF],
             selected_position=Position.OF,
         )
-        # selected_position=OF but status="IL60" — still IL
+        # BN slot + IL60 status — still IL-classified, still displaces.
         il_player = _hitter(
-            "IL status",
+            "IL on bench",
             r=30,
             hr=6,
             rbi=20,
@@ -825,7 +830,7 @@ class TestDisplacementILSlotAndStatus:
             h=60,
             ab=250,
             positions=[Position.OF],
-            selected_position=Position.OF,
+            selected_position=Position.BN,
             status="IL60",
         )
 
@@ -833,6 +838,44 @@ class TestDisplacementILSlotAndStatus:
         # factor = (500 - 250) / 500 = 0.5
         # Total = active*0.5 + IL full
         assert stats[Category.R] == pytest.approx(80 * 0.5 + 30)
+
+    def test_il_status_on_active_slot_counts_at_face_value(self):
+        """Active-slotted player with IL status is treated as active, not IL.
+
+        This is the fix for the Soto-in-OF-with-IL10-status bug: the manager
+        put him in an active slot, so respect that — no displacement routing.
+        """
+        active = _hitter(
+            "Active",
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            h=140,
+            ab=500,
+            positions=[Position.OF],
+            selected_position=Position.OF,
+        )
+        # Active slot (OF) + IL status -> treated at face value under new rule
+        il_status_active = _hitter(
+            "IL status, active slot",
+            r=75,
+            hr=25,
+            rbi=85,
+            sb=8,
+            h=150,
+            ab=540,
+            positions=[Position.OF],
+            selected_position=Position.OF,
+            status="IL10",
+        )
+
+        stats = project_team_stats([active, il_status_active], displacement=True)
+        # Both count in full — no displacement, no zeroing.
+        assert stats[Category.R] == pytest.approx(80 + 75)
+        assert stats[Category.HR] == pytest.approx(20 + 25)
+        assert stats[Category.RBI] == pytest.approx(70 + 85)
+        assert stats[Category.SB] == pytest.approx(10 + 8)
 
 
 class TestDisplacementDictInputUnaffected:
