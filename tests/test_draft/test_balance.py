@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.draft.balance import CategoryBalance
+from fantasy_baseball.utils.constants import Category
 
 
 def _make_hitter(name, r, hr, rbi, sb, avg, ab):
@@ -23,25 +24,25 @@ class TestCategoryBalance:
     def test_empty_roster(self):
         bal = CategoryBalance()
         totals = bal.get_totals()
-        assert totals["HR"] == 0
-        assert totals["K"] is None  # no pitchers → None, not 0
+        assert totals[Category.HR] == 0
+        assert totals[Category.K] is None  # no pitchers → None, not 0
 
     def test_add_hitter(self):
         bal = CategoryBalance()
         bal.add_player(_make_hitter("Judge", 110, 45, 120, 5, .291, 550))
         totals = bal.get_totals()
-        assert totals["HR"] == 45
-        assert totals["R"] == 110
-        assert totals["RBI"] == 120
-        assert totals["SB"] == 5
+        assert totals[Category.HR] == 45
+        assert totals[Category.R] == 110
+        assert totals[Category.RBI] == 120
+        assert totals[Category.SB] == 5
 
     def test_add_multiple_hitters_sums(self):
         bal = CategoryBalance()
         bal.add_player(_make_hitter("Judge", 110, 45, 120, 5, .291, 550))
         bal.add_player(_make_hitter("Betts", 105, 28, 85, 15, .287, 540))
         totals = bal.get_totals()
-        assert totals["HR"] == 73
-        assert totals["SB"] == 20
+        assert totals[Category.HR] == 73
+        assert totals[Category.SB] == 20
 
     def test_avg_is_weighted(self):
         bal = CategoryBalance()
@@ -49,15 +50,15 @@ class TestCategoryBalance:
         bal.add_player(_make_hitter("Betts", 105, 28, 85, 15, .287, 540))
         totals = bal.get_totals()
         expected = (550 * .291 + 540 * .287) / (550 + 540)
-        assert totals["AVG"] == pytest.approx(expected, abs=0.001)
+        assert totals[Category.AVG] == pytest.approx(expected, abs=0.001)
 
     def test_add_pitcher(self):
         bal = CategoryBalance()
         bal.add_player(_make_pitcher("Cole", 15, 240, 0, 3.15, 1.05, 200))
         totals = bal.get_totals()
-        assert totals["W"] == 15
-        assert totals["K"] == 240
-        assert totals["SV"] == 0
+        assert totals[Category.W] == 15
+        assert totals[Category.K] == 240
+        assert totals[Category.SV] == 0
 
     def test_era_whip_weighted_by_ip(self):
         bal = CategoryBalance()
@@ -66,7 +67,7 @@ class TestCategoryBalance:
         totals = bal.get_totals()
         total_er = 3.00 * 200 / 9 + 2.00 * 70 / 9
         expected_era = total_er * 9 / 270
-        assert totals["ERA"] == pytest.approx(expected_era, abs=0.01)
+        assert totals[Category.ERA] == pytest.approx(expected_era, abs=0.01)
 
     def test_get_warnings_flags_weak_categories(self):
         bal = CategoryBalance()

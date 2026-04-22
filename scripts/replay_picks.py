@@ -21,6 +21,7 @@ from fantasy_baseball.draft.recommender import (
     get_recommendations,
 )
 from fantasy_baseball.draft.strategy import CLOSER_SV_THRESHOLD
+from fantasy_baseball.utils.constants import Category
 
 HART = None  # set from draft metadata
 
@@ -211,11 +212,11 @@ def _explain_pick(name, player, var, vona, is_closer, closer_count,
 
     totals = balance.get_totals()
     reason = ""
-    if totals.get("SB", 0) < 100 and sb >= 15:
+    if (totals.get(Category.SB) or 0) < 100 and sb >= 15:
         reason = "SB is a top category need"
-    elif totals.get("AVG", 0) < 0.255 and avg >= 0.260:
+    elif (totals.get(Category.AVG) or 0) < 0.255 and avg >= 0.260:
         reason = "protects AVG floor"
-    elif totals.get("HR", 0) < 100 and hr >= 20:
+    elif (totals.get(Category.HR) or 0) < 100 and hr >= 20:
         reason = "HR contribution needed"
 
     strength_str = f" ({', '.join(strengths)})" if strengths else ""

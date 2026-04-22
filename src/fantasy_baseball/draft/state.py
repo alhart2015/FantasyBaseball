@@ -27,6 +27,7 @@ import pandas as pd
 from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.utils.constants import RATE_STATS
 
 # ---------------------------------------------------------------------------
 # Module-level version counter (monotonically increasing, thread-safe)
@@ -122,14 +123,14 @@ def serialize_state(
         protocol fields.
     """
     totals = balance.get_totals()
-    rounded_totals = {}
+    rounded_totals: dict[str, float] = {}
     for cat, val in totals.items():
         if val is None:
-            rounded_totals[cat] = 0.0
-        elif cat in ("AVG", "ERA", "WHIP"):
-            rounded_totals[cat] = round(float(val), 3)
+            rounded_totals[cat.value] = 0.0
+        elif cat in RATE_STATS:
+            rounded_totals[cat.value] = round(float(val), 3)
         else:
-            rounded_totals[cat] = round(float(val))
+            rounded_totals[cat.value] = round(float(val))
 
     # Offset pick/round to account for keeper rounds so the UI shows
     # the overall draft pick number (e.g. pick 59 not pick 29).
