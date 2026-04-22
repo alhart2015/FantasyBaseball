@@ -3,6 +3,7 @@
 Tests cover 14 strategy functions + 6 helper functions with happy paths,
 constraint-triggering paths, and edge cases.
 """
+
 import pandas as pd
 
 from fantasy_baseball.config import LeagueConfig
@@ -16,7 +17,6 @@ from fantasy_baseball.draft.strategy import (
     STRATEGIES,
     THREE_CLOSERS_DEADLINES,
     TWO_CLOSERS_DEADLINES,
-    _can_roster_player,
     _count_closers,
     _count_hitters,
     _count_pitchers,
@@ -43,6 +43,7 @@ from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD, DEFAULT_ROSTER
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_config(roster_slots=None, num_teams=10):
     """Create a minimal LeagueConfig for testing."""
@@ -160,35 +161,59 @@ def _make_board(players):
     so that strategy code can filter without KeyError.
     """
     if not players:
-        return pd.DataFrame(columns=[
-            "name", "player_id", "player_type", "var", "total_sgp",
-            "best_position", "positions", "adp", "avg", "ab", "h",
-            "r", "hr", "rbi", "sb", "sv", "ip", "w", "k",
-            "era", "whip", "er", "bb", "h_allowed",
-        ])
+        return pd.DataFrame(
+            columns=[
+                "name",
+                "player_id",
+                "player_type",
+                "var",
+                "total_sgp",
+                "best_position",
+                "positions",
+                "adp",
+                "avg",
+                "ab",
+                "h",
+                "r",
+                "hr",
+                "rbi",
+                "sb",
+                "sv",
+                "ip",
+                "w",
+                "k",
+                "era",
+                "whip",
+                "er",
+                "bb",
+                "h_allowed",
+            ]
+        )
     return pd.DataFrame(players)
 
 
 def _make_standard_board():
     """Create a standard test board with a mix of hitters, SPs, closers."""
-    return _make_board([
-        _make_hitter("Hitter A", var=15.0, adp=1, avg=0.290, ab=550, positions=["OF"]),
-        _make_hitter("Hitter B", var=14.0, adp=2, avg=0.275, ab=530, positions=["SS"]),
-        _make_hitter("Hitter C", var=13.0, adp=3, avg=0.260, ab=480, positions=["C"]),
-        _make_hitter("Hitter D", var=12.0, adp=6, avg=0.300, ab=500, positions=["1B"]),
-        _make_hitter("Hitter E", var=11.0, adp=7, avg=0.240, ab=550, positions=["2B"]),
-        _make_hitter("Hitter F", var=10.0, adp=8, avg=0.230, ab=520, positions=["3B"]),
-        _make_hitter("Hitter G", var=6.0, adp=15, avg=0.280, ab=480, positions=["OF"]),
-        _make_hitter("Hitter H", var=5.0, adp=16, avg=0.295, ab=450, positions=["OF"]),
-        _make_sp("SP A", var=13.5, adp=4, ip=195),
-        _make_sp("SP B", var=12.5, adp=5, ip=185),
-        _make_sp("SP C", var=8.0, adp=12, ip=170),
-        _make_sp("SP D", var=5.5, adp=17, ip=200),
-        _make_closer("Closer A", var=9.0, adp=9, sv=35),
-        _make_closer("Closer B", var=7.0, adp=11, sv=30),
-        _make_closer("Closer C", var=5.0, adp=14, sv=25),
-        _make_closer("Closer D", var=3.0, adp=19, sv=22),
-    ])
+    return _make_board(
+        [
+            _make_hitter("Hitter A", var=15.0, adp=1, avg=0.290, ab=550, positions=["OF"]),
+            _make_hitter("Hitter B", var=14.0, adp=2, avg=0.275, ab=530, positions=["SS"]),
+            _make_hitter("Hitter C", var=13.0, adp=3, avg=0.260, ab=480, positions=["C"]),
+            _make_hitter("Hitter D", var=12.0, adp=6, avg=0.300, ab=500, positions=["1B"]),
+            _make_hitter("Hitter E", var=11.0, adp=7, avg=0.240, ab=550, positions=["2B"]),
+            _make_hitter("Hitter F", var=10.0, adp=8, avg=0.230, ab=520, positions=["3B"]),
+            _make_hitter("Hitter G", var=6.0, adp=15, avg=0.280, ab=480, positions=["OF"]),
+            _make_hitter("Hitter H", var=5.0, adp=16, avg=0.295, ab=450, positions=["OF"]),
+            _make_sp("SP A", var=13.5, adp=4, ip=195),
+            _make_sp("SP B", var=12.5, adp=5, ip=185),
+            _make_sp("SP C", var=8.0, adp=12, ip=170),
+            _make_sp("SP D", var=5.5, adp=17, ip=200),
+            _make_closer("Closer A", var=9.0, adp=9, sv=35),
+            _make_closer("Closer B", var=7.0, adp=11, sv=30),
+            _make_closer("Closer C", var=5.0, adp=14, sv=25),
+            _make_closer("Closer D", var=3.0, adp=19, sv=22),
+        ]
+    )
 
 
 def _make_tracker(num_teams=10, user_position=1, rounds=22, advance_to=1):
@@ -222,6 +247,7 @@ def _draft_other_player(tracker, name, player_id=None):
 # ---------------------------------------------------------------------------
 # Helper function tests
 # ---------------------------------------------------------------------------
+
 
 class TestCountClosers:
     def test_zero_closers(self):
@@ -324,7 +350,7 @@ class TestSvInDanger:
             1: ["Closer A::pitcher"],  # user team (35 SV)
             2: ["Closer B::pitcher"],  # 30 SV
             3: ["Closer C::pitcher"],  # 25 SV
-            4: ["Hitter A::hitter"],   # 0 SV
+            4: ["Hitter A::hitter"],  # 0 SV
         }
         result = _sv_in_danger(tracker, board, board, team_rosters, 4)
         assert result is False
@@ -382,7 +408,19 @@ class TestForceCloser:
         """When all P slots are full, closers can't be rostered."""
         board = _make_standard_board()
         # Config with only 1 P slot and no BN
-        config = _make_config(roster_slots={"P": 1, "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "OF": 4, "UTIL": 2, "IF": 1})
+        config = _make_config(
+            roster_slots={
+                "P": 1,
+                "C": 1,
+                "1B": 1,
+                "2B": 1,
+                "3B": 1,
+                "SS": 1,
+                "OF": 4,
+                "UTIL": 2,
+                "IF": 1,
+            }
+        )
         tracker = _make_tracker()
         # Fill the P slot
         _draft_user_player(tracker, "SP A", "SP A::pitcher")
@@ -430,50 +468,10 @@ class TestFallbackNonCloser:
         assert pid is None
 
 
-class TestCanRosterPlayer:
-    def test_open_of_slot(self):
-        player = pd.Series({"positions": ["OF"]})
-        filled = {"OF": 1}
-        slots = {"OF": 4, "UTIL": 2, "P": 9, "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1, "BN": 2}
-        assert _can_roster_player(player, filled, slots) is True
-
-    def test_all_of_slots_full_but_util_open(self):
-        player = pd.Series({"positions": ["OF"]})
-        filled = {"OF": 4}
-        slots = {"OF": 4, "UTIL": 2, "P": 9, "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1, "BN": 2}
-        assert _can_roster_player(player, filled, slots) is True
-
-    def test_no_slots_available(self):
-        player = pd.Series({"positions": ["OF"]})
-        filled = {"OF": 4, "UTIL": 2, "BN": 2}
-        slots = {"OF": 4, "UTIL": 2, "BN": 2, "P": 9, "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1}
-        assert _can_roster_player(player, filled, slots) is False
-
-    def test_pitcher_fills_p_slot(self):
-        player = pd.Series({"positions": ["SP"]})
-        filled = {}
-        slots = {"P": 9, "OF": 4, "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1, "UTIL": 2, "BN": 2}
-        assert _can_roster_player(player, filled, slots) is True
-
-    def test_il_slot_is_ignored(self):
-        """IL slots should not be used for draft roster assignment."""
-        player = pd.Series({"positions": ["OF"]})
-        filled = {"OF": 4, "UTIL": 2, "BN": 2}
-        slots = {"OF": 4, "UTIL": 2, "BN": 2, "IL": 2, "P": 9, "C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1}
-        # IL is excluded, so OF player has no slots
-        assert _can_roster_player(player, filled, slots) is False
-
-    def test_if_slot_for_infielder(self):
-        """2B-eligible player can fill IF slot."""
-        player = pd.Series({"positions": ["2B"]})
-        filled = {"2B": 1}
-        slots = {"2B": 1, "IF": 1, "UTIL": 2, "P": 9, "OF": 4, "C": 1, "1B": 1, "3B": 1, "SS": 1, "BN": 2}
-        assert _can_roster_player(player, filled, slots) is True
-
-
 # ---------------------------------------------------------------------------
 # Strategy function tests
 # ---------------------------------------------------------------------------
+
 
 class TestPickDefault:
     def test_returns_top_recommendation(self):
@@ -581,20 +579,30 @@ class TestPickAvgHedge:
     def test_skips_low_avg_hitter_when_would_tank_team(self):
         """When team AVG is near the floor, a low-AVG hitter should be skipped."""
         # Create a board with only low-AVG hitters and a pitcher
-        board = _make_board([
-            _make_hitter("Low AVG 1", var=15.0, adp=1, avg=0.200, ab=550, positions=["OF"]),
-            _make_hitter("Low AVG 2", var=14.0, adp=2, avg=0.210, ab=530, positions=["SS"]),
-            _make_sp("Good SP", var=13.0, adp=3),
-        ])
+        board = _make_board(
+            [
+                _make_hitter("Low AVG 1", var=15.0, adp=1, avg=0.200, ab=550, positions=["OF"]),
+                _make_hitter("Low AVG 2", var=14.0, adp=2, avg=0.210, ab=530, positions=["SS"]),
+                _make_sp("Good SP", var=13.0, adp=3),
+            ]
+        )
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
         # Add a hitter near the floor so adding a low-AVG hitter would tank it
-        existing = pd.Series({
-            "name": "Existing", "player_type": "hitter",
-            "r": 80, "hr": 25, "rbi": 80, "sb": 10, "avg": 0.258, "ab": 500,
-            "h": int(0.258 * 500),
-        })
+        existing = pd.Series(
+            {
+                "name": "Existing",
+                "player_type": "hitter",
+                "r": 80,
+                "hr": 25,
+                "rbi": 80,
+                "sb": 10,
+                "avg": 0.258,
+                "ab": 500,
+                "h": int(0.258 * 500),
+            }
+        )
         balance.add_player(existing)
         name, _pid = pick_avg_hedge(board, board, tracker, balance, config, {})
         # Should prefer the pitcher since low-AVG hitters would tank AVG
@@ -602,18 +610,28 @@ class TestPickAvgHedge:
 
     def test_no_hitters_above_floor_takes_best_anyway(self):
         """If all hitters would tank AVG, should still take the best rec."""
-        board = _make_board([
-            _make_hitter("Low AVG 1", var=15.0, adp=1, avg=0.200, ab=550, positions=["OF"]),
-            _make_hitter("Low AVG 2", var=14.0, adp=2, avg=0.210, ab=530, positions=["SS"]),
-        ])
+        board = _make_board(
+            [
+                _make_hitter("Low AVG 1", var=15.0, adp=1, avg=0.200, ab=550, positions=["OF"]),
+                _make_hitter("Low AVG 2", var=14.0, adp=2, avg=0.210, ab=530, positions=["SS"]),
+            ]
+        )
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
-        existing = pd.Series({
-            "name": "Existing", "player_type": "hitter",
-            "r": 80, "hr": 25, "rbi": 80, "sb": 10, "avg": 0.256, "ab": 500,
-            "h": int(0.256 * 500),
-        })
+        existing = pd.Series(
+            {
+                "name": "Existing",
+                "player_type": "hitter",
+                "r": 80,
+                "hr": 25,
+                "rbi": 80,
+                "sb": 10,
+                "avg": 0.256,
+                "ab": 500,
+                "h": int(0.256 * 500),
+            }
+        )
         balance.add_player(existing)
         name, _pid = pick_avg_hedge(board, board, tracker, balance, config, {})
         # Falls back to best rec
@@ -621,9 +639,11 @@ class TestPickAvgHedge:
 
     def test_first_hitter_always_accepted(self):
         """With no current AB, any hitter should be accepted."""
-        board = _make_board([
-            _make_hitter("Low AVG", var=15.0, adp=1, avg=0.220, ab=550, positions=["OF"]),
-        ])
+        board = _make_board(
+            [
+                _make_hitter("Low AVG", var=15.0, adp=1, avg=0.220, ab=550, positions=["OF"]),
+            ]
+        )
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
@@ -656,7 +676,12 @@ class TestPickNoPuntOpp:
             4: ["Closer C::pitcher"],
         }
         name, _pid = pick_no_punt_opp(
-            board, board, tracker, balance, config, {},
+            board,
+            board,
+            tracker,
+            balance,
+            config,
+            {},
             team_rosters=team_rosters,
         )
         # Should force a closer
@@ -696,18 +721,28 @@ class TestPickNoPuntOpp:
 
     def test_avg_floor_applied(self):
         """Low-AVG hitters are filtered when AVG floor is active."""
-        board = _make_board([
-            _make_hitter("Low AVG", var=15.0, adp=1, avg=0.200, ab=550, positions=["OF"]),
-            _make_sp("Good SP", var=14.0, adp=2),
-        ])
+        board = _make_board(
+            [
+                _make_hitter("Low AVG", var=15.0, adp=1, avg=0.200, ab=550, positions=["OF"]),
+                _make_sp("Good SP", var=14.0, adp=2),
+            ]
+        )
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
-        existing = pd.Series({
-            "name": "Existing", "player_type": "hitter",
-            "r": 80, "hr": 25, "rbi": 80, "sb": 10, "avg": 0.252, "ab": 500,
-            "h": int(0.252 * 500),
-        })
+        existing = pd.Series(
+            {
+                "name": "Existing",
+                "player_type": "hitter",
+                "r": 80,
+                "hr": 25,
+                "rbi": 80,
+                "sb": 10,
+                "avg": 0.252,
+                "ab": 500,
+                "h": int(0.252 * 500),
+            }
+        )
         balance.add_player(existing)
         name, _pid = pick_no_punt_opp(board, board, tracker, balance, config, {})
         # Should prefer the pitcher since low-AVG hitter would tank team AVG
@@ -865,7 +900,12 @@ class TestPickNoPunt:
             4: ["Closer C::pitcher"],
         }
         name, _pid = pick_no_punt(
-            board, board, tracker, balance, config, {},
+            board,
+            board,
+            tracker,
+            balance,
+            config,
+            {},
             team_rosters=team_rosters,
         )
         row = board[board["name"] == name]
@@ -886,18 +926,28 @@ class TestPickNoPunt:
 
     def test_avg_floor_filtering(self):
         """Low-AVG hitters should be filtered by NO_PUNT_AVG_FLOOR."""
-        board = _make_board([
-            _make_hitter("Low AVG", var=15.0, adp=1, avg=0.200, ab=550, positions=["OF"]),
-            _make_sp("Good SP", var=14.0, adp=2),
-        ])
+        board = _make_board(
+            [
+                _make_hitter("Low AVG", var=15.0, adp=1, avg=0.200, ab=550, positions=["OF"]),
+                _make_sp("Good SP", var=14.0, adp=2),
+            ]
+        )
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
-        existing = pd.Series({
-            "name": "Existing", "player_type": "hitter",
-            "r": 80, "hr": 25, "rbi": 80, "sb": 10, "avg": 0.252, "ab": 500,
-            "h": int(0.252 * 500),
-        })
+        existing = pd.Series(
+            {
+                "name": "Existing",
+                "player_type": "hitter",
+                "r": 80,
+                "hr": 25,
+                "rbi": 80,
+                "sb": 10,
+                "avg": 0.252,
+                "ab": 500,
+                "h": int(0.252 * 500),
+            }
+        )
         balance.add_player(existing)
         name, _pid = pick_no_punt(board, board, tracker, balance, config, {})
         assert name == "Good SP"
@@ -949,7 +999,12 @@ class TestPickNoPuntStagger:
             4: ["Closer C::pitcher"],
         }
         name, _pid = pick_no_punt_stagger(
-            board, board, tracker, balance, config, {},
+            board,
+            board,
+            tracker,
+            balance,
+            config,
+            {},
             team_rosters=team_rosters,
         )
         row = board[board["name"] == name]
@@ -957,18 +1012,28 @@ class TestPickNoPuntStagger:
         assert row.iloc[0]["sv"] >= CLOSER_SV_THRESHOLD
 
     def test_avg_floor_protection(self):
-        board = _make_board([
-            _make_hitter("Low AVG", var=15.0, adp=1, avg=0.200, ab=550, positions=["OF"]),
-            _make_sp("Good SP", var=14.0, adp=2),
-        ])
+        board = _make_board(
+            [
+                _make_hitter("Low AVG", var=15.0, adp=1, avg=0.200, ab=550, positions=["OF"]),
+                _make_sp("Good SP", var=14.0, adp=2),
+            ]
+        )
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
-        existing = pd.Series({
-            "name": "Existing", "player_type": "hitter",
-            "r": 80, "hr": 25, "rbi": 80, "sb": 10, "avg": 0.252, "ab": 500,
-            "h": int(0.252 * 500),
-        })
+        existing = pd.Series(
+            {
+                "name": "Existing",
+                "player_type": "hitter",
+                "r": 80,
+                "hr": 25,
+                "rbi": 80,
+                "sb": 10,
+                "avg": 0.252,
+                "ab": 500,
+                "h": int(0.252 * 500),
+            }
+        )
         balance.add_player(existing)
         name, _pid = pick_no_punt_stagger(board, board, tracker, balance, config, {})
         assert name == "Good SP"
@@ -1019,31 +1084,43 @@ class TestPickNoPuntCap3:
 
     def test_avg_floor_with_cap(self):
         """AVG floor still applies even when closer cap is hit."""
-        board = _make_board([
-            _make_hitter("Low AVG", var=15.0, adp=1, avg=0.200, ab=550, positions=["OF"]),
-            _make_sp("Good SP", var=14.0, adp=2),
-            _make_closer("Cap Closer", var=12.0, adp=3, sv=30),
-        ])
+        board = _make_board(
+            [
+                _make_hitter("Low AVG", var=15.0, adp=1, avg=0.200, ab=550, positions=["OF"]),
+                _make_sp("Good SP", var=14.0, adp=2),
+                _make_closer("Cap Closer", var=12.0, adp=3, sv=30),
+            ]
+        )
         config = _make_config()
         tracker = _make_tracker()
         _draft_user_player(tracker, "CloserX", "CloserX::pitcher")
         _draft_user_player(tracker, "CloserY", "CloserY::pitcher")
         _draft_user_player(tracker, "CloserZ", "CloserZ::pitcher")
         # Add closers to full_board so _count_closers works
-        full_board = _make_board([
-            _make_hitter("Low AVG", var=15.0, adp=1, avg=0.200, ab=550, positions=["OF"]),
-            _make_sp("Good SP", var=14.0, adp=2),
-            _make_closer("Cap Closer", var=12.0, adp=3, sv=30),
-            _make_closer("CloserX", var=9.0, adp=10, sv=30),
-            _make_closer("CloserY", var=8.0, adp=11, sv=25),
-            _make_closer("CloserZ", var=7.0, adp=12, sv=22),
-        ])
+        full_board = _make_board(
+            [
+                _make_hitter("Low AVG", var=15.0, adp=1, avg=0.200, ab=550, positions=["OF"]),
+                _make_sp("Good SP", var=14.0, adp=2),
+                _make_closer("Cap Closer", var=12.0, adp=3, sv=30),
+                _make_closer("CloserX", var=9.0, adp=10, sv=30),
+                _make_closer("CloserY", var=8.0, adp=11, sv=25),
+                _make_closer("CloserZ", var=7.0, adp=12, sv=22),
+            ]
+        )
         balance = CategoryBalance()
-        existing = pd.Series({
-            "name": "Existing", "player_type": "hitter",
-            "r": 80, "hr": 25, "rbi": 80, "sb": 10, "avg": 0.252, "ab": 500,
-            "h": int(0.252 * 500),
-        })
+        existing = pd.Series(
+            {
+                "name": "Existing",
+                "player_type": "hitter",
+                "r": 80,
+                "hr": 25,
+                "rbi": 80,
+                "sb": 10,
+                "avg": 0.252,
+                "ab": 500,
+                "h": int(0.252 * 500),
+            }
+        )
         balance.add_player(existing)
         name, _pid = pick_no_punt_cap3(board, full_board, tracker, balance, config, {})
         # Should prefer the SP over the low-AVG hitter and skip the closer (cap hit)
@@ -1052,22 +1129,26 @@ class TestPickNoPuntCap3:
     def test_fallback_non_closer_when_all_recs_filtered(self):
         """When all recs are closers and cap is hit, fallback to non-closer."""
         # Board with only closers + 1 low-var hitter
-        board = _make_board([
-            _make_closer("Closer A", var=9.0, adp=9, sv=35),
-            _make_closer("Closer B", var=7.0, adp=11, sv=30),
-            _make_hitter("Backup Hitter", var=1.0, adp=30, avg=0.260, ab=400, positions=["OF"]),
-        ])
+        board = _make_board(
+            [
+                _make_closer("Closer A", var=9.0, adp=9, sv=35),
+                _make_closer("Closer B", var=7.0, adp=11, sv=30),
+                _make_hitter("Backup Hitter", var=1.0, adp=30, avg=0.260, ab=400, positions=["OF"]),
+            ]
+        )
         config = _make_config()
         tracker = _make_tracker()
         # Already have 3 closers (need full_board with them)
-        full_board = _make_board([
-            _make_closer("Closer A", var=9.0, adp=9, sv=35),
-            _make_closer("Closer B", var=7.0, adp=11, sv=30),
-            _make_hitter("Backup Hitter", var=1.0, adp=30, avg=0.260, ab=400, positions=["OF"]),
-            _make_closer("My Closer 1", var=6.0, adp=14, sv=25),
-            _make_closer("My Closer 2", var=4.0, adp=18, sv=22),
-            _make_closer("My Closer 3", var=3.0, adp=20, sv=20),
-        ])
+        full_board = _make_board(
+            [
+                _make_closer("Closer A", var=9.0, adp=9, sv=35),
+                _make_closer("Closer B", var=7.0, adp=11, sv=30),
+                _make_hitter("Backup Hitter", var=1.0, adp=30, avg=0.260, ab=400, positions=["OF"]),
+                _make_closer("My Closer 1", var=6.0, adp=14, sv=25),
+                _make_closer("My Closer 2", var=4.0, adp=18, sv=22),
+                _make_closer("My Closer 3", var=3.0, adp=20, sv=20),
+            ]
+        )
         _draft_user_player(tracker, "My Closer 1", "My Closer 1::pitcher")
         _draft_user_player(tracker, "My Closer 2", "My Closer 2::pitcher")
         _draft_user_player(tracker, "My Closer 3", "My Closer 3::pitcher")
@@ -1093,7 +1174,9 @@ class TestPickAvgAnchor:
         row = board[board["name"] == name]
         if not row.empty and row.iloc[0]["player_type"] == "hitter":
             # When the anchor is found, it should have high AVG
-            assert row.iloc[0]["avg"] >= AVG_ANCHOR_MIN or True  # May pick default if anchor not in top recs
+            assert (
+                row.iloc[0]["avg"] >= AVG_ANCHOR_MIN or True
+            )  # May pick default if anchor not in top recs
 
     def test_falls_back_to_default_after_anchor_secured(self):
         """Once an anchor is drafted, falls back to default."""
@@ -1124,13 +1207,19 @@ class TestPickAvgAnchor:
     def test_searches_board_when_no_anchor_in_recs(self):
         """When no high-AVG hitter in top recs, searches the board."""
         # Board with high-AVG hitter at low VAR (won't be in top recs)
-        board = _make_board([
-            _make_sp("SP Top", var=15.0, adp=1),
-            _make_sp("SP 2", var=14.0, adp=2),
-            _make_sp("SP 3", var=13.0, adp=3),
-            _make_hitter("Low AVG Hitter", var=12.0, adp=4, avg=0.250, ab=550, positions=["OF"]),
-            _make_hitter("High AVG Anchor", var=4.0, adp=20, avg=0.300, ab=450, positions=["1B"]),
-        ])
+        board = _make_board(
+            [
+                _make_sp("SP Top", var=15.0, adp=1),
+                _make_sp("SP 2", var=14.0, adp=2),
+                _make_sp("SP 3", var=13.0, adp=3),
+                _make_hitter(
+                    "Low AVG Hitter", var=12.0, adp=4, avg=0.250, ab=550, positions=["OF"]
+                ),
+                _make_hitter(
+                    "High AVG Anchor", var=4.0, adp=20, avg=0.300, ab=450, positions=["1B"]
+                ),
+            ]
+        )
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
@@ -1254,13 +1343,24 @@ class TestPickBalanced:
 # STRATEGIES registry test
 # ---------------------------------------------------------------------------
 
+
 class TestStrategiesRegistry:
     def test_all_strategies_registered(self):
         expected = {
-            "default", "nonzero_sv", "avg_hedge", "two_closers",
-            "three_closers", "four_closers", "no_punt", "no_punt_opp",
-            "no_punt_stagger", "no_punt_cap3", "avg_anchor",
-            "closers_avg", "balanced", "anti_fragile",
+            "default",
+            "nonzero_sv",
+            "avg_hedge",
+            "two_closers",
+            "three_closers",
+            "four_closers",
+            "no_punt",
+            "no_punt_opp",
+            "no_punt_stagger",
+            "no_punt_cap3",
+            "avg_anchor",
+            "closers_avg",
+            "balanced",
+            "anti_fragile",
         }
         assert set(STRATEGIES.keys()) == expected
 
@@ -1272,6 +1372,7 @@ class TestStrategiesRegistry:
 # ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestEdgeCases:
     def test_all_strategies_return_valid_pick(self):
@@ -1291,9 +1392,11 @@ class TestEdgeCases:
 
     def test_single_player_board(self):
         """Strategies should work when only 1 player is available."""
-        board = _make_board([
-            _make_hitter("Only One", var=10.0, adp=1, avg=0.280, ab=500, positions=["OF"]),
-        ])
+        board = _make_board(
+            [
+                _make_hitter("Only One", var=10.0, adp=1, avg=0.280, ab=500, positions=["OF"]),
+            ]
+        )
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
@@ -1302,10 +1405,12 @@ class TestEdgeCases:
 
     def test_n_closers_factory_no_closers_on_board(self):
         """When deadline triggers but no closers exist, falls back to default."""
-        board = _make_board([
-            _make_hitter("Hitter A", var=15.0, adp=1, avg=0.290, ab=550, positions=["OF"]),
-            _make_sp("SP A", var=14.0, adp=2),
-        ])
+        board = _make_board(
+            [
+                _make_hitter("Hitter A", var=15.0, adp=1, avg=0.290, ab=550, positions=["OF"]),
+                _make_sp("SP A", var=14.0, adp=2),
+            ]
+        )
         config = _make_config()
         tracker = _make_tracker()
         _advance_to_round(tracker, TWO_CLOSERS_DEADLINES[0])
@@ -1370,11 +1475,11 @@ class TestEdgeCases:
         # With DANGER_ZONE=2, our_rank must be > 5 - 2 = 3
         # 3 teams have more SV, so our_rank = 4 > 3 -> danger
         team_rosters = {
-            1: ["Hitter A::hitter"],   # user: 0 SV
-            2: ["Closer A::pitcher"],   # 35 SV
-            3: ["Closer B::pitcher"],   # 30 SV
-            4: ["Closer C::pitcher"],   # 25 SV
-            5: ["Hitter B::hitter"],    # 0 SV
+            1: ["Hitter A::hitter"],  # user: 0 SV
+            2: ["Closer A::pitcher"],  # 35 SV
+            3: ["Closer B::pitcher"],  # 30 SV
+            4: ["Closer C::pitcher"],  # 25 SV
+            5: ["Hitter B::hitter"],  # 0 SV
         }
         result = _sv_in_danger(tracker, board, board, team_rosters, 5)
         assert result is True
@@ -1388,11 +1493,11 @@ class TestEdgeCases:
         # 5 teams, user has 22 SV, 3 have higher SV
         # our_rank = 4 > 5 - 2 = 3 -> still danger
         team_rosters = {
-            1: ["Closer D::pitcher"],   # user: 22 SV
-            2: ["Closer A::pitcher"],   # 35 SV
-            3: ["Closer B::pitcher"],   # 30 SV
-            4: ["Closer C::pitcher"],   # 25 SV
-            5: ["Hitter A::hitter"],    # 0 SV
+            1: ["Closer D::pitcher"],  # user: 22 SV
+            2: ["Closer A::pitcher"],  # 35 SV
+            3: ["Closer B::pitcher"],  # 30 SV
+            4: ["Closer C::pitcher"],  # 25 SV
+            5: ["Hitter A::hitter"],  # 0 SV
         }
         result = _sv_in_danger(tracker, board, board, team_rosters, 5)
         # 3 teams above us, rank=4, 4 > 3 -> True (still in danger)
@@ -1406,11 +1511,11 @@ class TestEdgeCases:
 
         # 5 teams, user has 35 SV (highest)
         team_rosters = {
-            1: ["Closer A::pitcher"],   # user: 35 SV
-            2: ["Closer B::pitcher"],   # 30 SV
-            3: ["Closer C::pitcher"],   # 25 SV
-            4: ["Closer D::pitcher"],   # 22 SV
-            5: ["Hitter A::hitter"],    # 0 SV
+            1: ["Closer A::pitcher"],  # user: 35 SV
+            2: ["Closer B::pitcher"],  # 30 SV
+            3: ["Closer C::pitcher"],  # 25 SV
+            4: ["Closer D::pitcher"],  # 22 SV
+            5: ["Hitter A::hitter"],  # 0 SV
         }
         result = _sv_in_danger(tracker, board, board, team_rosters, 5)
         # rank=1, 1 > 3? no -> False
@@ -1419,10 +1524,13 @@ class TestEdgeCases:
     def test_lookup_pid_returns_unknown_for_missing(self):
         """_lookup_pid returns name::unknown when player not found."""
         from fantasy_baseball.draft.strategy import _lookup_pid
+
         # Use a board with at least one player so DataFrame has columns
-        board = _make_board([
-            _make_hitter("Real Player", var=10.0, adp=1, avg=0.280, ab=500),
-        ])
+        board = _make_board(
+            [
+                _make_hitter("Real Player", var=10.0, adp=1, avg=0.280, ab=500),
+            ]
+        )
         result = _lookup_pid(board, "Ghost Player")
         assert result == "Ghost Player::unknown"
 
@@ -1440,7 +1548,12 @@ class TestEdgeCases:
             4: ["Closer C::pitcher"],
         }
         name, _pid = pick_no_punt_cap3(
-            board, board, tracker, balance, config, {},
+            board,
+            board,
+            tracker,
+            balance,
+            config,
+            {},
             team_rosters=team_rosters,
         )
         row = board[board["name"] == name]
@@ -1464,7 +1577,12 @@ class TestEdgeCases:
             4: [],
         }
         name, _pid = pick_no_punt_cap3(
-            board, board, tracker, balance, config, {},
+            board,
+            board,
+            tracker,
+            balance,
+            config,
+            {},
             team_rosters=team_rosters,
         )
         assert name is not None

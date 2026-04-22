@@ -14,12 +14,13 @@ Strategies:
     balanced         — Alternates hitter/pitcher picks to diversify risk.
     anti_fragile     — Discounts high-IP pitchers, prefers durable mid-tier arms.
 """
+
 import pandas as pd
 
 from fantasy_baseball.draft.recommender import get_filled_positions, get_recommendations
+from fantasy_baseball.draft.roster_state import RosterState
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
-from fantasy_baseball.utils.positions import can_fill_slot
 from fantasy_baseball.utils.rate_stats import calculate_avg
 
 # Draft a closer by this round if you have none
@@ -61,7 +62,8 @@ ANTI_FRAGILE_DISCOUNT = 0.25  # 25% VAR penalty per 30 IP above threshold
 
 
 def build_player_lookup(
-    board: pd.DataFrame, full_board: pd.DataFrame,
+    board: pd.DataFrame,
+    full_board: pd.DataFrame,
 ) -> dict[str, pd.Series]:
     """Build a dict from player_id -> row for O(1) lookups.
 
@@ -69,17 +71,21 @@ def build_player_lookup(
     board (e.g. keepers removed by apply_keepers).
     """
     # full_board first, then board overrides (board has live VAR)
-    lookup: dict[str, pd.Series] = dict(zip(
-        full_board["player_id"], (row for _, row in full_board.iterrows()), strict=False
-    ))
-    lookup.update(dict(zip(
-        board["player_id"], (row for _, row in board.iterrows()), strict=False
-    )))
+    lookup: dict[str, pd.Series] = dict(
+        zip(full_board["player_id"], (row for _, row in full_board.iterrows()), strict=False)
+    )
+    lookup.update(dict(zip(board["player_id"], (row for _, row in board.iterrows()), strict=False)))
     return lookup
 
 
 def pick_default(
-    board, full_board, tracker, balance, config, team_filled, **kwargs,
+    board,
+    full_board,
+    tracker,
+    balance,
+    config,
+    team_filled,
+    **kwargs,
 ):
     """Default strategy: take the #1 leverage-weighted recommendation."""
     recs = _get_recs(board, full_board, tracker, config, n=5, **kwargs)
@@ -89,7 +95,13 @@ def pick_default(
 
 
 def pick_nonzero_sv(
-    board, full_board, tracker, balance, config, team_filled, **kwargs,
+    board,
+    full_board,
+    tracker,
+    balance,
+    config,
+    team_filled,
+    **kwargs,
 ):
     """Force a closer by CLOSER_DEADLINE_ROUND if none has been drafted."""
     player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
@@ -113,20 +125,27 @@ def pick_nonzero_sv(
             best = closers.iloc[0]
             # Verify they can be rostered
             filled = get_filled_positions(
-                tracker.user_roster_ids, full_board,
+                tracker.user_roster_ids,
+                full_board,
                 roster_slots=config.roster_slots,
                 player_lookup=player_lookup,
             )
-            if _can_roster_player(best, filled, config.roster_slots):
+            roster_state = RosterState.from_dicts(filled, config.roster_slots)
+            if roster_state.any_slot_open_for(best["positions"]):
                 return best["name"], best["player_id"]
 
     # Otherwise, fall back to default
-    return pick_default(board, full_board, tracker, balance, config,
-                        team_filled, **kwargs)
+    return pick_default(board, full_board, tracker, balance, config, team_filled, **kwargs)
 
 
 def pick_avg_hedge(
-    board, full_board, tracker, balance, config, team_filled, **kwargs,
+    board,
+    full_board,
+    tracker,
+    balance,
+    config,
+    team_filled,
+    **kwargs,
 ):
     """Penalize hitters that would drag team AVG below the floor."""
     recs = _get_recs(board, full_board, tracker, config, n=10, **kwargs)
@@ -136,7 +155,13 @@ def pick_avg_hedge(
 
 
 def pick_no_punt_opp(
-    board, full_board, tracker, balance, config, team_filled, **kwargs,
+    board,
+    full_board,
+    tracker,
+    balance,
+    config,
+    team_filled,
+    **kwargs,
 ):
     """No-punt with dynamic SV monitoring and opportunistic closer grabs.
 
@@ -157,7 +182,11 @@ def pick_no_punt_opp(
     need_closer = False
     if team_rosters:
         need_closer = _sv_in_danger(
-            tracker, board, full_board, team_rosters, config.num_teams,
+            tracker,
+            board,
+            full_board,
+            team_rosters,
+            config.num_teams,
             player_lookup=player_lookup,
         )
     else:
@@ -184,12 +213,14 @@ def pick_no_punt_opp(
             if not falling.empty:
                 falling = falling.sort_values("var", ascending=False)
                 filled = get_filled_positions(
-                    tracker.user_roster_ids, full_board,
+                    tracker.user_roster_ids,
+                    full_board,
                     roster_slots=config.roster_slots,
                     player_lookup=player_lookup,
                 )
+                roster_state = RosterState.from_dicts(filled, config.roster_slots)
                 for _, best in falling.iterrows():
-                    if _can_roster_player(best, filled, config.roster_slots):
+                    if roster_state.any_slot_open_for(best["positions"]):
                         return best["name"], best["player_id"]
 
     # Default with AVG floor
@@ -201,8 +232,15 @@ def pick_no_punt_opp(
 
 def _make_n_closers_strategy(target, deadlines):
     """Factory: create a strategy that drafts exactly N closers at spaced deadlines."""
+
     def pick_n_closers(
-        board, full_board, tracker, balance, config, team_filled, **kwargs,
+        board,
+        full_board,
+        tracker,
+        balance,
+        config,
+        team_filled,
+        **kwargs,
     ):
         player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
         kwargs["player_lookup"] = player_lookup
@@ -223,16 +261,18 @@ def _make_n_closers_strategy(target, deadlines):
             if not closers.empty:
                 closers = closers.sort_values("var", ascending=False)
                 filled = get_filled_positions(
-                    tracker.user_roster_ids, full_board,
+                    tracker.user_roster_ids,
+                    full_board,
                     roster_slots=config.roster_slots,
                     player_lookup=player_lookup,
                 )
+                roster_state = RosterState.from_dicts(filled, config.roster_slots)
                 for _, best in closers.iterrows():
-                    if _can_roster_player(best, filled, config.roster_slots):
+                    if roster_state.any_slot_open_for(best["positions"]):
                         return best["name"], best["player_id"]
 
-        return pick_default(board, full_board, tracker, balance, config,
-                            team_filled, **kwargs)
+        return pick_default(board, full_board, tracker, balance, config, team_filled, **kwargs)
+
     pick_n_closers.__doc__ = f"Draft exactly {target} closers at deadlines {deadlines}."
     return pick_n_closers
 
@@ -271,8 +311,7 @@ def _count_pitchers(tracker, board, full_board, player_lookup=None):
     return len(tracker.user_roster) - _count_hitters(tracker, board, full_board, player_lookup)
 
 
-def _sv_in_danger(tracker, board, full_board, team_rosters, num_teams,
-                  player_lookup=None):
+def _sv_in_danger(tracker, board, full_board, team_rosters, num_teams, player_lookup=None):
     """Check if our projected SV would finish in the danger zone.
 
     Returns True if:
@@ -326,12 +365,14 @@ def _force_closer(board, tracker, full_board, config, player_lookup=None):
         return None
     closers = closers.sort_values("var", ascending=False)
     filled = get_filled_positions(
-        tracker.user_roster_ids, full_board,
+        tracker.user_roster_ids,
+        full_board,
         roster_slots=config.roster_slots,
         player_lookup=player_lookup,
     )
+    roster_state = RosterState.from_dicts(filled, config.roster_slots)
     for _, best in closers.iterrows():
-        if _can_roster_player(best, filled, config.roster_slots):
+        if roster_state.any_slot_open_for(best["positions"]):
             return best["name"], best["player_id"]
     return None
 
@@ -346,12 +387,14 @@ def _fallback_non_closer(board, tracker, full_board, config):
     available = board[~board["player_id"].isin(tracker.drafted_ids)]
     non_closers = available[available["sv"].fillna(0) < CLOSER_SV_THRESHOLD]
     filled = get_filled_positions(
-        tracker.user_roster_ids, full_board,
+        tracker.user_roster_ids,
+        full_board,
         roster_slots=config.roster_slots,
     )
+    roster_state = RosterState.from_dicts(filled, config.roster_slots)
     if not non_closers.empty:
         for _, best in non_closers.sort_values("var", ascending=False).head(50).iterrows():
-            if _can_roster_player(best, filled, config.roster_slots):
+            if roster_state.any_slot_open_for(best["positions"]):
                 return best["name"], best["player_id"]
     # Also check full_board for players not on the draft board
     # (e.g. low-projection players filtered during board construction)
@@ -359,7 +402,7 @@ def _fallback_non_closer(board, tracker, full_board, config):
     non_closers_full = avail_full[avail_full["sv"].fillna(0) < CLOSER_SV_THRESHOLD]
     if not non_closers_full.empty:
         for _, best in non_closers_full.sort_values("var", ascending=False).head(50).iterrows():
-            if _can_roster_player(best, filled, config.roster_slots):
+            if roster_state.any_slot_open_for(best["positions"]):
                 return best["name"], best["player_id"]
     return None, None
 
@@ -367,15 +410,18 @@ def _fallback_non_closer(board, tracker, full_board, config):
 def _get_recs(board, full_board, tracker, config, n=10, **kwargs):
     """Get recommendations (shared helper)."""
     filled = get_filled_positions(
-        tracker.user_roster_ids, full_board,
+        tracker.user_roster_ids,
+        full_board,
         roster_slots=config.roster_slots,
         player_lookup=kwargs.get("player_lookup"),
     )
     picks_until_next = getattr(tracker, "picks_until_next_turn", None)
     return get_recommendations(
-        board, drafted=tracker.drafted_ids,
+        board,
+        drafted=tracker.drafted_ids,
         user_roster=tracker.user_roster,
-        n=n, filled_positions=filled,
+        n=n,
+        filled_positions=filled,
         picks_until_next=picks_until_next,
         roster_slots=config.roster_slots,
         num_teams=config.num_teams,
@@ -384,7 +430,13 @@ def _get_recs(board, full_board, tracker, config, n=10, **kwargs):
 
 
 def pick_no_punt(
-    board, full_board, tracker, balance, config, team_filled, **kwargs,
+    board,
+    full_board,
+    tracker,
+    balance,
+    config,
+    team_filled,
+    **kwargs,
 ):
     """Ensure no category finishes dead last.
 
@@ -401,12 +453,19 @@ def pick_no_punt(
     need_closer = False
     if team_rosters:
         need_closer = _sv_in_danger(
-            tracker, board, full_board, team_rosters, config.num_teams,
+            tracker,
+            board,
+            full_board,
+            team_rosters,
+            config.num_teams,
             player_lookup=player_lookup,
         )
     else:
         closer_count = _count_closers(tracker, board, full_board, player_lookup)
-        if closer_count == 0 and kwargs.get("current_round", tracker.current_round) >= NO_PUNT_SV_DEADLINE:
+        if (
+            closer_count == 0
+            and kwargs.get("current_round", tracker.current_round) >= NO_PUNT_SV_DEADLINE
+        ):
             need_closer = True
 
     if need_closer:
@@ -422,7 +481,13 @@ def pick_no_punt(
 
 
 def pick_no_punt_stagger(
-    board, full_board, tracker, balance, config, team_filled, **kwargs,
+    board,
+    full_board,
+    tracker,
+    balance,
+    config,
+    team_filled,
+    **kwargs,
 ):
     """No-punt with staggered closer deadlines.
 
@@ -450,7 +515,11 @@ def pick_no_punt_stagger(
     # Also check dynamic SV danger (if team_rosters available)
     if not need_closer and team_rosters and closer_count < NO_PUNT_STAGGER_TARGET:
         need_closer = _sv_in_danger(
-            tracker, board, full_board, team_rosters, config.num_teams,
+            tracker,
+            board,
+            full_board,
+            team_rosters,
+            config.num_teams,
             player_lookup=player_lookup,
         )
 
@@ -467,7 +536,13 @@ def pick_no_punt_stagger(
 
 
 def pick_no_punt_cap3(
-    board, full_board, tracker, balance, config, team_filled, **kwargs,
+    board,
+    full_board,
+    tracker,
+    balance,
+    config,
+    team_filled,
+    **kwargs,
 ):
     """No-punt with staggered closer deadlines and a hard 3-closer cap.
 
@@ -492,7 +567,11 @@ def pick_no_punt_cap3(
         # Dynamic SV danger check
         if not need_closer and team_rosters:
             need_closer = _sv_in_danger(
-                tracker, board, full_board, team_rosters, config.num_teams,
+                tracker,
+                board,
+                full_board,
+                team_rosters,
+                config.num_teams,
                 player_lookup=player_lookup,
             )
 
@@ -507,9 +586,16 @@ def pick_no_punt_cap3(
     # If recs is empty (late-draft roster nearly full), fall back to
     # board search that respects the closer cap.
     if not recs:
-        return _fallback_non_closer(
-            board, tracker, full_board, config,
-        ) if closer_count >= NO_PUNT_CAP3_TARGET else (None, None)
+        return (
+            _fallback_non_closer(
+                board,
+                tracker,
+                full_board,
+                config,
+            )
+            if closer_count >= NO_PUNT_CAP3_TARGET
+            else (None, None)
+        )
 
     current_h, current_ab = balance.get_avg_components()
 
@@ -541,7 +627,13 @@ def pick_no_punt_cap3(
 
 
 def pick_avg_anchor(
-    board, full_board, tracker, balance, config, team_filled, **kwargs,
+    board,
+    full_board,
+    tracker,
+    balance,
+    config,
+    team_filled,
+    **kwargs,
 ):
     """Target a high-AVG hitter (.285+) in the first 3 hitter picks.
 
@@ -554,7 +646,11 @@ def pick_avg_anchor(
     has_anchor = False
     for pid in tracker.user_roster_ids:
         row = player_lookup.get(pid)
-        if row is not None and row.get("player_type") == PlayerType.HITTER and row.get("avg", 0) >= AVG_ANCHOR_MIN:
+        if (
+            row is not None
+            and row.get("player_type") == PlayerType.HITTER
+            and row.get("avg", 0) >= AVG_ANCHOR_MIN
+        ):
             has_anchor = True
             break
 
@@ -575,24 +671,31 @@ def pick_avg_anchor(
             # If none in recs, search the board for the best high-AVG hitter
             available = board[~board["player_id"].isin(tracker.drafted_ids)]
             anchors = available[
-                (available["player_type"] == PlayerType.HITTER) &
-                (available["avg"] >= AVG_ANCHOR_MIN)
+                (available["player_type"] == PlayerType.HITTER)
+                & (available["avg"] >= AVG_ANCHOR_MIN)
             ].sort_values("var", ascending=False)
             filled = get_filled_positions(
-                tracker.user_roster_ids, full_board,
+                tracker.user_roster_ids,
+                full_board,
                 roster_slots=config.roster_slots,
             )
+            roster_state = RosterState.from_dicts(filled, config.roster_slots)
             for _, best in anchors.head(5).iterrows():
-                if _can_roster_player(best, filled, config.roster_slots):
+                if roster_state.any_slot_open_for(best["positions"]):
                     return best["name"], best["player_id"]
 
     # Fall back to default
-    return pick_default(board, full_board, tracker, balance, config,
-                        team_filled, **kwargs)
+    return pick_default(board, full_board, tracker, balance, config, team_filled, **kwargs)
 
 
 def pick_closers_avg(
-    board, full_board, tracker, balance, config, team_filled, **kwargs,
+    board,
+    full_board,
+    tracker,
+    balance,
+    config,
+    team_filled,
+    **kwargs,
 ):
     """Combine three_closers + avg_anchor.
 
@@ -615,12 +718,17 @@ def pick_closers_avg(
                     return result
 
     # Then try AVG anchor (player_lookup already in kwargs)
-    return pick_avg_anchor(board, full_board, tracker, balance, config,
-                           team_filled, **kwargs)
+    return pick_avg_anchor(board, full_board, tracker, balance, config, team_filled, **kwargs)
 
 
 def pick_balanced(
-    board, full_board, tracker, balance, config, team_filled, **kwargs,
+    board,
+    full_board,
+    tracker,
+    balance,
+    config,
+    team_filled,
+    **kwargs,
 ):
     """Alternate hitter/pitcher picks to diversify risk.
 
@@ -651,7 +759,13 @@ def pick_balanced(
 
 
 def pick_anti_fragile(
-    board, full_board, tracker, balance, config, team_filled, **kwargs,
+    board,
+    full_board,
+    tracker,
+    balance,
+    config,
+    team_filled,
+    **kwargs,
 ):
     """Prefer durable mid-tier pitchers over fragile aces.
 
@@ -719,16 +833,6 @@ def _lookup_pid(board, name, name_to_pid=None):
     if not rows.empty:
         return rows.iloc[0]["player_id"]
     return name + "::unknown"
-
-
-def _can_roster_player(player, filled, roster_slots):
-    positions = player["positions"]
-    for pos, total in roster_slots.items():
-        if pos == "IL":
-            continue
-        if filled.get(pos, 0) < total and can_fill_slot(positions, pos):
-            return True
-    return False
 
 
 STRATEGIES = {
