@@ -117,7 +117,9 @@ def compute_combined_sgp_rankings(
 
 
 def build_rankings_lookup(
-    ros: dict, preseason: dict, current: dict,
+    ros: dict,
+    preseason: dict,
+    current: dict,
 ) -> dict[str, dict]:
     """Three-way merge of player ranking dicts keyed by ``name::player_type``.
 

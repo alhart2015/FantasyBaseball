@@ -1,4 +1,5 @@
 """Tests for blended_projections helpers."""
+
 from fantasy_baseball.data import redis_store
 
 HITTER_ROW = {
@@ -6,8 +7,13 @@ HITTER_ROW = {
     "name": "Juan Soto",
     "team": "NYY",
     "player_type": "hitter",
-    "pa": 650.0, "ab": 540.0, "h": 148.0,
-    "r": 110.0, "hr": 34.0, "rbi": 100.0, "sb": 8.0,
+    "pa": 650.0,
+    "ab": 540.0,
+    "h": 148.0,
+    "r": 110.0,
+    "hr": 34.0,
+    "rbi": 100.0,
+    "sb": 8.0,
     "avg": 0.274,
 }
 PITCHER_ROW = {
@@ -15,9 +21,15 @@ PITCHER_ROW = {
     "name": "Gerrit Cole",
     "team": "NYY",
     "player_type": "pitcher",
-    "ip": 200.0, "er": 68.0, "bb": 50.0, "h_allowed": 170.0,
-    "w": 15.0, "k": 230.0, "sv": 0.0,
-    "era": 3.06, "whip": 1.10,
+    "ip": 200.0,
+    "er": 68.0,
+    "bb": 50.0,
+    "h_allowed": 170.0,
+    "w": 15.0,
+    "k": 230.0,
+    "sv": 0.0,
+    "era": 3.06,
+    "whip": 1.10,
 }
 
 
@@ -40,6 +52,7 @@ def test_set_and_get_blended_pitchers(fake_redis):
 
 def test_set_blended_rejects_bad_type(fake_redis):
     import pytest
+
     with pytest.raises(ValueError, match="player_type must be"):
         redis_store.set_blended_projections(fake_redis, "goalies", [])
 
@@ -61,6 +74,7 @@ def test_get_blended_projections_returns_empty_when_client_none():
 
 # --- get_ros_projections ---------------------------------------------------
 
+
 def test_get_ros_projections_returns_none_when_unset(fake_redis):
     assert redis_store.get_ros_projections(fake_redis) is None
 
@@ -71,6 +85,7 @@ def test_get_ros_projections_returns_none_when_client_none():
 
 def test_get_ros_projections_reads_payload(fake_redis):
     import json
+
     payload = {"hitters": [HITTER_ROW], "pitchers": [PITCHER_ROW]}
     fake_redis.set("cache:ros_projections", json.dumps(payload))
     assert redis_store.get_ros_projections(fake_redis) == payload
@@ -78,6 +93,7 @@ def test_get_ros_projections_reads_payload(fake_redis):
 
 def test_get_ros_projections_returns_none_on_corrupt_json(fake_redis, caplog):
     import logging
+
     fake_redis.set("cache:ros_projections", "not valid json {{{")
     with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.redis_store"):
         assert redis_store.get_ros_projections(fake_redis) is None

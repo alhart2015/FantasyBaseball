@@ -7,6 +7,7 @@ a correlation matrix for future covariance-based simulation.
 Usage:
     python scripts/calibrate_variance.py
 """
+
 import sys
 from pathlib import Path
 
@@ -38,9 +39,17 @@ PITCHER_RATE_COMPONENTS = ["ER", "BB", "H"]  # for ERA and WHIP
 # Minimum projected values to include in ratio calculations —
 # avoids extreme ratios when projected value is near zero
 MIN_PROJ_STAT = {
-    "R": 30, "HR": 8, "RBI": 30, "SB": 5,
-    "W": 3, "SO": 40, "SV": 5, "IP": 40,
-    "ER": 15, "BB": 15, "H": 40,
+    "R": 30,
+    "HR": 8,
+    "RBI": 30,
+    "SB": 5,
+    "W": 3,
+    "SO": 40,
+    "SV": 5,
+    "IP": 40,
+    "ER": 15,
+    "BB": 15,
+    "H": 40,
 }
 
 # Only include players who played 60-140% of projected PA/IP —
@@ -160,8 +169,13 @@ def compute_hitter_residuals(proj: pd.DataFrame, actual: pd.DataFrame, year: int
     rows = []
     for _, row in merged.iterrows():
         name = row.get("Name_proj", row.get("Name_act", "?"))
-        entry = {"year": year, "name": name, "MLBAMID": row["MLBAMID"],
-                 "PA_proj": row["PA_proj"], "PA_act": row["PA_act"]}
+        entry = {
+            "year": year,
+            "name": name,
+            "MLBAMID": row["MLBAMID"],
+            "PA_proj": row["PA_proj"],
+            "PA_act": row["PA_act"],
+        }
 
         for stat in HITTER_STATS:
             proj_val = float(row.get(f"{stat}_proj", row.get(stat, 0)) or 0)
@@ -220,8 +234,13 @@ def compute_pitcher_residuals(proj: pd.DataFrame, actual: pd.DataFrame, year: in
         name = row.get("Name_proj", row.get("Name_act", "?"))
         ip_proj = float(row.get("IP_proj", row.get("IP", 0)) or 0)
         ip_act = float(row.get("IP_act", 0) or 0)
-        entry = {"year": year, "name": name, "MLBAMID": row["MLBAMID"],
-                 "IP_proj": ip_proj, "IP_act": ip_act}
+        entry = {
+            "year": year,
+            "name": name,
+            "MLBAMID": row["MLBAMID"],
+            "IP_proj": ip_proj,
+            "IP_act": ip_act,
+        }
 
         # IP itself
         if ip_proj >= MIN_PROJ_STAT.get("IP", 1):
@@ -332,7 +351,9 @@ def main():
             p10 = vals.quantile(0.10)
             p90 = vals.quantile(0.90)
             current = 0.10
-            print(f"  {stat:>5} {mean:>+7.3f} {sd:>7.3f} {med:>+7.3f} {p10:>+7.3f} {p90:>+7.3f}  {current:.2f}")
+            print(
+                f"  {stat:>5} {mean:>+7.3f} {sd:>7.3f} {med:>+7.3f} {p10:>+7.3f} {p90:>+7.3f}  {current:.2f}"
+            )
 
         # Overall hitter sigma (mean across counting stats)
         counting_sds = []
@@ -389,7 +410,9 @@ def main():
             p10 = vals.quantile(0.10)
             p90 = vals.quantile(0.90)
             current = 0.18
-            print(f"  {stat:>5} {mean:>+7.3f} {sd:>7.3f} {med:>+7.3f} {p10:>+7.3f} {p90:>+7.3f}  {current:.2f}")
+            print(
+                f"  {stat:>5} {mean:>+7.3f} {sd:>7.3f} {med:>+7.3f} {p10:>+7.3f} {p90:>+7.3f}  {current:.2f}"
+            )
 
         # Overall pitcher sigma
         p_counting = ["W", "SO", "IP", "ER", "BB", "H"]

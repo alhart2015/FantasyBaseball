@@ -7,7 +7,16 @@ from fantasy_baseball.models.positions import Position
 
 def test_hitter_counting_on_pace():
     """A hitter exactly on pace for all counting stats gets neutral colors."""
-    projected = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    projected = {
+        "pa": 600,
+        "r": 90,
+        "hr": 30,
+        "rbi": 90,
+        "sb": 10,
+        "h": 150,
+        "ab": 540,
+        "avg": 0.278,
+    }
     actual = {"pa": 60, "r": 9, "hr": 3, "rbi": 9, "sb": 1, "h": 15, "ab": 54}
     result = compute_player_pace(actual, projected, "hitter")
     assert result["HR"]["color_class"] == "stat-neutral"
@@ -20,7 +29,16 @@ def test_hitter_counting_on_pace():
 
 def test_hitter_counting_above_pace():
     """A hitter well above pace on HR gets hot color."""
-    projected = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    projected = {
+        "pa": 600,
+        "r": 90,
+        "hr": 30,
+        "rbi": 90,
+        "sb": 10,
+        "h": 150,
+        "ab": 540,
+        "avg": 0.278,
+    }
     actual = {"pa": 60, "r": 9, "hr": 6, "rbi": 9, "sb": 1, "h": 15, "ab": 54}
     result = compute_player_pace(actual, projected, "hitter")
     assert result["HR"]["color_class"] == "stat-hot-2"
@@ -29,7 +47,16 @@ def test_hitter_counting_above_pace():
 
 def test_hitter_counting_below_pace():
     """A hitter well below pace on SB gets cold color (1-2 SD = light cold)."""
-    projected = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    projected = {
+        "pa": 600,
+        "r": 90,
+        "hr": 30,
+        "rbi": 90,
+        "sb": 10,
+        "h": 150,
+        "ab": 540,
+        "avg": 0.278,
+    }
     actual = {"pa": 60, "r": 9, "hr": 3, "rbi": 9, "sb": 0, "h": 15, "ab": 54}
     result = compute_player_pace(actual, projected, "hitter")
     # z = -1.4 -> between -1 and -2 SD = stat-cold-1
@@ -39,7 +66,16 @@ def test_hitter_counting_below_pace():
 
 def test_expected_zero_shows_neutral():
     """When projected stat is 0, show neutral regardless of actual."""
-    projected = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 0, "h": 150, "ab": 540, "avg": 0.278}
+    projected = {
+        "pa": 600,
+        "r": 90,
+        "hr": 30,
+        "rbi": 90,
+        "sb": 0,
+        "h": 150,
+        "ab": 540,
+        "avg": 0.278,
+    }
     actual = {"pa": 60, "r": 9, "hr": 3, "rbi": 9, "sb": 2, "h": 15, "ab": 54}
     result = compute_player_pace(actual, projected, "hitter")
     assert result["SB"]["color_class"] == "stat-neutral"
@@ -48,7 +84,16 @@ def test_expected_zero_shows_neutral():
 
 def test_pa_always_neutral():
     """PA is sample-size context, never color-coded."""
-    projected = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    projected = {
+        "pa": 600,
+        "r": 90,
+        "hr": 30,
+        "rbi": 90,
+        "sb": 10,
+        "h": 150,
+        "ab": 540,
+        "avg": 0.278,
+    }
     actual = {"pa": 60, "r": 9, "hr": 3, "rbi": 9, "sb": 1, "h": 15, "ab": 54}
     result = compute_player_pace(actual, projected, "hitter")
     assert result["PA"]["color_class"] == "stat-neutral"
@@ -58,7 +103,16 @@ def test_pa_always_neutral():
 
 def test_hitter_avg_above_projection():
     """Hitter batting well above projected AVG gets hot color."""
-    projected = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    projected = {
+        "pa": 600,
+        "r": 90,
+        "hr": 30,
+        "rbi": 90,
+        "sb": 10,
+        "h": 150,
+        "ab": 540,
+        "avg": 0.278,
+    }
     actual = {"pa": 120, "r": 18, "hr": 6, "rbi": 18, "sb": 2, "h": 42, "ab": 108}
     # actual AVG = 42/108 = .389, proj .278, dev = +0.111
     # z = 0.111 / (0.103 * 0.278) = 0.111 / 0.0286 = 3.88 -> stat-hot-2
@@ -70,7 +124,16 @@ def test_hitter_avg_above_projection():
 
 def test_hitter_avg_neutral_below_min_sample():
     """AVG with < 30 PA should be neutral regardless of value."""
-    projected = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    projected = {
+        "pa": 600,
+        "r": 90,
+        "hr": 30,
+        "rbi": 90,
+        "sb": 10,
+        "h": 150,
+        "ab": 540,
+        "avg": 0.278,
+    }
     actual = {"pa": 20, "r": 3, "hr": 1, "rbi": 3, "sb": 0, "h": 10, "ab": 18}
     result = compute_player_pace(actual, projected, "hitter")
     assert result["AVG"]["color_class"] == "stat-neutral"
@@ -78,7 +141,16 @@ def test_hitter_avg_neutral_below_min_sample():
 
 def test_counting_neutral_below_min_sample():
     """With < 10 PA, counting stats should be neutral too."""
-    projected = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    projected = {
+        "pa": 600,
+        "r": 90,
+        "hr": 30,
+        "rbi": 90,
+        "sb": 10,
+        "h": 150,
+        "ab": 540,
+        "avg": 0.278,
+    }
     actual = {"pa": 5, "r": 3, "hr": 2, "rbi": 3, "sb": 0, "h": 3, "ab": 5}
     result = compute_player_pace(actual, projected, "hitter")
     assert result["HR"]["color_class"] == "stat-neutral"
@@ -87,8 +159,17 @@ def test_counting_neutral_below_min_sample():
 
 def test_pitcher_counting_and_rates():
     """Pitcher with good K rate and bad ERA."""
-    projected = {"ip": 180, "w": 12, "k": 190, "sv": 0, "er": 60, "bb": 50, "h_allowed": 150,
-                 "era": 3.00, "whip": 1.11}
+    projected = {
+        "ip": 180,
+        "w": 12,
+        "k": 190,
+        "sv": 0,
+        "er": 60,
+        "bb": 50,
+        "h_allowed": 150,
+        "era": 3.00,
+        "whip": 1.11,
+    }
     actual = {"ip": 18.0, "k": 22, "w": 1, "sv": 0, "er": 10, "bb": 5, "h_allowed": 16}
     result = compute_player_pace(actual, projected, "pitcher")
 
@@ -112,8 +193,17 @@ def test_pitcher_counting_and_rates():
 
 def test_pitcher_era_neutral_below_min_ip():
     """ERA with < 10 IP should be neutral, but counting stats with >= 5 IP should be colored."""
-    projected = {"ip": 180, "w": 12, "k": 190, "sv": 0, "er": 60, "bb": 50, "h_allowed": 150,
-                 "era": 3.00, "whip": 1.11}
+    projected = {
+        "ip": 180,
+        "w": 12,
+        "k": 190,
+        "sv": 0,
+        "er": 60,
+        "bb": 50,
+        "h_allowed": 150,
+        "era": 3.00,
+        "whip": 1.11,
+    }
     actual = {"ip": 5.0, "k": 15, "w": 0, "sv": 0, "er": 0, "bb": 1, "h_allowed": 3}
     result = compute_player_pace(actual, projected, "pitcher")
     assert result["ERA"]["color_class"] == "stat-neutral"
@@ -124,7 +214,16 @@ def test_pitcher_era_neutral_below_min_ip():
 
 def test_intermediate_color_classes():
     """z-scores between 1.0 and 2.0 should produce stat-hot-1 / stat-cold-1."""
-    projected = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    projected = {
+        "pa": 600,
+        "r": 90,
+        "hr": 30,
+        "rbi": 90,
+        "sb": 10,
+        "h": 150,
+        "ab": 540,
+        "avg": 0.278,
+    }
     # HR: actual=4, expected=3.0, ratio=1.33, z = 0.33/0.343 = 0.97 -> neutral (< 1.0 SD)
     actual = {"pa": 60, "r": 9, "hr": 4, "rbi": 9, "sb": 1, "h": 15, "ab": 54}
     result = compute_player_pace(actual, projected, "hitter")
@@ -146,7 +245,16 @@ def test_intermediate_color_classes():
 
 def test_middle_sample_counting_colored_rates_neutral():
     """With 10-29 PA: counting stats colored, AVG neutral."""
-    projected = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    projected = {
+        "pa": 600,
+        "r": 90,
+        "hr": 30,
+        "rbi": 90,
+        "sb": 10,
+        "h": 150,
+        "ab": 540,
+        "avg": 0.278,
+    }
     actual = {"pa": 20, "r": 3, "hr": 5, "rbi": 3, "sb": 0, "h": 10, "ab": 18}
     result = compute_player_pace(actual, projected, "hitter")
     assert result["HR"]["color_class"] != "stat-neutral"
@@ -156,7 +264,16 @@ def test_middle_sample_counting_colored_rates_neutral():
 def test_small_absolute_diff_stays_neutral():
     """When actual is within 1 unit of expected, counting stats stay neutral
     regardless of z-score (e.g. 1 RBI vs 0.2 expected)."""
-    projected = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    projected = {
+        "pa": 600,
+        "r": 90,
+        "hr": 30,
+        "rbi": 90,
+        "sb": 10,
+        "h": 150,
+        "ab": 540,
+        "avg": 0.278,
+    }
     # 12 PA -> counting colored, but expected RBI = 90 * (12/600) = 1.8
     actual = {"pa": 12, "r": 2, "hr": 1, "rbi": 1, "sb": 1, "h": 3, "ab": 11}
     result = compute_player_pace(actual, projected, "hitter")
@@ -168,7 +285,16 @@ def test_small_absolute_diff_stays_neutral():
 
 def test_no_game_logs_shows_dashes():
     """Player with no actual stats gets 0 actuals and neutral colors."""
-    projected = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    projected = {
+        "pa": 600,
+        "r": 90,
+        "hr": 30,
+        "rbi": 90,
+        "sb": 10,
+        "h": 150,
+        "ab": 540,
+        "avg": 0.278,
+    }
     actual = {}  # no game logs at all
     result = compute_player_pace(actual, projected, "hitter")
     assert result["HR"]["actual"] == 0
@@ -188,11 +314,22 @@ def test_no_projection_shows_actuals_neutral():
 
 def test_hitter_rest_of_season_deviation_sgp():
     """ROS deviation = (ros - preseason) / sgp_denom, positive = good."""
-    preseason = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    preseason = {
+        "pa": 600,
+        "r": 90,
+        "hr": 30,
+        "rbi": 90,
+        "sb": 10,
+        "h": 150,
+        "ab": 540,
+        "avg": 0.278,
+    }
     ros = {"r": 100, "hr": 33, "rbi": 85, "sb": 12, "avg": 0.290}
     sgp = {"R": 20, "HR": 9, "RBI": 20, "SB": 8, "AVG": 0.005}
     actual = {"pa": 60, "r": 9, "hr": 3, "rbi": 9, "sb": 1, "h": 15, "ab": 54}
-    result = compute_player_pace(actual, preseason, "hitter", rest_of_season_stats=ros, sgp_denoms=sgp)
+    result = compute_player_pace(
+        actual, preseason, "hitter", rest_of_season_stats=ros, sgp_denoms=sgp
+    )
 
     # R: (100 - 90) / 20 = 0.5
     assert result["R"]["rest_of_season_deviation_sgp"] == pytest.approx(0.5, abs=0.01)
@@ -208,12 +345,23 @@ def test_hitter_rest_of_season_deviation_sgp():
 
 def test_pitcher_rest_of_season_deviation_sgp():
     """Pitcher ROS deviation: ERA/WHIP are inverse (lower = positive deviation)."""
-    preseason = {"ip": 180, "w": 12, "k": 190, "sv": 0, "er": 60, "bb": 50, "h_allowed": 150,
-                 "era": 3.00, "whip": 1.11}
+    preseason = {
+        "ip": 180,
+        "w": 12,
+        "k": 190,
+        "sv": 0,
+        "er": 60,
+        "bb": 50,
+        "h_allowed": 150,
+        "era": 3.00,
+        "whip": 1.11,
+    }
     ros = {"w": 14, "k": 200, "sv": 0, "era": 2.70, "whip": 1.05}
     sgp = {"W": 3, "K": 30, "SV": 7, "ERA": 0.15, "WHIP": 0.015}
     actual = {"ip": 18.0, "k": 22, "w": 1, "sv": 0, "er": 5, "bb": 5, "h_allowed": 16}
-    result = compute_player_pace(actual, preseason, "pitcher", rest_of_season_stats=ros, sgp_denoms=sgp)
+    result = compute_player_pace(
+        actual, preseason, "pitcher", rest_of_season_stats=ros, sgp_denoms=sgp
+    )
 
     # W: (14 - 12) / 3 = 0.667
     assert result["W"]["rest_of_season_deviation_sgp"] == pytest.approx(0.667, abs=0.01)
@@ -227,7 +375,16 @@ def test_pitcher_rest_of_season_deviation_sgp():
 
 def test_rest_of_season_deviation_zero_when_no_ros():
     """When rest_of_season_stats or sgp_denoms are None, rest_of_season_deviation_sgp should be 0."""
-    preseason = {"pa": 600, "r": 90, "hr": 30, "rbi": 90, "sb": 10, "h": 150, "ab": 540, "avg": 0.278}
+    preseason = {
+        "pa": 600,
+        "r": 90,
+        "hr": 30,
+        "rbi": 90,
+        "sb": 10,
+        "h": 150,
+        "ab": 540,
+        "avg": 0.278,
+    }
     actual = {"pa": 60, "r": 9, "hr": 3, "rbi": 9, "sb": 1, "h": 15, "ab": 54}
     result = compute_player_pace(actual, preseason, "hitter")
     assert result["HR"]["rest_of_season_deviation_sgp"] == 0.0
@@ -236,23 +393,43 @@ def test_rest_of_season_deviation_zero_when_no_ros():
 
 def _hitter_with_ros(name="Soto", r=80, hr=25, rbi=80, sb=5, avg=0.290, ab=500):
     p = Player(
-        name=name, positions=[Position.OF], player_type=PlayerType.HITTER,
-        selected_position=Position.OF, yahoo_id=f"{name}::hitter",
+        name=name,
+        positions=[Position.OF],
+        player_type=PlayerType.HITTER,
+        selected_position=Position.OF,
+        yahoo_id=f"{name}::hitter",
     )
     p.rest_of_season = HitterStats(
-        r=r, hr=hr, rbi=rbi, sb=sb, avg=avg, h=int(avg * ab), ab=ab, pa=ab,
+        r=r,
+        hr=hr,
+        rbi=rbi,
+        sb=sb,
+        avg=avg,
+        h=int(avg * ab),
+        ab=ab,
+        pa=ab,
     )
     return p
 
 
 def _pitcher_with_ros(name="Cole", w=12, k=200, sv=0, era=3.0, whip=1.10, ip=180):
     p = Player(
-        name=name, positions=[Position.SP], player_type=PlayerType.PITCHER,
-        selected_position=Position.P, yahoo_id=f"{name}::pitcher",
+        name=name,
+        positions=[Position.SP],
+        player_type=PlayerType.PITCHER,
+        selected_position=Position.P,
+        yahoo_id=f"{name}::pitcher",
     )
     p.rest_of_season = PitcherStats(
-        w=w, k=k, sv=sv, era=era, whip=whip, ip=ip,
-        er=era * ip / 9, bb=int(whip * ip * 0.3), h_allowed=int(whip * ip * 0.7),
+        w=w,
+        k=k,
+        sv=sv,
+        era=era,
+        whip=whip,
+        ip=ip,
+        er=era * ip / 9,
+        bb=int(whip * ip * 0.3),
+        h_allowed=int(whip * ip * 0.7),
     )
     return p
 
@@ -262,10 +439,22 @@ class TestAttachPaceToRoster:
         h = _hitter_with_ros()
         hitter_logs = {"soto": {"r": 40, "hr": 15, "rbi": 50, "sb": 2, "avg": 0.310}}
         attach_pace_to_roster(
-            [h], hitter_logs, pitcher_logs={},
+            [h],
+            hitter_logs,
+            pitcher_logs={},
             preseason_lookup={},
-            sgp_denoms={"r": 25, "hr": 8, "rbi": 25, "sb": 8, "avg": 0.012,
-                        "w": 5, "k": 80, "sv": 12, "era": 0.30, "whip": 0.05},
+            sgp_denoms={
+                "r": 25,
+                "hr": 8,
+                "rbi": 25,
+                "sb": 8,
+                "avg": 0.012,
+                "w": 5,
+                "k": 80,
+                "sv": 12,
+                "era": 0.30,
+                "whip": 0.05,
+            },
         )
         assert h.pace is not None
 
@@ -273,10 +462,22 @@ class TestAttachPaceToRoster:
         p = _pitcher_with_ros()
         pitcher_logs = {"cole": {"w": 6, "k": 110, "sv": 0, "era": 2.80, "whip": 1.05}}
         attach_pace_to_roster(
-            [p], hitter_logs={}, pitcher_logs=pitcher_logs,
+            [p],
+            hitter_logs={},
+            pitcher_logs=pitcher_logs,
             preseason_lookup={},
-            sgp_denoms={"r": 25, "hr": 8, "rbi": 25, "sb": 8, "avg": 0.012,
-                        "w": 5, "k": 80, "sv": 12, "era": 0.30, "whip": 0.05},
+            sgp_denoms={
+                "r": 25,
+                "hr": 8,
+                "rbi": 25,
+                "sb": 8,
+                "avg": 0.012,
+                "w": 5,
+                "k": 80,
+                "sv": 12,
+                "era": 0.30,
+                "whip": 0.05,
+            },
         )
         assert p.pace is not None
 
@@ -285,10 +486,22 @@ class TestAttachPaceToRoster:
         # still get a pace attached — compute_player_pace handles empty.
         h = _hitter_with_ros(name="Newbie")
         attach_pace_to_roster(
-            [h], hitter_logs={}, pitcher_logs={},
+            [h],
+            hitter_logs={},
+            pitcher_logs={},
             preseason_lookup={},
-            sgp_denoms={"r": 25, "hr": 8, "rbi": 25, "sb": 8, "avg": 0.012,
-                        "w": 5, "k": 80, "sv": 12, "era": 0.30, "whip": 0.05},
+            sgp_denoms={
+                "r": 25,
+                "hr": 8,
+                "rbi": 25,
+                "sb": 8,
+                "avg": 0.012,
+                "w": 5,
+                "k": 80,
+                "sv": 12,
+                "era": 0.30,
+                "whip": 0.05,
+            },
         )
         assert h.pace is not None
 
@@ -298,26 +511,52 @@ class TestAttachPaceToRoster:
         h = _hitter_with_ros(name="Soto")
         pre = _hitter_with_ros(name="Soto", r=100, hr=35)
         attach_pace_to_roster(
-            [h], hitter_logs={"soto": {"r": 50, "hr": 18}},
+            [h],
+            hitter_logs={"soto": {"r": 50, "hr": 18}},
             pitcher_logs={},
             preseason_lookup={"soto": pre},
-            sgp_denoms={"r": 25, "hr": 8, "rbi": 25, "sb": 8, "avg": 0.012,
-                        "w": 5, "k": 80, "sv": 12, "era": 0.30, "whip": 0.05},
+            sgp_denoms={
+                "r": 25,
+                "hr": 8,
+                "rbi": 25,
+                "sb": 8,
+                "avg": 0.012,
+                "w": 5,
+                "k": 80,
+                "sv": 12,
+                "era": 0.30,
+                "whip": 0.05,
+            },
         )
         assert h.pace is not None
 
     def test_player_without_rest_of_season_still_processed(self):
         # Player.rest_of_season can be None for unmatched FAs etc.
         h = Player(
-            name="NoProj", positions=[Position.OF], player_type=PlayerType.HITTER,
-            selected_position=Position.OF, yahoo_id="NoProj::hitter",
+            name="NoProj",
+            positions=[Position.OF],
+            player_type=PlayerType.HITTER,
+            selected_position=Position.OF,
+            yahoo_id="NoProj::hitter",
         )
         # h.rest_of_season is None
         attach_pace_to_roster(
-            [h], hitter_logs={}, pitcher_logs={},
+            [h],
+            hitter_logs={},
+            pitcher_logs={},
             preseason_lookup={},
-            sgp_denoms={"r": 25, "hr": 8, "rbi": 25, "sb": 8, "avg": 0.012,
-                        "w": 5, "k": 80, "sv": 12, "era": 0.30, "whip": 0.05},
+            sgp_denoms={
+                "r": 25,
+                "hr": 8,
+                "rbi": 25,
+                "sb": 8,
+                "avg": 0.012,
+                "w": 5,
+                "k": 80,
+                "sv": 12,
+                "era": 0.30,
+                "whip": 0.05,
+            },
         )
         # Should not raise; pace is set (compute_player_pace handles None)
         assert h.pace is not None

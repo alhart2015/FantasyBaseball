@@ -142,14 +142,16 @@ def fetch_team_batting_stats(season: int | None = None) -> dict[str, dict]:
     if not stats and season == local_today().year:
         logger.info(
             "No %d stats available (pre-season?); falling back to %d",
-            season, season - 1,
+            season,
+            season - 1,
         )
         stats = _fetch_team_batting_stats_for_season(season - 1, teams)
     return stats
 
 
 def _fetch_team_batting_stats_for_season(
-    season: int, teams: list[dict],
+    season: int,
+    teams: list[dict],
 ) -> dict[str, dict]:
     """Fetch team batting stats for a specific season.
 
@@ -329,6 +331,7 @@ def get_probable_starters(
             # Parse day name from date
             try:
                 from datetime import datetime as dt
+
                 day = dt.strptime(game["date"], "%Y-%m-%d").strftime("%a")
             except (ValueError, KeyError):
                 day = "?"
@@ -360,8 +363,8 @@ def get_probable_starters(
                 "ops": round(opp_stats.get("ops", 0.0), 3),
                 "ops_rank": ops_rank_map.get(opponent, 0),
                 "k_pct": round(opp_stats.get("k_pct", 0.0) * 100, 1)
-                         if opp_stats.get("k_pct", 0) < 1
-                         else round(opp_stats.get("k_pct", 0.0), 1),
+                if opp_stats.get("k_pct", 0) < 1
+                else round(opp_stats.get("k_pct", 0.0), 1),
                 "k_rank": k_rank_map.get(opponent, 0),
             }
 
@@ -382,18 +385,22 @@ def get_probable_starters(
     result: list[dict[str, Any]] = []
     for pitcher_name, starts in pitcher_starts.items():
         starts.sort(key=lambda s: s["date"])
-        result.append({
-            "pitcher": pitcher_name,
-            "starts": len(starts),
-            "days": ", ".join(s["day"] for s in starts),
-            "opponents": ", ".join(f"{s['indicator']} {s['opponent']}" for s in starts),
-            "matchup_quality": (
-                "Tough" if any(s["matchup_quality"] == "Tough" for s in starts)
-                else "Fair" if any(s["matchup_quality"] == "Fair" for s in starts)
-                else "Great"
-            ),
-            "matchups": starts,
-        })
+        result.append(
+            {
+                "pitcher": pitcher_name,
+                "starts": len(starts),
+                "days": ", ".join(s["day"] for s in starts),
+                "opponents": ", ".join(f"{s['indicator']} {s['opponent']}" for s in starts),
+                "matchup_quality": (
+                    "Tough"
+                    if any(s["matchup_quality"] == "Tough" for s in starts)
+                    else "Fair"
+                    if any(s["matchup_quality"] == "Fair" for s in starts)
+                    else "Great"
+                ),
+                "matchups": starts,
+            }
+        )
 
     result.sort(key=lambda s: (-s["starts"], s["pitcher"]))
     return result

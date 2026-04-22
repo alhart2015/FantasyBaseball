@@ -5,6 +5,7 @@ module from production code paths. The `analysis/recency.py` module is
 still permitted as a research tool — only the `lineup/blending.py` bridge
 and direct `predict_*` calls from production are forbidden.
 """
+
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

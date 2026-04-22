@@ -102,22 +102,13 @@ class TestFetchFangraphsData:
 
         assert result == []
 
-
     def test_fetch_fangraphs_data_parses_dehydrated_state(self):
         """Current FanGraphs structure: dehydratedState.queries[0].state.data."""
         players = [
             {"PlayerName": "Bobby Witt Jr.", "HR": 28, "playerid": "25764"},
         ]
         blob = {
-            "props": {
-                "pageProps": {
-                    "dehydratedState": {
-                        "queries": [
-                            {"state": {"data": players}}
-                        ]
-                    }
-                }
-            }
+            "props": {"pageProps": {"dehydratedState": {"queries": [{"state": {"data": players}}]}}}
         }
         html = f'<script id="__NEXT_DATA__">{json.dumps(blob)}</script>'
 
@@ -184,10 +175,13 @@ class TestFetchRosProjections:
             self._mock_response(pitchers),
         ]
 
-        with patch(
-            "fantasy_baseball.data.fangraphs_fetch.requests.get",
-            side_effect=responses,
-        ), patch("fantasy_baseball.data.fangraphs_fetch.time.sleep"):
+        with (
+            patch(
+                "fantasy_baseball.data.fangraphs_fetch.requests.get",
+                side_effect=responses,
+            ),
+            patch("fantasy_baseball.data.fangraphs_fetch.time.sleep"),
+        ):
             results = fetch_rest_of_season_projections(
                 tmp_path, systems=["steamer"], season_year=2026
             )
@@ -195,6 +189,7 @@ class TestFetchRosProjections:
         assert results["steamer"] == "ok"
 
         from datetime import date
+
         today = date.today().isoformat()
         snapshot_dir = tmp_path / "2026" / "rest_of_season" / today
         assert (snapshot_dir / "steamer-hitters.csv").exists()
@@ -202,9 +197,12 @@ class TestFetchRosProjections:
 
     def test_fetch_rest_of_season_projections_handles_unknown_system(self, tmp_path):
         """Unknown system names return an error without crashing."""
-        with patch(
-            "fantasy_baseball.data.fangraphs_fetch.requests.get",
-        ) as mock_get, patch("fantasy_baseball.data.fangraphs_fetch.time.sleep"):
+        with (
+            patch(
+                "fantasy_baseball.data.fangraphs_fetch.requests.get",
+            ) as mock_get,
+            patch("fantasy_baseball.data.fangraphs_fetch.time.sleep"),
+        ):
             results = fetch_rest_of_season_projections(
                 tmp_path, systems=["nonexistent-system"], season_year=2026
             )
@@ -216,10 +214,13 @@ class TestFetchRosProjections:
     def test_fetch_rest_of_season_projections_multiple_systems(self, tmp_path):
         players = [{"PlayerName": "Test Player", "playerid": "1"}]
 
-        with patch(
-            "fantasy_baseball.data.fangraphs_fetch.requests.get",
-            return_value=self._mock_response(players),
-        ), patch("fantasy_baseball.data.fangraphs_fetch.time.sleep"):
+        with (
+            patch(
+                "fantasy_baseball.data.fangraphs_fetch.requests.get",
+                return_value=self._mock_response(players),
+            ),
+            patch("fantasy_baseball.data.fangraphs_fetch.time.sleep"),
+        ):
             results = fetch_rest_of_season_projections(
                 tmp_path,
                 systems=["steamer", "zips"],
@@ -233,10 +234,13 @@ class TestFetchRosProjections:
         """Mix of known + unknown systems: known succeeds, unknown errors."""
         players = [{"PlayerName": "Test", "playerid": "1"}]
 
-        with patch(
-            "fantasy_baseball.data.fangraphs_fetch.requests.get",
-            return_value=self._mock_response(players),
-        ), patch("fantasy_baseball.data.fangraphs_fetch.time.sleep"):
+        with (
+            patch(
+                "fantasy_baseball.data.fangraphs_fetch.requests.get",
+                return_value=self._mock_response(players),
+            ),
+            patch("fantasy_baseball.data.fangraphs_fetch.time.sleep"),
+        ):
             results = fetch_rest_of_season_projections(
                 tmp_path,
                 systems=["steamer", "bad-system"],
@@ -250,13 +254,14 @@ class TestFetchRosProjections:
         """Verifies time.sleep is called between HTTP requests."""
         players = [{"PlayerName": "Test", "playerid": "1"}]
 
-        with patch(
-            "fantasy_baseball.data.fangraphs_fetch.requests.get",
-            return_value=self._mock_response(players),
-        ), patch("fantasy_baseball.data.fangraphs_fetch.time.sleep") as mock_sleep:
-            fetch_rest_of_season_projections(
-                tmp_path, systems=["steamer"], season_year=2026
-            )
+        with (
+            patch(
+                "fantasy_baseball.data.fangraphs_fetch.requests.get",
+                return_value=self._mock_response(players),
+            ),
+            patch("fantasy_baseball.data.fangraphs_fetch.time.sleep") as mock_sleep,
+        ):
+            fetch_rest_of_season_projections(tmp_path, systems=["steamer"], season_year=2026)
 
         # steamer has 2 requests (bat + pit), sleep after 1st but not before
         assert mock_sleep.call_count == 1

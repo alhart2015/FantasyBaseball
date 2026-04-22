@@ -19,6 +19,7 @@ def _columns(conn, table: str) -> set[str]:
 class TestWeeklyRostersMigration:
     def test_fresh_db_has_status_and_yahoo_id(self, conn):
         from fantasy_baseball.data.db import create_tables
+
         create_tables(conn)
         cols = _columns(conn, "weekly_rosters")
         assert "status" in cols
@@ -75,9 +76,7 @@ class TestWeeklyRostersMigration:
 
         create_tables(conn)
 
-        row = conn.execute(
-            "SELECT player_name, status, yahoo_id FROM weekly_rosters"
-        ).fetchone()
+        row = conn.execute("SELECT player_name, status, yahoo_id FROM weekly_rosters").fetchone()
         assert row["player_name"] == "Ivan Herrera"
         assert row["status"] is None
         assert row["yahoo_id"] is None
@@ -86,6 +85,7 @@ class TestWeeklyRostersMigration:
 class TestStandingsMigration:
     def test_fresh_db_has_team_key(self, conn):
         from fantasy_baseball.data.db import create_tables
+
         create_tables(conn)
         cols = _columns(conn, "standings")
         assert "team_key" in cols

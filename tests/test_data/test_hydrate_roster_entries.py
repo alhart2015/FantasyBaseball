@@ -5,43 +5,65 @@ import pandas as pd
 
 def _hitters_df():
     """Two-row hitters projection DataFrame matching the real columns."""
-    df = pd.DataFrame([
-        {
-            "name": "Juan Soto",
-            "fg_id": "22579",
-            "mlbam_id": 665742,
-            "team": "NYY",
-            "player_type": "hitter",
-            "pa": 650, "ab": 540, "h": 155, "r": 105, "hr": 35,
-            "rbi": 100, "sb": 8, "avg": 0.287,
-        },
-        {
-            "name": "Ivan Herrera",
-            "fg_id": "26664",
-            "mlbam_id": 672744,
-            "team": "STL",
-            "player_type": "hitter",
-            "pa": 500, "ab": 430, "h": 116, "r": 60, "hr": 15,
-            "rbi": 55, "sb": 5, "avg": 0.270,
-        },
-    ])
+    df = pd.DataFrame(
+        [
+            {
+                "name": "Juan Soto",
+                "fg_id": "22579",
+                "mlbam_id": 665742,
+                "team": "NYY",
+                "player_type": "hitter",
+                "pa": 650,
+                "ab": 540,
+                "h": 155,
+                "r": 105,
+                "hr": 35,
+                "rbi": 100,
+                "sb": 8,
+                "avg": 0.287,
+            },
+            {
+                "name": "Ivan Herrera",
+                "fg_id": "26664",
+                "mlbam_id": 672744,
+                "team": "STL",
+                "player_type": "hitter",
+                "pa": 500,
+                "ab": 430,
+                "h": 116,
+                "r": 60,
+                "hr": 15,
+                "rbi": 55,
+                "sb": 5,
+                "avg": 0.270,
+            },
+        ]
+    )
     df["_name_norm"] = df["name"].str.lower()
     return df
 
 
 def _pitchers_df():
-    df = pd.DataFrame([
-        {
-            "name": "Bryan Woo",
-            "fg_id": "22300",
-            "mlbam_id": 694973,
-            "team": "SEA",
-            "player_type": "pitcher",
-            "ip": 180, "w": 12, "k": 190, "sv": 0,
-            "er": 65, "bb": 35, "h_allowed": 150,
-            "era": 3.25, "whip": 1.03,
-        },
-    ])
+    df = pd.DataFrame(
+        [
+            {
+                "name": "Bryan Woo",
+                "fg_id": "22300",
+                "mlbam_id": 694973,
+                "team": "SEA",
+                "player_type": "pitcher",
+                "ip": 180,
+                "w": 12,
+                "k": 190,
+                "sv": 0,
+                "er": 65,
+                "bb": 35,
+                "h_allowed": 150,
+                "era": 3.25,
+                "whip": 1.03,
+            },
+        ]
+    )
     df["_name_norm"] = df["name"].str.lower()
     return df
 
@@ -50,6 +72,7 @@ class TestHydrateRosterEntries:
     def _roster(self, *entries):
         from fantasy_baseball.models.positions import Position
         from fantasy_baseball.models.roster import Roster, RosterEntry
+
         return Roster(
             effective_date=date(2026, 4, 14),
             entries=[

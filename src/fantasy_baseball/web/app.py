@@ -25,6 +25,7 @@ Endpoints
       full state is returned with ``full_state: true`` so the client can
       reset.
 """
+
 import logging
 from pathlib import Path
 
@@ -67,8 +68,7 @@ def create_app(state_path: Path | None = None) -> Flask:
     def index():
         state = read_state(app.config["STATE_PATH"])
         roster_slots = state.get("roster_slots", {})
-        return render_template("dashboard.html", state=state,
-                               roster_slots=roster_slots)
+        return render_template("dashboard.html", state=state, roster_slots=roster_slots)
 
     @app.route("/api/board")
     def api_board():

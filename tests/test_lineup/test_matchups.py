@@ -13,10 +13,22 @@ from fantasy_baseball.lineup.matchups import (
 def test_normalize_team_batting_stats():
     """Given raw MLB API team stat dicts, produce {abbrev: {ops, k_pct}}."""
     raw = [
-        {"team_id": 147, "team_name": "New York Yankees", "abbreviation": "NYY",
-         "ops": ".787", "strikeouts": 1463, "plate_appearances": 6235},
-        {"team_id": 119, "team_name": "Los Angeles Dodgers", "abbreviation": "LAD",
-         "ops": ".820", "strikeouts": 1300, "plate_appearances": 6100},
+        {
+            "team_id": 147,
+            "team_name": "New York Yankees",
+            "abbreviation": "NYY",
+            "ops": ".787",
+            "strikeouts": 1463,
+            "plate_appearances": 6235,
+        },
+        {
+            "team_id": 119,
+            "team_name": "Los Angeles Dodgers",
+            "abbreviation": "LAD",
+            "ops": ".820",
+            "strikeouts": 1300,
+            "plate_appearances": 6100,
+        },
     ]
     result = normalize_team_batting_stats(raw)
     assert "NYY" in result
@@ -63,11 +75,22 @@ def test_dampening_limits_adjustment():
 
 
 def _make_pitcher(name, team, era, whip, k, w, sv, ip):
-    return pd.Series({
-        "name": name, "team": team, "player_type": "pitcher",
-        "era": era, "whip": whip, "k": k, "w": w, "sv": sv,
-        "ip": ip, "er": era * ip / 9, "bb": 40, "h_allowed": 140,
-    })
+    return pd.Series(
+        {
+            "name": name,
+            "team": team,
+            "player_type": "pitcher",
+            "era": era,
+            "whip": whip,
+            "k": k,
+            "w": w,
+            "sv": sv,
+            "ip": ip,
+            "er": era * ip / 9,
+            "bb": 40,
+            "h_allowed": 140,
+        }
+    )
 
 
 def test_easy_matchup_lowers_era():
@@ -120,17 +143,43 @@ def test_fetch_team_batting_stats(mock_api):
     """fetch_team_batting_stats calls MLB API per team and returns normalized data."""
     mock_api.get.side_effect = [
         # First call: get teams
-        {"teams": [
-            {"id": 147, "name": "New York Yankees", "abbreviation": "NYY"},
-            {"id": 119, "name": "Los Angeles Dodgers", "abbreviation": "LAD"},
-        ]},
+        {
+            "teams": [
+                {"id": 147, "name": "New York Yankees", "abbreviation": "NYY"},
+                {"id": 119, "name": "Los Angeles Dodgers", "abbreviation": "LAD"},
+            ]
+        },
         # Per-team stat calls
-        {"stats": [{"splits": [{"stat": {
-            "ops": ".787", "strikeOuts": 1463, "plateAppearances": 6235,
-        }}]}]},
-        {"stats": [{"splits": [{"stat": {
-            "ops": ".820", "strikeOuts": 1300, "plateAppearances": 6100,
-        }}]}]},
+        {
+            "stats": [
+                {
+                    "splits": [
+                        {
+                            "stat": {
+                                "ops": ".787",
+                                "strikeOuts": 1463,
+                                "plateAppearances": 6235,
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "stats": [
+                {
+                    "splits": [
+                        {
+                            "stat": {
+                                "ops": ".820",
+                                "strikeOuts": 1300,
+                                "plateAppearances": 6100,
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
     ]
 
     result = fetch_team_batting_stats(season=2025)
@@ -147,15 +196,29 @@ def test_fetch_falls_back_to_prior_season_when_preseason(mock_api, mock_dt):
 
     mock_api.get.side_effect = [
         # Teams list (fetched once, reused for fallback)
-        {"teams": [
-            {"id": 147, "name": "New York Yankees", "abbreviation": "NYY"},
-        ]},
+        {
+            "teams": [
+                {"id": 147, "name": "New York Yankees", "abbreviation": "NYY"},
+            ]
+        },
         # 2026 per-team call: empty splits (no games played yet)
         {"stats": [{"splits": []}]},
         # 2025 fallback per-team call: real data
-        {"stats": [{"splits": [{"stat": {
-            "ops": ".787", "strikeOuts": 1463, "plateAppearances": 6235,
-        }}]}]},
+        {
+            "stats": [
+                {
+                    "splits": [
+                        {
+                            "stat": {
+                                "ops": ".787",
+                                "strikeOuts": 1463,
+                                "plateAppearances": 6235,
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
     ]
 
     result = fetch_team_batting_stats(season=None)
@@ -166,12 +229,30 @@ def test_fetch_falls_back_to_prior_season_when_preseason(mock_api, mock_dt):
 def test_full_pipeline():
     """End-to-end: raw stats -> factors -> adjusted pitcher projection."""
     raw = [
-        {"abbreviation": "COL", "ops": ".650", "strikeouts": 1600, "plate_appearances": 6000,
-         "team_id": 115, "team_name": "Colorado Rockies"},
-        {"abbreviation": "LAD", "ops": ".820", "strikeouts": 1200, "plate_appearances": 6100,
-         "team_id": 119, "team_name": "Los Angeles Dodgers"},
-        {"abbreviation": "MIL", "ops": ".740", "strikeouts": 1400, "plate_appearances": 6050,
-         "team_id": 158, "team_name": "Milwaukee Brewers"},
+        {
+            "abbreviation": "COL",
+            "ops": ".650",
+            "strikeouts": 1600,
+            "plate_appearances": 6000,
+            "team_id": 115,
+            "team_name": "Colorado Rockies",
+        },
+        {
+            "abbreviation": "LAD",
+            "ops": ".820",
+            "strikeouts": 1200,
+            "plate_appearances": 6100,
+            "team_id": 119,
+            "team_name": "Los Angeles Dodgers",
+        },
+        {
+            "abbreviation": "MIL",
+            "ops": ".740",
+            "strikeouts": 1400,
+            "plate_appearances": 6050,
+            "team_id": 158,
+            "team_name": "Milwaukee Brewers",
+        },
     ]
     stats = normalize_team_batting_stats(raw)
     factors = calculate_matchup_factors(stats, dampening=0.5)

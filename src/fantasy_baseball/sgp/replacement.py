@@ -36,14 +36,15 @@ def calculate_replacement_levels(
     # level is the SGP of the marginal hitter at that combined depth.
     util_starters = starters_per_position.get("UTIL", 0)
     if util_starters > 0:
-        all_hitters = player_pool[
-            player_pool["positions"].apply(is_hitter)
-        ].sort_values("total_sgp", ascending=False).reset_index(drop=True)
+        all_hitters = (
+            player_pool[player_pool["positions"].apply(is_hitter)]
+            .sort_values("total_sgp", ascending=False)
+            .reset_index(drop=True)
+        )
 
         # Total hitter starters across all positional + UTIL slots
         positional_hitter_slots = sum(
-            n for pos, n in starters_per_position.items()
-            if pos not in ("P", "IF", "UTIL")
+            n for pos, n in starters_per_position.items() if pos not in ("P", "IF", "UTIL")
         )
         total_hitter_starters = positional_hitter_slots + util_starters
 
@@ -105,13 +106,14 @@ def calculate_replacement_rates(
         rates["whip"] = REPLACEMENT_WHIP
 
     # Hitter replacement rates
-    all_hitters = player_pool[
-        player_pool["positions"].apply(is_hitter)
-    ].sort_values("total_sgp", ascending=False).reset_index(drop=True)
+    all_hitters = (
+        player_pool[player_pool["positions"].apply(is_hitter)]
+        .sort_values("total_sgp", ascending=False)
+        .reset_index(drop=True)
+    )
 
     positional_hitter_slots = sum(
-        n for pos, n in starters_per_position.items()
-        if pos not in ("P", "IF", "UTIL")
+        n for pos, n in starters_per_position.items() if pos not in ("P", "IF", "UTIL")
     )
     util_slots = starters_per_position.get("UTIL", 0)
     total_hitter_starters = positional_hitter_slots + util_slots

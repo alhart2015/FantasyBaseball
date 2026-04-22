@@ -67,14 +67,28 @@ def _build_actual_standings():
     """Build actual YTD standings for 2 teams (midseason-like values)."""
     return {
         "Team A": {
-            "R": 350, "HR": 100, "RBI": 340, "SB": 40,
-            "AVG": 0.265, "W": 35, "K": 600, "SV": 25,
-            "ERA": 3.80, "WHIP": 1.20,
+            "R": 350,
+            "HR": 100,
+            "RBI": 340,
+            "SB": 40,
+            "AVG": 0.265,
+            "W": 35,
+            "K": 600,
+            "SV": 25,
+            "ERA": 3.80,
+            "WHIP": 1.20,
         },
         "Team B": {
-            "R": 320, "HR": 90, "RBI": 310, "SB": 50,
-            "AVG": 0.255, "W": 30, "K": 550, "SV": 20,
-            "ERA": 4.10, "WHIP": 1.28,
+            "R": 320,
+            "HR": 90,
+            "RBI": 310,
+            "SB": 50,
+            "AVG": 0.255,
+            "W": 30,
+            "K": 550,
+            "SV": 20,
+            "ERA": 4.10,
+            "WHIP": 1.28,
         },
     }
 
@@ -95,8 +109,12 @@ class TestSimulateRemainingSeason:
         rng = np.random.default_rng(42)
 
         team_stats, injuries = simulate_remaining_season(
-            actuals, rosters, fraction_remaining=0.5, rng=rng,
-            h_slots=3, p_slots=2,
+            actuals,
+            rosters,
+            fraction_remaining=0.5,
+            rng=rng,
+            h_slots=3,
+            p_slots=2,
         )
 
         for team in ["Team A", "Team B"]:
@@ -110,19 +128,13 @@ class TestSimulateRemainingSeason:
                 )
 
             # AVG should be in a valid range
-            assert 0.150 < stats["AVG"] < 0.350, (
-                f"{team} AVG out of range: {stats['AVG']}"
-            )
+            assert 0.150 < stats["AVG"] < 0.350, f"{team} AVG out of range: {stats['AVG']}"
 
             # ERA should be in a valid range
-            assert 1.0 < stats["ERA"] < 8.0, (
-                f"{team} ERA out of range: {stats['ERA']}"
-            )
+            assert 1.0 < stats["ERA"] < 8.0, f"{team} ERA out of range: {stats['ERA']}"
 
             # WHIP should be in a valid range
-            assert 0.8 < stats["WHIP"] < 2.0, (
-                f"{team} WHIP out of range: {stats['WHIP']}"
-            )
+            assert 0.8 < stats["WHIP"] < 2.0, f"{team} WHIP out of range: {stats['WHIP']}"
 
         # Both teams should be in injuries dict
         assert "Team A" in injuries
@@ -135,8 +147,12 @@ class TestSimulateRemainingSeason:
 
         rng = np.random.default_rng(99)
         team_stats, injuries = simulate_remaining_season(
-            actuals, rosters, fraction_remaining=0.0, rng=rng,
-            h_slots=3, p_slots=2,
+            actuals,
+            rosters,
+            fraction_remaining=0.0,
+            rng=rng,
+            h_slots=3,
+            p_slots=2,
         )
 
         for team in ["Team A", "Team B"]:
@@ -144,8 +160,7 @@ class TestSimulateRemainingSeason:
             result = team_stats[team]
             for cat in ["R", "HR", "RBI", "SB", "W", "K", "SV"]:
                 assert result[cat] == pytest.approx(act[cat]), (
-                    f"{team} {cat}: expected {act[cat]} at fraction_remaining=0, "
-                    f"got {result[cat]}"
+                    f"{team} {cat}: expected {act[cat]} at fraction_remaining=0, got {result[cat]}"
                 )
             assert injuries[team] == []
 

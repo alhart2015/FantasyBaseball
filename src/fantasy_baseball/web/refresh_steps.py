@@ -5,6 +5,7 @@ belong in a domain module like ``scoring`` or ``analysis.pace``
 because they only exist to compose those domains' outputs into the
 shape the cache files need.
 """
+
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
@@ -77,12 +78,14 @@ def compute_lineup_moves(
                     reason = f"SGP: {sgp:.1f}"
                 else:
                     reason = "Optimal slot"
-                moves.append({
-                    "action": "START",
-                    "player": player_name,
-                    "slot": base_slot,
-                    "reason": reason,
-                })
+                moves.append(
+                    {
+                        "action": "START",
+                        "player": player_name,
+                        "slot": base_slot,
+                        "reason": reason,
+                    }
+                )
             break
     return moves
 

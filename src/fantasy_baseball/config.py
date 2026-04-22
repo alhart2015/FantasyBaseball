@@ -43,10 +43,10 @@ def load_config(config_path: Path) -> LeagueConfig:
 
     # Import here to avoid circular dependency
     from fantasy_baseball.draft.strategy import STRATEGIES
+
     if strategy not in STRATEGIES:
         raise ValueError(
-            f"Unknown strategy {strategy!r}. "
-            f"Valid strategies: {', '.join(sorted(STRATEGIES))}"
+            f"Unknown strategy {strategy!r}. Valid strategies: {', '.join(sorted(STRATEGIES))}"
         )
     if scoring_mode not in VALID_SCORING_MODES:
         raise ValueError(

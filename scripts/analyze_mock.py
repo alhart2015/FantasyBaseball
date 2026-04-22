@@ -1,4 +1,5 @@
 """Analyze the most recent mock draft results."""
+
 import json
 import sys
 from pathlib import Path
@@ -100,10 +101,12 @@ def main():
     print("\n" + "=" * 132)
     print("PROJECTED ROTO STANDINGS (median of 1000 MC simulations)")
     print("=" * 132)
-    print(f"{'Rk':<3} {'Team':>6} {'Pts':>4}  "
-          f"{'R':>5} {'HR':>4} {'RBI':>5} {'SB':>4} {'AVG':>6}  "
-          f"{'W':>4} {'K':>5} {'SV':>4} {'ERA':>5} {'WHIP':>6}  "
-          f"{'H':>2}/{'P':>2}")
+    print(
+        f"{'Rk':<3} {'Team':>6} {'Pts':>4}  "
+        f"{'R':>5} {'HR':>4} {'RBI':>5} {'SB':>4} {'AVG':>6}  "
+        f"{'W':>4} {'K':>5} {'SV':>4} {'ERA':>5} {'WHIP':>6}  "
+        f"{'H':>2}/{'P':>2}"
+    )
     print("-" * 132)
     for i, tn in enumerate(order, 1):
         med = np.median(all_totals[tn])
@@ -111,12 +114,14 @@ def main():
         nh = sum(1 for p in team_players[tn] if p["player_type"] == "hitter")
         np_ = sum(1 for p in team_players[tn] if p["player_type"] == "pitcher")
         marker = " <<<" if tn == user_team else ""
-        print(f"{i:<3} T{tn:>4} {med:>4.0f}  "
-              f"{vals['R']:>5.0f} {vals['HR']:>4.0f} {vals['RBI']:>5.0f} "
-              f"{vals['SB']:>4.0f} {vals['AVG']:>6.3f}  "
-              f"{vals['W']:>4.0f} {vals['K']:>5.0f} {vals['SV']:>4.0f} "
-              f"{vals['ERA']:>5.2f} {vals['WHIP']:>6.3f}  "
-              f"{nh:>2}/{np_:>2}{marker}")
+        print(
+            f"{i:<3} T{tn:>4} {med:>4.0f}  "
+            f"{vals['R']:>5.0f} {vals['HR']:>4.0f} {vals['RBI']:>5.0f} "
+            f"{vals['SB']:>4.0f} {vals['AVG']:>6.3f}  "
+            f"{vals['W']:>4.0f} {vals['K']:>5.0f} {vals['SV']:>4.0f} "
+            f"{vals['ERA']:>5.2f} {vals['WHIP']:>6.3f}  "
+            f"{nh:>2}/{np_:>2}{marker}"
+        )
 
     # Category points
     print(f"\n{'=' * 100}")
@@ -138,18 +143,22 @@ def main():
     print(f"\n{'=' * 75}")
     print("WIN PROBABILITY")
     print("=" * 75)
-    print(f"{'Rk':<3} {'Team':>6} {'Med':>5} {'P10':>5} {'P90':>5}  "
-          f"{'Win%':>6} {'Top3':>6} {'Bot3':>6}")
+    print(
+        f"{'Rk':<3} {'Team':>6} {'Med':>5} {'P10':>5} {'P90':>5}  "
+        f"{'Win%':>6} {'Top3':>6} {'Bot3':>6}"
+    )
     print("-" * 75)
     for i, tn in enumerate(order, 1):
         tots = np.array(all_totals[tn])
         fins = np.array(all_finishes[tn])
         marker = " <<<" if tn == user_team else ""
-        print(f"{i:<3} T{tn:>4} {np.median(tots):>5.0f} {np.percentile(tots, 10):>5.0f} "
-              f"{np.percentile(tots, 90):>5.0f}  "
-              f"{np.mean(fins == 1) * 100:>5.1f}% "
-              f"{np.mean(fins <= 3) * 100:>5.1f}% "
-              f"{np.mean(fins >= 8) * 100:>5.1f}%{marker}")
+        print(
+            f"{i:<3} T{tn:>4} {np.median(tots):>5.0f} {np.percentile(tots, 10):>5.0f} "
+            f"{np.percentile(tots, 90):>5.0f}  "
+            f"{np.mean(fins == 1) * 100:>5.1f}% "
+            f"{np.mean(fins <= 3) * 100:>5.1f}% "
+            f"{np.mean(fins >= 8) * 100:>5.1f}%{marker}"
+        )
 
     # Category risk
     print(f"\n{'=' * 60}")
@@ -159,22 +168,33 @@ def main():
     print("-" * 40)
     for cat in ALL_CATS:
         pts = np.array(all_cat_pts[user_team][cat])
-        print(f"{cat:>5} {np.median(pts):>4.0f} {np.percentile(pts, 10):>4.0f} "
-              f"{np.percentile(pts, 90):>4.0f}  "
-              f"{np.mean(pts >= 8) * 100:>4.1f}% "
-              f"{np.mean(pts <= 3) * 100:>4.1f}%")
+        print(
+            f"{cat:>5} {np.median(pts):>4.0f} {np.percentile(pts, 10):>4.0f} "
+            f"{np.percentile(pts, 90):>4.0f}  "
+            f"{np.mean(pts >= 8) * 100:>4.1f}% "
+            f"{np.mean(pts <= 3) * 100:>4.1f}%"
+        )
 
     # Strengths / weaknesses
     print(f"\n{'=' * 60}")
     print("YOUR STRENGTHS AND WEAKNESSES")
     print("=" * 60)
     cats_sorted = sorted(ALL_CATS, key=lambda c: np.median(all_cat_pts[user_team][c]), reverse=True)
-    strengths = [(c, np.median(all_cat_pts[user_team][c]), np.median(all_cat_vals[user_team][c]))
-                 for c in cats_sorted if np.median(all_cat_pts[user_team][c]) >= 7]
-    mid = [(c, np.median(all_cat_pts[user_team][c]), np.median(all_cat_vals[user_team][c]))
-           for c in cats_sorted if 4 <= np.median(all_cat_pts[user_team][c]) <= 6]
-    weak = [(c, np.median(all_cat_pts[user_team][c]), np.median(all_cat_vals[user_team][c]))
-            for c in cats_sorted if np.median(all_cat_pts[user_team][c]) <= 3]
+    strengths = [
+        (c, np.median(all_cat_pts[user_team][c]), np.median(all_cat_vals[user_team][c]))
+        for c in cats_sorted
+        if np.median(all_cat_pts[user_team][c]) >= 7
+    ]
+    mid = [
+        (c, np.median(all_cat_pts[user_team][c]), np.median(all_cat_vals[user_team][c]))
+        for c in cats_sorted
+        if 4 <= np.median(all_cat_pts[user_team][c]) <= 6
+    ]
+    weak = [
+        (c, np.median(all_cat_pts[user_team][c]), np.median(all_cat_vals[user_team][c]))
+        for c in cats_sorted
+        if np.median(all_cat_pts[user_team][c]) <= 3
+    ]
 
     if strengths:
         print("\nStrengths (7+ pts):")

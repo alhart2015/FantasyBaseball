@@ -15,6 +15,7 @@ Usage:
     python scripts/rescore_transactions.py           # local DB only
     python scripts/rescore_transactions.py --redis    # also clear Redis cache
 """
+
 import argparse
 import sys
 from pathlib import Path
@@ -24,7 +25,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 def main():
     parser = argparse.ArgumentParser(description="Clear transaction scores for re-computation")
-    parser.add_argument("--redis", action="store_true", help="Also clear Redis transaction_analyzer cache")
+    parser.add_argument(
+        "--redis", action="store_true", help="Also clear Redis transaction_analyzer cache"
+    )
     args = parser.parse_args()
 
     from fantasy_baseball.data.db import create_tables, get_connection
@@ -54,9 +57,11 @@ def main():
 
     if args.redis:
         import os
+
         # Load .env if available
         try:
             from dotenv import load_dotenv
+
             load_dotenv()
         except ImportError:
             pass
@@ -64,7 +69,9 @@ def main():
         url = os.environ.get("UPSTASH_REDIS_REST_URL")
         token = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
         if not url or not token:
-            print("Redis credentials not found. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN.")
+            print(
+                "Redis credentials not found. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN."
+            )
             sys.exit(1)
 
         from upstash_redis import Redis

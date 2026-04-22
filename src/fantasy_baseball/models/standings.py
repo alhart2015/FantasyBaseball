@@ -24,37 +24,36 @@ from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category, Opportuni
 
 # Private: single source of truth for Category <-> attribute mapping.
 _CAT_TO_FIELD: dict[Category, str] = {
-    Category.R:    "r",
-    Category.HR:   "hr",
-    Category.RBI:  "rbi",
-    Category.SB:   "sb",
-    Category.AVG:  "avg",
-    Category.W:    "w",
-    Category.K:    "k",
-    Category.SV:   "sv",
-    Category.ERA:  "era",
+    Category.R: "r",
+    Category.HR: "hr",
+    Category.RBI: "rbi",
+    Category.SB: "sb",
+    Category.AVG: "avg",
+    Category.W: "w",
+    Category.K: "k",
+    Category.SV: "sv",
+    Category.ERA: "era",
     Category.WHIP: "whip",
 }
 
 
 @dataclass
 class CategoryStats:
-    r:    float = 0.0
-    hr:   float = 0.0
-    rbi:  float = 0.0
-    sb:   float = 0.0
-    avg:  float = 0.0
-    w:    float = 0.0
-    k:    float = 0.0
-    sv:   float = 0.0
-    era:  float = 99.0
+    r: float = 0.0
+    hr: float = 0.0
+    rbi: float = 0.0
+    sb: float = 0.0
+    avg: float = 0.0
+    w: float = 0.0
+    k: float = 0.0
+    sv: float = 0.0
+    era: float = 99.0
     whip: float = 99.0
 
     def __getitem__(self, cat: Category) -> float:
         if not isinstance(cat, Category):
             raise TypeError(
-                f"CategoryStats indexing requires a Category enum, got "
-                f"{type(cat).__name__}"
+                f"CategoryStats indexing requires a Category enum, got {type(cat).__name__}"
             )
         return float(getattr(self, _CAT_TO_FIELD[cat]))
 
@@ -77,10 +76,7 @@ class CategoryStats:
 
     def to_dict(self) -> dict[str, float]:
         """Produce an UPPERCASE-string-keyed dict (I/O boundary only)."""
-        return {
-            cat.value: float(getattr(self, _CAT_TO_FIELD[cat]))
-            for cat in ALL_CATEGORIES
-        }
+        return {cat.value: float(getattr(self, _CAT_TO_FIELD[cat])) for cat in ALL_CATEGORIES}
 
 
 @dataclass
@@ -100,8 +96,7 @@ class CategoryPoints:
     def __getitem__(self, cat: Category) -> float:
         if not isinstance(cat, Category):
             raise TypeError(
-                f"CategoryPoints indexing requires a Category enum, got "
-                f"{type(cat).__name__}"
+                f"CategoryPoints indexing requires a Category enum, got {type(cat).__name__}"
             )
         return self.values[cat]
 
@@ -123,6 +118,7 @@ class StandingsEntry:
     :class:`OpportunityStat` enum — bare-string access is deliberately
     not supported (same contract as :class:`CategoryStats`).
     """
+
     team_name: str
     team_key: str
     rank: int
@@ -188,14 +184,16 @@ class Standings:
                     # Unknown key — ignore to keep legacy/in-flight
                     # writers from breaking the read path.
                     continue
-            entries.append(StandingsEntry(
-                team_name=row["name"],
-                team_key=row["team_key"],
-                rank=int(row["rank"]),
-                stats=CategoryStats.from_dict(row["stats"]),
-                yahoo_points_for=row.get("yahoo_points_for"),
-                extras=extras,
-            ))
+            entries.append(
+                StandingsEntry(
+                    team_name=row["name"],
+                    team_key=row["team_key"],
+                    rank=int(row["rank"]),
+                    stats=CategoryStats.from_dict(row["stats"]),
+                    yahoo_points_for=row.get("yahoo_points_for"),
+                    extras=extras,
+                )
+            )
         return cls(effective_date=eff, entries=entries)
 
     def to_json(self) -> dict[str, Any]:
@@ -230,18 +228,14 @@ class ProjectedStandings:
         out: dict[str, ProjectedStandingsEntry] = {}
         for entry in self.entries:
             if entry.team_name in out:
-                raise ValueError(
-                    f"duplicate team in projected standings: {entry.team_name!r}"
-                )
+                raise ValueError(f"duplicate team in projected standings: {entry.team_name!r}")
             out[entry.team_name] = entry
         return out
 
     @classmethod
     def from_json(cls, d: Mapping[str, Any]) -> ProjectedStandings:
         if not isinstance(d, Mapping) or "teams" not in d or "effective_date" not in d:
-            raise ValueError(
-                "ProjectedStandings.from_json: missing 'effective_date' or 'teams'"
-            )
+            raise ValueError("ProjectedStandings.from_json: missing 'effective_date' or 'teams'")
         return cls(
             effective_date=date.fromisoformat(d["effective_date"]),
             entries=[
@@ -256,10 +250,7 @@ class ProjectedStandings:
     def to_json(self) -> dict[str, Any]:
         return {
             "effective_date": self.effective_date.isoformat(),
-            "teams": [
-                {"name": e.team_name, "stats": e.stats.to_dict()}
-                for e in self.entries
-            ],
+            "teams": [{"name": e.team_name, "stats": e.stats.to_dict()} for e in self.entries],
         }
 
     @classmethod

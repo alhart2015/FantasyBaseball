@@ -4,6 +4,7 @@ Mocks Yahoo and uses fakeredis. Asserts shape of every cache artifact
 plus cross-step invariants (in test_invariants below). Does NOT lock
 down values — Monte Carlo has randomness and projections change weekly.
 """
+
 import json
 from pathlib import Path
 
@@ -36,10 +37,21 @@ class TestRefreshShape:
             refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
 
         expected_files = [
-            "standings", "pending_moves", "projections", "roster",
-            "rankings", "lineup_optimal", "probable_starters", "positions",
-            "roster_audit", "leverage", "monte_carlo", "spoe",
-            "transaction_analyzer", "meta", "opp_rosters",
+            "standings",
+            "pending_moves",
+            "projections",
+            "roster",
+            "rankings",
+            "lineup_optimal",
+            "probable_starters",
+            "positions",
+            "roster_audit",
+            "leverage",
+            "monte_carlo",
+            "spoe",
+            "transaction_analyzer",
+            "meta",
+            "opp_rosters",
         ]
         for name in expected_files:
             path = cache_dir / f"{name}.json"
@@ -136,6 +148,7 @@ class TestRefreshInvariants:
         roster = _read(self.cache_dir, "roster")
         opp_rosters = _read(self.cache_dir, "opp_rosters")
         from fantasy_baseball.utils.name_utils import normalize_name
+
         # Roster players
         for p in roster:
             assert normalize_name(p["name"]) in positions
@@ -156,11 +169,16 @@ class TestRefreshInvariants:
 class TestMonteCarloROSBranch:
     @pytest.mark.parametrize("has_ros", [True, False])
     def test_monte_carlo_keys_match_ros_availability(
-        self, configured_test_env, fake_redis, has_ros,
+        self,
+        configured_test_env,
+        fake_redis,
+        has_ros,
     ):
         cache_dir = configured_test_env
         with patched_refresh_environment(
-            fake_redis, has_rest_of_season=has_ros, cache_dir=cache_dir,
+            fake_redis,
+            has_rest_of_season=has_ros,
+            cache_dir=cache_dir,
         ):
             refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
         data = _read(cache_dir, "monte_carlo")
@@ -185,7 +203,10 @@ class TestROSProjectionsRedisAuthoritative:
     """
 
     def test_refresh_does_not_call_blend_and_cache_ros(
-        self, configured_test_env, fake_redis, monkeypatch,
+        self,
+        configured_test_env,
+        fake_redis,
+        monkeypatch,
     ):
         """Regression guard: refresh must not invoke blend_and_cache_ros.
 
@@ -211,7 +232,9 @@ class TestROSProjectionsRedisAuthoritative:
         assert call_count["n"] == 0
 
     def test_refresh_preserves_existing_ros_projections(
-        self, configured_test_env, fake_redis,
+        self,
+        configured_test_env,
+        fake_redis,
     ):
         """Redis ros_projections must be unchanged after refresh runs.
 
@@ -219,6 +242,7 @@ class TestROSProjectionsRedisAuthoritative:
         Running refresh must not clobber that with a stale disk blend.
         """
         from fantasy_baseball.data.cache_keys import CacheKey, redis_key
+
         cache_dir = configured_test_env
 
         # The fixture seeds its own ros_projections. Run the refresh
@@ -240,7 +264,9 @@ class TestPreseasonBaseline:
     refresh still completes."""
 
     def test_baseline_present_populates_cache(
-        self, configured_test_env, fake_redis,
+        self,
+        configured_test_env,
+        fake_redis,
     ):
         cache_dir = configured_test_env
         with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
@@ -252,7 +278,9 @@ class TestPreseasonBaseline:
         assert data["baseline_meta"]["roster_date"] == "2026-03-27"
 
     def test_baseline_missing_leaves_none(
-        self, configured_test_env, fake_redis,
+        self,
+        configured_test_env,
+        fake_redis,
     ):
         cache_dir = configured_test_env
         # Intentionally strip the baseline that the fixture seeds.

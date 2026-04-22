@@ -5,8 +5,13 @@ def test_parse_hitter_game_log():
     raw_split = {
         "date": "2025-06-15",
         "stat": {
-            "atBats": 4, "hits": 2, "homeRuns": 1, "runs": 1,
-            "rbi": 2, "stolenBases": 0, "plateAppearances": 5,
+            "atBats": 4,
+            "hits": 2,
+            "homeRuns": 1,
+            "runs": 1,
+            "rbi": 2,
+            "stolenBases": 0,
+            "plateAppearances": 5,
         },
     }
     result = parse_hitter_game_log(raw_split)
@@ -21,9 +26,16 @@ def test_parse_pitcher_game_log():
     raw_split = {
         "date": "2025-06-15",
         "stat": {
-            "inningsPitched": "6.0", "strikeOuts": 8, "earnedRuns": 2,
-            "baseOnBalls": 1, "hits": 4, "wins": 1, "losses": 0,
-            "saves": 0, "gamesStarted": 1, "gamesPlayed": 1,
+            "inningsPitched": "6.0",
+            "strikeOuts": 8,
+            "earnedRuns": 2,
+            "baseOnBalls": 1,
+            "hits": 4,
+            "wins": 1,
+            "losses": 0,
+            "saves": 0,
+            "gamesStarted": 1,
+            "gamesPlayed": 1,
             "battersFaced": 23,
         },
     }
@@ -40,9 +52,16 @@ def test_parse_pitcher_partial_innings():
     raw_split = {
         "date": "2025-06-15",
         "stat": {
-            "inningsPitched": "6.1", "strikeOuts": 7, "earnedRuns": 3,
-            "baseOnBalls": 2, "hits": 5, "wins": 0, "losses": 1,
-            "saves": 0, "gamesStarted": 1, "gamesPlayed": 1,
+            "inningsPitched": "6.1",
+            "strikeOuts": 7,
+            "earnedRuns": 3,
+            "baseOnBalls": 2,
+            "hits": 5,
+            "wins": 0,
+            "losses": 1,
+            "saves": 0,
+            "gamesStarted": 1,
+            "gamesPlayed": 1,
         },
     }
     result = parse_pitcher_game_log(raw_split)

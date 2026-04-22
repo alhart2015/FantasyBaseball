@@ -3,6 +3,7 @@
 Migrated from tests/test_integration.py to resolve the naming conflict
 between that standalone module and the tests/test_integration/ package.
 """
+
 from pathlib import Path
 
 import pandas as pd
@@ -65,11 +66,7 @@ def test_full_pipeline(fixtures_dir):
         var = calculate_var(player, levels)
         vars_list.append({"name": player["name"], "var": var})
 
-    rankings = (
-        pd.DataFrame(vars_list)
-        .sort_values("var", ascending=False)
-        .reset_index(drop=True)
-    )
+    rankings = pd.DataFrame(vars_list).sort_values("var", ascending=False).reset_index(drop=True)
 
     # Step 5: Verify rankings make sense
     assert len(rankings) == 7
@@ -79,9 +76,9 @@ def test_full_pipeline(fixtures_dir):
     assert rankings.iloc[0]["var"] >= rankings.iloc[-1]["var"]
     # Aaron Judge should have the highest VAR among hitters
     # (high HR, R, RBI in a 7-player pool)
-    hitter_rankings = rankings[rankings["name"].isin(
-        ["Aaron Judge", "Mookie Betts", "Adley Rutschman", "Marcus Semien"]
-    )]
+    hitter_rankings = rankings[
+        rankings["name"].isin(["Aaron Judge", "Mookie Betts", "Adley Rutschman", "Marcus Semien"])
+    ]
     assert hitter_rankings.iloc[0]["name"] == "Aaron Judge"
 
 

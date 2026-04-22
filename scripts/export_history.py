@@ -4,6 +4,7 @@ Usage:
     python scripts/export_history.py              # dumps to data/history/YYYY-MM-DD/
     python scripts/export_history.py --out PATH   # custom output dir
 """
+
 from __future__ import annotations
 
 import argparse
@@ -35,19 +36,13 @@ def main() -> None:
     (args.out / "weekly_rosters_history.json").write_text(
         json.dumps(rosters, indent=2), encoding="utf-8"
     )
-    print(
-        f"Wrote {len(rosters)} roster snapshots -> "
-        f"{args.out / 'weekly_rosters_history.json'}"
-    )
+    print(f"Wrote {len(rosters)} roster snapshots -> {args.out / 'weekly_rosters_history.json'}")
 
     standings = get_standings_history(client)
     (args.out / "standings_history.json").write_text(
         json.dumps(standings, indent=2), encoding="utf-8"
     )
-    print(
-        f"Wrote {len(standings)} standings snapshots -> "
-        f"{args.out / 'standings_history.json'}"
-    )
+    print(f"Wrote {len(standings)} standings snapshots -> {args.out / 'standings_history.json'}")
 
 
 if __name__ == "__main__":

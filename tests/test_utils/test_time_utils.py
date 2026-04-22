@@ -114,15 +114,18 @@ class TestComputeEffectiveDate:
         # Yahoo scoring period ends on a Sunday; effective date is the
         # following Tuesday (lineup lock day).
         from fantasy_baseball.utils.time_utils import compute_effective_date
+
         assert compute_effective_date("2026-04-19") == date(2026, 4, 21)
 
     def test_accepts_iso_string(self):
         from fantasy_baseball.utils.time_utils import compute_effective_date
+
         assert compute_effective_date("2026-05-03") == date(2026, 5, 5)
 
     def test_tuesday_input_returns_following_tuesday(self):
         # next_tuesday is strict — a Tuesday input still moves forward.
         from fantasy_baseball.utils.time_utils import compute_effective_date
+
         assert compute_effective_date("2026-04-21") == date(2026, 4, 28)
 
 
@@ -132,12 +135,14 @@ class TestNextTuesday:
         scoring week ending on Sunday. next_tuesday(Sunday) must
         produce the Tuesday two days later."""
         from fantasy_baseball.utils.time_utils import next_tuesday
+
         assert next_tuesday(date(2026, 4, 12)) == date(2026, 4, 14)
 
     def test_monday_advances_one_day(self):
         """If the scoring week ever returns a Monday end_date, the
         formula end+1 would correctly produce Tuesday."""
         from fantasy_baseball.utils.time_utils import next_tuesday
+
         assert next_tuesday(date(2026, 4, 13)) == date(2026, 4, 14)
 
     def test_tuesday_advances_a_full_week(self):
@@ -146,14 +151,17 @@ class TestNextTuesday:
         prevents zero-day effective_date windows at the edge of a
         scoring period."""
         from fantasy_baseball.utils.time_utils import next_tuesday
+
         assert next_tuesday(date(2026, 4, 14)) == date(2026, 4, 21)
 
     def test_wednesday_advances_six_days(self):
         from fantasy_baseball.utils.time_utils import next_tuesday
+
         assert next_tuesday(date(2026, 4, 15)) == date(2026, 4, 21)
 
     def test_thursday_friday_saturday(self):
         from fantasy_baseball.utils.time_utils import next_tuesday
+
         assert next_tuesday(date(2026, 4, 16)) == date(2026, 4, 21)  # Thu
         assert next_tuesday(date(2026, 4, 17)) == date(2026, 4, 21)  # Fri
         assert next_tuesday(date(2026, 4, 18)) == date(2026, 4, 21)  # Sat
@@ -161,6 +169,7 @@ class TestNextTuesday:
     def test_crosses_month_boundary(self):
         """Sun Apr 26 → Tue Apr 28."""
         from fantasy_baseball.utils.time_utils import next_tuesday
+
         assert next_tuesday(date(2026, 4, 26)) == date(2026, 4, 28)
 
     def test_crosses_year_boundary(self):
@@ -168,6 +177,7 @@ class TestNextTuesday:
         Sun Dec 28 2025 → Tue Dec 30 2025 (within same year)
         Sun Dec 27 2020 → Tue Dec 29 2020 → check a Dec end-of-year."""
         from fantasy_baseball.utils.time_utils import next_tuesday
+
         # Tue Dec 29 → next Tue Jan 5
         assert next_tuesday(date(2026, 12, 29)) == date(2027, 1, 5)
 
@@ -175,30 +185,40 @@ class TestNextTuesday:
 class TestComputeFractionRemaining:
     def test_mid_season(self):
         from fantasy_baseball.utils.time_utils import compute_fraction_remaining
+
         season_start = date(2026, 4, 1)
         season_end = date(2026, 9, 30)  # 182 days total
-        today = date(2026, 7, 1)        # 91 days remaining
+        today = date(2026, 7, 1)  # 91 days remaining
         result = compute_fraction_remaining(season_start, season_end, today)
         assert result == pytest.approx(91 / 182)
 
     def test_today_after_season_end_returns_zero(self):
         from fantasy_baseball.utils.time_utils import compute_fraction_remaining
+
         result = compute_fraction_remaining(
-            date(2026, 4, 1), date(2026, 9, 30), date(2026, 10, 15),
+            date(2026, 4, 1),
+            date(2026, 9, 30),
+            date(2026, 10, 15),
         )
         assert result == 0.0
 
     def test_today_equals_season_start_returns_one(self):
         from fantasy_baseball.utils.time_utils import compute_fraction_remaining
+
         result = compute_fraction_remaining(
-            date(2026, 4, 1), date(2026, 9, 30), date(2026, 4, 1),
+            date(2026, 4, 1),
+            date(2026, 9, 30),
+            date(2026, 4, 1),
         )
         assert result == 1.0
 
     def test_zero_total_days_returns_zero(self):
         # Defensive: avoid divide-by-zero if season_end == season_start
         from fantasy_baseball.utils.time_utils import compute_fraction_remaining
+
         result = compute_fraction_remaining(
-            date(2026, 4, 1), date(2026, 4, 1), date(2026, 4, 1),
+            date(2026, 4, 1),
+            date(2026, 4, 1),
+            date(2026, 4, 1),
         )
         assert result == 0.0

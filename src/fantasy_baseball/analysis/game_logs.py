@@ -1,4 +1,5 @@
 """Fetch and cache player game logs from the MLB Stats API."""
+
 import json
 import logging
 from pathlib import Path
@@ -63,7 +64,9 @@ def fetch_player_game_log(mlbam_id: int, season: int, group: str = "hitting") ->
     return [parser(s) for s in splits]
 
 
-def fetch_all_game_logs(players: list[dict], season: int = 2025, cache_path: Path | None = None) -> dict[int, dict]:
+def fetch_all_game_logs(
+    players: list[dict], season: int = 2025, cache_path: Path | None = None
+) -> dict[int, dict]:
     """Fetch game logs for a list of players, with JSON caching.
 
     Args:

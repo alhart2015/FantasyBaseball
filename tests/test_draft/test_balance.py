@@ -6,18 +6,37 @@ from fantasy_baseball.utils.constants import Category
 
 
 def _make_hitter(name, r, hr, rbi, sb, avg, ab):
-    return pd.Series({
-        "name": name, "player_type": "hitter",
-        "r": r, "hr": hr, "rbi": rbi, "sb": sb, "avg": avg, "ab": ab, "h": int(avg * ab),
-    })
+    return pd.Series(
+        {
+            "name": name,
+            "player_type": "hitter",
+            "r": r,
+            "hr": hr,
+            "rbi": rbi,
+            "sb": sb,
+            "avg": avg,
+            "ab": ab,
+            "h": int(avg * ab),
+        }
+    )
 
 
 def _make_pitcher(name, w, k, sv, era, whip, ip):
-    return pd.Series({
-        "name": name, "player_type": "pitcher",
-        "w": w, "k": k, "sv": sv, "era": era, "whip": whip, "ip": ip,
-        "er": era * ip / 9, "bb": int(whip * ip * 0.3), "h_allowed": int(whip * ip * 0.7),
-    })
+    return pd.Series(
+        {
+            "name": name,
+            "player_type": "pitcher",
+            "w": w,
+            "k": k,
+            "sv": sv,
+            "era": era,
+            "whip": whip,
+            "ip": ip,
+            "er": era * ip / 9,
+            "bb": int(whip * ip * 0.3),
+            "h_allowed": int(whip * ip * 0.7),
+        }
+    )
 
 
 class TestCategoryBalance:
@@ -29,7 +48,7 @@ class TestCategoryBalance:
 
     def test_add_hitter(self):
         bal = CategoryBalance()
-        bal.add_player(_make_hitter("Judge", 110, 45, 120, 5, .291, 550))
+        bal.add_player(_make_hitter("Judge", 110, 45, 120, 5, 0.291, 550))
         totals = bal.get_totals()
         assert totals[Category.HR] == 45
         assert totals[Category.R] == 110
@@ -38,18 +57,18 @@ class TestCategoryBalance:
 
     def test_add_multiple_hitters_sums(self):
         bal = CategoryBalance()
-        bal.add_player(_make_hitter("Judge", 110, 45, 120, 5, .291, 550))
-        bal.add_player(_make_hitter("Betts", 105, 28, 85, 15, .287, 540))
+        bal.add_player(_make_hitter("Judge", 110, 45, 120, 5, 0.291, 550))
+        bal.add_player(_make_hitter("Betts", 105, 28, 85, 15, 0.287, 540))
         totals = bal.get_totals()
         assert totals[Category.HR] == 73
         assert totals[Category.SB] == 20
 
     def test_avg_is_weighted(self):
         bal = CategoryBalance()
-        bal.add_player(_make_hitter("Judge", 110, 45, 120, 5, .291, 550))
-        bal.add_player(_make_hitter("Betts", 105, 28, 85, 15, .287, 540))
+        bal.add_player(_make_hitter("Judge", 110, 45, 120, 5, 0.291, 550))
+        bal.add_player(_make_hitter("Betts", 105, 28, 85, 15, 0.287, 540))
         totals = bal.get_totals()
-        expected = (550 * .291 + 540 * .287) / (550 + 540)
+        expected = (550 * 0.291 + 540 * 0.287) / (550 + 540)
         assert totals[Category.AVG] == pytest.approx(expected, abs=0.001)
 
     def test_add_pitcher(self):
@@ -73,6 +92,6 @@ class TestCategoryBalance:
         bal = CategoryBalance()
         # Add 5 low-power, no-speed hitters to pass min threshold
         for i in range(5):
-            bal.add_player(_make_hitter(f"Slappy{i}", 40, 2, 30, 0, .260, 400))
+            bal.add_player(_make_hitter(f"Slappy{i}", 40, 2, 30, 0, 0.260, 400))
         warnings = bal.get_warnings()
         assert any("SB" in w for w in warnings)

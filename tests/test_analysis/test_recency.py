@@ -9,14 +9,16 @@ from fantasy_baseball.analysis.recency import (
 )
 
 PROJ_HITTER = {
-    "hr_per_pa": 0.040, "r_per_pa": 0.120, "rbi_per_pa": 0.110,
-    "sb_per_pa": 0.015, "avg": 0.270,
+    "hr_per_pa": 0.040,
+    "r_per_pa": 0.120,
+    "rbi_per_pa": 0.110,
+    "sb_per_pa": 0.015,
+    "avg": 0.270,
 }
 
 # 30 hot games: 4 PA each, 2 H, 1 HR, 1 R, 1 RBI, 0 SB per game
 HOT_GAMES = [
-    {"date": f"2025-06-{d:02d}", "pa": 4, "ab": 4, "h": 2, "hr": 1,
-     "r": 1, "rbi": 1, "sb": 0}
+    {"date": f"2025-06-{d:02d}", "pa": 4, "ab": 4, "h": 2, "hr": 1, "r": 1, "rbi": 1, "sb": 0}
     for d in range(1, 31)
 ]
 # Totals: 120 PA, 120 AB, 60 H, 30 HR, 30 R, 30 RBI, 0 SB
@@ -52,11 +54,31 @@ def test_exponential_decay_weights_recent_more():
     # First 15 days cold (0 hits), last 15 days hot (3 hits per game)
     mixed = []
     for d in range(1, 16):
-        mixed.append({"date": f"2025-06-{d:02d}", "pa": 4, "ab": 4,
-                       "h": 0, "hr": 0, "r": 0, "rbi": 0, "sb": 0})
+        mixed.append(
+            {
+                "date": f"2025-06-{d:02d}",
+                "pa": 4,
+                "ab": 4,
+                "h": 0,
+                "hr": 0,
+                "r": 0,
+                "rbi": 0,
+                "sb": 0,
+            }
+        )
     for d in range(16, 31):
-        mixed.append({"date": f"2025-06-{d:02d}", "pa": 4, "ab": 4,
-                       "h": 3, "hr": 1, "r": 1, "rbi": 2, "sb": 1})
+        mixed.append(
+            {
+                "date": f"2025-06-{d:02d}",
+                "pa": 4,
+                "ab": 4,
+                "h": 3,
+                "hr": 1,
+                "r": 1,
+                "rbi": 2,
+                "sb": 1,
+            }
+        )
     result_decay = predict_exponential_decay(PROJ_HITTER, mixed, "2025-07-01")
     # Flat reliability blend uses the same blending method but weights all games equally.
     # Decay should weight recent hot games more heavily, producing a higher HR/PA estimate.
@@ -66,8 +88,9 @@ def test_exponential_decay_weights_recent_more():
 
 def test_fixed_blend_no_games_falls_back():
     """If no games in the 30-day window, fall back to projection."""
-    old_games = [{"date": "2025-03-15", "pa": 4, "ab": 4, "h": 2,
-                  "hr": 1, "r": 1, "rbi": 1, "sb": 0}]
+    old_games = [
+        {"date": "2025-03-15", "pa": 4, "ab": 4, "h": 2, "hr": 1, "r": 1, "rbi": 1, "sb": 0}
+    ]
     result = predict_fixed_blend(PROJ_HITTER, old_games, "2025-07-01")
     assert result["hr_per_pa"] == pytest.approx(0.040)
 

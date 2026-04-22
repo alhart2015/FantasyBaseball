@@ -86,9 +86,7 @@ def compute_effective_date(end_date: str) -> date:
     return next_tuesday(date.fromisoformat(end_date))
 
 
-def compute_fraction_remaining(
-    season_start: date, season_end: date, today: date
-) -> float:
+def compute_fraction_remaining(season_start: date, season_end: date, today: date) -> float:
     """Return the fraction of the regular season still ahead of ``today``.
 
     Used for SD scaling on projected standings (``sqrt`` damps variance

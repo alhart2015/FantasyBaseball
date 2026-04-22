@@ -5,6 +5,7 @@ class TestRosterEntry:
     def test_construction(self):
         from fantasy_baseball.models.positions import Position
         from fantasy_baseball.models.roster import RosterEntry
+
         entry = RosterEntry(
             name="Ivan Herrera",
             positions=[Position.C, Position.UTIL],
@@ -19,6 +20,7 @@ class TestRosterEntry:
     def test_default_status_and_yahoo_id(self):
         from fantasy_baseball.models.positions import Position
         from fantasy_baseball.models.roster import RosterEntry
+
         entry = RosterEntry(
             name="X",
             positions=[Position.OF],
@@ -31,11 +33,13 @@ class TestRosterEntry:
 class TestRoster:
     def _make(self, *entries):
         from fantasy_baseball.models.roster import Roster
+
         return Roster(effective_date=date(2026, 4, 14), entries=list(entries))
 
     def _entry(self, name, slot, eligible=None):
         from fantasy_baseball.models.positions import Position
         from fantasy_baseball.models.roster import RosterEntry
+
         slot_p = Position.parse(slot) if isinstance(slot, str) else slot
         eligible_list = (
             [Position.parse(p) if isinstance(p, str) else p for p in eligible]
@@ -43,7 +47,9 @@ class TestRoster:
             else [slot_p]
         )
         return RosterEntry(
-            name=name, positions=eligible_list, selected_position=slot_p,
+            name=name,
+            positions=eligible_list,
+            selected_position=slot_p,
         )
 
     def test_empty_roster(self):
@@ -71,6 +77,7 @@ class TestRoster:
 
     def test_by_slot_groups_by_selected_position(self):
         from fantasy_baseball.models.positions import Position
+
         roster = self._make(
             self._entry("A", "C"),
             self._entry("B", "OF"),

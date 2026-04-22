@@ -61,6 +61,7 @@ def main():
         sys.exit(1)
 
     from upstash_redis import Redis
+
     redis = Redis(url=url, token=token)
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)

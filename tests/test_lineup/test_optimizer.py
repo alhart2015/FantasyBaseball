@@ -13,7 +13,8 @@ CATEGORIES = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
 def _hitter(name, positions, r=70, hr=20, rbi=70, sb=10, h=120, ab=450, pa=500):
     avg = (h / ab) if ab else 0
     return Player(
-        name=name, player_type=PlayerType.HITTER,
+        name=name,
+        player_type=PlayerType.HITTER,
         positions=[Position.parse(p) for p in positions],
         rest_of_season=HitterStats(pa=pa, ab=ab, h=h, r=r, hr=hr, rbi=rbi, sb=sb, avg=avg),
         selected_position=Position.parse(positions[0]),
@@ -22,11 +23,19 @@ def _hitter(name, positions, r=70, hr=20, rbi=70, sb=10, h=120, ab=450, pa=500):
 
 def _pitcher(name, positions, ip=180, w=12, k=180, sv=0, era=3.50, whip=1.20):
     return Player(
-        name=name, player_type=PlayerType.PITCHER,
+        name=name,
+        player_type=PlayerType.PITCHER,
         positions=[Position.parse(p) for p in positions],
         rest_of_season=PitcherStats(
-            ip=ip, w=w, k=k, sv=sv, era=era, whip=whip,
-            er=era * ip / 9, bb=int(whip * ip * 0.3), h_allowed=int(whip * ip * 0.7),
+            ip=ip,
+            w=w,
+            k=k,
+            sv=sv,
+            era=era,
+            whip=whip,
+            er=era * ip / 9,
+            bb=int(whip * ip * 0.3),
+            h_allowed=int(whip * ip * 0.7),
         ),
         selected_position=Position.parse(positions[0]),
     )
@@ -42,7 +51,18 @@ def _standing(name: str, **overrides) -> dict:
     return {"name": name, "team_key": "", "rank": 0, "stats": stats}
 
 
-SMALL_ROSTER_SLOTS = {"C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "OF": 3, "UTIL": 1, "BN": 2, "P": 9, "IL": 0}
+SMALL_ROSTER_SLOTS = {
+    "C": 1,
+    "1B": 1,
+    "2B": 1,
+    "3B": 1,
+    "SS": 1,
+    "OF": 3,
+    "UTIL": 1,
+    "BN": 2,
+    "P": 9,
+    "IL": 0,
+}
 
 
 class TestBasic:
@@ -64,8 +84,10 @@ class TestBasic:
             _standing("Rival", R=1, HR=1, RBI=1, SB=1, AVG=0),
         ]
         lineup = optimize_hitter_lineup(
-            hitters=hitters, full_roster=hitters,
-            projected_standings=standings, team_name="Us",
+            hitters=hitters,
+            full_roster=hitters,
+            projected_standings=standings,
+            team_name="Us",
             roster_slots=SMALL_ROSTER_SLOTS,
         )
         assert isinstance(lineup, list)
@@ -94,13 +116,15 @@ class TestERotoMaximization:
         full = [a, b, c]
 
         standings = [
-            _standing("Us", R=0, HR=100, RBI=0, SB=0, AVG=0),   # overwritten by loop
+            _standing("Us", R=0, HR=100, RBI=0, SB=0, AVG=0),  # overwritten by loop
             _standing("Rival", R=0, HR=30, RBI=0, SB=20, AVG=0),
             _standing("Third", R=0, HR=20, RBI=0, SB=15, AVG=0),
         ]
         lineup = optimize_hitter_lineup(
-            hitters=full, full_roster=full,
-            projected_standings=standings, team_name="Us",
+            hitters=full,
+            full_roster=full,
+            projected_standings=standings,
+            team_name="Us",
             roster_slots=slots,
         )
         assert len(lineup) == 1
@@ -118,8 +142,10 @@ class TestERotoMaximization:
             _standing("Rival", R=1, HR=1),
         ]
         lineup = optimize_hitter_lineup(
-            hitters=hitters, full_roster=hitters,
-            projected_standings=standings, team_name="Us",
+            hitters=hitters,
+            full_roster=hitters,
+            projected_standings=standings,
+            team_name="Us",
             roster_slots=slots,
         )
         for a in lineup:
@@ -136,8 +162,10 @@ class TestERotoMaximization:
         slots = {"C": 1, "OF": 1, "BN": 1, "P": 9, "IL": 0}
         standings = [_standing("Us"), _standing("Rival", R=1, HR=1, RBI=1)]
         lineup = optimize_hitter_lineup(
-            hitters=hitters, full_roster=hitters,
-            projected_standings=standings, team_name="Us",
+            hitters=hitters,
+            full_roster=hitters,
+            projected_standings=standings,
+            team_name="Us",
             roster_slots=slots,
         )
         slots_assigned = {a.slot for a in lineup}
@@ -156,8 +184,10 @@ class TestERotoMaximization:
         slots = {"OF": 1, "BN": 1, "P": 9, "IL": 0}
         standings = [_standing("Us"), _standing("Rival", R=1, HR=1)]
         lineup = optimize_hitter_lineup(
-            hitters=active, full_roster=[*active, il],
-            projected_standings=standings, team_name="Us",
+            hitters=active,
+            full_roster=[*active, il],
+            projected_standings=standings,
+            team_name="Us",
             roster_slots=slots,
         )
         names = {a.name for a in lineup}
@@ -178,8 +208,10 @@ class TestERotoMaximization:
             _standing("Third", R=0, HR=20, RBI=0, SB=15, AVG=0),
         ]
         lineup = optimize_hitter_lineup(
-            hitters=[a, b, c], full_roster=[a, b, c],
-            projected_standings=standings, team_name="Us",
+            hitters=[a, b, c],
+            full_roster=[a, b, c],
+            projected_standings=standings,
+            team_name="Us",
             roster_slots=slots,
         )
         assert len(lineup) == 1
@@ -199,8 +231,10 @@ class TestERotoMaximization:
             _standing("Rival", R=0, HR=0, RBI=0, SB=0, AVG=0),
         ]
         lineup = optimize_hitter_lineup(
-            hitters=[only], full_roster=[only],
-            projected_standings=standings, team_name="Us",
+            hitters=[only],
+            full_roster=[only],
+            projected_standings=standings,
+            team_name="Us",
             roster_slots=slots,
         )
         assert len(lineup) == 1
@@ -219,8 +253,11 @@ class TestPitcherOptimizer:
         ]
         standings = [_standing("Us"), _standing("Rival", W=1, K=1, ERA=0.1, WHIP=0.1)]
         starters, bench = optimize_pitcher_lineup(
-            pitchers=pitchers, full_roster=pitchers,
-            projected_standings=standings, team_name="Us", slots=3,
+            pitchers=pitchers,
+            full_roster=pitchers,
+            projected_standings=standings,
+            team_name="Us",
+            slots=3,
         )
         assert len(starters) == 3
         assert len(bench) == 1
@@ -240,21 +277,26 @@ class TestPitcherOptimizer:
             _standing("Rival", W=0, K=0, SV=20, ERA=0, WHIP=0),
         ]
         starters, _bench = optimize_pitcher_lineup(
-            pitchers=pitchers, full_roster=pitchers,
-            projected_standings=standings, team_name="Us", slots=slots_cfg,
+            pitchers=pitchers,
+            full_roster=pitchers,
+            projected_standings=standings,
+            team_name="Us",
+            slots=slots_cfg,
         )
         assert len(starters) == 1
         assert starters[0].name == "C"
 
     def test_roto_delta_non_negative_for_every_starter(self):
         pitchers = [
-            _pitcher(f"P{i}", ["SP"], ip=180 - i*10, w=15 - i, k=200 - i*20)
-            for i in range(5)
+            _pitcher(f"P{i}", ["SP"], ip=180 - i * 10, w=15 - i, k=200 - i * 20) for i in range(5)
         ]
         standings = [_standing("Us"), _standing("Rival", W=1, K=1)]
         starters, _ = optimize_pitcher_lineup(
-            pitchers=pitchers, full_roster=pitchers,
-            projected_standings=standings, team_name="Us", slots=3,
+            pitchers=pitchers,
+            full_roster=pitchers,
+            projected_standings=standings,
+            team_name="Us",
+            slots=3,
         )
         for s in starters:
             assert s.roto_delta >= 0
@@ -272,8 +314,11 @@ class TestPitcherOptimizer:
             _standing("Rival", W=0, K=0, SV=20, ERA=0, WHIP=0),
         ]
         starters, _ = optimize_pitcher_lineup(
-            pitchers=pitchers, full_roster=pitchers,
-            projected_standings=standings, team_name="Us", slots=1,
+            pitchers=pitchers,
+            full_roster=pitchers,
+            projected_standings=standings,
+            team_name="Us",
+            slots=1,
         )
         assert len(starters) == 1
         assert starters[0].name == "C"

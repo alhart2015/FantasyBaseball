@@ -60,16 +60,42 @@ def test_active_page_highlighted(client):
     with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
         resp = client.get("/standings")
     html = resp.data.decode()
-    assert 'active' in html
+    assert "active" in html
 
 
 def _mock_standings():
     """Canonical Standings.to_json() shape (post-refactor cache payload)."""
     teams = [
-        ("Hart of the Order", {"R": 300, "HR": 90, "RBI": 290, "SB": 50, "AVG": 0.270,
-                               "W": 35, "K": 600, "SV": 25, "ERA": 3.50, "WHIP": 1.18}),
-        ("SkeleThor", {"R": 310, "HR": 85, "RBI": 295, "SB": 40, "AVG": 0.265,
-                       "W": 38, "K": 580, "SV": 30, "ERA": 3.40, "WHIP": 1.15}),
+        (
+            "Hart of the Order",
+            {
+                "R": 300,
+                "HR": 90,
+                "RBI": 290,
+                "SB": 50,
+                "AVG": 0.270,
+                "W": 35,
+                "K": 600,
+                "SV": 25,
+                "ERA": 3.50,
+                "WHIP": 1.18,
+            },
+        ),
+        (
+            "SkeleThor",
+            {
+                "R": 310,
+                "HR": 85,
+                "RBI": 295,
+                "SB": 40,
+                "AVG": 0.265,
+                "W": 38,
+                "K": 580,
+                "SV": 30,
+                "ERA": 3.40,
+                "WHIP": 1.15,
+            },
+        ),
     ]
     return {
         "effective_date": "2026-04-01",
@@ -81,8 +107,10 @@ def _mock_standings():
 
 
 def test_standings_renders_table_with_data(client):
-    with patch("fantasy_baseball.web.season_routes.read_cache") as mock_cache, \
-         patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache") as mock_cache,
+        patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
+    ):
         mock_cache.side_effect = lambda k: _mock_standings() if k == CacheKey.STANDINGS else {}
         mock_cfg.return_value.team_name = "Hart of the Order"
         resp = client.get("/standings")
@@ -118,20 +146,50 @@ def test_full_standings_page_with_cached_data(client, tmp_path):
         standings = {
             "effective_date": "2026-04-01",
             "teams": [
-                {"name": "Hart of the Order", "team_key": "k1", "rank": 1,
-                 "stats": {"R": 300, "HR": 90, "RBI": 290, "SB": 50, "AVG": 0.270,
-                           "W": 35, "K": 600, "SV": 25, "ERA": 3.50, "WHIP": 1.18}},
-                {"name": "SkeleThor", "team_key": "k2", "rank": 2,
-                 "stats": {"R": 310, "HR": 85, "RBI": 295, "SB": 40, "AVG": 0.265,
-                           "W": 38, "K": 580, "SV": 30, "ERA": 3.40, "WHIP": 1.15}},
+                {
+                    "name": "Hart of the Order",
+                    "team_key": "k1",
+                    "rank": 1,
+                    "stats": {
+                        "R": 300,
+                        "HR": 90,
+                        "RBI": 290,
+                        "SB": 50,
+                        "AVG": 0.270,
+                        "W": 35,
+                        "K": 600,
+                        "SV": 25,
+                        "ERA": 3.50,
+                        "WHIP": 1.18,
+                    },
+                },
+                {
+                    "name": "SkeleThor",
+                    "team_key": "k2",
+                    "rank": 2,
+                    "stats": {
+                        "R": 310,
+                        "HR": 85,
+                        "RBI": 295,
+                        "SB": 40,
+                        "AVG": 0.265,
+                        "W": 38,
+                        "K": 580,
+                        "SV": 30,
+                        "ERA": 3.40,
+                        "WHIP": 1.15,
+                    },
+                },
             ],
         }
         season_data.write_cache(CacheKey.STANDINGS, standings, tmp_path)
         season_data.write_cache(CacheKey.META, {"last_refresh": "8:32 AM", "week": "3"}, tmp_path)
 
-        with patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc, \
-             patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm, \
-             patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+        with (
+            patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc,
+            patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm,
+            patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
+        ):
             mock_rc.side_effect = lambda k: season_data.read_cache(k, tmp_path)
             mock_rm.return_value = season_data.read_meta(tmp_path)
             mock_cfg.return_value.team_name = "Hart of the Order"
@@ -155,18 +213,30 @@ def test_full_lineup_page_with_cached_data(client, tmp_path):
 
     try:
         roster = [
-            {"name": "Adley Rutschman", "positions": ["C"], "selected_position": "C",
-             "player_id": "123", "status": ""},
-            {"name": "Corbin Burnes", "positions": ["SP"], "selected_position": "P",
-             "player_id": "456", "status": ""},
+            {
+                "name": "Adley Rutschman",
+                "positions": ["C"],
+                "selected_position": "C",
+                "player_id": "123",
+                "status": "",
+            },
+            {
+                "name": "Corbin Burnes",
+                "positions": ["SP"],
+                "selected_position": "P",
+                "player_id": "456",
+                "status": "",
+            },
         ]
         optimal = {"hitters": {}, "pitchers": {}, "moves": []}
         season_data.write_cache(CacheKey.ROSTER, roster, tmp_path)
         season_data.write_cache(CacheKey.LINEUP_OPTIMAL, optimal, tmp_path)
         season_data.write_cache(CacheKey.META, {"last_refresh": "9:00 AM"}, tmp_path)
 
-        with patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc, \
-             patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm:
+        with (
+            patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc,
+            patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm,
+        ):
             mock_rc.side_effect = lambda k: season_data.read_cache(k, tmp_path)
             mock_rm.return_value = season_data.read_meta(tmp_path)
 
@@ -205,22 +275,28 @@ def test_standings_passes_baseline_meta_to_template(client, tmp_path):
     old_cache_dir = season_data.CACHE_DIR
     season_data.CACHE_DIR = tmp_path
     try:
-        season_data.write_cache(CacheKey.MONTE_CARLO, {
-            "base": {"team_results": {}, "category_risk": {}},
-            "with_management": {"team_results": {}, "category_risk": {}},
-            "baseline_meta": {
-                "frozen_at": "2026-04-17T00:00:00Z",
-                "roster_date": "2026-03-27",
-                "season_year": 2026,
+        season_data.write_cache(
+            CacheKey.MONTE_CARLO,
+            {
+                "base": {"team_results": {}, "category_risk": {}},
+                "with_management": {"team_results": {}, "category_risk": {}},
+                "baseline_meta": {
+                    "frozen_at": "2026-04-17T00:00:00Z",
+                    "roster_date": "2026-03-27",
+                    "season_year": 2026,
+                },
+                "rest_of_season": None,
+                "rest_of_season_with_management": None,
             },
-            "rest_of_season": None,
-            "rest_of_season_with_management": None,
-        }, tmp_path)
+            tmp_path,
+        )
         season_data.write_cache(CacheKey.STANDINGS, _mock_standings(), tmp_path)
 
-        with patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc, \
-             patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm, \
-             patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+        with (
+            patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc,
+            patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm,
+            patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
+        ):
             mock_rc.side_effect = lambda k: season_data.read_cache(k, tmp_path)
             mock_rm.return_value = season_data.read_meta(tmp_path)
             mock_cfg.return_value.team_name = "Team 01"

@@ -6,18 +6,21 @@ import pytest
 def _entry(name: str, slot: str = "OF"):
     from fantasy_baseball.models.positions import Position
     from fantasy_baseball.models.roster import RosterEntry
+
     p = Position.parse(slot)
     return RosterEntry(name=name, positions=[p], selected_position=p)
 
 
 def _roster(d: date, *names: str):
     from fantasy_baseball.models.roster import Roster
+
     return Roster(effective_date=d, entries=[_entry(n) for n in names])
 
 
 class TestTeamBasics:
     def test_team_construction(self):
         from fantasy_baseball.models.team import Team
+
         team = Team(name="Hart of the Order", team_key="k1", rosters=[])
         assert team.name == "Hart of the Order"
         assert team.team_key == "k1"
@@ -27,6 +30,7 @@ class TestTeamBasics:
 class TestLatestRoster:
     def test_latest_roster_returns_max_effective_date(self):
         from fantasy_baseball.models.team import Team
+
         r1 = _roster(date(2026, 4, 7), "Alpha")
         r2 = _roster(date(2026, 4, 14), "Beta")
         team = Team("T", "k", [r1, r2])
@@ -35,6 +39,7 @@ class TestLatestRoster:
     def test_latest_roster_works_when_unsorted(self):
         """Team does not assume rosters are pre-sorted."""
         from fantasy_baseball.models.team import Team
+
         r1 = _roster(date(2026, 4, 7), "Alpha")
         r2 = _roster(date(2026, 4, 14), "Beta")
         team = Team("T", "k", [r2, r1])  # out of order on purpose
@@ -42,6 +47,7 @@ class TestLatestRoster:
 
     def test_latest_roster_raises_on_empty(self):
         from fantasy_baseball.models.team import Team
+
         team = Team("T", "k", [])
         with pytest.raises(ValueError, match="no rosters"):
             team.latest_roster()
@@ -50,11 +56,16 @@ class TestLatestRoster:
 class TestRosterAsOf:
     def _team(self):
         from fantasy_baseball.models.team import Team
-        return Team("T", "k", [
-            _roster(date(2026, 3, 31), "Opening Day Roster"),
-            _roster(date(2026, 4, 7), "Week 2"),
-            _roster(date(2026, 4, 14), "Week 3"),
-        ])
+
+        return Team(
+            "T",
+            "k",
+            [
+                _roster(date(2026, 3, 31), "Opening Day Roster"),
+                _roster(date(2026, 4, 7), "Week 2"),
+                _roster(date(2026, 4, 14), "Week 3"),
+            ],
+        )
 
     def test_exact_match(self):
         team = self._team()
@@ -81,6 +92,7 @@ class TestRosterAsOf:
 
     def test_empty_team_returns_none(self):
         from fantasy_baseball.models.team import Team
+
         team = Team("T", "k", [])
         assert team.roster_as_of(date(2026, 4, 11)) is None
 
@@ -89,14 +101,20 @@ class TestOwnershipPeriods:
     def _team_with_history(self):
         """Team that swapped Alpha -> Beta at the 04-14 lock."""
         from fantasy_baseball.models.team import Team
-        return Team("T", "k", [
-            _roster(date(2026, 3, 31), "Alpha", "Constant"),
-            _roster(date(2026, 4, 7), "Alpha", "Constant"),
-            _roster(date(2026, 4, 14), "Beta", "Constant"),
-        ])
+
+        return Team(
+            "T",
+            "k",
+            [
+                _roster(date(2026, 3, 31), "Alpha", "Constant"),
+                _roster(date(2026, 4, 7), "Alpha", "Constant"),
+                _roster(date(2026, 4, 14), "Beta", "Constant"),
+            ],
+        )
 
     def test_empty_team_returns_empty(self):
         from fantasy_baseball.models.team import Team
+
         team = Team("T", "k", [])
         periods = team.ownership_periods(
             season_start=date(2026, 3, 31),
@@ -134,10 +152,15 @@ class TestOwnershipPeriods:
     def test_ownership_periods_clips_to_today(self):
         """Future-dated snapshots don't contribute days past `today`."""
         from fantasy_baseball.models.team import Team
-        team = Team("T", "k", [
-            _roster(date(2026, 4, 7), "Alpha"),
-            _roster(date(2026, 4, 14), "Beta"),  # future relative to today
-        ])
+
+        team = Team(
+            "T",
+            "k",
+            [
+                _roster(date(2026, 4, 7), "Alpha"),
+                _roster(date(2026, 4, 14), "Beta"),  # future relative to today
+            ],
+        )
         periods = team.ownership_periods(
             season_start=date(2026, 3, 31),
             season_end=date(2026, 10, 1),
@@ -151,18 +174,21 @@ class TestOwnershipPeriods:
     def test_ownership_periods_clips_to_season_window(self):
         """Preseason snapshots don't contribute days before season_start."""
         from fantasy_baseball.models.team import Team
-        team = Team("T", "k", [
-            _roster(date(2026, 3, 15), "Preseason"),  # before season
-            _roster(date(2026, 4, 7), "In Season"),
-        ])
+
+        team = Team(
+            "T",
+            "k",
+            [
+                _roster(date(2026, 3, 15), "Preseason"),  # before season
+                _roster(date(2026, 4, 7), "In Season"),
+            ],
+        )
         periods = team.ownership_periods(
             season_start=date(2026, 3, 31),
             season_end=date(2026, 10, 1),
             today=date(2026, 4, 20),
         )
-        by_name = {
-            e.name: (start, end) for e, start, end in periods
-        }
+        by_name = {e.name: (start, end) for e, start, end in periods}
         # Preseason snapshot's window gets clipped to [season_start, 04-07)
         assert by_name["Preseason"] == (date(2026, 3, 31), date(2026, 4, 7))
         assert by_name["In Season"] == (date(2026, 4, 7), date(2026, 4, 20))

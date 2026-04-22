@@ -44,10 +44,7 @@ def test_create_tables_creates_ros_blended_projections(tmp_path):
     assert "ros_blended_projections" in tables
 
     # Verify the PRIMARY KEY columns exist via pragma
-    cols = {
-        row[1]
-        for row in conn.execute("PRAGMA table_info(ros_blended_projections)")
-    }
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(ros_blended_projections)")}
     assert "year" in cols
     assert "snapshot_date" in cols
     assert "fg_id" in cols
@@ -72,11 +69,11 @@ def test_load_raw_projections(tmp_path):
     csv_dir = tmp_path / "2026"
     csv_dir.mkdir()
     (csv_dir / "steamer-hitters.csv").write_text(
-        'Name,Team,PA,AB,H,R,HR,RBI,SB,CS,BB,SO,AVG,OBP,SLG,OPS,ISO,BABIP,wOBA,wRC+,WAR,ADP,G,PlayerId,MLBAMID\n'
+        "Name,Team,PA,AB,H,R,HR,RBI,SB,CS,BB,SO,AVG,OBP,SLG,OPS,ISO,BABIP,wOBA,wRC+,WAR,ADP,G,PlayerId,MLBAMID\n"
         '"James Wood","WSN",600,520,140,85,26,80,15,5,70,150,0.269,0.350,0.480,0.830,0.211,0.320,0.370,130,4.0,50.0,145,"29518",695578\n'
     )
     (csv_dir / "steamer-pitchers.csv").write_text(
-        'Name,Team,W,L,SV,ERA,G,GS,IP,H,R,ER,HR,BB,SO,K/9,BB/9,K/BB,HR/9,WHIP,FIP,WAR,ADP,PlayerId,MLBAMID\n'
+        "Name,Team,W,L,SV,ERA,G,GS,IP,H,R,ER,HR,BB,SO,K/9,BB/9,K/BB,HR/9,WHIP,FIP,WAR,ADP,PlayerId,MLBAMID\n"
         '"Corbin Burnes","BAL",14,7,0,3.20,32,32,200,170,75,71,20,50,220,9.9,2.3,4.4,0.9,1.10,3.10,5.0,15.0,"19361",669203\n'
     )
 
@@ -100,10 +97,10 @@ def test_load_raw_projections(tmp_path):
         "SELECT name, w, k, era, fg_id, h_allowed, hr_p, bb_p, player_type FROM raw_projections WHERE name='Corbin Burnes'"
     ).fetchone()
     assert pitcher["w"] == 14
-    assert pitcher["k"] == 220      # SO maps to k for pitchers
+    assert pitcher["k"] == 220  # SO maps to k for pitchers
     assert pitcher["h_allowed"] == 170  # H maps to h_allowed for pitchers
-    assert pitcher["hr_p"] == 20    # HR maps to hr_p for pitchers
-    assert pitcher["bb_p"] == 50    # BB maps to bb_p for pitchers
+    assert pitcher["hr_p"] == 20  # HR maps to hr_p for pitchers
+    assert pitcher["bb_p"] == 50  # BB maps to bb_p for pitchers
     assert pitcher["player_type"] == "pitcher"
 
     conn.close()
@@ -113,7 +110,7 @@ def test_load_raw_projections_handles_year_suffix(tmp_path):
     csv_dir = tmp_path / "2025"
     csv_dir.mkdir()
     (csv_dir / "steamer-hitters-2025.csv").write_text(
-        'Name,Team,PA,AB,H,R,HR,RBI,SB,AVG,G,PlayerId,MLBAMID\n'
+        "Name,Team,PA,AB,H,R,HR,RBI,SB,AVG,G,PlayerId,MLBAMID\n"
         '"Test Player","NYY",500,430,110,70,20,65,10,0.256,130,"12345",123456\n'
     )
 
@@ -123,7 +120,9 @@ def test_load_raw_projections_handles_year_suffix(tmp_path):
     create_tables(conn)
     load_raw_projections(conn, tmp_path)
 
-    row = conn.execute("SELECT system, year FROM raw_projections WHERE name='Test Player'").fetchone()
+    row = conn.execute(
+        "SELECT system, year FROM raw_projections WHERE name='Test Player'"
+    ).fetchone()
     assert row["system"] == "steamer"
     assert row["year"] == 2025
     conn.close()
@@ -134,8 +133,7 @@ def test_load_raw_projections_insert_or_ignore(tmp_path):
     csv_dir = tmp_path / "2026"
     csv_dir.mkdir()
     (csv_dir / "steamer-hitters.csv").write_text(
-        'Name,Team,PA,HR,G,PlayerId,MLBAMID\n'
-        '"Test Player","NYY",500,20,130,"99999",999999\n'
+        'Name,Team,PA,HR,G,PlayerId,MLBAMID\n"Test Player","NYY",500,20,130,"99999",999999\n'
     )
 
     db_path = tmp_path / "test.db"
@@ -155,8 +153,7 @@ def test_load_raw_projections_date_suffix(tmp_path):
     csv_dir = tmp_path / "2027"
     csv_dir.mkdir()
     (csv_dir / "zips-hitters-2027-proj-from-2026-03-25.csv").write_text(
-        'Name,Team,PA,HR,G,PlayerId,MLBAMID\n'
-        '"Future Player","SEA",480,18,125,"77777",777777\n'
+        'Name,Team,PA,HR,G,PlayerId,MLBAMID\n"Future Player","SEA",480,18,125,"77777",777777\n'
     )
 
     db_path = tmp_path / "test.db"
@@ -165,7 +162,9 @@ def test_load_raw_projections_date_suffix(tmp_path):
     create_tables(conn)
     load_raw_projections(conn, tmp_path)
 
-    row = conn.execute("SELECT system, year, player_type FROM raw_projections WHERE name='Future Player'").fetchone()
+    row = conn.execute(
+        "SELECT system, year, player_type FROM raw_projections WHERE name='Future Player'"
+    ).fetchone()
     assert row["system"] == "zips"
     assert row["year"] == 2027
     assert row["player_type"] == "hitter"
@@ -176,11 +175,11 @@ def test_load_blended_projections(tmp_path):
     csv_dir = tmp_path / "2026"
     csv_dir.mkdir()
     (csv_dir / "steamer-hitters.csv").write_text(
-        'Name,Team,PA,AB,H,R,HR,RBI,SB,CS,BB,SO,AVG,OBP,SLG,OPS,WAR,ADP,G,PlayerId,MLBAMID\n'
+        "Name,Team,PA,AB,H,R,HR,RBI,SB,CS,BB,SO,AVG,OBP,SLG,OPS,WAR,ADP,G,PlayerId,MLBAMID\n"
         '"James Wood","WSN",600,520,140,85,26,80,15,5,70,150,0.269,0.350,0.480,0.830,4.0,50.0,145,"29518",695578\n'
     )
     (csv_dir / "steamer-pitchers.csv").write_text(
-        'Name,Team,W,L,SV,ERA,G,GS,IP,H,R,ER,HR,BB,SO,K/9,BB/9,WHIP,FIP,WAR,ADP,PlayerId,MLBAMID\n'
+        "Name,Team,W,L,SV,ERA,G,GS,IP,H,R,ER,HR,BB,SO,K/9,BB/9,WHIP,FIP,WAR,ADP,PlayerId,MLBAMID\n"
         '"Corbin Burnes","BAL",14,7,0,3.20,32,32,200,170,75,71,20,50,220,9.9,2.3,1.10,3.10,5.0,15.0,"19361",669203\n'
     )
 
@@ -211,11 +210,11 @@ def test_load_blended_projections_insert_or_replace(tmp_path):
     csv_dir = tmp_path / "2026"
     csv_dir.mkdir()
     (csv_dir / "steamer-hitters.csv").write_text(
-        'Name,Team,PA,AB,H,R,HR,RBI,SB,CS,BB,SO,AVG,OBP,SLG,OPS,WAR,ADP,G,PlayerId,MLBAMID\n'
+        "Name,Team,PA,AB,H,R,HR,RBI,SB,CS,BB,SO,AVG,OBP,SLG,OPS,WAR,ADP,G,PlayerId,MLBAMID\n"
         '"James Wood","WSN",600,520,140,85,26,80,15,5,70,150,0.269,0.350,0.480,0.830,4.0,50.0,145,"29518",695578\n'
     )
     (csv_dir / "steamer-pitchers.csv").write_text(
-        'Name,Team,W,L,SV,ERA,G,GS,IP,H,R,ER,HR,BB,SO,K/9,BB/9,WHIP,FIP,WAR,ADP,PlayerId,MLBAMID\n'
+        "Name,Team,W,L,SV,ERA,G,GS,IP,H,R,ER,HR,BB,SO,K/9,BB/9,WHIP,FIP,WAR,ADP,PlayerId,MLBAMID\n"
         '"Corbin Burnes","BAL",14,7,0,3.20,32,32,200,170,75,71,20,50,220,9.9,2.3,1.10,3.10,5.0,15.0,"19361",669203\n'
     )
 
@@ -224,7 +223,9 @@ def test_load_blended_projections_insert_or_replace(tmp_path):
     conn.row_factory = sqlite3.Row
     create_tables(conn)
     load_blended_projections(conn, tmp_path, ["steamer"], {"steamer": 1.0})
-    load_blended_projections(conn, tmp_path, ["steamer"], {"steamer": 1.0})  # second call must not raise
+    load_blended_projections(
+        conn, tmp_path, ["steamer"], {"steamer": 1.0}
+    )  # second call must not raise
 
     rows = conn.execute("SELECT * FROM blended_projections WHERE year=2026").fetchall()
     assert len(rows) == 2  # one hitter + one pitcher
@@ -236,11 +237,11 @@ def test_load_blended_projections_skips_bad_year(tmp_path):
     good_dir = tmp_path / "2026"
     good_dir.mkdir()
     (good_dir / "steamer-hitters.csv").write_text(
-        'Name,Team,PA,AB,H,R,HR,RBI,SB,CS,BB,SO,AVG,OBP,SLG,OPS,WAR,ADP,G,PlayerId,MLBAMID\n'
+        "Name,Team,PA,AB,H,R,HR,RBI,SB,CS,BB,SO,AVG,OBP,SLG,OPS,WAR,ADP,G,PlayerId,MLBAMID\n"
         '"James Wood","WSN",600,520,140,85,26,80,15,5,70,150,0.269,0.350,0.480,0.830,4.0,50.0,145,"29518",695578\n'
     )
     (good_dir / "steamer-pitchers.csv").write_text(
-        'Name,Team,W,L,SV,ERA,G,GS,IP,H,R,ER,HR,BB,SO,K/9,BB/9,WHIP,FIP,WAR,ADP,PlayerId,MLBAMID\n'
+        "Name,Team,W,L,SV,ERA,G,GS,IP,H,R,ER,HR,BB,SO,K/9,BB/9,WHIP,FIP,WAR,ADP,PlayerId,MLBAMID\n"
         '"Corbin Burnes","BAL",14,7,0,3.20,32,32,200,170,75,71,20,50,220,9.9,2.3,1.10,3.10,5.0,15.0,"19361",669203\n'
     )
 
@@ -248,7 +249,7 @@ def test_load_blended_projections_skips_bad_year(tmp_path):
     bad_dir = tmp_path / "2027"
     bad_dir.mkdir()
     (bad_dir / "zips-hitters.csv").write_text(
-        'Name,Team,PA,AB,H,R,HR,RBI,SB,AVG,G,PlayerId,MLBAMID\n'
+        "Name,Team,PA,AB,H,R,HR,RBI,SB,AVG,G,PlayerId,MLBAMID\n"
         '"Future Player","SEA",480,420,110,60,18,65,8,0.262,125,"77777",777777\n'
     )
 
@@ -292,9 +293,23 @@ def test_load_standings(tmp_path):
     standings = {
         "2023": {
             "standings": [
-                {"name": "Hart of the Order", "team_key": "k1", "rank": 1,
-                 "stats": {"R": 900, "HR": 250, "RBI": 880, "SB": 150, "AVG": 0.260,
-                           "W": 80, "K": 1400, "SV": 90, "ERA": 3.60, "WHIP": 1.20}},
+                {
+                    "name": "Hart of the Order",
+                    "team_key": "k1",
+                    "rank": 1,
+                    "stats": {
+                        "R": 900,
+                        "HR": 250,
+                        "RBI": 880,
+                        "SB": 150,
+                        "AVG": 0.260,
+                        "W": 80,
+                        "K": 1400,
+                        "SV": 90,
+                        "ERA": 3.60,
+                        "WHIP": 1.20,
+                    },
+                },
             ]
         }
     }
@@ -325,7 +340,7 @@ def test_load_weekly_rosters(tmp_path):
         "roster": {
             "C": {"name": "Ivan Herrera", "positions": ["C", "Util"]},
             "OF": {"name": "Juan Soto", "positions": ["OF", "Util"]},
-        }
+        },
     }
     (roster_dir / "2026-03-23_hart_roster.json").write_text(json.dumps(roster))
 
@@ -367,8 +382,7 @@ def test_append_roster_snapshot(tmp_path):
     append_roster_snapshot(conn, roster, "2026-03-24", 1, "Hart of the Order")
 
     rows = conn.execute(
-        "SELECT player_name, status, yahoo_id FROM weekly_rosters "
-        "ORDER BY player_name"
+        "SELECT player_name, status, yahoo_id FROM weekly_rosters ORDER BY player_name"
     ).fetchall()
     assert len(rows) == 2
     assert rows[0]["player_name"] == "Corbin Burnes"
@@ -403,40 +417,65 @@ def test_append_roster_snapshot_replaces_team_snapshot(tmp_path):
     create_tables(conn)
 
     first = [
-        {"name": "Matt McLain", "selected_position": "2B",
-         "positions": ["2B", "IF", "Util"], "status": "", "player_id": "1"},
-        {"name": "Juan Soto", "selected_position": "OF",
-         "positions": ["OF", "Util"], "status": "", "player_id": "2"},
+        {
+            "name": "Matt McLain",
+            "selected_position": "2B",
+            "positions": ["2B", "IF", "Util"],
+            "status": "",
+            "player_id": "1",
+        },
+        {
+            "name": "Juan Soto",
+            "selected_position": "OF",
+            "positions": ["OF", "Util"],
+            "status": "",
+            "player_id": "2",
+        },
     ]
     append_roster_snapshot(conn, first, "2026-04-21", None, "Hart of the Order")
 
     second = [
-        {"name": "Otto Lopez", "selected_position": "2B",
-         "positions": ["2B", "SS", "IF", "Util"], "status": "", "player_id": "3"},
-        {"name": "Juan Soto", "selected_position": "OF",
-         "positions": ["OF", "Util"], "status": "", "player_id": "2"},
+        {
+            "name": "Otto Lopez",
+            "selected_position": "2B",
+            "positions": ["2B", "SS", "IF", "Util"],
+            "status": "",
+            "player_id": "3",
+        },
+        {
+            "name": "Juan Soto",
+            "selected_position": "OF",
+            "positions": ["OF", "Util"],
+            "status": "",
+            "player_id": "2",
+        },
     ]
     append_roster_snapshot(conn, second, "2026-04-21", None, "Hart of the Order")
 
-    names = [r["player_name"] for r in conn.execute(
-        "SELECT player_name FROM weekly_rosters "
-        "WHERE snapshot_date = '2026-04-21' AND team = 'Hart of the Order' "
-        "ORDER BY player_name"
-    ).fetchall()]
-    assert names == ["Juan Soto", "Otto Lopez"], (
-        f"Expected stale McLain removed, got {names}"
-    )
+    names = [
+        r["player_name"]
+        for r in conn.execute(
+            "SELECT player_name FROM weekly_rosters "
+            "WHERE snapshot_date = '2026-04-21' AND team = 'Hart of the Order' "
+            "ORDER BY player_name"
+        ).fetchall()
+    ]
+    assert names == ["Juan Soto", "Otto Lopez"], f"Expected stale McLain removed, got {names}"
 
     # Writes for a DIFFERENT team on the same date must not be touched.
     other = [
-        {"name": "Other Player", "selected_position": "C",
-         "positions": ["C"], "status": "", "player_id": "99"},
+        {
+            "name": "Other Player",
+            "selected_position": "C",
+            "positions": ["C"],
+            "status": "",
+            "player_id": "99",
+        },
     ]
     append_roster_snapshot(conn, other, "2026-04-21", None, "Other Team")
     append_roster_snapshot(conn, second, "2026-04-21", None, "Hart of the Order")
     other_rows = conn.execute(
-        "SELECT player_name FROM weekly_rosters "
-        "WHERE team = 'Other Team'"
+        "SELECT player_name FROM weekly_rosters WHERE team = 'Other Team'"
     ).fetchall()
     assert len(other_rows) == 1
     conn.close()
@@ -458,9 +497,7 @@ def test_append_roster_snapshot_defaults_missing_fields(tmp_path):
     ]
     append_roster_snapshot(conn, roster, "2026-03-24", 1, "T")
 
-    row = conn.execute(
-        "SELECT player_name, status, yahoo_id FROM weekly_rosters"
-    ).fetchone()
+    row = conn.execute("SELECT player_name, status, yahoo_id FROM weekly_rosters").fetchone()
     assert row["player_name"] == "Old Style"
     assert row["status"] is None
     assert row["yahoo_id"] is None
@@ -479,8 +516,16 @@ def test_append_standings_snapshot(tmp_path):
             "team_key": "469.l.5652.t.4",
             "rank": 1,
             "stats": {
-                "R": 100, "HR": 30, "RBI": 95, "SB": 20, "AVG": 0.265,
-                "W": 10, "K": 200, "SV": 15, "ERA": 3.50, "WHIP": 1.18,
+                "R": 100,
+                "HR": 30,
+                "RBI": 95,
+                "SB": 20,
+                "AVG": 0.265,
+                "W": 10,
+                "K": 200,
+                "SV": 15,
+                "ERA": 3.50,
+                "WHIP": 1.18,
             },
         },
     ]
@@ -524,27 +569,47 @@ def test_build_db_end_to_end(tmp_path):
     proj_dir = tmp_path / "projections" / "2026"
     proj_dir.mkdir(parents=True)
     (proj_dir / "steamer-hitters.csv").write_text(
-        'Name,Team,PA,AB,H,R,HR,RBI,SB,AVG,G,PlayerId,MLBAMID\n'
+        "Name,Team,PA,AB,H,R,HR,RBI,SB,AVG,G,PlayerId,MLBAMID\n"
         '"James Wood","WSN",600,520,140,85,26,80,15,0.269,145,"29518",695578\n'
     )
     (proj_dir / "steamer-pitchers.csv").write_text(
-        'Name,Team,W,L,SV,ERA,IP,ER,BB,SO,H,HR,WHIP,G,GS,PlayerId,MLBAMID\n'
+        "Name,Team,W,L,SV,ERA,IP,ER,BB,SO,H,HR,WHIP,G,GS,PlayerId,MLBAMID\n"
         '"Corbin Burnes","BAL",14,7,0,3.20,200,71,50,220,170,20,1.10,32,32,"19361",669203\n'
     )
 
     drafts_path = tmp_path / "drafts.json"
-    drafts_path.write_text(json.dumps({
-        "2026": [{"pick": 1, "round": 1, "team": "Hart", "player": "James Wood"}]
-    }))
+    drafts_path.write_text(
+        json.dumps({"2026": [{"pick": 1, "round": 1, "team": "Hart", "player": "James Wood"}]})
+    )
 
     standings_path = tmp_path / "standings.json"
-    standings_path.write_text(json.dumps({
-        "2025": {"standings": [
-            {"name": "Hart", "team_key": "k1", "rank": 1,
-             "stats": {"R": 900, "HR": 250, "RBI": 880, "SB": 150, "AVG": 0.260,
-                       "W": 80, "K": 1400, "SV": 90, "ERA": 3.60, "WHIP": 1.20}}
-        ]}
-    }))
+    standings_path.write_text(
+        json.dumps(
+            {
+                "2025": {
+                    "standings": [
+                        {
+                            "name": "Hart",
+                            "team_key": "k1",
+                            "rank": 1,
+                            "stats": {
+                                "R": 900,
+                                "HR": 250,
+                                "RBI": 880,
+                                "SB": 150,
+                                "AVG": 0.260,
+                                "W": 80,
+                                "K": 1400,
+                                "SV": 90,
+                                "ERA": 3.60,
+                                "WHIP": 1.20,
+                            },
+                        }
+                    ]
+                }
+            }
+        )
+    )
 
     db_path = tmp_path / "test.db"
     conn = sqlite3.connect(db_path)
@@ -556,7 +621,9 @@ def test_build_db_end_to_end(tmp_path):
     load_standings(conn, standings_path)
 
     # Verify queries
-    wood = conn.execute("SELECT year, hr, avg FROM blended_projections WHERE name='James Wood'").fetchone()
+    wood = conn.execute(
+        "SELECT year, hr, avg FROM blended_projections WHERE name='James Wood'"
+    ).fetchone()
     assert wood is not None and wood["hr"] == 26
 
     draft = conn.execute("SELECT * FROM draft_results WHERE year=2026").fetchone()
@@ -639,7 +706,20 @@ def test_get_blended_projections(tmp_path):
     # Check required columns exist
     for col in ("name", "fg_id", "ab", "h", "r", "hr", "rbi", "sb", "avg", "adp"):
         assert col in hitters.columns, f"Missing hitter column: {col}"
-    for col in ("name", "fg_id", "w", "k", "sv", "ip", "er", "bb", "h_allowed", "era", "whip", "adp"):
+    for col in (
+        "name",
+        "fg_id",
+        "w",
+        "k",
+        "sv",
+        "ip",
+        "er",
+        "bb",
+        "h_allowed",
+        "era",
+        "whip",
+        "adp",
+    ):
         assert col in pitchers.columns, f"Missing pitcher column: {col}"
 
     # Verify a specific player
@@ -653,9 +733,11 @@ def test_get_blended_projections(tmp_path):
 # Helper: build a minimal ROS projections directory tree using fixture CSVs
 # ---------------------------------------------------------------------------
 
+
 def _make_ros_dir(tmp_path, year=2026, date="2026-04-07"):
     """Create data/projections/{year}/ros/{date}/ with steamer fixture CSVs."""
     import shutil
+
     fixtures = Path(__file__).parent.parent / "fixtures"
     date_dir = tmp_path / "projections" / str(year) / "rest_of_season" / date
     date_dir.mkdir(parents=True)
@@ -668,6 +750,7 @@ def _make_ros_dir(tmp_path, year=2026, date="2026-04-07"):
 # ---------------------------------------------------------------------------
 # Task 2: load_rest_of_season_projections()
 # ---------------------------------------------------------------------------
+
 
 def test_load_rest_of_season_projections_basic(tmp_path):
     """Task 2: loading a single ROS snapshot inserts hitter and pitcher rows."""
@@ -719,6 +802,7 @@ def test_load_rest_of_season_projections_idempotent(tmp_path):
 # Task 3: get_rest_of_season_projections()
 # ---------------------------------------------------------------------------
 
+
 def test_get_rest_of_season_projections_returns_latest_snapshot(tmp_path):
     """Task 3: get_rest_of_season_projections() returns the most recent snapshot_date."""
     _make_ros_dir(tmp_path, year=2026, date="2026-04-07")
@@ -767,6 +851,7 @@ def test_get_rest_of_season_projections_empty_when_no_data(tmp_path):
 class TestGetSeasonTotals:
     def test_returns_hitter_totals_by_mlbam_id(self):
         from fantasy_baseball.data.db import create_tables, get_connection, get_season_totals
+
         conn = get_connection(":memory:")
         create_tables(conn)
         conn.execute(
@@ -794,6 +879,7 @@ class TestGetSeasonTotals:
 
     def test_returns_pitcher_totals_by_mlbam_id(self):
         from fantasy_baseball.data.db import create_tables, get_connection, get_season_totals
+
         conn = get_connection(":memory:")
         create_tables(conn)
         conn.execute(
@@ -821,6 +907,7 @@ class TestGetSeasonTotals:
 
     def test_empty_when_no_data(self):
         from fantasy_baseball.data.db import create_tables, get_connection, get_season_totals
+
         conn = get_connection(":memory:")
         create_tables(conn)
         hitter_totals, pitcher_totals = get_season_totals(conn, 2026)
@@ -859,7 +946,10 @@ class TestLoadRosNormalizationAppliesToAllSystems:
         conn.commit()
 
         load_rest_of_season_projections(
-            conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0},
+            conn,
+            tmp_path / "projections",
+            ["steamer"],
+            {"steamer": 1.0},
         )
 
         judge = conn.execute(

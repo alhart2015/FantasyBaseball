@@ -4,6 +4,7 @@ Usage:
     python scripts/replay_picks.py                          # latest draft
     python scripts/replay_picks.py data/drafts/mock_*.json  # specific file
 """
+
 import json
 import sys
 from pathlib import Path
@@ -83,12 +84,15 @@ def main():
             by_vona = available_v.sort_values("vona", ascending=False).head(5)
 
             # Get the actual recommendation
-            filled = get_filled_positions(user_roster_ids, full_board,
-                                         roster_slots=config.roster_slots)
+            filled = get_filled_positions(
+                user_roster_ids, full_board, roster_slots=config.roster_slots
+            )
             recs = get_recommendations(
-                board, drafted=drafted_ids,
+                board,
+                drafted=drafted_ids,
                 user_roster=user_roster,
-                n=5, filled_positions=filled,
+                n=5,
+                filled_positions=filled,
                 roster_slots=config.roster_slots,
                 num_teams=config.num_teams,
                 scoring_mode="vona",
@@ -117,8 +121,10 @@ def main():
             print()
             print("=" * 100)
             rnd = entry["round"]
-            print(f"YOUR PICK #{hart_pick_num} (Overall #{entry['pick']}, Round {rnd})"
-                  f"  |  Closers: {closer_count}/3  |  Roster: {len(user_roster)} players")
+            print(
+                f"YOUR PICK #{hart_pick_num} (Overall #{entry['pick']}, Round {rnd})"
+                f"  |  Closers: {closer_count}/3  |  Roster: {len(user_roster)} players"
+            )
             print("=" * 100)
 
             def _fmt_row(name, ptype, val, positions=None, sv=0):
@@ -130,32 +136,61 @@ def main():
             for i in range(5):
                 a = by_adp.iloc[i] if i < len(by_adp) else None
                 s = by_sgp.iloc[i] if i < len(by_sgp) else None
-                left = _fmt_row(a["name"], a["player_type"], a["adp"], a["positions"], a.get("sv",0)) if a is not None else ""
-                right = _fmt_row(s["name"], s["player_type"], s["total_sgp"], s["positions"], s.get("sv",0)) if s is not None else ""
-                print(f"  {i+1}. {left:<48} {i+1}. {right}")
+                left = (
+                    _fmt_row(a["name"], a["player_type"], a["adp"], a["positions"], a.get("sv", 0))
+                    if a is not None
+                    else ""
+                )
+                right = (
+                    _fmt_row(
+                        s["name"], s["player_type"], s["total_sgp"], s["positions"], s.get("sv", 0)
+                    )
+                    if s is not None
+                    else ""
+                )
+                print(f"  {i + 1}. {left:<48} {i + 1}. {right}")
 
             print(f"\n  {'By VAR':<50} {'By VONA (raw urgency)':<50}")
             for i in range(5):
                 v = by_var.iloc[i] if i < len(by_var) else None
                 vo = by_vona.iloc[i] if i < len(by_vona) else None
-                left = _fmt_row(v["name"], v["player_type"], v["var"], v["positions"], v.get("sv",0)) if v is not None else ""
-                right = _fmt_row(vo["name"], vo["player_type"], vo["vona"], vo["positions"], vo.get("sv",0)) if vo is not None else ""
-                print(f"  {i+1}. {left:<48} {i+1}. {right}")
+                left = (
+                    _fmt_row(v["name"], v["player_type"], v["var"], v["positions"], v.get("sv", 0))
+                    if v is not None
+                    else ""
+                )
+                right = (
+                    _fmt_row(
+                        vo["name"], vo["player_type"], vo["vona"], vo["positions"], vo.get("sv", 0)
+                    )
+                    if vo is not None
+                    else ""
+                )
+                print(f"  {i + 1}. {left:<48} {i + 1}. {right}")
 
             # Show what strategy recommended
             print(f"\n  Strategy recommendation: {recs[0].name if recs else 'N/A'}")
             print(f"  >>> PICKED: {picked}")
             if picked_player is not None:
                 pos = "/".join(picked_player["positions"][:3])
-                print(f"      {picked_player['player_type']} | {pos} | "
-                      f"VAR={picked_var:.2f} | SGP={picked_sgp:.2f} | "
-                      f"VONA={picked_vona:.2f}")
+                print(
+                    f"      {picked_player['player_type']} | {pos} | "
+                    f"VAR={picked_var:.2f} | SGP={picked_sgp:.2f} | "
+                    f"VONA={picked_vona:.2f}"
+                )
 
             # Explanation
             is_closer = picked_sv and picked_sv >= CLOSER_SV_THRESHOLD
             explanation = _explain_pick(
-                picked, picked_player, picked_var, picked_vona,
-                is_closer, closer_count, rnd, by_var, balance,
+                picked,
+                picked_player,
+                picked_var,
+                picked_vona,
+                is_closer,
+                closer_count,
+                rnd,
+                by_var,
+                balance,
             )
             print(f"      Why: {explanation}")
 
@@ -170,8 +205,7 @@ def main():
                 balance.add_player(rows.iloc[0])
 
 
-def _explain_pick(name, player, var, vona, is_closer, closer_count,
-                  rnd, by_var, balance):
+def _explain_pick(name, player, var, vona, is_closer, closer_count, rnd, by_var, balance):
     """Generate a brief explanation of why this player was recommended."""
     if player is None:
         return "Player not found on board"
@@ -180,22 +214,32 @@ def _explain_pick(name, player, var, vona, is_closer, closer_count,
 
     # Check if this was a forced closer deadline
     from fantasy_baseball.draft.strategy import NO_PUNT_STAGGER_DEADLINES
+
     if is_closer and closer_count < 3:
-        deadline = NO_PUNT_STAGGER_DEADLINES[closer_count] if closer_count < len(NO_PUNT_STAGGER_DEADLINES) else 99
+        deadline = (
+            NO_PUNT_STAGGER_DEADLINES[closer_count]
+            if closer_count < len(NO_PUNT_STAGGER_DEADLINES)
+            else 99
+        )
         if rnd >= deadline:
-            return (f"Closer deadline #{closer_count+1} triggered (round {deadline}). "
-                    f"Best available closer by VAR ({var:.2f}).")
+            return (
+                f"Closer deadline #{closer_count + 1} triggered (round {deadline}). "
+                f"Best available closer by VAR ({var:.2f})."
+            )
 
     if is_closer:
-        return (f"VONA urgency ({vona:.2f}) — closer scarcity makes this pick "
-                f"more urgent than higher-VAR alternatives.")
+        return (
+            f"VONA urgency ({vona:.2f}) — closer scarcity makes this pick "
+            f"more urgent than higher-VAR alternatives."
+        )
 
     if ptype == "pitcher":
         top_var = by_var.iloc[0]
         if name == top_var["name"]:
             return f"Top pitcher by VAR ({var:.2f})."
-        return (f"VONA score ({vona:.2f}) combined with VAR ({var:.2f}) "
-                f"makes this the best available.")
+        return (
+            f"VONA score ({vona:.2f}) combined with VAR ({var:.2f}) makes this the best available."
+        )
 
     # Hitter
     avg = player.get("avg", 0)

@@ -75,6 +75,7 @@ class TestFlaskBackgroundThread:
 
         # Give server a moment to start, then test it's alive
         import time
+
         time.sleep(0.5)
         assert server_thread.is_alive()
         # Thread is daemon, will be cleaned up when test exits
@@ -116,12 +117,8 @@ class TestDraftSimulationRoundtrip:
     def _expected_counts(config):
         """Derive expected totals from config."""
         num_keepers = len(config.keepers)
-        user_keepers = sum(
-            1 for k in config.keepers if k.get("team") == config.team_name
-        )
-        draftable_slots = sum(
-            v for k, v in config.roster_slots.items() if k != "IL"
-        )
+        user_keepers = sum(1 for k in config.keepers if k.get("team") == config.team_name)
+        draftable_slots = sum(v for k, v in config.roster_slots.items() if k != "IL")
         rounds = draftable_slots - user_keepers
         total_draft_picks = config.num_teams * rounds
         total_drafted = total_draft_picks + num_keepers
@@ -139,8 +136,7 @@ class TestDraftSimulationRoundtrip:
         tracker = sim_result["tracker"]
         ids = tracker.drafted_ids
         assert len(ids) == len(set(ids)), (
-            f"Duplicate player_ids found: "
-            f"{[pid for pid in ids if ids.count(pid) > 1]}"
+            f"Duplicate player_ids found: {[pid for pid in ids if ids.count(pid) > 1]}"
         )
 
     # 2. All roster slots legal
@@ -150,9 +146,7 @@ class TestDraftSimulationRoundtrip:
         roster_slots = config.roster_slots
 
         for team_num, players in team_players.items():
-            total_allowed = sum(
-                v for k, v in roster_slots.items() if k != "IL"
-            )
+            total_allowed = sum(v for k, v in roster_slots.items() if k != "IL")
             assert len(players) <= total_allowed, (
                 f"Team {team_num} has {len(players)} players but only "
                 f"{total_allowed} draftable slots"
@@ -169,8 +163,7 @@ class TestDraftSimulationRoundtrip:
         for cat in all_cats:
             total = sum(t[f"{cat}_p"] for t in results)
             assert abs(total - expected_per_cat) < 0.01, (
-                f"Category {cat} roto points sum to {total}, "
-                f"expected {expected_per_cat}"
+                f"Category {cat} roto points sum to {total}, expected {expected_per_cat}"
             )
 
         grand_total = sum(t["tot"] for t in results)

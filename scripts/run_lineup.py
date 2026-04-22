@@ -5,6 +5,7 @@ Same code path as the Render deploy, so local success means remote success.
 Usage:
     python scripts/run_lineup.py
 """
+
 import sys
 from pathlib import Path
 

@@ -7,6 +7,7 @@ Merges results into player_positions.json.
 Usage:
     python scripts/fetch_positions_mlb.py [--year YEAR]
 """
+
 import argparse
 import json
 import sys
@@ -73,7 +74,7 @@ def fetch_positions_from_mlb_api(mlbam_ids):
     batch_size = 100
 
     for i in range(0, len(ids_list), batch_size):
-        batch = ids_list[i:i + batch_size]
+        batch = ids_list[i : i + batch_size]
         ids_str = ",".join(str(x) for x in batch)
         url = f"{MLB_API_BASE}/people?personIds={ids_str}"
 
@@ -83,7 +84,7 @@ def fetch_positions_from_mlb_api(mlbam_ids):
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
-            print(f"  API error for batch {i}-{i+len(batch)}: {e}")
+            print(f"  API error for batch {i}-{i + len(batch)}: {e}")
             continue
 
         for person in data.get("people", []):

@@ -1,4 +1,5 @@
 """Tests for custom draft order with traded picks."""
+
 import json
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from fantasy_baseball.draft.tracker import DraftTracker
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def config_with_strategy(tmp_path):
@@ -79,15 +81,31 @@ def draft_order_file(tmp_path):
         ],
         "rounds": [
             # R1 (keeper round): standard order
-            ["Send in the Cavalli", "SkeleThor", "Work in Progress",
-             "Jon's Underdogs", "Boston Estrellas", "Spacemen",
-             "Springfield Isotopes", "Hart of the Order",
-             "Tortured Baseball Department", "Hello Peanuts!"],
+            [
+                "Send in the Cavalli",
+                "SkeleThor",
+                "Work in Progress",
+                "Jon's Underdogs",
+                "Boston Estrellas",
+                "Spacemen",
+                "Springfield Isotopes",
+                "Hart of the Order",
+                "Tortured Baseball Department",
+                "Hello Peanuts!",
+            ],
             # R2: Hart gets SkeleThor's pick (slot 1), SkeleThor has no pick
-            ["Hart of the Order", "Work in Progress", "Jon's Underdogs",
-             "Boston Estrellas", "Spacemen", "Springfield Isotopes",
-             "Hart of the Order", "Send in the Cavalli",
-             "Tortured Baseball Department", "Hello Peanuts!"],
+            [
+                "Hart of the Order",
+                "Work in Progress",
+                "Jon's Underdogs",
+                "Boston Estrellas",
+                "Spacemen",
+                "Springfield Isotopes",
+                "Hart of the Order",
+                "Send in the Cavalli",
+                "Tortured Baseball Department",
+                "Hello Peanuts!",
+            ],
         ],
     }
     order_file = tmp_path / "draft_order.json"
@@ -116,6 +134,7 @@ def small_draft_order_json():
 # ---------------------------------------------------------------------------
 # Config strategy/scoring tests
 # ---------------------------------------------------------------------------
+
 
 class TestConfigStrategy:
     def test_strategy_loaded_from_config(self, config_with_strategy):
@@ -152,10 +171,12 @@ projections:
 # Draft order loading tests (run_draft._load_draft_order)
 # ---------------------------------------------------------------------------
 
+
 class TestLoadDraftOrder:
     def test_load_draft_order_returns_picks(self, tmp_path, draft_order_file):
         """_load_draft_order returns a list of pick dicts."""
         import sys
+
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
         from run_draft import _load_draft_order
 
@@ -167,6 +188,7 @@ class TestLoadDraftOrder:
 
     def test_load_draft_order_marks_trades(self, tmp_path, draft_order_file):
         import sys
+
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
         from run_draft import _load_draft_order
 
@@ -180,6 +202,7 @@ class TestLoadDraftOrder:
 
     def test_load_draft_order_missing_file(self, tmp_path):
         import sys
+
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
         from run_draft import _load_draft_order
 
@@ -188,6 +211,7 @@ class TestLoadDraftOrder:
 
     def test_load_draft_order_team_names(self, tmp_path, draft_order_file):
         import sys
+
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
         from run_draft import _load_draft_order
 
@@ -203,12 +227,17 @@ class TestLoadDraftOrder:
 # Simulation pick order tests (simulate_draft._load_pick_order)
 # ---------------------------------------------------------------------------
 
+
 class TestSimulationPickOrder:
     def _make_config(self, teams, keepers, num_teams=3):
         return LeagueConfig(
-            league_id=1, num_teams=num_teams, game_code="mlb",
-            team_name="Team A", draft_position=1,
-            keepers=keepers, roster_slots={"C": 1},
+            league_id=1,
+            num_teams=num_teams,
+            game_code="mlb",
+            team_name="Team A",
+            draft_position=1,
+            keepers=keepers,
+            roster_slots={"C": 1},
             projection_systems=["steamer"],
             projection_weights={"steamer": 1.0},
             teams=teams,
@@ -217,6 +246,7 @@ class TestSimulationPickOrder:
     def test_pick_order_skips_keeper_rounds(self, tmp_path, small_draft_order_json):
         """Post-keeper pick order should not include keeper round picks."""
         import sys
+
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
         order_file = tmp_path / "draft_order.json"
@@ -224,6 +254,7 @@ class TestSimulationPickOrder:
 
         # Monkey-patch the path
         import simulate_draft
+
         orig_path = simulate_draft.DRAFT_ORDER_PATH
         simulate_draft.DRAFT_ORDER_PATH = order_file
 
@@ -244,6 +275,7 @@ class TestSimulationPickOrder:
 
     def test_pick_order_maps_team_names_to_numbers(self, tmp_path, small_draft_order_json):
         import sys
+
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
         import simulate_draft
 
@@ -277,6 +309,7 @@ class TestSimulationPickOrder:
     def test_traded_pick_gives_extra_pick_to_user(self, tmp_path, small_draft_order_json):
         """User should appear more times when they have a traded pick."""
         import sys
+
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
         import simulate_draft
 
@@ -310,13 +343,23 @@ class TestSimulationPickOrder:
 # Serialize state with keeper offset tests
 # ---------------------------------------------------------------------------
 
+
 class TestSerializeStateKeepers:
     def _make_board(self):
-        return pd.DataFrame([
-            {"name": "P1", "player_id": "p1", "positions": ["OF"],
-             "var": 5.0, "best_position": "OF", "player_type": "hitter",
-             "total_sgp": 5.0, "adp": 10},
-        ])
+        return pd.DataFrame(
+            [
+                {
+                    "name": "P1",
+                    "player_id": "p1",
+                    "positions": ["OF"],
+                    "var": 5.0,
+                    "best_position": "OF",
+                    "player_type": "hitter",
+                    "total_sgp": 5.0,
+                    "adp": 10,
+                },
+            ]
+        )
 
     def test_pick_number_includes_keepers(self):
         tracker = DraftTracker(num_teams=10, user_position=8, rounds=20)
@@ -324,8 +367,11 @@ class TestSerializeStateKeepers:
         board = self._make_board()
 
         state = serialize_state(
-            tracker=tracker, balance=balance, board=board,
-            recommendations=[], filled_positions={},
+            tracker=tracker,
+            balance=balance,
+            board=board,
+            recommendations=[],
+            filled_positions={},
             num_keepers=30,
         )
         # tracker.current_pick=1, plus 30 keepers = overall pick 31
@@ -337,8 +383,11 @@ class TestSerializeStateKeepers:
         board = self._make_board()
 
         state = serialize_state(
-            tracker=tracker, balance=balance, board=board,
-            recommendations=[], filled_positions={},
+            tracker=tracker,
+            balance=balance,
+            board=board,
+            recommendations=[],
+            filled_positions={},
             num_keepers=30,
         )
         # tracker.current_round=1, plus 3 keeper rounds = round 4
@@ -350,8 +399,11 @@ class TestSerializeStateKeepers:
         board = self._make_board()
 
         state = serialize_state(
-            tracker=tracker, balance=balance, board=board,
-            recommendations=[], filled_positions={},
+            tracker=tracker,
+            balance=balance,
+            board=board,
+            recommendations=[],
+            filled_positions={},
             num_keepers=0,
         )
         assert state["current_pick"] == 1
@@ -366,8 +418,11 @@ class TestSerializeStateKeepers:
         board = self._make_board()
 
         state = serialize_state(
-            tracker=tracker, balance=balance, board=board,
-            recommendations=[], filled_positions={},
+            tracker=tracker,
+            balance=balance,
+            board=board,
+            recommendations=[],
+            filled_positions={},
             num_keepers=30,
         )
         # pick 28 + 30 keepers = 58
@@ -380,17 +435,21 @@ class TestSerializeStateKeepers:
 # Strategy registration tests
 # ---------------------------------------------------------------------------
 
+
 class TestStrategyRegistration:
     def test_two_closers_registered(self):
         from fantasy_baseball.draft.strategy import STRATEGIES
+
         assert "two_closers" in STRATEGIES
 
     def test_four_closers_registered(self):
         from fantasy_baseball.draft.strategy import STRATEGIES
+
         assert "four_closers" in STRATEGIES
 
     def test_all_strategies_callable(self):
         from fantasy_baseball.draft.strategy import STRATEGIES
+
         for name, fn in STRATEGIES.items():
             assert callable(fn), f"Strategy '{name}' is not callable"
 
@@ -398,12 +457,14 @@ class TestStrategyRegistration:
         from fantasy_baseball.draft.recommender import CLOSER_SV_THRESHOLD as rec_threshold
         from fantasy_baseball.draft.strategy import CLOSER_SV_THRESHOLD as strat_threshold
         from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
+
         assert strat_threshold == CLOSER_SV_THRESHOLD == rec_threshold == 20
 
 
 # ---------------------------------------------------------------------------
 # Integration: real draft order file
 # ---------------------------------------------------------------------------
+
 
 class TestRealDraftOrder:
     """Tests against the actual config/draft_order.json."""
@@ -421,14 +482,11 @@ class TestRealDraftOrder:
 
     def test_10_picks_per_round(self, real_order):
         for i, rnd in enumerate(real_order["rounds"]):
-            assert len(rnd) == 10, f"Round {i+1} has {len(rnd)} picks"
+            assert len(rnd) == 10, f"Round {i + 1} has {len(rnd)} picks"
 
     def test_hart_has_20_post_keeper_picks(self, real_order):
         post_keeper = real_order["rounds"][3:]  # skip 3 keeper rounds
-        hart_count = sum(
-            1 for rnd in post_keeper for team in rnd
-            if team == "Hart of the Order"
-        )
+        hart_count = sum(1 for rnd in post_keeper for team in rnd if team == "Hart of the Order")
         assert hart_count == 20
 
     def test_hart_has_no_r18_pick(self, real_order):
@@ -444,19 +502,13 @@ class TestRealDraftOrder:
         assert len(real_order["trades"]) == 6
 
     def test_hart_gained_r5_from_tbd(self, real_order):
-        hart_gains = [
-            t for t in real_order["trades"]
-            if t["to"] == "Hart of the Order"
-        ]
+        hart_gains = [t for t in real_order["trades"] if t["to"] == "Hart of the Order"]
         assert len(hart_gains) == 1
         assert hart_gains[0]["round"] == 5
         assert hart_gains[0]["from"] == "Tortured Baseball Department"
 
     def test_hart_lost_r18_to_tbd(self, real_order):
-        hart_losses = [
-            t for t in real_order["trades"]
-            if t["from"] == "Hart of the Order"
-        ]
+        hart_losses = [t for t in real_order["trades"] if t["from"] == "Hart of the Order"]
         assert len(hart_losses) == 1
         assert hart_losses[0]["round"] == 18
         assert hart_losses[0]["to"] == "Tortured Baseball Department"
@@ -464,6 +516,7 @@ class TestRealDraftOrder:
     def test_every_team_has_20_post_keeper_picks(self, real_order):
         """All teams should have exactly 20 draftable picks."""
         from collections import Counter
+
         post_keeper = real_order["rounds"][3:]
         counts = Counter()
         for rnd in post_keeper:

@@ -3,6 +3,7 @@
 Each model function takes (projection, games, cutoff) and returns a dict of
 predicted per-PA rates (hitters) or per-IP rates (pitchers).
 """
+
 import math
 from datetime import date, timedelta
 
@@ -42,6 +43,7 @@ _DECAY_RATE = math.log(2) / DECAY_HALF_LIFE_DAYS
 # Player type detection
 # ---------------------------------------------------------------------------
 
+
 def _is_hitter(projection: dict) -> bool:
     return "hr_per_pa" in projection
 
@@ -49,6 +51,7 @@ def _is_hitter(projection: dict) -> bool:
 # ---------------------------------------------------------------------------
 # Date helpers
 # ---------------------------------------------------------------------------
+
 
 def _parse_date(d) -> date:
     if isinstance(d, date):
@@ -73,6 +76,7 @@ def _filter_games_window(games: list[dict], cutoff, window_days: int) -> list[di
 # Aggregation helpers
 # ---------------------------------------------------------------------------
 
+
 def _aggregate_hitter_games(games: list[dict]) -> dict:
     """Sum totals and compute per-PA rates from a list of hitter game log dicts."""
     pa = sum(g["pa"] for g in games)
@@ -85,12 +89,28 @@ def _aggregate_hitter_games(games: list[dict]) -> dict:
 
     if pa == 0:
         return {
-            "pa": 0, "ab": 0, "h": 0, "hr": 0, "r": 0, "rbi": 0, "sb": 0,
-            "hr_per_pa": 0, "r_per_pa": 0, "rbi_per_pa": 0, "sb_per_pa": 0, "avg": 0,
+            "pa": 0,
+            "ab": 0,
+            "h": 0,
+            "hr": 0,
+            "r": 0,
+            "rbi": 0,
+            "sb": 0,
+            "hr_per_pa": 0,
+            "r_per_pa": 0,
+            "rbi_per_pa": 0,
+            "sb_per_pa": 0,
+            "avg": 0,
         }
 
     return {
-        "pa": pa, "ab": ab, "h": h, "hr": hr, "r": r, "rbi": rbi, "sb": sb,
+        "pa": pa,
+        "ab": ab,
+        "h": h,
+        "hr": hr,
+        "r": r,
+        "rbi": rbi,
+        "sb": sb,
         "hr_per_pa": hr / pa,
         "r_per_pa": r / pa,
         "rbi_per_pa": rbi / pa,
@@ -113,14 +133,32 @@ def _aggregate_pitcher_games(games: list[dict]) -> dict:
 
     if ip == 0:
         return {
-            "ip": 0, "k": 0, "er": 0, "bb": 0, "h_allowed": 0, "w": 0,
-            "sv": 0, "gs": 0, "g": 0,
-            "k_per_ip": 0, "era": 0, "whip": 0, "w_per_gs": 0, "sv_per_g": 0,
+            "ip": 0,
+            "k": 0,
+            "er": 0,
+            "bb": 0,
+            "h_allowed": 0,
+            "w": 0,
+            "sv": 0,
+            "gs": 0,
+            "g": 0,
+            "k_per_ip": 0,
+            "era": 0,
+            "whip": 0,
+            "w_per_gs": 0,
+            "sv_per_g": 0,
         }
 
     return {
-        "ip": ip, "k": k, "er": er, "bb": bb, "h_allowed": h_allowed,
-        "w": w, "sv": sv, "gs": gs, "g": g,
+        "ip": ip,
+        "k": k,
+        "er": er,
+        "bb": bb,
+        "h_allowed": h_allowed,
+        "w": w,
+        "sv": sv,
+        "gs": gs,
+        "g": g,
         "k_per_ip": k / ip,
         "era": calculate_era(er, ip),
         "whip": calculate_whip(bb, h_allowed, ip),
@@ -133,6 +171,7 @@ def _aggregate_pitcher_games(games: list[dict]) -> dict:
 # Model 1: Preseason — return projection unchanged
 # ---------------------------------------------------------------------------
 
+
 def predict_preseason(projection: dict, games: list[dict], cutoff) -> dict:
     """Return projection rates unchanged, ignoring all game log data."""
     if _is_hitter(projection):
@@ -143,6 +182,7 @@ def predict_preseason(projection: dict, games: list[dict], cutoff) -> dict:
 # ---------------------------------------------------------------------------
 # Model 2: Season-to-date — pure actuals, ignore projection
 # ---------------------------------------------------------------------------
+
 
 def predict_season_to_date(projection: dict, games: list[dict], cutoff) -> dict:
     """Return rates computed purely from games before cutoff. Returns zeros if no games."""
@@ -158,6 +198,7 @@ def predict_season_to_date(projection: dict, games: list[dict], cutoff) -> dict:
 # ---------------------------------------------------------------------------
 # Model 3: Fixed blend — 30% last-30-days actuals + 70% projection
 # ---------------------------------------------------------------------------
+
 
 def predict_fixed_blend(projection: dict, games: list[dict], cutoff) -> dict:
     """Blend 30% of last-30-day rates with 70% projection. Falls back to projection if no games."""
@@ -178,15 +219,13 @@ def predict_fixed_blend(projection: dict, games: list[dict], cutoff) -> dict:
 
     w_actual = FIXED_BLEND_ACTUAL_WEIGHT
     w_proj = 1.0 - w_actual
-    return {
-        k: w_actual * agg[k] + w_proj * projection[k]
-        for k in stat_keys
-    }
+    return {k: w_actual * agg[k] + w_proj * projection[k] for k in stat_keys}
 
 
 # ---------------------------------------------------------------------------
 # Model 4: Reliability blend — weight actual vs projection by sample size
 # ---------------------------------------------------------------------------
+
 
 def predict_reliability_blend(projection: dict, games: list[dict], cutoff) -> dict:
     """Blend actuals with projection using reliability-weighted actual weight.
@@ -219,6 +258,7 @@ def predict_reliability_blend(projection: dict, games: list[dict], cutoff) -> di
 # ---------------------------------------------------------------------------
 # Model 5: Exponential decay — recent games weighted more heavily
 # ---------------------------------------------------------------------------
+
 
 def predict_exponential_decay(projection: dict, games: list[dict], cutoff) -> dict:
     """Weight each game by exp(-decay_rate * days_ago), blend with projection via reliability.

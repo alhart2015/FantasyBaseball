@@ -5,16 +5,21 @@ from fantasy_baseball.models.positions import Position
 
 def _hitter(name="H"):
     return Player(
-        name=name, player_type=PlayerType.HITTER, positions=[Position.OF],
+        name=name,
+        player_type=PlayerType.HITTER,
+        positions=[Position.OF],
         rest_of_season=HitterStats(pa=500, ab=450, h=120, r=70, hr=20, rbi=70, sb=10, avg=0.267),
     )
 
 
 def _pitcher(name="P"):
     return Player(
-        name=name, player_type=PlayerType.PITCHER, positions=[Position.SP],
-        rest_of_season=PitcherStats(ip=180, w=12, k=180, sv=0, era=3.50, whip=1.20,
-                                     er=70, bb=55, h_allowed=160),
+        name=name,
+        player_type=PlayerType.PITCHER,
+        positions=[Position.SP],
+        rest_of_season=PitcherStats(
+            ip=180, w=12, k=180, sv=0, era=3.50, whip=1.20, er=70, bb=55, h_allowed=160
+        ),
     )
 
 

@@ -41,8 +41,6 @@ class HitterStats:
 
         return cls(**kwargs)
 
-
-
     # ------------------------------------------------------------------
     # Serialisation
     # ------------------------------------------------------------------
@@ -55,9 +53,9 @@ class HitterStats:
 
     def compute_sgp(self) -> float:
         from fantasy_baseball.sgp.player_value import calculate_player_sgp
+
         self.sgp = calculate_player_sgp(self)
         return self.sgp
-
 
 
 @dataclass
@@ -105,14 +103,15 @@ class PitcherStats:
 
     def compute_sgp(self) -> float:
         from fantasy_baseball.sgp.player_value import calculate_player_sgp
+
         self.sgp = calculate_player_sgp(self)
         return self.sgp
-
 
 
 # ---------------------------------------------------------------------------
 # RankInfo
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class RankInfo:
@@ -122,15 +121,24 @@ class RankInfo:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> RankInfo:
-        return cls(rest_of_season=d.get("rest_of_season"), preseason=d.get("preseason"), current=d.get("current"))
+        return cls(
+            rest_of_season=d.get("rest_of_season"),
+            preseason=d.get("preseason"),
+            current=d.get("current"),
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        return {"rest_of_season": self.rest_of_season, "preseason": self.preseason, "current": self.current}
+        return {
+            "rest_of_season": self.rest_of_season,
+            "preseason": self.preseason,
+            "current": self.current,
+        }
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _has_stat_keys(d: dict[str, Any], player_type: PlayerType) -> bool:
     """Return True if d contains top-level stat keys for the given player_type."""
@@ -139,9 +147,7 @@ def _has_stat_keys(d: dict[str, Any], player_type: PlayerType) -> bool:
     return any(k in d for k in ("hr", "r", "rbi"))
 
 
-def _make_stats(
-    d: dict[str, Any], player_type: PlayerType
-) -> HitterStats | PitcherStats | None:
+def _make_stats(d: dict[str, Any], player_type: PlayerType) -> HitterStats | PitcherStats | None:
     """Build the appropriate stats object from a sub-dict."""
     if not d:
         return None
@@ -153,6 +159,7 @@ def _make_stats(
 # ---------------------------------------------------------------------------
 # Player
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class Player:
@@ -204,8 +211,7 @@ class Player:
 
         raw_positions = d.get("positions", [])
         parsed_positions = [
-            p if isinstance(p, Position) else Position.parse(p)
-            for p in raw_positions
+            p if isinstance(p, Position) else Position.parse(p) for p in raw_positions
         ]
 
         raw_slot = d.get("selected_position")

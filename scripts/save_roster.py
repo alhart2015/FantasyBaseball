@@ -9,6 +9,7 @@ Connects to Yahoo, fetches the current roster for the user's team,
 and saves it to data/rosters/<monday>_hart_roster.json (keyed to Monday
 of the current week so each week gets one file).
 """
+
 import argparse
 import json
 import sys
@@ -30,8 +31,9 @@ ROSTERS_DIR = PROJECT_ROOT / "data" / "rosters"
 
 def main():
     parser = argparse.ArgumentParser(description="Save weekly roster snapshot from Yahoo")
-    parser.add_argument("--week", type=int, default=None,
-                        help="Week number (default: auto-detect from Yahoo)")
+    parser.add_argument(
+        "--week", type=int, default=None, help="Week number (default: auto-detect from Yahoo)"
+    )
     args = parser.parse_args()
 
     config = load_config(CONFIG_PATH)
