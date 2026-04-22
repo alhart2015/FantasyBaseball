@@ -3,7 +3,7 @@
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import requests
 
@@ -14,7 +14,44 @@ logger = logging.getLogger(__name__)
 MLB_API_BASE = "https://statsapi.mlb.com/api/v1"
 
 
-def parse_hitter_game_log(split: dict[str, Any]) -> dict[str, Any]:
+class HitterGameLog(TypedDict):
+    """One game's worth of hitter stats parsed from the MLB Stats API."""
+
+    date: str
+    pa: int
+    ab: int
+    h: int
+    hr: int
+    r: int
+    rbi: int
+    sb: int
+
+
+class PitcherGameLog(TypedDict):
+    """One game's worth of pitcher stats parsed from the MLB Stats API.
+
+    ``ip`` is a float because the API returns values like ``"6.1"`` meaning
+    6⅓ innings; we convert the fractional part into thirds.
+    """
+
+    date: str
+    ip: float
+    k: int
+    er: int
+    bb: int
+    h_allowed: int
+    w: int
+    sv: int
+    gs: int
+    g: int
+
+
+# Union of the two game log shapes, for code paths that don't know the
+# player type statically (e.g. fetch_player_game_log dispatching on `group`).
+GameLog = HitterGameLog | PitcherGameLog
+
+
+def parse_hitter_game_log(split: dict[str, Any]) -> HitterGameLog:
     """Parse a single hitter game log entry from the MLB API."""
     stat = split["stat"]
     return {
@@ -29,7 +66,7 @@ def parse_hitter_game_log(split: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def parse_pitcher_game_log(split: dict[str, Any]) -> dict[str, Any]:
+def parse_pitcher_game_log(split: dict[str, Any]) -> PitcherGameLog:
     """Parse a single pitcher game log entry from the MLB API."""
     stat = split["stat"]
     ip_str = str(stat.get("inningsPitched", "0"))
@@ -53,23 +90,35 @@ def parse_pitcher_game_log(split: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def fetch_player_game_log(
-    mlbam_id: int, season: int, group: str = "hitting"
-) -> list[dict[str, Any]]:
-    """Fetch game log from MLB Stats API for one player."""
+def fetch_player_game_log(mlbam_id: int, season: int, group: str = "hitting") -> list[GameLog]:
+    """Fetch game log from MLB Stats API for one player.
+
+    Returns hitter rows for ``group="hitting"`` and pitcher rows for any
+    other value — callers that know the player type can narrow the list
+    element type accordingly.
+    """
     url = f"{MLB_API_BASE}/people/{mlbam_id}/stats"
     params: dict[str, str | int] = {"stats": "gameLog", "group": group, "season": season}
     resp = requests.get(url, params=params, timeout=15)
     resp.raise_for_status()
     data = resp.json()
     splits = data.get("stats", [{}])[0].get("splits", [])
-    parser = parse_hitter_game_log if group == "hitting" else parse_pitcher_game_log
-    return [parser(s) for s in splits]
+    if group == "hitting":
+        return [parse_hitter_game_log(s) for s in splits]
+    return [parse_pitcher_game_log(s) for s in splits]
+
+
+class PlayerGameLogs(TypedDict):
+    """Game logs for a single player, as stored in the cache JSON."""
+
+    name: str
+    type: str
+    games: list[GameLog]
 
 
 def fetch_all_game_logs(
     players: list[dict[str, Any]], season: int = 2025, cache_path: Path | None = None
-) -> dict[int, dict[str, Any]]:
+) -> dict[int, PlayerGameLogs]:
     """Fetch game logs for a list of players, with JSON caching.
 
     Args:
@@ -89,7 +138,7 @@ def fetch_all_game_logs(
             logger.info("Using cached game logs (%d players)", len(cached))
             return {int(k): v for k, v in cached.items()}
 
-    results: dict[int, dict[str, Any]] = {}
+    results: dict[int, PlayerGameLogs] = {}
     for i, player in enumerate(players):
         mid = player["mlbam_id"]
         name = player["name"]
