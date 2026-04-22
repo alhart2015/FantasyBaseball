@@ -239,7 +239,7 @@ class TestPitcherOptimizer:
             _standing("Us", W=0, K=0, SV=0, ERA=0, WHIP=0),
             _standing("Rival", W=0, K=0, SV=20, ERA=0, WHIP=0),
         ]
-        starters, bench = optimize_pitcher_lineup(
+        starters, _bench = optimize_pitcher_lineup(
             pitchers=pitchers, full_roster=pitchers,
             projected_standings=standings, team_name="Us", slots=slots_cfg,
         )

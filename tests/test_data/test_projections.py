@@ -17,7 +17,7 @@ class TestBlendProjections:
         assert len(pitchers) == 3
 
     def test_blended_counting_stats_are_averaged(self, fixtures_dir):
-        hitters, pitchers, _ = blend_projections(
+        hitters, _pitchers, _ = blend_projections(
             fixtures_dir,
             systems=["steamer", "zips"],
         )
@@ -28,7 +28,7 @@ class TestBlendProjections:
         assert judge["r"] == pytest.approx(107.5)
 
     def test_blended_avg_recomputed_from_components(self, fixtures_dir):
-        hitters, pitchers, _ = blend_projections(
+        hitters, _pitchers, _ = blend_projections(
             fixtures_dir,
             systems=["steamer", "zips"],
         )
@@ -39,7 +39,7 @@ class TestBlendProjections:
         assert judge["avg"] == pytest.approx(expected_avg, abs=0.001)
 
     def test_blended_era_recomputed_from_components(self, fixtures_dir):
-        hitters, pitchers, _ = blend_projections(
+        _hitters, pitchers, _ = blend_projections(
             fixtures_dir,
             systems=["steamer", "zips"],
         )
@@ -50,7 +50,7 @@ class TestBlendProjections:
         assert cole["era"] == pytest.approx(expected_era, abs=0.01)
 
     def test_blended_whip_recomputed_from_components(self, fixtures_dir):
-        hitters, pitchers, _ = blend_projections(
+        _hitters, pitchers, _ = blend_projections(
             fixtures_dir,
             systems=["steamer", "zips"],
         )
@@ -62,7 +62,7 @@ class TestBlendProjections:
         assert cole["whip"] == pytest.approx(expected_whip, abs=0.01)
 
     def test_custom_weights(self, fixtures_dir):
-        hitters, pitchers, _ = blend_projections(
+        hitters, _pitchers, _ = blend_projections(
             fixtures_dir,
             systems=["steamer", "zips"],
             weights={"steamer": 0.75, "zips": 0.25},
@@ -72,7 +72,7 @@ class TestBlendProjections:
         assert judge["hr"] == pytest.approx(44.25)
 
     def test_single_system(self, fixtures_dir):
-        hitters, pitchers, _ = blend_projections(
+        hitters, _pitchers, _ = blend_projections(
             fixtures_dir,
             systems=["steamer"],
         )
@@ -82,7 +82,7 @@ class TestBlendProjections:
     def test_blend_preserves_mlbam_id_in_metadata(self, fixtures_dir):
         """mlbam_id should be available in loaded system DataFrames."""
         from fantasy_baseball.data.fangraphs import load_projection_set
-        hitters, pitchers = load_projection_set(fixtures_dir, "steamer")
+        hitters, _pitchers = load_projection_set(fixtures_dir, "steamer")
         assert "mlbam_id" in hitters.columns, "mlbam_id missing from hitter columns"
         judge = hitters[hitters["name"] == "Aaron Judge"].iloc[0]
         assert judge["mlbam_id"] == 592450

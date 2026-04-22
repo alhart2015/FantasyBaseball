@@ -405,7 +405,7 @@ class TestFallbackNonCloser:
         board = _make_standard_board()
         config = _make_config()
         tracker = _make_tracker()
-        name, pid = _fallback_non_closer(board, tracker, board, config)
+        name, _pid = _fallback_non_closer(board, tracker, board, config)
         # Should not return a closer
         if name:
             row = board[board["name"] == name]
@@ -503,7 +503,7 @@ class TestPickDefault:
         tracker = _make_tracker()
         _draft_other_player(tracker, "Hitter A", "Hitter A::hitter")
         balance = CategoryBalance()
-        name, pid = pick_default(board, board, tracker, balance, config, {})
+        name, _pid = pick_default(board, board, tracker, balance, config, {})
         assert name != "Hitter A"
 
 
@@ -514,7 +514,7 @@ class TestPickNonzeroSv:
         config = _make_config()
         tracker = _make_tracker()  # Round 1
         balance = CategoryBalance()
-        name, pid = pick_nonzero_sv(board, board, tracker, balance, config, {})
+        name, _pid = pick_nonzero_sv(board, board, tracker, balance, config, {})
         # Should pick as normal (default) since we're before deadline
         assert name is not None
 
@@ -525,7 +525,7 @@ class TestPickNonzeroSv:
         tracker = _make_tracker()
         _advance_to_round(tracker, CLOSER_DEADLINE_ROUND)
         balance = CategoryBalance()
-        name, pid = pick_nonzero_sv(board, board, tracker, balance, config, {})
+        name, _pid = pick_nonzero_sv(board, board, tracker, balance, config, {})
         assert name is not None
         # Should be a closer
         row = board[board["name"] == name]
@@ -543,7 +543,7 @@ class TestPickNonzeroSv:
         # Add the closer to balance so leverage works
         closer_row = board[board["name"] == "Closer A"].iloc[0]
         balance.add_player(closer_row)
-        name, pid = pick_nonzero_sv(board, board, tracker, balance, config, {})
+        name, _pid = pick_nonzero_sv(board, board, tracker, balance, config, {})
         # Should fall back to default (may or may not be a closer, but it's not forced)
         assert name is not None
 
@@ -559,7 +559,7 @@ class TestPickNonzeroSv:
         _draft_other_player(tracker, "Closer D", "Closer D::pitcher")
         _advance_to_round(tracker, CLOSER_DEADLINE_ROUND)
         balance = CategoryBalance()
-        name, pid = pick_nonzero_sv(board, board, tracker, balance, config, {})
+        name, _pid = pick_nonzero_sv(board, board, tracker, balance, config, {})
         # Should still return something (default pick)
         assert name is not None
         # Should NOT be a closer since they're all gone
@@ -575,7 +575,7 @@ class TestPickAvgHedge:
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
-        name, pid = pick_avg_hedge(board, board, tracker, balance, config, {})
+        name, _pid = pick_avg_hedge(board, board, tracker, balance, config, {})
         assert name is not None
 
     def test_skips_low_avg_hitter_when_would_tank_team(self):
@@ -596,7 +596,7 @@ class TestPickAvgHedge:
             "h": int(0.258 * 500),
         })
         balance.add_player(existing)
-        name, pid = pick_avg_hedge(board, board, tracker, balance, config, {})
+        name, _pid = pick_avg_hedge(board, board, tracker, balance, config, {})
         # Should prefer the pitcher since low-AVG hitters would tank AVG
         assert name == "Good SP"
 
@@ -615,7 +615,7 @@ class TestPickAvgHedge:
             "h": int(0.256 * 500),
         })
         balance.add_player(existing)
-        name, pid = pick_avg_hedge(board, board, tracker, balance, config, {})
+        name, _pid = pick_avg_hedge(board, board, tracker, balance, config, {})
         # Falls back to best rec
         assert name is not None
 
@@ -627,7 +627,7 @@ class TestPickAvgHedge:
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
-        name, pid = pick_avg_hedge(board, board, tracker, balance, config, {})
+        name, _pid = pick_avg_hedge(board, board, tracker, balance, config, {})
         assert name == "Low AVG"
 
 
@@ -638,7 +638,7 @@ class TestPickNoPuntOpp:
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
-        name, pid = pick_no_punt_opp(board, board, tracker, balance, config, {})
+        name, _pid = pick_no_punt_opp(board, board, tracker, balance, config, {})
         assert name is not None
 
     def test_forces_closer_when_sv_in_danger(self):
@@ -655,7 +655,7 @@ class TestPickNoPuntOpp:
             3: ["Closer B::pitcher"],
             4: ["Closer C::pitcher"],
         }
-        name, pid = pick_no_punt_opp(
+        name, _pid = pick_no_punt_opp(
             board, board, tracker, balance, config, {},
             team_rosters=team_rosters,
         )
@@ -673,7 +673,7 @@ class TestPickNoPuntOpp:
         _advance_to_round(tracker, NO_PUNT_SV_DEADLINE)
         balance = CategoryBalance()
         # No team_rosters -> legacy deadline
-        name, pid = pick_no_punt_opp(board, board, tracker, balance, config, {})
+        name, _pid = pick_no_punt_opp(board, board, tracker, balance, config, {})
         assert name is not None
         # Should force a closer since no closer and past deadline
         row = board[board["name"] == name]
@@ -691,7 +691,7 @@ class TestPickNoPuntOpp:
         while tracker.current_pick < 20:
             tracker.advance()
         balance = CategoryBalance()
-        name, pid = pick_no_punt_opp(board, board, tracker, balance, config, {})
+        name, _pid = pick_no_punt_opp(board, board, tracker, balance, config, {})
         assert name is not None
 
     def test_avg_floor_applied(self):
@@ -709,7 +709,7 @@ class TestPickNoPuntOpp:
             "h": int(0.252 * 500),
         })
         balance.add_player(existing)
-        name, pid = pick_no_punt_opp(board, board, tracker, balance, config, {})
+        name, _pid = pick_no_punt_opp(board, board, tracker, balance, config, {})
         # Should prefer the pitcher since low-AVG hitter would tank team AVG
         assert name == "Good SP"
 
@@ -721,7 +721,7 @@ class TestPickTwoClosers:
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
-        name, pid = pick_two_closers(board, board, tracker, balance, config, {})
+        name, _pid = pick_two_closers(board, board, tracker, balance, config, {})
         assert name is not None
 
     def test_forces_first_closer_at_deadline(self):
@@ -731,7 +731,7 @@ class TestPickTwoClosers:
         tracker = _make_tracker()
         _advance_to_round(tracker, TWO_CLOSERS_DEADLINES[0])
         balance = CategoryBalance()
-        name, pid = pick_two_closers(board, board, tracker, balance, config, {})
+        name, _pid = pick_two_closers(board, board, tracker, balance, config, {})
         assert name is not None
         row = board[board["name"] == name]
         assert not row.empty
@@ -745,7 +745,7 @@ class TestPickTwoClosers:
         _draft_user_player(tracker, "Closer A", "Closer A::pitcher")
         _advance_to_round(tracker, TWO_CLOSERS_DEADLINES[1])
         balance = CategoryBalance()
-        name, pid = pick_two_closers(board, board, tracker, balance, config, {})
+        name, _pid = pick_two_closers(board, board, tracker, balance, config, {})
         assert name is not None
         row = board[board["name"] == name]
         assert not row.empty
@@ -760,7 +760,7 @@ class TestPickTwoClosers:
         _draft_user_player(tracker, "Closer B", "Closer B::pitcher")
         _advance_to_round(tracker, 20)  # Way past deadlines
         balance = CategoryBalance()
-        name, pid = pick_two_closers(board, board, tracker, balance, config, {})
+        name, _pid = pick_two_closers(board, board, tracker, balance, config, {})
         # Should pick default (not forced to get a third closer)
         assert name is not None
 
@@ -772,7 +772,7 @@ class TestPickThreeClosers:
         tracker = _make_tracker()
         _advance_to_round(tracker, THREE_CLOSERS_DEADLINES[0])
         balance = CategoryBalance()
-        name, pid = pick_three_closers(board, board, tracker, balance, config, {})
+        name, _pid = pick_three_closers(board, board, tracker, balance, config, {})
         row = board[board["name"] == name]
         assert not row.empty
         assert row.iloc[0]["sv"] >= CLOSER_SV_THRESHOLD
@@ -784,7 +784,7 @@ class TestPickThreeClosers:
         _draft_user_player(tracker, "Closer A", "Closer A::pitcher")
         _advance_to_round(tracker, THREE_CLOSERS_DEADLINES[1])
         balance = CategoryBalance()
-        name, pid = pick_three_closers(board, board, tracker, balance, config, {})
+        name, _pid = pick_three_closers(board, board, tracker, balance, config, {})
         row = board[board["name"] == name]
         assert not row.empty
         assert row.iloc[0]["sv"] >= CLOSER_SV_THRESHOLD
@@ -798,7 +798,7 @@ class TestPickThreeClosers:
         _draft_user_player(tracker, "Closer C", "Closer C::pitcher")
         _advance_to_round(tracker, 20)
         balance = CategoryBalance()
-        name, pid = pick_three_closers(board, board, tracker, balance, config, {})
+        name, _pid = pick_three_closers(board, board, tracker, balance, config, {})
         assert name is not None
 
 
@@ -809,7 +809,7 @@ class TestPickFourClosers:
         tracker = _make_tracker()
         _advance_to_round(tracker, FOUR_CLOSERS_DEADLINES[0])
         balance = CategoryBalance()
-        name, pid = pick_four_closers(board, board, tracker, balance, config, {})
+        name, _pid = pick_four_closers(board, board, tracker, balance, config, {})
         row = board[board["name"] == name]
         assert not row.empty
         assert row.iloc[0]["sv"] >= CLOSER_SV_THRESHOLD
@@ -823,7 +823,7 @@ class TestPickFourClosers:
         _draft_user_player(tracker, "Closer C", "Closer C::pitcher")
         _advance_to_round(tracker, FOUR_CLOSERS_DEADLINES[3])
         balance = CategoryBalance()
-        name, pid = pick_four_closers(board, board, tracker, balance, config, {})
+        name, _pid = pick_four_closers(board, board, tracker, balance, config, {})
         row = board[board["name"] == name]
         assert not row.empty
         assert row.iloc[0]["sv"] >= CLOSER_SV_THRESHOLD
@@ -838,7 +838,7 @@ class TestPickFourClosers:
         _draft_user_player(tracker, "Closer D", "Closer D::pitcher")
         _advance_to_round(tracker, 20)
         balance = CategoryBalance()
-        name, pid = pick_four_closers(board, board, tracker, balance, config, {})
+        name, _pid = pick_four_closers(board, board, tracker, balance, config, {})
         assert name is not None
 
 
@@ -848,7 +848,7 @@ class TestPickNoPunt:
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
-        name, pid = pick_no_punt(board, board, tracker, balance, config, {})
+        name, _pid = pick_no_punt(board, board, tracker, balance, config, {})
         assert name is not None
 
     def test_forces_closer_via_dynamic_sv(self):
@@ -864,7 +864,7 @@ class TestPickNoPunt:
             3: ["Closer B::pitcher"],
             4: ["Closer C::pitcher"],
         }
-        name, pid = pick_no_punt(
+        name, _pid = pick_no_punt(
             board, board, tracker, balance, config, {},
             team_rosters=team_rosters,
         )
@@ -878,7 +878,7 @@ class TestPickNoPunt:
         tracker = _make_tracker()
         _advance_to_round(tracker, NO_PUNT_SV_DEADLINE)
         balance = CategoryBalance()
-        name, pid = pick_no_punt(board, board, tracker, balance, config, {})
+        name, _pid = pick_no_punt(board, board, tracker, balance, config, {})
         # No closer drafted, past deadline -> forces closer
         row = board[board["name"] == name]
         assert not row.empty
@@ -899,7 +899,7 @@ class TestPickNoPunt:
             "h": int(0.252 * 500),
         })
         balance.add_player(existing)
-        name, pid = pick_no_punt(board, board, tracker, balance, config, {})
+        name, _pid = pick_no_punt(board, board, tracker, balance, config, {})
         assert name == "Good SP"
 
     def test_no_punt_with_closer_already_drafted_no_force(self):
@@ -910,7 +910,7 @@ class TestPickNoPunt:
         _draft_user_player(tracker, "Closer A", "Closer A::pitcher")
         _advance_to_round(tracker, NO_PUNT_SV_DEADLINE)
         balance = CategoryBalance()
-        name, pid = pick_no_punt(board, board, tracker, balance, config, {})
+        name, _pid = pick_no_punt(board, board, tracker, balance, config, {})
         # Already has a closer -> no force, should fall back to recs
         assert name is not None
 
@@ -921,7 +921,7 @@ class TestPickNoPuntStagger:
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
-        name, pid = pick_no_punt_stagger(board, board, tracker, balance, config, {})
+        name, _pid = pick_no_punt_stagger(board, board, tracker, balance, config, {})
         assert name is not None
 
     def test_forces_closer_at_first_deadline(self):
@@ -930,7 +930,7 @@ class TestPickNoPuntStagger:
         tracker = _make_tracker()
         _advance_to_round(tracker, NO_PUNT_STAGGER_DEADLINES[0])
         balance = CategoryBalance()
-        name, pid = pick_no_punt_stagger(board, board, tracker, balance, config, {})
+        name, _pid = pick_no_punt_stagger(board, board, tracker, balance, config, {})
         row = board[board["name"] == name]
         assert not row.empty
         assert row.iloc[0]["sv"] >= CLOSER_SV_THRESHOLD
@@ -948,7 +948,7 @@ class TestPickNoPuntStagger:
             3: ["Closer B::pitcher"],
             4: ["Closer C::pitcher"],
         }
-        name, pid = pick_no_punt_stagger(
+        name, _pid = pick_no_punt_stagger(
             board, board, tracker, balance, config, {},
             team_rosters=team_rosters,
         )
@@ -970,7 +970,7 @@ class TestPickNoPuntStagger:
             "h": int(0.252 * 500),
         })
         balance.add_player(existing)
-        name, pid = pick_no_punt_stagger(board, board, tracker, balance, config, {})
+        name, _pid = pick_no_punt_stagger(board, board, tracker, balance, config, {})
         assert name == "Good SP"
 
 
@@ -981,7 +981,7 @@ class TestPickNoPuntCap3:
         tracker = _make_tracker()
         _advance_to_round(tracker, NO_PUNT_STAGGER_DEADLINES[0])
         balance = CategoryBalance()
-        name, pid = pick_no_punt_cap3(board, board, tracker, balance, config, {})
+        name, _pid = pick_no_punt_cap3(board, board, tracker, balance, config, {})
         row = board[board["name"] == name]
         assert not row.empty
         assert row.iloc[0]["sv"] >= CLOSER_SV_THRESHOLD
@@ -996,7 +996,7 @@ class TestPickNoPuntCap3:
         _draft_user_player(tracker, "Closer C", "Closer C::pitcher")
         _advance_to_round(tracker, 20)
         balance = CategoryBalance()
-        name, pid = pick_no_punt_cap3(board, board, tracker, balance, config, {})
+        name, _pid = pick_no_punt_cap3(board, board, tracker, balance, config, {})
         assert name is not None
         # Should NOT be a closer
         row = board[board["name"] == name]
@@ -1013,7 +1013,7 @@ class TestPickNoPuntCap3:
         _draft_user_player(tracker, "Closer C", "Closer C::pitcher")
         _advance_to_round(tracker, NO_PUNT_STAGGER_DEADLINES[2])
         balance = CategoryBalance()
-        name, pid = pick_no_punt_cap3(board, board, tracker, balance, config, {})
+        name, _pid = pick_no_punt_cap3(board, board, tracker, balance, config, {})
         # Should pick a non-closer
         assert name is not None
 
@@ -1045,7 +1045,7 @@ class TestPickNoPuntCap3:
             "h": int(0.252 * 500),
         })
         balance.add_player(existing)
-        name, pid = pick_no_punt_cap3(board, full_board, tracker, balance, config, {})
+        name, _pid = pick_no_punt_cap3(board, full_board, tracker, balance, config, {})
         # Should prefer the SP over the low-AVG hitter and skip the closer (cap hit)
         assert name == "Good SP"
 
@@ -1087,7 +1087,7 @@ class TestPickAvgAnchor:
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
-        name, pid = pick_avg_anchor(board, board, tracker, balance, config, {})
+        name, _pid = pick_avg_anchor(board, board, tracker, balance, config, {})
         assert name is not None
         # Should prefer a high-AVG hitter if available in recs
         row = board[board["name"] == name]
@@ -1103,7 +1103,7 @@ class TestPickAvgAnchor:
         # Draft a high-AVG hitter as anchor
         _draft_user_player(tracker, "Hitter D", "Hitter D::hitter")  # .300 AVG
         balance = CategoryBalance()
-        name, pid = pick_avg_anchor(board, board, tracker, balance, config, {})
+        name, _pid = pick_avg_anchor(board, board, tracker, balance, config, {})
         # Should just take the default pick now
         assert name is not None
 
@@ -1117,7 +1117,7 @@ class TestPickAvgAnchor:
         _draft_user_player(tracker, "Hitter B", "Hitter B::hitter")
         _draft_user_player(tracker, "Hitter C", "Hitter C::hitter")
         balance = CategoryBalance()
-        name, pid = pick_avg_anchor(board, board, tracker, balance, config, {})
+        name, _pid = pick_avg_anchor(board, board, tracker, balance, config, {})
         # Past deadline, falls back to default
         assert name is not None
 
@@ -1134,7 +1134,7 @@ class TestPickAvgAnchor:
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
-        name, pid = pick_avg_anchor(board, board, tracker, balance, config, {})
+        name, _pid = pick_avg_anchor(board, board, tracker, balance, config, {})
         # Should find the anchor on the board
         assert name is not None
 
@@ -1147,7 +1147,7 @@ class TestPickClosersAvg:
         tracker = _make_tracker()
         _advance_to_round(tracker, THREE_CLOSERS_DEADLINES[0])
         balance = CategoryBalance()
-        name, pid = pick_closers_avg(board, board, tracker, balance, config, {})
+        name, _pid = pick_closers_avg(board, board, tracker, balance, config, {})
         row = board[board["name"] == name]
         assert not row.empty
         assert row.iloc[0]["sv"] >= CLOSER_SV_THRESHOLD
@@ -1158,7 +1158,7 @@ class TestPickClosersAvg:
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
-        name, pid = pick_closers_avg(board, board, tracker, balance, config, {})
+        name, _pid = pick_closers_avg(board, board, tracker, balance, config, {})
         assert name is not None
 
     def test_no_force_when_all_closers_drafted(self):
@@ -1171,7 +1171,7 @@ class TestPickClosersAvg:
         _draft_user_player(tracker, "Closer C", "Closer C::pitcher")
         _advance_to_round(tracker, 20)
         balance = CategoryBalance()
-        name, pid = pick_closers_avg(board, board, tracker, balance, config, {})
+        name, _pid = pick_closers_avg(board, board, tracker, balance, config, {})
         assert name is not None
 
 
@@ -1182,7 +1182,7 @@ class TestPickBalanced:
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
-        name, pid = pick_balanced(board, board, tracker, balance, config, {})
+        name, _pid = pick_balanced(board, board, tracker, balance, config, {})
         assert name is not None
 
     def test_forces_hitter_when_pitchers_lead(self):
@@ -1197,7 +1197,7 @@ class TestPickBalanced:
         _draft_user_player(tracker, "Closer B", "Closer B::pitcher")
         _draft_user_player(tracker, "Hitter A", "Hitter A::hitter")
         balance = CategoryBalance()
-        name, pid = pick_balanced(board, board, tracker, balance, config, {})
+        name, _pid = pick_balanced(board, board, tracker, balance, config, {})
         assert name is not None
         row = board[board["name"] == name]
         if not row.empty:
@@ -1215,7 +1215,7 @@ class TestPickBalanced:
         _draft_user_player(tracker, "Hitter D", "Hitter D::hitter")
         _draft_user_player(tracker, "SP A", "SP A::pitcher")
         balance = CategoryBalance()
-        name, pid = pick_balanced(board, board, tracker, balance, config, {})
+        name, _pid = pick_balanced(board, board, tracker, balance, config, {})
         assert name is not None
         row = board[board["name"] == name]
         if not row.empty:
@@ -1232,7 +1232,7 @@ class TestPickBalanced:
         _draft_user_player(tracker, "SP A", "SP A::pitcher")
         _draft_user_player(tracker, "SP B", "SP B::pitcher")
         balance = CategoryBalance()
-        name, pid = pick_balanced(board, board, tracker, balance, config, {})
+        name, _pid = pick_balanced(board, board, tracker, balance, config, {})
         # Should pick the best available (no forced type)
         assert name is not None
 
@@ -1246,7 +1246,7 @@ class TestPickBalanced:
         _draft_user_player(tracker, "Hitter B", "Hitter B::hitter")
         _draft_user_player(tracker, "SP A", "SP A::pitcher")
         balance = CategoryBalance()
-        name, pid = pick_balanced(board, board, tracker, balance, config, {})
+        name, _pid = pick_balanced(board, board, tracker, balance, config, {})
         assert name is not None
 
 
@@ -1297,7 +1297,7 @@ class TestEdgeCases:
         config = _make_config()
         tracker = _make_tracker()
         balance = CategoryBalance()
-        name, pid = pick_default(board, board, tracker, balance, config, {})
+        name, _pid = pick_default(board, board, tracker, balance, config, {})
         assert name == "Only One"
 
     def test_n_closers_factory_no_closers_on_board(self):
@@ -1310,7 +1310,7 @@ class TestEdgeCases:
         tracker = _make_tracker()
         _advance_to_round(tracker, TWO_CLOSERS_DEADLINES[0])
         balance = CategoryBalance()
-        name, pid = pick_two_closers(board, board, tracker, balance, config, {})
+        name, _pid = pick_two_closers(board, board, tracker, balance, config, {})
         # No closers on board -> falls back to default
         assert name is not None
         row = board[board["name"] == name]
@@ -1324,7 +1324,7 @@ class TestEdgeCases:
         _draft_other_player(tracker, "Closer A", "Closer A::pitcher")
         result = _force_closer(board, tracker, board, config)
         assert result is not None
-        name, pid = result
+        name, _pid = result
         assert name != "Closer A"
 
     def test_count_closers_empty_roster(self):
@@ -1340,7 +1340,7 @@ class TestEdgeCases:
         for name in ["Hitter A", "Hitter B", "Hitter C", "Hitter D", "Hitter E", "Hitter F"]:
             _draft_user_player(tracker, name, f"{name}::hitter")
         balance = CategoryBalance()
-        name, pid = pick_balanced(board, board, tracker, balance, config, {})
+        name, _pid = pick_balanced(board, board, tracker, balance, config, {})
         assert name is not None
         row = board[board["name"] == name]
         if not row.empty:
@@ -1354,7 +1354,7 @@ class TestEdgeCases:
         for name in ["SP A", "SP B", "SP C", "Closer A", "Closer B"]:
             _draft_user_player(tracker, name, f"{name}::pitcher")
         balance = CategoryBalance()
-        name, pid = pick_balanced(board, board, tracker, balance, config, {})
+        name, _pid = pick_balanced(board, board, tracker, balance, config, {})
         assert name is not None
         row = board[board["name"] == name]
         if not row.empty:
@@ -1439,7 +1439,7 @@ class TestEdgeCases:
             3: ["Closer B::pitcher"],
             4: ["Closer C::pitcher"],
         }
-        name, pid = pick_no_punt_cap3(
+        name, _pid = pick_no_punt_cap3(
             board, board, tracker, balance, config, {},
             team_rosters=team_rosters,
         )
@@ -1463,7 +1463,7 @@ class TestEdgeCases:
             3: [],
             4: [],
         }
-        name, pid = pick_no_punt_cap3(
+        name, _pid = pick_no_punt_cap3(
             board, board, tracker, balance, config, {},
             team_rosters=team_rosters,
         )
