@@ -20,6 +20,7 @@ import pandas as pd
 from fantasy_baseball.models.league import League
 from fantasy_baseball.models.player import HitterStats, PitcherStats, PlayerType
 from fantasy_baseball.models.roster import Roster
+from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.trades.evaluate import apply_swap_delta
@@ -326,7 +327,7 @@ def _delta_roto(
     team_name: str,
     loses_ros: dict[str, float],
     gains_ros: dict[str, float],
-    projected_standings: list[dict[str, Any]],
+    projected_standings: ProjectedStandings,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
 ) -> float:
     """Return the team's total-ΔRoto from swapping ``loses_ros`` → ``gains_ros``.
@@ -339,7 +340,7 @@ def _delta_roto(
     ERoto points; otherwise it falls back to integer rank-based
     scoring.
     """
-    all_before = {t["name"]: dict(t["stats"]) for t in projected_standings}
+    all_before = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
     if team_name not in all_before:
         return 0.0
 
@@ -358,7 +359,7 @@ def _delta_roto(
 def score_transaction(
     league: League,
     txn: dict[str, Any],
-    projected_standings: list[dict[str, Any]],
+    projected_standings: ProjectedStandings,
     hitters_proj: pd.DataFrame,
     pitchers_proj: pd.DataFrame,
     season_start: date,
@@ -385,8 +386,8 @@ def score_transaction(
         league: League model with standings + roster history.
         txn: Transaction dict (team, type, timestamp, add_name,
             add_positions, drop_name, drop_positions).
-        projected_standings: end-of-season standings baseline.
-            Each entry: ``{"name", "team_key", "rank", "stats"}``.
+        projected_standings: end-of-season standings baseline
+            (typed :class:`ProjectedStandings`).
         hitters_proj / pitchers_proj: ROS projection DataFrames with a
             ``_name_norm`` column (added by
             :func:`_load_projections_for_date_redis`).

@@ -1005,7 +1005,6 @@ class RefreshRun:
             )
             season_start = date.fromisoformat(self.config.season_start)
             season_end = date.fromisoformat(self.config.season_end)
-            projected_rows = self.projected_standings.to_json()["teams"]
 
             for txn in new_txns:
                 entry = by_id[txn["transaction_id"]]
@@ -1014,7 +1013,7 @@ class RefreshRun:
                 scores = score_transaction(
                     self.league_model,
                     entry,
-                    projected_rows,
+                    self.projected_standings,
                     hitters_proj,
                     pitchers_proj,
                     season_start,
