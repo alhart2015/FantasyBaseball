@@ -36,7 +36,7 @@ from fantasy_baseball.utils.constants import RATE_STATS, Category
 # ---------------------------------------------------------------------------
 _version_lock = threading.Lock()
 _current_version: int = 0
-_previous_state: dict | None = None
+_previous_state: dict[str, Any] | None = None
 
 
 def _next_version() -> int:
@@ -58,7 +58,7 @@ def get_current_version() -> int:
 # ---------------------------------------------------------------------------
 
 
-def _serialize_player_stats(player: dict, row) -> None:
+def _serialize_player_stats(player: dict[str, Any], row: pd.Series) -> None:
     """Add stat fields to a player dict based on player type."""
     if row["player_type"] == PlayerType.HITTER:
         player["r"] = int(row.get("r", 0))
@@ -74,7 +74,7 @@ def _serialize_player_stats(player: dict, row) -> None:
         player["whip"] = round(float(row.get("whip", 0)), 2)
 
 
-def serialize_board(board: pd.DataFrame) -> list[dict]:
+def serialize_board(board: pd.DataFrame) -> list[dict[str, Any]]:
     """Serialize the full draft board into a JSON-serializable list.
 
     This is meant to be fetched once by the client and cached locally.
@@ -84,7 +84,7 @@ def serialize_board(board: pd.DataFrame) -> list[dict]:
     players = []
     for _, row in board.iterrows():
         adp_val = row.get("adp", None)
-        player: dict = {
+        player: dict[str, Any] = {
             "name": row["name"],
             "player_id": row.get("player_id", row["name"]),
             "positions": row["positions"]
@@ -119,7 +119,7 @@ def serialize_state(
     vona_scores: dict[str, float] | None = None,
     *,
     include_available: bool = True,
-) -> dict:
+) -> dict[str, Any]:
     """Convert all draft objects into a JSON-serializable dict.
 
     Parameters
@@ -146,7 +146,7 @@ def serialize_state(
     keeper_rounds = num_keepers // tracker.num_teams if tracker.num_teams else 0
     overall_round = tracker.current_round + keeper_rounds
 
-    state: dict = {
+    state: dict[str, Any] = {
         "version": get_current_version(),  # will be bumped by write_state
         "current_pick": overall_pick,
         "current_round": overall_round,
@@ -193,7 +193,7 @@ def serialize_state(
         available = board[~board["player_id"].isin(tracker.drafted_ids)]
         available_players = []
         for _, row in available.iterrows():
-            player: dict = {
+            player: dict[str, Any] = {
                 "name": row["name"],
                 "positions": row["positions"]
                 if isinstance(row["positions"], list)
@@ -235,13 +235,13 @@ _DELTA_KEYS = {
 }
 
 
-def compute_delta(old_state: dict | None, new_state: dict) -> dict:
+def compute_delta(old_state: dict[str, Any] | None, new_state: dict[str, Any]) -> dict[str, Any]:
     """Return a dict with only the fields that differ between *old* and *new*.
 
     Always includes ``version``.  If *old_state* is ``None`` the full
     *new_state* is returned (minus ``available_players``).
     """
-    delta: dict = {"version": new_state["version"]}
+    delta: dict[str, Any] = {"version": new_state["version"]}
 
     if old_state is None:
         # No baseline -- send everything (excluding the heavy board list).
@@ -265,7 +265,7 @@ def compute_delta(old_state: dict | None, new_state: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def write_state(state: dict, path: Path) -> None:
+def write_state(state: dict[str, Any], path: Path) -> None:
     """Atomically write state dict to JSON (write tmp + rename).
 
     Writes to a temporary file in the same directory as ``path``, then
@@ -298,7 +298,7 @@ def write_state(state: dict, path: Path) -> None:
     _previous_state = lightweight
 
 
-def write_board(board_data: list[dict], path: Path) -> None:
+def write_board(board_data: list[dict[str, Any]], path: Path) -> None:
     """Atomically write the full board to a JSON file.
 
     Called once at draft start so the dashboard can fetch the board via
@@ -337,7 +337,7 @@ def _atomic_write(data, path: Path) -> None:
         raise
 
 
-def read_state(path: Path) -> dict:
+def read_state(path: Path) -> dict[str, Any]:
     """Read state dict from JSON. Returns empty dict on decode error or missing file."""
     try:
         with open(path) as f:
@@ -346,7 +346,7 @@ def read_state(path: Path) -> dict:
         return {}
 
 
-def read_board(path: Path) -> list[dict]:
+def read_board(path: Path) -> list[dict[str, Any]]:
     """Read the board list from JSON. Returns empty list on error or missing file."""
     try:
         with open(path) as f:
@@ -355,7 +355,7 @@ def read_board(path: Path) -> list[dict]:
         return []
 
 
-def read_delta(path: Path) -> dict:
+def read_delta(path: Path) -> dict[str, Any]:
     """Read the most recent delta from JSON. Returns empty dict on error."""
     try:
         with open(path) as f:

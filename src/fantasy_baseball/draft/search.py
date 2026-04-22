@@ -22,9 +22,7 @@ def split_team_and_player(
         return None, raw_input
 
     # Normalize team names for comparison
-    normed_teams = {
-        _norm(t): t for t in team_names
-    }
+    normed_teams = {_norm(t): t for t in team_names}
 
     best_score = 0.0
     best_team: str | None = None

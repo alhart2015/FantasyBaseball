@@ -71,7 +71,7 @@ def compute_slot_scarcity_order(
 def calculate_vona_scores(
     available: pd.DataFrame,
     picks_until_next: int | None = None,
-) -> dict:
+) -> dict[str, float]:
     """Compute Value Over Next Available for each player.
 
     For each player, estimates what the best player of the same bucket
@@ -284,7 +284,7 @@ def _filter_rosterable(
 def _collect_roster_entries(
     user_roster_ids: list[str],
     board: pd.DataFrame,
-    player_lookup: dict | None = None,
+    player_lookup: dict[str, pd.Series] | None = None,
 ) -> list[pd.Series]:
     """Look up board entries for each roster player by player_id."""
     if player_lookup is None:
@@ -318,7 +318,7 @@ def get_filled_positions(
     user_roster_ids: list[str],
     board: pd.DataFrame,
     roster_slots: dict[str, int] | None = None,
-    player_lookup: dict | None = None,
+    player_lookup: dict[str, pd.Series] | None = None,
 ) -> dict[str, int]:
     """Count how many of each roster slot the user has filled.
 
