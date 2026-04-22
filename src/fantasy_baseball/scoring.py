@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from math import erf, sqrt
 from typing import Protocol
 
@@ -244,6 +245,77 @@ def _scale_stats(p: Player, factor: float) -> dict[str, float | PlayerType]:
     return result
 
 
+# ── Breakdown types (per-team, per-player contribution view) ────────
+
+
+class ContributionStatus(StrEnum):
+    """Why a player contributes at the level they do.
+
+    Derived from the same classification ``_apply_displacement`` uses;
+    exposed on per-player breakdowns for UI tooling.
+    """
+
+    ACTIVE = "active"
+    IL_FULL = "il_full"
+    DISPLACED = "displaced"
+    BENCH = "bench"
+    NO_PROJECTION = "no_projection"
+
+
+@dataclass(frozen=True)
+class PlayerContribution:
+    """One player's contribution to a team's projected totals."""
+
+    name: str
+    player_type: PlayerType
+    status: ContributionStatus
+    scale_factor: float  # 0.0 to 1.0
+    raw_stats: dict[str, float]  # pre-scale ROS stats; empty when NO_PROJECTION
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "player_type": self.player_type.value,
+            "status": self.status.value,
+            "scale_factor": self.scale_factor,
+            "raw_stats": dict(self.raw_stats),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> PlayerContribution:
+        return cls(
+            name=d["name"],
+            player_type=PlayerType(d["player_type"]),
+            status=ContributionStatus(d["status"]),
+            scale_factor=float(d["scale_factor"]),
+            raw_stats={k: float(v) for k, v in d.get("raw_stats", {}).items()},
+        )
+
+
+@dataclass(frozen=True)
+class RosterBreakdown:
+    """Per-player contributions for one team, partitioned by player type."""
+
+    team_name: str
+    hitters: list[PlayerContribution]
+    pitchers: list[PlayerContribution]
+
+    def to_dict(self) -> dict:
+        return {
+            "team_name": self.team_name,
+            "hitters": [c.to_dict() for c in self.hitters],
+            "pitchers": [c.to_dict() for c in self.pitchers],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> RosterBreakdown:
+        return cls(
+            team_name=d["team_name"],
+            hitters=[PlayerContribution.from_dict(x) for x in d.get("hitters", [])],
+            pitchers=[PlayerContribution.from_dict(x) for x in d.get("pitchers", [])],
+        )
+
+
 def _apply_displacement(roster: list[Player]) -> list[Player | dict]:
     """Partition roster into active/bench/IL and apply displacement scaling.
 
@@ -326,6 +398,131 @@ def _apply_displacement(roster: list[Player]) -> list[Player | dict]:
             result.append(p)
 
     return result
+
+
+_HITTER_RAW_KEYS: tuple[str, ...] = ("r", "hr", "rbi", "sb", "h", "ab")
+_PITCHER_RAW_KEYS: tuple[str, ...] = ("w", "k", "sv", "ip", "er", "bb", "h_allowed")
+
+
+def _raw_stats_for(p: Player) -> dict[str, float]:
+    """Extract the ROS raw stats the breakdown needs, or ``{}`` if absent."""
+    if p.rest_of_season is None:
+        return {}
+    keys = _PITCHER_RAW_KEYS if p.player_type == PlayerType.PITCHER else _HITTER_RAW_KEYS
+    return {k: _safe(getattr(p.rest_of_season, k, 0)) for k in keys}
+
+
+def compute_roster_breakdown(team_name: str, roster: list[Player]) -> RosterBreakdown:
+    """Return per-player contributions for ``roster``, tagged with status.
+
+    Uses the same slot-first classification as :func:`_apply_displacement`,
+    and the same displacement-factor math. The aggregate over
+    ``raw_stats[cat] * scale_factor`` per category equals
+    :func:`project_team_stats` with ``displacement=True``.
+    """
+    active: list[Player] = []
+    il_players: list[Player] = []
+    bench: list[Player] = []
+    no_projection: list[Player] = []
+
+    for p in roster:
+        if not isinstance(p, Player):
+            continue  # dict-input callers aren't supported here
+        slot = p.selected_position
+        if slot == Position.BN:
+            if _is_il(p):
+                il_players.append(p)
+            else:
+                bench.append(p)
+            continue
+        if slot in IL_SLOTS:
+            il_players.append(p)
+            continue
+        active.append(p)
+
+    # Run the same displacement math _apply_displacement runs, without
+    # allocating its output list — we only need the factors.
+    il_players_sorted = sorted(il_players, key=_playing_time, reverse=True)
+    already_displaced: set[str] = set()
+    displacement_factors: dict[str, float] = {}
+    for il_p in il_players_sorted:
+        il_pt = _playing_time(il_p)
+        if il_pt <= 0:
+            continue
+        target = _find_worst_match(il_p, active, already_displaced)
+        if target is None:
+            continue
+        active_pt = _playing_time(target)
+        if active_pt <= 0:
+            continue
+        factor = max(0.0, active_pt - il_pt) / active_pt
+        already_displaced.add(target.name)
+        displacement_factors[target.name] = factor
+
+    contributions: list[PlayerContribution] = []
+
+    for p in active:
+        if p.rest_of_season is None:
+            status = ContributionStatus.NO_PROJECTION
+            factor = 0.0
+        elif p.name in displacement_factors:
+            status = ContributionStatus.DISPLACED
+            factor = displacement_factors[p.name]
+        else:
+            status = ContributionStatus.ACTIVE
+            factor = 1.0
+        contributions.append(
+            PlayerContribution(
+                name=p.name,
+                player_type=p.player_type,
+                status=status,
+                scale_factor=factor,
+                raw_stats=_raw_stats_for(p),
+            )
+        )
+
+    for p in il_players:
+        status = (
+            ContributionStatus.NO_PROJECTION
+            if p.rest_of_season is None
+            else ContributionStatus.IL_FULL
+        )
+        factor = 0.0 if status == ContributionStatus.NO_PROJECTION else 1.0
+        contributions.append(
+            PlayerContribution(
+                name=p.name,
+                player_type=p.player_type,
+                status=status,
+                scale_factor=factor,
+                raw_stats=_raw_stats_for(p),
+            )
+        )
+
+    for p in bench:
+        contributions.append(
+            PlayerContribution(
+                name=p.name,
+                player_type=p.player_type,
+                status=ContributionStatus.BENCH,
+                scale_factor=0.0,
+                raw_stats=_raw_stats_for(p),
+            )
+        )
+
+    for p in no_projection:
+        contributions.append(
+            PlayerContribution(
+                name=p.name,
+                player_type=p.player_type,
+                status=ContributionStatus.NO_PROJECTION,
+                scale_factor=0.0,
+                raw_stats={},
+            )
+        )
+
+    hitters = [c for c in contributions if c.player_type == PlayerType.HITTER]
+    pitchers = [c for c in contributions if c.player_type == PlayerType.PITCHER]
+    return RosterBreakdown(team_name=team_name, hitters=hitters, pitchers=pitchers)
 
 
 def project_team_stats(roster, *, displacement: bool = False) -> CategoryStats:
