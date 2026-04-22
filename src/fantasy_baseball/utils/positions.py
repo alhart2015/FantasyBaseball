@@ -17,8 +17,8 @@ from fantasy_baseball.models.positions import (
 )
 
 # Exported for backward compatibility with existing callers
-HITTER_POSITIONS: frozenset = HITTER_ELIGIBLE
-PITCHER_POSITIONS: frozenset = PITCHER_ELIGIBLE
+HITTER_POSITIONS: frozenset[Position] = HITTER_ELIGIBLE
+PITCHER_POSITIONS: frozenset[Position] = PITCHER_ELIGIBLE
 
 # IF-eligible positions — a subset of HITTER_ELIGIBLE used by can_fill_slot
 _IF_ELIGIBLE: frozenset[Position] = frozenset(

@@ -6,6 +6,7 @@ Use ``rank_key()`` to build name-based lookup keys.
 """
 
 from collections.abc import Sequence
+from typing import Any
 
 import pandas as pd
 
@@ -29,11 +30,11 @@ def rank_key_from_positions(name: str, positions: Sequence[Position | str]) -> s
 
 
 def lookup_rank(
-    rankings: dict[str, int | dict],
+    rankings: dict[str, int | dict[str, Any]],
     fg_id: str | None,
     name: str,
     player_type: str,
-) -> dict:
+) -> dict[str, Any]:
     """Look up rank data, trying fg_id first then name::player_type fallback."""
     if fg_id:
         result = rankings.get(str(fg_id))
@@ -117,10 +118,10 @@ def compute_combined_sgp_rankings(
 
 
 def build_rankings_lookup(
-    ros: dict,
-    preseason: dict,
-    current: dict,
-) -> dict[str, dict]:
+    ros: dict[str, Any],
+    preseason: dict[str, Any],
+    current: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
     """Three-way merge of player ranking dicts keyed by ``name::player_type``.
 
     The output is a dict mapping each player key to a dict with three
@@ -140,8 +141,8 @@ def build_rankings_lookup(
 
 
 def compute_rankings_from_game_logs(
-    hitter_logs: dict[str, dict],
-    pitcher_logs: dict[str, dict],
+    hitter_logs: dict[str, dict[str, Any]],
+    pitcher_logs: dict[str, dict[str, Any]],
 ) -> dict[str, int]:
     """Rank players by SGP of actual accumulated stats from game logs.
 

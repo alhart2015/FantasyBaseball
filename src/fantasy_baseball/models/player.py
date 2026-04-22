@@ -179,7 +179,7 @@ class Player:
 
     selected_position: Position | None = None
     status: str = ""
-    pace: dict | None = None
+    pace: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------
     # Constructor
