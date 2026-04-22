@@ -11,7 +11,13 @@ import pytest
 from fantasy_baseball.lineup.leverage import calculate_leverage
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player
-from fantasy_baseball.models.standings import CategoryStats, Standings, StandingsEntry
+from fantasy_baseball.models.standings import (
+    CategoryStats,
+    ProjectedStandings,
+    ProjectedStandingsEntry,
+    Standings,
+    StandingsEntry,
+)
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
     DEFAULT_ROSTER_SLOTS,
@@ -35,11 +41,13 @@ def _list_to_standings(standings_list: list[dict]) -> Standings:
     )
 
 
-def _snapshot_to_list(snap: Standings) -> list[dict]:
-    return [
-        {"name": e.team_name, "team_key": e.team_key, "rank": e.rank, "stats": e.stats.to_dict()}
-        for e in snap.entries
-    ]
+def _snapshot_to_projected(snap: Standings) -> ProjectedStandings:
+    return ProjectedStandings(
+        effective_date=snap.effective_date,
+        entries=[
+            ProjectedStandingsEntry(team_name=e.team_name, stats=e.stats) for e in snap.entries
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -420,7 +428,7 @@ class TestLeverageIntegration:
 class TestHitterOptimizerIntegration:
     def test_all_hitter_slots_filled(self, midseason_standings, full_hitter_roster):
         """With 14 hitters and 12 active slots, every slot should be assigned."""
-        projected_standings = _snapshot_to_list(midseason_standings)
+        projected_standings = _snapshot_to_projected(midseason_standings)
         lineup = optimize_hitter_lineup(
             hitters=full_hitter_roster,
             full_roster=full_hitter_roster,
@@ -445,7 +453,7 @@ class TestHitterOptimizerIntegration:
         """Every starter's roto_delta must be non-negative: the optimizer
         should never include a starter whose removal strictly improves the
         team's ERoto total."""
-        projected_standings = _snapshot_to_list(midseason_standings)
+        projected_standings = _snapshot_to_projected(midseason_standings)
         lineup = optimize_hitter_lineup(
             hitters=full_hitter_roster,
             full_roster=full_hitter_roster,
@@ -458,7 +466,7 @@ class TestHitterOptimizerIntegration:
 
     def test_position_eligibility_respected(self, midseason_standings, full_hitter_roster):
         """Every player assigned to a slot must be eligible for that slot."""
-        projected_standings = _snapshot_to_list(midseason_standings)
+        projected_standings = _snapshot_to_projected(midseason_standings)
         lineup = optimize_hitter_lineup(
             hitters=full_hitter_roster,
             full_roster=full_hitter_roster,
@@ -496,20 +504,19 @@ class TestHitterOptimizerIntegration:
             _make_hitter("OF Guy 4", ["OF"], 72, 18, 62, 10, 0.260, 490),
             _make_hitter("Util Filler", ["1B", "DH"], 60, 15, 55, 2, 0.252, 460),
         ]
-        standings = [
-            {
-                "name": "Us",
-                "team_key": "",
-                "rank": 0,
-                "stats": {c.value: 0.0 for c in ALL_CATEGORIES},
-            },
-            {
-                "name": "Rival",
-                "team_key": "",
-                "rank": 1,
-                "stats": {c.value: 1.0 for c in ALL_CATEGORIES},
-            },
-        ]
+        standings = ProjectedStandings(
+            effective_date=date.min,
+            entries=[
+                ProjectedStandingsEntry(
+                    team_name="Us",
+                    stats=CategoryStats.from_dict({c.value: 0.0 for c in ALL_CATEGORIES}),
+                ),
+                ProjectedStandingsEntry(
+                    team_name="Rival",
+                    stats=CategoryStats.from_dict({c.value: 1.0 for c in ALL_CATEGORIES}),
+                ),
+            ],
+        )
 
         lineup = optimize_hitter_lineup(
             hitters=hitters,
@@ -537,7 +544,7 @@ class TestHitterOptimizerIntegration:
 class TestPitcherOptimizerIntegration:
     def test_pitcher_lineup_respects_slot_count(self, midseason_standings, full_pitcher_roster):
         """optimize_pitcher_lineup returns exactly P slots starters."""
-        projected_standings = _snapshot_to_list(midseason_standings)
+        projected_standings = _snapshot_to_projected(midseason_standings)
         p_slots = DEFAULT_ROSTER_SLOTS["P"]  # 9
 
         starters, bench = optimize_pitcher_lineup(
@@ -557,7 +564,7 @@ class TestPitcherOptimizerIntegration:
         self, midseason_standings, full_pitcher_roster
     ):
         """Every pitcher starter's roto_delta must be non-negative."""
-        projected_standings = _snapshot_to_list(midseason_standings)
+        projected_standings = _snapshot_to_projected(midseason_standings)
         starters, _ = optimize_pitcher_lineup(
             pitchers=full_pitcher_roster,
             full_roster=full_pitcher_roster,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from fantasy_baseball.lineup.delta_roto import compute_delta_roto
@@ -16,6 +17,11 @@ from fantasy_baseball.lineup.optimizer import (
 )
 from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS
+from fantasy_baseball.models.standings import (
+    CategoryStats,
+    ProjectedStandings,
+    ProjectedStandingsEntry,
+)
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import IL_STATUSES, Category
@@ -216,6 +222,25 @@ class AuditEntry:
         }
 
 
+def _list_to_projected_standings(rows: list[dict[str, Any]]) -> ProjectedStandings:
+    """Temporary adapter: list[dict] -> ProjectedStandings.
+
+    Only the team_name + stats are used by the optimizer; effective_date
+    is not inspected, so we pass a placeholder. Removed once
+    :func:`audit_roster` itself takes ``ProjectedStandings``.
+    """
+    return ProjectedStandings(
+        effective_date=date.min,
+        entries=[
+            ProjectedStandingsEntry(
+                team_name=row["name"],
+                stats=CategoryStats.from_dict(row["stats"]),
+            )
+            for row in rows
+        ],
+    )
+
+
 def audit_roster(
     roster: list[Player],
     free_agents: list[Player],
@@ -277,6 +302,11 @@ def audit_roster(
 
     denoms = get_sgp_denominators()
 
+    # Adapter: optimizer now takes typed ProjectedStandings. Callers still
+    # pass list[dict]; convert once here. Removed when audit_roster itself
+    # is migrated to ProjectedStandings (follow-up phase).
+    projected_standings_obj = _list_to_projected_standings(projected_standings)
+
     # Slot assignments come from the already-solved ERoto lineup. Compute
     # here only if the caller didn't pass them.
     if optimal_hitters is None:
@@ -284,7 +314,7 @@ def audit_roster(
         optimal_hitters = optimize_hitter_lineup(
             hitters=active_hitters,
             full_roster=roster,
-            projected_standings=projected_standings,
+            projected_standings=projected_standings_obj,
             team_name=team_name,
             roster_slots=roster_slots,
             team_sds=team_sds,
@@ -294,7 +324,7 @@ def audit_roster(
         optimal_pitchers, _ = optimize_pitcher_lineup(
             pitchers=active_pitchers,
             full_roster=roster,
-            projected_standings=projected_standings,
+            projected_standings=projected_standings_obj,
             team_name=team_name,
             slots=roster_slots.get("P", 9),
             team_sds=team_sds,
