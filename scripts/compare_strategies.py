@@ -28,7 +28,6 @@ OPP_STRATEGIES = (
     "5:two_closers,6:four_closers,7:two_closers,9:nonzero_sv,10:three_closers"
 )
 
-CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
 ADP_ITERATIONS = 20
 ADP_NOISE = 15.0
 STRATEGY_NOISE = 1.0
