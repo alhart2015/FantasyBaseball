@@ -5,7 +5,7 @@ Rankings are keyed by ``fg_id`` (primary, unique) with a secondary
 Use ``rank_key()`` to build name-based lookup keys.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pandas as pd
@@ -30,7 +30,7 @@ def rank_key_from_positions(name: str, positions: Sequence[Position | str]) -> s
 
 
 def lookup_rank(
-    rankings: dict[str, int | dict[str, Any]],
+    rankings: Mapping[str, int | dict[str, Any]],
     fg_id: str | None,
     name: str,
     player_type: str,

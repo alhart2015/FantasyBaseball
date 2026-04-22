@@ -117,6 +117,28 @@ def read_cache(key: CacheKey, cache_dir: Path = CACHE_DIR) -> dict | list | None
         return None
 
 
+def read_cache_dict(key: CacheKey, cache_dir: Path = CACHE_DIR) -> dict[str, Any] | None:
+    """Read a cached payload, narrowed to dict.
+
+    Returns ``None`` if the cache is missing, corrupt, or holds a list
+    (unexpected shape for this key). Prefer this over ``read_cache``
+    when the caller knows the key stores a dict — it lets mypy see the
+    shape without ``cast()``.
+    """
+    payload = read_cache(key, cache_dir)
+    return payload if isinstance(payload, dict) else None
+
+
+def read_cache_list(key: CacheKey, cache_dir: Path = CACHE_DIR) -> list[Any] | None:
+    """Read a cached payload, narrowed to list.
+
+    Returns ``None`` if the cache is missing, corrupt, or holds a dict
+    (unexpected shape for this key). See :func:`read_cache_dict`.
+    """
+    payload = read_cache(key, cache_dir)
+    return payload if isinstance(payload, list) else None
+
+
 def write_cache(key: CacheKey, data: dict | list, cache_dir: Path = CACHE_DIR) -> None:
     """Atomically write a cached JSON payload. Writes to Redis only on Render."""
     cache_dir.mkdir(parents=True, exist_ok=True)

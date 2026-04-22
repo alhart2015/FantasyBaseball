@@ -81,9 +81,11 @@ files = [
     "src/fantasy_baseball/utils/",
     "src/fantasy_baseball/web/app.py",
     "src/fantasy_baseball/web/job_logger.py",
+    "src/fantasy_baseball/web/refresh_pipeline.py",
     "src/fantasy_baseball/web/refresh_steps.py",
     "src/fantasy_baseball/web/season_app.py",
     "src/fantasy_baseball/web/season_data.py",
+    "src/fantasy_baseball/web/season_routes.py",
 ]
 warn_return_any = true
 warn_unused_ignores = true

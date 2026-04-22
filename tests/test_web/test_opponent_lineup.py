@@ -143,7 +143,7 @@ def client():
 class TestApiTeams:
     def test_returns_teams_from_standings_cache(self, client):
         with (
-            patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc,
+            patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_rc,
             patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
         ):
             mock_rc.side_effect = lambda k: _sample_standings() if k == CacheKey.STANDINGS else None
@@ -155,7 +155,7 @@ class TestApiTeams:
         assert data["user_team_key"] == "469.l.5652.t.3"
 
     def test_returns_empty_without_standings(self, client):
-        with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
+        with patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=None):
             resp = client.get("/api/teams")
         assert resp.status_code == 200
         data = resp.get_json()
@@ -353,7 +353,7 @@ class TestApiOpponentLineup:
     def test_returns_404_without_standings(self, client):
         with client.session_transaction() as sess:
             sess["authenticated"] = True
-        with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
+        with patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=None):
             resp = client.get("/api/opponent/469.l.5652.t.8/lineup")
         assert resp.status_code == 404
 
@@ -369,7 +369,7 @@ class TestApiOpponentLineup:
             return None
 
         with (
-            patch("fantasy_baseball.web.season_routes.read_cache", side_effect=mock_cache),
+            patch("fantasy_baseball.web.season_routes.read_cache_dict", side_effect=mock_cache),
             patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
             patch("fantasy_baseball.web.season_data.build_opponent_lineup") as mock_build,
             patch("fantasy_baseball.web.season_routes._load_yahoo_league") as mock_league,
@@ -398,7 +398,7 @@ class TestStandingsLinks:
     def test_team_names_are_links(self, client):
         standings = _sample_standings()
         with (
-            patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc,
+            patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_rc,
             patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm,
             patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
         ):
