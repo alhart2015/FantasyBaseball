@@ -423,35 +423,50 @@ function formatContribution(value) {
     return Math.round(value * 10) / 10;
 }
 
-function renderBreakdownRow(contribution, cat, colSpec) {
-    const scalePct = contribution.status === 'no_projection'
-        ? '—'
-        : (Math.round(contribution.scale_factor * 1000) / 10).toFixed(1) + '%';
-    const status = contribution.status;
-    const badgeClass = 'breakdown-status-badge' + (status === 'no_projection' ? ' no-projection' : '');
+function buildBadgeSpan(status) {
+    const span = document.createElement('span');
+    span.className = 'breakdown-status-badge' + (status === 'no_projection' ? ' no-projection' : '');
+    span.textContent = status.replace('_', ' ').toUpperCase();
+    return span;
+}
+
+function buildBreakdownRow(contribution, cat, colSpec) {
+    const tr = document.createElement('tr');
+
+    // Player name — textContent, defense against HTML in source data.
+    const nameTd = document.createElement('td');
+    nameTd.textContent = contribution.name;
+    tr.appendChild(nameTd);
+
+    // Status badge
+    const statusTd = document.createElement('td');
+    statusTd.appendChild(buildBadgeSpan(contribution.status));
+    tr.appendChild(statusTd);
+
     const raw = contribution.raw_stats || {};
     const factor = contribution.scale_factor || 0;
+    const isMissing = contribution.status === 'no_projection';
 
-    let cells;
     if (colSpec.kind === 'counting') {
-        const val = (raw[colSpec.field] || 0) * factor;
-        const display = status === 'no_projection' ? '—' : formatContribution(val);
-        cells = `<td>${display}</td>`;
+        const td = document.createElement('td');
+        td.textContent = isMissing ? '—' : String(formatContribution((raw[colSpec.field] || 0) * factor));
+        tr.appendChild(td);
     } else {
-        cells = colSpec.components.map(c => {
-            if (status === 'no_projection') return '<td>—</td>';
-            return `<td>${formatContribution((raw[c] || 0) * factor)}</td>`;
-        }).join('');
+        for (const component of colSpec.components) {
+            const td = document.createElement('td');
+            td.textContent = isMissing ? '—' : String(formatContribution((raw[component] || 0) * factor));
+            tr.appendChild(td);
+        }
     }
 
-    return `
-        <tr>
-            <td>${contribution.name}</td>
-            <td><span class="${badgeClass}">${status}</span></td>
-            ${cells}
-            <td>${scalePct}</td>
-        </tr>
-    `;
+    // Scale %
+    const scaleTd = document.createElement('td');
+    scaleTd.textContent = isMissing
+        ? '—'
+        : (Math.round(factor * 1000) / 10).toFixed(1) + '%';
+    tr.appendChild(scaleTd);
+
+    return tr;
 }
 
 function sortContributions(contributions, colSpec) {
@@ -488,8 +503,8 @@ function openBreakdownModal(teamName, cat) {
     document.getElementById('breakdown-modal-thead').innerHTML = `<tr>${headCells}</tr>`;
 
     // Body
-    document.getElementById('breakdown-modal-tbody').innerHTML =
-        rows.map(c => renderBreakdownRow(c, cat, colSpec)).join('');
+    const tbody = document.getElementById('breakdown-modal-tbody');
+    tbody.replaceChildren(...rows.map(c => buildBreakdownRow(c, cat, colSpec)));
 
     // Title + total subheader: pull the team total for this cat from the
     // corresponding rendered stat cell (the one the user clicked).

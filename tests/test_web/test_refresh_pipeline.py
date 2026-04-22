@@ -259,12 +259,9 @@ class TestROSProjectionsRedisAuthoritative:
 
 
 def test_standings_breakdown_cache_written_by_refresh():
-    """build_standings_breakdown_payload produces the STANDINGS_BREAKDOWN shape.
-
-    Exercises the extracted helper directly; decouples the test from
-    the surrounding RefreshRun scaffolding.
-    """
+    """build_standings_breakdown_payload produces the STANDINGS_BREAKDOWN shape."""
     import json
+    from datetime import date
 
     from fantasy_baseball.models.player import Player, PlayerType
     from fantasy_baseball.models.positions import Position
@@ -280,8 +277,9 @@ def test_standings_breakdown_cache_written_by_refresh():
 
     team_rosters = {"Team A": [_h("A1"), _h("A2")], "Team B": [_h("B1")]}
 
-    payload = build_standings_breakdown_payload(team_rosters)
+    payload = build_standings_breakdown_payload(team_rosters, date(2026, 4, 22))
 
+    assert payload["effective_date"] == "2026-04-22"
     assert set(payload["teams"].keys()) == {"Team A", "Team B"}
     assert "hitters" in payload["teams"]["Team A"]
     assert "pitchers" in payload["teams"]["Team A"]
