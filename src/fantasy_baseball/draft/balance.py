@@ -3,6 +3,7 @@ import pandas as pd
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import (
     HITTING_CATEGORIES,
+    INVERSE_STATS,
     PITCHING_CATEGORIES,
     Category,
 )
@@ -37,32 +38,37 @@ class CategoryBalance:
         elif player.get("player_type") == PlayerType.PITCHER:
             self._pitchers.append(player)
 
-    def get_totals(self) -> dict[str, float | None]:
-        totals: dict[str, float | None] = {}
-        for stat, col in [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")]:
-            totals[stat] = sum(h.get(col, 0) for h in self._hitters)
+    def get_totals(self) -> dict[Category, float | None]:
+        totals: dict[Category, float | None] = {}
+        for cat, col in [
+            (Category.R, "r"),
+            (Category.HR, "hr"),
+            (Category.RBI, "rbi"),
+            (Category.SB, "sb"),
+        ]:
+            totals[cat] = sum(h.get(col, 0) for h in self._hitters)
         total_h = sum(h.get("h", 0) for h in self._hitters)
         total_ab = sum(h.get("ab", 0) for h in self._hitters)
-        totals["AVG"] = calculate_avg(total_h, total_ab)
+        totals[Category.AVG] = calculate_avg(total_h, total_ab)
         if self._pitchers:
-            for stat, col in [("W", "w"), ("K", "k"), ("SV", "sv")]:
-                totals[stat] = sum(p.get(col, 0) for p in self._pitchers)
+            for cat, col in [(Category.W, "w"), (Category.K, "k"), (Category.SV, "sv")]:
+                totals[cat] = sum(p.get(col, 0) for p in self._pitchers)
             total_ip = sum(p.get("ip", 0) for p in self._pitchers)
             if total_ip > 0:
                 total_er = sum(p.get("er", 0) for p in self._pitchers)
-                totals["ERA"] = calculate_era(total_er, total_ip)
+                totals[Category.ERA] = calculate_era(total_er, total_ip)
                 total_bb = sum(p.get("bb", 0) for p in self._pitchers)
                 total_ha = sum(p.get("h_allowed", 0) for p in self._pitchers)
-                totals["WHIP"] = calculate_whip(total_bb, total_ha, total_ip)
+                totals[Category.WHIP] = calculate_whip(total_bb, total_ha, total_ip)
             else:
-                totals["ERA"] = None
-                totals["WHIP"] = None
+                totals[Category.ERA] = None
+                totals[Category.WHIP] = None
         else:
             # No pitchers: all pitching categories are None so leverage
             # treats them uniformly (avoids 100:1 asymmetry where ERA/WHIP
             # get emergency weight but W/K/SV get zero weight).
             for cat in PITCHING_CATEGORIES:
-                totals[cat.value] = None
+                totals[cat] = None
         return totals
 
     def get_avg_components(self) -> tuple[float, float]:
@@ -82,23 +88,21 @@ class CategoryBalance:
         min_pitchers = 3
         for cat in HITTING_CATEGORIES:
             target = TEAM_TARGETS[cat]
-            key = cat.value
-            val = totals[key]
+            val = totals[cat]
             if val is None or num_hitters < min_hitters:
                 continue
             if val < target * WARNING_THRESHOLD:
                 fmt = ".3f" if cat == Category.AVG else ".0f"
-                warnings.append(f"{key} is low ({val:{fmt}}, target ~{target:{fmt}})")
+                warnings.append(f"{cat.value} is low ({val:{fmt}}, target ~{target:{fmt}})")
         for cat in PITCHING_CATEGORIES:
             target = TEAM_TARGETS[cat]
-            key = cat.value
-            val = totals[key]
+            val = totals[cat]
             if val is None or num_pitchers < min_pitchers:
                 continue
-            if cat in (Category.ERA, Category.WHIP):
+            if cat in INVERSE_STATS:
                 if val > target / WARNING_THRESHOLD:
-                    warnings.append(f"{key} is high ({val:.2f}, target ~{target:.2f})")
+                    warnings.append(f"{cat.value} is high ({val:.2f}, target ~{target:.2f})")
             else:
                 if val < target * WARNING_THRESHOLD:
-                    warnings.append(f"{key} is low ({val:.0f}, target ~{target:.0f})")
+                    warnings.append(f"{cat.value} is low ({val:.0f}, target ~{target:.0f})")
         return warnings

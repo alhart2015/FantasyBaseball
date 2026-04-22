@@ -38,7 +38,7 @@ from fantasy_baseball.draft.strategy import (
     _sv_in_danger,
 )
 from fantasy_baseball.draft.tracker import DraftTracker
-from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
+from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD, Category
 from fantasy_baseball.web.app import create_app
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
@@ -173,7 +173,7 @@ def _save_draft_log(tracker, balance, config, full_board, mock=False,
         },
         "user_roster": user_roster,
         "draft_log": draft_log,
-        "balance": balance.get_totals(),
+        "balance": {cat.value: v for cat, v in balance.get_totals().items()},
     }
 
     with open(out_path, "w") as f:
@@ -627,12 +627,13 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
     totals = balance.get_totals()
     warnings = balance.get_warnings()
     print("\nROSTER BALANCE:")
-    print(f"  R:{totals['R']:.0f} HR:{totals['HR']:.0f} RBI:{totals['RBI']:.0f} "
-          f"SB:{totals['SB']:.0f} AVG:{totals['AVG']:.3f}")
-    era_str = f"{totals['ERA']:.2f}" if totals["ERA"] is not None else "N/A"
-    whip_str = f"{totals['WHIP']:.3f}" if totals["WHIP"] is not None else "N/A"
-    print(f"  W:{totals['W']:.0f} K:{totals['K']:.0f} SV:{totals['SV']:.0f} "
-          f"ERA:{era_str} WHIP:{whip_str}")
+    print(f"  R:{totals[Category.R]:.0f} HR:{totals[Category.HR]:.0f} "
+          f"RBI:{totals[Category.RBI]:.0f} SB:{totals[Category.SB]:.0f} "
+          f"AVG:{totals[Category.AVG]:.3f}")
+    era_str = f"{totals[Category.ERA]:.2f}" if totals[Category.ERA] is not None else "N/A"
+    whip_str = f"{totals[Category.WHIP]:.3f}" if totals[Category.WHIP] is not None else "N/A"
+    print(f"  W:{totals[Category.W]:.0f} K:{totals[Category.K]:.0f} "
+          f"SV:{totals[Category.SV]:.0f} ERA:{era_str} WHIP:{whip_str}")
     if warnings:
         print(f"  Warnings: {', '.join(warnings)}")
 
