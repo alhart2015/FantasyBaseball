@@ -14,6 +14,7 @@ player board (300+ rows) on every 2-second poll:
 * ``read_delta`` - returns only the fields that changed between version *N*
   and the current version, or ``None`` when a full reload is required.
 """
+
 import contextlib
 import json
 import os
@@ -56,6 +57,7 @@ def get_current_version() -> int:
 # Board serialization (heavy, sent once)
 # ---------------------------------------------------------------------------
 
+
 def _serialize_player_stats(player: dict, row) -> None:
     """Add stat fields to a player dict based on player type."""
     if row["player_type"] == PlayerType.HITTER:
@@ -85,9 +87,13 @@ def serialize_board(board: pd.DataFrame) -> list[dict]:
         player: dict = {
             "name": row["name"],
             "player_id": row.get("player_id", row["name"]),
-            "positions": row["positions"] if isinstance(row["positions"], list) else [row["positions"]],
+            "positions": row["positions"]
+            if isinstance(row["positions"], list)
+            else [row["positions"]],
             "var": round(float(row["var"]), 1),
-            "adp": round(float(adp_val), 1) if adp_val is not None and adp_val != float("inf") else None,
+            "adp": round(float(adp_val), 1)
+            if adp_val is not None and adp_val != float("inf")
+            else None,
             "player_type": row["player_type"],
         }
         _serialize_player_stats(player, row)
@@ -98,6 +104,7 @@ def serialize_board(board: pd.DataFrame) -> list[dict]:
 # ---------------------------------------------------------------------------
 # State serialization (lightweight, sent on every poll)
 # ---------------------------------------------------------------------------
+
 
 def serialize_state(
     tracker: DraftTracker,
@@ -144,7 +151,9 @@ def serialize_state(
         "current_pick": overall_pick,
         "current_round": overall_round,
         "picking_team": tracker.picking_team,
-        "picking_team_name": (teams or {}).get(tracker.picking_team, f"Team {tracker.picking_team}"),
+        "picking_team_name": (teams or {}).get(
+            tracker.picking_team, f"Team {tracker.picking_team}"
+        ),
         "is_user_pick": tracker.is_user_pick,
         "picks_until_user_turn": tracker.picks_until_user_turn,
         "user_roster": list(tracker.user_roster),
@@ -155,8 +164,8 @@ def serialize_state(
             {
                 "name": r.name,
                 "var": round(float(r.var), 1),
-                "best_position": r.best_position,
-                "positions": list(r.positions),
+                "best_position": r.best_position.value,
+                "positions": [p.value for p in r.positions],
                 "need_flag": bool(r.need_flag),
                 "note": r.note,
             }
@@ -172,9 +181,7 @@ def serialize_state(
 
     if vona_scores is not None:
         # Round VONA to 1 decimal, keyed by player_id
-        state["vona_scores"] = {
-            pid: round(float(v), 1) for pid, v in vona_scores.items()
-        }
+        state["vona_scores"] = {pid: round(float(v), 1) for pid, v in vona_scores.items()}
 
     if roster_slots is not None:
         state["roster_slots"] = dict(roster_slots)
@@ -188,7 +195,9 @@ def serialize_state(
         for _, row in available.iterrows():
             player: dict = {
                 "name": row["name"],
-                "positions": row["positions"] if isinstance(row["positions"], list) else [row["positions"]],
+                "positions": row["positions"]
+                if isinstance(row["positions"], list)
+                else [row["positions"]],
                 "var": round(float(row["var"]), 1),
                 "player_type": row["player_type"],
             }
@@ -255,6 +264,7 @@ def compute_delta(old_state: dict | None, new_state: dict) -> dict:
 # File I/O
 # ---------------------------------------------------------------------------
 
+
 def write_state(state: dict, path: Path) -> None:
     """Atomically write state dict to JSON (write tmp + rename).
 
@@ -308,9 +318,7 @@ def _atomic_write(data, path: Path) -> None:
     """
     import time
 
-    fd, tmp_path = tempfile.mkstemp(
-        dir=path.parent, suffix=".tmp", prefix="draft_state_"
-    )
+    fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp", prefix="draft_state_")
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(data, f, indent=2)

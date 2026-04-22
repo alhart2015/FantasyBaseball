@@ -2,32 +2,104 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from fantasy_baseball.draft.recommender import calculate_vona_scores, get_recommendations
+from fantasy_baseball.draft.recommender import (
+    Recommendation,
+    calculate_vona_scores,
+    get_recommendations,
+)
+from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.models.positions import Position
 
 
 def _make_board():
     players = [
-        {"name": "Player A", "var": 15.0, "total_sgp": 20.0, "best_position": "OF", "positions": ["OF"],
-         "player_type": "hitter", "player_id": "Player A::hitter",
-         "r": 100, "hr": 35, "rbi": 100, "sb": 20, "avg": .280, "ab": 550, "h": 154,
-         "adp": 1},
-        {"name": "Player B", "var": 14.0, "total_sgp": 19.0, "best_position": "SS", "positions": ["SS"],
-         "player_type": "hitter", "player_id": "Player B::hitter",
-         "r": 90, "hr": 25, "rbi": 80, "sb": 30, "avg": .275, "ab": 530, "h": 146,
-         "adp": 2},
-        {"name": "Player C", "var": 13.0, "total_sgp": 18.0, "best_position": "C", "positions": ["C"],
-         "player_type": "hitter", "player_id": "Player C::hitter",
-         "r": 70, "hr": 22, "rbi": 75, "sb": 2, "avg": .260, "ab": 480, "h": 125,
-         "adp": 3},
-        {"name": "Player D", "var": 12.0, "total_sgp": 17.0, "best_position": "P", "positions": ["SP"],
-         "player_type": "pitcher", "player_id": "Player D::pitcher",
-         "w": 14, "k": 210, "sv": 0, "era": 3.20, "whip": 1.10, "ip": 195,
-         "er": 69, "bb": 50, "h_allowed": 165,
-         "adp": 4},
-        {"name": "Player E", "var": 11.0, "total_sgp": 16.0, "best_position": "OF", "positions": ["OF"],
-         "player_type": "hitter", "player_id": "Player E::hitter",
-         "r": 80, "hr": 20, "rbi": 70, "sb": 15, "avg": .270, "ab": 500, "h": 135,
-         "adp": 5},
+        {
+            "name": "Player A",
+            "var": 15.0,
+            "total_sgp": 20.0,
+            "best_position": "OF",
+            "positions": ["OF"],
+            "player_type": "hitter",
+            "player_id": "Player A::hitter",
+            "r": 100,
+            "hr": 35,
+            "rbi": 100,
+            "sb": 20,
+            "avg": 0.280,
+            "ab": 550,
+            "h": 154,
+            "adp": 1,
+        },
+        {
+            "name": "Player B",
+            "var": 14.0,
+            "total_sgp": 19.0,
+            "best_position": "SS",
+            "positions": ["SS"],
+            "player_type": "hitter",
+            "player_id": "Player B::hitter",
+            "r": 90,
+            "hr": 25,
+            "rbi": 80,
+            "sb": 30,
+            "avg": 0.275,
+            "ab": 530,
+            "h": 146,
+            "adp": 2,
+        },
+        {
+            "name": "Player C",
+            "var": 13.0,
+            "total_sgp": 18.0,
+            "best_position": "C",
+            "positions": ["C"],
+            "player_type": "hitter",
+            "player_id": "Player C::hitter",
+            "r": 70,
+            "hr": 22,
+            "rbi": 75,
+            "sb": 2,
+            "avg": 0.260,
+            "ab": 480,
+            "h": 125,
+            "adp": 3,
+        },
+        {
+            "name": "Player D",
+            "var": 12.0,
+            "total_sgp": 17.0,
+            "best_position": "P",
+            "positions": ["SP"],
+            "player_type": "pitcher",
+            "player_id": "Player D::pitcher",
+            "w": 14,
+            "k": 210,
+            "sv": 0,
+            "era": 3.20,
+            "whip": 1.10,
+            "ip": 195,
+            "er": 69,
+            "bb": 50,
+            "h_allowed": 165,
+            "adp": 4,
+        },
+        {
+            "name": "Player E",
+            "var": 11.0,
+            "total_sgp": 16.0,
+            "best_position": "OF",
+            "positions": ["OF"],
+            "player_type": "hitter",
+            "player_id": "Player E::hitter",
+            "r": 80,
+            "hr": 20,
+            "rbi": 70,
+            "sb": 15,
+            "avg": 0.270,
+            "ab": 500,
+            "h": 135,
+            "adp": 5,
+        },
     ]
     return pd.DataFrame(players)
 
@@ -64,6 +136,64 @@ class TestGetRecommendations:
         assert recs[0].best_position
         assert recs[0].name
 
+    def test_recommendation_positions_are_position_enum(self):
+        board = _make_board()
+        recs = get_recommendations(board, drafted=[], user_roster=[], n=5)
+        for rec in recs:
+            assert isinstance(rec.best_position, Position)
+            assert all(isinstance(p, Position) for p in rec.positions)
+
+
+class TestRecommendationCoercion:
+    """__post_init__ coerces str inputs to Position for ergonomic construction."""
+
+    def test_string_best_position_is_parsed(self):
+        rec = Recommendation(
+            name="Juan Soto",
+            var=12.0,
+            score=12.0,
+            best_position="OF",
+            positions=["OF"],
+            player_type=PlayerType.HITTER,
+        )
+        assert rec.best_position is Position.OF
+        assert rec.positions == [Position.OF]
+
+    def test_position_enum_best_position_unchanged(self):
+        rec = Recommendation(
+            name="Juan Soto",
+            var=12.0,
+            score=12.0,
+            best_position=Position.OF,
+            positions=[Position.OF],
+            player_type=PlayerType.HITTER,
+        )
+        assert rec.best_position is Position.OF
+        assert rec.positions == [Position.OF]
+
+    def test_mixed_string_and_enum_positions(self):
+        rec = Recommendation(
+            name="Mookie Betts",
+            var=13.0,
+            score=13.0,
+            best_position="OF",
+            positions=[Position.OF, "2B"],
+            player_type=PlayerType.HITTER,
+        )
+        assert rec.positions == [Position.OF, Position.SECOND_BASE]
+
+    def test_yahoo_mixed_case_position_is_parsed(self):
+        """Yahoo-style 'Util' casing should normalize via Position.parse."""
+        rec = Recommendation(
+            name="Shohei Ohtani",
+            var=15.0,
+            score=15.0,
+            best_position="Util",
+            positions=["Util"],
+            player_type=PlayerType.HITTER,
+        )
+        assert rec.best_position is Position.UTIL
+
 
 class TestVonaPicksUntilNext:
     """Verify that picks_until_next is passed through to calculate_vona_scores."""
@@ -76,8 +206,12 @@ class TestVonaPicksUntilNext:
             wraps=calculate_vona_scores,
         ) as mock_vona:
             get_recommendations(
-                board, drafted=[], user_roster=[], n=3,
-                scoring_mode="vona", picks_until_next=4,
+                board,
+                drafted=[],
+                user_roster=[],
+                n=3,
+                scoring_mode="vona",
+                picks_until_next=4,
             )
             mock_vona.assert_called_once()
             _, _kwargs = mock_vona.call_args
@@ -93,8 +227,12 @@ class TestVonaPicksUntilNext:
             wraps=calculate_vona_scores,
         ) as mock_vona:
             get_recommendations(
-                board, drafted=[], user_roster=[], n=3,
-                scoring_mode="vona", picks_until_next=None,
+                board,
+                drafted=[],
+                user_roster=[],
+                n=3,
+                scoring_mode="vona",
+                picks_until_next=None,
             )
             mock_vona.assert_called_once()
             args = mock_vona.call_args[0]
@@ -107,8 +245,12 @@ class TestVonaPicksUntilNext:
             "fantasy_baseball.draft.recommender.calculate_vona_scores",
         ) as mock_vona:
             get_recommendations(
-                board, drafted=[], user_roster=[], n=3,
-                scoring_mode="var", picks_until_next=4,
+                board,
+                drafted=[],
+                user_roster=[],
+                n=3,
+                scoring_mode="var",
+                picks_until_next=4,
             )
             mock_vona.assert_not_called()
 
@@ -132,5 +274,3 @@ class TestVonaPicksUntilNext:
         # the remaining pool has 3 players. The top-ADP player (Player A)
         # should have positive VONA since they'd be gone if not picked now.
         assert scores["Player A::hitter"] > 0
-
-
