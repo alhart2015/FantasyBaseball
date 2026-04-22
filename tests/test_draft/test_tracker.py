@@ -1,4 +1,24 @@
-from fantasy_baseball.draft.tracker import DraftTracker
+from dataclasses import FrozenInstanceError
+
+import pytest
+
+from fantasy_baseball.draft.tracker import DraftTracker, Pick
+
+
+class TestPick:
+    def test_is_frozen(self):
+        p = Pick(name="Juan Soto", player_id="Juan Soto::hitter", is_user=True)
+        with pytest.raises(FrozenInstanceError):
+            p.name = "Mike Trout"  # type: ignore[misc]
+
+    def test_equality(self):
+        a = Pick(name="Juan Soto", player_id="Juan Soto::hitter", is_user=True)
+        b = Pick(name="Juan Soto", player_id="Juan Soto::hitter", is_user=True)
+        assert a == b
+
+    def test_hashable(self):
+        p = Pick(name="Juan Soto", player_id="Juan Soto::hitter", is_user=True)
+        assert {p}  # frozen dataclass is hashable
 
 
 class TestDraftTracker:
@@ -72,6 +92,39 @@ class TestDraftTracker:
     def test_total_picks(self):
         t = DraftTracker(num_teams=10, user_position=8, rounds=22)
         assert t.total_picks == 220
+
+    # --- Pick dataclass / picks accessor tests ---
+
+    def test_picks_accessor_returns_pick_objects(self):
+        t = self.make_tracker()
+        t.draft_player("Juan Soto", is_user=True, player_id="Juan Soto::hitter")
+        t.draft_player("Gerrit Cole", is_user=False, player_id="Gerrit Cole::pitcher")
+        assert len(t.picks) == 2
+        assert all(isinstance(p, Pick) for p in t.picks)
+        assert t.picks[0] == Pick(name="Juan Soto", player_id="Juan Soto::hitter", is_user=True)
+        assert t.picks[1] == Pick(
+            name="Gerrit Cole", player_id="Gerrit Cole::pitcher", is_user=False
+        )
+
+    def test_player_id_defaults_to_name(self):
+        t = self.make_tracker()
+        t.draft_player("Juan Soto", is_user=True)
+        assert t.picks[0].player_id == "Juan Soto"
+
+    def test_drafted_ids_and_user_roster_ids(self):
+        t = self.make_tracker()
+        t.draft_player("Juan Soto", is_user=True, player_id="Juan Soto::hitter")
+        t.draft_player("Gerrit Cole", is_user=False, player_id="Gerrit Cole::pitcher")
+        assert t.drafted_ids == ["Juan Soto::hitter", "Gerrit Cole::pitcher"]
+        assert t.user_roster_ids == ["Juan Soto::hitter"]
+
+    def test_picks_preserves_order(self):
+        t = self.make_tracker()
+        names = ["A", "B", "C", "D"]
+        for n in names:
+            t.draft_player(n, is_user=(n == "C"))
+        assert [p.name for p in t.picks] == names
+        assert t.user_roster == ["C"]
 
     # --- picks_until_next_turn tests ---
 

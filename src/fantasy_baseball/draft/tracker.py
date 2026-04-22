@@ -1,3 +1,15 @@
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Pick:
+    """A single completed pick in the draft."""
+
+    name: str
+    player_id: str
+    is_user: bool
+
+
 class DraftTracker:
     """Track state of a snake draft."""
 
@@ -6,11 +18,7 @@ class DraftTracker:
         self.user_position = user_position
         self.rounds = rounds
         self.current_pick = 1
-        self.drafted_players: list[str] = []
-        self.user_roster: list[str] = []
-        # Parallel ID lists for filtering (disambiguates same-name players)
-        self.drafted_ids: list[str] = []
-        self.user_roster_ids: list[str] = []
+        self.picks: list[Pick] = []
 
     @property
     def total_picks(self) -> int:
@@ -85,13 +93,35 @@ class DraftTracker:
             temp_pick += 1
         return count
 
+    # ------------------------------------------------------------------
+    # Backward-compat parallel-list accessors.  Prefer iterating
+    # ``self.picks`` directly in new code.
+    # ------------------------------------------------------------------
+
+    @property
+    def drafted_players(self) -> list[str]:
+        return [p.name for p in self.picks]
+
+    @property
+    def drafted_ids(self) -> list[str]:
+        return [p.player_id for p in self.picks]
+
+    @property
+    def user_roster(self) -> list[str]:
+        return [p.name for p in self.picks if p.is_user]
+
+    @property
+    def user_roster_ids(self) -> list[str]:
+        return [p.player_id for p in self.picks if p.is_user]
+
     def advance(self) -> None:
         self.current_pick += 1
 
-    def draft_player(self, name: str, is_user: bool = False,
-                     player_id: str | None = None) -> None:
-        self.drafted_players.append(name)
-        self.drafted_ids.append(player_id or name)
-        if is_user:
-            self.user_roster.append(name)
-            self.user_roster_ids.append(player_id or name)
+    def draft_player(self, name: str, is_user: bool = False, player_id: str | None = None) -> None:
+        self.picks.append(
+            Pick(
+                name=name,
+                player_id=player_id or name,
+                is_user=is_user,
+            )
+        )
