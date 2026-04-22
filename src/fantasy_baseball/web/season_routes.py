@@ -606,15 +606,13 @@ def register_routes(app: Flask) -> None:
             my_active_ids=set(data.get("my_active_ids") or []),
         )
 
-        # evaluate_multi_trade still consumes the legacy list[dict] shape;
-        # the canonical cache payload wraps those rows under "teams".
         result = evaluate_multi_trade(
             proposal=proposal,
             hart_name=config.team_name,
             hart_roster=hart_roster,
             opp_rosters=opp_rosters,
             waiver_pool=waiver_pool,
-            projected_standings=projected_standings_raw["teams"],
+            projected_standings=_projected_from_cache(projected_standings_raw),
             team_sds=team_sds,
             roster_slots=config.roster_slots,
         )
