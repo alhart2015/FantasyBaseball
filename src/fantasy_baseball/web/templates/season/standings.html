@@ -373,13 +373,18 @@ function toggleProjMode(el, cellSelector) {
     const group = el.parentElement;
     group.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
     el.classList.add('active');
-    if (el.dataset.mode === 'points') {
+    const showStats = el.dataset.mode !== 'points';
+    if (showStats) {
+        formatStatCellsWithBounds(cellSelector);
+    } else {
         document.querySelectorAll(cellSelector).forEach(cell => {
             cell.textContent = cell.dataset.points;
         });
-    } else {
-        formatStatCellsWithBounds(cellSelector);
     }
+    // Gate the click affordance for breakdown drilldown to stat-totals mode.
+    document.querySelectorAll(cellSelector).forEach(cell => {
+        cell.classList.toggle('mode-stats', showStats);
+    });
 }
 
 /* ── Monte Carlo tab toggle ── */
@@ -392,12 +397,196 @@ function toggleMcTab(el) {
     document.getElementById('mc-current').style.display = tab === 'current' ? '' : 'none';
     document.getElementById('mc-current-mgmt').style.display = tab === 'current-mgmt' ? '' : 'none';
 }
+
+/* ── Stat-breakdown drilldown (Projected → Current → Stat Totals) ── */
+
+const BREAKDOWN_COLUMNS = {
+    R:   {kind: 'counting', field: 'r',   players: 'hitters'},
+    HR:  {kind: 'counting', field: 'hr',  players: 'hitters'},
+    RBI: {kind: 'counting', field: 'rbi', players: 'hitters'},
+    SB:  {kind: 'counting', field: 'sb',  players: 'hitters'},
+    W:   {kind: 'counting', field: 'w',   players: 'pitchers'},
+    K:   {kind: 'counting', field: 'k',   players: 'pitchers'},
+    SV:  {kind: 'counting', field: 'sv',  players: 'pitchers'},
+    AVG: {kind: 'rate',     components: ['h', 'ab'],              players: 'hitters'},
+    ERA: {kind: 'rate',     components: ['er', 'ip'],             players: 'pitchers'},
+    WHIP:{kind: 'rate',     components: ['bb', 'h_allowed', 'ip'], players: 'pitchers'},
+};
+
+function getBreakdownData() {
+    const node = document.getElementById('breakdown-data');
+    if (!node) return null;
+    try { return JSON.parse(node.textContent); } catch (_) { return null; }
+}
+
+function formatContribution(value) {
+    return Math.round(value * 10) / 10;
+}
+
+function renderBreakdownRow(contribution, cat, colSpec) {
+    const scalePct = contribution.status === 'no_projection'
+        ? '—'
+        : (Math.round(contribution.scale_factor * 1000) / 10).toFixed(1) + '%';
+    const status = contribution.status;
+    const badgeClass = 'breakdown-status-badge' + (status === 'no_projection' ? ' no-projection' : '');
+    const raw = contribution.raw_stats || {};
+    const factor = contribution.scale_factor || 0;
+
+    let cells;
+    if (colSpec.kind === 'counting') {
+        const val = (raw[colSpec.field] || 0) * factor;
+        const display = status === 'no_projection' ? '—' : formatContribution(val);
+        cells = `<td>${display}</td>`;
+    } else {
+        cells = colSpec.components.map(c => {
+            if (status === 'no_projection') return '<td>—</td>';
+            return `<td>${formatContribution((raw[c] || 0) * factor)}</td>`;
+        }).join('');
+    }
+
+    return `
+        <tr>
+            <td>${contribution.name}</td>
+            <td><span class="${badgeClass}">${status}</span></td>
+            ${cells}
+            <td>${scalePct}</td>
+        </tr>
+    `;
+}
+
+function sortContributions(contributions, colSpec) {
+    return contributions.slice().sort((a, b) => {
+        // Contributing rows first (non-zero factor AND has projection), sorted by the target stat desc
+        const aValue = colSpec.kind === 'counting'
+            ? (a.raw_stats?.[colSpec.field] || 0) * (a.scale_factor || 0)
+            : (a.scale_factor || 0);
+        const bValue = colSpec.kind === 'counting'
+            ? (b.raw_stats?.[colSpec.field] || 0) * (b.scale_factor || 0)
+            : (b.scale_factor || 0);
+        if (aValue !== bValue) return bValue - aValue;
+        return a.name.localeCompare(b.name);
+    });
+}
+
+function openBreakdownModal(teamName, cat) {
+    const data = getBreakdownData();
+    if (!data) return;
+    const team = data.teams[teamName];
+    if (!team) return;
+    const colSpec = BREAKDOWN_COLUMNS[cat];
+    if (!colSpec) return;
+
+    const contributions = team[colSpec.players] || [];
+    const rows = sortContributions(contributions, colSpec);
+
+    // Build thead
+    const headCells = colSpec.kind === 'counting'
+        ? `<th>Player</th><th>Status</th><th>${cat}</th><th>Scale %</th>`
+        : `<th>Player</th><th>Status</th>` +
+            colSpec.components.map(c => `<th>${c.toUpperCase()}</th>`).join('') +
+            `<th>Scale %</th>`;
+    document.getElementById('breakdown-modal-thead').innerHTML = `<tr>${headCells}</tr>`;
+
+    // Body
+    document.getElementById('breakdown-modal-tbody').innerHTML =
+        rows.map(c => renderBreakdownRow(c, cat, colSpec)).join('');
+
+    // Title + total subheader: pull the team total for this cat from the
+    // corresponding rendered stat cell (the one the user clicked).
+    document.getElementById('breakdown-modal-title').textContent =
+        `${teamName} — ${cat} breakdown`;
+    const cellTotal = document.querySelector(
+        `#proj-current tr[data-team="${CSS.escape(teamName)}"] td[data-cat="${CSS.escape(cat)}"]`
+    );
+    const totalValue = cellTotal ? cellTotal.dataset.stat : '';
+    document.getElementById('breakdown-modal-total').textContent =
+        totalValue ? `Team total: ${totalValue}` : '';
+
+    document.getElementById('breakdown-modal').showModal();
+}
+
+/* Click delegation — only inside #proj-current, only on stat-totals cells */
+document.addEventListener('DOMContentLoaded', () => {
+    const root = document.getElementById('proj-current');
+    if (!root) return;
+    root.addEventListener('click', (e) => {
+        const cell = e.target.closest('td.proj-current-cell');
+        if (!cell) return;
+        if (!cell.classList.contains('mode-stats')) return;
+        const row = cell.closest('tr');
+        const team = row?.dataset.team;
+        const cat = cell.dataset.cat;
+        if (!team || !cat) return;
+        openBreakdownModal(team, cat);
+    });
+
+    // Dismiss on click outside the dialog content
+    const dlg = document.getElementById('breakdown-modal');
+    if (dlg) {
+        dlg.addEventListener('click', (e) => {
+            if (e.target === dlg) dlg.close();
+        });
+    }
+});
 </script>
 
 <style>
 .sd-bound {
     opacity: 0.45;
     font-size: 0.85em;
+}
+
+/* Clickable stat cells under Projected → Current in Stat Totals mode */
+.proj-current-cell.mode-stats {
+    cursor: pointer;
+}
+.proj-current-cell.mode-stats:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+#breakdown-modal {
+    border: 1px solid var(--border, #333);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    max-width: 560px;
+    background: var(--bg-panel, #1a1a1a);
+    color: var(--fg, #eee);
+}
+#breakdown-modal::backdrop {
+    background: rgba(0, 0, 0, 0.5);
+}
+.breakdown-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+}
+.breakdown-close {
+    background: transparent;
+    border: none;
+    color: inherit;
+    font-size: 1.5rem;
+    cursor: pointer;
+    line-height: 1;
+}
+.breakdown-modal-total {
+    opacity: 0.75;
+    margin: 0 0 0.75rem 0;
+}
+.breakdown-modal-table {
+    width: 100%;
+    font-size: 0.9rem;
+}
+.breakdown-status-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    background: var(--bg-subtle, #2a2a2a);
+}
+.breakdown-status-badge.no-projection {
+    background: var(--warning, #663);
+    color: #fff;
 }
 </style>
 
