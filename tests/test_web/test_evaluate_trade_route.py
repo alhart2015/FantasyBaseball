@@ -18,14 +18,20 @@ def client():
 
 
 def _fake_cache(monkeypatch, values: dict):
-    """Patch read_cache to return the values dict keyed by CacheKey.value."""
+    """Patch read_cache_dict/list to return the values dict keyed by CacheKey.value."""
 
-    def fake_read_cache(key, *_args, **_kwargs):
-        return values.get(key.value)
+    def fake_read_cache_dict(key, *_args, **_kwargs):
+        val = values.get(key.value)
+        return val if isinstance(val, dict) else None
+
+    def fake_read_cache_list(key, *_args, **_kwargs):
+        val = values.get(key.value)
+        return val if isinstance(val, list) else None
 
     import fantasy_baseball.web.season_routes as routes
 
-    monkeypatch.setattr(routes, "read_cache", fake_read_cache)
+    monkeypatch.setattr(routes, "read_cache_dict", fake_read_cache_dict)
+    monkeypatch.setattr(routes, "read_cache_list", fake_read_cache_list)
 
 
 def _auth(client):

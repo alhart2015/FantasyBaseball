@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -137,7 +137,7 @@ def worst_roster_by_position(
 
 def fa_target_positions(
     player_type: str,
-    positions: list[str],
+    positions: Sequence[str],
     sv: float,
 ) -> list[str]:
     """Return the pool positions an FA should be compared against.

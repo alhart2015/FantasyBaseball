@@ -18,9 +18,11 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from fantasy_baseball.utils.constants import (
     IL_STATUSES,
+    Category,
 )
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 from fantasy_baseball.utils.time_utils import (
@@ -38,6 +40,15 @@ from fantasy_baseball.web.season_data import (
     read_cache,
     write_cache,
 )
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+    from fantasy_baseball.config import LeagueConfig
+    from fantasy_baseball.lineup.optimizer import HitterAssignment, PitcherStarter
+    from fantasy_baseball.models.league import League
+    from fantasy_baseball.models.player import Player
+    from fantasy_baseball.models.standings import ProjectedStandings, Standings
 
 log = logging.getLogger(__name__)
 
@@ -98,40 +109,44 @@ class RefreshRun:
 
         # Shared state — populated as steps run. All initialized to None
         # so attribute access errors surface as clear AttributeErrors
-        # rather than silent fall-through to the wrong type.
-        self.config = None
-        self.league = None  # Yahoo session-bound league
-        self.league_model = None  # League dataclass loaded from Redis
-        self.user_team_key = None
-        self.standings = None  # Standings | None
-        self.projected_standings = None  # ProjectedStandings | None
-        self.team_sds = None
-        self.fraction_remaining = None
-        self.sd_scale = None
-        self.effective_date = None
-        self.start_date = None
-        self.end_date = None
-        self.roster_raw = None
-        self.raw_rosters_by_team = None
-        self.opp_rosters = None
-        self.matched = None
-        self.roster_players = None
-        self.preseason_lookup = None
-        self.preseason_hitters = None
-        self.preseason_pitchers = None
-        self.hitters_proj = None
-        self.pitchers_proj = None
-        self.has_rest_of_season = False
-        self.hitter_logs = None
-        self.pitcher_logs = None
-        self.leverage = None
-        self.rankings_lookup = None
-        self.optimal_hitters = None
-        self.optimal_pitchers_starters = None
-        self.optimal_pitchers_bench = None
-        self.fa_players = None
-        self.rest_of_season_mc = None
-        self.rest_of_season_mgmt_mc = None
+        # rather than silent fall-through to the wrong type. Methods
+        # that read these attributes assert-not-None at entry; the
+        # ordering is enforced by ``run()``.
+        self.config: LeagueConfig | None = None
+        self.league: Any = None  # Yahoo session-bound league (untyped lib)
+        self.league_model: League | None = None
+        self.user_team_key: str | None = None
+        self.standings: Standings | None = None
+        self.projected_standings: ProjectedStandings | None = None
+        self.preseason_projected_standings: ProjectedStandings | None = None
+        self.team_sds: dict[str, dict[Category, float]] | None = None
+        self.preseason_team_sds: dict[str, dict[Category, float]] | None = None
+        self.fraction_remaining: float | None = None
+        self.sd_scale: float | None = None
+        self.effective_date: date | None = None
+        self.start_date: str | None = None
+        self.end_date: str | None = None
+        self.roster_raw: list[dict[str, Any]] | None = None
+        self.raw_rosters_by_team: dict[str, list[dict[str, Any]]] | None = None
+        self.opp_rosters: dict[str, list[Player]] | None = None
+        self.matched: list[Player] | None = None
+        self.roster_players: list[Player] | None = None
+        self.preseason_lookup: dict[str, Player] | None = None
+        self.preseason_hitters: pd.DataFrame | None = None
+        self.preseason_pitchers: pd.DataFrame | None = None
+        self.hitters_proj: pd.DataFrame | None = None
+        self.pitchers_proj: pd.DataFrame | None = None
+        self.has_rest_of_season: bool = False
+        self.hitter_logs: dict[str, dict[str, Any]] | None = None
+        self.pitcher_logs: dict[str, dict[str, Any]] | None = None
+        self.leverage: dict[str, float] | None = None
+        self.rankings_lookup: dict[str, dict[str, Any]] | None = None
+        self.optimal_hitters: list[HitterAssignment] | None = None
+        self.optimal_pitchers_starters: list[PitcherStarter] | None = None
+        self.optimal_pitchers_bench: list[Player] | None = None
+        self.fa_players: list[Player] | None = None
+        self.rest_of_season_mc: dict[str, Any] | None = None
+        self.rest_of_season_mgmt_mc: dict[str, Any] | None = None
 
     def _progress(self, msg: str) -> None:
         _set_refresh_progress(msg)
@@ -202,6 +217,7 @@ class RefreshRun:
 
     # --- Step 2: Find user's team key ---
     def _find_user_team(self):
+        assert self.config is not None
         self._progress("Finding team...")
         teams = self.league.teams()
         for key, team_info in teams.items():
@@ -219,6 +235,9 @@ class RefreshRun:
             fetch_scoring_period,
             fetch_standings,
         )
+
+        assert self.config is not None
+        assert self.user_team_key is not None
 
         # Compute the effective date for the next lineup lock BEFORE
         # fetching standings so we can tag the Standings snapshot with
@@ -306,7 +325,7 @@ class RefreshRun:
         rest_of_season_hitters = pd.DataFrame()
         rest_of_season_pitchers = pd.DataFrame()
         ros_cached = read_cache(CacheKey.ROS_PROJECTIONS, self.cache_dir)
-        if ros_cached:
+        if isinstance(ros_cached, dict):
             rest_of_season_hitters = pd.DataFrame(ros_cached.get("hitters", []))
             rest_of_season_pitchers = pd.DataFrame(ros_cached.get("pitchers", []))
         self.has_rest_of_season = (
@@ -339,6 +358,10 @@ class RefreshRun:
     # --- Step 4b: Fetch opponent rosters (raw) ---
     def _fetch_opponent_rosters(self):
         from fantasy_baseball.lineup.yahoo_roster import fetch_roster
+
+        assert self.config is not None
+        assert self.roster_raw is not None
+        assert self.effective_date is not None
 
         self._progress("Fetching opponent rosters...")
 
@@ -375,6 +398,11 @@ class RefreshRun:
     # --- Step 4c: Write rosters + standings to Redis, then load League ---
     def _write_snapshots_and_load_league(self):
         from fantasy_baseball.models.league import League
+
+        assert self.config is not None
+        assert self.effective_date is not None
+        assert self.raw_rosters_by_team is not None
+        assert self.standings is not None
 
         self._progress("Writing roster snapshots to Redis...")
         from fantasy_baseball.data.kv_store import get_kv
@@ -418,7 +446,11 @@ class RefreshRun:
     # --- Step 4d: Hydrate user roster + opponent rosters from League ---
     def _hydrate_rosters(self):
         from fantasy_baseball.data.projections import hydrate_roster_entries
-        from fantasy_baseball.models.player import Player
+
+        assert self.config is not None
+        assert self.league_model is not None
+        assert self.hitters_proj is not None
+        assert self.pitchers_proj is not None
 
         self._progress("Hydrating user and opponent rosters...")
         user_team_model = self.league_model.team_by_name(self.config.team_name)
@@ -430,7 +462,7 @@ class RefreshRun:
             context="user",
         )
 
-        self.opp_rosters: dict[str, list[Player]] = {}
+        self.opp_rosters = {}
         for team in self.league_model.teams:
             if team.name == self.config.team_name:
                 continue
@@ -459,6 +491,14 @@ class RefreshRun:
         from fantasy_baseball.data.projections import hydrate_roster_entries
         from fantasy_baseball.models.standings import ProjectedStandings
         from fantasy_baseball.scoring import build_team_sds, team_sds_to_json
+
+        assert self.config is not None
+        assert self.matched is not None
+        assert self.opp_rosters is not None
+        assert self.effective_date is not None
+        assert self.league_model is not None
+        assert self.preseason_hitters is not None
+        assert self.preseason_pitchers is not None
 
         all_team_rosters = {self.config.team_name: self.matched}
         all_team_rosters.update(self.opp_rosters)
@@ -518,6 +558,9 @@ class RefreshRun:
     def _compute_leverage(self):
         from fantasy_baseball.lineup.leverage import calculate_leverage
 
+        assert self.config is not None
+        assert self.standings is not None
+
         self._progress("Calculating leverage weights...")
         self.leverage = calculate_leverage(
             self.standings,
@@ -530,6 +573,11 @@ class RefreshRun:
         from fantasy_baseball.data.projections import match_roster_to_projections
         from fantasy_baseball.utils.name_utils import normalize_name
         from fantasy_baseball.web.refresh_steps import merge_matched_and_raw_roster
+
+        assert self.roster_raw is not None
+        assert self.preseason_hitters is not None
+        assert self.preseason_pitchers is not None
+        assert self.matched is not None
 
         self._progress("Matching roster to projections...")
 
@@ -555,11 +603,17 @@ class RefreshRun:
     def _fetch_game_logs(self):
         from fantasy_baseball.data.mlb_game_logs import fetch_game_log_totals
 
+        assert self.config is not None
+
         self._progress("Fetching MLB game logs...")
         fetch_game_log_totals(self.config.season_year, progress_cb=self._progress)
 
     # --- Step 6c: Compute season-to-date pace vs projections ---
     def _compute_pace(self):
+        assert self.config is not None
+        assert self.roster_players is not None
+        assert self.preseason_lookup is not None
+
         self._progress("Computing player pace...")
         self.hitter_logs, self.pitcher_logs = _load_game_log_totals(self.config.season_year)
 
@@ -584,6 +638,14 @@ class RefreshRun:
             compute_sgp_rankings,
             lookup_rank,
         )
+
+        assert self.hitters_proj is not None
+        assert self.pitchers_proj is not None
+        assert self.preseason_hitters is not None
+        assert self.preseason_pitchers is not None
+        assert self.hitter_logs is not None
+        assert self.pitcher_logs is not None
+        assert self.roster_players is not None
 
         rest_of_season_ranks = compute_sgp_rankings(self.hitters_proj, self.pitchers_proj)
         preseason_ranks = compute_sgp_rankings(self.preseason_hitters, self.preseason_pitchers)
@@ -622,6 +684,10 @@ class RefreshRun:
             optimize_pitcher_lineup,
         )
 
+        assert self.config is not None
+        assert self.roster_players is not None
+        assert self.projected_standings is not None
+
         self._progress("Optimizing lineup...")
         active_players = [p for p in self.roster_players if p.status not in IL_STATUSES]
         hitter_players = []
@@ -658,6 +724,11 @@ class RefreshRun:
     def _compute_moves(self):
         from fantasy_baseball.web.refresh_steps import compute_lineup_moves
 
+        assert self.optimal_hitters is not None
+        assert self.optimal_pitchers_starters is not None
+        assert self.optimal_pitchers_bench is not None
+        assert self.roster_players is not None
+
         self._progress("Computing lineup moves...")
         legacy_shape = {a.slot.value: a.name for a in self.optimal_hitters}
         moves = compute_lineup_moves(legacy_shape, self.roster_players)
@@ -677,6 +748,10 @@ class RefreshRun:
             calculate_matchup_factors,
             get_team_batting_stats,
         )
+
+        assert self.start_date is not None
+        assert self.end_date is not None
+        assert self.roster_players is not None
 
         self._progress("Fetching schedule and matchup data...")
         # start_date and end_date were fetched earlier to compute effective_date
@@ -706,6 +781,15 @@ class RefreshRun:
         from fantasy_baseball.lineup.roster_audit import audit_roster
         from fantasy_baseball.lineup.waivers import fetch_and_match_free_agents
         from fantasy_baseball.web.refresh_steps import build_positions_map
+
+        assert self.config is not None
+        assert self.hitters_proj is not None
+        assert self.pitchers_proj is not None
+        assert self.roster_players is not None
+        assert self.opp_rosters is not None
+        assert self.projected_standings is not None
+        assert self.optimal_hitters is not None
+        assert self.optimal_pitchers_starters is not None
 
         self._progress("Running roster audit...")
         self.fa_players, _ = fetch_and_match_free_agents(
@@ -739,6 +823,8 @@ class RefreshRun:
     def _compute_per_team_leverage(self):
         from fantasy_baseball.lineup.leverage import calculate_leverage
 
+        assert self.standings is not None
+
         self._progress("Computing leverage...")
         leverage_by_team: dict[str, dict] = {}
         for entry in self.standings.entries:
@@ -751,10 +837,17 @@ class RefreshRun:
 
     # --- Step 13b: ROS Monte Carlo simulation ---
     def _run_ros_monte_carlo(self):
+        assert self.config is not None
+
         self.rest_of_season_mc = None
         self.rest_of_season_mgmt_mc = None
         if self.has_rest_of_season:
             from fantasy_baseball.simulation import run_ros_monte_carlo
+
+            assert self.matched is not None
+            assert self.opp_rosters is not None
+            assert self.standings is not None
+            assert self.fraction_remaining is not None
 
             # fraction_remaining was computed in Step 4e and is reused here
 
@@ -840,6 +933,12 @@ class RefreshRun:
             compute_current_spoe,
         )
 
+        assert self.config is not None
+        assert self.league_model is not None
+        assert self.standings is not None
+        assert self.preseason_hitters is not None
+        assert self.preseason_pitchers is not None
+
         preseason_lookup = build_preseason_lookup(
             self.preseason_hitters,
             self.preseason_pitchers,
@@ -867,11 +966,18 @@ class RefreshRun:
         )
         from fantasy_baseball.lineup.yahoo_roster import fetch_all_transactions
 
+        assert self.config is not None
+        assert self.league_model is not None
+        assert self.projected_standings is not None
+
         raw_txns = fetch_all_transactions(self.league)
         if not raw_txns:
             return
 
-        stored_txns = read_cache(CacheKey.TRANSACTIONS, self.cache_dir) or []
+        stored_txns_raw = read_cache(CacheKey.TRANSACTIONS, self.cache_dir) or []
+        stored_txns: list[dict[str, Any]] = (
+            stored_txns_raw if isinstance(stored_txns_raw, list) else []
+        )
         existing_ids = {t["transaction_id"] for t in stored_txns}
         new_txns = [t for t in raw_txns if t["transaction_id"] not in existing_ids]
 
@@ -931,6 +1037,8 @@ class RefreshRun:
 
     # --- Step 16: Write meta ---
     def _write_meta(self):
+        assert self.config is not None
+
         self._progress("Finalizing...")
         meta = {
             "last_refresh": local_now().strftime("%Y-%m-%d %H:%M"),

@@ -7,6 +7,7 @@ import os
 import threading
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
@@ -18,7 +19,12 @@ from fantasy_baseball.models.standings import (
 )
 from fantasy_baseball.scoring import team_sds_from_json
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, RATE_STATS, Category
-from fantasy_baseball.web.season_data import CacheKey, read_cache, read_meta
+from fantasy_baseball.web.season_data import (
+    CacheKey,
+    read_cache_dict,
+    read_cache_list,
+    read_meta,
+)
 
 
 def _standings_from_cache(raw: dict) -> Standings:
@@ -113,7 +119,7 @@ def _compute_worst_roster_by_position() -> dict[str, str]:
     from fantasy_baseball.lineup.roster_audit import worst_roster_by_position
     from fantasy_baseball.models.player import Player
 
-    roster_raw = read_cache(CacheKey.ROSTER) or []
+    roster_raw = read_cache_list(CacheKey.ROSTER) or []
     if not roster_raw:
         return {}
     roster = [Player.from_dict(p) for p in roster_raw]
@@ -145,7 +151,6 @@ def _load_projections():
     from fantasy_baseball.data.kv_store import get_kv
     from fantasy_baseball.data.redis_store import get_blended_projections
     from fantasy_baseball.utils.name_utils import normalize_name
-    from fantasy_baseball.web.season_data import read_cache
 
     client = get_kv()
     hitters_raw = get_blended_projections(client, "hitters")
@@ -161,7 +166,7 @@ def _load_projections():
     # ROS projections served from the cache:ros_projections Redis key (existing write-through).
     # Task 7 migrates the ROS pipeline off SQLite staging; this request-path reader already
     # goes through Redis cache.
-    ros_cache = read_cache(CacheKey.ROS_PROJECTIONS) or {}
+    ros_cache = read_cache_dict(CacheKey.ROS_PROJECTIONS) or {}
     rest_of_season_hitters = pd.DataFrame(ros_cache.get("hitters", []))
     rest_of_season_pitchers = pd.DataFrame(ros_cache.get("pitchers", []))
 
@@ -269,7 +274,7 @@ def register_routes(app: Flask) -> None:
     @app.route("/standings")
     def standings():
         meta = read_meta()
-        raw_standings = read_cache(CacheKey.STANDINGS)
+        raw_standings = read_cache_dict(CacheKey.STANDINGS)
         config = _load_config()
         standings_data = None
         preseason_data = None
@@ -290,7 +295,7 @@ def register_routes(app: Flask) -> None:
                 _standings_from_cache(raw_standings), config.team_name
             )
 
-            raw_projected = read_cache(CacheKey.PROJECTIONS)
+            raw_projected = read_cache_dict(CacheKey.PROJECTIONS)
             if raw_projected:
                 preseason_standings = raw_projected.get(
                     "preseason_standings",
@@ -309,7 +314,7 @@ def register_routes(app: Flask) -> None:
                         team_sds=_team_sds_from_cache(raw_projected.get("team_sds")),
                     )
 
-            raw_mc = read_cache(CacheKey.MONTE_CARLO)
+            raw_mc = read_cache_dict(CacheKey.MONTE_CARLO)
             if raw_mc:
                 baseline_meta = raw_mc.get("baseline_meta")
                 if raw_mc.get("base"):
@@ -346,10 +351,10 @@ def register_routes(app: Flask) -> None:
     @app.route("/lineup")
     def lineup():
         meta = read_meta()
-        roster_raw = read_cache(CacheKey.ROSTER)
-        optimal_raw = read_cache(CacheKey.LINEUP_OPTIMAL)
-        starters_raw = read_cache(CacheKey.PROBABLE_STARTERS)
-        pending_moves_raw = read_cache(CacheKey.PENDING_MOVES) or []
+        roster_raw = read_cache_list(CacheKey.ROSTER)
+        optimal_raw = read_cache_dict(CacheKey.LINEUP_OPTIMAL)
+        starters_raw = read_cache_list(CacheKey.PROBABLE_STARTERS)
+        pending_moves_raw = read_cache_list(CacheKey.PENDING_MOVES) or []
 
         lineup_data = None
         if roster_raw:
@@ -360,7 +365,7 @@ def register_routes(app: Flask) -> None:
         # Build teams list for opponent selector dropdown
         from fantasy_baseball.web.season_data import get_teams_list
 
-        standings_raw = read_cache(CacheKey.STANDINGS)
+        standings_raw = read_cache_dict(CacheKey.STANDINGS)
         config = _load_config()
         standings_typed = (
             _standings_from_cache(standings_raw)
@@ -397,7 +402,7 @@ def register_routes(app: Flask) -> None:
     @app.route("/roster-audit")
     def roster_audit():
         meta = read_meta()
-        audit_raw = read_cache(CacheKey.ROSTER_AUDIT)
+        audit_raw = read_cache_list(CacheKey.ROSTER_AUDIT)
         return render_template(
             "season/roster_audit.html",
             meta=meta,
@@ -412,8 +417,8 @@ def register_routes(app: Flask) -> None:
         meta = read_meta()
 
         # Build player name list for trade search autocomplete
-        roster_raw = read_cache(CacheKey.ROSTER) or []
-        opp_rosters_raw = read_cache(CacheKey.OPP_ROSTERS) or {}
+        roster_raw = read_cache_list(CacheKey.ROSTER) or []
+        opp_rosters_raw = read_cache_dict(CacheKey.OPP_ROSTERS) or {}
         my_players = sorted(set(p.get("name", "") for p in roster_raw if p.get("name")))
         opp_players = sorted(
             set(
@@ -453,27 +458,27 @@ def register_routes(app: Flask) -> None:
             return jsonify({"error": "mode must be 'away' or 'for'"}), 400
 
         config = _load_config()
-        standings_raw = read_cache(CacheKey.STANDINGS)
+        standings_raw = read_cache_dict(CacheKey.STANDINGS)
         if not standings_raw:
             return jsonify({"error": "No standings data. Run a refresh first."}), 404
 
-        roster_raw = read_cache(CacheKey.ROSTER)
+        roster_raw = read_cache_list(CacheKey.ROSTER)
         if not roster_raw:
             return jsonify({"error": "No roster data. Run a refresh first."}), 404
 
-        opp_rosters_raw = read_cache(CacheKey.OPP_ROSTERS)
+        opp_rosters_raw = read_cache_dict(CacheKey.OPP_ROSTERS)
         if not opp_rosters_raw:
             return jsonify({"error": "No opponent roster data. Run a refresh first."}), 404
 
-        leverage_raw = read_cache(CacheKey.LEVERAGE)
+        leverage_raw = read_cache_dict(CacheKey.LEVERAGE)
         if not leverage_raw:
             return jsonify({"error": "No leverage data. Run a refresh first."}), 404
 
-        rankings_raw = read_cache(CacheKey.RANKINGS)
+        rankings_raw = read_cache_dict(CacheKey.RANKINGS)
         if not rankings_raw:
             return jsonify({"error": "No rankings data. Run a refresh first."}), 404
 
-        proj_cache = read_cache(CacheKey.PROJECTIONS) or {}
+        proj_cache = read_cache_dict(CacheKey.PROJECTIONS) or {}
         projected_standings_raw = proj_cache.get("projected_standings")
 
         # Convert cached list[dict] to typed Standings / ProjectedStandings
@@ -515,6 +520,7 @@ def register_routes(app: Flask) -> None:
             team_sds=team_sds,
         )
 
+        results: list[Any]
         if mode == "away":
             results = search_trades_away(**kwargs)
         else:
@@ -533,16 +539,16 @@ def register_routes(app: Flask) -> None:
         if len(query) < 2:
             return jsonify([])
 
-        roster_raw = read_cache(CacheKey.ROSTER) or []
-        opp_rosters_raw = read_cache(CacheKey.OPP_ROSTERS) or {}
-        ros_cache = read_cache(CacheKey.ROS_PROJECTIONS) or {}
+        roster_raw = read_cache_list(CacheKey.ROSTER) or []
+        opp_rosters_raw = read_cache_dict(CacheKey.OPP_ROSTERS) or {}
+        ros_cache = read_cache_dict(CacheKey.ROS_PROJECTIONS) or {}
 
         hart_roster = [Player.from_dict(p) for p in roster_raw]
         opp_rosters = {n: [Player.from_dict(p) for p in ps] for n, ps in opp_rosters_raw.items()}
         pool = build_waiver_pool(hart_roster, opp_rosters, ros_cache)
 
         q_norm = normalize_name(query)
-        matches = [
+        matches: list[dict[str, Any]] = [
             {
                 "key": key,
                 "name": p.name,
@@ -552,7 +558,7 @@ def register_routes(app: Flask) -> None:
             for key, p in pool.items()
             if q_norm in normalize_name(p.name)
         ]
-        matches.sort(key=lambda m: m["name"])
+        matches.sort(key=lambda m: str(m["name"]))
         return jsonify(matches[:20])
 
     @app.route("/api/evaluate-trade", methods=["POST"])
@@ -571,20 +577,20 @@ def register_routes(app: Flask) -> None:
             return jsonify({"error": "opponent is required"}), 400
 
         config = _load_config()
-        roster_raw = read_cache(CacheKey.ROSTER)
-        opp_rosters_raw = read_cache(CacheKey.OPP_ROSTERS)
+        roster_raw = read_cache_list(CacheKey.ROSTER)
+        opp_rosters_raw = read_cache_dict(CacheKey.OPP_ROSTERS)
         if roster_raw is None or opp_rosters_raw is None:
             return jsonify({"error": "No roster data. Run a refresh first."}), 404
         if opponent not in opp_rosters_raw:
             return jsonify({"error": f"Unknown opponent: {opponent}"}), 400
 
-        proj_cache = read_cache(CacheKey.PROJECTIONS) or {}
+        proj_cache = read_cache_dict(CacheKey.PROJECTIONS) or {}
         projected_standings_raw = proj_cache.get("projected_standings")
         team_sds = _team_sds_from_cache(proj_cache.get("team_sds"))
         if not projected_standings_raw:
             return jsonify({"error": "No projected standings. Run a refresh first."}), 404
 
-        ros_cache = read_cache(CacheKey.ROS_PROJECTIONS) or {}
+        ros_cache = read_cache_dict(CacheKey.ROS_PROJECTIONS) or {}
 
         hart_roster = [Player.from_dict(p) for p in roster_raw]
         opp_rosters = {n: [Player.from_dict(p) for p in ps] for n, ps in opp_rosters_raw.items()}
@@ -648,24 +654,25 @@ def register_routes(app: Flask) -> None:
         """
         from fantasy_baseball.lineup.roster_audit import fa_target_positions
         from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, RankInfo
+        from fantasy_baseball.models.positions import Position
         from fantasy_baseball.sgp.rankings import lookup_rank
         from fantasy_baseball.utils.name_utils import normalize_name
 
-        ros_cache = read_cache(CacheKey.ROS_PROJECTIONS)
+        ros_cache = read_cache_dict(CacheKey.ROS_PROJECTIONS)
         if not ros_cache:
             return jsonify([])
 
-        rankings_cache = read_cache(CacheKey.RANKINGS) or {}
+        rankings_cache = read_cache_dict(CacheKey.RANKINGS) or {}
 
         # Build position and ownership maps from Redis caches
-        pos_map: dict[str, list[str]] = read_cache(CacheKey.POSITIONS) or {}
+        pos_map: dict[str, list[str]] = read_cache_dict(CacheKey.POSITIONS) or {}
         owner_map: dict[str, str] = {}
 
-        for rp in read_cache(CacheKey.ROSTER) or []:
+        for rp in read_cache_list(CacheKey.ROSTER) or []:
             norm = normalize_name(rp.get("name", ""))
             owner_map[norm] = "roster"
 
-        for team_name_opp, team_roster in (read_cache(CacheKey.OPP_ROSTERS) or {}).items():
+        for team_name_opp, team_roster in (read_cache_dict(CacheKey.OPP_ROSTERS) or {}).items():
             for rp in team_roster:
                 norm = normalize_name(rp.get("name", ""))
                 if norm not in owner_map:
@@ -675,7 +682,7 @@ def register_routes(app: Flask) -> None:
         # each roster slot.  Index every (drop_player, fa) pair so the browse
         # page can surface ΔRoto directly without recomputation, then pair
         # each FA with the worst-SGP roster player at their position.
-        audit_raw = read_cache(CacheKey.ROSTER_AUDIT) or []
+        audit_raw = read_cache_list(CacheKey.ROSTER_AUDIT) or []
         audit_index: dict[tuple[str, str], dict] = {}
         for entry in audit_raw:
             drop_name = entry.get("player")
@@ -701,18 +708,22 @@ def register_routes(app: Flask) -> None:
                 if team != team and isinstance(team, float):
                     team = ""  # NaN team
 
-                stats_cls = HitterStats if ptype == PlayerType.HITTER else PitcherStats
-                ros = stats_cls.from_dict(d)
+                ros: HitterStats | PitcherStats
+                if ptype == PlayerType.HITTER:
+                    ros = HitterStats.from_dict(d)
+                else:
+                    ros = PitcherStats.from_dict(d)
                 ros.compute_sgp()
 
                 rank_info = lookup_rank(rankings_cache, fg_id, name, ptype)
 
+                positions = [Position.parse(pos) for pos in pos_map.get(norm, [])]
                 p = Player(
                     name=name,
                     player_type=ptype,
                     team=team or "",
                     fg_id=fg_id,
-                    positions=pos_map.get(norm, []),
+                    positions=positions,
                     rest_of_season=ros,
                     rank=RankInfo.from_dict(rank_info),
                 )
@@ -722,9 +733,8 @@ def register_routes(app: Flask) -> None:
                 owner = owner_map.get(norm)
                 delta_roto = None
                 if owner is None:
-                    targets = fa_target_positions(
-                        ptype, p.positions, ros.sv if ptype == PlayerType.PITCHER else 0.0
-                    )
+                    sv_for_targets = ros.sv if isinstance(ros, PitcherStats) else 0.0
+                    targets = fa_target_positions(ptype, p.positions, sv_for_targets)
                     for target_pos in targets:
                         drop_name = worst_by_pos.get(target_pos)
                         if not drop_name:
@@ -735,7 +745,7 @@ def register_routes(app: Flask) -> None:
                         if delta_roto is None or dr["total"] > delta_roto["total"]:
                             delta_roto = dr
 
-                result = {
+                result: dict[str, Any] = {
                     "name": name,
                     "team": p.team,
                     "player_type": ptype,
@@ -743,11 +753,11 @@ def register_routes(app: Flask) -> None:
                     "positions": p.positions,
                     "owner": owner,
                     "rank": p.rank.rest_of_season,
-                    "sgp": round(ros.sgp, 2),
+                    "sgp": round(ros.sgp, 2) if ros.sgp is not None else None,
                     "delta_roto": delta_roto,
                 }
 
-                if ptype == PlayerType.HITTER:
+                if isinstance(ros, HitterStats):
                     result.update(
                         {
                             "R": ros.r,
@@ -793,11 +803,11 @@ def register_routes(app: Flask) -> None:
                 {"error": "roster_player, other_player, and other_type are required"}
             ), 400
 
-        roster_cache = read_cache(CacheKey.ROSTER)
+        roster_cache = read_cache_list(CacheKey.ROSTER)
         if not roster_cache:
             return jsonify({"error": "No roster data available"}), 404
 
-        proj_cache = read_cache(CacheKey.PROJECTIONS) or {}
+        proj_cache = read_cache_dict(CacheKey.PROJECTIONS) or {}
         projected_standings = proj_cache.get("projected_standings")
         if not projected_standings:
             return jsonify({"error": "No projected standings available"}), 404
@@ -834,7 +844,7 @@ def register_routes(app: Flask) -> None:
         # source the browse page uses.  This prevents the delta from
         # diverging when ros_projections is updated after a refresh.
         roster_player_projection = None
-        ros_cache = read_cache(CacheKey.ROS_PROJECTIONS) or {}
+        ros_cache = read_cache_dict(CacheKey.ROS_PROJECTIONS) or {}
         target_norm = normalize_name(roster_player)
         for pool_key in ("hitters", "pitchers"):
             for d in ros_cache.get(pool_key, []):
@@ -880,7 +890,7 @@ def register_routes(app: Flask) -> None:
         """
         from fantasy_baseball.lineup.delta_roto import compute_delta_roto
         from fantasy_baseball.lineup.roster_audit import fa_target_positions
-        from fantasy_baseball.models.player import Player
+        from fantasy_baseball.models.player import PitcherStats, Player
         from fantasy_baseball.utils.name_utils import normalize_name
 
         player_name = request.args.get("player")
@@ -888,19 +898,19 @@ def register_routes(app: Flask) -> None:
         if not player_name or not player_type:
             return jsonify({"error": "player and player_type are required"}), 400
 
-        roster_raw = read_cache(CacheKey.ROSTER)
+        roster_raw = read_cache_list(CacheKey.ROSTER)
         if not roster_raw:
             return jsonify({"error": "No roster data available"}), 404
         user_roster = [Player.from_dict(p) for p in roster_raw]
 
-        proj_cache = read_cache(CacheKey.PROJECTIONS) or {}
+        proj_cache = read_cache_dict(CacheKey.PROJECTIONS) or {}
         projected_standings_raw = proj_cache.get("projected_standings")
         if not projected_standings_raw:
             return jsonify({"error": "No projected standings available"}), 404
 
         # Resolve the FA's ROS projection from ros_projections (same source
         # the browse page uses, so totals line up with the table row).
-        ros_cache = read_cache(CacheKey.ROS_PROJECTIONS) or {}
+        ros_cache = read_cache_dict(CacheKey.ROS_PROJECTIONS) or {}
         pool_key = "pitchers" if player_type == "pitcher" else "hitters"
         target_norm = normalize_name(player_name)
         fa_player = None
@@ -912,9 +922,10 @@ def register_routes(app: Flask) -> None:
             return jsonify({"error": f"{player_name} not found in projections"}), 404
 
         # Worst roster player at the FA's target positions
-        pos_map = read_cache(CacheKey.POSITIONS) or {}
+        pos_map = read_cache_dict(CacheKey.POSITIONS) or {}
         fa_positions = pos_map.get(target_norm, [])
-        sv = fa_player.rest_of_season.sv if player_type == "pitcher" else 0.0
+        fa_ros = fa_player.rest_of_season
+        sv = fa_ros.sv if isinstance(fa_ros, PitcherStats) else 0.0
         targets = fa_target_positions(player_type, fa_positions, sv)
 
         worst_by_pos = _compute_worst_roster_by_position()
@@ -951,7 +962,7 @@ def register_routes(app: Flask) -> None:
     @app.route("/luck")
     def luck():
         meta = read_meta()
-        spoe_cache = read_cache(CacheKey.SPOE) or {}
+        spoe_cache = read_cache_dict(CacheKey.SPOE) or {}
         latest = spoe_cache.get("snapshot_date")
         results = spoe_cache.get("results", [])
 
@@ -989,7 +1000,7 @@ def register_routes(app: Flask) -> None:
     @app.route("/transactions")
     def transactions():
         meta = read_meta()
-        txn_cache = read_cache(CacheKey.TRANSACTION_ANALYZER) or {}
+        txn_cache = read_cache_dict(CacheKey.TRANSACTION_ANALYZER) or {}
         config = _load_config()
         return render_template(
             "season/transactions.html",
@@ -1035,7 +1046,7 @@ def register_routes(app: Flask) -> None:
     def api_teams():
         from fantasy_baseball.web.season_data import get_teams_list
 
-        standings = read_cache(CacheKey.STANDINGS)
+        standings = read_cache_dict(CacheKey.STANDINGS)
         config = _load_config()
         if not standings:
             return jsonify({"teams": [], "user_team_key": None})
@@ -1059,7 +1070,7 @@ def register_routes(app: Flask) -> None:
             return jsonify(cached["data"])
 
         # Need standings for team name lookup
-        standings_raw = read_cache(CacheKey.STANDINGS)
+        standings_raw = read_cache_dict(CacheKey.STANDINGS)
         if not standings_raw:
             return jsonify({"error": "No standings data. Run a refresh first."}), 404
 

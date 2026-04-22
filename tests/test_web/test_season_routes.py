@@ -21,21 +21,30 @@ def test_index_redirects_to_standings(client):
 
 
 def test_standings_page_renders(client):
-    with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=None),
+        patch("fantasy_baseball.web.season_routes.read_cache_list", return_value=None),
+    ):
         resp = client.get("/standings")
     assert resp.status_code == 200
     assert b"Standings" in resp.data
 
 
 def test_lineup_page_renders(client):
-    with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=None),
+        patch("fantasy_baseball.web.season_routes.read_cache_list", return_value=None),
+    ):
         resp = client.get("/lineup")
     assert resp.status_code == 200
     assert b"Lineup" in resp.data
 
 
 def test_trades_page_renders(client):
-    with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=None),
+        patch("fantasy_baseball.web.season_routes.read_cache_list", return_value=None),
+    ):
         resp = client.get("/waivers-trades")
     assert resp.status_code == 200
     assert b"Trades" in resp.data
@@ -48,7 +57,10 @@ def test_players_page_renders(client):
 
 
 def test_sidebar_nav_links_present(client):
-    with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=None),
+        patch("fantasy_baseball.web.season_routes.read_cache_list", return_value=None),
+    ):
         resp = client.get("/standings")
     html = resp.data.decode()
     assert 'href="/standings"' in html
@@ -57,7 +69,10 @@ def test_sidebar_nav_links_present(client):
 
 
 def test_active_page_highlighted(client):
-    with patch("fantasy_baseball.web.season_routes.read_cache", return_value=None):
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=None),
+        patch("fantasy_baseball.web.season_routes.read_cache_list", return_value=None),
+    ):
         resp = client.get("/standings")
     html = resp.data.decode()
     assert "active" in html
@@ -108,7 +123,7 @@ def _mock_standings():
 
 def test_standings_renders_table_with_data(client):
     with (
-        patch("fantasy_baseball.web.season_routes.read_cache") as mock_cache,
+        patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_cache,
         patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
     ):
         mock_cache.side_effect = lambda k: _mock_standings() if k == CacheKey.STANDINGS else {}
@@ -186,11 +201,13 @@ def test_full_standings_page_with_cached_data(client, tmp_path):
         season_data.write_cache(CacheKey.META, {"last_refresh": "8:32 AM", "week": "3"}, tmp_path)
 
         with (
-            patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc,
+            patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_rc_dict,
+            patch("fantasy_baseball.web.season_routes.read_cache_list") as mock_rc_list,
             patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm,
             patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
         ):
-            mock_rc.side_effect = lambda k: season_data.read_cache(k, tmp_path)
+            mock_rc_dict.side_effect = lambda k: season_data.read_cache_dict(k, tmp_path)
+            mock_rc_list.side_effect = lambda k: season_data.read_cache_list(k, tmp_path)
             mock_rm.return_value = season_data.read_meta(tmp_path)
             mock_cfg.return_value.team_name = "Hart of the Order"
 
@@ -234,10 +251,12 @@ def test_full_lineup_page_with_cached_data(client, tmp_path):
         season_data.write_cache(CacheKey.META, {"last_refresh": "9:00 AM"}, tmp_path)
 
         with (
-            patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc,
+            patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_rc_dict,
+            patch("fantasy_baseball.web.season_routes.read_cache_list") as mock_rc_list,
             patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm,
         ):
-            mock_rc.side_effect = lambda k: season_data.read_cache(k, tmp_path)
+            mock_rc_dict.side_effect = lambda k: season_data.read_cache_dict(k, tmp_path)
+            mock_rc_list.side_effect = lambda k: season_data.read_cache_list(k, tmp_path)
             mock_rm.return_value = season_data.read_meta(tmp_path)
 
             resp = client.get("/lineup")
@@ -293,11 +312,13 @@ def test_standings_passes_baseline_meta_to_template(client, tmp_path):
         season_data.write_cache(CacheKey.STANDINGS, _mock_standings(), tmp_path)
 
         with (
-            patch("fantasy_baseball.web.season_routes.read_cache") as mock_rc,
+            patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_rc_dict,
+            patch("fantasy_baseball.web.season_routes.read_cache_list") as mock_rc_list,
             patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm,
             patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
         ):
-            mock_rc.side_effect = lambda k: season_data.read_cache(k, tmp_path)
+            mock_rc_dict.side_effect = lambda k: season_data.read_cache_dict(k, tmp_path)
+            mock_rc_list.side_effect = lambda k: season_data.read_cache_list(k, tmp_path)
             mock_rm.return_value = season_data.read_meta(tmp_path)
             mock_cfg.return_value.team_name = "Team 01"
 
