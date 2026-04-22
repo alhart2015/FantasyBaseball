@@ -258,6 +258,40 @@ class TestROSProjectionsRedisAuthoritative:
         )
 
 
+def test_standings_breakdown_cache_written_by_refresh():
+    """build_standings_breakdown_payload produces the STANDINGS_BREAKDOWN shape.
+
+    Exercises the extracted helper directly; decouples the test from
+    the surrounding RefreshRun scaffolding.
+    """
+    import json
+
+    from fantasy_baseball.models.player import Player, PlayerType
+    from fantasy_baseball.models.positions import Position
+    from fantasy_baseball.web.refresh_pipeline import build_standings_breakdown_payload
+
+    def _h(name):
+        return Player(
+            name=name,
+            player_type=PlayerType.HITTER,
+            positions=[Position.OF],
+            selected_position=Position.OF,
+        )
+
+    team_rosters = {"Team A": [_h("A1"), _h("A2")], "Team B": [_h("B1")]}
+
+    payload = build_standings_breakdown_payload(team_rosters)
+
+    assert set(payload["teams"].keys()) == {"Team A", "Team B"}
+    assert "hitters" in payload["teams"]["Team A"]
+    assert "pitchers" in payload["teams"]["Team A"]
+    assert len(payload["teams"]["Team A"]["hitters"]) == 2
+
+    # Round-trip through JSON (proves serialization shape)
+    roundtripped = json.loads(json.dumps(payload))
+    assert roundtripped == payload
+
+
 class TestPreseasonBaseline:
     """The refresh reads preseason_baseline:{year} from Redis; if
     missing, the base/with_management cache fields are None but the
