@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 import pandas as pd
 
@@ -48,9 +49,22 @@ def apply_backfill_blending(pool: pd.DataFrame) -> pd.DataFrame:
     # Ensure counting-stat columns are float so fractional backfill
     # values can be written without pandas raising LossySetitemError.
     _float_cols = [
-        "w", "k", "sv", "ip", "er", "bb", "h_allowed",
-        "r", "hr", "rbi", "sb", "h", "ab",
-        "era", "whip", "avg",
+        "w",
+        "k",
+        "sv",
+        "ip",
+        "er",
+        "bb",
+        "h_allowed",
+        "r",
+        "hr",
+        "rbi",
+        "sb",
+        "h",
+        "ab",
+        "era",
+        "whip",
+        "avg",
     ]
     for c in _float_cols:
         if c in pool.columns:
@@ -91,7 +105,9 @@ def apply_backfill_blending(pool: pd.DataFrame) -> pd.DataFrame:
             new_ip = pool.at[idx, "ip"]
             if new_ip > 0:
                 pool.at[idx, "era"] = calculate_era(pool.at[idx, "er"], new_ip)
-                pool.at[idx, "whip"] = calculate_whip(pool.at[idx, "bb"], pool.at[idx, "h_allowed"], new_ip)
+                pool.at[idx, "whip"] = calculate_whip(
+                    pool.at[idx, "bb"], pool.at[idx, "h_allowed"], new_ip
+                )
 
         elif row["player_type"] == PlayerType.HITTER:
             ab = _safe(row.get("ab", 0))
@@ -151,16 +167,15 @@ def build_draft_board(
 
     # Two-pass SGP: first with defaults (for ordering), then with
     # pool-derived replacement rates (for accurate values).
-    pool["total_sgp"] = pool.apply(
-        lambda row: calculate_player_sgp(row, denoms=denoms), axis=1
-    )
+    pool["total_sgp"] = pool.apply(lambda row: calculate_player_sgp(row, denoms=denoms), axis=1)
 
     starters = compute_starters_per_position(roster_slots, num_teams)
     repl_rates = calculate_replacement_rates(pool, starters)
 
     pool["total_sgp"] = pool.apply(
         lambda row: calculate_player_sgp(
-            row, denoms=denoms,
+            row,
+            denoms=denoms,
             replacement_era=repl_rates["era"],
             replacement_whip=repl_rates["whip"],
             replacement_avg=repl_rates["avg"],
@@ -191,7 +206,7 @@ def build_draft_board(
     return board
 
 
-def apply_keepers(board: pd.DataFrame, keepers: list[dict]) -> pd.DataFrame:
+def apply_keepers(board: pd.DataFrame, keepers: list[dict[str, Any]]) -> pd.DataFrame:
     """Remove keeper players from the draft board.
 
     Uses normalized name matching to handle accented characters.
@@ -249,13 +264,17 @@ def _validate_top_adp_players(
     if missing:
         logger.warning(
             "Top-%d ADP players missing from board (%d found):",
-            adp_threshold, len(missing),
+            adp_threshold,
+            len(missing),
         )
         for name, ptype, adp, ab, ip in sorted(missing, key=lambda x: x[2]):
             stat = f"AB={ab:.0f}" if ptype == PlayerType.HITTER else f"IP={ip:.0f}"
             logger.warning(
                 "  ADP %3.0f: %-25s [%s] %s (filtered by minimum threshold)",
-                adp, name, ptype, stat,
+                adp,
+                name,
+                ptype,
+                stat,
             )
 
 

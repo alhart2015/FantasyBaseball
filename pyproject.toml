@@ -88,6 +88,16 @@ warn_return_any = true
 warn_unused_ignores = true
 check_untyped_defs = true
 ignore_missing_imports = true
+warn_redundant_casts = true
+
+# Stricter rules for the draft subsystem, which was audited for type
+# completeness in the draft-parity refactor. Extend this list as other
+# subsystems are brought up to the same bar.
+[[tool.mypy.overrides]]
+module = "fantasy_baseball.draft.*"
+disallow_any_generics = true
+no_implicit_optional = true
+strict_equality = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
