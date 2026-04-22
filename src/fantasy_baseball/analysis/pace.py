@@ -14,6 +14,8 @@ comparison page. It has been removed — pace highlighting is now the
 only legitimate use of in-season game logs for display.
 """
 
+from typing import Any
+
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import (
     HITTER_PROJ_KEYS,
@@ -64,12 +66,12 @@ def _z_to_color(z: float) -> str:
 
 
 def compute_player_pace(
-    actual_stats: dict,
-    projected_stats: dict,
+    actual_stats: dict[str, Any],
+    projected_stats: dict[str, Any],
     player_type: str,
-    rest_of_season_stats: dict | None = None,
-    sgp_denoms: dict | None = None,
-) -> dict:
+    rest_of_season_stats: dict[str, Any] | None = None,
+    sgp_denoms: dict[Any, float] | None = None,
+) -> dict[str, Any]:
     """Compute z-scores and color classes for each roto stat.
 
     Args:
@@ -84,7 +86,7 @@ def compute_player_pace(
         {"actual", "expected", "z_score", "color_class", "projection",
          "rest_of_season_deviation_sgp"}
     """
-    result = {}
+    result: dict[str, Any] = {}
 
     if player_type == PlayerType.HITTER:
         opp_key = "pa"
@@ -234,11 +236,11 @@ def compute_player_pace(
 
 
 def attach_pace_to_roster(
-    players: list,
-    hitter_logs: dict,
-    pitcher_logs: dict,
-    preseason_lookup: dict,
-    sgp_denoms: dict,
+    players: list[Any],
+    hitter_logs: dict[str, dict[str, Any]],
+    pitcher_logs: dict[str, dict[str, Any]],
+    preseason_lookup: dict[str, Any],
+    sgp_denoms: dict[Any, float],
 ) -> None:
     """Attach a ``pace`` attribute to every player in ``players``.
 
@@ -276,7 +278,7 @@ def attach_pace_to_roster(
         )
 
 
-def compute_overall_pace(pace: dict | None) -> dict:
+def compute_overall_pace(pace: dict[str, Any] | None) -> dict[str, Any]:
     """Average per-category z-scores into an overall pace summary.
 
     Args:

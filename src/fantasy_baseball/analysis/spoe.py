@@ -74,7 +74,7 @@ def build_preseason_lookup(
 def _resolve_preseason(
     preseason_lookup: dict[tuple[str, str], dict[str, Any]],
     name: str,
-    positions: list,
+    positions: list[Any],
 ) -> dict[str, Any] | None:
     """Pick the projection entry matching the rostered player's positions.
 
@@ -126,12 +126,12 @@ def _empty_components() -> dict[str, float]:
 
 def compute_current_spoe(
     league: League,
-    standings: list[dict],
+    standings: list[dict[str, Any]],
     preseason_lookup: dict[tuple[str, str], dict[str, Any]],
     season_start: str,
     season_end: str,
     today: date | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Compute current season-to-date SPoE.
 
     Iterates league.teams and calls Team.ownership_periods() on each
@@ -222,7 +222,7 @@ def compute_current_spoe(
     projected_roto = score_roto_dict({t: expected_stats[t] for t in common})
     actual_roto = score_roto_dict({t: actual_stats[t] for t in common})
 
-    results: list[dict] = []
+    results: list[dict[str, Any]] = []
     for team in sorted(common):
         total_spoe = 0.0
         for cat in ALL_CATEGORIES:

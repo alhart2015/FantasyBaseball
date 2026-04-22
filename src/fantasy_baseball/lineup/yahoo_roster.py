@@ -69,10 +69,10 @@ class ParsedStandingsTeam:
 
 
 def fetch_roster(
-    league,
+    league: Any,
     team_key: str,
     day: datetime.date | None = None,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Fetch a team's roster from Yahoo.
 
     Args:
@@ -92,7 +92,7 @@ def fetch_roster(
     return parse_roster(raw_roster)
 
 
-def parse_roster(raw_roster: list[dict]) -> list[dict]:
+def parse_roster(raw_roster: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Normalize raw Yahoo roster data."""
     players = []
     for p in raw_roster:
@@ -107,7 +107,7 @@ def parse_roster(raw_roster: list[dict]) -> list[dict]:
     return players
 
 
-def fetch_injuries(league, team_key: str) -> list[dict]:
+def fetch_injuries(league: Any, team_key: str) -> list[dict[str, Any]]:
     """Fetch injured players on a team's roster with injury details.
 
     Uses the raw Yahoo API to get injury_note and status_full fields
@@ -120,7 +120,7 @@ def fetch_injuries(league, team_key: str) -> list[dict]:
     return parse_injuries_raw(raw)
 
 
-def parse_injuries_raw(raw: dict) -> list[dict]:
+def parse_injuries_raw(raw: dict[str, Any]) -> list[dict[str, Any]]:
     """Parse raw Yahoo roster JSON to extract injured players.
 
     Looks for players with a non-empty ``status`` field (IL15, IL60, DTD, etc.)
@@ -184,7 +184,7 @@ def parse_injuries_raw(raw: dict) -> list[dict]:
     return injured
 
 
-def fetch_standings(league, effective_date: date) -> Standings:
+def fetch_standings(league: Any, effective_date: date) -> Standings:
     """Fetch league standings with cumulative roto stats."""
     raw = league.yhandler.get_standings_raw(league.league_id)
     return parse_standings_raw(
@@ -196,7 +196,7 @@ def fetch_standings(league, effective_date: date) -> Standings:
 
 
 def parse_standings_raw(
-    raw: dict,
+    raw: dict[str, Any],
     stat_id_map: dict[str, str],
     *,
     effective_date: date,
@@ -243,7 +243,7 @@ def parse_standings_raw(
 
         # team_standings may live at team_entry[1] or team_entry[2] depending on
         # the Yahoo response shape; check both positions.
-        standings_candidates: list[dict] = []
+        standings_candidates: list[dict[str, Any]] = []
         detail = team_entry[1] if len(team_entry) > 1 else {}
         if isinstance(detail, dict) and detail.get("team_standings"):
             standings_candidates.append(detail["team_standings"])
@@ -296,7 +296,7 @@ def parse_standings_raw(
     return Standings(effective_date=effective_date, entries=entries)
 
 
-def fetch_free_agents(league, position: str, count: int = 50) -> list[dict]:
+def fetch_free_agents(league: Any, position: str, count: int = 50) -> list[dict[str, Any]]:
     """Fetch top available players (free agents + waivers) at a position.
 
     Uses status 'A' (all available) instead of 'FA' (free agents only)
@@ -350,7 +350,7 @@ def fetch_scoring_period(league) -> tuple[str, str]:
         return monday.isoformat(), sunday.isoformat()
 
 
-def _extract_player_info(player_data: dict) -> tuple[dict, dict]:
+def _extract_player_info(player_data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     """Extract player metadata and transaction_data from a Yahoo player entry.
 
     Yahoo nests data as:
@@ -397,7 +397,7 @@ def _extract_player_info(player_data: dict) -> tuple[dict, dict]:
     return {"name": name, "player_id": player_id, "positions": positions}, tdata
 
 
-def fetch_all_transactions(league) -> list[dict]:
+def fetch_all_transactions(league: Any) -> list[dict[str, Any]]:
     """Fetch all successful add/drop transactions for the season.
 
     Returns list of flat transaction dicts ready for scoring and DB insertion.
@@ -411,7 +411,7 @@ def fetch_all_transactions(league) -> list[dict]:
         return []
 
 
-def parse_all_transactions(transactions: list[dict]) -> list[dict]:
+def parse_all_transactions(transactions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Parse raw Yahoo transactions into flat dicts for DB storage.
 
     Only includes successful (completed) transactions.

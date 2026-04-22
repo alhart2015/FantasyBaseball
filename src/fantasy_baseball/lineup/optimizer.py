@@ -2,6 +2,7 @@ import dataclasses
 from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import combinations
+from typing import Any
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
@@ -20,7 +21,7 @@ class HitterAssignment:
     player: Player
     roto_delta: float
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "slot": self.slot.value,
             "name": self.name,
@@ -34,7 +35,7 @@ class PitcherStarter:
     player: Player
     roto_delta: float
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {"name": self.name, "roto_delta": round(self.roto_delta, 2)}
 
 
@@ -84,7 +85,7 @@ class _TeamContext:
     """Scoring-side inputs passed through every ERoto evaluation."""
 
     full_roster: list[Player]
-    projected_standings: list[dict]
+    projected_standings: list[dict[str, Any]]
     team_name: str
     team_sds: Mapping[str, Mapping[Category, float]] | None = None
 
@@ -155,7 +156,7 @@ def _score_pitcher_subset(
 def optimize_hitter_lineup(
     hitters: list[Player],
     full_roster: list[Player],
-    projected_standings: list[dict],
+    projected_standings: list[dict[str, Any]],
     team_name: str,
     roster_slots: dict[str, int] | None = None,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
@@ -243,7 +244,7 @@ def optimize_hitter_lineup(
 def optimize_pitcher_lineup(
     pitchers: list[Player],
     full_roster: list[Player],
-    projected_standings: list[dict],
+    projected_standings: list[dict[str, Any]],
     team_name: str,
     slots: int = 9,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
@@ -293,7 +294,7 @@ def combined_team_roto(
     hitter_lineup: list[HitterAssignment],
     pitcher_starters: list[PitcherStarter],
     pitcher_bench: list[Player],
-    projected_standings: list[dict],
+    projected_standings: list[dict[str, Any]],
     team_name: str,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
 ) -> float:

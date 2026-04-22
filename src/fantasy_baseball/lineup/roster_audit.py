@@ -196,7 +196,7 @@ class AuditEntry:
     best_fa_sgp: float | None = None
     best_fa_id: str | None = None
     gap: float = 0.0
-    candidates: list[dict] = field(default_factory=list)
+    candidates: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -221,7 +221,7 @@ def audit_roster(
     free_agents: list[Player],
     roster_slots: dict[str, int],
     *,
-    projected_standings: list[dict],
+    projected_standings: list[dict[str, Any]],
     team_name: str,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
     optimal_hitters: list[HitterAssignment] | None = None,
@@ -334,7 +334,7 @@ def audit_roster(
 
         candidates = candidates_for_player(player, pools)
 
-        scored: list[dict] = []
+        scored: list[dict[str, Any]] = []
 
         for fa in candidates:
             new_roster = [p for p in active_roster if p.name != player.name] + [fa]
