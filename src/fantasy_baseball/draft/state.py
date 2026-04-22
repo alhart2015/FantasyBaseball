@@ -352,11 +352,3 @@ def read_delta(path: Path) -> dict:
             return cast(dict[str, Any], json.load(f))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
-
-
-def reset_version_state() -> None:
-    """Reset module-level version state.  Intended for tests only."""
-    global _current_version, _previous_state
-    with _version_lock:
-        _current_version = 0
-        _previous_state = None

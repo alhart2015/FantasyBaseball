@@ -78,11 +78,6 @@ def build_player_lookup(
     return lookup
 
 
-def _lookup_player(pid: str, player_lookup: dict) -> pd.Series | None:
-    """Look up a player by ID. Returns None if not found."""
-    return player_lookup.get(pid)
-
-
 def pick_default(
     board, full_board, tracker, balance, config, team_filled, **kwargs,
 ):

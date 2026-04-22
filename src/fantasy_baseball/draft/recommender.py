@@ -33,14 +33,6 @@ def compute_slot_scarcity_order(
         scarcity[slot] = total_sgp / n_slots if n_slots > 0 else float("inf")
     return sorted(scarcity.keys(), key=lambda s: scarcity[s])
 
-def _player_bucket(player) -> str:
-    """Classify a player into hitter / sp / closer for VONA."""
-    if player.get("player_type") == PlayerType.HITTER:
-        return "hitter"
-    if player.get("sv", 0) >= CLOSER_SV_THRESHOLD:
-        return "closer"
-    return "sp"
-
 
 def calculate_vona_scores(
     available: pd.DataFrame,
