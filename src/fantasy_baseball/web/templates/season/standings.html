@@ -86,7 +86,7 @@
         </thead>
         <tbody>
         {% for team in data.teams %}
-            <tr class="{% if team.is_user %}user-team{% endif %}">
+            <tr class="{% if team.is_user %}user-team{% endif %}" data-team="{{ team.name }}">
                 <td>{{ team.rank }}</td>
                 <td class="team-name">{{ team.name }}</td>
                 {% for cat in all_categories %}
@@ -132,6 +132,9 @@
         {{ eroto_table(current_projected, "proj-current-cell") }}
         {% else %}
         <p class="placeholder-text">No ROS projections loaded. Download ROS projections from FanGraphs and place them in data/projections/&lt;year&gt;/rest_of_season/YYYY-MM-DD/.</p>
+        {% endif %}
+        {% if standings_breakdown %}
+        <script type="application/json" id="breakdown-data">{{ standings_breakdown | tojson }}</script>
         {% endif %}
     </div>
 </div>
@@ -250,6 +253,19 @@
         {% endif %}
     </div>
 </div>
+
+<dialog id="breakdown-modal">
+    <div class="breakdown-modal-head">
+        <h3 id="breakdown-modal-title"></h3>
+        <button type="button" class="breakdown-close" aria-label="Close"
+                onclick="document.getElementById('breakdown-modal').close()">×</button>
+    </div>
+    <p class="breakdown-modal-total" id="breakdown-modal-total"></p>
+    <table class="data-table breakdown-modal-table" id="breakdown-modal-table">
+        <thead id="breakdown-modal-thead"></thead>
+        <tbody id="breakdown-modal-tbody"></tbody>
+    </table>
+</dialog>
 
 <script>
 const RATE_CATS = new Set(['AVG', 'ERA', 'WHIP']);
