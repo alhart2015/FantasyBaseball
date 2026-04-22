@@ -1,4 +1,5 @@
 """Tests for positions helpers in redis_store."""
+
 from fantasy_baseball.data import redis_store
 
 

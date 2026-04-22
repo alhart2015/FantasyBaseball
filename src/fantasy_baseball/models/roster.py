@@ -24,10 +24,11 @@ from fantasy_baseball.models.positions import Position
 @dataclass
 class RosterEntry:
     """One player's slot-level assignment on a team."""
+
     name: str
     positions: list[Position]
     selected_position: Position
-    status: str = ""          # "", "IL15", "IL60", "DTD", "NA", ...
+    status: str = ""  # "", "IL15", "IL60", "DTD", "NA", ...
     yahoo_id: str = ""
 
 
@@ -40,6 +41,7 @@ class Roster:
     ``effective_date=2026-04-14`` is in effect from 2026-04-14 until the
     next snapshot supersedes it.
     """
+
     effective_date: date
     entries: list[RosterEntry] = field(default_factory=list)
 

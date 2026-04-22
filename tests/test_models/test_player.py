@@ -4,6 +4,7 @@ import pytest
 class TestHitterStats:
     def test_from_dict(self):
         from fantasy_baseball.models.player import HitterStats
+
         d = {"pa": 650, "ab": 550, "h": 160, "r": 100, "hr": 40, "rbi": 100, "sb": 5, "avg": 0.291}
         stats = HitterStats.from_dict(d)
         assert stats.pa == 650
@@ -12,6 +13,7 @@ class TestHitterStats:
 
     def test_from_dict_missing_keys_default_to_zero(self):
         from fantasy_baseball.models.player import HitterStats
+
         stats = HitterStats.from_dict({"hr": 30})
         assert stats.hr == 30
         assert stats.pa == 0
@@ -19,6 +21,7 @@ class TestHitterStats:
 
     def test_to_dict(self):
         from fantasy_baseball.models.player import HitterStats
+
         stats = HitterStats(pa=650, ab=550, h=160, r=100, hr=40, rbi=100, sb=5, avg=0.291)
         d = stats.to_dict()
         assert d["hr"] == 40
@@ -27,12 +30,14 @@ class TestHitterStats:
 
     def test_to_dict_includes_sgp_when_set(self):
         from fantasy_baseball.models.player import HitterStats
+
         stats = HitterStats(pa=650, ab=550, h=160, r=100, hr=40, rbi=100, sb=5, avg=0.291, sgp=12.5)
         d = stats.to_dict()
         assert d["sgp"] == 12.5
 
     def test_compute_avg_from_components(self):
         from fantasy_baseball.models.player import HitterStats
+
         stats = HitterStats.from_dict({"h": 150, "ab": 500})
         assert stats.avg == pytest.approx(0.300)
 
@@ -40,7 +45,18 @@ class TestHitterStats:
 class TestPitcherStats:
     def test_from_dict(self):
         from fantasy_baseball.models.player import PitcherStats
-        d = {"ip": 200, "w": 15, "k": 220, "sv": 0, "er": 62, "bb": 40, "h_allowed": 150, "era": 2.79, "whip": 0.95}
+
+        d = {
+            "ip": 200,
+            "w": 15,
+            "k": 220,
+            "sv": 0,
+            "er": 62,
+            "bb": 40,
+            "h_allowed": 150,
+            "era": 2.79,
+            "whip": 0.95,
+        }
         stats = PitcherStats.from_dict(d)
         assert stats.ip == 200
         assert stats.k == 220
@@ -48,20 +64,26 @@ class TestPitcherStats:
 
     def test_from_dict_computes_era_whip_from_components(self):
         from fantasy_baseball.models.player import PitcherStats
+
         stats = PitcherStats.from_dict({"ip": 180, "er": 60, "bb": 40, "h_allowed": 130})
         assert stats.era == pytest.approx(3.0)
         assert stats.whip == pytest.approx((40 + 130) / 180)
 
     def test_to_dict(self):
         from fantasy_baseball.models.player import PitcherStats
-        stats = PitcherStats(ip=200, w=15, k=220, sv=0, er=62, bb=40, h_allowed=150, era=2.79, whip=0.95)
+
+        stats = PitcherStats(
+            ip=200, w=15, k=220, sv=0, er=62, bb=40, h_allowed=150, era=2.79, whip=0.95
+        )
         d = stats.to_dict()
         assert d["k"] == 220
         assert d["era"] == 2.79
 
+
 class TestRankInfo:
     def test_from_dict(self):
         from fantasy_baseball.models.player import RankInfo
+
         r = RankInfo.from_dict({"rest_of_season": 5, "preseason": 8, "current": 12})
         assert r.rest_of_season == 5
         assert r.preseason == 8
@@ -69,6 +91,7 @@ class TestRankInfo:
 
     def test_from_dict_missing_keys(self):
         from fantasy_baseball.models.player import RankInfo
+
         r = RankInfo.from_dict({"rest_of_season": 5})
         assert r.rest_of_season == 5
         assert r.preseason is None
@@ -76,11 +99,13 @@ class TestRankInfo:
 
     def test_to_dict(self):
         from fantasy_baseball.models.player import RankInfo
+
         r = RankInfo(rest_of_season=5, preseason=8, current=12)
         assert r.to_dict() == {"rest_of_season": 5, "preseason": 8, "current": 12}
 
     def test_empty_rank(self):
         from fantasy_baseball.models.player import RankInfo
+
         r = RankInfo()
         assert r.rest_of_season is None
 
@@ -88,14 +113,37 @@ class TestRankInfo:
 class TestPlayer:
     def test_from_dict_hitter(self):
         from fantasy_baseball.models.player import HitterStats, Player
+
         d = {
-            "name": "Aaron Judge", "player_type": "hitter",
-            "positions": ["OF", "DH"], "team": "NYY",
-            "fg_id": "15640", "mlbam_id": 592450,
-            "selected_position": "OF", "status": "",
+            "name": "Aaron Judge",
+            "player_type": "hitter",
+            "positions": ["OF", "DH"],
+            "team": "NYY",
+            "fg_id": "15640",
+            "mlbam_id": 592450,
+            "selected_position": "OF",
+            "status": "",
             "rank": {"rest_of_season": 2, "preseason": 1, "current": 3},
-            "rest_of_season": {"pa": 600, "ab": 500, "h": 145, "r": 95, "hr": 38, "rbi": 92, "sb": 7, "avg": 0.290},
-            "preseason": {"pa": 650, "ab": 550, "h": 160, "r": 110, "hr": 45, "rbi": 120, "sb": 5, "avg": 0.291},
+            "rest_of_season": {
+                "pa": 600,
+                "ab": 500,
+                "h": 145,
+                "r": 95,
+                "hr": 38,
+                "rbi": 92,
+                "sb": 7,
+                "avg": 0.290,
+            },
+            "preseason": {
+                "pa": 650,
+                "ab": 550,
+                "h": 160,
+                "r": 110,
+                "hr": 45,
+                "rbi": 120,
+                "sb": 5,
+                "avg": 0.291,
+            },
         }
         p = Player.from_dict(d)
         assert p.name == "Aaron Judge"
@@ -111,10 +159,23 @@ class TestPlayer:
 
     def test_from_dict_pitcher(self):
         from fantasy_baseball.models.player import PitcherStats, Player
+
         d = {
-            "name": "Gerrit Cole", "player_type": "pitcher",
-            "positions": ["P"], "team": "NYY",
-            "rest_of_season": {"ip": 190, "w": 14, "k": 200, "sv": 0, "er": 60, "bb": 40, "h_allowed": 140, "era": 2.84, "whip": 0.95},
+            "name": "Gerrit Cole",
+            "player_type": "pitcher",
+            "positions": ["P"],
+            "team": "NYY",
+            "rest_of_season": {
+                "ip": 190,
+                "w": 14,
+                "k": 200,
+                "sv": 0,
+                "er": 60,
+                "bb": 40,
+                "h_allowed": 140,
+                "era": 2.84,
+                "whip": 0.95,
+            },
         }
         p = Player.from_dict(d)
         assert p.player_type == "pitcher"
@@ -123,12 +184,25 @@ class TestPlayer:
 
     def test_to_dict_roundtrip(self):
         from fantasy_baseball.models.player import Player
+
         d = {
-            "name": "Aaron Judge", "player_type": "hitter",
-            "positions": ["OF"], "team": "NYY",
-            "fg_id": "15640", "mlbam_id": 592450,
+            "name": "Aaron Judge",
+            "player_type": "hitter",
+            "positions": ["OF"],
+            "team": "NYY",
+            "fg_id": "15640",
+            "mlbam_id": 592450,
             "rank": {"rest_of_season": 2, "preseason": 1, "current": 3},
-            "rest_of_season": {"pa": 600, "ab": 500, "h": 145, "r": 95, "hr": 38, "rbi": 92, "sb": 7, "avg": 0.290},
+            "rest_of_season": {
+                "pa": 600,
+                "ab": 500,
+                "h": 145,
+                "r": 95,
+                "hr": 38,
+                "rbi": 92,
+                "sb": 7,
+                "avg": 0.290,
+            },
         }
         p = Player.from_dict(d)
         result = p.to_dict()
@@ -139,10 +213,20 @@ class TestPlayer:
     def test_from_dict_flat_stats_hitter(self):
         """Player.from_dict handles flat dicts where stats are top-level keys."""
         from fantasy_baseball.models.player import Player
+
         d = {
-            "name": "Aaron Judge", "player_type": "hitter",
-            "positions": ["OF"], "team": "NYY",
-            "r": 95, "hr": 38, "rbi": 92, "sb": 7, "h": 145, "ab": 500, "pa": 600, "avg": 0.290,
+            "name": "Aaron Judge",
+            "player_type": "hitter",
+            "positions": ["OF"],
+            "team": "NYY",
+            "r": 95,
+            "hr": 38,
+            "rbi": 92,
+            "sb": 7,
+            "h": 145,
+            "ab": 500,
+            "pa": 600,
+            "avg": 0.290,
         }
         p = Player.from_dict(d)
         assert p.rest_of_season is not None
@@ -151,10 +235,17 @@ class TestPlayer:
     def test_from_dict_flat_stats_pitcher(self):
         """Player.from_dict handles flat dicts where stats are top-level keys."""
         from fantasy_baseball.models.player import Player
+
         d = {
-            "name": "Gerrit Cole", "player_type": "pitcher",
+            "name": "Gerrit Cole",
+            "player_type": "pitcher",
             "positions": ["P"],
-            "ip": 190, "w": 14, "k": 200, "sv": 0, "era": 2.84, "whip": 0.95,
+            "ip": 190,
+            "w": 14,
+            "k": 200,
+            "sv": 0,
+            "era": 2.84,
+            "whip": 0.95,
         }
         p = Player.from_dict(d)
         assert p.rest_of_season is not None
@@ -165,6 +256,7 @@ class TestCacheCompatibility:
     def test_to_dict_preserves_nested_ros_and_preseason(self):
         """Verify to_dict includes nested ros and preseason dicts."""
         from fantasy_baseball.models.player import HitterStats, Player, RankInfo
+
         p = Player(
             name="Aaron Judge",
             player_type="hitter",
@@ -195,6 +287,7 @@ class TestCacheCompatibility:
     def test_player_from_dict_roundtrip_with_all_fields(self):
         """Full roundtrip: construct Player, serialize, reconstruct, compare."""
         from fantasy_baseball.models.player import HitterStats, Player, RankInfo
+
         original = Player(
             name="Aaron Judge",
             player_type="hitter",
@@ -221,8 +314,10 @@ class TestCacheCompatibility:
 class TestToFlatDict:
     def test_flat_dict_has_rest_of_season_stats_at_top_level(self):
         from fantasy_baseball.models.player import HitterStats, Player
+
         p = Player(
-            name="Aaron Judge", player_type="hitter",
+            name="Aaron Judge",
+            player_type="hitter",
             rest_of_season=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
         )
         d = p.to_flat_dict()
@@ -232,8 +327,10 @@ class TestToFlatDict:
 
     def test_flat_dict_also_has_nested_ros(self):
         from fantasy_baseball.models.player import HitterStats, Player
+
         p = Player(
-            name="Aaron Judge", player_type="hitter",
+            name="Aaron Judge",
+            player_type="hitter",
             rest_of_season=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
         )
         d = p.to_flat_dict()
@@ -241,6 +338,7 @@ class TestToFlatDict:
 
     def test_flat_dict_no_ros_still_works(self):
         from fantasy_baseball.models.player import Player
+
         p = Player(name="Unknown", player_type="hitter")
         d = p.to_flat_dict()
         assert d["name"] == "Unknown"
@@ -250,6 +348,7 @@ class TestToFlatDict:
 class TestSgpComputation:
     def test_hitter_stats_compute_sgp(self):
         from fantasy_baseball.models.player import HitterStats
+
         stats = HitterStats(pa=650, ab=550, h=160, r=100, hr=40, rbi=100, sb=5, avg=0.291)
         sgp = stats.compute_sgp()
         assert sgp > 0
@@ -257,7 +356,10 @@ class TestSgpComputation:
 
     def test_pitcher_stats_compute_sgp(self):
         from fantasy_baseball.models.player import PitcherStats
-        stats = PitcherStats(ip=200, w=15, k=220, sv=0, er=62, bb=40, h_allowed=150, era=2.79, whip=0.95)
+
+        stats = PitcherStats(
+            ip=200, w=15, k=220, sv=0, er=62, bb=40, h_allowed=150, era=2.79, whip=0.95
+        )
         sgp = stats.compute_sgp()
         assert sgp > 0
         assert stats.sgp == sgp
@@ -266,6 +368,7 @@ class TestSgpComputation:
         """Verify our compute_sgp produces same result as the standalone function."""
         from fantasy_baseball.models.player import HitterStats
         from fantasy_baseball.sgp.player_value import calculate_player_sgp
+
         stats = HitterStats(pa=650, ab=550, h=160, r=100, hr=40, rbi=100, sb=5, avg=0.291)
         our_sgp = stats.compute_sgp()
         standalone_sgp = calculate_player_sgp(stats)
@@ -274,7 +377,10 @@ class TestSgpComputation:
     def test_pitcher_sgp_matches_calculate_player_sgp(self):
         from fantasy_baseball.models.player import PitcherStats
         from fantasy_baseball.sgp.player_value import calculate_player_sgp
-        stats = PitcherStats(ip=200, w=15, k=220, sv=0, er=62, bb=40, h_allowed=150, era=2.79, whip=0.95)
+
+        stats = PitcherStats(
+            ip=200, w=15, k=220, sv=0, er=62, bb=40, h_allowed=150, era=2.79, whip=0.95
+        )
         our_sgp = stats.compute_sgp()
         standalone_sgp = calculate_player_sgp(stats)
         assert our_sgp == pytest.approx(standalone_sgp)
@@ -285,12 +391,14 @@ class TestPlayerPositionEnum:
         from fantasy_baseball.models.player import Player
         from fantasy_baseball.models.positions import Position
 
-        p = Player.from_dict({
-            "name": "Juan Soto",
-            "player_type": "hitter",
-            "positions": ["OF", "Util"],
-            "selected_position": "OF",
-        })
+        p = Player.from_dict(
+            {
+                "name": "Juan Soto",
+                "player_type": "hitter",
+                "positions": ["OF", "Util"],
+                "selected_position": "OF",
+            }
+        )
         assert p.positions == [Position.OF, Position.UTIL]
         assert p.selected_position is Position.OF
 
@@ -299,11 +407,13 @@ class TestPlayerPositionEnum:
         players and pre-season unassigned players. That must NOT raise."""
         from fantasy_baseball.models.player import Player
 
-        p = Player.from_dict({
-            "name": "X",
-            "player_type": "hitter",
-            "positions": ["OF"],
-        })
+        p = Player.from_dict(
+            {
+                "name": "X",
+                "player_type": "hitter",
+                "positions": ["OF"],
+            }
+        )
         assert p.selected_position is None
 
     def test_from_dict_normalizes_casing(self):
@@ -311,12 +421,14 @@ class TestPlayerPositionEnum:
         from fantasy_baseball.models.player import Player
         from fantasy_baseball.models.positions import Position
 
-        p = Player.from_dict({
-            "name": "X",
-            "player_type": "hitter",
-            "positions": ["OF", "Util"],
-            "selected_position": "Util",
-        })
+        p = Player.from_dict(
+            {
+                "name": "X",
+                "player_type": "hitter",
+                "positions": ["OF", "Util"],
+                "selected_position": "Util",
+            }
+        )
         assert Position.UTIL in p.positions
         assert p.selected_position is Position.UTIL
 

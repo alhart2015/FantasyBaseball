@@ -14,8 +14,8 @@ from fantasy_baseball.data.mlb_schedule import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_game(away_name, home_name, game_date, game_type="R",
-               away_pitcher="", home_pitcher=""):
+
+def _make_game(away_name, home_name, game_date, game_type="R", away_pitcher="", home_pitcher=""):
     return {
         "away_name": away_name,
         "home_name": home_name,
@@ -45,6 +45,7 @@ def _mock_teams_response():
 # ---------------------------------------------------------------------------
 # TestNormalizeTeamAbbrev
 # ---------------------------------------------------------------------------
+
 
 class TestNormalizeTeamAbbrev:
     def test_passthrough_nyy(self):
@@ -84,6 +85,7 @@ class TestNormalizeTeamAbbrev:
 # ---------------------------------------------------------------------------
 # TestFetchWeekSchedule
 # ---------------------------------------------------------------------------
+
 
 class TestFetchWeekSchedule:
     @patch("fantasy_baseball.data.mlb_schedule.statsapi")
@@ -136,13 +138,17 @@ class TestFetchWeekSchedule:
 # TestProbablePitchers
 # ---------------------------------------------------------------------------
 
+
 class TestProbablePitchers:
     @patch("fantasy_baseball.data.mlb_schedule.statsapi")
     def test_extracts_pitcher_names_team_abbrevs_and_dates(self, mock_statsapi):
         mock_statsapi.schedule.return_value = [
             _make_game(
-                "New York Yankees", "Boston Red Sox", "2026-04-07",
-                away_pitcher="Gerrit Cole", home_pitcher="Chris Sale",
+                "New York Yankees",
+                "Boston Red Sox",
+                "2026-04-07",
+                away_pitcher="Gerrit Cole",
+                home_pitcher="Chris Sale",
             ),
         ]
         mock_statsapi.get.return_value = _mock_teams_response()
@@ -161,8 +167,9 @@ class TestProbablePitchers:
     @patch("fantasy_baseball.data.mlb_schedule.statsapi")
     def test_empty_pitcher_strings_become_tbd(self, mock_statsapi):
         mock_statsapi.schedule.return_value = [
-            _make_game("New York Yankees", "Boston Red Sox", "2026-04-07",
-                       away_pitcher="", home_pitcher=""),
+            _make_game(
+                "New York Yankees", "Boston Red Sox", "2026-04-07", away_pitcher="", home_pitcher=""
+            ),
         ]
         mock_statsapi.get.return_value = _mock_teams_response()
 
@@ -208,6 +215,7 @@ class TestProbablePitchers:
 # TestScheduleCache
 # ---------------------------------------------------------------------------
 
+
 class TestScheduleCache:
     def test_save_and_load_roundtrip(self, tmp_path):
         data = {
@@ -231,6 +239,7 @@ class TestScheduleCache:
 # ---------------------------------------------------------------------------
 # TestGetWeekSchedule
 # ---------------------------------------------------------------------------
+
 
 class TestGetWeekSchedule:
     @patch("fantasy_baseball.data.mlb_schedule.fetch_week_schedule")

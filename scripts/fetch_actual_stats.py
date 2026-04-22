@@ -7,6 +7,7 @@ Usage:
     python scripts/fetch_actual_stats.py                    # Fetch 2022-2025
     python scripts/fetch_actual_stats.py --years 2024 2025  # Specific years
 """
+
 import argparse
 import json
 import sys
@@ -94,20 +95,22 @@ def splits_to_hitter_rows(splits: list[dict], min_pa: int = 50) -> list[dict]:
         h = stat.get("hits", 0)
         avg = h / ab if ab > 0 else 0
 
-        rows.append({
-            "Name": player.get("fullName", ""),
-            "Team": team.get("name", "").split()[-1] if team.get("name") else "",
-            "G": stat.get("gamesPlayed", 0),
-            "PA": pa,
-            "AB": ab,
-            "H": h,
-            "HR": stat.get("homeRuns", 0),
-            "R": stat.get("runs", 0),
-            "RBI": stat.get("rbi", 0),
-            "SB": stat.get("stolenBases", 0),
-            "AVG": round(avg, 3),
-            "MLBAMID": player.get("id", ""),
-        })
+        rows.append(
+            {
+                "Name": player.get("fullName", ""),
+                "Team": team.get("name", "").split()[-1] if team.get("name") else "",
+                "G": stat.get("gamesPlayed", 0),
+                "PA": pa,
+                "AB": ab,
+                "H": h,
+                "HR": stat.get("homeRuns", 0),
+                "R": stat.get("runs", 0),
+                "RBI": stat.get("rbi", 0),
+                "SB": stat.get("stolenBases", 0),
+                "AVG": round(avg, 3),
+                "MLBAMID": player.get("id", ""),
+            }
+        )
     return rows
 
 
@@ -128,23 +131,25 @@ def splits_to_pitcher_rows(splits: list[dict], min_ip: float = 10.0) -> list[dic
         era = er * 9 / ip if ip > 0 else 0
         whip = (bb + h_allowed) / ip if ip > 0 else 0
 
-        rows.append({
-            "Name": player.get("fullName", ""),
-            "Team": team.get("name", "").split()[-1] if team.get("name") else "",
-            "W": stat.get("wins", 0),
-            "L": stat.get("losses", 0),
-            "SV": stat.get("saves", 0),
-            "G": stat.get("gamesPitched", stat.get("gamesPlayed", 0)),
-            "GS": stat.get("gamesStarted", 0),
-            "IP": round(ip, 1),
-            "SO": stat.get("strikeOuts", 0),
-            "ER": er,
-            "BB": bb,
-            "H": h_allowed,
-            "ERA": round(era, 2),
-            "WHIP": round(whip, 2),
-            "MLBAMID": player.get("id", ""),
-        })
+        rows.append(
+            {
+                "Name": player.get("fullName", ""),
+                "Team": team.get("name", "").split()[-1] if team.get("name") else "",
+                "W": stat.get("wins", 0),
+                "L": stat.get("losses", 0),
+                "SV": stat.get("saves", 0),
+                "G": stat.get("gamesPitched", stat.get("gamesPlayed", 0)),
+                "GS": stat.get("gamesStarted", 0),
+                "IP": round(ip, 1),
+                "SO": stat.get("strikeOuts", 0),
+                "ER": er,
+                "BB": bb,
+                "H": h_allowed,
+                "ERA": round(era, 2),
+                "WHIP": round(whip, 2),
+                "MLBAMID": player.get("id", ""),
+            }
+        )
     return rows
 
 
@@ -170,15 +175,22 @@ def write_csv(rows: list[dict], path: Path):
 def main():
     parser = argparse.ArgumentParser(description="Fetch actual MLB stats from MLB API")
     parser.add_argument(
-        "--years", type=int, nargs="+", default=[2022, 2023, 2024],
+        "--years",
+        type=int,
+        nargs="+",
+        default=[2022, 2023, 2024],
         help="Seasons to fetch (default: 2022 2023 2024)",
     )
     parser.add_argument(
-        "--min-pa", type=int, default=50,
+        "--min-pa",
+        type=int,
+        default=50,
         help="Minimum PA for hitters (default: 50)",
     )
     parser.add_argument(
-        "--min-ip", type=float, default=10.0,
+        "--min-ip",
+        type=float,
+        default=10.0,
         help="Minimum IP for pitchers (default: 10)",
     )
     args = parser.parse_args()

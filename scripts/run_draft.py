@@ -8,6 +8,7 @@ Pre-requisites:
     2. Run: python scripts/fetch_positions.py
     3. config/league.yaml with keepers and settings
 """
+
 import json
 import sys
 import threading
@@ -55,6 +56,7 @@ FLASK_PORT = 5000
 def _start_flask_server(state_path: Path) -> None:
     """Start the Flask dashboard server in a background daemon thread."""
     from waitress import serve
+
     app = create_app(state_path=state_path)
     server_thread = threading.Thread(
         target=lambda: serve(
@@ -94,18 +96,21 @@ def _load_draft_order(path, num_teams):
         for slot_idx, team_name in enumerate(round_teams):
             slot = slot_idx + 1
             trade_info = trades.get((rnd, slot))
-            picks.append({
-                "team": team_name,
-                "round": rnd,
-                "slot": slot,
-                "traded": trade_info is not None,
-                "original_team": trade_info["from"] if trade_info else None,
-            })
+            picks.append(
+                {
+                    "team": team_name,
+                    "round": rnd,
+                    "slot": slot,
+                    "traded": trade_info is not None,
+                    "original_team": trade_info["from"] if trade_info else None,
+                }
+            )
     return picks
 
 
-def _save_draft_log(tracker, balance, config, full_board, mock=False,
-                    draft_position=None, run_timestamp=None):
+def _save_draft_log(
+    tracker, balance, config, full_board, mock=False, draft_position=None, run_timestamp=None
+):
     """Save a timestamped draft log to data/drafts/ for later analysis."""
     if run_timestamp is None:
         run_timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -120,23 +125,28 @@ def _save_draft_log(tracker, balance, config, full_board, mock=False,
 
     # Build draft log from tracker
     draft_log = []
-    draft_entries = list(zip(
-        tracker.drafted_players[num_keepers:],
-        tracker.drafted_ids[num_keepers:], strict=False,
-    ))
+    draft_entries = list(
+        zip(
+            tracker.drafted_players[num_keepers:],
+            tracker.drafted_ids[num_keepers:],
+            strict=False,
+        )
+    )
     for pick_num, (name, pid) in enumerate(draft_entries, 1):
         rnd = (pick_num - 1) // num_teams + 1
         pos = (pick_num - 1) % num_teams + 1
         team_num = pos if rnd % 2 == 1 else num_teams - pos + 1
         team_name = config.teams.get(team_num, f"Team {team_num}")
-        draft_log.append({
-            "pick": pick_num,
-            "round": rnd,
-            "team_num": team_num,
-            "team": team_name,
-            "player": name,
-            "player_id": pid,
-        })
+        draft_log.append(
+            {
+                "pick": pick_num,
+                "round": rnd,
+                "team_num": team_num,
+                "team": team_name,
+                "player": name,
+                "player_id": pid,
+            }
+        )
 
     # User roster details
     user_roster = []
@@ -151,8 +161,22 @@ def _save_draft_log(tracker, balance, config, full_board, mock=False,
                 "positions": [str(x) for x in p.get("positions", [])],
                 "var": round(float(p.get("var", 0)), 2),
             }
-            for stat in ["r", "hr", "rbi", "sb", "h", "ab", "avg",
-                          "w", "k", "sv", "ip", "er", "bb", "h_allowed"]:
+            for stat in [
+                "r",
+                "hr",
+                "rbi",
+                "sb",
+                "h",
+                "ab",
+                "avg",
+                "w",
+                "k",
+                "sv",
+                "ip",
+                "er",
+                "bb",
+                "h_allowed",
+            ]:
                 val = p.get(stat, 0)
                 if val is not None and val != 0:
                     entry[stat] = round(float(val), 4)
@@ -184,9 +208,18 @@ def _save_draft_log(tracker, balance, config, full_board, mock=False,
     return str(out_path)
 
 
-def _write_dashboard_state(tracker, balance, board, recs, filled,
-                           roster_slots=None, roster_by_pos=None, teams=None,
-                           num_keepers=0, vona_scores=None):
+def _write_dashboard_state(
+    tracker,
+    balance,
+    board,
+    recs,
+    filled,
+    roster_slots=None,
+    roster_by_pos=None,
+    teams=None,
+    num_keepers=0,
+    vona_scores=None,
+):
     """Serialize and atomically write dashboard state to disk."""
     state = serialize_state(
         tracker=tracker,
@@ -205,13 +238,25 @@ def _write_dashboard_state(tracker, balance, board, recs, filled,
 
 def _parse_args():
     import argparse
+
     parser = argparse.ArgumentParser(description="Fantasy Baseball Draft Assistant")
-    parser.add_argument("--mock", action="store_true",
-                        help="Mock draft mode: no keepers, override position/teams")
-    parser.add_argument("--position", "-p", type=int, default=None,
-                        help="Draft position (mock mode, default: from config)")
-    parser.add_argument("--teams", "-t", type=int, default=None,
-                        help="Number of teams (mock mode, default: from config)")
+    parser.add_argument(
+        "--mock", action="store_true", help="Mock draft mode: no keepers, override position/teams"
+    )
+    parser.add_argument(
+        "--position",
+        "-p",
+        type=int,
+        default=None,
+        help="Draft position (mock mode, default: from config)",
+    )
+    parser.add_argument(
+        "--teams",
+        "-t",
+        type=int,
+        default=None,
+        help="Number of teams (mock mode, default: from config)",
+    )
     return parser.parse_args()
 
 
@@ -270,6 +315,7 @@ def main():
 
     # Add keeper projections to balance and mark all keepers as drafted
     from fantasy_baseball.utils.name_utils import normalize_name
+
     for keeper in keepers:
         is_user = keeper.get("team") == config.team_name
         norm = normalize_name(keeper["name"])
@@ -279,8 +325,7 @@ def main():
             best = matches.loc[matches["var"].idxmax()]
             if is_user:
                 balance.add_player(best)
-            tracker.draft_player(best["name"], is_user=is_user,
-                                 player_id=best["player_id"])
+            tracker.draft_player(best["name"], is_user=is_user, player_id=best["player_id"])
         else:
             tracker.draft_player(keeper["name"], is_user=is_user)
 
@@ -292,8 +337,10 @@ def main():
         draft_picks = draft_order[num_keepers:]
         user_pick_count = sum(1 for p in draft_picks if p["team"] == config.team_name)
         trade_count = sum(1 for p in draft_picks if p["traded"])
-        print(f"Draft order loaded: {len(draft_picks)} picks, "
-              f"{user_pick_count} yours, {trade_count} traded picks")
+        print(
+            f"Draft order loaded: {len(draft_picks)} picks, "
+            f"{user_pick_count} yours, {trade_count} traded picks"
+        )
     else:
         draft_picks = None
         print("No custom draft order found — using standard snake")
@@ -308,24 +355,37 @@ def main():
     _start_flask_server(STATE_PATH)
 
     # Write initial state (use full_board for roster lookups so keepers are found)
-    filled = get_filled_positions(tracker.user_roster_ids, full_board,
-                                  roster_slots=config.roster_slots)
-    by_pos = get_roster_by_position(tracker.user_roster_ids, full_board,
-                                    roster_slots=config.roster_slots)
-    recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
-                               n=5, filled_positions=filled,
-                               picks_until_next=tracker.picks_until_next_turn,
-                               roster_slots=config.roster_slots,
-                               num_teams=num_teams,
-                               scoring_mode=scoring_mode)
+    filled = get_filled_positions(
+        tracker.user_roster_ids, full_board, roster_slots=config.roster_slots
+    )
+    by_pos = get_roster_by_position(
+        tracker.user_roster_ids, full_board, roster_slots=config.roster_slots
+    )
+    recs = get_recommendations(
+        board,
+        tracker.drafted_ids,
+        tracker.user_roster,
+        n=5,
+        filled_positions=filled,
+        picks_until_next=tracker.picks_until_next_turn,
+        roster_slots=config.roster_slots,
+        num_teams=num_teams,
+        scoring_mode=scoring_mode,
+    )
     available = board[~board["player_id"].isin(tracker.drafted_ids)]
     vona = calculate_vona_scores(available, tracker.picks_until_next_turn)
-    _write_dashboard_state(tracker, balance, board, recs, filled,
-                           roster_slots=config.roster_slots,
-                           roster_by_pos=by_pos,
-                           teams=config.teams,
-                           num_keepers=len(keepers),
-                           vona_scores=vona)
+    _write_dashboard_state(
+        tracker,
+        balance,
+        board,
+        recs,
+        filled,
+        roster_slots=config.roster_slots,
+        roster_by_pos=by_pos,
+        teams=config.teams,
+        num_keepers=len(keepers),
+        vona_scores=vona,
+    )
 
     # Show pre-draft rankings
     print("=" * 70)
@@ -350,7 +410,7 @@ def main():
             if draft_picks and pick_index < len(draft_picks):
                 pick_info = draft_picks[pick_index]
                 team_label = pick_info["team"]
-                is_user = (team_label == config.team_name)
+                is_user = team_label == config.team_name
                 is_traded = pick_info["traded"]
                 pick_round = pick_info["round"]
             else:
@@ -366,8 +426,7 @@ def main():
                 print("  !!!!! TRADED PICK !!!!!")
                 print(f"  Originally {original}'s pick -> now {team_label}'s")
                 print("  !!!!! TRADED PICK !!!!!")
-            print(f"ROUND {pick_round} | Pick {overall_pick} "
-                  f"| {team_label}", end="")
+            print(f"ROUND {pick_round} | Pick {overall_pick} | {team_label}", end="")
             if is_user:
                 print(" *** YOUR PICK ***")
             else:
@@ -375,55 +434,84 @@ def main():
             print("=" * 70)
 
             if is_user:
-                _handle_user_pick(board, full_board, tracker, balance,
-                                  roster_slots=config.roster_slots,
-                                  num_teams=num_teams,
-                                  team_names=team_names,
-                                  user_team_name=config.team_name,
-                                  config=config,
-                                  draft_picks=draft_picks,
-                                  pick_index=pick_index)
+                _handle_user_pick(
+                    board,
+                    full_board,
+                    tracker,
+                    balance,
+                    roster_slots=config.roster_slots,
+                    num_teams=num_teams,
+                    team_names=team_names,
+                    user_team_name=config.team_name,
+                    config=config,
+                    draft_picks=draft_picks,
+                    pick_index=pick_index,
+                )
             else:
                 # Peek at input — if "mine", treat as user pick (traded pick)
                 raw = input("\nPick (player, 'team player', or 'mine'): ").strip()
                 if raw.lower() == "mine":
                     print("  >>> YOUR PICK (traded to you)")
-                    _handle_user_pick(board, full_board, tracker, balance,
-                                      roster_slots=config.roster_slots,
-                                      num_teams=num_teams,
-                                      config=config,
-                                      draft_picks=draft_picks,
-                                      pick_index=pick_index)
+                    _handle_user_pick(
+                        board,
+                        full_board,
+                        tracker,
+                        balance,
+                        roster_slots=config.roster_slots,
+                        num_teams=num_teams,
+                        config=config,
+                        draft_picks=draft_picks,
+                        pick_index=pick_index,
+                    )
                 else:
                     # Process the input that was already typed
-                    _handle_other_pick(board, full_board, tracker, balance,
-                                       team_names, config.team_name,
-                                       prefilled_input=raw)
+                    _handle_other_pick(
+                        board,
+                        full_board,
+                        tracker,
+                        balance,
+                        team_names,
+                        config.team_name,
+                        prefilled_input=raw,
+                    )
 
             # Advance to next pick so dashboard shows upcoming pick, not the one just made
             tracker.advance()
             pick_index += 1
 
             # Write updated state for the dashboard after every pick
-            filled = get_filled_positions(tracker.user_roster_ids, full_board,
-                                          roster_slots=config.roster_slots)
-            by_pos = get_roster_by_position(tracker.user_roster_ids, full_board,
-                                            roster_slots=config.roster_slots)
-            recs = get_recommendations(board, tracker.drafted_ids, tracker.user_roster,
-                                       n=5, filled_positions=filled,
-                                       picks_until_next=tracker.picks_until_next_turn,
-                                       roster_slots=config.roster_slots,
-                                       num_teams=num_teams,
-                                       scoring_mode=scoring_mode)
+            filled = get_filled_positions(
+                tracker.user_roster_ids, full_board, roster_slots=config.roster_slots
+            )
+            by_pos = get_roster_by_position(
+                tracker.user_roster_ids, full_board, roster_slots=config.roster_slots
+            )
+            recs = get_recommendations(
+                board,
+                tracker.drafted_ids,
+                tracker.user_roster,
+                n=5,
+                filled_positions=filled,
+                picks_until_next=tracker.picks_until_next_turn,
+                roster_slots=config.roster_slots,
+                num_teams=num_teams,
+                scoring_mode=scoring_mode,
+            )
 
             available = board[~board["player_id"].isin(tracker.drafted_ids)]
             vona = calculate_vona_scores(available, tracker.picks_until_next_turn)
-            _write_dashboard_state(tracker, balance, board, recs, filled,
-                                   roster_slots=config.roster_slots,
-                                   roster_by_pos=by_pos,
-                                   teams=config.teams,
-                                   num_keepers=len(keepers),
-                                   vona_scores=vona)
+            _write_dashboard_state(
+                tracker,
+                balance,
+                board,
+                recs,
+                filled,
+                roster_slots=config.roster_slots,
+                roster_by_pos=by_pos,
+                teams=config.teams,
+                num_keepers=len(keepers),
+                vona_scores=vona,
+            )
 
             # Show updated top 10
             print()
@@ -436,8 +524,12 @@ def main():
 
     # Save timestamped draft log
     log_path = _save_draft_log(
-        tracker, balance, config, full_board,
-        mock=mock, draft_position=draft_position,
+        tracker,
+        balance,
+        config,
+        full_board,
+        mock=mock,
+        draft_position=draft_position,
         run_timestamp=run_timestamp,
     )
     print(f"\nDraft log saved to {log_path}")
@@ -447,20 +539,29 @@ def main():
         print(f"  {name}")
 
 
-def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
-                      num_teams=None, team_names=None, user_team_name=None,
-                      config=None, draft_picks=None, pick_index=0):
+def _handle_user_pick(
+    board,
+    full_board,
+    tracker,
+    balance,
+    roster_slots=None,
+    num_teams=None,
+    team_names=None,
+    user_team_name=None,
+    config=None,
+    draft_picks=None,
+    pick_index=0,
+):
     """Handle the user's draft pick with recommendations."""
     scoring_mode = config.scoring_mode if config else "var"
     strategy = config.strategy if config else "two_closers"
     team_name = config.team_name if config else "Hart of the Order"
-    filled = get_filled_positions(tracker.user_roster_ids, full_board,
-                                  roster_slots=roster_slots)
+    filled = get_filled_positions(tracker.user_roster_ids, full_board, roster_slots=roster_slots)
     # Calculate gap to NEXT user turn after this one.
     if draft_picks:
         # Use custom draft order to find next user pick
         picks_gap = 0
-        for future in draft_picks[pick_index + 1:]:
+        for future in draft_picks[pick_index + 1 :]:
             picks_gap += 1
             if future["team"] == team_name:
                 break
@@ -546,9 +647,7 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
         # (In the interactive draft we don't have full team_rosters,
         # so we check closer count as a simpler proxy)
         if closer_count == 0 and tracker.current_round >= 8:
-            strategy_alerts.append(
-                "SV DANGER: You have zero closers — consider drafting one now"
-            )
+            strategy_alerts.append("SV DANGER: You have zero closers — consider drafting one now")
             available = board[~board["player_id"].isin(tracker.drafted_ids)]
             closers_avail = available[
                 available.apply(lambda r: r.get("sv", 0) >= CLOSER_SV_THRESHOLD, axis=1)
@@ -576,7 +675,9 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
             ]
             if not closers_avail.empty:
                 effective_pick = tracker.current_pick
-                falling = closers_avail[effective_pick >= closers_avail["adp"] - OPP_CLOSER_ADP_BUFFER]
+                falling = closers_avail[
+                    effective_pick >= closers_avail["adp"] - OPP_CLOSER_ADP_BUFFER
+                ]
                 if not falling.empty:
                     best_falling = falling.sort_values("var", ascending=False).iloc[0]
                     strategy_alerts.append(
@@ -628,32 +729,43 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
         note = f" ({rec.note})" if rec.note else ""
         score_str = f" score: {rec.score:.1f}" if rec.score is not None else ""
         avg_warn = " [LOW AVG]" if rec.name in avg_warnings else ""
-        print(f"  {i}. {rec.name} ({rec.best_position}) "
-              f"VAR: {rec.var:.1f}{score_str}{flag}{avg_warn}{note}")
+        print(
+            f"  {i}. {rec.name} ({rec.best_position}) "
+            f"VAR: {rec.var:.1f}{score_str}{flag}{avg_warn}{note}"
+        )
 
     # Show category balance
     totals = balance.get_totals()
     warnings = balance.get_warnings()
     print("\nROSTER BALANCE:")
-    print(f"  R:{totals[Category.R]:.0f} HR:{totals[Category.HR]:.0f} "
-          f"RBI:{totals[Category.RBI]:.0f} SB:{totals[Category.SB]:.0f} "
-          f"AVG:{totals[Category.AVG]:.3f}")
+    print(
+        f"  R:{totals[Category.R]:.0f} HR:{totals[Category.HR]:.0f} "
+        f"RBI:{totals[Category.RBI]:.0f} SB:{totals[Category.SB]:.0f} "
+        f"AVG:{totals[Category.AVG]:.3f}"
+    )
     era_str = f"{totals[Category.ERA]:.2f}" if totals[Category.ERA] is not None else "N/A"
     whip_str = f"{totals[Category.WHIP]:.3f}" if totals[Category.WHIP] is not None else "N/A"
-    print(f"  W:{totals[Category.W]:.0f} K:{totals[Category.K]:.0f} "
-          f"SV:{totals[Category.SV]:.0f} ERA:{era_str} WHIP:{whip_str}")
+    print(
+        f"  W:{totals[Category.W]:.0f} K:{totals[Category.K]:.0f} "
+        f"SV:{totals[Category.SV]:.0f} ERA:{era_str} WHIP:{whip_str}"
+    )
     if warnings:
         print(f"  Warnings: {', '.join(warnings)}")
 
     # Get user input — pass team_names so "spacemen gausman" is recognized as traded away
     name, pid, matched_team = _get_player_input(
-        board, tracker, current_recs=recs, team_names=team_names,
+        board,
+        tracker,
+        current_recs=recs,
+        team_names=team_names,
     )
     if name:
         # If a different team was specified, this pick was traded away
-        traded_away = (matched_team is not None
-                       and user_team_name is not None
-                       and matched_team != user_team_name)
+        traded_away = (
+            matched_team is not None
+            and user_team_name is not None
+            and matched_team != user_team_name
+        )
         if traded_away:
             tracker.draft_player(name, is_user=False, player_id=pid)
             print(f"  -> Drafted: {name} ({matched_team} via trade)")
@@ -665,22 +777,24 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
             print(f"  -> Drafted: {name}")
 
 
-def _handle_other_pick(board, full_board, tracker, balance,
-                       team_names=None, user_team_name=None,
-                       prefilled_input=None):
+def _handle_other_pick(
+    board, full_board, tracker, balance, team_names=None, user_team_name=None, prefilled_input=None
+):
     """Handle another team's pick (or a traded pick for the user's team).
 
     If prefilled_input is provided, it's used as the first input line
     instead of prompting (for when the main loop already read input to
     check for 'mine').
     """
-    name, pid, matched_team = _get_player_input(board, tracker,
-                                                team_names=team_names,
-                                                prefilled_input=prefilled_input)
+    name, pid, matched_team = _get_player_input(
+        board, tracker, team_names=team_names, prefilled_input=prefilled_input
+    )
     if name:
-        is_user = (matched_team is not None
-                   and user_team_name is not None
-                   and matched_team == user_team_name)
+        is_user = (
+            matched_team is not None
+            and user_team_name is not None
+            and matched_team == user_team_name
+        )
         tracker.draft_player(name, is_user=is_user, player_id=pid)
         if is_user:
             rows = board[board["player_id"] == pid] if pid else board[board["name"] == name]
@@ -693,8 +807,7 @@ def _handle_other_pick(board, full_board, tracker, balance,
             print(f"  -> Drafted: {name}")
 
 
-def _get_player_input(board, tracker, team_names=None, current_recs=None,
-                      prefilled_input=None):
+def _get_player_input(board, tracker, team_names=None, current_recs=None, prefilled_input=None):
     """Get and fuzzy-match a player name from user input.
 
     Returns (name, player_id, team) or (None, None, None).
@@ -740,9 +853,9 @@ def _get_player_input(board, tracker, team_names=None, current_recs=None,
             recs = current_recs
             if recs is None:
                 filled = get_filled_positions(tracker.user_roster_ids, board)
-                recs = get_recommendations(board, tracker.drafted_ids,
-                                           tracker.user_roster, n=5,
-                                           filled_positions=filled)
+                recs = get_recommendations(
+                    board, tracker.drafted_ids, tracker.user_roster, n=5, filled_positions=filled
+                )
             if 0 <= idx < len(recs):
                 return recs[idx].name, _lookup_id(recs[idx].name), None
 
@@ -754,10 +867,10 @@ def _get_player_input(board, tracker, team_names=None, current_recs=None,
         if raw.startswith('"') and '"' in raw[1:]:
             closing = raw.index('"', 1)
             quoted_team = raw[1:closing].strip()
-            remainder = raw[closing + 1:].strip()
+            remainder = raw[closing + 1 :].strip()
             if remainder:
                 # Match quoted text against team names (case-insensitive)
-                for tn in (team_names or []):
+                for tn in team_names or []:
                     if tn.lower() == quoted_team.lower():
                         matched_team = tn
                         player_query = remainder
@@ -801,7 +914,9 @@ def _show_top_players(board, drafted_ids, n):
     """Display top N available players."""
     available = board[~board["player_id"].isin(drafted_ids)]
     for i, (_, p) in enumerate(available.head(n).iterrows(), 1):
-        pos_str = "/".join(p["positions"][:3]) if isinstance(p["positions"], list) else p["best_position"]
+        pos_str = (
+            "/".join(p["positions"][:3]) if isinstance(p["positions"], list) else p["best_position"]
+        )
         print(f"  {i:>3}. {p['name']:<25} {pos_str:<12} VAR: {p['var']:>6.1f}")
 
 

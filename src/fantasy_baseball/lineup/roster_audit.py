@@ -77,7 +77,9 @@ def build_position_pools(
         else:
             eligible = [fa for fa in free_agents if pos in fa.positions]
         eligible.sort(
-            key=lambda p: calculate_player_sgp(p.rest_of_season, denoms) if p.rest_of_season else 0.0,
+            key=lambda p: (
+                calculate_player_sgp(p.rest_of_season, denoms) if p.rest_of_season else 0.0
+            ),
             reverse=True,
         )
         pools[pos] = eligible[:n]
@@ -119,14 +121,12 @@ def worst_roster_by_position(
     sps = [
         p
         for p in roster
-        if isinstance(p.rest_of_season, PitcherStats)
-        and p.rest_of_season.sv < RP_SV_THRESHOLD
+        if isinstance(p.rest_of_season, PitcherStats) and p.rest_of_season.sv < RP_SV_THRESHOLD
     ]
     rps = [
         p
         for p in roster
-        if isinstance(p.rest_of_season, PitcherStats)
-        and p.rest_of_season.sv >= RP_SV_THRESHOLD
+        if isinstance(p.rest_of_season, PitcherStats) and p.rest_of_season.sv >= RP_SV_THRESHOLD
     ]
     if sps:
         result["SP"] = min(sps, key=_sgp).name

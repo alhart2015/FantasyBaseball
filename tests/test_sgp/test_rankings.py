@@ -5,17 +5,78 @@ from fantasy_baseball.sgp.rankings import build_rankings_lookup, compute_sgp_ran
 
 class TestComputeSgpRankings:
     def _make_hitters_df(self):
-        return pd.DataFrame([
-            {"name": "Aaron Judge", "player_type": "hitter", "r": 100, "hr": 40, "rbi": 100, "sb": 5, "h": 160, "ab": 550, "avg": 0.291, "pa": 650},
-            {"name": "Juan Soto", "player_type": "hitter", "r": 110, "hr": 35, "rbi": 90, "sb": 10, "h": 155, "ab": 540, "avg": 0.287, "pa": 680},
-            {"name": "Marcus Semien", "player_type": "hitter", "r": 80, "hr": 20, "rbi": 70, "sb": 12, "h": 140, "ab": 600, "avg": 0.233, "pa": 660},
-        ])
+        return pd.DataFrame(
+            [
+                {
+                    "name": "Aaron Judge",
+                    "player_type": "hitter",
+                    "r": 100,
+                    "hr": 40,
+                    "rbi": 100,
+                    "sb": 5,
+                    "h": 160,
+                    "ab": 550,
+                    "avg": 0.291,
+                    "pa": 650,
+                },
+                {
+                    "name": "Juan Soto",
+                    "player_type": "hitter",
+                    "r": 110,
+                    "hr": 35,
+                    "rbi": 90,
+                    "sb": 10,
+                    "h": 155,
+                    "ab": 540,
+                    "avg": 0.287,
+                    "pa": 680,
+                },
+                {
+                    "name": "Marcus Semien",
+                    "player_type": "hitter",
+                    "r": 80,
+                    "hr": 20,
+                    "rbi": 70,
+                    "sb": 12,
+                    "h": 140,
+                    "ab": 600,
+                    "avg": 0.233,
+                    "pa": 660,
+                },
+            ]
+        )
 
     def _make_pitchers_df(self):
-        return pd.DataFrame([
-            {"name": "Gerrit Cole", "player_type": "pitcher", "w": 15, "k": 220, "sv": 0, "ip": 200, "era": 2.80, "whip": 0.95, "er": 62, "bb": 40, "h_allowed": 150},
-            {"name": "Emmanuel Clase", "player_type": "pitcher", "w": 3, "k": 70, "sv": 40, "ip": 70, "era": 2.50, "whip": 0.90, "er": 19, "bb": 15, "h_allowed": 48},
-        ])
+        return pd.DataFrame(
+            [
+                {
+                    "name": "Gerrit Cole",
+                    "player_type": "pitcher",
+                    "w": 15,
+                    "k": 220,
+                    "sv": 0,
+                    "ip": 200,
+                    "era": 2.80,
+                    "whip": 0.95,
+                    "er": 62,
+                    "bb": 40,
+                    "h_allowed": 150,
+                },
+                {
+                    "name": "Emmanuel Clase",
+                    "player_type": "pitcher",
+                    "w": 3,
+                    "k": 70,
+                    "sv": 40,
+                    "ip": 70,
+                    "era": 2.50,
+                    "whip": 0.90,
+                    "er": 19,
+                    "bb": 15,
+                    "h_allowed": 48,
+                },
+            ]
+        )
 
     def test_returns_dict_keyed_by_name_and_type(self):
         rankings = compute_sgp_rankings(self._make_hitters_df(), self._make_pitchers_df())
@@ -24,19 +85,28 @@ class TestComputeSgpRankings:
 
     def test_hitters_ranked_separately_from_pitchers(self):
         rankings = compute_sgp_rankings(self._make_hitters_df(), self._make_pitchers_df())
-        hitter_ranks = [rankings[rank_key(n, "hitter")] for n in ["Aaron Judge", "Juan Soto", "Marcus Semien"]]
-        pitcher_ranks = [rankings[rank_key(n, "pitcher")] for n in ["Gerrit Cole", "Emmanuel Clase"]]
+        hitter_ranks = [
+            rankings[rank_key(n, "hitter")] for n in ["Aaron Judge", "Juan Soto", "Marcus Semien"]
+        ]
+        pitcher_ranks = [
+            rankings[rank_key(n, "pitcher")] for n in ["Gerrit Cole", "Emmanuel Clase"]
+        ]
         assert 1 in hitter_ranks
         assert 1 in pitcher_ranks
 
     def test_ranks_are_ordinal_1_based(self):
         rankings = compute_sgp_rankings(self._make_hitters_df(), self._make_pitchers_df())
-        hitter_ranks = sorted([rankings[rank_key(n, "hitter")] for n in ["Aaron Judge", "Juan Soto", "Marcus Semien"]])
+        hitter_ranks = sorted(
+            [rankings[rank_key(n, "hitter")] for n in ["Aaron Judge", "Juan Soto", "Marcus Semien"]]
+        )
         assert hitter_ranks == [1, 2, 3]
 
     def test_higher_sgp_gets_lower_rank_number(self):
         rankings = compute_sgp_rankings(self._make_hitters_df(), self._make_pitchers_df())
-        assert rankings[rank_key("Aaron Judge", "hitter")] < rankings[rank_key("Marcus Semien", "hitter")]
+        assert (
+            rankings[rank_key("Aaron Judge", "hitter")]
+            < rankings[rank_key("Marcus Semien", "hitter")]
+        )
 
     def test_empty_dataframes_return_empty_dict(self):
         rankings = compute_sgp_rankings(pd.DataFrame(), pd.DataFrame())
@@ -44,27 +114,79 @@ class TestComputeSgpRankings:
 
     def test_same_name_hitter_and_pitcher_get_separate_ranks(self):
         """Juan Soto the hitter and Juan Soto the pitcher get independent ranks."""
-        hitters = pd.DataFrame([
-            {"name": "Juan Soto", "player_type": "hitter", "r": 110, "hr": 35, "rbi": 90, "sb": 10, "h": 155, "ab": 540, "avg": 0.287, "pa": 680},
-        ])
-        pitchers = pd.DataFrame([
-            {"name": "Juan Soto", "player_type": "pitcher", "w": 0, "k": 1, "sv": 0, "ip": 2, "era": 4.50, "whip": 1.50, "er": 1, "bb": 1, "h_allowed": 2},
-        ])
+        hitters = pd.DataFrame(
+            [
+                {
+                    "name": "Juan Soto",
+                    "player_type": "hitter",
+                    "r": 110,
+                    "hr": 35,
+                    "rbi": 90,
+                    "sb": 10,
+                    "h": 155,
+                    "ab": 540,
+                    "avg": 0.287,
+                    "pa": 680,
+                },
+            ]
+        )
+        pitchers = pd.DataFrame(
+            [
+                {
+                    "name": "Juan Soto",
+                    "player_type": "pitcher",
+                    "w": 0,
+                    "k": 1,
+                    "sv": 0,
+                    "ip": 2,
+                    "era": 4.50,
+                    "whip": 1.50,
+                    "er": 1,
+                    "bb": 1,
+                    "h_allowed": 2,
+                },
+            ]
+        )
         rankings = compute_sgp_rankings(hitters, pitchers)
         assert rank_key("Juan Soto", "hitter") in rankings
         assert rank_key("Juan Soto", "pitcher") in rankings
         assert rankings[rank_key("Juan Soto", "hitter")] == 1
         assert rankings[rank_key("Juan Soto", "pitcher")] == 1
 
-
     def test_same_name_same_type_disambiguated_by_fg_id(self):
         """Two pitchers named Mason Miller get distinct ranks via fg_id."""
-        pitchers = pd.DataFrame([
-            {"name": "Mason Miller", "player_type": "pitcher", "fg_id": "31757",
-             "w": 3, "k": 99, "sv": 32, "ip": 63, "era": 2.50, "whip": 0.90, "er": 17, "bb": 15, "h_allowed": 42},
-            {"name": "Mason Miller", "player_type": "pitcher", "fg_id": "sa3023658",
-             "w": 0, "k": 1, "sv": 0, "ip": 2, "era": 4.50, "whip": 1.50, "er": 1, "bb": 1, "h_allowed": 2},
-        ])
+        pitchers = pd.DataFrame(
+            [
+                {
+                    "name": "Mason Miller",
+                    "player_type": "pitcher",
+                    "fg_id": "31757",
+                    "w": 3,
+                    "k": 99,
+                    "sv": 32,
+                    "ip": 63,
+                    "era": 2.50,
+                    "whip": 0.90,
+                    "er": 17,
+                    "bb": 15,
+                    "h_allowed": 42,
+                },
+                {
+                    "name": "Mason Miller",
+                    "player_type": "pitcher",
+                    "fg_id": "sa3023658",
+                    "w": 0,
+                    "k": 1,
+                    "sv": 0,
+                    "ip": 2,
+                    "era": 4.50,
+                    "whip": 1.50,
+                    "er": 1,
+                    "bb": 1,
+                    "h_allowed": 2,
+                },
+            ]
+        )
         rankings = compute_sgp_rankings(pd.DataFrame(), pitchers)
         # Each fg_id gets its own rank
         assert "31757" in rankings
@@ -93,6 +215,7 @@ class TestRankingsFromGameLogs:
 
     def test_empty_logs_return_empty_dict(self):
         from fantasy_baseball.sgp.rankings import compute_rankings_from_game_logs
+
         assert compute_rankings_from_game_logs({}, {}) == {}
 
 
@@ -123,7 +246,9 @@ class TestBuildRankingsLookup:
     def test_player_only_in_preseason_has_none_for_others(self):
         # E.g. preseason hype guy who didn't end up on the ROS list
         result = build_rankings_lookup(
-            ros={}, preseason={"Bust::hitter": {"overall": 50}}, current={},
+            ros={},
+            preseason={"Bust::hitter": {"overall": 50}},
+            current={},
         )
         assert result["Bust::hitter"] == {
             "rest_of_season": None,
@@ -134,7 +259,9 @@ class TestBuildRankingsLookup:
     def test_player_only_in_current_has_none_for_others(self):
         # Surprise breakout with no projection on either side
         result = build_rankings_lookup(
-            ros={}, preseason={}, current={"Surprise::hitter": {"overall": 25}},
+            ros={},
+            preseason={},
+            current={"Surprise::hitter": {"overall": 25}},
         )
         assert result["Surprise::hitter"] == {
             "rest_of_season": None,

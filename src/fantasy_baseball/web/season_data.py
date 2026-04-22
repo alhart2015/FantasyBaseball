@@ -40,6 +40,7 @@ def _get_redis() -> KVStore | None:
     """
     return get_kv() if is_remote() else None
 
+
 if TYPE_CHECKING:
     import pandas as pd
 

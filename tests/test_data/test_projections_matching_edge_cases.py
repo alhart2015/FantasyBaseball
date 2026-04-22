@@ -9,6 +9,7 @@ And the matcher's observability: WARNING logs on unmatched, ambiguous,
 and fallback matches so future regressions surface immediately instead
 of silently dropping or mis-matching players.
 """
+
 import logging
 from typing import ClassVar
 
@@ -19,6 +20,7 @@ from fantasy_baseball.models.player import HitterStats, PitcherStats, PlayerType
 
 # --- Tiny in-memory DataFrame builders ---
 
+
 def _hitters_df(rows):
     """Build a hitters projection DataFrame with the minimum columns the
     matcher and HitterStats.from_dict require. Each row in ``rows`` is a
@@ -26,8 +28,15 @@ def _hitters_df(rows):
     default to 0.
     """
     defaults = {
-        "r": 0, "hr": 0, "rbi": 0, "sb": 0, "avg": 0.0,
-        "ab": 0, "h": 0, "pa": 0, "player_type": "hitter",
+        "r": 0,
+        "hr": 0,
+        "rbi": 0,
+        "sb": 0,
+        "avg": 0.0,
+        "ab": 0,
+        "h": 0,
+        "pa": 0,
+        "player_type": "hitter",
     }
     return pd.DataFrame([{**defaults, **r} for r in rows])
 
@@ -37,8 +46,16 @@ def _pitchers_df(rows):
     matcher and PitcherStats.from_dict require.
     """
     defaults = {
-        "w": 0, "k": 0, "sv": 0, "ip": 0, "er": 0, "bb": 0, "h_allowed": 0,
-        "era": 0.0, "whip": 0.0, "player_type": "pitcher",
+        "w": 0,
+        "k": 0,
+        "sv": 0,
+        "ip": 0,
+        "er": 0,
+        "bb": 0,
+        "h_allowed": 0,
+        "era": 0.0,
+        "whip": 0.0,
+        "player_type": "pitcher",
     }
     return pd.DataFrame([{**defaults, **r} for r in rows])
 
@@ -53,6 +70,7 @@ def _empty_pitchers():
 
 # --- Julio Rodriguez: accent encoding ---
 
+
 class TestJulioRodriguezAccentEncoding:
     """Verify normalize_name handles all three Unicode forms of 'í'.
 
@@ -60,12 +78,18 @@ class TestJulioRodriguezAccentEncoding:
     variants Yahoo and FanGraphs have been observed to send.
     """
 
-    PROJECTION: ClassVar[dict] = {"name": "Julio Rodríguez", "_name_norm": "julio rodriguez", "hr": 32}
+    PROJECTION: ClassVar[dict] = {
+        "name": "Julio Rodríguez",
+        "_name_norm": "julio rodriguez",
+        "hr": 32,
+    }
 
     def test_roster_nfc_precomposed_matches(self):
         roster = [{"name": "Julio Rodríguez", "positions": ["OF"]}]
         result = match_roster_to_projections(
-            roster, _hitters_df([self.PROJECTION]), _empty_pitchers(),
+            roster,
+            _hitters_df([self.PROJECTION]),
+            _empty_pitchers(),
         )
         assert len(result) == 1
         assert result[0].rest_of_season.hr == 32
@@ -74,7 +98,9 @@ class TestJulioRodriguezAccentEncoding:
         # 'í' as 'i' + combining acute accent (U+0301)
         roster = [{"name": "Julio Rodri\u0301guez", "positions": ["OF"]}]
         result = match_roster_to_projections(
-            roster, _hitters_df([self.PROJECTION]), _empty_pitchers(),
+            roster,
+            _hitters_df([self.PROJECTION]),
+            _empty_pitchers(),
         )
         assert len(result) == 1
         assert result[0].rest_of_season.hr == 32
@@ -82,7 +108,9 @@ class TestJulioRodriguezAccentEncoding:
     def test_roster_ascii_matches_accented_projection(self):
         roster = [{"name": "Julio Rodriguez", "positions": ["OF"]}]
         result = match_roster_to_projections(
-            roster, _hitters_df([self.PROJECTION]), _empty_pitchers(),
+            roster,
+            _hitters_df([self.PROJECTION]),
+            _empty_pitchers(),
         )
         assert len(result) == 1
         assert result[0].rest_of_season.hr == 32
@@ -92,7 +120,9 @@ class TestJulioRodriguezAccentEncoding:
         roster = [{"name": "Julio Rodríguez", "positions": ["OF"]}]
         ascii_proj = {"name": "Julio Rodriguez", "_name_norm": "julio rodriguez", "hr": 32}
         result = match_roster_to_projections(
-            roster, _hitters_df([ascii_proj]), _empty_pitchers(),
+            roster,
+            _hitters_df([ascii_proj]),
+            _empty_pitchers(),
         )
         assert len(result) == 1
         assert result[0].rest_of_season.hr == 32
@@ -100,24 +130,32 @@ class TestJulioRodriguezAccentEncoding:
 
 # --- Mason Miller: cross-type same-name collision ---
 
+
 class TestMasonMillerCrossTypeCollision:
     """Verify the matcher uses positions to pick the right Mason Miller
     when both hitter and pitcher entries exist in projections.
     """
 
     HITTER_PROJ: ClassVar[dict] = {
-        "name": "Mason Miller", "_name_norm": "mason miller",
-        "hr": 18, "ab": 480,
+        "name": "Mason Miller",
+        "_name_norm": "mason miller",
+        "hr": 18,
+        "ab": 480,
     }
     PITCHER_PROJ: ClassVar[dict] = {
-        "name": "Mason Miller", "_name_norm": "mason miller",
-        "k": 95, "sv": 28, "ip": 65,
+        "name": "Mason Miller",
+        "_name_norm": "mason miller",
+        "k": 95,
+        "sv": 28,
+        "ip": 65,
     }
 
     def test_hitter_position_picks_hitter_projection(self):
         roster = [{"name": "Mason Miller", "positions": ["3B"]}]
         result = match_roster_to_projections(
-            roster, _hitters_df([self.HITTER_PROJ]), _pitchers_df([self.PITCHER_PROJ]),
+            roster,
+            _hitters_df([self.HITTER_PROJ]),
+            _pitchers_df([self.PITCHER_PROJ]),
         )
         assert len(result) == 1
         assert result[0].player_type == PlayerType.HITTER
@@ -127,7 +165,9 @@ class TestMasonMillerCrossTypeCollision:
     def test_pitcher_position_picks_pitcher_projection(self):
         roster = [{"name": "Mason Miller", "positions": ["SP"]}]
         result = match_roster_to_projections(
-            roster, _hitters_df([self.HITTER_PROJ]), _pitchers_df([self.PITCHER_PROJ]),
+            roster,
+            _hitters_df([self.HITTER_PROJ]),
+            _pitchers_df([self.PITCHER_PROJ]),
         )
         assert len(result) == 1
         assert result[0].player_type == PlayerType.PITCHER
@@ -141,7 +181,9 @@ class TestMasonMillerCrossTypeCollision:
         roster = [{"name": "Mason Miller", "positions": []}]
         with caplog.at_level(logging.WARNING):
             result = match_roster_to_projections(
-                roster, _hitters_df([self.HITTER_PROJ]), _pitchers_df([self.PITCHER_PROJ]),
+                roster,
+                _hitters_df([self.HITTER_PROJ]),
+                _pitchers_df([self.PITCHER_PROJ]),
             )
         assert len(result) == 1
         assert result[0].player_type == PlayerType.HITTER
@@ -149,6 +191,7 @@ class TestMasonMillerCrossTypeCollision:
 
 
 # --- Shohei Ohtani: dual-entry roster ---
+
 
 class TestShoheiOhtaniDualEntry:
     """Yahoo returns Ohtani as two roster entries:
@@ -160,24 +203,41 @@ class TestShoheiOhtaniDualEntry:
     """
 
     HITTER_PROJ: ClassVar[dict] = {
-        "name": "Shohei Ohtani", "_name_norm": "shohei ohtani",
-        "hr": 44, "r": 110,
+        "name": "Shohei Ohtani",
+        "_name_norm": "shohei ohtani",
+        "hr": 44,
+        "r": 110,
     }
     PITCHER_PROJ: ClassVar[dict] = {
-        "name": "Shohei Ohtani", "_name_norm": "shohei ohtani",
-        "k": 180, "ip": 140, "w": 12,
+        "name": "Shohei Ohtani",
+        "_name_norm": "shohei ohtani",
+        "k": 180,
+        "ip": 140,
+        "w": 12,
     }
 
     def test_dual_roster_entries_produce_two_player_objects(self, caplog):
         roster = [
-            {"name": "Shohei Ohtani", "positions": ["Util"],
-             "selected_position": "Util", "player_id": "100", "status": ""},
-            {"name": "Shohei Ohtani (Pitcher)", "positions": ["SP"],
-             "selected_position": "SP", "player_id": "200", "status": ""},
+            {
+                "name": "Shohei Ohtani",
+                "positions": ["Util"],
+                "selected_position": "Util",
+                "player_id": "100",
+                "status": "",
+            },
+            {
+                "name": "Shohei Ohtani (Pitcher)",
+                "positions": ["SP"],
+                "selected_position": "SP",
+                "player_id": "200",
+                "status": "",
+            },
         ]
         with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.projections"):
             result = match_roster_to_projections(
-                roster, _hitters_df([self.HITTER_PROJ]), _pitchers_df([self.PITCHER_PROJ]),
+                roster,
+                _hitters_df([self.HITTER_PROJ]),
+                _pitchers_df([self.PITCHER_PROJ]),
             )
         assert len(result) == 2
         assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 0
@@ -199,6 +259,7 @@ class TestShoheiOhtaniDualEntry:
 
 # --- Observability ---
 
+
 class TestMatchObservability:
     """Verify match_roster_to_projections emits WARNING logs for the three
     insidious cases (unmatched, ambiguous, fallback) so future matching
@@ -210,7 +271,9 @@ class TestMatchObservability:
         roster = [{"name": "Nobody Special", "positions": ["OF"]}]
         with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.projections"):
             result = match_roster_to_projections(
-                roster, _empty_hitters(), _empty_pitchers(),
+                roster,
+                _empty_hitters(),
+                _empty_pitchers(),
             )
         assert result == []
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
@@ -224,7 +287,10 @@ class TestMatchObservability:
         roster = [{"name": "Nobody Special", "positions": ["OF"]}]
         with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.projections"):
             match_roster_to_projections(
-                roster, _empty_hitters(), _empty_pitchers(), context="opp:Sharks",
+                roster,
+                _empty_hitters(),
+                _empty_pitchers(),
+                context="opp:Sharks",
             )
         msg = caplog.records[0].getMessage()
         assert "[opp:Sharks]" in msg
@@ -233,7 +299,9 @@ class TestMatchObservability:
         roster = [{"name": "Nobody Special", "positions": ["OF"]}]
         with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.projections"):
             match_roster_to_projections(
-                roster, _empty_hitters(), _empty_pitchers(),
+                roster,
+                _empty_hitters(),
+                _empty_pitchers(),
             )
         msg = caplog.records[0].getMessage()
         assert "[]" not in msg
@@ -241,10 +309,12 @@ class TestMatchObservability:
 
     def test_ambiguous_hitter_match_logs_warning(self, caplog):
         # Two projection rows with the same normalized name and matching positions
-        hitters = _hitters_df([
-            {"name": "John Smith", "_name_norm": "john smith", "hr": 25},
-            {"name": "John Smith", "_name_norm": "john smith", "hr": 12},
-        ])
+        hitters = _hitters_df(
+            [
+                {"name": "John Smith", "_name_norm": "john smith", "hr": 25},
+                {"name": "John Smith", "_name_norm": "john smith", "hr": 12},
+            ]
+        )
         roster = [{"name": "John Smith", "positions": ["OF"]}]
         with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.projections"):
             result = match_roster_to_projections(roster, hitters, _empty_pitchers())
@@ -260,10 +330,12 @@ class TestMatchObservability:
         assert "2 candidates" in msg
 
     def test_ambiguous_pitcher_match_logs_warning(self, caplog):
-        pitchers = _pitchers_df([
-            {"name": "Joe Pitcher", "_name_norm": "joe pitcher", "k": 200},
-            {"name": "Joe Pitcher", "_name_norm": "joe pitcher", "k": 50},
-        ])
+        pitchers = _pitchers_df(
+            [
+                {"name": "Joe Pitcher", "_name_norm": "joe pitcher", "k": 200},
+                {"name": "Joe Pitcher", "_name_norm": "joe pitcher", "k": 50},
+            ]
+        )
         roster = [{"name": "Joe Pitcher", "positions": ["SP"]}]
         with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.projections"):
             result = match_roster_to_projections(roster, _empty_hitters(), pitchers)
@@ -279,9 +351,11 @@ class TestMatchObservability:
     def test_fallback_match_logs_warning(self, caplog):
         # Position list doesn't qualify as hitter or pitcher (empty),
         # but name matches a hitter projection via fallback.
-        hitters = _hitters_df([
-            {"name": "Mystery Player", "_name_norm": "mystery player", "hr": 10},
-        ])
+        hitters = _hitters_df(
+            [
+                {"name": "Mystery Player", "_name_norm": "mystery player", "hr": 10},
+            ]
+        )
         roster = [{"name": "Mystery Player", "positions": []}]
         with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.projections"):
             result = match_roster_to_projections(roster, hitters, _empty_pitchers())

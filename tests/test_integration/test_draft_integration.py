@@ -3,6 +3,7 @@
 These tests use the ACTUAL projection files in data/projections/ and the
 ACTUAL config/league.yaml to exercise the full draft pipeline end-to-end.
 """
+
 from pathlib import Path
 from typing import ClassVar
 
@@ -41,6 +42,7 @@ _POSITIONS_PATH = _PROJECT_ROOT / "data" / "player_positions.json"
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def config() -> LeagueConfig:
     """Load the real league config."""
@@ -53,7 +55,9 @@ def full_board(config: LeagueConfig) -> pd.DataFrame:
     conn = get_connection(":memory:")
     create_tables(conn)
 
-    load_blended_projections(conn, _PROJECTIONS_DIR, config.projection_systems, config.projection_weights)
+    load_blended_projections(
+        conn, _PROJECTIONS_DIR, config.projection_systems, config.projection_weights
+    )
 
     if _POSITIONS_PATH.exists():
         positions = load_positions_cache(_POSITIONS_PATH)
@@ -102,15 +106,15 @@ def _simulate_n_picks(
 
     # Pre-draft keepers: mark all keeper players as drafted by their teams
     for keeper in config.keepers:
-        keeper_rows = board[
-            board["name"].str.lower() == keeper["name"].lower()
-        ]
+        keeper_rows = board[board["name"].str.lower() == keeper["name"].lower()]
         if not keeper_rows.empty:
             row = keeper_rows.iloc[0]
             pid = row["player_id"]
             is_user_keeper = keeper.get("team", "") == config.team_name
             tracker.draft_player(
-                row["name"], is_user=is_user_keeper, player_id=pid,
+                row["name"],
+                is_user=is_user_keeper,
+                player_id=pid,
             )
             if is_user_keeper:
                 balance.add_player(row)
@@ -151,15 +155,17 @@ def _simulate_n_picks(
                 player_row = rows.iloc[0]
                 tracker.draft_player(name, is_user=True, player_id=pid)
                 balance.add_player(player_row)
-                picks.append({
-                    "name": name,
-                    "player_id": pid,
-                    "player_type": player_row["player_type"],
-                    "sv": player_row.get("sv", 0),
-                    "positions": player_row.get("positions", []),
-                    "best_position": player_row.get("best_position", ""),
-                    "ip": player_row.get("ip", 0),
-                })
+                picks.append(
+                    {
+                        "name": name,
+                        "player_id": pid,
+                        "player_type": player_row["player_type"],
+                        "sv": player_row.get("sv", 0),
+                        "positions": player_row.get("positions", []),
+                        "best_position": player_row.get("best_position", ""),
+                        "ip": player_row.get("ip", 0),
+                    }
+                )
                 user_picks_made += 1
             tracker.advance()
         else:
@@ -172,7 +178,8 @@ def _simulate_n_picks(
             if not available.empty:
                 opp_pick = available.iloc[0]
                 tracker.draft_player(
-                    opp_pick["name"], is_user=False,
+                    opp_pick["name"],
+                    is_user=False,
                     player_id=opp_pick["player_id"],
                 )
             tracker.advance()
@@ -216,7 +223,9 @@ class TestKeepersRemovedFromBoard:
     """After apply_keepers, keeper players should not appear in the board."""
 
     def test_keepers_not_in_filtered_board(
-        self, full_board: pd.DataFrame, board_after_keepers: pd.DataFrame,
+        self,
+        full_board: pd.DataFrame,
+        board_after_keepers: pd.DataFrame,
         config: LeagueConfig,
     ):
         # apply_keepers removes the highest-VAR entry per keeper name.
@@ -225,13 +234,9 @@ class TestKeepersRemovedFromBoard:
         # board.  So we check that each keeper lost at least one entry.
         for keeper in config.keepers:
             name_lower = keeper["name"].lower()
-            entries_before = len(
-                full_board[full_board["name"].str.lower() == name_lower]
-            )
+            entries_before = len(full_board[full_board["name"].str.lower() == name_lower])
             entries_after = len(
-                board_after_keepers[
-                    board_after_keepers["name"].str.lower() == name_lower
-                ]
+                board_after_keepers[board_after_keepers["name"].str.lower() == name_lower]
             )
             if entries_before > 0:
                 assert entries_after < entries_before, (
@@ -240,7 +245,9 @@ class TestKeepersRemovedFromBoard:
                 )
 
     def test_board_shrunk_by_keeper_count(
-        self, full_board: pd.DataFrame, board_after_keepers: pd.DataFrame,
+        self,
+        full_board: pd.DataFrame,
+        board_after_keepers: pd.DataFrame,
         config: LeagueConfig,
     ):
         # Some keepers might not be in projections; count how many actually matched
@@ -284,10 +291,20 @@ class TestAllStrategiesRegistered:
     """Every strategy name in STRATEGIES dict should map to a callable."""
 
     EXPECTED_STRATEGIES: ClassVar[list[str]] = [
-        "default", "nonzero_sv", "avg_hedge", "two_closers",
-        "three_closers", "four_closers", "no_punt", "no_punt_opp",
-        "no_punt_stagger", "no_punt_cap3", "avg_anchor", "closers_avg",
-        "balanced", "anti_fragile",
+        "default",
+        "nonzero_sv",
+        "avg_hedge",
+        "two_closers",
+        "three_closers",
+        "four_closers",
+        "no_punt",
+        "no_punt_opp",
+        "no_punt_stagger",
+        "no_punt_cap3",
+        "avg_anchor",
+        "closers_avg",
+        "balanced",
+        "anti_fragile",
     ]
 
     def test_all_expected_strategies_present(self):
@@ -304,7 +321,9 @@ class TestDefaultStrategyProducesValidPick:
     player that exists on the board."""
 
     def test_default_pick_exists_on_board(
-        self, board_after_keepers: pd.DataFrame, config: LeagueConfig,
+        self,
+        board_after_keepers: pd.DataFrame,
+        config: LeagueConfig,
     ):
         picks = _simulate_n_picks(
             board=board_after_keepers,
@@ -319,7 +338,9 @@ class TestDefaultStrategyProducesValidPick:
         )
 
     def test_default_pick_is_a_real_player(
-        self, board_after_keepers: pd.DataFrame, config: LeagueConfig,
+        self,
+        board_after_keepers: pd.DataFrame,
+        config: LeagueConfig,
     ):
         picks = _simulate_n_picks(
             board=board_after_keepers,
@@ -336,7 +357,9 @@ class TestStrategyDoesNotDraftFiveSPInFiveRounds:
 
     @pytest.mark.parametrize("strategy_name", list(STRATEGIES.keys()))
     def test_not_five_sp_in_five_picks(
-        self, board_after_keepers: pd.DataFrame, config: LeagueConfig,
+        self,
+        board_after_keepers: pd.DataFrame,
+        config: LeagueConfig,
         strategy_name: str,
     ):
         picks = _simulate_n_picks(
@@ -346,9 +369,9 @@ class TestStrategyDoesNotDraftFiveSPInFiveRounds:
             n_picks=5,
         )
         sp_count = sum(
-            1 for p in picks
-            if p["player_type"] == "pitcher"
-            and p.get("sv", 0) < CLOSER_SV_THRESHOLD
+            1
+            for p in picks
+            if p["player_type"] == "pitcher" and p.get("sv", 0) < CLOSER_SV_THRESHOLD
         )
         assert sp_count < 5, (
             f"Strategy '{strategy_name}' drafted {sp_count} SPs in 5 picks: "
@@ -360,7 +383,9 @@ class TestTwoClosersStrategyDraftsClosers:
     """The two_closers strategy should draft at least 1 closer in the first 15 picks."""
 
     def test_at_least_one_closer_in_fifteen_picks(
-        self, board_after_keepers: pd.DataFrame, config: LeagueConfig,
+        self,
+        board_after_keepers: pd.DataFrame,
+        config: LeagueConfig,
     ):
         picks = _simulate_n_picks(
             board=board_after_keepers,
@@ -380,7 +405,9 @@ class TestVonaModeProducesDifferentRankingThanVar:
     for at least some board states."""
 
     def test_vona_differs_from_var(
-        self, board_after_keepers: pd.DataFrame, config: LeagueConfig,
+        self,
+        board_after_keepers: pd.DataFrame,
+        config: LeagueConfig,
     ):
         # Test across several board states: fresh, and after some drafting
         board = board_after_keepers
@@ -389,20 +416,24 @@ class TestVonaModeProducesDifferentRankingThanVar:
         for n_drafted in [0, 30, 60, 90]:
             # Create a set of "drafted" player IDs (top-N by ADP)
             if n_drafted > 0 and "adp" in board.columns:
-                drafted_ids = list(
-                    board.nsmallest(n_drafted, "adp")["player_id"]
-                )
+                drafted_ids = list(board.nsmallest(n_drafted, "adp")["player_id"])
             else:
                 drafted_ids = []
 
             var_recs = get_recommendations(
-                board, drafted=drafted_ids, user_roster=[], n=1,
+                board,
+                drafted=drafted_ids,
+                user_roster=[],
+                n=1,
                 roster_slots=config.roster_slots,
                 num_teams=config.num_teams,
                 scoring_mode="var",
             )
             vona_recs = get_recommendations(
-                board, drafted=drafted_ids, user_roster=[], n=1,
+                board,
+                drafted=drafted_ids,
+                user_roster=[],
+                n=1,
                 roster_slots=config.roster_slots,
                 num_teams=config.num_teams,
                 scoring_mode="vona",

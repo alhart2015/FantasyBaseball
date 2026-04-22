@@ -39,12 +39,24 @@ STANDINGS_2026_PATH = PROJECT_ROOT / "data" / "standings_2026.json"
 
 
 SNAPSHOT_TABLES = [
-    ("weekly_rosters", WEEKLY_ROSTERS_PATH, "roster snapshots",
-     "SELECT * FROM weekly_rosters WHERE snapshot_date >= '2026-'"),
-    ("standings", STANDINGS_2026_PATH, "standings snapshots",
-     "SELECT * FROM standings WHERE year = 2026 AND snapshot_date != 'final'"),
-    ("game_logs", GAME_LOGS_PATH, "game log entries",
-     "SELECT * FROM game_logs WHERE season = 2026"),
+    (
+        "weekly_rosters",
+        WEEKLY_ROSTERS_PATH,
+        "roster snapshots",
+        "SELECT * FROM weekly_rosters WHERE snapshot_date >= '2026-'",
+    ),
+    (
+        "standings",
+        STANDINGS_2026_PATH,
+        "standings snapshots",
+        "SELECT * FROM standings WHERE year = 2026 AND snapshot_date != 'final'",
+    ),
+    (
+        "game_logs",
+        GAME_LOGS_PATH,
+        "game log entries",
+        "SELECT * FROM game_logs WHERE season = 2026",
+    ),
 ]
 
 
@@ -63,8 +75,9 @@ def export_snapshots():
 
 def main():
     parser = argparse.ArgumentParser(description="Build or export the SQLite database.")
-    parser.add_argument("--export", action="store_true",
-                        help="Export in-season snapshot data to JSON for git")
+    parser.add_argument(
+        "--export", action="store_true", help="Export in-season snapshot data to JSON for git"
+    )
     args = parser.parse_args()
 
     if args.export:
@@ -100,6 +113,7 @@ def main():
         roster_count = conn.execute("SELECT COUNT(*) FROM weekly_rosters").fetchone()[0]
         print(f"  Loaded {roster_count} roster entries")
         from fantasy_baseball.data.db import get_roster_names
+
         roster_names = get_roster_names(conn)
         if roster_names:
             print(f"  Found {len(roster_names)} rostered players for quality checks")
@@ -120,12 +134,8 @@ def main():
             progress_cb=print,
         )
         client = get_kv()
-        set_blended_projections(
-            client, "hitters", hitters_df.to_dict(orient="records")
-        )
-        set_blended_projections(
-            client, "pitchers", pitchers_df.to_dict(orient="records")
-        )
+        set_blended_projections(client, "hitters", hitters_df.to_dict(orient="records"))
+        set_blended_projections(client, "pitchers", pitchers_df.to_dict(orient="records"))
         print(f"  Loaded {len(hitters_df)} hitters + {len(pitchers_df)} pitchers to Redis")
     else:
         raise FileNotFoundError(

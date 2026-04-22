@@ -6,6 +6,7 @@ rest-of-season predictions against actual MLB game log data.
 Usage:
     python scripts/backtest_recency.py
 """
+
 import csv
 import json
 import sys
@@ -79,6 +80,7 @@ SEASON_END = date(2025, 9, 28)  # approximate end of 2025 regular season
 # Name normalization
 # ---------------------------------------------------------------------------
 
+
 def strip_suffixes(name: str) -> str:
     """Remove common name suffixes for looser matching."""
     for suffix in [" jr.", " jr", " sr.", " sr", " ii", " iii"]:
@@ -90,6 +92,7 @@ def strip_suffixes(name: str) -> str:
 # ---------------------------------------------------------------------------
 # Step 1: Load preseason projections
 # ---------------------------------------------------------------------------
+
 
 def load_preseason_projections() -> dict:
     """Load Steamer + ZiPS 2025 projections, average them, return per-PA/IP rates.
@@ -132,10 +135,9 @@ def load_preseason_projections() -> dict:
         .reset_index()
     )
     # Keep first name per MLBAMID
-    hitter_names = (
-        hitter_combined.drop_duplicates("MLBAMID")[["MLBAMID", "Name"]]
-        .set_index("MLBAMID")["Name"]
-    )
+    hitter_names = hitter_combined.drop_duplicates("MLBAMID")[["MLBAMID", "Name"]].set_index(
+        "MLBAMID"
+    )["Name"]
     hitter_avg["Name"] = hitter_avg["MLBAMID"].map(hitter_names)
 
     for _, row in hitter_avg.iterrows():
@@ -174,10 +176,9 @@ def load_preseason_projections() -> dict:
         .mean()
         .reset_index()
     )
-    pitcher_names = (
-        pitcher_combined.drop_duplicates("MLBAMID")[["MLBAMID", "Name"]]
-        .set_index("MLBAMID")["Name"]
-    )
+    pitcher_names = pitcher_combined.drop_duplicates("MLBAMID")[["MLBAMID", "Name"]].set_index(
+        "MLBAMID"
+    )["Name"]
     pitcher_avg["Name"] = pitcher_avg["MLBAMID"].map(pitcher_names)
 
     for _, row in pitcher_avg.iterrows():
@@ -199,15 +200,18 @@ def load_preseason_projections() -> dict:
             },
         }
 
-    print(f"Loaded projections for {len(projections)} players "
-          f"({sum(1 for v in projections.values() if v['type'] == 'hitter')} hitters, "
-          f"{sum(1 for v in projections.values() if v['type'] == 'pitcher')} pitchers)")
+    print(
+        f"Loaded projections for {len(projections)} players "
+        f"({sum(1 for v in projections.values() if v['type'] == 'hitter')} hitters, "
+        f"{sum(1 for v in projections.values() if v['type'] == 'pitcher')} pitchers)"
+    )
     return projections
 
 
 # ---------------------------------------------------------------------------
 # Step 2: Match DRAFT_2025 names to MLBAMIDs
 # ---------------------------------------------------------------------------
+
 
 def match_draft_to_projections(projections: dict) -> list[dict]:
     """Match draft player names to MLBAM IDs from projection data.
@@ -251,12 +255,14 @@ def match_draft_to_projections(projections: dict) -> list[dict]:
         if mid is not None and mid not in seen_ids:
             seen_ids.add(mid)
             data = projections[mid]
-            matched_players.append({
-                "mlbam_id": mid,
-                "name": data["name"],
-                "type": data["type"],
-                "proj": data["proj"],
-            })
+            matched_players.append(
+                {
+                    "mlbam_id": mid,
+                    "name": data["name"],
+                    "type": data["type"],
+                    "proj": data["proj"],
+                }
+            )
             matched += 1
         elif mid is None:
             missed += 1
@@ -272,10 +278,10 @@ def match_draft_to_projections(projections: dict) -> list[dict]:
 # Step 3: Fetch game logs
 # ---------------------------------------------------------------------------
 
+
 def fetch_game_logs(matched_players: list[dict]) -> dict:
     """Fetch (or load cached) game logs for all matched players."""
-    print(f"Fetching game logs for {len(matched_players)} players "
-          f"(cache: {GAME_LOG_CACHE})...")
+    print(f"Fetching game logs for {len(matched_players)} players (cache: {GAME_LOG_CACHE})...")
     return fetch_all_game_logs(matched_players, season=2025, cache_path=GAME_LOG_CACHE)
 
 
@@ -283,16 +289,15 @@ def fetch_game_logs(matched_players: list[dict]) -> dict:
 # Step 4: Compute actual rates for a time window
 # ---------------------------------------------------------------------------
 
-def compute_actual_rates(games: list[dict], player_type: str,
-                         start: date, end: date) -> dict | None:
+
+def compute_actual_rates(
+    games: list[dict], player_type: str, start: date, end: date
+) -> dict | None:
     """Compute actual per-PA/IP rates for games in [start, end).
 
     Returns None if insufficient data.
     """
-    window_games = [
-        g for g in games
-        if start <= _parse_date(g["date"]) < end
-    ]
+    window_games = [g for g in games if start <= _parse_date(g["date"]) < end]
 
     if player_type == "hitter":
         agg = _aggregate_hitter_games(window_games)
@@ -315,6 +320,7 @@ def has_sufficient_data(agg: dict, player_type: str, target: str) -> bool:
 # ---------------------------------------------------------------------------
 # Step 5: Evaluation loop
 # ---------------------------------------------------------------------------
+
 
 def run_evaluation(matched_players: list[dict], game_logs: dict) -> list[dict]:
     """Run the full evaluation loop.
@@ -368,14 +374,16 @@ def run_evaluation(matched_players: list[dict], game_logs: dict) -> list[dict]:
             # Compute MAE per (target, stat)
             for (target, stat), errs in errors.items():
                 mae = sum(errs) / len(errs) if errs else 0.0
-                results.append({
-                    "checkpoint": checkpoint_str,
-                    "model": model_name,
-                    "target": target,
-                    "stat": stat,
-                    "mae": round(mae, 6),
-                    "n_players": len(errs),
-                })
+                results.append(
+                    {
+                        "checkpoint": checkpoint_str,
+                        "model": model_name,
+                        "target": target,
+                        "stat": stat,
+                        "mae": round(mae, 6),
+                        "n_players": len(errs),
+                    }
+                )
 
             n_total = sum(len(v) for v in errors.values())
             print(f"  {model_name:<22} {n_total} total (target, stat, player) evals")
@@ -386,6 +394,7 @@ def run_evaluation(matched_players: list[dict], game_logs: dict) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Step 6: Save results CSV
 # ---------------------------------------------------------------------------
+
 
 def save_results(results: list[dict]) -> None:
     """Write evaluation results to CSV."""
@@ -401,6 +410,7 @@ def save_results(results: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 # Step 7: Print human-readable summary
 # ---------------------------------------------------------------------------
+
 
 def print_summary(results: list[dict]) -> None:
     """Print summary answering the four key questions."""
@@ -522,6 +532,7 @@ def print_summary(results: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 # Main entrypoint
 # ---------------------------------------------------------------------------
+
 
 def main():
     print("=" * 60)

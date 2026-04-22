@@ -20,25 +20,25 @@ _TRAILING_DIGITS = re.compile(r"\d+$")
 
 class Position(StrEnum):
     # Hitter-eligible + starter slots
-    C           = "C"
-    FIRST_BASE  = "1B"
+    C = "C"
+    FIRST_BASE = "1B"
     SECOND_BASE = "2B"
-    THIRD_BASE  = "3B"
-    SS          = "SS"
-    IF          = "IF"        # infield flex
-    OF          = "OF"
-    DH          = "DH"
-    UTIL        = "UTIL"
+    THIRD_BASE = "3B"
+    SS = "SS"
+    IF = "IF"  # infield flex
+    OF = "OF"
+    DH = "DH"
+    UTIL = "UTIL"
     # Pitcher-eligible + pitcher slots
-    P           = "P"
-    SP          = "SP"
-    RP          = "RP"
+    P = "P"
+    SP = "SP"
+    RP = "RP"
     # Non-active slots
-    BN          = "BN"
-    IL          = "IL"
-    IL_PLUS     = "IL+"
-    DL          = "DL"         # legacy — kept for parsing historical snapshots
-    DL_PLUS     = "DL+"
+    BN = "BN"
+    IL = "IL"
+    IL_PLUS = "IL+"
+    DL = "DL"  # legacy — kept for parsing historical snapshots
+    DL_PLUS = "DL+"
 
     @classmethod
     def parse(cls, s: str) -> Position:
@@ -82,21 +82,43 @@ class Position(StrEnum):
         return [cls.parse(tok) for tok in s.split(",") if tok.strip()]
 
 
-HITTER_ELIGIBLE: frozenset[Position] = frozenset({
-    Position.C, Position.FIRST_BASE, Position.SECOND_BASE,
-    Position.THIRD_BASE, Position.SS, Position.IF, Position.OF,
-    Position.DH, Position.UTIL,
-})
+HITTER_ELIGIBLE: frozenset[Position] = frozenset(
+    {
+        Position.C,
+        Position.FIRST_BASE,
+        Position.SECOND_BASE,
+        Position.THIRD_BASE,
+        Position.SS,
+        Position.IF,
+        Position.OF,
+        Position.DH,
+        Position.UTIL,
+    }
+)
 
-PITCHER_ELIGIBLE: frozenset[Position] = frozenset({
-    Position.P, Position.SP, Position.RP,
-})
+PITCHER_ELIGIBLE: frozenset[Position] = frozenset(
+    {
+        Position.P,
+        Position.SP,
+        Position.RP,
+    }
+)
 
-BENCH_SLOTS: frozenset[Position] = frozenset({
-    Position.BN, Position.IL, Position.IL_PLUS,
-    Position.DL, Position.DL_PLUS,
-})
+BENCH_SLOTS: frozenset[Position] = frozenset(
+    {
+        Position.BN,
+        Position.IL,
+        Position.IL_PLUS,
+        Position.DL,
+        Position.DL_PLUS,
+    }
+)
 
-IL_SLOTS: frozenset[Position] = frozenset({
-    Position.IL, Position.IL_PLUS, Position.DL, Position.DL_PLUS,
-})
+IL_SLOTS: frozenset[Position] = frozenset(
+    {
+        Position.IL,
+        Position.IL_PLUS,
+        Position.DL,
+        Position.DL_PLUS,
+    }
+)

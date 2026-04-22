@@ -2,58 +2,183 @@
 
 # Known closers (manually tagged from the draft data)
 CLOSERS_2025 = {
-    "Emmanuel Clase", "Devin Williams", "Josh Hader", "Edwin Díaz",
-    "Raisel Iglesias", "Mason Miller", "Ryan Helsley", "Ryan Walker",
-    "Andrés Muñoz", "Jhoan Duran", "Robert Suarez", "Félix Bautista",
-    "Tanner Scott", "Pete Fairbanks", "Kenley Jansen", "Aroldis Chapman",
-    "Clay Holmes", "David Bednar", "Jordan Romano",
+    "Emmanuel Clase",
+    "Devin Williams",
+    "Josh Hader",
+    "Edwin Díaz",
+    "Raisel Iglesias",
+    "Mason Miller",
+    "Ryan Helsley",
+    "Ryan Walker",
+    "Andrés Muñoz",
+    "Jhoan Duran",
+    "Robert Suarez",
+    "Félix Bautista",
+    "Tanner Scott",
+    "Pete Fairbanks",
+    "Kenley Jansen",
+    "Aroldis Chapman",
+    "Clay Holmes",
+    "David Bednar",
+    "Jordan Romano",
 }
 CLOSERS_2024 = {
-    "Emmanuel Clase", "Edwin Díaz", "Josh Hader", "Raisel Iglesias",
-    "Andrés Muñoz", "Alexis Díaz", "Ryan Helsley", "David Bednar",
-    "Clay Holmes", "Pete Fairbanks", "Craig Kimbrel", "Kenley Jansen",
-    "Tanner Scott", "Paul Sewald", "Jordan Romano", "José Alvarado",
-    "Robert Suarez", "Kyle Finnegan", "Carlos Estévez", "Mason Miller",
-    "Jhoan Duran", "Hunter Harvey", "José Leclerc", "Alex Lange",
-    "Evan Phillips", "Camilo Doval",
+    "Emmanuel Clase",
+    "Edwin Díaz",
+    "Josh Hader",
+    "Raisel Iglesias",
+    "Andrés Muñoz",
+    "Alexis Díaz",
+    "Ryan Helsley",
+    "David Bednar",
+    "Clay Holmes",
+    "Pete Fairbanks",
+    "Craig Kimbrel",
+    "Kenley Jansen",
+    "Tanner Scott",
+    "Paul Sewald",
+    "Jordan Romano",
+    "José Alvarado",
+    "Robert Suarez",
+    "Kyle Finnegan",
+    "Carlos Estévez",
+    "Mason Miller",
+    "Jhoan Duran",
+    "Hunter Harvey",
+    "José Leclerc",
+    "Alex Lange",
+    "Evan Phillips",
+    "Camilo Doval",
 }
 
 # Pitchers (SP) - not closers
 PITCHERS_2025 = {
-    "Paul Skenes", "Tarik Skubal", "Zack Wheeler", "Logan Gilbert",
-    "Garrett Crochet", "Chris Sale", "Corbin Burnes", "Cole Ragans",
-    "Tyler Glasnow", "Yoshinobu Yamamoto", "Framber Valdez", "Dylan Cease",
-    "Blake Snell", "Jacob deGrom", "Spencer Schwellenbach", "Pablo López",
-    "Shota Imanaga", "Logan Webb", "Aaron Nola", "Tanner Bibee",
-    "Max Fried", "Freddy Peralta", "Bailey Ober", "Hunter Brown",
-    "Luis Castillo", "Joe Ryan", "Bryce Miller", "Hunter Greene",
-    "Roki Sasaki", "Zac Gallen", "George Kirby", "Spencer Strider",
-    "Sandy Alcantara", "Justin Steele", "Sonny Gray", "Jack Flaherty",
-    "Kevin Gausman", "Cristopher Sánchez", "Jeff Hoffman",
-    "Shane McClanahan", "Yusei Kikuchi", "Gavin Williams", "Shane Baz",
-    "Bryan Woo", "Carlos Rodón", "Nick Pivetta", "Ryan Pepiot",
-    "Seth Lugo", "Robbie Ray", "Taj Bradley", "Brandon Pfaadt",
-    "Zach Eflin", "MacKenzie Gore", "Nick Lodolo", "Tanner Houck",
-    "Mitch Keller", "Kodai Senga", "Reynaldo López",
+    "Paul Skenes",
+    "Tarik Skubal",
+    "Zack Wheeler",
+    "Logan Gilbert",
+    "Garrett Crochet",
+    "Chris Sale",
+    "Corbin Burnes",
+    "Cole Ragans",
+    "Tyler Glasnow",
+    "Yoshinobu Yamamoto",
+    "Framber Valdez",
+    "Dylan Cease",
+    "Blake Snell",
+    "Jacob deGrom",
+    "Spencer Schwellenbach",
+    "Pablo López",
+    "Shota Imanaga",
+    "Logan Webb",
+    "Aaron Nola",
+    "Tanner Bibee",
+    "Max Fried",
+    "Freddy Peralta",
+    "Bailey Ober",
+    "Hunter Brown",
+    "Luis Castillo",
+    "Joe Ryan",
+    "Bryce Miller",
+    "Hunter Greene",
+    "Roki Sasaki",
+    "Zac Gallen",
+    "George Kirby",
+    "Spencer Strider",
+    "Sandy Alcantara",
+    "Justin Steele",
+    "Sonny Gray",
+    "Jack Flaherty",
+    "Kevin Gausman",
+    "Cristopher Sánchez",
+    "Jeff Hoffman",
+    "Shane McClanahan",
+    "Yusei Kikuchi",
+    "Gavin Williams",
+    "Shane Baz",
+    "Bryan Woo",
+    "Carlos Rodón",
+    "Nick Pivetta",
+    "Ryan Pepiot",
+    "Seth Lugo",
+    "Robbie Ray",
+    "Taj Bradley",
+    "Brandon Pfaadt",
+    "Zach Eflin",
+    "MacKenzie Gore",
+    "Nick Lodolo",
+    "Tanner Houck",
+    "Mitch Keller",
+    "Kodai Senga",
+    "Reynaldo López",
 }
 PITCHERS_2024 = {
-    "Corbin Burnes", "Spencer Strider", "Gerrit Cole", "Zac Gallen",
-    "Zack Wheeler", "Tyler Glasnow", "Freddy Peralta", "Aaron Nola",
-    "Framber Valdez", "Logan Gilbert", "Kevin Gausman", "Logan Webb",
-    "Yoshinobu Yamamoto", "George Kirby", "Luis Castillo", "Cole Ragans",
-    "Chris Bassitt", "Justin Steele", "Blake Snell", "Bobby Miller",
-    "Zach Eflin", "Tanner Bibee", "Hunter Brown", "Grayson Rodriguez",
-    "Joe Ryan", "Dylan Cease", "Pablo López", "Max Fried", "Bailey Ober",
-    "Shota Imanaga", "Ryan Pepiot", "Sonny Gray", "Hunter Greene",
-    "Bryce Miller", "Michael King", "Cristian Javier", "Nick Pivetta",
-    "Mitch Keller", "Nathan Eovaldi", "Carlos Rodón", "José Berríos",
-    "Shane Bieber", "Chris Sale", "Merrill Kelly", "Walker Buehler",
-    "Yu Darvish", "Brandon Pfaadt", "Nestor Cortes", "Triston McKenzie",
-    "Justin Verlander", "Gavin Williams", "Kyle Harrison", "Michael Wacha",
-    "Yusei Kikuchi", "Eury Pérez", "Brayan Bello", "Braxton Garrett",
-    "Clayton Kershaw", "Aaron Civale", "Eduardo Rodriguez",
-    "Charlie Morton", "Joe Musgrove", "Cristopher Sánchez",
-    "Kutter Crawford", "Luis Severino", "Jordan Montgomery",
+    "Corbin Burnes",
+    "Spencer Strider",
+    "Gerrit Cole",
+    "Zac Gallen",
+    "Zack Wheeler",
+    "Tyler Glasnow",
+    "Freddy Peralta",
+    "Aaron Nola",
+    "Framber Valdez",
+    "Logan Gilbert",
+    "Kevin Gausman",
+    "Logan Webb",
+    "Yoshinobu Yamamoto",
+    "George Kirby",
+    "Luis Castillo",
+    "Cole Ragans",
+    "Chris Bassitt",
+    "Justin Steele",
+    "Blake Snell",
+    "Bobby Miller",
+    "Zach Eflin",
+    "Tanner Bibee",
+    "Hunter Brown",
+    "Grayson Rodriguez",
+    "Joe Ryan",
+    "Dylan Cease",
+    "Pablo López",
+    "Max Fried",
+    "Bailey Ober",
+    "Shota Imanaga",
+    "Ryan Pepiot",
+    "Sonny Gray",
+    "Hunter Greene",
+    "Bryce Miller",
+    "Michael King",
+    "Cristian Javier",
+    "Nick Pivetta",
+    "Mitch Keller",
+    "Nathan Eovaldi",
+    "Carlos Rodón",
+    "José Berríos",
+    "Shane Bieber",
+    "Chris Sale",
+    "Merrill Kelly",
+    "Walker Buehler",
+    "Yu Darvish",
+    "Brandon Pfaadt",
+    "Nestor Cortes",
+    "Triston McKenzie",
+    "Justin Verlander",
+    "Gavin Williams",
+    "Kyle Harrison",
+    "Michael Wacha",
+    "Yusei Kikuchi",
+    "Eury Pérez",
+    "Brayan Bello",
+    "Braxton Garrett",
+    "Clayton Kershaw",
+    "Aaron Civale",
+    "Eduardo Rodriguez",
+    "Charlie Morton",
+    "Joe Musgrove",
+    "Cristopher Sánchez",
+    "Kutter Crawford",
+    "Luis Severino",
+    "Jordan Montgomery",
 }
 
 
@@ -97,13 +222,15 @@ def parse_draft(text, closers, pitchers):
             }
             team = team_map.get(team, team)
             ptype = classify(player, closers, pitchers)
-            picks.append({
-                "round": current_round,
-                "pick": int(pick_num),
-                "player": player,
-                "team": team,
-                "type": ptype,
-            })
+            picks.append(
+                {
+                    "round": current_round,
+                    "pick": int(pick_num),
+                    "player": player,
+                    "team": team,
+                    "type": ptype,
+                }
+            )
     return picks
 
 
@@ -660,23 +787,30 @@ def main():
         a25 = analyze_team(picks_2025, team)
         a24 = analyze_team(picks_2024, team)
         print(f"\n  {team}")
-        print(f"  {'':4} {'Year':>5} {'H':>3} {'SP':>3} {'CL':>3}  {'1st SP':>6} {'1st CL':>6}  {'Early(R1-5)':>11}  CL rounds")
-        print(f"  {'':4} {'2025':>5} {a25['hitters']:>3} {a25['sp']:>3} {a25['closers']:>3}  "
-              f"{'R'+str(a25['first_sp']) if a25['first_sp'] else 'never':>6} "
-              f"{'R'+str(a25['first_cl']) if a25['first_cl'] else 'never':>6}  "
-              f"{a25['early_h']}H/{a25['early_p']}P{'':<5}  "
-              f"{a25['cl_rounds']}")
-        print(f"  {'':4} {'2024':>5} {a24['hitters']:>3} {a24['sp']:>3} {a24['closers']:>3}  "
-              f"{'R'+str(a24['first_sp']) if a24['first_sp'] else 'never':>6} "
-              f"{'R'+str(a24['first_cl']) if a24['first_cl'] else 'never':>6}  "
-              f"{a24['early_h']}H/{a24['early_p']}P{'':<5}  "
-              f"{a24['cl_rounds']}")
+        print(
+            f"  {'':4} {'Year':>5} {'H':>3} {'SP':>3} {'CL':>3}  {'1st SP':>6} {'1st CL':>6}  {'Early(R1-5)':>11}  CL rounds"
+        )
+        print(
+            f"  {'':4} {'2025':>5} {a25['hitters']:>3} {a25['sp']:>3} {a25['closers']:>3}  "
+            f"{'R' + str(a25['first_sp']) if a25['first_sp'] else 'never':>6} "
+            f"{'R' + str(a25['first_cl']) if a25['first_cl'] else 'never':>6}  "
+            f"{a25['early_h']}H/{a25['early_p']}P{'':<5}  "
+            f"{a25['cl_rounds']}"
+        )
+        print(
+            f"  {'':4} {'2024':>5} {a24['hitters']:>3} {a24['sp']:>3} {a24['closers']:>3}  "
+            f"{'R' + str(a24['first_sp']) if a24['first_sp'] else 'never':>6} "
+            f"{'R' + str(a24['first_cl']) if a24['first_cl'] else 'never':>6}  "
+            f"{a24['early_h']}H/{a24['early_p']}P{'':<5}  "
+            f"{a24['cl_rounds']}"
+        )
 
     # Closer demand curve
     print("\n" + "=" * 90)
     print("CLOSER DEMAND BY ROUND (both years combined)")
     print("=" * 90)
     from collections import Counter
+
     cl_by_round = Counter()
     for p in picks_2025 + picks_2024:
         if p["type"] == "CL":

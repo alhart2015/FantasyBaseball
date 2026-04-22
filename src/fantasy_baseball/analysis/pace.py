@@ -34,16 +34,16 @@ RATE_COMPONENT = {"avg": "h", "era": "er", "whip": "h_allowed"}
 
 # Sample size thresholds
 # Hitters: < 10 PA = all neutral, 10-29 PA = counting colored / rates neutral, >= 30 PA = all colored
-HITTER_MIN_COUNTING = 10   # PA threshold for counting stats to be colored
-HITTER_MIN_RATES = 30      # PA threshold for rate stats to be colored
+HITTER_MIN_COUNTING = 10  # PA threshold for counting stats to be colored
+HITTER_MIN_RATES = 30  # PA threshold for rate stats to be colored
 
 # Pitchers: < 5 IP = all neutral, 5-9 IP = counting colored / rates neutral, >= 10 IP = all colored
-PITCHER_MIN_COUNTING = 5   # IP threshold for counting stats to be colored
-PITCHER_MIN_RATES = 10     # IP threshold for rate stats to be colored
+PITCHER_MIN_COUNTING = 5  # IP threshold for counting stats to be colored
+PITCHER_MIN_RATES = 10  # IP threshold for rate stats to be colored
 
 # Z-score thresholds for color coding
-Z_BRIGHT = 2.0   # >= this: stat-hot-2 / stat-cold-2 (bright green/red)
-Z_LIGHT = 1.0    # >= this: stat-hot-1 / stat-cold-1 (light green/red)
+Z_BRIGHT = 2.0  # >= this: stat-hot-2 / stat-cold-2 (bright green/red)
+Z_LIGHT = 1.0  # >= this: stat-hot-1 / stat-cold-1 (light green/red)
 
 # Minimum absolute difference (actual vs expected) for counting stats to be
 # colored.  Prevents e.g. 1 RBI vs 0.2 expected from showing bright green.
@@ -154,7 +154,9 @@ def compute_player_pace(
             "actual": actual,
             "expected": round(expected, 1),
             "z_score": round(z, 2),
-            "color_class": _z_to_color(z) if abs(actual - expected) >= COUNTING_MIN_ABS_DIFF else "stat-neutral",
+            "color_class": _z_to_color(z)
+            if abs(actual - expected) >= COUNTING_MIN_ABS_DIFF
+            else "stat-neutral",
             "projection": round(proj),
             "rest_of_season_deviation_sgp": _rest_of_season_deviation(display_key),
         }
@@ -262,11 +264,15 @@ def attach_pace_to_roster(
             projected = {k: 0 for k in proj_keys}
         ros_dict = (
             {k: getattr(player.rest_of_season, k, 0) for k in ros_keys}
-            if player.rest_of_season else None
+            if player.rest_of_season
+            else None
         )
         player.pace = compute_player_pace(
-            actuals, projected, player.player_type,
-            rest_of_season_stats=ros_dict, sgp_denoms=sgp_denoms,
+            actuals,
+            projected,
+            player.player_type,
+            rest_of_season_stats=ros_dict,
+            sgp_denoms=sgp_denoms,
         )
 
 

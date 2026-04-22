@@ -1,4 +1,3 @@
-
 import pytest
 
 from fantasy_baseball.data.yahoo_players import (
@@ -50,22 +49,27 @@ class TestFetchMissingKeepers:
 
     def _make_league(self, details_map):
         """Create a mock league whose player_details returns from a dict."""
+
         class MockLeague:
             def player_details(self, name):
                 return details_map.get(name, [])
+
         return MockLeague()
 
     def test_finds_missing_keeper(self):
-        league = self._make_league({
-            "Juan Soto": [
-                {
-                    "name": {"full": "Juan Soto"},
-                    "eligible_positions": [
-                        {"position": "OF"}, {"position": "Util"},
-                    ],
-                }
-            ],
-        })
+        league = self._make_league(
+            {
+                "Juan Soto": [
+                    {
+                        "name": {"full": "Juan Soto"},
+                        "eligible_positions": [
+                            {"position": "OF"},
+                            {"position": "Util"},
+                        ],
+                    }
+                ],
+            }
+        )
         keepers = [{"name": "Juan Soto", "team": "Hart of the Order"}]
         existing = {}
         result = fetch_missing_keepers(league, keepers, existing)
@@ -74,16 +78,19 @@ class TestFetchMissingKeepers:
 
     def test_stores_under_config_name_not_yahoo_name(self):
         """Accented Yahoo name should be stored under the ASCII config name."""
-        league = self._make_league({
-            "Jose Ramirez": [
-                {
-                    "name": {"full": "José Ramírez"},
-                    "eligible_positions": [
-                        {"position": "3B"}, {"position": "IF"},
-                    ],
-                }
-            ],
-        })
+        league = self._make_league(
+            {
+                "Jose Ramirez": [
+                    {
+                        "name": {"full": "José Ramírez"},
+                        "eligible_positions": [
+                            {"position": "3B"},
+                            {"position": "IF"},
+                        ],
+                    }
+                ],
+            }
+        )
         keepers = [{"name": "Jose Ramirez", "team": "TBD"}]
         result = fetch_missing_keepers(league, keepers, {})
         assert "Jose Ramirez" in result
@@ -92,18 +99,20 @@ class TestFetchMissingKeepers:
 
     def test_batter_pitcher_split(self):
         """Two-way players produce two entries: config name + config name (Pitcher)."""
-        league = self._make_league({
-            "Shohei Ohtani": [
-                {
-                    "name": {"full": "Shohei Ohtani (Batter)"},
-                    "eligible_positions": [{"position": "Util"}],
-                },
-                {
-                    "name": {"full": "Shohei Ohtani (Pitcher)"},
-                    "eligible_positions": [{"position": "P"}],
-                },
-            ],
-        })
+        league = self._make_league(
+            {
+                "Shohei Ohtani": [
+                    {
+                        "name": {"full": "Shohei Ohtani (Batter)"},
+                        "eligible_positions": [{"position": "Util"}],
+                    },
+                    {
+                        "name": {"full": "Shohei Ohtani (Pitcher)"},
+                        "eligible_positions": [{"position": "P"}],
+                    },
+                ],
+            }
+        )
         keepers = [{"name": "Shohei Ohtani", "team": "Work in Progress"}]
         result = fetch_missing_keepers(league, keepers, {})
         assert "Shohei Ohtani" in result
@@ -128,35 +137,40 @@ class TestFetchMissingKeepers:
         class BrokenLeague:
             def player_details(self, name):
                 raise RuntimeError("API error")
+
         keepers = [{"name": "Juan Soto", "team": "Hart of the Order"}]
         result = fetch_missing_keepers(BrokenLeague(), keepers, {})
         assert result == {}
 
     def test_handles_string_positions(self):
         """Some Yahoo endpoints return positions as plain strings."""
-        league = self._make_league({
-            "Cal Raleigh": [
-                {
-                    "name": {"full": "Cal Raleigh"},
-                    "eligible_positions": ["C", "Util"],
-                }
-            ],
-        })
+        league = self._make_league(
+            {
+                "Cal Raleigh": [
+                    {
+                        "name": {"full": "Cal Raleigh"},
+                        "eligible_positions": ["C", "Util"],
+                    }
+                ],
+            }
+        )
         keepers = [{"name": "Cal Raleigh", "team": "TBD"}]
         result = fetch_missing_keepers(league, keepers, {})
         assert "Cal Raleigh" in result
         assert "C" in result["Cal Raleigh"]
 
     def test_multiple_keepers_mixed(self):
-        league = self._make_league({
-            "Bobby Witt Jr.": [
-                {
-                    "name": {"full": "Bobby Witt Jr."},
-                    "eligible_positions": [{"position": "SS"}],
-                }
-            ],
-            "Ghost Player": [],
-        })
+        league = self._make_league(
+            {
+                "Bobby Witt Jr.": [
+                    {
+                        "name": {"full": "Bobby Witt Jr."},
+                        "eligible_positions": [{"position": "SS"}],
+                    }
+                ],
+                "Ghost Player": [],
+            }
+        )
         keepers = [
             {"name": "Bobby Witt Jr.", "team": "Team A"},
             {"name": "Ghost Player", "team": "Team B"},

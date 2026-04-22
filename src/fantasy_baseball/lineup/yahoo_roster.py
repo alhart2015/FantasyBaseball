@@ -143,8 +143,12 @@ def parse_injuries_raw(raw: dict) -> list[dict]:
 
         meta = player[0] if isinstance(player[0], list) else []
         info = {
-            "name": "", "status": "", "status_full": "",
-            "injury_note": "", "player_id": "", "positions": [],
+            "name": "",
+            "status": "",
+            "status_full": "",
+            "injury_note": "",
+            "player_id": "",
+            "positions": [],
             "selected_position": "",
         }
 
@@ -162,7 +166,8 @@ def parse_injuries_raw(raw: dict) -> list[dict]:
                 info["player_id"] = item["player_id"]
             if "eligible_positions" in item:
                 info["positions"] = [
-                    ep["position"] for ep in item["eligible_positions"]
+                    ep["position"]
+                    for ep in item["eligible_positions"]
                     if isinstance(ep, dict) and "position" in ep
                 ]
 
@@ -301,21 +306,21 @@ def fetch_free_agents(league, position: str, count: int = 50) -> list[dict]:
     try:
         # _fetch_players('A', ...) returns both FA and W status players.
         # league.free_agents() only returns 'FA', which is empty pre-season.
-        agents = league._fetch_players('A', position=position)
+        agents = league._fetch_players("A", position=position)
         result = []
         for p in agents[:count]:
-            result.append({
-                "name": p["name"],
-                "positions": p.get("eligible_positions", [position]),
-                "player_id": p.get("player_id", ""),
-                "status": p.get("status", ""),
-            })
+            result.append(
+                {
+                    "name": p["name"],
+                    "positions": p.get("eligible_positions", [position]),
+                    "player_id": p.get("player_id", ""),
+                    "status": p.get("status", ""),
+                }
+            )
         return result
     except (PermissionError, OSError):
         # Auth failures and critical OS-level errors must surface
-        logger.exception(
-            "Critical error fetching free agents at position %s", position
-        )
+        logger.exception("Critical error fetching free agents at position %s", position)
         raise
     except Exception:
         # Transient network errors, rate limits, etc. — log and degrade
@@ -375,7 +380,8 @@ def _extract_player_info(player_data: dict) -> tuple[dict, dict]:
             positions = [p.strip() for p in item["display_position"].split(",")]
         if "eligible_positions" in item and not positions:
             positions = [
-                ep["position"] for ep in item["eligible_positions"]
+                ep["position"]
+                for ep in item["eligible_positions"]
                 if isinstance(ep, dict) and "position" in ep
             ]
 
@@ -389,7 +395,6 @@ def _extract_player_info(player_data: dict) -> tuple[dict, dict]:
             tdata = td_raw
 
     return {"name": name, "player_id": player_id, "positions": positions}, tdata
-
 
 
 def fetch_all_transactions(league) -> list[dict]:
@@ -447,19 +452,21 @@ def parse_all_transactions(transactions: list[dict]) -> list[dict]:
                     team_name = tdata.get("source_team_name", "")
                     team_key = tdata.get("source_team_key", "")
 
-        results.append({
-            "transaction_id": txn.get("transaction_id", ""),
-            "type": txn.get("type", ""),
-            "status": txn.get("status", ""),
-            "timestamp": txn.get("timestamp", ""),
-            "team": team_name,
-            "team_key": team_key,
-            "add_name": add_name,
-            "add_player_id": add_pid,
-            "add_positions": add_pos,
-            "drop_name": drop_name,
-            "drop_player_id": drop_pid,
-            "drop_positions": drop_pos,
-        })
+        results.append(
+            {
+                "transaction_id": txn.get("transaction_id", ""),
+                "type": txn.get("type", ""),
+                "status": txn.get("status", ""),
+                "timestamp": txn.get("timestamp", ""),
+                "team": team_name,
+                "team_key": team_key,
+                "add_name": add_name,
+                "add_player_id": add_pid,
+                "add_positions": add_pos,
+                "drop_name": drop_name,
+                "drop_player_id": drop_pid,
+                "drop_positions": drop_pos,
+            }
+        )
 
     return results

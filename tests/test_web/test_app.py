@@ -17,18 +17,42 @@ def state_file(tmp_path):
         "user_roster": ["Juan Soto"],
         "drafted_players": ["Juan Soto", "Elly De La Cruz"],
         "recommendations": [
-            {"name": "Gerrit Cole", "var": 8.2, "best_position": "P",
-             "positions": ["SP"], "need_flag": True, "note": "fills P need"}
+            {
+                "name": "Gerrit Cole",
+                "var": 8.2,
+                "best_position": "P",
+                "positions": ["SP"],
+                "need_flag": True,
+                "note": "fills P need",
+            }
         ],
         "balance": {
-            "totals": {"R": 110, "HR": 35, "RBI": 100, "SB": 10, "AVG": 0.290,
-                       "W": 0, "K": 0, "SV": 0, "ERA": 0.0, "WHIP": 0.0},
+            "totals": {
+                "R": 110,
+                "HR": 35,
+                "RBI": 100,
+                "SB": 10,
+                "AVG": 0.290,
+                "W": 0,
+                "K": 0,
+                "SV": 0,
+                "ERA": 0.0,
+                "WHIP": 0.0,
+            },
             "warnings": ["SB is low (10, target ~100)"],
         },
         "available_players": [
-            {"name": "Gerrit Cole", "positions": ["SP"], "var": 8.2,
-             "player_type": "pitcher", "w": 16, "k": 250, "sv": 0,
-             "era": 2.80, "whip": 1.05},
+            {
+                "name": "Gerrit Cole",
+                "positions": ["SP"],
+                "var": 8.2,
+                "player_type": "pitcher",
+                "w": 16,
+                "k": 250,
+                "sv": 0,
+                "era": 2.80,
+                "whip": 1.05,
+            },
         ],
         "filled_positions": {"OF": 1},
     }

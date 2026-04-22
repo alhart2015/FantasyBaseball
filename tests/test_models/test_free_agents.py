@@ -21,6 +21,7 @@ class TestFreeAgentPoolBasics:
 
     def test_empty_pool(self):
         from fantasy_baseball.models.free_agents import FreeAgentPool
+
         pool = FreeAgentPool(effective_date=date(2026, 4, 14), entries=[])
         assert list(pool) == []
         assert len(pool) == 0
@@ -31,8 +32,7 @@ class TestFreeAgentPoolBasics:
         from fantasy_baseball.models.roster import RosterEntry
 
         entries = [
-            RosterEntry(name=f"P{i}", positions=[Position.OF],
-                        selected_position=Position.OF)
+            RosterEntry(name=f"P{i}", positions=[Position.OF], selected_position=Position.OF)
             for i in range(3)
         ]
         pool = FreeAgentPool(date(2026, 4, 14), entries)
@@ -45,10 +45,8 @@ class TestFreeAgentPoolBasics:
         from fantasy_baseball.models.roster import RosterEntry
 
         entries = [
-            RosterEntry(name="Alpha", positions=[Position.C],
-                        selected_position=Position.C),
-            RosterEntry(name="Beta", positions=[Position.OF],
-                        selected_position=Position.OF),
+            RosterEntry(name="Alpha", positions=[Position.C], selected_position=Position.C),
+            RosterEntry(name="Beta", positions=[Position.OF], selected_position=Position.OF),
         ]
         pool = FreeAgentPool(date(2026, 4, 14), entries)
         assert pool.names() == {"Alpha", "Beta"}
@@ -60,15 +58,14 @@ class TestFreeAgentPoolFromYahooParsed:
     Kept separate from ``from_yahoo`` (which hits the network) so we can
     exercise the conversion logic without mocking the Yahoo client.
     """
+
     def test_parse_normalizes_positions(self):
         from fantasy_baseball.models.free_agents import FreeAgentPool
         from fantasy_baseball.models.positions import Position
 
         raw = [
-            {"name": "Util Guy", "positions": ["OF", "Util"],
-             "player_id": "42", "status": ""},
-            {"name": "Starter", "positions": ["SP"],
-             "player_id": "43", "status": ""},
+            {"name": "Util Guy", "positions": ["OF", "Util"], "player_id": "42", "status": ""},
+            {"name": "Starter", "positions": ["SP"], "player_id": "43", "status": ""},
         ]
         entries = FreeAgentPool._parse_yahoo_entries(raw)
         assert len(entries) == 2
@@ -100,8 +97,7 @@ class TestFreeAgentPoolFromYahooParsed:
 
     def test_parse_skips_entry_with_no_positions(self):
         from fantasy_baseball.models.free_agents import FreeAgentPool
+
         raw = [{"name": "No Positions", "positions": [], "player_id": "1"}]
         entries = FreeAgentPool._parse_yahoo_entries(raw)
         assert entries == []
-
-

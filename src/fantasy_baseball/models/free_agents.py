@@ -55,19 +55,23 @@ class FreeAgentPool:
                     continue
             if not positions:
                 continue
-            parsed.append(RosterEntry(
-                name=p.get("name", ""),
-                positions=positions,
-                # FAs have no assigned slot; BN is the closest meaning
-                selected_position=Position.BN,
-                status=p.get("status", ""),
-                yahoo_id=p.get("player_id", ""),
-            ))
+            parsed.append(
+                RosterEntry(
+                    name=p.get("name", ""),
+                    positions=positions,
+                    # FAs have no assigned slot; BN is the closest meaning
+                    selected_position=Position.BN,
+                    status=p.get("status", ""),
+                    yahoo_id=p.get("player_id", ""),
+                )
+            )
         return parsed
 
     @classmethod
     def from_yahoo(
-        cls, yahoo_league, positions: list[Position] | None = None,
+        cls,
+        yahoo_league,
+        positions: list[Position] | None = None,
     ) -> FreeAgentPool:
         """Fetch the free-agent pool live from Yahoo.
 
@@ -84,9 +88,14 @@ class FreeAgentPool:
 
         if positions is None:
             positions = [
-                Position.C, Position.FIRST_BASE, Position.SECOND_BASE,
-                Position.THIRD_BASE, Position.SS, Position.OF,
-                Position.SP, Position.RP,
+                Position.C,
+                Position.FIRST_BASE,
+                Position.SECOND_BASE,
+                Position.THIRD_BASE,
+                Position.SS,
+                Position.OF,
+                Position.SP,
+                Position.RP,
             ]
 
         raw: list[dict] = []
@@ -102,4 +111,3 @@ class FreeAgentPool:
             effective_date=local_today(),
             entries=cls._parse_yahoo_entries(raw),
         )
-

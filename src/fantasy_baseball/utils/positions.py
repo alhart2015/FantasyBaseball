@@ -21,10 +21,14 @@ HITTER_POSITIONS: frozenset = HITTER_ELIGIBLE
 PITCHER_POSITIONS: frozenset = PITCHER_ELIGIBLE
 
 # IF-eligible positions — a subset of HITTER_ELIGIBLE used by can_fill_slot
-_IF_ELIGIBLE: frozenset[Position] = frozenset({
-    Position.FIRST_BASE, Position.SECOND_BASE,
-    Position.THIRD_BASE, Position.SS,
-})
+_IF_ELIGIBLE: frozenset[Position] = frozenset(
+    {
+        Position.FIRST_BASE,
+        Position.SECOND_BASE,
+        Position.THIRD_BASE,
+        Position.SS,
+    }
+)
 
 
 def _coerce(p) -> Position | None:
@@ -52,11 +56,9 @@ def can_fill_slot(player_positions, slot) -> bool:
     slot_p = _coerce(slot)
     if slot_p is None:
         return False
-    eligible = [c for c in (_coerce(p) for p in player_positions)
-                if c is not None]
+    eligible = [c for c in (_coerce(p) for p in player_positions) if c is not None]
 
-    if slot_p in (Position.BN, Position.IL, Position.IL_PLUS,
-                  Position.DL, Position.DL_PLUS):
+    if slot_p in (Position.BN, Position.IL, Position.IL_PLUS, Position.DL, Position.DL_PLUS):
         return True
     if slot_p is Position.UTIL:
         return any(p in HITTER_ELIGIBLE for p in eligible)

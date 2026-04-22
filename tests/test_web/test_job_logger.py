@@ -69,19 +69,26 @@ def test_job_logger_finish_no_redis():
 
 
 def test_get_all_logs_returns_sorted():
-    older_log = json.dumps({
-        "job": "refresh",
-        "started_at": "2026-03-29 10:00:00",
-        "status": "ok",
-    })
-    newer_log = json.dumps({
-        "job": "refresh",
-        "started_at": "2026-03-30 08:00:00",
-        "status": "ok",
-    })
+    older_log = json.dumps(
+        {
+            "job": "refresh",
+            "started_at": "2026-03-29 10:00:00",
+            "status": "ok",
+        }
+    )
+    newer_log = json.dumps(
+        {
+            "job": "refresh",
+            "started_at": "2026-03-30 08:00:00",
+            "status": "ok",
+        }
+    )
 
     mock_redis = MagicMock()
-    mock_redis.keys.return_value = ["job_log:refresh:2026-03-29:111", "job_log:refresh:2026-03-30:222"]
+    mock_redis.keys.return_value = [
+        "job_log:refresh:2026-03-29:111",
+        "job_log:refresh:2026-03-30:222",
+    ]
     mock_redis.mget.return_value = [older_log, newer_log]
 
     with patch("fantasy_baseball.web.job_logger._get_redis", return_value=mock_redis):

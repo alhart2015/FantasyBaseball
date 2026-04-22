@@ -8,10 +8,15 @@ from fantasy_baseball.data.db import (
 )
 
 
-def _make_txn(txn_id, team="Team A", ttype="add/drop",
-              add_name="Player X", drop_name="Player Y",
-              value=0.5,
-              timestamp="1712700000"):
+def _make_txn(
+    txn_id,
+    team="Team A",
+    ttype="add/drop",
+    add_name="Player X",
+    drop_name="Player Y",
+    value=0.5,
+    timestamp="1712700000",
+):
     return {
         "year": 2026,
         "transaction_id": txn_id,
@@ -67,8 +72,7 @@ class TestTransactionDB:
     def test_add_only_transaction(self):
         conn = get_connection(":memory:")
         create_tables(conn)
-        txn = _make_txn("1", ttype="add", add_name="Player X",
-                        drop_name=None, value=1.0)
+        txn = _make_txn("1", ttype="add", add_name="Player X", drop_name=None, value=1.0)
         txn["drop_player_id"] = None
         txn["drop_positions"] = None
         insert_transactions(conn, [txn])

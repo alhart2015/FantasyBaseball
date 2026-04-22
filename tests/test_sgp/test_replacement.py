@@ -10,14 +10,42 @@ from fantasy_baseball.sgp.replacement import (
 def _make_player_pool():
     hitters = []
     for i in range(15):
-        hitters.append({"name": f"Catcher_{i}", "positions": ["C"], "total_sgp": 20.0 - i, "player_type": "hitter"})
+        hitters.append(
+            {
+                "name": f"Catcher_{i}",
+                "positions": ["C"],
+                "total_sgp": 20.0 - i,
+                "player_type": "hitter",
+            }
+        )
     for i in range(15):
-        hitters.append({"name": f"FirstBase_{i}", "positions": ["1B"], "total_sgp": 25.0 - i, "player_type": "hitter"})
+        hitters.append(
+            {
+                "name": f"FirstBase_{i}",
+                "positions": ["1B"],
+                "total_sgp": 25.0 - i,
+                "player_type": "hitter",
+            }
+        )
     for i in range(50):
-        hitters.append({"name": f"Outfielder_{i}", "positions": ["OF"], "total_sgp": 30.0 - i * 0.5, "player_type": "hitter"})
+        hitters.append(
+            {
+                "name": f"Outfielder_{i}",
+                "positions": ["OF"],
+                "total_sgp": 30.0 - i * 0.5,
+                "player_type": "hitter",
+            }
+        )
     pitchers = []
     for i in range(100):
-        pitchers.append({"name": f"Pitcher_{i}", "positions": ["SP"] if i < 70 else ["RP"], "total_sgp": 25.0 - i * 0.2, "player_type": "pitcher"})
+        pitchers.append(
+            {
+                "name": f"Pitcher_{i}",
+                "positions": ["SP"] if i < 70 else ["RP"],
+                "total_sgp": 25.0 - i * 0.2,
+                "player_type": "pitcher",
+            }
+        )
     return pd.DataFrame(hitters + pitchers)
 
 
@@ -57,22 +85,24 @@ def _make_pool_with_stats():
         ab = 500 - i
         avg = 0.280 - i * 0.0005
         h = int(ab * avg)
-        hitters.append({
-            "name": f"Hitter_{i}",
-            "positions": ["OF"] if i % 2 == 0 else ["1B"],
-            "total_sgp": 30.0 - i * 0.2,
-            "player_type": "hitter",
-            "ab": ab,
-            "h": h,
-            "avg": avg,
-            # Pitcher columns needed so DataFrame is uniform
-            "ip": 0.0,
-            "er": 0,
-            "bb": 0,
-            "h_allowed": 0,
-            "era": 0.0,
-            "whip": 0.0,
-        })
+        hitters.append(
+            {
+                "name": f"Hitter_{i}",
+                "positions": ["OF"] if i % 2 == 0 else ["1B"],
+                "total_sgp": 30.0 - i * 0.2,
+                "player_type": "hitter",
+                "ab": ab,
+                "h": h,
+                "avg": avg,
+                # Pitcher columns needed so DataFrame is uniform
+                "ip": 0.0,
+                "er": 0,
+                "bb": 0,
+                "h_allowed": 0,
+                "era": 0.0,
+                "whip": 0.0,
+            }
+        )
 
     pitchers = []
     for i in range(100):
@@ -82,21 +112,23 @@ def _make_pool_with_stats():
         whip = 1.15 + i * 0.005
         bb = int(whip * ip * 0.35)
         h_allowed = int(whip * ip - bb)
-        pitchers.append({
-            "name": f"Pitcher_{i}",
-            "positions": ["SP"],
-            "total_sgp": 25.0 - i * 0.2,
-            "player_type": "pitcher",
-            "ab": 0,
-            "h": 0,
-            "avg": 0.0,
-            "ip": ip,
-            "er": er,
-            "bb": bb,
-            "h_allowed": h_allowed,
-            "era": era,
-            "whip": whip,
-        })
+        pitchers.append(
+            {
+                "name": f"Pitcher_{i}",
+                "positions": ["SP"],
+                "total_sgp": 25.0 - i * 0.2,
+                "player_type": "pitcher",
+                "ab": 0,
+                "h": 0,
+                "avg": 0.0,
+                "ip": ip,
+                "er": er,
+                "bb": bb,
+                "h_allowed": h_allowed,
+                "era": era,
+                "whip": whip,
+            }
+        )
 
     return pd.DataFrame(hitters + pitchers)
 
@@ -144,9 +176,7 @@ class TestReplacementRates:
         pool = _make_pool_with_stats()
         # Set IP to 0 for pitchers near the replacement threshold
         pitcher_mask = pool["player_type"] == "pitcher"
-        pitcher_indices = pool[pitcher_mask].sort_values(
-            "total_sgp", ascending=False
-        ).index
+        pitcher_indices = pool[pitcher_mask].sort_values("total_sgp", ascending=False).index
         # Zero out IP for pitchers 85-95 (around the 90-starter threshold)
         for idx in pitcher_indices[85:96]:
             pool.loc[idx, "ip"] = 0.0

@@ -1,4 +1,5 @@
 """Backtest: compare 2025 draft simulation to actual 2025 results."""
+
 import re
 import sys
 import unicodedata
@@ -43,16 +44,146 @@ def ascii_name(s):
 
 # Actual 2025 final standings
 ACTUAL = {
-    "Hello Peanuts!": {"total": 79, "rank": 1, "R": 996, "HR": 273, "RBI": 960, "SB": 161, "AVG": .259, "W": 94, "SV": 87, "K": 1419, "ERA": 3.16, "WHIP": 1.10},
-    "Tortured Baseball Department": {"total": 70, "rank": 2, "R": 985, "HR": 270, "RBI": 936, "SB": 201, "AVG": .267, "W": 97, "SV": 38, "K": 1434, "ERA": 3.84, "WHIP": 1.14},
-    "Hart of the Order": {"total": 69, "rank": 3, "R": 974, "HR": 305, "RBI": 961, "SB": 193, "AVG": .248, "W": 84, "SV": 109, "K": 1282, "ERA": 3.56, "WHIP": 1.18},
-    "Springfield Isotopes": {"total": 61.5, "rank": 4, "R": 1035, "HR": 294, "RBI": 988, "SB": 182, "AVG": .255, "W": 80, "SV": 71, "K": 1348, "ERA": 4.04, "WHIP": 1.21},
-    "Spacemen": {"total": 57, "rank": 5, "R": 1005, "HR": 317, "RBI": 935, "SB": 156, "AVG": .254, "W": 83, "SV": 73, "K": 1276, "ERA": 3.58, "WHIP": 1.19},
-    "Boston Estrellas": {"total": 55, "rank": 6, "R": 881, "HR": 291, "RBI": 918, "SB": 153, "AVG": .241, "W": 87, "SV": 74, "K": 1306, "ERA": 3.10, "WHIP": 1.12},
-    "Jon's Underdogs": {"total": 54, "rank": 7, "R": 949, "HR": 242, "RBI": 932, "SB": 167, "AVG": .255, "W": 76, "SV": 75, "K": 1334, "ERA": 3.48, "WHIP": 1.14},
-    "Work in Progress": {"total": 52.5, "rank": 8, "R": 944, "HR": 298, "RBI": 947, "SB": 143, "AVG": .260, "W": 79, "SV": 65, "K": 1180, "ERA": 3.52, "WHIP": 1.13},
-    "SkeleThor": {"total": 31.5, "rank": 9, "R": 953, "HR": 241, "RBI": 842, "SB": 165, "AVG": .259, "W": 79, "SV": 27, "K": 1235, "ERA": 3.92, "WHIP": 1.25},
-    "Crews Control": {"total": 20.5, "rank": 10, "R": 847, "HR": 266, "RBI": 844, "SB": 133, "AVG": .247, "W": 80, "SV": 36, "K": 1120, "ERA": 3.94, "WHIP": 1.21},
+    "Hello Peanuts!": {
+        "total": 79,
+        "rank": 1,
+        "R": 996,
+        "HR": 273,
+        "RBI": 960,
+        "SB": 161,
+        "AVG": 0.259,
+        "W": 94,
+        "SV": 87,
+        "K": 1419,
+        "ERA": 3.16,
+        "WHIP": 1.10,
+    },
+    "Tortured Baseball Department": {
+        "total": 70,
+        "rank": 2,
+        "R": 985,
+        "HR": 270,
+        "RBI": 936,
+        "SB": 201,
+        "AVG": 0.267,
+        "W": 97,
+        "SV": 38,
+        "K": 1434,
+        "ERA": 3.84,
+        "WHIP": 1.14,
+    },
+    "Hart of the Order": {
+        "total": 69,
+        "rank": 3,
+        "R": 974,
+        "HR": 305,
+        "RBI": 961,
+        "SB": 193,
+        "AVG": 0.248,
+        "W": 84,
+        "SV": 109,
+        "K": 1282,
+        "ERA": 3.56,
+        "WHIP": 1.18,
+    },
+    "Springfield Isotopes": {
+        "total": 61.5,
+        "rank": 4,
+        "R": 1035,
+        "HR": 294,
+        "RBI": 988,
+        "SB": 182,
+        "AVG": 0.255,
+        "W": 80,
+        "SV": 71,
+        "K": 1348,
+        "ERA": 4.04,
+        "WHIP": 1.21,
+    },
+    "Spacemen": {
+        "total": 57,
+        "rank": 5,
+        "R": 1005,
+        "HR": 317,
+        "RBI": 935,
+        "SB": 156,
+        "AVG": 0.254,
+        "W": 83,
+        "SV": 73,
+        "K": 1276,
+        "ERA": 3.58,
+        "WHIP": 1.19,
+    },
+    "Boston Estrellas": {
+        "total": 55,
+        "rank": 6,
+        "R": 881,
+        "HR": 291,
+        "RBI": 918,
+        "SB": 153,
+        "AVG": 0.241,
+        "W": 87,
+        "SV": 74,
+        "K": 1306,
+        "ERA": 3.10,
+        "WHIP": 1.12,
+    },
+    "Jon's Underdogs": {
+        "total": 54,
+        "rank": 7,
+        "R": 949,
+        "HR": 242,
+        "RBI": 932,
+        "SB": 167,
+        "AVG": 0.255,
+        "W": 76,
+        "SV": 75,
+        "K": 1334,
+        "ERA": 3.48,
+        "WHIP": 1.14,
+    },
+    "Work in Progress": {
+        "total": 52.5,
+        "rank": 8,
+        "R": 944,
+        "HR": 298,
+        "RBI": 947,
+        "SB": 143,
+        "AVG": 0.260,
+        "W": 79,
+        "SV": 65,
+        "K": 1180,
+        "ERA": 3.52,
+        "WHIP": 1.13,
+    },
+    "SkeleThor": {
+        "total": 31.5,
+        "rank": 9,
+        "R": 953,
+        "HR": 241,
+        "RBI": 842,
+        "SB": 165,
+        "AVG": 0.259,
+        "W": 79,
+        "SV": 27,
+        "K": 1235,
+        "ERA": 3.92,
+        "WHIP": 1.25,
+    },
+    "Crews Control": {
+        "total": 20.5,
+        "rank": 10,
+        "R": 847,
+        "HR": 266,
+        "RBI": 844,
+        "SB": 133,
+        "AVG": 0.247,
+        "W": 80,
+        "SV": 36,
+        "K": 1120,
+        "ERA": 3.94,
+        "WHIP": 1.21,
+    },
 }
 
 # 2025 draft (ASCII-safe names)
@@ -301,7 +432,11 @@ def sim_season(rosters, rng, h_slots=13, p_slots=9):
         pitchers = [p for p in players if p["player_type"] == "pitcher"]
         ah, ap = [], []
         for h in hitters:
-            frac = rng.uniform(*INJURY_SEVERITY["hitter"]) if rng.random() < INJURY_PROB["hitter"] else 0
+            frac = (
+                rng.uniform(*INJURY_SEVERITY["hitter"])
+                if rng.random() < INJURY_PROB["hitter"]
+                else 0
+            )
             row = {}
             for col in HITTING_COUNTING:
                 base = float(h.get(col, 0) or 0)
@@ -310,7 +445,11 @@ def sim_season(rosters, rng, h_slots=13, p_slots=9):
                 row[col] = varied * (1 - frac) + REPLACEMENT_HITTER.get(col, 0) * frac
             ah.append(row)
         for p in pitchers:
-            frac = rng.uniform(*INJURY_SEVERITY["pitcher"]) if rng.random() < INJURY_PROB["pitcher"] else 0
+            frac = (
+                rng.uniform(*INJURY_SEVERITY["pitcher"])
+                if rng.random() < INJURY_PROB["pitcher"]
+                else 0
+            )
             repl = REPLACEMENT_RP if float(p.get("sv", 0) or 0) >= 15 else REPLACEMENT_SP
             row = {}
             for col in PITCHING_COUNTING:
@@ -340,8 +479,16 @@ def sim_season(rosters, rng, h_slots=13, p_slots=9):
         era = ter * 9 / tip if tip > 0 else 99
         whip = (tbb + tha) / tip if tip > 0 else 99
         stats[team] = {
-            "R": r, "HR": hr, "RBI": rbi, "SB": sb, "AVG": avg,
-            "W": w, "K": k, "SV": sv, "ERA": era, "WHIP": whip,
+            "R": r,
+            "HR": hr,
+            "RBI": rbi,
+            "SB": sb,
+            "AVG": avg,
+            "W": w,
+            "K": k,
+            "SV": sv,
+            "ERA": era,
+            "WHIP": whip,
         }
     return stats
 
@@ -350,7 +497,9 @@ def main():
     conn = get_connection(":memory:")
     create_tables(conn)
     load_blended_projections(
-        conn, PROJECTIONS_DIR, ["steamer", "zips"],
+        conn,
+        PROJECTIONS_DIR,
+        ["steamer", "zips"],
         {"steamer": 0.50, "zips": 0.50},
     )
     if POSITIONS_PATH.exists():
@@ -449,8 +598,7 @@ def main():
         act_pts = a.get("total", "?")
         rdiff = abs(med_rank - act_rank) if isinstance(act_rank, (int, float)) else "?"
         print(
-            f"{team:<28} {act_rank:>4} {act_pts:>5} {med_pts:>5.0f} "
-            f"{med_rank:>5.1f} {rdiff:>5.1f}"
+            f"{team:<28} {act_rank:>4} {act_pts:>5} {med_pts:>5.0f} {med_rank:>5.1f} {rdiff:>5.1f}"
         )
 
     # Category comparison for Hart

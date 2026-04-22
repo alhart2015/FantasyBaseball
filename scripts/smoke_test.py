@@ -51,12 +51,19 @@ def section(title: str):
 
 # -- 1. Cache files exist -------------------------------------
 
+
 def check_caches():
     section("Cache files")
     required = [
-        "meta.json", "standings.json", "roster.json",
-        "roster_audit.json", "pending_moves.json", "spoe.json",
-        "leverage.json", "waivers.json", "monte_carlo.json",
+        "meta.json",
+        "standings.json",
+        "roster.json",
+        "roster_audit.json",
+        "pending_moves.json",
+        "spoe.json",
+        "leverage.json",
+        "waivers.json",
+        "monte_carlo.json",
     ]
     for name in required:
         path = CACHE_DIR / name
@@ -68,6 +75,7 @@ def check_caches():
 
 
 # -- 2. Meta / timestamp --------------------------------------
+
 
 def check_meta():
     section("Meta")
@@ -97,6 +105,7 @@ def check_meta():
 
 # -- 3. Roster audit ------------------------------------------
 
+
 def check_audit():
     section("Roster audit")
     audit_path = CACHE_DIR / "roster_audit.json"
@@ -120,9 +129,7 @@ def check_audit():
     check("P slot present", "P" in slots)
 
     # Positions should be enum-normalized (UTIL not Util)
-    all_positions = [
-        p for e in audit for p in e.get("positions", [])
-    ]
+    all_positions = [p for e in audit for p in e.get("positions", [])]
     has_mixed_case_util = any(p == "Util" for p in all_positions)
     check(
         "positions are enum-normalized (UTIL not Util)",
@@ -132,6 +139,7 @@ def check_audit():
 
 
 # -- 4. Pending moves -----------------------------------------
+
 
 def check_pending_moves():
     section("Pending moves")
@@ -163,6 +171,7 @@ def check_pending_moves():
 
 # -- 5. SPoE --------------------------------------------------
 
+
 def check_spoe():
     section("SPoE")
     spoe_path = CACHE_DIR / "spoe.json"
@@ -185,6 +194,7 @@ def check_spoe():
 
 
 # -- 6. Standings ----------------------------------------------
+
 
 def check_standings():
     section("Standings")
@@ -211,6 +221,7 @@ def check_standings():
 
 
 # -- 7. League.from_redis -------------------------------------
+
 
 def check_league_from_redis():
     section("League.from_redis")
@@ -251,6 +262,7 @@ def check_league_from_redis():
 
             # Check Position enum on roster entries
             from fantasy_baseball.models.positions import Position
+
             first = latest.entries[0]
             check(
                 "roster entry positions are Position enum",
@@ -265,6 +277,7 @@ def check_league_from_redis():
 
 
 # -- 8. Scoring round-trip ------------------------------------
+
 
 def check_scoring():
     section("Scoring round-trip")
@@ -311,6 +324,7 @@ def check_scoring():
 
 
 # -- Main ------------------------------------------------------
+
 
 def main():
     quick = "--quick" in sys.argv

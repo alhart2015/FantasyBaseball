@@ -103,9 +103,7 @@ class League:
                     status=e.get("status") or "",
                     yahoo_id=e.get("yahoo_id") or "",
                 )
-                by_team_snap.setdefault(
-                    e["team"], {}
-                ).setdefault(snap_date, []).append(entry)
+                by_team_snap.setdefault(e["team"], {}).setdefault(snap_date, []).append(entry)
 
         snapshots_by_date: dict[str, Standings] = {}
         team_key_by_name: dict[str, str] = {}
@@ -120,12 +118,13 @@ class League:
             snapshots_by_date[snap_date] = standings
             for standings_entry in standings.entries:
                 if standings_entry.team_key:
-                    team_key_by_name[standings_entry.team_name] = (
-                        standings_entry.team_key
-                    )
+                    team_key_by_name[standings_entry.team_name] = standings_entry.team_key
 
         return cls._assemble(
-            season_year, by_team_snap, snapshots_by_date, team_key_by_name,
+            season_year,
+            by_team_snap,
+            snapshots_by_date,
+            team_key_by_name,
         )
 
     @classmethod
@@ -143,9 +142,7 @@ class League:
         with sorted ``Roster`` list) and ``Standings`` list (sorted
         by effective_date).
         """
-        standings_list = [
-            snapshots_by_date[k] for k in sorted(snapshots_by_date)
-        ]
+        standings_list = [snapshots_by_date[k] for k in sorted(snapshots_by_date)]
 
         # Build Team list (union of team names across both sources)
         all_team_names = set(by_team_snap.keys()) | set(team_key_by_name.keys())
@@ -154,16 +151,20 @@ class League:
         for team_name in sorted(all_team_names):
             rosters: list[Roster] = []
             for snap_key, entries in by_team_snap.get(team_name, {}).items():
-                rosters.append(Roster(
-                    effective_date=date.fromisoformat(snap_key),
-                    entries=entries,
-                ))
+                rosters.append(
+                    Roster(
+                        effective_date=date.fromisoformat(snap_key),
+                        entries=entries,
+                    )
+                )
             rosters.sort(key=lambda r: r.effective_date)
-            teams.append(Team(
-                name=team_name,
-                team_key=team_key_by_name.get(team_name, ""),
-                rosters=rosters,
-            ))
+            teams.append(
+                Team(
+                    name=team_name,
+                    team_key=team_key_by_name.get(team_name, ""),
+                    rosters=rosters,
+                )
+            )
 
         return cls(
             season_year=season_year,

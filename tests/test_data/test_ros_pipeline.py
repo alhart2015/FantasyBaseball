@@ -1,4 +1,5 @@
 """Tests for blend_and_cache_ros — the Redis-backed ROS projections pipeline."""
+
 import shutil
 from pathlib import Path
 
@@ -34,6 +35,7 @@ def projections_dir(tmp_path, monkeypatch):
     ``data/cache/`` directory.
     """
     import fantasy_baseball.web.season_data as season_data
+
     fake_cache = tmp_path / "cache"
     monkeypatch.setattr(season_data, "CACHE_DIR", fake_cache)
     # Default args were bound at def-time; overwrite them so
@@ -52,8 +54,11 @@ def test_blend_and_cache_ros_raises_when_ros_dir_missing(projections_dir, monkey
     )
     with pytest.raises(FileNotFoundError, match="ROS snapshot dir missing"):
         blend_and_cache_ros(
-            projections_dir, ["steamer"], {"steamer": 1.0},
-            None, 2026,
+            projections_dir,
+            ["steamer"],
+            {"steamer": 1.0},
+            None,
+            2026,
         )
 
 
@@ -66,13 +71,19 @@ def test_blend_and_cache_ros_raises_when_no_date_dirs(projections_dir, monkeypat
     )
     with pytest.raises(FileNotFoundError, match="No ROS snapshot dirs"):
         blend_and_cache_ros(
-            projections_dir, ["steamer"], {"steamer": 1.0},
-            None, 2026,
+            projections_dir,
+            ["steamer"],
+            {"steamer": 1.0},
+            None,
+            2026,
         )
 
 
 def test_blend_and_cache_ros_blends_latest_snapshot_and_writes_cache(
-    projections_dir, fake_redis, monkeypatch, tmp_path,
+    projections_dir,
+    fake_redis,
+    monkeypatch,
+    tmp_path,
 ):
     """Two date dirs present: the latest one gets blended; result cached."""
     _make_ros_tree(projections_dir, year=2026, date="2026-04-07")
@@ -85,11 +96,15 @@ def test_blend_and_cache_ros_blends_latest_snapshot_and_writes_cache(
     # Point write_cache's Redis singleton at fake_redis so the
     # write-through lands somewhere observable.
     import fantasy_baseball.web.season_data as season_data
+
     monkeypatch.setattr(season_data, "_get_redis", lambda: fake_redis)
 
     hitters_df, pitchers_df = blend_and_cache_ros(
-        projections_dir, ["steamer"], {"steamer": 1.0},
-        None, 2026,
+        projections_dir,
+        ["steamer"],
+        {"steamer": 1.0},
+        None,
+        2026,
     )
 
     # DataFrames: fixture has 4 hitters + 3 pitchers
@@ -100,6 +115,7 @@ def test_blend_and_cache_ros_blends_latest_snapshot_and_writes_cache(
 
     # Local cache file written by write_cache.
     import json
+
     cache_file = tmp_path / "cache" / "ros_projections.json"
     assert cache_file.exists()
     cached = json.loads(cache_file.read_text(encoding="utf-8"))
@@ -115,7 +131,9 @@ def test_blend_and_cache_ros_blends_latest_snapshot_and_writes_cache(
 
 
 def test_blend_and_cache_ros_normalizes_using_redis_totals(
-    projections_dir, fake_redis, monkeypatch,
+    projections_dir,
+    fake_redis,
+    monkeypatch,
 ):
     """game_log_totals from Redis must be added to ROS counting stats.
 
@@ -128,12 +146,14 @@ def test_blend_and_cache_ros_normalizes_using_redis_totals(
 
     # 10 HR already accumulated for Aaron Judge.
     redis_store.set_game_log_totals(
-        fake_redis, "hitters",
+        fake_redis,
+        "hitters",
         {"592450": {"ab": 40, "h": 12, "r": 8, "hr": 10, "rbi": 25, "sb": 0, "pa": 45}},
     )
     # Gerrit Cole (mlbam_id 543037) has 5 wins, 60 Ks banked.
     redis_store.set_game_log_totals(
-        fake_redis, "pitchers",
+        fake_redis,
+        "pitchers",
         {"543037": {"ip": 40.0, "er": 12, "bb": 10, "h_allowed": 30, "k": 60, "w": 5, "sv": 0}},
     )
 
@@ -142,11 +162,15 @@ def test_blend_and_cache_ros_normalizes_using_redis_totals(
         lambda: fake_redis,
     )
     import fantasy_baseball.web.season_data as season_data
+
     monkeypatch.setattr(season_data, "_get_redis", lambda: fake_redis)
 
     hitters_df, pitchers_df = blend_and_cache_ros(
-        projections_dir, ["steamer"], {"steamer": 1.0},
-        None, 2026,
+        projections_dir,
+        ["steamer"],
+        {"steamer": 1.0},
+        None,
+        2026,
     )
 
     judge = hitters_df[hitters_df["name"] == "Aaron Judge"]
@@ -163,7 +187,9 @@ def test_blend_and_cache_ros_normalizes_using_redis_totals(
 
 
 def test_blend_and_cache_ros_still_returns_dfs_when_redis_unconfigured(
-    projections_dir, fake_redis, monkeypatch,
+    projections_dir,
+    fake_redis,
+    monkeypatch,
 ):
     """None client: blending still succeeds; Redis write-through is a no-op.
 
@@ -180,11 +206,15 @@ def test_blend_and_cache_ros_still_returns_dfs_when_redis_unconfigured(
         lambda: None,
     )
     import fantasy_baseball.web.season_data as season_data
+
     monkeypatch.setattr(season_data, "_get_redis", lambda: None)
 
     hitters_df, pitchers_df = blend_and_cache_ros(
-        projections_dir, ["steamer"], {"steamer": 1.0},
-        None, 2026,
+        projections_dir,
+        ["steamer"],
+        {"steamer": 1.0},
+        None,
+        2026,
     )
     assert len(hitters_df) == 4
     assert len(pitchers_df) == 3

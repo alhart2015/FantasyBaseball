@@ -1,9 +1,15 @@
 from fantasy_baseball.draft.search import find_player
 
 PLAYER_NAMES = [
-    "Aaron Judge", "Mookie Betts", "Adley Rutschman",
-    "Marcus Semien", "Gerrit Cole", "Emmanuel Clase",
-    "Corbin Burnes", "Juan Soto", "Julio Rodriguez",
+    "Aaron Judge",
+    "Mookie Betts",
+    "Adley Rutschman",
+    "Marcus Semien",
+    "Gerrit Cole",
+    "Emmanuel Clase",
+    "Corbin Burnes",
+    "Juan Soto",
+    "Julio Rodriguez",
 ]
 
 

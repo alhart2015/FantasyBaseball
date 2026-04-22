@@ -9,6 +9,7 @@ Part 2: Against ADP opponents (20 iterations with ADP jitter).
 Usage:
     python scripts/compare_strategies.py
 """
+
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -35,11 +36,11 @@ STRATEGY_ITERATIONS = 20
 MAX_WORKERS = 16  # use half of 32 cores — each worker is memory-heavy
 
 
-def _run_strategy_batch(strat, scoring, iterations, opp_str, adp_noise,
-                        strategy_noise, seed_base):
+def _run_strategy_batch(strat, scoring, iterations, opp_str, adp_noise, strategy_noise, seed_base):
     """Run one strategy+mode for N iterations. Called in worker process."""
     # Each worker builds its own context (not picklable)
     from simulate_draft import build_board_and_context, run_simulation
+
     ctx = build_board_and_context()
     config = ctx["config"]
 
@@ -73,10 +74,7 @@ def _run_strategy_batch(strat, scoring, iterations, opp_str, adp_noise,
 
 
 def _print_ranking(results):
-    print(
-        f"{'#':>3} {'Strategy':<30} {'Avg':>5} {'AvgRk':>6} "
-        f"{'Win%':>5} {'Floor':>5} {'Ceil':>5}"
-    )
+    print(f"{'#':>3} {'Strategy':<30} {'Avg':>5} {'AvgRk':>6} {'Win%':>5} {'Floor':>5} {'Ceil':>5}")
     print("-" * 65)
     for i, r in enumerate(sorted(results, key=lambda x: -x["avg_pts"]), 1):
         print(
@@ -90,16 +88,17 @@ def main():
     scoring_modes = ["vona", "var"]
     n_combos = len(strategy_names) * len(scoring_modes)
 
-    print(f"Strategies: {len(strategy_names)}, modes: {len(scoring_modes)}, "
-          f"workers: {MAX_WORKERS}")
+    print(f"Strategies: {len(strategy_names)}, modes: {len(scoring_modes)}, workers: {MAX_WORKERS}")
     print("Each worker builds its own board (~10s startup)\n")
 
     # ---------------------------------------------------------------
     # PART 1: Strategic opponents with pick noise
     # ---------------------------------------------------------------
     print("=" * 100)
-    print(f"PART 1: vs STRATEGIC OPPONENTS ({STRATEGY_ITERATIONS} iterations, "
-          f"pick_noise={STRATEGY_NOISE}, {MAX_WORKERS} workers)")
+    print(
+        f"PART 1: vs STRATEGIC OPPONENTS ({STRATEGY_ITERATIONS} iterations, "
+        f"pick_noise={STRATEGY_NOISE}, {MAX_WORKERS} workers)"
+    )
     print("=" * 100)
     print(f"  Opponents: {OPP_STRATEGIES}\n")
 
@@ -110,9 +109,14 @@ def main():
         for strat in strategy_names:
             for scoring in scoring_modes:
                 f = pool.submit(
-                    _run_strategy_batch, strat, scoring,
-                    STRATEGY_ITERATIONS, OPP_STRATEGIES,
-                    0.0, STRATEGY_NOISE, 4000,
+                    _run_strategy_batch,
+                    strat,
+                    scoring,
+                    STRATEGY_ITERATIONS,
+                    OPP_STRATEGIES,
+                    0.0,
+                    STRATEGY_NOISE,
+                    4000,
                 )
                 futures[f] = f"{strat}+{scoring}"
         for f in as_completed(futures):
@@ -138,8 +142,10 @@ def main():
     # ---------------------------------------------------------------
     print()
     print("=" * 100)
-    print(f"PART 2: vs ADP OPPONENTS ({ADP_ITERATIONS} iterations, "
-          f"noise={ADP_NOISE}, {MAX_WORKERS} workers)")
+    print(
+        f"PART 2: vs ADP OPPONENTS ({ADP_ITERATIONS} iterations, "
+        f"noise={ADP_NOISE}, {MAX_WORKERS} workers)"
+    )
     print("=" * 100)
     print()
 
@@ -150,9 +156,14 @@ def main():
         for strat in strategy_names:
             for scoring in scoring_modes:
                 f = pool.submit(
-                    _run_strategy_batch, strat, scoring,
-                    ADP_ITERATIONS, "",
-                    ADP_NOISE, 0.0, 3000,
+                    _run_strategy_batch,
+                    strat,
+                    scoring,
+                    ADP_ITERATIONS,
+                    "",
+                    ADP_NOISE,
+                    0.0,
+                    3000,
                 )
                 futures[f] = f"{strat}+{scoring}"
         for f in as_completed(futures):

@@ -16,8 +16,9 @@ from fantasy_baseball.web.refresh_steps import (
 _UNSET = object()
 
 
-def _player(name, player_type=PlayerType.HITTER, positions=_UNSET,
-            selected_position=_UNSET, ros=None):
+def _player(
+    name, player_type=PlayerType.HITTER, positions=_UNSET, selected_position=_UNSET, ros=None
+):
     """Build a Player fixture.
 
     Accepts either ``HitterStats`` / ``PitcherStats`` for ``ros`` (the
@@ -49,10 +50,15 @@ class TestMergeMatchedAndRawRoster:
         soto_pre = _player("Soto", ros=HitterStats(r=100, hr=35))
         result = merge_matched_and_raw_roster(
             matched=[soto],
-            roster_raw=[{
-                "name": "Soto", "positions": ["OF"],
-                "selected_position": "OF", "player_id": "1", "status": "",
-            }],
+            roster_raw=[
+                {
+                    "name": "Soto",
+                    "positions": ["OF"],
+                    "selected_position": "OF",
+                    "player_id": "1",
+                    "status": "",
+                }
+            ],
             preseason_lookup={"soto": soto_pre},
         )
         assert len(result) == 1
@@ -62,10 +68,15 @@ class TestMergeMatchedAndRawRoster:
         soto = _player("Soto", ros=HitterStats(r=80))
         result = merge_matched_and_raw_roster(
             matched=[soto],
-            roster_raw=[{
-                "name": "Soto", "positions": ["OF"],
-                "selected_position": "OF", "player_id": "1", "status": "",
-            }],
+            roster_raw=[
+                {
+                    "name": "Soto",
+                    "positions": ["OF"],
+                    "selected_position": "OF",
+                    "player_id": "1",
+                    "status": "",
+                }
+            ],
             preseason_lookup={},  # no preseason match
         )
         assert len(result) == 1
@@ -77,10 +88,15 @@ class TestMergeMatchedAndRawRoster:
         # player_type inferred from positions (OF → HITTER).
         result = merge_matched_and_raw_roster(
             matched=[],
-            roster_raw=[{
-                "name": "Newbie", "positions": ["OF"],
-                "selected_position": "OF", "player_id": "99", "status": "",
-            }],
+            roster_raw=[
+                {
+                    "name": "Newbie",
+                    "positions": ["OF"],
+                    "selected_position": "OF",
+                    "player_id": "99",
+                    "status": "",
+                }
+            ],
             preseason_lookup={},
         )
         assert len(result) == 1
@@ -91,10 +107,15 @@ class TestMergeMatchedAndRawRoster:
         # SP positions → PITCHER
         result = merge_matched_and_raw_roster(
             matched=[],
-            roster_raw=[{
-                "name": "RookiePitcher", "positions": ["SP"],
-                "selected_position": "P", "player_id": "100", "status": "",
-            }],
+            roster_raw=[
+                {
+                    "name": "RookiePitcher",
+                    "positions": ["SP"],
+                    "selected_position": "P",
+                    "player_id": "100",
+                    "status": "",
+                }
+            ],
             preseason_lookup={},
         )
         assert len(result) == 1
@@ -107,10 +128,20 @@ class TestMergeMatchedAndRawRoster:
         result = merge_matched_and_raw_roster(
             matched=[soto],
             roster_raw=[
-                {"name": "Soto", "positions": ["OF"],
-                 "selected_position": "OF", "player_id": "1", "status": ""},
-                {"name": "Newbie", "positions": ["OF"],
-                 "selected_position": "BN", "player_id": "99", "status": ""},
+                {
+                    "name": "Soto",
+                    "positions": ["OF"],
+                    "selected_position": "OF",
+                    "player_id": "1",
+                    "status": "",
+                },
+                {
+                    "name": "Newbie",
+                    "positions": ["OF"],
+                    "selected_position": "BN",
+                    "player_id": "99",
+                    "status": "",
+                },
             ],
             preseason_lookup={},
         )
