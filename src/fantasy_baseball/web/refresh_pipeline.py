@@ -89,7 +89,7 @@ def _write_spoe_snapshot(spoe_result: dict) -> None:
 
 
 def build_standings_breakdown_payload(
-    team_rosters: dict[str, list],
+    team_rosters: dict[str, list["Player"]],
     effective_date: date,
 ) -> dict:
     """Build the STANDINGS_BREAKDOWN cache payload for ``team_rosters``.
