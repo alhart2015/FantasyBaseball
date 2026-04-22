@@ -22,6 +22,7 @@ from typing import Any
 import pandas as pd
 
 from fantasy_baseball.models.league import League
+from fantasy_baseball.models.standings import Standings
 from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
@@ -126,7 +127,7 @@ def _empty_components() -> dict[str, float]:
 
 def compute_current_spoe(
     league: League,
-    standings: list[dict[str, Any]],
+    standings: Standings,
     preseason_lookup: dict[tuple[str, str], dict[str, Any]],
     season_start: str,
     season_end: str,
@@ -145,8 +146,7 @@ def compute_current_spoe(
         league: Loaded League object. SPoE iterates league.teams and
             calls Team.ownership_periods() on each to get the
             (entry, period_start, period_end) tuples it needs.
-        standings: list of team dicts from cache:standings — each dict
-            has ``name`` and ``stats`` keys.
+        standings: live Standings dataclass (typed view of cache:standings).
         preseason_lookup: output of build_preseason_lookup.
         season_start: "YYYY-MM-DD" season start date.
         season_end: "YYYY-MM-DD" season end date.
@@ -200,14 +200,14 @@ def compute_current_spoe(
                 comps[c] += preseason.get(c, 0.0) * fraction
 
     actual_stats: dict[str, dict[str, float]] = {}
-    for t in standings:
-        actual_stats[t["name"]] = dict(t["stats"])
+    for standings_entry in standings.entries:
+        actual_stats[standings_entry.team_name] = standings_entry.stats.to_dict()
         # Ensure every team that appears in standings shows up in the
         # results, even if its roster walk contributed zero (empty roster
         # or all players missing from preseason lookup). Without this,
         # score_roto would rank a reduced team set and the results would
         # omit teams that deserve a row.
-        _ = team_components[t["name"]]
+        _ = team_components[standings_entry.team_name]
 
     expected_stats = {team: _components_to_stats(comps) for team, comps in team_components.items()}
 

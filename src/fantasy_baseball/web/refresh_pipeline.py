@@ -940,7 +940,7 @@ class RefreshRun:
         )
         spoe_result = compute_current_spoe(
             self.league_model,
-            self.standings.to_json()["teams"],
+            self.standings,
             preseason_lookup,
             self.config.season_start,
             self.config.season_end,

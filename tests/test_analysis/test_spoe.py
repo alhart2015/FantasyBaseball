@@ -13,12 +13,29 @@ from fantasy_baseball.analysis.spoe import (
 )
 from fantasy_baseball.data import redis_store
 from fantasy_baseball.models.league import League
+from fantasy_baseball.models.standings import CategoryStats, Standings, StandingsEntry
 
 # --- Fixtures --------------------------------------------------------------
 
 SEASON_START = "2026-03-27"
 SEASON_END = "2026-09-28"
 TOTAL_DAYS = (date.fromisoformat(SEASON_END) - date.fromisoformat(SEASON_START)).days
+
+
+def _standings(rows: list[dict]) -> Standings:
+    """Wrap a list-of-dicts standings fixture as a typed Standings."""
+    return Standings(
+        effective_date=date.fromisoformat("2026-04-01"),
+        entries=[
+            StandingsEntry(
+                team_name=r["name"],
+                team_key=r.get("team_key", ""),
+                rank=int(r.get("rank", 0)),
+                stats=CategoryStats.from_dict(r["stats"]),
+            )
+            for r in rows
+        ],
+    )
 
 
 @pytest.fixture
@@ -153,7 +170,7 @@ class TestComputeCurrentSpoe:
         # today BEFORE season_start → days_elapsed = 0 but season_fraction=0
         result = compute_current_spoe(
             _league_from(conn),
-            standings=[],
+            standings=_standings([]),
             preseason_lookup=lookup,
             season_start=SEASON_START,
             season_end=SEASON_END,
@@ -215,7 +232,7 @@ class TestComputeCurrentSpoe:
         # today = 2026-04-07 → snapshot covers 7 days (full week)
         result = compute_current_spoe(
             _league_from(conn),
-            standings=standings,
+            standings=_standings(standings),
             preseason_lookup=lookup,
             season_start=SEASON_START,
             season_end=SEASON_END,
@@ -295,7 +312,7 @@ class TestComputeCurrentSpoe:
         # today = 2026-04-14 → first snapshot covers 7 days, second covers 7 days
         result = compute_current_spoe(
             _league_from(conn),
-            standings=standings,
+            standings=_standings(standings),
             preseason_lookup=lookup,
             season_start=SEASON_START,
             season_end=SEASON_END,
@@ -381,7 +398,7 @@ class TestComputeCurrentSpoe:
 
         result = compute_current_spoe(
             _league_from(conn),
-            standings=standings,
+            standings=_standings(standings),
             preseason_lookup=lookup,
             season_start=SEASON_START,
             season_end=SEASON_END,
@@ -446,7 +463,7 @@ class TestComputeCurrentSpoe:
         # today = 2026-04-10 → 3 days since snapshot, not 7
         result = compute_current_spoe(
             _league_from(conn),
-            standings=standings,
+            standings=_standings(standings),
             preseason_lookup=lookup,
             season_start=SEASON_START,
             season_end=SEASON_END,
@@ -506,7 +523,7 @@ class TestComputeCurrentSpoe:
 
         result = compute_current_spoe(
             _league_from(conn),
-            standings=standings,
+            standings=_standings(standings),
             preseason_lookup=lookup,
             season_start=SEASON_START,
             season_end=SEASON_END,
@@ -585,7 +602,7 @@ class TestComputeCurrentSpoe:
 
         result = compute_current_spoe(
             _league_from(conn),
-            standings=standings,
+            standings=_standings(standings),
             preseason_lookup=lookup,
             season_start=SEASON_START,
             season_end=SEASON_END,
@@ -675,7 +692,7 @@ class TestComputeCurrentSpoe:
 
         result = compute_current_spoe(
             _league_from(conn),
-            standings=standings,
+            standings=_standings(standings),
             preseason_lookup=lookup,
             season_start=SEASON_START,
             season_end=SEASON_END,
@@ -736,7 +753,7 @@ class TestComputeCurrentSpoe:
         ]
         result = compute_current_spoe(
             _league_from(conn),
-            standings=standings,
+            standings=_standings(standings),
             preseason_lookup=lookup,
             season_start=SEASON_START,
             season_end=SEASON_END,
