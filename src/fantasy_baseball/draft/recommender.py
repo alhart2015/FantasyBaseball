@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from fantasy_baseball.draft.roster_state import RosterState
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.sgp.replacement import calculate_replacement_levels
@@ -192,16 +193,17 @@ def get_recommendations(
 
     if filled_positions is None:
         filled_positions = {}
+    roster_state = RosterState.from_dicts(filled_positions, roster_slots)
 
     # Filter out players who have no open roster slot (including BN).
     # E.g. if all OF, UTIL, and BN spots are full, don't suggest more OFs.
-    available = _filter_rosterable(available, filled_positions, roster_slots)
+    available = _filter_rosterable(available, roster_state)
     available = available.sort_values(sort_col, ascending=False)
 
     # Use a wider window for scarcity checks, narrower for rec candidates
     scarcity_pool = available.head(50)
     candidates = available.head(n * 3)
-    unfilled = _get_unfilled_positions(filled_positions, roster_slots)
+    unfilled = roster_state.unfilled_starter_slots()
 
     # Ensure the best available player at each unfilled position is included
     # so the user always sees their positional options, not just raw VAR.
@@ -265,19 +267,10 @@ def get_recommendations(
 
 def _filter_rosterable(
     available: pd.DataFrame,
-    filled: dict[str, int],
-    roster_slots: dict[str, int],
+    roster_state: RosterState,
 ) -> pd.DataFrame:
     """Remove players who cannot fit in any open roster slot (including BN)."""
-    # Build open-slot counts (exclude IL — you don't draft to IL)
-    open_slots: dict[str, int] = {}
-    for pos, total in roster_slots.items():
-        if pos == "IL":
-            continue
-        current = filled.get(pos, 0)
-        if current < total:
-            open_slots[pos] = total - current
-
+    open_slots = roster_state.open_slots()
     if not open_slots:
         return available.iloc[0:0]  # no room at all
 
@@ -286,20 +279,6 @@ def _filter_rosterable(
 
     mask = available["positions"].apply(has_open_slot)
     return available[mask]
-
-
-def _get_unfilled_positions(
-    filled: dict[str, int],
-    roster_slots: dict[str, int],
-) -> set[str]:
-    unfilled = set()
-    for pos, slots in roster_slots.items():
-        if pos in ("BN", "IL"):
-            continue
-        current = filled.get(pos, 0)
-        if current < slots:
-            unfilled.add(pos)
-    return unfilled
 
 
 def _collect_roster_entries(
