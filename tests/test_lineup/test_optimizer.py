@@ -1,3 +1,5 @@
+from datetime import date
+
 from fantasy_baseball.lineup.optimizer import (
     HitterAssignment,
     PitcherStarter,
@@ -6,6 +8,11 @@ from fantasy_baseball.lineup.optimizer import (
 )
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import Position
+from fantasy_baseball.models.standings import (
+    CategoryStats,
+    ProjectedStandings,
+    ProjectedStandingsEntry,
+)
 
 CATEGORIES = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
 
@@ -45,10 +52,17 @@ def _zero_stats():
     return {c: 0.0 for c in CATEGORIES}
 
 
-def _standing(name: str, **overrides) -> dict:
+def _standing(name: str, **overrides) -> ProjectedStandingsEntry:
     stats = _zero_stats()
     stats.update(overrides)
-    return {"name": name, "team_key": "", "rank": 0, "stats": stats}
+    return ProjectedStandingsEntry(
+        team_name=name,
+        stats=CategoryStats.from_dict(stats),
+    )
+
+
+def _standings(*entries: ProjectedStandingsEntry) -> ProjectedStandings:
+    return ProjectedStandings(effective_date=date.min, entries=list(entries))
 
 
 SMALL_ROSTER_SLOTS = {
@@ -79,10 +93,10 @@ class TestBasic:
             _hitter("OF4", ["OF"]),
             _hitter("UTIL1", ["1B", "OF"]),
         ]
-        standings = [
+        standings = _standings(
             _standing("Us", R=0, HR=0, RBI=0, SB=0, AVG=0),
             _standing("Rival", R=1, HR=1, RBI=1, SB=1, AVG=0),
-        ]
+        )
         lineup = optimize_hitter_lineup(
             hitters=hitters,
             full_roster=hitters,
@@ -115,11 +129,11 @@ class TestERotoMaximization:
         slots = {"OF": 1, "BN": 2, "P": 9, "IL": 0}
         full = [a, b, c]
 
-        standings = [
+        standings = _standings(
             _standing("Us", R=0, HR=100, RBI=0, SB=0, AVG=0),  # overwritten by loop
             _standing("Rival", R=0, HR=30, RBI=0, SB=20, AVG=0),
             _standing("Third", R=0, HR=20, RBI=0, SB=15, AVG=0),
-        ]
+        )
         lineup = optimize_hitter_lineup(
             hitters=full,
             full_roster=full,
@@ -137,10 +151,10 @@ class TestERotoMaximization:
             _hitter("C", ["OF"], r=60, hr=15),
         ]
         slots = {"OF": 2, "BN": 1, "P": 9, "IL": 0}
-        standings = [
+        standings = _standings(
             _standing("Us", R=0, HR=0),
             _standing("Rival", R=1, HR=1),
-        ]
+        )
         lineup = optimize_hitter_lineup(
             hitters=hitters,
             full_roster=hitters,
@@ -160,7 +174,7 @@ class TestERotoMaximization:
         o1 = _hitter("O1", ["OF"], r=60, hr=15, rbi=50)
         hitters = [c1, c2, o1]
         slots = {"C": 1, "OF": 1, "BN": 1, "P": 9, "IL": 0}
-        standings = [_standing("Us"), _standing("Rival", R=1, HR=1, RBI=1)]
+        standings = _standings(_standing("Us"), _standing("Rival", R=1, HR=1, RBI=1))
         lineup = optimize_hitter_lineup(
             hitters=hitters,
             full_roster=hitters,
@@ -182,7 +196,7 @@ class TestERotoMaximization:
             _hitter("B", ["OF"], r=60, hr=15),
         ]
         slots = {"OF": 1, "BN": 1, "P": 9, "IL": 0}
-        standings = [_standing("Us"), _standing("Rival", R=1, HR=1)]
+        standings = _standings(_standing("Us"), _standing("Rival", R=1, HR=1))
         lineup = optimize_hitter_lineup(
             hitters=active,
             full_roster=[*active, il],
@@ -202,11 +216,11 @@ class TestERotoMaximization:
         b = _hitter("B", ["OF"], r=70, hr=20, rbi=70, sb=25, h=120, ab=450)
         c = _hitter("C", ["OF"], r=60, hr=18, rbi=60, sb=8, h=120, ab=450)
         slots = {"OF": 1, "BN": 2, "P": 9, "IL": 0}
-        standings = [
+        standings = _standings(
             _standing("Us", R=0, HR=100, RBI=0, SB=0, AVG=0),
             _standing("Rival", R=0, HR=30, RBI=0, SB=20, AVG=0),
             _standing("Third", R=0, HR=20, RBI=0, SB=15, AVG=0),
-        ]
+        )
         lineup = optimize_hitter_lineup(
             hitters=[a, b, c],
             full_roster=[a, b, c],
@@ -226,10 +240,10 @@ class TestERotoMaximization:
         (best_total - team_with_slot_empty), not the full best_total."""
         only = _hitter("Only", ["OF"], r=80, hr=30, rbi=90, sb=15, h=120, ab=450)
         slots = {"OF": 1, "BN": 0, "P": 9, "IL": 0}
-        standings = [
+        standings = _standings(
             _standing("Us"),
             _standing("Rival", R=0, HR=0, RBI=0, SB=0, AVG=0),
-        ]
+        )
         lineup = optimize_hitter_lineup(
             hitters=[only],
             full_roster=[only],
@@ -251,7 +265,7 @@ class TestPitcherOptimizer:
             _pitcher("P3", ["SP"], ip=160, w=10, k=150, era=3.80, whip=1.22),
             _pitcher("P4", ["SP"], ip=150, w=8, k=130, era=4.20, whip=1.30),
         ]
-        standings = [_standing("Us"), _standing("Rival", W=1, K=1, ERA=0.1, WHIP=0.1)]
+        standings = _standings(_standing("Us"), _standing("Rival", W=1, K=1, ERA=0.1, WHIP=0.1))
         starters, bench = optimize_pitcher_lineup(
             pitchers=pitchers,
             full_roster=pitchers,
@@ -272,10 +286,10 @@ class TestPitcherOptimizer:
         c = _pitcher("C", ["RP"], ip=65, w=3, k=80, sv=35, era=2.50, whip=1.00)
         pitchers = [a, c]
         slots_cfg = 1
-        standings = [
+        standings = _standings(
             _standing("Us", W=0, K=0, SV=0, ERA=0, WHIP=0),
             _standing("Rival", W=0, K=0, SV=20, ERA=0, WHIP=0),
-        ]
+        )
         starters, _bench = optimize_pitcher_lineup(
             pitchers=pitchers,
             full_roster=pitchers,
@@ -290,7 +304,7 @@ class TestPitcherOptimizer:
         pitchers = [
             _pitcher(f"P{i}", ["SP"], ip=180 - i * 10, w=15 - i, k=200 - i * 20) for i in range(5)
         ]
-        standings = [_standing("Us"), _standing("Rival", W=1, K=1)]
+        standings = _standings(_standing("Us"), _standing("Rival", W=1, K=1))
         starters, _ = optimize_pitcher_lineup(
             pitchers=pitchers,
             full_roster=pitchers,
@@ -309,10 +323,10 @@ class TestPitcherOptimizer:
         a = _pitcher("A", ["SP"], ip=200, w=15, k=230, sv=0, era=3.00, whip=1.05)
         c = _pitcher("C", ["RP"], ip=65, w=3, k=80, sv=35, era=2.50, whip=1.00)
         pitchers = [a, c]
-        standings = [
+        standings = _standings(
             _standing("Us"),
             _standing("Rival", W=0, K=0, SV=20, ERA=0, WHIP=0),
-        ]
+        )
         starters, _ = optimize_pitcher_lineup(
             pitchers=pitchers,
             full_roster=pitchers,

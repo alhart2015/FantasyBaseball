@@ -698,15 +698,10 @@ class RefreshRun:
             else:
                 hitter_players.append(player)
 
-        # The optimizer still consumes the legacy list[dict] shape.
-        # Convert at the boundary via ``to_json()["teams"]`` so the
-        # typed object stays the source of truth inside this class.
-        projected_rows = self.projected_standings.to_json()["teams"]
-
         self.optimal_hitters = optimize_hitter_lineup(
             hitters=hitter_players,
             full_roster=self.roster_players,
-            projected_standings=projected_rows,
+            projected_standings=self.projected_standings,
             team_name=self.config.team_name,
             roster_slots=self.config.roster_slots,
             team_sds=self.team_sds,
@@ -714,7 +709,7 @@ class RefreshRun:
         self.optimal_pitchers_starters, self.optimal_pitchers_bench = optimize_pitcher_lineup(
             pitchers=pitcher_players,
             full_roster=self.roster_players,
-            projected_standings=projected_rows,
+            projected_standings=self.projected_standings,
             team_name=self.config.team_name,
             slots=self.config.roster_slots.get("P", 9),
             team_sds=self.team_sds,
@@ -809,7 +804,7 @@ class RefreshRun:
             self.roster_players,
             self.fa_players,
             self.config.roster_slots,
-            projected_standings=self.projected_standings.to_json()["teams"],
+            projected_standings=self.projected_standings,
             team_name=self.config.team_name,
             team_sds=self.team_sds,
             optimal_hitters=self.optimal_hitters,
@@ -945,7 +940,7 @@ class RefreshRun:
         )
         spoe_result = compute_current_spoe(
             self.league_model,
-            self.standings.to_json()["teams"],
+            self.standings,
             preseason_lookup,
             self.config.season_start,
             self.config.season_end,
@@ -1010,7 +1005,6 @@ class RefreshRun:
             )
             season_start = date.fromisoformat(self.config.season_start)
             season_end = date.fromisoformat(self.config.season_end)
-            projected_rows = self.projected_standings.to_json()["teams"]
 
             for txn in new_txns:
                 entry = by_id[txn["transaction_id"]]
@@ -1019,7 +1013,7 @@ class RefreshRun:
                 scores = score_transaction(
                     self.league_model,
                     entry,
-                    projected_rows,
+                    self.projected_standings,
                     hitters_proj,
                     pitchers_proj,
                     season_start,

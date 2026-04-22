@@ -13,6 +13,7 @@ from typing import Any
 
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.models.positions import BENCH_SLOTS, IL_SLOTS
+from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.trades.evaluate import (
     aggregate_player_stats,
@@ -89,7 +90,7 @@ def evaluate_multi_trade(
     hart_roster: list[Player],
     opp_rosters: dict[str, list[Player]],
     waiver_pool: dict[str, Player],
-    projected_standings: list[dict[str, Any]],
+    projected_standings: ProjectedStandings,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
     roster_slots: dict[str, int],
 ) -> MultiTradeResult:
@@ -182,7 +183,7 @@ def evaluate_multi_trade(
     opp_gains = aggregate_player_stats(sent)
 
     # --- 4. Apply deltas to baseline and score -------------------------------
-    if not any(t["name"] == hart_name for t in projected_standings):
+    if not any(e.team_name == hart_name for e in projected_standings.entries):
         return MultiTradeResult(
             legal=False,
             reason=f"Team {hart_name} missing from projected_standings",
@@ -190,27 +191,15 @@ def evaluate_multi_trade(
             categories={},
         )
 
-    post = []
-    for t in projected_standings:
-        if t["name"] == hart_name:
-            post.append(
-                {"name": t["name"], "stats": apply_swap_delta(t["stats"], my_loses, my_gains)}
-            )
-        elif t["name"] == proposal.opponent:
-            post.append(
-                {"name": t["name"], "stats": apply_swap_delta(t["stats"], opp_loses, opp_gains)}
-            )
-        else:
-            post.append(t)
+    before_stats = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
+    after_stats = dict(before_stats)
+    after_stats[hart_name] = apply_swap_delta(before_stats[hart_name], my_loses, my_gains)
+    after_stats[proposal.opponent] = apply_swap_delta(
+        before_stats[proposal.opponent], opp_loses, opp_gains
+    )
 
-    before_roto = score_roto_dict(
-        {t["name"]: t["stats"] for t in projected_standings},
-        team_sds=team_sds,
-    )
-    after_roto = score_roto_dict(
-        {t["name"]: t["stats"] for t in post},
-        team_sds=team_sds,
-    )
+    before_roto = score_roto_dict(before_stats, team_sds=team_sds)
+    after_roto = score_roto_dict(after_stats, team_sds=team_sds)
 
     categories: dict[str, CategoryDelta] = {}
     total_delta = 0.0

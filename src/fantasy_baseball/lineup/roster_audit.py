@@ -16,6 +16,7 @@ from fantasy_baseball.lineup.optimizer import (
 )
 from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS
+from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import IL_STATUSES, Category
@@ -221,7 +222,7 @@ def audit_roster(
     free_agents: list[Player],
     roster_slots: dict[str, int],
     *,
-    projected_standings: list[dict[str, Any]],
+    projected_standings: ProjectedStandings,
     team_name: str,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
     optimal_hitters: list[HitterAssignment] | None = None,

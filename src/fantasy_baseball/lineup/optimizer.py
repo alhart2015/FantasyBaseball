@@ -9,6 +9,7 @@ from scipy.optimize import linear_sum_assignment
 
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.models.positions import HITTER_ELIGIBLE, PITCHER_ELIGIBLE, Position
+from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.scoring import project_team_stats, score_roto_dict
 from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS, Category
 from fantasy_baseball.utils.positions import can_fill_slot
@@ -85,7 +86,7 @@ class _TeamContext:
     """Scoring-side inputs passed through every ERoto evaluation."""
 
     full_roster: list[Player]
-    projected_standings: list[dict[str, Any]]
+    projected_standings: ProjectedStandings
     team_name: str
     team_sds: Mapping[str, Mapping[Category, float]] | None = None
 
@@ -114,7 +115,7 @@ def apply_lineup_to_roster(
 
 def team_roto_total(hypothetical: list[Player], ctx: _TeamContext) -> float:
     my_stats = project_team_stats(hypothetical, displacement=True).to_dict()
-    all_stats = {t["name"]: dict(t["stats"]) for t in ctx.projected_standings}
+    all_stats = {e.team_name: e.stats.to_dict() for e in ctx.projected_standings.entries}
     all_stats[ctx.team_name] = my_stats
     return score_roto_dict(all_stats, team_sds=ctx.team_sds)[ctx.team_name]["total"]
 
@@ -156,7 +157,7 @@ def _score_pitcher_subset(
 def optimize_hitter_lineup(
     hitters: list[Player],
     full_roster: list[Player],
-    projected_standings: list[dict[str, Any]],
+    projected_standings: ProjectedStandings,
     team_name: str,
     roster_slots: dict[str, int] | None = None,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
@@ -244,7 +245,7 @@ def optimize_hitter_lineup(
 def optimize_pitcher_lineup(
     pitchers: list[Player],
     full_roster: list[Player],
-    projected_standings: list[dict[str, Any]],
+    projected_standings: ProjectedStandings,
     team_name: str,
     slots: int = 9,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
@@ -294,7 +295,7 @@ def combined_team_roto(
     hitter_lineup: list[HitterAssignment],
     pitcher_starters: list[PitcherStarter],
     pitcher_bench: list[Player],
-    projected_standings: list[dict[str, Any]],
+    projected_standings: ProjectedStandings,
     team_name: str,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
 ) -> float:

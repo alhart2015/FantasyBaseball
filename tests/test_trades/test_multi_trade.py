@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player
+from fantasy_baseball.models.standings import (
+    CategoryStats,
+    ProjectedStandings,
+    ProjectedStandingsEntry,
+)
 from fantasy_baseball.trades.evaluate import player_rest_of_season_stats
 from fantasy_baseball.trades.multi_trade import (
     CategoryDelta,
@@ -141,11 +148,17 @@ def _team_stats_from_players(players: list[Player]) -> dict[str, float]:
     return stats
 
 
-def _standings_of(teams: dict[str, list[Player]]) -> list[dict]:
-    return [
-        {"name": name, "stats": _team_stats_from_players(players)}
-        for name, players in teams.items()
-    ]
+def _standings_of(teams: dict[str, list[Player]]) -> ProjectedStandings:
+    return ProjectedStandings(
+        effective_date=date.fromisoformat("2026-04-01"),
+        entries=[
+            ProjectedStandingsEntry(
+                team_name=name,
+                stats=CategoryStats.from_dict(_team_stats_from_players(players)),
+            )
+            for name, players in teams.items()
+        ],
+    )
 
 
 def test_evaluate_2_for_2_legal_returns_delta():

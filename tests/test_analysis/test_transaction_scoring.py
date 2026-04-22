@@ -15,6 +15,7 @@ from fantasy_baseball.analysis.transactions import score_transaction
 from fantasy_baseball.models.league import League
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.roster import Roster, RosterEntry
+from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.models.team import Team
 from fantasy_baseball.utils.name_utils import normalize_name
 
@@ -67,15 +68,20 @@ def _df(rows):
 
 
 def _projected_standings(team_stats):
-    """Build a projected_standings list from ``{team_name: stats_dict}``.
+    """Build a ``ProjectedStandings`` from ``{team_name: stats_dict}``.
 
     Two-team league is enough to give score_roto a non-degenerate
     ranking.
     """
-    return [
-        {"name": name, "team_key": "", "rank": 0, "stats": dict(stats)}
-        for name, stats in team_stats.items()
-    ]
+    return ProjectedStandings.from_json(
+        {
+            "effective_date": SEASON_START.isoformat(),
+            "teams": [
+                {"name": name, "team_key": "", "rank": 0, "stats": dict(stats)}
+                for name, stats in team_stats.items()
+            ],
+        }
+    )
 
 
 def _baseline_stats():
