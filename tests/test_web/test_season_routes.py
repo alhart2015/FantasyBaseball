@@ -286,6 +286,71 @@ def test_compare_missing_params(client):
     assert resp2.status_code == 400
 
 
+def test_standings_page_includes_breakdown_json_when_cache_present(client, tmp_path):
+    """When STANDINGS_BREAKDOWN cache exists, its JSON is embedded in the page."""
+    from fantasy_baseball.web import season_data
+
+    old_cache_dir = season_data.CACHE_DIR
+    season_data.CACHE_DIR = tmp_path
+    try:
+        payload = {
+            "teams": {
+                "Team A": {
+                    "team_name": "Team A",
+                    "hitters": [
+                        {
+                            "name": "H1",
+                            "player_type": "hitter",
+                            "status": "active",
+                            "scale_factor": 1.0,
+                            "raw_stats": {
+                                "hr": 20,
+                                "r": 60,
+                                "rbi": 70,
+                                "sb": 5,
+                                "h": 120,
+                                "ab": 450,
+                            },
+                        }
+                    ],
+                    "pitchers": [],
+                }
+            }
+        }
+        season_data.write_cache(CacheKey.STANDINGS_BREAKDOWN, payload, tmp_path)
+        season_data.write_cache(CacheKey.STANDINGS, _mock_standings(), tmp_path)
+
+        with (
+            patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_rc_dict,
+            patch("fantasy_baseball.web.season_routes.read_cache_list") as mock_rc_list,
+            patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm,
+            patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
+        ):
+            mock_rc_dict.side_effect = lambda k: season_data.read_cache_dict(k, tmp_path)
+            mock_rc_list.side_effect = lambda k: season_data.read_cache_list(k, tmp_path)
+            mock_rm.return_value = season_data.read_meta(tmp_path)
+            mock_cfg.return_value.team_name = "Hart of the Order"
+
+            resp = client.get("/standings")
+            assert resp.status_code == 200
+            body = resp.get_data(as_text=True)
+            assert 'id="breakdown-data"' in body
+            assert '"Team A"' in body
+    finally:
+        season_data.CACHE_DIR = old_cache_dir
+
+
+def test_standings_page_omits_breakdown_json_when_cache_missing(client):
+    """When STANDINGS_BREAKDOWN cache is absent, no embedded JSON tag."""
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=None),
+        patch("fantasy_baseball.web.season_routes.read_cache_list", return_value=None),
+    ):
+        resp = client.get("/standings")
+    body = resp.get_data(as_text=True)
+    assert 'id="breakdown-data"' not in body
+
+
 def test_standings_passes_baseline_meta_to_template(client, tmp_path):
     """When monte_carlo.baseline_meta is present in the cache, it is
     rendered into the page as the freeze-date caption."""

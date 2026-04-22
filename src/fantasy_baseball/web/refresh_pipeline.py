@@ -88,6 +88,27 @@ def _write_spoe_snapshot(spoe_result: dict) -> None:
         log.warning(f"Failed to write spoe_snapshot:{snapshot_date}: {exc}")
 
 
+def build_standings_breakdown_payload(
+    team_rosters: dict[str, list["Player"]],
+    effective_date: date,
+) -> dict:
+    """Build the STANDINGS_BREAKDOWN cache payload for ``team_rosters``.
+
+    One :class:`RosterBreakdown` per team, serialized to a JSON-safe
+    dict and keyed by team name. ``effective_date`` is included to
+    match the :class:`ProjectedStandings` payload shape.
+    """
+    from fantasy_baseball.scoring import compute_roster_breakdown
+
+    teams_payload: dict[str, dict] = {}
+    for team_name, roster in team_rosters.items():
+        teams_payload[team_name] = compute_roster_breakdown(team_name, roster).to_dict()
+    return {
+        "effective_date": effective_date.isoformat(),
+        "teams": teams_payload,
+    }
+
+
 class RefreshRun:
     """Encapsulates one execution of the season dashboard refresh.
 
@@ -550,6 +571,11 @@ class RefreshRun:
                 "preseason_standings": self.preseason_projected_standings.to_json(),
                 "preseason_team_sds": team_sds_to_json(self.preseason_team_sds),
             },
+            self.cache_dir,
+        )
+        write_cache(
+            CacheKey.STANDINGS_BREAKDOWN,
+            build_standings_breakdown_payload(all_team_rosters, self.effective_date),
             self.cache_dir,
         )
         self._progress(f"Projected standings for {len(self.projected_standings.entries)} teams")

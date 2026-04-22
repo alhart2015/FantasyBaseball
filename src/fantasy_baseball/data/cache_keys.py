@@ -30,6 +30,7 @@ class CacheKey(StrEnum):
     TRANSACTIONS = "transactions"
     ROS_PROJECTIONS = "ros_projections"
     POSITIONS = "positions"
+    STANDINGS_BREAKDOWN = "standings_breakdown"
 
 
 def redis_key(key: CacheKey) -> str:
