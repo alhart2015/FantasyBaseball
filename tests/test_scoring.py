@@ -1577,3 +1577,194 @@ class TestComputeRosterBreakdown:
         breakdown = compute_roster_breakdown("Team A", [h, p])
         assert [c.name for c in breakdown.hitters] == ["H"]
         assert [c.name for c in breakdown.pitchers] == ["P"]
+
+    def test_pitcher_counting_stat_sum_invariant(self):
+        """Sum of scaled pitcher contributions == project_team_stats output."""
+        from fantasy_baseball.scoring import (
+            compute_roster_breakdown,
+            project_team_stats,
+        )
+
+        p1 = _pitcher(
+            "P1",
+            w=15,
+            k=200,
+            sv=0,
+            ip=190,
+            er=55,
+            bb=40,
+            h_allowed=150,
+            positions=[Position.SP],
+            selected_position=Position.SP,
+        )
+        p2 = _pitcher(
+            "P2",
+            w=5,
+            k=60,
+            sv=20,
+            ip=60,
+            er=20,
+            bb=15,
+            h_allowed=50,
+            positions=[Position.RP],
+            selected_position=Position.RP,
+        )
+        il = _pitcher(
+            "IL",
+            w=8,
+            k=100,
+            sv=0,
+            ip=130,
+            er=40,
+            bb=30,
+            h_allowed=100,
+            positions=[Position.SP],
+            selected_position=Position.IL,
+        )
+        roster = [p1, p2, il]
+        breakdown = compute_roster_breakdown("Team A", roster)
+        agg = project_team_stats(roster, displacement=True)
+        summed_k = sum(c.raw_stats.get("k", 0) * c.scale_factor for c in breakdown.pitchers)
+        summed_w = sum(c.raw_stats.get("w", 0) * c.scale_factor for c in breakdown.pitchers)
+        assert summed_k == pytest.approx(agg.k)
+        assert summed_w == pytest.approx(agg.w)
+
+    def test_era_component_invariant(self):
+        """ERA computed from scaled ER and IP matches project_team_stats."""
+        from fantasy_baseball.scoring import (
+            compute_roster_breakdown,
+            project_team_stats,
+        )
+        from fantasy_baseball.utils.rate_stats import calculate_era
+
+        p = _pitcher(
+            "P",
+            w=12,
+            k=180,
+            sv=0,
+            ip=180,
+            er=60,
+            bb=45,
+            h_allowed=150,
+            positions=[Position.SP],
+            selected_position=Position.SP,
+        )
+        il = _pitcher(
+            "IL",
+            w=1,
+            k=20,
+            sv=10,
+            ip=30,
+            er=10,
+            bb=8,
+            h_allowed=25,
+            positions=[Position.RP],
+            selected_position=Position.IL,
+        )
+        breakdown = compute_roster_breakdown("Team A", [p, il])
+        agg = project_team_stats([p, il], displacement=True)
+        total_er = sum(c.raw_stats.get("er", 0) * c.scale_factor for c in breakdown.pitchers)
+        total_ip = sum(c.raw_stats.get("ip", 0) * c.scale_factor for c in breakdown.pitchers)
+        assert calculate_era(total_er, total_ip) == pytest.approx(agg.era)
+
+    def test_whip_component_invariant(self):
+        """WHIP computed from scaled BB, H, IP matches project_team_stats."""
+        from fantasy_baseball.scoring import (
+            compute_roster_breakdown,
+            project_team_stats,
+        )
+        from fantasy_baseball.utils.rate_stats import calculate_whip
+
+        p = _pitcher(
+            "P",
+            w=12,
+            k=180,
+            sv=0,
+            ip=180,
+            er=60,
+            bb=45,
+            h_allowed=150,
+            positions=[Position.SP],
+            selected_position=Position.SP,
+        )
+        il = _pitcher(
+            "IL",
+            w=1,
+            k=20,
+            sv=10,
+            ip=30,
+            er=10,
+            bb=8,
+            h_allowed=25,
+            positions=[Position.RP],
+            selected_position=Position.IL,
+        )
+        breakdown = compute_roster_breakdown("Team A", [p, il])
+        agg = project_team_stats([p, il], displacement=True)
+        total_bb = sum(c.raw_stats.get("bb", 0) * c.scale_factor for c in breakdown.pitchers)
+        total_h = sum(c.raw_stats.get("h_allowed", 0) * c.scale_factor for c in breakdown.pitchers)
+        total_ip = sum(c.raw_stats.get("ip", 0) * c.scale_factor for c in breakdown.pitchers)
+        assert calculate_whip(total_bb, total_h, total_ip) == pytest.approx(agg.whip)
+
+    def test_no_projection_does_not_perturb_others(self):
+        """A missing-ROS player doesn't trigger displacement on other actives."""
+        from fantasy_baseball.scoring import (
+            ContributionStatus,
+            compute_roster_breakdown,
+        )
+
+        active_with = _hitter(
+            "Active",
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            h=140,
+            ab=500,
+            positions=[Position.OF],
+            selected_position=Position.OF,
+        )
+        no_ros = Player(
+            name="Missing",
+            player_type=PlayerType.HITTER,
+            positions=[Position.OF],
+            selected_position=Position.IL,
+            rest_of_season=None,
+        )
+        breakdown = compute_roster_breakdown("Team A", [active_with, no_ros])
+        by_name = {c.name: c for c in breakdown.hitters}
+        # Missing is classified IL by slot, but has no ROS → NO_PROJECTION.
+        # Critically: it should not have triggered displacement on Active
+        # (no playing time to displace with).
+        assert by_name["Missing"].status == ContributionStatus.NO_PROJECTION
+        assert by_name["Active"].status == ContributionStatus.ACTIVE
+        assert by_name["Active"].scale_factor == 1.0
+
+    def test_active_slot_with_il_status_classified_active(self):
+        """Regression guard: active slot + IL status → ACTIVE, not IL_FULL.
+
+        This is the scenario the displacement-fix spec exists to handle:
+        Yahoo flips a player's status to IL10 while the manager leaves
+        them in an active slot; the breakdown must mirror the fix.
+        """
+        from fantasy_baseball.scoring import (
+            ContributionStatus,
+            compute_roster_breakdown,
+        )
+
+        p = _hitter(
+            "Soto-like",
+            r=80,
+            hr=30,
+            rbi=90,
+            sb=5,
+            h=140,
+            ab=500,
+            positions=[Position.OF],
+            selected_position=Position.OF,
+            status="IL10",
+        )
+        breakdown = compute_roster_breakdown("Team A", [p])
+        c = breakdown.hitters[0]
+        assert c.status == ContributionStatus.ACTIVE
+        assert c.scale_factor == 1.0
