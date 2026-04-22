@@ -390,9 +390,9 @@ def run_simulation(
                     )
                     if len(recs) > skip:
                         alt = recs[skip]
-                        rows = board[board["name"] == alt["name"]]
+                        rows = board[board["name"] == alt.name]
                         if not rows.empty:
-                            pick_name = alt["name"]
+                            pick_name = alt.name
                             pid = rows.iloc[0]["player_id"]
 
             if pick_name is None:

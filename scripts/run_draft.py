@@ -22,6 +22,7 @@ from fantasy_baseball.data.db import get_connection
 from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.board import apply_keepers, build_draft_board
 from fantasy_baseball.draft.recommender import (
+    Recommendation,
     calculate_vona_scores,
     get_filled_positions,
     get_recommendations,
@@ -38,6 +39,7 @@ from fantasy_baseball.draft.strategy import (
     _sv_in_danger,
 )
 from fantasy_baseball.draft.tracker import DraftTracker
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD, Category
 from fantasy_baseball.web.app import create_app
 
@@ -525,15 +527,18 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
                     closers_avail = available[available["sv"].fillna(0) >= CLOSER_SV_THRESHOLD]
                     if not closers_avail.empty:
                         best_closer = closers_avail.sort_values("var", ascending=False).iloc[0]
-                        closer_rec = {
-                            "name": best_closer["name"],
-                            "best_position": "RP",
-                            "var": best_closer.get("var", 0),
-                            "score": None,
-                            "need_flag": True,
-                            "note": f"CLOSER DEADLINE — draft closer #{closer_count + 1}",
-                            "player_type": "pitcher",
-                        }
+                        closer_rec = Recommendation(
+                            name=best_closer["name"],
+                            var=float(best_closer.get("var", 0) or 0),
+                            score=None,
+                            best_position="RP",
+                            positions=list(best_closer["positions"])
+                            if isinstance(best_closer["positions"], list)
+                            else [best_closer["positions"]],
+                            player_type=PlayerType.PITCHER,
+                            need_flag=True,
+                            note=f"CLOSER DEADLINE — draft closer #{closer_count + 1}",
+                        )
 
     # no_punt_opp: dynamic SV monitoring + opportunistic closer grabs
     elif strategy == "no_punt_opp":
@@ -550,15 +555,18 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
             ]
             if not closers_avail.empty:
                 best_closer = closers_avail.sort_values("var", ascending=False).iloc[0]
-                closer_rec = {
-                    "name": best_closer["name"],
-                    "best_position": "RP",
-                    "var": best_closer.get("var", 0),
-                    "score": None,
-                    "need_flag": True,
-                    "note": "SV DANGER — draft a closer",
-                    "player_type": "pitcher",
-                }
+                closer_rec = Recommendation(
+                    name=best_closer["name"],
+                    var=float(best_closer.get("var", 0) or 0),
+                    score=None,
+                    best_position="RP",
+                    positions=list(best_closer["positions"])
+                    if isinstance(best_closer["positions"], list)
+                    else [best_closer["positions"]],
+                    player_type=PlayerType.PITCHER,
+                    need_flag=True,
+                    note="SV DANGER — draft a closer",
+                )
 
         # Opportunistic closer grab: closer falling past ADP
         if closer_rec is None and closer_count < 3:
@@ -581,9 +589,9 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
     avg_warnings = []
     if current_ab > 0:
         for rec in recs:
-            if rec["player_type"] != "hitter":
+            if rec.player_type != PlayerType.HITTER:
                 continue
-            rows = board[board["name"] == rec["name"]]
+            rows = board[board["name"] == rec.name]
             if rows.empty:
                 continue
             player = rows.iloc[0]
@@ -591,19 +599,19 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
             new_ab = current_ab + player.get("ab", 0)
             projected_avg = new_h / new_ab if new_ab > 0 else 0
             if projected_avg < NO_PUNT_AVG_FLOOR:
-                avg_warnings.append(rec["name"])
+                avg_warnings.append(rec.name)
 
     # Reorder: push low-AVG hitters below non-flagged recs
     if avg_warnings:
-        safe_recs = [r for r in recs if r["name"] not in avg_warnings]
-        risky_recs = [r for r in recs if r["name"] in avg_warnings]
+        safe_recs = [r for r in recs if r.name not in avg_warnings]
+        risky_recs = [r for r in recs if r.name in avg_warnings]
         recs = safe_recs + risky_recs
 
     # Build final recommendation list: closer on top if triggered
     if closer_rec:
-        closer_in_recs = any(r["name"] == closer_rec["name"] for r in recs)
+        closer_in_recs = any(r.name == closer_rec.name for r in recs)
         if closer_in_recs:
-            recs = [r for r in recs if r["name"] != closer_rec["name"]]
+            recs = [r for r in recs if r.name != closer_rec.name]
         recs = [closer_rec, *recs[:4]]
 
     # Show recommendations
@@ -616,12 +624,12 @@ def _handle_user_pick(board, full_board, tracker, balance, roster_slots=None,
 
     print("\nRECOMMENDATIONS:")
     for i, rec in enumerate(recs, 1):
-        flag = " [NEED]" if rec["need_flag"] else ""
-        note = f" ({rec['note']})" if rec["note"] else ""
-        score_str = f" score: {rec['score']:.1f}" if rec.get("score") is not None else ""
-        avg_warn = " [LOW AVG]" if rec["name"] in avg_warnings else ""
-        print(f"  {i}. {rec['name']} ({rec['best_position']}) "
-              f"VAR: {rec['var']:.1f}{score_str}{flag}{avg_warn}{note}")
+        flag = " [NEED]" if rec.need_flag else ""
+        note = f" ({rec.note})" if rec.note else ""
+        score_str = f" score: {rec.score:.1f}" if rec.score is not None else ""
+        avg_warn = " [LOW AVG]" if rec.name in avg_warnings else ""
+        print(f"  {i}. {rec.name} ({rec.best_position}) "
+              f"VAR: {rec.var:.1f}{score_str}{flag}{avg_warn}{note}")
 
     # Show category balance
     totals = balance.get_totals()
@@ -736,7 +744,7 @@ def _get_player_input(board, tracker, team_names=None, current_recs=None,
                                            tracker.user_roster, n=5,
                                            filled_positions=filled)
             if 0 <= idx < len(recs):
-                return recs[idx]["name"], _lookup_id(recs[idx]["name"]), None
+                return recs[idx].name, _lookup_id(recs[idx].name), None
 
         # Try to split off a team-name prefix
         player_query = raw

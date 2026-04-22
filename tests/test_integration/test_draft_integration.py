@@ -409,7 +409,7 @@ class TestVonaModeProducesDifferentRankingThanVar:
                 picks_until_next=12,
             )
 
-            if var_recs and vona_recs and var_recs[0]["name"] != vona_recs[0]["name"]:
+            if var_recs and vona_recs and var_recs[0].name != vona_recs[0].name:
                 found_difference = True
                 break
 
