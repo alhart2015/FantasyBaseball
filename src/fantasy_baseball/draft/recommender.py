@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.models.positions import Position
 from fantasy_baseball.sgp.replacement import calculate_replacement_levels
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
@@ -21,16 +22,27 @@ class Recommendation:
     ``score`` is the scoring-mode-specific ranking value (VAR or VONA) used
     to sort recommendations; it is ``None`` for synthetic entries like the
     strategy-layer closer alert in ``run_draft.py``.
+
+    ``best_position`` and ``positions`` are ``Position`` enum values; the
+    ``__post_init__`` coerces raw strings (as stored on the board DataFrame)
+    so callers can pass either.
     """
 
     name: str
     var: float
     score: float | None
-    best_position: str
-    positions: list[str]
+    best_position: Position
+    positions: list[Position]
     player_type: PlayerType
     need_flag: bool = False
     note: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.best_position, Position):
+            self.best_position = Position.parse(self.best_position)
+        self.positions = [
+            p if isinstance(p, Position) else Position.parse(p) for p in self.positions
+        ]
 
 
 def compute_slot_scarcity_order(
@@ -86,7 +98,11 @@ def calculate_vona_scores(
 
     # Assign buckets vectorized
     is_hitter = remaining["player_type"] == PlayerType.HITTER
-    sv = remaining["sv"].fillna(0) if "sv" in remaining.columns else pd.Series(0, index=remaining.index)
+    sv = (
+        remaining["sv"].fillna(0)
+        if "sv" in remaining.columns
+        else pd.Series(0, index=remaining.index)
+    )
     remaining_buckets = pd.Series("sp", index=remaining.index)
     remaining_buckets[is_hitter] = "hitter"
     remaining_buckets[(~is_hitter) & (sv >= CLOSER_SV_THRESHOLD)] = "closer"
@@ -98,7 +114,11 @@ def calculate_vona_scores(
 
     # VONA = player SGP - best remaining in same bucket (vectorized)
     is_hitter_a = available["player_type"] == PlayerType.HITTER
-    sv_a = available["sv"].fillna(0) if "sv" in available.columns else pd.Series(0, index=available.index)
+    sv_a = (
+        available["sv"].fillna(0)
+        if "sv" in available.columns
+        else pd.Series(0, index=available.index)
+    )
     avail_buckets = pd.Series("sp", index=available.index)
     avail_buckets[is_hitter_a] = "hitter"
     avail_buckets[(~is_hitter_a) & (sv_a >= CLOSER_SV_THRESHOLD)] = "closer"
@@ -108,7 +128,6 @@ def calculate_vona_scores(
     vona_series = avail_sgp - best_for_bucket
 
     return dict(zip(available["player_id"], vona_series, strict=False))
-
 
 
 def get_recommendations(
@@ -192,9 +211,7 @@ def get_recommendations(
             if row["player_id"] in candidate_ids:
                 continue
             if can_fill_slot(row["positions"], slot):
-                candidates = pd.concat(
-                    [candidates, row.to_frame().T], ignore_index=True
-                )
+                candidates = pd.concat([candidates, row.to_frame().T], ignore_index=True)
                 candidate_ids.add(row["player_id"])
                 break  # only need the best one per slot
 
@@ -232,7 +249,7 @@ def get_recommendations(
     # Split into need-fills and pure-score, then merge.
     need_recs: list[Recommendation] = []
     other_recs: list[Recommendation] = []
-    seen_need_slots: set[str] = set()
+    seen_need_slots: set[Position] = set()
     # Sort all by score (VAR or VONA)
     recs.sort(key=lambda r: r.score if r.score is not None else float("-inf"), reverse=True)
     for rec in recs:
@@ -286,7 +303,8 @@ def _get_unfilled_positions(
 
 
 def _collect_roster_entries(
-    user_roster_ids: list[str], board: pd.DataFrame,
+    user_roster_ids: list[str],
+    board: pd.DataFrame,
     player_lookup: dict | None = None,
 ) -> list[pd.Series]:
     """Look up board entries for each roster player by player_id."""
@@ -334,19 +352,14 @@ def get_filled_positions(
         roster_slots = DEFAULT_ROSTER_SLOTS
 
     # Build capacity: how many of each slot are available
-    capacity: dict[str, int] = {
-        pos: count for pos, count in roster_slots.items()
-        if pos != "IL"
-    }
+    capacity: dict[str, int] = {pos: count for pos, count in roster_slots.items() if pos != "IL"}
     filled: dict[str, int] = {pos: 0 for pos in capacity}
 
     players = _collect_roster_entries(user_roster_ids, board, player_lookup)
 
     # Sort: assign players with fewer eligible active slots first (most constrained)
     active_slots = {k: v for k, v in capacity.items() if k != "BN"}
-    players.sort(key=lambda p: sum(
-        1 for s in active_slots if can_fill_slot(p["positions"], s)
-    ))
+    players.sort(key=lambda p: sum(1 for s in active_slots if can_fill_slot(p["positions"], s)))
 
     # Slot assignment order: scarcity-based for specific slots, then flex.
     # Cache the scarcity order since it depends only on the board and slots.
@@ -369,7 +382,11 @@ def get_filled_positions(
                 break
         if not assigned:
             for slot in flex_slots:
-                if slot in active_slots and filled[slot] < capacity[slot] and can_fill_slot(positions, slot):
+                if (
+                    slot in active_slots
+                    and filled[slot] < capacity[slot]
+                    and can_fill_slot(positions, slot)
+                ):
                     filled[slot] += 1
                     assigned = True
                     break
@@ -392,19 +409,14 @@ def get_roster_by_position(
     if roster_slots is None:
         roster_slots = DEFAULT_ROSTER_SLOTS
 
-    capacity: dict[str, int] = {
-        pos: count for pos, count in roster_slots.items()
-        if pos != "IL"
-    }
+    capacity: dict[str, int] = {pos: count for pos, count in roster_slots.items() if pos != "IL"}
     by_pos: dict[str, list[str]] = {pos: [] for pos in capacity}
 
     players = _collect_roster_entries(user_roster_ids, board)
 
     # Sort: assign players with fewer eligible active slots first (most constrained)
     active_slots = {k: v for k, v in capacity.items() if k != "BN"}
-    players.sort(key=lambda p: sum(
-        1 for s in active_slots if can_fill_slot(p["positions"], s)
-    ))
+    players.sort(key=lambda p: sum(1 for s in active_slots if can_fill_slot(p["positions"], s)))
 
     # Slot assignment order: scarcity-based (cached)
     cache_key = id(board)
@@ -425,7 +437,11 @@ def get_roster_by_position(
                 break
         if not assigned:
             for slot in flex_slots:
-                if slot in active_slots and len(by_pos[slot]) < capacity[slot] and can_fill_slot(positions, slot):
+                if (
+                    slot in active_slots
+                    and len(by_pos[slot]) < capacity[slot]
+                    and can_fill_slot(positions, slot)
+                ):
                     by_pos[slot].append(player["name"])
                     assigned = True
                     break

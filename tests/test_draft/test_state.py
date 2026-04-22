@@ -11,36 +11,50 @@ from fantasy_baseball.models.player import PlayerType
 
 
 def _make_hitter(name, positions, var, best_position, r, hr, rbi, sb, avg, ab):
-    return pd.Series({
-        "name": name,
-        "positions": positions,
-        "var": var,
-        "best_position": best_position,
-        "player_type": "hitter",
-        "player_id": f"{name}::hitter",
-        "r": r, "hr": hr, "rbi": rbi, "sb": sb, "avg": avg,
-        "ab": ab, "h": int(avg * ab),
-    })
+    return pd.Series(
+        {
+            "name": name,
+            "positions": positions,
+            "var": var,
+            "best_position": best_position,
+            "player_type": "hitter",
+            "player_id": f"{name}::hitter",
+            "r": r,
+            "hr": hr,
+            "rbi": rbi,
+            "sb": sb,
+            "avg": avg,
+            "ab": ab,
+            "h": int(avg * ab),
+        }
+    )
 
 
 def _make_pitcher(name, positions, var, best_position, w, k, sv, era, whip, ip):
-    return pd.Series({
-        "name": name,
-        "positions": positions,
-        "var": var,
-        "best_position": best_position,
-        "player_type": "pitcher",
-        "player_id": f"{name}::pitcher",
-        "w": w, "k": k, "sv": sv, "era": era, "whip": whip,
-        "ip": ip, "er": era * ip / 9,
-        "bb": int(whip * ip * 0.3),
-        "h_allowed": int(whip * ip * 0.7),
-    })
+    return pd.Series(
+        {
+            "name": name,
+            "positions": positions,
+            "var": var,
+            "best_position": best_position,
+            "player_type": "pitcher",
+            "player_id": f"{name}::pitcher",
+            "w": w,
+            "k": k,
+            "sv": sv,
+            "era": era,
+            "whip": whip,
+            "ip": ip,
+            "er": era * ip / 9,
+            "bb": int(whip * ip * 0.3),
+            "h_allowed": int(whip * ip * 0.7),
+        }
+    )
 
 
 @pytest.fixture
 def sample_board():
-    hitter = _make_hitter("Juan Soto", ["OF"], 12.5, "OF", 110, 35, 100, 10, .290, 550)
+    hitter = _make_hitter("Juan Soto", ["OF"], 12.5, "OF", 110, 35, 100, 10, 0.290, 550)
     pitcher = _make_pitcher("Gerrit Cole", ["SP"], 8.2, "P", 16, 250, 0, 2.80, 1.05, 200)
     return pd.DataFrame([hitter, pitcher])
 
@@ -101,10 +115,28 @@ class TestSerializeState:
         assert "Elly De La Cruz" in state["drafted_players"]
         assert "Juan Soto" in state["drafted_players"]
 
-    def test_contains_recommendations(self, sample_tracker, sample_balance, sample_board, sample_recs):
+    def test_contains_recommendations(
+        self, sample_tracker, sample_balance, sample_board, sample_recs
+    ):
         state = serialize_state(sample_tracker, sample_balance, sample_board, sample_recs, {})
         assert len(state["recommendations"]) == 1
         assert state["recommendations"][0]["name"] == "Gerrit Cole"
+
+    def test_recommendation_positions_serialize_as_plain_strings(
+        self,
+        sample_tracker,
+        sample_balance,
+        sample_board,
+        sample_recs,
+    ):
+        """Wire protocol: best_position / positions must be JSON strings,
+        not repr strings like 'Position.P'. Dashboard JS depends on this."""
+        state = serialize_state(sample_tracker, sample_balance, sample_board, sample_recs, {})
+        rec = state["recommendations"][0]
+        assert rec["best_position"] == "P"
+        assert type(rec["best_position"]) is str
+        assert rec["positions"] == ["SP"]
+        assert all(type(p) is str for p in rec["positions"])
 
     def test_contains_balance(self, sample_tracker, sample_balance, sample_board, sample_recs):
         state = serialize_state(sample_tracker, sample_balance, sample_board, sample_recs, {})
@@ -112,7 +144,9 @@ class TestSerializeState:
         assert "warnings" in state["balance"]
         assert state["balance"]["totals"]["HR"] == 35
 
-    def test_available_players_excludes_drafted(self, sample_tracker, sample_balance, sample_board, sample_recs):
+    def test_available_players_excludes_drafted(
+        self, sample_tracker, sample_balance, sample_board, sample_recs
+    ):
         state = serialize_state(sample_tracker, sample_balance, sample_board, sample_recs, {})
         names = [p["name"] for p in state["available_players"]]
         # Soto and De La Cruz are drafted; Soto is on the board but should be excluded
@@ -123,7 +157,7 @@ class TestSerializeState:
 
     def test_hitter_fields(self, sample_tracker, sample_balance, sample_board, sample_recs):
         # Add a non-drafted hitter to the board so it appears in available
-        extra_hitter = _make_hitter("Pete Alonso", ["1B"], 5.0, "1B", 88, 35, 95, 2, .254, 520)
+        extra_hitter = _make_hitter("Pete Alonso", ["1B"], 5.0, "1B", 88, 35, 95, 2, 0.254, 520)
         board = pd.concat([sample_board, pd.DataFrame([extra_hitter])], ignore_index=True)
         state = serialize_state(sample_tracker, sample_balance, board, sample_recs, {})
         alonso = next(p for p in state["available_players"] if p["name"] == "Pete Alonso")
@@ -140,8 +174,12 @@ class TestSerializeState:
         assert cole["w"] == 16
         assert "hr" not in cole
 
-    def test_filled_positions_passthrough(self, sample_tracker, sample_balance, sample_board, sample_recs):
-        state = serialize_state(sample_tracker, sample_balance, sample_board, sample_recs, {"OF": 2, "SS": 1})
+    def test_filled_positions_passthrough(
+        self, sample_tracker, sample_balance, sample_board, sample_recs
+    ):
+        state = serialize_state(
+            sample_tracker, sample_balance, sample_board, sample_recs, {"OF": 2, "SS": 1}
+        )
         assert state["filled_positions"] == {"OF": 2, "SS": 1}
 
     def test_is_json_serializable(self, sample_tracker, sample_balance, sample_board, sample_recs):
