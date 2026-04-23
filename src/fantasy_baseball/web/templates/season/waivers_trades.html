@@ -36,11 +36,12 @@
 .bt-result-bad { color: var(--danger); padding: 0.5rem; }
 .bt-panel { border: 1px solid var(--panel-bg); padding: 0.4rem; border-radius: 4px; }
 .bt-panel h4 { margin: 0 0 0.4rem; font-size: 0.85rem; }
-.bt-slot-grid { display: grid; grid-template-columns: 60px 1fr; gap: 2px;
-                align-items: center; font-size: 0.8rem; }
+.bt-slot-grid { display: flex; flex-direction: column; gap: 2px; font-size: 0.8rem; }
+.bt-slot-row { display: grid; grid-template-columns: 60px 1fr; gap: 2px; align-items: center; }
 .bt-slot-label { color: var(--text-secondary); font-family: monospace; padding: 0 0.3rem; }
 .bt-slot { min-height: 22px; padding: 2px 4px; border: 1px dashed rgba(255,255,255,0.1);
            border-radius: 2px; background: rgba(255,255,255,0.02); }
+.bt-ghost { display: none; }
 .bt-slot.drag-over { background: var(--success); opacity: 0.5; }
 .bt-zone { border: 1px dashed rgba(255,255,255,0.1); padding: 0.3rem;
            min-height: 30px; border-radius: 3px; margin-top: 0.3rem; }
@@ -412,8 +413,10 @@ document.addEventListener('DOMContentLoaded', function() {
         const holder = [...state.placements.entries()]
           .find(([, pl]) => pl.currentSide === side && pl.zone === s);
         const chip = holder ? renderChip(holder[0]) : "";
-        return `<div class="bt-slot-label">${esc(s)}</div>
-                <div class="bt-slot" data-bt-side="${side}" data-bt-zone="${esc(s)}">${chip}</div>`;
+        return `<div class="bt-slot-row">
+                  <div class="bt-slot-label">${esc(s)}</div>
+                  <div class="bt-slot" data-bt-side="${side}" data-bt-zone="${esc(s)}">${chip}</div>
+                </div>`;
       }).join("");
       for (const zone of ["BN", "IL", "DROP"]) {
         const domId = zone === "DROP" ? `bt-${side}-drops`
@@ -582,6 +585,7 @@ document.addEventListener('DOMContentLoaded', function() {
         group: "trade-builder",
         sort: false,                  // we don't care about order within a grid
         animation: 0,                  // no reorder animations
+        ghostClass: "bt-ghost",
         onStart: handleStart,
         onEnd: handleDrop,
       });
@@ -593,6 +597,7 @@ document.addEventListener('DOMContentLoaded', function() {
         group: { name: "trade-builder", put: false },
         sort: false,
         animation: 0,
+        ghostClass: "bt-ghost",
         onStart: handleStart,
         onEnd: handleDrop,
       });
