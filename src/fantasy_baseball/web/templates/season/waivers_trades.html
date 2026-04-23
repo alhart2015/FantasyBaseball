@@ -159,6 +159,8 @@
   };
 </script>
 
+<script src="{{ url_for('static', filename='vendor/Sortable.min.js') }}"></script>
+
 <script>
 function toggleSection(id) {
     var body = document.getElementById('section-' + id);
@@ -396,7 +398,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const cls = ["bt-chip-player"];
     if (foreign) cls.push("foreign");
     if (il) cls.push("il");
-    const dragAttr = il ? "" : `draggable="true" data-bt-drag-key="${esc(key)}"`;
+    const dragAttr = il ? "" : `data-bt-drag-key="${esc(key)}"`;
     const positions = (p.positions || []).join("/");
     return `<span class="${cls.join(" ")}" ${dragAttr}>${esc(p.name)} <small>${esc(positions)}</small></span>`;
   }
@@ -428,6 +430,7 @@ document.addEventListener('DOMContentLoaded', function() {
         el.innerHTML = `<div class="bt-zone-label">${label}</div>${chips}`;
       }
     }
+    attachSortables();
   }
 
   function populateOpponents() {
@@ -495,8 +498,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const matches = await resp.json();
         sugg.innerHTML = matches.map(m => {
           const positions = (m.positions || []).join("/");
-          return `<li draggable="true"
-                     data-bt-drag-key="${esc(m.key)}"
+          return `<li data-bt-drag-key="${esc(m.key)}"
                      data-bt-waiver-name="${esc(m.name)}"
                      data-bt-waiver-positions="${esc(positions)}">${esc(m.name)} <small>(${esc(positions)})</small></li>`;
         }).join("");
@@ -504,53 +506,47 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
 
-  function attachDragHandlers() {
-    let draggingKey = null;
+  function handleStart(evt) {
+    const chip = evt.item;
+    if (chip.dataset.btWaiverName) {
+      state.waiverMeta.set(chip.dataset.btDragKey, {
+        name: chip.dataset.btWaiverName,
+        positions: chip.dataset.btWaiverPositions || "",
+      });
+    }
+  }
 
-    document.addEventListener("dragstart", (e) => {
-      const chip = e.target.closest("[data-bt-drag-key]");
-      if (!chip) return;
-      draggingKey = chip.dataset.btDragKey;
-      chip.classList.add("dragging");
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", draggingKey);
+  function handleDrop(evt) {
+    if (!evt.to || evt.to === evt.from) return;
+    const key = evt.item.dataset.btDragKey;
+    const side = evt.to.dataset.btSide;
+    const zone = evt.to.dataset.btZone;
+    if (!key || !side || !zone) return;
+    placeAt(key, side, zone);
+  }
 
-      // Waiver suggestion — stash metadata so placeAt can seed a placement on drop.
-      if (chip.dataset.btWaiverName) {
-        state.waiverMeta.set(draggingKey, {
-          name: chip.dataset.btWaiverName,
-          positions: chip.dataset.btWaiverPositions || "",
-        });
-      }
-    });
-
-    document.addEventListener("dragend", (e) => {
-      const chip = e.target.closest("[data-bt-drag-key]");
-      if (chip) chip.classList.remove("dragging");
-      draggingKey = null;
-    });
-
-    document.addEventListener("dragover", (e) => {
-      const zone = e.target.closest("[data-bt-zone][data-bt-side]");
-      if (!zone) return;
-      e.preventDefault();
-      zone.classList.add("drag-over");
-    });
-
-    document.addEventListener("dragleave", (e) => {
-      const zone = e.target.closest("[data-bt-zone][data-bt-side]");
-      if (zone) zone.classList.remove("drag-over");
-    });
-
-    document.addEventListener("drop", (e) => {
-      const zone = e.target.closest("[data-bt-zone][data-bt-side]");
-      if (!zone) return;
-      e.preventDefault();
-      zone.classList.remove("drag-over");
-      const key = draggingKey || e.dataTransfer.getData("text/plain");
-      if (!key) return;
-      placeAt(key, zone.dataset.btSide, zone.dataset.btZone);
-    });
+  function attachSortables() {
+    // Drop zones on both sides: positional slots, BN, DROP. Exclude IL (read-only).
+    for (const el of document.querySelectorAll("[data-bt-side][data-bt-zone]")) {
+      if (el.dataset.btZone === "IL") continue;
+      // eslint-disable-next-line no-new
+      new Sortable(el, {
+        group: "trade-builder",
+        onStart: handleStart,
+        onEnd: handleDrop,
+      });
+    }
+    // Waiver suggestions: pull-only source.
+    const waiver = document.getElementById("bt-waiver-suggestions");
+    if (waiver) {
+      // eslint-disable-next-line no-new
+      new Sortable(waiver, {
+        group: { name: "trade-builder", put: false },
+        sort: false,
+        onStart: handleStart,
+        onEnd: handleDrop,
+      });
+    }
   }
 
   function buildPayload() {
@@ -637,7 +633,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
   window.bt = {
     init() {
-      attachDragHandlers();
+      attachSortables();
       attachWaiverInputListener();
       populateOpponents();
       rebuildPlacements();   // with opponent=null this fills only my side
