@@ -796,7 +796,7 @@ def compute_comparison_standings(
             "ev_roto": ev_roto_after,
         },
         "delta_roto": delta_roto.to_dict(),
-        "categories": ALL_CATEGORIES,
+        "categories": [c.value for c in ALL_CATEGORIES],
         "user_team": user_team_name,
     }
 
