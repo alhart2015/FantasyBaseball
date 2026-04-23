@@ -39,8 +39,11 @@
 .bt-slot-grid { display: flex; flex-direction: column; gap: 2px; font-size: 0.8rem; }
 .bt-slot-row { display: grid; grid-template-columns: 60px 1fr; gap: 2px; align-items: center; }
 .bt-slot-label { color: var(--text-secondary); font-family: monospace; padding: 0 0.3rem; }
-.bt-slot { min-height: 22px; padding: 2px 4px; border: 1px dashed rgba(255,255,255,0.1);
-           border-radius: 2px; background: rgba(255,255,255,0.02); }
+.bt-slot { min-height: 22px; max-height: 22px; padding: 2px 4px; border: 1px dashed rgba(255,255,255,0.1);
+           border-radius: 2px; background: rgba(255,255,255,0.02);
+           display: flex; align-items: center; overflow: hidden; }
+.bt-slot:has(.bt-ghost) { background: var(--success); opacity: 0.55; border-style: solid; }
+.bt-zone:has(.bt-ghost) { background: var(--success); opacity: 0.35; border-style: solid; }
 .bt-ghost { display: none; }
 .bt-slot.drag-over { background: var(--success); opacity: 0.5; }
 .bt-zone { border: 1px dashed rgba(255,255,255,0.1); padding: 0.3rem;
@@ -110,14 +113,14 @@
     <div class="build-trade-rosters" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
         <div class="bt-panel">
             <h4>My Team</h4>
-            <div id="bt-my-slots" class="bt-slot-grid" data-bt-side="my" data-bt-zone-type="slots"></div>
-            <div id="bt-my-bench" class="bt-zone" data-bt-side="my" data-bt-zone="BN" data-bt-zone-type="BN">
+            <div id="bt-my-slots" class="bt-slot-grid" data-bt-side="my"></div>
+            <div id="bt-my-bench" class="bt-zone" data-bt-side="my" data-bt-zone="BN">
                 <div class="bt-zone-label">Bench</div>
             </div>
-            <div id="bt-my-il" class="bt-zone" data-bt-side="my" data-bt-zone-type="IL">
+            <div id="bt-my-il" class="bt-zone" data-bt-side="my">
                 <div class="bt-zone-label">IL (read-only)</div>
             </div>
-            <div id="bt-my-drops" class="bt-zone bt-drops-zone" data-bt-side="my" data-bt-zone="DROP" data-bt-zone-type="DROP">
+            <div id="bt-my-drops" class="bt-zone bt-drops-zone" data-bt-side="my" data-bt-zone="DROP">
                 <div class="bt-zone-label">Drops</div>
             </div>
             <div class="mt-2">
@@ -129,14 +132,14 @@
         </div>
         <div class="bt-panel">
             <h4>Opponent Team</h4>
-            <div id="bt-opp-slots" class="bt-slot-grid" data-bt-side="opp" data-bt-zone-type="slots"></div>
-            <div id="bt-opp-bench" class="bt-zone" data-bt-side="opp" data-bt-zone="BN" data-bt-zone-type="BN">
+            <div id="bt-opp-slots" class="bt-slot-grid" data-bt-side="opp"></div>
+            <div id="bt-opp-bench" class="bt-zone" data-bt-side="opp" data-bt-zone="BN">
                 <div class="bt-zone-label">Bench</div>
             </div>
-            <div id="bt-opp-il" class="bt-zone" data-bt-side="opp" data-bt-zone-type="IL">
+            <div id="bt-opp-il" class="bt-zone" data-bt-side="opp">
                 <div class="bt-zone-label">IL (read-only)</div>
             </div>
-            <div id="bt-opp-drops" class="bt-zone bt-drops-zone" data-bt-side="opp" data-bt-zone="DROP" data-bt-zone-type="DROP">
+            <div id="bt-opp-drops" class="bt-zone bt-drops-zone" data-bt-side="opp" data-bt-zone="DROP">
                 <div class="bt-zone-label">Drops</div>
             </div>
         </div>
@@ -523,73 +526,41 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
 
-  function dropCoords(evt) {
-    const orig = evt.originalEvent;
-    if (!orig) return null;
-    if (typeof orig.clientX === "number" && typeof orig.clientY === "number") {
-      return { x: orig.clientX, y: orig.clientY };
-    }
-    if (orig.changedTouches && orig.changedTouches.length) {
-      const t = orig.changedTouches[0];
-      return { x: t.clientX, y: t.clientY };
-    }
-    return null;
-  }
-
   function handleDrop(evt) {
     if (!evt.to) return;
     const key = evt.item.dataset.btDragKey;
     if (!key) return;                          // IL chips have no key
-    const outer = evt.to;
-    const side = outer.dataset.btSide;
-    const zoneType = outer.dataset.btZoneType;
-    if (!side || !zoneType) return;
-    if (zoneType === "IL") return;             // IL is read-only
-
-    let zone;
-    if (zoneType === "slots") {
-      // The grid is the container Sortable reported; find the specific
-      // slot under the drop coordinates.
-      const coords = dropCoords(evt);
-      if (!coords) return;
-      const hit = document.elementFromPoint(coords.x, coords.y);
-      const slot = hit ? hit.closest(".bt-slot[data-bt-zone]") : null;
-      if (!slot) return;
-      // Guard: the slot must belong to the same grid we landed in
-      // (prevents cross-grid confusion if coords drift between render
-      // and elementFromPoint).
-      if (slot.dataset.btSide !== side) return;
-      zone = slot.dataset.btZone;
-    } else {
-      // BN or DROP — zoneType IS the zone.
-      zone = zoneType;
-    }
+    const side = evt.to.dataset.btSide;
+    const zone = evt.to.dataset.btZone;
+    if (!side || !zone) return;
     placeAt(key, side, zone);
   }
 
   function attachSortables() {
-    // Eight drop-zone grids + one pull-only waiver source. IL grids get
-    // a Sortable instance so elementFromPoint resolution can find their
-    // zone attrs, but onEnd below refuses to place players there.
-    const GRID_IDS = [
-      "bt-my-slots", "bt-opp-slots",
-      "bt-my-bench", "bt-opp-bench",
-      "bt-my-drops", "bt-opp-drops",
-      "bt-my-il",    "bt-opp-il",
-    ];
-    for (const id of GRID_IDS) {
-      const el = document.getElementById(id);
-      if (!el) continue;
+    // Each positional slot + bench + drops is its own single-item Sortable.
+    // IL slots are excluded (read-only). Waiver suggestions are a pull-only
+    // source.
+    const droppableSelector = [
+      "#bt-my-slots .bt-slot",
+      "#bt-opp-slots .bt-slot",
+      "#bt-my-bench",
+      "#bt-opp-bench",
+      "#bt-my-drops",
+      "#bt-opp-drops",
+    ].join(", ");
+
+    for (const el of document.querySelectorAll(droppableSelector)) {
       Sortable.get(el)?.destroy();
       new Sortable(el, {
         group: "trade-builder",
-        sort: false,                  // we don't care about order within a grid
-        animation: 0,                  // no reorder animations
+        sort: false,
+        animation: 0,
         ghostClass: "bt-ghost",
         onStart: handleStart,
         onEnd: handleDrop,
       });
     }
+
     const waiver = document.getElementById("bt-waiver-suggestions");
     if (waiver) {
       Sortable.get(waiver)?.destroy();
