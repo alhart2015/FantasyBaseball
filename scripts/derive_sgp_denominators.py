@@ -32,16 +32,19 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.db import get_connection
 from fantasy_baseball.draft.board import build_draft_board
-from fantasy_baseball.utils.constants import STAT_VARIANCE
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, STAT_VARIANCE, Category
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 STANDINGS_PATH = PROJECT_ROOT / "data" / "historical_standings.json"
 
-CATS = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "ERA", "WHIP", "SV"]
-
 # Per-team closer count used in the Monte Carlo fallback. Sorting pitchers
 # by VAR alone under-picks closers because their low IP depresses counting-
 # stat VAR; we split the pool so each team gets a realistic share.
+#
+# Floor of 10 SV (not utils.constants.CLOSER_SV_THRESHOLD of 20) because the
+# pool needs enough closer candidates to cover CLOSERS_PER_TEAM * num_teams;
+# a stricter floor risks under-filling the closer pool in years where
+# projected SV is fragmented across committee setups.
 CLOSERS_PER_TEAM = 2
 CLOSER_SV_FLOOR = 10
 
@@ -53,10 +56,10 @@ def _adjacent_gap(values: list[float]) -> float:
     return (ordered[-1] - ordered[0]) / (len(values) - 1)
 
 
-def _format_denom(cat: str, value: float) -> str:
-    if cat == "AVG":
+def _format_denom(cat: Category, value: float) -> str:
+    if cat is Category.AVG:
         return f"{value:.4f}"
-    if cat in {"ERA", "WHIP"}:
+    if cat in {Category.ERA, Category.WHIP}:
         return f"{value:.3f}"
     return f"{round(value):d}"
 
@@ -64,7 +67,7 @@ def _format_denom(cat: str, value: float) -> str:
 # ---------- Historical-standings derivation (preferred) ----------
 
 
-def derive_from_history(years: list[str]) -> dict[str, tuple[float, list[float]]]:
+def derive_from_history(years: list[str]) -> dict[Category, tuple[float, list[float]]]:
     """Compute per-category gap averaged across `years`.
 
     Returns ``{cat: (mean_gap, [per_year_gaps])}``.
@@ -72,11 +75,11 @@ def derive_from_history(years: list[str]) -> dict[str, tuple[float, list[float]]
     with open(STANDINGS_PATH) as f:
         data = json.load(f)
 
-    gaps_by_cat: dict[str, list[float]] = {cat: [] for cat in CATS}
+    gaps_by_cat: dict[Category, list[float]] = {cat: [] for cat in ALL_CATEGORIES}
     for year in years:
         standings = data[year]["standings"]
-        for cat in CATS:
-            vals = [t["stats"][cat] for t in standings]
+        for cat in ALL_CATEGORIES:
+            vals = [t["stats"][cat.value] for t in standings]
             gaps_by_cat[cat].append(_adjacent_gap(vals))
     return {cat: (float(np.mean(gs)), gs) for cat, gs in gaps_by_cat.items()}
 
@@ -119,23 +122,23 @@ def _sum_stats(roster, keys: list[str], rng: np.random.Generator | None = None) 
     return totals
 
 
-def _compute_team_categories(hitters, pitchers, rng=None) -> dict[str, float]:
+def _compute_team_categories(hitters, pitchers, rng=None) -> dict[Category, float]:
     h = _sum_stats(hitters, ["r", "hr", "rbi", "sb", "h", "ab"], rng)
     p = _sum_stats(pitchers, ["w", "k", "sv", "ip", "er", "bb", "h_allowed"], rng)
     avg = h["h"] / h["ab"] if h["ab"] > 0 else 0.0
     era = 9.0 * p["er"] / p["ip"] if p["ip"] > 0 else 0.0
     whip = (p["bb"] + p["h_allowed"]) / p["ip"] if p["ip"] > 0 else 0.0
     return {
-        "R": h["r"],
-        "HR": h["hr"],
-        "RBI": h["rbi"],
-        "SB": h["sb"],
-        "AVG": avg,
-        "W": p["w"],
-        "K": p["k"],
-        "SV": p["sv"],
-        "ERA": era,
-        "WHIP": whip,
+        Category.R: h["r"],
+        Category.HR: h["hr"],
+        Category.RBI: h["rbi"],
+        Category.SB: h["sb"],
+        Category.AVG: avg,
+        Category.W: p["w"],
+        Category.K: p["k"],
+        Category.SV: p["sv"],
+        Category.ERA: era,
+        Category.WHIP: whip,
     }
 
 
@@ -176,15 +179,15 @@ def derive_from_mc(trials: int, seed: int) -> dict[str, float]:
     pitcher_teams = [closer_teams[i] + non_closer_teams[i] for i in range(num_teams)]
 
     rng = np.random.default_rng(seed)
-    gap_accum: dict[str, list[float]] = {cat: [] for cat in CATS}
+    gap_accum: dict[Category, list[float]] = {cat: [] for cat in ALL_CATEGORIES}
     for _ in range(trials):
         team_cats = [
             _compute_team_categories(hitter_teams[i], pitcher_teams[i], rng)
             for i in range(num_teams)
         ]
-        for cat in CATS:
+        for cat in ALL_CATEGORIES:
             gap_accum[cat].append(_adjacent_gap([t[cat] for t in team_cats]))
-    return {cat: float(np.mean(gap_accum[cat])) for cat in CATS}
+    return {cat: float(np.mean(gap_accum[cat])) for cat in ALL_CATEGORIES}
 
 
 def main() -> None:
@@ -218,18 +221,18 @@ def main() -> None:
         print()
         history = derive_from_history(args.years)
         print("# Per-year gaps:")
-        for cat in CATS:
+        for cat in ALL_CATEGORIES:
             mean, per_year = history[cat]
             per_year_str = " ".join(
                 f"{y}={g:.3f}" for y, g in zip(args.years, per_year, strict=True)
             )
-            print(f"#   {cat:>4}: {per_year_str}  -> mean {mean:.4f}")
+            print(f"#   {cat.value:>4}: {per_year_str}  -> mean {mean:.4f}")
         print()
-        denoms = {cat: history[cat][0] for cat in CATS}
+        denoms = {cat: history[cat][0] for cat in ALL_CATEGORIES}
 
     print("sgp_denominators:")
-    for cat in ["R", "HR", "RBI", "SB", "AVG", "W", "K", "ERA", "WHIP", "SV"]:
-        print(f"  {cat}: {_format_denom(cat, denoms[cat])}")
+    for cat in ALL_CATEGORIES:
+        print(f"  {cat.value}: {_format_denom(cat, denoms[cat])}")
 
 
 if __name__ == "__main__":

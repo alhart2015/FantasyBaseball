@@ -29,10 +29,7 @@ def main() -> None:
     local_by_id = {entry["player_id"]: entry for entry in local if entry.get("player_id")}
     remote_by_id = {entry["player_id"]: entry for entry in remote if entry.get("player_id")}
 
-    header = (
-        f"{'player':<28}{'slot':<6}{'type':<9}"
-        f"{'local':>8}{'remote':>8}{'delta':>8}{'%':>8}"
-    )
+    header = f"{'player':<28}{'slot':<6}{'type':<9}{'local':>8}{'remote':>8}{'delta':>8}{'%':>8}"
 
     by_type: dict[str, list[tuple]] = {"hitter": [], "pitcher": []}
     missing = []
@@ -55,8 +52,7 @@ def main() -> None:
         rows = sorted(by_type[t], key=lambda x: -abs(x[5]))
         for name, slot, ptype, ls, rs, delta, pct in rows:
             print(
-                f"{name[:27]:<28}{slot:<6}{ptype:<9}"
-                f"{ls:>8.2f}{rs:>8.2f}{delta:>+8.2f}{pct:>+7.1f}%"
+                f"{name[:27]:<28}{slot:<6}{ptype:<9}{ls:>8.2f}{rs:>8.2f}{delta:>+8.2f}{pct:>+7.1f}%"
             )
         print()
 
@@ -71,10 +67,7 @@ def main() -> None:
         )
     grand_l = sum(r[3] for rows in by_type.values() for r in rows)
     grand_r = sum(r[4] for rows in by_type.values() for r in rows)
-    print(
-        f"  TOTAL   : local={grand_l:.2f}  remote={grand_r:.2f}  "
-        f"delta={grand_l - grand_r:+.2f}"
-    )
+    print(f"  TOTAL   : local={grand_l:.2f}  remote={grand_r:.2f}  delta={grand_l - grand_r:+.2f}")
     if missing:
         print()
         print(f"Note: {len(missing)} local players missing from remote: {missing}")
