@@ -115,7 +115,8 @@ def test_hitter_avg_above_projection():
     }
     actual = {"pa": 120, "r": 18, "hr": 6, "rbi": 18, "sb": 2, "h": 42, "ab": 108}
     # actual AVG = 42/108 = .389, proj .278, dev = +0.111
-    # z = 0.111 / (0.103 * 0.278) = 0.111 / 0.0286 = 3.88 -> stat-hot-2
+    # Binomial SD = sqrt(.278*.722/108) = 0.0431
+    # z = 0.111 / 0.0431 = 2.57 -> stat-hot-2
     result = compute_player_pace(actual, projected, "hitter")
     assert "AVG" in result
     assert result["AVG"]["color_class"] == "stat-hot-2"
@@ -180,14 +181,15 @@ def test_pitcher_counting_and_rates():
     assert result["K"]["color_class"] == "stat-hot-1"
 
     # ERA: actual = 10*9/18 = 5.00, proj 3.00, dev = +2.0
-    # z = 2.0 / (0.252 * 3.00) = 2.0 / 0.756 = 2.65
-    # ERA is inverse -> negate -> -2.65 -> stat-cold-2
-    assert result["ERA"]["color_class"] == "stat-cold-2"
+    # Poisson SD(ERA) = sqrt(3.0 * 9 / 18) = 1.225
+    # z = 2.0 / 1.225 = 1.633; inverse -> -1.63 -> stat-cold-1 (1-2 SD)
+    assert result["ERA"]["color_class"] == "stat-cold-1"
     assert result["ERA"]["z_score"] < -1.0
+    assert result["ERA"]["z_score"] > -2.0
 
     # WHIP: actual = (5+16)/18 = 1.167, proj 1.11, dev = +0.057
-    # z = 0.057 / (0.143 * 1.11) = 0.057 / 0.159 = 0.36
-    # WHIP is inverse -> negate -> -0.36 -> neutral
+    # Poisson SD(WHIP) = sqrt(1.11 / 18) = 0.248
+    # z = 0.057 / 0.248 = 0.23; inverse -> -0.23 -> neutral
     assert result["WHIP"]["color_class"] == "stat-neutral"
 
 
@@ -310,6 +312,86 @@ def test_no_projection_shows_actuals_neutral():
     assert result["HR"]["actual"] == 3
     assert result["HR"]["color_class"] == "stat-neutral"
     assert result["HR"].get("z_score", 0) == 0.0
+
+
+def test_hitter_avg_uses_binomial_sampling_sd():
+    """AVG z-score must scale with sample size, not a fixed season-long CV.
+
+    Exact case from the data-scientist review: .444 in 27 AB vs .275 projected.
+    Binomial SD: sqrt(p*(1-p)/ab) = sqrt(.275*.725/27) = 0.0859
+    Expected z = (0.444 - 0.275) / 0.0859 = 1.97 → stat-hot-1 (not bright).
+
+    Old buggy formula divided by STAT_VARIANCE["h"] * proj_avg = 0.103*.275
+    = 0.0283, yielding z = 5.97 and incorrectly flagging bright green.
+    """
+    projected = {
+        "pa": 600,
+        "r": 90,
+        "hr": 30,
+        "rbi": 90,
+        "sb": 10,
+        "h": 149,
+        "ab": 540,
+        "avg": 0.275,
+    }
+    actual = {"pa": 30, "r": 4, "hr": 2, "rbi": 4, "sb": 0, "h": 12, "ab": 27}
+    result = compute_player_pace(actual, projected, "hitter")
+    assert result["AVG"]["z_score"] == pytest.approx(1.97, abs=0.1)
+    assert result["AVG"]["color_class"] == "stat-hot-1"
+
+
+def test_pitcher_era_uses_poisson_sampling_sd():
+    """ERA z-score must scale with innings pitched, not a fixed season-long CV.
+
+    Poisson approximation on ER count (λ = proj_era * ip / 9):
+    SD(ERA) = sqrt(proj_era * 9 / ip).
+
+    10 ER in 18 IP (5.00 ERA) vs 3.00 projected:
+    SD = sqrt(3.00*9/18) = 1.225; z = (5.00-3.00)/1.225 = 1.633;
+    inverted (lower-is-better): -1.63 → stat-cold-1.
+    """
+    projected = {
+        "ip": 180,
+        "w": 12,
+        "k": 190,
+        "sv": 0,
+        "er": 60,
+        "bb": 50,
+        "h_allowed": 150,
+        "era": 3.00,
+        "whip": 1.11,
+    }
+    actual = {"ip": 18.0, "k": 20, "w": 1, "sv": 0, "er": 10, "bb": 5, "h_allowed": 16}
+    result = compute_player_pace(actual, projected, "pitcher")
+    assert result["ERA"]["z_score"] == pytest.approx(-1.63, abs=0.1)
+    assert result["ERA"]["color_class"] == "stat-cold-1"
+
+
+def test_pitcher_whip_uses_poisson_sampling_sd():
+    """WHIP z-score must scale with innings pitched, not a fixed season-long CV.
+
+    Poisson approximation on baserunners (λ = proj_whip * ip):
+    SD(WHIP) = sqrt(proj_whip / ip).
+
+    30 baserunners in 18 IP (1.667 WHIP) vs 1.11 projected:
+    SD = sqrt(1.11/18) = 0.248; z = (1.667-1.11)/0.248 = 2.25;
+    inverted: -2.25 → stat-cold-2.
+    """
+    projected = {
+        "ip": 180,
+        "w": 12,
+        "k": 190,
+        "sv": 0,
+        "er": 60,
+        "bb": 50,
+        "h_allowed": 150,
+        "era": 3.00,
+        "whip": 1.11,
+    }
+    actual = {"ip": 18.0, "k": 18, "w": 1, "sv": 0, "er": 7, "bb": 10, "h_allowed": 20}
+    result = compute_player_pace(actual, projected, "pitcher")
+    assert result["WHIP"]["z_score"] == pytest.approx(-2.25, abs=0.15)
+    assert result["WHIP"]["color_class"] == "stat-cold-2"
 
 
 def test_hitter_rest_of_season_deviation_sgp():
