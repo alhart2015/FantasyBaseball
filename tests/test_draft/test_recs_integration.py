@@ -110,22 +110,55 @@ def test_mc_mean_approximates_expected_rank_sum():
     assert result["C"][0] == expected_tied_points + 3.0
 
 
-def test_compute_standings_cache_schema():
-    """Cache entries must expose total.point_estimate / total.sd at the
-    top level and keep per-category EVs under ``categories``."""
+def test_compute_standings_cache_returns_typed_rows():
+    """Cache returns ``TeamStandingsRow`` instances with float total/total_sd
+    and a ``Category``-keyed per-category dict."""
+    from fantasy_baseball.draft.recs_integration import TeamStandingsRow
+
     standings = _three_team_standings((150, 200, 250))
     team_sds = _uniform_sds(sd_per_cat=5.0)
     cache = compute_standings_cache(standings, team_sds, mc_iters=100, mc_seed=7)
 
     assert set(cache.keys()) == {"A", "B", "C"}
-    for _team, entry in cache.items():
-        assert "total" in entry
-        assert "point_estimate" in entry["total"]
-        assert "sd" in entry["total"]
-        assert entry["total"]["sd"] >= 0.0
-        assert isinstance(entry["categories"], dict)
-        # Every category present; each has a point_estimate float.
-        for cat in ALL_CATEGORIES:
-            cat_entry = entry["categories"][cat.value]
-            assert "point_estimate" in cat_entry
-            assert isinstance(cat_entry["point_estimate"], float)
+    for row in cache.values():
+        assert isinstance(row, TeamStandingsRow)
+        assert isinstance(row.total, float)
+        assert isinstance(row.total_sd, float)
+        assert row.total_sd >= 0.0
+        # Categories keyed on the Category enum, valued as float roto points.
+        assert set(row.categories.keys()) == set(ALL_CATEGORIES)
+        for ev in row.categories.values():
+            assert isinstance(ev, float)
+
+
+def test_standings_cache_round_trips_through_json():
+    """``serialize_standings_cache`` and ``deserialize_standings_cache``
+    must be inverses so the cache survives a write_state/read_state cycle."""
+    from fantasy_baseball.draft.recs_integration import (
+        deserialize_standings_cache,
+        serialize_standings_cache,
+    )
+
+    standings = _three_team_standings((150, 200, 250))
+    team_sds = _uniform_sds(sd_per_cat=5.0)
+    original = compute_standings_cache(standings, team_sds, mc_iters=100, mc_seed=7)
+    json_shape = serialize_standings_cache(original)
+    parsed = deserialize_standings_cache(json_shape)
+
+    assert parsed == original
+
+
+def test_deserialize_drops_malformed_entries():
+    """Legacy / malformed entries are skipped, not crashed on."""
+    from fantasy_baseball.draft.recs_integration import deserialize_standings_cache
+
+    cache = deserialize_standings_cache(
+        {
+            "GoodTeam": {"total": 55.0, "total_sd": 4.2, "categories": {"R": 6.0}},
+            "LegacyTeam": {"R": {"point_estimate": 6.0, "sd": 25.0}},  # old schema
+            "EmptyTeam": {},
+        }
+    )
+    assert set(cache.keys()) == {"GoodTeam"}
+    assert cache["GoodTeam"].total == 55.0
+    assert cache["GoodTeam"].total_sd == 4.2

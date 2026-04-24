@@ -169,9 +169,8 @@ def _attach_standings_cache(
             app.config["BOARD_PATH"],
             league_yaml,
         )
-        state["projected_standings_cache"] = recs_integration.compute_standings_cache(
-            projected_standings, team_sds
-        )
+        rows = recs_integration.compute_standings_cache(projected_standings, team_sds)
+        state["projected_standings_cache"] = recs_integration.serialize_standings_cache(rows)
     except Exception:
         logging.getLogger(__name__).exception(
             "failed to refresh projected_standings_cache; leaving stale cache"
@@ -308,24 +307,17 @@ def _register_writer_routes(app):
 
     @app.get("/api/standings")
     def standings():
+        from fantasy_baseball.draft import recs_integration
+
         state = draft_controller.resume_or_init(app.config["STATE_PATH"])
-        cache = state.get("projected_standings_cache", {})
-        rows = []
-        for team, entry in cache.items():
-            total_entry = entry.get("total") if isinstance(entry, dict) else None
-            if not isinstance(total_entry, dict):
-                # Legacy cache shape ({cat: {point_estimate, sd}}) — ignore
-                # rather than producing a garbage SD. Next pick refreshes.
-                continue
-            rows.append(
-                {
-                    "team": team,
-                    "total": float(total_entry.get("point_estimate", 0.0)),
-                    "sd": float(total_entry.get("sd", 0.0)),
-                }
-            )
-        rows.sort(key=lambda r: r["total"], reverse=True)
-        return jsonify(rows)
+        cache = recs_integration.deserialize_standings_cache(
+            state.get("projected_standings_cache") or {}
+        )
+        # Sort on the typed dataclass so mypy sees float, not object.
+        sorted_items = sorted(cache.items(), key=lambda kv: kv[1].total, reverse=True)
+        return jsonify(
+            [{"team": team, "total": row.total, "sd": row.total_sd} for team, row in sorted_items]
+        )
 
 
 def create_app(state_path: Path | None = None) -> Flask:

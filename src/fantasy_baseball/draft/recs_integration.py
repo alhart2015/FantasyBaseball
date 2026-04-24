@@ -9,6 +9,7 @@ outside ``draft_controller`` so the controller stays pure.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any, cast
@@ -250,24 +251,51 @@ def monte_carlo_roto_totals(
     return {t: (float(m), float(s)) for t, m, s in zip(teams, means_out, sds_out, strict=True)}
 
 
+@dataclass(frozen=True)
+class TeamStandingsRow:
+    """One team's entry in the ``projected_standings_cache``.
+
+    ``total`` / ``total_sd`` describe the team's projected total roto
+    points (from a Monte-Carlo over projection uncertainty). ``categories``
+    maps each roto category to its fractional EV points (from
+    ``score_roto``) for per-category drill-down.
+    """
+
+    total: float
+    total_sd: float
+    categories: dict[Category, float]
+
+    def to_json(self) -> dict[str, Any]:
+        """Serialize to the shape stored in ``draft_state.json``."""
+        return {
+            "total": self.total,
+            "total_sd": self.total_sd,
+            "categories": {cat.value: pts for cat, pts in self.categories.items()},
+        }
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> TeamStandingsRow:
+        """Parse from the JSON shape written by :meth:`to_json`."""
+        return cls(
+            total=float(data["total"]),
+            total_sd=float(data["total_sd"]),
+            categories={Category(k): float(v) for k, v in (data.get("categories") or {}).items()},
+        )
+
+
 def compute_standings_cache(
     projected_standings: ProjectedStandings,
     team_sds: Mapping[str, Mapping[Category, float]],
     *,
     mc_iters: int = 500,
     mc_seed: int | None = None,
-) -> dict[str, dict[str, Any]]:
-    """Build the ``projected_standings_cache`` shape the dashboard reads.
+) -> dict[str, TeamStandingsRow]:
+    """Build the standings cache (one :class:`TeamStandingsRow` per team).
 
-    Schema per team:
-
-    ``{"total": {"point_estimate": float, "sd": float},
-      "categories": {cat_value: {"point_estimate": float}}}``
-
-    ``total.point_estimate`` and ``total.sd`` come from a Monte-Carlo
-    simulation that perturbs each team's raw category totals by their
-    projection SD and rank-scores each draw. ``categories`` holds the
-    fractional per-category EV from ``score_roto`` for drill-down display.
+    Per-team totals and SDs come from a Monte-Carlo over projection
+    uncertainty (see :func:`monte_carlo_roto_totals`). Per-category EVs
+    come from ``score_roto`` so the drill-down matches the numbers
+    :func:`rank_candidates` sees.
     """
     # ProjectedStandings structurally satisfies TeamStatsTable, but mypy
     # can't see the protocol variance through list[ProjectedStandingsEntry]
@@ -279,13 +307,36 @@ def compute_standings_cache(
         n_iters=mc_iters,
         seed=mc_seed,
     )
-    cache: dict[str, dict[str, Any]] = {}
+    cache: dict[str, TeamStandingsRow] = {}
     for team, cat_points in points.items():
         mean_total, sd_total = mc.get(team, (float(cat_points.total), 0.0))
-        cache[team] = {
-            "total": {"point_estimate": mean_total, "sd": sd_total},
-            "categories": {
-                cat.value: {"point_estimate": float(pts)} for cat, pts in cat_points.values.items()
-            },
-        }
+        cache[team] = TeamStandingsRow(
+            total=mean_total,
+            total_sd=sd_total,
+            categories={cat: float(pts) for cat, pts in cat_points.values.items()},
+        )
     return cache
+
+
+def serialize_standings_cache(
+    cache: Mapping[str, TeamStandingsRow],
+) -> dict[str, dict[str, Any]]:
+    """Serialize a standings cache for persistence in ``draft_state.json``."""
+    return {team: row.to_json() for team, row in cache.items()}
+
+
+def deserialize_standings_cache(
+    data: Mapping[str, Mapping[str, Any]],
+) -> dict[str, TeamStandingsRow]:
+    """Parse a persisted standings cache back into typed rows.
+
+    Entries that fail to parse (legacy schema, missing keys, etc.) are
+    silently dropped — the next pick refreshes the cache.
+    """
+    out: dict[str, TeamStandingsRow] = {}
+    for team, raw in data.items():
+        try:
+            out[team] = TeamStandingsRow.from_json(raw)
+        except (KeyError, ValueError, TypeError):
+            continue
+    return out
