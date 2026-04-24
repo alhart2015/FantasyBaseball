@@ -310,14 +310,20 @@ def _register_writer_routes(app):
     def standings():
         state = draft_controller.resume_or_init(app.config["STATE_PATH"])
         cache = state.get("projected_standings_cache", {})
-        rows = [
-            {
-                "team": team,
-                "total": sum(c["point_estimate"] for c in cats.values()),
-                "sd": (sum(c["sd"] ** 2 for c in cats.values())) ** 0.5,
-            }
-            for team, cats in cache.items()
-        ]
+        rows = []
+        for team, entry in cache.items():
+            total_entry = entry.get("total") if isinstance(entry, dict) else None
+            if not isinstance(total_entry, dict):
+                # Legacy cache shape ({cat: {point_estimate, sd}}) — ignore
+                # rather than producing a garbage SD. Next pick refreshes.
+                continue
+            rows.append(
+                {
+                    "team": team,
+                    "total": float(total_entry.get("point_estimate", 0.0)),
+                    "sd": float(total_entry.get("sd", 0.0)),
+                }
+            )
         rows.sort(key=lambda r: r["total"], reverse=True)
         return jsonify(rows)
 

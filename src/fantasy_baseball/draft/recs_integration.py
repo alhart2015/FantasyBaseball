@@ -13,14 +13,16 @@ from datetime import date
 from pathlib import Path
 from typing import Any, cast
 
+import numpy as np
 import pandas as pd
+from scipy.stats import rankdata
 
 from fantasy_baseball.draft.adp import ADPTable, blend_adp
 from fantasy_baseball.draft.state import read_board
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.models.standings import ProjectedStandings, ProjectedStandingsEntry
 from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto
-from fantasy_baseball.utils.constants import Category
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS, Category
 
 _NON_ACTIVE_SLOTS: frozenset[str] = frozenset({"BN", "IL", "IL+", "DL", "DL+"})
 
@@ -203,27 +205,87 @@ def compute_rec_inputs(
     return candidates, replacements, projected_standings, team_sds, adp_table
 
 
+def monte_carlo_roto_totals(
+    projected_standings: ProjectedStandings,
+    team_sds: Mapping[str, Mapping[Category, float]],
+    *,
+    n_iters: int = 500,
+    seed: int | None = None,
+) -> dict[str, tuple[float, float]]:
+    """Monte-Carlo simulate final roto totals under projection uncertainty.
+
+    For each iteration: perturb each team's raw category total by a
+    Gaussian with the team's projection SD for that category, rank teams
+    per category (averaging ties, reversing for ERA/WHIP), and sum the
+    resulting per-category ranks (1..n_teams) as that team's total.
+
+    Returns ``{team: (mean_total, sd_total)}`` across ``n_iters`` draws.
+    The mean approximates ``score_roto``'s EV (averaged ranks converge to
+    the Gaussian pairwise smooth approximation); the SD is the honest
+    uncertainty on the total roto points — the quantity a naive
+    quadrature-sum of per-category projection SDs does not produce.
+    """
+    rng = np.random.default_rng(seed)
+    teams = [e.team_name for e in projected_standings.entries]
+    if not teams:
+        return {}
+    stats_by_team = {e.team_name: e.stats for e in projected_standings.entries}
+
+    totals = np.zeros((n_iters, len(teams)))
+    for cat in ALL_CATEGORIES:
+        means = np.array([stats_by_team[t][cat] for t in teams], dtype=float)
+        sds = np.array(
+            [float(team_sds.get(t, {}).get(cat, 0.0)) for t in teams],
+            dtype=float,
+        )
+        samples = rng.normal(loc=means, scale=sds, size=(n_iters, len(teams)))
+        if cat in INVERSE_STATS:
+            samples = -samples  # lower is better → flip sign for ranking
+        # rankdata returns 1..n with averaged ties. Applied per iteration.
+        ranks = np.apply_along_axis(rankdata, 1, samples)
+        totals += ranks
+
+    means_out = totals.mean(axis=0)
+    sds_out = totals.std(axis=0, ddof=1) if n_iters > 1 else np.zeros(len(teams))
+    return {t: (float(m), float(s)) for t, m, s in zip(teams, means_out, sds_out, strict=True)}
+
+
 def compute_standings_cache(
     projected_standings: ProjectedStandings,
     team_sds: Mapping[str, Mapping[Category, float]],
-) -> dict[str, dict[str, dict[str, float]]]:
+    *,
+    mc_iters: int = 500,
+    mc_seed: int | None = None,
+) -> dict[str, dict[str, Any]]:
     """Build the ``projected_standings_cache`` shape the dashboard reads.
 
-    Returns ``{team: {category_value: {"point_estimate": roto_pts, "sd": proj_sd}}}``.
-    ``point_estimate`` is the fractional roto points from ``score_roto``.
-    ``sd`` is the raw projection SD for that category — a coarse proxy
-    for the uncertainty on the roto points estimate (proper ERoto
-    uncertainty math can land in a follow-up).
+    Schema per team:
+
+    ``{"total": {"point_estimate": float, "sd": float},
+      "categories": {cat_value: {"point_estimate": float}}}``
+
+    ``total.point_estimate`` and ``total.sd`` come from a Monte-Carlo
+    simulation that perturbs each team's raw category totals by their
+    projection SD and rank-scores each draw. ``categories`` holds the
+    fractional per-category EV from ``score_roto`` for drill-down display.
     """
     # ProjectedStandings structurally satisfies TeamStatsTable, but mypy
     # can't see the protocol variance through list[ProjectedStandingsEntry]
     # vs Sequence[TeamStatsRow]. Same cast pattern web/season_data.py uses.
     points = score_roto(cast("Any", projected_standings), team_sds=team_sds)
-    cache: dict[str, dict[str, dict[str, float]]] = {}
+    mc = monte_carlo_roto_totals(
+        projected_standings,
+        team_sds,
+        n_iters=mc_iters,
+        seed=mc_seed,
+    )
+    cache: dict[str, dict[str, Any]] = {}
     for team, cat_points in points.items():
-        cats: dict[str, dict[str, float]] = {}
-        for cat, pts in cat_points.values.items():
-            sd = float(team_sds.get(team, {}).get(cat, 0.0)) if team_sds else 0.0
-            cats[cat.value] = {"point_estimate": float(pts), "sd": sd}
-        cache[team] = cats
+        mean_total, sd_total = mc.get(team, (float(cat_points.total), 0.0))
+        cache[team] = {
+            "total": {"point_estimate": mean_total, "sd": sd_total},
+            "categories": {
+                cat.value: {"point_estimate": float(pts)} for cat, pts in cat_points.values.items()
+            },
+        }
     return cache
