@@ -14,6 +14,7 @@ comparison page. It has been removed — pace highlighting is now the
 only legitimate use of in-season game logs for display.
 """
 
+import math
 from typing import Any
 
 from fantasy_baseball.models.player import PlayerType
@@ -30,9 +31,6 @@ from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calc
 # Roto categories by player type
 HITTER_COUNTING = ["r", "hr", "rbi", "sb"]
 PITCHER_COUNTING = ["w", "k", "sv"]
-
-# Rate stat -> component stat for variance lookup
-RATE_COMPONENT = {"avg": "h", "era": "er", "whip": "h_allowed"}
 
 # Sample size thresholds
 # Hitters: < 10 PA = all neutral, 10-29 PA = counting colored / rates neutral, >= 30 PA = all colored
@@ -174,8 +172,11 @@ def compute_player_pace(
         actual_avg = round(calculate_avg(actual_h, actual_ab, default=0.0), 3)
 
         if proj_avg > 0 and actual_ab > 0 and rates_colored:
-            variance = STAT_VARIANCE.get("h", 0.0)
-            z = (actual_avg - proj_avg) / (variance * proj_avg) if variance > 0 else 0.0
+            # Binomial sampling SD: SD(hits/AB) = sqrt(p*(1-p)/AB).
+            # This is the distribution of a sample mean of a Bernoulli trial
+            # with probability proj_avg over actual_ab at-bats.
+            sd = math.sqrt(proj_avg * (1.0 - proj_avg) / actual_ab)
+            z = (actual_avg - proj_avg) / sd if sd > 0 else 0.0
         else:
             z = 0.0
 
@@ -198,9 +199,12 @@ def compute_player_pace(
 
         # ERA
         actual_era = round(calculate_era(actual_er, actual_ip, default=0.0), 2)
-        if proj_era > 0 and rates_colored:
-            variance = STAT_VARIANCE.get("er", 0.0)
-            z = (actual_era - proj_era) / (variance * proj_era) if variance > 0 else 0.0
+        if proj_era > 0 and actual_ip > 0 and rates_colored:
+            # Poisson sampling SD on ER count: Var(ER) ≈ λ = proj_era*ip/9.
+            # Dividing by ip/9 to convert count SD back to ERA units gives
+            # SD(ERA) = sqrt(proj_era * 9 / ip).
+            sd = math.sqrt(proj_era * 9.0 / actual_ip)
+            z = (actual_era - proj_era) / sd if sd > 0 else 0.0
             z = -z  # inverse stat: lower is better
         else:
             z = 0.0
@@ -216,9 +220,11 @@ def compute_player_pace(
 
         # WHIP
         actual_whip = round(calculate_whip(actual_bb, actual_ha, actual_ip, default=0.0), 2)
-        if proj_whip > 0 and rates_colored:
-            variance = STAT_VARIANCE.get("h_allowed", 0.0)
-            z = (actual_whip - proj_whip) / (variance * proj_whip) if variance > 0 else 0.0
+        if proj_whip > 0 and actual_ip > 0 and rates_colored:
+            # Poisson sampling SD on baserunners: Var(BB+H) ≈ λ = proj_whip*ip.
+            # SD(WHIP) = sqrt(proj_whip / ip).
+            sd = math.sqrt(proj_whip / actual_ip)
+            z = (actual_whip - proj_whip) / sd if sd > 0 else 0.0
             z = -z  # inverse stat: lower is better
         else:
             z = 0.0

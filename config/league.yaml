@@ -124,13 +124,21 @@ projections:
     oopsy: 0.20
 
 sgp_denominators:
-  R: 20
-  HR: 9
-  RBI: 20
-  SB: 8
-  AVG: 0.005
+  # Empirically derived from this league's 2023-2025 end-of-season standings
+  # via `scripts/derive_sgp_denominators.py`. Value = mean adjacent-rank gap
+  # across the 3 seasons. Re-run after each season to keep current.
+  #
+  # W is rounded up (mean 2.44 -> 3 not 2) because the 3-year gap range
+  # is 1.67-3.33 and W=2 over-values wins enough to push strategies
+  # toward all-SP early rounds (caught by pitcher-overvaluation guard in
+  # tests/test_integration/test_draft_integration.py).
+  R: 21
+  HR: 7
+  RBI: 21
+  SB: 12
+  AVG: 0.0025
   W: 3
-  K: 30
-  ERA: 0.15
-  WHIP: 0.015
-  SV: 7
+  K: 33
+  ERA: 0.121
+  WHIP: 0.018
+  SV: 8
