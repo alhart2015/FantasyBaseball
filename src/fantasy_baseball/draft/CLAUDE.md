@@ -23,9 +23,11 @@ Each strategy is a `pick_*()` function in `draft/strategy.py` registered in the 
 
 ## Draft dashboard (web-only)
 
-All pick entry happens in `src/fantasy_baseball/web/app.py`. The CLI
-(`scripts/run_draft.py`) is still available as a legacy path but the new
-dashboard is the intended entry point.
+All pick entry happens in `src/fantasy_baseball/web/app.py`. Launch with
+`python scripts/run_draft_dashboard.py` (default port 5050, `--debug`
+flag for auto-reload during development). The legacy CLI
+(`scripts/run_draft.py`) is still available until the dashboard's
+real-data path is complete.
 
 - `draft_state.json` — snapshot written atomically by the Flask writer
   endpoints on every pick. Reader (the browser JS) polls
