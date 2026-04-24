@@ -12,15 +12,15 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fantasy_baseball.draft.state import Pick, read_state
+from fantasy_baseball.draft.state import Pick, StateKey, read_state
 
 EMPTY_STATE: dict[str, Any] = {
-    "version": 0,
-    "keepers": [],
-    "picks": [],
-    "undo_stack": [],
-    "on_the_clock": None,
-    "projected_standings_cache": {},
+    StateKey.VERSION: 0,
+    StateKey.KEEPERS: [],
+    StateKey.PICKS: [],
+    StateKey.UNDO_STACK: [],
+    StateKey.ON_THE_CLOCK: None,
+    StateKey.PROJECTED_STANDINGS_CACHE: {},
 }
 
 
@@ -86,12 +86,12 @@ def start_new_draft(
         raise UnresolvedKeeperError("Could not resolve keepers: " + "; ".join(unresolved))
 
     return {
-        "version": 0,
-        "keepers": keepers,
-        "picks": [],
-        "undo_stack": [],
-        "on_the_clock": first_picker,
-        "projected_standings_cache": {},
+        StateKey.VERSION: 0,
+        StateKey.KEEPERS: keepers,
+        StateKey.PICKS: [],
+        StateKey.UNDO_STACK: [],
+        StateKey.ON_THE_CLOCK: first_picker,
+        StateKey.PROJECTED_STANDINGS_CACHE: {},
     }
 
 
@@ -133,13 +133,15 @@ def apply_pick(
     teams_by_position: dict[int, str],
 ) -> dict[str, Any]:
     """Record a live pick, advance the snake order, return the new state."""
-    if state["on_the_clock"] != team:
-        raise WrongTeamError(f"{team} is not on the clock — {state['on_the_clock']} is.")
-    all_ids = {p["player_id"] for p in state["keepers"]} | {p["player_id"] for p in state["picks"]}
+    if state[StateKey.ON_THE_CLOCK] != team:
+        raise WrongTeamError(f"{team} is not on the clock — {state[StateKey.ON_THE_CLOCK]} is.")
+    all_ids = {p["player_id"] for p in state[StateKey.KEEPERS]} | {
+        p["player_id"] for p in state[StateKey.PICKS]
+    }
     if player_id in all_ids:
         raise AlreadyDraftedError(f"{player_id} already drafted")
 
-    pick_number = len(state["picks"]) + 1
+    pick_number = len(state[StateKey.PICKS]) + 1
     num_teams = len(teams_by_position)
     round_number = (pick_number - 1) // num_teams + 1
 
@@ -154,9 +156,11 @@ def apply_pick(
     ).to_dict()
 
     new_state = {**state}
-    new_state["picks"] = state["picks"] + [new_pick]
-    new_state["on_the_clock"] = _compute_on_the_clock(teams_by_position, len(new_state["picks"]))
-    new_state["undo_stack"] = []
+    new_state[StateKey.PICKS] = state[StateKey.PICKS] + [new_pick]
+    new_state[StateKey.ON_THE_CLOCK] = _compute_on_the_clock(
+        teams_by_position, len(new_state[StateKey.PICKS])
+    )
+    new_state[StateKey.UNDO_STACK] = []
     return new_state
 
 
@@ -169,15 +173,17 @@ def undo_pick(
     teams_by_position: dict[int, str],
 ) -> dict[str, Any]:
     """Pop the most recent live pick, advance the undo stack, roll on_the_clock back."""
-    if not state["picks"]:
+    if not state[StateKey.PICKS]:
         return state
     new_state = {**state}
-    popped = new_state["picks"][-1]
-    new_state["picks"] = new_state["picks"][:-1]
-    undo_stack = new_state.get("undo_stack", [])[:]
+    popped = new_state[StateKey.PICKS][-1]
+    new_state[StateKey.PICKS] = new_state[StateKey.PICKS][:-1]
+    undo_stack = new_state.get(StateKey.UNDO_STACK, [])[:]
     undo_stack.append(popped)
     if len(undo_stack) > UNDO_CAP:
         undo_stack = undo_stack[-UNDO_CAP:]
-    new_state["undo_stack"] = undo_stack
-    new_state["on_the_clock"] = _compute_on_the_clock(teams_by_position, len(new_state["picks"]))
+    new_state[StateKey.UNDO_STACK] = undo_stack
+    new_state[StateKey.ON_THE_CLOCK] = _compute_on_the_clock(
+        teams_by_position, len(new_state[StateKey.PICKS])
+    )
     return new_state

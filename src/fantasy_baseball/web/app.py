@@ -35,9 +35,22 @@ import yaml
 from flask import Flask, jsonify, render_template, request
 
 from fantasy_baseball.draft import draft_controller
-from fantasy_baseball.draft.state import read_board, read_delta, read_state, write_state
+from fantasy_baseball.draft.state import (
+    StateKey,
+    read_board,
+    read_delta,
+    read_state,
+    write_state,
+)
 
 DEFAULT_STATE_PATH = Path(__file__).resolve().parents[3] / "data" / "draft_state.json"
+
+# Flask app.config keys. Module-level constants so a typo at a read site
+# is caught by mypy (against `Final[str]`) rather than silently returning
+# None from app.config.get and crashing later.
+CFG_STATE_PATH: str = "STATE_PATH"
+CFG_BOARD_PATH: str = "BOARD_PATH"
+CFG_DELTA_PATH: str = "DELTA_PATH"
 
 
 def _load_league_yaml() -> dict[str, Any]:
@@ -64,7 +77,7 @@ def _resolve_keeper_factory(app: Flask):
     from fantasy_baseball.draft.draft_controller import KeeperNotFound
     from fantasy_baseball.utils.name_utils import normalize_name
 
-    board = read_board(app.config["BOARD_PATH"])
+    board = read_board(app.config[CFG_BOARD_PATH])
     # Index rows by normalized name. Multiple rows per name are rare but
     # possible (namesakes) — we keep a list and tie-break at lookup time.
     by_norm: dict[str, list[dict[str, Any]]] = {}
@@ -91,7 +104,7 @@ def _resolve_keeper_factory(app: Flask):
 def _load_board_cached(app):
     """Return the on-disk draft board, cached per-app.
 
-    Reads from ``app.config["BOARD_PATH"]`` once and stashes the result
+    Reads from ``app.config[CFG_BOARD_PATH]`` once and stashes the result
     on the app instance. Returns ``None`` when the board file does not
     exist or is empty — callers should treat that as "no real-data path
     available yet" and fall back to a 503.
@@ -99,7 +112,7 @@ def _load_board_cached(app):
     cached = getattr(app, "_draft_board_cache", "__missing__")
     if cached != "__missing__":
         return cached
-    rows = read_board(app.config["BOARD_PATH"])
+    rows = read_board(app.config[CFG_BOARD_PATH])
     app._draft_board_cache = rows if rows else None
     return app._draft_board_cache
 
@@ -121,7 +134,7 @@ def _build_rec_inputs(app, state, league_yaml):
         )
     return recs_integration.compute_rec_inputs(
         state,
-        app.config["BOARD_PATH"],
+        app.config[CFG_BOARD_PATH],
         league_yaml,
     )
 
@@ -138,7 +151,7 @@ def _picks_until_next_turn(state, team):
         league_yaml = _load_league_yaml()
         teams_by_position = _teams_by_position(league_yaml)
         order = _snake_order(teams_by_position, num_rounds=30)
-        picks_so_far = len(state.get("picks", []))
+        picks_so_far = len(state.get(StateKey.PICKS, []))
         for i in range(picks_so_far + 1, len(order)):
             if order[i] == team:
                 return i - picks_so_far
@@ -164,13 +177,13 @@ def _attach_standings_cache(
             return state
         from fantasy_baseball.draft import recs_integration
 
-        _, _, projected_standings, team_sds, _ = recs_integration.compute_rec_inputs(
+        inputs = recs_integration.compute_rec_inputs(
             state,
-            app.config["BOARD_PATH"],
+            app.config[CFG_BOARD_PATH],
             league_yaml,
         )
-        rows = recs_integration.compute_standings_cache(projected_standings, team_sds)
-        state["projected_standings_cache"] = recs_integration.serialize_standings_cache(rows)
+        rows = recs_integration.compute_standings_cache(inputs.projected_standings, inputs.team_sds)
+        state[StateKey.PROJECTED_STANDINGS_CACHE] = recs_integration.serialize_standings_cache(rows)
     except Exception:
         logging.getLogger(__name__).exception(
             "failed to refresh projected_standings_cache; leaving stale cache"
@@ -190,7 +203,7 @@ def _register_writer_routes(app):
         except draft_controller.UnresolvedKeeperError as e:
             return jsonify({"error": str(e)}), 400
         state = _attach_standings_cache(app, state, league_yaml)
-        write_state(state, app.config["STATE_PATH"])
+        write_state(state, app.config[CFG_STATE_PATH])
         return jsonify(state)
 
     @app.post("/api/pick")
@@ -201,7 +214,7 @@ def _register_writer_routes(app):
         if missing:
             return jsonify({"error": f"missing fields: {missing}"}), 400
         league_yaml = _load_league_yaml()
-        state = draft_controller.resume_or_init(app.config["STATE_PATH"])
+        state = draft_controller.resume_or_init(app.config[CFG_STATE_PATH])
         try:
             new_state = draft_controller.apply_pick(
                 state,
@@ -216,19 +229,19 @@ def _register_writer_routes(app):
         except draft_controller.AlreadyDraftedError as e:
             return jsonify({"error": str(e)}), 409
         new_state = _attach_standings_cache(app, new_state, league_yaml)
-        write_state(new_state, app.config["STATE_PATH"])
+        write_state(new_state, app.config[CFG_STATE_PATH])
         return jsonify(new_state)
 
     @app.post("/api/undo")
     def undo():
         league_yaml = _load_league_yaml()
-        state = draft_controller.resume_or_init(app.config["STATE_PATH"])
+        state = draft_controller.resume_or_init(app.config[CFG_STATE_PATH])
         new_state = draft_controller.undo_pick(
             state,
             teams_by_position=_teams_by_position(league_yaml),
         )
         new_state = _attach_standings_cache(app, new_state, league_yaml)
-        write_state(new_state, app.config["STATE_PATH"])
+        write_state(new_state, app.config[CFG_STATE_PATH])
         return jsonify(new_state)
 
     @app.post("/api/on-the-clock")
@@ -237,10 +250,10 @@ def _register_writer_routes(app):
         if "team" not in body:
             return jsonify({"error": "missing fields: ['team']"}), 400
         league_yaml = _load_league_yaml()
-        state = draft_controller.resume_or_init(app.config["STATE_PATH"])
+        state = draft_controller.resume_or_init(app.config[CFG_STATE_PATH])
         new_state = {**state, "on_the_clock": body["team"]}
         new_state = _attach_standings_cache(app, new_state, league_yaml)
-        write_state(new_state, app.config["STATE_PATH"])
+        write_state(new_state, app.config[CFG_STATE_PATH])
         return jsonify(new_state)
 
     @app.post("/api/reset")
@@ -249,9 +262,9 @@ def _register_writer_routes(app):
         if body.get("confirm") != "RESET":
             return jsonify({"error": "missing confirm"}), 400
         for p in (
-            app.config["STATE_PATH"],
-            app.config["BOARD_PATH"],
-            app.config["DELTA_PATH"],
+            app.config[CFG_STATE_PATH],
+            app.config[CFG_BOARD_PATH],
+            app.config[CFG_DELTA_PATH],
         ):
             Path(p).unlink(missing_ok=True)
         return jsonify({"reset": True})
@@ -264,26 +277,20 @@ def _register_writer_routes(app):
         if not team:
             return jsonify({"error": "missing team parameter"}), 400
         league_yaml = _load_league_yaml()
-        state = draft_controller.resume_or_init(app.config["STATE_PATH"])
+        state = draft_controller.resume_or_init(app.config[CFG_STATE_PATH])
         try:
-            (
-                candidates,
-                replacements,
-                projected_standings,
-                team_sds,
-                adp_table,
-            ) = _build_rec_inputs(app, state, league_yaml)
+            inputs = _build_rec_inputs(app, state, league_yaml)
         except RuntimeError as e:
             return jsonify({"error": str(e)}), 503
         picks_until_next = _picks_until_next_turn(state, team)
         rows = eroto_recs.rank_candidates(
-            candidates=candidates,
-            replacements=replacements,
+            candidates=inputs.candidates,
+            replacements=inputs.replacements,
             team_name=team,
-            projected_standings=projected_standings,
-            team_sds=team_sds,
+            projected_standings=inputs.projected_standings,
+            team_sds=inputs.team_sds,
             picks_until_next_turn=picks_until_next,
-            adp_table=adp_table,
+            adp_table=inputs.adp_table,
         )
         return jsonify([row.__dict__ for row in rows[:10]])
 
@@ -292,9 +299,11 @@ def _register_writer_routes(app):
         team = request.args.get("team")
         if not team:
             return jsonify({"error": "missing team parameter"}), 400
-        state = draft_controller.resume_or_init(app.config["STATE_PATH"])
+        state = draft_controller.resume_or_init(app.config[CFG_STATE_PATH])
         drafted = [
-            p for p in (state.get("keepers", []) + state.get("picks", [])) if p["team"] == team
+            p
+            for p in (state.get(StateKey.KEEPERS, []) + state.get(StateKey.PICKS, []))
+            if p["team"] == team
         ]
         roster_slots = _load_league_yaml().get("roster_slots", {}) or {}
         rows = [
@@ -309,9 +318,9 @@ def _register_writer_routes(app):
     def standings():
         from fantasy_baseball.draft import recs_integration
 
-        state = draft_controller.resume_or_init(app.config["STATE_PATH"])
+        state = draft_controller.resume_or_init(app.config[CFG_STATE_PATH])
         cache = recs_integration.deserialize_standings_cache(
-            state.get("projected_standings_cache") or {}
+            state.get(StateKey.PROJECTED_STANDINGS_CACHE) or {}
         )
         # Sort on the typed dataclass so mypy sees float, not object.
         sorted_items = sorted(cache.items(), key=lambda kv: kv[1].total, reverse=True)
@@ -341,23 +350,23 @@ def create_app(state_path: Path | None = None) -> Flask:
         template_folder=str(Path(__file__).parent / "templates"),
         static_folder=str(Path(__file__).parent / "static"),
     )
-    app.config["STATE_PATH"] = state_path
-    app.config["BOARD_PATH"] = board_path
-    app.config["DELTA_PATH"] = delta_path
+    app.config[CFG_STATE_PATH] = state_path
+    app.config[CFG_BOARD_PATH] = board_path
+    app.config[CFG_DELTA_PATH] = delta_path
 
     # Suppress Flask/werkzeug request logging (htmx polls every 2s)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
     @app.route("/")
     def index():
-        state = read_state(app.config["STATE_PATH"])
+        state = read_state(app.config[CFG_STATE_PATH])
         roster_slots = state.get("roster_slots", {})
         return render_template("dashboard.html", state=state, roster_slots=roster_slots)
 
     @app.route("/api/board")
     def api_board():
         """Return the full player board (fetched once by the client)."""
-        board = read_board(app.config["BOARD_PATH"])
+        board = read_board(app.config[CFG_BOARD_PATH])
         return jsonify(board)
 
     @app.route("/api/state")
@@ -372,7 +381,7 @@ def create_app(state_path: Path | None = None) -> Flask:
 
         if since_param is None:
             # Legacy / initial load: return full state.
-            state = read_state(app.config["STATE_PATH"])
+            state = read_state(app.config[CFG_STATE_PATH])
             return jsonify(state)
 
         # Client wants a delta.
@@ -380,14 +389,14 @@ def create_app(state_path: Path | None = None) -> Flask:
             since_version = int(since_param)
         except (ValueError, TypeError):
             # Bad param: fall back to full state.
-            state = read_state(app.config["STATE_PATH"])
+            state = read_state(app.config[CFG_STATE_PATH])
             return jsonify(state)
 
         # Read the latest delta file.
-        delta = read_delta(app.config["DELTA_PATH"])
+        delta = read_delta(app.config[CFG_DELTA_PATH])
         if not delta:
             # No delta file yet: return full state.
-            state = read_state(app.config["STATE_PATH"])
+            state = read_state(app.config[CFG_STATE_PATH])
             return jsonify(state)
 
         current_version = delta.get("version", 0)
@@ -403,7 +412,7 @@ def create_app(state_path: Path | None = None) -> Flask:
 
         # Client is multiple versions behind (or version 0 / first load):
         # return the full state so they can reset.
-        state = read_state(app.config["STATE_PATH"])
+        state = read_state(app.config[CFG_STATE_PATH])
         # Strip available_players to save bandwidth when client has
         # the board cached.  Include a flag so the client knows this
         # is a full-state reset.

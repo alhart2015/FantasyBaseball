@@ -19,7 +19,7 @@ import pandas as pd
 from scipy.stats import rankdata
 
 from fantasy_baseball.draft.adp import ADPTable, blend_adp
-from fantasy_baseball.draft.state import read_board
+from fantasy_baseball.draft.state import StateKey, read_board
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.models.standings import ProjectedStandings, ProjectedStandingsEntry
 from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto
@@ -40,8 +40,8 @@ def rows_to_players(rows: list[dict[str, Any]]) -> list[Player]:
 
 def drafted_ids(state: dict[str, Any]) -> set[str]:
     """All player_ids already claimed by keepers or picks."""
-    keepers = state.get("keepers") or []
-    picks = state.get("picks") or []
+    keepers = state.get(StateKey.KEEPERS) or []
+    picks = state.get(StateKey.PICKS) or []
     return {p["player_id"] for p in (keepers + picks)}
 
 
@@ -120,7 +120,7 @@ def build_team_rosters(
     to the replacement at the keeper's declared position.
     """
     team_picks: dict[str, list[Player]] = {t: [] for t in teams}
-    for entry in (state.get("keepers") or []) + (state.get("picks") or []):
+    for entry in (state.get(StateKey.KEEPERS) or []) + (state.get(StateKey.PICKS) or []):
         team = entry["team"]
         pid = entry["player_id"]
         player = board_by_id.get(pid)
@@ -171,18 +171,28 @@ def _league_teams(league_yaml: Mapping[str, Any]) -> list[str]:
     return list(teams_raw)
 
 
+@dataclass(frozen=True)
+class RecInputs:
+    """Bundle of inputs ``eroto_recs.rank_candidates`` consumes.
+
+    Returned by :func:`compute_rec_inputs` so callers don't have to
+    unpack a 5-tuple by position. Pass ``inputs.candidates``,
+    ``inputs.replacements``, etc., to ``rank_candidates`` keyword args.
+    """
+
+    candidates: list[Player]
+    replacements: dict[str, Player]
+    projected_standings: ProjectedStandings
+    team_sds: dict[str, dict[Category, float]]
+    adp_table: ADPTable
+
+
 def compute_rec_inputs(
     state: dict[str, Any],
     board_path: Path,
     league_yaml: Mapping[str, Any],
-) -> tuple[
-    list[Player],
-    dict[str, Player],
-    ProjectedStandings,
-    dict[str, dict[Category, float]],
-    ADPTable,
-]:
-    """Assemble the five inputs ``rank_candidates`` needs."""
+) -> RecInputs:
+    """Assemble the inputs ``rank_candidates`` needs."""
     rows = load_board_rows(board_path)
     players = rows_to_players(rows)
     drafted = drafted_ids(state)
@@ -203,7 +213,13 @@ def compute_rec_inputs(
     team_sds = build_team_sds(team_rosters, sd_scale=1.0)
     adp_table = build_adp_table(rows)
 
-    return candidates, replacements, projected_standings, team_sds, adp_table
+    return RecInputs(
+        candidates=candidates,
+        replacements=replacements,
+        projected_standings=projected_standings,
+        team_sds=team_sds,
+        adp_table=adp_table,
+    )
 
 
 def monte_carlo_roto_totals(

@@ -21,6 +21,7 @@ import os
 import tempfile
 import threading
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
 
@@ -31,6 +32,28 @@ from fantasy_baseball.draft.recommender import Recommendation
 from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import RATE_STATS, Category
+
+
+class StateKey(StrEnum):
+    """Canonical names of the keys in the live-draft state dict.
+
+    Members serialize to their string value (StrEnum) so JSON I/O is
+    transparent: ``state[StateKey.PICKS] = [...]`` is equivalent to
+    ``state["picks"] = [...]`` but a typo on the enum form is caught
+    statically by mypy/ruff. Mirrors the pattern in
+    :class:`fantasy_baseball.data.cache_keys.CacheKey`.
+
+    Only the keys introduced by the dashboard rework are listed here;
+    legacy CLI keys (``current_pick``, ``picking_team``, etc.) remain as
+    bare strings until the legacy path is retired.
+    """
+
+    VERSION = "version"
+    KEEPERS = "keepers"
+    PICKS = "picks"
+    ON_THE_CLOCK = "on_the_clock"
+    UNDO_STACK = "undo_stack"
+    PROJECTED_STANDINGS_CACHE = "projected_standings_cache"
 
 
 @dataclass

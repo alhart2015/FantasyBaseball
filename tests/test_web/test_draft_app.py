@@ -112,11 +112,17 @@ def test_recs_returns_ranked_rows(client, monkeypatch):
 
     monkeypatch.setattr(eroto_recs, "rank_candidates", fake_rank)
 
+    from fantasy_baseball.draft.recs_integration import RecInputs
     from fantasy_baseball.web import app as web_app
 
-    monkeypatch.setattr(
-        web_app, "_build_rec_inputs", lambda *_a, **_kw: (None, None, None, None, None)
+    fake_inputs = RecInputs(
+        candidates=[],
+        replacements={},
+        projected_standings=None,  # type: ignore[arg-type]
+        team_sds={},
+        adp_table=None,  # type: ignore[arg-type]
     )
+    monkeypatch.setattr(web_app, "_build_rec_inputs", lambda *_a, **_kw: fake_inputs)
     monkeypatch.setattr(web_app, "_load_board_cached", lambda _app: None)
     monkeypatch.setattr(web_app, "_picks_until_next_turn", lambda state, team: 3)
 
