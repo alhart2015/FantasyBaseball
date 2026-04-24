@@ -61,6 +61,7 @@ files = [
     "src/fantasy_baseball/draft/board.py",
     "src/fantasy_baseball/draft/eroto_recs.py",
     "src/fantasy_baseball/draft/recommender.py",
+    "src/fantasy_baseball/draft/recs_integration.py",
     "src/fantasy_baseball/draft/roster_state.py",
     "src/fantasy_baseball/draft/search.py",
     "src/fantasy_baseball/draft/state.py",

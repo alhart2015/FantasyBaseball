@@ -80,9 +80,9 @@ def test_reset_without_confirm_rejected(client):
 def test_recs_endpoint_exists(client):
     client.post("/api/new-draft")
     r = client.get("/api/recs?team=Hart of the Order")
-    # Phase 4 wires the real recommender; for now the endpoint exists but
-    # is marked 501 so the frontend knows to render a placeholder.
-    assert r.status_code == 501
+    # With no board file on disk, the real-data path can't run — the
+    # endpoint signals 503 so the frontend can render a placeholder.
+    assert r.status_code == 503
 
 
 def test_pick_missing_fields_returns_400(client):
@@ -117,7 +117,7 @@ def test_recs_returns_ranked_rows(client, monkeypatch):
     monkeypatch.setattr(
         web_app, "_build_rec_inputs", lambda *_a, **_kw: (None, None, None, None, None)
     )
-    monkeypatch.setattr(web_app, "_load_board_cached", lambda: None)
+    monkeypatch.setattr(web_app, "_load_board_cached", lambda _app: None)
     monkeypatch.setattr(web_app, "_picks_until_next_turn", lambda state, team: 3)
 
     client.post("/api/new-draft")
@@ -290,3 +290,111 @@ def test_resolve_keeper_missing_player_returns_400(tmp_path, monkeypatch):
         r = c.post("/api/new-draft")
         assert r.status_code == 400
         assert "Nobody Important" in r.get_json()["error"]
+
+
+# Shared 4-player board fixture for integration tests that need real
+# stats: 2 hitters, 2 pitchers, enough to exercise project_team_stats.
+_INTEGRATION_BOARD_ROWS = [
+    {
+        "name": "Slugger",
+        "name_normalized": "slugger",
+        "player_id": "1::hitter",
+        "player_type": "hitter",
+        "positions": ["OF"],
+        "best_position": "OF",
+        "var": 9.0,
+        "r": 100.0,
+        "hr": 40.0,
+        "rbi": 110.0,
+        "sb": 5.0,
+        "avg": 0.280,
+        "h": 160.0,
+        "ab": 580.0,
+    },
+    {
+        "name": "Slapper",
+        "name_normalized": "slapper",
+        "player_id": "2::hitter",
+        "player_type": "hitter",
+        "positions": ["OF"],
+        "best_position": "OF",
+        "var": 5.0,
+        "r": 85.0,
+        "hr": 10.0,
+        "rbi": 55.0,
+        "sb": 12.0,
+        "avg": 0.300,
+        "h": 170.0,
+        "ab": 570.0,
+    },
+    {
+        "name": "Ace",
+        "name_normalized": "ace",
+        "player_id": "3::pitcher",
+        "player_type": "pitcher",
+        "positions": ["SP"],
+        "best_position": "SP",
+        "var": 8.0,
+        "w": 15.0,
+        "k": 220.0,
+        "sv": 0.0,
+        "era": 3.10,
+        "whip": 1.05,
+        "ip": 195.0,
+        "h_allowed": 160.0,
+        "er": 67.0,
+        "bb": 50.0,
+    },
+    {
+        "name": "Closer",
+        "name_normalized": "closer",
+        "player_id": "4::pitcher",
+        "player_type": "pitcher",
+        "positions": ["RP"],
+        "best_position": "RP",
+        "var": 6.0,
+        "w": 3.0,
+        "k": 90.0,
+        "sv": 35.0,
+        "era": 2.50,
+        "whip": 0.95,
+        "ip": 65.0,
+        "h_allowed": 50.0,
+        "er": 18.0,
+        "bb": 22.0,
+    },
+]
+
+
+_INTEGRATION_LEAGUE_YAML = (
+    "league:\n  team_name: Hart of the Order\n"
+    "draft:\n  position: 1\n  teams:\n    1: Hart of the Order\n    2: Opp\n"
+    "keepers: []\n"
+    "roster_slots:\n  OF: 1\n  SP: 1\n  RP: 1\n  BN: 0\n  IL: 0\n"
+)
+
+
+def test_recs_returns_real_rows_with_board_and_picks(tmp_path, monkeypatch):
+    """Integration: with a real board file on disk, /api/recs returns
+    RecRow dicts with non-trivial immediate_delta values."""
+    from fantasy_baseball.draft.state import write_board
+    from fantasy_baseball.web.app import create_app
+
+    board_path = tmp_path / "draft_state_board.json"
+    write_board(_INTEGRATION_BOARD_ROWS, board_path)
+
+    league_path = tmp_path / "league.yaml"
+    league_path.write_text(_INTEGRATION_LEAGUE_YAML)
+    monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+
+    a = create_app(state_path=tmp_path / "draft_state.json")
+    a.config["TESTING"] = True
+    with a.test_client() as c:
+        c.post("/api/new-draft")
+        r = c.get("/api/recs?team=Hart of the Order")
+    assert r.status_code == 200, r.get_json()
+    body = r.get_json()
+    assert isinstance(body, list)
+    assert len(body) >= 1
+    # Plausibility: at least one candidate has a non-zero immediate_delta.
+    assert any(abs(row["immediate_delta"]) > 1e-6 for row in body), body

@@ -88,30 +88,42 @@ def _resolve_keeper_factory(app: Flask):
     return _resolver
 
 
-def _load_board_cached():
-    """Load the preseason draft board once per process.
+def _load_board_cached(app):
+    """Return the on-disk draft board, cached per-app.
 
-    Returns ``None`` if the board is unavailable (which triggers a 501
-    from ``/api/recs`` in the real-data path). Real board loading is
-    deferred past Phase 5 — monkeypatched tests prove the downstream
-    wiring works.
+    Reads from ``app.config["BOARD_PATH"]`` once and stashes the result
+    on the app instance. Returns ``None`` when the board file does not
+    exist or is empty — callers should treat that as "no real-data path
+    available yet" and fall back to a 503.
     """
-    if getattr(_load_board_cached, "_board", None) is None:
-        try:
-            raise NotImplementedError("board loading wired in Phase 5.2")
-        except NotImplementedError:
-            _load_board_cached._board = None  # type: ignore[attr-defined]
-    return _load_board_cached._board  # type: ignore[attr-defined]
+    cached = getattr(app, "_draft_board_cache", "__missing__")
+    if cached != "__missing__":
+        return cached
+    rows = read_board(app.config["BOARD_PATH"])
+    app._draft_board_cache = rows if rows else None
+    return app._draft_board_cache
 
 
-def _build_rec_inputs(board, team, state_path):
-    """Gather inputs ``rank_candidates`` needs.
+def _build_rec_inputs(app, state, league_yaml):
+    """Gather the five inputs ``rank_candidates`` needs.
 
-    The real implementation is deferred past Phase 5 — tests monkeypatch
-    this helper. In the real-data path, raising ``NotImplementedError``
-    propagates up to ``/api/recs`` as a 501.
+    Loads the cached board, normalises into ``Player`` objects, and
+    delegates to :mod:`fantasy_baseball.draft.recs_integration`. Raises
+    ``RuntimeError`` when no board is available so the caller can map
+    that to a 503.
     """
-    raise NotImplementedError("real _build_rec_inputs lands in Phase 5.2")
+    from fantasy_baseball.draft import recs_integration
+
+    board = _load_board_cached(app)
+    if not board:
+        raise RuntimeError(
+            "draft board not loaded — run scripts/run_draft.py at least once to cache the board"
+        )
+    return recs_integration.compute_rec_inputs(
+        state,
+        app.config["BOARD_PATH"],
+        league_yaml,
+    )
 
 
 def _picks_until_next_turn(state, team):
@@ -215,18 +227,18 @@ def _register_writer_routes(app):
         team = request.args.get("team")
         if not team:
             return jsonify({"error": "missing team parameter"}), 400
+        league_yaml = _load_league_yaml()
+        state = draft_controller.resume_or_init(app.config["STATE_PATH"])
         try:
-            board = _load_board_cached()
             (
                 candidates,
                 replacements,
                 projected_standings,
                 team_sds,
                 adp_table,
-            ) = _build_rec_inputs(board, team, app.config["STATE_PATH"])
-        except NotImplementedError as e:
-            return jsonify({"error": str(e)}), 501
-        state = draft_controller.resume_or_init(app.config["STATE_PATH"])
+            ) = _build_rec_inputs(app, state, league_yaml)
+        except RuntimeError as e:
+            return jsonify({"error": str(e)}), 503
         picks_until_next = _picks_until_next_turn(state, team)
         rows = eroto_recs.rank_candidates(
             candidates=candidates,
