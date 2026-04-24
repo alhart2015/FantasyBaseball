@@ -147,6 +147,38 @@ def _picks_until_next_turn(state, team):
         return 0
 
 
+def _attach_standings_cache(
+    app: Flask, state: dict[str, Any], league_yaml: dict[str, Any]
+) -> dict[str, Any]:
+    """Best-effort: compute projected standings and stash them on ``state``.
+
+    Swallows errors (missing board, malformed league.yaml, etc.) so a
+    pick can never fail because of standings wiring. Returns the state
+    with or without ``projected_standings_cache`` populated. The next
+    successful pick will refresh the cache; until then, ``/api/standings``
+    just returns ``[]``.
+    """
+    try:
+        board = _load_board_cached(app)
+        if not board:
+            return state
+        from fantasy_baseball.draft import recs_integration
+
+        _, _, projected_standings, team_sds, _ = recs_integration.compute_rec_inputs(
+            state,
+            app.config["BOARD_PATH"],
+            league_yaml,
+        )
+        state["projected_standings_cache"] = recs_integration.compute_standings_cache(
+            projected_standings, team_sds
+        )
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "failed to refresh projected_standings_cache; leaving stale cache"
+        )
+    return state
+
+
 def _register_writer_routes(app):
     @app.post("/api/new-draft")
     def new_draft():
@@ -158,6 +190,7 @@ def _register_writer_routes(app):
             )
         except draft_controller.UnresolvedKeeperError as e:
             return jsonify({"error": str(e)}), 400
+        state = _attach_standings_cache(app, state, league_yaml)
         write_state(state, app.config["STATE_PATH"])
         return jsonify(state)
 
@@ -183,6 +216,7 @@ def _register_writer_routes(app):
             return jsonify({"error": str(e)}), 409
         except draft_controller.AlreadyDraftedError as e:
             return jsonify({"error": str(e)}), 409
+        new_state = _attach_standings_cache(app, new_state, league_yaml)
         write_state(new_state, app.config["STATE_PATH"])
         return jsonify(new_state)
 
@@ -194,6 +228,7 @@ def _register_writer_routes(app):
             state,
             teams_by_position=_teams_by_position(league_yaml),
         )
+        new_state = _attach_standings_cache(app, new_state, league_yaml)
         write_state(new_state, app.config["STATE_PATH"])
         return jsonify(new_state)
 
@@ -202,8 +237,10 @@ def _register_writer_routes(app):
         body = request.get_json(silent=True) or {}
         if "team" not in body:
             return jsonify({"error": "missing fields: ['team']"}), 400
+        league_yaml = _load_league_yaml()
         state = draft_controller.resume_or_init(app.config["STATE_PATH"])
         new_state = {**state, "on_the_clock": body["team"]}
+        new_state = _attach_standings_cache(app, new_state, league_yaml)
         write_state(new_state, app.config["STATE_PATH"])
         return jsonify(new_state)
 

@@ -398,3 +398,37 @@ def test_recs_returns_real_rows_with_board_and_picks(tmp_path, monkeypatch):
     assert len(body) >= 1
     # Plausibility: at least one candidate has a non-zero immediate_delta.
     assert any(abs(row["immediate_delta"]) > 1e-6 for row in body), body
+
+
+def test_standings_endpoint_returns_real_rows_after_pick(tmp_path, monkeypatch):
+    """Integration: with a real board on disk, /api/pick refreshes
+    projected_standings_cache and /api/standings renders it."""
+    from fantasy_baseball.draft.state import write_board
+    from fantasy_baseball.web.app import create_app
+
+    board_path = tmp_path / "draft_state_board.json"
+    write_board(_INTEGRATION_BOARD_ROWS, board_path)
+
+    league_path = tmp_path / "league.yaml"
+    league_path.write_text(_INTEGRATION_LEAGUE_YAML)
+    monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+
+    a = create_app(state_path=tmp_path / "draft_state.json")
+    a.config["TESTING"] = True
+    with a.test_client() as c:
+        c.post("/api/new-draft")
+        c.post(
+            "/api/pick",
+            json={
+                "player_id": "1::hitter",
+                "player_name": "Slugger",
+                "position": "OF",
+                "team": "Hart of the Order",
+            },
+        )
+        r = c.get("/api/standings")
+    assert r.status_code == 200
+    rows = r.get_json()
+    assert len(rows) == 2  # two teams
+    assert all(isinstance(row["total"], int | float) for row in rows)
+    assert rows[0]["total"] >= rows[1]["total"]  # sorted desc
