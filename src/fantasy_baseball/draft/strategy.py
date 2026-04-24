@@ -17,8 +17,8 @@ Strategies:
 
 import pandas as pd
 
-from fantasy_baseball.draft.recommender import get_filled_positions, get_recommendations
-from fantasy_baseball.draft.roster_state import RosterState
+from fantasy_baseball.draft.recommender import get_recommendations
+from fantasy_baseball.draft.roster_state import RosterState, get_filled_positions
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.rate_stats import calculate_avg

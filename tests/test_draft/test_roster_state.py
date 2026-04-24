@@ -1,9 +1,63 @@
 from dataclasses import FrozenInstanceError
 
+import pandas as pd
 import pytest
 
-from fantasy_baseball.draft.roster_state import RosterState
+from fantasy_baseball.draft.roster_state import (
+    RosterState,
+    _scarcity_cache,
+    _scarcity_cache_counters,
+    _scarcity_cache_stats,
+    _scarcity_order_cached,
+)
 from fantasy_baseball.models.positions import BENCH_SLOTS, Position
+
+
+def _make_board(rows: list[dict]) -> pd.DataFrame:
+    df = pd.DataFrame(rows)
+    for col in ("name_normalized", "player_id"):
+        if col not in df.columns:
+            df[col] = df.get("name", "").astype(str)
+    return df
+
+
+def test_scarcity_cache_invalidates_on_board_content_change():
+    """The content-hash cache must:
+    - miss on first call (populate),
+    - hit on same-content repeat call,
+    - miss when content changes (even if Python reuses the same id()).
+    """
+    # Reset cache state so the assertions are independent of test ordering.
+    _scarcity_cache.clear()
+    _scarcity_cache_counters["hits"] = 0
+    _scarcity_cache_counters["misses"] = 0
+
+    rows_a = [
+        {"name": "A", "positions": ["C"], "var": 5.0, "total_sgp": 5.0, "player_type": "hitter"},
+        {"name": "B", "positions": ["SS"], "var": 4.0, "total_sgp": 4.0, "player_type": "hitter"},
+    ]
+    rows_b = [
+        {"name": "C", "positions": ["OF"], "var": 9.0, "total_sgp": 9.0, "player_type": "hitter"},
+    ]
+    slots = {"C": 1, "SS": 1, "OF": 1}
+
+    # First call: cache miss, populates the cache.
+    board_a = _make_board(rows_a)
+    order_a = _scarcity_order_cached(board_a, slots)
+    assert _scarcity_cache_stats() == {"hits": 0, "misses": 1}
+
+    # Same content → cache hit.
+    _scarcity_order_cached(board_a, slots)
+    assert _scarcity_cache_stats() == {"hits": 1, "misses": 1}
+
+    # Drop board_a so Python may reuse its id(); the cache must key on content, not identity.
+    del board_a
+    board_b = _make_board(rows_b)
+    order_b = _scarcity_order_cached(board_b, slots)
+    assert _scarcity_cache_stats() == {"hits": 1, "misses": 2}, (
+        "different content must be a cache miss, not a stale hit via id() reuse"
+    )
+    assert order_a != order_b, "different-content boards should produce different scarcity orders"
 
 
 class TestFromDicts:
@@ -182,3 +236,30 @@ class TestAnySlotOpenFor:
             capacity={"OF": 5},
         )
         assert state.any_slot_open_for(iter([Position.OF])) is True
+
+
+def test_get_roster_by_position_filters_empty_slots():
+    """Empty slots must not appear in the returned dict (preserves pre-move
+    behavior — consumers relied on presence-implies-non-empty)."""
+    from fantasy_baseball.draft.roster_state import get_roster_by_position
+
+    board = _make_board(
+        [
+            {
+                "name": "Catcher Cathy",
+                "positions": ["C"],
+                "var": 3.0,
+                "player_type": "hitter",
+                "total_sgp": 3.0,
+                "player_id": "Catcher Cathy::hitter",
+            },
+        ]
+    )
+    roster_slots = {"C": 1, "SS": 1, "OF": 1, "BN": 1, "IL": 1}
+    result = get_roster_by_position(["Catcher Cathy::hitter"], board, roster_slots)
+    # Only C should appear; SS, OF, BN should be absent (old contract).
+    assert "C" in result
+    assert result["C"] == ["Catcher Cathy"]
+    assert "SS" not in result
+    assert "OF" not in result
+    assert "BN" not in result

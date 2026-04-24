@@ -18,9 +18,9 @@ from simulate_draft import build_board_and_context
 from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.recommender import (
     calculate_vona_scores,
-    get_filled_positions,
     get_recommendations,
 )
+from fantasy_baseball.draft.roster_state import get_filled_positions
 from fantasy_baseball.draft.strategy import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.constants import Category
 
