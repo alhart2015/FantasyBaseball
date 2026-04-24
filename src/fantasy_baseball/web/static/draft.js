@@ -4,6 +4,7 @@
 const POLL_INTERVAL_MS = 500;
 let lastVersion = 0;
 let fullBoard = [];  // cached once from /api/board
+let recsPrimarySort = "immediate"; // or "vopn"
 
 async function fetchBoard() {
   const r = await fetch("/api/board");
@@ -25,6 +26,9 @@ function renderState(state) {
   document.getElementById("picks-to-next").textContent = picksUntilNext(state);
   renderAvailablePlayers(state);
   renderRecentPicks(state);
+  if (state.on_the_clock) {
+    fetchRecs(state.on_the_clock).then(renderRecs).catch(() => {});
+  }
 }
 
 function currentRound(state) {
@@ -67,6 +71,103 @@ function renderRecentPicks(state) {
     <li>${p.team}: ${p.player_name}</li>
   `).join("");
   document.getElementById("undo-btn").disabled = (state.picks?.length ?? 0) === 0;
+}
+
+async function fetchRecs(team) {
+  const r = await fetch(`/api/recs?team=${encodeURIComponent(team)}`);
+  if (!r.ok) return [];
+  return r.json();
+}
+
+function renderRecs(rows) {
+  const sortKey = recsPrimarySort === "immediate" ? "immediate_delta" : "value_of_picking_now";
+  rows = [...rows].sort((a, b) => b[sortKey] - a[sortKey]);
+  const ol = document.getElementById("rec-list");
+  ol.innerHTML = rows.map((r, i) => `
+    <li data-pid="${r.player_id}" data-pname="${r.name}" data-pos="${r.positions[0] || ''}">
+      <div class="row">
+        <span class="rank">${i + 1}.</span>
+        <span class="name">${r.name}</span>
+        <span class="pos">${r.positions.join("/")}</span>
+        <span class="delta ${r.immediate_delta >= 0 ? "positive" : "negative"}">
+          ${r.immediate_delta.toFixed(2)} ± ${r.immediate_delta_sd.toFixed(2)}
+        </span>
+        <span class="vopn">${r.value_of_picking_now.toFixed(2)}</span>
+        <button class="detail-toggle" aria-label="expand">▾</button>
+      </div>
+      <div class="detail">
+        <table>
+          <thead><tr><th>Cat</th><th>Δ</th></tr></thead>
+          <tbody>
+            ${Object.entries(r.per_category).map(([cat, delta]) => `
+              <tr><td>${cat}</td><td class="${delta >= 0 ? 'positive' : 'negative'}">${delta.toFixed(2)}</td></tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    </li>
+  `).join("");
+  ol.onclick = (e) => {
+    const toggle = e.target.closest(".detail-toggle");
+    if (toggle) {
+      toggle.closest("li").classList.toggle("expanded");
+      return;
+    }
+    const li = e.target.closest("li");
+    if (li) {
+      recordPick({
+        player_id: li.dataset.pid,
+        player_name: li.dataset.pname,
+        position: li.dataset.pos,
+        team: document.getElementById("otc-btn").textContent,
+      });
+    }
+  };
+}
+
+async function fetchRoster(team) {
+  const r = await fetch(`/api/roster?team=${encodeURIComponent(team)}`);
+  if (!r.ok) return [];
+  return r.json();
+}
+
+function renderRoster(rows) {
+  document.getElementById("roster-panel").innerHTML = `
+    <ul class="roster-list">
+      ${rows.map((row) => `
+        <li class="${row.replacement ? 'replacement-slot' : ''}">
+          <span class="slot">${row.slot}</span>
+          <span class="name">${row.replacement ? `Replacement — ${row.slot}` : row.name}</span>
+        </li>
+      `).join("")}
+    </ul>
+  `;
+}
+
+async function fetchStandings() {
+  const r = await fetch("/api/standings");
+  if (!r.ok) return [];
+  return r.json();
+}
+
+function renderStandings(rows) {
+  document.getElementById("standings-panel").innerHTML = `
+    <table class="standings">
+      <thead><tr><th>Team</th><th>ERoto</th><th>±</th></tr></thead>
+      <tbody>
+        ${rows.map((r) => `
+          <tr>
+            <td>${r.team}</td>
+            <td>
+              ${r.total.toFixed(1)}
+              <span class="uncertainty-bar" style="width:${Math.max(4, r.sd * 2)}px"></span>
+            </td>
+            <td>±${r.sd.toFixed(1)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
 }
 
 async function recordPick(payload) {
@@ -131,5 +232,34 @@ async function poll() {
   document.getElementById("undo-btn").onclick = undo;
   document.getElementById("new-draft-btn").onclick = newDraft;
   document.getElementById("reset-btn").onclick = reset;
+
+  document.querySelectorAll(".sort-toggle button").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      document.querySelectorAll(".sort-toggle button").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      recsPrimarySort = btn.dataset.sort;
+      const otc = document.getElementById("otc-btn").textContent;
+      if (otc !== "—") {
+        renderRecs(await fetchRecs(otc));
+      }
+    });
+  });
+
+  document.querySelectorAll(".team-inspector .tabs button").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      document.querySelectorAll(".team-inspector .tabs button").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      const tab = btn.dataset.tab;
+      document.getElementById("roster-panel").classList.toggle("hidden", tab !== "roster");
+      document.getElementById("standings-panel").classList.toggle("hidden", tab !== "standings");
+      const team = document.getElementById("team-picker").value || document.getElementById("otc-btn").textContent;
+      if (tab === "roster") {
+        renderRoster(await fetchRoster(team));
+      } else {
+        renderStandings(await fetchStandings());
+      }
+    });
+  });
+
   setTimeout(poll, POLL_INTERVAL_MS);
 })();

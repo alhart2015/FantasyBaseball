@@ -97,3 +97,72 @@ def test_on_the_clock_missing_team_returns_400(client):
     client.post("/api/new-draft")
     r = client.post("/api/on-the-clock", json={})
     assert r.status_code == 400
+
+
+def test_recs_returns_ranked_rows(client, monkeypatch):
+    """/api/recs returns a list of rec rows sorted by immediate_delta desc."""
+    from fantasy_baseball.draft import eroto_recs
+    from fantasy_baseball.draft.eroto_recs import RecRow
+
+    def fake_rank(**_kwargs):
+        return [
+            RecRow("p1::hitter", "Player One", ["OF"], 3.2, 0.5, 1.1, {"HR": 1.2}),
+            RecRow("p2::hitter", "Player Two", ["SS"], 2.1, 0.3, 0.4, {"SB": 0.9}),
+        ]
+
+    monkeypatch.setattr(eroto_recs, "rank_candidates", fake_rank)
+
+    from fantasy_baseball.web import app as web_app
+
+    monkeypatch.setattr(
+        web_app, "_build_rec_inputs", lambda *_a, **_kw: (None, None, None, None, None)
+    )
+    monkeypatch.setattr(web_app, "_load_board_cached", lambda: None)
+    monkeypatch.setattr(web_app, "_picks_until_next_turn", lambda state, team: 3)
+
+    client.post("/api/new-draft")
+    r = client.get("/api/recs?team=Hart of the Order")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body[0]["name"] == "Player One"
+    assert body[0]["immediate_delta"] == 3.2
+    assert body[0]["per_category"]["HR"] == 1.2
+
+
+def test_roster_endpoint_returns_empty_for_fresh_draft(client):
+    client.post("/api/new-draft")
+    r = client.get("/api/roster?team=Hart of the Order")
+    assert r.status_code == 200
+    body = r.get_json()
+    # Empty league.yaml has no roster_slots -> no replacement padding.
+    assert body == []
+
+
+def test_roster_endpoint_reflects_a_pick(client):
+    client.post("/api/new-draft")
+    client.post(
+        "/api/pick",
+        json={
+            "player_id": "P1::hitter",
+            "player_name": "Player One",
+            "position": "OF",
+            "team": "Hart of the Order",
+        },
+    )
+    r = client.get("/api/roster?team=Hart of the Order")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert any(row["name"] == "Player One" for row in body)
+
+
+def test_roster_missing_team_returns_400(client):
+    client.post("/api/new-draft")
+    r = client.get("/api/roster")
+    assert r.status_code == 400
+
+
+def test_standings_endpoint_returns_empty_list_with_empty_cache(client):
+    client.post("/api/new-draft")
+    r = client.get("/api/standings")
+    assert r.status_code == 200
+    assert r.get_json() == []

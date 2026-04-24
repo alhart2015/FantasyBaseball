@@ -69,6 +69,53 @@ def _resolve_keeper_factory(league_yaml: dict[str, Any]):  # noqa: ARG001
     return _resolver
 
 
+def _load_board_cached():
+    """Load the preseason draft board once per process.
+
+    Returns ``None`` if the board is unavailable (which triggers a 501
+    from ``/api/recs`` in the real-data path). Real board loading is
+    deferred past Phase 5 — monkeypatched tests prove the downstream
+    wiring works.
+    """
+    if getattr(_load_board_cached, "_board", None) is None:
+        try:
+            raise NotImplementedError("board loading wired in Phase 5.2")
+        except NotImplementedError:
+            _load_board_cached._board = None  # type: ignore[attr-defined]
+    return _load_board_cached._board  # type: ignore[attr-defined]
+
+
+def _build_rec_inputs(board, team, state_path):
+    """Gather inputs ``rank_candidates`` needs.
+
+    The real implementation is deferred past Phase 5 — tests monkeypatch
+    this helper. In the real-data path, raising ``NotImplementedError``
+    propagates up to ``/api/recs`` as a 501.
+    """
+    raise NotImplementedError("real _build_rec_inputs lands in Phase 5.2")
+
+
+def _picks_until_next_turn(state, team):
+    """Count opponent picks between now and ``team``'s next turn.
+
+    Falls back to ``0`` when the controller can't determine it (e.g. the
+    draft is already done, or state is malformed).
+    """
+    try:
+        from fantasy_baseball.draft.draft_controller import _snake_order
+
+        league_yaml = _load_league_yaml()
+        teams_by_position = _teams_by_position(league_yaml)
+        order = _snake_order(teams_by_position, num_rounds=30)
+        picks_so_far = len(state.get("picks", []))
+        for i in range(picks_so_far + 1, len(order)):
+            if order[i] == team:
+                return i - picks_so_far
+        return 0
+    except Exception:
+        return 0
+
+
 def _register_writer_routes(app):
     @app.post("/api/new-draft")
     def new_draft():
@@ -144,8 +191,67 @@ def _register_writer_routes(app):
 
     @app.get("/api/recs")
     def recs():
-        # Real implementation lands in Phase 5.
-        return jsonify({"error": "not yet implemented"}), 501
+        from fantasy_baseball.draft import eroto_recs
+
+        team = request.args.get("team")
+        if not team:
+            return jsonify({"error": "missing team parameter"}), 400
+        try:
+            board = _load_board_cached()
+            (
+                candidates,
+                replacements,
+                projected_standings,
+                team_sds,
+                adp_table,
+            ) = _build_rec_inputs(board, team, app.config["STATE_PATH"])
+        except NotImplementedError as e:
+            return jsonify({"error": str(e)}), 501
+        state = draft_controller.resume_or_init(app.config["STATE_PATH"])
+        picks_until_next = _picks_until_next_turn(state, team)
+        rows = eroto_recs.rank_candidates(
+            candidates=candidates,
+            replacements=replacements,
+            team_name=team,
+            projected_standings=projected_standings,
+            team_sds=team_sds,
+            picks_until_next_turn=picks_until_next,
+            adp_table=adp_table,
+        )
+        return jsonify([row.__dict__ for row in rows[:10]])
+
+    @app.get("/api/roster")
+    def roster():
+        team = request.args.get("team")
+        if not team:
+            return jsonify({"error": "missing team parameter"}), 400
+        state = draft_controller.resume_or_init(app.config["STATE_PATH"])
+        drafted = [
+            p for p in (state.get("keepers", []) + state.get("picks", [])) if p["team"] == team
+        ]
+        roster_slots = _load_league_yaml().get("roster_slots", {}) or {}
+        rows = [
+            {"slot": p["position"], "name": p["player_name"], "replacement": False} for p in drafted
+        ]
+        total = sum(roster_slots.values()) - roster_slots.get("IL", 0) if roster_slots else 0
+        for _ in range(max(0, total - len(rows))):
+            rows.append({"slot": "?", "name": "Replacement", "replacement": True})
+        return jsonify(rows)
+
+    @app.get("/api/standings")
+    def standings():
+        state = draft_controller.resume_or_init(app.config["STATE_PATH"])
+        cache = state.get("projected_standings_cache", {})
+        rows = [
+            {
+                "team": team,
+                "total": sum(c["point_estimate"] for c in cats.values()),
+                "sd": (sum(c["sd"] ** 2 for c in cats.values())) ** 0.5,
+            }
+            for team, cats in cache.items()
+        ]
+        rows.sort(key=lambda r: r["total"], reverse=True)
+        return jsonify(rows)
 
 
 def create_app(state_path: Path | None = None) -> Flask:
