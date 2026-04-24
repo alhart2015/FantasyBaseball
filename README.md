@@ -22,16 +22,16 @@ An interactive CLI + live web dashboard for snake drafts:
 
 ### Draft Strategy Engine
 Simulate and compare draft strategies with Monte Carlo analysis:
-- **14 strategies** — default, two_closers, three_closers, four_closers, no_punt, no_punt_opp, no_punt_stagger, no_punt_cap3, avg_hedge, avg_anchor, closers_avg, balanced, nonzero_sv, anti_fragile
+- **14 strategies** — default, nonzero_sv, avg_hedge, two_closers, three_closers, four_closers, no_punt, no_punt_opp, no_punt_stagger, no_punt_cap3, avg_anchor, closers_avg, balanced, anti_fragile
 - **Opponent modeling** — assign strategies to specific opponents based on historical draft tendencies
 - **ADP noise** — randomize opponent draft order to test robustness
 - **Active roster modeling** — only counts stats from starting lineup, not bench
 - **Monte Carlo projections** — correlated injury model, empirical stat variance, and roto scoring across 1000 simulated seasons
 
 ### In-Season Tools
-CLI tools and a season dashboard that connect to Yahoo, analyze your standings position, and recommend optimal lineups, waiver moves, and trades:
-- **Season dashboard** — Flask web UI for in-season management (standings, rosters, projections, game logs)
-- **Standings leverage** — identifies which categories are closest to gaining (or losing) a standings point
+A season dashboard and CLI tools that connect to Yahoo, analyze your standings position, and recommend optimal lineups, waiver moves, and trades:
+- **Season dashboard** — Flask web UI for in-season management (standings, rosters, projections, game logs, waivers, trades)
+- **Standings leverage** — identifies which categories are closest to gaining (or losing) a standings point, using sample-size-aware z-scores derived from this league's historical standings
 - **Optimal hitter lineup** — uses the Hungarian algorithm to assign hitters to roster slots, maximizing leverage-weighted SGP
 - **Pitcher ranking** — ranks pitchers by leverage-weighted SGP with matchup quality adjustments
 - **Per-decision reasoning** — explains flex slot choices (e.g., "Start X over Y at UTIL — gains HR, RBI")
@@ -42,15 +42,15 @@ CLI tools and a season dashboard that connect to Yahoo, analyze your standings p
 - **Recency weighting** — blends ROS projections with recent performance for start/sit decisions (validated via backtest: +1.9% next-week accuracy)
 
 ### Data & Analytics
-- **SQLite database** — `fantasy.db` stores projections (raw + blended), draft results, standings history, weekly rosters, and MLB game logs
+- **Upstash KV (Redis)** — runtime store for the deployed season dashboard: standings, rosters, projections, transactions, refresh state
+- **Local SQLite mirror** — `fantasy.db` is synced from Upstash on demand for offline analysis and backs the draft tooling (projection blending, draft history, game logs)
 - **Empirical variance model** — stat variance and correlation matrices calibrated from 2022-2024 projection-vs-actual residuals, used in Monte Carlo simulation
+- **SGP denominators derived from this league's history** — not generic constants
 - **Game log tracking** — fetches and stores per-game batting and pitching stats from the MLB Stats API
 
 ## Setup
 
-See [SETUP.md](SETUP.md) for detailed step-by-step instructions (including for non-technical users).
-
-### Quick Start
+### 1. Install and configure
 
 ```bash
 git clone https://github.com/alhart2015/FantasyBaseball.git
@@ -58,17 +58,24 @@ cd FantasyBaseball
 pip install -e ".[dev]"
 ```
 
-Create `config/oauth.json` with Yahoo app credentials, download FanGraphs projection CSVs to `data/projections/`, and configure `config/league.yaml`.
+Then:
+- Create `config/oauth.json` with Yahoo app credentials (`consumer_key`, `consumer_secret`).
+- Copy `config/league.yaml.example` → `config/league.yaml` and fill in league id, team name, draft position, keepers, and roster slots.
+- Download FanGraphs projection CSVs into `data/projections/{season_year}/` (Steamer, ZiPS, ATC, THE BAT X, Oopsy — hitters and pitchers).
+
+### 2. Authenticate with Yahoo
+
+The first script that needs Yahoo data will open your browser for OAuth and cache the token under `config/`.
 
 ## Draft Day
 
-### 1. Fetch player positions (run once before draft)
+### 1. Cache player positions (run before draft)
 
 ```bash
-python scripts/fetch_positions.py
+python scripts/fetch_positions_mlb.py
 ```
 
-This fetches position eligibility from Yahoo for all rostered players, free agents, and keepers.
+Fills position eligibility gaps via the MLB Stats API for any players Yahoo doesn't return positions for.
 
 ### 2. Launch the draft assistant
 
@@ -95,38 +102,39 @@ python scripts/run_draft.py --mock --position 8 --teams 10
 ```bash
 python scripts/simulate_draft.py -s two_closers --scoring-mode vona
 python scripts/simulate_draft.py -s two_closers --opponent-strategies "1:two_closers,5:three_closers"
-python scripts/compare_strategies.py   # Full comparison across strategies
-python scripts/monte_carlo.py -n 1000  # Season projection with injuries + variance
+python scripts/compare_strategies.py   # Full comparison across strategies (slow, ~10min)
 ```
 
 ## In-Season Usage
 
 ```bash
-python scripts/run_lineup.py          # Lineup optimization + waiver recommendations
-python scripts/run_trades.py          # Trade recommendations across all opponents
-python scripts/run_season_dashboard.py  # Launch season dashboard at localhost:5001
+python scripts/run_season_dashboard.py   # Launch dashboard at localhost:5001 (syncs from Upstash first)
+python scripts/run_lineup.py             # CLI lineup optimizer + waiver recommendations
+python scripts/refresh_remote.py         # Trigger a remote refresh on the Render-hosted dashboard
 ```
+
+The season dashboard is the primary entry point — it covers standings leverage, lineup optimization, waiver scanning, and trade recommendations in one UI. `run_lineup.py` is the CLI equivalent for lineup + waivers, useful when you want a terminal-only view.
 
 `run_lineup.py` connects to Yahoo, fetches your roster, standings, and the MLB schedule, then prints:
 1. **Category leverage** — which stats are most valuable to target this week
 2. **Optimal hitter lineup** — slot assignments with reasoning on flex decisions
 3. **Optimal pitcher lineup** — ranked by leverage-weighted SGP
 4. **Probable starters** — matchups for your pitchers, flagging two-start pitchers
-5. **Waiver recommendations** — top 5 add/drop swaps with category impact
+5. **Waiver recommendations** — top add/drop swaps with category impact
 
 ## How It Works
 
 ### Standings Gain Points (SGP)
 
-In roto leagues, each stat category earns 1-10 standings points. SGP measures how many raw stats it takes to move up one place in the standings. Players are valued by how many standings points they contribute across all 10 categories.
+In roto leagues, each stat category earns 1-10 standings points. SGP measures how many raw stats it takes to move up one place in the standings. Players are valued by how many standings points they contribute across all 10 categories. Denominators are derived from this league's historical standings, not generic constants.
 
 ### Value Above Replacement (VAR)
 
-VAR = Player's total SGP - replacement-level SGP at their position. Scarce positions like C and SS have lower replacement levels, which naturally inflates the value of good players at those positions.
+VAR = Player's total SGP - replacement-level SGP at their position. Scarce positions like C and SS have lower replacement levels, which naturally inflates the value of good players at those positions. Replacement levels recalculate per pick from the available pool to reflect live positional scarcity.
 
 ### VONA (Value Over Next Available)
 
-VONA measures urgency — how much value you lose by waiting. For each player, it estimates what the best remaining player in the same bucket (hitter/SP/closer) will be after opponents make their picks. High VONA means "draft now or lose significant value." Used alongside leverage weighting to balance urgency against team category needs.
+VONA measures urgency — how much value you lose by waiting. For each player, it estimates what the best remaining player in the same bucket (hitter / SP / closer) will be after opponents make their picks. High VONA means "draft now or lose significant value." Used alongside leverage weighting to balance urgency against team category needs.
 
 ### two_closers Strategy
 
@@ -143,44 +151,55 @@ FantasyBaseball/
 ├── src/fantasy_baseball/
 │   ├── analysis/      # Game logs, recency weighting
 │   ├── auth/          # Yahoo OAuth2 authentication
-│   ├── data/          # FanGraphs CSV parsing, projection blending, MLB schedule, SQLite DB
+│   ├── data/          # FanGraphs CSV parsing, projection blending, MLB schedule, KV store (Upstash + SQLite mirror)
 │   ├── draft/         # Draft board, tracker, balance, recommender, strategies, search
 │   ├── lineup/        # In-season optimizer: leverage, weighted SGP, optimizer, waivers, matchups
+│   ├── models/        # Domain models: player, team, league, roster, standings, free agents, positions
 │   ├── sgp/           # SGP engine: denominators, player values, replacement levels, VAR
-│   ├── trades/        # Trade evaluation and pitch generation
+│   ├── trades/        # Trade evaluation and multi-team trade search
 │   ├── utils/         # Constants (variance/correlation matrices), position helpers, name normalization
-│   ├── web/           # Flask dashboards for draft and in-season management
+│   ├── web/           # Flask dashboards for draft and in-season management (refresh pipeline, season routes)
 │   ├── scoring.py     # Shared roto scoring and team stat projection
 │   ├── simulation.py  # Monte Carlo season simulation with correlated variance
 │   └── config.py      # YAML config loading
 ├── scripts/
-│   ├── run_draft.py           # Interactive draft assistant CLI (+ mock mode)
-│   ├── run_lineup.py          # In-season lineup optimizer CLI
-│   ├── run_trades.py          # Trade recommender CLI
-│   ├── run_season_dashboard.py # In-season web dashboard
-│   ├── summary.py             # Weekly analysis: rosters, projections, lineup, waivers, trades
-│   ├── simulate_draft.py      # Draft simulation with configurable strategies
-│   ├── compare_strategies.py  # Side-by-side strategy comparison
-│   ├── build_db.py            # Rebuild SQLite database from source files
-│   ├── calibrate_variance.py  # Calibrate stat variance from projection-vs-actual residuals
-│   ├── fetch_positions_mlb.py # Fill position gaps via MLB Stats API
-│   ├── analyze_draft.py       # Post-draft projection + Monte Carlo analysis
-│   ├── analyze_mock.py        # Post-mock-draft projection analysis
-│   ├── analyze_history.py     # Historical draft tendency analysis
-│   ├── backtest_2025.py       # Backtest simulation against 2025 actual results
-│   ├── backtest_recency.py    # Recency weighting backtest
-│   └── backtest_trades.py     # Trade recommender backtest
+│   ├── run_draft.py                # Interactive draft assistant CLI (+ mock mode)
+│   ├── run_lineup.py               # In-season lineup optimizer CLI
+│   ├── run_season_dashboard.py     # In-season web dashboard (syncs from Upstash)
+│   ├── simulate_draft.py           # Draft simulation with configurable strategies
+│   ├── compare_strategies.py       # Side-by-side strategy comparison
+│   ├── build_db.py                 # Rebuild local SQLite from source files
+│   ├── calibrate_variance.py       # Calibrate stat variance from projection-vs-actual residuals
+│   ├── derive_sgp_denominators.py  # Recompute SGP denominators from this league's standings history
+│   ├── fetch_positions_mlb.py      # Fill position gaps via MLB Stats API
+│   ├── fetch_actual_stats.py       # Fetch actual season stats for backtest/calibration
+│   ├── refresh_remote.py           # Trigger refresh on the Render-hosted dashboard
+│   ├── sync_redis.py               # Sync between local SQLite KV and remote Upstash
+│   ├── freeze_preseason_baseline.py # Snapshot the preseason projection baseline
+│   ├── save_roster.py              # Persist current Yahoo roster snapshot
+│   ├── replay_picks.py             # Replay draft picks against the board
+│   ├── rescore_transactions.py     # Re-evaluate historical waiver/trade transactions
+│   ├── migrate_standings_history.py # Migrate / backfill standings history
+│   ├── backfill_roster_history.py  # Backfill historical weekly rosters
+│   ├── export_history.py           # Export league history for analysis
+│   ├── compare_sgp_local_vs_remote.py # Diff SGP outputs across local vs remote KV
+│   ├── analyze_draft.py            # Post-draft projection + Monte Carlo analysis
+│   ├── analyze_mock.py             # Post-mock-draft projection analysis
+│   ├── analyze_history.py          # Historical draft tendency analysis
+│   ├── backtest_2025.py            # Backtest simulation against 2025 actual results
+│   ├── backtest_recency.py         # Recency weighting backtest
+│   └── smoke_test.py               # End-to-end smoke test of the refresh pipeline
 ├── data/
 │   ├── projections/    # FanGraphs CSV files (not committed)
-│   ├── fantasy.db      # SQLite database (not committed)
+│   ├── fantasy.db      # Local SQLite mirror (not committed)
 │   └── player_positions.json  # Cached Yahoo positions (not committed)
 ├── config/
-│   ├── league.yaml     # League settings + keepers
-│   └── oauth.json      # Yahoo credentials (gitignored)
-├── CLAUDE.md           # Claude Code guidance
-├── SETUP.md            # Setup guide for new users
+│   ├── league.yaml         # League settings + keepers
+│   ├── league.yaml.example # Template
+│   └── oauth.json          # Yahoo credentials (gitignored)
+├── CLAUDE.md           # Claude Code guidance (subsystem CLAUDE.md files live alongside the code)
 ├── TODO.md             # In-season enhancement roadmap
-└── tests/              # 558 tests
+└── tests/              # 1267 tests
 ```
 
 ## Running Tests
@@ -194,6 +213,7 @@ pytest -v
 - **Python 3.11+** with pandas, numpy, scipy
 - **yahoo-fantasy-api** + **yahoo-oauth** for Yahoo Fantasy API access
 - **MLB-StatsAPI** for weekly schedule, probable pitchers, and game logs
-- **SQLite** for persistent storage of projections, draft history, standings, rosters, and game logs
+- **Upstash Redis** for the deployed dashboard's runtime KV store, with a local **SQLite** mirror for offline analysis and the draft tooling
 - **Flask** + **htmx** for draft and season dashboards
-- **pytest** for testing (558 tests)
+- **Render** for hosting the season dashboard
+- **pytest** for testing (1267 tests)
