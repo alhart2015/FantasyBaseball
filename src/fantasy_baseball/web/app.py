@@ -55,16 +55,35 @@ def _teams_by_position(league_yaml: dict[str, Any]) -> dict[int, str]:
     return {i + 1: v for i, v in enumerate(teams)}
 
 
-def _resolve_keeper_factory(league_yaml: dict[str, Any]):  # noqa: ARG001
-    """Returns a keeper-resolver callable.
+def _resolve_keeper_factory(app: Flask):
+    """Return a keeper-resolver callable backed by the on-disk board JSON.
 
-    For now, uses a placeholder that echoes the name. Phase 4+ wires the
-    real board-backed resolver (draft.search.find_player_by_name) that
-    consumes ``league_yaml`` and the ``team`` argument to scope the lookup.
+    Looks up by normalized name with VAR tie-break — mirrors the logic
+    in ``scripts/run_draft.py``'s CLI keeper matching.
     """
+    from fantasy_baseball.draft.draft_controller import KeeperNotFound
+    from fantasy_baseball.utils.name_utils import normalize_name
+
+    board = read_board(app.config["BOARD_PATH"])
+    # Index rows by normalized name. Multiple rows per name are rare but
+    # possible (namesakes) — we keep a list and tie-break at lookup time.
+    by_norm: dict[str, list[dict[str, Any]]] = {}
+    for row in board:
+        key = row.get("name_normalized") or normalize_name(row.get("name", ""))
+        by_norm.setdefault(key, []).append(row)
 
     def _resolver(name: str, _team: str) -> tuple[str, str, str]:
-        return (f"{name}::hitter", name, "OF")
+        norm = normalize_name(name)
+        candidates = by_norm.get(norm, [])
+        if not candidates:
+            raise KeeperNotFound(f"no board match for keeper {name!r}")
+        # Tie-break by var (fall back to 0 if missing).
+        best = max(candidates, key=lambda r: r.get("var") or 0.0)
+        return (
+            best["player_id"],
+            best["name"],
+            best.get("best_position") or best["positions"][0],
+        )
 
     return _resolver
 
@@ -123,7 +142,7 @@ def _register_writer_routes(app):
         try:
             state = draft_controller.start_new_draft(
                 league_yaml,
-                resolve_keeper=_resolve_keeper_factory(league_yaml),
+                resolve_keeper=_resolve_keeper_factory(app),
             )
         except draft_controller.UnresolvedKeeperError as e:
             return jsonify({"error": str(e)}), 400

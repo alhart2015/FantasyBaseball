@@ -166,3 +166,127 @@ def test_standings_endpoint_returns_empty_list_with_empty_cache(client):
     r = client.get("/api/standings")
     assert r.status_code == 200
     assert r.get_json() == []
+
+
+def test_resolve_keeper_finds_pitcher_by_normalized_name(tmp_path, monkeypatch):
+    """Real keeper resolver must honor player_type and best_position
+    from the board — not hardcode hitter/OF."""
+    from fantasy_baseball.draft.state import write_board
+    from fantasy_baseball.web.app import create_app
+
+    # Seed league.yaml with one pitcher keeper.
+    league_path = tmp_path / "league.yaml"
+    league_path.write_text(
+        "league:\n  team_name: Hart of the Order\n"
+        "draft:\n  position: 1\n  teams:\n    1: Hart of the Order\n    2: Opp\n"
+        "keepers:\n"
+        "  - {name: Tarik Skubal, team: Hart of the Order}\n"
+    )
+    monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+
+    # Seed a tiny board.
+    board_path = tmp_path / "draft_state_board.json"
+    write_board(
+        [
+            {
+                "name": "Tarik Skubal",
+                "name_normalized": "tarik skubal",
+                "player_id": "12345::pitcher",
+                "player_type": "pitcher",
+                "positions": ["SP"],
+                "best_position": "SP",
+                "var": 8.5,
+            },
+        ],
+        board_path,
+    )
+
+    a = create_app(state_path=tmp_path / "draft_state.json")
+    a.config["TESTING"] = True
+
+    with a.test_client() as c:
+        r = c.post("/api/new-draft")
+        assert r.status_code == 200
+        state = r.get_json()
+
+    assert len(state["keepers"]) == 1
+    keeper = state["keepers"][0]
+    assert keeper["player_id"] == "12345::pitcher"  # real ID, not {name}::hitter
+    assert keeper["position"] == "SP"  # real position, not "OF"
+    assert keeper["player_name"] == "Tarik Skubal"
+
+
+def test_resolve_keeper_tie_breaks_by_var(tmp_path, monkeypatch):
+    """When two board rows share a normalized name, pick the one with
+    higher VAR (real player vs namesake)."""
+    from fantasy_baseball.draft.state import write_board
+    from fantasy_baseball.web.app import create_app
+
+    league_path = tmp_path / "league.yaml"
+    league_path.write_text(
+        "league:\n  team_name: Hart of the Order\n"
+        "draft:\n  position: 1\n  teams:\n    1: Hart of the Order\n    2: Opp\n"
+        "keepers:\n"
+        "  - {name: Jose Ramirez, team: Hart of the Order}\n"
+    )
+    monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+
+    board_path = tmp_path / "draft_state_board.json"
+    # Two Jose Ramirezes: the real one (high VAR) and a namesake (low VAR).
+    write_board(
+        [
+            {
+                "name": "Jose Ramirez",
+                "name_normalized": "jose ramirez",
+                "player_id": "111::hitter",
+                "player_type": "hitter",
+                "positions": ["3B"],
+                "best_position": "3B",
+                "var": 9.2,
+            },
+            {
+                "name": "Jose Ramirez",
+                "name_normalized": "jose ramirez",
+                "player_id": "222::pitcher",
+                "player_type": "pitcher",
+                "positions": ["SP"],
+                "best_position": "SP",
+                "var": 0.5,
+            },
+        ],
+        board_path,
+    )
+
+    a = create_app(state_path=tmp_path / "draft_state.json")
+    a.config["TESTING"] = True
+
+    with a.test_client() as c:
+        r = c.post("/api/new-draft")
+        assert r.status_code == 200
+        state = r.get_json()
+
+    assert state["keepers"][0]["player_id"] == "111::hitter"
+
+
+def test_resolve_keeper_missing_player_returns_400(tmp_path, monkeypatch):
+    """Keeper not on board → UnresolvedKeeperError → HTTP 400."""
+    from fantasy_baseball.draft.state import write_board
+    from fantasy_baseball.web.app import create_app
+
+    league_path = tmp_path / "league.yaml"
+    league_path.write_text(
+        "league:\n  team_name: Hart of the Order\n"
+        "draft:\n  position: 1\n  teams:\n    1: Hart of the Order\n    2: Opp\n"
+        "keepers:\n"
+        "  - {name: Nobody Important, team: Hart of the Order}\n"
+    )
+    monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+    write_board([], tmp_path / "draft_state_board.json")
+
+    a = create_app(state_path=tmp_path / "draft_state.json")
+    a.config["TESTING"] = True
+
+    with a.test_client() as c:
+        r = c.post("/api/new-draft")
+        assert r.status_code == 400
+        assert "Nobody Important" in r.get_json()["error"]
