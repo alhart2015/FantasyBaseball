@@ -25,9 +25,11 @@ Each strategy is a `pick_*()` function in `draft/strategy.py` registered in the 
 
 All pick entry happens in `src/fantasy_baseball/web/app.py`. Launch with
 `python scripts/run_draft_dashboard.py` (default port 5050, `--debug`
-flag for auto-reload during development). The legacy CLI
-(`scripts/run_draft.py`) is still available until the dashboard's
-real-data path is complete.
+for auto-reload during development). Before a fresh draft — or any time
+the projection CSVs have changed — pass `--rebuild-board` once to
+regenerate `data/draft_state_board.json` from the SQLite projections
+pipeline. The legacy CLI (`scripts/run_draft.py`) is still available as
+a fallback.
 
 - `draft_state.json` — snapshot written atomically by the Flask writer
   endpoints on every pick. Reader (the browser JS) polls
