@@ -27,13 +27,125 @@ Endpoints
 """
 
 import logging
+import os
 from pathlib import Path
+from typing import Any, cast
 
+import yaml
 from flask import Flask, jsonify, render_template, request
 
-from fantasy_baseball.draft.state import read_board, read_delta, read_state
+from fantasy_baseball.draft import draft_controller
+from fantasy_baseball.draft.state import read_board, read_delta, read_state, write_state
 
 DEFAULT_STATE_PATH = Path(__file__).resolve().parents[3] / "data" / "draft_state.json"
+
+
+def _load_league_yaml() -> dict[str, Any]:
+    path = os.environ.get("DRAFT_LEAGUE_YAML_PATH") or str(
+        Path(__file__).resolve().parents[3] / "config" / "league.yaml"
+    )
+    with open(path) as f:
+        return cast(dict[str, Any], yaml.safe_load(f))
+
+
+def _teams_by_position(league_yaml: dict[str, Any]) -> dict[int, str]:
+    teams = league_yaml["draft"]["teams"]
+    if isinstance(teams, dict):
+        return {int(k): v for k, v in teams.items()}
+    return {i + 1: v for i, v in enumerate(teams)}
+
+
+def _resolve_keeper_factory(league_yaml: dict[str, Any]):  # noqa: ARG001
+    """Returns a keeper-resolver callable.
+
+    For now, uses a placeholder that echoes the name. Phase 4+ wires the
+    real board-backed resolver (draft.search.find_player_by_name) that
+    consumes ``league_yaml`` and the ``team`` argument to scope the lookup.
+    """
+
+    def _resolver(name: str, _team: str) -> tuple[str, str, str]:
+        return (f"{name}::hitter", name, "OF")
+
+    return _resolver
+
+
+def _register_writer_routes(app):
+    @app.post("/api/new-draft")
+    def new_draft():
+        league_yaml = _load_league_yaml()
+        try:
+            state = draft_controller.start_new_draft(
+                league_yaml,
+                resolve_keeper=_resolve_keeper_factory(league_yaml),
+            )
+        except draft_controller.UnresolvedKeeperError as e:
+            return jsonify({"error": str(e)}), 400
+        write_state(state, app.config["STATE_PATH"])
+        return jsonify(state)
+
+    @app.post("/api/pick")
+    def record_pick():
+        body = request.get_json(silent=True) or {}
+        required = ("player_id", "player_name", "position", "team")
+        missing = [k for k in required if k not in body]
+        if missing:
+            return jsonify({"error": f"missing fields: {missing}"}), 400
+        league_yaml = _load_league_yaml()
+        state = draft_controller.resume_or_init(app.config["STATE_PATH"])
+        try:
+            new_state = draft_controller.apply_pick(
+                state,
+                player_id=body["player_id"],
+                player_name=body["player_name"],
+                position=body["position"],
+                team=body["team"],
+                teams_by_position=_teams_by_position(league_yaml),
+            )
+        except draft_controller.WrongTeamError as e:
+            return jsonify({"error": str(e)}), 409
+        except draft_controller.AlreadyDraftedError as e:
+            return jsonify({"error": str(e)}), 409
+        write_state(new_state, app.config["STATE_PATH"])
+        return jsonify(new_state)
+
+    @app.post("/api/undo")
+    def undo():
+        league_yaml = _load_league_yaml()
+        state = draft_controller.resume_or_init(app.config["STATE_PATH"])
+        new_state = draft_controller.undo_pick(
+            state,
+            teams_by_position=_teams_by_position(league_yaml),
+        )
+        write_state(new_state, app.config["STATE_PATH"])
+        return jsonify(new_state)
+
+    @app.post("/api/on-the-clock")
+    def override_on_the_clock():
+        body = request.get_json(silent=True) or {}
+        if "team" not in body:
+            return jsonify({"error": "missing fields: ['team']"}), 400
+        state = draft_controller.resume_or_init(app.config["STATE_PATH"])
+        new_state = {**state, "on_the_clock": body["team"]}
+        write_state(new_state, app.config["STATE_PATH"])
+        return jsonify(new_state)
+
+    @app.post("/api/reset")
+    def reset():
+        body = request.get_json(silent=True) or {}
+        if body.get("confirm") != "RESET":
+            return jsonify({"error": "missing confirm"}), 400
+        for p in (
+            app.config["STATE_PATH"],
+            app.config["BOARD_PATH"],
+            app.config["DELTA_PATH"],
+        ):
+            Path(p).unlink(missing_ok=True)
+        return jsonify({"reset": True})
+
+    @app.get("/api/recs")
+    def recs():
+        # Real implementation lands in Phase 5.
+        return jsonify({"error": "not yet implemented"}), 501
 
 
 def create_app(state_path: Path | None = None) -> Flask:
@@ -126,5 +238,7 @@ def create_app(state_path: Path | None = None) -> Flask:
         state_slim = {k: v for k, v in state.items() if k != "available_players"}
         state_slim["full_state"] = True
         return jsonify(state_slim)
+
+    _register_writer_routes(app)
 
     return app
