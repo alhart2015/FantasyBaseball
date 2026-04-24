@@ -20,6 +20,7 @@ import json
 import os
 import tempfile
 import threading
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -30,6 +31,34 @@ from fantasy_baseball.draft.recommender import Recommendation
 from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import RATE_STATS, Category
+
+
+@dataclass
+class Pick:
+    """One drafted slot — live pick or pre-seeded keeper.
+
+    ``pick_number`` is ``None`` for keepers (they do not consume a draft
+    slot). ``undone`` is flipped when the pick is rolled back via undo and
+    pushed onto the ``undo_stack``; the pick is removed from the live
+    ``picks`` list, not marked in place.
+    """
+
+    pick_number: int | None
+    round: int
+    team: str
+    player_id: str
+    player_name: str
+    position: str
+    timestamp: float
+    undone: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Pick":
+        return cls(**data)
+
 
 # ---------------------------------------------------------------------------
 # Module-level version counter (monotonically increasing, thread-safe)

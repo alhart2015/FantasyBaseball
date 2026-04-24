@@ -229,3 +229,79 @@ class TestReadState:
         path = tmp_path / "bad.json"
         path.write_text("{invalid json!!")
         assert read_state(path) == {}
+
+
+def test_pick_roundtrips_through_json():
+    from fantasy_baseball.draft.state import Pick
+
+    p = Pick(
+        pick_number=1,
+        round=1,
+        team="Hart of the Order",
+        player_id="Juan Soto::hitter",
+        player_name="Juan Soto",
+        position="OF",
+        timestamp=1714000000.0,
+        undone=False,
+    )
+    data = p.to_dict()
+    assert data == {
+        "pick_number": 1,
+        "round": 1,
+        "team": "Hart of the Order",
+        "player_id": "Juan Soto::hitter",
+        "player_name": "Juan Soto",
+        "position": "OF",
+        "timestamp": 1714000000.0,
+        "undone": False,
+    }
+    restored = Pick.from_dict(data)
+    assert restored == p
+
+
+def test_pick_none_pick_number_for_keepers():
+    from fantasy_baseball.draft.state import Pick
+
+    p = Pick(
+        pick_number=None,
+        round=0,
+        team="Hart of the Order",
+        player_id="Juan Soto::hitter",
+        player_name="Juan Soto",
+        position="OF",
+        timestamp=1714000000.0,
+        undone=False,
+    )
+    assert p.to_dict()["pick_number"] is None
+
+
+def test_new_state_dict_keys_survive_roundtrip(tmp_path):
+    from fantasy_baseball.draft.state import Pick, read_state, write_state
+
+    state = {
+        "version": 0,
+        "keepers": [Pick(None, 0, "TeamA", "p1::hitter", "P1", "OF", 1.0).to_dict()],
+        "picks": [Pick(1, 1, "TeamA", "p2::hitter", "P2", "SS", 2.0).to_dict()],
+        "on_the_clock": "TeamB",
+        "undo_stack": [],
+        "projected_standings_cache": {"TeamA": {"HR": {"point_estimate": 60.0, "sd": 5.0}}},
+    }
+    path = tmp_path / "draft_state.json"
+    write_state(state, path)
+    loaded = read_state(path)
+    assert loaded["on_the_clock"] == "TeamB"
+    assert len(loaded["keepers"]) == 1
+    assert loaded["projected_standings_cache"]["TeamA"]["HR"]["sd"] == 5.0
+
+
+def test_read_state_tolerates_missing_legacy_fields(tmp_path):
+    import json
+
+    from fantasy_baseball.draft.state import read_state
+
+    path = tmp_path / "draft_state.json"
+    path.write_text(json.dumps({"version": 1, "on_the_clock": "TeamA"}))
+    loaded = read_state(path)
+    assert loaded["on_the_clock"] == "TeamA"
+    assert loaded.get("recommendations", []) == []
+    assert loaded.get("balance") is None
