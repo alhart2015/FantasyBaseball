@@ -5,6 +5,11 @@ const POLL_INTERVAL_MS = 500;
 let lastVersion = 0;
 let fullBoard = [];  // cached once from /api/board
 let recsPrimarySort = "immediate"; // or "vopn"
+// Increments on every recs fetch so a slow response from a stale request
+// doesn't overwrite a newer one. lastRecsRows caches the most recent
+// response so the sort toggle can re-render without re-fetching.
+let recsRequestId = 0;
+let lastRecsRows = [];
 
 async function fetchBoard() {
   const r = await fetch("/api/board");
@@ -39,7 +44,7 @@ function renderState(state) {
   renderAvailablePlayers(state);
   renderRecentPicks(state);
   if (state.on_the_clock) {
-    fetchRecs(state.on_the_clock).then(renderRecs).catch(() => {});
+    loadAndRenderRecs(state.on_the_clock);
   }
 }
 
@@ -93,8 +98,33 @@ function renderRecentPicks(state) {
 
 async function fetchRecs(team) {
   const r = await fetch(`/api/recs?team=${encodeURIComponent(team)}`);
-  if (!r.ok) return [];
+  if (!r.ok) return null;  // null distinguishes failure from "0 recs"
   return r.json();
+}
+
+function setRecsStatus(text, loading) {
+  const status = document.getElementById("recs-status");
+  if (status) status.textContent = text;
+  document.getElementById("rec-list").classList.toggle("loading", !!loading);
+}
+
+// Fetch + render with a stale-response guard. If a newer fetch starts
+// before this one returns, the older response is discarded — prevents
+// the panel from flashing stale recs on top of fresh ones.
+async function loadAndRenderRecs(team) {
+  const myReq = ++recsRequestId;
+  setRecsStatus(`loading for ${team}…`, true);
+  const rows = await fetchRecs(team);
+  if (myReq !== recsRequestId) return;  // superseded
+  if (rows == null) {
+    lastRecsRows = [];
+    document.getElementById("rec-list").innerHTML = "";
+    setRecsStatus(`no data for ${team} (board not loaded?)`, false);
+    return;
+  }
+  lastRecsRows = rows;
+  renderRecs(rows);
+  setRecsStatus(rows.length ? `for ${team}` : `no recs for ${team}`, false);
 }
 
 function renderRecs(rows) {
@@ -255,14 +285,12 @@ async function refreshInspectorPanel() {
   document.getElementById("team-picker").addEventListener("change", refreshInspectorPanel);
 
   document.querySelectorAll(".sort-toggle button").forEach((btn) => {
-    btn.addEventListener("click", async () => {
+    btn.addEventListener("click", () => {
       document.querySelectorAll(".sort-toggle button").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       recsPrimarySort = btn.dataset.sort;
-      const otc = document.getElementById("otc-btn").textContent;
-      if (otc !== "—") {
-        renderRecs(await fetchRecs(otc));
-      }
+      // Sort is client-side — re-render the cached rows instead of refetching.
+      if (lastRecsRows.length) renderRecs(lastRecsRows);
     });
   });
 

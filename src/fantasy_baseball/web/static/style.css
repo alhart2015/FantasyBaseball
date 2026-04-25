@@ -125,6 +125,17 @@ body {
 .recommendations .detail { display: none; color: var(--muted); font-size: 0.85rem; padding-top: 0.5rem; }
 .recommendations li.expanded .detail { display: block; }
 
+/* Loading / freshness indicator next to the panel title. */
+.recommendations .recs-status {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-weight: normal;
+  margin-left: 0.5rem;
+}
+/* Dim the rec list while a fetch is in-flight so it's clear the
+ * displayed rows are about to be replaced. */
+#rec-list.loading { opacity: 0.4; transition: opacity 150ms; }
+
 .team-inspector .tabs button { font: inherit; background: none; border: none; color: var(--muted); padding: 0.5rem 1rem; cursor: pointer; }
 .team-inspector .tabs button.active { color: var(--text); border-bottom: 2px solid var(--accent); }
 .team-inspector .panel.hidden { display: none; }
