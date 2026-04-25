@@ -435,3 +435,36 @@ def test_standings_endpoint_returns_real_rows_after_pick(tmp_path, monkeypatch):
     assert len(rows) == 2  # two teams
     assert all(isinstance(row["total"], int | float) for row in rows)
     assert rows[0]["total"] >= rows[1]["total"]  # sorted desc
+
+
+def test_recs_excludes_drafted_players_from_candidates(tmp_path, monkeypatch):
+    """Drafted players (keepers + picks) must not appear in /api/recs."""
+    from fantasy_baseball.draft.state import write_board
+    from fantasy_baseball.web.app import create_app
+
+    board_path = tmp_path / "draft_state_board.json"
+    write_board(_INTEGRATION_BOARD_ROWS, board_path)
+
+    league_path = tmp_path / "league.yaml"
+    league_path.write_text(_INTEGRATION_LEAGUE_YAML)
+    monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+
+    a = create_app(state_path=tmp_path / "draft_state.json")
+    a.config["TESTING"] = True
+    with a.test_client() as c:
+        c.post("/api/new-draft")
+        # Pick the highest-VAR hitter ("Slugger" in the integration fixture).
+        c.post(
+            "/api/pick",
+            json={
+                "player_id": "1::hitter",
+                "player_name": "Slugger",
+                "position": "OF",
+                "team": "Hart of the Order",
+            },
+        )
+        r = c.get("/api/recs?team=Opp")
+    assert r.status_code == 200
+    body = r.get_json()
+    drafted_ids = {row["player_id"] for row in body}
+    assert "1::hitter" not in drafted_ids
