@@ -96,7 +96,11 @@ def _require_auth(f):
             token = auth_header[7:]
             if hmac.compare_digest(token, _get_admin_password()):
                 return f(*args, **kwargs)
-        if request.is_json or request.content_type == "application/json":
+        if (
+            request.path.startswith("/api/")
+            or request.is_json
+            or request.content_type == "application/json"
+        ):
             return jsonify({"error": "Authentication required"}), 401
         return redirect(url_for("login", next=request.path))
 

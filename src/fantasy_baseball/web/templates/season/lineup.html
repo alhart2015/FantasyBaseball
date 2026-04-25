@@ -405,10 +405,28 @@ function onTeamChange(teamKey) {
     var statusEl = document.getElementById('opponent-status');
     if (statusEl) statusEl.textContent = 'Loading...';
 
+    var respMeta = {status: null, contentType: null};
     fetch('/api/opponent/' + encodeURIComponent(teamKey) + '/lineup')
         .then(function(r) {
-            if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || 'Failed'); });
-            return r.json();
+            respMeta.status = r.status;
+            respMeta.contentType = r.headers.get('content-type') || '';
+            if (!r.ok) {
+                return r.text().then(function(body) {
+                    var msg;
+                    try { msg = JSON.parse(body).error || 'Failed'; }
+                    catch (e) { msg = 'HTTP ' + r.status + ' (' + respMeta.contentType + ')'; }
+                    throw new Error(msg);
+                });
+            }
+            return r.text().then(function(body) {
+                try { return JSON.parse(body); }
+                catch (e) {
+                    throw new Error(
+                        'Bad response: HTTP ' + r.status + ' ' + respMeta.contentType
+                        + ' — body starts: ' + body.slice(0, 80)
+                    );
+                }
+            });
         })
         .then(function(data) {
             renderOpponentLineup(data);
@@ -416,6 +434,7 @@ function onTeamChange(teamKey) {
             if (statusEl) statusEl.textContent = '';
         })
         .catch(function(err) {
+            console.error('opponent load failed', respMeta, err);
             alert('Error loading opponent: ' + err.message);
             selector.disabled = false;
             if (statusEl) statusEl.textContent = '';

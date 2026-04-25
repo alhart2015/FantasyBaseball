@@ -141,6 +141,25 @@ def test_refresh_status_not_running(client):
     assert data["running"] is False
 
 
+def test_unauthed_api_returns_json_401_not_redirect(client):
+    """Unauthenticated /api/* GETs must return JSON 401, not redirect to /login.
+
+    The mobile lineup page relies on `r.json()` to read errors; a 302 to the HTML
+    login page makes JSON parsing fail with a confusing browser-specific error.
+    """
+    resp = client.get("/api/opponent/mlb.l.1.t.1/lineup")
+    assert resp.status_code == 401
+    assert resp.content_type.startswith("application/json")
+    assert resp.get_json() == {"error": "Authentication required"}
+
+
+def test_unauthed_html_page_still_redirects_to_login(client):
+    """Non-API routes should still redirect to /login when unauthenticated."""
+    resp = client.get("/logs")
+    assert resp.status_code == 302
+    assert "/login" in resp.headers["Location"]
+
+
 def test_logs_page_renders(client):
     with client.session_transaction() as sess:
         sess["authenticated"] = True
