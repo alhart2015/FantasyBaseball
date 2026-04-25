@@ -86,34 +86,50 @@ def rank_candidates(
         )
         immediate_rows.append((candidate, delta))
 
-    best_at_next_turn_delta = 0.0
+    # Forward-model: opponents pick lowest-ADP first. After picks_until_next_turn
+    # picks they take a fixed set of candidates (the "sniped" ones); the rest
+    # are "surviving" — we'd still see them at our next turn.
+    surviving_ids = {_candidate_id(c) for c in candidates}
     if picks_until_next_turn > 0 and adp_table is not None:
-        remaining_ids = {_candidate_id(c) for c in candidates}
         by_adp = sorted(candidates, key=lambda c: adp_table.get(_candidate_id(c)))
+        snipes_left = picks_until_next_turn
         for c in by_adp:
-            if picks_until_next_turn <= 0:
+            if snipes_left <= 0:
                 break
-            cid = _candidate_id(c)
-            if cid in remaining_ids:
-                remaining_ids.remove(cid)
-                picks_until_next_turn -= 1
-        best_at_next_turn_delta = max(
-            (d.total for c, d in immediate_rows if _candidate_id(c) in remaining_ids),
-            default=0.0,
-        )
+            surviving_ids.discard(_candidate_id(c))
+            snipes_left -= 1
 
-    rows = [
-        RecRow(
-            player_id=_candidate_id(c),
-            name=c.name,
-            positions=[str(p) for p in c.positions],
-            immediate_delta=d.total,
-            immediate_delta_sd=0.0,
-            value_of_picking_now=d.total - best_at_next_turn_delta,
-            per_category=d.per_category,
+    # Best immediate_delta among the candidates that will survive — the
+    # baseline alternative I'd be left with if I let p go.
+    best_surviving_delta = max(
+        (d.total for c, d in immediate_rows if _candidate_id(c) in surviving_ids),
+        default=0.0,
+    )
+
+    rows = []
+    for c, d in immediate_rows:
+        cid = _candidate_id(c)
+        if cid in surviving_ids:
+            # I can wait — p will still be there at my next turn, so the
+            # order I pick doesn't affect my two-pick total. No regret.
+            vopn = 0.0
+        else:
+            # p will be sniped. Regret = gap between p and the best
+            # alternative I could still grab at my next turn. Positive
+            # means urgent (p > best_survivor); negative means even
+            # waiting beats panic-grabbing p now.
+            vopn = d.total - best_surviving_delta
+        rows.append(
+            RecRow(
+                player_id=cid,
+                name=c.name,
+                positions=[str(p) for p in c.positions],
+                immediate_delta=d.total,
+                immediate_delta_sd=0.0,
+                value_of_picking_now=vopn,
+                per_category=d.per_category,
+            )
         )
-        for c, d in immediate_rows
-    ]
     rows.sort(key=lambda r: r.immediate_delta, reverse=True)
     return rows
 

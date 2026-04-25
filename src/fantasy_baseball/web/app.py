@@ -148,10 +148,14 @@ def _build_rec_inputs(app, state, league_yaml):
 
 
 def _picks_until_next_turn(state, team):
-    """Count opponent picks between now and ``team``'s next turn.
+    """Count opponent picks between ``team``'s upcoming pick and the one after.
 
-    Falls back to ``0`` when the controller can't determine it (e.g. the
-    draft is already done, or state is malformed).
+    For VOPN: if ``team`` were to take a player at their next turn, this is
+    the number of opponent picks before they pick again. The dashboard
+    typically queries ``team = on_the_clock``; works either way.
+
+    Falls back to ``0`` when the controller can't determine it (draft done,
+    state malformed, team unknown).
     """
     try:
         from fantasy_baseball.draft.draft_controller import _snake_order
@@ -160,10 +164,16 @@ def _picks_until_next_turn(state, team):
         teams_by_position = _teams_by_position(league_yaml)
         order = _snake_order(teams_by_position, num_rounds=30)
         picks_so_far = len(state.get(StateKey.PICKS, []))
-        for i in range(picks_so_far + 1, len(order)):
-            if order[i] == team:
-                return i - picks_so_far
-        return 0
+        # First, find team's upcoming pick at or after picks_so_far.
+        upcoming_idx = next((i for i in range(picks_so_far, len(order)) if order[i] == team), None)
+        if upcoming_idx is None:
+            return 0
+        # Then find the pick AFTER that.
+        next_idx = next((i for i in range(upcoming_idx + 1, len(order)) if order[i] == team), None)
+        if next_idx is None:
+            return 0
+        # Indices in (upcoming, next) are opponent picks; team picks at next.
+        return next_idx - upcoming_idx - 1
     except Exception:
         return 0
 

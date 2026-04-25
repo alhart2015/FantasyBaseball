@@ -1,3 +1,6 @@
+import pytest
+
+
 def _two_team_projected_standings():
     """Minimal ProjectedStandings stub for delta math tests.
 
@@ -170,3 +173,77 @@ def test_value_of_picking_now_positive_when_player_is_scarce():
 
     assert bomber_row.value_of_picking_now > 0
     assert abs(slap_row.value_of_picking_now) < bomber_row.value_of_picking_now
+
+
+def test_vopn_sort_differs_from_immediate_delta_sort_when_some_survive():
+    """VOPN must produce a different sort order than immediate_delta when
+    some candidates survive opponent picks. A high-immediate-delta
+    surviving player should rank LOWER in VOPN sort than a sniped player
+    with somewhat lower immediate_delta — that's the whole point.
+    """
+    from fantasy_baseball.draft.adp import ADPTable
+    from fantasy_baseball.draft.eroto_recs import rank_candidates
+    from fantasy_baseball.models.player import HitterStats, Player, PlayerType
+
+    # Three candidates: stud (highest delta, low ADP — sniped),
+    # mid (mid delta, late ADP — survives), late (low delta, late ADP).
+    stud = Player(
+        name="Stud",
+        player_type=PlayerType.HITTER,
+        positions=["OF"],
+        yahoo_id="stud::hitter",
+        rest_of_season=HitterStats(r=110, hr=40, rbi=110, sb=10, avg=0.290, ab=580, h=168),
+    )
+    mid = Player(
+        name="Mid",
+        player_type=PlayerType.HITTER,
+        positions=["OF"],
+        yahoo_id="mid::hitter",
+        rest_of_season=HitterStats(r=85, hr=22, rbi=70, sb=15, avg=0.270, ab=560, h=151),
+    )
+    late = Player(
+        name="Late",
+        player_type=PlayerType.HITTER,
+        positions=["OF"],
+        yahoo_id="late::hitter",
+        rest_of_season=HitterStats(r=70, hr=10, rbi=50, sb=8, avg=0.260, ab=520, h=135),
+    )
+    standings = _two_team_projected_standings()
+    replacements = {
+        "OF": Player(
+            name="Replacement OF",
+            player_type=PlayerType.HITTER,
+            positions=["OF"],
+            rest_of_season=HitterStats(r=55, hr=10, rbi=45, sb=2, avg=0.240, ab=450, h=108),
+        )
+    }
+    # Stud goes early; mid and late are late-round.
+    adp = ADPTable(adp={"stud::hitter": 5.0, "mid::hitter": 80.0, "late::hitter": 110.0})
+
+    rows = rank_candidates(
+        candidates=[stud, mid, late],
+        replacements=replacements,
+        team_name="TeamA",
+        projected_standings=standings,
+        team_sds=None,
+        picks_until_next_turn=1,  # exactly one snipe → only stud goes
+        adp_table=adp,
+    )
+
+    vopns = {r.name: r.value_of_picking_now for r in rows}
+    deltas = {r.name: r.immediate_delta for r in rows}
+
+    # Surviving players have no regret — I can wait and grab them later.
+    assert vopns["Mid"] == 0.0
+    assert vopns["Late"] == 0.0
+
+    # Core invariant break: under the OLD bug, vopn[X] - vopn[Y] equaled
+    # delta[X] - delta[Y] for ALL pairs (single constant K subtracted).
+    # The fix breaks that for at least one pair so VOPN sort actually
+    # differs from immediate_delta sort.
+    names = ["Stud", "Mid", "Late"]
+    pairs = [(a, b) for i, a in enumerate(names) for b in names[i + 1 :]]
+    differing = [
+        (a, b) for a, b in pairs if (vopns[a] - vopns[b]) != pytest.approx(deltas[a] - deltas[b])
+    ]
+    assert differing, "VOPN sort would equal immediate_delta sort if every pair matched"
