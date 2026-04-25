@@ -33,7 +33,6 @@ body {
 .topbar .round-pick { font-size: 1.5rem; font-weight: 600; }
 .topbar .on-the-clock button { font: inherit; background: none; border: 1px dashed var(--border); color: var(--accent); padding: 0.25rem 0.5rem; cursor: pointer; }
 .topbar .lifecycle-buttons { margin-left: auto; }
-.topbar .lifecycle-buttons .danger { color: var(--negative); }
 
 .dashboard-grid {
   flex: 1;

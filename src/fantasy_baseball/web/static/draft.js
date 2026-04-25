@@ -203,17 +203,6 @@ async function newDraft() {
   renderState(await r.json());
 }
 
-async function reset() {
-  const input = prompt("Type RESET to confirm");
-  if (input !== "RESET") return;
-  await fetch("/api/reset", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ confirm: "RESET" }),
-  });
-  window.location.reload();
-}
-
 async function poll() {
   const state = await fetchState(lastVersion || null);
   if (state) {
@@ -231,7 +220,6 @@ async function poll() {
   if (initial) renderState(initial);
   document.getElementById("undo-btn").onclick = undo;
   document.getElementById("new-draft-btn").onclick = newDraft;
-  document.getElementById("reset-btn").onclick = reset;
 
   document.querySelectorAll(".sort-toggle button").forEach((btn) => {
     btn.addEventListener("click", async () => {

@@ -64,19 +64,6 @@ def test_pick_wrong_team_rejected(client):
     assert r.status_code == 409
 
 
-def test_reset_deletes_state(client, tmp_path):
-    client.post("/api/new-draft")
-    r = client.post("/api/reset", json={"confirm": "RESET"})
-    assert r.status_code == 200
-    assert not (tmp_path / "draft_state.json").exists()
-
-
-def test_reset_without_confirm_rejected(client):
-    client.post("/api/new-draft")
-    r = client.post("/api/reset", json={})
-    assert r.status_code == 400
-
-
 def test_recs_endpoint_exists(client):
     client.post("/api/new-draft")
     r = client.get("/api/recs?team=Hart of the Order")

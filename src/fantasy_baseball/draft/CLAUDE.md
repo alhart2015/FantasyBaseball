@@ -48,9 +48,8 @@ Writer endpoints in `web/app.py`:
 - `POST /api/pick` — record a pick, advance snake order.
 - `POST /api/undo` — pop the most recent live pick.
 - `POST /api/on-the-clock` — manual override.
-- `POST /api/reset` — delete state files (requires `{"confirm": "RESET"}`).
-- `GET /api/recs?team=<name>` — top 10 ERoto-delta candidates (currently
-  returns 501 until real board loading lands — see the post-rework TODOs).
+- `GET /api/recs?team=<name>` — top 10 ERoto-delta candidates (returns
+  503 if the cached board is missing — run `--rebuild-board` once).
 - `GET /api/roster?team=<name>` — slots + replacement placeholders.
 - `GET /api/standings` — fractional ERoto per team with uncertainty SDs
   (currently empty until `projected_standings_cache` is populated by

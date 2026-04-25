@@ -256,19 +256,6 @@ def _register_writer_routes(app):
         write_state(new_state, app.config[CFG_STATE_PATH])
         return jsonify(new_state)
 
-    @app.post("/api/reset")
-    def reset():
-        body = request.get_json(silent=True) or {}
-        if body.get("confirm") != "RESET":
-            return jsonify({"error": "missing confirm"}), 400
-        for p in (
-            app.config[CFG_STATE_PATH],
-            app.config[CFG_BOARD_PATH],
-            app.config[CFG_DELTA_PATH],
-        ):
-            Path(p).unlink(missing_ok=True)
-        return jsonify({"reset": True})
-
     @app.get("/api/recs")
     def recs():
         from fantasy_baseball.draft import eroto_recs
