@@ -52,6 +52,14 @@ CFG_STATE_PATH: str = "STATE_PATH"
 CFG_BOARD_PATH: str = "BOARD_PATH"
 CFG_DELTA_PATH: str = "DELTA_PATH"
 
+# /api/recs ERoto-scores every remaining candidate, which is O(N * score_roto).
+# Past pick ~50 by VAR there's effectively no chance a player ranks in the
+# top-10 immediate_delta — VAR is monotone with raw stat contribution, so a
+# bottom-of-board player has near-zero or negative delta vs replacement.
+# Capping the candidate pool turns a 6.5s response into ~200ms.
+# Board is var-sorted desc by build_draft_board, so this is just a slice.
+RECS_CANDIDATE_POOL_SIZE: int = 200
+
 
 def _load_league_yaml() -> dict[str, Any]:
     path = os.environ.get("DRAFT_LEAGUE_YAML_PATH") or str(
@@ -271,7 +279,7 @@ def _register_writer_routes(app):
             return jsonify({"error": str(e)}), 503
         picks_until_next = _picks_until_next_turn(state, team)
         rows = eroto_recs.rank_candidates(
-            candidates=inputs.candidates,
+            candidates=inputs.candidates[:RECS_CANDIDATE_POOL_SIZE],
             replacements=inputs.replacements,
             team_name=team,
             projected_standings=inputs.projected_standings,
