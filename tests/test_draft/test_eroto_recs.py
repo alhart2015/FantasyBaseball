@@ -176,11 +176,11 @@ def test_value_of_picking_now_positive_when_player_is_scarce():
     assert bomber_row.value_of_picking_now > slap_row.value_of_picking_now
 
 
-def test_vopn_sort_differs_from_immediate_delta_sort_when_some_survive():
-    """VOPN must produce a different sort order than immediate_delta when
-    some candidates survive opponent picks. A high-immediate-delta
-    surviving player should rank LOWER in VOPN sort than a sniped player
-    with somewhat lower immediate_delta — that's the whole point.
+def test_vopn_position_aware_promotes_best_at_position():
+    """VOPN is per-position urgency: 'should I take a player at this
+    position now, or wait?' The best candidate at his position gets the
+    position-urgency VOPN; non-best at same position get negative VOPN
+    (don't take them — take the position's best instead).
     """
     from fantasy_baseball.draft.adp import ADPTable
     from fantasy_baseball.draft.eroto_recs import rank_candidates
@@ -232,13 +232,18 @@ def test_vopn_sort_differs_from_immediate_delta_sort_when_some_survive():
     )
 
     vopns = {r.name: r.value_of_picking_now for r in rows}
+    deltas = {r.name: r.immediate_delta for r in rows}
 
-    # Stud is sniped — taking him first is the optimal sequence because
-    # it preserves Mid for the second pick. So Stud has the unique max
-    # two-pick total → positive VOPN. Mid + Late lose stud forever if
-    # not chosen first → negative VOPN.
-    by_vopn = sorted(rows, key=lambda r: r.value_of_picking_now, reverse=True)
-    assert by_vopn[0].name == "Stud"
-    assert vopns["Stud"] > 0
-    assert vopns["Mid"] < 0
-    assert vopns["Late"] < 0
+    # All three are OF (same primary position). Stud is best at OF.
+    # Stud's VOPN is computed per-position — gap to best surviving OF
+    # (which is Mid since Stud is sniped). Mid + Late aren't best at
+    # their position, so their VOPN = delta - delta(Stud) <= 0.
+    assert vopns["Stud"] >= vopns["Mid"]
+    assert vopns["Stud"] >= vopns["Late"]
+    # Non-best-at-position candidates must NOT have higher VOPN than the
+    # best-at-position candidate even when their delta is similar — that's
+    # the point of "I need a 1B, take the best 1B not the 2nd-best".
+    if deltas["Mid"] < deltas["Stud"]:
+        assert vopns["Mid"] < 0  # he's strictly worse than Stud at OF
+    if deltas["Late"] < deltas["Stud"]:
+        assert vopns["Late"] < 0
