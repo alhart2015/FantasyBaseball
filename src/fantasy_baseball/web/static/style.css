@@ -34,6 +34,24 @@ body {
 .topbar .on-the-clock button { font: inherit; background: none; border: 1px dashed var(--border); color: var(--accent); padding: 0.25rem 0.5rem; cursor: pointer; }
 .topbar .lifecycle-buttons { margin-left: auto; }
 
+/* Lifecycle + recent-picks buttons: explicit styling so the dark-theme
+ * background doesn't make them disappear into the panel.
+ */
+.lifecycle-buttons button,
+.recent-picks button {
+  font: inherit;
+  background: var(--accent);
+  color: #0f1419;
+  border: none;
+  padding: 0.4rem 0.9rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.lifecycle-buttons button:hover:not(:disabled),
+.recent-picks button:hover:not(:disabled) { filter: brightness(1.1); }
+.lifecycle-buttons button:disabled,
+.recent-picks button:disabled { opacity: 0.4; cursor: not-allowed; }
+
 .dashboard-grid {
   flex: 1;
   display: grid;
