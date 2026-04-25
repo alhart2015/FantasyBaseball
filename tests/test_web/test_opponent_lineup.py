@@ -336,6 +336,105 @@ class TestBuildOpponentLineup:
         assert "W" in pitcher["pace"], "pitcher pace must include 'W'"
         assert "K" in pitcher["pace"], "pitcher pace must include 'K'"
 
+    def test_template_compatible_shape(self):
+        """Opponent entries must carry the same fields the lineup template reads
+        for the user roster: rank (for the rank badge macro), delta_roto (always
+        None for opponents — template renders '—'), is_bench / is_il flags."""
+        roster = [
+            {
+                "name": "Salvador Perez",
+                "positions": ["C", "Util"],
+                "selected_position": "BN",
+                "player_id": "100",
+                "status": "",
+            },
+            {
+                "name": "Corbin Burnes",
+                "positions": ["SP"],
+                "selected_position": "SP",
+                "player_id": "200",
+                "status": "DTD",
+            },
+        ]
+        hitters_proj, pitchers_proj = _sample_projections()
+
+        result = build_opponent_lineup(
+            roster=roster,
+            opponent_name="Springfield Isotopes",
+            hitters_proj=hitters_proj,
+            pitchers_proj=pitchers_proj,
+            rest_of_season_hitters=pd.DataFrame(),
+            rest_of_season_pitchers=pd.DataFrame(),
+            season_year=2026,
+        )
+
+        hitter = result["hitters"][0]
+        pitcher = result["pitchers"][0]
+
+        for entry, label in [(hitter, "hitter"), (pitcher, "pitcher")]:
+            assert "rank" in entry, f"{label} missing 'rank' (rank_badge macro reads h.rank)"
+            assert isinstance(entry["rank"], dict), f"{label} 'rank' must be RankInfo.to_dict()"
+            assert entry["delta_roto"] is None, f"{label} 'delta_roto' must be None for opponents"
+            assert "is_bench" in entry
+            assert "is_il" in entry
+
+        assert hitter["is_bench"] is True, "BN hitter should be bench"
+        assert pitcher["is_il"] is False, "DTD pitcher in active SP slot is not IL"
+
+    def test_ros_keys_flattened_to_top_level(self):
+        """Lineup template's tooltip reads `h.r`, `h.hr`, … (the rest-of-season
+        key flattened to top level). When a ROS projection exists for an opponent
+        player, those flat keys must reflect the ROS-source numbers, not the
+        blended preseason that to_flat_dict sets by default."""
+        from fantasy_baseball.utils.name_utils import normalize_name
+
+        roster = [
+            {
+                "name": "Salvador Perez",
+                "positions": ["C", "Util"],
+                "selected_position": "C",
+                "player_id": "100",
+                "status": "",
+            },
+        ]
+        hitters_proj, pitchers_proj = _sample_projections()
+
+        # Distinct ROS numbers so we can prove the flat keys came from here, not preseason.
+        ros_hitters = pd.DataFrame(
+            [
+                {
+                    "name": "Salvador Perez",
+                    "fg_id": "1",
+                    "player_type": "hitter",
+                    "pa": 400,
+                    "ab": 360,
+                    "h": 95,
+                    "r": 42,
+                    "hr": 18,
+                    "rbi": 60,
+                    "sb": 2,
+                    "avg": 0.265,
+                }
+            ]
+        )
+        ros_hitters["_name_norm"] = ros_hitters["name"].apply(normalize_name)
+
+        result = build_opponent_lineup(
+            roster=roster,
+            opponent_name="Springfield Isotopes",
+            hitters_proj=hitters_proj,
+            pitchers_proj=pitchers_proj,
+            rest_of_season_hitters=ros_hitters,
+            rest_of_season_pitchers=pd.DataFrame(),
+            season_year=2026,
+        )
+
+        perez = result["hitters"][0]
+        # Flat keys reflect ROS numbers (42/18/60), not preseason (60/25/80).
+        assert perez["r"] == 42
+        assert perez["hr"] == 18
+        assert perez["rbi"] == 60
+
 
 class TestOpponentCache:
     def test_clear_opponent_cache(self):
