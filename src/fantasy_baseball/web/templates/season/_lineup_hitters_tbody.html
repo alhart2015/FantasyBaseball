@@ -1,0 +1,85 @@
+{# Hitter table body (totals row + player rows). Caller passes:
+   - players: list of hitter entries (must carry pace, overall_pace, rank, …)
+   - totals:  hitter_totals dict (or None)
+   Used by lineup.html for the user roster and rendered server-side by
+   /api/opponent/<key>/lineup so the opponent view inherits every feature
+   the user view has (rank badges, full tooltips, ROS deviation classes).
+#}
+{% from "season/macros.html" import rank_badge %}
+{% if totals %}
+{% set t = totals %}
+<tr class="totals-row">
+    <td></td>
+    <td style="text-align: left; font-weight: 600;">Team Totals</td>
+    <td></td>
+    {% for cat in ["PA", "R", "HR", "RBI", "SB", "AVG"] %}
+    {% set st = t.get(cat, {}) %}
+    <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'PA' %} pa-col{% endif %}" style="font-weight: 600;">
+        {% if st.get('actual') is not none %}
+            {% if cat == 'AVG' %}{{ "%.3f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}
+        {% else %}—{% endif %}
+        {% if st.get('z_score') is defined and cat not in ['PA'] %}
+        <div class="tooltip">
+            <div style="font-weight: 600; margin-bottom: 6px;">Team — {{ cat }}</div>
+            <div class="tooltip-row"><span class="tooltip-label">Actual</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}</span></div>
+            <div class="tooltip-row"><span class="tooltip-label">Expected pace</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.expected) }}{% else %}{{ st.expected }}{% endif %}</span></div>
+            <div class="tooltip-row"><span class="tooltip-label">Z-score</span><span class="tooltip-val">{{ "%+.1f"|format(st.z_score) }}</span></div>
+        </div>
+        {% endif %}
+    </td>
+    {% endfor %}
+    <td></td>
+    <td></td>
+    <td></td>
+</tr>
+{% endif %}
+{% for p in players %}
+    {% set s = p.pace if p.pace else {} %}
+    <tr class="{% if p.is_bench %}bench-row{% endif %}{% if p.is_il and not p.is_bench %} il-active-row{% endif %}">
+        <td class="stat-cell {{ p.overall_pace.color_class if p.overall_pace else 'stat-neutral' }}">
+            {{ p.selected_position }}
+            {% if p.overall_pace and p.overall_pace.avg_z is not none %}
+            <div class="tooltip">
+                <div style="font-weight: 600; margin-bottom: 6px;">{{ p.name }} — Overall Pace</div>
+                <div class="tooltip-row"><span class="tooltip-label">Avg z-score</span><span class="tooltip-val">{{ '%+.1f'|format(p.overall_pace.avg_z) }}</span></div>
+            </div>
+            {% endif %}
+        </td>
+        <td style="text-align: left; font-weight: 500;">{{ p.name }} {{ rank_badge(p.rank) }}</td>
+        <td style="text-align: left; color: var(--text-secondary); font-size: 11px;">
+            {{ p.positions | join(", ") }}
+        </td>
+        {% for cat in ["PA", "R", "HR", "RBI", "SB", "AVG"] %}
+        {% set st = s.get(cat, {}) if s else {} %}
+        {% set dev = st.get('rest_of_season_deviation_sgp', 0)|int %}
+        {% set dev_abs = dev if dev > 0 else -dev %}
+        {% set dev_clamped = [dev_abs, 3]|min %}
+        <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'PA' %} pa-col{% endif %}{% if dev > 0 %} stat-ros-up stat-ros-{{ dev_clamped }}{% elif dev < 0 %} stat-ros-down stat-ros-{{ dev_clamped }}{% endif %}">
+            {% if st and st.get('actual') is not none and (st.get('actual', 0) != 0 or s.get('PA', {}).get('actual', 0) > 0) %}
+                {% if cat == 'AVG' %}{{ "%.3f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}
+            {% else %}—{% endif %}
+            {% if st and st.get('z_score') is defined and cat != 'PA' %}
+            <div class="tooltip">
+                <div style="font-weight: 600; margin-bottom: 6px;">{{ p.name }} — {{ cat }}</div>
+                <div class="tooltip-row"><span class="tooltip-label">Actual</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}</span></div>
+                <div class="tooltip-row"><span class="tooltip-label">{% if cat == 'AVG' %}Projection{% else %}Expected pace{% endif %}</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.expected) }}{% else %}{{ st.expected }}{% endif %}</span></div>
+                <div class="tooltip-row"><span class="tooltip-label">Z-score</span><span class="tooltip-val">{{ "%+.1f"|format(st.z_score) }}</span></div>
+                <div class="tooltip-divider"></div>
+                {% if cat != 'AVG' %}
+                <div class="tooltip-row"><span class="tooltip-label">Pre-season proj</span><span class="tooltip-val">{{ st.projection }} {{ cat }}</span></div>
+                {% endif %}
+                {% set rest_of_season_key = cat | lower %}
+                <div class="tooltip-row"><span class="tooltip-label">ROS proj</span><span class="tooltip-val">{% if p[rest_of_season_key] is defined and p[rest_of_season_key] is not none %}{% if cat == 'AVG' %}{{ "%.3f"|format(p[rest_of_season_key]) }}{% else %}{{ p[rest_of_season_key] | round | int }}{% endif %} {{ cat }}{% else %}<span style="color: var(--text-secondary); font-style: italic;">—</span>{% endif %}</span></div>
+            </div>
+            {% endif %}
+        </td>
+        {% endfor %}
+        <td>{{ "%.2f" | format(p.sgp) if p.sgp is not none else "—" }}</td>
+        <td>{{ "%+.2f" | format(p.delta_roto) if p.delta_roto is not none else "—" }}</td>
+        <td>
+            {% if p.status %}
+            <span class="badge badge-il">{{ p.status }}</span>
+            {% endif %}
+        </td>
+    </tr>
+{% endfor %}

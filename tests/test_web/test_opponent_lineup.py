@@ -477,7 +477,21 @@ class TestApiOpponentLineup:
             mock_cfg.return_value.team_name = "Hart of the Order"
             mock_cfg.return_value.season_year = 2026
             mock_build.return_value = {
-                "hitters": [{"name": "Salvador Perez", "sgp": 3.5}],
+                "hitters": [
+                    {
+                        "name": "Salvador Perez",
+                        "selected_position": "C",
+                        "positions": ["C", "Util"],
+                        "sgp": 3.5,
+                        "delta_roto": None,
+                        "is_bench": False,
+                        "is_il": False,
+                        "pace": {},
+                        "overall_pace": {"avg_z": None, "color_class": "stat-neutral"},
+                        "rank": {"rest_of_season": 42, "preseason": 50, "current": None},
+                        "status": "",
+                    }
+                ],
                 "pitchers": [],
                 "hitter_totals": {},
                 "pitcher_totals": {},
@@ -490,7 +504,14 @@ class TestApiOpponentLineup:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["team_name"] == "Springfield Isotopes"
-        assert len(data["hitters"]) == 1
+        # Server now returns rendered HTML, not raw lists. The frontend swaps
+        # this directly into the existing tbody so opponents render through
+        # the same Jinja partials as the user roster.
+        assert "hitters_html" in data
+        assert "pitchers_html" in data
+        assert "Salvador Perez" in data["hitters_html"]
+        assert 'class="rank-badge"' in data["hitters_html"]  # rank badge rendered
+        assert "#42" in data["hitters_html"]  # ROS rank shown
 
 
 class TestStandingsLinks:
