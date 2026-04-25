@@ -103,8 +103,8 @@ def test_recs_returns_ranked_rows(client, monkeypatch):
 
     def fake_rank(**_kwargs):
         return [
-            RecRow("p1::hitter", "Player One", ["OF"], 3.2, 0.5, 1.1, {"HR": 1.2}),
-            RecRow("p2::hitter", "Player Two", ["SS"], 2.1, 0.3, 0.4, {"SB": 0.9}),
+            RecRow("p1::hitter", "Player One", ["OF"], 3.2, 1.1, {"HR": 1.2}),
+            RecRow("p2::hitter", "Player Two", ["SS"], 2.1, 0.4, {"SB": 0.9}),
         ]
 
     monkeypatch.setattr(eroto_recs, "rank_candidates", fake_rank)
@@ -121,7 +121,7 @@ def test_recs_returns_ranked_rows(client, monkeypatch):
     )
     monkeypatch.setattr(web_app, "_build_rec_inputs", lambda *_a, **_kw: fake_inputs)
     monkeypatch.setattr(web_app, "_load_board_cached", lambda _app: None)
-    monkeypatch.setattr(web_app, "_picks_until_next_turn", lambda state, team: 3)
+    monkeypatch.setattr(web_app, "_picks_until_next_turn", lambda state, team, league_yaml: 3)
 
     client.post("/api/new-draft")
     r = client.get("/api/recs?team=Hart of the Order")
@@ -435,6 +435,97 @@ def test_standings_endpoint_returns_real_rows_after_pick(tmp_path, monkeypatch):
     assert len(rows) == 2  # two teams
     assert all(isinstance(row["total"], int | float) for row in rows)
     assert rows[0]["total"] >= rows[1]["total"]  # sorted desc
+
+
+def test_roster_endpoint_organizes_by_slot_with_replacements(tmp_path, monkeypatch):
+    """Slot-aware /api/roster. With OF=1, SP=1, RP=1 and one OF pick, the
+    response is one row per slot capacity: filled OF + replacement SP/RP.
+    """
+    from fantasy_baseball.draft.state import write_board
+    from fantasy_baseball.web.app import create_app
+
+    write_board(_INTEGRATION_BOARD_ROWS, tmp_path / "draft_state_board.json")
+    league_path = tmp_path / "league.yaml"
+    league_path.write_text(_INTEGRATION_LEAGUE_YAML)
+    monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+
+    a = create_app(state_path=tmp_path / "draft_state.json")
+    a.config["TESTING"] = True
+    with a.test_client() as c:
+        c.post("/api/new-draft")
+        c.post(
+            "/api/pick",
+            json={
+                "player_id": "1::hitter",
+                "player_name": "Slugger",
+                "position": "OF",
+                "team": "Hart of the Order",
+            },
+        )
+        r = c.get("/api/roster?team=Hart of the Order")
+
+    assert r.status_code == 200
+    rows = r.get_json()
+    slots = {row["slot"]: row for row in rows}
+    # OF was the pick → assigned to OF slot, not "Replacement".
+    assert slots["OF"]["name"] == "Slugger"
+    assert slots["OF"]["replacement"] is False
+    # SP and RP are unfilled — they show "Replacement", not the OF pick.
+    assert slots["SP"]["name"] == "Replacement"
+    assert slots["SP"]["replacement"] is True
+    assert slots["RP"]["replacement"] is True
+
+
+def test_rec_inputs_cached_across_attach_standings_and_recs(tmp_path, monkeypatch):
+    """Regression: a single pick should compute_rec_inputs only ONCE.
+
+    _attach_standings_cache used to call compute_rec_inputs and discard
+    the result; /api/recs would then call it again moments later. Now
+    both go through _build_rec_inputs which caches on the keepers+picks
+    fingerprint.
+    """
+    from fantasy_baseball.draft import recs_integration
+    from fantasy_baseball.draft.state import write_board
+    from fantasy_baseball.web.app import create_app
+
+    board_path = tmp_path / "draft_state_board.json"
+    write_board(_INTEGRATION_BOARD_ROWS, board_path)
+
+    league_path = tmp_path / "league.yaml"
+    league_path.write_text(_INTEGRATION_LEAGUE_YAML)
+    monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+
+    call_count = {"n": 0}
+    real_compute = recs_integration.compute_rec_inputs
+
+    def counting_compute(*args, **kwargs):
+        call_count["n"] += 1
+        return real_compute(*args, **kwargs)
+
+    monkeypatch.setattr(recs_integration, "compute_rec_inputs", counting_compute)
+
+    a = create_app(state_path=tmp_path / "draft_state.json")
+    a.config["TESTING"] = True
+    with a.test_client() as c:
+        c.post("/api/new-draft")
+        baseline = call_count["n"]
+        c.post(
+            "/api/pick",
+            json={
+                "player_id": "1::hitter",
+                "player_name": "Slugger",
+                "position": "OF",
+                "team": "Hart of the Order",
+            },
+        )
+        # /api/pick triggered _attach_standings_cache (1 compute). The
+        # subsequent /api/recs call must hit the cache.
+        after_pick = call_count["n"]
+        c.get("/api/recs?team=Opp")
+        after_recs = call_count["n"]
+
+    assert after_pick - baseline == 1, "pick should compute inputs exactly once"
+    assert after_recs == after_pick, "/api/recs should reuse cached inputs from the pick"
 
 
 def test_recs_excludes_drafted_players_from_candidates(tmp_path, monkeypatch):

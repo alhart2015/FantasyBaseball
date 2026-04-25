@@ -25,12 +25,26 @@
     <section class="available-players">
       <header>
         <input type="search" id="player-filter" placeholder="Filter players…" />
+        <select id="position-filter" aria-label="Filter by position">
+          <option value="">All positions</option>
+          <option value="C">C</option>
+          <option value="1B">1B</option>
+          <option value="2B">2B</option>
+          <option value="3B">3B</option>
+          <option value="SS">SS</option>
+          <option value="IF">IF</option>
+          <option value="OF">OF</option>
+          <option value="UTIL">UTIL</option>
+          <option value="SP">SP</option>
+          <option value="RP">RP</option>
+          <option value="P">P (any pitcher)</option>
+        </select>
       </header>
       <div class="player-list-header">
-        <span class="name">Name</span>
+        <button class="name" data-sort="name">Name</button>
         <span class="pos">Pos</span>
-        <span class="adp">ADP</span>
-        <span class="sgp">SGP</span>
+        <button class="adp" data-sort="adp">ADP</button>
+        <button class="sgp" data-sort="sgp">SGP</button>
       </div>
       <ul id="player-list"></ul>
     </section>

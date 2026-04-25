@@ -120,6 +120,35 @@ body {
 .available-players li .pos { text-align: left; }
 .available-players .player-list-header .pos { text-align: left; }
 
+/* Sortable column headers: same look as the static <span>, just clickable.
+ * Active sort column gets a direction arrow appended via ::after. */
+.available-players .player-list-header button {
+  font: inherit;
+  background: none;
+  border: none;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+.available-players .player-list-header button.adp,
+.available-players .player-list-header button.sgp { text-align: right; }
+.available-players .player-list-header button.name { text-align: left; }
+.available-players .player-list-header button:hover { color: var(--text); }
+.available-players .player-list-header button.sort-active { color: var(--accent); }
+.available-players .player-list-header button.sort-asc::after { content: " ↑"; }
+.available-players .player-list-header button.sort-desc::after { content: " ↓"; }
+
+/* Header row: name filter + position select side-by-side. */
+.available-players > header {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.available-players > header > input[type="search"] { flex: 1; min-width: 0; }
+.available-players > header > select { flex: 0 0 auto; }
+
 .recommendations .delta.positive { color: var(--positive); }
 .recommendations .delta.negative { color: var(--negative); }
 .recommendations .detail { display: none; color: var(--muted); font-size: 0.85rem; padding-top: 0.5rem; }
@@ -140,6 +169,24 @@ body {
 .team-inspector .tabs button.active { color: var(--text); border-bottom: 2px solid var(--accent); }
 .team-inspector .panel.hidden { display: none; }
 .team-inspector .replacement-slot { color: var(--muted); font-style: italic; }
+
+/* Roster list: slot column + player column. Slots left-aligned in a
+ * fixed-width column so position labels stack cleanly. */
+.team-inspector .roster-list { list-style: none; padding: 0; margin: 0; }
+.team-inspector .roster-list li {
+  display: grid;
+  grid-template-columns: 3rem 1fr;
+  gap: 0.75rem;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.team-inspector .roster-list .slot {
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.85rem;
+}
 .team-inspector .uncertainty-bar {
   display: inline-block;
   height: 4px;

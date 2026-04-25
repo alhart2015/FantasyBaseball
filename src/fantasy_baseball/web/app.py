@@ -28,6 +28,7 @@ Endpoints
 
 import logging
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
@@ -61,12 +62,20 @@ CFG_DELTA_PATH: str = "DELTA_PATH"
 RECS_CANDIDATE_POOL_SIZE: int = 200
 
 
+@lru_cache(maxsize=8)
+def _read_league_yaml(path: str, _mtime: float) -> dict[str, Any]:
+    # ``_mtime`` is part of the cache key so an in-place rewrite of the
+    # config invalidates the cached parse. Each request handler hits this
+    # so we can't afford to reparse ~3 KB of YAML per call.
+    with open(path) as f:
+        return cast(dict[str, Any], yaml.safe_load(f))
+
+
 def _load_league_yaml() -> dict[str, Any]:
     path = os.environ.get("DRAFT_LEAGUE_YAML_PATH") or str(
         Path(__file__).resolve().parents[3] / "config" / "league.yaml"
     )
-    with open(path) as f:
-        return cast(dict[str, Any], yaml.safe_load(f))
+    return _read_league_yaml(path, os.path.getmtime(path))
 
 
 def _teams_by_position(league_yaml: dict[str, Any]) -> dict[int, str]:
@@ -77,29 +86,16 @@ def _teams_by_position(league_yaml: dict[str, Any]) -> dict[int, str]:
 
 
 def _resolve_keeper_factory(app: Flask):
-    """Return a keeper-resolver callable backed by the on-disk board JSON.
-
-    Looks up by normalized name with VAR tie-break — mirrors the logic
-    in ``scripts/run_draft.py``'s CLI keeper matching.
-    """
+    """Return a keeper-resolver callable backed by the on-disk board JSON."""
     from fantasy_baseball.draft.draft_controller import KeeperNotFound
-    from fantasy_baseball.utils.name_utils import normalize_name
+    from fantasy_baseball.draft.keepers import find_keeper_match, index_by_normalized_name
 
-    board = read_board(app.config[CFG_BOARD_PATH])
-    # Index rows by normalized name. Multiple rows per name are rare but
-    # possible (namesakes) — we keep a list and tie-break at lookup time.
-    by_norm: dict[str, list[dict[str, Any]]] = {}
-    for row in board:
-        key = row.get("name_normalized") or normalize_name(row.get("name", ""))
-        by_norm.setdefault(key, []).append(row)
+    by_norm = index_by_normalized_name(read_board(app.config[CFG_BOARD_PATH]))
 
     def _resolver(name: str, _team: str) -> tuple[str, str, str]:
-        norm = normalize_name(name)
-        candidates = by_norm.get(norm, [])
-        if not candidates:
+        best = find_keeper_match(name, by_norm)
+        if best is None:
             raise KeeperNotFound(f"no board match for keeper {name!r}")
-        # Tie-break by var (fall back to 0 if missing).
-        best = max(candidates, key=lambda r: r.get("var") or 0.0)
         return (
             best["player_id"],
             best["name"],
@@ -125,13 +121,27 @@ def _load_board_cached(app):
     return app._draft_board_cache
 
 
-def _build_rec_inputs(app, state, league_yaml):
-    """Gather the five inputs ``rank_candidates`` needs.
+def _rec_inputs_key(state: dict[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Cache key for ``compute_rec_inputs``.
 
-    Loads the cached board, normalises into ``Player`` objects, and
-    delegates to :mod:`fantasy_baseball.draft.recs_integration`. Raises
-    ``RuntimeError`` when no board is available so the caller can map
-    that to a 503.
+    The inputs depend only on which players are off the board (keepers +
+    picks). ``on_the_clock`` is consumed by the *caller* of the inputs,
+    not by ``compute_rec_inputs`` itself, so it isn't part of the key.
+    """
+    keepers = tuple(p["player_id"] for p in state.get(StateKey.KEEPERS, []))
+    picks = tuple(p["player_id"] for p in state.get(StateKey.PICKS, []))
+    return (keepers, picks)
+
+
+def _build_rec_inputs(app, state, league_yaml):
+    """Gather the inputs ``rank_candidates`` and the standings cache need.
+
+    Caches the result on ``app`` keyed on the keepers+picks tuple so a
+    single pick doesn't trigger two full ``compute_rec_inputs`` runs
+    (one in ``_attach_standings_cache``, another in ``/api/recs``).
+
+    Raises ``RuntimeError`` when no board is available so the caller
+    can map that to a 503.
     """
     from fantasy_baseball.draft import recs_integration
 
@@ -140,42 +150,110 @@ def _build_rec_inputs(app, state, league_yaml):
         raise RuntimeError(
             "draft board not loaded — run scripts/run_draft.py at least once to cache the board"
         )
-    return recs_integration.compute_rec_inputs(
+    key = _rec_inputs_key(state)
+    cached = getattr(app, "_rec_inputs_cache", None)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    inputs = recs_integration.compute_rec_inputs(
         state,
         app.config[CFG_BOARD_PATH],
         league_yaml,
     )
+    app._rec_inputs_cache = (key, inputs)
+    return inputs
 
 
-def _picks_until_next_turn(state, team):
+_ROSTER_DISPLAY_ORDER: tuple[str, ...] = (
+    "C",
+    "1B",
+    "2B",
+    "3B",
+    "SS",
+    "IF",
+    "OF",
+    "UTIL",
+    "SP",
+    "RP",
+    "P",
+    "BN",
+)
+
+
+def _assemble_roster_rows(
+    app: Flask,
+    drafted: list[dict[str, Any]],
+    roster_slots: dict[str, int],
+) -> list[dict[str, Any]]:
+    """Slot-aware roster rendering for ``/api/roster``.
+
+    Runs the team's drafted players through
+    :func:`roster_state.get_roster_by_position` (the same scarcity-aware
+    assignment the lineup tools use) and emits one row per slot
+    capacity, with ``"Replacement"`` filling unfilled positions. Falls
+    back to a flat by-pick list when the board isn't loaded yet.
+    """
+    if not roster_slots:
+        return [
+            {"slot": p["position"], "name": p["player_name"], "replacement": False} for p in drafted
+        ]
+
+    board_rows = _load_board_cached(app)
+    if not board_rows:
+        return [
+            {"slot": p["position"], "name": p["player_name"], "replacement": False} for p in drafted
+        ]
+
+    import pandas as pd
+
+    from fantasy_baseball.draft.roster_state import get_roster_by_position
+    from fantasy_baseball.utils.name_utils import normalize_name
+
+    board_df = pd.DataFrame(board_rows)
+    # name_normalized isn't in the JSON board (serialize_board strips it).
+    # get_roster_by_position only uses it for a fallback path; synthesize
+    # so the lookup never crashes.
+    if "name_normalized" not in board_df.columns:
+        board_df["name_normalized"] = board_df["name"].apply(normalize_name)
+
+    user_roster_ids = [p["player_id"] for p in drafted]
+    by_slot = get_roster_by_position(user_roster_ids, board_df, dict(roster_slots))
+
+    rows: list[dict[str, Any]] = []
+    for slot in _ROSTER_DISPLAY_ORDER:
+        capacity = int(roster_slots.get(slot, 0))
+        if capacity <= 0:
+            continue
+        names = by_slot.get(slot, [])
+        # BN is the overflow bucket — show every assigned name even past capacity.
+        n_rows = max(capacity, len(names))
+        for i in range(n_rows):
+            if i < len(names):
+                rows.append({"slot": slot, "name": names[i], "replacement": False})
+            else:
+                rows.append({"slot": slot, "name": "Replacement", "replacement": True})
+    return rows
+
+
+def _picks_until_next_turn(state: dict[str, Any], team: str, league_yaml: dict[str, Any]) -> int:
     """Count opponent picks between ``team``'s upcoming pick and the one after.
 
     For VOPN: if ``team`` were to take a player at their next turn, this is
     the number of opponent picks before they pick again. The dashboard
     typically queries ``team = on_the_clock``; works either way.
 
-    Falls back to ``0`` when the controller can't determine it (draft done,
-    state malformed, team unknown).
+    Returns 0 when the team is not in the snake order or the draft has
+    progressed past the modeled rounds.
     """
-    try:
-        from fantasy_baseball.draft.draft_controller import _snake_order
-
-        league_yaml = _load_league_yaml()
-        teams_by_position = _teams_by_position(league_yaml)
-        order = _snake_order(teams_by_position, num_rounds=30)
-        picks_so_far = len(state.get(StateKey.PICKS, []))
-        # First, find team's upcoming pick at or after picks_so_far.
-        upcoming_idx = next((i for i in range(picks_so_far, len(order)) if order[i] == team), None)
-        if upcoming_idx is None:
-            return 0
-        # Then find the pick AFTER that.
-        next_idx = next((i for i in range(upcoming_idx + 1, len(order)) if order[i] == team), None)
-        if next_idx is None:
-            return 0
-        # Indices in (upcoming, next) are opponent picks; team picks at next.
-        return next_idx - upcoming_idx - 1
-    except Exception:
+    teams_by_position = _teams_by_position(league_yaml)
+    order = draft_controller.snake_order(teams_by_position, num_rounds=30)
+    picks_so_far = len(state.get(StateKey.PICKS, []))
+    upcoming_idx = next((i for i in range(picks_so_far, len(order)) if order[i] == team), None)
+    if upcoming_idx is None:
         return 0
+    next_idx = next((i for i in range(upcoming_idx + 1, len(order)) if order[i] == team), None)
+    if next_idx is None:
+        return 0
+    return next_idx - upcoming_idx - 1
 
 
 def _attach_standings_cache(
@@ -190,18 +268,14 @@ def _attach_standings_cache(
     just returns ``[]``.
     """
     try:
-        board = _load_board_cached(app)
-        if not board:
-            return state
         from fantasy_baseball.draft import recs_integration
 
-        inputs = recs_integration.compute_rec_inputs(
-            state,
-            app.config[CFG_BOARD_PATH],
-            league_yaml,
-        )
+        inputs = _build_rec_inputs(app, state, league_yaml)
         rows = recs_integration.compute_standings_cache(inputs.projected_standings, inputs.team_sds)
         state[StateKey.PROJECTED_STANDINGS_CACHE] = recs_integration.serialize_standings_cache(rows)
+    except RuntimeError:
+        # Board not loaded yet — silent: page-load + first-run flow.
+        return state
     except Exception:
         logging.getLogger(__name__).exception(
             "failed to refresh projected_standings_cache; leaving stale cache"
@@ -269,7 +343,7 @@ def _register_writer_routes(app):
             return jsonify({"error": "missing fields: ['team']"}), 400
         league_yaml = _load_league_yaml()
         state = draft_controller.resume_or_init(app.config[CFG_STATE_PATH])
-        new_state = {**state, "on_the_clock": body["team"]}
+        new_state = {**state, StateKey.ON_THE_CLOCK: body["team"]}
         new_state = _attach_standings_cache(app, new_state, league_yaml)
         write_state(new_state, app.config[CFG_STATE_PATH])
         return jsonify(new_state)
@@ -287,7 +361,7 @@ def _register_writer_routes(app):
             inputs = _build_rec_inputs(app, state, league_yaml)
         except RuntimeError as e:
             return jsonify({"error": str(e)}), 503
-        picks_until_next = _picks_until_next_turn(state, team)
+        picks_until_next = _picks_until_next_turn(state, team, league_yaml)
         rows = eroto_recs.rank_candidates(
             candidates=inputs.candidates[:RECS_CANDIDATE_POOL_SIZE],
             replacements=inputs.replacements,
@@ -303,8 +377,9 @@ def _register_writer_routes(app):
     def meta():
         """League metadata the dashboard needs once on page load.
 
-        Used to populate the Team Inspector's team dropdown (which the
-        polling /api/state response doesn't carry).
+        Used to populate the Team Inspector's team dropdown and to
+        compute "picks until your next turn" client-side from
+        ``state.picks.length`` against ``pick_order``.
         """
         league_yaml = _load_league_yaml()
         teams_by_position = _teams_by_position(league_yaml)
@@ -312,6 +387,7 @@ def _register_writer_routes(app):
             {
                 "teams": [teams_by_position[i] for i in sorted(teams_by_position)],
                 "user_team": (league_yaml.get("league") or {}).get("team_name"),
+                "pick_order": draft_controller.snake_order(teams_by_position, num_rounds=30),
             }
         )
 
@@ -321,19 +397,14 @@ def _register_writer_routes(app):
         if not team:
             return jsonify({"error": "missing team parameter"}), 400
         state = draft_controller.resume_or_init(app.config[CFG_STATE_PATH])
+        league_yaml = _load_league_yaml()
+        roster_slots = league_yaml.get("roster_slots") or {}
         drafted = [
             p
             for p in (state.get(StateKey.KEEPERS, []) + state.get(StateKey.PICKS, []))
             if p["team"] == team
         ]
-        roster_slots = _load_league_yaml().get("roster_slots", {}) or {}
-        rows = [
-            {"slot": p["position"], "name": p["player_name"], "replacement": False} for p in drafted
-        ]
-        total = sum(roster_slots.values()) - roster_slots.get("IL", 0) if roster_slots else 0
-        for _ in range(max(0, total - len(rows))):
-            rows.append({"slot": "?", "name": "Replacement", "replacement": True})
-        return jsonify(rows)
+        return jsonify(_assemble_roster_rows(app, drafted, roster_slots))
 
     @app.get("/api/standings")
     def standings():
