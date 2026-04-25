@@ -103,7 +103,7 @@ class AlreadyDraftedError(Exception):
     """Raised when a player_id is already in keepers or picks."""
 
 
-def _snake_order(teams_by_position: dict[int, str], num_rounds: int) -> list[str]:
+def snake_order(teams_by_position: dict[int, str], num_rounds: int) -> list[str]:
     """Return the full pick order as a flat list of team names."""
     positions = [teams_by_position[i] for i in sorted(teams_by_position)]
     order: list[str] = []
@@ -117,7 +117,7 @@ def _compute_on_the_clock(
     picks_so_far: int,
 ) -> str | None:
     """Return the team name for the next live pick, or None if the draft is done."""
-    order = _snake_order(teams_by_position, num_rounds=30)
+    order = snake_order(teams_by_position, num_rounds=30)
     if picks_so_far >= len(order):
         return None
     return order[picks_so_far]

@@ -21,16 +21,38 @@ from scipy.stats import rankdata
 from fantasy_baseball.draft.adp import ADPTable, blend_adp
 from fantasy_baseball.draft.state import StateKey, read_board
 from fantasy_baseball.models.player import Player
+from fantasy_baseball.models.positions import BENCH_SLOTS
 from fantasy_baseball.models.standings import ProjectedStandings, ProjectedStandingsEntry
 from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS, Category
+from fantasy_baseball.utils.positions import can_fill_slot
 
-_NON_ACTIVE_SLOTS: frozenset[str] = frozenset({"BN", "IL", "IL+", "DL", "DL+"})
+
+def _var_key(row: dict[str, Any]) -> float:
+    """Sort key for board rows by ``var`` desc.
+
+    Treats missing/None ``var`` as -inf (sorts to the bottom) but
+    returns ``0.0`` literally — the obvious ``r.get("var") or -inf``
+    form treats ``0.0`` as falsy and pushes those rows to the bottom,
+    which silently shifts the marginal-replacement player up by however
+    many ``var=0.0`` rows sit above the threshold (~21 in this league's
+    board). That offset is enough to flip immediate_delta rankings.
+    """
+    v = row.get("var")
+    return float(v) if v is not None else float("-inf")
 
 
 def load_board_rows(board_path: Path) -> list[dict[str, Any]]:
-    """Load the cached draft board as a list of row dicts."""
-    return read_board(board_path)
+    """Load the cached draft board as a list of row dicts.
+
+    Sorts by ``var`` desc on read because the ``RECS_CANDIDATE_POOL_SIZE``
+    cap in ``web/app.py`` slices the top-N candidates assuming this order.
+    ``build_draft_board`` already writes the board sorted, but a hand-edit
+    or future writer that appends rows would silently break recs without
+    this normalization.
+    """
+    rows = read_board(board_path)
+    return sorted(rows, key=_var_key, reverse=True)
 
 
 def rows_to_players(rows: list[dict[str, Any]]) -> list[Player]:
@@ -60,29 +82,25 @@ def build_replacements_by_position(
     For each position with ``capacity`` starters per team, pick the
     (capacity * num_teams + 1)-th best player (by ``var``) who is
     eligible there — roughly the first player beyond the league's
-    collective demand.
+    collective demand. Uses :func:`can_fill_slot` for eligibility so the
+    UTIL/IF/P meta-slots and Yahoo's mixed-case position strings (e.g.
+    ``"Util"``) are handled the same way the optimizer handles them.
     """
     if not rows:
         return {}
-    df = pd.DataFrame(rows)
-    if df.empty or "var" not in df.columns or "positions" not in df.columns:
-        return {}
-    df = df.sort_values("var", ascending=False).reset_index(drop=True)
+    sorted_rows = sorted(rows, key=_var_key, reverse=True)
     out: dict[str, Player] = {}
     for pos, capacity in roster_slots.items():
-        if pos in _NON_ACTIVE_SLOTS or not capacity:
+        if pos in BENCH_SLOTS or not capacity:
             continue
         demand = int(capacity) * max(int(num_teams), 1)
-        eligible = df[df["positions"].apply(lambda ps, p=pos: p in (ps or []))]
-        if eligible.empty:
+        eligible = [r for r in sorted_rows if can_fill_slot(r.get("positions") or [], pos)]
+        if not eligible:
             continue
-        if len(eligible) <= demand:
-            # Not enough players at this position to define a true
-            # replacement — fall back to the worst eligible one.
-            choice = eligible.iloc[-1]
-        else:
-            choice = eligible.iloc[demand]
-        out[pos] = Player.from_dict(choice.to_dict())
+        # Not enough players at this position to define a true replacement
+        # — fall back to the worst eligible one.
+        choice = eligible[demand] if len(eligible) > demand else eligible[-1]
+        out[pos] = Player.from_dict(choice)
     return out
 
 
@@ -129,7 +147,7 @@ def build_team_rosters(
         elif entry.get("position") in replacements:
             team_picks.setdefault(team, []).append(replacements[entry["position"]])
 
-    total_slots = sum(int(v) for k, v in roster_slots.items() if k not in _NON_ACTIVE_SLOTS and v)
+    total_slots = sum(int(v) for k, v in roster_slots.items() if k not in BENCH_SLOTS and v)
     generic_rep = _generic_replacement(replacements)
     for roster in team_picks.values():
         while generic_rep is not None and len(roster) < total_slots:
@@ -241,6 +259,16 @@ def monte_carlo_roto_totals(
     the Gaussian pairwise smooth approximation); the SD is the honest
     uncertainty on the total roto points — the quantity a naive
     quadrature-sum of per-category projection SDs does not produce.
+
+    Why not :func:`fantasy_baseball.simulation.run_monte_carlo`? That
+    function models *player-level* per-game variance via
+    ``simulate_season`` — appropriate for in-season simulation where
+    rosters are fixed and we want bottom-up uncertainty. At draft time
+    we want *team-level* uncertainty propagated from projection SDs
+    (built via ``build_team_sds``) and we'd burn ~30x the wall-clock
+    rebuilding flat rosters, simulating per-game outcomes, and
+    collapsing back to roto on every pick. The two MCs answer different
+    questions; this one is the right tool for the dashboard's hot path.
     """
     rng = np.random.default_rng(seed)
     teams = [e.team_name for e in projected_standings.entries]
@@ -258,9 +286,7 @@ def monte_carlo_roto_totals(
         samples = rng.normal(loc=means, scale=sds, size=(n_iters, len(teams)))
         if cat in INVERSE_STATS:
             samples = -samples  # lower is better → flip sign for ranking
-        # rankdata returns 1..n with averaged ties. Applied per iteration.
-        ranks = np.apply_along_axis(rankdata, 1, samples)
-        totals += ranks
+        totals += rankdata(samples, axis=1)
 
     means_out = totals.mean(axis=0)
     sds_out = totals.std(axis=0, ddof=1) if n_iters > 1 else np.zeros(len(teams))

@@ -87,9 +87,6 @@ def _coerce(d: Mapping[str | Position, int]) -> dict[Position, int]:
     return out
 
 
-# --- Slot-assignment helpers (moved from recommender.py 2026-04-24) ---
-
-
 def compute_slot_scarcity_order(
     board: pd.DataFrame,
     roster_slots: dict[str, int] | None = None,

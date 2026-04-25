@@ -312,6 +312,39 @@ def test_read_state_tolerates_missing_legacy_fields(tmp_path):
     assert loaded.get("balance") is None
 
 
+def test_compute_delta_picks_up_dashboard_schema_changes():
+    """Regression: _DELTA_KEYS must include the dashboard-rework keys.
+
+    A pick mutates ``picks``, ``on_the_clock``, and (after standings
+    refresh) ``projected_standings_cache``. If these aren't in
+    _DELTA_KEYS the delta endpoint returns an empty diff after every
+    pick and the polling client freezes mid-draft.
+    """
+    from fantasy_baseball.draft.state import compute_delta
+
+    old = {
+        "version": 1,
+        "keepers": [{"player_id": "k1", "team": "A"}],
+        "picks": [],
+        "on_the_clock": "A",
+        "undo_stack": [],
+        "projected_standings_cache": {},
+    }
+    new = {
+        "version": 2,
+        "keepers": old["keepers"],
+        "picks": [{"player_id": "p1", "team": "A"}],
+        "on_the_clock": "B",
+        "undo_stack": [],
+        "projected_standings_cache": {"A": {"total": 50.0, "total_sd": 5.0, "categories": {}}},
+    }
+    delta = compute_delta(old, new)
+    assert delta["version"] == 2
+    assert delta["picks"] == new["picks"]
+    assert delta["on_the_clock"] == "B"
+    assert delta["projected_standings_cache"] == new["projected_standings_cache"]
+
+
 def test_serialize_board_emits_total_sgp_and_adp():
     """The available-players panel renders ADP + SGP columns from these
     fields — make sure they survive serialization."""

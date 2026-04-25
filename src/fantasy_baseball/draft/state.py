@@ -35,7 +35,7 @@ from fantasy_baseball.utils.constants import RATE_STATS, Category
 
 
 class StateKey(StrEnum):
-    """Canonical names of the keys in the live-draft state dict.
+    """Canonical names of the dashboard-schema keys in ``draft_state.json``.
 
     Members serialize to their string value (StrEnum) so JSON I/O is
     transparent: ``state[StateKey.PICKS] = [...]`` is equivalent to
@@ -43,9 +43,12 @@ class StateKey(StrEnum):
     statically by mypy/ruff. Mirrors the pattern in
     :class:`fantasy_baseball.data.cache_keys.CacheKey`.
 
-    Only the keys introduced by the dashboard rework are listed here;
-    legacy CLI keys (``current_pick``, ``picking_team``, etc.) remain as
-    bare strings until the legacy path is retired.
+    Scope: this enum covers the keys the dashboard writers
+    (:mod:`draft_controller`) produce. The legacy CLI's
+    :func:`serialize_state` writes a different schema (``current_pick``,
+    ``recommendations``, ``balance``, ...) — those keys are bare strings
+    because the legacy path is slated for removal once the dashboard
+    fully replaces the CLI. Don't grow this enum to cover legacy keys.
     """
 
     VERSION = "version"
@@ -144,8 +147,15 @@ def serialize_board(board: pd.DataFrame) -> list[dict[str, Any]]:
             if isinstance(row["positions"], list)
             else [row["positions"]],
             "var": round(float(row["var"]), 1),
+            # The projection CSVs use 999.0 as a sentinel for "no ADP
+            # data" (e.g. NPB imports like Murakami who weren't in the
+            # FanGraphs draft pool). Normalize to None so the dashboard
+            # renders "—" instead of literal 999.
             "adp": round(float(adp_val), 1)
-            if adp_val is not None and not pd.isna(adp_val) and adp_val != float("inf")
+            if adp_val is not None
+            and not pd.isna(adp_val)
+            and adp_val != float("inf")
+            and float(adp_val) < 999
             else None,
             "total_sgp": round(float(sgp_val), 2)
             if sgp_val is not None and not pd.isna(sgp_val)
@@ -271,8 +281,13 @@ def serialize_state(
 # Keys that are always included in deltas so the client can render status.
 _ALWAYS_INCLUDE = {"version"}
 
-# Keys to compare for changes.
+# Keys to compare for changes. Mixes the legacy CLI schema (current_pick,
+# recommendations, balance, ...) and the dashboard schema (picks, keepers,
+# on_the_clock, ...) because both writers produce state files this delta
+# protocol serves. Without the dashboard keys here, polling clients see
+# empty deltas after every pick and the UI freezes mid-draft.
 _DELTA_KEYS = {
+    # Legacy CLI fields (serialize_state)
     "current_pick",
     "current_round",
     "picking_team",
@@ -288,6 +303,12 @@ _DELTA_KEYS = {
     "roster_by_position",
     "projections",
     "vona_scores",
+    # Dashboard fields (draft_controller.apply_pick / start_new_draft)
+    StateKey.KEEPERS.value,
+    StateKey.PICKS.value,
+    StateKey.ON_THE_CLOCK.value,
+    StateKey.UNDO_STACK.value,
+    StateKey.PROJECTED_STANDINGS_CACHE.value,
 }
 
 

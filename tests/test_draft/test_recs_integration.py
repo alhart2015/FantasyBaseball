@@ -148,6 +148,106 @@ def test_standings_cache_round_trips_through_json():
     assert parsed == original
 
 
+def test_var_zero_rows_sort_above_negative_var():
+    """Regression: ``r.get('var') or -inf`` treats var=0.0 as falsy and
+    sinks those rows to the bottom, shifting the marginal-replacement
+    player up by however many var=0.0 rows sit in the cutoff
+    neighborhood — enough to flip top-10 immediate_delta rankings."""
+    from fantasy_baseball.draft.recs_integration import build_replacements_by_position
+
+    rows = [
+        # Three OF-eligible players: one positive var, one var=0.0, one negative.
+        # With capacity=1, num_teams=1 → demand=1 → replacement is index [1].
+        {
+            "name": "Top OF",
+            "player_id": "1::hitter",
+            "player_type": "hitter",
+            "positions": ["OF"],
+            "var": 1.0,
+        },
+        {
+            "name": "Mid OF (var=0)",
+            "player_id": "2::hitter",
+            "player_type": "hitter",
+            "positions": ["OF"],
+            "var": 0.0,
+        },
+        {
+            "name": "Bottom OF",
+            "player_id": "3::hitter",
+            "player_type": "hitter",
+            "positions": ["OF"],
+            "var": -2.0,
+        },
+    ]
+    reps = build_replacements_by_position(rows, {"OF": 1, "BN": 0}, num_teams=1)
+    # Correct sort: 1.0 > 0.0 > -2.0 → index [1] is "Mid OF (var=0)".
+    # The buggy ``or -inf`` would push var=0 below var=-2 and pick
+    # "Bottom OF" instead.
+    assert reps["OF"].name == "Mid OF (var=0)"
+
+
+def test_build_replacements_uses_can_fill_slot_for_util():
+    """UTIL slot must accept any hitter, not just rows with literal "UTIL"
+    in positions. The board emits "Util" (Yahoo casing) — the old
+    inline ``p in positions`` filter missed all of them, leaving UTIL
+    out of the replacement map."""
+    from fantasy_baseball.draft.recs_integration import build_replacements_by_position
+
+    rows = [
+        {
+            "name": "Star OF",
+            "name_normalized": "star of",
+            "player_id": "1::hitter",
+            "player_type": "hitter",
+            "positions": ["OF", "Util"],  # mixed-case — what the board actually emits
+            "var": 9.0,
+        },
+        {
+            "name": "Bench OF",
+            "name_normalized": "bench of",
+            "player_id": "2::hitter",
+            "player_type": "hitter",
+            "positions": ["OF", "Util"],
+            "var": 0.5,
+        },
+    ]
+    reps = build_replacements_by_position(rows, {"OF": 1, "UTIL": 1, "BN": 0}, num_teams=1)
+    # Both slots should resolve to the second-best eligible player (demand=1
+    # x 1 team) — the Bench OF.
+    assert "OF" in reps
+    assert "UTIL" in reps
+    assert reps["UTIL"].name == "Bench OF"
+
+
+def test_build_replacements_expands_p_to_sp_rp():
+    """``can_fill_slot`` treats P as the union of P/SP/RP. A roster with
+    only SP/RP rows still produces a P replacement."""
+    from fantasy_baseball.draft.recs_integration import build_replacements_by_position
+
+    rows = [
+        {
+            "name": "Top SP",
+            "name_normalized": "top sp",
+            "player_id": "1::pitcher",
+            "player_type": "pitcher",
+            "positions": ["SP"],
+            "var": 8.0,
+        },
+        {
+            "name": "Bench RP",
+            "name_normalized": "bench rp",
+            "player_id": "2::pitcher",
+            "player_type": "pitcher",
+            "positions": ["RP"],
+            "var": 1.0,
+        },
+    ]
+    reps = build_replacements_by_position(rows, {"P": 1, "BN": 0}, num_teams=1)
+    assert "P" in reps
+    assert reps["P"].name == "Bench RP"
+
+
 def test_deserialize_drops_malformed_entries():
     """Legacy / malformed entries are skipped, not crashed on."""
     from fantasy_baseball.draft.recs_integration import deserialize_standings_cache

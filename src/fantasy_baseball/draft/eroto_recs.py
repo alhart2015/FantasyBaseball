@@ -11,11 +11,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 from fantasy_baseball.draft.adp import ADPTable
-from fantasy_baseball.lineup.delta_roto import DeltaRotoResult, compute_delta_roto
+from fantasy_baseball.lineup.delta_roto import DeltaRotoResult, compute_delta_roto, score_swap
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.models.standings import ProjectedStandings
+from fantasy_baseball.scoring import score_roto_dict
+from fantasy_baseball.trades.evaluate import apply_swap_delta, player_rest_of_season_stats
 from fantasy_baseball.utils.constants import Category
 
 
@@ -58,7 +61,6 @@ class RecRow:
     name: str
     positions: list[str]
     immediate_delta: float
-    immediate_delta_sd: float
     value_of_picking_now: float
     per_category: dict[str, float] = field(default_factory=dict)
 
@@ -74,17 +76,36 @@ def rank_candidates(
     adp_table: ADPTable | None = None,
 ) -> list[RecRow]:
     """Score every candidate's immediate ERoto delta + value-of-picking-now."""
+    # The baseline standings + roto scores don't depend on the candidate,
+    # but compute_delta_roto recomputes them from scratch every call. With
+    # ~200 candidates that's ~200 redundant score_roto runs over 10 teams x
+    # 10 cats. Hoist them out of the loop and call score_swap directly.
+    all_before = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
+    roto_before = score_roto_dict(all_before, team_sds=team_sds)
+    loses_ros_cache: dict[int, dict[str, Any]] = {}
+    user_before_stats = all_before[team_name]
+
     immediate_rows: list[tuple[Player, DeltaBreakdown]] = []
     for candidate in candidates:
         replacement = _pick_replacement(candidate, replacements)
-        delta = immediate_delta(
-            candidate=candidate,
-            replacement=replacement,
-            team_name=team_name,
-            projected_standings=projected_standings,
-            team_sds=team_sds,
+        loses_ros = loses_ros_cache.get(id(replacement))
+        if loses_ros is None:
+            loses_ros = player_rest_of_season_stats(replacement)
+            loses_ros_cache[id(replacement)] = loses_ros
+        gains_ros = player_rest_of_season_stats(candidate)
+        all_after = dict(all_before)
+        all_after[team_name] = apply_swap_delta(user_before_stats, loses_ros, gains_ros)
+        roto_after = score_roto_dict(all_after, team_sds=team_sds)
+        result = score_swap(roto_before, roto_after, team_name)
+        immediate_rows.append(
+            (
+                candidate,
+                DeltaBreakdown(
+                    total=result.total,
+                    per_category={cat: cd.roto_delta for cat, cd in result.categories.items()},
+                ),
+            )
         )
-        immediate_rows.append((candidate, delta))
 
     # Forward-model: opponents pick lowest-ADP first. After picks_until_next_turn
     # picks they take a fixed set of candidates (the "sniped" ones); the rest
@@ -157,7 +178,6 @@ def rank_candidates(
                 name=c.name,
                 positions=[str(p) for p in c.positions],
                 immediate_delta=d.total,
-                immediate_delta_sd=0.0,
                 value_of_picking_now=vopn,
                 per_category=d.per_category,
             )

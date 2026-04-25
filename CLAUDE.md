@@ -44,6 +44,7 @@ These apply everywhere; subsystem-specific rules live in the relevant subdirecto
 - **Position collisions** between MLB players and prospects sharing a normalized name are resolved by keeping the entry with more eligible positions.
 - **Projection files** are named `{system}-hitters.csv` / `{system}-pitchers.csv` and live under `data/projections/{season_year}/`. Blend functions validate and emit actionable FanGraphs download links on error.
 - **Scripts inject `src/` into sys.path** rather than relying solely on the editable install. Both work, but scripts do it explicitly for robustness.
+- **Don't use `x or default` for numeric defaults.** Python treats `0`, `0.0`, and `""` as falsy, so `r.get("var") or -inf` silently sinks `var=0.0` rows to `-inf`. The bug is invisible in tests that don't include zero values and surfaces only in production data. Use `r["var"] if r.get("var") is not None else default` (or `dict.get("var", default)` when the default is the right answer for both missing-and-None and present-as-zero). Especially load-bearing in sort keys and bisect/index lookups, where a single misordered element shifts every subsequent index.
 
 ## Reuse before writing
 
