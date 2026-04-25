@@ -99,29 +99,47 @@ def rank_candidates(
             surviving_ids.discard(_candidate_id(c))
             snipes_left -= 1
 
-    # Best immediate_delta among the candidates that will survive — the
-    # baseline alternative I'd be left with if I let p go.
-    best_surviving_delta = max(
-        (d.total for c, d in immediate_rows if _candidate_id(c) in surviving_ids),
-        default=0.0,
+    # Top-2 surviving deltas — needed to project the second pick.
+    survivors_sorted = sorted(
+        ((c, d.total) for c, d in immediate_rows if _candidate_id(c) in surviving_ids),
+        key=lambda kv: kv[1],
+        reverse=True,
     )
+    best_surviving_delta = survivors_sorted[0][1] if survivors_sorted else 0.0
+    second_best_surviving_delta = survivors_sorted[1][1] if len(survivors_sorted) > 1 else 0.0
+    best_survivor: Player | None = survivors_sorted[0][0] if survivors_sorted else None
 
-    rows = []
+    # Two-pick lookahead: total roto if I take this candidate first and
+    # then the best player still available at my next turn.
+    #
+    # If p is sniped: opponents take their slate (no longer including p),
+    #   survivors unchanged → second pick = best_surviving.
+    # If p is the best surviving: my second pick is second-best surviving.
+    # If p is a non-best survivor: my second pick is best surviving.
+    two_pick: list[tuple[Player, DeltaBreakdown, float]] = []
     for c, d in immediate_rows:
         cid = _candidate_id(c)
         if cid in surviving_ids:
-            # I can wait — p will still be there at my next turn, so the
-            # order I pick doesn't affect my two-pick total. No regret.
-            vopn = 0.0
+            second = second_best_surviving_delta if c is best_survivor else best_surviving_delta
         else:
-            # p will be sniped. Regret = gap between p and the best
-            # alternative I could still grab at my next turn. Positive
-            # means urgent (p > best_survivor); negative means even
-            # waiting beats panic-grabbing p now.
-            vopn = d.total - best_surviving_delta
+            second = best_surviving_delta
+        two_pick.append((c, d, d.total + second))
+
+    # VOPN(p) = total starting with p - best total starting with anything else.
+    # Positive on the unique optimal first pick; negative on every other
+    # candidate (and most-negative on the worst options).
+    sorted_tp = sorted(two_pick, key=lambda t: t[2], reverse=True)
+    top_two = (sorted_tp[0][2], sorted_tp[1][2] if len(sorted_tp) > 1 else 0.0)
+    leader: Player | None = sorted_tp[0][0] if sorted_tp else None
+
+    rows = []
+    for c, d, total in two_pick:
+        # max(two_pick) excluding self.
+        max_excluding_self = top_two[1] if c is leader else top_two[0]
+        vopn = total - max_excluding_self
         rows.append(
             RecRow(
-                player_id=cid,
+                player_id=_candidate_id(c),
                 name=c.name,
                 positions=[str(p) for p in c.positions],
                 immediate_delta=d.total,

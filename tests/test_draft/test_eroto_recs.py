@@ -1,6 +1,3 @@
-import pytest
-
-
 def _two_team_projected_standings():
     """Minimal ProjectedStandings stub for delta math tests.
 
@@ -171,8 +168,12 @@ def test_value_of_picking_now_positive_when_player_is_scarce():
     bomber_row = next(r for r in rows if r.name == "Bomber")
     slap_row = next(r for r in rows if r.name == "Slap One")
 
+    # Bomber is the best of three sniped candidates → optimal first pick →
+    # positive VOPN. Slaps have lower delta → they sort below bomber and
+    # come out negative under the regret-vs-optimal-alternative formula.
     assert bomber_row.value_of_picking_now > 0
-    assert abs(slap_row.value_of_picking_now) < bomber_row.value_of_picking_now
+    assert slap_row.value_of_picking_now < 0
+    assert bomber_row.value_of_picking_now > slap_row.value_of_picking_now
 
 
 def test_vopn_sort_differs_from_immediate_delta_sort_when_some_survive():
@@ -231,19 +232,13 @@ def test_vopn_sort_differs_from_immediate_delta_sort_when_some_survive():
     )
 
     vopns = {r.name: r.value_of_picking_now for r in rows}
-    deltas = {r.name: r.immediate_delta for r in rows}
 
-    # Surviving players have no regret — I can wait and grab them later.
-    assert vopns["Mid"] == 0.0
-    assert vopns["Late"] == 0.0
-
-    # Core invariant break: under the OLD bug, vopn[X] - vopn[Y] equaled
-    # delta[X] - delta[Y] for ALL pairs (single constant K subtracted).
-    # The fix breaks that for at least one pair so VOPN sort actually
-    # differs from immediate_delta sort.
-    names = ["Stud", "Mid", "Late"]
-    pairs = [(a, b) for i, a in enumerate(names) for b in names[i + 1 :]]
-    differing = [
-        (a, b) for a, b in pairs if (vopns[a] - vopns[b]) != pytest.approx(deltas[a] - deltas[b])
-    ]
-    assert differing, "VOPN sort would equal immediate_delta sort if every pair matched"
+    # Stud is sniped — taking him first is the optimal sequence because
+    # it preserves Mid for the second pick. So Stud has the unique max
+    # two-pick total → positive VOPN. Mid + Late lose stud forever if
+    # not chosen first → negative VOPN.
+    by_vopn = sorted(rows, key=lambda r: r.value_of_picking_now, reverse=True)
+    assert by_vopn[0].name == "Stud"
+    assert vopns["Stud"] > 0
+    assert vopns["Mid"] < 0
+    assert vopns["Late"] < 0
