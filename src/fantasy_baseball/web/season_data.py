@@ -357,6 +357,8 @@ def build_opponent_lineup(
     """
     from fantasy_baseball.analysis.pace import compute_overall_pace, compute_player_pace
     from fantasy_baseball.data.projections import match_roster_to_projections
+    from fantasy_baseball.models.player import RankInfo
+    from fantasy_baseball.sgp.rankings import lookup_rank
     from fantasy_baseball.utils.name_utils import normalize_name
 
     # Match roster to projections
@@ -383,6 +385,9 @@ def build_opponent_lineup(
     # Load game log totals for pace
     hitter_logs, pitcher_logs = _load_game_log_totals(season_year)
 
+    # Rankings (populated during refresh; absent on cold cache).
+    rankings = read_cache_dict(CacheKey.RANKINGS) or {}
+
     # Build enriched entries
     matched_names = set()
     enriched = []
@@ -392,22 +397,27 @@ def build_opponent_lineup(
         norm = normalize_name(player.name)
         matched_names.add(norm)
 
+        rank_data = lookup_rank(rankings, player.fg_id, player.name, player.player_type)
+        if rank_data:
+            player.rank = RankInfo.from_dict(rank_data)
+
         entry = player.to_flat_dict()
         entry.setdefault("sgp", 0.0)
+        entry["delta_roto"] = None  # opponent rows don't have a swap delta
 
-        # ROS projection tooltip data
+        # ROS projection tooltip data — overwrite both nested ros dict AND the flat
+        # stat keys, so the lineup template's `h[rest_of_season_key]` access pattern
+        # reflects ROS-source projections (not the blended preseason from to_flat_dict).
         rest_of_season_entry = rest_of_season_lookup.get(norm)
         if rest_of_season_entry and rest_of_season_entry.rest_of_season:
-            if player.player_type == PlayerType.HITTER:
-                entry["rest_of_season"] = {
-                    k: getattr(rest_of_season_entry.rest_of_season, k, 0)
-                    for k in ["r", "hr", "rbi", "sb", "avg"]
-                }
-            else:
-                entry["rest_of_season"] = {
-                    k: getattr(rest_of_season_entry.rest_of_season, k, 0)
-                    for k in ["w", "k", "sv", "era", "whip"]
-                }
+            ros_keys = (
+                ["r", "hr", "rbi", "sb", "avg"]
+                if player.player_type == PlayerType.HITTER
+                else ["w", "k", "sv", "era", "whip", "ip"]
+            )
+            ros_dict = {k: getattr(rest_of_season_entry.rest_of_season, k, 0) for k in ros_keys}
+            entry["rest_of_season"] = ros_dict
+            entry.update(ros_dict)
 
         # Pace data
         ptype = player.player_type
@@ -430,6 +440,7 @@ def build_opponent_lineup(
         if normalize_name(raw_player["name"]) not in matched_names:
             entry = dict(raw_player)
             entry["sgp"] = 0.0
+            entry["delta_roto"] = None
             entry["pace"] = {}
             entry["overall_pace"] = compute_overall_pace(entry["pace"])
             enriched.append(entry)
@@ -440,6 +451,7 @@ def build_opponent_lineup(
     for p in enriched:
         pos = p.get("selected_position", "BN")
         p["is_bench"] = pos in ("BN", "IL", "DL")
+        p["is_il"] = "IL" in (p.get("status") or "") or pos == "IL"
         is_pitcher = pos in PITCHER_POSITIONS or (
             pos == "BN" and set(p.get("positions", [])).issubset(PITCHER_POSITIONS | {"BN"})
         )

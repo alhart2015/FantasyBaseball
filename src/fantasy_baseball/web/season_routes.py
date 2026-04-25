@@ -1111,14 +1111,25 @@ def register_routes(app: Flask) -> None:
             season_year=config.season_year,
         )
 
+        # Render the same Jinja partials the user roster uses, so opponents
+        # inherit rank badges + full tooltips without duplicate JS rendering.
+        hitters_html = render_template(
+            "season/_lineup_hitters_tbody.html",
+            players=lineup["hitters"],
+            totals=lineup["hitter_totals"],
+        )
+        pitchers_html = render_template(
+            "season/_lineup_pitchers_tbody.html",
+            players=lineup["pitchers"],
+            totals=lineup["pitcher_totals"],
+        )
+
         response_data = {
             "team_name": opponent.team_name,
             "team_key": team_key,
             "rank": opponent.rank,
-            "hitters": lineup["hitters"],
-            "pitchers": lineup["pitchers"],
-            "hitter_totals": lineup["hitter_totals"],
-            "pitcher_totals": lineup["pitcher_totals"],
+            "hitters_html": hitters_html,
+            "pitchers_html": pitchers_html,
         }
 
         _opponent_cache[team_key] = {
