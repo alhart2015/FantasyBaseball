@@ -1,0 +1,207 @@
+"""ERoto-delta recommender for the live draft.
+
+Wraps ``lineup.delta_roto.compute_delta_roto`` — same math powering
+in-season trade evaluation. For a candidate player and the team on the
+clock, we compute ``score_roto(team_with_player) - score_roto(team_with_replacement)``
+across all 10 teams. The delta is context-dependent: a 40-HR candidate is
+worth more to an HR-weak roster than to an HR-strong one.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Any
+
+from fantasy_baseball.draft.adp import ADPTable
+from fantasy_baseball.lineup.delta_roto import DeltaRotoResult, compute_delta_roto, score_swap
+from fantasy_baseball.models.player import Player
+from fantasy_baseball.models.standings import ProjectedStandings
+from fantasy_baseball.scoring import score_roto_dict
+from fantasy_baseball.trades.evaluate import apply_swap_delta, player_rest_of_season_stats
+from fantasy_baseball.utils.constants import Category
+
+
+@dataclass
+class DeltaBreakdown:
+    """Per-category + total ERoto delta for a single candidate pick."""
+
+    total: float
+    per_category: dict[str, float]
+
+
+def immediate_delta(
+    *,
+    candidate: Player,
+    replacement: Player,
+    team_name: str,
+    projected_standings: ProjectedStandings,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
+) -> DeltaBreakdown:
+    """ERoto delta from swapping ``replacement`` out for ``candidate``."""
+    result: DeltaRotoResult = compute_delta_roto(
+        drop_name=replacement.name,
+        add_player=candidate,
+        user_roster=[replacement],
+        projected_standings=projected_standings,
+        team_name=team_name,
+        team_sds=team_sds,
+    )
+    return DeltaBreakdown(
+        total=result.total,
+        per_category={cat: cd.roto_delta for cat, cd in result.categories.items()},
+    )
+
+
+@dataclass
+class RecRow:
+    """One recommendation row for the dashboard."""
+
+    player_id: str
+    name: str
+    positions: list[str]
+    immediate_delta: float
+    value_of_picking_now: float
+    per_category: dict[str, float] = field(default_factory=dict)
+
+
+def rank_candidates(
+    *,
+    candidates: list[Player],
+    replacements: Mapping[str, Player],
+    team_name: str,
+    projected_standings: ProjectedStandings,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
+    picks_until_next_turn: int = 0,
+    adp_table: ADPTable | None = None,
+) -> list[RecRow]:
+    """Score every candidate's immediate ERoto delta + value-of-picking-now."""
+    # The baseline standings + roto scores don't depend on the candidate,
+    # but compute_delta_roto recomputes them from scratch every call. With
+    # ~200 candidates that's ~200 redundant score_roto runs over 10 teams x
+    # 10 cats. Hoist them out of the loop and call score_swap directly.
+    all_before = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
+    roto_before = score_roto_dict(all_before, team_sds=team_sds)
+    loses_ros_cache: dict[int, dict[str, Any]] = {}
+    user_before_stats = all_before[team_name]
+
+    immediate_rows: list[tuple[Player, DeltaBreakdown]] = []
+    for candidate in candidates:
+        replacement = _pick_replacement(candidate, replacements)
+        loses_ros = loses_ros_cache.get(id(replacement))
+        if loses_ros is None:
+            loses_ros = player_rest_of_season_stats(replacement)
+            loses_ros_cache[id(replacement)] = loses_ros
+        gains_ros = player_rest_of_season_stats(candidate)
+        all_after = dict(all_before)
+        all_after[team_name] = apply_swap_delta(user_before_stats, loses_ros, gains_ros)
+        roto_after = score_roto_dict(all_after, team_sds=team_sds)
+        result = score_swap(roto_before, roto_after, team_name)
+        immediate_rows.append(
+            (
+                candidate,
+                DeltaBreakdown(
+                    total=result.total,
+                    per_category={cat: cd.roto_delta for cat, cd in result.categories.items()},
+                ),
+            )
+        )
+
+    # Forward-model: opponents pick lowest-ADP first. After picks_until_next_turn
+    # picks they take a fixed set of candidates (the "sniped" ones); the rest
+    # are "surviving" — we'd still see them at our next turn.
+    surviving_ids = {_candidate_id(c) for c in candidates}
+    if picks_until_next_turn > 0 and adp_table is not None:
+        by_adp = sorted(candidates, key=lambda c: adp_table.get(_candidate_id(c)))
+        snipes_left = picks_until_next_turn
+        for c in by_adp:
+            if snipes_left <= 0:
+                break
+            surviving_ids.discard(_candidate_id(c))
+            snipes_left -= 1
+
+    # Position-aware VOPN: per candidate, "is now the right time to draft
+    # at this player's position?"
+    #
+    # For each primary position X, compute:
+    #   best_now(X)   = highest-delta candidate at X (sniped or surviving).
+    #   best_later(X) = highest-delta SURVIVING candidate at X.
+    # If best_now is sniped, best_later is whoever's left — the gap is the
+    # positional urgency. If best_now is surviving, best_later == best_now.
+    #
+    # Per candidate p with primary X:
+    #   - If p IS best_now at X:
+    #       - p sniped:    VOPN = delta(p) - best_later(X)   (urgent)
+    #       - p surviving: VOPN = delta(p) - second_best_surviving(X)
+    #         (gap to the next-best at this position; you can wait but
+    #         taking him now locks in the position lead)
+    #   - Else: p isn't the recommended pick at his position. VOPN =
+    #     delta(p) - delta(best_now at X) (negative).
+    def _primary(p: Player) -> str:
+        return str(p.positions[0]) if p.positions else ""
+
+    candidates_at_pos: dict[str, list[tuple[Player, float]]] = {}
+    for c, d in immediate_rows:
+        candidates_at_pos.setdefault(_primary(c), []).append((c, d.total))
+    for items in candidates_at_pos.values():
+        items.sort(key=lambda kv: kv[1], reverse=True)
+
+    # Per position: (best_now_player, best_now_delta, best_later_delta,
+    # second_best_later_delta).
+    pos_summary: dict[str, tuple[Player, float, float, float]] = {}
+    for pos, items in candidates_at_pos.items():
+        best_now_player, best_now_delta = items[0]
+        survivors = [(c, dd) for c, dd in items if _candidate_id(c) in surviving_ids]
+        best_later = survivors[0][1] if survivors else 0.0
+        second_best_later = survivors[1][1] if len(survivors) > 1 else 0.0
+        pos_summary[pos] = (best_now_player, best_now_delta, best_later, second_best_later)
+
+    rows = []
+    for c, d in immediate_rows:
+        primary = _primary(c)
+        best_now_player, best_now_delta, best_later, second_best_later = pos_summary[primary]
+        if c is best_now_player:
+            if _candidate_id(c) in surviving_ids:
+                # Surviving best at his position — gap to second-best survivor
+                # at same position. Tells you the cost of skipping now.
+                vopn = d.total - second_best_later
+            else:
+                # Sniped best at his position — gap to whoever's left.
+                vopn = d.total - best_later
+        else:
+            # Someone else is the best pick at this position; he's not the
+            # recommended draft-this-position-now choice.
+            vopn = d.total - best_now_delta
+        rows.append(
+            RecRow(
+                player_id=_candidate_id(c),
+                name=c.name,
+                positions=[str(p) for p in c.positions],
+                immediate_delta=d.total,
+                value_of_picking_now=vopn,
+                per_category=d.per_category,
+            )
+        )
+    rows.sort(key=lambda r: r.immediate_delta, reverse=True)
+    return rows
+
+
+def _pick_replacement(candidate: Player, replacements: Mapping[str, Player]) -> Player:
+    """Choose the replacement-level player the candidate would displace.
+
+    For v1, use the candidate's primary position. Phase 3 can be smarter
+    (scarcity-based slot pick) — call out to roster_state helpers then.
+    """
+    primary = str(candidate.positions[0]) if candidate.positions else ""
+    if primary in replacements:
+        return replacements[primary]
+    return next(iter(replacements.values()))
+
+
+def _candidate_id(player: Player) -> str:
+    """Stable ID for a candidate. Falls back to ``name::player_type`` when
+    ``yahoo_id`` is missing — same convention used throughout the codebase.
+    """
+    if player.yahoo_id:
+        return player.yahoo_id
+    return f"{player.name}::{player.player_type.value}"

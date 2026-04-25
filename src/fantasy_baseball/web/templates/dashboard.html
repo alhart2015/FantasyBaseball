@@ -1,454 +1,83 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Draft Dashboard</title>
-    <link rel="stylesheet" href="/static/style.css">
-    <script src="https://unpkg.com/htmx.org@2.0.4"
-            integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
-            crossorigin="anonymous"></script>
+  <meta charset="utf-8" />
+  <title>Draft Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
 </head>
 <body>
-    <div id="dashboard">
-
-        <!-- Left column: Draft Board -->
-        <div class="col-left">
-            <div class="panel">
-                <div class="panel-header">
-                    <h2>Draft Board</h2>
-                    <div class="filters">
-                        <button class="filter-btn active" data-pos="All">All</button>
-                        <button class="filter-btn" data-pos="C">C</button>
-                        <button class="filter-btn" data-pos="1B">1B</button>
-                        <button class="filter-btn" data-pos="2B">2B</button>
-                        <button class="filter-btn" data-pos="3B">3B</button>
-                        <button class="filter-btn" data-pos="SS">SS</button>
-                        <button class="filter-btn" data-pos="OF">OF</button>
-                        <button class="filter-btn" data-pos="P">P</button>
-                        <label class="toggle-label">
-                            <input type="checkbox" id="hide-drafted" checked> Hide drafted
-                        </label>
-                        <input type="text" id="board-search" class="board-search" placeholder="Search players..." />
-                    </div>
-                </div>
-                <div class="table-scroll">
-                    <table id="board-table">
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th class="sortable" data-sort="name">Name</th>
-                                <th>Pos</th>
-                                <th class="sortable" data-sort="var">VAR</th>
-                                <th class="sortable" data-sort="vona">VONA</th>
-                                <th class="sortable" data-sort="adp">ADP</th>
-                                <th class="stat-col hitter-col sortable" data-sort="hr">HR</th>
-                                <th class="stat-col hitter-col sortable" data-sort="r">R</th>
-                                <th class="stat-col hitter-col sortable" data-sort="rbi">RBI</th>
-                                <th class="stat-col hitter-col sortable" data-sort="sb">SB</th>
-                                <th class="stat-col hitter-col sortable" data-sort="avg">AVG</th>
-                                <th class="stat-col pitcher-col sortable" data-sort="w">W</th>
-                                <th class="stat-col pitcher-col sortable" data-sort="k">K</th>
-                                <th class="stat-col pitcher-col sortable" data-sort="sv">SV</th>
-                                <th class="stat-col pitcher-col sortable" data-sort="era">ERA</th>
-                                <th class="stat-col pitcher-col sortable" data-sort="whip">WHIP</th>
-                            </tr>
-                        </thead>
-                        <tbody id="board-body">
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <!-- Right column: Panels -->
-        <div class="col-right">
-
-            <!-- Status Bar -->
-            <div class="panel" id="status-panel">
-                <div class="panel-header"><h2>Status</h2></div>
-                <div class="status-grid">
-                    <div class="status-item">
-                        <span class="status-label">Round</span>
-                        <span class="status-value" id="status-round">--</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-label">Pick</span>
-                        <span class="status-value" id="status-pick">--</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-label">Team</span>
-                        <span class="status-value" id="status-team">--</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-label">Next turn in</span>
-                        <span class="status-value" id="status-until">--</span>
-                    </div>
-                </div>
-                <div id="your-pick-banner" class="your-pick-banner hidden">YOUR PICK</div>
-            </div>
-
-            <!-- Recommendations -->
-            <div class="panel">
-                <div class="panel-header"><h2>Recommendations</h2></div>
-                <div id="recs-list" class="recs-list"></div>
-            </div>
-
-            <!-- Your Roster -->
-            <div class="panel">
-                <div class="panel-header"><h2>Your Roster</h2></div>
-                <div id="roster-grid" class="roster-grid"></div>
-            </div>
-
-            <!-- Category Balance -->
-            <div class="panel">
-                <div class="panel-header"><h2>Category Balance</h2></div>
-                <div id="balance-bars" class="balance-bars"></div>
-                <div id="balance-warnings" class="balance-warnings"></div>
-            </div>
-        </div>
+  <header class="topbar">
+    <div class="round-pick">
+      R<span id="round">–</span> P<span id="pick">–</span>
     </div>
+    <div class="on-the-clock">
+      On the clock:
+      <button id="otc-btn" class="team-override">—</button>
+    </div>
+    <div class="next-pick">Your next: <span id="picks-to-next">—</span></div>
+    <div class="lifecycle-buttons">
+      <button id="new-draft-btn">New Draft</button>
+    </div>
+  </header>
 
-    <script>
-    // --- State & Config (injected from server-side league config) ---
-    const ROSTER_SLOTS = {{ roster_slots | tojson }};
-    const TARGETS = {
-        "R": 900, "HR": 265, "RBI": 890, "SB": 145, "AVG": 0.260,
-        "W": 78, "K": 1250, "SV": 55, "ERA": 3.80, "WHIP": 1.20
-    };
-    const INVERSE = new Set(["ERA", "WHIP"]);
-    let currentFilter = "All";
-    let hideDrafted = true;
-    let searchQuery = "";
-    let sortCol = null;   // null = default VAR desc
-    let sortAsc = false;
+  <main class="dashboard-grid">
+    <section class="available-players">
+      <header>
+        <input type="search" id="player-filter" placeholder="Filter players…" />
+        <select id="position-filter" aria-label="Filter by position">
+          <option value="">All positions</option>
+          <option value="C">C</option>
+          <option value="1B">1B</option>
+          <option value="2B">2B</option>
+          <option value="3B">3B</option>
+          <option value="SS">SS</option>
+          <option value="IF">IF</option>
+          <option value="OF">OF</option>
+          <option value="UTIL">UTIL</option>
+          <option value="SP">SP</option>
+          <option value="RP">RP</option>
+          <option value="P">P (any pitcher)</option>
+        </select>
+      </header>
+      <div class="player-list-header">
+        <button class="name" data-sort="name">Name</button>
+        <span class="pos">Pos</span>
+        <button class="adp" data-sort="adp">ADP</button>
+        <button class="sgp" data-sort="sgp">SGP</button>
+      </div>
+      <ul id="player-list"></ul>
+    </section>
 
-    // --- XSS-safe text escaping ---
-    const _esc_el = document.createElement("span");
-    function esc(str) {
-        _esc_el.textContent = str;
-        return _esc_el.innerHTML;
-    }
+    <section class="recommendations">
+      <header>
+        <h2>Recommendations <span id="recs-status" class="recs-status"></span></h2>
+        <div class="sort-toggle">
+          <button data-sort="immediate" class="active">Immediate Δ</button>
+          <button data-sort="vopn">Value of picking now</button>
+        </div>
+      </header>
+      <ol id="rec-list"></ol>
+    </section>
 
-    // --- Delta protocol state ---
-    // The full player board, fetched once from /api/board.
-    let cachedBoard = null;
-    // Accumulated state from polls (starts empty, filled on first response).
-    let currentState = null;
-    // Last version we received (0 = never fetched).
-    let knownVersion = 0;
-    // Polling interval handle.
-    let pollTimer = null;
-    const POLL_MS = 2000;
+    <section class="team-inspector">
+      <header>
+        <div class="tabs">
+          <button data-tab="roster" class="active">Roster</button>
+          <button data-tab="standings">Standings</button>
+        </div>
+        <select id="team-picker"></select>
+      </header>
+      <div id="roster-panel" class="panel"></div>
+      <div id="standings-panel" class="panel hidden"></div>
+    </section>
+  </main>
 
-    // --- Initialization ---
-    async function initDashboard() {
-        // Fetch the full board once (static player data).
-        try {
-            const boardResp = await fetch("/api/board");
-            if (boardResp.ok) {
-                const boardData = await boardResp.json();
-                if (Array.isArray(boardData) && boardData.length > 0) {
-                    cachedBoard = boardData;
-                }
-            }
-        } catch (e) {
-            console.warn("Board fetch failed, will fall back to full state", e);
-        }
+  <footer class="recent-picks">
+    <ol id="recent-picks"></ol>
+    <button id="undo-btn">Undo</button>
+  </footer>
 
-        // If board fetch failed or returned empty, the first full-state
-        // response will include available_players as a fallback.
-
-        // Do an initial full-state fetch (no ?since= param).
-        await pollState();
-
-        // Start periodic polling.
-        pollTimer = setInterval(pollState, POLL_MS);
-    }
-
-    async function pollState() {
-        try {
-            const url = knownVersion > 0
-                ? "/api/state?since=" + knownVersion
-                : "/api/state";
-            const resp = await fetch(url);
-            if (!resp.ok) return;
-            const data = await resp.json();
-            if (!data || typeof data !== "object") return;
-
-            // Server says nothing changed.
-            if (data.no_change) return;
-
-            // Apply the response to our local state.
-            if (data.full_state || !currentState || data.available_players) {
-                // Full state response (initial load, or client was too far behind).
-                currentState = data;
-            } else {
-                // Delta response: merge changed fields into currentState.
-                for (const key of Object.keys(data)) {
-                    if (key === "no_change") continue;
-                    currentState[key] = data[key];
-                }
-            }
-
-            // Update our version watermark.
-            if (data.version !== undefined) {
-                knownVersion = data.version;
-                currentState.version = data.version;
-            }
-
-            // Render everything that we have data for.
-            if (currentState.current_pick) {
-                renderStatus(currentState);
-                renderBoard(currentState);
-                renderRecs(currentState);
-                renderRoster(currentState);
-                renderBalance(currentState);
-            }
-        } catch (e) {
-            // Network error; skip this cycle.
-        }
-    }
-
-    // --- Status Panel ---
-    function renderStatus(state) {
-        document.getElementById("status-round").textContent = state.current_round;
-        document.getElementById("status-pick").textContent = state.current_pick;
-        document.getElementById("status-team").textContent = state.picking_team_name || ("Team " + state.picking_team);
-        document.getElementById("status-until").textContent =
-            state.is_user_pick ? "NOW" : state.picks_until_user_turn + " picks";
-        const banner = document.getElementById("your-pick-banner");
-        const panel = document.getElementById("status-panel");
-        if (state.is_user_pick) {
-            banner.classList.remove("hidden");
-            panel.classList.add("user-pick-glow");
-        } else {
-            banner.classList.add("hidden");
-            panel.classList.remove("user-pick-glow");
-        }
-    }
-
-    // --- Draft Board ---
-    function renderBoard(state) {
-        const tbody = document.getElementById("board-body");
-        const userRoster = new Set(state.user_roster || []);
-        const draftedIds = new Set(state.drafted_ids || state.drafted_players || []);
-
-        // Merge VONA scores from state into board players
-        const vonaScores = state.vona_scores || {};
-
-        // Use the cached board if available; fall back to available_players
-        // from a legacy full-state response.
-        let allPlayers;
-        if (cachedBoard) {
-            // Board is the complete player list. Mark each as drafted or not.
-            allPlayers = cachedBoard.map(p =>
-                Object.assign({_drafted: draftedIds.has(p.player_id || p.name),
-                               vona: vonaScores.hasOwnProperty(p.player_id) ? vonaScores[p.player_id] : null}, p)
-            );
-        } else {
-            // Fallback: use available_players from the full state response.
-            allPlayers = (state.available_players || []).map(p => Object.assign({_drafted: false}, p));
-            for (const name of (state.drafted_players || [])) {
-                allPlayers.push({name, positions: [], var: 0, player_type: "unknown", _drafted: true});
-            }
-        }
-
-        // Apply search filter
-        const q = searchQuery.toLowerCase();
-
-        // Filter
-        let filtered = [];
-        for (const p of allPlayers) {
-            const isDrafted = p._drafted || draftedIds.has(p.player_id || p.name);
-            if (hideDrafted && isDrafted) continue;
-            if (currentFilter !== "All") {
-                let match = false;
-                for (const pos of (p.positions || [])) {
-                    if (currentFilter === "P" && (pos === "SP" || pos === "RP")) { match = true; break; }
-                    if (pos === currentFilter) { match = true; break; }
-                }
-                if (!match) continue;
-            }
-            if (q && !p.name.toLowerCase().includes(q)) continue;
-            filtered.push({p, isDrafted});
-        }
-
-        // Sort
-        if (sortCol) {
-            filtered.sort((a, b) => {
-                let va, vb;
-                if (sortCol === "name") {
-                    va = a.p.name.toLowerCase();
-                    vb = b.p.name.toLowerCase();
-                } else {
-                    va = a.p[sortCol];
-                    vb = b.p[sortCol];
-                    // Null/undefined sort to bottom regardless of direction
-                    if (va == null && vb == null) return 0;
-                    if (va == null) return 1;
-                    if (vb == null) return -1;
-                }
-                if (va < vb) return sortAsc ? -1 : 1;
-                if (va > vb) return sortAsc ? 1 : -1;
-                return 0;
-            });
-        }
-
-        let rows = "";
-        let rank = 0;
-        for (const {p, isDrafted} of filtered) {
-            rank++;
-            const isUser = userRoster.has(p.name);
-            const cls = isUser ? "user-player" : (isDrafted ? "drafted-player" : "");
-            const posStr = esc((p.positions || []).slice(0, 3).join("/"));
-            rows += `<tr class="${cls}">`;
-            rows += `<td>${rank}</td>`;
-            rows += `<td>${esc(p.name)}</td>`;
-            rows += `<td>${posStr}</td>`;
-            rows += `<td>${(p.var || 0).toFixed(1)}</td>`;
-            rows += `<td>${p.vona != null ? p.vona.toFixed(1) : '—'}</td>`;
-            rows += `<td>${p.adp != null ? Math.round(p.adp) : '—'}</td>`;
-            if (p.player_type === "hitter") {
-                rows += `<td>${p.hr}</td><td>${p.r}</td><td>${p.rbi}</td><td>${p.sb}</td><td>${p.avg.toFixed(3)}</td>`;
-                rows += `<td></td><td></td><td></td><td></td><td></td>`;
-            } else if (p.player_type === "pitcher") {
-                rows += `<td></td><td></td><td></td><td></td><td></td>`;
-                rows += `<td>${p.w}</td><td>${p.k}</td><td>${p.sv}</td><td>${p.era.toFixed(2)}</td><td>${p.whip.toFixed(2)}</td>`;
-            } else {
-                rows += `<td></td><td></td><td></td><td></td><td></td>`;
-                rows += `<td></td><td></td><td></td><td></td><td></td>`;
-            }
-            rows += `</tr>`;
-        }
-        tbody.innerHTML = rows;
-    }
-
-    // --- Recommendations ---
-    function renderRecs(state) {
-        const container = document.getElementById("recs-list");
-        let html = "";
-        for (const [i, rec] of (state.recommendations || []).entries()) {
-            const flag = rec.need_flag ? `<span class="need-flag">[NEED]</span>` : "";
-            const note = rec.note ? `<span class="rec-note">${esc(rec.note)}</span>` : "";
-            html += `<div class="rec-item">
-                <span class="rec-rank">${i + 1}.</span>
-                <span class="rec-name">${esc(rec.name)}</span>
-                <span class="rec-pos">${esc(rec.positions.join("/"))}</span>
-                <span class="rec-var">VAR ${rec.var.toFixed(1)}</span>
-                ${flag} ${note}
-            </div>`;
-        }
-        container.innerHTML = html;
-    }
-
-    // --- Roster Grid ---
-    function renderRoster(state) {
-        const container = document.getElementById("roster-grid");
-        const byPos = state.roster_by_position || {};
-        let html = "";
-        for (const [pos, count] of Object.entries(ROSTER_SLOTS)) {
-            const names = byPos[pos] || [];
-            const slots = Math.max(count, names.length);
-            html += `<div class="roster-pos">`;
-            html += `<div class="roster-pos-label">${pos}</div>`;
-            for (let i = 0; i < slots; i++) {
-                const isFilled = i < names.length;
-                const cls = isFilled ? "slot-filled" : "slot-empty";
-                const text = isFilled ? esc(names[i]) : "---";
-                html += `<div class="roster-slot ${cls}">${text}</div>`;
-            }
-            html += `</div>`;
-        }
-        container.innerHTML = html;
-    }
-
-    // --- Category Balance ---
-    function renderBalance(state) {
-        const container = document.getElementById("balance-bars");
-        const warnings = document.getElementById("balance-warnings");
-        const totals = (state.balance && state.balance.totals) || {};
-        let html = "";
-        for (const [cat, target] of Object.entries(TARGETS)) {
-            const val = totals[cat] || 0;
-            let pct;
-            if (INVERSE.has(cat)) {
-                // For ERA/WHIP, lower is better. 100% = at target, >100% if below target (good)
-                pct = target === 0 ? 0 : Math.min((val === 0 ? 0 : (target / val)) * 100, 150);
-            } else {
-                pct = target === 0 ? 0 : Math.min((val / target) * 100, 150);
-            }
-            const isWarning = (state.balance && state.balance.warnings || [])
-                .some(w => w.includes(cat));
-            const barCls = isWarning ? "bar-warning" : (pct >= 80 ? "bar-good" : "bar-normal");
-            let displayVal = cat === "AVG" ? val.toFixed(3)
-                : (cat === "ERA" || cat === "WHIP") ? val.toFixed(2)
-                : Math.round(val);
-            html += `<div class="balance-row">
-                <span class="balance-label">${cat}</span>
-                <div class="balance-track">
-                    <div class="balance-fill ${barCls}" style="width: ${Math.min(pct, 100)}%"></div>
-                </div>
-                <span class="balance-value">${displayVal}</span>
-            </div>`;
-        }
-        container.innerHTML = html;
-        // Warnings
-        const warnList = (state.balance && state.balance.warnings) || [];
-        warnings.innerHTML = warnList.map(w => `<div class="warning-item">${esc(w)}</div>`).join("");
-    }
-
-    // --- Filter buttons ---
-    document.addEventListener("DOMContentLoaded", function() {
-        document.querySelectorAll(".filter-btn").forEach(btn => {
-            btn.addEventListener("click", function() {
-                document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
-                this.classList.add("active");
-                currentFilter = this.dataset.pos;
-                // Re-render board immediately with new filter.
-                if (currentState && currentState.current_pick) {
-                    renderBoard(currentState);
-                }
-            });
-        });
-        document.getElementById("hide-drafted").addEventListener("change", function() {
-            hideDrafted = this.checked;
-            // Re-render board immediately with new toggle.
-            if (currentState && currentState.current_pick) {
-                renderBoard(currentState);
-            }
-        });
-
-        // Search input
-        document.getElementById("board-search").addEventListener("input", function() {
-            searchQuery = this.value;
-            if (currentState && currentState.current_pick) {
-                renderBoard(currentState);
-            }
-        });
-
-        // Sortable column headers
-        document.querySelectorAll(".sortable").forEach(th => {
-            th.addEventListener("click", function() {
-                const col = this.dataset.sort;
-                if (sortCol === col) {
-                    sortAsc = !sortAsc;
-                } else {
-                    sortCol = col;
-                    sortAsc = col === "name";  // name defaults ascending, stats descending
-                }
-                // Update header indicators
-                document.querySelectorAll(".sortable").forEach(h => h.classList.remove("sort-asc", "sort-desc"));
-                this.classList.add(sortAsc ? "sort-asc" : "sort-desc");
-                if (currentState && currentState.current_pick) {
-                    renderBoard(currentState);
-                }
-            });
-        });
-
-        // Kick off the delta-based polling.
-        initDashboard();
-    });
-    </script>
+  <script src="/static/draft.js"></script>
 </body>
 </html>

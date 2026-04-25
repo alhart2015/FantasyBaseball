@@ -2,7 +2,16 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from fantasy_baseball.draft.roster_state import RosterState
+# compute_slot_scarcity_order, get_filled_positions, and get_roster_by_position
+# are re-exported below for backward compatibility with simulator code and tests
+# that imported these helpers from draft.recommender. New live-draft code should
+# import directly from draft.roster_state.
+from fantasy_baseball.draft.roster_state import (
+    RosterState,
+    compute_slot_scarcity_order,  # noqa: F401
+    get_filled_positions,  # noqa: F401
+    get_roster_by_position,  # noqa: F401
+)
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.sgp.replacement import calculate_replacement_levels
@@ -12,7 +21,6 @@ from fantasy_baseball.utils.constants import (
     DEFAULT_ROSTER_SLOTS,
     compute_starters_per_position,
 )
-from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 
 
@@ -44,28 +52,6 @@ class Recommendation:
         self.positions = [
             p if isinstance(p, Position) else Position.parse(p) for p in self.positions
         ]
-
-
-def compute_slot_scarcity_order(
-    board: pd.DataFrame,
-    roster_slots: dict[str, int] | None = None,
-) -> list[str]:
-    """Return roster slots ordered by positional scarcity (most scarce first).
-
-    Scarcity = sum(SGP of all eligible players) / number of roster slots.
-    Lower scarcity = fewer resources per slot = assign multi-eligible players
-    here first so flex slots stay open for less flexible players.
-    """
-    if roster_slots is None:
-        roster_slots = DEFAULT_ROSTER_SLOTS
-    scarcity: dict[str, float] = {}
-    for slot, n_slots in roster_slots.items():
-        if slot in ("BN", "IL"):
-            continue
-        eligible = board[board["positions"].apply(lambda p, slot=slot: can_fill_slot(p, slot))]
-        total_sgp = eligible["total_sgp"].sum() if "total_sgp" in eligible.columns else 0
-        scarcity[slot] = total_sgp / n_slots if n_slots > 0 else float("inf")
-    return sorted(scarcity.keys(), key=lambda s: scarcity[s])
 
 
 def calculate_vona_scores(
@@ -279,152 +265,3 @@ def _filter_rosterable(
 
     mask = available["positions"].apply(has_open_slot)
     return available[mask]
-
-
-def _collect_roster_entries(
-    user_roster_ids: list[str],
-    board: pd.DataFrame,
-    player_lookup: dict[str, pd.Series] | None = None,
-) -> list[pd.Series]:
-    """Look up board entries for each roster player by player_id."""
-    if player_lookup is None:
-        # Build a pid lookup dict for O(1) lookups instead of O(n) per player
-        pid_index = {}
-        for _idx, row in board.iterrows():
-            pid_index[row["player_id"]] = row
-    else:
-        pid_index = player_lookup
-    players: list[pd.Series] = []
-    for pid in user_roster_ids:
-        if pid in pid_index:
-            players.append(pid_index[pid])
-        else:
-            # Fallback: try name match (for entries without player_id).
-            # player_id may be fg_id::type or name::type, so try the
-            # prefix as a name only if it looks like one (not numeric).
-            prefix = pid.split("::")[0] if "::" in pid else pid
-            if prefix.isdigit() or prefix.startswith("sa"):
-                continue  # fg_id prefix, can't match by name
-            rows = board[board["name_normalized"] == normalize_name(prefix)]
-            if not rows.empty:
-                players.append(rows.iloc[0])
-    return players
-
-
-_scarcity_cache: dict[int, list[str]] = {}
-
-
-def get_filled_positions(
-    user_roster_ids: list[str],
-    board: pd.DataFrame,
-    roster_slots: dict[str, int] | None = None,
-    player_lookup: dict[str, pd.Series] | None = None,
-) -> dict[str, int]:
-    """Count how many of each roster slot the user has filled.
-
-    Assigns each drafted player to the most *scarce* open slot they're
-    eligible for (by positional scarcity index), then falls back to flex
-    slots (IF, UTIL), then bench.  This ensures multi-position players
-    occupy their scarcest position so flex slots stay open.
-    """
-    if roster_slots is None:
-        roster_slots = DEFAULT_ROSTER_SLOTS
-
-    # Build capacity: how many of each slot are available
-    capacity: dict[str, int] = {pos: count for pos, count in roster_slots.items() if pos != "IL"}
-    filled: dict[str, int] = {pos: 0 for pos in capacity}
-
-    players = _collect_roster_entries(user_roster_ids, board, player_lookup)
-
-    # Sort: assign players with fewer eligible active slots first (most constrained)
-    active_slots = {k: v for k, v in capacity.items() if k != "BN"}
-    players.sort(key=lambda p: sum(1 for s in active_slots if can_fill_slot(p["positions"], s)))
-
-    # Slot assignment order: scarcity-based for specific slots, then flex.
-    # Cache the scarcity order since it depends only on the board and slots.
-    cache_key = id(board)
-    if cache_key not in _scarcity_cache:
-        _scarcity_cache.clear()  # keep only one entry
-        _scarcity_cache[cache_key] = compute_slot_scarcity_order(board, roster_slots)
-    scarcity_order = _scarcity_cache[cache_key]
-    specific_slots = [s for s in scarcity_order if s not in ("IF", "UTIL")]
-    flex_slots = [s for s in scarcity_order if s in ("IF", "UTIL")]
-
-    for player in players:
-        positions = player["positions"]
-        assigned = False
-        # Try specific slots in scarcity order (most scarce first)
-        for slot in specific_slots:
-            if filled[slot] < capacity[slot] and can_fill_slot(positions, slot):
-                filled[slot] += 1
-                assigned = True
-                break
-        if not assigned:
-            for slot in flex_slots:
-                if (
-                    slot in active_slots
-                    and filled[slot] < capacity[slot]
-                    and can_fill_slot(positions, slot)
-                ):
-                    filled[slot] += 1
-                    assigned = True
-                    break
-        if not assigned:
-            filled["BN"] = filled.get("BN", 0) + 1
-
-    # Remove zero entries for cleaner output
-    return {pos: count for pos, count in filled.items() if count > 0}
-
-
-def get_roster_by_position(
-    user_roster_ids: list[str],
-    board: pd.DataFrame,
-    roster_slots: dict[str, int] | None = None,
-) -> dict[str, list[str]]:
-    """Map roster slot -> list of player names for the user's roster.
-
-    Uses the same greedy slot assignment as get_filled_positions.
-    """
-    if roster_slots is None:
-        roster_slots = DEFAULT_ROSTER_SLOTS
-
-    capacity: dict[str, int] = {pos: count for pos, count in roster_slots.items() if pos != "IL"}
-    by_pos: dict[str, list[str]] = {pos: [] for pos in capacity}
-
-    players = _collect_roster_entries(user_roster_ids, board)
-
-    # Sort: assign players with fewer eligible active slots first (most constrained)
-    active_slots = {k: v for k, v in capacity.items() if k != "BN"}
-    players.sort(key=lambda p: sum(1 for s in active_slots if can_fill_slot(p["positions"], s)))
-
-    # Slot assignment order: scarcity-based (cached)
-    cache_key = id(board)
-    if cache_key not in _scarcity_cache:
-        _scarcity_cache.clear()
-        _scarcity_cache[cache_key] = compute_slot_scarcity_order(board, roster_slots)
-    scarcity_order = _scarcity_cache[cache_key]
-    specific_slots = [s for s in scarcity_order if s not in ("IF", "UTIL")]
-    flex_slots = [s for s in scarcity_order if s in ("IF", "UTIL")]
-
-    for player in players:
-        positions = player["positions"]
-        assigned = False
-        for slot in specific_slots:
-            if len(by_pos[slot]) < capacity[slot] and can_fill_slot(positions, slot):
-                by_pos[slot].append(player["name"])
-                assigned = True
-                break
-        if not assigned:
-            for slot in flex_slots:
-                if (
-                    slot in active_slots
-                    and len(by_pos[slot]) < capacity[slot]
-                    and can_fill_slot(positions, slot)
-                ):
-                    by_pos[slot].append(player["name"])
-                    assigned = True
-                    break
-        if not assigned:
-            by_pos.setdefault("BN", []).append(player["name"])
-
-    return {pos: names for pos, names in by_pos.items() if names}

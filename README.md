@@ -79,11 +79,19 @@ Fills position eligibility gaps via the MLB Stats API for any players Yahoo does
 
 ### 2. Launch the draft assistant
 
+Web dashboard (click-to-pick, default port 5050):
+
+```bash
+python scripts/run_draft_dashboard.py
+```
+
+Legacy interactive CLI (kept until the dashboard's real-data path lands):
+
 ```bash
 python scripts/run_draft.py
 ```
 
-For mock drafts:
+For mock drafts (CLI only):
 
 ```bash
 python scripts/run_draft.py --mock --position 8 --teams 10
@@ -163,7 +171,8 @@ FantasyBaseball/
 │   ├── simulation.py  # Monte Carlo season simulation with correlated variance
 │   └── config.py      # YAML config loading
 ├── scripts/
-│   ├── run_draft.py                # Interactive draft assistant CLI (+ mock mode)
+│   ├── run_draft_dashboard.py      # Web-only draft dashboard
+│   ├── run_draft.py                # Legacy CLI + dashboard (+ mock mode)
 │   ├── run_lineup.py               # In-season lineup optimizer CLI
 │   ├── run_season_dashboard.py     # In-season web dashboard (syncs from Upstash)
 │   ├── simulate_draft.py           # Draft simulation with configurable strategies

@@ -5,7 +5,12 @@ import pytest
 
 from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.recommender import Recommendation
-from fantasy_baseball.draft.state import read_state, serialize_state, write_state
+from fantasy_baseball.draft.state import (
+    read_state,
+    serialize_board,
+    serialize_state,
+    write_state,
+)
 from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.models.player import PlayerType
 
@@ -229,3 +234,147 @@ class TestReadState:
         path = tmp_path / "bad.json"
         path.write_text("{invalid json!!")
         assert read_state(path) == {}
+
+
+def test_pick_roundtrips_through_json():
+    from fantasy_baseball.draft.state import Pick
+
+    p = Pick(
+        pick_number=1,
+        round=1,
+        team="Hart of the Order",
+        player_id="Juan Soto::hitter",
+        player_name="Juan Soto",
+        position="OF",
+        timestamp=1714000000.0,
+        undone=False,
+    )
+    data = p.to_dict()
+    assert data == {
+        "pick_number": 1,
+        "round": 1,
+        "team": "Hart of the Order",
+        "player_id": "Juan Soto::hitter",
+        "player_name": "Juan Soto",
+        "position": "OF",
+        "timestamp": 1714000000.0,
+        "undone": False,
+    }
+    restored = Pick.from_dict(data)
+    assert restored == p
+
+
+def test_pick_none_pick_number_for_keepers():
+    from fantasy_baseball.draft.state import Pick
+
+    p = Pick(
+        pick_number=None,
+        round=0,
+        team="Hart of the Order",
+        player_id="Juan Soto::hitter",
+        player_name="Juan Soto",
+        position="OF",
+        timestamp=1714000000.0,
+        undone=False,
+    )
+    assert p.to_dict()["pick_number"] is None
+
+
+def test_new_state_dict_keys_survive_roundtrip(tmp_path):
+    from fantasy_baseball.draft.state import Pick, read_state, write_state
+
+    state = {
+        "version": 0,
+        "keepers": [Pick(None, 0, "TeamA", "p1::hitter", "P1", "OF", 1.0).to_dict()],
+        "picks": [Pick(1, 1, "TeamA", "p2::hitter", "P2", "SS", 2.0).to_dict()],
+        "on_the_clock": "TeamB",
+        "undo_stack": [],
+        "projected_standings_cache": {"TeamA": {"HR": {"point_estimate": 60.0, "sd": 5.0}}},
+    }
+    path = tmp_path / "draft_state.json"
+    write_state(state, path)
+    loaded = read_state(path)
+    assert loaded["on_the_clock"] == "TeamB"
+    assert len(loaded["keepers"]) == 1
+    assert loaded["projected_standings_cache"]["TeamA"]["HR"]["sd"] == 5.0
+
+
+def test_read_state_tolerates_missing_legacy_fields(tmp_path):
+    import json
+
+    from fantasy_baseball.draft.state import read_state
+
+    path = tmp_path / "draft_state.json"
+    path.write_text(json.dumps({"version": 1, "on_the_clock": "TeamA"}))
+    loaded = read_state(path)
+    assert loaded["on_the_clock"] == "TeamA"
+    assert loaded.get("recommendations", []) == []
+    assert loaded.get("balance") is None
+
+
+def test_compute_delta_picks_up_dashboard_schema_changes():
+    """Regression: _DELTA_KEYS must include the dashboard-rework keys.
+
+    A pick mutates ``picks``, ``on_the_clock``, and (after standings
+    refresh) ``projected_standings_cache``. If these aren't in
+    _DELTA_KEYS the delta endpoint returns an empty diff after every
+    pick and the polling client freezes mid-draft.
+    """
+    from fantasy_baseball.draft.state import compute_delta
+
+    old = {
+        "version": 1,
+        "keepers": [{"player_id": "k1", "team": "A"}],
+        "picks": [],
+        "on_the_clock": "A",
+        "undo_stack": [],
+        "projected_standings_cache": {},
+    }
+    new = {
+        "version": 2,
+        "keepers": old["keepers"],
+        "picks": [{"player_id": "p1", "team": "A"}],
+        "on_the_clock": "B",
+        "undo_stack": [],
+        "projected_standings_cache": {"A": {"total": 50.0, "total_sd": 5.0, "categories": {}}},
+    }
+    delta = compute_delta(old, new)
+    assert delta["version"] == 2
+    assert delta["picks"] == new["picks"]
+    assert delta["on_the_clock"] == "B"
+    assert delta["projected_standings_cache"] == new["projected_standings_cache"]
+
+
+def test_serialize_board_emits_total_sgp_and_adp():
+    """The available-players panel renders ADP + SGP columns from these
+    fields — make sure they survive serialization."""
+    rows = pd.DataFrame(
+        [
+            {
+                "name": "Has Stats",
+                "player_id": "1::hitter",
+                "positions": ["OF"],
+                "best_position": "OF",
+                "var": 5.0,
+                "adp": 12.3,
+                "total_sgp": 7.45,
+                "player_type": "hitter",
+            },
+            {
+                "name": "Missing Stats",
+                "player_id": "2::hitter",
+                "positions": ["1B"],
+                "best_position": "1B",
+                "var": 1.0,
+                "adp": float("nan"),
+                "total_sgp": float("nan"),
+                "player_type": "hitter",
+            },
+        ]
+    )
+    serialized = serialize_board(rows)
+    assert serialized[0]["adp"] == 12.3
+    assert serialized[0]["total_sgp"] == 7.45
+    # Missing values should serialize as None, not NaN (NaN isn't JSON-safe).
+    assert serialized[1]["adp"] is None
+    assert serialized[1]["total_sgp"] is None
