@@ -18,7 +18,12 @@ body {
   font-family: system-ui, -apple-system, sans-serif;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  /* Lock body to the viewport so dashboard-grid's flex:1 + min-height:0
+   * has an actual max to grow into. With min-height:100vh, the long
+   * available-players list pushes the body taller and the section's
+   * overflow-y:auto never kicks in. */
+  height: 100vh;
+  overflow: hidden;
 }
 
 .topbar {
