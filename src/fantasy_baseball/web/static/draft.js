@@ -12,6 +12,18 @@ async function fetchBoard() {
   return r.json();
 }
 
+async function fetchMeta() {
+  const r = await fetch("/api/meta");
+  if (!r.ok) return { teams: [], user_team: null };
+  return r.json();
+}
+
+function populateTeamPicker(meta) {
+  const select = document.getElementById("team-picker");
+  select.innerHTML = meta.teams.map((t) => `<option value="${t}">${t}</option>`).join("");
+  if (meta.user_team) select.value = meta.user_team;
+}
+
 async function fetchState(since = null) {
   const url = since == null ? "/api/state" : `/api/state?since=${since}`;
   const r = await fetch(url);
@@ -214,12 +226,27 @@ async function poll() {
   setTimeout(poll, POLL_INTERVAL_MS);
 }
 
+async function refreshInspectorPanel() {
+  const team = document.getElementById("team-picker").value || document.getElementById("otc-btn").textContent;
+  const activeTab = document.querySelector(".team-inspector .tabs button.active")?.dataset.tab;
+  if (activeTab === "standings") {
+    renderStandings(await fetchStandings());
+  } else {
+    renderRoster(await fetchRoster(team));
+  }
+}
+
 (async () => {
   fullBoard = await fetchBoard();
+  const meta = await fetchMeta();
+  populateTeamPicker(meta);
   const initial = await fetchState();
   if (initial) renderState(initial);
+  // Initial Roster-tab fill (the tab is .active by default in dashboard.html).
+  refreshInspectorPanel();
   document.getElementById("undo-btn").onclick = undo;
   document.getElementById("new-draft-btn").onclick = newDraft;
+  document.getElementById("team-picker").addEventListener("change", refreshInspectorPanel);
 
   document.querySelectorAll(".sort-toggle button").forEach((btn) => {
     btn.addEventListener("click", async () => {

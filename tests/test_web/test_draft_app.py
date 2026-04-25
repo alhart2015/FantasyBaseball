@@ -72,6 +72,16 @@ def test_recs_endpoint_exists(client):
     assert r.status_code == 503
 
 
+def test_meta_returns_teams_and_user_team(client):
+    """/api/meta is fetched once on page load to populate the team-picker
+    dropdown and pick the default team."""
+    r = client.get("/api/meta")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["teams"] == ["Hart of the Order", "Opp"]
+    assert body["user_team"] == "Hart of the Order"
+
+
 def test_pick_missing_fields_returns_400(client):
     client.post("/api/new-draft")
     r = client.post("/api/pick", json={"player_id": "P1::hitter"})  # missing most fields

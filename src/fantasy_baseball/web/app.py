@@ -281,6 +281,22 @@ def _register_writer_routes(app):
         )
         return jsonify([row.__dict__ for row in rows[:10]])
 
+    @app.get("/api/meta")
+    def meta():
+        """League metadata the dashboard needs once on page load.
+
+        Used to populate the Team Inspector's team dropdown (which the
+        polling /api/state response doesn't carry).
+        """
+        league_yaml = _load_league_yaml()
+        teams_by_position = _teams_by_position(league_yaml)
+        return jsonify(
+            {
+                "teams": [teams_by_position[i] for i in sorted(teams_by_position)],
+                "user_team": (league_yaml.get("league") or {}).get("team_name"),
+            }
+        )
+
     @app.get("/api/roster")
     def roster():
         team = request.args.get("team")
