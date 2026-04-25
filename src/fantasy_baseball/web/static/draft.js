@@ -53,6 +53,9 @@ function picksUntilNext(state) {
   return "—";
 }
 
+function fmtAdp(v) { return v == null ? "—" : v.toFixed(1); }
+function fmtSgp(v) { return v == null ? "—" : v.toFixed(2); }
+
 function renderAvailablePlayers(state) {
   const drafted = new Set([
     ...(state.keepers ?? []).map((p) => p.player_id),
@@ -62,7 +65,10 @@ function renderAvailablePlayers(state) {
   const ul = document.getElementById("player-list");
   ul.innerHTML = available.slice(0, 200).map((p) => `
     <li data-pid="${p.player_id}" data-pname="${p.name}" data-pos="${p.best_position || p.positions?.[0] || ''}">
-      ${p.name} <span class="pos">${(p.positions || []).join("/")}</span>
+      <span class="name">${p.name}</span>
+      <span class="pos">${(p.positions || []).join("/")}</span>
+      <span class="adp">${fmtAdp(p.adp)}</span>
+      <span class="sgp">${fmtSgp(p.total_sgp)}</span>
     </li>
   `).join("");
   ul.onclick = (e) => {

@@ -136,6 +136,7 @@ def serialize_board(board: pd.DataFrame) -> list[dict[str, Any]]:
     players = []
     for _, row in board.iterrows():
         adp_val = row.get("adp", None)
+        sgp_val = row.get("total_sgp", None)
         player: dict[str, Any] = {
             "name": row["name"],
             "player_id": row.get("player_id", row["name"]),
@@ -144,7 +145,10 @@ def serialize_board(board: pd.DataFrame) -> list[dict[str, Any]]:
             else [row["positions"]],
             "var": round(float(row["var"]), 1),
             "adp": round(float(adp_val), 1)
-            if adp_val is not None and adp_val != float("inf")
+            if adp_val is not None and not pd.isna(adp_val) and adp_val != float("inf")
+            else None,
+            "total_sgp": round(float(sgp_val), 2)
+            if sgp_val is not None and not pd.isna(sgp_val)
             else None,
             "player_type": row["player_type"],
         }

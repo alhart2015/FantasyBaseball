@@ -5,7 +5,12 @@ import pytest
 
 from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.recommender import Recommendation
-from fantasy_baseball.draft.state import read_state, serialize_state, write_state
+from fantasy_baseball.draft.state import (
+    read_state,
+    serialize_board,
+    serialize_state,
+    write_state,
+)
 from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.models.player import PlayerType
 
@@ -305,3 +310,38 @@ def test_read_state_tolerates_missing_legacy_fields(tmp_path):
     assert loaded["on_the_clock"] == "TeamA"
     assert loaded.get("recommendations", []) == []
     assert loaded.get("balance") is None
+
+
+def test_serialize_board_emits_total_sgp_and_adp():
+    """The available-players panel renders ADP + SGP columns from these
+    fields — make sure they survive serialization."""
+    rows = pd.DataFrame(
+        [
+            {
+                "name": "Has Stats",
+                "player_id": "1::hitter",
+                "positions": ["OF"],
+                "best_position": "OF",
+                "var": 5.0,
+                "adp": 12.3,
+                "total_sgp": 7.45,
+                "player_type": "hitter",
+            },
+            {
+                "name": "Missing Stats",
+                "player_id": "2::hitter",
+                "positions": ["1B"],
+                "best_position": "1B",
+                "var": 1.0,
+                "adp": float("nan"),
+                "total_sgp": float("nan"),
+                "player_type": "hitter",
+            },
+        ]
+    )
+    serialized = serialize_board(rows)
+    assert serialized[0]["adp"] == 12.3
+    assert serialized[0]["total_sgp"] == 7.45
+    # Missing values should serialize as None, not NaN (NaN isn't JSON-safe).
+    assert serialized[1]["adp"] is None
+    assert serialized[1]["total_sgp"] is None
