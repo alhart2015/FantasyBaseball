@@ -247,3 +247,54 @@ def test_vopn_position_aware_promotes_best_at_position():
         assert vopns["Mid"] < 0  # he's strictly worse than Stud at OF
     if deltas["Late"] < deltas["Stud"]:
         assert vopns["Late"] < 0
+
+
+def test_pick_replacement_normalizes_sp_and_rp_to_p():
+    """Pitcher candidates with primary position 'SP' or 'RP' must look
+    up the 'P' replacement, not fall back to the first dict entry (a
+    hitter). Regression: the literal string match in _pick_replacement
+    used to fall back to next(iter(replacements.values())), which silently
+    returned a hitter and produced absurd deltaRoto values like Loaisiga
+    ranked #1 of 3,658 candidates because the swap math added pitcher stats
+    while removing hitter stats."""
+    from fantasy_baseball.draft.eroto_recs import _pick_replacement
+    from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
+
+    p_replacement = Player(
+        name="The P Replacement",
+        player_type=PlayerType.PITCHER,
+        positions=["P"],
+        rest_of_season=PitcherStats(ip=150.0, w=8, k=130, era=4.20),
+    )
+    of_replacement = Player(
+        name="The OF Replacement",
+        player_type=PlayerType.HITTER,
+        positions=["OF"],
+        rest_of_season=HitterStats(ab=500, h=130, r=70, hr=18, rbi=70, sb=10, avg=0.260),
+    )
+    # Insertion order: OF first so it would be next(iter(...)) — the
+    # buggy fallback would return this hitter for a pitcher candidate.
+    replacements = {"OF": of_replacement, "P": p_replacement}
+
+    sp_candidate = Player(
+        name="An SP",
+        player_type=PlayerType.PITCHER,
+        positions=["SP"],
+        rest_of_season=PitcherStats(ip=170.0, w=12, k=180, era=3.50),
+    )
+    rp_candidate = Player(
+        name="An RP",
+        player_type=PlayerType.PITCHER,
+        positions=["RP"],
+        rest_of_season=PitcherStats(ip=60.0, w=4, k=70, sv=10, era=3.20),
+    )
+    p_candidate = Player(
+        name="A Generic P",
+        player_type=PlayerType.PITCHER,
+        positions=["P"],
+        rest_of_season=PitcherStats(ip=100.0, w=6, k=100, sv=2, era=3.80),
+    )
+
+    assert _pick_replacement(sp_candidate, replacements) is p_replacement
+    assert _pick_replacement(rp_candidate, replacements) is p_replacement
+    assert _pick_replacement(p_candidate, replacements) is p_replacement

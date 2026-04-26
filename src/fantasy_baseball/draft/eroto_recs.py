@@ -189,12 +189,15 @@ def rank_candidates(
 def _pick_replacement(candidate: Player, replacements: Mapping[str, Player]) -> Player:
     """Choose the replacement-level player the candidate would displace.
 
-    For v1, use the candidate's primary position. Phase 3 can be smarter
-    (scarcity-based slot pick) — call out to roster_state helpers then.
+    Normalizes SP/RP/P to a single 'P' lookup so pitcher candidates
+    don't fall through to ``next(iter(replacements.values()))`` and end
+    up swapped against the first dict entry (typically a hitter).
+    Mirrors :func:`fantasy_baseball.sgp.var.calculate_var`.
     """
     primary = str(candidate.positions[0]) if candidate.positions else ""
-    if primary in replacements:
-        return replacements[primary]
+    lookup = "P" if primary in ("P", "SP", "RP") else primary
+    if lookup in replacements:
+        return replacements[lookup]
     return next(iter(replacements.values()))
 
 
