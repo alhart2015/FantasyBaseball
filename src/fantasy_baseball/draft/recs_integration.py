@@ -25,7 +25,6 @@ from fantasy_baseball.models.positions import BENCH_SLOTS
 from fantasy_baseball.models.standings import ProjectedStandings, ProjectedStandingsEntry
 from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS, Category
-from fantasy_baseball.utils.positions import can_fill_slot
 
 
 def _var_key(row: dict[str, Any]) -> float:
@@ -72,36 +71,31 @@ def partition_available(players: list[Player], drafted: set[str]) -> list[Player
     return [p for p in players if (p.yahoo_id or "") not in drafted]
 
 
-def build_replacements_by_position(
+def _build_replacements(
     rows: list[dict[str, Any]],
     roster_slots: Mapping[str, int],
     num_teams: int,
 ) -> dict[str, Player]:
-    """Per-position replacement-level Player.
+    """Wrap :func:`find_replacement_players` for the recs path.
 
-    For each position with ``capacity`` starters per team, pick the
-    (capacity * num_teams + 1)-th best player (by ``var``) who is
-    eligible there — roughly the first player beyond the league's
-    collective demand. Uses :func:`can_fill_slot` for eligibility so the
-    UTIL/IF/P meta-slots and Yahoo's mixed-case position strings (e.g.
-    ``"Util"``) are handled the same way the optimizer handles them.
+    Converts the board-row list into the DataFrame shape
+    ``find_replacement_players`` expects, scales league-config slots
+    by num_teams to get per-position starter counts, and lifts the
+    returned row dicts back into :class:`Player` objects so downstream
+    swap math can call ``player_rest_of_season_stats`` on them.
     """
+    from fantasy_baseball.sgp.replacement import find_replacement_players
+
     if not rows:
         return {}
-    sorted_rows = sorted(rows, key=_var_key, reverse=True)
-    out: dict[str, Player] = {}
-    for pos, capacity in roster_slots.items():
-        if pos in BENCH_SLOTS or not capacity:
-            continue
-        demand = int(capacity) * max(int(num_teams), 1)
-        eligible = [r for r in sorted_rows if can_fill_slot(r.get("positions") or [], pos)]
-        if not eligible:
-            continue
-        # Not enough players at this position to define a true replacement
-        # — fall back to the worst eligible one.
-        choice = eligible[demand] if len(eligible) > demand else eligible[-1]
-        out[pos] = Player.from_dict(choice)
-    return out
+    pool = pd.DataFrame(rows)
+    starters_per_position = {
+        pos: int(count) * max(int(num_teams), 1)
+        for pos, count in roster_slots.items()
+        if pos not in BENCH_SLOTS and count
+    }
+    rep_rows = find_replacement_players(pool, starters_per_position)
+    return {pos: Player.from_dict(row) for pos, row in rep_rows.items()}
 
 
 def _generic_replacement(replacements: Mapping[str, Player]) -> Player | None:
@@ -219,7 +213,7 @@ def compute_rec_inputs(
     roster_slots = league_yaml.get("roster_slots") or {}
     teams = _league_teams(league_yaml)
 
-    replacements = build_replacements_by_position(rows, roster_slots, len(teams))
+    replacements = _build_replacements(rows, roster_slots, len(teams))
 
     board_by_id: dict[str, Player] = {}
     for p in players:
