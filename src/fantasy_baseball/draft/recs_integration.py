@@ -24,6 +24,7 @@ from fantasy_baseball.models.player import Player
 from fantasy_baseball.models.positions import BENCH_SLOTS
 from fantasy_baseball.models.standings import ProjectedStandings, ProjectedStandingsEntry
 from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto
+from fantasy_baseball.sgp.replacement import find_replacement_players
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS, Category
 
 
@@ -84,8 +85,6 @@ def _build_replacements(
     returned row dicts back into :class:`Player` objects so downstream
     swap math can call ``player_rest_of_season_stats`` on them.
     """
-    from fantasy_baseball.sgp.replacement import find_replacement_players
-
     if not rows:
         return {}
     pool = pd.DataFrame(rows)
