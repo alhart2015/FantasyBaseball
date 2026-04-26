@@ -4,6 +4,8 @@ Tests cover 14 strategy functions + 6 helper functions with happy paths,
 constraint-triggering paths, and edge cases.
 """
 
+from typing import ClassVar
+
 import pandas as pd
 
 from fantasy_baseball.config import LeagueConfig
@@ -279,6 +281,49 @@ class TestCountClosers:
         _draft_user_player(tracker, "Closer A", "Closer A::pitcher")
         # full_board has the closer, small board doesn't
         assert _count_closers(tracker, small_board, board) == 1
+
+    def test_count_closers_handles_none_or_nan_sv(self):
+        """_count_closers must not crash when a roster row's sv is None or NaN.
+
+        Regression: row.get("sv", 0) on a pandas Series returns None when the
+        index has the key with a null value — NOT the default. None >= 20
+        raises TypeError; NaN >= 20 silently returns False. Use _safe_float
+        to guard against both.
+        """
+        import math
+
+        board = pd.DataFrame(
+            [
+                {
+                    "player_id": "h1",
+                    "name": "Hitter",
+                    "player_type": "hitter",
+                    "sv": None,
+                    "var": 5.0,
+                },
+                {
+                    "player_id": "p1",
+                    "name": "Closer",
+                    "player_type": "pitcher",
+                    "sv": 35,
+                    "var": 4.0,
+                },
+                {
+                    "player_id": "p2",
+                    "name": "Pitcher Nan SV",
+                    "player_type": "pitcher",
+                    "sv": math.nan,
+                    "var": 3.0,
+                },
+            ]
+        )
+
+        class _StubTracker:
+            user_roster_ids: ClassVar[list[str]] = ["h1", "p1", "p2"]
+
+        count = _count_closers(_StubTracker(), board, board)
+        # Only p1 (sv=35) qualifies; h1 has sv=None, p2 has sv=NaN.
+        assert count == 1
 
 
 class TestCountHittersAndPitchers:

@@ -13,120 +13,11 @@ from fantasy_baseball.sgp.replacement import (
 )
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
-    BACKFILL_CLOSER_THRESHOLD,
-    BACKFILL_HITTER_THRESHOLD,
-    BACKFILL_SP_THRESHOLD,
-    CLOSER_SV_THRESHOLD,
-    HEALTHY_CLOSER_IP,
-    HEALTHY_HITTER_AB,
-    HEALTHY_SP_IP,
-    STARTER_IP_THRESHOLD,
-    WAIVER_HITTER,
-    WAIVER_RP,
-    WAIVER_SP,
     compute_starters_per_position,
 )
-from fantasy_baseball.utils.constants import (
-    safe_float as _safe,
-)
 from fantasy_baseball.utils.name_utils import normalize_name
-from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 logger = logging.getLogger(__name__)
-
-
-def apply_backfill_blending(pool: pd.DataFrame) -> pd.DataFrame:
-    """Blend injury-prone players' stats with waiver-quality backfill.
-
-    Players projected below a healthy baseline have their counting stats
-    augmented with replacement-level stats for the gap innings/ABs.  This
-    produces effective stats that reflect the true team-level cost.
-
-    Original stats are preserved in ``orig_*`` columns for display.
-    """
-    pool = pool.copy()
-
-    # Ensure counting-stat columns are float so fractional backfill
-    # values can be written without pandas raising LossySetitemError.
-    _float_cols = [
-        "w",
-        "k",
-        "sv",
-        "ip",
-        "er",
-        "bb",
-        "h_allowed",
-        "r",
-        "hr",
-        "rbi",
-        "sb",
-        "h",
-        "ab",
-        "era",
-        "whip",
-        "avg",
-    ]
-    for c in _float_cols:
-        if c in pool.columns:
-            pool[c] = pool[c].astype(float)
-
-    for idx, row in pool.iterrows():
-        if row["player_type"] == PlayerType.PITCHER:
-            sv = _safe(row.get("sv", 0))
-            ip = _safe(row.get("ip", 0))
-            positions = row.get("positions", [])
-
-            # Classify pitcher tier
-            if sv >= CLOSER_SV_THRESHOLD:
-                baseline = HEALTHY_CLOSER_IP
-                threshold = BACKFILL_CLOSER_THRESHOLD
-                waiver = WAIVER_RP
-            elif "SP" in positions or ip >= STARTER_IP_THRESHOLD:
-                baseline = HEALTHY_SP_IP
-                threshold = BACKFILL_SP_THRESHOLD
-                waiver = WAIVER_SP
-            else:
-                continue  # middle reliever — no backfill
-
-            gap = baseline - ip
-            if gap <= threshold:
-                continue
-
-            # Preserve originals
-            pool.at[idx, "orig_ip"] = ip
-            pool.at[idx, "orig_era"] = row.get("era", 0)
-            pool.at[idx, "orig_whip"] = row.get("whip", 0)
-
-            scale = gap / waiver["ip"]
-            for col in ("w", "k", "sv", "ip", "er", "bb", "h_allowed"):
-                pool.at[idx, col] = row.get(col, 0) + waiver[col] * scale
-
-            # Recompute rate stats from blended components
-            new_ip = pool.at[idx, "ip"]
-            if new_ip > 0:
-                pool.at[idx, "era"] = calculate_era(pool.at[idx, "er"], new_ip)
-                pool.at[idx, "whip"] = calculate_whip(
-                    pool.at[idx, "bb"], pool.at[idx, "h_allowed"], new_ip
-                )
-
-        elif row["player_type"] == PlayerType.HITTER:
-            ab = _safe(row.get("ab", 0))
-            gap = HEALTHY_HITTER_AB - ab
-            if gap <= BACKFILL_HITTER_THRESHOLD:
-                continue
-
-            pool.at[idx, "orig_ab"] = ab
-            pool.at[idx, "orig_avg"] = row.get("avg", 0)
-
-            scale = gap / WAIVER_HITTER["ab"]
-            for col in ("r", "hr", "rbi", "sb", "h", "ab"):
-                pool.at[idx, col] = row.get(col, 0) + WAIVER_HITTER[col] * scale
-
-            new_ab = pool.at[idx, "ab"]
-            if new_ab > 0:
-                pool.at[idx, "avg"] = calculate_avg(pool.at[idx, "h"], new_ab)
-
-    return pool
 
 
 def build_draft_board(
@@ -161,9 +52,6 @@ def build_draft_board(
 
     denoms = get_sgp_denominators(sgp_overrides)
     pool = pd.concat([hitters, pitchers], ignore_index=True)
-
-    # Apply injury backfill blending before SGP calculation
-    pool = apply_backfill_blending(pool)
 
     # Two-pass SGP: first with defaults (for ordering), then with
     # pool-derived replacement rates (for accurate values).
