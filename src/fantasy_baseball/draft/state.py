@@ -116,11 +116,9 @@ def get_current_version() -> int:
 def _serialize_player_stats(player: dict[str, Any], row: pd.Series) -> None:
     """Add stat fields to a player dict based on player type.
 
-    Includes both displayed counting/rate stats (R/HR/.../AVG, W/K/.../ERA)
-    and the volume stats (AB/H, IP/ER/BB/H_allowed) needed to combine
-    per-player projections into team-level rate stats. Without the
-    volume stats, ``project_team_stats`` produces AVG=0 / ERA=99 / WHIP=99
-    defaults and downstream ERoto deltas in those cats are mechanically zero.
+    Volume stats (AB/H, IP/ER/BB/H_allowed) are emitted alongside the
+    displayed counting/rate stats so ``project_team_stats`` can recompute
+    team rate stats (AVG/ERA/WHIP) from components.
     """
     if row["player_type"] == PlayerType.HITTER:
         player["r"] = int(row.get("r", 0))
