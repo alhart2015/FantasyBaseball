@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -92,6 +93,33 @@ def build_draft_board(
     board = pool.sort_values("var", ascending=False).reset_index(drop=True)
     _validate_top_adp_players(board, hitters, pitchers)
     return board
+
+
+def rebuild_board(config_path: Path, board_path: Path) -> int:
+    """Build the draft board from SQLite projections and write to JSON.
+
+    Thin I/O wrapper around :func:`build_draft_board`. Used by the web
+    dashboard to refresh the cached board on new-draft, and by the
+    --rebuild-board CLI flag for offline regeneration. Returns the
+    number of board rows written so callers can log/report.
+    """
+    from fantasy_baseball.config import load_config
+    from fantasy_baseball.data.db import get_connection
+    from fantasy_baseball.draft.state import serialize_board, write_board
+
+    config = load_config(config_path)
+    conn = get_connection()
+    try:
+        board = build_draft_board(
+            conn=conn,
+            sgp_overrides=config.sgp_overrides or None,
+            roster_slots=config.roster_slots or None,
+            num_teams=config.num_teams,
+        )
+    finally:
+        conn.close()
+    write_board(serialize_board(board), board_path)
+    return len(board)
 
 
 def apply_keepers(board: pd.DataFrame, keepers: list[dict[str, Any]]) -> pd.DataFrame:

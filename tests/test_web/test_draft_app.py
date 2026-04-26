@@ -3,6 +3,7 @@ import pytest
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
+    from fantasy_baseball.web import app as web_app
     from fantasy_baseball.web.app import create_app
 
     league_path = tmp_path / "league.yaml"
@@ -12,6 +13,8 @@ def app(tmp_path, monkeypatch):
         "keepers: []\n"
     )
     monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+    # Stub the board rebuild — these tests don't need real SQLite data.
+    monkeypatch.setattr(web_app, "rebuild_board", lambda *a, **kw: 0)
     a = create_app(state_path=tmp_path / "draft_state.json")
     a.config["TESTING"] = True
     return a
@@ -175,6 +178,7 @@ def test_resolve_keeper_finds_pitcher_by_normalized_name(tmp_path, monkeypatch):
     """Real keeper resolver must honor player_type and best_position
     from the board — not hardcode hitter/OF."""
     from fantasy_baseball.draft.state import write_board
+    from fantasy_baseball.web import app as web_app
     from fantasy_baseball.web.app import create_app
 
     # Seed league.yaml with one pitcher keeper.
@@ -186,6 +190,7 @@ def test_resolve_keeper_finds_pitcher_by_normalized_name(tmp_path, monkeypatch):
         "  - {name: Tarik Skubal, team: Hart of the Order}\n"
     )
     monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+    monkeypatch.setattr(web_app, "rebuild_board", lambda *a, **kw: 0)
 
     # Seed a tiny board.
     board_path = tmp_path / "draft_state_board.json"
@@ -223,6 +228,7 @@ def test_resolve_keeper_tie_breaks_by_var(tmp_path, monkeypatch):
     """When two board rows share a normalized name, pick the one with
     higher VAR (real player vs namesake)."""
     from fantasy_baseball.draft.state import write_board
+    from fantasy_baseball.web import app as web_app
     from fantasy_baseball.web.app import create_app
 
     league_path = tmp_path / "league.yaml"
@@ -233,6 +239,7 @@ def test_resolve_keeper_tie_breaks_by_var(tmp_path, monkeypatch):
         "  - {name: Jose Ramirez, team: Hart of the Order}\n"
     )
     monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+    monkeypatch.setattr(web_app, "rebuild_board", lambda *a, **kw: 0)
 
     board_path = tmp_path / "draft_state_board.json"
     # Two Jose Ramirezes: the real one (high VAR) and a namesake (low VAR).
@@ -274,6 +281,7 @@ def test_resolve_keeper_tie_breaks_by_var(tmp_path, monkeypatch):
 def test_resolve_keeper_missing_player_returns_400(tmp_path, monkeypatch):
     """Keeper not on board → UnresolvedKeeperError → HTTP 400."""
     from fantasy_baseball.draft.state import write_board
+    from fantasy_baseball.web import app as web_app
     from fantasy_baseball.web.app import create_app
 
     league_path = tmp_path / "league.yaml"
@@ -284,6 +292,7 @@ def test_resolve_keeper_missing_player_returns_400(tmp_path, monkeypatch):
         "  - {name: Nobody Important, team: Hart of the Order}\n"
     )
     monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+    monkeypatch.setattr(web_app, "rebuild_board", lambda *a, **kw: 0)
     write_board([], tmp_path / "draft_state_board.json")
 
     a = create_app(state_path=tmp_path / "draft_state.json")
@@ -385,6 +394,7 @@ def test_recs_returns_real_rows_with_board_and_picks(tmp_path, monkeypatch):
     """Integration: with a real board file on disk, /api/recs returns
     RecRow dicts with non-trivial immediate_delta values."""
     from fantasy_baseball.draft.state import write_board
+    from fantasy_baseball.web import app as web_app
     from fantasy_baseball.web.app import create_app
 
     board_path = tmp_path / "draft_state_board.json"
@@ -393,6 +403,7 @@ def test_recs_returns_real_rows_with_board_and_picks(tmp_path, monkeypatch):
     league_path = tmp_path / "league.yaml"
     league_path.write_text(_INTEGRATION_LEAGUE_YAML)
     monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+    monkeypatch.setattr(web_app, "rebuild_board", lambda *a, **kw: 0)
 
     a = create_app(state_path=tmp_path / "draft_state.json")
     a.config["TESTING"] = True
@@ -411,6 +422,7 @@ def test_standings_endpoint_returns_real_rows_after_pick(tmp_path, monkeypatch):
     """Integration: with a real board on disk, /api/pick refreshes
     projected_standings_cache and /api/standings renders it."""
     from fantasy_baseball.draft.state import write_board
+    from fantasy_baseball.web import app as web_app
     from fantasy_baseball.web.app import create_app
 
     board_path = tmp_path / "draft_state_board.json"
@@ -419,6 +431,7 @@ def test_standings_endpoint_returns_real_rows_after_pick(tmp_path, monkeypatch):
     league_path = tmp_path / "league.yaml"
     league_path.write_text(_INTEGRATION_LEAGUE_YAML)
     monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+    monkeypatch.setattr(web_app, "rebuild_board", lambda *a, **kw: 0)
 
     a = create_app(state_path=tmp_path / "draft_state.json")
     a.config["TESTING"] = True
@@ -446,12 +459,14 @@ def test_roster_endpoint_organizes_by_slot_with_replacements(tmp_path, monkeypat
     response is one row per slot capacity: filled OF + replacement SP/RP.
     """
     from fantasy_baseball.draft.state import write_board
+    from fantasy_baseball.web import app as web_app
     from fantasy_baseball.web.app import create_app
 
     write_board(_INTEGRATION_BOARD_ROWS, tmp_path / "draft_state_board.json")
     league_path = tmp_path / "league.yaml"
     league_path.write_text(_INTEGRATION_LEAGUE_YAML)
     monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+    monkeypatch.setattr(web_app, "rebuild_board", lambda *a, **kw: 0)
 
     a = create_app(state_path=tmp_path / "draft_state.json")
     a.config["TESTING"] = True
@@ -490,6 +505,7 @@ def test_rec_inputs_cached_across_attach_standings_and_recs(tmp_path, monkeypatc
     """
     from fantasy_baseball.draft import recs_integration
     from fantasy_baseball.draft.state import write_board
+    from fantasy_baseball.web import app as web_app
     from fantasy_baseball.web.app import create_app
 
     board_path = tmp_path / "draft_state_board.json"
@@ -498,6 +514,7 @@ def test_rec_inputs_cached_across_attach_standings_and_recs(tmp_path, monkeypatc
     league_path = tmp_path / "league.yaml"
     league_path.write_text(_INTEGRATION_LEAGUE_YAML)
     monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+    monkeypatch.setattr(web_app, "rebuild_board", lambda *a, **kw: 0)
 
     call_count = {"n": 0}
     real_compute = recs_integration.compute_rec_inputs
@@ -535,6 +552,7 @@ def test_rec_inputs_cached_across_attach_standings_and_recs(tmp_path, monkeypatc
 def test_recs_excludes_drafted_players_from_candidates(tmp_path, monkeypatch):
     """Drafted players (keepers + picks) must not appear in /api/recs."""
     from fantasy_baseball.draft.state import write_board
+    from fantasy_baseball.web import app as web_app
     from fantasy_baseball.web.app import create_app
 
     board_path = tmp_path / "draft_state_board.json"
@@ -543,6 +561,7 @@ def test_recs_excludes_drafted_players_from_candidates(tmp_path, monkeypatch):
     league_path = tmp_path / "league.yaml"
     league_path.write_text(_INTEGRATION_LEAGUE_YAML)
     monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+    monkeypatch.setattr(web_app, "rebuild_board", lambda *a, **kw: 0)
 
     a = create_app(state_path=tmp_path / "draft_state.json")
     a.config["TESTING"] = True
@@ -563,3 +582,67 @@ def test_recs_excludes_drafted_players_from_candidates(tmp_path, monkeypatch):
     body = r.get_json()
     drafted_ids = {row["player_id"] for row in body}
     assert "1::hitter" not in drafted_ids
+
+
+def test_new_draft_triggers_board_rebuild(tmp_path, monkeypatch):
+    """POSTing to /api/new-draft must rebuild the board JSON before
+    seeding draft state. Otherwise the board on disk could be stale
+    (e.g., regenerated before backfill_blending was removed) and the
+    fresh-start draft would silently use wrong projections."""
+    from fantasy_baseball.web import app as web_app
+    from fantasy_baseball.web.app import create_app
+
+    league_path = tmp_path / "league.yaml"
+    league_path.write_text(
+        "league:\n  team_name: Hart of the Order\n"
+        "draft:\n  position: 1\n  teams:\n    1: Hart of the Order\n    2: Opp\n"
+        "keepers: []\n"
+    )
+    monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+
+    rebuild_calls: list[tuple] = []
+
+    def _fake_rebuild(config_path, board_path):
+        rebuild_calls.append((config_path, board_path))
+        return 42
+
+    monkeypatch.setattr(web_app, "rebuild_board", _fake_rebuild)
+
+    a = create_app(state_path=tmp_path / "draft_state.json")
+    a.config["TESTING"] = True
+    with a.test_client() as client:
+        r = client.post("/api/new-draft")
+
+    assert r.status_code == 200
+    assert len(rebuild_calls) == 1, "rebuild_board should be called exactly once per /api/new-draft"
+    cfg_path, board_path = rebuild_calls[0]
+    assert str(cfg_path) == str(league_path)
+    assert board_path == a.config["BOARD_PATH"]
+
+
+def test_new_draft_returns_500_when_rebuild_fails(tmp_path, monkeypatch):
+    """If the board rebuild raises, the route must return an error
+    rather than silently proceeding with a stale board."""
+    from fantasy_baseball.web import app as web_app
+    from fantasy_baseball.web.app import create_app
+
+    league_path = tmp_path / "league.yaml"
+    league_path.write_text(
+        "league:\n  team_name: Hart of the Order\n"
+        "draft:\n  position: 1\n  teams:\n    1: Hart of the Order\n    2: Opp\n"
+        "keepers: []\n"
+    )
+    monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+
+    def _fail(*_a, **_kw):
+        raise RuntimeError("simulated SQLite outage")
+
+    monkeypatch.setattr(web_app, "rebuild_board", _fail)
+
+    a = create_app(state_path=tmp_path / "draft_state.json")
+    a.config["TESTING"] = True
+    with a.test_client() as client:
+        r = client.post("/api/new-draft")
+
+    assert r.status_code == 500
+    assert "board rebuild failed" in r.get_json()["error"]
