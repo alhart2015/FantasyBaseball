@@ -205,3 +205,100 @@ class TestReplacementRates:
         # All pitchers in the helper are SP, so this is just SP-only
         assert 3.0 < rates["era"] < 6.0
         assert 1.0 < rates["whip"] < 2.0
+
+
+class TestFindReplacementPlayers:
+    def test_returns_marginal_player_per_position(self):
+        """For a position with N starter slots, the replacement player
+        is the (N+1)-th best at that position by total_sgp — the
+        marginal-just-not-a-starter."""
+        from fantasy_baseball.sgp.replacement import find_replacement_players
+
+        pool = _make_player_pool()
+        # _make_player_pool creates 15 catchers with total_sgp = 20, 19, ..., 6.
+        # Default STARTERS_PER_POSITION has C with positive demand; pass an
+        # explicit starters dict so the test is independent of league config.
+        starters = {"C": 5}
+        reps = find_replacement_players(pool, starters)
+        # 6th-best catcher (index 5) → total_sgp = 20 - 5 = 15.0
+        assert reps["C"]["name"] == "Catcher_5"
+        assert reps["C"]["total_sgp"] == pytest.approx(15.0)
+
+    def test_returns_player_for_each_position(self):
+        from fantasy_baseball.sgp.replacement import find_replacement_players
+
+        pool = _make_player_pool()
+        starters = {"C": 1, "1B": 1, "OF": 1, "P": 1}
+        reps = find_replacement_players(pool, starters)
+        for pos in ("C", "1B", "OF", "P"):
+            assert pos in reps
+            assert reps[pos]["name"]  # has a name
+            assert "total_sgp" in reps[pos]
+
+    def test_skips_if_meta_slot(self):
+        """IF is a meta-slot in calculate_replacement_levels (handled via
+        UTIL/positional fallback in calculate_var). find_replacement_players
+        follows the same convention so its output drops cleanly into the same
+        downstream lookup logic."""
+        from fantasy_baseball.sgp.replacement import find_replacement_players
+
+        pool = _make_player_pool()
+        starters = {"IF": 1, "OF": 1}
+        reps = find_replacement_players(pool, starters)
+        assert "IF" not in reps
+        assert "OF" in reps
+
+    def test_util_uses_total_hitter_starters(self):
+        """UTIL replacement is the marginal hitter at depth =
+        positional_hitter_starters + util_starters across the full
+        hitter pool. Mirrors calculate_replacement_levels behavior."""
+        from fantasy_baseball.sgp.replacement import find_replacement_players
+
+        pool = _make_player_pool()
+        # Pool has 15 C + 15 1B + 50 OF = 80 hitters total.
+        # With C=5, 1B=5, OF=10, UTIL=5 → positional=20, total_hitter_starters=25.
+        # The 26th-best hitter overall (index 25 by total_sgp desc) is the UTIL replacement.
+        starters = {"C": 5, "1B": 5, "OF": 10, "UTIL": 5}
+        reps = find_replacement_players(pool, starters)
+        assert "UTIL" in reps
+        all_hitters_sorted = (
+            pool[pool["positions"].apply(lambda pos: pos[0] in ("C", "1B", "2B", "3B", "SS", "OF"))]
+            .sort_values("total_sgp", ascending=False)
+            .reset_index(drop=True)
+        )
+        expected_name = all_hitters_sorted.iloc[25]["name"]
+        assert reps["UTIL"]["name"] == expected_name
+
+    def test_pitcher_pool_includes_sp_and_rp(self):
+        """The P bucket pulls from any P/SP/RP-eligible row, mirroring
+        calculate_replacement_levels._get_eligible_players."""
+        from fantasy_baseball.sgp.replacement import find_replacement_players
+
+        pool = _make_player_pool()
+        # Pool has 100 pitchers (70 SP, 30 RP) with total_sgp = 25, 24.8, ..., -3.0.
+        starters = {"P": 50}
+        reps = find_replacement_players(pool, starters)
+        # 51st-best pitcher (index 50) → total_sgp = 25 - 50*0.2 = 15.0
+        assert reps["P"]["total_sgp"] == pytest.approx(15.0)
+
+    def test_falls_back_to_worst_eligible_when_pool_too_small(self):
+        """When fewer eligible players exist than the demand, the
+        replacement is the worst eligible player — same behavior as
+        calculate_replacement_levels' `eligible.iloc[-1]` branch."""
+        from fantasy_baseball.sgp.replacement import find_replacement_players
+
+        # Tiny pool: 3 catchers, demand 10.
+        pool = pd.DataFrame(
+            [
+                {
+                    "name": f"C_{i}",
+                    "positions": ["C"],
+                    "total_sgp": 10.0 - i,
+                    "player_type": "hitter",
+                }
+                for i in range(3)
+            ]
+        )
+        starters = {"C": 10}
+        reps = find_replacement_players(pool, starters)
+        assert reps["C"]["name"] == "C_2"  # worst eligible

@@ -58,6 +58,61 @@ def calculate_replacement_levels(
     return replacement_levels
 
 
+def find_replacement_players(
+    player_pool: pd.DataFrame,
+    starters_per_position: dict[str, int] | None = None,
+) -> dict[str, dict]:
+    """Find the marginal replacement-level player at each position.
+
+    Mirrors :func:`calculate_replacement_levels` demand math but returns
+    the actual player row (as a dict) instead of just the SGP threshold.
+    Use this when downstream code needs to swap a candidate against the
+    replacement player's full stat line — e.g. the ERoto draft
+    recommender, which compares ``score_roto(team_with_candidate)`` to
+    ``score_roto(team_with_replacement)``.
+
+    Skips ``IF`` (handled via UTIL/positional fallback in ``calculate_var``).
+    For ``UTIL``, uses the marginal hitter at depth
+    ``positional_hitter_starters + util_starters`` over the full hitter pool.
+    """
+    if starters_per_position is None:
+        starters_per_position = dict(STARTERS_PER_POSITION)
+
+    out: dict[str, dict] = {}
+
+    for position, num_starters in starters_per_position.items():
+        if position in ("IF", "UTIL"):
+            continue
+
+        eligible = _get_eligible_players(player_pool, position)
+        eligible = eligible.sort_values("total_sgp", ascending=False).reset_index(drop=True)
+        if eligible.empty:
+            continue
+        idx = num_starters if len(eligible) > num_starters else len(eligible) - 1
+        out[position] = eligible.iloc[idx].to_dict()
+
+    util_starters = starters_per_position.get("UTIL", 0)
+    if util_starters > 0:
+        all_hitters = (
+            player_pool[player_pool["positions"].apply(is_hitter)]
+            .sort_values("total_sgp", ascending=False)
+            .reset_index(drop=True)
+        )
+        positional_hitter_slots = sum(
+            n for pos, n in starters_per_position.items() if pos not in ("P", "IF", "UTIL")
+        )
+        total_hitter_starters = positional_hitter_slots + util_starters
+        if not all_hitters.empty:
+            idx = (
+                total_hitter_starters
+                if len(all_hitters) > total_hitter_starters
+                else len(all_hitters) - 1
+            )
+            out["UTIL"] = all_hitters.iloc[idx].to_dict()
+
+    return out
+
+
 def _get_eligible_players(pool: pd.DataFrame, position: str) -> pd.DataFrame:
     if position == "P":
         return pool[pool["positions"].apply(lambda pos: any(p in ("P", "SP", "RP") for p in pos))]
