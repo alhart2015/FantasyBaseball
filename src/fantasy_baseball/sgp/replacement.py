@@ -1,3 +1,5 @@
+from typing import Any
+
 import pandas as pd
 
 from fantasy_baseball.sgp.player_value import REPLACEMENT_AVG, REPLACEMENT_ERA, REPLACEMENT_WHIP
@@ -61,7 +63,7 @@ def calculate_replacement_levels(
 def find_replacement_players(
     player_pool: pd.DataFrame,
     starters_per_position: dict[str, int] | None = None,
-) -> dict[str, dict]:
+) -> dict[str, dict[str, Any]]:
     """Find the marginal replacement-level player at each position.
 
     Mirrors :func:`calculate_replacement_levels` demand math but returns
@@ -78,7 +80,7 @@ def find_replacement_players(
     if starters_per_position is None:
         starters_per_position = dict(STARTERS_PER_POSITION)
 
-    out: dict[str, dict] = {}
+    out: dict[str, dict[str, Any]] = {}
 
     for position, num_starters in starters_per_position.items():
         if position in ("IF", "UTIL"):

@@ -4,7 +4,9 @@ import pytest
 from fantasy_baseball.sgp.replacement import (
     calculate_replacement_levels,
     calculate_replacement_rates,
+    find_replacement_players,
 )
+from fantasy_baseball.utils.positions import is_hitter
 
 
 def _make_player_pool():
@@ -212,8 +214,6 @@ class TestFindReplacementPlayers:
         """For a position with N starter slots, the replacement player
         is the (N+1)-th best at that position by total_sgp — the
         marginal-just-not-a-starter."""
-        from fantasy_baseball.sgp.replacement import find_replacement_players
-
         pool = _make_player_pool()
         # _make_player_pool creates 15 catchers with total_sgp = 20, 19, ..., 6.
         # Default STARTERS_PER_POSITION has C with positive demand; pass an
@@ -225,8 +225,6 @@ class TestFindReplacementPlayers:
         assert reps["C"]["total_sgp"] == pytest.approx(15.0)
 
     def test_returns_player_for_each_position(self):
-        from fantasy_baseball.sgp.replacement import find_replacement_players
-
         pool = _make_player_pool()
         starters = {"C": 1, "1B": 1, "OF": 1, "P": 1}
         reps = find_replacement_players(pool, starters)
@@ -240,8 +238,6 @@ class TestFindReplacementPlayers:
         UTIL/positional fallback in calculate_var). find_replacement_players
         follows the same convention so its output drops cleanly into the same
         downstream lookup logic."""
-        from fantasy_baseball.sgp.replacement import find_replacement_players
-
         pool = _make_player_pool()
         starters = {"IF": 1, "OF": 1}
         reps = find_replacement_players(pool, starters)
@@ -252,8 +248,6 @@ class TestFindReplacementPlayers:
         """UTIL replacement is the marginal hitter at depth =
         positional_hitter_starters + util_starters across the full
         hitter pool. Mirrors calculate_replacement_levels behavior."""
-        from fantasy_baseball.sgp.replacement import find_replacement_players
-
         pool = _make_player_pool()
         # Pool has 15 C + 15 1B + 50 OF = 80 hitters total.
         # With C=5, 1B=5, OF=10, UTIL=5 → positional=20, total_hitter_starters=25.
@@ -262,7 +256,7 @@ class TestFindReplacementPlayers:
         reps = find_replacement_players(pool, starters)
         assert "UTIL" in reps
         all_hitters_sorted = (
-            pool[pool["positions"].apply(lambda pos: pos[0] in ("C", "1B", "2B", "3B", "SS", "OF"))]
+            pool[pool["positions"].apply(is_hitter)]
             .sort_values("total_sgp", ascending=False)
             .reset_index(drop=True)
         )
@@ -272,8 +266,6 @@ class TestFindReplacementPlayers:
     def test_pitcher_pool_includes_sp_and_rp(self):
         """The P bucket pulls from any P/SP/RP-eligible row, mirroring
         calculate_replacement_levels._get_eligible_players."""
-        from fantasy_baseball.sgp.replacement import find_replacement_players
-
         pool = _make_player_pool()
         # Pool has 100 pitchers (70 SP, 30 RP) with total_sgp = 25, 24.8, ..., -3.0.
         starters = {"P": 50}
@@ -285,8 +277,6 @@ class TestFindReplacementPlayers:
         """When fewer eligible players exist than the demand, the
         replacement is the worst eligible player — same behavior as
         calculate_replacement_levels' `eligible.iloc[-1]` branch."""
-        from fantasy_baseball.sgp.replacement import find_replacement_players
-
         # Tiny pool: 3 catchers, demand 10.
         pool = pd.DataFrame(
             [
