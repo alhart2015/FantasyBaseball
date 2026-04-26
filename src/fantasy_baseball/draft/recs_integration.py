@@ -20,7 +20,7 @@ from scipy.stats import rankdata
 
 from fantasy_baseball.draft.adp import ADPTable, blend_adp
 from fantasy_baseball.draft.state import StateKey, read_board
-from fantasy_baseball.models.player import Player
+from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import BENCH_SLOTS
 from fantasy_baseball.models.standings import ProjectedStandings, ProjectedStandingsEntry
 from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto
@@ -97,13 +97,10 @@ def _build_replacements(
     return {pos: Player.from_dict(row) for pos, row in rep_rows.items()}
 
 
-def _generic_replacement(replacements: Mapping[str, Player]) -> Player | None:
-    """Pick a single 'generic' replacement to pad unfilled bench slots.
-
-    Uses the highest-VAR ROS-stat replacement among all positions —
-    falls back to the first available value if no ROS stats are present.
-    """
-    if not replacements:
+def _best_by_type(replacements: Mapping[str, Player], ptype: PlayerType) -> Player | None:
+    """Highest-SGP replacement of the given type, or None if none present."""
+    candidates = [p for p in replacements.values() if p.player_type == ptype]
+    if not candidates:
         return None
 
     def _score(p: Player) -> float:
@@ -113,7 +110,20 @@ def _generic_replacement(replacements: Mapping[str, Player]) -> Player | None:
         sgp = getattr(ros, "sgp", None)
         return float(sgp) if sgp is not None else 0.0
 
-    return max(replacements.values(), key=_score)
+    return max(candidates, key=_score)
+
+
+def _best_hitter_replacement(replacements: Mapping[str, Player]) -> Player | None:
+    """Highest-SGP hitter among the replacement set, or None if no hitters."""
+    return _best_by_type(replacements, PlayerType.HITTER)
+
+
+def _best_pitcher_replacement(replacements: Mapping[str, Player]) -> Player | None:
+    """Highest-SGP pitcher among the replacement set, or None if no pitchers."""
+    return _best_by_type(replacements, PlayerType.PITCHER)
+
+
+_PITCHER_SLOT_KEYS: frozenset[str] = frozenset({"P", "SP", "RP"})
 
 
 def build_team_rosters(
@@ -125,10 +135,20 @@ def build_team_rosters(
 ) -> dict[str, list[Player]]:
     """Collect each team's keepers + picks as Player objects.
 
-    Pads each roster with a generic replacement-level Player up to the
-    league's active roster size so every team has comparable depth when
-    aggregating stats. Keepers/picks not on the board (rare) fall back
-    to the replacement at the keeper's declared position.
+    Pads each team's empty hitter slots with the best hitter-side
+    replacement and empty pitcher slots with the best pitcher-side
+    replacement, so the team-aggregation matches what the recommender's
+    swap math assumes — i.e., picking a pitcher displaces a pitcher
+    placeholder, not a hitter placeholder.
+
+    Mismatched padding (the old single _generic_replacement, always a
+    hitter) caused recommended pitcher picks to sometimes DECREASE
+    projected totals: the recs promised "+3 deltaRoto" while the
+    standings actually moved -2, because the pick was dropping a cloned
+    hitter from the lineup instead of a pitcher placeholder.
+
+    Keepers/picks not on the board (rare) fall back to the replacement
+    at the keeper's declared position.
     """
     team_picks: dict[str, list[Player]] = {t: [] for t in teams}
     for entry in (state.get(StateKey.KEEPERS) or []) + (state.get(StateKey.PICKS) or []):
@@ -140,11 +160,29 @@ def build_team_rosters(
         elif entry.get("position") in replacements:
             team_picks.setdefault(team, []).append(replacements[entry["position"]])
 
-    total_slots = sum(int(v) for k, v in roster_slots.items() if k not in BENCH_SLOTS and v)
-    generic_rep = _generic_replacement(replacements)
+    pitcher_slots = sum(
+        int(v)
+        for k, v in roster_slots.items()
+        if k in _PITCHER_SLOT_KEYS and k not in BENCH_SLOTS and v
+    )
+    hitter_slots = sum(
+        int(v)
+        for k, v in roster_slots.items()
+        if k not in _PITCHER_SLOT_KEYS and k not in BENCH_SLOTS and v
+    )
+
+    hitter_rep = _best_hitter_replacement(replacements)
+    pitcher_rep = _best_pitcher_replacement(replacements)
+
     for roster in team_picks.values():
-        while generic_rep is not None and len(roster) < total_slots:
-            roster.append(generic_rep)
+        actual_hitters = sum(1 for p in roster if p.player_type == PlayerType.HITTER)
+        actual_pitchers = sum(1 for p in roster if p.player_type == PlayerType.PITCHER)
+        while hitter_rep is not None and actual_hitters < hitter_slots:
+            roster.append(hitter_rep)
+            actual_hitters += 1
+        while pitcher_rep is not None and actual_pitchers < pitcher_slots:
+            roster.append(pitcher_rep)
+            actual_pitchers += 1
     return team_picks
 
 
