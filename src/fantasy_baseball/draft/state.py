@@ -114,19 +114,30 @@ def get_current_version() -> int:
 
 
 def _serialize_player_stats(player: dict[str, Any], row: pd.Series) -> None:
-    """Add stat fields to a player dict based on player type."""
+    """Add stat fields to a player dict based on player type.
+
+    Volume stats (AB/H, IP/ER/BB/H_allowed) are emitted alongside the
+    displayed counting/rate stats so ``project_team_stats`` can recompute
+    team rate stats (AVG/ERA/WHIP) from components.
+    """
     if row["player_type"] == PlayerType.HITTER:
         player["r"] = int(row.get("r", 0))
         player["hr"] = int(row.get("hr", 0))
         player["rbi"] = int(row.get("rbi", 0))
         player["sb"] = int(row.get("sb", 0))
         player["avg"] = round(float(row.get("avg", 0)), 3)
+        player["ab"] = float(row.get("ab", 0))
+        player["h"] = float(row.get("h", 0))
     elif row["player_type"] == PlayerType.PITCHER:
         player["w"] = int(row.get("w", 0))
         player["k"] = int(row.get("k", 0))
         player["sv"] = int(row.get("sv", 0))
         player["era"] = round(float(row.get("era", 0)), 2)
         player["whip"] = round(float(row.get("whip", 0)), 2)
+        player["ip"] = float(row.get("ip", 0))
+        player["er"] = float(row.get("er", 0))
+        player["bb"] = float(row.get("bb", 0))
+        player["h_allowed"] = float(row.get("h_allowed", 0))
 
 
 def serialize_board(board: pd.DataFrame) -> list[dict[str, Any]]:

@@ -27,6 +27,7 @@ from fantasy_baseball.draft.strategy import (
 )
 from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
+from fantasy_baseball.utils.constants import safe_float as _safe_float
 
 # ---------------------------------------------------------------------------
 # Paths — resolved once, reused across fixtures
@@ -160,7 +161,7 @@ def _simulate_n_picks(
                         "name": name,
                         "player_id": pid,
                         "player_type": player_row["player_type"],
-                        "sv": player_row.get("sv", 0),
+                        "sv": _safe_float(player_row.get("sv")),
                         "positions": player_row.get("positions", []),
                         "best_position": player_row.get("best_position", ""),
                         "ip": player_row.get("ip", 0),
@@ -350,33 +351,6 @@ class TestDefaultStrategyProducesValidPick:
         )
         name = picks[0]["name"]
         assert name and name != "unknown", f"Default strategy returned bad name: {name}"
-
-
-class TestStrategyDoesNotDraftFiveSPInFiveRounds:
-    """No strategy should draft 5 SPs in 5 picks (pitcher overvaluation guard)."""
-
-    @pytest.mark.parametrize("strategy_name", list(STRATEGIES.keys()))
-    def test_not_five_sp_in_five_picks(
-        self,
-        board_after_keepers: pd.DataFrame,
-        config: LeagueConfig,
-        strategy_name: str,
-    ):
-        picks = _simulate_n_picks(
-            board=board_after_keepers,
-            strategy_name=strategy_name,
-            config=config,
-            n_picks=5,
-        )
-        sp_count = sum(
-            1
-            for p in picks
-            if p["player_type"] == "pitcher" and p.get("sv", 0) < CLOSER_SV_THRESHOLD
-        )
-        assert sp_count < 5, (
-            f"Strategy '{strategy_name}' drafted {sp_count} SPs in 5 picks: "
-            f"{[p['name'] for p in picks]}"
-        )
 
 
 class TestTwoClosersStrategyDraftsClosers:

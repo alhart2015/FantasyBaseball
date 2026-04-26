@@ -378,3 +378,69 @@ def test_serialize_board_emits_total_sgp_and_adp():
     # Missing values should serialize as None, not NaN (NaN isn't JSON-safe).
     assert serialized[1]["adp"] is None
     assert serialized[1]["total_sgp"] is None
+
+
+def test_serialize_board_emits_hitter_volume_stats():
+    """Hitter rows must carry `ab` and `h` so downstream code that
+    builds team rate stats (AVG) from per-player components has the
+    raw volume to work with. Without these fields, every team's
+    projected AVG collapses to the default and ERoto AVG deltas are
+    mechanically zero."""
+    rows = pd.DataFrame(
+        [
+            {
+                "name": "Hitter",
+                "player_id": "1::hitter",
+                "positions": ["OF"],
+                "best_position": "OF",
+                "var": 5.0,
+                "adp": 12.3,
+                "total_sgp": 7.45,
+                "player_type": "hitter",
+                "r": 85,
+                "hr": 25,
+                "rbi": 80,
+                "sb": 10,
+                "avg": 0.265,
+                "ab": 540,
+                "h": 143,
+            }
+        ]
+    )
+    serialized = serialize_board(rows)
+    assert serialized[0]["ab"] == 540
+    assert serialized[0]["h"] == 143
+
+
+def test_serialize_board_emits_pitcher_volume_stats():
+    """Pitcher rows must carry `ip`, `er`, `bb`, and `h_allowed` so
+    downstream code that builds team ERA/WHIP from per-player
+    components has the raw volume to work with."""
+    rows = pd.DataFrame(
+        [
+            {
+                "name": "Pitcher",
+                "player_id": "1::pitcher",
+                "positions": ["SP"],
+                "best_position": "P",
+                "var": 5.0,
+                "adp": 25.0,
+                "total_sgp": 6.0,
+                "player_type": "pitcher",
+                "w": 12,
+                "k": 180,
+                "sv": 0,
+                "era": 3.50,
+                "whip": 1.15,
+                "ip": 175.0,
+                "er": 68,
+                "bb": 50,
+                "h_allowed": 151,
+            }
+        ]
+    )
+    serialized = serialize_board(rows)
+    assert serialized[0]["ip"] == 175.0
+    assert serialized[0]["er"] == 68
+    assert serialized[0]["bb"] == 50
+    assert serialized[0]["h_allowed"] == 151

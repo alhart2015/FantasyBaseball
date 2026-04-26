@@ -16,6 +16,7 @@ from typing import Any
 from fantasy_baseball.draft.adp import ADPTable
 from fantasy_baseball.lineup.delta_roto import DeltaRotoResult, compute_delta_roto, score_swap
 from fantasy_baseball.models.player import Player
+from fantasy_baseball.models.positions import PITCHER_ELIGIBLE
 from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.trades.evaluate import apply_swap_delta, player_rest_of_season_stats
@@ -189,12 +190,15 @@ def rank_candidates(
 def _pick_replacement(candidate: Player, replacements: Mapping[str, Player]) -> Player:
     """Choose the replacement-level player the candidate would displace.
 
-    For v1, use the candidate's primary position. Phase 3 can be smarter
-    (scarcity-based slot pick) — call out to roster_state helpers then.
+    Normalizes SP/RP/P to a single 'P' lookup so pitcher candidates
+    don't fall through to ``next(iter(replacements.values()))`` and end
+    up swapped against the first dict entry (typically a hitter).
+    Mirrors :func:`fantasy_baseball.sgp.var.calculate_var`.
     """
     primary = str(candidate.positions[0]) if candidate.positions else ""
-    if primary in replacements:
-        return replacements[primary]
+    lookup = "P" if primary in PITCHER_ELIGIBLE else primary
+    if lookup in replacements:
+        return replacements[lookup]
     return next(iter(replacements.values()))
 
 

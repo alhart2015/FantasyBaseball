@@ -21,6 +21,7 @@ from fantasy_baseball.draft.recommender import get_recommendations
 from fantasy_baseball.draft.roster_state import RosterState, get_filled_positions
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
+from fantasy_baseball.utils.constants import safe_float as _safe
 from fantasy_baseball.utils.rate_stats import calculate_avg
 
 # Draft a closer by this round if you have none
@@ -109,7 +110,7 @@ def pick_nonzero_sv(
     has_closer = False
     for pid in tracker.user_roster_ids:
         row = player_lookup.get(pid)
-        if row is not None and row.get("sv", 0) >= CLOSER_SV_THRESHOLD:
+        if row is not None and _safe(row.get("sv")) >= CLOSER_SV_THRESHOLD:
             has_closer = True
             break
 
@@ -289,7 +290,7 @@ def _count_closers(tracker, board, full_board, player_lookup=None):
     count = 0
     for pid in tracker.user_roster_ids:
         row = player_lookup.get(pid)
-        if row is not None and row.get("sv", 0) >= CLOSER_SV_THRESHOLD:
+        if row is not None and _safe(row.get("sv")) >= CLOSER_SV_THRESHOLD:
             count += 1
     return count
 

@@ -36,6 +36,7 @@ import yaml
 from flask import Flask, jsonify, render_template, request
 
 from fantasy_baseball.draft import draft_controller
+from fantasy_baseball.draft.board import rebuild_board
 from fantasy_baseball.draft.state import (
     StateKey,
     read_board,
@@ -71,10 +72,16 @@ def _read_league_yaml(path: str, _mtime: float) -> dict[str, Any]:
         return cast(dict[str, Any], yaml.safe_load(f))
 
 
-def _load_league_yaml() -> dict[str, Any]:
-    path = os.environ.get("DRAFT_LEAGUE_YAML_PATH") or str(
-        Path(__file__).resolve().parents[3] / "config" / "league.yaml"
+def _league_yaml_path() -> Path:
+    """Return the league.yaml path (env override or repo default)."""
+    return Path(
+        os.environ.get("DRAFT_LEAGUE_YAML_PATH")
+        or str(Path(__file__).resolve().parents[3] / "config" / "league.yaml")
     )
+
+
+def _load_league_yaml() -> dict[str, Any]:
+    path = str(_league_yaml_path())
     return _read_league_yaml(path, os.path.getmtime(path))
 
 
@@ -287,6 +294,11 @@ def _register_writer_routes(app):
     @app.post("/api/new-draft")
     def new_draft():
         league_yaml = _load_league_yaml()
+        try:
+            rebuild_board(_league_yaml_path(), app.config[CFG_BOARD_PATH])
+        except Exception as exc:
+            logging.getLogger(__name__).exception("board rebuild failed during /api/new-draft")
+            return jsonify({"error": f"board rebuild failed: {exc}"}), 500
         try:
             state = draft_controller.start_new_draft(
                 league_yaml,

@@ -20,12 +20,12 @@ from scipy.stats import rankdata
 
 from fantasy_baseball.draft.adp import ADPTable, blend_adp
 from fantasy_baseball.draft.state import StateKey, read_board
-from fantasy_baseball.models.player import Player
-from fantasy_baseball.models.positions import BENCH_SLOTS
+from fantasy_baseball.models.player import Player, PlayerType
+from fantasy_baseball.models.positions import BENCH_SLOTS, PITCHER_ELIGIBLE
 from fantasy_baseball.models.standings import ProjectedStandings, ProjectedStandingsEntry
 from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto
+from fantasy_baseball.sgp.replacement import find_replacement_players
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS, Category
-from fantasy_baseball.utils.positions import can_fill_slot
 
 
 def _var_key(row: dict[str, Any]) -> float:
@@ -72,45 +72,33 @@ def partition_available(players: list[Player], drafted: set[str]) -> list[Player
     return [p for p in players if (p.yahoo_id or "") not in drafted]
 
 
-def build_replacements_by_position(
-    rows: list[dict[str, Any]],
+def _build_replacements(
+    pool: pd.DataFrame,
     roster_slots: Mapping[str, int],
     num_teams: int,
 ) -> dict[str, Player]:
-    """Per-position replacement-level Player.
+    """Wrap :func:`find_replacement_players` for the recs path.
 
-    For each position with ``capacity`` starters per team, pick the
-    (capacity * num_teams + 1)-th best player (by ``var``) who is
-    eligible there — roughly the first player beyond the league's
-    collective demand. Uses :func:`can_fill_slot` for eligibility so the
-    UTIL/IF/P meta-slots and Yahoo's mixed-case position strings (e.g.
-    ``"Util"``) are handled the same way the optimizer handles them.
+    Scales league-config slots by num_teams to get per-position starter
+    counts, then lifts the returned row dicts back into :class:`Player`
+    objects so downstream swap math can call
+    ``player_rest_of_season_stats`` on them.
     """
-    if not rows:
+    if pool.empty:
         return {}
-    sorted_rows = sorted(rows, key=_var_key, reverse=True)
-    out: dict[str, Player] = {}
-    for pos, capacity in roster_slots.items():
-        if pos in BENCH_SLOTS or not capacity:
-            continue
-        demand = int(capacity) * max(int(num_teams), 1)
-        eligible = [r for r in sorted_rows if can_fill_slot(r.get("positions") or [], pos)]
-        if not eligible:
-            continue
-        # Not enough players at this position to define a true replacement
-        # — fall back to the worst eligible one.
-        choice = eligible[demand] if len(eligible) > demand else eligible[-1]
-        out[pos] = Player.from_dict(choice)
-    return out
+    starters_per_position = {
+        pos: int(count) * max(int(num_teams), 1)
+        for pos, count in roster_slots.items()
+        if pos not in BENCH_SLOTS and count
+    }
+    rep_rows = find_replacement_players(pool, starters_per_position)
+    return {pos: Player.from_dict(row) for pos, row in rep_rows.items()}
 
 
-def _generic_replacement(replacements: Mapping[str, Player]) -> Player | None:
-    """Pick a single 'generic' replacement to pad unfilled bench slots.
-
-    Uses the highest-VAR ROS-stat replacement among all positions —
-    falls back to the first available value if no ROS stats are present.
-    """
-    if not replacements:
+def _best_by_type(replacements: Mapping[str, Player], ptype: PlayerType) -> Player | None:
+    """Highest-SGP replacement of the given type, or None if none present."""
+    candidates = [p for p in replacements.values() if p.player_type == ptype]
+    if not candidates:
         return None
 
     def _score(p: Player) -> float:
@@ -120,7 +108,7 @@ def _generic_replacement(replacements: Mapping[str, Player]) -> Player | None:
         sgp = getattr(ros, "sgp", None)
         return float(sgp) if sgp is not None else 0.0
 
-    return max(replacements.values(), key=_score)
+    return max(candidates, key=_score)
 
 
 def build_team_rosters(
@@ -132,10 +120,12 @@ def build_team_rosters(
 ) -> dict[str, list[Player]]:
     """Collect each team's keepers + picks as Player objects.
 
-    Pads each roster with a generic replacement-level Player up to the
-    league's active roster size so every team has comparable depth when
-    aggregating stats. Keepers/picks not on the board (rare) fall back
-    to the replacement at the keeper's declared position.
+    Hitter and pitcher slots are padded separately so a candidate
+    displaces a placeholder of the same player type — required for the
+    recommender's swap math (which assumes a pitcher pick drops the P
+    replacement, not a hitter placeholder) to match the standings
+    update after the pick lands. Keepers/picks not on the board (rare)
+    fall back to the replacement at the keeper's declared position.
     """
     team_picks: dict[str, list[Player]] = {t: [] for t in teams}
     for entry in (state.get(StateKey.KEEPERS) or []) + (state.get(StateKey.PICKS) or []):
@@ -147,11 +137,29 @@ def build_team_rosters(
         elif entry.get("position") in replacements:
             team_picks.setdefault(team, []).append(replacements[entry["position"]])
 
-    total_slots = sum(int(v) for k, v in roster_slots.items() if k not in BENCH_SLOTS and v)
-    generic_rep = _generic_replacement(replacements)
+    pitcher_slots = sum(
+        int(v)
+        for k, v in roster_slots.items()
+        if k in PITCHER_ELIGIBLE and k not in BENCH_SLOTS and v
+    )
+    hitter_slots = sum(
+        int(v)
+        for k, v in roster_slots.items()
+        if k not in PITCHER_ELIGIBLE and k not in BENCH_SLOTS and v
+    )
+
+    hitter_rep = _best_by_type(replacements, PlayerType.HITTER)
+    pitcher_rep = _best_by_type(replacements, PlayerType.PITCHER)
+
     for roster in team_picks.values():
-        while generic_rep is not None and len(roster) < total_slots:
-            roster.append(generic_rep)
+        actual_hitters = sum(1 for p in roster if p.player_type == PlayerType.HITTER)
+        actual_pitchers = sum(1 for p in roster if p.player_type == PlayerType.PITCHER)
+        while hitter_rep is not None and actual_hitters < hitter_slots:
+            roster.append(hitter_rep)
+            actual_hitters += 1
+        while pitcher_rep is not None and actual_pitchers < pitcher_slots:
+            roster.append(pitcher_rep)
+            actual_pitchers += 1
     return team_picks
 
 
@@ -170,14 +178,11 @@ def build_projected_standings(
     )
 
 
-def build_adp_table(rows: list[dict[str, Any]]) -> ADPTable:
+def build_adp_table(pool: pd.DataFrame) -> ADPTable:
     """Construct an ADPTable from the board's ``adp`` column (if present)."""
-    if not rows:
+    if pool.empty or "adp" not in pool.columns or "player_id" not in pool.columns:
         return ADPTable()
-    df = pd.DataFrame(rows)
-    if df.empty or "adp" not in df.columns or "player_id" not in df.columns:
-        return ADPTable()
-    blended = blend_adp({"board": df[["player_id", "adp"]]})
+    blended = blend_adp({"board": pool[["player_id", "adp"]]})
     return ADPTable(adp=blended)
 
 
@@ -219,7 +224,8 @@ def compute_rec_inputs(
     roster_slots = league_yaml.get("roster_slots") or {}
     teams = _league_teams(league_yaml)
 
-    replacements = build_replacements_by_position(rows, roster_slots, len(teams))
+    pool = pd.DataFrame(rows) if rows else pd.DataFrame()
+    replacements = _build_replacements(pool, roster_slots, len(teams))
 
     board_by_id: dict[str, Player] = {}
     for p in players:
@@ -229,7 +235,7 @@ def compute_rec_inputs(
     team_rosters = build_team_rosters(state, board_by_id, teams, roster_slots, replacements)
     projected_standings = build_projected_standings(team_rosters)
     team_sds = build_team_sds(team_rosters, sd_scale=1.0)
-    adp_table = build_adp_table(rows)
+    adp_table = build_adp_table(pool)
 
     return RecInputs(
         candidates=candidates,

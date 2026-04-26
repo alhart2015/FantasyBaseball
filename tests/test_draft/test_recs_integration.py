@@ -148,106 +148,6 @@ def test_standings_cache_round_trips_through_json():
     assert parsed == original
 
 
-def test_var_zero_rows_sort_above_negative_var():
-    """Regression: ``r.get('var') or -inf`` treats var=0.0 as falsy and
-    sinks those rows to the bottom, shifting the marginal-replacement
-    player up by however many var=0.0 rows sit in the cutoff
-    neighborhood — enough to flip top-10 immediate_delta rankings."""
-    from fantasy_baseball.draft.recs_integration import build_replacements_by_position
-
-    rows = [
-        # Three OF-eligible players: one positive var, one var=0.0, one negative.
-        # With capacity=1, num_teams=1 → demand=1 → replacement is index [1].
-        {
-            "name": "Top OF",
-            "player_id": "1::hitter",
-            "player_type": "hitter",
-            "positions": ["OF"],
-            "var": 1.0,
-        },
-        {
-            "name": "Mid OF (var=0)",
-            "player_id": "2::hitter",
-            "player_type": "hitter",
-            "positions": ["OF"],
-            "var": 0.0,
-        },
-        {
-            "name": "Bottom OF",
-            "player_id": "3::hitter",
-            "player_type": "hitter",
-            "positions": ["OF"],
-            "var": -2.0,
-        },
-    ]
-    reps = build_replacements_by_position(rows, {"OF": 1, "BN": 0}, num_teams=1)
-    # Correct sort: 1.0 > 0.0 > -2.0 → index [1] is "Mid OF (var=0)".
-    # The buggy ``or -inf`` would push var=0 below var=-2 and pick
-    # "Bottom OF" instead.
-    assert reps["OF"].name == "Mid OF (var=0)"
-
-
-def test_build_replacements_uses_can_fill_slot_for_util():
-    """UTIL slot must accept any hitter, not just rows with literal "UTIL"
-    in positions. The board emits "Util" (Yahoo casing) — the old
-    inline ``p in positions`` filter missed all of them, leaving UTIL
-    out of the replacement map."""
-    from fantasy_baseball.draft.recs_integration import build_replacements_by_position
-
-    rows = [
-        {
-            "name": "Star OF",
-            "name_normalized": "star of",
-            "player_id": "1::hitter",
-            "player_type": "hitter",
-            "positions": ["OF", "Util"],  # mixed-case — what the board actually emits
-            "var": 9.0,
-        },
-        {
-            "name": "Bench OF",
-            "name_normalized": "bench of",
-            "player_id": "2::hitter",
-            "player_type": "hitter",
-            "positions": ["OF", "Util"],
-            "var": 0.5,
-        },
-    ]
-    reps = build_replacements_by_position(rows, {"OF": 1, "UTIL": 1, "BN": 0}, num_teams=1)
-    # Both slots should resolve to the second-best eligible player (demand=1
-    # x 1 team) — the Bench OF.
-    assert "OF" in reps
-    assert "UTIL" in reps
-    assert reps["UTIL"].name == "Bench OF"
-
-
-def test_build_replacements_expands_p_to_sp_rp():
-    """``can_fill_slot`` treats P as the union of P/SP/RP. A roster with
-    only SP/RP rows still produces a P replacement."""
-    from fantasy_baseball.draft.recs_integration import build_replacements_by_position
-
-    rows = [
-        {
-            "name": "Top SP",
-            "name_normalized": "top sp",
-            "player_id": "1::pitcher",
-            "player_type": "pitcher",
-            "positions": ["SP"],
-            "var": 8.0,
-        },
-        {
-            "name": "Bench RP",
-            "name_normalized": "bench rp",
-            "player_id": "2::pitcher",
-            "player_type": "pitcher",
-            "positions": ["RP"],
-            "var": 1.0,
-        },
-    ]
-    reps = build_replacements_by_position(rows, {"P": 1, "BN": 0}, num_teams=1)
-    assert "P" in reps
-    assert reps["P"].name == "Bench RP"
-
-
 def test_deserialize_drops_malformed_entries():
     """Legacy / malformed entries are skipped, not crashed on."""
     from fantasy_baseball.draft.recs_integration import deserialize_standings_cache
@@ -262,3 +162,294 @@ def test_deserialize_drops_malformed_entries():
     assert set(cache.keys()) == {"GoodTeam"}
     assert cache["GoodTeam"].total == 55.0
     assert cache["GoodTeam"].total_sd == 4.2
+
+
+def test_compute_rec_inputs_uses_marginal_replacements(tmp_path):
+    """compute_rec_inputs must surface true replacement-level players,
+    not top-tier MLB regulars. Regression: the old
+    build_replacements_by_position used `demand = capacity * num_teams`
+    per slot, which produced replacements like 'top-21 hitter for UTIL'
+    instead of 'marginal hitter for UTIL'."""
+    import json
+
+    from fantasy_baseball.draft.recs_integration import compute_rec_inputs
+    from fantasy_baseball.draft.state import StateKey
+
+    # Build a 30-hitter pool. With 1 OF starter and 1 UTIL starter
+    # in a 1-team league: positional_hitter_starters=1, total UTIL
+    # demand = 1+1 = 2. The UTIL replacement is the 3rd-best hitter
+    # overall (index 2).
+    rows = [
+        {
+            "name": f"H{i}",
+            "player_id": f"{i}::hitter",
+            "player_type": "hitter",
+            "positions": ["OF", "Util"],
+            "total_sgp": 30.0 - i,
+            "var": 30.0 - i,
+            "ab": 500,
+            "h": 130,
+            "r": 80,
+            "hr": 20,
+            "rbi": 75,
+            "sb": 5,
+            "avg": 0.260,
+        }
+        for i in range(30)
+    ]
+    board_path = tmp_path / "board.json"
+    board_path.write_text(json.dumps(rows))
+
+    state = {
+        StateKey.KEEPERS: [],
+        StateKey.PICKS: [],
+    }
+    league_yaml = {
+        "draft": {"teams": {1: "Solo"}},
+        "roster_slots": {"OF": 1, "UTIL": 1, "BN": 0},
+    }
+
+    inputs = compute_rec_inputs(state, board_path, league_yaml)
+
+    # OF replacement: 2nd-best OF (index 1) → "H1"
+    assert inputs.replacements["OF"].name == "H1"
+    # UTIL replacement: 3rd-best hitter overall (index 2) → "H2"
+    assert inputs.replacements["UTIL"].name == "H2"
+
+
+def test_build_team_rosters_pads_pitcher_slots_with_pitchers(tmp_path):
+    """build_team_rosters must fill empty pitcher slots with a pitcher
+    replacement, not the generic hitter replacement.
+
+    Regression: the old code used _generic_replacement (highest-SGP
+    across ALL positions, always a hitter) for every empty slot.
+    A team with empty P slots ended up with hitter clones counted as
+    pitchers — giving the team phantom R/HR/RBI/SB/AVG from pitcher
+    slots and zero W/K/SV/ERA/WHIP. This made recommender's swap math
+    (which assumed the pitcher slot held a P replacement) disagree with
+    the standings path (which saw a hitter clone in the P slot).
+    """
+    import json
+
+    from fantasy_baseball.draft.recs_integration import build_team_rosters
+    from fantasy_baseball.draft.state import StateKey
+    from fantasy_baseball.models.player import PlayerType
+
+    # Build a minimal board: some hitters and pitchers with known stats.
+    rows = []
+    for i in range(10):
+        rows.append(
+            {
+                "name": f"H{i}",
+                "player_id": f"h{i}::hitter",
+                "player_type": "hitter",
+                "positions": ["OF", "Util"],
+                "total_sgp": 10.0 - i,
+                "var": 10.0 - i,
+                "ab": 500,
+                "h": 130,
+                "r": 80,
+                "hr": 20,
+                "rbi": 75,
+                "sb": 5,
+                "avg": 0.260,
+            }
+        )
+    for i in range(10):
+        rows.append(
+            {
+                "name": f"P{i}",
+                "player_id": f"p{i}::pitcher",
+                "player_type": "pitcher",
+                "positions": ["P"],
+                "total_sgp": 10.0 - i,
+                "var": 10.0 - i,
+                "ip": 180,
+                "er": 70,
+                "bb": 50,
+                "h_allowed": 160,
+                "w": 12,
+                "k": 170,
+                "sv": 0,
+                "era": 3.50,
+                "whip": 1.18,
+            }
+        )
+
+    # Build a fake board_by_id with one player (H0 on a team).
+    board_path = tmp_path / "board.json"
+    board_path.write_text(json.dumps(rows))
+    from fantasy_baseball.draft.recs_integration import rows_to_players
+
+    players = rows_to_players(rows)
+    board_by_id = {p.yahoo_id: p for p in players if p.yahoo_id}
+
+    # Create type-specific replacements as Player objects.
+    hitter_rep = next(p for p in players if p.player_type == PlayerType.HITTER and p.name == "H9")
+    pitcher_rep = next(p for p in players if p.player_type == PlayerType.PITCHER and p.name == "P9")
+    replacements = {"OF": hitter_rep, "UTIL": hitter_rep, "P": pitcher_rep}
+
+    # One team with one hitter drafted; all pitcher slots empty.
+    state = {
+        StateKey.KEEPERS: [],
+        StateKey.PICKS: [
+            {"player_id": "h0::hitter", "player_name": "H0", "team": "Solo", "position": "OF"}
+        ],
+    }
+    roster_slots = {"OF": 2, "UTIL": 1, "P": 3}  # 3 hitter slots + 3 pitcher slots
+
+    roster = build_team_rosters(state, board_by_id, ["Solo"], roster_slots, replacements)["Solo"]
+
+    # Count actual picks by type in the padded roster.
+    hitters_on_roster = [p for p in roster if p.player_type == PlayerType.HITTER]
+    pitchers_on_roster = [p for p in roster if p.player_type == PlayerType.PITCHER]
+
+    # Should have exactly 3 hitters (1 real + 2 padding) and 3 pitchers (all padding).
+    assert len(hitters_on_roster) == 3, (
+        f"Expected 3 hitter slots filled, got {len(hitters_on_roster)}: "
+        f"{[p.name for p in hitters_on_roster]}"
+    )
+    assert len(pitchers_on_roster) == 3, (
+        f"Expected 3 pitcher slots filled (all with pitcher replacement), "
+        f"got {len(pitchers_on_roster)}: {[p.name for p in pitchers_on_roster]}. "
+        f"If this is 0, the bug (all slots padded with hitter) is present."
+    )
+
+
+def test_recommended_pick_increases_projected_standings_total(tmp_path):
+    """A recommended pick must INCREASE the team's projected total roto
+    points (relative to the recommender's starting baseline).
+
+    Regression: build_team_rosters used a single _generic_replacement
+    (always a hitter) for ALL empty slots, but the recommender's swap
+    math used position-specific replacements. Picking a recommended
+    pitcher would drop a hitter clone from the projected roster, often
+    making the team's total points go DOWN even though the recommender
+    promised they'd go UP.
+
+    Setup: Solo has one hitter already drafted. Rival has six strong
+    hitters, giving them an edge in all hitting cats. P1 (a solid SP)
+    gives Solo pitching value — the recommender computes delta vs the
+    P replacement (P replacement ≈ P18, a mediocre SP). The two paths
+    must agree that picking a pitcher with positive immediate_delta
+    actually increases the projected total.
+    """
+    import json
+
+    from fantasy_baseball.draft.eroto_recs import rank_candidates
+    from fantasy_baseball.draft.recs_integration import compute_rec_inputs
+    from fantasy_baseball.draft.state import StateKey
+    from fantasy_baseball.scoring import score_roto
+
+    rows = []
+    for i in range(30):
+        rows.append(
+            {
+                "name": f"H{i}",
+                "player_id": f"h{i}::hitter",
+                "player_type": "hitter",
+                "positions": ["OF", "Util"],
+                "total_sgp": 30.0 - i,
+                "var": 30.0 - i,
+                "ab": 500,
+                "h": 130,
+                "r": 80,
+                "hr": 20,
+                "rbi": 75,
+                "sb": 5,
+                "avg": 0.260,
+            }
+        )
+    # All pitchers are SPs — ordered by quality. P0 is the best (ace),
+    # P18 is the replacement level. Any P with idx < 18 should have
+    # positive immediate_delta (better than the replacement).
+    for i in range(30):
+        rows.append(
+            {
+                "name": f"P{i}",
+                "player_id": f"p{i}::pitcher",
+                "player_type": "pitcher",
+                "positions": ["P"],
+                "total_sgp": 30.0 - i,
+                "var": 30.0 - i,
+                "ip": max(50, 200 - i * 5),
+                "er": 50 + i * 3,
+                "bb": 40 + i * 2,
+                "h_allowed": 150 + i * 3,
+                "w": max(3, 18 - i // 2),
+                "k": max(40, 250 - i * 8),
+                "sv": 0,
+                "era": 2.25 + i * 0.12,
+                "whip": 1.00 + i * 0.02,
+            }
+        )
+    board_path = tmp_path / "board.json"
+    board_path.write_text(json.dumps(rows))
+
+    # Rival has 6 strong hitters (dominates hitting cats).
+    # Solo has 1 hitter + empty P slots. Bug: those P slots get padded
+    # with hitter clones instead of pitcher replacements.
+    rival_keepers = [
+        {"player_id": f"h{i}::hitter", "player_name": f"H{i}", "team": "Rival", "position": "OF"}
+        for i in range(6)
+    ]
+    solo_keepers = [
+        {"player_id": "h6::hitter", "player_name": "H6", "team": "Solo", "position": "OF"}
+    ]
+
+    state_before = {StateKey.KEEPERS: rival_keepers + solo_keepers, StateKey.PICKS: []}
+    league_yaml = {
+        "draft": {"teams": {1: "Solo", 2: "Rival"}},
+        "roster_slots": {"OF": 4, "UTIL": 2, "P": 9, "BN": 0},
+    }
+
+    inputs_before = compute_rec_inputs(state_before, board_path, league_yaml)
+    recs = rank_candidates(
+        candidates=inputs_before.candidates,
+        replacements=inputs_before.replacements,
+        team_name="Solo",
+        projected_standings=inputs_before.projected_standings,
+        team_sds=inputs_before.team_sds,
+        picks_until_next_turn=0,
+        adp_table=inputs_before.adp_table,
+    )
+
+    # Find any pitcher with positive immediate_delta — these are better
+    # than the P replacement and the recommender says to pick them.
+    positive_pitcher_recs = [r for r in recs if r.immediate_delta > 0 and "P" in r.positions]
+    assert positive_pitcher_recs, (
+        "No pitcher with positive immediate_delta found — test fixture is invalid. "
+        "At least P0 (best SP) should beat the P replacement."
+    )
+    top_pitcher = positive_pitcher_recs[0]
+
+    # Baseline standings total for Solo.
+    roto_before = score_roto(inputs_before.projected_standings, team_sds=inputs_before.team_sds)
+    total_before = roto_before["Solo"].total
+
+    # Pick that pitcher and recompute.
+    state_after = {
+        StateKey.KEEPERS: rival_keepers + solo_keepers,
+        StateKey.PICKS: [
+            {
+                "player_id": top_pitcher.player_id,
+                "player_name": top_pitcher.name,
+                "team": "Solo",
+                "position": top_pitcher.positions[0],
+            }
+        ],
+    }
+    inputs_after = compute_rec_inputs(state_after, board_path, league_yaml)
+    roto_after = score_roto(inputs_after.projected_standings, team_sds=inputs_after.team_sds)
+    total_after = roto_after["Solo"].total
+
+    # The actual standings total must not DROP after picking a pitcher
+    # that the recommender said was positive. If it drops, the bench-
+    # padding mismatch bug caused the standings path to lose a bench
+    # hitter (instead of a pitcher placeholder), making the trade look
+    # worse than the recommender promised.
+    assert total_after >= total_before, (
+        f"Recommended pick {top_pitcher.name} (delta={top_pitcher.immediate_delta:+.3f}) caused "
+        f"projected total to DROP from {total_before:.3f} to {total_after:.3f} — "
+        f"recs/standings disagree about what gets displaced."
+    )
