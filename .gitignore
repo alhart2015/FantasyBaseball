@@ -9,6 +9,7 @@ venv/
 
 # Config secrets
 config/oauth.json
+.env
 
 # IDE
 .vscode/
