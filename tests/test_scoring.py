@@ -180,6 +180,22 @@ class TestProjectTeamStats:
         assert stats[Category.R] == 100
         assert stats[Category.HR] == 28
 
+    def test_project_team_stats_falls_back_to_rest_of_season_when_full_missing(self):
+        """When a Player has only ``rest_of_season`` set (no
+        ``full_season_projection``), ``projection_source='full_season_projection'``
+        must fall back to ``rest_of_season``. Without this, preseason rosters —
+        whose matcher only writes to ``rest_of_season`` — produce a board of
+        zeros for the preseason-standings widget."""
+        p = Player(
+            name="Preseason Hitter",
+            player_type=PlayerType.HITTER,
+            rest_of_season=HitterStats(r=100, hr=30, rbi=90, sb=10, h=140, ab=520, pa=580),
+            full_season_projection=None,
+        )
+        stats = project_team_stats([p], projection_source="full_season_projection")
+        assert stats[Category.R] == 100
+        assert stats[Category.HR] == 30
+
 
 class TestProbBeats:
     """Unit tests for the pairwise Gaussian win-probability helper."""
@@ -1500,6 +1516,35 @@ class TestComputeRosterBreakdown:
         assert by_name["Missing"].status == ContributionStatus.NO_PROJECTION
         assert by_name["Missing"].scale_factor == 0.0
         assert by_name["Missing"].raw_stats == {}
+
+    def test_raw_stats_prefers_full_season_projection(self):
+        """``_raw_stats_for`` reads ``full_season_projection`` when set so the
+        breakdown drilldown sums to the same end-of-season totals shown in
+        the standings widget. Falls back to ``rest_of_season`` only when
+        ``full_season_projection`` is unset (e.g. preseason rosters)."""
+        from fantasy_baseball.scoring import compute_roster_breakdown
+
+        both = Player(
+            name="Both Fields",
+            player_type=PlayerType.HITTER,
+            positions=[Position.OF],
+            selected_position=Position.OF,
+            rest_of_season=HitterStats(r=70, hr=20, rbi=60, sb=5, h=100, ab=400, pa=440),
+            full_season_projection=HitterStats(r=100, hr=28, rbi=85, sb=7, h=140, ab=520, pa=580),
+        )
+        preseason_only = Player(
+            name="Preseason Only",
+            player_type=PlayerType.HITTER,
+            positions=[Position.FIRST_BASE],
+            selected_position=Position.FIRST_BASE,
+            rest_of_season=HitterStats(r=90, hr=25, rbi=80, sb=8, h=130, ab=480, pa=540),
+            full_season_projection=None,
+        )
+        by_name = {
+            c.name: c for c in compute_roster_breakdown("Team A", [both, preseason_only]).hitters
+        }
+        assert by_name["Both Fields"].raw_stats["r"] == 100  # full_season wins
+        assert by_name["Preseason Only"].raw_stats["r"] == 90  # rest_of_season fallback
 
     def test_counting_stat_sum_invariant(self):
         """Sum of scaled contributions == project_team_stats output."""

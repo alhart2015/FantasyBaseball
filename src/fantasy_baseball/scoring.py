@@ -87,11 +87,21 @@ def _stat(p, key, source: ProjectionSource = "rest_of_season"):
     end-of-season-totals projection until a proper standings + ROS
     combination ships).
 
+    When the requested source is missing on the Player (e.g. preseason
+    rosters are matched against a single projection frame and end up with
+    ``full_season_projection=None`` — the preseason values live in
+    ``rest_of_season``), falls back to ``rest_of_season``. Without this
+    fallback, ``ProjectedStandings.from_rosters`` would read zeros for
+    every preseason team and the preseason-standings widget would show
+    a default-only (R=0, ERA=99) board.
+
     Flat-dict input (draft scripts) is unaffected by ``source`` — those
     rosters carry a single set of stat keys with no ROS/full distinction.
     """
     # Player dataclass: stats live on the .{source} attribute.
     stats = getattr(p, source, None)
+    if stats is None and source != "rest_of_season":
+        stats = getattr(p, "rest_of_season", None)
     if stats is not None and hasattr(stats, key):
         return _safe(getattr(stats, key, 0))
     # Flat dict (legacy callers, tests, draft scripts)
@@ -432,11 +442,19 @@ def _apply_displacement(roster: list[Player]) -> list[Player | dict]:
 
 
 def _raw_stats_for(p: Player) -> dict[str, float]:
-    """Extract the ROS raw stats the breakdown needs, or ``{}`` if absent."""
-    if p.rest_of_season is None:
+    """Extract the per-player raw stats for the standings breakdown drilldown.
+
+    Reads ``full_season_projection`` (so per-player rows in the
+    breakdown modal sum to the end-of-season totals shown in the
+    standings widget), falling back to ``rest_of_season`` when the
+    full-season field is unset (preseason rosters store preseason
+    values there). Returns ``{}`` when neither projection is set.
+    """
+    stats = p.full_season_projection or p.rest_of_season
+    if stats is None:
         return {}
     keys = PITCHING_COUNTING if p.player_type == PlayerType.PITCHER else HITTING_COUNTING
-    return {k: _safe(getattr(p.rest_of_season, k, 0)) for k in keys}
+    return {k: _safe(getattr(stats, k, 0)) for k in keys}
 
 
 def compute_roster_breakdown(team_name: str, roster: list[Player]) -> RosterBreakdown:
