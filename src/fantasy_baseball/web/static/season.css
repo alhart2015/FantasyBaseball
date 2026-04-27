@@ -3056,9 +3056,6 @@ td[style*="--neg"] {
 }
 
 /* ── gap-badge traffic light (load-bearing signal) ────────────────── */
-/* Semantic note: in this template, .gap-low = green = "good" (easy
-   swap or big upgrade), .gap-high = red = "bad" (risky swap or no
-   upgrade), .gap-medium = yellow = "in between". Retoned but kept. */
 
 .page-roster-audit .gap-badge {
     display: inline-block;
@@ -3070,17 +3067,17 @@ td[style*="--neg"] {
     border-radius: 2px !important;
     border: 1px solid transparent;
 }
-.page-roster-audit .gap-high {
+.page-roster-audit .gap-negative {
     background: var(--trail-soft) !important;
     color: var(--trail-deep) !important;
     border-color: var(--trail);
 }
-.page-roster-audit .gap-medium {
+.page-roster-audit .gap-marginal {
     background: var(--gold-soft) !important;
     color: var(--gold-deep) !important;
     border-color: var(--gold);
 }
-.page-roster-audit .gap-low {
+.page-roster-audit .gap-positive {
     background: var(--lead-soft) !important;
     color: var(--lead-deep) !important;
     border-color: var(--lead);

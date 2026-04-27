@@ -67,7 +67,7 @@
         <td>
             {% if entry.candidates and entry.candidates[0].delta_roto %}
             {% set dr = entry.candidates[0].delta_roto.total %}
-            <span class="gap-badge {% if dr >= 1.0 %}gap-low{% elif dr > 0 %}gap-medium{% else %}gap-high{% endif %}">
+            <span class="gap-badge {% if dr >= 1.0 %}gap-positive{% elif dr > 0 %}gap-marginal{% else %}gap-negative{% endif %}">
                 {{ "%+.2f"|format(dr) }}
             </span>
             {% else %}
@@ -104,7 +104,7 @@
                     </td>
                     <td style="text-align:right">{{ "%.2f"|format(c.sgp) }}</td>
                     <td style="text-align:right">
-                        <span class="gap-badge {% if c.gap >= 0.5 %}gap-low{% elif c.gap > 0 %}gap-medium{% else %}gap-high{% endif %}">
+                        <span class="gap-badge {% if c.gap >= 0.5 %}gap-positive{% elif c.gap > 0 %}gap-marginal{% else %}gap-negative{% endif %}">
                             {{ "%+.2f"|format(c.gap) }}
                         </span>
                     </td>
