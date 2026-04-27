@@ -21,6 +21,7 @@ Thumbs.db
 # Superpowers tool artifacts
 .superpowers/
 docs/superpowers/
+.worktrees/
 
 # Simulation output (regenerable via simulate_draft.py)
 data/sim_results/
