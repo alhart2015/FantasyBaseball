@@ -863,3 +863,562 @@ td[style*="--neg"] {
     .page-standings .data-table th  { font-size: 9.5px; padding: 8px 4px 6px; }
     .page-standings .data-table td  { padding: 8px 4px; font-size: 12px; }
 }
+
+/* =====================================================================
+   LINEUP — Editorial Sports Almanac (white & gold) — operational density
+   Same palette as .page-standings; tighter, more clipped tone for daily
+   start/sit decisions. Pace signal (z-score → stat-hot-* / stat-cold-*
+   classes from the partials) is preserved and retoned to olive/burgundy.
+   ===================================================================== */
+
+.page-lineup {
+    /* shared paper + ink + gold spectrum (mirrors .page-standings) */
+    --paper:        #F8F5EE;
+    --paper-edge:   #EFE9D8;
+    --paper-tint:   #F2EDE0;
+    --paper-deep:   #ECE4CD;
+    --ink:          #1A1612;
+    --ink-soft:     #6B6258;
+    --ink-faint:    #9A8F7E;
+    --rule:         #E1D9C4;
+    --rule-strong:  #B8AC8E;
+
+    --gold:         #B8860B;
+    --gold-deep:    #7C5A0A;
+    --gold-bright:  #D4A933;
+    --gold-soft:    rgba(184, 134, 11, 0.10);
+    --gold-amber:   #C8851A;
+
+    --lead:         #5C7A2E;
+    --lead-deep:    #3F5A1A;
+    --lead-soft:    rgba(92, 122, 46, 0.10);
+    --trail:        #8B2C2C;
+    --trail-deep:   #5F1F1F;
+    --trail-soft:   rgba(139, 44, 44, 0.08);
+
+    background: var(--paper);
+    color: var(--ink);
+    margin: -24px -32px;
+    padding: 32px 44px 56px;
+    min-height: calc(100vh + 24px);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.6),
+        0 0 0 1px var(--paper-edge),
+        0 24px 48px -16px rgba(0, 0, 0, 0.55);
+    background-image:
+        radial-gradient(circle at 20% 10%, rgba(184, 134, 11, 0.04), transparent 60%),
+        radial-gradient(circle at 80% 90%, rgba(184, 134, 11, 0.03), transparent 50%);
+    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    letter-spacing: 0.005em;
+}
+
+/* ── Masthead ──────────────────────────────────────────────────────── */
+
+.page-lineup .page-header {
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 22px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--rule);
+    position: relative;
+}
+.page-lineup .page-header::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -1px;
+    width: 80px;
+    height: 3px;
+    background: var(--gold);
+}
+.page-lineup .page-header h2 {
+    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-style: italic;
+    font-weight: 400;
+    font-size: 52px;
+    line-height: 0.95;
+    letter-spacing: -0.025em;
+    color: var(--ink);
+    font-variation-settings: "opsz" 144, "SOFT" 50;
+    margin-right: 6px;
+}
+.page-lineup .page-header h2::after {
+    content: ".";
+    color: var(--gold);
+    font-style: normal;
+}
+.page-lineup .week-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    padding-bottom: 8px;
+    margin-left: auto;
+}
+.page-lineup .week-label::before {
+    content: "◆ ";
+    color: var(--gold);
+    font-size: 9px;
+    vertical-align: 2px;
+    margin-right: 4px;
+}
+
+/* Editorial team selector — overrides the inline dark styles in lineup.html */
+.page-lineup #team-selector {
+    background: var(--paper-tint) !important;
+    color: var(--ink) !important;
+    border: 1px solid var(--rule-strong) !important;
+    border-radius: 2px !important;
+    padding: 6px 28px 6px 12px !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    letter-spacing: 0.04em !important;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image:
+        linear-gradient(45deg, transparent 50%, var(--gold-deep) 50%),
+        linear-gradient(135deg, var(--gold-deep) 50%, transparent 50%);
+    background-position:
+        calc(100% - 14px) calc(50% - 2px),
+        calc(100% - 9px) calc(50% - 2px);
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+    margin-bottom: 8px;
+}
+.page-lineup #team-selector:hover {
+    border-color: var(--gold) !important;
+}
+.page-lineup #opponent-status {
+    color: var(--ink-soft) !important;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+/* ── Section headers (Hitters / Pitchers / Probable Starters) ─────── */
+
+.page-lineup .section-header {
+    align-items: baseline;
+    margin: 26px 0 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--rule);
+    position: relative;
+}
+.page-lineup .section-header::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -1px;
+    width: 32px;
+    height: 2px;
+    background: var(--gold);
+}
+.page-lineup .section-header h3 {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-weight: 500;
+    font-size: 22px;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+}
+.page-lineup .section-header .opp-rank {
+    color: var(--ink-soft) !important;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px !important;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+/* ── Optimize button ──────────────────────────────────────────────── */
+
+.page-lineup .btn-optimize {
+    border-radius: 2px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 8px 18px;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.page-lineup .btn-optimize.available {
+    background: var(--gold);
+    color: var(--paper);
+    border: 1px solid var(--gold);
+    box-shadow: 0 1px 0 var(--gold-deep);
+}
+.page-lineup .btn-optimize.available:hover {
+    background: var(--gold-deep);
+    border-color: var(--gold-deep);
+    box-shadow: 0 1px 0 var(--gold-deep);
+}
+.page-lineup .btn-optimize.optimal {
+    background: transparent;
+    color: var(--lead-deep);
+    border: 1px solid var(--lead);
+    cursor: default;
+    box-shadow: none;
+}
+
+/* ── Banners (suggested moves / pending) ──────────────────────────── */
+
+.page-lineup .moves-banner {
+    background: var(--paper-tint);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--gold);
+    border-radius: 2px;
+    padding: 14px 18px;
+    margin: 14px 0 18px;
+}
+.page-lineup .moves-banner h4 {
+    color: var(--gold-deep) !important;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+}
+/* The pending-moves banner uses an inline border-left-color: var(--warning).
+   Override it back to amber-gold so the inline color doesn't fight the palette. */
+.page-lineup .moves-banner[style*="warning"] {
+    border-left-color: var(--gold-amber) !important;
+}
+.page-lineup .moves-banner[style*="warning"] h4 {
+    color: var(--gold-amber) !important;
+}
+.page-lineup .move-row {
+    color: var(--ink);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+}
+.page-lineup .move-row strong { color: var(--ink); }
+/* Inline `style="color: var(--success/danger);"` on add/drop spans — recolor */
+.page-lineup .move-row strong[style*="success"] { color: var(--lead-deep) !important; }
+.page-lineup .move-row strong[style*="danger"]  { color: var(--trail-deep) !important; }
+.page-lineup .move-row span[style*="text-secondary"] {
+    color: var(--ink-soft) !important;
+}
+
+/* ── Data tables (hitters / pitchers / probable starters) ─────────── */
+
+.page-lineup .data-table {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    border-top: 2px solid var(--ink);
+    border-bottom: 1px solid var(--ink);
+    font-size: 12.5px;
+    overflow: visible;
+    margin-bottom: 4px;
+    font-feature-settings: "tnum" 1, "lnum" 1;
+}
+.page-lineup .data-table th {
+    background: transparent;
+    color: var(--ink-soft);
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    padding: 9px 5px 7px;
+    border-bottom: 1px solid var(--rule-strong);
+}
+.page-lineup .data-table td {
+    padding: 8px 5px;
+    border-bottom: 1px solid var(--rule);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12.5px;
+    color: var(--ink);
+}
+.page-lineup .data-table td[style*="text-align: left"] {
+    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-weight: 500;
+    font-size: 14px;
+    font-variation-settings: "opsz" 30;
+    letter-spacing: 0;
+    color: var(--ink) !important;
+}
+/* "Elig" / positions column — small DM Sans caps */
+.page-lineup .data-table td[style*="font-size: 11px"] {
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 10.5px !important;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-soft) !important;
+}
+
+/* PA / IP column — already muted via .pa-col class */
+.page-lineup .pa-col {
+    color: var(--ink-faint) !important;
+    font-size: 11.5px !important;
+}
+
+/* Totals row — paper-deep wash, bold serif label */
+.page-lineup .totals-row {
+    background: var(--paper-deep);
+    border-bottom: 2px solid var(--ink) !important;
+}
+.page-lineup .totals-row td {
+    font-weight: 600;
+    border-bottom: none;
+}
+.page-lineup .totals-row td[style*="text-align: left"] {
+    font-style: italic;
+    color: var(--ink) !important;
+}
+
+/* Bench rows — paper-tint wash + faded ink (not the harsh 0.5 opacity) */
+.page-lineup .bench-row {
+    opacity: 1;
+    background: linear-gradient(to right, var(--paper-tint), transparent 40%);
+}
+.page-lineup .bench-row td {
+    color: var(--ink-faint);
+}
+.page-lineup .bench-row td[style*="text-align: left"] {
+    color: var(--ink-soft) !important;
+}
+
+/* IL active rows — burgundy left rule + faint wash */
+.page-lineup .il-active-row {
+    background: var(--trail-soft);
+    box-shadow: inset 3px 0 0 var(--trail);
+}
+
+/* ── Pace signal — z-score classes (preserved, retoned) ───────────── */
+
+.page-lineup .stat-hot-2 {
+    background: rgba(92, 122, 46, 0.20);
+    color: var(--lead-deep);
+    font-weight: 700;
+}
+.page-lineup .stat-hot-1 {
+    background: rgba(92, 122, 46, 0.09);
+    color: var(--lead-deep);
+}
+.page-lineup .stat-neutral {
+    background: transparent;
+    color: var(--ink);
+}
+.page-lineup .stat-cold-1 {
+    background: rgba(139, 44, 44, 0.08);
+    color: var(--trail-deep);
+}
+.page-lineup .stat-cold-2 {
+    background: rgba(139, 44, 44, 0.18);
+    color: var(--trail-deep);
+    font-weight: 700;
+}
+
+/* ROS deviation glyphs (corner +/++/+++ vs ×/××/×××) — repalette */
+.page-lineup .stat-ros-up::after   { color: var(--lead) !important; }
+.page-lineup .stat-ros-down::after { color: var(--trail) !important; }
+
+/* ── SGP / ΔRoto numeric columns ──────────────────────────────────── */
+
+/* Last three numeric columns (SGP, ΔRoto, status) sit at the right.
+   Keep them in mono; gold-tint ΔRoto totals via attribute heuristics is
+   risky, so we just keep ink color and let the totals-row weight win. */
+
+/* ── IL badge (already has badge-il class) ────────────────────────── */
+.page-lineup .badge-il {
+    background: var(--trail);
+    color: var(--paper);
+    border-radius: 2px;
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+    padding: 2px 6px;
+    text-transform: uppercase;
+}
+
+/* ── Probable starters: matchup quality + 2-start badges ──────────── */
+.page-lineup .badge-success {
+    background: var(--lead);
+    color: var(--paper);
+    border-radius: 2px;
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+}
+.page-lineup .badge-warning {
+    background: var(--gold);
+    color: var(--paper);
+    border-radius: 2px;
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+}
+.page-lineup .badge-danger {
+    background: var(--trail);
+    color: var(--paper);
+    border-radius: 2px;
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+}
+.page-lineup .badge-info {
+    background: var(--gold-soft);
+    color: var(--gold-deep);
+    border: 1px solid var(--gold);
+    border-radius: 2px;
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 1px 6px;
+}
+
+/* Expand-row affordance on probable starters */
+.page-lineup .expandable {
+    cursor: pointer;
+    transition: background 0.12s;
+}
+.page-lineup .expandable:hover {
+    background: var(--gold-soft);
+}
+.page-lineup .expand-content td {
+    background: var(--paper-tint);
+    border-bottom: 1px solid var(--rule);
+    color: var(--ink-soft);
+    padding: 10px 14px 10px 28px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11.5px;
+}
+.page-lineup .expand-content strong { color: var(--ink); font-weight: 600; }
+
+/* ── Tooltips — paper card with gold edge ─────────────────────────── */
+.page-lineup .stat-cell { position: relative; cursor: default; }
+.page-lineup .stat-cell .tooltip {
+    background: var(--paper);
+    color: var(--ink);
+    border: 1px solid var(--rule-strong);
+    border-top: 3px solid var(--gold);
+    border-radius: 2px;
+    padding: 10px 14px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px;
+    box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.45);
+    min-width: 200px;
+    text-align: left;
+    z-index: 100;
+}
+.page-lineup .tooltip-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 0;
+    gap: 18px;
+}
+.page-lineup .tooltip-label {
+    color: var(--ink-soft);
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.page-lineup .tooltip-val {
+    font-weight: 600;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--ink);
+}
+.page-lineup .tooltip-divider {
+    border-top: 1px solid var(--rule);
+    margin: 6px 0;
+}
+.page-lineup .stat-cell .tooltip > div[style*="font-weight: 600"]:first-child {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-weight: 500 !important;
+    font-size: 13px;
+    color: var(--ink);
+    letter-spacing: -0.005em;
+    text-transform: none;
+    margin-bottom: 8px !important;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--rule);
+}
+
+/* ── Rank badge — gold variant ────────────────────────────────────── */
+.page-lineup .rank-badge {
+    background: var(--gold-soft);
+    color: var(--gold-deep);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    border: 1px solid var(--gold);
+    padding: 1px 6px;
+    border-radius: 2px;
+    margin-left: 4px;
+    vertical-align: 1px;
+}
+.page-lineup .rank-tooltip {
+    background: var(--paper);
+    color: var(--ink);
+    border: 1px solid var(--rule-strong);
+    border-top: 3px solid var(--gold);
+    box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.45);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 10.5px;
+}
+.page-lineup .rank-tooltip::after { display: none; }
+.page-lineup .rank-tooltip-label { color: var(--ink-soft); }
+
+/* ── Placeholder text ─────────────────────────────────────────────── */
+.page-lineup .placeholder-text {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 16px;
+    color: var(--ink-soft);
+    padding: 32px 0;
+}
+
+/* ── Subtle row reveal on first paint ─────────────────────────────── */
+@keyframes pageLineupRowEnter {
+    from { opacity: 0; transform: translateY(2px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.page-lineup tbody tr {
+    animation: pageLineupRowEnter 0.28s ease-out backwards;
+}
+.page-lineup tbody tr:nth-child(1)  { animation-delay: 0.02s; }
+.page-lineup tbody tr:nth-child(2)  { animation-delay: 0.04s; }
+.page-lineup tbody tr:nth-child(3)  { animation-delay: 0.06s; }
+.page-lineup tbody tr:nth-child(4)  { animation-delay: 0.08s; }
+.page-lineup tbody tr:nth-child(5)  { animation-delay: 0.10s; }
+.page-lineup tbody tr:nth-child(6)  { animation-delay: 0.12s; }
+.page-lineup tbody tr:nth-child(7)  { animation-delay: 0.14s; }
+.page-lineup tbody tr:nth-child(8)  { animation-delay: 0.16s; }
+.page-lineup tbody tr:nth-child(9)  { animation-delay: 0.18s; }
+.page-lineup tbody tr:nth-child(10) { animation-delay: 0.20s; }
+.page-lineup tbody tr:nth-child(11) { animation-delay: 0.22s; }
+.page-lineup tbody tr:nth-child(12) { animation-delay: 0.24s; }
+.page-lineup tbody tr:nth-child(13) { animation-delay: 0.26s; }
+.page-lineup tbody tr:nth-child(14) { animation-delay: 0.28s; }
+.page-lineup tbody tr:nth-child(15) { animation-delay: 0.30s; }
+.page-lineup tbody tr:nth-child(16) { animation-delay: 0.32s; }
+.page-lineup tbody tr:nth-child(n+17) { animation-delay: 0.34s; }
+@media (prefers-reduced-motion: reduce) {
+    .page-lineup tbody tr { animation: none; }
+}
+
+/* ── Narrow viewports ─────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    .page-lineup {
+        margin: -16px;
+        padding: 22px 18px 36px;
+    }
+    .page-lineup .page-header h2 { font-size: 36px; }
+    .page-lineup .section-header h3 { font-size: 17px; }
+    .page-lineup .data-table th { font-size: 9px; padding: 7px 3px 5px; }
+    .page-lineup .data-table td { padding: 6px 3px; font-size: 11.5px; }
+}
