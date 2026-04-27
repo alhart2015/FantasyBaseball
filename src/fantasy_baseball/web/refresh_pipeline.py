@@ -157,6 +157,8 @@ class RefreshRun:
         self.preseason_pitchers: pd.DataFrame | None = None
         self.hitters_proj: pd.DataFrame | None = None
         self.pitchers_proj: pd.DataFrame | None = None
+        self.full_hitters_proj: pd.DataFrame | None = None
+        self.full_pitchers_proj: pd.DataFrame | None = None
         self.has_rest_of_season: bool = False
         self.hitter_logs: dict[str, dict[str, Any]] | None = None
         self.pitcher_logs: dict[str, dict[str, Any]] | None = None
@@ -309,6 +311,9 @@ class RefreshRun:
         from fantasy_baseball.data.redis_store import (
             get_blended_projections as redis_get_blended,
         )
+        from fantasy_baseball.data.redis_store import (
+            get_full_season_projections,
+        )
 
         _redis_client = get_kv()
         _hitters_rows = redis_get_blended(_redis_client, "hitters") or []
@@ -375,6 +380,34 @@ class RefreshRun:
             self.pitchers_proj = rest_of_season_pitchers
         else:
             self._progress("WARNING: No ROS projections available — falling back to preseason")
+
+        # Full-season (ROS+YTD) projections live in cache:full_season_projections
+        # and are written alongside the ROS blob by blend_and_cache_ros. Loading
+        # them here lets hydrate_roster_entries populate Player.full_season_projection
+        # for display + ProjectedStandings, while keeping Player.rest_of_season
+        # ROS-only for forward-looking decision paths.
+        self._progress("Loading full-season projections from Redis...")
+        full_season_payload = get_full_season_projections(_redis_client)
+        if isinstance(full_season_payload, dict):
+            full_hitters_rows = full_season_payload.get("hitters", []) or []
+            full_pitchers_rows = full_season_payload.get("pitchers", []) or []
+            full_hitters = pd.DataFrame(full_hitters_rows)
+            full_pitchers = pd.DataFrame(full_pitchers_rows)
+            if not full_hitters.empty:
+                full_hitters["_name_norm"] = full_hitters["name"].apply(normalize_name)
+            if not full_pitchers.empty:
+                full_pitchers["_name_norm"] = full_pitchers["name"].apply(normalize_name)
+            self.full_hitters_proj = full_hitters
+            self.full_pitchers_proj = full_pitchers
+            self._progress(
+                f"Loaded {len(full_hitters)} full-season hitters + "
+                f"{len(full_pitchers)} full-season pitchers"
+            )
+        else:
+            self._progress(
+                "WARNING: cache:full_season_projections missing — "
+                "Player.full_season_projection will be unset"
+            )
 
     # --- Step 4b: Fetch opponent rosters (raw) ---
     def _fetch_opponent_rosters(self):
@@ -480,6 +513,8 @@ class RefreshRun:
             user_roster_model,
             self.hitters_proj,
             self.pitchers_proj,
+            full_hitters_proj=self.full_hitters_proj,
+            full_pitchers_proj=self.full_pitchers_proj,
             context="user",
         )
 
@@ -494,6 +529,8 @@ class RefreshRun:
                 latest,
                 self.hitters_proj,
                 self.pitchers_proj,
+                full_hitters_proj=self.full_hitters_proj,
+                full_pitchers_proj=self.full_pitchers_proj,
                 context=f"opp:{team.name}",
             )
             if hydrated:

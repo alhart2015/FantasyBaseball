@@ -162,3 +162,66 @@ class TestHydrateRosterEntries:
         result = hydrate_roster_entries(roster, _hitters_df(), _pitchers_df())
         assert len(result) == 1
         assert result[0].name == "Ivan Herrera"
+
+
+def test_player_holds_both_ros_and_full_season():
+    """match_roster_to_projections must populate Player.rest_of_season
+    (ROS-only) and Player.full_season_projection (ROS+YTD) from the
+    matching FanGraphs row plus YTD actuals."""
+    import pandas as pd
+
+    from fantasy_baseball.data.projections import match_roster_to_projections
+
+    roster = [
+        {
+            "name": "Test Hitter",
+            "positions": ["OF"],
+            "selected_position": "OF",
+            "player_id": "12345",
+            "status": "",
+        }
+    ]
+    ros_hitters = pd.DataFrame(
+        [
+            {
+                "_name_norm": "test hitter",
+                "name": "Test Hitter",
+                "mlbam_id": 12345,
+                "r": 100.0,
+                "hr": 25.0,
+                "rbi": 75.0,
+                "sb": 8.0,
+                "h": 110.0,
+                "ab": 400.0,
+                "pa": 440.0,
+                "avg": 0.275,
+            }
+        ]
+    )
+    full_hitters = pd.DataFrame(
+        [
+            {
+                "_name_norm": "test hitter",
+                "name": "Test Hitter",
+                "mlbam_id": 12345,
+                "r": 130.0,
+                "hr": 30.0,
+                "rbi": 95.0,
+                "sb": 10.0,
+                "h": 140.0,
+                "ab": 500.0,
+                "pa": 550.0,
+                "avg": 0.280,
+            }
+        ]
+    )
+    matched = match_roster_to_projections(
+        roster,
+        hitters_proj=ros_hitters,
+        pitchers_proj=pd.DataFrame(),
+        full_hitters_proj=full_hitters,
+        full_pitchers_proj=pd.DataFrame(),
+    )
+    p = matched[0]
+    assert p.rest_of_season.r == 100.0
+    assert p.full_season_projection.r == 130.0
