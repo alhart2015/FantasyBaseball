@@ -20,6 +20,7 @@ from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from fantasy_baseball.models.positions import BENCH_SLOTS
 from fantasy_baseball.utils.constants import (
     IL_STATUSES,
     Category,
@@ -151,11 +152,6 @@ class RefreshRun:
         self.cache_dir = cache_dir
         self.logger = JobLogger("refresh")
 
-        # Shared state — populated as steps run. All initialized to None
-        # so attribute access errors surface as clear AttributeErrors
-        # rather than silent fall-through to the wrong type. Methods
-        # that read these attributes assert-not-None at entry; the
-        # ordering is enforced by ``run()``.
         self.config: LeagueConfig | None = None
         self.league: Any = None  # Yahoo session-bound league (untyped lib)
         self.league_model: League | None = None
@@ -428,7 +424,8 @@ class RefreshRun:
             try:
                 opp_raw = fetch_roster(self.league, key, day=self.effective_date)
                 return (tname, opp_raw)
-            except Exception:
+            except Exception as exc:
+                log.warning(f"Opponent roster fetch failed for {tname or key}: {exc}")
                 return None
 
         teams = self.league.teams()
@@ -464,11 +461,6 @@ class RefreshRun:
         client = get_kv()
         snapshot_date = self.effective_date.isoformat()
         for tname, team_raw in self.raw_rosters_by_team.items():
-            # team_raw rows come from parse_roster: keys are "name",
-            # "positions" (list), "selected_position", "player_id",
-            # "status". Convert to the serialized shape the old
-            # SQLite writer produced so downstream readers see an
-            # identical blob.
             entries = [
                 {
                     "slot": row["selected_position"],
@@ -808,7 +800,6 @@ class RefreshRun:
         assert self.roster_players is not None
 
         self._progress("Fetching schedule and matchup data...")
-        # start_date and end_date were fetched earlier to compute effective_date
         project_root = Path(__file__).resolve().parents[3]
         schedule_cache_path = project_root / "data" / "weekly_schedule.json"
         schedule = get_week_schedule(self.start_date, self.end_date, schedule_cache_path)
@@ -889,12 +880,10 @@ class RefreshRun:
             )
         write_cache(CacheKey.LEVERAGE, leverage_by_team, self.cache_dir)
 
-    # --- Step 13b: ROS Monte Carlo simulation ---
+    # --- ROS Monte Carlo simulation ---
     def _run_ros_monte_carlo(self):
         assert self.config is not None
 
-        self.rest_of_season_mc = None
-        self.rest_of_season_mgmt_mc = None
         if self.has_rest_of_season:
             from fantasy_baseball.simulation import run_ros_monte_carlo
 
@@ -903,27 +892,18 @@ class RefreshRun:
             assert self.standings is not None
             assert self.fraction_remaining is not None
 
-            # fraction_remaining was computed in Step 4e and is reused here
-
+            non_hitter_slots = BENCH_SLOTS | {"P"}
             h_slots = sum(
-                v for k, v in self.config.roster_slots.items() if k not in ("P", "BN", "IL", "DL")
+                v for k, v in self.config.roster_slots.items() if k not in non_hitter_slots
             )
             p_slots = self.config.roster_slots.get("P", 9)
 
-            all_team_rosters = {self.config.team_name: self.matched}
-            all_team_rosters.update(self.opp_rosters)
-
-            # Build ROS rosters for all teams. hitters_proj/pitchers_proj
-            # already ARE rest_of_season_hitters/rest_of_season_pitchers when has_rest_of_season is True
-            # (see the assignment above), so opp_rosters is already
-            # matched against ROS projections — just reuse it.
-            rest_of_season_mc_rosters = {}
+            # opp_rosters were already matched against ROS projections in
+            # _hydrate_rosters (hitters_proj/pitchers_proj swap to ROS at
+            # _load_projections), so they're MC-ready as-is.
+            rest_of_season_mc_rosters: dict[str, list] = dict(self.opp_rosters)
             if self.matched:
-                rest_of_season_mc_rosters[self.config.team_name] = all_team_rosters.get(
-                    self.config.team_name, []
-                )
-            for tname, opp_players in self.opp_rosters.items():
-                rest_of_season_mc_rosters[tname] = opp_players
+                rest_of_season_mc_rosters[self.config.team_name] = self.matched
 
             # Build actual standings dict (uppercase-string-keyed per category)
             actual_standings_dict = {e.team_name: e.stats.to_dict() for e in self.standings.entries}

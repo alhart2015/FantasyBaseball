@@ -7,6 +7,7 @@ shape the cache files need.
 """
 
 from fantasy_baseball.models.player import Player, PlayerType
+from fantasy_baseball.models.positions import BENCH_SLOTS
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 
@@ -55,10 +56,9 @@ def compute_lineup_moves(
     """Compare optimizer output to current slots; emit START moves.
 
     Only emits a move when the player is crossing the bench/active
-    boundary. Bench-like slots: BN, IL, DL. Slot keys may have suffixes
-    like ``OF_1`` — only the prefix before ``_`` matters for comparison.
+    boundary. Slot keys may have suffixes like ``OF_1`` — only the
+    prefix before ``_`` matters for comparison.
     """
-    bench_slots = {"BN", "IL", "DL"}
     moves: list[dict] = []
     for slot, player_name in optimal_hitters.items():
         for player in roster_players:
@@ -67,7 +67,7 @@ def compute_lineup_moves(
             current_slot = player.selected_position or "BN"
             base_slot = slot.split("_")[0]
             if current_slot != base_slot and (
-                current_slot in bench_slots or base_slot in bench_slots
+                current_slot in BENCH_SLOTS or base_slot in BENCH_SLOTS
             ):
                 if player.rest_of_season is not None:
                     sgp = (

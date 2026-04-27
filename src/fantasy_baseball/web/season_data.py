@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 from fantasy_baseball.data.kv_store import KVStore, get_kv, is_remote
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.models.positions import BENCH_SLOTS
 from fantasy_baseball.models.standings import ProjectedStandings, Standings, StandingsEntry
 from fantasy_baseball.scoring import score_roto
 from fantasy_baseball.utils.constants import (
@@ -97,20 +98,20 @@ def read_cache(key: CacheKey, cache_dir: Path = CACHE_DIR) -> dict | list | None
         try:
             raw = redis.get(redis_key(key))
         except Exception as e:
-            print(f"[redis] read_cache({key}) failed: {e}")
+            log.warning(f"read_cache({key}) Redis read failed: {e}")
             raw = None
         if raw is not None:
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError:
-                print(f"[redis] read_cache({key}) corrupt data, treating as miss")
+                log.warning(f"read_cache({key}) corrupt Redis data, treating as miss")
                 data = None
             if data is not None:
                 try:
                     cache_dir.mkdir(parents=True, exist_ok=True)
                     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
                 except OSError as e:
-                    print(f"[redis] local write-back for {key} failed: {e}")
+                    log.warning(f"read_cache({key}) local write-back failed: {e}")
                 return cast("dict | list", data)
 
     try:
@@ -159,7 +160,7 @@ def write_cache(key: CacheKey, data: dict | list, cache_dir: Path = CACHE_DIR) -
         try:
             redis.set(redis_key(key), json.dumps(data))
         except Exception as e:
-            print(f"[redis] write_cache({key}) failed: {e}")
+            log.warning(f"write_cache({key}) Redis write failed: {e}")
 
 
 def read_meta(cache_dir: Path = CACHE_DIR) -> dict:
@@ -451,7 +452,7 @@ def build_opponent_lineup(
     pitchers = []
     for p in enriched:
         pos = p.get("selected_position", "BN")
-        p["is_bench"] = pos in ("BN", "IL", "DL")
+        p["is_bench"] = pos in BENCH_SLOTS
         p["is_il"] = "IL" in (p.get("status") or "") or pos == "IL"
         is_pitcher = pos in PITCHER_POSITIONS or (
             pos == "BN" and set(p.get("positions", [])).issubset(PITCHER_POSITIONS | {"BN"})
@@ -465,9 +466,7 @@ def build_opponent_lineup(
     hitters.sort(
         key=lambda h: (slot_rank.get(h.get("selected_position", ""), 99), -h.get("sgp", 0))
     )
-    pitchers.sort(
-        key=lambda p: (p.get("selected_position", "") in ("BN", "IL", "DL"), -p.get("sgp", 0))
-    )
+    pitchers.sort(key=lambda p: (p.get("selected_position", "") in BENCH_SLOTS, -p.get("sgp", 0)))
 
     return {
         "hitters": hitters,
@@ -690,7 +689,7 @@ def format_lineup_for_display(roster: list[dict], optimal: dict | None) -> dict:
             "sgp": ros_sgp,
             "delta_roto": roto_delta_by_name.get(player.name),
             "games": p.get("games_this_week", 0),
-            "is_bench": pos in ("BN", "IL", "DL"),
+            "is_bench": pos in BENCH_SLOTS,
             "is_il": "IL" in player.status or pos == "IL",
             "pace": player.pace or {},
             "overall_pace": compute_overall_pace(player.pace),
