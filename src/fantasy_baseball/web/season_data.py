@@ -75,6 +75,7 @@ CACHE_FILES: dict[CacheKey, str] = {
     CacheKey.TRANSACTION_ANALYZER: "transaction_analyzer.json",
     CacheKey.TRANSACTIONS: "transactions.json",
     CacheKey.ROS_PROJECTIONS: "ros_projections.json",
+    CacheKey.FULL_SEASON_PROJECTIONS: "full_season_projections.json",
     CacheKey.POSITIONS: "positions.json",
     CacheKey.STANDINGS_BREAKDOWN: "standings_breakdown.json",
 }

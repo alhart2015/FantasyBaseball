@@ -311,9 +311,6 @@ class RefreshRun:
         from fantasy_baseball.data.redis_store import (
             get_blended_projections as redis_get_blended,
         )
-        from fantasy_baseball.data.redis_store import (
-            get_full_season_projections,
-        )
 
         _redis_client = get_kv()
         _hitters_rows = redis_get_blended(_redis_client, "hitters") or []
@@ -385,9 +382,10 @@ class RefreshRun:
         # and are written alongside the ROS blob by blend_and_cache_ros. Loading
         # them here lets hydrate_roster_entries populate Player.full_season_projection
         # for display + ProjectedStandings, while keeping Player.rest_of_season
-        # ROS-only for forward-looking decision paths.
-        self._progress("Loading full-season projections from Redis...")
-        full_season_payload = get_full_season_projections(_redis_client)
+        # ROS-only for forward-looking decision paths. Use read_cache so we get
+        # the same Redis+disk-fallback resilience as the ROS load above.
+        self._progress("Loading full-season projections...")
+        full_season_payload = read_cache(CacheKey.FULL_SEASON_PROJECTIONS, self.cache_dir)
         if isinstance(full_season_payload, dict):
             full_hitters_rows = full_season_payload.get("hitters", []) or []
             full_pitchers_rows = full_season_payload.get("pitchers", []) or []

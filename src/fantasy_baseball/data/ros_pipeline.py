@@ -123,22 +123,25 @@ def blend_and_cache_ros(
         "hitters": hitters_ros.to_dict(orient="records"),
         "pitchers": pitchers_ros.to_dict(orient="records"),
     }
+    full_payload = {
+        "hitters": hitters_full.to_dict(orient="records"),
+        "pitchers": pitchers_full.to_dict(orient="records"),
+    }
     # Write through ``write_cache`` for the on-disk JSON
-    # (``data/cache/ros_projections.json``) plus the on-Render Upstash
-    # write-through, then through ``set_ros_projections`` so off-Render
-    # callers reading via ``get_ros_projections(kv)`` see the same blob
-    # (``write_cache``'s Redis path is gated by ``RENDER=true``).
-    # Imported at call time to avoid a web-layer import at data-layer
-    # import time.
+    # (``data/cache/{ros,full_season}_projections.json``) plus the
+    # on-Render Upstash write-through, then through
+    # ``set_{ros,full_season}_projections`` so off-Render callers
+    # reading via ``get_{ros,full_season}_projections(kv)`` see the
+    # same blob (``write_cache``'s Redis path is gated by
+    # ``RENDER=true``). Disk persistence is necessary so the refresh
+    # pipeline's ``read_cache(CacheKey.FULL_SEASON_PROJECTIONS, ...)``
+    # call has a fallback when Upstash is briefly unreachable —
+    # symmetric with the ROS load. Imported at call time to avoid a
+    # web-layer import at data-layer import time.
     from fantasy_baseball.web.season_data import write_cache
 
     write_cache(CacheKey.ROS_PROJECTIONS, ros_payload)
+    write_cache(CacheKey.FULL_SEASON_PROJECTIONS, full_payload)
     set_ros_projections(client, ros_payload)
-    set_full_season_projections(
-        client,
-        {
-            "hitters": hitters_full.to_dict(orient="records"),
-            "pitchers": pitchers_full.to_dict(orient="records"),
-        },
-    )
+    set_full_season_projections(client, full_payload)
     return hitters_ros, pitchers_ros
