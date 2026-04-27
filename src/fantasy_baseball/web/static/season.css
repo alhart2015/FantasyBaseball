@@ -1,26 +1,58 @@
 /* === Season Dashboard Styles === */
 
 :root {
-    --bg: #0f0f1a;
-    --panel-bg: #1a1a2e;
-    --panel-border: #16213e;
-    --card-bg: #1e1e1e;
-    --accent: #64b5f6;
-    --text: #eee;
-    --text-secondary: #888;
-    --success: #66bb6a;
-    --warning: #f9a825;
-    --danger: #ef5350;
-    --row-highlight: rgba(100, 181, 246, 0.08);
+    /* Paper + ink + gold — global tokens.
+       Pages render cream-on-cream by default; the .page-X wrappers add
+       editorial typography and bespoke component theming on top. */
+    --paper:        #F8F5EE;
+    --paper-edge:   #EFE9D8;
+    --paper-tint:   #F2EDE0;
+    --paper-deep:   #ECE4CD;
+    --ink:          #1A1612;
+    --ink-soft:     #6B6258;
+    --ink-faint:    #9A8F7E;
+    --rule:         #E1D9C4;
+    --rule-strong:  #B8AC8E;
+
+    --gold:         #B8860B;
+    --gold-deep:    #7C5A0A;
+    --gold-bright:  #D4A933;
+    --gold-soft:    rgba(184, 134, 11, 0.10);
+    --gold-amber:   #C8851A;
+
+    --lead:         #5C7A2E;
+    --lead-deep:    #3F5A1A;
+    --lead-soft:    rgba(92, 122, 46, 0.10);
+    --trail:        #8B2C2C;
+    --trail-deep:   #5F1F1F;
+    --trail-soft:   rgba(139, 44, 44, 0.08);
+
+    /* Legacy semantic tokens — every existing var(--bg)/var(--text)/etc.
+       reference across templates, JS, and CSS resolves through these. */
+    --bg:             var(--paper-tint);
+    --panel-bg:       var(--paper-deep);
+    --panel-border:   var(--rule-strong);
+    --card-bg:        var(--paper);
+    --accent:         var(--gold);
+    --text:           var(--ink);
+    --text-primary:   var(--ink);
+    --text-secondary: var(--ink-soft);
+    --text-dim:       var(--ink-faint);
+    --success:        var(--lead);
+    --warning:        var(--gold-amber);
+    --danger:         var(--trail);
+    --border:         var(--rule);
+    --row-highlight:  var(--gold-soft);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: var(--bg);
-    color: var(--text);
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--paper-tint);
+    color: var(--ink);
     min-height: 100vh;
+    letter-spacing: 0.005em;
 }
 
 .layout {
@@ -30,74 +62,135 @@ body {
 
 .sidebar {
     width: 220px;
-    background: var(--panel-bg);
-    border-right: 1px solid var(--panel-border);
+    background: var(--paper-deep);
+    border-right: 1px solid var(--rule-strong);
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
     position: sticky;
     top: 0;
     height: 100vh;
+    box-shadow: inset -3px 0 0 -2px var(--gold);
 }
 
 .sidebar-header {
-    padding: 16px 20px;
-    font-size: 16px;
-    font-weight: bold;
-    color: var(--accent);
-    border-bottom: 1px solid var(--panel-border);
+    padding: 22px 22px 18px;
+    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-style: italic;
+    font-size: 22px;
+    font-weight: 500;
+    color: var(--ink);
+    letter-spacing: -0.015em;
+    line-height: 1.05;
+    font-variation-settings: "opsz" 60, "SOFT" 50;
+    border-bottom: 1px solid var(--rule);
+    position: relative;
+}
+.sidebar-header::before {
+    content: "◆";
+    color: var(--gold);
+    font-size: 9px;
+    font-style: normal;
+    margin-right: 8px;
+    vertical-align: 4px;
+}
+.sidebar-header::after {
+    content: "";
+    position: absolute;
+    left: 22px;
+    bottom: -1px;
+    width: 36px;
+    height: 2px;
+    background: var(--gold);
 }
 
 .nav-link {
     display: block;
-    padding: 12px 20px;
-    color: var(--text);
+    padding: 11px 22px;
+    color: var(--ink-soft);
     text-decoration: none;
-    font-size: 14px;
-    opacity: 0.7;
-    transition: opacity 0.15s, background 0.15s;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    opacity: 1;
+    border-left: 3px solid transparent;
+    padding-left: 19px;
+    transition: color 0.15s, background 0.15s, border-left-color 0.15s;
 }
 
 .nav-link:hover {
-    opacity: 1;
-    background: rgba(255, 255, 255, 0.03);
+    color: var(--ink);
+    background: var(--paper);
 }
 
 .nav-link.active {
-    opacity: 1;
-    font-weight: bold;
-    background: rgba(100, 181, 246, 0.08);
-    border-left: 3px solid var(--accent);
-    padding-left: 17px;
+    color: var(--ink);
+    background: var(--paper);
+    border-left-color: var(--gold);
+    font-weight: 700;
 }
 
 .sidebar-footer {
     margin-top: auto;
-    padding: 16px 20px;
-    border-top: 1px solid var(--panel-border);
+    padding: 16px 22px 20px;
+    border-top: 1px solid var(--rule);
+    background: var(--paper-deep);
 }
 
 .refresh-info {
-    font-size: 12px;
-    color: var(--text-secondary);
-    margin-bottom: 10px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-bottom: 12px;
 }
 
 .btn-refresh {
     width: 100%;
-    padding: 8px 16px;
-    background: var(--accent);
-    color: var(--bg);
-    border: none;
-    border-radius: 4px;
+    padding: 9px 16px;
+    background: var(--gold);
+    color: var(--paper);
+    border: 1px solid var(--gold);
+    border-radius: 2px;
     cursor: pointer;
-    font-weight: bold;
-    font-size: 13px;
-    transition: opacity 0.15s;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    box-shadow: 0 1px 0 var(--gold-deep);
+    transition: background 0.15s, border-color 0.15s;
 }
 
-.btn-refresh:hover { opacity: 0.9; }
-.btn-refresh:disabled { opacity: 0.5; cursor: default; }
+.btn-refresh:hover {
+    background: var(--gold-deep);
+    border-color: var(--gold-deep);
+}
+.btn-refresh:disabled {
+    background: var(--paper-tint);
+    border-color: var(--rule-strong);
+    color: var(--ink-faint);
+    cursor: default;
+    box-shadow: none;
+}
+
+/* Logout link inline-styled in base.html — reads as ink-soft via tokens */
+.sidebar-footer a[href*="logout"] {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 10px !important;
+    font-weight: 600;
+    letter-spacing: 0.14em !important;
+    text-transform: uppercase;
+    color: var(--ink-faint) !important;
+    transition: color 0.15s;
+}
+.sidebar-footer a[href*="logout"]:hover {
+    color: var(--trail-deep) !important;
+}
 
 .content {
     flex: 1;
@@ -177,7 +270,7 @@ body {
 .data-table td {
     padding: 8px 6px;
     text-align: center;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    border-bottom: 1px solid var(--rule);
 }
 
 .data-table tr:last-child td { border-bottom: none; }
@@ -192,15 +285,16 @@ td.cat-bottom { color: var(--danger); font-weight: bold; }
 
 /* Stat-distance coloring for standings cells.
    Template sets exactly one of --pos / --neg in [0, 1] per cell;
-   cells with neither render neutral. Peak alpha 0.25 matches the
-   prior rank-top / rank-bottom look. */
+   cells with neither render neutral. Retoned to olive (lead) /
+   burgundy (trail) so the signal lives on cream. The .page-standings
+   wrapper layers a slightly different intensity over this default. */
 td[style*="--pos"] {
-    background: rgba(34, 197, 94, calc(var(--pos) * 0.25));
-    color: color-mix(in srgb, var(--text-primary), #4ade80 calc(var(--pos) * 70%));
+    background: rgba(92, 122, 46, calc(var(--pos) * 0.20));
+    color: color-mix(in srgb, var(--ink), var(--lead-deep) calc(var(--pos) * 70%));
 }
 td[style*="--neg"] {
-    background: rgba(239, 68, 68, calc(var(--neg) * 0.25));
-    color: color-mix(in srgb, var(--text-primary), #f87171 calc(var(--neg) * 70%));
+    background: rgba(139, 44, 44, calc(var(--neg) * 0.20));
+    color: color-mix(in srgb, var(--ink), var(--trail-deep) calc(var(--neg) * 70%));
 }
 
 .total-col { color: var(--accent); font-weight: bold; }
@@ -227,33 +321,36 @@ td[style*="--neg"] {
     font-weight: bold;
 }
 
-.badge-success { background: var(--success); color: #fff; }
-.badge-warning { background: var(--warning); color: #1a1a1a; }
-.badge-danger { background: var(--danger); color: #fff; }
-.badge-info { background: rgba(100, 181, 246, 0.2); color: var(--accent); }
-.badge-il { background: #c62828; color: #fff; }
+.badge-success { background: var(--lead); color: var(--paper); border-radius: 2px; font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; padding: 2px 7px; }
+.badge-warning { background: var(--gold); color: var(--paper); border-radius: 2px; font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; padding: 2px 7px; }
+.badge-danger  { background: var(--trail); color: var(--paper); border-radius: 2px; font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; padding: 2px 7px; }
+.badge-info    { background: var(--gold-soft); color: var(--gold-deep); border: 1px solid var(--gold); border-radius: 2px; font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; padding: 1px 6px; }
+.badge-il      { background: var(--trail); color: var(--paper); border-radius: 2px; font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; padding: 2px 6px; }
 
 .btn-optimize {
     padding: 8px 18px;
     border: none;
-    border-radius: 4px;
-    font-weight: bold;
-    font-size: 13px;
+    border-radius: 2px;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
     cursor: pointer;
 }
 
-.btn-optimize.available { background: var(--success); color: #fff; }
-.btn-optimize.optimal { background: #555; color: #aaa; cursor: default; }
+.btn-optimize.available { background: var(--gold); color: var(--paper); border: 1px solid var(--gold); }
+.btn-optimize.optimal   { background: transparent; color: var(--lead-deep); border: 1px solid var(--lead); cursor: default; }
 
 .moves-banner {
-    background: rgba(100, 181, 246, 0.1);
-    border: 1px solid rgba(100, 181, 246, 0.3);
-    border-radius: 6px;
+    background: var(--paper-tint);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--gold);
+    border-radius: 2px;
     padding: 14px;
     margin: 12px 0;
 }
 
-.moves-banner h4 { color: var(--accent); font-size: 13px; margin-bottom: 10px; }
+.moves-banner h4 { color: var(--gold-deep); font-size: 10.5px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 10px; }
 
 .move-row {
     display: flex;
@@ -278,14 +375,14 @@ td[style*="--neg"] {
     border-radius: 6px;
 }
 
-.trade-send { background: rgba(239, 83, 80, 0.08); }
-.trade-receive { background: rgba(102, 187, 106, 0.08); }
+.trade-send    { background: var(--trail-soft); }
+.trade-receive { background: var(--lead-soft); }
 
-.trade-arrow { font-size: 20px; color: var(--text-secondary); }
+.trade-arrow { font-size: 20px; color: var(--ink-soft); }
 
 .trade-details {
     margin-top: 12px;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-top: 1px solid var(--rule);
     padding-top: 12px;
     display: none;
 }
@@ -294,24 +391,24 @@ td[style*="--neg"] {
 
 .trade-pitch {
     margin-top: 10px;
-    background: #252530;
-    border-radius: 6px;
+    background: var(--paper-tint);
+    border-radius: 2px;
     padding: 12px;
     font-size: 12px;
     font-style: italic;
-    color: #ccc;
-    border-left: 3px solid var(--accent);
+    color: var(--ink-soft);
+    border-left: 3px solid var(--gold);
 }
 
 .expandable { cursor: pointer; }
-.expandable:hover { background: rgba(255, 255, 255, 0.02); }
+.expandable:hover { background: var(--gold-soft); }
 
 .expand-content {
     display: none;
     padding: 8px 6px 8px 24px;
     font-size: 12px;
-    color: var(--text-secondary);
-    background: rgba(0, 0, 0, 0.15);
+    color: var(--ink-soft);
+    background: var(--paper-tint);
 }
 
 .expand-content.open { display: table-row; }
@@ -327,14 +424,14 @@ td[style*="--neg"] {
 .cat-gain { color: var(--success); }
 .cat-loss { color: var(--danger); }
 
-.totals-row { border-bottom: 2px solid var(--border); }
-.bench-row { opacity: 0.5; }
-.il-active-row { background: rgba(239, 83, 80, 0.06); }
+.totals-row { border-bottom: 2px solid var(--rule-strong); }
+.bench-row { opacity: 0.55; }
+.il-active-row { background: var(--trail-soft); }
 
 ::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: var(--bg); }
-::-webkit-scrollbar-thumb { background: var(--panel-border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+::-webkit-scrollbar-track { background: var(--paper-tint); }
+::-webkit-scrollbar-thumb { background: var(--rule-strong); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--gold); }
 
 @media (max-width: 768px) {
     .layout { flex-direction: column; }
@@ -353,18 +450,23 @@ td[style*="--neg"] {
     .sidebar-header {
         padding: 4px 8px;
         border-bottom: none;
-        font-size: 14px;
+        font-size: 16px;
     }
+    .sidebar-header::after { display: none; }
+    .sidebar { box-shadow: inset 0 -2px 0 -1px var(--gold); }
 
     .nav-link {
-        padding: 6px 12px;
-        font-size: 13px;
+        padding: 6px 10px;
+        font-size: 10px;
+        border-left: none;
+        padding-left: 10px;
     }
 
     .nav-link.active {
         border-left: none;
-        border-bottom: 2px solid var(--accent);
-        padding-left: 12px;
+        border-bottom: 2px solid var(--gold);
+        padding-left: 10px;
+        background: transparent;
     }
 
     .sidebar-footer {
@@ -383,12 +485,13 @@ td[style*="--neg"] {
     .content { padding: 16px; }
 }
 
-/* Stat color coding (shared by lineup and waivers/trades pages) */
-.stat-hot-2 { color: #22c55e; font-weight: 600; background: rgba(34, 197, 94, 0.15); }
-.stat-hot-1 { color: #86efac; background: rgba(134, 239, 172, 0.08); }
+/* Stat color coding (used by lineup partials; .page-lineup adds bolder
+   per-page overrides). Retoned for the paper palette. */
+.stat-hot-2 { color: var(--lead-deep); font-weight: 700; background: rgba(92, 122, 46, 0.18); }
+.stat-hot-1 { color: var(--lead-deep); background: rgba(92, 122, 46, 0.08); }
 .stat-neutral { }
-.stat-cold-1 { color: #fca5a5; background: rgba(252, 165, 165, 0.08); }
-.stat-cold-2 { color: #ef4444; font-weight: 600; background: rgba(239, 68, 68, 0.15); }
+.stat-cold-1 { color: var(--trail-deep); background: rgba(139, 44, 44, 0.08); }
+.stat-cold-2 { color: var(--trail-deep); font-weight: 700; background: rgba(139, 44, 44, 0.18); }
 
 /* ROS deviation indicators — shows how much actual+ROS has shifted from preseason in SGP units */
 .stat-ros-up, .stat-ros-down { position: relative; }
@@ -397,11 +500,11 @@ td[style*="--neg"] {
     top: 1px;
     right: 2px;
     font-size: 8px;
-    opacity: 0.7;
+    opacity: 0.85;
     line-height: 1;
 }
-.stat-ros-up::after { color: #22c55e; }
-.stat-ros-down::after { color: #ef4444; }
+.stat-ros-up::after { color: var(--lead); }
+.stat-ros-down::after { color: var(--trail); }
 .stat-ros-up.stat-ros-1::after { content: "+"; }
 .stat-ros-up.stat-ros-2::after { content: "++"; }
 .stat-ros-up.stat-ros-3::after { content: "+++"; }
@@ -502,10 +605,8 @@ td[style*="--neg"] {
     margin: -24px -32px;     /* counter the .content padding so paper bleeds edge-to-edge */
     padding: 40px 48px 64px;
     min-height: calc(100vh + 24px);
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.6),
-        0 0 0 1px var(--paper-edge),
-        0 24px 48px -16px rgba(0, 0, 0, 0.55);
+    /* Body is now also cream — page differentiates by bg only. */
+    box-shadow: none;
     /* faint paper grain */
     background-image:
         radial-gradient(circle at 20% 10%, rgba(184, 134, 11, 0.04), transparent 60%),
@@ -901,10 +1002,8 @@ td[style*="--neg"] {
     margin: -24px -32px;
     padding: 32px 44px 56px;
     min-height: calc(100vh + 24px);
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.6),
-        0 0 0 1px var(--paper-edge),
-        0 24px 48px -16px rgba(0, 0, 0, 0.55);
+    /* Body is now also cream — page differentiates by bg only. */
+    box-shadow: none;
     background-image:
         radial-gradient(circle at 20% 10%, rgba(184, 134, 11, 0.04), transparent 60%),
         radial-gradient(circle at 80% 90%, rgba(184, 134, 11, 0.03), transparent 50%);
@@ -1477,10 +1576,8 @@ td[style*="--neg"] {
     margin: -24px -32px;
     padding: 32px 44px 56px;
     min-height: calc(100vh + 24px);
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.6),
-        0 0 0 1px var(--paper-edge),
-        0 24px 48px -16px rgba(0, 0, 0, 0.55);
+    /* Body is now also cream — page differentiates by bg only. */
+    box-shadow: none;
     background-image:
         radial-gradient(circle at 20% 10%, rgba(184, 134, 11, 0.04), transparent 60%),
         radial-gradient(circle at 80% 90%, rgba(184, 134, 11, 0.03), transparent 50%);
@@ -1992,10 +2089,8 @@ td[style*="--neg"] {
     margin: -24px -32px;
     padding: 32px 44px 56px;
     min-height: calc(100vh + 24px);
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.6),
-        0 0 0 1px var(--paper-edge),
-        0 24px 48px -16px rgba(0, 0, 0, 0.55);
+    /* Body is now also cream — page differentiates by bg only. */
+    box-shadow: none;
     background-image:
         radial-gradient(circle at 20% 10%, rgba(184, 134, 11, 0.04), transparent 60%),
         radial-gradient(circle at 80% 90%, rgba(184, 134, 11, 0.03), transparent 50%);
@@ -2360,4 +2455,440 @@ td[style*="--neg"] {
     .page-players .page-header h2 { font-size: 36px; }
     .page-players .data-table th { font-size: 9px; padding: 7px 3px 5px; }
     .page-players .data-table td { padding: 6px 3px; font-size: 11.5px; }
+}
+
+/* =====================================================================
+   LUCK / TRANSACTIONS / LOGS — shared paper-page base + bespoke blocks
+   Each block sits on the same paper sheet as the other pages but adds
+   its own typography and component theming.
+   ===================================================================== */
+
+.page-luck,
+.page-transactions,
+.page-logs {
+    background: var(--paper);
+    color: var(--ink);
+    margin: -24px -32px;
+    padding: 32px 44px 56px;
+    min-height: calc(100vh + 24px);
+    background-image:
+        radial-gradient(circle at 20% 10%, rgba(184, 134, 11, 0.04), transparent 60%),
+        radial-gradient(circle at 80% 90%, rgba(184, 134, 11, 0.03), transparent 50%);
+    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    letter-spacing: 0.005em;
+}
+
+/* Shared masthead — luck has a bare <h2>, the others have .page-header
+   wrapping. Treat them the same way visually. */
+.page-luck > h2,
+.page-transactions .page-header,
+.page-logs .page-header {
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--rule);
+    position: relative;
+}
+.page-luck > h2::after,
+.page-transactions .page-header::after,
+.page-logs .page-header::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -1px;
+    width: 80px;
+    height: 3px;
+    background: var(--gold);
+}
+.page-luck > h2,
+.page-transactions .page-header h2,
+.page-logs .page-header h2 {
+    font-family: 'Fraunces', 'Times New Roman', serif !important;
+    font-style: italic;
+    font-weight: 400 !important;
+    font-size: 52px !important;
+    line-height: 0.95;
+    letter-spacing: -0.025em !important;
+    color: var(--ink) !important;
+    font-variation-settings: "opsz" 144, "SOFT" 50;
+    margin-bottom: 0 !important;
+}
+.page-luck > h2::before {
+    /* No ::before, use ::after for the period dot. We place the gold dot
+       inline by appending a span via ::after, but content already used
+       above for the gold rule. So apply via direct CSS marker: */
+}
+.page-transactions .page-header h2::after,
+.page-logs .page-header h2::after {
+    content: ".";
+    color: var(--gold);
+    font-style: normal;
+}
+/* Luck's bare h2 — emulate the period-dot via inline gold "." */
+.page-luck > h2 {
+    /* Done via ::before content because ::after is already the gold rule */
+}
+
+/* ── LUCK ─────────────────────────────────────────────────────────── */
+
+.page-luck > p {
+    color: var(--ink-soft) !important;
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 14px !important;
+    margin-bottom: 18px;
+    max-width: 720px;
+    line-height: 1.5;
+}
+
+.page-luck .spoe-table {
+    width: 100%;
+    border-collapse: collapse;
+    border-top: 2px solid var(--ink);
+    border-bottom: 1px solid var(--ink);
+    font-feature-settings: "tnum" 1, "lnum" 1;
+}
+.page-luck .spoe-table th {
+    text-align: right;
+    padding: 10px 10px 8px;
+    color: var(--ink-soft) !important;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 700;
+    font-size: 10.5px !important;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--rule-strong) !important;
+}
+.page-luck .spoe-table td {
+    text-align: right;
+    padding: 10px;
+    border-bottom: 1px solid var(--rule);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 13px;
+    color: var(--ink);
+}
+.page-luck .spoe-table th:first-child,
+.page-luck .spoe-table td:first-child {
+    text-align: left;
+}
+.page-luck .spoe-table td:nth-child(2) {
+    text-align: left;
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 14px;
+}
+.page-luck .spoe-table tr {
+    border-bottom: none;
+}
+
+.page-luck .spoe-positive { color: var(--lead-deep) !important; font-weight: 700; }
+.page-luck .spoe-negative { color: var(--trail-deep) !important; font-weight: 700; }
+.page-luck .rank-num { color: var(--ink-faint) !important; font-family: 'Fraunces', serif; font-weight: 500; font-size: 15px; }
+
+.page-luck .expandable { cursor: pointer; }
+.page-luck .expandable:hover { background: var(--gold-soft); }
+.page-luck .expand-content { display: none; }
+.page-luck .expand-content.open { display: table-row; }
+.page-luck .expand-content > td {
+    background: var(--paper-tint);
+    padding: 12px 18px !important;
+    border-bottom: 1px solid var(--rule);
+}
+.page-luck .detail-table {
+    width: 100%;
+    margin: 4px 0;
+    border-collapse: collapse;
+}
+.page-luck .detail-table th {
+    text-align: right !important;
+    color: var(--ink-soft) !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-weight: 700 !important;
+    font-size: 9.5px !important;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 6px 8px !important;
+    border-bottom: 1px solid var(--rule-strong);
+}
+.page-luck .detail-table th:first-child { text-align: left !important; }
+.page-luck .detail-table td {
+    padding: 6px 8px !important;
+    text-align: right !important;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11.5px;
+    border-bottom: 1px solid var(--rule);
+}
+.page-luck .detail-table td:first-child { text-align: left !important; font-family: 'DM Sans', sans-serif; font-weight: 500; }
+
+/* ── TRANSACTIONS ─────────────────────────────────────────────────── */
+
+.page-transactions .data-table {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    border-top: 2px solid var(--ink);
+    border-bottom: 1px solid var(--ink);
+    font-size: 12.5px;
+    overflow: visible;
+    font-feature-settings: "tnum" 1, "lnum" 1;
+}
+.page-transactions .data-table th {
+    background: transparent;
+    color: var(--ink-soft);
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    padding: 10px 6px 8px;
+    border-bottom: 1px solid var(--rule-strong);
+}
+.page-transactions .data-table td {
+    padding: 9px 6px;
+    border-bottom: 1px solid var(--rule);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12.5px;
+    color: var(--ink);
+}
+.page-transactions .data-table .team-name {
+    text-align: left;
+    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-weight: 500;
+    font-size: 14px;
+    font-variation-settings: "opsz" 30;
+    color: var(--ink) !important;
+}
+.page-transactions .data-table tr.user-team {
+    background: linear-gradient(to right, var(--gold-soft), transparent 60%);
+    box-shadow: inset 4px 0 0 var(--gold);
+}
+.page-transactions .data-table tr.user-team .team-name {
+    color: var(--gold-deep) !important;
+    font-style: italic;
+    font-weight: 600;
+}
+.page-transactions .data-table tr.user-team .team-name::before {
+    content: "◆ ";
+    font-size: 10px;
+    color: var(--gold);
+    vertical-align: 2px;
+    font-style: normal;
+}
+
+.page-transactions .txn-summary { cursor: pointer; }
+.page-transactions .txn-summary:hover { background: var(--gold-soft); }
+.page-transactions .txn-detail { display: none; }
+.page-transactions .txn-detail.open { display: table-row; }
+.page-transactions .txn-detail > td {
+    background: var(--paper-tint);
+    padding: 0 !important;
+}
+.page-transactions .txn-inner-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11.5px;
+}
+.page-transactions .txn-inner-table th {
+    color: var(--ink-soft) !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-weight: 700 !important;
+    font-size: 9.5px !important;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 8px 12px !important;
+    border-bottom: 1px solid var(--rule-strong);
+}
+.page-transactions .txn-inner-table td {
+    padding: 7px 12px !important;
+    border-bottom: 1px solid var(--rule);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11.5px;
+    color: var(--ink);
+}
+.page-transactions .value-positive { color: var(--lead-deep) !important; font-weight: 700; }
+.page-transactions .value-negative { color: var(--trail-deep) !important; font-weight: 700; }
+.page-transactions .badge-paired {
+    background: var(--gold-soft) !important;
+    color: var(--gold-deep) !important;
+    border: 1px solid var(--gold);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 9.5px !important;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 1px 6px !important;
+    border-radius: 2px !important;
+}
+
+.page-transactions .placeholder-text {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 16px;
+    color: var(--ink-soft);
+}
+
+/* ── LOGS ─────────────────────────────────────────────────────────── */
+
+.page-logs .log-filters {
+    display: flex;
+    gap: 0;
+    margin-bottom: 18px;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 0;
+}
+.page-logs .log-filters .pill {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    color: var(--ink-soft);
+    opacity: 1;
+    padding: 8px 18px 10px;
+    margin-bottom: -1px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+    cursor: pointer;
+}
+.page-logs .log-filters .pill:first-child { padding-left: 0; }
+.page-logs .log-filters .pill:hover { color: var(--ink); }
+.page-logs .log-filters .pill.active {
+    color: var(--ink);
+    border-bottom-color: var(--gold);
+}
+
+.page-logs .log-card {
+    background: var(--paper-tint);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--rule-strong);
+    border-radius: 2px;
+    margin-bottom: 8px;
+    transition: border-left-color 0.15s;
+}
+.page-logs .log-card:has(.badge-ok) { border-left-color: var(--lead); }
+.page-logs .log-card:has(.badge-error) { border-left-color: var(--trail); }
+
+.page-logs .log-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 16px;
+    cursor: pointer;
+    user-select: none;
+}
+.page-logs .log-header:hover { background: var(--gold-soft); }
+
+.page-logs .log-job {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-weight: 500;
+    font-size: 15px;
+    color: var(--ink);
+    min-width: 130px;
+}
+.page-logs .log-time {
+    color: var(--ink-soft);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11.5px;
+    flex: 1;
+}
+.page-logs .log-duration {
+    color: var(--ink-faint);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11.5px;
+    letter-spacing: 0.04em;
+}
+
+.page-logs .badge-ok {
+    background: var(--lead-soft) !important;
+    color: var(--lead-deep) !important;
+    border: 1px solid var(--lead);
+    border-radius: 2px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 9.5px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 2px 8px !important;
+}
+.page-logs .badge-error {
+    background: var(--trail-soft) !important;
+    color: var(--trail-deep) !important;
+    border: 1px solid var(--trail);
+    border-radius: 2px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 9.5px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 2px 8px !important;
+}
+
+.page-logs .log-body {
+    display: none;
+    padding: 0 18px 14px;
+    border-top: 1px solid var(--rule);
+}
+.page-logs .log-body.open { display: block; }
+
+.page-logs .log-entries {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11.5px;
+    line-height: 1.65;
+    color: var(--ink-soft);
+    padding-top: 10px;
+}
+.page-logs .log-entry-time {
+    color: var(--gold-deep);
+    margin-right: 10px;
+    font-weight: 500;
+}
+
+.page-logs .log-error-msg {
+    background: var(--trail-soft) !important;
+    border: 1px solid var(--trail);
+    border-left: 3px solid var(--trail);
+    color: var(--trail-deep) !important;
+    padding: 10px 14px !important;
+    border-radius: 2px;
+    margin: 10px 0;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11.5px;
+}
+
+/* "Fetch ROS Projections" CTA — uses .btn-refresh which is already
+   gold-filled globally. Keep the inline width-auto override but tighten
+   the spacing to match the editorial header. */
+.page-logs .page-header #fetch-ros-btn {
+    font-size: 10.5px !important;
+    letter-spacing: 0.14em !important;
+}
+.page-logs .page-header #fetch-ros-status {
+    color: var(--ink-soft) !important;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px !important;
+    letter-spacing: 0.04em;
+}
+
+.page-logs .placeholder-text {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 16px;
+    color: var(--ink-soft);
+}
+
+/* Narrow viewports — collapse paddings */
+@media (max-width: 768px) {
+    .page-luck, .page-transactions, .page-logs {
+        margin: -16px;
+        padding: 22px 18px 36px;
+    }
+    .page-luck > h2,
+    .page-transactions .page-header h2,
+    .page-logs .page-header h2 { font-size: 36px !important; }
+    .page-logs .log-header { flex-wrap: wrap; gap: 8px; }
+    .page-logs .log-time { flex: none; min-width: 0; }
 }

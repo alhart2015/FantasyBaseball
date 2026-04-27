@@ -1,19 +1,14 @@
 {% extends "season/base.html" %}
 {% block content %}
 <style>
+/* Layout-only rules; theming lives in season.css under .page-transactions. */
 .txn-summary { cursor: pointer; }
-.txn-summary:hover { background: var(--row-highlight); }
 .txn-detail { display: none; }
 .txn-detail.open { display: table-row; }
-.txn-detail td { padding: 0; }
-.txn-inner-table { width: 100%; font-size: 12px; }
-.txn-inner-table td { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.03); }
-.txn-inner-table tr:last-child td { border-bottom: none; }
-.value-positive { color: var(--success); font-weight: 600; }
-.value-negative { color: var(--danger); font-weight: 600; }
-.badge-paired { background: rgba(100,181,246,0.15); color: var(--accent); font-size: 10px; padding: 2px 6px; border-radius: 3px; }
+.txn-inner-table { width: 100%; }
 </style>
 
+<div class="page-transactions">
 <div class="page-header">
     <h2>Transaction Analyzer</h2>
 </div>
@@ -109,4 +104,5 @@ function toggleTxnDetail(row) {
 </script>
 
 {% endif %}
+</div>
 {% endblock %}

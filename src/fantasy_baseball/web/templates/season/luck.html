@@ -4,24 +4,13 @@
 
 {% block content %}
 <style>
-    .spoe-table { width: 100%; border-collapse: collapse; }
-    .spoe-table th, .spoe-table td { padding: 8px 12px; text-align: right; }
-    .spoe-table th:first-child, .spoe-table td:first-child { text-align: left; }
-    .spoe-table th { border-bottom: 2px solid var(--panel-border); color: var(--text-dim); font-size: 0.85em; text-transform: uppercase; }
-    .spoe-table tr { border-bottom: 1px solid var(--panel-border); }
-    .spoe-positive { color: var(--success); }
-    .spoe-negative { color: var(--danger); }
+    /* Layout-only rules; theming lives in season.css under .page-luck. */
     .expandable { cursor: pointer; }
-    .expandable:hover { background: rgba(255,255,255,0.03); }
     .expand-content { display: none; }
     .expand-content.open { display: table-row; }
-    .expand-content td { padding: 4px 12px; font-size: 0.9em; }
-    .detail-table { width: 100%; margin: 4px 0; }
-    .detail-table th { font-size: 0.8em; }
-    .detail-table td { padding: 4px 8px; }
-    .rank-num { color: var(--text-dim); }
 </style>
 
+<div class="page-luck">
 <h2>Luck Analysis (SPOE)</h2>
 {% if snapshot_date %}
 <p style="color: var(--text-dim); font-size: 0.9em;">
@@ -90,6 +79,8 @@
 {% else %}
 <p style="color: var(--text-dim);">No SPOE data yet. Run a dashboard refresh to compute standings luck analysis.</p>
 {% endif %}
+
+</div>
 
 <script>
 function toggleExpand(row) {
