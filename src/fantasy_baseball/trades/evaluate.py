@@ -150,6 +150,28 @@ def apply_swap_delta(
     return projected
 
 
+def build_swap_standings(
+    drop_player: Player,
+    add_player: Player,
+    projected_standings: ProjectedStandings,
+    user_team_name: str,
+) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]]]:
+    """Apply a one-for-one swap to projected standings; return (before, after).
+
+    Both dicts are ``{team_name: {STAT_CODE: float}}`` in the uppercase-keyed
+    shape ``apply_swap_delta`` operates on. The "before" map is the current
+    projected end-of-season totals; "after" replaces the user team's row with
+    the post-swap projection. Other teams are unchanged (shared dict references
+    — callers must not mutate them).
+    """
+    loses_ros = player_rest_of_season_stats(drop_player)
+    gains_ros = player_rest_of_season_stats(add_player)
+    all_before = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
+    all_after = dict(all_before)
+    all_after[user_team_name] = apply_swap_delta(all_before[user_team_name], loses_ros, gains_ros)
+    return all_before, all_after
+
+
 def compute_trade_impact(
     standings: Standings,
     hart_name: str,

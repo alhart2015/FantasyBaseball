@@ -293,3 +293,21 @@ class Player:
         if self.rest_of_season is not None:
             d.update(self.rest_of_season.to_dict())
         return d
+
+    def is_on_il(self) -> bool:
+        """True if the player is on the IL by Yahoo status or selected slot.
+
+        Yahoo roster data has three production shapes that all mean IL:
+          - status='IL10' + slot='BN' (bench-slotted IL — status check catches it)
+          - status='IL15' + slot='IL' (formally on IL — both checks catch it)
+          - status=''     + slot='IL' (freshly slotted, status not yet propagated
+            — only the slot check catches it)
+        Either signal alone is enough.
+        """
+        from fantasy_baseball.models.positions import IL_SLOTS
+        from fantasy_baseball.utils.constants import IL_STATUSES
+
+        if self.status in IL_STATUSES:
+            return True
+        slot = self.selected_position
+        return slot is not None and slot in IL_SLOTS

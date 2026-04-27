@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from fantasy_baseball.lineup.delta_roto import compute_delta_roto
+from fantasy_baseball.lineup.delta_roto import score_swap
 from fantasy_baseball.lineup.optimizer import (
     HitterAssignment,
     PitcherStarter,
@@ -15,11 +15,12 @@ from fantasy_baseball.lineup.optimizer import (
     optimize_pitcher_lineup,
 )
 from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
-from fantasy_baseball.models.positions import IL_SLOTS
 from fantasy_baseball.models.standings import ProjectedStandings
+from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
-from fantasy_baseball.utils.constants import IL_STATUSES, Category
+from fantasy_baseball.trades.evaluate import apply_swap_delta, player_rest_of_season_stats
+from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.utils.positions import can_cover_slots
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,14 @@ POSITION_POOL_SIZES: dict[str, int] = {
 RP_SV_THRESHOLD = 5
 
 
+def _is_starter(p: Player) -> bool:
+    return isinstance(p.rest_of_season, PitcherStats) and p.rest_of_season.sv < RP_SV_THRESHOLD
+
+
+def _is_reliever(p: Player) -> bool:
+    return isinstance(p.rest_of_season, PitcherStats) and p.rest_of_season.sv >= RP_SV_THRESHOLD
+
+
 def build_position_pools(
     free_agents: list[Player],
     denoms: dict[Category, float] | None = None,
@@ -62,19 +71,9 @@ def build_position_pools(
     pools: dict[str, list[Player]] = {}
     for pos, n in POSITION_POOL_SIZES.items():
         if pos == "SP":
-            eligible = [
-                fa
-                for fa in free_agents
-                if isinstance(fa.rest_of_season, PitcherStats)
-                and fa.rest_of_season.sv < RP_SV_THRESHOLD
-            ]
+            eligible = [fa for fa in free_agents if _is_starter(fa)]
         elif pos == "RP":
-            eligible = [
-                fa
-                for fa in free_agents
-                if isinstance(fa.rest_of_season, PitcherStats)
-                and fa.rest_of_season.sv >= RP_SV_THRESHOLD
-            ]
+            eligible = [fa for fa in free_agents if _is_reliever(fa)]
         else:
             eligible = [fa for fa in free_agents if pos in fa.positions]
         eligible.sort(
@@ -119,16 +118,8 @@ def worst_roster_by_position(
         if eligible:
             result[pos] = min(eligible, key=_sgp).name
 
-    sps = [
-        p
-        for p in roster
-        if isinstance(p.rest_of_season, PitcherStats) and p.rest_of_season.sv < RP_SV_THRESHOLD
-    ]
-    rps = [
-        p
-        for p in roster
-        if isinstance(p.rest_of_season, PitcherStats) and p.rest_of_season.sv >= RP_SV_THRESHOLD
-    ]
+    sps = [p for p in roster if _is_starter(p)]
+    rps = [p for p in roster if _is_reliever(p)]
     if sps:
         result["SP"] = min(sps, key=_sgp).name
     if rps:
@@ -146,7 +137,7 @@ def fa_target_positions(
     Hitters: their Yahoo positions intersected with hitter source positions.
     Pitchers: SP or RP based on projected saves (``RP_SV_THRESHOLD``).
     """
-    if player_type == PlayerType.PITCHER.value or player_type == "pitcher":
+    if player_type == PlayerType.PITCHER:
         return ["SP" if sv < RP_SV_THRESHOLD else "RP"]
     return [p for p in positions if p in HITTER_SOURCE_POSITIONS]
 
@@ -200,21 +191,7 @@ class AuditEntry:
     candidates: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "player": self.player,
-            "player_type": self.player_type,
-            "positions": self.positions,
-            "slot": self.slot,
-            "player_sgp": self.player_sgp,
-            "player_id": self.player_id,
-            "best_fa": self.best_fa,
-            "best_fa_type": self.best_fa_type,
-            "best_fa_positions": self.best_fa_positions,
-            "best_fa_sgp": self.best_fa_sgp,
-            "best_fa_id": self.best_fa_id,
-            "gap": self.gap,
-            "candidates": self.candidates,
-        }
+        return asdict(self)
 
 
 def audit_roster(
@@ -252,29 +229,9 @@ def audit_roster(
     if not roster:
         return []
 
-    def _is_il(player) -> bool:
-        """A player is on IL if either the status string or the
-        selected_position slot indicates IL.
-
-        Covers three production shapes seen in Yahoo roster data:
-          - Soto: selected_position='BN' + status='IL10' — the
-            status check catches this (bench-slotted IL player).
-          - Strider: selected_position='IL' + status='IL15' — both
-            checks catch this (formally in the IL slot).
-          - Hader: selected_position='IL' + status='' — only the
-            slot check catches this (Yahoo sometimes omits status
-            on freshly-slotted IL players).
-        """
-        if player.status in IL_STATUSES:
-            return True
-        slot = player.selected_position
-        if slot is None:
-            return False
-        return slot in IL_SLOTS
-
-    active_roster = [p for p in roster if not _is_il(p)]
-    il_players = [p for p in roster if _is_il(p)]
-    active_fas = [fa for fa in free_agents if not _is_il(fa)]
+    active_roster = [p for p in roster if not p.is_on_il()]
+    il_players = [p for p in roster if p.is_on_il()]
+    active_fas = [fa for fa in free_agents if not fa.is_on_il()]
 
     denoms = get_sgp_denominators()
 
@@ -322,6 +279,15 @@ def audit_roster(
 
     p_slots = roster_slots.get("P", 9)
 
+    # Hoist the swap-invariant baseline out of the per-FA loop. score_roto_dict
+    # over 12 teams x 10 categories is the dominant cost in the audit; without
+    # this it ran ~250 times when only the after-swap result actually changes.
+    # Same pattern as draft.eroto_recs.rank_candidates.
+    all_before = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
+    roto_before = score_roto_dict(all_before, team_sds=team_sds)
+    user_before_stats = all_before[team_name]
+    loses_ros_cache: dict[int, dict[str, Any]] = {}
+
     entries: list[AuditEntry] = []
     for player in active_roster:
         entry = AuditEntry(
@@ -359,14 +325,15 @@ def audit_roster(
                 continue
 
             try:
-                dr = compute_delta_roto(
-                    drop_name=player.name,
-                    add_player=fa,
-                    user_roster=roster,
-                    projected_standings=projected_standings,
-                    team_name=team_name,
-                    team_sds=team_sds,
-                )
+                loses_ros = loses_ros_cache.get(id(player))
+                if loses_ros is None:
+                    loses_ros = player_rest_of_season_stats(player)
+                    loses_ros_cache[id(player)] = loses_ros
+                gains_ros = player_rest_of_season_stats(fa)
+                all_after = dict(all_before)
+                all_after[team_name] = apply_swap_delta(user_before_stats, loses_ros, gains_ros)
+                roto_after = score_roto_dict(all_after, team_sds=team_sds)
+                dr = score_swap(roto_before, roto_after, team_name)
             except (ValueError, KeyError) as exc:
                 logger.warning(
                     "deltaRoto failed for %s → %s: %s",
@@ -402,12 +369,10 @@ def audit_roster(
             entry.best_fa_sgp = top["sgp"]
             entry.best_fa_id = top["player_id"]
             entry.gap = top["gap"]
-        # else: best_fa stays None, gap stays 0.0 — "No upgrade available"
 
         entries.append(entry)
 
-    # Sort entries by top-candidate deltaRoto desc (entries with best_fa=None
-    # sort to the bottom).
+    # best_fa=None entries sort to the bottom (-inf key).
     entries.sort(
         key=lambda e: (
             e.candidates[0]["delta_roto"]["total"] if e.best_fa is not None else float("-inf")
@@ -415,7 +380,6 @@ def audit_roster(
         reverse=True,
     )
 
-    # Add IL players at the end — they can't be swapped
     for player in il_players:
         entries.append(
             AuditEntry(

@@ -764,26 +764,19 @@ def compute_comparison_standings(
     dicts (the shape :func:`apply_swap_delta` operates on and that the
     Flask/JSON boundary expects).
     """
+    from fantasy_baseball.lineup.delta_roto import score_swap
     from fantasy_baseball.scoring import score_roto_dict
-    from fantasy_baseball.trades.evaluate import (
-        apply_swap_delta,
-        find_player_by_name,
-        player_rest_of_season_stats,
-    )
+    from fantasy_baseball.trades.evaluate import build_swap_standings, find_player_by_name
 
     dropped = find_player_by_name(roster_player_name, user_roster)
     if dropped is None:
         return {"error": f"Player '{roster_player_name}' not found on roster"}
 
-    loses_ros = player_rest_of_season_stats(roster_player_projection or dropped)
-    gains_ros = player_rest_of_season_stats(other_player)
-
-    all_stats_before = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
-    all_stats_after = dict(all_stats_before)
-    all_stats_after[user_team_name] = apply_swap_delta(
-        all_stats_before[user_team_name],
-        loses_ros,
-        gains_ros,
+    all_stats_before, all_stats_after = build_swap_standings(
+        roster_player_projection or dropped,
+        other_player,
+        projected_standings,
+        user_team_name,
     )
 
     roto_before = score_roto_dict(all_stats_before)
@@ -791,8 +784,6 @@ def compute_comparison_standings(
 
     ev_roto_before = score_roto_dict(all_stats_before, team_sds=team_sds)
     ev_roto_after = score_roto_dict(all_stats_after, team_sds=team_sds)
-
-    from fantasy_baseball.lineup.delta_roto import score_swap
 
     delta_roto = score_swap(ev_roto_before, ev_roto_after, user_team_name)
 
