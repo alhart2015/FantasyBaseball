@@ -3,39 +3,14 @@
 {% block content %}
 
 <style>
-.audit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.audit-table th {
-    text-align: left; font-size: 11px; color: var(--text-secondary);
-    font-weight: 500; text-transform: uppercase; padding: 6px 8px;
-    border-bottom: 1px solid var(--panel-border);
-}
-.audit-table td { padding: 8px; border-bottom: 1px solid var(--panel-border); }
+/* Layout-only rules; theming lives in season.css under .page-roster-audit. */
 .audit-row { cursor: pointer; }
-.audit-row:hover { background: rgba(255, 255, 255, 0.03); }
-.audit-row.has-upgrade { background: rgba(251, 191, 36, 0.05); }
-.audit-row.has-upgrade:hover { background: rgba(251, 191, 36, 0.10); }
-.gap-badge {
-    font-weight: 600; font-size: 12px; padding: 2px 8px;
-    border-radius: 3px; display: inline-block;
-}
-.gap-high { background: rgba(239, 68, 68, 0.15); color: #fca5a5; }
-.gap-medium { background: rgba(251, 191, 36, 0.15); color: #fcd34d; }
-.gap-low { background: rgba(34, 197, 94, 0.15); color: #86efac; }
-.gap-none { color: var(--text-secondary); font-size: 12px; }
 .audit-detail { display: none; }
 .audit-detail.open { display: table-row; }
-.audit-detail td { padding: 12px 8px; background: rgba(0,0,0,0.2); }
-.cat-impact { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
-.cat-gain { color: var(--success); font-size: 11px; font-weight: 600; }
-.cat-loss { color: var(--danger); font-size: 11px; font-weight: 600; }
-.player-pos { color: var(--text-secondary); font-size: 11px; margin-left: 4px; }
-.player-type-tag {
-    font-size: 10px; padding: 1px 5px; border-radius: 3px;
-    background: rgba(255,255,255,0.08); color: var(--text-secondary);
-    margin-left: 4px;
-}
+.cat-impact { display: flex; flex-wrap: wrap; margin-top: 6px; }
 </style>
 
+<div class="page-roster-audit">
 <div class="page-header">
     <h2>Roster Audit</h2>
     {% if meta and meta.get('week') %}
@@ -92,7 +67,7 @@
         <td>
             {% if entry.candidates and entry.candidates[0].delta_roto %}
             {% set dr = entry.candidates[0].delta_roto.total %}
-            <span class="gap-badge {% if dr >= 1.0 %}gap-low{% elif dr > 0 %}gap-medium{% else %}gap-high{% endif %}">
+            <span class="gap-badge {% if dr >= 1.0 %}gap-positive{% elif dr > 0 %}gap-marginal{% else %}gap-negative{% endif %}">
                 {{ "%+.2f"|format(dr) }}
             </span>
             {% else %}
@@ -129,7 +104,7 @@
                     </td>
                     <td style="text-align:right">{{ "%.2f"|format(c.sgp) }}</td>
                     <td style="text-align:right">
-                        <span class="gap-badge {% if c.gap >= 0.5 %}gap-high{% elif c.gap >= 0.2 %}gap-medium{% else %}gap-low{% endif %}">
+                        <span class="gap-badge {% if c.gap >= 0.5 %}gap-positive{% elif c.gap > 0 %}gap-marginal{% else %}gap-negative{% endif %}">
                             {{ "%+.2f"|format(c.gap) }}
                         </span>
                     </td>
@@ -159,6 +134,8 @@
     </tbody>
 </table>
 {% endif %}
+
+</div>
 
 <script>
 function toggleAuditDetail(id) {
