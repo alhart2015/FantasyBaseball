@@ -8,6 +8,7 @@ from fantasy_baseball.models.standings import (
 )
 from fantasy_baseball.trades.evaluate import (
     aggregate_player_stats,
+    apply_swap_delta,
     compute_roto_points,
     compute_roto_points_by_cat,
     compute_trade_impact,
@@ -268,3 +269,61 @@ def test_aggregate_empty_list_returns_zeros():
         "ab": 0,
         "ip": 0,
     }
+
+
+def test_swap_delta_uses_ros_only_not_full_season():
+    """A swap of cold-YTD Soto-archetype for hot-YTD Cruz-archetype should
+    score by ROS-remaining only, not by full-season totals that double-count
+    YTD already locked into team standings.
+
+    Setup: Hart's projected end-of-season R=900 (CategoryStats baseline).
+    Soto-archetype: 3 R YTD, 87 R remaining (full-season would be 90).
+    Cruz-archetype: 19 R YTD, 68 R remaining (full-season would be 87).
+    Swapping Cruz out for Soto should bump Hart's projected R by +19
+    (Soto's 87 in vs Cruz's 68 out), NOT +3 (the full-season diff that
+    would double-count YTD already locked in).
+    """
+    current = {
+        "R": 900.0,
+        "HR": 200.0,
+        "RBI": 800.0,
+        "SB": 100.0,
+        "AVG": 0.260,
+        "W": 80.0,
+        "K": 1300.0,
+        "SV": 40.0,
+        "ERA": 3.80,
+        "WHIP": 1.20,
+    }
+    cruz_ros_only = {
+        "R": 68,
+        "HR": 22,
+        "RBI": 64,
+        "SB": 7,
+        "AVG": 0.255,
+        "ab": 400,
+        "ip": 0,
+        "W": 0,
+        "K": 0,
+        "SV": 0,
+        "ERA": 0,
+        "WHIP": 0,
+    }
+    soto_ros_only = {
+        "R": 87,
+        "HR": 29,
+        "RBI": 79,
+        "SB": 14,
+        "AVG": 0.290,
+        "ab": 432,
+        "ip": 0,
+        "W": 0,
+        "K": 0,
+        "SV": 0,
+        "ERA": 0,
+        "WHIP": 0,
+    }
+
+    after = apply_swap_delta(current, loses_ros=cruz_ros_only, gains_ros=soto_ros_only)
+    assert after["R"] == 900.0 - 68 + 87
+    assert after["R"] - current["R"] == 19  # NOT 3 (which would be full-season diff)
