@@ -1,6 +1,7 @@
 {% extends "season/base.html" %}
 {% block title %}Standings — Season Dashboard{% endblock %}
 {% block content %}
+<div class="page-standings">
 <div class="page-header">
     <h2>Standings</h2>
     {% if meta and meta.get('week') %}
@@ -546,29 +547,10 @@ document.addEventListener('DOMContentLoaded', () => {
 </script>
 
 <style>
-.sd-bound {
-    opacity: 0.45;
-    font-size: 0.85em;
-}
-
-/* Clickable stat cells under Projected → Current in Stat Totals mode */
-.proj-current-cell.mode-stats {
-    cursor: pointer;
-}
-.proj-current-cell.mode-stats:hover {
-    background-color: rgba(255, 255, 255, 0.08);
-}
-
+/* Layout-only rules for the breakdown modal. Theming lives in season.css. */
+.proj-current-cell.mode-stats { cursor: pointer; }
 #breakdown-modal {
-    border: 1px solid var(--border, #333);
-    border-radius: 8px;
-    padding: 1rem 1.25rem;
     max-width: 560px;
-    background: var(--bg-panel, #1a1a1a);
-    color: var(--fg, #eee);
-}
-#breakdown-modal::backdrop {
-    background: rgba(0, 0, 0, 0.5);
 }
 .breakdown-modal-head {
     display: flex;
@@ -579,13 +561,11 @@ document.addEventListener('DOMContentLoaded', () => {
 .breakdown-close {
     background: transparent;
     border: none;
-    color: inherit;
     font-size: 1.5rem;
     cursor: pointer;
     line-height: 1;
 }
 .breakdown-modal-total {
-    opacity: 0.75;
     margin: 0 0 0.75rem 0;
 }
 .breakdown-modal-table {
@@ -595,15 +575,11 @@ document.addEventListener('DOMContentLoaded', () => {
 .breakdown-status-badge {
     display: inline-block;
     padding: 2px 6px;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    background: var(--bg-subtle, #2a2a2a);
-}
-.breakdown-status-badge.no-projection {
-    background: var(--warning, #663);
-    color: #fff;
+    border-radius: 3px;
+    font-size: 0.7rem;
 }
 </style>
 
 {% endif %}
+</div>
 {% endblock %}
