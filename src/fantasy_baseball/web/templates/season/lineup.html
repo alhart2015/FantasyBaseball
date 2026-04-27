@@ -3,32 +3,24 @@
 {% block content %}
 
 <style>
+/* Layout-only rules. Page theming lives in season.css under .page-lineup. */
 .section-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     margin: 20px 0 10px;
 }
-.section-header h3 {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text);
-}
-
 .stat-cell { position: relative; cursor: default; }
 .stat-cell .tooltip {
-    display: none; position: fixed;
-    background: var(--panel-bg, #1a1a2e); border: 1px solid var(--panel-border, #3a3a5e);
-    border-radius: 6px; padding: 10px 14px; font-size: 11px; white-space: nowrap;
-    z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.5); min-width: 180px; text-align: left;
+    display: none;
+    position: fixed;
+    z-index: 100;
+    white-space: nowrap;
 }
-.tooltip-row { display: flex; justify-content: space-between; padding: 2px 0; }
-.tooltip-label { color: var(--text-secondary, #8888aa); }
-.tooltip-val { font-weight: 500; }
-.tooltip-divider { border-top: 1px solid var(--panel-border, #2a2a3e); margin: 4px 0; }
-.pa-col { color: var(--text-secondary) !important; font-size: 12px; }
+.pa-col { font-size: 12px; }
 </style>
 
+<div class="page-lineup">
 <div class="page-header">
     <h2>Lineup</h2>
     {% if teams %}
@@ -220,6 +212,7 @@
 {% endif %}
 
 {% endif %}
+</div>
 
 <script>
 var userTeamKey = "{{ user_team_key }}";
