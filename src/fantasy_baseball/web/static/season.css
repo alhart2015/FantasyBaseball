@@ -462,3 +462,404 @@ td[style*="--neg"] {
 .rank-tooltip-label {
     color: var(--text-secondary);
 }
+
+/* =====================================================================
+   STANDINGS — Editorial Sports Almanac (white & gold)
+   Scoped under .page-standings so other pages keep their dark theme.
+   The intensity system (cells with --pos / --neg from team.color_intensity)
+   is preserved; the rules below override the dark-theme tints with
+   desaturated olive/burgundy that harmonize with cream + gold.
+   ===================================================================== */
+
+.page-standings {
+    /* paper + ink */
+    --paper:        #F8F5EE;
+    --paper-edge:   #EFE9D8;
+    --paper-tint:   #F2EDE0;
+    --ink:          #1A1612;
+    --ink-soft:     #6B6258;
+    --ink-faint:    #9A8F7E;
+    --rule:         #E1D9C4;
+    --rule-strong:  #B8AC8E;
+
+    /* gold spectrum */
+    --gold:         #B8860B;
+    --gold-deep:    #7C5A0A;
+    --gold-bright:  #D4A933;
+    --gold-soft:    rgba(184, 134, 11, 0.10);
+    --silver:       #8E8B85;
+    --bronze:       #9C6B3F;
+
+    /* leading / trailing — desaturated to live next to gold */
+    --lead:         #5C7A2E;
+    --lead-deep:    #3F5A1A;
+    --trail:        #8B2C2C;
+    --trail-deep:   #5F1F1F;
+
+    /* paper sheet on dark workspace */
+    background: var(--paper);
+    color: var(--ink);
+    margin: -24px -32px;     /* counter the .content padding so paper bleeds edge-to-edge */
+    padding: 40px 48px 64px;
+    min-height: calc(100vh + 24px);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.6),
+        0 0 0 1px var(--paper-edge),
+        0 24px 48px -16px rgba(0, 0, 0, 0.55);
+    /* faint paper grain */
+    background-image:
+        radial-gradient(circle at 20% 10%, rgba(184, 134, 11, 0.04), transparent 60%),
+        radial-gradient(circle at 80% 90%, rgba(184, 134, 11, 0.03), transparent 50%);
+    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+    font-size: 14px;
+    letter-spacing: 0.005em;
+}
+
+/* ── Masthead ──────────────────────────────────────────────────────── */
+
+.page-standings .page-header {
+    align-items: flex-end;
+    margin-bottom: 28px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--rule);
+    position: relative;
+}
+.page-standings .page-header::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -1px;
+    width: 96px;
+    height: 3px;
+    background: var(--gold);
+}
+.page-standings .page-header h2 {
+    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-style: italic;
+    font-weight: 400;
+    font-size: 64px;
+    line-height: 0.95;
+    letter-spacing: -0.025em;
+    color: var(--ink);
+    font-variation-settings: "opsz" 144, "SOFT" 50;
+}
+.page-standings .page-header h2::after {
+    content: ".";
+    color: var(--gold);
+    font-style: normal;
+}
+.page-standings .week-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    padding-bottom: 10px;
+}
+.page-standings .week-label::before {
+    content: "◆ ";
+    color: var(--gold);
+    font-size: 9px;
+    vertical-align: 2px;
+    margin-right: 4px;
+}
+
+/* ── Editorial tabs (replacing the dark "pills") ──────────────────── */
+
+.page-standings .pill-group {
+    gap: 0;
+    margin-bottom: 18px;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 0;
+}
+.page-standings .pill {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    color: var(--ink-soft);
+    opacity: 1;
+    padding: 8px 18px 10px;
+    margin-bottom: -1px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+}
+.page-standings .pill:first-child { padding-left: 0; }
+.page-standings .pill:hover {
+    color: var(--ink);
+    opacity: 1;
+}
+.page-standings .pill.active {
+    color: var(--ink);
+    background: transparent;
+    border-bottom-color: var(--gold);
+}
+
+/* Nested sub-toggle groups sit closer to their content */
+.page-standings #current-sub-toggle,
+.page-standings #proj-tab-toggle,
+.page-standings #proj-preseason-sub,
+.page-standings #proj-current-sub,
+.page-standings #mc-tab-toggle {
+    margin-top: 8px;
+    margin-bottom: 14px;
+    border-bottom: 1px solid var(--rule);
+}
+
+/* ── The standings table ──────────────────────────────────────────── */
+
+.page-standings .data-table {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    border-top: 2px solid var(--ink);
+    border-bottom: 1px solid var(--ink);
+    font-size: 13px;
+    overflow: visible;
+    font-feature-settings: "tnum" 1, "lnum" 1;
+}
+
+.page-standings .data-table th {
+    background: transparent;
+    color: var(--ink-soft);
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 700;
+    font-size: 10.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    padding: 10px 6px 8px;
+    border-bottom: 1px solid var(--rule-strong);
+}
+
+.page-standings .data-table td {
+    padding: 10px 6px;
+    border-bottom: 1px solid var(--rule);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 13px;
+    color: var(--ink);
+}
+
+.page-standings .data-table .team-name {
+    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-weight: 500;
+    font-size: 15px;
+    font-variation-settings: "opsz" 30;
+    letter-spacing: 0;
+    color: var(--ink);
+    padding-left: 4px;
+}
+.page-standings .data-table .team-name a {
+    color: inherit !important;
+    border-bottom-color: var(--rule) !important;
+}
+.page-standings .data-table .team-name a:hover {
+    border-bottom-color: var(--gold) !important;
+}
+
+/* Rank column: bigger, serif, gold for top three */
+.page-standings .data-table tbody td:first-child {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 17px;
+    color: var(--ink-faint);
+    width: 36px;
+    padding-left: 4px;
+}
+.page-standings .data-table tbody tr:nth-child(1) td:first-child { color: var(--gold); }
+.page-standings .data-table tbody tr:nth-child(2) td:first-child { color: var(--silver); }
+.page-standings .data-table tbody tr:nth-child(3) td:first-child { color: var(--bronze); }
+
+/* User team row — unmissable but tasteful */
+.page-standings .data-table tr.user-team {
+    background:
+        linear-gradient(to right, var(--gold-soft), transparent 60%);
+    box-shadow: inset 4px 0 0 var(--gold);
+}
+.page-standings .data-table tr.user-team .team-name {
+    color: var(--gold-deep);
+    font-style: italic;
+    font-weight: 600;
+}
+.page-standings .data-table tr.user-team .team-name::before {
+    content: "◆ ";
+    font-size: 10px;
+    color: var(--gold);
+    vertical-align: 2px;
+    font-style: normal;
+}
+.page-standings .data-table tr.user-team td {
+    color: var(--ink);
+}
+
+/* Total column: thicker rule + gold ink */
+.page-standings .data-table th.total-col,
+.page-standings .data-table td.total-col {
+    border-left: 2px solid var(--ink);
+    color: var(--gold-deep);
+    font-weight: 600;
+    font-size: 14px;
+    padding-left: 12px;
+}
+
+/* Intensity tints — desaturated olive (lead) / burgundy (trail).
+   The template still sets --pos or --neg in [0, 1]; we just retune
+   the alpha and ink so the cells read as warm stains on cream paper. */
+.page-standings .data-table td[style*="--pos"] {
+    background: rgba(92, 122, 46, calc(var(--pos) * 0.18));
+    color: color-mix(in srgb, var(--ink), var(--lead-deep) calc(var(--pos) * 75%));
+}
+.page-standings .data-table td[style*="--neg"] {
+    background: rgba(139, 44, 44, calc(var(--neg) * 0.18));
+    color: color-mix(in srgb, var(--ink), var(--trail-deep) calc(var(--neg) * 75%));
+}
+
+/* In current-mode "Roto Points" cells, keep the totals subtle.
+   The total-col override above wins for the rightmost column. */
+
+.page-standings td.cat-top    { color: var(--lead-deep); font-weight: 700; }
+.page-standings td.cat-bottom { color: var(--trail-deep); font-weight: 700; }
+
+/* MC sub-cards (category risk) blend with paper rather than hover above */
+.page-standings .card {
+    background: var(--paper-tint);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    box-shadow: inset 3px 0 0 var(--gold);
+    padding: 18px 20px;
+}
+.page-standings .card h3 {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-weight: 500;
+    color: var(--ink) !important;   /* override inline color: var(--warning) on Category Risk header */
+    font-size: 18px;
+    letter-spacing: -0.01em;
+}
+
+.page-standings .baseline-caption {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    opacity: 1 !important;
+}
+
+.page-standings .placeholder-text {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 16px;
+    color: var(--ink-soft);
+    padding: 32px 0;
+}
+
+.page-standings .sd-bound {
+    color: var(--ink-faint);
+    font-size: 0.78em;
+    letter-spacing: 0;
+}
+
+/* Click-to-drilldown hover state */
+.page-standings .proj-current-cell.mode-stats:hover {
+    background-color: var(--gold-soft) !important;
+    box-shadow: inset 0 -2px 0 var(--gold);
+}
+
+/* Breakdown modal — re-skinned for paper */
+.page-standings #breakdown-modal,
+#breakdown-modal {
+    background: var(--paper, #F8F5EE);
+    color: var(--ink, #1A1612);
+    border: 1px solid var(--rule-strong, #B8AC8E);
+    border-top: 3px solid var(--gold, #B8860B);
+    border-radius: 2px;
+    box-shadow: 0 24px 48px -8px rgba(0, 0, 0, 0.45);
+    padding: 22px 28px;
+    font-family: 'DM Sans', sans-serif;
+}
+#breakdown-modal::backdrop {
+    background: rgba(26, 22, 18, 0.55);
+}
+#breakdown-modal-title {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-weight: 500;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+}
+.breakdown-modal-total {
+    color: var(--ink-soft, #6B6258);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity: 1;
+}
+.breakdown-modal-table th {
+    color: var(--ink-soft, #6B6258);
+    border-bottom: 1px solid var(--rule-strong, #B8AC8E);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-size: 10px;
+}
+.breakdown-modal-table td {
+    border-bottom: 1px solid var(--rule, #E1D9C4);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.breakdown-status-badge {
+    background: var(--paper-tint, #F2EDE0);
+    color: var(--ink-soft, #6B6258);
+    border: 1px solid var(--rule, #E1D9C4);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+}
+.breakdown-status-badge.no-projection {
+    background: rgba(184, 134, 11, 0.18);
+    color: var(--gold-deep, #7C5A0A);
+    border-color: var(--gold, #B8860B);
+}
+.breakdown-close {
+    color: var(--ink-soft);
+    transition: color 0.15s;
+}
+.breakdown-close:hover { color: var(--gold-deep); }
+
+/* Subtle row reveal on first paint — staggered */
+@keyframes pageStandingsRowEnter {
+    from { opacity: 0; transform: translateY(3px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.page-standings tbody tr {
+    animation: pageStandingsRowEnter 0.32s ease-out backwards;
+}
+.page-standings tbody tr:nth-child(1)  { animation-delay: 0.02s; }
+.page-standings tbody tr:nth-child(2)  { animation-delay: 0.05s; }
+.page-standings tbody tr:nth-child(3)  { animation-delay: 0.08s; }
+.page-standings tbody tr:nth-child(4)  { animation-delay: 0.11s; }
+.page-standings tbody tr:nth-child(5)  { animation-delay: 0.14s; }
+.page-standings tbody tr:nth-child(6)  { animation-delay: 0.17s; }
+.page-standings tbody tr:nth-child(7)  { animation-delay: 0.20s; }
+.page-standings tbody tr:nth-child(8)  { animation-delay: 0.23s; }
+.page-standings tbody tr:nth-child(9)  { animation-delay: 0.26s; }
+.page-standings tbody tr:nth-child(10) { animation-delay: 0.29s; }
+.page-standings tbody tr:nth-child(11) { animation-delay: 0.32s; }
+.page-standings tbody tr:nth-child(12) { animation-delay: 0.35s; }
+@media (prefers-reduced-motion: reduce) {
+    .page-standings tbody tr { animation: none; }
+}
+
+/* Tighter spacing on narrow viewports — the masthead would otherwise dominate */
+@media (max-width: 768px) {
+    .page-standings {
+        margin: -16px;
+        padding: 24px 20px 40px;
+    }
+    .page-standings .page-header h2 { font-size: 44px; }
+    .page-standings .data-table th  { font-size: 9.5px; padding: 8px 4px 6px; }
+    .page-standings .data-table td  { padding: 8px 4px; font-size: 12px; }
+}
