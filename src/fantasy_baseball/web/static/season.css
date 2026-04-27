@@ -2892,3 +2892,312 @@ td[style*="--neg"] {
     .page-logs .log-header { flex-wrap: wrap; gap: 8px; }
     .page-logs .log-time { flex: none; min-width: 0; }
 }
+
+/* =====================================================================
+   ROSTER AUDIT — Editorial Sports Almanac (white & gold)
+   "Did we identify a better player on the waiver wire for this slot?"
+   Load-bearing signal is the gap-badge traffic-light: HIGH (red) means
+   bad/risky, LOW (green) means good/easy upgrade. Retoned to paper
+   palette while preserving the semantic.
+   ===================================================================== */
+
+.page-roster-audit {
+    background: var(--paper);
+    color: var(--ink);
+    margin: -24px -32px;
+    padding: 32px 44px 56px;
+    min-height: calc(100vh + 24px);
+    background-image:
+        radial-gradient(circle at 20% 10%, rgba(184, 134, 11, 0.04), transparent 60%),
+        radial-gradient(circle at 80% 90%, rgba(184, 134, 11, 0.03), transparent 50%);
+    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    letter-spacing: 0.005em;
+}
+
+/* ── Masthead ──────────────────────────────────────────────────────── */
+
+.page-roster-audit .page-header {
+    align-items: flex-end;
+    margin-bottom: 20px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--rule);
+    position: relative;
+}
+.page-roster-audit .page-header::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -1px;
+    width: 80px;
+    height: 3px;
+    background: var(--gold);
+}
+.page-roster-audit .page-header h2 {
+    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-style: italic;
+    font-weight: 400;
+    font-size: 52px;
+    line-height: 0.95;
+    letter-spacing: -0.025em;
+    color: var(--ink);
+    font-variation-settings: "opsz" 144, "SOFT" 50;
+}
+.page-roster-audit .page-header h2::after {
+    content: ".";
+    color: var(--gold);
+    font-style: normal;
+}
+.page-roster-audit .week-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    padding-bottom: 8px;
+}
+.page-roster-audit .week-label::before {
+    content: "◆ ";
+    color: var(--gold);
+    font-size: 9px;
+    vertical-align: 2px;
+    margin-right: 4px;
+}
+
+/* The summary lede paragraph above the table */
+.page-roster-audit > p {
+    font-family: 'Fraunces', serif !important;
+    font-style: italic;
+    font-size: 14px !important;
+    color: var(--ink-soft) !important;
+    max-width: 720px;
+    line-height: 1.5;
+    margin-bottom: 18px !important;
+}
+
+/* ── Audit table ──────────────────────────────────────────────────── */
+
+.page-roster-audit .audit-table {
+    width: 100%;
+    border-collapse: collapse;
+    border-top: 2px solid var(--ink);
+    border-bottom: 1px solid var(--ink);
+    font-feature-settings: "tnum" 1, "lnum" 1;
+}
+.page-roster-audit .audit-table th {
+    text-align: left;
+    color: var(--ink-soft) !important;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 700;
+    font-size: 10px !important;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    padding: 10px 8px 8px !important;
+    border-bottom: 1px solid var(--rule-strong) !important;
+}
+.page-roster-audit .audit-table td {
+    padding: 9px 8px !important;
+    border-bottom: 1px solid var(--rule) !important;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12.5px;
+    color: var(--ink);
+    vertical-align: middle;
+}
+/* Slot column — small caps DM Sans, like a positional label */
+.page-roster-audit .audit-table tbody td:first-child {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    width: 56px;
+}
+/* Player name columns (cols 2 and 4) — Fraunces */
+.page-roster-audit .audit-table tbody td:nth-child(2),
+.page-roster-audit .audit-table tbody td:nth-child(4) {
+    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-weight: 500;
+    font-size: 14px;
+    font-variation-settings: "opsz" 30;
+    color: var(--ink) !important;
+}
+/* …but inside the nested drilldown table, the first column should be
+   styled the same way — use a more specific selector because the
+   nested table is also .audit-table. */
+.page-roster-audit .audit-detail .audit-table tbody td:first-child {
+    font-family: 'Fraunces', serif !important;
+    font-weight: 500 !important;
+    font-size: 13px !important;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
+    color: var(--ink) !important;
+    width: auto !important;
+}
+.page-roster-audit .audit-detail .audit-table tbody td:nth-child(2),
+.page-roster-audit .audit-detail .audit-table tbody td:nth-child(3),
+.page-roster-audit .audit-detail .audit-table tbody td:nth-child(4) {
+    font-family: 'JetBrains Mono', ui-monospace, monospace !important;
+    font-size: 12px !important;
+}
+
+.page-roster-audit .audit-row { cursor: pointer; }
+.page-roster-audit .audit-row:hover { background: var(--gold-soft); }
+
+/* "Has upgrade" rows — faint gold wash + gold left rule (signal: pay
+   attention to this row, there's a swap available). */
+.page-roster-audit .audit-row.has-upgrade {
+    background: linear-gradient(to right, var(--gold-soft), transparent 70%);
+    box-shadow: inset 3px 0 0 var(--gold);
+}
+.page-roster-audit .audit-row.has-upgrade:hover {
+    background: linear-gradient(to right, rgba(184, 134, 11, 0.18), transparent 70%);
+}
+
+/* ── gap-badge traffic light (load-bearing signal) ────────────────── */
+/* Semantic note: in this template, .gap-low = green = "good" (easy
+   swap or big upgrade), .gap-high = red = "bad" (risky swap or no
+   upgrade), .gap-medium = yellow = "in between". Retoned but kept. */
+
+.page-roster-audit .gap-badge {
+    display: inline-block;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 700;
+    font-size: 10.5px !important;
+    letter-spacing: 0.06em;
+    padding: 3px 9px !important;
+    border-radius: 2px !important;
+    border: 1px solid transparent;
+}
+.page-roster-audit .gap-high {
+    background: var(--trail-soft) !important;
+    color: var(--trail-deep) !important;
+    border-color: var(--trail);
+}
+.page-roster-audit .gap-medium {
+    background: var(--gold-soft) !important;
+    color: var(--gold-deep) !important;
+    border-color: var(--gold);
+}
+.page-roster-audit .gap-low {
+    background: var(--lead-soft) !important;
+    color: var(--lead-deep) !important;
+    border-color: var(--lead);
+}
+.page-roster-audit .gap-none {
+    color: var(--ink-faint) !important;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px !important;
+    font-style: italic;
+}
+
+/* ── audit-detail expand drawer ───────────────────────────────────── */
+
+.page-roster-audit .audit-detail { display: none; }
+.page-roster-audit .audit-detail.open { display: table-row; }
+.page-roster-audit .audit-detail > td {
+    background: var(--paper-tint) !important;
+    padding: 14px 18px !important;
+    border-bottom: 1px solid var(--rule);
+}
+.page-roster-audit .audit-detail > td > div:first-child {
+    font-family: 'Fraunces', serif !important;
+    font-style: italic;
+    font-weight: 500 !important;
+    font-size: 14px !important;
+    color: var(--ink) !important;
+    margin-bottom: 10px !important;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--rule);
+}
+/* Nested audit-table in the drilldown — strip the outer borders to
+   blend with the paper-tint drawer. */
+.page-roster-audit .audit-detail .audit-table {
+    border-top: none !important;
+    border-bottom: none !important;
+}
+.page-roster-audit .audit-detail .audit-table th {
+    border-bottom: 1px solid var(--rule-strong) !important;
+    padding: 8px !important;
+}
+.page-roster-audit .audit-detail .audit-table td {
+    padding: 7px 8px !important;
+    font-size: 11.5px !important;
+}
+
+/* "Compare" pill link in the drilldown — gold outline */
+.page-roster-audit .audit-detail .pill {
+    background: transparent !important;
+    border: 1px solid var(--gold) !important;
+    border-radius: 2px !important;
+    color: var(--gold-deep) !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 9.5px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.14em !important;
+    text-transform: uppercase !important;
+    padding: 3px 10px !important;
+    opacity: 1 !important;
+    transition: background 0.15s, color 0.15s;
+    text-decoration: none !important;
+}
+.page-roster-audit .audit-detail .pill:hover {
+    background: var(--gold) !important;
+    color: var(--paper) !important;
+}
+
+/* Player pos / type tags — small caps DM Sans on cream */
+.page-roster-audit .player-pos {
+    color: var(--ink-faint) !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 10px !important;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-left: 6px !important;
+}
+.page-roster-audit .player-type-tag {
+    background: var(--paper-deep) !important;
+    color: var(--ink-soft) !important;
+    border: 1px solid var(--rule);
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 9px !important;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 1px 5px !important;
+    border-radius: 2px !important;
+    margin-left: 6px !important;
+}
+
+/* "—" placeholder when no upgrade is available */
+.page-roster-audit .audit-table td[style*="font-style: italic"] {
+    color: var(--ink-faint) !important;
+    font-family: 'Fraunces', serif !important;
+    font-size: 14px !important;
+}
+
+/* cat-gain / cat-loss already auto-resolve via the global token remap.
+   cat-impact spacing tightened to match the editorial density. */
+.page-roster-audit .cat-impact {
+    gap: 4px 12px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px;
+}
+.page-roster-audit .cat-gain { color: var(--lead-deep); font-weight: 600; }
+.page-roster-audit .cat-loss { color: var(--trail-deep); font-weight: 600; }
+
+.page-roster-audit .placeholder-text {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 16px;
+    color: var(--ink-soft);
+}
+
+/* Narrow viewports */
+@media (max-width: 768px) {
+    .page-roster-audit { margin: -16px; padding: 22px 18px 36px; }
+    .page-roster-audit .page-header h2 { font-size: 36px; }
+    .page-roster-audit .audit-table th { font-size: 9px !important; padding: 7px 4px 5px !important; }
+    .page-roster-audit .audit-table td { padding: 7px 4px !important; font-size: 11.5px; }
+}
