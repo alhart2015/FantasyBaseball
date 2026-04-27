@@ -322,6 +322,12 @@ def _blend_players(
         result["team"] = meta["team"]
     if "fg_id" in combined.columns and group_col != "fg_id":
         result["fg_id"] = combined.groupby(group_col)["fg_id"].first()
+    # Carry mlbam_id through as identity metadata (used by post-blend
+    # YTD normalization in ros_pipeline). first() picks any non-null
+    # value; mlbam_id is invariant per player across systems, so the
+    # tiebreak doesn't matter.
+    if "mlbam_id" in combined.columns:
+        result["mlbam_id"] = combined.groupby(group_col)["mlbam_id"].first()
 
     # ADP: weighted average of non-null values only
     # Use original group-normalized weights (not per-stat NaN-aware weights)
