@@ -259,7 +259,21 @@ class ProjectedStandings:
         team_rosters: Mapping[str, Any],
         effective_date: date,
     ) -> ProjectedStandings:
-        """Build from {team_name: roster_list} using project_team_stats."""
+        """Build from {team_name: roster_list} using project_team_stats.
+
+        ``ProjectedStandings`` projects end-of-season totals — read
+        ``full_season_projection`` (= ROS + YTD per player). The optimizer
+        and other forward-looking decision paths use the default
+        ``rest_of_season`` (ROS-only) instead so a hot-YTD player's locked
+        accumulated value doesn't bias start/sit and trade decisions.
+
+        TODO: Replace this approximation with current_standings + ROS
+        contribution when team-level YTD AB ingest lands. Yahoo standings
+        only surface AVG, not H/AB components, so the rate-stat
+        recombination can't be implemented correctly today. See
+        ``docs/feature_specs/ros_only_decision_projections.md`` Phase 3
+        scope reduction (deferred to follow-up).
+        """
         from fantasy_baseball.scoring import project_team_stats
 
         return cls(
@@ -267,7 +281,11 @@ class ProjectedStandings:
             entries=[
                 ProjectedStandingsEntry(
                     team_name=tname,
-                    stats=project_team_stats(roster, displacement=True),
+                    stats=project_team_stats(
+                        roster,
+                        displacement=True,
+                        projection_source="full_season_projection",
+                    ),
                 )
                 for tname, roster in team_rosters.items()
             ],
