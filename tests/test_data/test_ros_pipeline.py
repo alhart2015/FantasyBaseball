@@ -135,13 +135,21 @@ def test_blend_and_cache_ros_normalizes_using_redis_totals(
     fake_redis,
     monkeypatch,
 ):
-    """game_log_totals from Redis must be added to ROS counting stats.
+    """game_log_totals from Redis must be added to ROS counting stats — but
+    only into the cache:full_season_projections blob; the returned
+    DataFrame and cache:ros_projections must remain ROS-only.
 
-    The fixture has Aaron Judge (mlbam_id 592450) with ROS HR=45. If we
-    pre-seed game_log_totals with 10 accumulated HR, the blended output
-    must show HR=55 (the JSON round-trip stringifies keys; the pipeline
-    must coerce them back to int).
+    # updated: cache:ros_projections is ROS-only per ros_only_decision_projections.md
+    The fixture has Aaron Judge (mlbam_id 592450) with ROS HR=45. After
+    pre-seeding 10 accumulated HR, the returned (ROS) DataFrame must
+    still show HR=45, while cache:full_season_projections must show
+    HR=55 (45+10). Pre-fix this test asserted HR=55 on the returned
+    DataFrame because the pipeline pre-blend-normalized; the new
+    pipeline keeps the returned DataFrame ROS-only and emits the
+    YTD-added view through the typed full-season setter.
     """
+    import json
+
     _make_ros_tree(projections_dir, year=2026, date="2026-04-07")
 
     # 10 HR already accumulated for Aaron Judge.
@@ -173,17 +181,82 @@ def test_blend_and_cache_ros_normalizes_using_redis_totals(
         2026,
     )
 
+    # Returned DataFrame is ROS-only (no YTD added).
     judge = hitters_df[hitters_df["name"] == "Aaron Judge"]
     assert len(judge) == 1
-    # ROS 45 + actuals 10 = 55 full-season
-    assert judge.iloc[0]["hr"] == pytest.approx(55)
+    assert judge.iloc[0]["hr"] == pytest.approx(45)  # ROS-only HR
 
     cole = pitchers_df[pitchers_df["name"] == "Gerrit Cole"]
     assert len(cole) == 1
-    # ROS 15 W + actuals 5 W = 20 full-season
-    assert cole.iloc[0]["w"] == pytest.approx(20)
-    # ROS 240 K + actuals 60 K = 300 full-season
-    assert cole.iloc[0]["k"] == pytest.approx(300)
+    assert cole.iloc[0]["w"] == pytest.approx(15)  # ROS-only W
+    assert cole.iloc[0]["k"] == pytest.approx(240)  # ROS-only K
+
+    # cache:full_season_projections holds the YTD-added view.
+    full_raw = fake_redis.get("cache:full_season_projections")
+    assert full_raw is not None
+    full = json.loads(full_raw)
+    judge_full = next(p for p in full["hitters"] if p["name"] == "Aaron Judge")
+    cole_full = next(p for p in full["pitchers"] if p["name"] == "Gerrit Cole")
+    assert judge_full["hr"] == pytest.approx(55)  # 45 + 10
+    assert cole_full["w"] == pytest.approx(20)  # 15 + 5
+    assert cole_full["k"] == pytest.approx(300)  # 240 + 60
+
+
+def test_blend_writes_both_ros_and_full_season(tmp_path, monkeypatch):
+    """blend_and_cache_ros() must write BOTH cache:ros_projections (ROS-only)
+    AND cache:full_season_projections (with YTD added)."""
+    from fantasy_baseball.data import redis_store as rs
+    from fantasy_baseball.data.kv_store import SqliteKVStore, _reset_singleton
+    from fantasy_baseball.data.ros_pipeline import blend_and_cache_ros
+
+    monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(tmp_path / "kv.db"))
+    _reset_singleton()
+    kv = SqliteKVStore(tmp_path / "kv.db")
+    rs.set_game_log_totals(
+        kv,
+        "hitters",
+        {
+            "12345": {
+                "r": 30,
+                "hr": 5,
+                "rbi": 20,
+                "sb": 2,
+                "h": 30,
+                "ab": 100,
+                "pa": 110,
+                "name": "Test Hitter",
+            },
+        },
+    )
+    rs.set_game_log_totals(kv, "pitchers", {})
+
+    proj_dir = tmp_path / "projections"
+    date_dir = proj_dir / "2026" / "rest_of_season" / "2026-04-26"
+    date_dir.mkdir(parents=True)
+    (date_dir / "steamer-hitters.csv").write_text(
+        "fg_id,mlbam_id,Name,Team,PA,AB,R,HR,RBI,SB,H,AVG\n"
+        "x,12345,Test Hitter,X,440,400,100,25,75,8,110,0.275\n"
+    )
+    (date_dir / "steamer-pitchers.csv").write_text(
+        "fg_id,mlbam_id,Name,Team,IP,W,SO,SV,ER,BB,H,ERA,WHIP\n"
+    )
+
+    blend_and_cache_ros(
+        projections_dir=proj_dir,
+        systems=["steamer"],
+        weights=None,
+        roster_names=None,
+        season_year=2026,
+    )
+
+    ros = rs.get_ros_projections(kv)
+    full = rs.get_full_season_projections(kv)
+
+    assert ros is not None and full is not None
+    ros_row = next(p for p in ros["hitters"] if p.get("mlbam_id") == 12345)
+    full_row = next(p for p in full["hitters"] if p.get("mlbam_id") == 12345)
+    assert ros_row["r"] == 100.0, "ROS cache must be 100 (CSV value, no YTD added)"
+    assert full_row["r"] == 130.0, "Full-season cache must be 100+30=130"
 
 
 def test_blend_and_cache_ros_still_returns_dfs_when_redis_unconfigured(

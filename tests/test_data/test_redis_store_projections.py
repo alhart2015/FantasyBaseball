@@ -103,3 +103,49 @@ def test_get_ros_projections_returns_none_on_corrupt_json(fake_redis, caplog):
 def test_get_ros_projections_returns_none_on_non_dict_json(fake_redis):
     fake_redis.set("cache:ros_projections", '["unexpected", "list"]')
     assert redis_store.get_ros_projections(fake_redis) is None
+
+
+# --- get_full_season_projections / set_full_season_projections ---------------
+
+
+def test_full_season_projections_round_trip(tmp_path):
+    from fantasy_baseball.data import redis_store as rs
+    from fantasy_baseball.data.kv_store import SqliteKVStore
+
+    kv = SqliteKVStore(tmp_path / "kv.db")
+    rs.set_full_season_projections(
+        kv,
+        {
+            "hitters": [{"name": "A", "r": 100}],
+            "pitchers": [{"name": "B", "k": 200}],
+        },
+    )
+    got = rs.get_full_season_projections(kv)
+    assert got == {"hitters": [{"name": "A", "r": 100}], "pitchers": [{"name": "B", "k": 200}]}
+
+
+def test_full_season_projections_missing_returns_none(tmp_path):
+    from fantasy_baseball.data import redis_store as rs
+    from fantasy_baseball.data.kv_store import SqliteKVStore
+
+    kv = SqliteKVStore(tmp_path / "kv.db")
+    assert rs.get_full_season_projections(kv) is None
+
+
+def test_set_ros_projections_round_trip(tmp_path):
+    from fantasy_baseball.data import redis_store as rs
+    from fantasy_baseball.data.kv_store import SqliteKVStore
+
+    kv = SqliteKVStore(tmp_path / "kv.db")
+    rs.set_ros_projections(
+        kv,
+        {
+            "hitters": [{"name": "A", "r": 60}],
+            "pitchers": [{"name": "B", "k": 100}],
+        },
+    )
+    got = rs.get_ros_projections(kv)
+    assert got == {
+        "hitters": [{"name": "A", "r": 60}],
+        "pitchers": [{"name": "B", "k": 100}],
+    }

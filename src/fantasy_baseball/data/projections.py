@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 HITTING_COUNTING_COLS: list[str] = ["r", "hr", "rbi", "sb", "h", "ab", "pa"]
 PITCHING_COUNTING_COLS: list[str] = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
 
+
 def normalize_rest_of_season_to_full_season(
     df: pd.DataFrame,
     game_log_totals: dict[int, dict],
@@ -60,7 +61,9 @@ def normalize_rest_of_season_to_full_season(
         return df.copy()
 
     result = df.copy()
-    counting_cols = HITTING_COUNTING_COLS if player_type == PlayerType.HITTER else PITCHING_COUNTING_COLS
+    counting_cols = (
+        HITTING_COUNTING_COLS if player_type == PlayerType.HITTER else PITCHING_COUNTING_COLS
+    )
 
     # Coerce counting columns to float64 BEFORE adding actuals. Some
     # projection systems publish whole-number IP (zips, atc) so pandas
@@ -86,9 +89,7 @@ def normalize_rest_of_season_to_full_season(
     return result
 
 
-def validate_projections_dir(
-    projections_dir: Path, systems: list[str]
-) -> None:
+def validate_projections_dir(projections_dir: Path, systems: list[str]) -> None:
     """Validate that the projections directory exists and contains expected CSV files.
 
     Raises FileNotFoundError with an actionable message if the directory is
@@ -139,10 +140,7 @@ def validate_projections_dir(
             f"Directory {projections_dir} contains: {', '.join(found_files)}\n"
             f"\n"
             f"Expected files like:\n"
-            + "\n".join(
-                f"  - {s}-hitters.csv / {s}-pitchers.csv"
-                for s in missing_systems
-            )
+            + "\n".join(f"  - {s}-hitters.csv / {s}-pitchers.csv" for s in missing_systems)
             + f"\n"
             f"\n"
             f"To fix this:\n"
@@ -194,27 +192,21 @@ def blend_projections(
             hitters, pitchers = load_projection_set(projections_dir, system)
         except Exception as exc:
             import traceback
+
             if progress_cb:
-                progress_cb(
-                    f"ERROR loading {system}: {type(exc).__name__}: {exc}"
-                )
-                progress_cb(
-                    f"ERROR {system} traceback: "
-                    f"{traceback.format_exc().splitlines()[-5:]}"
-                )
+                progress_cb(f"ERROR loading {system}: {type(exc).__name__}: {exc}")
+                progress_cb(f"ERROR {system} traceback: {traceback.format_exc().splitlines()[-5:]}")
             continue
         if normalizer is not None:
             try:
                 hitters, pitchers = normalizer(system, hitters, pitchers)
             except Exception as exc:
                 import traceback
+
                 if progress_cb:
+                    progress_cb(f"ERROR normalizing {system}: {type(exc).__name__}: {exc}")
                     progress_cb(
-                        f"ERROR normalizing {system}: {type(exc).__name__}: {exc}"
-                    )
-                    progress_cb(
-                        f"ERROR {system} traceback: "
-                        f"{traceback.format_exc().splitlines()[-5:]}"
+                        f"ERROR {system} traceback: {traceback.format_exc().splitlines()[-5:]}"
                     )
                 continue
         system_dfs[system] = (hitters, pitchers)
@@ -280,9 +272,7 @@ def _blend_players(
     # Group by fg_id when available (robust against name variations
     # across systems, e.g. accented vs ASCII). Fall back to name.
     group_col = (
-        "fg_id"
-        if "fg_id" in combined.columns and combined["fg_id"].notna().all()
-        else "name"
+        "fg_id" if "fg_id" in combined.columns and combined["fg_id"].notna().all() else "name"
     )
 
     # Pre-multiply counting stats by normalized weight, then sum per group.
@@ -322,6 +312,12 @@ def _blend_players(
         result["team"] = meta["team"]
     if "fg_id" in combined.columns and group_col != "fg_id":
         result["fg_id"] = combined.groupby(group_col)["fg_id"].first()
+    # Carry mlbam_id through as identity metadata (used by post-blend
+    # YTD normalization in ros_pipeline). first() picks any non-null
+    # value; mlbam_id is invariant per player across systems, so the
+    # tiebreak doesn't matter.
+    if "mlbam_id" in combined.columns:
+        result["mlbam_id"] = combined.groupby(group_col)["mlbam_id"].first()
 
     # ADP: weighted average of non-null values only
     # Use original group-normalized weights (not per-stat NaN-aware weights)
@@ -334,11 +330,13 @@ def _blend_players(
         adp_vals[mask] = 0.0
         adp_nw[mask] = 0.0
 
-        adp_df = pd.DataFrame({
-            group_col: combined[group_col].values,
-            "_aw": adp_vals * adp_nw,
-            "_nw": adp_nw,
-        })
+        adp_df = pd.DataFrame(
+            {
+                group_col: combined[group_col].values,
+                "_aw": adp_vals * adp_nw,
+                "_nw": adp_nw,
+            }
+        )
         adp_agg = adp_df.groupby(group_col).sum()
         adp_result = adp_agg["_aw"] / adp_agg["_nw"]
         result["adp"] = adp_result.replace([np.inf, -np.inf, np.nan], float("inf"))
@@ -366,11 +364,61 @@ def _blend_pitchers(dfs: list[pd.DataFrame]) -> pd.DataFrame:
     return result
 
 
+def _build_full_season_index(
+    full_df: pd.DataFrame | None,
+) -> tuple[dict[int, dict], dict[str, dict]]:
+    """Index a full-season projections frame for O(1) per-player lookup.
+
+    Returns ``(by_mlbam, by_namenorm)`` — record dicts keyed first by
+    ``mlbam_id`` (identity, robust to accent/encoding differences)
+    and second by ``_name_norm`` (fallback for rows missing an id).
+    Either dict may be empty when the corresponding column is missing
+    or the frame is None/empty.
+    """
+    if full_df is None or full_df.empty:
+        return {}, {}
+    by_mlbam: dict[int, dict] = {}
+    if "mlbam_id" in full_df.columns:
+        for record in full_df.to_dict(orient="records"):
+            mid = record.get("mlbam_id")
+            if mid is None or pd.isna(mid):
+                continue
+            by_mlbam[int(mid)] = record
+    by_namenorm: dict[str, dict] = {}
+    if "_name_norm" in full_df.columns:
+        for record in full_df.to_dict(orient="records"):
+            nn = record.get("_name_norm")
+            if nn:
+                by_namenorm.setdefault(nn, record)
+    return by_mlbam, by_namenorm
+
+
+def _lookup_full_season_record(
+    proj_row: pd.Series,
+    name_norm: str,
+    by_mlbam: dict[int, dict],
+    by_namenorm: dict[str, dict],
+) -> dict | None:
+    """Look up a player's full-season (ROS+YTD) record using prebuilt indices.
+
+    Prefers ``mlbam_id`` (identity, immune to name encoding) and falls
+    back to ``_name_norm``. Returns the matched record dict or ``None``.
+    """
+    mlbam_id = proj_row.get("mlbam_id") if "mlbam_id" in proj_row.index else None
+    if mlbam_id is not None and not pd.isna(mlbam_id):
+        record = by_mlbam.get(int(mlbam_id))
+        if record is not None:
+            return record
+    return by_namenorm.get(name_norm)
+
+
 def match_roster_to_projections(
     roster: list[dict],
     hitters_proj: pd.DataFrame,
     pitchers_proj: pd.DataFrame,
     *,
+    full_hitters_proj: pd.DataFrame | None = None,
+    full_pitchers_proj: pd.DataFrame | None = None,
     context: str = "",
 ) -> list[Player]:
     """Match roster players to blended projections by normalized name.
@@ -392,9 +440,24 @@ def match_roster_to_projections(
     The ``context`` kwarg is included in log messages as a ``[context]``
     prefix to identify which call site produced the warning (e.g.
     ``"user"``, ``"opp:Sharks"``, ``"preseason"``, ``"ros"``).
+
+    ``hitters_proj``/``pitchers_proj`` carry ROS-only counting stats
+    (per ``cache:ros_projections`` after the ROS-only-decision-projections
+    fix). They populate ``Player.rest_of_season`` and drive every
+    forward-looking decision (lineup, waivers, trades, transactions).
+
+    ``full_hitters_proj``/``full_pitchers_proj`` are the optional
+    ROS+YTD blob (per ``cache:full_season_projections``). When provided,
+    each player's full-season counterpart row is looked up by ``mlbam_id``
+    (preferred) or ``_name_norm`` and assigned to
+    ``Player.full_season_projection`` — used for display and end-of-season
+    projected standings. Defaults to ``None``; legacy callers keep
+    working with ROS-only frames.
     """
     prefix = f"[{context}] " if context else ""
     matched: list[Player] = []
+    full_hitters_by_id, full_hitters_by_name = _build_full_season_index(full_hitters_proj)
+    full_pitchers_by_id, full_pitchers_by_name = _build_full_season_index(full_pitchers_proj)
     for player in roster:
         name = player["name"].replace(" (Batter)", "").replace(" (Pitcher)", "")
         name_norm = normalize_name(name)
@@ -408,7 +471,9 @@ def match_roster_to_projections(
                 if len(matches) > 1:
                     logger.warning(
                         "%sambiguous hitter match for %r — %d candidates, picked first",
-                        prefix, name, len(matches),
+                        prefix,
+                        name,
+                        len(matches),
                     )
                 proj = matches.iloc[0]
                 ptype = PlayerType.HITTER
@@ -418,7 +483,9 @@ def match_roster_to_projections(
                 if len(matches) > 1:
                     logger.warning(
                         "%sambiguous pitcher match for %r — %d candidates, picked first",
-                        prefix, name, len(matches),
+                        prefix,
+                        name,
+                        len(matches),
                     )
                 proj = matches.iloc[0]
                 ptype = PlayerType.PITCHER
@@ -432,14 +499,18 @@ def match_roster_to_projections(
                     ptype = pt
                     logger.warning(
                         "%s%r matched via fallback branch — positions=%r did not disambiguate",
-                        prefix, name, positions,
+                        prefix,
+                        name,
+                        positions,
                     )
                     break
 
         if proj is None or ptype is None:
             logger.warning(
                 "%sno projection match for %r (positions=%r)",
-                prefix, name, positions,
+                prefix,
+                name,
+                positions,
             )
             continue
 
@@ -449,11 +520,25 @@ def match_roster_to_projections(
         else:
             ros = PitcherStats.from_dict(proj.to_dict())
 
+        # Look up matching full-season (ROS+YTD) record if indices were built.
+        if ptype == PlayerType.HITTER:
+            full_record = _lookup_full_season_record(
+                proj, name_norm, full_hitters_by_id, full_hitters_by_name
+            )
+        else:
+            full_record = _lookup_full_season_record(
+                proj, name_norm, full_pitchers_by_id, full_pitchers_by_name
+            )
+
+        full_season_stats: HitterStats | PitcherStats | None = None
+        if full_record is not None:
+            if ptype == PlayerType.HITTER:
+                full_season_stats = HitterStats.from_dict(full_record)
+            else:
+                full_season_stats = PitcherStats.from_dict(full_record)
+
         # Parse positions and selected_position explicitly
-        parsed_positions = [
-            p if isinstance(p, Position) else Position.parse(p)
-            for p in positions
-        ]
+        parsed_positions = [p if isinstance(p, Position) else Position.parse(p) for p in positions]
         raw_slot = player.get("selected_position", "")
         if raw_slot is None or raw_slot == "":
             parsed_slot = None
@@ -470,6 +555,7 @@ def match_roster_to_projections(
             selected_position=parsed_slot,
             status=player.get("status", ""),
             rest_of_season=ros,
+            full_season_projection=full_season_stats,
         )
         matched.append(p)
 
@@ -481,6 +567,8 @@ def hydrate_roster_entries(
     hitters_proj: pd.DataFrame,
     pitchers_proj: pd.DataFrame,
     *,
+    full_hitters_proj: pd.DataFrame | None = None,
+    full_pitchers_proj: pd.DataFrame | None = None,
     context: str = "",
 ) -> list[Player]:
     """Convert a :class:`Roster`'s entries into ``list[Player]`` with
@@ -495,6 +583,11 @@ def hydrate_roster_entries(
     Unmatched entries are omitted, matching
     :func:`match_roster_to_projections`'s contract.
 
+    The ``full_hitters_proj``/``full_pitchers_proj`` kwargs forward the
+    optional full-season (ROS+YTD) frames into
+    :func:`match_roster_to_projections` so each Player's
+    ``.full_season_projection`` is populated for display + standings.
+
     The ``context`` kwarg is forwarded for log clarity.
     """
     roster_dicts = [
@@ -508,5 +601,10 @@ def hydrate_roster_entries(
         for entry in roster.entries
     ]
     return match_roster_to_projections(
-        roster_dicts, hitters_proj, pitchers_proj, context=context,
+        roster_dicts,
+        hitters_proj,
+        pitchers_proj,
+        full_hitters_proj=full_hitters_proj,
+        full_pitchers_proj=full_pitchers_proj,
+        context=context,
     )

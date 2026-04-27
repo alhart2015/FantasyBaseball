@@ -310,6 +310,68 @@ class TestCacheCompatibility:
         assert restored.preseason.hr == original.preseason.hr
         assert restored.rank.rest_of_season == original.rank.rest_of_season
 
+    def test_round_trip_includes_full_season_projection(self):
+        """Player.from_dict / to_dict preserve full_season_projection (nested format)."""
+        from fantasy_baseball.models.player import Player
+
+        d = {
+            "name": "Test Hitter",
+            "player_type": "hitter",
+            "positions": [],
+            "rest_of_season": {
+                "r": 70,
+                "hr": 20,
+                "rbi": 60,
+                "sb": 5,
+                "h": 100,
+                "ab": 400,
+                "pa": 440,
+                "avg": 0.250,
+            },
+            "full_season_projection": {
+                "r": 100,
+                "hr": 28,
+                "rbi": 85,
+                "sb": 7,
+                "h": 140,
+                "ab": 520,
+                "pa": 580,
+                "avg": 0.269,
+            },
+        }
+        p = Player.from_dict(d)
+        assert p.full_season_projection is not None
+        assert p.full_season_projection.r == 100
+        round_tripped = p.to_dict()
+        assert round_tripped["full_season_projection"]["r"] == 100
+        assert round_tripped["rest_of_season"]["r"] == 70
+
+    def test_flat_format_leaves_full_season_projection_unset(self):
+        """Flat-format dict (single stat snapshot) is treated as ROS-only.
+
+        full_season_projection stays None because flat format has no way
+        to distinguish ROS from full-season in a single dict.
+        """
+        from fantasy_baseball.models.player import Player
+
+        d = {
+            "name": "Flat Hitter",
+            "player_type": "hitter",
+            "positions": [],
+            "r": 100,
+            "hr": 28,
+            "rbi": 85,
+            "sb": 7,
+            "h": 140,
+            "ab": 520,
+            "pa": 580,
+            "avg": 0.269,
+        }
+        p = Player.from_dict(d)
+        assert p.rest_of_season is not None
+        assert p.rest_of_season.r == 100
+        assert p.full_season_projection is None
+
 
 class TestToFlatDict:
     def test_flat_dict_has_rest_of_season_stats_at_top_level(self):

@@ -89,17 +89,24 @@ def apply_swap_delta(
 ) -> dict[str, float]:
     """Project end-of-season team stats after swapping one player for another.
 
-    Applies a delta to cached projected standings — the single source of
-    truth for projected team stats (built once during the refresh pipeline
-    via ``project_team_stats``).  All code that needs a "what-if" swap
-    scenario (comparisons, trade evaluation, waiver search) should use
-    this function rather than recomputing standings from scratch.
+    ``current_stats`` is the team's projected end-of-season totals (full-season
+    units, as produced by ``ProjectedStandings.from_rosters``). ``loses_ros``
+    and ``gains_ros`` are the players' ROS-remaining-only projections (what
+    ``player_rest_of_season_stats`` returns).
+
+    The math: ``new_stats = current_stats - loses_ros + gains_ros`` works
+    correctly because YTD games already on the team's standings are sunk —
+    they don't change when a player is swapped. Only the future contribution
+    shifts. Passing full-season values for ``loses_ros``/``gains_ros`` would
+    double-count YTD already in ``current_stats`` and produce biased deltas
+    (favoring acquiring hot-start players, penalizing acquiring cold-start
+    players).
 
     Args:
         current_stats: current team stats dict (all 10 categories).
-        loses_ros: ROS projection for the player being dropped/traded away.
+        loses_ros: ROS-remaining projection for the player being dropped/traded away.
             Must include keys: R, HR, RBI, SB, AVG, W, K, SV, ERA, WHIP, ab, ip.
-        gains_ros: ROS projection for the player being acquired.
+        gains_ros: ROS-remaining projection for the player being acquired.
             Same keys as loses_ros.
 
     Returns:
@@ -248,10 +255,13 @@ def compute_trade_impact(
 
 
 def player_rest_of_season_stats(player: Player) -> dict[str, float]:
-    """Extract ROS stats from a Player for swap projection.
+    """Return the player's ROS-remaining stats as a flat dict.
 
-    Returns a flat dict with keys R, HR, RBI, SB, AVG, W, K, SV, ERA,
-    WHIP, ab, ip — the format expected by :func:`apply_swap_delta`.
+    Returns rate stats (AVG, ERA, WHIP) plus counting stats (R, HR, RBI,
+    SB, W, K, SV, ab, ip). All values are remaining-games-only — YTD
+    actuals already on the team's standings are sunk and not included
+    here. For end-of-season display (e.g. player comparison page), call
+    sites should read ``player.full_season_projection`` directly.
     """
     ros = player.rest_of_season
     if ros is None:

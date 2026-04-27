@@ -109,6 +109,29 @@ def build_standings_breakdown_payload(
     }
 
 
+def _load_projection_pair(payload: Any) -> "tuple[pd.DataFrame, pd.DataFrame]":
+    """Convert a cached ``{"hitters": [...], "pitchers": [...]}`` payload to
+    a ``(hitters_df, pitchers_df)`` pair with ``_name_norm`` attached.
+
+    Returns ``(empty, empty)`` when the payload is missing or wrong-shaped.
+    Skips ``_name_norm`` on empty frames so a partial blob doesn't crash on
+    a missing ``name`` column.
+    """
+    import pandas as pd
+
+    from fantasy_baseball.utils.name_utils import normalize_name
+
+    if not isinstance(payload, dict):
+        return pd.DataFrame(), pd.DataFrame()
+    hitters = pd.DataFrame(payload.get("hitters", []) or [])
+    pitchers = pd.DataFrame(payload.get("pitchers", []) or [])
+    if not hitters.empty:
+        hitters["_name_norm"] = hitters["name"].apply(normalize_name)
+    if not pitchers.empty:
+        pitchers["_name_norm"] = pitchers["name"].apply(normalize_name)
+    return hitters, pitchers
+
+
 class RefreshRun:
     """Encapsulates one execution of the season dashboard refresh.
 
@@ -157,6 +180,8 @@ class RefreshRun:
         self.preseason_pitchers: pd.DataFrame | None = None
         self.hitters_proj: pd.DataFrame | None = None
         self.pitchers_proj: pd.DataFrame | None = None
+        self.full_hitters_proj: pd.DataFrame | None = None
+        self.full_pitchers_proj: pd.DataFrame | None = None
         self.has_rest_of_season: bool = False
         self.hitter_logs: dict[str, dict[str, Any]] | None = None
         self.pitcher_logs: dict[str, dict[str, Any]] | None = None
@@ -342,39 +367,43 @@ class RefreshRun:
         # to preseason values (see commit history: 2a11c1e established
         # Redis as authoritative, 9592b63 accidentally re-introduced the
         # overwrite).
-        self._progress("Loading ROS projections from Redis...")
-        rest_of_season_hitters = pd.DataFrame()
-        rest_of_season_pitchers = pd.DataFrame()
-        ros_cached = read_cache(CacheKey.ROS_PROJECTIONS, self.cache_dir)
-        if isinstance(ros_cached, dict):
-            rest_of_season_hitters = pd.DataFrame(ros_cached.get("hitters", []))
-            rest_of_season_pitchers = pd.DataFrame(ros_cached.get("pitchers", []))
-        self.has_rest_of_season = (
-            not rest_of_season_hitters.empty or not rest_of_season_pitchers.empty
-        )
-        if self.has_rest_of_season:
-            self._progress(
-                f"Loaded ROS projections from Redis "
-                f"({len(rest_of_season_hitters)} hitters + {len(rest_of_season_pitchers)} pitchers)"
-            )
-
         self.preseason_hitters = self.hitters_proj
         self.preseason_pitchers = self.pitchers_proj
+
+        self._progress("Loading ROS projections from Redis...")
+        ros_hitters, ros_pitchers = _load_projection_pair(
+            read_cache(CacheKey.ROS_PROJECTIONS, self.cache_dir)
+        )
+        self.has_rest_of_season = not ros_hitters.empty or not ros_pitchers.empty
         if self.has_rest_of_season:
-            rest_of_season_hitters["_name_norm"] = rest_of_season_hitters["name"].apply(
-                normalize_name
-            )
-            rest_of_season_pitchers["_name_norm"] = rest_of_season_pitchers["name"].apply(
-                normalize_name
-            )
+            self.hitters_proj = ros_hitters
+            self.pitchers_proj = ros_pitchers
             self._progress(
-                f"Loaded {len(rest_of_season_hitters)} ROS hitters + {len(rest_of_season_pitchers)} ROS pitchers"
+                f"Loaded {len(ros_hitters)} ROS hitters + {len(ros_pitchers)} ROS pitchers"
             )
-            # Use ROS projections as primary — they're the most current estimates
-            self.hitters_proj = rest_of_season_hitters
-            self.pitchers_proj = rest_of_season_pitchers
         else:
             self._progress("WARNING: No ROS projections available — falling back to preseason")
+
+        # Full-season (ROS+YTD) projections populate Player.full_season_projection
+        # for display + ProjectedStandings, while Player.rest_of_season stays
+        # ROS-only for forward-looking decision paths. Same Redis+disk fallback
+        # as the ROS load.
+        self._progress("Loading full-season projections...")
+        full_hitters, full_pitchers = _load_projection_pair(
+            read_cache(CacheKey.FULL_SEASON_PROJECTIONS, self.cache_dir)
+        )
+        if not full_hitters.empty or not full_pitchers.empty:
+            self.full_hitters_proj = full_hitters
+            self.full_pitchers_proj = full_pitchers
+            self._progress(
+                f"Loaded {len(full_hitters)} full-season hitters + "
+                f"{len(full_pitchers)} full-season pitchers"
+            )
+        else:
+            self._progress(
+                "WARNING: cache:full_season_projections missing — "
+                "Player.full_season_projection will be unset"
+            )
 
     # --- Step 4b: Fetch opponent rosters (raw) ---
     def _fetch_opponent_rosters(self):
@@ -480,6 +509,8 @@ class RefreshRun:
             user_roster_model,
             self.hitters_proj,
             self.pitchers_proj,
+            full_hitters_proj=self.full_hitters_proj,
+            full_pitchers_proj=self.full_pitchers_proj,
             context="user",
         )
 
@@ -494,6 +525,8 @@ class RefreshRun:
                 latest,
                 self.hitters_proj,
                 self.pitchers_proj,
+                full_hitters_proj=self.full_hitters_proj,
+                full_pitchers_proj=self.full_pitchers_proj,
                 context=f"opp:{team.name}",
             )
             if hydrated:

@@ -161,6 +161,58 @@ def get_ros_projections(client) -> dict | None:
     return data
 
 
+def set_ros_projections(client, payload: dict) -> None:
+    """Overwrite the ROS-only projections blob.
+
+    Symmetric counterpart to :func:`set_full_season_projections`.
+    Used by ``blend_and_cache_ros`` so the local KV store sees the
+    blob off-Render (where ``web.season_data.write_cache`` writes only
+    to disk). No-op when ``client is None``.
+    """
+    if client is None:
+        return
+    client.set(ROS_PROJECTIONS_KEY, json.dumps(payload))
+
+
+FULL_SEASON_PROJECTIONS_KEY = redis_key(CacheKey.FULL_SEASON_PROJECTIONS)
+
+
+def get_full_season_projections(client) -> dict | None:
+    """Read the latest full-season (ROS+YTD) projections from Redis.
+
+    Same shape as :func:`get_ros_projections` —
+    ``{"hitters": [...], "pitchers": [...]}`` — but each row's counting
+    stats include season-to-date actuals. Used by
+    ``ProjectedStandings.from_rosters`` and ``project_team_stats`` for
+    end-of-season standings projection. NOT used by forward-looking
+    decision paths (transactions, trades, waivers, lineup optimizer) —
+    those should call :func:`get_ros_projections`.
+    """
+    if client is None:
+        return None
+    raw = client.get(FULL_SEASON_PROJECTIONS_KEY)
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Corrupt JSON at Redis key %r; ignoring", FULL_SEASON_PROJECTIONS_KEY)
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def set_full_season_projections(client, payload: dict) -> None:
+    """Overwrite the full-season projections blob.
+
+    No-op when ``client is None`` (unconfigured environments).
+    """
+    if client is None:
+        return
+    client.set(FULL_SEASON_PROJECTIONS_KEY, json.dumps(payload))
+
+
 def _game_log_totals_key(player_type: str) -> str:
     if player_type not in _BLENDED_PROJ_TYPES:
         raise ValueError(f"player_type must be one of {_BLENDED_PROJ_TYPES}, got {player_type!r}")

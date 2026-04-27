@@ -19,7 +19,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from math import erf, sqrt
-from typing import Protocol
+from typing import Literal, Protocol
 
 from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS, Position
@@ -48,6 +48,8 @@ from fantasy_baseball.utils.constants import (
 )
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
+ProjectionSource = Literal["rest_of_season", "full_season_projection"]
+
 
 class TeamStatsRow(Protocol):
     """Minimal shape for a standings row: ``team_name`` plus ``CategoryStats``."""
@@ -74,12 +76,24 @@ def _get(p, key, default=0):
     return default
 
 
-def _stat(p, key):
-    """Read a stat from a Player's ROS stats or from a flat dict."""
-    # Player dataclass: stats live on the .rest_of_season attribute
-    ros = getattr(p, "rest_of_season", None)
-    if ros is not None and hasattr(ros, key):
-        return _safe(getattr(ros, key, 0))
+def _stat(p, key, source: ProjectionSource = "rest_of_season"):
+    """Read a stat from a Player's projection stats or from a flat dict.
+
+    ``source`` selects which projection field on a :class:`Player` to read
+    from: ``"rest_of_season"`` (the default — forward-looking decision math
+    used by the optimizer, recs, and trade evaluation) or
+    ``"full_season_projection"`` (= ROS + YTD; used by
+    :meth:`ProjectedStandings.from_rosters` to preserve the
+    end-of-season-totals projection until a proper standings + ROS
+    combination ships).
+
+    Flat-dict input (draft scripts) is unaffected by ``source`` — those
+    rosters carry a single set of stat keys with no ROS/full distinction.
+    """
+    # Player dataclass: stats live on the .{source} attribute.
+    stats = getattr(p, source, None)
+    if stats is not None and hasattr(stats, key):
+        return _safe(getattr(stats, key, 0))
     # Flat dict (legacy callers, tests, draft scripts)
     if isinstance(p, dict):
         return _safe(p.get(key, 0))
@@ -491,13 +505,42 @@ def compute_roster_breakdown(team_name: str, roster: list[Player]) -> RosterBrea
     return RosterBreakdown(team_name=team_name, hitters=hitters, pitchers=pitchers)
 
 
-def project_team_stats(roster, *, displacement: bool = False) -> CategoryStats:
+def project_team_stats(
+    roster,
+    *,
+    displacement: bool = False,
+    projection_source: ProjectionSource = "rest_of_season",
+) -> CategoryStats:
     """Sum projected stats for a roster into a CategoryStats.
 
     Accepts Player dataclass objects OR plain dicts with flat stat
     keys. Rate stats (AVG, ERA, WHIP) are computed from component
     totals rather than simple sums, so the result is mathematically
     correct rather than just a naive average.
+
+    ``projection_source`` selects which projection field on each
+    :class:`Player` to sum. The default ``"rest_of_season"`` is the
+    forward-looking decision math used by the optimizer, recs, and
+    trade evaluation: a hot-YTD player and a cold-YTD player with the
+    same ROS-remaining contribute identically, so start/sit decisions
+    are not biased by locked YTD totals. ``"full_season_projection"``
+    sums ROS + YTD and is used only by
+    :meth:`ProjectedStandings.from_rosters` to preserve the
+    end-of-season-totals projection until proper standings + ROS
+    combination ships (Yahoo standings only surface AVG, not the H/AB
+    components needed to recombine rate stats correctly).
+
+    Note: ``projection_source`` controls only the per-player reads in
+    ``_stat``. Displacement scaling (``_apply_displacement`` →
+    ``_scale_stats``) continues to operate on ROS playing time and ROS
+    counting stats, so a displaced active player's contribution is
+    ROS-times-factor regardless of source. With
+    ``projection_source="full_season_projection"`` this is a documented
+    approximation: undisplaced active players contribute full-season
+    totals while displaced players contribute scaled ROS, mixing units.
+    The proper combination (YTD + scaled ROS for displaced; full-season
+    for undisplaced) requires the team-level YTD ingest deferred to a
+    follow-up phase.
 
     When ``displacement=True``, bench players are excluded and IL
     players displace the worst positional match among active players,
@@ -521,20 +564,20 @@ def project_team_stats(roster, *, displacement: bool = False) -> CategoryStats:
     for p in roster:
         ptype = _get(p, "player_type")
         if ptype == PlayerType.HITTER:
-            r += _stat(p, "r")
-            hr += _stat(p, "hr")
-            rbi += _stat(p, "rbi")
-            sb += _stat(p, "sb")
-            h_total += _stat(p, "h")
-            ab_total += _stat(p, "ab")
+            r += _stat(p, "r", projection_source)
+            hr += _stat(p, "hr", projection_source)
+            rbi += _stat(p, "rbi", projection_source)
+            sb += _stat(p, "sb", projection_source)
+            h_total += _stat(p, "h", projection_source)
+            ab_total += _stat(p, "ab", projection_source)
         elif ptype == PlayerType.PITCHER:
-            w += _stat(p, "w")
-            k += _stat(p, "k")
-            sv += _stat(p, "sv")
-            ip_total += _stat(p, "ip")
-            er_total += _stat(p, "er")
-            bb_total += _stat(p, "bb")
-            ha_total += _stat(p, "h_allowed")
+            w += _stat(p, "w", projection_source)
+            k += _stat(p, "k", projection_source)
+            sv += _stat(p, "sv", projection_source)
+            ip_total += _stat(p, "ip", projection_source)
+            er_total += _stat(p, "er", projection_source)
+            bb_total += _stat(p, "bb", projection_source)
+            ha_total += _stat(p, "h_allowed", projection_source)
 
     return CategoryStats(
         r=r,

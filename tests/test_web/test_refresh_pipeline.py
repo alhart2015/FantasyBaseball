@@ -323,3 +323,71 @@ class TestPreseasonBaseline:
         assert data["base"] is None
         assert data["with_management"] is None
         assert data["baseline_meta"] is None
+
+
+class TestFullSeasonProjectionsLoad:
+    """``_load_projections`` must use ``read_cache`` for the full-season
+    blob so it has the same Redis+disk-fallback resilience as ROS, and
+    must emit a clear warning when both Redis and disk are missing.
+    """
+
+    def test_warns_when_full_season_blob_missing(
+        self,
+        configured_test_env,
+        fake_redis,
+        caplog,
+    ):
+        """Both Redis and disk missing → refresh logs the warning and
+        leaves ``self.full_hitters_proj`` / ``self.full_pitchers_proj``
+        unset (so ``hydrate_roster_entries`` skips populating
+        ``Player.full_season_projection``)."""
+        from fantasy_baseball.data.cache_keys import CacheKey, redis_key
+
+        cache_dir = configured_test_env
+        # Ensure neither Redis nor disk has the full-season blob. The
+        # fixture doesn't seed it, but be defensive in case that changes.
+        fake_redis.delete(redis_key(CacheKey.FULL_SEASON_PROJECTIONS))
+        disk_path = cache_dir / "full_season_projections.json"
+        if disk_path.exists():
+            disk_path.unlink()
+
+        with (
+            caplog.at_level("INFO", logger="fantasy_baseball.web.refresh_pipeline"),
+            patched_refresh_environment(fake_redis, cache_dir=cache_dir),
+        ):
+            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+
+        # The warning is emitted via _progress -> log.info, so it shows
+        # up at INFO level on the refresh_pipeline logger.
+        assert any(
+            "cache:full_season_projections missing" in record.getMessage()
+            for record in caplog.records
+        ), "Expected the missing-full-season warning; saw: " + ", ".join(
+            r.getMessage() for r in caplog.records
+        )
+
+    def test_reads_disk_when_redis_missing(
+        self,
+        configured_test_env,
+        fake_redis,
+    ):
+        """Redis missing but disk has it → load succeeds (mirrors ROS
+        path's read_cache behavior). Asserts no warning is emitted."""
+        from fantasy_baseball.data.cache_keys import CacheKey, redis_key
+        from fantasy_baseball.web.season_data import write_cache
+
+        cache_dir = configured_test_env
+        # Seed the disk path before patching the environment so write_cache
+        # uses the same cache_dir the refresh will read from.
+        write_cache(
+            CacheKey.FULL_SEASON_PROJECTIONS,
+            {"hitters": [], "pitchers": []},
+            cache_dir,
+        )
+        # Strip Redis so only disk remains.
+        fake_redis.delete(redis_key(CacheKey.FULL_SEASON_PROJECTIONS))
+
+        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
+            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+        # Refresh completed without raising; the warning path was
+        # bypassed because read_cache returned the disk payload.

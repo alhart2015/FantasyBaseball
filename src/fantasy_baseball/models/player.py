@@ -172,6 +172,7 @@ class Player:
     yahoo_id: str | None = None
 
     rest_of_season: HitterStats | PitcherStats | None = None
+    full_season_projection: HitterStats | PitcherStats | None = None
     preseason: HitterStats | PitcherStats | None = None
     current: HitterStats | PitcherStats | None = None
 
@@ -196,9 +197,15 @@ class Player:
             ros = _make_stats(d, player_type)
             preseason = None
             current = None
+            full_season_projection = None
         else:
             ros_raw = d.get("rest_of_season")
             ros = _make_stats(ros_raw, player_type) if ros_raw is not None else None
+
+            fs_raw = d.get("full_season_projection")
+            full_season_projection = (
+                _make_stats(fs_raw, player_type) if fs_raw is not None else None
+            )
 
             pre_raw = d.get("preseason")
             preseason = _make_stats(pre_raw, player_type) if pre_raw is not None else None
@@ -232,6 +239,7 @@ class Player:
             mlbam_id=d.get("mlbam_id"),
             yahoo_id=d.get("player_id"),  # cache format uses "player_id"
             rest_of_season=ros,
+            full_season_projection=full_season_projection,
             preseason=preseason,
             current=current,
             rank=rank,
@@ -259,6 +267,8 @@ class Player:
             d["player_id"] = self.yahoo_id
         if self.rest_of_season is not None:
             d["rest_of_season"] = self.rest_of_season.to_dict()
+        if self.full_season_projection is not None:
+            d["full_season_projection"] = self.full_season_projection.to_dict()
         if self.preseason is not None:
             d["preseason"] = self.preseason.to_dict()
         if self.current is not None:

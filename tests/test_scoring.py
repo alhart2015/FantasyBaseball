@@ -140,6 +140,46 @@ class TestProjectTeamStats:
         assert stats[Category.HR] == 25
         assert stats[Category.AVG] == pytest.approx(130 / 500)
 
+    def test_project_team_stats_sums_ros_only_by_default(self):
+        """``project_team_stats`` sums ``Player.rest_of_season`` by default (ROS-only).
+
+        A hot-YTD player and a cold-YTD player with identical ROS-remaining
+        must produce identical contributions. This is the user-facing fix for
+        the lineup optimizer: forward-looking decisions should be made on
+        ROS-remaining, not on full-season totals where YTD is locked.
+        """
+        ros = HitterStats(r=70, hr=20, rbi=60, sb=5, h=100, ab=400, pa=440)
+        hot = Player(
+            name="Hot",
+            player_type=PlayerType.HITTER,
+            rest_of_season=ros,
+            full_season_projection=HitterStats(r=100, hr=28, rbi=85, sb=7, h=140, ab=520, pa=580),
+        )
+        cold = Player(
+            name="Cold",
+            player_type=PlayerType.HITTER,
+            rest_of_season=ros,
+            full_season_projection=HitterStats(r=73, hr=21, rbi=62, sb=5, h=103, ab=410, pa=450),
+        )
+        # Default behavior: read rest_of_season → identical
+        assert project_team_stats([hot])[Category.R] == 70
+        assert project_team_stats([hot])[Category.R] == project_team_stats([cold])[Category.R]
+
+    def test_project_team_stats_full_season_source_for_standings(self):
+        """``project_team_stats`` with ``projection_source='full_season_projection'``
+        sums full-season (used by ``ProjectedStandings.from_rosters`` to preserve
+        end-of-season standings projection until proper standings + ROS combination
+        lands in a follow-up phase)."""
+        p = Player(
+            name="X",
+            player_type=PlayerType.HITTER,
+            rest_of_season=HitterStats(r=70, hr=20, rbi=60, sb=5, h=100, ab=400, pa=440),
+            full_season_projection=HitterStats(r=100, hr=28, rbi=85, sb=7, h=140, ab=520, pa=580),
+        )
+        stats = project_team_stats([p], projection_source="full_season_projection")
+        assert stats[Category.R] == 100
+        assert stats[Category.HR] == 28
+
 
 class TestProbBeats:
     """Unit tests for the pairwise Gaussian win-probability helper."""
