@@ -34,7 +34,6 @@ from fantasy_baseball.utils.constants import (
 )
 from fantasy_baseball.utils.constants import (
     HITTING_COUNTING,
-    IL_STATUSES,
     PITCHING_COUNTING,
     STARTER_IP_THRESHOLD,
     STAT_VARIANCE,
@@ -156,16 +155,9 @@ _GENERIC_SLOTS: frozenset[Position] = frozenset(
 )
 
 
-def _is_il(p: Player) -> bool:
-    """True if the player is on the IL (by slot or by Yahoo status)."""
-    if p.selected_position in IL_SLOTS:
-        return True
-    return p.status in IL_STATUSES
-
-
 def _is_bench(p: Player) -> bool:
     """True if the player is benched (BN slot) and NOT on the IL."""
-    return p.selected_position == Position.BN and not _is_il(p)
+    return p.selected_position == Position.BN and not p.is_on_il()
 
 
 def _classify_roster(
@@ -189,7 +181,7 @@ def _classify_roster(
             continue
         slot = p.selected_position
         if slot == Position.BN:
-            if _is_il(p):
+            if p.is_on_il():
                 il_players.append(p)
             else:
                 bench.append(p)

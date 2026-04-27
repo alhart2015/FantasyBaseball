@@ -21,10 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fantasy_baseball.models.positions import BENCH_SLOTS
-from fantasy_baseball.utils.constants import (
-    IL_STATUSES,
-    Category,
-)
+from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 from fantasy_baseball.utils.time_utils import (
     compute_effective_date,
@@ -740,7 +737,7 @@ class RefreshRun:
         assert self.projected_standings is not None
 
         self._progress("Optimizing lineup...")
-        active_players = [p for p in self.roster_players if p.status not in IL_STATUSES]
+        active_players = [p for p in self.roster_players if not p.is_on_il()]
         hitter_players = []
         pitcher_players = []
         for player in active_players:
