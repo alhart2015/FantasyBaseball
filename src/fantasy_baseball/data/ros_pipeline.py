@@ -19,7 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 from fantasy_baseball.data.cache_keys import CacheKey
-from fantasy_baseball.data.kv_store import get_kv
+from fantasy_baseball.data.kv_store import get_kv, is_remote
 from fantasy_baseball.data.projections import (
     blend_projections,
     normalize_rest_of_season_to_full_season,
@@ -127,21 +127,18 @@ def blend_and_cache_ros(
         "hitters": hitters_full.to_dict(orient="records"),
         "pitchers": pitchers_full.to_dict(orient="records"),
     }
-    # Write through ``write_cache`` for the on-disk JSON
-    # (``data/cache/{ros,full_season}_projections.json``) plus the
-    # on-Render Upstash write-through, then through
-    # ``set_{ros,full_season}_projections`` so off-Render callers
-    # reading via ``get_{ros,full_season}_projections(kv)`` see the
-    # same blob (``write_cache``'s Redis path is gated by
-    # ``RENDER=true``). Disk persistence is necessary so the refresh
-    # pipeline's ``read_cache(CacheKey.FULL_SEASON_PROJECTIONS, ...)``
-    # call has a fallback when Upstash is briefly unreachable —
-    # symmetric with the ROS load. Imported at call time to avoid a
-    # web-layer import at data-layer import time.
+    # ``write_cache`` writes to disk and (only on Render) through to
+    # Upstash. Off Render, the local KV (sqlite) needs the explicit
+    # ``set_*_projections`` writes so consumers reading via
+    # ``get_{ros,full_season}_projections(kv)`` find the data; the
+    # on-Render path would otherwise double-write the same blob to
+    # Upstash. Imported at call time to avoid a web-layer import at
+    # data-layer import time.
     from fantasy_baseball.web.season_data import write_cache
 
     write_cache(CacheKey.ROS_PROJECTIONS, ros_payload)
     write_cache(CacheKey.FULL_SEASON_PROJECTIONS, full_payload)
-    set_ros_projections(client, ros_payload)
-    set_full_season_projections(client, full_payload)
+    if not is_remote():
+        set_ros_projections(client, ros_payload)
+        set_full_season_projections(client, full_payload)
     return hitters_ros, pitchers_ros

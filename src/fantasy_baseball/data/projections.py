@@ -364,34 +364,52 @@ def _blend_pitchers(dfs: list[pd.DataFrame]) -> pd.DataFrame:
     return result
 
 
-def _lookup_full_season_row(
+def _build_full_season_index(
+    full_df: pd.DataFrame | None,
+) -> tuple[dict[int, dict], dict[str, dict]]:
+    """Index a full-season projections frame for O(1) per-player lookup.
+
+    Returns ``(by_mlbam, by_namenorm)`` — record dicts keyed first by
+    ``mlbam_id`` (identity, robust to accent/encoding differences)
+    and second by ``_name_norm`` (fallback for rows missing an id).
+    Either dict may be empty when the corresponding column is missing
+    or the frame is None/empty.
+    """
+    if full_df is None or full_df.empty:
+        return {}, {}
+    by_mlbam: dict[int, dict] = {}
+    if "mlbam_id" in full_df.columns:
+        for record in full_df.to_dict(orient="records"):
+            mid = record.get("mlbam_id")
+            if mid is None or pd.isna(mid):
+                continue
+            by_mlbam[int(mid)] = record
+    by_namenorm: dict[str, dict] = {}
+    if "_name_norm" in full_df.columns:
+        for record in full_df.to_dict(orient="records"):
+            nn = record.get("_name_norm")
+            if nn:
+                by_namenorm.setdefault(nn, record)
+    return by_mlbam, by_namenorm
+
+
+def _lookup_full_season_record(
     proj_row: pd.Series,
     name_norm: str,
-    full_df: pd.DataFrame,
-) -> pd.Series | None:
-    """Look up a player's full-season (ROS+YTD) row in ``full_df``.
+    by_mlbam: dict[int, dict],
+    by_namenorm: dict[str, dict],
+) -> dict | None:
+    """Look up a player's full-season (ROS+YTD) record using prebuilt indices.
 
-    Mirrors the ROS lookup strategy: prefer ``mlbam_id`` when available
-    on both sides (immune to name variations and accents), fall back to
-    ``_name_norm`` equality. Returns the first matching row or ``None``.
-
-    The ``proj_row`` argument is the ROS row already matched for this
-    player; we re-use its ``mlbam_id`` so the cross-frame join is keyed
-    on identity, not on the (potentially different) name encoding the
-    full-season frame might have.
+    Prefers ``mlbam_id`` (identity, immune to name encoding) and falls
+    back to ``_name_norm``. Returns the matched record dict or ``None``.
     """
-    if full_df.empty:
-        return None
     mlbam_id = proj_row.get("mlbam_id") if "mlbam_id" in proj_row.index else None
-    if mlbam_id is not None and not pd.isna(mlbam_id) and "mlbam_id" in full_df.columns:
-        full_matches = full_df[full_df["mlbam_id"] == mlbam_id]
-        if not full_matches.empty:
-            return full_matches.iloc[0]
-    if "_name_norm" in full_df.columns:
-        full_matches = full_df[full_df["_name_norm"] == name_norm]
-        if not full_matches.empty:
-            return full_matches.iloc[0]
-    return None
+    if mlbam_id is not None and not pd.isna(mlbam_id):
+        record = by_mlbam.get(int(mlbam_id))
+        if record is not None:
+            return record
+    return by_namenorm.get(name_norm)
 
 
 def match_roster_to_projections(
@@ -438,6 +456,8 @@ def match_roster_to_projections(
     """
     prefix = f"[{context}] " if context else ""
     matched: list[Player] = []
+    full_hitters_by_id, full_hitters_by_name = _build_full_season_index(full_hitters_proj)
+    full_pitchers_by_id, full_pitchers_by_name = _build_full_season_index(full_pitchers_proj)
     for player in roster:
         name = player["name"].replace(" (Batter)", "").replace(" (Pitcher)", "")
         name_norm = normalize_name(name)
@@ -500,19 +520,22 @@ def match_roster_to_projections(
         else:
             ros = PitcherStats.from_dict(proj.to_dict())
 
-        # Look up matching full-season (ROS+YTD) row if a frame was provided.
-        full_season_proj_row: pd.Series | None = None
-        if ptype == PlayerType.HITTER and full_hitters_proj is not None:
-            full_season_proj_row = _lookup_full_season_row(proj, name_norm, full_hitters_proj)
-        elif ptype == PlayerType.PITCHER and full_pitchers_proj is not None:
-            full_season_proj_row = _lookup_full_season_row(proj, name_norm, full_pitchers_proj)
+        # Look up matching full-season (ROS+YTD) record if indices were built.
+        if ptype == PlayerType.HITTER:
+            full_record = _lookup_full_season_record(
+                proj, name_norm, full_hitters_by_id, full_hitters_by_name
+            )
+        else:
+            full_record = _lookup_full_season_record(
+                proj, name_norm, full_pitchers_by_id, full_pitchers_by_name
+            )
 
         full_season_stats: HitterStats | PitcherStats | None = None
-        if full_season_proj_row is not None:
+        if full_record is not None:
             if ptype == PlayerType.HITTER:
-                full_season_stats = HitterStats.from_dict(full_season_proj_row.to_dict())
+                full_season_stats = HitterStats.from_dict(full_record)
             else:
-                full_season_stats = PitcherStats.from_dict(full_season_proj_row.to_dict())
+                full_season_stats = PitcherStats.from_dict(full_record)
 
         # Parse positions and selected_position explicitly
         parsed_positions = [p if isinstance(p, Position) else Position.parse(p) for p in positions]

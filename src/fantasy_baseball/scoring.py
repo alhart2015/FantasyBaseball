@@ -19,7 +19,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from math import erf, sqrt
-from typing import Protocol
+from typing import Literal, Protocol
 
 from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS, Position
@@ -48,6 +48,8 @@ from fantasy_baseball.utils.constants import (
 )
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
+ProjectionSource = Literal["rest_of_season", "full_season_projection"]
+
 
 class TeamStatsRow(Protocol):
     """Minimal shape for a standings row: ``team_name`` plus ``CategoryStats``."""
@@ -74,10 +76,7 @@ def _get(p, key, default=0):
     return default
 
 
-_VALID_PROJECTION_SOURCES: frozenset[str] = frozenset({"rest_of_season", "full_season_projection"})
-
-
-def _stat(p, key, source: str = "rest_of_season"):
+def _stat(p, key, source: ProjectionSource = "rest_of_season"):
     """Read a stat from a Player's projection stats or from a flat dict.
 
     ``source`` selects which projection field on a :class:`Player` to read
@@ -510,7 +509,7 @@ def project_team_stats(
     roster,
     *,
     displacement: bool = False,
-    projection_source: str = "rest_of_season",
+    projection_source: ProjectionSource = "rest_of_season",
 ) -> CategoryStats:
     """Sum projected stats for a roster into a CategoryStats.
 
@@ -556,11 +555,6 @@ def project_team_stats(
     refactor and would need significant rework to use Player objects.
     Step 9 cleanup can revisit.
     """
-    if projection_source not in _VALID_PROJECTION_SOURCES:
-        raise ValueError(
-            f"projection_source must be one of {sorted(_VALID_PROJECTION_SOURCES)}, "
-            f"got {projection_source!r}"
-        )
     if displacement:
         roster = _apply_displacement(roster)
 
