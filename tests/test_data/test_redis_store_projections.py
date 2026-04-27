@@ -130,3 +130,22 @@ def test_full_season_projections_missing_returns_none(tmp_path):
 
     kv = SqliteKVStore(tmp_path / "kv.db")
     assert rs.get_full_season_projections(kv) is None
+
+
+def test_set_ros_projections_round_trip(tmp_path):
+    from fantasy_baseball.data import redis_store as rs
+    from fantasy_baseball.data.kv_store import SqliteKVStore
+
+    kv = SqliteKVStore(tmp_path / "kv.db")
+    rs.set_ros_projections(
+        kv,
+        {
+            "hitters": [{"name": "A", "r": 60}],
+            "pitchers": [{"name": "B", "k": 100}],
+        },
+    )
+    got = rs.get_ros_projections(kv)
+    assert got == {
+        "hitters": [{"name": "A", "r": 60}],
+        "pitchers": [{"name": "B", "k": 100}],
+    }

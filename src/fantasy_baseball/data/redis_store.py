@@ -161,6 +161,19 @@ def get_ros_projections(client) -> dict | None:
     return data
 
 
+def set_ros_projections(client, payload: dict) -> None:
+    """Overwrite the ROS-only projections blob.
+
+    Symmetric counterpart to :func:`set_full_season_projections`.
+    Used by ``blend_and_cache_ros`` so the local KV store sees the
+    blob off-Render (where ``web.season_data.write_cache`` writes only
+    to disk). No-op when ``client is None``.
+    """
+    if client is None:
+        return
+    client.set(ROS_PROJECTIONS_KEY, json.dumps(payload))
+
+
 FULL_SEASON_PROJECTIONS_KEY = redis_key(CacheKey.FULL_SEASON_PROJECTIONS)
 
 

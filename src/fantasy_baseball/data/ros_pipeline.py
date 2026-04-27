@@ -25,9 +25,9 @@ from fantasy_baseball.data.projections import (
     normalize_rest_of_season_to_full_season,
 )
 from fantasy_baseball.data.redis_store import (
-    ROS_PROJECTIONS_KEY,
     get_game_log_totals,
     set_full_season_projections,
+    set_ros_projections,
 )
 from fantasy_baseball.models.player import PlayerType
 
@@ -123,28 +123,17 @@ def blend_and_cache_ros(
         "hitters": hitters_ros.to_dict(orient="records"),
         "pitchers": pitchers_ros.to_dict(orient="records"),
     }
-    # Write the ROS-only blob:
-    #   1. Through ``write_cache`` so the on-disk JSON
-    #      (``data/cache/ros_projections.json``) and the on-Render
-    #      Upstash write-through stay in sync with the rest of the
-    #      cache:* namespace.
-    #   2. Directly to ``client`` so off-Render readers that go through
-    #      the typed ``get_ros_projections(kv)`` helper see the same
-    #      blob (write_cache's Redis write-through is gated by
-    #      ``RENDER=true``; the typed setter for the new full-season
-    #      blob already writes via ``client.set`` regardless of
-    #      environment, and we want both keys to reach the local kv
-    #      symmetrically so transactions/trades/lineup paths can
-    #      always read them).
+    # Write through ``write_cache`` for the on-disk JSON
+    # (``data/cache/ros_projections.json``) plus the on-Render Upstash
+    # write-through, then through ``set_ros_projections`` so off-Render
+    # callers reading via ``get_ros_projections(kv)`` see the same blob
+    # (``write_cache``'s Redis path is gated by ``RENDER=true``).
     # Imported at call time to avoid a web-layer import at data-layer
     # import time.
-    import json as _json
-
     from fantasy_baseball.web.season_data import write_cache
 
     write_cache(CacheKey.ROS_PROJECTIONS, ros_payload)
-    if client is not None:
-        client.set(ROS_PROJECTIONS_KEY, _json.dumps(ros_payload))
+    set_ros_projections(client, ros_payload)
     set_full_season_projections(
         client,
         {
