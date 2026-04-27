@@ -29,6 +29,7 @@ class CacheKey(StrEnum):
     TRANSACTION_ANALYZER = "transaction_analyzer"
     TRANSACTIONS = "transactions"
     ROS_PROJECTIONS = "ros_projections"
+    FULL_SEASON_PROJECTIONS = "full_season_projections"
     POSITIONS = "positions"
     STANDINGS_BREAKDOWN = "standings_breakdown"
 
