@@ -270,9 +270,14 @@ def attach_pace_to_roster(
             projected = {k: getattr(pre_player.rest_of_season, k, 0) for k in proj_keys}
         else:
             projected = {k: 0 for k in proj_keys}
+        # Pace deviation compares preseason expectations to the current
+        # full-season expectation (=ROS-remaining + YTD-actuals), so this
+        # reads full_season_projection rather than rest_of_season. The
+        # local variable names retain "ros" terminology for diff
+        # minimization; semantically the values are full-season totals.
         ros_dict = (
-            {k: getattr(player.rest_of_season, k, 0) for k in ros_keys}
-            if player.rest_of_season
+            {k: getattr(player.full_season_projection, k, 0) for k in ros_keys}
+            if player.full_season_projection
             else None
         )
         player.pace = compute_player_pace(

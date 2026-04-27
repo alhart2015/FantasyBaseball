@@ -642,3 +642,53 @@ class TestAttachPaceToRoster:
         )
         # Should not raise; pace is set (compute_player_pace handles None)
         assert h.pace is not None
+
+    def test_pace_deviation_reads_full_season_projection_not_ros(self):
+        """Phase 5 of ROS-only-decision-projections: pace deviation must read
+        Player.full_season_projection (=ROS-remaining + YTD-actuals) so it
+        reflects projection change since preseason. Reading rest_of_season
+        (now ROS-remaining only) would conflate true projection drift with
+        the natural decline of remaining games.
+
+        Setup: a hitter whose preseason projection matches the current
+        full-season expectation (no projection change) but whose
+        rest_of_season has eroded with elapsed games. The pace deviation
+        should be ~0 (no drift), regardless of how much the ROS-remaining
+        has shrunk.
+        """
+        h = Player(
+            name="Soto",
+            positions=[Position.OF],
+            player_type=PlayerType.HITTER,
+            selected_position=Position.OF,
+            yahoo_id="Soto::hitter",
+        )
+        # Preseason expected: 90 R, 30 HR. Current full-season expected:
+        # same. ROS-remaining is much smaller (elapsed games).
+        h.rest_of_season = HitterStats(r=60, hr=20, rbi=60, sb=7, avg=0.290, h=100, ab=345, pa=380)
+        h.full_season_projection = HitterStats(
+            r=90, hr=30, rbi=90, sb=10, avg=0.290, h=150, ab=540, pa=600
+        )
+        pre = Player(
+            name="Soto",
+            positions=[Position.OF],
+            player_type=PlayerType.HITTER,
+            selected_position=Position.OF,
+            yahoo_id="Soto::hitter",
+        )
+        pre.rest_of_season = HitterStats(
+            r=90, hr=30, rbi=90, sb=10, avg=0.290, h=150, ab=540, pa=600
+        )
+        attach_pace_to_roster(
+            [h],
+            hitter_logs={"soto": {"r": 30, "hr": 10, "rbi": 30, "sb": 3}},
+            pitcher_logs={},
+            preseason_lookup={"soto": pre},
+            sgp_denoms={"R": 25, "HR": 8, "RBI": 25, "SB": 8, "AVG": 0.012},
+        )
+        # Sum of deviations should be ~0 because full_season matches preseason.
+        # If pace.py read rest_of_season instead, R would be (60-90)/25 = -1.2,
+        # HR (20-30)/8 = -1.25, etc. — large negative drift.
+        for cat in ("R", "HR", "RBI", "SB"):
+            dev = h.pace[cat]["rest_of_season_deviation_sgp"]
+            assert abs(dev) < 0.01, f"{cat} deviation should be ~0, got {dev}"
