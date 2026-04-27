@@ -4,69 +4,55 @@
 {% block content %}
 
 <style>
+/* Layout-only rules. Page theming lives in season.css under .page-trades. */
 .section-toggle {
     display: flex;
     align-items: center;
     justify-content: space-between;
     cursor: pointer;
     user-select: none;
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text);
-    margin: 28px 0 10px;
-    padding: 0;
-}
-.section-toggle:first-of-type { margin-top: 20px; }
-.section-toggle .chevron {
-    font-size: 12px;
-    color: var(--text-secondary);
-    transition: transform 0.2s;
 }
 .section-toggle .chevron.collapsed { transform: rotate(-90deg); }
 .section-body { overflow: hidden; }
 .section-body.collapsed { display: none; }
 .mb-2 { margin-bottom: 0.5rem; }
 .mt-2 { margin-top: 0.5rem; }
-.bt-suggestions { list-style: none; padding: 0; margin: 0.25rem 0; max-height: 160px; overflow-y: auto; }
-.bt-suggestions li { padding: 0.2rem 0.4rem; cursor: pointer; background: var(--panel-bg); }
-.bt-suggestions li:hover { background: var(--text); color: var(--panel-bg); }
-.bt-legality { font-family: monospace; font-size: 0.85rem; }
-.bt-legality.illegal { color: var(--danger); }
+.bt-suggestions {
+    list-style: none;
+    padding: 0;
+    margin: 0.25rem 0;
+    max-height: 160px;
+    overflow-y: auto;
+}
+.bt-suggestions li { cursor: pointer; }
 .bt-result { margin-top: 1rem; }
-.bt-result-bad { color: var(--danger); padding: 0.5rem; }
-.bt-panel { border: 1px solid var(--panel-bg); padding: 0.4rem; border-radius: 4px; }
-.bt-panel h4 { margin: 0 0 0.4rem; font-size: 0.85rem; }
-.bt-slot-grid { display: flex; flex-direction: column; gap: 2px; font-size: 0.8rem; }
-.bt-slot-row { display: grid; grid-template-columns: 60px 1fr; gap: 2px; align-items: center; }
-.bt-slot-label { color: var(--text-secondary); font-family: monospace; padding: 0 0.3rem; }
-.bt-slot { min-height: 22px; max-height: 22px; padding: 2px 4px; border: 1px dashed rgba(255,255,255,0.1);
-           border-radius: 2px; background: rgba(255,255,255,0.02);
-           display: flex; align-items: center; overflow: hidden; }
-.bt-slot:has(.bt-ghost) { background: var(--success); opacity: 0.55; border-style: solid; }
-.bt-zone:has(.bt-ghost) { background: var(--success); opacity: 0.35; border-style: solid; }
+.bt-slot-grid { display: flex; flex-direction: column; }
+.bt-slot-row { display: grid; gap: 2px; }
+.bt-slot {
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+}
 .bt-ghost { display: none; }
-.bt-slot.drag-over { background: var(--success); opacity: 0.5; }
-.bt-zone { border: 1px dashed rgba(255,255,255,0.1); padding: 0.3rem;
-           min-height: 30px; border-radius: 3px; margin-top: 0.3rem; }
-.bt-zone.drag-over { background: var(--success); opacity: 0.3; }
-.bt-zone-label { font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;
-                 letter-spacing: 1px; margin-bottom: 0.2rem; }
-.bt-drops-zone { border-color: rgba(255, 70, 70, 0.3); }
-.bt-drops-zone .bt-zone-label { color: var(--danger); }
-.bt-chip-player { display: inline-block; padding: 2px 6px; margin: 2px;
-                  background: var(--panel-bg); border: 1px solid rgba(255,255,255,0.1);
-                  border-radius: 3px; cursor: grab; font-size: 0.8rem; user-select: none;
-                  max-width: 100%; white-space: nowrap; overflow: hidden;
-                  text-overflow: ellipsis; }
+.bt-zone { min-height: 30px; }
+.bt-chip-player {
+    display: inline-block;
+    margin: 2px;
+    cursor: grab;
+    user-select: none;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 .bt-chip-player.dragging { opacity: 0.4; }
-.bt-chip-player.foreign { border-color: var(--success); }
-.bt-chip-player.il { opacity: 0.4; cursor: default; }
-.bt-chip-player small { color: var(--text-secondary); margin-left: 4px; }
+.bt-chip-player.il { cursor: default; }
 @media (max-width: 768px) {
-  .build-trade-rosters { grid-template-columns: 1fr !important; }
+    .build-trade-rosters { grid-template-columns: 1fr !important; }
 }
 </style>
 
+<div class="page-trades">
 <div class="page-header">
     <h2>Trades</h2>
     {% if meta and meta.get('week') %}
@@ -158,6 +144,7 @@
 
     <div id="bt-result" class="bt-result"></div>
 
+</div>
 </div>
 
 <script>

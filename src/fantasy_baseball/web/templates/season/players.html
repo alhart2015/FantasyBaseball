@@ -3,76 +3,30 @@
 {% block content %}
 
 <style>
+/* Layout-only rules. Page theming lives in season.css under .page-players. */
 .filter-bar {
     display: flex;
     align-items: center;
     gap: 16px;
-    margin: 20px 0 12px;
     flex-wrap: wrap;
-}
-.filter-bar select,
-.filter-bar input[type="text"] {
-    padding: 8px 12px;
-    font-size: 13px;
-    background: var(--panel-bg);
-    border: 1px solid var(--panel-border);
-    border-radius: 6px;
-    color: var(--text);
-    outline: none;
-}
-.filter-bar select:focus,
-.filter-bar input[type="text"]:focus {
-    border-color: var(--accent);
 }
 .filter-bar label {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 13px;
-    color: var(--text-secondary);
     cursor: pointer;
-}
-.filter-bar input[type="checkbox"] { accent-color: var(--accent); }
-.filter-bar input[type="text"]::placeholder { color: var(--text-secondary); }
-#player-count {
-    color: var(--text-secondary);
-    font-size: 12px;
-    margin-bottom: 8px;
 }
 #browse-table th {
     cursor: pointer;
     user-select: none;
     white-space: nowrap;
 }
-#browse-table th:hover { color: var(--text); }
-.sort-arrow { font-size: 10px; margin-left: 2px; }
-.owner-fa { color: #2196f3; }
-.owner-roster { color: var(--success); font-weight: 600; }
-.owner-opp { color: var(--text-secondary); }
 #empty-msg {
-    color: var(--text-secondary);
-    font-size: 13px;
     margin-top: 20px;
 }
-.standings-toggle {
-    background: none;
-    border: 1px solid var(--panel-border);
-    color: var(--text-secondary);
-    padding: 4px 10px;
-    font-size: 12px;
-    cursor: pointer;
-    border-radius: 4px;
-}
-.standings-toggle.active {
-    background: var(--accent);
-    color: #fff;
-    border-color: var(--accent);
-}
-#compare-stats-table td.better { font-weight: 600; }
-#compare-stats-table td.diff-positive { color: var(--success); }
-#compare-stats-table td.diff-negative { color: var(--danger); }
 </style>
 
+<div class="page-players">
 <div class="page-header">
     <h2>Players</h2>
     {% if meta and meta.get('week') %}
@@ -151,6 +105,7 @@
     <div id="standings-unavailable" style="display:none; margin-top:16px; padding:12px 16px; color:var(--text-secondary); font-style:italic; font-size:13px; border-top:1px solid var(--panel-border);">
         Projected standings impact is only available when comparing a player on your team to a player not on your team.
     </div>
+</div>
 </div>
 
 <script>
@@ -506,7 +461,7 @@ function renderStatComparison(roster, other) {
     compStatsHead.innerHTML =
         '<th style="text-align:left">Stat</th>' +
         '<th style="text-align:right;color:var(--success)">' + rLabel + '</th>' +
-        '<th style="text-align:right;color:#2196f3">' + oLabel + '</th>' +
+        '<th style="text-align:right;color:var(--accent)">' + oLabel + '</th>' +
         '<th style="text-align:right">Diff</th>';
 
     compStatsBody.innerHTML = rows.map(r => {
