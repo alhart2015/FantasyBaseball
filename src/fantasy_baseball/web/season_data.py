@@ -10,10 +10,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 from fantasy_baseball.data.kv_store import KVStore, get_kv, is_remote
+from fantasy_baseball.lineup.delta_roto import score_swap
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import BENCH_SLOTS
 from fantasy_baseball.models.standings import ProjectedStandings, Standings, StandingsEntry
-from fantasy_baseball.scoring import score_roto
+from fantasy_baseball.scoring import score_roto, score_roto_dict
+from fantasy_baseball.trades.evaluate import build_swap_standings, find_player_by_name
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
     HITTER_PROJ_KEYS,
@@ -764,10 +766,6 @@ def compute_comparison_standings(
     dicts (the shape :func:`apply_swap_delta` operates on and that the
     Flask/JSON boundary expects).
     """
-    from fantasy_baseball.lineup.delta_roto import score_swap
-    from fantasy_baseball.scoring import score_roto_dict
-    from fantasy_baseball.trades.evaluate import build_swap_standings, find_player_by_name
-
     dropped = find_player_by_name(roster_player_name, user_roster)
     if dropped is None:
         return {"error": f"Player '{roster_player_name}' not found on roster"}

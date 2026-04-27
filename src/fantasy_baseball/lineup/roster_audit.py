@@ -45,10 +45,12 @@ RP_SV_THRESHOLD = 5
 
 
 def _is_starter(p: Player) -> bool:
+    """Pitcher with projected SV < ``RP_SV_THRESHOLD`` (treat as SP)."""
     return isinstance(p.rest_of_season, PitcherStats) and p.rest_of_season.sv < RP_SV_THRESHOLD
 
 
 def _is_reliever(p: Player) -> bool:
+    """Pitcher with projected SV >= ``RP_SV_THRESHOLD`` (treat as RP/closer)."""
     return isinstance(p.rest_of_season, PitcherStats) and p.rest_of_season.sv >= RP_SV_THRESHOLD
 
 
@@ -286,7 +288,6 @@ def audit_roster(
     all_before = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
     roto_before = score_roto_dict(all_before, team_sds=team_sds)
     user_before_stats = all_before[team_name]
-    loses_ros_cache: dict[int, dict[str, Any]] = {}
 
     entries: list[AuditEntry] = []
     for player in active_roster:
@@ -300,6 +301,7 @@ def audit_roster(
         )
 
         candidates = candidates_for_player(player, pools)
+        loses_ros = player_rest_of_season_stats(player)
 
         scored: list[dict[str, Any]] = []
 
@@ -325,16 +327,12 @@ def audit_roster(
                 continue
 
             try:
-                loses_ros = loses_ros_cache.get(id(player))
-                if loses_ros is None:
-                    loses_ros = player_rest_of_season_stats(player)
-                    loses_ros_cache[id(player)] = loses_ros
                 gains_ros = player_rest_of_season_stats(fa)
                 all_after = dict(all_before)
                 all_after[team_name] = apply_swap_delta(user_before_stats, loses_ros, gains_ros)
                 roto_after = score_roto_dict(all_after, team_sds=team_sds)
                 dr = score_swap(roto_before, roto_after, team_name)
-            except (ValueError, KeyError) as exc:
+            except KeyError as exc:
                 logger.warning(
                     "deltaRoto failed for %s → %s: %s",
                     player.name,

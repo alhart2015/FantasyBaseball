@@ -161,8 +161,12 @@ def build_swap_standings(
     Both dicts are ``{team_name: {STAT_CODE: float}}`` in the uppercase-keyed
     shape ``apply_swap_delta`` operates on. The "before" map is the current
     projected end-of-season totals; "after" replaces the user team's row with
-    the post-swap projection. Other teams are unchanged (shared dict references
-    — callers must not mutate them).
+    the post-swap projection.
+
+    Aliasing: ``all_after`` is a shallow copy of ``all_before``, so every
+    non-user team's row is the **same dict object** in both. Mutating
+    ``all_after[other_team][...]`` will silently mutate ``all_before`` too.
+    The user team's row is a fresh dict and is safe to mutate.
     """
     loses_ros = player_rest_of_season_stats(drop_player)
     gains_ros = player_rest_of_season_stats(add_player)

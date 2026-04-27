@@ -4,7 +4,8 @@ from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from typing import Any
 
-from fantasy_baseball.models.positions import Position
+from fantasy_baseball.models.positions import IL_SLOTS, Position
+from fantasy_baseball.utils.constants import IL_STATUSES
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 
@@ -304,9 +305,6 @@ class Player:
             — only the slot check catches it)
         Either signal alone is enough.
         """
-        from fantasy_baseball.models.positions import IL_SLOTS
-        from fantasy_baseball.utils.constants import IL_STATUSES
-
         if self.status in IL_STATUSES:
             return True
         slot = self.selected_position
