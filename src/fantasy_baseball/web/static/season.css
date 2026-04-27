@@ -1422,3 +1422,942 @@ td[style*="--neg"] {
     .page-lineup .data-table th { font-size: 9px; padding: 7px 3px 5px; }
     .page-lineup .data-table td { padding: 6px 3px; font-size: 11.5px; }
 }
+
+/* =====================================================================
+   TRADES — Editorial Sports Almanac (white & gold) — trade builder
+   Same paper + ink + gold palette. Both inline styles in waivers_trades.html
+   and JS-rendered fragments reference --success / --danger / --accent /
+   --text / --text-secondary / --panel-bg / --panel-border. We redefine
+   those tokens locally inside .page-trades so every inline reference
+   resolves to paper-themed values without chasing each call site.
+   ===================================================================== */
+
+.page-trades {
+    --paper:        #F8F5EE;
+    --paper-edge:   #EFE9D8;
+    --paper-tint:   #F2EDE0;
+    --paper-deep:   #ECE4CD;
+    --ink:          #1A1612;
+    --ink-soft:     #6B6258;
+    --ink-faint:    #9A8F7E;
+    --rule:         #E1D9C4;
+    --rule-strong:  #B8AC8E;
+
+    --gold:         #B8860B;
+    --gold-deep:    #7C5A0A;
+    --gold-bright:  #D4A933;
+    --gold-soft:    rgba(184, 134, 11, 0.10);
+    --gold-amber:   #C8851A;
+
+    --lead:         #5C7A2E;
+    --lead-deep:    #3F5A1A;
+    --lead-soft:    rgba(92, 122, 46, 0.10);
+    --trail:        #8B2C2C;
+    --trail-deep:   #5F1F1F;
+    --trail-soft:   rgba(139, 44, 44, 0.08);
+
+    /* Token remap — inline `style="color: var(--success)"` etc. now
+       resolve to the paper palette inside this page. */
+    --success:        var(--lead);
+    --danger:         var(--trail);
+    --warning:        var(--gold-amber);
+    --text:           var(--ink);
+    --text-primary:   var(--ink);
+    --text-secondary: var(--ink-soft);
+    --accent:         var(--gold);
+    --bg:             var(--paper);
+    --panel-bg:       var(--paper-tint);
+    --panel-border:   var(--rule-strong);
+    --card-bg:        var(--paper-tint);
+    --row-highlight:  var(--gold-soft);
+    --border:         var(--rule);
+
+    background: var(--paper);
+    color: var(--ink);
+    margin: -24px -32px;
+    padding: 32px 44px 56px;
+    min-height: calc(100vh + 24px);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.6),
+        0 0 0 1px var(--paper-edge),
+        0 24px 48px -16px rgba(0, 0, 0, 0.55);
+    background-image:
+        radial-gradient(circle at 20% 10%, rgba(184, 134, 11, 0.04), transparent 60%),
+        radial-gradient(circle at 80% 90%, rgba(184, 134, 11, 0.03), transparent 50%);
+    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    letter-spacing: 0.005em;
+}
+
+/* ── Masthead ──────────────────────────────────────────────────────── */
+
+.page-trades .page-header {
+    align-items: flex-end;
+    margin-bottom: 22px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--rule);
+    position: relative;
+}
+.page-trades .page-header::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -1px;
+    width: 80px;
+    height: 3px;
+    background: var(--gold);
+}
+.page-trades .page-header h2 {
+    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-style: italic;
+    font-weight: 400;
+    font-size: 52px;
+    line-height: 0.95;
+    letter-spacing: -0.025em;
+    color: var(--ink);
+    font-variation-settings: "opsz" 144, "SOFT" 50;
+}
+.page-trades .page-header h2::after {
+    content: ".";
+    color: var(--gold);
+    font-style: normal;
+}
+.page-trades .week-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    padding-bottom: 8px;
+}
+.page-trades .week-label::before {
+    content: "◆ ";
+    color: var(--gold);
+    font-size: 9px;
+    vertical-align: 2px;
+    margin-right: 4px;
+}
+
+/* ── Section toggle headers (Trade Finder, Build a Trade) ─────────── */
+
+.page-trades .section-toggle {
+    margin: 28px 0 12px !important;
+    padding: 0 0 6px !important;
+    border-bottom: 1px solid var(--rule);
+    color: var(--ink) !important;
+    font-family: 'Fraunces', serif !important;
+    font-style: italic;
+    font-weight: 500 !important;
+    font-size: 22px !important;
+    letter-spacing: -0.005em;
+    position: relative;
+}
+.page-trades .section-toggle:first-of-type {
+    margin-top: 22px !important;
+}
+.page-trades .section-toggle::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -1px;
+    width: 32px;
+    height: 2px;
+    background: var(--gold);
+}
+.page-trades .section-toggle .chevron {
+    color: var(--gold-deep) !important;
+    font-size: 11px !important;
+    transition: transform 0.2s;
+}
+
+/* ── Trade Finder: search input + Away/For pills ──────────────────── */
+
+.page-trades #trade-search-input {
+    background: var(--paper-tint) !important;
+    border: 1px solid var(--rule-strong) !important;
+    border-radius: 2px !important;
+    color: var(--ink) !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 13px !important;
+}
+.page-trades #trade-search-input::placeholder {
+    color: var(--ink-faint);
+}
+.page-trades #trade-search-input:focus {
+    outline: none;
+    border-color: var(--gold) !important;
+    box-shadow: 0 0 0 2px var(--gold-soft);
+}
+
+.page-trades .pill {
+    background: transparent;
+    border: 1px solid var(--rule-strong);
+    border-radius: 2px;
+    color: var(--ink-soft);
+    opacity: 1;
+    padding: 7px 14px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    transition: all 0.15s;
+    cursor: pointer;
+}
+.page-trades .pill:hover {
+    color: var(--ink);
+    border-color: var(--gold);
+}
+.page-trades .pill.active {
+    background: var(--gold);
+    color: var(--paper);
+    border-color: var(--gold);
+}
+.page-trades .pill:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    border-color: var(--rule);
+    color: var(--ink-faint);
+}
+
+/* Evaluate Trade is the primary CTA when enabled */
+.page-trades #bt-evaluate:not(:disabled) {
+    background: var(--gold);
+    color: var(--paper);
+    border-color: var(--gold);
+    box-shadow: 0 1px 0 var(--gold-deep);
+}
+.page-trades #bt-evaluate:not(:disabled):hover {
+    background: var(--gold-deep);
+    border-color: var(--gold-deep);
+}
+
+/* ── Trade card (.card injected by JS) ────────────────────────────── */
+
+.page-trades .card {
+    background: var(--paper-tint);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--gold);
+    border-radius: 2px;
+    padding: 14px 18px;
+    margin-bottom: 12px;
+}
+.page-trades .card-header {
+    align-items: center;
+}
+.page-trades .card h4 {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-weight: 500;
+    font-size: 18px;
+    color: var(--ink);
+    letter-spacing: -0.005em;
+    margin-bottom: 8px;
+}
+
+.page-trades .trade-details {
+    border-top: 1px solid var(--rule);
+}
+.page-trades .trade-details thead th {
+    color: var(--ink-soft);
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--rule-strong);
+    padding: 8px 6px;
+    text-align: left;
+}
+.page-trades .trade-details tbody td {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    padding: 6px;
+    border-bottom: 1px solid var(--rule);
+}
+.page-trades .trade-details tbody th {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 600;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    text-align: left;
+    padding: 6px;
+    border-bottom: 1px solid var(--rule);
+}
+
+.page-trades .cat-impact {
+    gap: 6px 12px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11.5px;
+}
+.page-trades .cat-gain { color: var(--lead-deep); font-weight: 600; }
+.page-trades .cat-loss { color: var(--trail-deep); font-weight: 600; }
+
+/* ── Build a Trade panels ─────────────────────────────────────────── */
+
+.page-trades #bt-opponent {
+    background: var(--paper-tint);
+    border: 1px solid var(--rule-strong);
+    border-radius: 2px;
+    color: var(--ink);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    padding: 6px 28px 6px 12px;
+    margin-left: 8px;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image:
+        linear-gradient(45deg, transparent 50%, var(--gold-deep) 50%),
+        linear-gradient(135deg, var(--gold-deep) 50%, transparent 50%);
+    background-position:
+        calc(100% - 14px) calc(50% - 2px),
+        calc(100% - 9px) calc(50% - 2px);
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+}
+.page-trades label[for="bt-opponent"],
+.page-trades label[for="bt-waiver-search"] {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+}
+
+.page-trades .bt-panel {
+    background: var(--paper);
+    border: 1px solid var(--rule-strong) !important;
+    border-radius: 2px !important;
+    padding: 14px 16px !important;
+}
+.page-trades .bt-panel h4 {
+    font-family: 'Fraunces', serif !important;
+    font-style: italic;
+    font-weight: 500;
+    font-size: 16px !important;
+    color: var(--ink);
+    margin-bottom: 10px !important;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--rule);
+}
+
+/* Slot grid */
+.page-trades .bt-slot-grid {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px !important;
+    gap: 3px !important;
+}
+.page-trades .bt-slot-row {
+    grid-template-columns: 52px 1fr;
+    align-items: center;
+}
+.page-trades .bt-slot-label {
+    color: var(--ink-soft) !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 10px !important;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+.page-trades .bt-slot {
+    background: var(--paper-deep) !important;
+    border: 1px dashed var(--rule-strong) !important;
+    border-radius: 2px !important;
+    min-height: 26px !important;
+    max-height: 26px !important;
+}
+
+/* Drop-target indicator (live during drag, plus :has(.bt-ghost) state) */
+.page-trades .bt-slot.drag-over,
+.page-trades .bt-slot:has(.bt-ghost) {
+    background: var(--lead-soft) !important;
+    border-style: solid !important;
+    border-color: var(--lead) !important;
+    opacity: 1 !important;
+}
+.page-trades .bt-zone.drag-over,
+.page-trades .bt-zone:has(.bt-ghost) {
+    background: var(--lead-soft) !important;
+    border-style: solid !important;
+    border-color: var(--lead) !important;
+    opacity: 1 !important;
+}
+
+.page-trades .bt-zone {
+    background: var(--paper-tint) !important;
+    border: 1px dashed var(--rule-strong) !important;
+    border-radius: 2px !important;
+    padding: 8px !important;
+    margin-top: 6px !important;
+}
+.page-trades .bt-zone-label {
+    color: var(--ink-soft) !important;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 9.5px !important;
+    font-weight: 700;
+    letter-spacing: 0.16em !important;
+    text-transform: uppercase;
+    margin-bottom: 6px !important;
+}
+.page-trades .bt-drops-zone {
+    border-color: var(--trail) !important;
+    background: var(--trail-soft) !important;
+}
+.page-trades .bt-drops-zone .bt-zone-label {
+    color: var(--trail-deep) !important;
+}
+
+/* Player chips */
+.page-trades .bt-chip-player {
+    background: var(--paper) !important;
+    border: 1px solid var(--rule-strong) !important;
+    border-radius: 2px !important;
+    color: var(--ink) !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 11px !important;
+    font-weight: 500;
+    padding: 3px 8px !important;
+}
+.page-trades .bt-chip-player.foreign {
+    border-color: var(--lead) !important;
+    background: var(--lead-soft) !important;
+    color: var(--lead-deep) !important;
+}
+.page-trades .bt-chip-player.il {
+    border-color: var(--rule);
+    background: var(--paper-tint) !important;
+    color: var(--ink-faint) !important;
+    opacity: 1 !important;
+}
+.page-trades .bt-chip-player small {
+    color: var(--ink-faint) !important;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px !important;
+    margin-left: 5px !important;
+    letter-spacing: 0.04em;
+}
+
+/* Waiver search list */
+.page-trades #bt-waiver-search {
+    background: var(--paper-tint);
+    border: 1px solid var(--rule-strong);
+    border-radius: 2px;
+    color: var(--ink);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    padding: 6px 10px;
+    margin-top: 4px;
+    width: 100%;
+}
+.page-trades #bt-waiver-search:focus {
+    outline: none;
+    border-color: var(--gold);
+    box-shadow: 0 0 0 2px var(--gold-soft);
+}
+.page-trades .bt-suggestions {
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    margin-top: 4px !important;
+}
+.page-trades .bt-suggestions li {
+    background: var(--paper-tint) !important;
+    color: var(--ink);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    padding: 5px 10px !important;
+    border-bottom: 1px solid var(--rule);
+}
+.page-trades .bt-suggestions li:last-child { border-bottom: none; }
+.page-trades .bt-suggestions li:hover {
+    background: var(--gold-soft) !important;
+    color: var(--ink) !important;
+}
+.page-trades .bt-suggestions li small {
+    color: var(--ink-faint);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+}
+
+/* Legality banner */
+.page-trades .bt-legality {
+    background: var(--paper-tint);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--gold);
+    border-radius: 2px;
+    padding: 10px 14px;
+    color: var(--ink);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11.5px !important;
+    margin-top: 12px !important;
+}
+.page-trades .bt-legality.illegal {
+    border-left-color: var(--trail);
+    background: var(--trail-soft);
+    color: var(--trail-deep) !important;
+}
+.page-trades .bt-result-bad {
+    background: var(--trail-soft);
+    border: 1px solid var(--trail);
+    border-radius: 2px;
+    color: var(--trail-deep) !important;
+    padding: 12px 16px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+}
+
+/* Trade card-header layout — make it a flex row so JS-injected divs lay out */
+.page-trades .card-header > div:first-child {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    color: var(--ink);
+}
+
+/* Result delta-roto totals headline */
+.page-trades #bt-result h4 {
+    font-family: 'Fraunces', serif !important;
+    font-style: italic;
+    font-weight: 500 !important;
+    font-size: 17px !important;
+    color: var(--ink);
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 8px;
+    margin-bottom: 12px !important;
+}
+
+.page-trades .placeholder-text {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 16px;
+    color: var(--ink-soft);
+}
+
+/* Narrow viewports */
+@media (max-width: 768px) {
+    .page-trades { margin: -16px; padding: 22px 18px 36px; }
+    .page-trades .page-header h2 { font-size: 36px; }
+    .page-trades .section-toggle { font-size: 17px !important; }
+}
+
+/* =====================================================================
+   PLAYERS — Editorial Sports Almanac (white & gold) — browse + compare
+   Same approach as .page-trades: redefine the dark-theme tokens locally
+   so inline `style="color: var(--success)"` and JS-injected fragments
+   resolve to the paper palette.
+   ===================================================================== */
+
+.page-players {
+    --paper:        #F8F5EE;
+    --paper-edge:   #EFE9D8;
+    --paper-tint:   #F2EDE0;
+    --paper-deep:   #ECE4CD;
+    --ink:          #1A1612;
+    --ink-soft:     #6B6258;
+    --ink-faint:    #9A8F7E;
+    --rule:         #E1D9C4;
+    --rule-strong:  #B8AC8E;
+
+    --gold:         #B8860B;
+    --gold-deep:    #7C5A0A;
+    --gold-bright:  #D4A933;
+    --gold-soft:    rgba(184, 134, 11, 0.10);
+    --gold-amber:   #C8851A;
+
+    --lead:         #5C7A2E;
+    --lead-deep:    #3F5A1A;
+    --lead-soft:    rgba(92, 122, 46, 0.10);
+    --trail:        #8B2C2C;
+    --trail-deep:   #5F1F1F;
+    --trail-soft:   rgba(139, 44, 44, 0.08);
+
+    --success:        var(--lead);
+    --danger:         var(--trail);
+    --warning:        var(--gold-amber);
+    --text:           var(--ink);
+    --text-primary:   var(--ink);
+    --text-secondary: var(--ink-soft);
+    --accent:         var(--gold);
+    --bg:             var(--paper);
+    --panel-bg:       var(--paper-tint);
+    --panel-border:   var(--rule-strong);
+    --card-bg:        var(--paper-tint);
+    --row-highlight:  var(--gold-soft);
+    --border:         var(--rule);
+
+    background: var(--paper);
+    color: var(--ink);
+    margin: -24px -32px;
+    padding: 32px 44px 56px;
+    min-height: calc(100vh + 24px);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.6),
+        0 0 0 1px var(--paper-edge),
+        0 24px 48px -16px rgba(0, 0, 0, 0.55);
+    background-image:
+        radial-gradient(circle at 20% 10%, rgba(184, 134, 11, 0.04), transparent 60%),
+        radial-gradient(circle at 80% 90%, rgba(184, 134, 11, 0.03), transparent 50%);
+    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    letter-spacing: 0.005em;
+}
+
+/* ── Masthead ──────────────────────────────────────────────────────── */
+
+.page-players .page-header {
+    align-items: flex-end;
+    margin-bottom: 20px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--rule);
+    position: relative;
+}
+.page-players .page-header::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -1px;
+    width: 80px;
+    height: 3px;
+    background: var(--gold);
+}
+.page-players .page-header h2 {
+    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-style: italic;
+    font-weight: 400;
+    font-size: 52px;
+    line-height: 0.95;
+    letter-spacing: -0.025em;
+    color: var(--ink);
+    font-variation-settings: "opsz" 144, "SOFT" 50;
+}
+.page-players .page-header h2::after {
+    content: ".";
+    color: var(--gold);
+    font-style: normal;
+}
+.page-players .week-label {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    padding-bottom: 8px;
+}
+.page-players .week-label::before {
+    content: "◆ ";
+    color: var(--gold);
+    font-size: 9px;
+    vertical-align: 2px;
+    margin-right: 4px;
+}
+
+/* ── Filter bar ───────────────────────────────────────────────────── */
+
+.page-players .filter-bar {
+    margin: 18px 0 12px;
+}
+.page-players .filter-bar select,
+.page-players .filter-bar input[type="text"] {
+    background: var(--paper-tint) !important;
+    border: 1px solid var(--rule-strong) !important;
+    border-radius: 2px !important;
+    color: var(--ink) !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 12px !important;
+    padding: 7px 12px !important;
+}
+.page-players .filter-bar select {
+    appearance: none;
+    -webkit-appearance: none;
+    padding-right: 28px !important;
+    background-image:
+        linear-gradient(45deg, transparent 50%, var(--gold-deep) 50%),
+        linear-gradient(135deg, var(--gold-deep) 50%, transparent 50%);
+    background-position:
+        calc(100% - 14px) calc(50% - 2px),
+        calc(100% - 9px) calc(50% - 2px);
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+}
+.page-players .filter-bar select:focus,
+.page-players .filter-bar input[type="text"]:focus {
+    outline: none;
+    border-color: var(--gold) !important;
+    box-shadow: 0 0 0 2px var(--gold-soft);
+}
+.page-players .filter-bar input[type="text"]::placeholder {
+    color: var(--ink-faint);
+}
+.page-players .filter-bar label {
+    color: var(--ink-soft);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11.5px;
+    letter-spacing: 0.04em;
+    font-weight: 500;
+}
+.page-players .filter-bar input[type="checkbox"] {
+    accent-color: var(--gold);
+}
+
+.page-players #player-count {
+    color: var(--ink-soft);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+}
+
+/* ── Browse table ─────────────────────────────────────────────────── */
+
+.page-players .data-table {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    border-top: 2px solid var(--ink);
+    border-bottom: 1px solid var(--ink);
+    font-size: 12.5px;
+    overflow: visible;
+    font-feature-settings: "tnum" 1, "lnum" 1;
+}
+.page-players .data-table th {
+    background: transparent;
+    color: var(--ink-soft);
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    padding: 10px 6px 8px;
+    border-bottom: 1px solid var(--rule-strong);
+}
+.page-players #browse-table th:hover { color: var(--ink); }
+.page-players .data-table td {
+    padding: 8px 6px;
+    border-bottom: 1px solid var(--rule);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12.5px;
+    color: var(--ink);
+}
+.page-players .data-table td[style*="text-align:left"],
+.page-players .data-table td[style*="text-align: left"] {
+    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-weight: 500;
+    font-size: 14px;
+    font-variation-settings: "opsz" 30;
+    color: var(--ink) !important;
+}
+.page-players .sort-arrow {
+    color: var(--gold);
+    font-size: 9px;
+    margin-left: 4px;
+}
+
+/* Owner badges — repalette */
+.page-players .owner-fa {
+    color: var(--gold-deep) !important;
+    font-weight: 600;
+    font-size: 11.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.page-players .owner-roster {
+    color: var(--lead-deep) !important;
+    font-weight: 700;
+    font-size: 11.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.page-players .owner-opp {
+    color: var(--ink-soft) !important;
+    font-size: 11.5px;
+}
+
+/* Compare checkbox */
+.page-players .compare-cb { accent-color: var(--gold) !important; }
+
+/* dr-compute button (FA delta-roto on demand) */
+.page-players .dr-compute {
+    background: transparent !important;
+    border: 1px solid var(--rule-strong) !important;
+    border-radius: 2px !important;
+    color: var(--ink-soft) !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 9.5px !important;
+    font-weight: 700;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase;
+    padding: 3px 9px !important;
+}
+.page-players .dr-compute:hover {
+    color: var(--ink) !important;
+    border-color: var(--gold) !important;
+}
+
+.page-players #empty-msg {
+    color: var(--ink-soft);
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 15px;
+}
+
+/* ── Comparison panel ─────────────────────────────────────────────── */
+
+.page-players #comparison-panel {
+    background: var(--paper-tint) !important;
+    border: 1px solid var(--rule-strong) !important;
+    border-top: 3px solid var(--gold) !important;
+    border-radius: 2px !important;
+    padding: 22px 24px !important;
+}
+.page-players #comparison-panel h3 {
+    font-family: 'Fraunces', serif !important;
+    font-style: italic;
+    font-weight: 500;
+    color: var(--ink) !important;
+    font-size: 22px !important;
+    letter-spacing: -0.005em;
+}
+.page-players #comparison-panel h4 {
+    font-family: 'Fraunces', serif !important;
+    font-style: italic;
+    font-weight: 500;
+    color: var(--ink) !important;
+    font-size: 16px !important;
+}
+
+.page-players #clear-compare {
+    background: transparent !important;
+    border: 1px solid var(--rule-strong) !important;
+    color: var(--ink-soft) !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: 10.5px !important;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 4px 10px !important;
+    border-radius: 2px !important;
+}
+.page-players #clear-compare:hover {
+    color: var(--trail-deep) !important;
+    border-color: var(--trail) !important;
+}
+
+#compare-validation {
+    /* lives inside the panel; no need for .page-players prefix because
+       we're targeting it under the panel only via #compare-validation */
+}
+.page-players #compare-validation {
+    color: var(--ink-soft) !important;
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 13px;
+}
+
+/* Stat compare table — better/diff classes */
+.page-players #compare-stats-table td.better {
+    color: var(--lead-deep) !important;
+    font-weight: 700;
+    background: var(--lead-soft);
+}
+.page-players #compare-stats-table td.diff-positive {
+    color: var(--lead-deep) !important;
+    font-weight: 600;
+}
+.page-players #compare-stats-table td.diff-negative {
+    color: var(--trail-deep) !important;
+    font-weight: 600;
+}
+
+/* Standings toggle pills (Roto / ERoto / Stat Totals) */
+.page-players .standings-toggle {
+    background: transparent;
+    border: 1px solid var(--rule-strong);
+    color: var(--ink-soft);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 5px 12px;
+    border-radius: 2px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.page-players .standings-toggle:hover {
+    color: var(--ink);
+    border-color: var(--gold);
+}
+.page-players .standings-toggle.active {
+    background: var(--gold);
+    color: var(--paper);
+    border-color: var(--gold);
+}
+
+#standings-subtitle.lineup-themed { /* no-op anchor */ }
+.page-players #standings-subtitle {
+    color: var(--ink-soft) !important;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px !important;
+    letter-spacing: 0.06em;
+}
+.page-players #standings-after-label {
+    color: var(--ink-soft) !important;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 10.5px !important;
+    font-weight: 700;
+    letter-spacing: 0.14em !important;
+    text-transform: uppercase;
+}
+
+.page-players #standings-unavailable {
+    color: var(--ink-soft) !important;
+    font-family: 'Fraunces', serif !important;
+    font-style: italic !important;
+    border-top: 1px solid var(--rule) !important;
+    padding-top: 14px !important;
+    margin-top: 16px !important;
+    background: transparent !important;
+}
+
+/* Standings before/after tables — tighter than the main browse table */
+.page-players #standings-before,
+.page-players #standings-after {
+    font-size: 11.5px;
+}
+.page-players #standings-before td,
+.page-players #standings-after td {
+    padding: 6px 5px;
+    font-size: 11.5px;
+}
+.page-players #standings-before th,
+.page-players #standings-after th {
+    font-size: 9.5px;
+    padding: 8px 5px 6px;
+}
+/* User team highlight inside before/after tables (rows have inline
+   color: var(--accent); font-weight: 600 when team === user_team —
+   the var(--accent) override turns them gold, which reads well) */
+
+/* delta-roto-summary card */
+.page-players #delta-roto-summary {
+    background: var(--paper) !important;
+    border: 1px solid var(--rule-strong) !important;
+    border-left: 3px solid var(--gold) !important;
+    border-radius: 2px !important;
+    padding: 12px 16px !important;
+    color: var(--ink);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12.5px !important;
+}
+
+/* Narrow viewports */
+@media (max-width: 768px) {
+    .page-players { margin: -16px; padding: 22px 18px 36px; }
+    .page-players .page-header h2 { font-size: 36px; }
+    .page-players .data-table th { font-size: 9px; padding: 7px 3px 5px; }
+    .page-players .data-table td { padding: 6px 3px; font-size: 11.5px; }
+}
