@@ -453,6 +453,47 @@ document.addEventListener('DOMContentLoaded', function() {
     return moves;
   }
 
+  function renderMovesTable(moves) {
+    const rows = [];
+    for (const a of moves.adds) {
+      rows.push('<tr><td class="bt-move-add">+ ' + esc(a.name) +
+                (a.slot ? ' <small>(' + esc(a.slot) + ')</small>' : '') + '</td></tr>');
+    }
+    for (const o of moves.outgoing) {
+      rows.push('<tr><td class="bt-move-out">&minus; ' + esc(o.name) +
+                (o.slot ? ' <small>(' + esc(o.slot) + ')</small>' : '') + '</td></tr>');
+    }
+    for (const d of moves.drops) {
+      rows.push('<tr><td class="bt-move-drop">&times; ' + esc(d.name) + ' <small>(dropped)</small></td></tr>');
+    }
+    for (const r of moves.reshuffles) {
+      rows.push('<tr><td class="bt-move-shuffle">' + esc(r.name) +
+                ' <small>' + esc(r.fromSlot) + ' &rarr; ' + esc(r.toSlot) + '</small></td></tr>');
+    }
+    if (rows.length === 0) rows.push('<tr><td><em>(no moves)</em></td></tr>');
+    return (
+      '<div class="bt-moves-team">' +
+      '<h5>' + esc(moves.team) + '</h5>' +
+      '<table class="bt-moves-table"><tbody>' + rows.join("") + '</tbody></table>' +
+      '</div>'
+    );
+  }
+
+  function renderMovesSummary() {
+    const target = document.getElementById("bt-result-moves");
+    if (!target) return;
+    const myMoves = computeMovesSummary("my");
+    const oppMoves = computeMovesSummary("opp");
+    target.innerHTML =
+      '<div class="card bt-moves-card">' +
+        '<h4>Moves</h4>' +
+        '<div class="bt-moves-grid">' +
+          renderMovesTable(myMoves) +
+          renderMovesTable(oppMoves) +
+        '</div>' +
+      '</div>';
+  }
+
   function renderChip(key) {
     const p = playerByKey(key);
     if (!p) return "";
@@ -686,7 +727,7 @@ document.addEventListener('DOMContentLoaded', function() {
       target.textContent = "Failed to load delta view component.";
     }
 
-    // Moves summary is rendered by Phase 3; placeholder until then.
+    renderMovesSummary();
   }
 
   // --- Stubs filled in by later tasks ---------------------------------------
