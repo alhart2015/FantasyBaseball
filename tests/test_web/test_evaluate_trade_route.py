@@ -252,3 +252,13 @@ def test_evaluate_trade_response_includes_view_blocks(client, monkeypatch):
             assert cat in block["categories"], f"{view_name} missing {cat}"
             cv = block["categories"][cat]
             assert {"before", "after", "delta"} <= cv.keys()
+
+    # stat_totals.delta_total is always 0.0 (summing across mixed-unit cats is meaningless)
+    assert body["stat_totals"]["delta_total"] == 0.0
+
+    # When team_sds is None, score_roto_dict returns integer roto regardless of mode,
+    # so roto and ev_roto deltas should match for every category.
+    for cat in ("R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"):
+        assert (
+            body["roto"]["categories"][cat]["delta"] == body["ev_roto"]["categories"][cat]["delta"]
+        )
