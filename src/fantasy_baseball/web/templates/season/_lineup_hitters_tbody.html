@@ -16,13 +16,13 @@
     {% set st = t.get(cat, {}) %}
     <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'PA' %} pa-col{% endif %}" style="font-weight: 600;">
         {% if st.get('actual') is not none %}
-            {% if cat == 'AVG' %}{{ "%.3f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}
+            {% if cat == 'AVG' %}{{ "%.3f"|format(st.actual) }}{% else %}{{ "%.0f"|format(st.actual) }}{% endif %}
         {% else %}—{% endif %}
         {% if st.get('z_score') is defined and cat not in ['PA'] %}
         <div class="tooltip">
             <div style="font-weight: 600; margin-bottom: 6px;">Team — {{ cat }}</div>
-            <div class="tooltip-row"><span class="tooltip-label">Actual</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}</span></div>
-            <div class="tooltip-row"><span class="tooltip-label">Expected pace</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.expected) }}{% else %}{{ st.expected }}{% endif %}</span></div>
+            <div class="tooltip-row"><span class="tooltip-label">Actual</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.actual) }}{% else %}{{ "%.0f"|format(st.actual) }}{% endif %}</span></div>
+            <div class="tooltip-row"><span class="tooltip-label">Expected pace</span><span class="tooltip-val">{% if cat == 'AVG' %}{{ "%.3f"|format(st.expected) }}{% else %}{{ "%.0f"|format(st.expected) }}{% endif %}</span></div>
             <div class="tooltip-row"><span class="tooltip-label">Z-score</span><span class="tooltip-val">{{ "%+.1f"|format(st.z_score) }}</span></div>
         </div>
         {% endif %}
