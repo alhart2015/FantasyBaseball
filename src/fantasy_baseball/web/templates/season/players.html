@@ -575,9 +575,21 @@ function renderDeltaRoto(dr) {
     el.innerHTML = html;
 }
 
+function filterStandingsCats(allCats) {
+    if (selectedPlayers.length !== 2) return allCats;
+    const [a, b] = selectedPlayers;
+    if (a.player_type === 'hitter' && b.player_type === 'hitter') {
+        return allCats.filter(c => HITTING_CATS.includes(c));
+    }
+    if (a.player_type === 'pitcher' && b.player_type === 'pitcher') {
+        return allCats.filter(c => PITCHING_CATS.includes(c));
+    }
+    return allCats;
+}
+
 function renderStandings() {
     if (!standingsData) return;
-    const cats = standingsData.categories;
+    const cats = filterStandingsCats(standingsData.categories);
     const mode = standingsMode;
 
     const headHtml = '<th style="text-align:left">Team</th><th style="text-align:right">Pts</th>' +
