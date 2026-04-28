@@ -610,13 +610,13 @@ def register_routes(app: Flask) -> None:
 
         # Decorate each candidate with canonical name::player_type keys
         # so client code (Compare button) can build /players?compare=...
-        # URLs without re-deriving the player_type lookup.
+        # URLs without re-deriving the player_type lookup. Fail loudly on
+        # missing player_type — defaulting would silently miscategorize
+        # pitcher trades as hitter trades (CLAUDE.md: never key on bare names).
         for group in results:
             for cand in group.get("candidates", []):
-                send_type = cand.get("send_player_type", "hitter")
-                receive_type = cand.get("receive_player_type", "hitter")
-                cand["send_key"] = f"{cand['send']}::{send_type}"
-                cand["receive_key"] = f"{cand['receive']}::{receive_type}"
+                cand["send_key"] = f"{cand['send']}::{cand['send_player_type']}"
+                cand["receive_key"] = f"{cand['receive']}::{cand['receive_player_type']}"
 
         return jsonify(results)
 
