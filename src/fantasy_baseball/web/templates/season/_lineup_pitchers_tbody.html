@@ -11,13 +11,13 @@
     {% set st = t.get(cat, {}) %}
     <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'IP' %} pa-col{% endif %}" style="font-weight: 600;">
         {% if st.get('actual') is not none %}
-            {% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.actual) }}{% elif cat == 'IP' %}{{ st.actual | format_ip }}{% else %}{{ st.actual }}{% endif %}
+            {% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.actual) }}{% elif cat == 'IP' %}{{ st.actual | format_ip }}{% else %}{{ "%.0f"|format(st.actual) }}{% endif %}
         {% else %}—{% endif %}
         {% if st.get('z_score') is defined and cat != 'IP' %}
         <div class="tooltip">
             <div style="font-weight: 600; margin-bottom: 6px;">Team — {{ cat }}</div>
-            <div class="tooltip-row"><span class="tooltip-label">Actual</span><span class="tooltip-val">{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.actual) }}{% elif cat == 'IP' %}{{ st.actual | format_ip }}{% else %}{{ st.actual }}{% endif %}</span></div>
-            <div class="tooltip-row"><span class="tooltip-label">Expected pace</span><span class="tooltip-val">{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.expected) }}{% elif cat == 'IP' %}{{ st.expected | format_ip }}{% else %}{{ st.expected }}{% endif %}</span></div>
+            <div class="tooltip-row"><span class="tooltip-label">Actual</span><span class="tooltip-val">{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.actual) }}{% elif cat == 'IP' %}{{ st.actual | format_ip }}{% else %}{{ "%.0f"|format(st.actual) }}{% endif %}</span></div>
+            <div class="tooltip-row"><span class="tooltip-label">Expected pace</span><span class="tooltip-val">{% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.expected) }}{% elif cat == 'IP' %}{{ st.expected | format_ip }}{% else %}{{ "%.0f"|format(st.expected) }}{% endif %}</span></div>
             <div class="tooltip-row"><span class="tooltip-label">Z-score</span><span class="tooltip-val">{{ "%+.1f"|format(st.z_score) }}</span></div>
         </div>
         {% endif %}
