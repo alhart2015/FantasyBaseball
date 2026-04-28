@@ -43,6 +43,47 @@ def test_multi_trade_result_shape():
     assert r.categories["R"].delta == 1.0
 
 
+def test_category_view_shape():
+    from fantasy_baseball.trades.multi_trade import CategoryView
+
+    v = CategoryView(before=10.0, after=12.0, delta=2.0)
+    assert v.before == 10.0
+    assert v.after == 12.0
+    assert v.delta == 2.0
+
+
+def test_view_block_shape():
+    from fantasy_baseball.trades.multi_trade import CategoryView, ViewBlock
+
+    v = ViewBlock(
+        delta_total=1.5,
+        categories={"R": CategoryView(before=10.0, after=11.0, delta=1.0)},
+    )
+    assert v.delta_total == 1.5
+    assert v.categories["R"].after == 11.0
+
+
+def test_multi_trade_result_has_view_blocks():
+    from fantasy_baseball.trades.multi_trade import (
+        MultiTradeResult,
+        ViewBlock,
+    )
+
+    empty = ViewBlock(delta_total=0.0, categories={})
+    r = MultiTradeResult(
+        legal=True,
+        reason=None,
+        delta_total=0.0,
+        categories={},
+        roto=empty,
+        ev_roto=empty,
+        stat_totals=empty,
+    )
+    assert r.roto.delta_total == 0.0
+    assert r.ev_roto.delta_total == 0.0
+    assert r.stat_totals.delta_total == 0.0
+
+
 def _hitter_with_key(name: str) -> Player:
     return Player(
         name=name,

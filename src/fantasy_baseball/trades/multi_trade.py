@@ -49,6 +49,23 @@ class CategoryDelta:
 
 
 @dataclass
+class CategoryView:
+    """Per-category before/after/delta tuple, used in roto / eROTO / stat-totals views."""
+
+    before: float
+    after: float
+    delta: float
+
+
+@dataclass
+class ViewBlock:
+    """One delta view (roto, eROTO, or stat totals) - total + per-category."""
+
+    delta_total: float  # 0.0 for stat_totals (no scalar total is meaningful)
+    categories: dict[str, CategoryView]
+
+
+@dataclass
 class MultiTradeResult:
     """Output of :func:`evaluate_multi_trade`."""
 
@@ -56,6 +73,11 @@ class MultiTradeResult:
     reason: str | None
     delta_total: float
     categories: dict[str, CategoryDelta]
+    roto: ViewBlock = field(default_factory=lambda: ViewBlock(delta_total=0.0, categories={}))
+    ev_roto: ViewBlock = field(default_factory=lambda: ViewBlock(delta_total=0.0, categories={}))
+    stat_totals: ViewBlock = field(
+        default_factory=lambda: ViewBlock(delta_total=0.0, categories={})
+    )
 
 
 def player_key(player: Player) -> str:
