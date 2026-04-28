@@ -305,6 +305,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const state = {
     opponent: null,
     placements: new Map(),
+    initialPlacements: new Map(),  // snapshot at rebuildPlacements time, used for moves-summary diff
     waiverMeta: new Map(),  // key -> {name, positions} for waiver-origin players
   };
 
@@ -367,6 +368,11 @@ document.addEventListener('DOMContentLoaded', function() {
       const canon = normalizeSlot(p.selected_position);
       const zone = canon === "BN" ? "BN" : assignToFirstFreeSlot("opp", canon, occupied);
       state.placements.set(k, { currentSide: "opp", zone, origin: "opp" });
+    }
+    // Snapshot the just-built placements for later diffing in the moves summary.
+    state.initialPlacements.clear();
+    for (const [k, pl] of state.placements) {
+      state.initialPlacements.set(k, {currentSide: pl.currentSide, zone: pl.zone, origin: pl.origin});
     }
   }
 
