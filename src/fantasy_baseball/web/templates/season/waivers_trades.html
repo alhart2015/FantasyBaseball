@@ -151,7 +151,8 @@
   window.BT_DATA = {
     myRoster: {{ my_roster_data | tojson }},
     oppRosters: {{ opp_rosters_data | tojson }},
-    rosterSlots: {{ roster_slots | tojson }}
+    rosterSlots: {{ roster_slots | tojson }},
+    myTeamName: {{ (config.team_name if config else "My Team") | tojson }}
   };
 </script>
 
@@ -387,6 +388,69 @@ document.addEventListener('DOMContentLoaded', function() {
       positions: meta.positions ? String(meta.positions).split("/") : [],
       player_type: key.split("::")[1] || "hitter",
     };
+  }
+
+  // Strip trailing digits from slot IDs (OF1 -> OF, P3 -> P, UTIL2 -> UTIL).
+  function canonicalSlot(zone) {
+    if (!zone) return "";
+    if (zone === "BN") return "Bench";
+    if (zone === "IL") return "IL";
+    if (zone === "DROP") return "Drop";
+    return zone.replace(/\d+$/, "");
+  }
+
+  function teamLabelFor(side) {
+    if (side === "my") return (window.BT_DATA && window.BT_DATA.myTeamName) || "My Team";
+    return state.opponent || "Opponent";
+  }
+
+  // Diff initialPlacements vs placements for a given side. Returns a moves-summary object.
+  function computeMovesSummary(side) {
+    const moves = {team: teamLabelFor(side), adds: [], outgoing: [], drops: [], reshuffles: []};
+    if (!state.opponent) return moves;
+
+    for (const [k, current] of state.placements) {
+      const initial = state.initialPlacements.get(k);
+      const player = playerByKey(k);
+      const name = (player && player.name) || k.split("::")[0];
+
+      // INCOMING (adds to this side): origin != side AND currentSide == side AND zone != DROP.
+      // Includes players received from the other team and waiver pickups.
+      if (current.currentSide === side && current.origin !== side && current.zone !== "DROP") {
+        moves.adds.push({name, slot: canonicalSlot(current.zone)});
+        continue;
+      }
+
+      // OUTGOING (this side lost the player to the trade): origin == side AND currentSide != side.
+      if (current.origin === side && current.currentSide !== side && current.zone !== "DROP") {
+        const fromSlot = initial ? canonicalSlot(initial.zone) : "";
+        moves.outgoing.push({name, slot: fromSlot});
+        continue;
+      }
+
+      // DROP (this side dropped a player it owned).
+      if (current.zone === "DROP" && current.origin === side) {
+        moves.drops.push({name});
+        continue;
+      }
+
+      // RESHUFFLE (same side, same origin, slot changed, neither slot is IL).
+      if (
+        initial &&
+        current.origin === side &&
+        current.currentSide === side &&
+        initial.zone !== current.zone &&
+        initial.zone !== "IL" &&
+        current.zone !== "IL"
+      ) {
+        moves.reshuffles.push({
+          name,
+          fromSlot: canonicalSlot(initial.zone),
+          toSlot: canonicalSlot(current.zone),
+        });
+      }
+    }
+    return moves;
   }
 
   function renderChip(key) {
@@ -704,6 +768,7 @@ document.addEventListener('DOMContentLoaded', function() {
   };
 
   // Debug exports (stable across tasks)
+  window.bt._computeMovesSummary = computeMovesSummary;
   window.bt._state = state;
   window.bt._playerKey = playerKey;
   window.bt._isIL = isIL;
