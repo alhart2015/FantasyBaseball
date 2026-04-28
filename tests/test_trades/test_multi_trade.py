@@ -43,6 +43,47 @@ def test_multi_trade_result_shape():
     assert r.categories["R"].delta == 1.0
 
 
+def test_category_view_shape():
+    from fantasy_baseball.trades.multi_trade import CategoryView
+
+    v = CategoryView(before=10.0, after=12.0, delta=2.0)
+    assert v.before == 10.0
+    assert v.after == 12.0
+    assert v.delta == 2.0
+
+
+def test_view_block_shape():
+    from fantasy_baseball.trades.multi_trade import CategoryView, ViewBlock
+
+    v = ViewBlock(
+        delta_total=1.5,
+        categories={"R": CategoryView(before=10.0, after=11.0, delta=1.0)},
+    )
+    assert v.delta_total == 1.5
+    assert v.categories["R"].after == 11.0
+
+
+def test_multi_trade_result_has_view_blocks():
+    from fantasy_baseball.trades.multi_trade import (
+        MultiTradeResult,
+        ViewBlock,
+    )
+
+    empty = ViewBlock(delta_total=0.0, categories={})
+    r = MultiTradeResult(
+        legal=True,
+        reason=None,
+        delta_total=0.0,
+        categories={},
+        roto=empty,
+        ev_roto=empty,
+        stat_totals=empty,
+    )
+    assert r.roto.delta_total == 0.0
+    assert r.ev_roto.delta_total == 0.0
+    assert r.stat_totals.delta_total == 0.0
+
+
 def _hitter_with_key(name: str) -> Player:
     return Player(
         name=name,
@@ -450,6 +491,93 @@ def test_unknown_player_key_returns_illegal_with_reason():
     )
     assert result.legal is False
     assert "Ghost" in result.reason
+
+
+def _build_min_legal_proposal_fixture():
+    """Build a minimal fixture: 23 hitters per team, swap one player.
+
+    Returns (proposal, hart_name, hart_roster, opp_rosters, projected_standings).
+    """
+
+    hart_name = "Hart"
+    opp_name = "Rival"
+
+    hart_roster = [_hitter_with_key(f"M{i}") for i in range(23)]
+    for i, p in enumerate(hart_roster):
+        p.selected_position = "BN" if i >= 21 else "OF"
+    opp_roster = [_hitter_with_key(f"R{i}") for i in range(23)]
+    for i, p in enumerate(opp_roster):
+        p.selected_position = "BN" if i >= 21 else "OF"
+
+    cat_stats = {
+        "R": 1000.0,
+        "HR": 250.0,
+        "RBI": 750.0,
+        "SB": 80.0,
+        "AVG": 0.260,
+        "W": 70.0,
+        "K": 1200.0,
+        "SV": 50.0,
+        "ERA": 3.80,
+        "WHIP": 1.25,
+    }
+    standings = ProjectedStandings(
+        effective_date=date(2026, 4, 1),
+        entries=[
+            ProjectedStandingsEntry(team_name=hart_name, stats=CategoryStats.from_dict(cat_stats)),
+            ProjectedStandingsEntry(team_name=opp_name, stats=CategoryStats.from_dict(cat_stats)),
+        ],
+    )
+
+    swap_send = player_key(hart_roster[0])
+    swap_receive = player_key(opp_roster[0])
+
+    # New active set: M0 leaves (replaced by R0), so M0 not in active; R0 added at slot 0.
+    new_active = {player_key(p) for p in hart_roster[:21]}
+    new_active.discard(swap_send)
+    new_active.add(swap_receive)
+
+    proposal = TradeProposal(
+        opponent=opp_name,
+        send=[swap_send],
+        receive=[swap_receive],
+        my_active_ids=new_active,
+    )
+    return proposal, hart_name, hart_roster, {opp_name: opp_roster}, standings
+
+
+def test_evaluate_multi_trade_populates_view_blocks():
+    proposal, hart_name, hart_roster, opp_rosters, standings = _build_min_legal_proposal_fixture()
+
+    result = evaluate_multi_trade(
+        proposal=proposal,
+        hart_name=hart_name,
+        hart_roster=hart_roster,
+        opp_rosters=opp_rosters,
+        waiver_pool={},
+        projected_standings=standings,
+        team_sds=None,
+        roster_slots=ROSTER_SLOTS_STANDARD,
+    )
+
+    assert result.legal, result.reason
+
+    # All three view blocks present and populated for every roto category.
+    for view_name in ("roto", "ev_roto", "stat_totals"):
+        view = getattr(result, view_name)
+        for cat in ("R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"):
+            assert cat in view.categories, f"{view_name} missing {cat}"
+            cv = view.categories[cat]
+            assert cv.delta == cv.after - cv.before, f"{view_name}/{cat}: delta != after-before"
+
+    # stat_totals.delta_total is conventionally 0.0 (no meaningful scalar).
+    assert result.stat_totals.delta_total == 0.0
+
+    # ev_roto block matches the existing top-level delta_total + categories
+    # (since the top-level fields were always eROTO when team_sds is provided).
+    # When team_sds is None, score_roto_dict returns integer roto, so ev_roto == roto here.
+    for cat, cd in result.categories.items():
+        assert result.ev_roto.categories[cat].delta == cd.delta
 
 
 def test_build_waiver_pool_excludes_rostered_players():

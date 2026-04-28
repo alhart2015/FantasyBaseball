@@ -269,6 +269,78 @@ def _run_rest_of_season_fetch() -> None:
         logger.finish("error", str(exc))
 
 
+def _optimize_one_side(
+    roster,
+    projected_standings,
+    team_name,
+    roster_slots,
+    team_sds,
+    optimize_hitter_lineup,
+    optimize_pitcher_lineup,
+    il_slots,
+):
+    """Run hitter + pitcher optimizers; return ``{player_key: zone}`` dict.
+
+    IL players are passed through unchanged. All non-active hitters/pitchers
+    land on BN. Hitter slot assignments come from the optimizer; pitcher
+    starters get sequential slot ids ``P1..PN`` (or ``P`` if there is only
+    one pitcher slot).
+    """
+    from fantasy_baseball.trades.multi_trade import player_key
+
+    out: dict[str, str] = {}
+
+    # IL passthrough.
+    for p in roster:
+        if p.selected_position in il_slots:
+            out[player_key(p)] = "IL"
+
+    hitters = [
+        p for p in roster if p.player_type == "hitter" and p.selected_position not in il_slots
+    ]
+    pitchers = [
+        p for p in roster if p.player_type == "pitcher" and p.selected_position not in il_slots
+    ]
+
+    hitter_assignments = optimize_hitter_lineup(
+        hitters,
+        roster,
+        projected_standings,
+        team_name,
+        roster_slots=roster_slots,
+        team_sds=team_sds,
+    )
+    pitcher_starters, pitcher_bench = optimize_pitcher_lineup(
+        pitchers,
+        roster,
+        projected_standings,
+        team_name,
+        slots=roster_slots.get("P", 9),
+        team_sds=team_sds,
+    )
+
+    assigned_hitter_keys = set()
+    for a in hitter_assignments:
+        # `a.slot` is a Position enum; .value is the canonical slot label.
+        slot_label = a.slot.value if hasattr(a.slot, "value") else str(a.slot)
+        out[player_key(a.player)] = slot_label
+        assigned_hitter_keys.add(player_key(a.player))
+    for p in hitters:
+        if player_key(p) not in assigned_hitter_keys:
+            out[player_key(p)] = "BN"
+
+    n_pslots = roster_slots.get("P", 9)
+    for i, starter in enumerate(pitcher_starters[:n_pslots]):
+        # `starter` is a PitcherStarter dataclass — has a .player attribute.
+        target = starter.player if hasattr(starter, "player") else starter
+        slot = f"P{i + 1}" if n_pslots > 1 else "P"
+        out[player_key(target)] = slot
+    for p in pitcher_bench:
+        out[player_key(p)] = "BN"
+
+    return out
+
+
 def register_routes(app: Flask) -> None:
 
     @app.route("/")
@@ -437,6 +509,7 @@ def register_routes(app: Flask) -> None:
             )
         )
 
+        config = _load_config()
         return render_template(
             "season/waivers_trades.html",
             meta=meta,
@@ -445,7 +518,8 @@ def register_routes(app: Flask) -> None:
             opp_players=opp_players,
             my_roster_data=roster_raw or [],
             opp_rosters_data=opp_rosters_raw or {},
-            roster_slots=dict(_load_config().roster_slots),
+            roster_slots=dict(config.roster_slots),
+            config=config,
         )
 
     @app.route("/api/trade-search", methods=["POST"])
@@ -533,6 +607,16 @@ def register_routes(app: Flask) -> None:
             results = search_trades_away(**kwargs)
         else:
             results = search_trades_for(**kwargs)
+
+        # Decorate each candidate with canonical name::player_type keys
+        # so client code (Compare button) can build /players?compare=...
+        # URLs without re-deriving the player_type lookup. Fail loudly on
+        # missing player_type — defaulting would silently miscategorize
+        # pitcher trades as hitter trades (CLAUDE.md: never key on bare names).
+        for group in results:
+            for cand in group.get("candidates", []):
+                cand["send_key"] = f"{cand['send']}::{cand['send_player_type']}"
+                cand["receive_key"] = f"{cand['receive']}::{cand['receive_player_type']}"
 
         return jsonify(results)
 
@@ -624,6 +708,20 @@ def register_routes(app: Flask) -> None:
             team_sds=team_sds,
             roster_slots=config.roster_slots,
         )
+
+        def _serialize_view(view) -> dict:
+            return {
+                "delta_total": round(view.delta_total, 2),
+                "categories": {
+                    cat: {
+                        "before": round(cv.before, 4),
+                        "after": round(cv.after, 4),
+                        "delta": round(cv.delta, 4),
+                    }
+                    for cat, cv in view.categories.items()
+                },
+            }
+
         return jsonify(
             {
                 "legal": result.legal,
@@ -637,8 +735,137 @@ def register_routes(app: Flask) -> None:
                     }
                     for cat, cd in result.categories.items()
                 },
+                "roto": _serialize_view(result.roto),
+                "ev_roto": _serialize_view(result.ev_roto),
+                "stat_totals": _serialize_view(result.stat_totals),
             }
         )
+
+    @app.route("/api/optimize-trade-lineup", methods=["POST"])
+    @_require_auth
+    def api_optimize_trade_lineup():
+        from fantasy_baseball.lineup.optimizer import (
+            optimize_hitter_lineup,
+            optimize_pitcher_lineup,
+        )
+        from fantasy_baseball.models.player import Player
+        from fantasy_baseball.models.positions import IL_SLOTS
+        from fantasy_baseball.trades.multi_trade import (
+            TradeProposal,
+            build_waiver_pool,
+            evaluate_multi_trade,
+            player_key,
+        )
+
+        data = request.get_json(silent=True) or {}
+        opponent = (data.get("opponent") or "").strip()
+        if not opponent:
+            return jsonify({"error": "opponent is required"}), 400
+
+        config = _load_config()
+        roster_raw = read_cache_list(CacheKey.ROSTER)
+        opp_rosters_raw = read_cache_dict(CacheKey.OPP_ROSTERS)
+        if roster_raw is None or opp_rosters_raw is None:
+            return jsonify({"error": "No roster data. Run a refresh first."}), 404
+        if opponent not in opp_rosters_raw:
+            return jsonify({"error": f"Unknown opponent: {opponent}"}), 400
+
+        proj_cache = read_cache_dict(CacheKey.PROJECTIONS) or {}
+        projected_standings_raw = proj_cache.get("projected_standings")
+        team_sds = _team_sds_from_cache(proj_cache.get("team_sds"))
+        if not projected_standings_raw:
+            return jsonify({"error": "No projected standings. Run a refresh first."}), 404
+
+        ros_cache = read_cache_dict(CacheKey.ROS_PROJECTIONS) or {}
+        hart_roster = [Player.from_dict(p) for p in roster_raw]
+        opp_rosters = {n: [Player.from_dict(p) for p in ps] for n, ps in opp_rosters_raw.items()}
+        waiver_pool = build_waiver_pool(hart_roster, opp_rosters, ros_cache)
+
+        proposal = TradeProposal(
+            opponent=opponent,
+            send=list(data.get("send") or []),
+            receive=list(data.get("receive") or []),
+            my_drops=list(data.get("my_drops") or []),
+            opp_drops=list(data.get("opp_drops") or []),
+            my_adds=list(data.get("my_adds") or []),
+        )
+
+        # Resolve key lists into Player objects for the post-trade rosters.
+        my_idx = {player_key(p): p for p in hart_roster}
+        opp_idx = {player_key(p): p for p in opp_rosters[opponent]}
+        try:
+            sent = [my_idx[k] for k in proposal.send]
+            received = [opp_idx[k] for k in proposal.receive]
+            my_drops_p = [my_idx[k] for k in proposal.my_drops]
+            opp_drops_p = [opp_idx[k] for k in proposal.opp_drops]
+            my_adds_p = [waiver_pool[k] for k in proposal.my_adds]
+        except KeyError as exc:
+            return jsonify({"ok": False, "reason": f"Unknown player key: {exc}"})
+
+        sent_keys = {player_key(p) for p in sent}
+        received_keys = {player_key(p) for p in received}
+        my_drop_keys = {player_key(p) for p in my_drops_p}
+        opp_drop_keys = {player_key(p) for p in opp_drops_p}
+
+        hart_post = (
+            [p for p in hart_roster if player_key(p) not in (sent_keys | my_drop_keys)]
+            + received
+            + my_adds_p
+        )
+        opp_post = [
+            p for p in opp_rosters[opponent] if player_key(p) not in (received_keys | opp_drop_keys)
+        ] + sent
+
+        # Legality check: reuse the full evaluator so size mismatches surface
+        # the same way the trade evaluator UI reports them.
+        legality_proposal = TradeProposal(
+            opponent=opponent,
+            send=proposal.send,
+            receive=proposal.receive,
+            my_drops=proposal.my_drops,
+            opp_drops=proposal.opp_drops,
+            my_adds=proposal.my_adds,
+            my_active_ids=set(),
+        )
+        projected = _projected_from_cache(projected_standings_raw)
+        result = evaluate_multi_trade(
+            proposal=legality_proposal,
+            hart_name=config.team_name,
+            hart_roster=hart_roster,
+            opp_rosters=opp_rosters,
+            waiver_pool=waiver_pool,
+            projected_standings=projected,
+            team_sds=team_sds,
+            roster_slots=config.roster_slots,
+        )
+        if not result.legal:
+            return jsonify({"ok": False, "reason": result.reason or "Trade is not legal"})
+
+        try:
+            my_slots = _optimize_one_side(
+                hart_post,
+                projected,
+                config.team_name,
+                config.roster_slots,
+                team_sds,
+                optimize_hitter_lineup,
+                optimize_pitcher_lineup,
+                IL_SLOTS,
+            )
+            opp_slots = _optimize_one_side(
+                opp_post,
+                projected,
+                opponent,
+                config.roster_slots,
+                team_sds,
+                optimize_hitter_lineup,
+                optimize_pitcher_lineup,
+                IL_SLOTS,
+            )
+        except ValueError as exc:
+            return jsonify({"ok": False, "reason": str(exc)})
+
+        return jsonify({"ok": True, "my_slots": my_slots, "opp_slots": opp_slots})
 
     @app.route("/players")
     def player_search():

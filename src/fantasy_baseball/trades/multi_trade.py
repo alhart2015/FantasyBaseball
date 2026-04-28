@@ -49,6 +49,23 @@ class CategoryDelta:
 
 
 @dataclass
+class CategoryView:
+    """Per-category before/after/delta tuple, used in roto / eROTO / stat-totals views."""
+
+    before: float
+    after: float
+    delta: float
+
+
+@dataclass
+class ViewBlock:
+    """One delta view (roto, eROTO, or stat totals) - total + per-category."""
+
+    delta_total: float  # 0.0 for stat_totals (no scalar total is meaningful)
+    categories: dict[str, CategoryView]
+
+
+@dataclass
 class MultiTradeResult:
     """Output of :func:`evaluate_multi_trade`."""
 
@@ -56,6 +73,11 @@ class MultiTradeResult:
     reason: str | None
     delta_total: float
     categories: dict[str, CategoryDelta]
+    roto: ViewBlock = field(default_factory=lambda: ViewBlock(delta_total=0.0, categories={}))
+    ev_roto: ViewBlock = field(default_factory=lambda: ViewBlock(delta_total=0.0, categories={}))
+    stat_totals: ViewBlock = field(
+        default_factory=lambda: ViewBlock(delta_total=0.0, categories={})
+    )
 
 
 def player_key(player: Player) -> str:
@@ -198,27 +220,52 @@ def evaluate_multi_trade(
         before_stats[proposal.opponent], opp_loses, opp_gains
     )
 
-    before_roto = score_roto_dict(before_stats, team_sds=team_sds)
-    after_roto = score_roto_dict(after_stats, team_sds=team_sds)
+    # Roto Points (integer ranks)
+    roto_before = score_roto_dict(before_stats)
+    roto_after = score_roto_dict(after_stats)
 
+    # eROTO (fractional EV-based) — falls back to roto when team_sds is None
+    ev_roto_before = score_roto_dict(before_stats, team_sds=team_sds)
+    ev_roto_after = score_roto_dict(after_stats, team_sds=team_sds)
+
+    def _build_view(before_pts, after_pts) -> ViewBlock:
+        cats: dict[str, CategoryView] = {}
+        total = 0.0
+        for cat in ALL_CATEGORIES:
+            b = before_pts[hart_name][f"{cat.value}_pts"]
+            a = after_pts[hart_name][f"{cat.value}_pts"]
+            cats[cat.value] = CategoryView(before=b, after=a, delta=a - b)
+            total += a - b
+        return ViewBlock(delta_total=total, categories=cats)
+
+    roto_view = _build_view(roto_before, roto_after)
+    ev_roto_view = _build_view(ev_roto_before, ev_roto_after)
+
+    # Stat totals (raw category values, not roto points)
+    stat_cats: dict[str, CategoryView] = {}
+    for cat in ALL_CATEGORIES:
+        b = float(before_stats[hart_name][cat.value])
+        a = float(after_stats[hart_name][cat.value])
+        stat_cats[cat.value] = CategoryView(before=b, after=a, delta=a - b)
+    stat_totals_view = ViewBlock(delta_total=0.0, categories=stat_cats)
+
+    # Existing per-category eROTO output (preserved for backward compat).
     categories: dict[str, CategoryDelta] = {}
     total_delta = 0.0
     for cat in ALL_CATEGORIES:
-        before_pts = before_roto[hart_name][f"{cat.value}_pts"]
-        after_pts = after_roto[hart_name][f"{cat.value}_pts"]
-        delta = after_pts - before_pts
-        categories[cat.value] = CategoryDelta(
-            before=before_pts,
-            after=after_pts,
-            delta=delta,
-        )
-        total_delta += delta
+        b = ev_roto_before[hart_name][f"{cat.value}_pts"]
+        a = ev_roto_after[hart_name][f"{cat.value}_pts"]
+        categories[cat.value] = CategoryDelta(before=b, after=a, delta=a - b)
+        total_delta += a - b
 
     return MultiTradeResult(
         legal=True,
         reason=None,
         delta_total=total_delta,
         categories=categories,
+        roto=roto_view,
+        ev_roto=ev_roto_view,
+        stat_totals=stat_totals_view,
     )
 
 
