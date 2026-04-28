@@ -624,6 +624,20 @@ def register_routes(app: Flask) -> None:
             team_sds=team_sds,
             roster_slots=config.roster_slots,
         )
+
+        def _serialize_view(view) -> dict:
+            return {
+                "delta_total": round(view.delta_total, 2),
+                "categories": {
+                    cat: {
+                        "before": round(cv.before, 4),
+                        "after": round(cv.after, 4),
+                        "delta": round(cv.delta, 4),
+                    }
+                    for cat, cv in view.categories.items()
+                },
+            }
+
         return jsonify(
             {
                 "legal": result.legal,
@@ -637,6 +651,9 @@ def register_routes(app: Flask) -> None:
                     }
                     for cat, cd in result.categories.items()
                 },
+                "roto": _serialize_view(result.roto),
+                "ev_roto": _serialize_view(result.ev_roto),
+                "stat_totals": _serialize_view(result.stat_totals),
             }
         )
 
