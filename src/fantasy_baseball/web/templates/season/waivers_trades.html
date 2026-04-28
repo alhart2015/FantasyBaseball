@@ -139,6 +139,8 @@
     <div id="bt-legality" class="bt-legality mt-2"></div>
     <button type="button" id="bt-evaluate" class="pill" disabled
             onclick="bt.evaluate()">Evaluate Trade</button>
+    <button type="button" id="bt-optimize" class="pill" disabled
+            onclick="bt.optimizeLineup()">Optimize Lineup</button>
     <button type="button" id="bt-reset" class="pill"
             onclick="bt.reset()">Reset</button>
 
@@ -759,6 +761,8 @@ document.addEventListener('DOMContentLoaded', function() {
     `;
     const hasTrade = mySend >= 1 && oppSend >= 1;
     btn.disabled = !(hasTrade && illegal === false);
+    const optBtn = document.getElementById("bt-optimize");
+    if (optBtn) optBtn.disabled = !(hasTrade && illegal === false);
   }
 
   window.bt = {
@@ -805,6 +809,60 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
       renderResult(data);
+    },
+    optimizeLineup: async () => {
+      if (!state.opponent) return;
+      const payload = buildPayload();
+      const optBtn = document.getElementById("bt-optimize");
+      const originalLabel = optBtn ? optBtn.textContent : "";
+      // Disable + label "Optimizing…" while the request is in flight.
+      // The optimizer can take 10s+ on large rosters with broad position eligibility.
+      if (optBtn) {
+        optBtn.disabled = true;
+        optBtn.textContent = "Optimizing…";
+      }
+      function restoreButton() {
+        if (optBtn) {
+          optBtn.textContent = originalLabel || "Optimize Lineup";
+          // updateLegality will re-evaluate disabled state.
+          updateLegality();
+        }
+      }
+      let resp;
+      try {
+        resp = await fetch("/api/optimize-trade-lineup", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload),
+        });
+      } catch (err) {
+        restoreButton();
+        alert("Optimize failed: " + String(err));
+        return;
+      }
+      const data = await resp.json();
+      if (!resp.ok) {
+        restoreButton();
+        alert(data.error || "Optimize failed");
+        return;
+      }
+      if (!data.ok) {
+        restoreButton();
+        alert("Cannot optimize: " + (data.reason || "unknown reason"));
+        return;
+      }
+      // Apply server's slot assignments to the placements map.
+      for (const [k, zone] of Object.entries(data.my_slots || {})) {
+        const cur = state.placements.get(k);
+        if (cur) state.placements.set(k, {...cur, currentSide: "my", zone});
+      }
+      for (const [k, zone] of Object.entries(data.opp_slots || {})) {
+        const cur = state.placements.get(k);
+        if (cur) state.placements.set(k, {...cur, currentSide: "opp", zone});
+      }
+      renderPanels();
+      restoreButton();
+      // NOTE: deliberately not auto-running evaluate; user clicks Evaluate to refresh deltas.
     },
   };
 
