@@ -139,7 +139,8 @@ def _load_yahoo_league():
     config = _load_config()
     sc = get_yahoo_session()
     league = get_league(sc, config.league_id, config.game_code)
-    return league, find_user_team_key(league.teams(), config.team_name)
+    team_names = {k: info.get("name", "") for k, info in league.teams().items()}
+    return league, find_user_team_key(team_names, config.team_name)
 
 
 def _load_projections():

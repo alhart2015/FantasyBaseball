@@ -278,7 +278,8 @@ class RefreshRun:
         assert self.config is not None
         self._progress("Finding team...")
         self.teams_dict = self.league.teams()
-        self.user_team_key = find_user_team_key(self.teams_dict, self.config.team_name)
+        team_names = {k: info.get("name", "") for k, info in self.teams_dict.items()}
+        self.user_team_key = find_user_team_key(team_names, self.config.team_name)
 
     # --- Step 3: Fetch standings + roster ---
     def _fetch_standings_and_roster(self):
