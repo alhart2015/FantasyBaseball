@@ -3,7 +3,6 @@
 import json
 import logging
 from collections.abc import Mapping
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key
@@ -54,32 +53,6 @@ OPPONENT_CACHE_TTL_SECONDS = 900  # 15 minutes
 def clear_opponent_cache() -> None:
     """Clear the opponent lineup in-memory cache (called on full refresh)."""
     _opponent_cache.clear()
-
-
-CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache"
-
-
-CACHE_FILES: dict[CacheKey, str] = {
-    CacheKey.STANDINGS: "standings.json",
-    CacheKey.ROSTER: "roster.json",
-    CacheKey.PROJECTIONS: "projections.json",
-    CacheKey.LINEUP_OPTIMAL: "lineup_optimal.json",
-    CacheKey.PROBABLE_STARTERS: "probable_starters.json",
-    CacheKey.MONTE_CARLO: "monte_carlo.json",
-    CacheKey.META: "meta.json",
-    CacheKey.RANKINGS: "rankings.json",
-    CacheKey.ROSTER_AUDIT: "roster_audit.json",
-    CacheKey.SPOE: "spoe.json",
-    CacheKey.OPP_ROSTERS: "opp_rosters.json",
-    CacheKey.LEVERAGE: "leverage.json",
-    CacheKey.PENDING_MOVES: "pending_moves.json",
-    CacheKey.TRANSACTION_ANALYZER: "transaction_analyzer.json",
-    CacheKey.TRANSACTIONS: "transactions.json",
-    CacheKey.ROS_PROJECTIONS: "ros_projections.json",
-    CacheKey.FULL_SEASON_PROJECTIONS: "full_season_projections.json",
-    CacheKey.POSITIONS: "positions.json",
-    CacheKey.STANDINGS_BREAKDOWN: "standings_breakdown.json",
-}
 
 
 def read_cache(key: CacheKey) -> dict | list | None:

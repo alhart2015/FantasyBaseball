@@ -26,22 +26,16 @@ def _make_ros_tree(root: Path, year: int, date: str) -> Path:
 
 
 @pytest.fixture
-def projections_dir(tmp_path, monkeypatch):
-    """Isolated projections dir + cache dir so write_cache writes to tmp.
+def projections_dir(tmp_path):
+    """Isolated projections dir for the ROS blend tests.
 
-    Patches both the module-level ``CACHE_DIR`` and ``write_cache`` /
-    ``read_cache``'s default-argument cache-dir capture so write-through
-    to disk lands in ``tmp_path/cache`` rather than the real
-    ``data/cache/`` directory.
+    Pre-cache-refactor this fixture also monkey-patched
+    ``season_data.CACHE_DIR`` and ``write_cache.__defaults__`` to redirect
+    JSON-file cache writes to ``tmp_path/cache``. After the cache moved
+    onto kv_store the redirection is unnecessary — tests that need a KV
+    isolation seed it directly via ``monkeypatch.setattr(season_data,
+    "get_kv", lambda: fake_redis)`` (see the individual test bodies).
     """
-    import fantasy_baseball.web.season_data as season_data
-
-    fake_cache = tmp_path / "cache"
-    monkeypatch.setattr(season_data, "CACHE_DIR", fake_cache)
-    # Default args were bound at def-time; overwrite them so
-    # ``write_cache(...)`` without an explicit cache_dir uses tmp.
-    season_data.write_cache.__defaults__ = (fake_cache,)
-    season_data.read_cache.__defaults__ = (fake_cache,)
     return tmp_path / "projections"
 
 

@@ -5,9 +5,11 @@ Run after any code change that touches the refresh pipeline, data
 model, or scoring stack. Exercises the key data paths without hitting
 Yahoo or running Monte Carlo (~2 seconds total).
 
-Requires local data: run ``python scripts/sync_redis.py`` first to
-pull cache data from Upstash, OR run a full local refresh via
-``python scripts/run_lineup.py``.
+Reads cache via the KV abstraction (``read_cache``/``read_cache_dict``
+/``read_cache_list`` from ``season_data``). On Render this reads
+Upstash; locally it reads SQLite at ``data/local.db``. To prime local
+data, run a full local refresh (``python scripts/run_lineup.py``) or
+sync from Upstash via ``scripts/refresh_remote.py``.
 
 Usage:
     python scripts/smoke_test.py          # run all checks
@@ -24,7 +26,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-CACHE_DIR = PROJECT_ROOT / "data" / "cache"
+from fantasy_baseball.web.season_data import (
+    CacheKey,
+    read_cache_dict,
+    read_cache_list,
+    read_meta,
+)
 
 _passed = 0
 _failed = 0
@@ -49,29 +56,27 @@ def section(title: str):
     print(f"{'-' * 60}")
 
 
-# -- 1. Cache files exist -------------------------------------
+# -- 1. Cache keys present ------------------------------------
 
 
 def check_caches():
-    section("Cache files")
-    required = [
-        "meta.json",
-        "standings.json",
-        "roster.json",
-        "roster_audit.json",
-        "pending_moves.json",
-        "spoe.json",
-        "leverage.json",
-        "waivers.json",
-        "monte_carlo.json",
+    section("Cache keys")
+    required_dicts = [
+        CacheKey.META,
+        CacheKey.STANDINGS,
+        CacheKey.SPOE,
+        CacheKey.LEVERAGE,
+        CacheKey.MONTE_CARLO,
     ]
-    for name in required:
-        path = CACHE_DIR / name
-        check(
-            f"cache:{name.replace('.json', '')} exists",
-            path.exists() and path.stat().st_size > 2,
-            f"missing or empty at {path}",
-        )
+    required_lists = [
+        CacheKey.ROSTER,
+        CacheKey.ROSTER_AUDIT,
+        CacheKey.PENDING_MOVES,
+    ]
+    for key in required_dicts:
+        check(f"cache:{key} present", read_cache_dict(key) is not None, "missing or empty")
+    for key in required_lists:
+        check(f"cache:{key} present", read_cache_list(key) is not None, "missing or empty")
 
 
 # -- 2. Meta / timestamp --------------------------------------
@@ -79,12 +84,11 @@ def check_caches():
 
 def check_meta():
     section("Meta")
-    meta_path = CACHE_DIR / "meta.json"
-    if not meta_path.exists():
-        check("meta.json readable", False, "file missing")
+    meta = read_meta()
+    if not meta:
+        check("meta readable", False, "key missing")
         return
 
-    meta = json.loads(meta_path.read_text())
     check("last_refresh present", bool(meta.get("last_refresh")))
     check("team_name present", bool(meta.get("team_name")))
     check(
@@ -108,12 +112,11 @@ def check_meta():
 
 def check_audit():
     section("Roster audit")
-    audit_path = CACHE_DIR / "roster_audit.json"
-    if not audit_path.exists():
-        check("roster_audit.json readable", False, "file missing")
+    audit = read_cache_list(CacheKey.ROSTER_AUDIT)
+    if not audit:
+        check("roster_audit readable", False, "key missing")
         return
 
-    audit = json.loads(audit_path.read_text())
     check("audit has entries", len(audit) > 0, f"got {len(audit)}")
 
     slots = {e["slot"] for e in audit}
@@ -143,12 +146,11 @@ def check_audit():
 
 def check_pending_moves():
     section("Pending moves")
-    pm_path = CACHE_DIR / "pending_moves.json"
-    if not pm_path.exists():
-        check("pending_moves.json readable", False, "file missing")
+    pm = read_cache_list(CacheKey.PENDING_MOVES)
+    if pm is None:
+        check("pending_moves readable", False, "key missing")
         return
 
-    pm = json.loads(pm_path.read_text())
     check("pending_moves is a list", isinstance(pm, list))
 
     if pm:
@@ -174,12 +176,11 @@ def check_pending_moves():
 
 def check_spoe():
     section("SPoE")
-    spoe_path = CACHE_DIR / "spoe.json"
-    if not spoe_path.exists():
-        check("spoe.json readable", False, "file missing")
+    spoe = read_cache_dict(CacheKey.SPOE)
+    if not spoe:
+        check("spoe readable", False, "key missing")
         return
 
-    spoe = json.loads(spoe_path.read_text())
     check("snapshot_date present", bool(spoe.get("snapshot_date")))
     check("season_fraction > 0", (spoe.get("season_fraction", 0) or 0) > 0)
     check("results non-empty", len(spoe.get("results", [])) > 0)
@@ -198,16 +199,16 @@ def check_spoe():
 
 def check_standings():
     section("Standings")
-    standings_path = CACHE_DIR / "standings.json"
-    if not standings_path.exists():
-        check("standings.json readable", False, "file missing")
+    standings = read_cache_dict(CacheKey.STANDINGS)
+    if not standings:
+        check("standings readable", False, "key missing")
         return
 
-    standings = json.loads(standings_path.read_text())
-    check("standings has 10 teams", len(standings) == 10, f"got {len(standings)}")
+    teams = standings.get("teams", [])
+    check("standings has 10 teams", len(teams) == 10, f"got {len(teams)}")
 
-    if standings:
-        t = standings[0]
+    if teams:
+        t = teams[0]
         check("team has name", bool(t.get("name")))
         check("team has team_key", bool(t.get("team_key")))
         check("team has stats dict", isinstance(t.get("stats"), dict))
@@ -282,9 +283,9 @@ def check_league_from_redis():
 def check_scoring():
     section("Scoring round-trip")
 
-    roster_path = CACHE_DIR / "roster.json"
-    if not roster_path.exists():
-        check("roster.json readable", False, "file missing")
+    roster_raw = read_cache_list(CacheKey.ROSTER)
+    if not roster_raw:
+        check("roster readable", False, "key missing")
         return
 
     try:
@@ -292,7 +293,6 @@ def check_scoring():
         from fantasy_baseball.models.standings import CategoryStats
         from fantasy_baseball.scoring import project_team_stats, score_roto_dict
 
-        roster_raw = json.loads(roster_path.read_text())
         players = [Player.from_dict(p) for p in roster_raw]
         check(f"parsed {len(players)} Player objects", len(players) > 0)
 
@@ -330,7 +330,6 @@ def main():
     quick = "--quick" in sys.argv
 
     print(f"\nSmoke test -- {date.today()}")
-    print(f"   Cache dir: {CACHE_DIR}")
     if quick:
         print("   Mode: --quick (skipping League.from_redis)")
 

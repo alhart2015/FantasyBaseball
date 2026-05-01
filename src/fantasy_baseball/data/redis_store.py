@@ -142,9 +142,8 @@ def get_ros_projections(client) -> dict | None:
     Returns the parsed ``{"hitters": [...], "pitchers": [...]}`` payload
     or ``None`` on missing key, corrupt JSON, or ``client is None``.
 
-    Reads Redis directly (no disk fallback via ``read_cache``) so tests
-    injecting a fake Redis client aren't cross-contaminated by stale
-    project-local ``data/cache/*.json`` files.
+    Reads the supplied KV directly so tests injecting a fake KV client
+    are not cross-contaminated by the global ``get_kv()`` singleton.
     """
     if client is None:
         return None

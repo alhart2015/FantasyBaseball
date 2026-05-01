@@ -1,8 +1,10 @@
 """One-shot comparison of roster_audit player_sgp between local and Upstash.
 
-Uses the LOCAL freshly-refreshed ``data/cache/roster_audit.json`` and pulls
-the REMOTE ``cache:roster_audit`` payload from Upstash for side-by-side diff.
-Intended to show how SGP shifts after a config/math change before deploying.
+Reads the LOCAL ``cache:roster_audit`` payload from the local SQLite KV
+(``data/local.db``) and pulls the REMOTE same key from Upstash for a
+side-by-side diff. Intended to show how SGP shifts after a config/math
+change before deploying. Run a local refresh first
+(``python scripts/run_lineup.py``) so the local KV is populated.
 """
 
 from __future__ import annotations
@@ -15,15 +17,21 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key
-from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
+from fantasy_baseball.data.kv_store import build_explicit_upstash_kv, get_kv
 
 
 def main() -> None:
-    with open(PROJECT_ROOT / "data" / "cache" / "roster_audit.json") as f:
-        local = json.load(f)
+    local_kv = get_kv()
+    local_raw = local_kv.get(redis_key(CacheKey.ROSTER_AUDIT))
+    if local_raw is None:
+        sys.exit(
+            "Local cache:roster_audit is empty. Run "
+            "``python scripts/run_lineup.py`` first to populate the local KV."
+        )
+    local = json.loads(local_raw)
 
-    kv = build_explicit_upstash_kv()
-    raw = kv.get(redis_key(CacheKey.ROSTER_AUDIT))
+    remote_kv = build_explicit_upstash_kv()
+    raw = remote_kv.get(redis_key(CacheKey.ROSTER_AUDIT))
     remote = json.loads(raw) if raw else []
 
     local_by_id = {entry["player_id"]: entry for entry in local if entry.get("player_id")}
