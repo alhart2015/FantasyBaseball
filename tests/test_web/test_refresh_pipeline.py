@@ -169,6 +169,57 @@ class TestRefreshInvariants:
         assert meta["team_name"] == "Team 01"
 
 
+class TestPitcherLineupMoves:
+    """Regression guard: ``_compute_moves`` must surface pitcher
+    start/sit recommendations, not just hitter ones. The bug was that
+    ``compute_lineup_moves`` was only ever called with hitter
+    assignments, so the dashboard rendered "Optimal ✓" even when the
+    optimizer wanted a benched pitcher activated.
+    """
+
+    def test_benched_pitcher_recommended_active_emits_start_move(
+        self,
+        configured_test_env,
+        fake_redis,
+        monkeypatch,
+    ):
+        """Put a 6th pitcher on BN for the user's team; with 9 P slots
+        and 6 healthy pitchers the optimizer wants all 6 active, so the
+        bench pitcher should produce a START move."""
+        from tests.test_web import _refresh_fixture
+
+        original_roster_for_team = _refresh_fixture.roster_for_team
+
+        def override(team_index):
+            roster = original_roster_for_team(team_index)
+            if team_index == 0:
+                # Pitcher060 is in projections (range 0..79) but unused
+                # by any roster (12 teams x 5 pitchers covers 0..59).
+                roster.append(
+                    {
+                        "name": "Pitcher060",
+                        "positions": ["SP", "P"],
+                        "selected_position": "BN",
+                        "player_id": "yh_p_060",
+                        "status": "",
+                    }
+                )
+            return roster
+
+        monkeypatch.setattr(_refresh_fixture, "roster_for_team", override)
+
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
+
+        optimal = _read(fake_redis, "lineup_optimal")
+        pitcher_starts = [
+            m for m in optimal["moves"] if m["slot"] == "P" and m["action"] == "START"
+        ]
+        assert any(m["player"] == "Pitcher060" for m in pitcher_starts), (
+            f"Expected START move for benched Pitcher060; got moves={optimal['moves']}"
+        )
+
+
 class TestMonteCarloROSBranch:
     @pytest.mark.parametrize("has_ros", [True, False])
     def test_monte_carlo_keys_match_ros_availability(
