@@ -279,7 +279,6 @@ def patched_refresh_environment(
     fake_redis,
     *,
     has_rest_of_season: bool = True,
-    cache_dir,
 ):
     """Patch every external dependency of run_full_refresh and yield.
 

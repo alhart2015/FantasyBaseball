@@ -30,7 +30,6 @@ from fantasy_baseball.utils.time_utils import (
     local_today,
 )
 from fantasy_baseball.web.season_data import (
-    CACHE_DIR,
     CacheKey,
     _compute_pending_moves_diff,
     _get_redis,
@@ -143,10 +142,9 @@ class RefreshRun:
     across threads and stays at module scope.
     """
 
-    def __init__(self, cache_dir: Path = CACHE_DIR):
+    def __init__(self) -> None:
         from fantasy_baseball.web.job_logger import JobLogger
 
-        self.cache_dir = cache_dir
         self.logger = JobLogger("refresh")
 
         self.config: LeagueConfig | None = None
@@ -295,7 +293,7 @@ class RefreshRun:
 
         self._progress("Fetching standings...")
         self.standings = fetch_standings(self.league, effective_date=self.effective_date)
-        write_cache(CacheKey.STANDINGS, self.standings.to_json(), self.cache_dir)
+        write_cache(CacheKey.STANDINGS, self.standings.to_json())
         self._progress(f"Fetched standings for {len(self.standings.entries)} teams")
 
         self._progress("Fetching today's roster (for pending-moves diff)...")
@@ -311,7 +309,7 @@ class RefreshRun:
             team_name=self.config.team_name,
             team_key=self.user_team_key,
         )
-        write_cache(CacheKey.PENDING_MOVES, pending_moves, self.cache_dir)
+        write_cache(CacheKey.PENDING_MOVES, pending_moves)
         if pending_moves:
             total_changes = sum(len(m["adds"]) + len(m["drops"]) for m in pending_moves)
             self._progress(f"Pending moves: {total_changes} change(s) detected")
@@ -364,9 +362,7 @@ class RefreshRun:
         self.preseason_pitchers = self.pitchers_proj
 
         self._progress("Loading ROS projections from Redis...")
-        ros_hitters, ros_pitchers = _load_projection_pair(
-            read_cache(CacheKey.ROS_PROJECTIONS, self.cache_dir)
-        )
+        ros_hitters, ros_pitchers = _load_projection_pair(read_cache(CacheKey.ROS_PROJECTIONS))
         self.has_rest_of_season = not ros_hitters.empty or not ros_pitchers.empty
         if self.has_rest_of_season:
             self.hitters_proj = ros_hitters
@@ -383,7 +379,7 @@ class RefreshRun:
         # as the ROS load.
         self._progress("Loading full-season projections...")
         full_hitters, full_pitchers = _load_projection_pair(
-            read_cache(CacheKey.FULL_SEASON_PROJECTIONS, self.cache_dir)
+            read_cache(CacheKey.FULL_SEASON_PROJECTIONS)
         )
         if not full_hitters.empty or not full_pitchers.empty:
             self.full_hitters_proj = full_hitters
@@ -526,7 +522,7 @@ class RefreshRun:
         opp_rosters_flat = {
             tname: [p.to_dict() for p in roster] for tname, roster in self.opp_rosters.items()
         }
-        write_cache(CacheKey.OPP_ROSTERS, opp_rosters_flat, self.cache_dir)
+        write_cache(CacheKey.OPP_ROSTERS, opp_rosters_flat)
 
     # --- Step 4e: Build projected standings ---
     def _build_projected_standings(self):
@@ -593,12 +589,10 @@ class RefreshRun:
                 "preseason_standings": self.preseason_projected_standings.to_json(),
                 "preseason_team_sds": team_sds_to_json(self.preseason_team_sds),
             },
-            self.cache_dir,
         )
         write_cache(
             CacheKey.STANDINGS_BREAKDOWN,
             build_standings_breakdown_payload(all_team_rosters, self.effective_date),
-            self.cache_dir,
         )
         self._progress(f"Projected standings for {len(self.projected_standings.entries)} teams")
 
@@ -708,7 +702,7 @@ class RefreshRun:
             current_ranks,
         )
 
-        write_cache(CacheKey.RANKINGS, self.rankings_lookup, self.cache_dir)
+        write_cache(CacheKey.RANKINGS, self.rankings_lookup)
         self._progress(
             f"Ranked {len(rest_of_season_ranks)} ROS, {len(preseason_ranks)} preseason, {len(current_ranks)} current"
         )
@@ -723,7 +717,7 @@ class RefreshRun:
             player.rank = RankInfo.from_dict(rank_data) if rank_data else RankInfo()
 
         roster_flat = [p.to_flat_dict() for p in self.roster_players]
-        write_cache(CacheKey.ROSTER, roster_flat, self.cache_dir)
+        write_cache(CacheKey.ROSTER, roster_flat)
 
     # --- Step 7: Run lineup optimizer ---
     def _optimize_lineup(self):
@@ -782,7 +776,7 @@ class RefreshRun:
             "pitcher_bench": [p.name for p in self.optimal_pitchers_bench],
             "moves": moves,
         }
-        write_cache(CacheKey.LINEUP_OPTIMAL, optimal_data, self.cache_dir)
+        write_cache(CacheKey.LINEUP_OPTIMAL, optimal_data)
 
     # --- Step 9: Probable starters ---
     def _fetch_probable_starters(self):
@@ -816,7 +810,7 @@ class RefreshRun:
             matchup_factors=matchup_factors,
             team_stats=team_stats,
         )
-        write_cache(CacheKey.PROBABLE_STARTERS, probable_starters, self.cache_dir)
+        write_cache(CacheKey.PROBABLE_STARTERS, probable_starters)
 
     # --- Step 10: Roster audit ---
     def _audit_roster(self):
@@ -840,7 +834,7 @@ class RefreshRun:
 
         # Cache positions for all known players (roster + opponents + FAs)
         positions_map = build_positions_map(self.roster_players, self.opp_rosters, self.fa_players)
-        write_cache(CacheKey.POSITIONS, positions_map, self.cache_dir)
+        write_cache(CacheKey.POSITIONS, positions_map)
         from fantasy_baseball.data.kv_store import get_kv
         from fantasy_baseball.data.redis_store import set_positions
 
@@ -857,7 +851,7 @@ class RefreshRun:
             optimal_hitters=self.optimal_hitters,
             optimal_pitchers=self.optimal_pitchers_starters,
         )
-        write_cache(CacheKey.ROSTER_AUDIT, [e.to_dict() for e in audit_results], self.cache_dir)
+        write_cache(CacheKey.ROSTER_AUDIT, [e.to_dict() for e in audit_results])
         upgrades = sum(1 for e in audit_results if e.gap > 0)
         self._progress(f"Roster audit: {upgrades} upgrade(s) found")
 
@@ -875,7 +869,7 @@ class RefreshRun:
                 entry.team_name,
                 projected_standings=self.projected_standings,
             )
-        write_cache(CacheKey.LEVERAGE, leverage_by_team, self.cache_dir)
+        write_cache(CacheKey.LEVERAGE, leverage_by_team)
 
     # --- ROS Monte Carlo simulation ---
     def _run_ros_monte_carlo(self):
@@ -950,7 +944,6 @@ class RefreshRun:
                 "rest_of_season": self.rest_of_season_mc,
                 "rest_of_season_with_management": self.rest_of_season_mgmt_mc,
             },
-            self.cache_dir,
         )
 
     # --- Step 14: Compute season-to-date SPoE (luck analysis) ---
@@ -982,7 +975,7 @@ class RefreshRun:
             self.config.season_end,
         )
 
-        write_cache(CacheKey.SPOE, spoe_result, self.cache_dir)
+        write_cache(CacheKey.SPOE, spoe_result)
         _write_spoe_snapshot(spoe_result)
         self._progress(f"SPoE computed for snapshot {spoe_result.get('snapshot_date')}")
 
@@ -1005,7 +998,7 @@ class RefreshRun:
         if not raw_txns:
             return
 
-        stored_txns_raw = read_cache(CacheKey.TRANSACTIONS, self.cache_dir) or []
+        stored_txns_raw = read_cache(CacheKey.TRANSACTIONS) or []
         stored_txns: list[dict[str, Any]] = (
             stored_txns_raw if isinstance(stored_txns_raw, list) else []
         )
@@ -1060,9 +1053,9 @@ class RefreshRun:
                 entry.update(scores)
 
         stored_txns.sort(key=lambda t: t.get("timestamp") or "")
-        write_cache(CacheKey.TRANSACTIONS, stored_txns, self.cache_dir)
+        write_cache(CacheKey.TRANSACTIONS, stored_txns)
         cache_data = build_cache_output(stored_txns)
-        write_cache(CacheKey.TRANSACTION_ANALYZER, cache_data, self.cache_dir)
+        write_cache(CacheKey.TRANSACTION_ANALYZER, cache_data)
         self._progress(f"Analyzed {len(stored_txns)} total transaction(s)")
 
     # --- Step 16: Write meta ---
@@ -1076,13 +1069,13 @@ class RefreshRun:
             "end_date": self.end_date,
             "team_name": self.config.team_name,
         }
-        write_cache(CacheKey.META, meta, self.cache_dir)
+        write_cache(CacheKey.META, meta)
 
 
-def run_full_refresh(cache_dir: Path = CACHE_DIR) -> None:
-    """Connect to Yahoo, fetch all data, run computations, and write cache files.
+def run_full_refresh() -> None:
+    """Connect to Yahoo, fetch all data, run computations, and write cache.
 
     Thin wrapper around RefreshRun for backward compatibility with
     existing callers (scripts/run_lineup.py, season_routes.py).
     """
-    RefreshRun(cache_dir).run()
+    RefreshRun().run()

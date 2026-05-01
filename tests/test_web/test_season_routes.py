@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
+from fantasy_baseball.data import kv_store
 from fantasy_baseball.web.season_app import create_app
 from fantasy_baseball.web.season_data import CacheKey
 
@@ -12,6 +13,21 @@ def client():
     app.config["TESTING"] = True
     with app.test_client() as client:
         yield client
+
+
+@pytest.fixture
+def kv_isolation(tmp_path, monkeypatch):
+    """Per-test isolated SQLite KV.
+
+    After Phase 2 of the cache refactor, ``read_cache``/``write_cache``
+    route through ``kv_store.get_kv()`` instead of JSON files in a
+    ``cache_dir``. Tests that exercise the dashboard's read-then-render
+    flow seed the KV here and let the route handlers read the same KV.
+    """
+    monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(tmp_path / "test.db"))
+    kv_store._reset_singleton()
+    yield
+    kv_store._reset_singleton()
 
 
 def test_index_redirects_to_standings(client):
@@ -169,123 +185,94 @@ def test_logs_page_renders(client):
     assert b"Job Logs" in resp.data
 
 
-def test_full_standings_page_with_cached_data(client, tmp_path):
+def test_full_standings_page_with_cached_data(client, kv_isolation):
     """Integration test: standings page renders correctly with all cached data present."""
     from fantasy_baseball.web import season_data
 
-    old_cache_dir = season_data.CACHE_DIR
-    season_data.CACHE_DIR = tmp_path
-
-    try:
-        standings = {
-            "effective_date": "2026-04-01",
-            "teams": [
-                {
-                    "name": "Hart of the Order",
-                    "team_key": "k1",
-                    "rank": 1,
-                    "stats": {
-                        "R": 300,
-                        "HR": 90,
-                        "RBI": 290,
-                        "SB": 50,
-                        "AVG": 0.270,
-                        "W": 35,
-                        "K": 600,
-                        "SV": 25,
-                        "ERA": 3.50,
-                        "WHIP": 1.18,
-                    },
+    standings = {
+        "effective_date": "2026-04-01",
+        "teams": [
+            {
+                "name": "Hart of the Order",
+                "team_key": "k1",
+                "rank": 1,
+                "stats": {
+                    "R": 300,
+                    "HR": 90,
+                    "RBI": 290,
+                    "SB": 50,
+                    "AVG": 0.270,
+                    "W": 35,
+                    "K": 600,
+                    "SV": 25,
+                    "ERA": 3.50,
+                    "WHIP": 1.18,
                 },
-                {
-                    "name": "SkeleThor",
-                    "team_key": "k2",
-                    "rank": 2,
-                    "stats": {
-                        "R": 310,
-                        "HR": 85,
-                        "RBI": 295,
-                        "SB": 40,
-                        "AVG": 0.265,
-                        "W": 38,
-                        "K": 580,
-                        "SV": 30,
-                        "ERA": 3.40,
-                        "WHIP": 1.15,
-                    },
+            },
+            {
+                "name": "SkeleThor",
+                "team_key": "k2",
+                "rank": 2,
+                "stats": {
+                    "R": 310,
+                    "HR": 85,
+                    "RBI": 295,
+                    "SB": 40,
+                    "AVG": 0.265,
+                    "W": 38,
+                    "K": 580,
+                    "SV": 30,
+                    "ERA": 3.40,
+                    "WHIP": 1.15,
                 },
-            ],
-        }
-        season_data.write_cache(CacheKey.STANDINGS, standings, tmp_path)
-        season_data.write_cache(CacheKey.META, {"last_refresh": "8:32 AM", "week": "3"}, tmp_path)
+            },
+        ],
+    }
+    season_data.write_cache(CacheKey.STANDINGS, standings)
+    season_data.write_cache(CacheKey.META, {"last_refresh": "8:32 AM", "week": "3"})
 
-        with (
-            patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_rc_dict,
-            patch("fantasy_baseball.web.season_routes.read_cache_list") as mock_rc_list,
-            patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm,
-            patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
-        ):
-            mock_rc_dict.side_effect = lambda k: season_data.read_cache_dict(k, tmp_path)
-            mock_rc_list.side_effect = lambda k: season_data.read_cache_list(k, tmp_path)
-            mock_rm.return_value = season_data.read_meta(tmp_path)
-            mock_cfg.return_value.team_name = "Hart of the Order"
+    with patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+        mock_cfg.return_value.team_name = "Hart of the Order"
 
-            resp = client.get("/standings")
-            assert resp.status_code == 200
-            html = resp.data.decode()
-            assert "Hart of the Order" in html
-            assert "SkeleThor" in html
-            assert "8:32 AM" in html
-    finally:
-        season_data.CACHE_DIR = old_cache_dir
+        resp = client.get("/standings")
+        assert resp.status_code == 200
+        html = resp.data.decode()
+        assert "Hart of the Order" in html
+        assert "SkeleThor" in html
+        assert "8:32 AM" in html
 
 
-def test_full_lineup_page_with_cached_data(client, tmp_path):
+def test_full_lineup_page_with_cached_data(client, kv_isolation):
     """Integration test: lineup page renders with cached roster data."""
     from fantasy_baseball.web import season_data
 
-    old_cache_dir = season_data.CACHE_DIR
-    season_data.CACHE_DIR = tmp_path
+    roster = [
+        {
+            "name": "Adley Rutschman",
+            "positions": ["C"],
+            "selected_position": "C",
+            "player_id": "123",
+            "status": "",
+        },
+        {
+            "name": "Corbin Burnes",
+            "positions": ["SP"],
+            "selected_position": "P",
+            "player_id": "456",
+            "status": "",
+        },
+    ]
+    optimal = {"hitters": {}, "pitchers": {}, "moves": []}
+    season_data.write_cache(CacheKey.ROSTER, roster)
+    season_data.write_cache(CacheKey.LINEUP_OPTIMAL, optimal)
+    season_data.write_cache(CacheKey.META, {"last_refresh": "9:00 AM"})
 
-    try:
-        roster = [
-            {
-                "name": "Adley Rutschman",
-                "positions": ["C"],
-                "selected_position": "C",
-                "player_id": "123",
-                "status": "",
-            },
-            {
-                "name": "Corbin Burnes",
-                "positions": ["SP"],
-                "selected_position": "P",
-                "player_id": "456",
-                "status": "",
-            },
-        ]
-        optimal = {"hitters": {}, "pitchers": {}, "moves": []}
-        season_data.write_cache(CacheKey.ROSTER, roster, tmp_path)
-        season_data.write_cache(CacheKey.LINEUP_OPTIMAL, optimal, tmp_path)
-        season_data.write_cache(CacheKey.META, {"last_refresh": "9:00 AM"}, tmp_path)
-
-        with (
-            patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_rc_dict,
-            patch("fantasy_baseball.web.season_routes.read_cache_list") as mock_rc_list,
-            patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm,
-        ):
-            mock_rc_dict.side_effect = lambda k: season_data.read_cache_dict(k, tmp_path)
-            mock_rc_list.side_effect = lambda k: season_data.read_cache_list(k, tmp_path)
-            mock_rm.return_value = season_data.read_meta(tmp_path)
-
-            resp = client.get("/lineup")
-            assert resp.status_code == 200
-            html = resp.data.decode()
-            assert "Adley Rutschman" in html
-            assert "Corbin Burnes" in html
-            assert "Optimal" in html  # should show optimal button since no moves
-    finally:
-        season_data.CACHE_DIR = old_cache_dir
+    resp = client.get("/lineup")
+    assert resp.status_code == 200
+    html = resp.data.decode()
+    assert "Adley Rutschman" in html
+    assert "Corbin Burnes" in html
+    assert "Optimal" in html  # should show optimal button since no moves
 
 
 def test_full_trades_page_renders(client):
@@ -305,58 +292,45 @@ def test_compare_missing_params(client):
     assert resp2.status_code == 400
 
 
-def test_standings_page_includes_breakdown_json_when_cache_present(client, tmp_path):
+def test_standings_page_includes_breakdown_json_when_cache_present(client, kv_isolation):
     """When STANDINGS_BREAKDOWN cache exists, its JSON is embedded in the page."""
     from fantasy_baseball.web import season_data
 
-    old_cache_dir = season_data.CACHE_DIR
-    season_data.CACHE_DIR = tmp_path
-    try:
-        payload = {
-            "teams": {
-                "Team A": {
-                    "team_name": "Team A",
-                    "hitters": [
-                        {
-                            "name": "H1",
-                            "player_type": "hitter",
-                            "status": "active",
-                            "scale_factor": 1.0,
-                            "raw_stats": {
-                                "hr": 20,
-                                "r": 60,
-                                "rbi": 70,
-                                "sb": 5,
-                                "h": 120,
-                                "ab": 450,
-                            },
-                        }
-                    ],
-                    "pitchers": [],
-                }
+    payload = {
+        "teams": {
+            "Team A": {
+                "team_name": "Team A",
+                "hitters": [
+                    {
+                        "name": "H1",
+                        "player_type": "hitter",
+                        "status": "active",
+                        "scale_factor": 1.0,
+                        "raw_stats": {
+                            "hr": 20,
+                            "r": 60,
+                            "rbi": 70,
+                            "sb": 5,
+                            "h": 120,
+                            "ab": 450,
+                        },
+                    }
+                ],
+                "pitchers": [],
             }
         }
-        season_data.write_cache(CacheKey.STANDINGS_BREAKDOWN, payload, tmp_path)
-        season_data.write_cache(CacheKey.STANDINGS, _mock_standings(), tmp_path)
+    }
+    season_data.write_cache(CacheKey.STANDINGS_BREAKDOWN, payload)
+    season_data.write_cache(CacheKey.STANDINGS, _mock_standings())
 
-        with (
-            patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_rc_dict,
-            patch("fantasy_baseball.web.season_routes.read_cache_list") as mock_rc_list,
-            patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm,
-            patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
-        ):
-            mock_rc_dict.side_effect = lambda k: season_data.read_cache_dict(k, tmp_path)
-            mock_rc_list.side_effect = lambda k: season_data.read_cache_list(k, tmp_path)
-            mock_rm.return_value = season_data.read_meta(tmp_path)
-            mock_cfg.return_value.team_name = "Hart of the Order"
+    with patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+        mock_cfg.return_value.team_name = "Hart of the Order"
 
-            resp = client.get("/standings")
-            assert resp.status_code == 200
-            body = resp.get_data(as_text=True)
-            assert 'id="breakdown-data"' in body
-            assert '"Team A"' in body
-    finally:
-        season_data.CACHE_DIR = old_cache_dir
+        resp = client.get("/standings")
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert 'id="breakdown-data"' in body
+        assert '"Team A"' in body
 
 
 def test_standings_page_omits_breakdown_json_when_cache_missing(client):
@@ -370,44 +344,30 @@ def test_standings_page_omits_breakdown_json_when_cache_missing(client):
     assert 'id="breakdown-data"' not in body
 
 
-def test_standings_passes_baseline_meta_to_template(client, tmp_path):
+def test_standings_passes_baseline_meta_to_template(client, kv_isolation):
     """When monte_carlo.baseline_meta is present in the cache, it is
     rendered into the page as the freeze-date caption."""
     from fantasy_baseball.web import season_data
 
-    old_cache_dir = season_data.CACHE_DIR
-    season_data.CACHE_DIR = tmp_path
-    try:
-        season_data.write_cache(
-            CacheKey.MONTE_CARLO,
-            {
-                "base": {"team_results": {}, "category_risk": {}},
-                "with_management": {"team_results": {}, "category_risk": {}},
-                "baseline_meta": {
-                    "frozen_at": "2026-04-17T00:00:00Z",
-                    "roster_date": "2026-03-27",
-                    "season_year": 2026,
-                },
-                "rest_of_season": None,
-                "rest_of_season_with_management": None,
+    season_data.write_cache(
+        CacheKey.MONTE_CARLO,
+        {
+            "base": {"team_results": {}, "category_risk": {}},
+            "with_management": {"team_results": {}, "category_risk": {}},
+            "baseline_meta": {
+                "frozen_at": "2026-04-17T00:00:00Z",
+                "roster_date": "2026-03-27",
+                "season_year": 2026,
             },
-            tmp_path,
-        )
-        season_data.write_cache(CacheKey.STANDINGS, _mock_standings(), tmp_path)
+            "rest_of_season": None,
+            "rest_of_season_with_management": None,
+        },
+    )
+    season_data.write_cache(CacheKey.STANDINGS, _mock_standings())
 
-        with (
-            patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_rc_dict,
-            patch("fantasy_baseball.web.season_routes.read_cache_list") as mock_rc_list,
-            patch("fantasy_baseball.web.season_routes.read_meta") as mock_rm,
-            patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
-        ):
-            mock_rc_dict.side_effect = lambda k: season_data.read_cache_dict(k, tmp_path)
-            mock_rc_list.side_effect = lambda k: season_data.read_cache_list(k, tmp_path)
-            mock_rm.return_value = season_data.read_meta(tmp_path)
-            mock_cfg.return_value.team_name = "Team 01"
+    with patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+        mock_cfg.return_value.team_name = "Team 01"
 
-            resp = client.get("/standings")
-            assert resp.status_code == 200
-            assert b"2026-03-27" in resp.data
-    finally:
-        season_data.CACHE_DIR = old_cache_dir
+        resp = client.get("/standings")
+        assert resp.status_code == 200
+        assert b"2026-03-27" in resp.data

@@ -71,35 +71,30 @@ def _projected_from_raw(raw: list[dict]) -> ProjectedStandings:
     )
 
 
-def test_write_and_read_cache(tmp_path):
+def test_write_and_read_cache():
     data = {"teams": [{"name": "Hart of the Order", "total": 67}]}
-    write_cache(CacheKey.STANDINGS, data, cache_dir=tmp_path)
-    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
-    assert result == data
+    write_cache(CacheKey.STANDINGS, data)
+    assert read_cache(CacheKey.STANDINGS) == data
 
 
-def test_read_cache_missing_file(tmp_path):
-    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
-    assert result is None
+def test_read_cache_missing_file():
+    assert read_cache(CacheKey.STANDINGS) is None
 
 
-def test_read_cache_corrupt_json(tmp_path):
+def test_read_cache_corrupt_json():
     """Corrupt JSON in the KV value is treated as a miss, not a hard error."""
     kv_store.get_kv().set(redis_key(CacheKey.STANDINGS), "not json{{")
-    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
-    assert result is None
+    assert read_cache(CacheKey.STANDINGS) is None
 
 
-def test_read_meta_missing(tmp_path):
-    result = read_meta(cache_dir=tmp_path)
-    assert result == {}
+def test_read_meta_missing():
+    assert read_meta() == {}
 
 
-def test_write_cache_overwrites(tmp_path):
-    write_cache(CacheKey.STANDINGS, {"v": 1}, cache_dir=tmp_path)
-    write_cache(CacheKey.STANDINGS, {"v": 2}, cache_dir=tmp_path)
-    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
-    assert result == {"v": 2}
+def test_write_cache_overwrites():
+    write_cache(CacheKey.STANDINGS, {"v": 1})
+    write_cache(CacheKey.STANDINGS, {"v": 2})
+    assert read_cache(CacheKey.STANDINGS) == {"v": 2}
 
 
 def _sample_standings():
@@ -588,7 +583,7 @@ def test_format_lineup_passes_ros_data_through():
     assert "r" not in no_ros
 
 
-def test_roster_cache_includes_stats(tmp_path, monkeypatch):
+def test_roster_cache_includes_stats():
     """After refresh, roster entries should include a 'pace' dict."""
     roster = [
         {
@@ -660,17 +655,17 @@ def test_roster_cache_includes_stats(tmp_path, monkeypatch):
 # graceful KV-error tolerance.
 
 
-def test_write_cache_uses_canonical_redis_key(tmp_path):
+def test_write_cache_uses_canonical_redis_key():
     """write_cache stores under ``cache:<key>`` so dashboard reads on
     Render (which hit the same key in Upstash) see the same data."""
     data = {"teams": [1, 2, 3]}
-    write_cache(CacheKey.STANDINGS, data, cache_dir=tmp_path)
+    write_cache(CacheKey.STANDINGS, data)
     raw = kv_store.get_kv().get(redis_key(CacheKey.STANDINGS))
     assert raw is not None
     assert json.loads(raw) == data
 
 
-def test_write_cache_swallows_kv_error(tmp_path, monkeypatch):
+def test_write_cache_swallows_kv_error(monkeypatch):
     """write_cache logs and continues if the KV write raises.
 
     Mirrors the pre-refactor behavior of tolerating transient Upstash
@@ -689,10 +684,10 @@ def test_write_cache_swallows_kv_error(tmp_path, monkeypatch):
 
     monkeypatch.setattr(season_data, "get_kv", lambda: _RaisingKV())
     # No exception escapes.
-    write_cache(CacheKey.STANDINGS, {"v": 1}, cache_dir=tmp_path)
+    write_cache(CacheKey.STANDINGS, {"v": 1})
 
 
-def test_read_cache_swallows_kv_error(tmp_path, monkeypatch):
+def test_read_cache_swallows_kv_error(monkeypatch):
     """read_cache returns None on KV error rather than propagating."""
 
     class _RaisingKV:
@@ -700,7 +695,7 @@ def test_read_cache_swallows_kv_error(tmp_path, monkeypatch):
             raise ConnectionError("Upstash unreachable")
 
     monkeypatch.setattr(season_data, "get_kv", lambda: _RaisingKV())
-    assert read_cache(CacheKey.STANDINGS, cache_dir=tmp_path) is None
+    assert read_cache(CacheKey.STANDINGS) is None
 
 
 class TestComputeComparisonStandings:

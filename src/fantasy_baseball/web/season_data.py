@@ -82,17 +82,13 @@ CACHE_FILES: dict[CacheKey, str] = {
 }
 
 
-def read_cache(key: CacheKey, cache_dir: Path = CACHE_DIR) -> dict | list | None:
+def read_cache(key: CacheKey) -> dict | list | None:
     """Read a cached payload from the KV store.
 
     Routes through ``kv_store.get_kv()``: Upstash on Render, SQLite
     locally. The ``RENDER`` gate in ``kv_store`` ensures off-Render
-    callers cannot reach Upstash even with creds present. The
-    ``cache_dir`` parameter is accepted for backward compatibility but
-    unused — Phase 2 of the cache refactor removes it from callers, then
-    Phase 3 drops it from this signature.
+    callers cannot reach Upstash even with creds present.
     """
-    del cache_dir  # unused; see Phase 2 of cache refactor
     kv = get_kv()
     try:
         raw = kv.get(redis_key(key))
@@ -108,7 +104,7 @@ def read_cache(key: CacheKey, cache_dir: Path = CACHE_DIR) -> dict | list | None
         return None
 
 
-def read_cache_dict(key: CacheKey, cache_dir: Path = CACHE_DIR) -> dict[str, Any] | None:
+def read_cache_dict(key: CacheKey) -> dict[str, Any] | None:
     """Read a cached payload, narrowed to dict.
 
     Returns ``None`` if the cache is missing, corrupt, or holds a list
@@ -116,29 +112,26 @@ def read_cache_dict(key: CacheKey, cache_dir: Path = CACHE_DIR) -> dict[str, Any
     when the caller knows the key stores a dict — it lets mypy see the
     shape without ``cast()``.
     """
-    payload = read_cache(key, cache_dir)
+    payload = read_cache(key)
     return payload if isinstance(payload, dict) else None
 
 
-def read_cache_list(key: CacheKey, cache_dir: Path = CACHE_DIR) -> list[Any] | None:
+def read_cache_list(key: CacheKey) -> list[Any] | None:
     """Read a cached payload, narrowed to list.
 
     Returns ``None`` if the cache is missing, corrupt, or holds a dict
     (unexpected shape for this key). See :func:`read_cache_dict`.
     """
-    payload = read_cache(key, cache_dir)
+    payload = read_cache(key)
     return payload if isinstance(payload, list) else None
 
 
-def write_cache(key: CacheKey, data: dict | list, cache_dir: Path = CACHE_DIR) -> None:
+def write_cache(key: CacheKey, data: dict | list) -> None:
     """Write a cached payload to the KV store.
 
     Routes through ``kv_store.get_kv()``: Upstash on Render, SQLite
-    locally. The ``cache_dir`` parameter is accepted for backward
-    compatibility but unused — see :func:`read_cache` for the migration
-    plan.
+    locally.
     """
-    del cache_dir  # unused; see Phase 2 of cache refactor
     kv = get_kv()
     try:
         kv.set(redis_key(key), json.dumps(data))
@@ -146,9 +139,9 @@ def write_cache(key: CacheKey, data: dict | list, cache_dir: Path = CACHE_DIR) -
         log.warning(f"write_cache({key}) KV write failed: {e}")
 
 
-def read_meta(cache_dir: Path = CACHE_DIR) -> dict:
+def read_meta() -> dict:
     """Read cache metadata (last refresh time, week, etc.). Returns empty dict if missing."""
-    payload = read_cache(CacheKey.META, cache_dir)
+    payload = read_cache(CacheKey.META)
     return payload if isinstance(payload, dict) else {}
 
 

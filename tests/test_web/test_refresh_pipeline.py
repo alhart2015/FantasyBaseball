@@ -18,7 +18,7 @@ def _read(client, name: str):
     """Read a cache entry from the KV (fake_redis in tests).
 
     After Phase 1 of the cache refactor, ``write_cache`` writes to the KV
-    via ``cache:<name>`` keys instead of JSON files in ``cache_dir``. This
+    via ``cache:<name>`` keys instead of JSON files. This
     helper reflects that — it queries the same KV the dashboard reads from
     on Render and SQLite locally.
     """
@@ -27,11 +27,15 @@ def _read(client, name: str):
 
 
 @pytest.fixture
-def configured_test_env(monkeypatch, fake_redis, tmp_path):
-    """Set environment variables expected by load_config."""
+def configured_test_env(monkeypatch, fake_redis):
+    """Set environment variables expected by load_config.
+
+    Pre-Phase-2 this fixture also returned ``tmp_path`` for the
+    JSON-file cache layer; after the cache layer moved onto kv_store
+    the dir is no longer needed and the fixture returns nothing.
+    """
     monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "http://fake")
     monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "fake-token")
-    return tmp_path
 
 
 class TestRefreshShape:
@@ -39,9 +43,8 @@ class TestRefreshShape:
     expected top-level keys and types."""
 
     def test_all_expected_cache_files_written(self, configured_test_env, fake_redis):
-        cache_dir = configured_test_env
-        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
-            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
 
         expected_keys = [
             CacheKey.STANDINGS,
@@ -64,9 +67,8 @@ class TestRefreshShape:
             assert fake_redis.get(redis_key(key)) is not None, f"Missing cache key: {key}"
 
     def test_standings_shape(self, configured_test_env, fake_redis):
-        cache_dir = configured_test_env
-        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
-            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
         data = _read(fake_redis, "standings")
         # Canonical Standings.to_json() shape: {effective_date, teams: [...]}
         assert isinstance(data, dict)
@@ -79,9 +81,8 @@ class TestRefreshShape:
             )
 
     def test_projections_shape(self, configured_test_env, fake_redis):
-        cache_dir = configured_test_env
-        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
-            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
         data = _read(fake_redis, "projections")
         assert {"projected_standings", "team_sds", "fraction_remaining"} <= data.keys()
         # projected_standings is now ProjectedStandings.to_json() shape:
@@ -92,26 +93,23 @@ class TestRefreshShape:
         assert isinstance(data["fraction_remaining"], (int, float))
 
     def test_lineup_optimal_shape(self, configured_test_env, fake_redis):
-        cache_dir = configured_test_env
-        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
-            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
         data = _read(fake_redis, "lineup_optimal")
         assert {"hitter_lineup", "pitcher_starters", "pitcher_bench", "moves"} <= data.keys()
         assert isinstance(data["moves"], list)
 
     def test_monte_carlo_shape(self, configured_test_env, fake_redis):
-        cache_dir = configured_test_env
-        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
-            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
         data = _read(fake_redis, "monte_carlo")
         assert "base" in data
         assert "with_management" in data
         # ROS keys may be None when has_rest_of_season=False (next task)
 
     def test_meta_shape(self, configured_test_env, fake_redis):
-        cache_dir = configured_test_env
-        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
-            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
         data = _read(fake_redis, "meta")
         assert {"last_refresh", "start_date", "end_date", "team_name"} <= data.keys()
         assert data["team_name"] == "Team 01"
@@ -122,10 +120,8 @@ class TestRefreshInvariants:
 
     @pytest.fixture(autouse=True)
     def _run_refresh(self, configured_test_env, fake_redis):
-        cache_dir = configured_test_env
-        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
-            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
-        self.cache_dir = cache_dir
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
         self.fake_redis = fake_redis
 
     def test_every_team_in_standings_appears_in_projected_standings(self):
@@ -181,13 +177,11 @@ class TestMonteCarloROSBranch:
         fake_redis,
         has_ros,
     ):
-        cache_dir = configured_test_env
         with patched_refresh_environment(
             fake_redis,
             has_rest_of_season=has_ros,
-            cache_dir=cache_dir,
         ):
-            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+            refresh_pipeline.run_full_refresh()
         data = _read(fake_redis, "monte_carlo")
         assert data["base"] is not None
         assert data["with_management"] is not None
@@ -233,9 +227,8 @@ class TestROSProjectionsRedisAuthoritative:
             )
 
         monkeypatch.setattr(ros_pipeline, "blend_and_cache_ros", _blow_up)
-        cache_dir = configured_test_env
-        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
-            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
         assert call_count["n"] == 0
 
     def test_refresh_preserves_existing_ros_projections(
@@ -248,16 +241,12 @@ class TestROSProjectionsRedisAuthoritative:
         Simulates: admin fetch wrote today's ROS blend (Junis sv=19).
         Running refresh must not clobber that with a stale disk blend.
         """
-        from fantasy_baseball.data.cache_keys import CacheKey, redis_key
-
-        cache_dir = configured_test_env
-
         # The fixture seeds its own ros_projections. Run the refresh
         # and assert whatever the fixture wrote is still there afterward
         # (byte-for-byte — no second write).
-        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
+        with patched_refresh_environment(fake_redis):
             before = fake_redis.get(redis_key(CacheKey.ROS_PROJECTIONS))
-            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+            refresh_pipeline.run_full_refresh()
             after = fake_redis.get(redis_key(CacheKey.ROS_PROJECTIONS))
         assert before == after, (
             "Refresh modified cache:ros_projections — it must be read-only "
@@ -307,9 +296,8 @@ class TestPreseasonBaseline:
         configured_test_env,
         fake_redis,
     ):
-        cache_dir = configured_test_env
-        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
-            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
         data = _read(fake_redis, "monte_carlo")
         assert data["base"] is not None
         assert data["with_management"] is not None
@@ -321,11 +309,10 @@ class TestPreseasonBaseline:
         configured_test_env,
         fake_redis,
     ):
-        cache_dir = configured_test_env
         # Intentionally strip the baseline that the fixture seeds.
-        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
+        with patched_refresh_environment(fake_redis):
             fake_redis.delete("preseason_baseline:2026")
-            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+            refresh_pipeline.run_full_refresh()
         data = _read(fake_redis, "monte_carlo")
         assert data["base"] is None
         assert data["with_management"] is None
@@ -349,16 +336,15 @@ class TestFullSeasonProjectionsLoad:
         ``self.full_hitters_proj`` / ``self.full_pitchers_proj`` unset
         (so ``hydrate_roster_entries`` skips populating
         ``Player.full_season_projection``)."""
-        cache_dir = configured_test_env
         # Ensure the KV has no full-season blob. The fixture doesn't
         # seed it, but be defensive in case that changes.
         fake_redis.delete(redis_key(CacheKey.FULL_SEASON_PROJECTIONS))
 
         with (
             caplog.at_level("INFO", logger="fantasy_baseball.web.refresh_pipeline"),
-            patched_refresh_environment(fake_redis, cache_dir=cache_dir),
+            patched_refresh_environment(fake_redis),
         ):
-            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
+            refresh_pipeline.run_full_refresh()
 
         # The warning is emitted via _progress -> log.info, so it shows
         # up at INFO level on the refresh_pipeline logger.
