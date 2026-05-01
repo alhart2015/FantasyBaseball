@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from fantasy_baseball.models.league import League
     from fantasy_baseball.models.player import Player
     from fantasy_baseball.models.standings import ProjectedStandings, Standings
+    from fantasy_baseball.models.team import Team
 
 log = logging.getLogger(__name__)
 
@@ -167,7 +168,7 @@ class RefreshRun:
 
         self.config: LeagueConfig | None = None
         self.league: Any = None  # Yahoo session-bound league (untyped lib)
-        self.teams_dict: dict[str, dict[str, Any]] | None = None
+        self.teams_dict: dict[str, Team] | None = None
         self.league_model: League | None = None
         self.user_team_key: str | None = None
         self.standings: Standings | None = None
@@ -273,13 +274,12 @@ class RefreshRun:
 
     # --- Step 2: Find user's team key ---
     def _find_user_team(self):
-        from fantasy_baseball.lineup.yahoo_roster import find_user_team_key
+        from fantasy_baseball.lineup.yahoo_roster import fetch_teams, find_user_team_key
 
         assert self.config is not None
         self._progress("Finding team...")
-        self.teams_dict = self.league.teams()
-        team_names = {k: info.get("name", "") for k, info in self.teams_dict.items()}
-        self.user_team_key = find_user_team_key(team_names, self.config.team_name)
+        self.teams_dict = fetch_teams(self.league)
+        self.user_team_key = find_user_team_key(self.teams_dict, self.config.team_name)
 
     # --- Step 3: Fetch standings + roster ---
     def _fetch_standings_and_roster(self):
@@ -427,24 +427,22 @@ class RefreshRun:
             self.config.team_name: self.roster_raw,
         }
 
-        def _fetch_opp(key_and_info):
-            key, team_info = key_and_info
-            tname = team_info.get("name", "")
+        def _fetch_opp(team: "Team"):
             try:
-                opp_raw = fetch_roster(self.league, key, day=self.effective_date)
-                return (tname, opp_raw)
+                opp_raw = fetch_roster(self.league, team.team_key, day=self.effective_date)
+                return (team.name, opp_raw)
             except Exception as exc:
-                log.warning(f"Opponent roster fetch failed for {tname or key}: {exc}")
+                log.warning(f"Opponent roster fetch failed for {team.name or team.team_key}: {exc}")
                 return None
 
         assert self.teams_dict is not None
-        opp_items = [
-            (key, info)
-            for key, info in self.teams_dict.items()
-            if info.get("name", "") != self.config.team_name and key != self.user_team_key
+        opp_teams = [
+            team
+            for team in self.teams_dict.values()
+            if team.name != self.config.team_name and team.team_key != self.user_team_key
         ]
         with ThreadPoolExecutor(max_workers=6) as pool:
-            for result in pool.map(_fetch_opp, opp_items):
+            for result in pool.map(_fetch_opp, opp_teams):
                 if result is None:
                     continue
                 tname, opp_raw = result

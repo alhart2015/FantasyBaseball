@@ -134,13 +134,12 @@ def _compute_worst_roster_by_position() -> dict[str, str]:
 def _load_yahoo_league():
     """Get Yahoo league object and user team key."""
     from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
-    from fantasy_baseball.lineup.yahoo_roster import find_user_team_key
+    from fantasy_baseball.lineup.yahoo_roster import fetch_teams, find_user_team_key
 
     config = _load_config()
     sc = get_yahoo_session()
     league = get_league(sc, config.league_id, config.game_code)
-    team_names = {k: info.get("name", "") for k, info in league.teams().items()}
-    return league, find_user_team_key(team_names, config.team_name)
+    return league, find_user_team_key(fetch_teams(league), config.team_name)
 
 
 def _load_projections():
