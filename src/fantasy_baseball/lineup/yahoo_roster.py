@@ -92,6 +92,25 @@ def fetch_roster(
     return parse_roster(raw_roster)
 
 
+def find_user_team_key(teams: dict[str, dict[str, Any]], team_name: str) -> str:
+    """Resolve the user's team key in a ``league.teams()`` payload.
+
+    Looks up the team whose ``name`` matches ``team_name``. Falls back to
+    the first team in the dict if no match — keeps the dashboard usable
+    when ``config.team_name`` drifts out of sync with the league name on
+    Yahoo (e.g. mid-season rename) so the user still sees their lineup
+    instead of a 500.
+
+    The caller passes the ``teams`` dict rather than the league handle so
+    a single ``league.teams()`` call can power both this lookup and any
+    downstream iteration (e.g. opponent fetches).
+    """
+    for key, info in teams.items():
+        if info.get("name") == team_name:
+            return key
+    return next(iter(teams))
+
+
 def parse_roster(raw_roster: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Normalize raw Yahoo roster data."""
     players = []

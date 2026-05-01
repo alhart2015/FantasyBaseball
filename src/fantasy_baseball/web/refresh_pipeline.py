@@ -58,6 +58,24 @@ def get_refresh_status() -> dict:
         return dict(_refresh_status)
 
 
+def try_acquire_refresh_slot() -> bool:
+    """Atomically claim the refresh slot.
+
+    Returns True if the caller acquired it (and may now spawn the worker),
+    False if a refresh is already running. Without this, the route's
+    check-then-spawn pattern races: two POSTs that hit between
+    ``get_refresh_status`` and the worker setting ``running=True`` could
+    both spawn refresh threads.
+    """
+    with _refresh_lock:
+        if _refresh_status["running"]:
+            return False
+        _refresh_status["running"] = True
+        _refresh_status["progress"] = "Starting..."
+        _refresh_status["error"] = None
+        return True
+
+
 def _set_refresh_progress(msg: str) -> None:
     with _refresh_lock:
         _refresh_status["progress"] = msg
@@ -149,6 +167,7 @@ class RefreshRun:
 
         self.config: LeagueConfig | None = None
         self.league: Any = None  # Yahoo session-bound league (untyped lib)
+        self.teams_dict: dict[str, dict[str, Any]] | None = None
         self.league_model: League | None = None
         self.user_team_key: str | None = None
         self.standings: Standings | None = None
@@ -254,16 +273,12 @@ class RefreshRun:
 
     # --- Step 2: Find user's team key ---
     def _find_user_team(self):
+        from fantasy_baseball.lineup.yahoo_roster import find_user_team_key
+
         assert self.config is not None
         self._progress("Finding team...")
-        teams = self.league.teams()
-        for key, team_info in teams.items():
-            if team_info.get("name") == self.config.team_name:
-                self.user_team_key = key
-                break
-        if self.user_team_key is None:
-            # Fall back to first team if not found by name
-            self.user_team_key = next(iter(teams))
+        self.teams_dict = self.league.teams()
+        self.user_team_key = find_user_team_key(self.teams_dict, self.config.team_name)
 
     # --- Step 3: Fetch standings + roster ---
     def _fetch_standings_and_roster(self):
@@ -421,10 +436,10 @@ class RefreshRun:
                 log.warning(f"Opponent roster fetch failed for {tname or key}: {exc}")
                 return None
 
-        teams = self.league.teams()
+        assert self.teams_dict is not None
         opp_items = [
             (key, info)
-            for key, info in teams.items()
+            for key, info in self.teams_dict.items()
             if info.get("name", "") != self.config.team_name and key != self.user_team_key
         ]
         with ThreadPoolExecutor(max_workers=6) as pool:
@@ -657,7 +672,7 @@ class RefreshRun:
         assert self.preseason_lookup is not None
 
         self._progress("Computing player pace...")
-        self.hitter_logs, self.pitcher_logs = _load_game_log_totals(self.config.season_year)
+        self.hitter_logs, self.pitcher_logs = _load_game_log_totals()
 
         # Attach pace data to each roster player (pace compares actuals vs preseason)
         from fantasy_baseball.analysis.pace import attach_pace_to_roster

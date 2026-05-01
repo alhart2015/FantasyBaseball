@@ -3,6 +3,7 @@
 import functools
 import hmac
 import logging
+import math
 import os
 import threading
 from datetime import date
@@ -133,19 +134,12 @@ def _compute_worst_roster_by_position() -> dict[str, str]:
 def _load_yahoo_league():
     """Get Yahoo league object and user team key."""
     from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
+    from fantasy_baseball.lineup.yahoo_roster import find_user_team_key
 
     config = _load_config()
     sc = get_yahoo_session()
     league = get_league(sc, config.league_id, config.game_code)
-    teams = league.teams()
-    user_team_key = None
-    for key, team_info in teams.items():
-        if team_info.get("name") == config.team_name:
-            user_team_key = key
-            break
-    if user_team_key is None:
-        user_team_key = next(iter(teams))
-    return league, user_team_key
+    return league, find_user_team_key(league.teams(), config.team_name)
 
 
 def _load_projections():
@@ -298,10 +292,14 @@ def _optimize_one_side(
             out[player_key(p)] = "IL"
 
     hitters = [
-        p for p in roster if p.player_type == "hitter" and p.selected_position not in il_slots
+        p
+        for p in roster
+        if p.player_type == PlayerType.HITTER and p.selected_position not in il_slots
     ]
     pitchers = [
-        p for p in roster if p.player_type == "pitcher" and p.selected_position not in il_slots
+        p
+        for p in roster
+        if p.player_type == PlayerType.PITCHER and p.selected_position not in il_slots
     ]
 
     hitter_assignments = optimize_hitter_lineup(
@@ -946,8 +944,8 @@ def register_routes(app: Flask) -> None:
                     continue
                 fg_id = d.get("fg_id")
                 team = d.get("team")
-                if team != team and isinstance(team, float):
-                    team = ""  # NaN team
+                if isinstance(team, float) and math.isnan(team):
+                    team = ""
 
                 ros: HitterStats | PitcherStats
                 if ptype == PlayerType.HITTER:
@@ -1090,7 +1088,7 @@ def register_routes(app: Flask) -> None:
         for pool_key in ("hitters", "pitchers"):
             for d in ros_cache.get(pool_key, []):
                 if normalize_name(d.get("name", "")) == target_norm:
-                    ptype = "hitter" if pool_key == "hitters" else "pitcher"
+                    ptype = PlayerType.HITTER if pool_key == "hitters" else PlayerType.PITCHER
                     roster_player_projection = Player.from_dict(
                         {
                             **d,
@@ -1135,9 +1133,13 @@ def register_routes(app: Flask) -> None:
         from fantasy_baseball.utils.name_utils import normalize_name
 
         player_name = request.args.get("player")
-        player_type = request.args.get("player_type")
-        if not player_name or not player_type:
+        player_type_arg = request.args.get("player_type")
+        if not player_name or not player_type_arg:
             return jsonify({"error": "player and player_type are required"}), 400
+        try:
+            player_type = PlayerType(player_type_arg)
+        except ValueError:
+            return jsonify({"error": f"invalid player_type: {player_type_arg}"}), 400
 
         roster_raw = read_cache_list(CacheKey.ROSTER)
         if not roster_raw:
@@ -1152,7 +1154,7 @@ def register_routes(app: Flask) -> None:
         # Resolve the FA's ROS projection from ros_projections (same source
         # the browse page uses, so totals line up with the table row).
         ros_cache = read_cache_dict(CacheKey.ROS_PROJECTIONS) or {}
-        pool_key = "pitchers" if player_type == "pitcher" else "hitters"
+        pool_key = "pitchers" if player_type == PlayerType.PITCHER else "hitters"
         target_norm = normalize_name(player_name)
         fa_player = None
         for d in ros_cache.get(pool_key, []):
@@ -1321,8 +1323,6 @@ def register_routes(app: Flask) -> None:
         if opponent is None:
             return jsonify({"error": f"Team key {team_key} not found"}), 404
 
-        config = _load_config()
-
         try:
             league, _ = _load_yahoo_league()
             roster = fetch_roster(league, team_key)
@@ -1343,7 +1343,6 @@ def register_routes(app: Flask) -> None:
             pitchers_proj=pitchers_proj,
             rest_of_season_hitters=rest_of_season_hitters,
             rest_of_season_pitchers=rest_of_season_pitchers,
-            season_year=config.season_year,
         )
 
         # Render the same Jinja partials the user roster uses, so opponents
@@ -1377,10 +1376,12 @@ def register_routes(app: Flask) -> None:
     @app.route("/api/refresh", methods=["POST"])
     @_require_auth
     def api_refresh():
-        from fantasy_baseball.web.refresh_pipeline import get_refresh_status, run_full_refresh
+        from fantasy_baseball.web.refresh_pipeline import (
+            run_full_refresh,
+            try_acquire_refresh_slot,
+        )
 
-        status = get_refresh_status()
-        if status["running"]:
+        if not try_acquire_refresh_slot():
             return jsonify({"status": "already_running"})
         thread = threading.Thread(target=run_full_refresh, daemon=True)
         thread.start()
