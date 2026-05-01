@@ -93,11 +93,12 @@ def test_blend_and_cache_ros_blends_latest_snapshot_and_writes_cache(
         "fantasy_baseball.data.ros_pipeline.get_kv",
         lambda: fake_redis,
     )
-    # Point write_cache's Redis singleton at fake_redis so the
-    # write-through lands somewhere observable.
+    # write_cache routes through season_data.get_kv() after Phase 1 of
+    # the cache refactor. Patch the season_data binding so the cache
+    # write lands in fake_redis where we can assert against it.
     import fantasy_baseball.web.season_data as season_data
 
-    monkeypatch.setattr(season_data, "_get_redis", lambda: fake_redis)
+    monkeypatch.setattr(season_data, "get_kv", lambda: fake_redis)
 
     hitters_df, pitchers_df = blend_and_cache_ros(
         projections_dir,
@@ -113,16 +114,9 @@ def test_blend_and_cache_ros_blends_latest_snapshot_and_writes_cache(
     assert (hitters_df["player_type"] == "hitter").all()
     assert (pitchers_df["player_type"] == "pitcher").all()
 
-    # Local cache file written by write_cache.
+    # cache:ros_projections is populated in the KV.
     import json
 
-    cache_file = tmp_path / "cache" / "ros_projections.json"
-    assert cache_file.exists()
-    cached = json.loads(cache_file.read_text(encoding="utf-8"))
-    assert len(cached["hitters"]) == 4
-    assert len(cached["pitchers"]) == 3
-
-    # Redis write-through: cache:ros_projections is populated.
     raw = fake_redis.get("cache:ros_projections")
     assert raw is not None
     cached_redis = json.loads(raw)
@@ -171,7 +165,7 @@ def test_blend_and_cache_ros_normalizes_using_redis_totals(
     )
     import fantasy_baseball.web.season_data as season_data
 
-    monkeypatch.setattr(season_data, "_get_redis", lambda: fake_redis)
+    monkeypatch.setattr(season_data, "get_kv", lambda: fake_redis)
 
     hitters_df, pitchers_df = blend_and_cache_ros(
         projections_dir,
@@ -264,13 +258,15 @@ def test_blend_and_cache_ros_still_returns_dfs_when_redis_unconfigured(
     fake_redis,
     monkeypatch,
 ):
-    """None client: blending still succeeds; Redis write-through is a no-op.
+    """None client: blending still succeeds; cache write is a no-op.
 
-    Convention matches Tasks 2-6: readers return empty, writers no-op.
-    write_cache still writes to local disk, so DataFrames come back populated.
-    ``fake_redis`` is injected but the pipeline sees ``None`` for both its
-    own client and ``season_data._get_redis``, so we can assert the Redis
-    cache key was never written.
+    Convention: readers return empty when client is None, writers no-op.
+    After Phase 1 of the cache refactor, write_cache routes through
+    ``season_data.get_kv()``; patching it to ``None`` exercises the
+    same no-op-on-failure path that Upstash outages would hit. The
+    assertion uses fake_redis (which is *not* the active KV here) to
+    confirm nothing was written to it — equivalent to asserting nothing
+    persisted anywhere observable.
     """
     _make_ros_tree(projections_dir, year=2026, date="2026-04-07")
 
@@ -280,7 +276,7 @@ def test_blend_and_cache_ros_still_returns_dfs_when_redis_unconfigured(
     )
     import fantasy_baseball.web.season_data as season_data
 
-    monkeypatch.setattr(season_data, "_get_redis", lambda: None)
+    monkeypatch.setattr(season_data, "get_kv", lambda: None)
 
     hitters_df, pitchers_df = blend_and_cache_ros(
         projections_dir,
@@ -292,5 +288,5 @@ def test_blend_and_cache_ros_still_returns_dfs_when_redis_unconfigured(
     assert len(hitters_df) == 4
     assert len(pitchers_df) == 3
     # Writer no-op: cache:ros_projections must NOT be written when the
-    # Redis client is unconfigured.
+    # KV client is unconfigured.
     assert fake_redis.get("cache:ros_projections") is None

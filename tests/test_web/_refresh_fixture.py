@@ -380,14 +380,19 @@ def patched_refresh_environment(
     # cache:ros_projections from Redis (the admin fetch is the sole
     # authoritative writer on Render). Seed the cache up front so the
     # refresh can find it, or leave it empty when has_rest_of_season
-    # is False.
+    # is False. Phase 1 of the cache refactor: write directly to
+    # fake_redis instead of through ``write_cache``, since that helper
+    # now routes through ``get_kv()`` and the patches that swap
+    # ``get_kv`` for ``fake_redis`` haven't been applied yet at this
+    # point in the fixture lifecycle.
     if has_rest_of_season:
-        from fantasy_baseball.web.season_data import CacheKey, write_cache
+        from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 
-        write_cache(
-            CacheKey.ROS_PROJECTIONS,
-            {"hitters": hitter_projections(), "pitchers": pitcher_projections()},
-            cache_dir,
+        fake_redis.set(
+            redis_key(CacheKey.ROS_PROJECTIONS),
+            json.dumps(
+                {"hitters": hitter_projections(), "pitchers": pitcher_projections()},
+            ),
         )
 
     # Capture the real Monte Carlo function BEFORE patching it,
@@ -522,9 +527,11 @@ def patched_refresh_environment(
         # Redis clients. The central singleton owner is ``kv_store.get_kv``;
         # patching it covers every call site that does ``from kv_store
         # import get_kv`` inside a function body (most refresh_pipeline
-        # entry points). ``season_data._get_redis`` is a thin wrapper that
-        # also has to be patched because tests don't set RENDER=true.
+        # entry points). Module-level imports (``from kv_store import
+        # get_kv`` at the top of season_data) bind the original symbol
+        # at import time, so we also patch each module-level alias.
         patch("fantasy_baseball.data.kv_store.get_kv", return_value=fake_redis),
+        patch("fantasy_baseball.web.season_data.get_kv", return_value=fake_redis),
         patch("fantasy_baseball.web.season_data._get_redis", return_value=fake_redis),
         # refresh_pipeline imports _get_redis at module level, so we also
         # have to patch the local name there (``_write_spoe_snapshot`` uses it).

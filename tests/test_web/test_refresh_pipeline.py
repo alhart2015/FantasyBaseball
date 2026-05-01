@@ -6,17 +6,24 @@ down values — Monte Carlo has randomness and projections change weekly.
 """
 
 import json
-from pathlib import Path
 
 import pytest
 
+from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 from fantasy_baseball.web import refresh_pipeline
 from tests.test_web._refresh_fixture import patched_refresh_environment
 
 
-def _read(cache_dir: Path, name: str):
-    """Read a cache JSON file."""
-    return json.loads((cache_dir / f"{name}.json").read_text())
+def _read(client, name: str):
+    """Read a cache entry from the KV (fake_redis in tests).
+
+    After Phase 1 of the cache refactor, ``write_cache`` writes to the KV
+    via ``cache:<name>`` keys instead of JSON files in ``cache_dir``. This
+    helper reflects that — it queries the same KV the dashboard reads from
+    on Render and SQLite locally.
+    """
+    raw = client.get(f"cache:{name}")
+    return json.loads(raw) if raw else None
 
 
 @pytest.fixture
@@ -36,32 +43,31 @@ class TestRefreshShape:
         with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
             refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
 
-        expected_files = [
-            "standings",
-            "pending_moves",
-            "projections",
-            "roster",
-            "rankings",
-            "lineup_optimal",
-            "probable_starters",
-            "positions",
-            "roster_audit",
-            "leverage",
-            "monte_carlo",
-            "spoe",
-            "transaction_analyzer",
-            "meta",
-            "opp_rosters",
+        expected_keys = [
+            CacheKey.STANDINGS,
+            CacheKey.PENDING_MOVES,
+            CacheKey.PROJECTIONS,
+            CacheKey.ROSTER,
+            CacheKey.RANKINGS,
+            CacheKey.LINEUP_OPTIMAL,
+            CacheKey.PROBABLE_STARTERS,
+            CacheKey.POSITIONS,
+            CacheKey.ROSTER_AUDIT,
+            CacheKey.LEVERAGE,
+            CacheKey.MONTE_CARLO,
+            CacheKey.SPOE,
+            CacheKey.TRANSACTION_ANALYZER,
+            CacheKey.META,
+            CacheKey.OPP_ROSTERS,
         ]
-        for name in expected_files:
-            path = cache_dir / f"{name}.json"
-            assert path.exists(), f"Missing cache file: {name}.json"
+        for key in expected_keys:
+            assert fake_redis.get(redis_key(key)) is not None, f"Missing cache key: {key}"
 
     def test_standings_shape(self, configured_test_env, fake_redis):
         cache_dir = configured_test_env
         with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
             refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
-        data = _read(cache_dir, "standings")
+        data = _read(fake_redis, "standings")
         # Canonical Standings.to_json() shape: {effective_date, teams: [...]}
         assert isinstance(data, dict)
         assert {"effective_date", "teams"} <= data.keys()
@@ -76,7 +82,7 @@ class TestRefreshShape:
         cache_dir = configured_test_env
         with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
             refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
-        data = _read(cache_dir, "projections")
+        data = _read(fake_redis, "projections")
         assert {"projected_standings", "team_sds", "fraction_remaining"} <= data.keys()
         # projected_standings is now ProjectedStandings.to_json() shape:
         # {effective_date, teams: [{name, stats}]}
@@ -89,7 +95,7 @@ class TestRefreshShape:
         cache_dir = configured_test_env
         with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
             refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
-        data = _read(cache_dir, "lineup_optimal")
+        data = _read(fake_redis, "lineup_optimal")
         assert {"hitter_lineup", "pitcher_starters", "pitcher_bench", "moves"} <= data.keys()
         assert isinstance(data["moves"], list)
 
@@ -97,7 +103,7 @@ class TestRefreshShape:
         cache_dir = configured_test_env
         with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
             refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
-        data = _read(cache_dir, "monte_carlo")
+        data = _read(fake_redis, "monte_carlo")
         assert "base" in data
         assert "with_management" in data
         # ROS keys may be None when has_rest_of_season=False (next task)
@@ -106,7 +112,7 @@ class TestRefreshShape:
         cache_dir = configured_test_env
         with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
             refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
-        data = _read(cache_dir, "meta")
+        data = _read(fake_redis, "meta")
         assert {"last_refresh", "start_date", "end_date", "team_name"} <= data.keys()
         assert data["team_name"] == "Team 01"
 
@@ -120,23 +126,24 @@ class TestRefreshInvariants:
         with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
             refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
         self.cache_dir = cache_dir
+        self.fake_redis = fake_redis
 
     def test_every_team_in_standings_appears_in_projected_standings(self):
-        standings = _read(self.cache_dir, "standings")
-        projections = _read(self.cache_dir, "projections")
+        standings = _read(self.fake_redis, "standings")
+        projections = _read(self.fake_redis, "projections")
         standings_names = {t["name"] for t in standings["teams"]}
         projected_names = {t["name"] for t in projections["projected_standings"]["teams"]}
         assert standings_names == projected_names
 
     def test_every_roster_player_has_pace(self):
-        roster = _read(self.cache_dir, "roster")
+        roster = _read(self.fake_redis, "roster")
         for player in roster:
             assert "pace" in player, f"{player.get('name')} missing pace"
             assert player["pace"] is not None
 
     def test_lineup_moves_only_reference_roster_players(self):
-        roster = _read(self.cache_dir, "roster")
-        optimal = _read(self.cache_dir, "lineup_optimal")
+        roster = _read(self.fake_redis, "roster")
+        optimal = _read(self.fake_redis, "lineup_optimal")
         roster_names = {p["name"] for p in roster}
         for move in optimal["moves"]:
             assert move["player"] in roster_names, (
@@ -144,9 +151,9 @@ class TestRefreshInvariants:
             )
 
     def test_positions_map_covers_roster_and_opponents_and_fas(self):
-        positions = _read(self.cache_dir, "positions")
-        roster = _read(self.cache_dir, "roster")
-        opp_rosters = _read(self.cache_dir, "opp_rosters")
+        positions = _read(self.fake_redis, "positions")
+        roster = _read(self.fake_redis, "roster")
+        opp_rosters = _read(self.fake_redis, "opp_rosters")
         from fantasy_baseball.utils.name_utils import normalize_name
 
         # Roster players
@@ -158,11 +165,11 @@ class TestRefreshInvariants:
                 assert normalize_name(p["name"]) in positions
 
     def test_meta_last_refresh_is_set(self):
-        meta = _read(self.cache_dir, "meta")
+        meta = _read(self.fake_redis, "meta")
         assert meta["last_refresh"]  # truthy
 
     def test_meta_team_name_matches_config(self):
-        meta = _read(self.cache_dir, "meta")
+        meta = _read(self.fake_redis, "meta")
         assert meta["team_name"] == "Team 01"
 
 
@@ -181,7 +188,7 @@ class TestMonteCarloROSBranch:
             cache_dir=cache_dir,
         ):
             refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
-        data = _read(cache_dir, "monte_carlo")
+        data = _read(fake_redis, "monte_carlo")
         assert data["base"] is not None
         assert data["with_management"] is not None
         if has_ros:
@@ -303,7 +310,7 @@ class TestPreseasonBaseline:
         cache_dir = configured_test_env
         with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
             refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
-        data = _read(cache_dir, "monte_carlo")
+        data = _read(fake_redis, "monte_carlo")
         assert data["base"] is not None
         assert data["with_management"] is not None
         assert "team_results" in data["base"]
@@ -319,16 +326,17 @@ class TestPreseasonBaseline:
         with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
             fake_redis.delete("preseason_baseline:2026")
             refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
-        data = _read(cache_dir, "monte_carlo")
+        data = _read(fake_redis, "monte_carlo")
         assert data["base"] is None
         assert data["with_management"] is None
         assert data["baseline_meta"] is None
 
 
 class TestFullSeasonProjectionsLoad:
-    """``_load_projections`` must use ``read_cache`` for the full-season
-    blob so it has the same Redis+disk-fallback resilience as ROS, and
-    must emit a clear warning when both Redis and disk are missing.
+    """``_load_projections`` must emit a clear warning when the
+    full-season blob is missing from the KV. Pre-Phase-1 there was a
+    second test for "reads disk when Redis missing" — the disk fallback
+    is gone now (single KV layer), so that test was removed.
     """
 
     def test_warns_when_full_season_blob_missing(
@@ -337,19 +345,14 @@ class TestFullSeasonProjectionsLoad:
         fake_redis,
         caplog,
     ):
-        """Both Redis and disk missing → refresh logs the warning and
-        leaves ``self.full_hitters_proj`` / ``self.full_pitchers_proj``
-        unset (so ``hydrate_roster_entries`` skips populating
+        """KV missing → refresh logs the warning and leaves
+        ``self.full_hitters_proj`` / ``self.full_pitchers_proj`` unset
+        (so ``hydrate_roster_entries`` skips populating
         ``Player.full_season_projection``)."""
-        from fantasy_baseball.data.cache_keys import CacheKey, redis_key
-
         cache_dir = configured_test_env
-        # Ensure neither Redis nor disk has the full-season blob. The
-        # fixture doesn't seed it, but be defensive in case that changes.
+        # Ensure the KV has no full-season blob. The fixture doesn't
+        # seed it, but be defensive in case that changes.
         fake_redis.delete(redis_key(CacheKey.FULL_SEASON_PROJECTIONS))
-        disk_path = cache_dir / "full_season_projections.json"
-        if disk_path.exists():
-            disk_path.unlink()
 
         with (
             caplog.at_level("INFO", logger="fantasy_baseball.web.refresh_pipeline"),
@@ -365,29 +368,3 @@ class TestFullSeasonProjectionsLoad:
         ), "Expected the missing-full-season warning; saw: " + ", ".join(
             r.getMessage() for r in caplog.records
         )
-
-    def test_reads_disk_when_redis_missing(
-        self,
-        configured_test_env,
-        fake_redis,
-    ):
-        """Redis missing but disk has it → load succeeds (mirrors ROS
-        path's read_cache behavior). Asserts no warning is emitted."""
-        from fantasy_baseball.data.cache_keys import CacheKey, redis_key
-        from fantasy_baseball.web.season_data import write_cache
-
-        cache_dir = configured_test_env
-        # Seed the disk path before patching the environment so write_cache
-        # uses the same cache_dir the refresh will read from.
-        write_cache(
-            CacheKey.FULL_SEASON_PROJECTIONS,
-            {"hitters": [], "pitchers": []},
-            cache_dir,
-        )
-        # Strip Redis so only disk remains.
-        fake_redis.delete(redis_key(CacheKey.FULL_SEASON_PROJECTIONS))
-
-        with patched_refresh_environment(fake_redis, cache_dir=cache_dir):
-            refresh_pipeline.run_full_refresh(cache_dir=cache_dir)
-        # Refresh completed without raising; the warning path was
-        # bypassed because read_cache returned the disk payload.
