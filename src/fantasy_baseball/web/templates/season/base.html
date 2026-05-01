@@ -49,15 +49,21 @@
                 Logs
             </a>
             <div class="sidebar-footer">
-                <div class="refresh-info">
+                <div class="refresh-info"
+                     {% if meta and meta.get('last_refresh') %}
+                     data-last-refresh="{{ meta['last_refresh'] }}"
+                     {% endif %}>
                     {% if meta and meta.get('last_refresh') %}
                         Last refresh: {{ meta['last_refresh'] }}
+                        <span id="staleness-indicator" style="display: none; margin-left: 4px; font-size: 11px;"></span>
                     {% else %}
                         No data yet
                     {% endif %}
                 </div>
                 {% if session.get('authenticated') %}
                 <button class="btn-refresh" id="refresh-btn" onclick="startRefresh()">Refresh Data</button>
+                <button class="btn-refresh" id="sync-btn" onclick="syncFromRemote()"
+                        style="margin-top: 4px; font-size: 11px; padding: 4px 8px;">Sync from remote</button>
                 <div id="refresh-progress" style="display: none; font-size: 11px; color: var(--accent); margin-top: 6px;"></div>
                 <a href="{{ url_for('logout') }}" style="display: block; margin-top: 8px; font-size: 11px; color: var(--text-secondary); text-decoration: none;">Logout</a>
                 {% else %}
@@ -104,6 +110,58 @@ function pollStatus() {
         })
         .catch(() => setTimeout(pollStatus, 2000));
 }
+
+// Lightweight Upstash → local SQLite copy. No Yahoo fetch, no recompute.
+// Useful when QStash has populated Upstash but the local KV is stale.
+function syncFromRemote() {
+    const btn = document.getElementById('sync-btn');
+    const progress = document.getElementById('refresh-progress');
+    if (!btn) return;
+    btn.disabled = true;
+    btn.textContent = 'Syncing…';
+    progress.style.display = 'block';
+    progress.style.color = 'var(--accent)';
+    progress.textContent = 'Pulling from Upstash…';
+
+    fetch('/api/sync-from-remote', {method: 'POST'})
+        .then(r => r.json().then(data => ({status: r.status, data})))
+        .then(({status, data}) => {
+            if (status >= 400 || data.error) {
+                progress.textContent = 'Sync failed: ' + (data.error || status);
+                progress.style.color = 'var(--danger)';
+                btn.disabled = false;
+                btn.textContent = 'Sync from remote';
+                return;
+            }
+            window.location.reload();
+        })
+        .catch(err => {
+            progress.textContent = 'Sync failed: ' + String(err);
+            progress.style.color = 'var(--danger)';
+            btn.disabled = false;
+            btn.textContent = 'Sync from remote';
+        });
+}
+
+// Stale-data banner. The "Last refresh" timestamp is rendered server-side
+// as "YYYY-MM-DD HH:MM" in the user's local time. After 24h, surface a
+// red "(stale)" indicator so the user notices before relying on the data.
+(function checkStaleness() {
+    const el = document.querySelector('.refresh-info[data-last-refresh]');
+    if (!el) return;
+    const indicator = document.getElementById('staleness-indicator');
+    if (!indicator) return;
+    const raw = el.getAttribute('data-last-refresh');
+    // Parse "2026-05-01 10:05" as local time (no timezone suffix → local).
+    const parsed = new Date(raw.replace(' ', 'T'));
+    if (isNaN(parsed.getTime())) return;
+    const ageHours = (Date.now() - parsed.getTime()) / (1000 * 60 * 60);
+    if (ageHours > 24) {
+        indicator.textContent = '(stale, ' + Math.floor(ageHours) + 'h old)';
+        indicator.style.display = 'inline';
+        indicator.style.color = 'var(--danger)';
+    }
+})();
 </script>
 </body>
 </html>
