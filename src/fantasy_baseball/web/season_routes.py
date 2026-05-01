@@ -282,9 +282,11 @@ def _optimize_one_side(
     """Run hitter + pitcher optimizers; return ``{player_key: zone}`` dict.
 
     IL players are passed through unchanged. All non-active hitters/pitchers
-    land on BN. Hitter slot assignments come from the optimizer; pitcher
-    starters get sequential slot ids ``P1..PN`` (or ``P`` if there is only
-    one pitcher slot).
+    land on BN. Slot labels match the trade-builder UI's slot IDs: when
+    ``roster_slots[label]`` is 1 the label is bare (``"3B"``); when > 1 it
+    is suffixed with a 1-based index (``"OF1".."OF4"``, ``"UTIL1"``,
+    ``"P1".."P9"``). The frontend's ``slotList()`` follows the same
+    convention, so the panel's ``pl.zone === slotId`` lookup matches.
     """
     from fantasy_baseball.trades.multi_trade import player_key
 
@@ -319,10 +321,16 @@ def _optimize_one_side(
         team_sds=team_sds,
     )
 
+    slot_counters: dict[str, int] = {}
     assigned_hitter_keys = set()
     for a in hitter_assignments:
         # `a.slot` is a Position enum; .value is the canonical slot label.
-        slot_label = a.slot.value if hasattr(a.slot, "value") else str(a.slot)
+        base = a.slot.value if hasattr(a.slot, "value") else str(a.slot)
+        if roster_slots.get(base, 1) > 1:
+            slot_counters[base] = slot_counters.get(base, 0) + 1
+            slot_label = f"{base}{slot_counters[base]}"
+        else:
+            slot_label = base
         out[player_key(a.player)] = slot_label
         assigned_hitter_keys.add(player_key(a.player))
     for p in hitters:
