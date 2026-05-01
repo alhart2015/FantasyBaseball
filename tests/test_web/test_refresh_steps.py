@@ -4,6 +4,7 @@ run_full_refresh that are specific to the refresh orchestration
 
 from fantasy_baseball.models.player import (
     HitterStats,
+    PitcherStats,
     Player,
     PlayerType,
 )
@@ -207,6 +208,51 @@ class TestComputeLineupMoves:
         optimal = {"OF_2": "Soto"}
         # Current is OF, target is OF (after stripping _2) → no move
         assert compute_lineup_moves(optimal, [p]) == []
+
+    def test_benched_pitcher_emits_start_move(self):
+        # Pitcher on BN; optimizer wants them at P_N → emit START with slot "P"
+        ros = PitcherStats(sgp=8.5)
+        nola = _player(
+            "Nola",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="BN",
+            ros=ros,
+        )
+        optimal = {"P_3": "Nola"}
+        moves = compute_lineup_moves(optimal, [nola])
+        assert len(moves) == 1
+        assert moves[0]["action"] == "START"
+        assert moves[0]["player"] == "Nola"
+        assert moves[0]["slot"] == "P"
+        assert "8.5" in moves[0]["reason"]
+
+    def test_active_pitcher_emits_no_move(self):
+        # Pitcher already at P; optimizer keeps them at P_N → no move
+        nola = _player(
+            "Nola",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="P",
+        )
+        optimal = {"P_5": "Nola"}
+        assert compute_lineup_moves(optimal, [nola]) == []
+
+    def test_mixed_hitter_and_pitcher_slots(self):
+        # Combined optimal lineup with both hitters and pitchers
+        soto = _player("Soto", ros=HitterStats(sgp=12.0), selected_position="BN")
+        nola = _player(
+            "Nola",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="BN",
+            ros=PitcherStats(sgp=7.0),
+        )
+        optimal = {"OF_1": "Soto", "P_1": "Nola"}
+        moves = compute_lineup_moves(optimal, [soto, nola])
+        assert len(moves) == 2
+        slots = {m["slot"] for m in moves}
+        assert slots == {"OF", "P"}
 
 
 class TestBuildPositionsMap:

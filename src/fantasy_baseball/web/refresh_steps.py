@@ -50,17 +50,19 @@ def merge_matched_and_raw_roster(
 
 
 def compute_lineup_moves(
-    optimal_hitters: dict[str, str],
+    optimal_assignments: dict[str, str],
     roster_players: list[Player],
 ) -> list[dict]:
     """Compare optimizer output to current slots; emit START moves.
 
-    Only emits a move when the player is crossing the bench/active
-    boundary. Slot keys may have suffixes like ``OF_1`` — only the
-    prefix before ``_`` matters for comparison.
+    Accepts both hitter assignments (e.g. ``OF_1``, ``Util``) and
+    pitcher slots (``P_1`` ... ``P_N``) in a single dict. Only emits a
+    move when the player is crossing the bench/active boundary. Slot
+    keys may have suffixes like ``OF_1`` or ``P_3`` — only the prefix
+    before ``_`` matters for comparison.
     """
     moves: list[dict] = []
-    for slot, player_name in optimal_hitters.items():
+    for slot, player_name in optimal_assignments.items():
         for player in roster_players:
             if player.name != player_name:
                 continue
