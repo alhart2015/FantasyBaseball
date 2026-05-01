@@ -169,6 +169,48 @@ def test_optimize_route_returns_slots_for_legal_trade(client, monkeypatch):
     assert set(body["opp_slots"].keys()) == expected_opp_keys
 
 
+def test_optimize_route_numbers_repeated_slots(client, monkeypatch):
+    """Multi-count slots (OF=3) come back as OF1/OF2/OF3, not bare "OF".
+
+    The trade-builder frontend's slotList() emits numbered IDs for any
+    slot with count > 1; the panel renders by exact ``pl.zone === slotId``
+    match, so a bare "OF" zone leaves the OF rows empty. Single-count
+    slots like UTIL=1 stay bare ("UTIL").
+    """
+    _auth(client)
+    me, opp, ps = _setup_minimal_rosters()
+    _fake_cache(
+        monkeypatch,
+        {
+            "roster": me,
+            "opp_rosters": {"Rival": opp},
+            "projections": {"projected_standings": ps, "team_sds": None},
+            "ros_projections": {"hitters": [], "pitchers": []},
+        },
+    )
+    _patch_config(monkeypatch)
+
+    resp = client.post(
+        "/api/optimize-trade-lineup",
+        json={
+            "opponent": "Rival",
+            "send": [player_key_json(me[0])],
+            "receive": [player_key_json(opp[0])],
+            "my_drops": [],
+            "opp_drops": [],
+            "my_adds": [],
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    of_zones = sorted(z for z in body["my_slots"].values() if z.startswith("OF"))
+    assert of_zones == ["OF1", "OF2", "OF3"], f"OF=3 should produce OF1/OF2/OF3, got {of_zones!r}"
+    assert "OF" not in body["my_slots"].values(), "bare 'OF' should not appear when OF count > 1"
+    util_zones = [z for z in body["my_slots"].values() if z.startswith("UTIL")]
+    assert util_zones == ["UTIL"], f"UTIL=1 should stay bare 'UTIL', got {util_zones!r}"
+
+
 def test_optimize_route_rejects_illegal_trade(client, monkeypatch):
     _auth(client)
     me, opp, ps = _setup_minimal_rosters()
