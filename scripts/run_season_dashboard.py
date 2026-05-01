@@ -36,6 +36,18 @@ def main() -> int:
         print("Syncing remote Upstash KV → local SQLite...")
         stats = sync_remote_to_local()
         print(f"  synced: {stats.summary()}")
+        # Surface freshness on startup so it's obvious how stale the
+        # local KV is. Pulls from the same KV the dashboard reads from
+        # (the just-synced SQLite) — meta is written by the refresh
+        # pipeline as "YYYY-MM-DD HH:MM" local time.
+        from fantasy_baseball.web.season_data import read_meta
+
+        meta = read_meta()
+        last_refresh = meta.get("last_refresh") if meta else None
+        if last_refresh:
+            print(f"  last_refresh: {last_refresh}")
+        else:
+            print("  last_refresh: (none — Upstash may be empty)")
 
     app = create_app()
     print(f"Season dashboard: http://localhost:{args.port}")

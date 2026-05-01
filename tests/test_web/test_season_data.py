@@ -1,9 +1,10 @@
 import json
 from datetime import date
-from unittest.mock import MagicMock
 
 import pytest
 
+from fantasy_baseball.data import kv_store
+from fantasy_baseball.data.cache_keys import redis_key
 from fantasy_baseball.models.standings import (
     CategoryStats,
     ProjectedStandings,
@@ -22,6 +23,21 @@ from fantasy_baseball.web.season_data import (
     read_meta,
     write_cache,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_kv(tmp_path, monkeypatch):
+    """Per-test isolated SQLite KV via FANTASY_LOCAL_KV_PATH.
+
+    Required after Phase 1 of the cache refactor: read_cache/write_cache
+    now route through ``kv_store.get_kv()`` instead of reading JSON files
+    out of the test's ``tmp_path``. Without per-test KV isolation, every
+    test would share ``data/local.db`` and stomp on each other.
+    """
+    monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(tmp_path / "test.db"))
+    kv_store._reset_singleton()
+    yield
+    kv_store._reset_singleton()
 
 
 def _standings_from_raw(raw: list[dict]) -> Standings:
@@ -55,35 +71,30 @@ def _projected_from_raw(raw: list[dict]) -> ProjectedStandings:
     )
 
 
-def test_write_and_read_cache(tmp_path):
+def test_write_and_read_cache():
     data = {"teams": [{"name": "Hart of the Order", "total": 67}]}
-    write_cache(CacheKey.STANDINGS, data, cache_dir=tmp_path)
-    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
-    assert result == data
+    write_cache(CacheKey.STANDINGS, data)
+    assert read_cache(CacheKey.STANDINGS) == data
 
 
-def test_read_cache_missing_file(tmp_path):
-    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
-    assert result is None
+def test_read_cache_missing_file():
+    assert read_cache(CacheKey.STANDINGS) is None
 
 
-def test_read_cache_corrupt_json(tmp_path):
-    path = tmp_path / "standings.json"
-    path.write_text("not json", encoding="utf-8")
-    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
-    assert result is None
+def test_read_cache_corrupt_json():
+    """Corrupt JSON in the KV value is treated as a miss, not a hard error."""
+    kv_store.get_kv().set(redis_key(CacheKey.STANDINGS), "not json{{")
+    assert read_cache(CacheKey.STANDINGS) is None
 
 
-def test_read_meta_missing(tmp_path):
-    result = read_meta(cache_dir=tmp_path)
-    assert result == {}
+def test_read_meta_missing():
+    assert read_meta() == {}
 
 
-def test_write_cache_overwrites(tmp_path):
-    write_cache(CacheKey.STANDINGS, {"v": 1}, cache_dir=tmp_path)
-    write_cache(CacheKey.STANDINGS, {"v": 2}, cache_dir=tmp_path)
-    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
-    assert result == {"v": 2}
+def test_write_cache_overwrites():
+    write_cache(CacheKey.STANDINGS, {"v": 1})
+    write_cache(CacheKey.STANDINGS, {"v": 2})
+    assert read_cache(CacheKey.STANDINGS) == {"v": 2}
 
 
 def _sample_standings():
@@ -572,7 +583,7 @@ def test_format_lineup_passes_ros_data_through():
     assert "r" not in no_ros
 
 
-def test_roster_cache_includes_stats(tmp_path, monkeypatch):
+def test_roster_cache_includes_stats():
     """After refresh, roster entries should include a 'pace' dict."""
     roster = [
         {
@@ -635,92 +646,56 @@ def test_roster_cache_includes_stats(tmp_path, monkeypatch):
     assert result["hitters"][0]["pace"]["HR"]["actual"] == 9
 
 
-# Note: the leak-prevention invariant for _get_redis (off-Render returns
-# None regardless of env creds) is enforced by kv_store.get_kv and is
-# tested in tests/test_data/test_kv_store.py against a real fixture
-# store. The tests below cover read_cache/write_cache's Redis path by
-# monkeypatching season_data._get_redis directly.
+# After Phase 1 of the cache refactor, read_cache/write_cache route
+# through ``kv_store.get_kv()``. The leak-prevention invariant
+# (off-Render get_kv() never reaches Upstash) is enforced by kv_store
+# itself and tested in ``tests/test_data/test_kv_store.py``. The tests
+# below verify the cache-layer behavior on top of the KV: round-trip,
+# canonical key naming, miss handling, corrupt-payload handling, and
+# graceful KV-error tolerance.
 
 
-def test_write_cache_writes_to_redis(tmp_path, monkeypatch):
-    """write_cache pushes to Redis when _get_redis returns a client."""
-    mock_redis = type("MockRedis", (), {"set": lambda self, k, v: None})()
-    mock_redis.set = lambda k, v: setattr(mock_redis, "_last_set", (k, v))
-    monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
-
+def test_write_cache_uses_canonical_redis_key():
+    """write_cache stores under ``cache:<key>`` so dashboard reads on
+    Render (which hit the same key in Upstash) see the same data."""
     data = {"teams": [1, 2, 3]}
-    write_cache(CacheKey.STANDINGS, data, cache_dir=tmp_path)
-
-    assert mock_redis._last_set[0] == "cache:standings"
-    assert json.loads(mock_redis._last_set[1]) == data
-
-
-def test_write_cache_skips_redis_when_get_redis_is_none(tmp_path, monkeypatch):
-    """With no Redis client (off-Render default), write_cache stays on disk."""
-    monkeypatch.setattr(season_data, "_get_redis", lambda: None)
-    data = {"v": 1}
-    write_cache(CacheKey.STANDINGS, data, cache_dir=tmp_path)
-    assert read_cache(CacheKey.STANDINGS, cache_dir=tmp_path) == data
+    write_cache(CacheKey.STANDINGS, data)
+    raw = kv_store.get_kv().get(redis_key(CacheKey.STANDINGS))
+    assert raw is not None
+    assert json.loads(raw) == data
 
 
-def test_write_cache_handles_redis_error(tmp_path, monkeypatch):
-    """write_cache continues if Redis raises a network error."""
-    mock_redis = MagicMock()
-    mock_redis.set.side_effect = ConnectionError("Upstash unreachable")
-    mock_redis.get.side_effect = ConnectionError("Upstash unreachable")
-    monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
+def test_write_cache_swallows_kv_error(monkeypatch):
+    """write_cache logs and continues if the KV write raises.
 
-    data = {"teams": [1, 2, 3]}
-    write_cache(CacheKey.STANDINGS, data, cache_dir=tmp_path)
-    # Local write still succeeded; read falls back to disk after Redis error.
-    assert read_cache(CacheKey.STANDINGS, cache_dir=tmp_path) == data
+    Mirrors the pre-refactor behavior of tolerating transient Upstash
+    blips during a refresh — failing the whole pipeline because one
+    cache write missed would be more disruptive than the staleness it
+    causes. read_cache will subsequently return None for this key,
+    which the dashboard already handles as a missing-cache state.
+    """
 
+    class _RaisingKV:
+        def get(self, key):
+            return None
 
-def test_read_cache_falls_back_to_redis(tmp_path, monkeypatch):
-    """When local disk has no file, read_cache fetches from Redis and writes back locally."""
-    data = {"teams": [1, 2, 3]}
-    mock_redis = type("MockRedis", (), {"get": lambda self, k: json.dumps(data)})()
-    monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
+        def set(self, key, value, **_):
+            raise ConnectionError("Upstash unreachable")
 
-    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
-    assert result == data
-    local = json.loads((tmp_path / "standings.json").read_text(encoding="utf-8"))
-    assert local == data
+    monkeypatch.setattr(season_data, "get_kv", lambda: _RaisingKV())
+    # No exception escapes.
+    write_cache(CacheKey.STANDINGS, {"v": 1})
 
 
-def test_read_cache_returns_none_when_both_miss(tmp_path, monkeypatch):
-    """When local disk and Redis both miss, returns None."""
-    mock_redis = type("MockRedis", (), {"get": lambda self, k: None})()
-    monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
+def test_read_cache_swallows_kv_error(monkeypatch):
+    """read_cache returns None on KV error rather than propagating."""
 
-    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
-    assert result is None
+    class _RaisingKV:
+        def get(self, key):
+            raise ConnectionError("Upstash unreachable")
 
-
-def test_read_cache_handles_corrupt_redis_data(tmp_path, monkeypatch):
-    """When Redis returns non-JSON, treat as miss."""
-    mock_redis = type("MockRedis", (), {"get": lambda self, k: "not-json{{"})()
-    monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
-
-    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
-    assert result is None
-
-
-def test_read_cache_skips_redis_when_get_redis_is_none(tmp_path, monkeypatch):
-    """With no Redis client (off-Render default), read_cache stays on disk."""
-    monkeypatch.setattr(season_data, "_get_redis", lambda: None)
-    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
-    assert result is None
-
-
-def test_read_cache_handles_redis_error(tmp_path, monkeypatch):
-    """read_cache returns None if Redis raises a network error."""
-    mock_redis = MagicMock()
-    mock_redis.get.side_effect = ConnectionError("Upstash unreachable")
-    monkeypatch.setattr(season_data, "_get_redis", lambda: mock_redis)
-
-    result = read_cache(CacheKey.STANDINGS, cache_dir=tmp_path)
-    assert result is None
+    monkeypatch.setattr(season_data, "get_kv", lambda: _RaisingKV())
+    assert read_cache(CacheKey.STANDINGS) is None
 
 
 class TestComputeComparisonStandings:

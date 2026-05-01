@@ -2,10 +2,7 @@
 
 import json
 import logging
-import os
-import tempfile
 from collections.abc import Mapping
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key
@@ -58,71 +55,29 @@ def clear_opponent_cache() -> None:
     _opponent_cache.clear()
 
 
-CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache"
+def read_cache(key: CacheKey) -> dict | list | None:
+    """Read a cached payload from the KV store.
 
-
-CACHE_FILES: dict[CacheKey, str] = {
-    CacheKey.STANDINGS: "standings.json",
-    CacheKey.ROSTER: "roster.json",
-    CacheKey.PROJECTIONS: "projections.json",
-    CacheKey.LINEUP_OPTIMAL: "lineup_optimal.json",
-    CacheKey.PROBABLE_STARTERS: "probable_starters.json",
-    CacheKey.MONTE_CARLO: "monte_carlo.json",
-    CacheKey.META: "meta.json",
-    CacheKey.RANKINGS: "rankings.json",
-    CacheKey.ROSTER_AUDIT: "roster_audit.json",
-    CacheKey.SPOE: "spoe.json",
-    CacheKey.OPP_ROSTERS: "opp_rosters.json",
-    CacheKey.LEVERAGE: "leverage.json",
-    CacheKey.PENDING_MOVES: "pending_moves.json",
-    CacheKey.TRANSACTION_ANALYZER: "transaction_analyzer.json",
-    CacheKey.TRANSACTIONS: "transactions.json",
-    CacheKey.ROS_PROJECTIONS: "ros_projections.json",
-    CacheKey.FULL_SEASON_PROJECTIONS: "full_season_projections.json",
-    CacheKey.POSITIONS: "positions.json",
-    CacheKey.STANDINGS_BREAKDOWN: "standings_breakdown.json",
-}
-
-
-def read_cache(key: CacheKey, cache_dir: Path = CACHE_DIR) -> dict | list | None:
-    """Read a cached JSON payload.
-
-    On Render: Upstash is the source of truth; local disk serves as
-    last-known-good fallback when Redis is unreachable. Off-Render
-    (local dashboard, tests): disk only. The ``is_remote()`` gate in
-    ``kv_store`` makes the remote path unreachable without
-    ``RENDER=true``, so there is no code path from local to prod.
+    Routes through ``kv_store.get_kv()``: Upstash on Render, SQLite
+    locally. The ``RENDER`` gate in ``kv_store`` ensures off-Render
+    callers cannot reach Upstash even with creds present.
     """
-    path = cache_dir / CACHE_FILES[key]
-
-    redis = _get_redis()
-    if redis is not None:
-        try:
-            raw = redis.get(redis_key(key))
-        except Exception as e:
-            log.warning(f"read_cache({key}) Redis read failed: {e}")
-            raw = None
-        if raw is not None:
-            try:
-                data = json.loads(raw)
-            except json.JSONDecodeError:
-                log.warning(f"read_cache({key}) corrupt Redis data, treating as miss")
-                data = None
-            if data is not None:
-                try:
-                    cache_dir.mkdir(parents=True, exist_ok=True)
-                    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-                except OSError as e:
-                    log.warning(f"read_cache({key}) local write-back failed: {e}")
-                return cast("dict | list", data)
-
+    kv = get_kv()
     try:
-        return cast("dict | list", json.loads(path.read_text(encoding="utf-8")))
-    except (FileNotFoundError, json.JSONDecodeError):
+        raw = kv.get(redis_key(key))
+    except Exception as e:
+        log.warning(f"read_cache({key}) KV read failed: {e}")
+        return None
+    if raw is None:
+        return None
+    try:
+        return cast("dict | list", json.loads(raw))
+    except json.JSONDecodeError:
+        log.warning(f"read_cache({key}) corrupt KV data, treating as miss")
         return None
 
 
-def read_cache_dict(key: CacheKey, cache_dir: Path = CACHE_DIR) -> dict[str, Any] | None:
+def read_cache_dict(key: CacheKey) -> dict[str, Any] | None:
     """Read a cached payload, narrowed to dict.
 
     Returns ``None`` if the cache is missing, corrupt, or holds a list
@@ -130,44 +85,36 @@ def read_cache_dict(key: CacheKey, cache_dir: Path = CACHE_DIR) -> dict[str, Any
     when the caller knows the key stores a dict — it lets mypy see the
     shape without ``cast()``.
     """
-    payload = read_cache(key, cache_dir)
+    payload = read_cache(key)
     return payload if isinstance(payload, dict) else None
 
 
-def read_cache_list(key: CacheKey, cache_dir: Path = CACHE_DIR) -> list[Any] | None:
+def read_cache_list(key: CacheKey) -> list[Any] | None:
     """Read a cached payload, narrowed to list.
 
     Returns ``None`` if the cache is missing, corrupt, or holds a dict
     (unexpected shape for this key). See :func:`read_cache_dict`.
     """
-    payload = read_cache(key, cache_dir)
+    payload = read_cache(key)
     return payload if isinstance(payload, list) else None
 
 
-def write_cache(key: CacheKey, data: dict | list, cache_dir: Path = CACHE_DIR) -> None:
-    """Atomically write a cached JSON payload. Writes to Redis only on Render."""
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    path = cache_dir / CACHE_FILES[key]
-    fd, tmp = tempfile.mkstemp(dir=cache_dir, suffix=".json")
+def write_cache(key: CacheKey, data: dict | list) -> None:
+    """Write a cached payload to the KV store.
+
+    Routes through ``kv_store.get_kv()``: Upstash on Render, SQLite
+    locally.
+    """
+    kv = get_kv()
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
-
-    redis = _get_redis()
-    if redis is not None:
-        try:
-            redis.set(redis_key(key), json.dumps(data))
-        except Exception as e:
-            log.warning(f"write_cache({key}) Redis write failed: {e}")
+        kv.set(redis_key(key), json.dumps(data))
+    except Exception as e:
+        log.warning(f"write_cache({key}) KV write failed: {e}")
 
 
-def read_meta(cache_dir: Path = CACHE_DIR) -> dict:
+def read_meta() -> dict:
     """Read cache metadata (last refresh time, week, etc.). Returns empty dict if missing."""
-    payload = read_cache(CacheKey.META, cache_dir)
+    payload = read_cache(CacheKey.META)
     return payload if isinstance(payload, dict) else {}
 
 
