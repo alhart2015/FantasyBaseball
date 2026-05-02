@@ -1564,3 +1564,201 @@ class TestComputeTeamTotalsPace:
         assert totals["PA"]["actual"] == 0.0
         # Counting actuals still come through from CategoryStats.
         assert totals["R"]["actual"] == pytest.approx(146)
+
+
+def test_build_trends_series_empty_history(fake_redis):
+    """Empty history hashes → empty payload but valid shape."""
+    from fantasy_baseball.web.season_data import build_trends_series
+
+    out = build_trends_series(fake_redis, user_team="Alpha")
+    assert out["user_team"] == "Alpha"
+    assert out.get("categories")
+    assert out["actual"] == {"dates": [], "teams": {}}
+    assert out["projected"] == {"dates": [], "teams": {}}
+
+
+def test_build_trends_series_actual_only(fake_redis):
+    """Standings populated, projected empty — actual fills, projected stays empty."""
+    import json
+
+    from fantasy_baseball.data import redis_store
+
+    fake_redis.hset(
+        redis_store.STANDINGS_HISTORY_KEY,
+        "2026-04-15",
+        json.dumps(
+            {
+                "effective_date": "2026-04-15",
+                "teams": [
+                    {
+                        "name": "Alpha",
+                        "team_key": "T.1",
+                        "rank": 1,
+                        "stats": {
+                            "R": 45,
+                            "HR": 12,
+                            "RBI": 40,
+                            "SB": 8,
+                            "AVG": 0.268,
+                            "W": 3,
+                            "K": 85,
+                            "SV": 4,
+                            "ERA": 3.21,
+                            "WHIP": 1.14,
+                        },
+                        "yahoo_points_for": 78.5,
+                        "extras": {},
+                    },
+                    {
+                        "name": "Beta",
+                        "team_key": "T.2",
+                        "rank": 2,
+                        "stats": {
+                            "R": 38,
+                            "HR": 9,
+                            "RBI": 32,
+                            "SB": 6,
+                            "AVG": 0.255,
+                            "W": 2,
+                            "K": 72,
+                            "SV": 3,
+                            "ERA": 3.85,
+                            "WHIP": 1.22,
+                        },
+                        "yahoo_points_for": 60.0,
+                        "extras": {},
+                    },
+                ],
+            }
+        ),
+    )
+
+    from fantasy_baseball.web.season_data import build_trends_series
+
+    out = build_trends_series(fake_redis, user_team="Alpha")
+    assert out["actual"]["dates"] == ["2026-04-15"]
+    assert set(out["actual"]["teams"].keys()) == {"Alpha", "Beta"}
+    alpha = out["actual"]["teams"]["Alpha"]
+    assert alpha["roto_points"] == [78.5]  # Yahoo authority preferred
+    assert alpha["stats"]["R"] == [45]
+    assert alpha["stats"]["WHIP"] == [1.14]
+    assert out["projected"] == {"dates": [], "teams": {}}
+
+
+def test_build_trends_series_gap_handling(fake_redis):
+    """Team appears on day 1 but not day 2 → null on day 2."""
+    import json
+
+    from fantasy_baseball.data import redis_store
+
+    base_stats = {
+        "R": 0,
+        "HR": 0,
+        "RBI": 0,
+        "SB": 0,
+        "AVG": 0.0,
+        "W": 0,
+        "K": 0,
+        "SV": 0,
+        "ERA": 99.0,
+        "WHIP": 99.0,
+    }
+    fake_redis.hset(
+        redis_store.STANDINGS_HISTORY_KEY,
+        "2026-04-01",
+        json.dumps(
+            {
+                "effective_date": "2026-04-01",
+                "teams": [
+                    {
+                        "name": "Alpha",
+                        "team_key": "T.1",
+                        "rank": 1,
+                        "stats": {**base_stats, "R": 10},
+                        "yahoo_points_for": 5.0,
+                        "extras": {},
+                    },
+                    {
+                        "name": "Beta",
+                        "team_key": "T.2",
+                        "rank": 2,
+                        "stats": {**base_stats, "R": 5},
+                        "yahoo_points_for": 4.0,
+                        "extras": {},
+                    },
+                ],
+            }
+        ),
+    )
+    fake_redis.hset(
+        redis_store.STANDINGS_HISTORY_KEY,
+        "2026-04-02",
+        json.dumps(
+            {
+                "effective_date": "2026-04-02",
+                "teams": [
+                    {
+                        "name": "Alpha",
+                        "team_key": "T.1",
+                        "rank": 1,
+                        "stats": {**base_stats, "R": 20},
+                        "yahoo_points_for": 6.0,
+                        "extras": {},
+                    },
+                ],
+            }
+        ),
+    )
+
+    from fantasy_baseball.web.season_data import build_trends_series
+
+    out = build_trends_series(fake_redis, user_team="Alpha")
+    assert out["actual"]["dates"] == ["2026-04-01", "2026-04-02"]
+    beta = out["actual"]["teams"]["Beta"]
+    assert beta["roto_points"][0] == 4.0
+    assert beta["roto_points"][1] is None
+    assert beta["stats"]["R"][0] == 5
+    assert beta["stats"]["R"][1] is None
+
+
+def test_build_trends_series_projected_uses_score_roto(fake_redis):
+    """Projected chart has no Yahoo authority — totals come from score_roto."""
+    import json
+
+    from fantasy_baseball.data import redis_store
+
+    base_stats = {
+        "R": 800,
+        "HR": 200,
+        "RBI": 750,
+        "SB": 80,
+        "AVG": 0.260,
+        "W": 70,
+        "K": 1400,
+        "SV": 50,
+        "ERA": 3.80,
+        "WHIP": 1.25,
+    }
+    fake_redis.hset(
+        redis_store.PROJECTED_STANDINGS_HISTORY_KEY,
+        "2026-04-15",
+        json.dumps(
+            {
+                "effective_date": "2026-04-15",
+                "teams": [
+                    {"name": "Alpha", "stats": {**base_stats, "R": 880}},
+                    {"name": "Beta", "stats": {**base_stats, "R": 820}},
+                ],
+            }
+        ),
+    )
+
+    from fantasy_baseball.web.season_data import build_trends_series
+
+    out = build_trends_series(fake_redis, user_team="Alpha")
+    assert out["projected"]["dates"] == ["2026-04-15"]
+    # With 2 teams over 10 categories, totals should be ordered Alpha > Beta (Alpha has higher R).
+    alpha_total = out["projected"]["teams"]["Alpha"]["roto_points"][0]
+    beta_total = out["projected"]["teams"]["Beta"]["roto_points"][0]
+    assert alpha_total > beta_total
+    assert out["projected"]["teams"]["Alpha"]["stats"]["R"] == [880]
