@@ -103,3 +103,29 @@ def test_default_local_is_get_kv(monkeypatch, remote_kv, tmp_path):
     sync_remote_to_local(remote=remote_kv)
 
     assert kv_store.get_kv().get("k") == "v"
+
+
+def test_sync_replicates_projected_standings_history(monkeypatch, tmp_path):
+    """Projected standings history is hash-typed and must round-trip
+    through sync_remote_to_local."""
+    import json
+
+    from fantasy_baseball.data import kv_store, kv_sync, redis_store
+
+    monkeypatch.setenv("RENDER", "")
+
+    remote = kv_store.SqliteKVStore(tmp_path / "remote.db")
+    local = kv_store.SqliteKVStore(tmp_path / "local.db")
+
+    remote.hset(
+        redis_store.PROJECTED_STANDINGS_HISTORY_KEY,
+        "2026-04-15",
+        json.dumps({"effective_date": "2026-04-15", "teams": []}),
+    )
+
+    kv_sync.sync_remote_to_local(remote=remote, local=local)
+
+    assert (
+        local.hget(redis_store.PROJECTED_STANDINGS_HISTORY_KEY, "2026-04-15")
+        == '{"effective_date": "2026-04-15", "teams": []}'
+    )
