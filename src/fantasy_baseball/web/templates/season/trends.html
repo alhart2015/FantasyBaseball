@@ -44,16 +44,9 @@
   <h2>Actual Standings</h2>
   <nav class="tab-strip" data-target="actual">
     <button type="button" class="active" data-tab="roto">Roto Points</button>
-    <button type="button" data-tab="R">R</button>
-    <button type="button" data-tab="HR">HR</button>
-    <button type="button" data-tab="RBI">RBI</button>
-    <button type="button" data-tab="SB">SB</button>
-    <button type="button" data-tab="AVG">AVG</button>
-    <button type="button" data-tab="W">W</button>
-    <button type="button" data-tab="K">K</button>
-    <button type="button" data-tab="SV">SV</button>
-    <button type="button" data-tab="ERA">ERA</button>
-    <button type="button" data-tab="WHIP">WHIP</button>
+    {% for cat in categories %}
+    <button type="button" data-tab="{{ cat }}">{{ cat }}</button>
+    {% endfor %}
   </nav>
   <div class="chart-wrapper"><canvas id="chart-actual"></canvas></div>
 </section>
@@ -62,16 +55,9 @@
   <h2>Projected ERoto</h2>
   <nav class="tab-strip" data-target="projected">
     <button type="button" class="active" data-tab="roto">Roto Points</button>
-    <button type="button" data-tab="R">R</button>
-    <button type="button" data-tab="HR">HR</button>
-    <button type="button" data-tab="RBI">RBI</button>
-    <button type="button" data-tab="SB">SB</button>
-    <button type="button" data-tab="AVG">AVG</button>
-    <button type="button" data-tab="W">W</button>
-    <button type="button" data-tab="K">K</button>
-    <button type="button" data-tab="SV">SV</button>
-    <button type="button" data-tab="ERA">ERA</button>
-    <button type="button" data-tab="WHIP">WHIP</button>
+    {% for cat in categories %}
+    <button type="button" data-tab="{{ cat }}">{{ cat }}</button>
+    {% endfor %}
   </nav>
   <div class="chart-wrapper"><canvas id="chart-projected"></canvas></div>
 </section>

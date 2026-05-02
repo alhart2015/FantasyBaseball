@@ -441,6 +441,7 @@ def register_routes(app: Flask) -> None:
             "season/trends.html",
             meta=meta,
             active_page="trends",
+            categories=[c.value for c in ALL_CATEGORIES],
         )
 
     @app.route("/api/trends/series")
