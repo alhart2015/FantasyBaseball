@@ -135,29 +135,54 @@
     });
   }
 
+  function showError(canvasId, msg) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const wrapper = canvas.parentElement;
+    if (wrapper) {
+      wrapper.innerHTML = '<div style="padding: 24px; color: var(--text-secondary); font-size: 13px;">' + msg + '</div>';
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     fetch("/api/trends/series")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) {
+          throw new Error("HTTP " + r.status);
+        }
+        return r.json();
+      })
       .then((data) => {
         payload = data;
         const userTeam = data.user_team;
 
-        const actualDatasets = buildDatasets(
-          data.actual.teams, data.actual.dates, userTeam, "roto"
-        );
-        const actualChart = buildChart(
-          "chart-actual", data.actual.dates, actualDatasets
-        );
+        if (!data.actual || !data.actual.dates || data.actual.dates.length === 0) {
+          showError("chart-actual", "No standings history yet. Run a refresh.");
+        } else {
+          const actualDatasets = buildDatasets(
+            data.actual.teams, data.actual.dates, userTeam, "roto"
+          );
+          const actualChart = buildChart(
+            "chart-actual", data.actual.dates, actualDatasets
+          );
+          wireTabs('.tab-strip[data-target="actual"]', actualChart, "actual");
+        }
 
-        const projectedDatasets = buildDatasets(
-          data.projected.teams, data.projected.dates, userTeam, "roto"
-        );
-        const projectedChart = buildChart(
-          "chart-projected", data.projected.dates, projectedDatasets
-        );
-
-        wireTabs('.tab-strip[data-target="actual"]', actualChart, "actual");
-        wireTabs('.tab-strip[data-target="projected"]', projectedChart, "projected");
+        if (!data.projected || !data.projected.dates || data.projected.dates.length === 0) {
+          showError("chart-projected", "No projected history yet. Run a refresh or run the backfill script.");
+        } else {
+          const projectedDatasets = buildDatasets(
+            data.projected.teams, data.projected.dates, userTeam, "roto"
+          );
+          const projectedChart = buildChart(
+            "chart-projected", data.projected.dates, projectedDatasets
+          );
+          wireTabs('.tab-strip[data-target="projected"]', projectedChart, "projected");
+        }
+      })
+      .catch((err) => {
+        showError("chart-actual", "Failed to load trends: " + err.message);
+        showError("chart-projected", "Failed to load trends: " + err.message);
       });
   });
 })();
