@@ -142,7 +142,7 @@ def _load_yahoo_league():
     return league, find_user_team_key(fetch_teams(league), config.team_name)
 
 
-def _load_projections():
+def load_projections():
     """Load projections from Redis. Returns (hitters, pitchers, rest_of_season_hitters, rest_of_season_pitchers)."""
     import pandas as pd
 
@@ -1331,7 +1331,7 @@ def register_routes(app: Flask) -> None:
 
         try:
             hitters_proj, pitchers_proj, rest_of_season_hitters, rest_of_season_pitchers = (
-                _load_projections()
+                load_projections()
             )
         except Exception as e:
             return jsonify({"error": f"Failed to load projections: {e}"}), 500

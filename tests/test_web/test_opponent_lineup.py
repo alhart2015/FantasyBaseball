@@ -467,7 +467,7 @@ class TestApiOpponentLineup:
             patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
             patch("fantasy_baseball.web.season_data.build_opponent_lineup") as mock_build,
             patch("fantasy_baseball.web.season_routes._load_yahoo_league") as mock_league,
-            patch("fantasy_baseball.web.season_routes._load_projections") as mock_proj,
+            patch("fantasy_baseball.web.season_routes.load_projections") as mock_proj,
         ):
             mock_cfg.return_value.team_name = "Hart of the Order"
             mock_cfg.return_value.season_year = 2026

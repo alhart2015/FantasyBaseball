@@ -35,7 +35,7 @@ from fantasy_baseball.data.redis_store import (
 )
 from fantasy_baseball.models.league import League
 from fantasy_baseball.models.standings import ProjectedStandings
-from fantasy_baseball.web.season_routes import _load_projections
+from fantasy_baseball.web.season_routes import load_projections
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ def main(season_year: int | None = None) -> int:
     client = kv_store.get_kv()
 
     logger.info("Loading projections...")
-    hitters_proj, pitchers_proj, ros_h, ros_p = _load_projections()
+    hitters_proj, pitchers_proj, ros_h, ros_p = load_projections()
     have_ros = not ros_h.empty and not ros_p.empty
     full_h = ros_h if have_ros else None
     full_p = ros_p if have_ros else None
