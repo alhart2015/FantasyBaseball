@@ -14,8 +14,6 @@
   ];
   const USER_COLOR = "#e15759";
 
-  let actualChart = null;
-  let projectedChart = null;
   let payload = null;
 
   function colorForTeam(name, userTeam, sortedNames) {
@@ -85,10 +83,6 @@
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
-  function originalColor(ds) {
-    return ds._origColor || ds.borderColor;
-  }
-
   function dimOthers(chart, focusedIdx) {
     chart.data.datasets.forEach((ds, i) => {
       if (!ds._origColor) ds._origColor = ds.borderColor;
@@ -151,12 +145,14 @@
         const actualDatasets = buildDatasets(
           data.actual.teams, data.actual.dates, userTeam, "roto"
         );
-        actualChart = buildChart("chart-actual", data.actual.dates, actualDatasets);
+        const actualChart = buildChart(
+          "chart-actual", data.actual.dates, actualDatasets
+        );
 
         const projectedDatasets = buildDatasets(
           data.projected.teams, data.projected.dates, userTeam, "roto"
         );
-        projectedChart = buildChart(
+        const projectedChart = buildChart(
           "chart-projected", data.projected.dates, projectedDatasets
         );
 
