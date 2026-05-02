@@ -19,7 +19,7 @@ import re as _re
 from typing import TypedDict
 
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key
-from fantasy_baseball.models.standings import Standings
+from fantasy_baseball.models.standings import ProjectedStandings, Standings
 
 logger = logging.getLogger(__name__)
 
@@ -451,4 +451,59 @@ def get_standings_history(client) -> dict[str, Standings]:
             continue
         if isinstance(data, dict):
             out[d] = Standings.from_json(data)
+    return out
+
+
+PROJECTED_STANDINGS_HISTORY_KEY = "projected_standings_history"
+
+
+def write_projected_standings_snapshot(client, projected: ProjectedStandings) -> None:
+    """Write a ProjectedStandings snapshot keyed by its effective_date.
+
+    Idempotent overwrite — same-day refreshes replace the previous
+    snapshot (last-write-wins). No-op when ``client`` is None.
+    """
+    if client is None:
+        return
+    client.hset(
+        PROJECTED_STANDINGS_HISTORY_KEY,
+        projected.effective_date.isoformat(),
+        json.dumps(projected.to_json()),
+    )
+
+
+def get_projected_standings_day(client, snapshot_date: str) -> ProjectedStandings | None:
+    """Return the ProjectedStandings for one snapshot date, or None if missing/corrupt."""
+    if client is None:
+        return None
+    raw = client.hget(PROJECTED_STANDINGS_HISTORY_KEY, snapshot_date)
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return ProjectedStandings.from_json(data)
+
+
+def get_projected_standings_history(client) -> dict[str, ProjectedStandings]:
+    """Return the entire history as {snapshot_date: ProjectedStandings}.
+
+    Corrupt JSON entries are silently skipped.
+    """
+    if client is None:
+        return {}
+    raw_map = client.hgetall(PROJECTED_STANDINGS_HISTORY_KEY)
+    if not raw_map:
+        return {}
+    out: dict[str, ProjectedStandings] = {}
+    for d, raw in raw_map.items():
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            out[d] = ProjectedStandings.from_json(data)
     return out
