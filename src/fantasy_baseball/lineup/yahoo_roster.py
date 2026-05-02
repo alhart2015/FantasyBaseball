@@ -12,6 +12,7 @@ from fantasy_baseball.models.standings import (
     Standings,
     StandingsEntry,
 )
+from fantasy_baseball.models.team import Team
 from fantasy_baseball.utils.constants import OpportunityStat
 from fantasy_baseball.utils.time_utils import local_today
 
@@ -90,6 +91,36 @@ def fetch_roster(
     else:
         raw_roster = team.roster(day=day)
     return parse_roster(raw_roster)
+
+
+def fetch_teams(league: Any) -> dict[str, Team]:
+    """Fetch ``league.teams()`` and project it to ``{team_key: Team}``.
+
+    The Yahoo lib returns a nested untyped dict; this wraps the call so
+    the rest of the codebase can work with typed :class:`Team` values
+    instead of dict-of-dict-of-Any. Returned Teams have empty rosters —
+    they're a session-level identity projection, not the rich Team
+    loaded from Redis by :meth:`League.from_redis`.
+    """
+    return {
+        team_key: Team(name=info.get("name", ""), team_key=team_key)
+        for team_key, info in league.teams().items()
+    }
+
+
+def find_user_team_key(teams: dict[str, Team], target: str) -> str:
+    """Resolve the user's team key in a ``{team_key: Team}`` mapping.
+
+    Returns the key whose name matches ``target``. Falls back to the
+    first key in the mapping on no match — keeps the dashboard usable
+    when ``config.team_name`` drifts out of sync with the league name on
+    Yahoo (e.g. mid-season rename) so the user still sees their lineup
+    instead of a 500.
+    """
+    for key, team in teams.items():
+        if team.name == target:
+            return key
+    return next(iter(teams))
 
 
 def parse_roster(raw_roster: list[dict[str, Any]]) -> list[dict[str, Any]]:

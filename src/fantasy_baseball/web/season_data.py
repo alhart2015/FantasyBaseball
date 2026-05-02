@@ -118,12 +118,10 @@ def read_meta() -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-def _load_game_log_totals(season_year: int) -> tuple[dict, dict]:  # noqa: ARG001
+def _load_game_log_totals() -> tuple[dict, dict]:
     """Load aggregated game log totals from Redis, keyed by normalized name.
 
     Returns (hitter_logs, pitcher_logs) where each is {normalized_name: {stat: value}}.
-    The season_year parameter is accepted for signature compatibility but unused —
-    Redis keys are not year-partitioned (current season only).
     """
     from fantasy_baseball.data.redis_store import get_game_log_totals
     from fantasy_baseball.utils.name_utils import normalize_name
@@ -289,7 +287,6 @@ def build_opponent_lineup(
     pitchers_proj: "pd.DataFrame",
     rest_of_season_hitters: "pd.DataFrame",
     rest_of_season_pitchers: "pd.DataFrame",
-    season_year: int,
 ) -> dict:
     """Build a fully enriched opponent lineup (projections, pace, SGP).
 
@@ -300,7 +297,6 @@ def build_opponent_lineup(
         pitchers_proj: Blended pitcher projections (with _name_norm column).
         rest_of_season_hitters: ROS hitter projections (may be empty DataFrame).
         rest_of_season_pitchers: ROS pitcher projections (may be empty DataFrame).
-        season_year: Season year for game log lookup.
 
     Returns:
         Dict with "hitters" and "pitchers" lists, each entry containing
@@ -334,7 +330,7 @@ def build_opponent_lineup(
         rest_of_season_lookup = {}
 
     # Load game log totals for pace
-    hitter_logs, pitcher_logs = _load_game_log_totals(season_year)
+    hitter_logs, pitcher_logs = _load_game_log_totals()
 
     # Rankings (populated during refresh; absent on cold cache).
     rankings = read_cache_dict(CacheKey.RANKINGS) or {}
@@ -420,8 +416,8 @@ def build_opponent_lineup(
     return {
         "hitters": hitters,
         "pitchers": pitchers,
-        "hitter_totals": _compute_team_totals_pace(hitters, "hitter", opponent_name),
-        "pitcher_totals": _compute_team_totals_pace(pitchers, "pitcher", opponent_name),
+        "hitter_totals": _compute_team_totals_pace(hitters, PlayerType.HITTER, opponent_name),
+        "pitcher_totals": _compute_team_totals_pace(pitchers, PlayerType.PITCHER, opponent_name),
     }
 
 
@@ -495,7 +491,7 @@ HITTER_SLOTS_ORDER = [
 
 def _compute_team_totals_pace(
     players: list[dict],
-    player_type: str,
+    player_type: PlayerType,
     team_name: str | None = None,
 ) -> dict:
     """Build a team totals row with pace highlighting.
@@ -528,7 +524,7 @@ def _compute_team_totals_pace(
                 team_entry = entry
                 break
 
-    if player_type == "hitter":
+    if player_type == PlayerType.HITTER:
         counting_cats: list[Category] = [Category.R, Category.HR, Category.RBI, Category.SB]
         rate_cats: dict[Category, tuple[str, bool]] = {Category.AVG: ("h", False)}
         opp_stat = OpportunityStat.PA
@@ -666,8 +662,8 @@ def format_lineup_for_display(roster: list[dict], optimal: dict | None) -> dict:
     return {
         "hitters": hitters,
         "pitchers": pitchers,
-        "hitter_totals": _compute_team_totals_pace(hitters, "hitter"),
-        "pitcher_totals": _compute_team_totals_pace(pitchers, "pitcher"),
+        "hitter_totals": _compute_team_totals_pace(hitters, PlayerType.HITTER),
+        "pitcher_totals": _compute_team_totals_pace(pitchers, PlayerType.PITCHER),
         "is_optimal": len(moves) == 0,
         "moves": moves,
     }

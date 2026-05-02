@@ -299,6 +299,12 @@ def _register_writer_routes(app):
         except Exception as exc:
             logging.getLogger(__name__).exception("board rebuild failed during /api/new-draft")
             return jsonify({"error": f"board rebuild failed: {exc}"}), 500
+        # Board on disk is now fresh — drop the in-memory copies so subsequent
+        # requests reload from the new file instead of serving stale rows.
+        if hasattr(app, "_draft_board_cache"):
+            del app._draft_board_cache
+        if hasattr(app, "_rec_inputs_cache"):
+            del app._rec_inputs_cache
         try:
             state = draft_controller.start_new_draft(
                 league_yaml,

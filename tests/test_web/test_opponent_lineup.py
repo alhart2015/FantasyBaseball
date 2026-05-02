@@ -251,7 +251,6 @@ class TestBuildOpponentLineup:
             pitchers_proj=pitchers_proj,
             rest_of_season_hitters=pd.DataFrame(),
             rest_of_season_pitchers=pd.DataFrame(),
-            season_year=2026,
         )
 
         assert len(result["hitters"]) == 1
@@ -278,7 +277,6 @@ class TestBuildOpponentLineup:
             pitchers_proj=pitchers_proj,
             rest_of_season_hitters=pd.DataFrame(),
             rest_of_season_pitchers=pd.DataFrame(),
-            season_year=2026,
         )
 
         perez = result["hitters"][0]
@@ -317,7 +315,6 @@ class TestBuildOpponentLineup:
             pitchers_proj=pitchers_proj,
             rest_of_season_hitters=pd.DataFrame(),
             rest_of_season_pitchers=pd.DataFrame(),
-            season_year=2026,
         )
 
         hitter = result["hitters"][0]
@@ -365,7 +362,6 @@ class TestBuildOpponentLineup:
             pitchers_proj=pitchers_proj,
             rest_of_season_hitters=pd.DataFrame(),
             rest_of_season_pitchers=pd.DataFrame(),
-            season_year=2026,
         )
 
         hitter = result["hitters"][0]
@@ -426,7 +422,6 @@ class TestBuildOpponentLineup:
             pitchers_proj=pitchers_proj,
             rest_of_season_hitters=ros_hitters,
             rest_of_season_pitchers=pd.DataFrame(),
-            season_year=2026,
         )
 
         perez = result["hitters"][0]
