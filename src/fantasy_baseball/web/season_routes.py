@@ -434,6 +434,23 @@ def register_routes(app: Flask) -> None:
             all_categories=ALL_CATEGORIES,
         )
 
+    @app.route("/trends")
+    def trends():
+        meta = read_meta()
+        return render_template(
+            "season/trends.html",
+            meta=meta,
+            active_page="trends",
+        )
+
+    @app.route("/api/trends/series")
+    def api_trends_series():
+        from fantasy_baseball.data.kv_store import get_kv
+        from fantasy_baseball.web.season_data import build_trends_series
+
+        config = _load_config()
+        return jsonify(build_trends_series(get_kv(), user_team=config.team_name))
+
     @app.route("/lineup")
     def lineup():
         meta = read_meta()
