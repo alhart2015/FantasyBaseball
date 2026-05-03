@@ -1233,6 +1233,62 @@ def register_routes(app: Flask) -> None:
                 break
         return jsonify({"players": rows})
 
+    @app.route("/api/players/lookup")
+    def api_player_lookup():
+        """Exact (name, player_type) resolution for the auto-compare URL.
+
+        Query: keys=Name1::type,Name2::type (URL-decoded names; types are
+        'hitter' or 'pitcher'). Returns enriched records in request order.
+        Missing players are silently dropped.
+        """
+        from fantasy_baseball.utils.name_utils import normalize_name
+
+        keys_param = request.args.get("keys")
+        if not keys_param:
+            return jsonify({"error": "keys is required"}), 400
+
+        requested: list[tuple[str, PlayerType]] = []
+        for raw in keys_param.split(","):
+            sep = raw.rfind("::")
+            if sep == -1:
+                continue
+            name = raw[:sep].strip()
+            ptype_str = raw[sep + 2 :].strip()
+            if not name or ptype_str not in (PlayerType.HITTER, PlayerType.PITCHER):
+                continue
+            requested.append((name, PlayerType(ptype_str)))
+
+        if not requested:
+            return jsonify({"players": []})
+
+        ctx = _browse_context()
+        by_norm: dict[tuple[str, PlayerType], tuple[dict, PlayerType]] = {}
+        for pool_key, ptype in (
+            ("hitters", PlayerType.HITTER),
+            ("pitchers", PlayerType.PITCHER),
+        ):
+            for d in ctx["ros_cache"].get(pool_key, []):
+                by_norm[(normalize_name(d.get("name", "")), ptype)] = (d, ptype)
+
+        rows: list[dict[str, Any]] = []
+        for name, ptype in requested:
+            match = by_norm.get((normalize_name(name), ptype))
+            if match is None:
+                continue
+            d, p = match
+            rows.append(
+                _build_player_record(
+                    d,
+                    p,
+                    ctx["owner_map"],
+                    ctx["pos_map"],
+                    ctx["rankings_cache"],
+                    ctx["audit_index"],
+                    ctx["worst_by_pos"],
+                )
+            )
+        return jsonify({"players": rows})
+
     @app.route("/api/players/compare")
     def api_player_compare():
         """Return projected standings before/after swapping a roster player."""

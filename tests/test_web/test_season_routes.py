@@ -753,3 +753,26 @@ def test_find_caps_at_25_results(client, kv_isolation):
     resp = client.get("/api/players/find?q=smith")
     assert resp.status_code == 200
     assert len(resp.get_json()["players"]) == 25
+
+
+def test_lookup_returns_players_in_request_order(client, kv_isolation):
+    names = _seed_browse_caches()
+    resp = client.get(f"/api/players/lookup?keys={names['fa_b']}::hitter,{names['mine']}::hitter")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    returned = [p["name"] for p in body["players"]]
+    assert returned == [names["fa_b"], names["mine"]]
+
+
+def test_lookup_silently_drops_misses(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/lookup?keys=Nobody::hitter,OF FA A::hitter")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert [p["name"] for p in body["players"]] == ["OF FA A"]
+
+
+def test_lookup_missing_keys_returns_400(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/lookup")
+    assert resp.status_code == 400
