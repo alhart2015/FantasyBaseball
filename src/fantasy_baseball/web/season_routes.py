@@ -1213,6 +1213,9 @@ def register_routes(app: Flask) -> None:
                 name = d.get("name", "")
                 if needle not in name.lower():
                     continue
+                # No sgp_hint: /find doesn't sort by SGP, so the per-row
+                # compute_sgp inside the builder is the cleanest path. Capped
+                # at 25 rows.
                 rows.append(
                     _build_player_record(
                         d,
