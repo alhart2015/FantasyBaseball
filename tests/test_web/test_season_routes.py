@@ -711,6 +711,11 @@ def test_find_returns_substring_matches(client, kv_isolation):
     assert "OF FA C" in names
     assert "SP FA A" in names
 
+    # Case-insensitivity: uppercase query returns the same matches.
+    resp_upper = client.get("/api/players/find?q=FA")
+    assert resp_upper.status_code == 200
+    assert {p["name"] for p in resp_upper.get_json()["players"]} == names
+
 
 def test_find_rejects_short_query(client, kv_isolation):
     _seed_browse_caches()
@@ -722,3 +727,29 @@ def test_find_missing_q_returns_400(client, kv_isolation):
     _seed_browse_caches()
     resp = client.get("/api/players/find")
     assert resp.status_code == 400
+
+
+def test_find_caps_at_25_results(client, kv_isolation):
+    kv = get_kv()
+    hitters = [
+        {
+            "name": f"Smithers {i}",
+            "player_type": "hitter",
+            "team": "BOS",
+            "r": 50,
+            "hr": 10,
+            "rbi": 40,
+            "sb": 2,
+            "h": 100,
+            "ab": 400,
+        }
+        for i in range(30)
+    ]
+    kv.set(redis_key(CacheKey.ROS_PROJECTIONS), json.dumps({"hitters": hitters, "pitchers": []}))
+    kv.set(redis_key(CacheKey.POSITIONS), json.dumps({f"smithers {i}": ["OF"] for i in range(30)}))
+    kv.set(redis_key(CacheKey.ROSTER), json.dumps([]))
+    kv.set(redis_key(CacheKey.OPP_ROSTERS), json.dumps({}))
+    kv.set(redis_key(CacheKey.ROSTER_AUDIT), json.dumps([]))
+    resp = client.get("/api/players/find?q=smith")
+    assert resp.status_code == 200
+    assert len(resp.get_json()["players"]) == 25
