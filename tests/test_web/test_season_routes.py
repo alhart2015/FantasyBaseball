@@ -697,3 +697,28 @@ def test_browse_sp_rp_split_on_sv_threshold(client, kv_isolation):
     assert rp_resp.status_code == 200
     rp_names = {p["name"] for p in rp_resp.get_json()["players"]}
     assert rp_names == {"RP Five"}
+
+
+def test_find_returns_substring_matches(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/find?q=fa")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    names = {p["name"] for p in body["players"]}
+    # "fa" matches every FA-named player (OF FA A/B/C and SP FA A).
+    assert "OF FA A" in names
+    assert "OF FA B" in names
+    assert "OF FA C" in names
+    assert "SP FA A" in names
+
+
+def test_find_rejects_short_query(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/find?q=a")
+    assert resp.status_code == 400
+
+
+def test_find_missing_q_returns_400(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/find")
+    assert resp.status_code == 400

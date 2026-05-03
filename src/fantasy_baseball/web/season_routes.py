@@ -1189,6 +1189,47 @@ def register_routes(app: Flask) -> None:
             }
         )
 
+    _FIND_RESULT_CAP = 25
+
+    @app.route("/api/players/find")
+    def api_player_find():
+        """Substring name search across ros_projections.
+
+        Returns up to 25 enriched records (same payload as /browse). Used
+        by the players page when no position is selected.
+        """
+        q = request.args.get("q", "").strip()
+        if len(q) < 2:
+            return jsonify({"error": "q must be at least 2 characters"}), 400
+
+        ctx = _browse_context()
+        needle = q.lower()
+        rows: list[dict[str, Any]] = []
+        for pool_key, ptype in (
+            ("hitters", PlayerType.HITTER),
+            ("pitchers", PlayerType.PITCHER),
+        ):
+            for d in ctx["ros_cache"].get(pool_key, []):
+                name = d.get("name", "")
+                if needle not in name.lower():
+                    continue
+                rows.append(
+                    _build_player_record(
+                        d,
+                        ptype,
+                        ctx["owner_map"],
+                        ctx["pos_map"],
+                        ctx["rankings_cache"],
+                        ctx["audit_index"],
+                        ctx["worst_by_pos"],
+                    )
+                )
+                if len(rows) >= _FIND_RESULT_CAP:
+                    break
+            if len(rows) >= _FIND_RESULT_CAP:
+                break
+        return jsonify({"players": rows})
+
     @app.route("/api/players/compare")
     def api_player_compare():
         """Return projected standings before/after swapping a roster player."""
