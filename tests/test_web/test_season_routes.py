@@ -776,3 +776,20 @@ def test_lookup_missing_keys_returns_400(client, kv_isolation):
     _seed_browse_caches()
     resp = client.get("/api/players/lookup")
     assert resp.status_code == 400
+
+
+def test_lookup_handles_malformed_inputs(client, kv_isolation):
+    _seed_browse_caches()
+    # Blank keys param -> 400 (same as missing).
+    assert client.get("/api/players/lookup?keys=").status_code == 400
+    # All-malformed pairs -> 200 with empty list (no separator, bad type).
+    body = client.get("/api/players/lookup?keys=NoSeparator,Soto::nope").get_json()
+    assert body == {"players": []}
+
+
+def test_lookup_normalizes_case_for_matching(client, kv_isolation):
+    names = _seed_browse_caches()
+    # Lowercase request matches the upper-cased seeded name via normalize_name.
+    resp = client.get(f"/api/players/lookup?keys={names['fa_a'].lower()}::hitter")
+    assert resp.status_code == 200
+    assert [p["name"] for p in resp.get_json()["players"]] == [names["fa_a"]]
