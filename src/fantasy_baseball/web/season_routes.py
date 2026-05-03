@@ -12,6 +12,11 @@ from typing import Any
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
+from fantasy_baseball.lineup.roster_audit import (
+    HITTER_SOURCE_POSITIONS,
+    POSITION_POOL_SIZES,
+    RP_SV_THRESHOLD,
+)
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.standings import (
     ProjectedStandings,
@@ -900,14 +905,82 @@ def register_routes(app: Flask) -> None:
             active_page="players",
         )
 
-    @app.route("/api/players/browse")
-    def api_player_browse():
-        """Return all ROS-projected players with stats, rank, SGP, ownership,
-        and — for FAs — precomputed ΔRoto vs the worst roster player at
-        their position (pulled from the roster_audit cache).
+    _ALL_VARIANTS = {"ALL", "ALL_HIT", "ALL_PIT"}
+    _VALID_POS = set(HITTER_SOURCE_POSITIONS) | {"SP", "RP"} | _ALL_VARIANTS
 
-        Reads from Redis caches (ros_projections, roster, opp_rosters,
-        rankings, roster_audit) so the page works without a local SQLite DB.
+    def _ros_eligible_at(d: dict, ptype: PlayerType, pos_list: list[str], pos: str) -> bool:
+        if pos == "ALL":
+            return True
+        if pos == "ALL_HIT":
+            return ptype == PlayerType.HITTER
+        if pos == "ALL_PIT":
+            return ptype == PlayerType.PITCHER
+        if pos in HITTER_SOURCE_POSITIONS:
+            return ptype == PlayerType.HITTER and pos in pos_list
+        if pos == "SP":
+            return ptype == PlayerType.PITCHER and d.get("sv", 0) < RP_SV_THRESHOLD
+        if pos == "RP":
+            return ptype == PlayerType.PITCHER and d.get("sv", 0) >= RP_SV_THRESHOLD
+        return False
+
+    def _default_fa_limit(pos: str) -> int:
+        if pos in _ALL_VARIANTS:
+            return 20
+        return POSITION_POOL_SIZES[pos]
+
+    def _split_rostered_and_fa(
+        ros_cache: dict,
+        pos_map: dict[str, list[str]],
+        owner_map: dict[str, str],
+        pos: str,
+    ) -> tuple[list[tuple[dict, PlayerType, float]], list[tuple[dict, PlayerType, float]]]:
+        """Walk ros_projections once; return (rostered, fa) lists of
+        (projection_dict, ptype, sgp) triples eligible for ``pos``.
+
+        SGP is computed once during the walk so the handler can sort and
+        build records without re-running ``compute_sgp`` on the survivors.
+        """
+        from fantasy_baseball.models.player import HitterStats, PitcherStats
+        from fantasy_baseball.utils.name_utils import normalize_name
+
+        rostered: list[tuple[dict, PlayerType, float]] = []
+        fas: list[tuple[dict, PlayerType, float]] = []
+        for pool_key, ptype in (
+            ("hitters", PlayerType.HITTER),
+            ("pitchers", PlayerType.PITCHER),
+        ):
+            for d in ros_cache.get(pool_key, []):
+                norm = normalize_name(d.get("name", ""))
+                pos_list = pos_map.get(norm, [])
+                if not _ros_eligible_at(d, ptype, pos_list, pos):
+                    continue
+                ros: HitterStats | PitcherStats
+                if ptype == PlayerType.HITTER:
+                    ros = HitterStats.from_dict(d)
+                else:
+                    ros = PitcherStats.from_dict(d)
+                ros.compute_sgp()
+                sgp = ros.sgp if ros.sgp is not None else 0.0
+                bucket = rostered if owner_map.get(norm) else fas
+                bucket.append((d, ptype, sgp))
+        return rostered, fas
+
+    def _build_player_record(
+        d: dict,
+        ptype: PlayerType,
+        owner_map: dict[str, str],
+        pos_map: dict[str, list[str]],
+        rankings_cache: dict,
+        audit_index: dict[tuple[str, str], dict],
+        worst_by_pos: dict[str, str],
+        sgp_hint: float | None = None,
+    ) -> dict[str, Any]:
+        """Build the per-player browse-page record from a ros_projections row.
+
+        When ``sgp_hint`` is provided the cached SGP is used directly,
+        avoiding a redundant ``compute_sgp`` call. Safe because
+        ``HitterStats.compute_sgp`` / ``PitcherStats.compute_sgp`` only
+        assign ``self.sgp`` and return it.
         """
         from fantasy_baseball.lineup.roster_audit import fa_target_positions
         from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, RankInfo
@@ -915,30 +988,106 @@ def register_routes(app: Flask) -> None:
         from fantasy_baseball.sgp.rankings import lookup_rank
         from fantasy_baseball.utils.name_utils import normalize_name
 
-        ros_cache = read_cache_dict(CacheKey.ROS_PROJECTIONS)
-        if not ros_cache:
-            return jsonify([])
+        name = d.get("name", "")
+        norm = normalize_name(name)
+        fg_id = d.get("fg_id")
+        team = d.get("team")
+        if isinstance(team, float) and math.isnan(team):
+            team = ""
 
+        ros: HitterStats | PitcherStats
+        if ptype == PlayerType.HITTER:
+            ros = HitterStats.from_dict(d)
+        else:
+            ros = PitcherStats.from_dict(d)
+        if sgp_hint is not None:
+            ros.sgp = sgp_hint
+        else:
+            ros.compute_sgp()
+
+        rank_info = lookup_rank(rankings_cache, fg_id, name, ptype)
+        positions = [Position.parse(pos) for pos in pos_map.get(norm, [])]
+        p = Player(
+            name=name,
+            player_type=ptype,
+            team=team or "",
+            fg_id=fg_id,
+            positions=positions,
+            rest_of_season=ros,
+            rank=RankInfo.from_dict(rank_info),
+        )
+
+        owner = owner_map.get(norm)
+        delta_roto = None
+        if owner is None:
+            sv_for_targets = ros.sv if isinstance(ros, PitcherStats) else 0.0
+            targets = fa_target_positions(ptype, p.positions, sv_for_targets)
+            for target_pos in targets:
+                drop_name = worst_by_pos.get(target_pos)
+                if not drop_name:
+                    continue
+                dr = audit_index.get((drop_name, name))
+                if dr is None:
+                    continue
+                if delta_roto is None or dr["total"] > delta_roto["total"]:
+                    delta_roto = dr
+
+        result: dict[str, Any] = {
+            "name": name,
+            "team": p.team,
+            "player_type": ptype,
+            "fg_id": fg_id,
+            "positions": p.positions,
+            "owner": owner,
+            "rank": p.rank.rest_of_season,
+            "sgp": round(ros.sgp, 2) if ros.sgp is not None else None,
+            "delta_roto": delta_roto,
+        }
+        if isinstance(ros, HitterStats):
+            result.update(
+                {
+                    "R": ros.r,
+                    "HR": ros.hr,
+                    "RBI": ros.rbi,
+                    "SB": ros.sb,
+                    "AVG": ros.avg,
+                    "h": ros.h,
+                    "ab": ros.ab,
+                }
+            )
+        else:
+            result.update(
+                {
+                    "W": ros.w,
+                    "K": ros.k,
+                    "SV": ros.sv,
+                    "ERA": ros.era,
+                    "WHIP": ros.whip,
+                    "ip": ros.ip,
+                    "er": ros.er,
+                    "bb": ros.bb,
+                    "h_allowed": ros.h_allowed,
+                }
+            )
+        return result
+
+    def _browse_context() -> dict[str, Any]:
+        """Read the caches the per-player builder needs in one place."""
+        from fantasy_baseball.utils.name_utils import normalize_name
+
+        ros_cache = read_cache_dict(CacheKey.ROS_PROJECTIONS) or {}
         rankings_cache = read_cache_dict(CacheKey.RANKINGS) or {}
-
-        # Build position and ownership maps from Redis caches
         pos_map: dict[str, list[str]] = read_cache_dict(CacheKey.POSITIONS) or {}
+
         owner_map: dict[str, str] = {}
-
         for rp in read_cache_list(CacheKey.ROSTER) or []:
-            norm = normalize_name(rp.get("name", ""))
-            owner_map[norm] = "roster"
-
+            owner_map[normalize_name(rp.get("name", ""))] = "roster"
         for team_name_opp, team_roster in (read_cache_dict(CacheKey.OPP_ROSTERS) or {}).items():
             for rp in team_roster:
                 norm = normalize_name(rp.get("name", ""))
                 if norm not in owner_map:
                     owner_map[norm] = team_name_opp
 
-        # Precomputed ΔRoto: roster_audit already evaluated the top-N FAs at
-        # each roster slot.  Index every (drop_player, fa) pair so the browse
-        # page can surface ΔRoto directly without recomputation, then pair
-        # each FA with the worst-SGP roster player at their position.
         audit_raw = read_cache_list(CacheKey.ROSTER_AUDIT) or []
         audit_index: dict[tuple[str, str], dict] = {}
         for entry in audit_raw:
@@ -950,100 +1099,195 @@ def register_routes(app: Flask) -> None:
                 dr = c.get("delta_roto")
                 if fa_name and dr:
                     audit_index[(drop_name, fa_name)] = dr
-        worst_by_pos = _compute_worst_roster_by_position()
 
-        players = []
-        for pool in [ros_cache.get("hitters", []), ros_cache.get("pitchers", [])]:
-            for d in pool:
-                name = d.get("name", "")
-                norm = normalize_name(name)
-                ptype = d.get("player_type", "")
-                if not ptype:
-                    continue
-                fg_id = d.get("fg_id")
-                team = d.get("team")
-                if isinstance(team, float) and math.isnan(team):
-                    team = ""
+        return {
+            "ros_cache": ros_cache,
+            "rankings_cache": rankings_cache,
+            "pos_map": pos_map,
+            "owner_map": owner_map,
+            "audit_index": audit_index,
+            "worst_by_pos": _compute_worst_roster_by_position(),
+        }
 
-                ros: HitterStats | PitcherStats
-                if ptype == PlayerType.HITTER:
-                    ros = HitterStats.from_dict(d)
-                else:
-                    ros = PitcherStats.from_dict(d)
-                ros.compute_sgp()
+    @app.route("/api/players/browse")
+    def api_player_browse():
+        """Position-scoped player browse.
 
-                rank_info = lookup_rank(rankings_cache, fg_id, name, ptype)
+        Query params:
+          pos        — required. C/1B/2B/3B/SS/OF/SP/RP/ALL_HIT/ALL_PIT/ALL.
+          fa_limit   — optional. Defaults to POSITION_POOL_SIZES[pos] for
+                       specific positions, 20 for ALL variants.
+          fa_offset  — optional. Defaults to 0. Paginates the SGP-sorted FA
+                       pool. Rostered players are returned only when offset=0.
+        """
+        pos = request.args.get("pos")
+        if not pos or pos not in _VALID_POS:
+            return jsonify({"error": "pos must be one of " + ", ".join(sorted(_VALID_POS))}), 400
+        try:
+            fa_offset = int(request.args.get("fa_offset", 0))
+        except ValueError:
+            return jsonify({"error": "fa_offset must be an integer"}), 400
+        if fa_offset < 0:
+            return jsonify({"error": "fa_offset must be >= 0"}), 400
+        try:
+            fa_limit = int(request.args.get("fa_limit", _default_fa_limit(pos)))
+        except ValueError:
+            return jsonify({"error": "fa_limit must be an integer"}), 400
+        if fa_limit <= 0:
+            return jsonify({"error": "fa_limit must be > 0"}), 400
 
-                positions = [Position.parse(pos) for pos in pos_map.get(norm, [])]
-                p = Player(
-                    name=name,
-                    player_type=ptype,
-                    team=team or "",
-                    fg_id=fg_id,
-                    positions=positions,
-                    rest_of_season=ros,
-                    rank=RankInfo.from_dict(rank_info),
+        ctx = _browse_context()
+        if not ctx["ros_cache"]:
+            return jsonify({"players": [], "has_more_fa": False, "next_fa_offset": fa_offset})
+
+        rostered, fas = _split_rostered_and_fa(
+            ctx["ros_cache"],
+            ctx["pos_map"],
+            ctx["owner_map"],
+            pos,
+        )
+        fas.sort(key=lambda t: t[2], reverse=True)
+
+        fa_slice = fas[fa_offset : fa_offset + fa_limit]
+        has_more_fa = (fa_offset + fa_limit) < len(fas)
+        next_fa_offset = fa_offset + len(fa_slice)
+
+        rows: list[dict[str, Any]] = []
+        if fa_offset == 0:
+            for d, ptype, sgp in rostered:
+                rows.append(
+                    _build_player_record(
+                        d,
+                        ptype,
+                        ctx["owner_map"],
+                        ctx["pos_map"],
+                        ctx["rankings_cache"],
+                        ctx["audit_index"],
+                        ctx["worst_by_pos"],
+                        sgp_hint=sgp,
+                    )
                 )
+        for d, ptype, sgp in fa_slice:
+            rows.append(
+                _build_player_record(
+                    d,
+                    ptype,
+                    ctx["owner_map"],
+                    ctx["pos_map"],
+                    ctx["rankings_cache"],
+                    ctx["audit_index"],
+                    ctx["worst_by_pos"],
+                    sgp_hint=sgp,
+                )
+            )
 
-                # ΔRoto: FAs only, max over eligible positions against the
-                # worst roster player at each pool position.
-                owner = owner_map.get(norm)
-                delta_roto = None
-                if owner is None:
-                    sv_for_targets = ros.sv if isinstance(ros, PitcherStats) else 0.0
-                    targets = fa_target_positions(ptype, p.positions, sv_for_targets)
-                    for target_pos in targets:
-                        drop_name = worst_by_pos.get(target_pos)
-                        if not drop_name:
-                            continue
-                        dr = audit_index.get((drop_name, name))
-                        if dr is None:
-                            continue
-                        if delta_roto is None or dr["total"] > delta_roto["total"]:
-                            delta_roto = dr
+        return jsonify(
+            {
+                "players": rows,
+                "has_more_fa": has_more_fa,
+                "next_fa_offset": next_fa_offset,
+            }
+        )
 
-                result: dict[str, Any] = {
-                    "name": name,
-                    "team": p.team,
-                    "player_type": ptype,
-                    "fg_id": fg_id,
-                    "positions": p.positions,
-                    "owner": owner,
-                    "rank": p.rank.rest_of_season,
-                    "sgp": round(ros.sgp, 2) if ros.sgp is not None else None,
-                    "delta_roto": delta_roto,
-                }
+    _FIND_RESULT_CAP = 25
 
-                if isinstance(ros, HitterStats):
-                    result.update(
-                        {
-                            "R": ros.r,
-                            "HR": ros.hr,
-                            "RBI": ros.rbi,
-                            "SB": ros.sb,
-                            "AVG": ros.avg,
-                            "h": ros.h,
-                            "ab": ros.ab,
-                        }
+    @app.route("/api/players/find")
+    def api_player_find():
+        """Substring name search across ros_projections.
+
+        Returns up to 25 enriched records (same payload as /browse). Used
+        by the players page when no position is selected.
+        """
+        q = request.args.get("q", "").strip()
+        if len(q) < 2:
+            return jsonify({"error": "q must be at least 2 characters"}), 400
+
+        ctx = _browse_context()
+        needle = q.lower()
+        rows: list[dict[str, Any]] = []
+        for pool_key, ptype in (
+            ("hitters", PlayerType.HITTER),
+            ("pitchers", PlayerType.PITCHER),
+        ):
+            for d in ctx["ros_cache"].get(pool_key, []):
+                name = d.get("name", "")
+                if needle not in name.lower():
+                    continue
+                # No sgp_hint: /find doesn't sort by SGP, so the per-row
+                # compute_sgp inside the builder is the cleanest path. Capped
+                # at 25 rows.
+                rows.append(
+                    _build_player_record(
+                        d,
+                        ptype,
+                        ctx["owner_map"],
+                        ctx["pos_map"],
+                        ctx["rankings_cache"],
+                        ctx["audit_index"],
+                        ctx["worst_by_pos"],
                     )
-                else:
-                    result.update(
-                        {
-                            "W": ros.w,
-                            "K": ros.k,
-                            "SV": ros.sv,
-                            "ERA": ros.era,
-                            "WHIP": ros.whip,
-                            "ip": ros.ip,
-                            "er": ros.er,
-                            "bb": ros.bb,
-                            "h_allowed": ros.h_allowed,
-                        }
-                    )
+                )
+                if len(rows) >= _FIND_RESULT_CAP:
+                    break
+            if len(rows) >= _FIND_RESULT_CAP:
+                break
+        return jsonify({"players": rows})
 
-                players.append(result)
+    @app.route("/api/players/lookup")
+    def api_player_lookup():
+        """Exact (name, player_type) resolution for the auto-compare URL.
 
-        return jsonify(players)
+        Query: keys=Name1::type,Name2::type (URL-decoded names; types are
+        'hitter' or 'pitcher'). Returns enriched records in request order.
+        Missing players are silently dropped.
+        """
+        from fantasy_baseball.utils.name_utils import normalize_name
+
+        keys_param = request.args.get("keys")
+        if not keys_param:
+            return jsonify({"error": "keys is required"}), 400
+
+        requested: list[tuple[str, PlayerType]] = []
+        for raw in keys_param.split(","):
+            sep = raw.rfind("::")
+            if sep == -1:
+                continue
+            name = raw[:sep].strip()
+            ptype_str = raw[sep + 2 :].strip()
+            if not name or ptype_str not in (PlayerType.HITTER, PlayerType.PITCHER):
+                continue
+            requested.append((name, PlayerType(ptype_str)))
+
+        if not requested:
+            return jsonify({"players": []})
+
+        ctx = _browse_context()
+        by_norm: dict[tuple[str, PlayerType], tuple[dict, PlayerType]] = {}
+        for pool_key, ptype in (
+            ("hitters", PlayerType.HITTER),
+            ("pitchers", PlayerType.PITCHER),
+        ):
+            for d in ctx["ros_cache"].get(pool_key, []):
+                by_norm[(normalize_name(d.get("name", "")), ptype)] = (d, ptype)
+
+        rows: list[dict[str, Any]] = []
+        for name, ptype in requested:
+            match = by_norm.get((normalize_name(name), ptype))
+            if match is None:
+                continue
+            d, p = match
+            rows.append(
+                _build_player_record(
+                    d,
+                    p,
+                    ctx["owner_map"],
+                    ctx["pos_map"],
+                    ctx["rankings_cache"],
+                    ctx["audit_index"],
+                    ctx["worst_by_pos"],
+                )
+            )
+        return jsonify({"players": rows})
 
     @app.route("/api/players/compare")
     def api_player_compare():

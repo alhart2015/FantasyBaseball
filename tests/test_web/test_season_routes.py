@@ -1,8 +1,11 @@
+import json
 from unittest.mock import patch
 
 import pytest
 
 from fantasy_baseball.data import kv_store
+from fantasy_baseball.data.cache_keys import redis_key
+from fantasy_baseball.data.kv_store import get_kv
 from fantasy_baseball.web.season_app import create_app
 from fantasy_baseball.web.season_data import CacheKey
 
@@ -439,3 +442,466 @@ def test_sync_from_remote_surfaces_errors_as_500(client, monkeypatch):
     resp = client.post("/api/sync-from-remote")
     assert resp.status_code == 500
     assert "Upstash creds missing" in resp.get_json()["error"]
+
+
+def _seed_browse_caches():
+    """Seed ros_projections + positions + roster + opp_rosters + audit
+    into the active KV store. Returns the seeded names so tests can assert
+    on specific players.
+    """
+    kv = get_kv()
+    of_hitters = [
+        {
+            "name": "OF FA A",
+            "player_type": "hitter",
+            "team": "BOS",
+            "r": 90,
+            "hr": 30,
+            "rbi": 100,
+            "sb": 10,
+            "h": 160,
+            "ab": 550,
+        },
+        {
+            "name": "OF FA B",
+            "player_type": "hitter",
+            "team": "NYY",
+            "r": 80,
+            "hr": 25,
+            "rbi": 90,
+            "sb": 8,
+            "h": 150,
+            "ab": 540,
+        },
+        {
+            "name": "OF FA C",
+            "player_type": "hitter",
+            "team": "LAD",
+            "r": 70,
+            "hr": 20,
+            "rbi": 80,
+            "sb": 6,
+            "h": 140,
+            "ab": 530,
+        },
+        {
+            "name": "OF Mine",
+            "player_type": "hitter",
+            "team": "ATL",
+            "r": 95,
+            "hr": 32,
+            "rbi": 105,
+            "sb": 12,
+            "h": 165,
+            "ab": 555,
+        },
+        {
+            "name": "OF Opp",
+            "player_type": "hitter",
+            "team": "HOU",
+            "r": 88,
+            "hr": 28,
+            "rbi": 95,
+            "sb": 9,
+            "h": 155,
+            "ab": 545,
+        },
+    ]
+    sp_pitchers = [
+        {
+            "name": "SP FA A",
+            "player_type": "pitcher",
+            "team": "BOS",
+            "w": 12,
+            "k": 180,
+            "sv": 0,
+            "ip": 180.0,
+            "er": 60,
+            "bb": 50,
+            "h_allowed": 150,
+        },
+    ]
+    kv.set(
+        redis_key(CacheKey.ROS_PROJECTIONS),
+        json.dumps({"hitters": of_hitters, "pitchers": sp_pitchers}),
+    )
+    kv.set(
+        redis_key(CacheKey.POSITIONS),
+        json.dumps(
+            {
+                "of fa a": ["OF"],
+                "of fa b": ["OF"],
+                "of fa c": ["OF"],
+                "of mine": ["OF"],
+                "of opp": ["OF"],
+                "sp fa a": ["P"],
+            }
+        ),
+    )
+    kv.set(redis_key(CacheKey.ROSTER), json.dumps([{"name": "OF Mine", "player_type": "hitter"}]))
+    kv.set(
+        redis_key(CacheKey.OPP_ROSTERS),
+        json.dumps(
+            {
+                "Rivals": [{"name": "OF Opp", "player_type": "hitter"}],
+            }
+        ),
+    )
+    kv.set(redis_key(CacheKey.ROSTER_AUDIT), json.dumps([]))
+    return {
+        "fa_a": "OF FA A",
+        "fa_b": "OF FA B",
+        "fa_c": "OF FA C",
+        "mine": "OF Mine",
+        "opp": "OF Opp",
+    }
+
+
+def test_browse_specific_position_returns_rostered_and_top_fas(client, kv_isolation):
+    names = _seed_browse_caches()
+    resp = client.get("/api/players/browse?pos=OF&fa_limit=2&fa_offset=0")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    returned = {p["name"] for p in body["players"]}
+    assert returned == {names["mine"], names["opp"], names["fa_a"], names["fa_b"]}
+    assert body["has_more_fa"] is True
+    assert body["next_fa_offset"] == 2
+
+
+def test_browse_load_more_paginates_fas_only(client, kv_isolation):
+    names = _seed_browse_caches()
+    resp = client.get("/api/players/browse?pos=OF&fa_limit=2&fa_offset=2")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    returned = {p["name"] for p in body["players"]}
+    assert returned == {names["fa_c"]}
+    assert body["has_more_fa"] is False
+    assert body["next_fa_offset"] == 3
+
+
+def test_browse_all_hit_caps_at_20_fas(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/browse?pos=ALL_HIT&fa_offset=0")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    fa_count = sum(1 for p in body["players"] if p["owner"] is None)
+    rostered_count = sum(1 for p in body["players"] if p["owner"] is not None)
+    assert fa_count == 3
+    assert rostered_count == 2
+    assert body["has_more_fa"] is False
+
+
+def test_browse_invalid_pos_returns_400(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/browse?pos=Bogus")
+    assert resp.status_code == 400
+
+
+def test_browse_missing_pos_returns_400(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/browse")
+    assert resp.status_code == 400
+
+
+def test_browse_all_hit_paginates_with_fa_offset(client, kv_isolation):
+    _seed_browse_caches()
+    # Default fa_limit for ALL_HIT is 20, but the seed only has 3 FAs.
+    # Asking for fa_offset=2 with fa_limit=2 should return one FA, no rostered.
+    resp = client.get("/api/players/browse?pos=ALL_HIT&fa_limit=2&fa_offset=2")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    fa_count = sum(1 for p in body["players"] if p["owner"] is None)
+    rostered_count = sum(1 for p in body["players"] if p["owner"] is not None)
+    assert fa_count == 1
+    assert rostered_count == 0
+    assert body["has_more_fa"] is False
+
+
+def test_browse_empty_cache_returns_empty_envelope(client, kv_isolation):
+    # Do not seed — ROS_PROJECTIONS missing.
+    resp = client.get("/api/players/browse?pos=OF")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body == {"players": [], "has_more_fa": False, "next_fa_offset": 0}
+
+
+def test_browse_sp_rp_split_on_sv_threshold(client, kv_isolation):
+    # Three pitchers: sv=0 (SP), sv=4 (SP — strict <), sv=5 (RP — boundary).
+    kv = get_kv()
+    kv.set(
+        redis_key(CacheKey.ROS_PROJECTIONS),
+        json.dumps(
+            {
+                "hitters": [],
+                "pitchers": [
+                    {
+                        "name": "SP Zero",
+                        "player_type": "pitcher",
+                        "team": "BOS",
+                        "w": 12,
+                        "k": 180,
+                        "sv": 0,
+                        "ip": 180.0,
+                        "er": 60,
+                        "bb": 50,
+                        "h_allowed": 150,
+                    },
+                    {
+                        "name": "SP Four",
+                        "player_type": "pitcher",
+                        "team": "NYY",
+                        "w": 10,
+                        "k": 160,
+                        "sv": 4,
+                        "ip": 170.0,
+                        "er": 65,
+                        "bb": 55,
+                        "h_allowed": 155,
+                    },
+                    {
+                        "name": "RP Five",
+                        "player_type": "pitcher",
+                        "team": "LAD",
+                        "w": 3,
+                        "k": 70,
+                        "sv": 5,
+                        "ip": 60.0,
+                        "er": 22,
+                        "bb": 20,
+                        "h_allowed": 50,
+                    },
+                ],
+            }
+        ),
+    )
+    kv.set(
+        redis_key(CacheKey.POSITIONS),
+        json.dumps(
+            {
+                "sp zero": ["P"],
+                "sp four": ["P"],
+                "rp five": ["P"],
+            }
+        ),
+    )
+    kv.set(redis_key(CacheKey.ROSTER), json.dumps([]))
+    kv.set(redis_key(CacheKey.OPP_ROSTERS), json.dumps({}))
+    kv.set(redis_key(CacheKey.ROSTER_AUDIT), json.dumps([]))
+
+    sp_resp = client.get("/api/players/browse?pos=SP")
+    assert sp_resp.status_code == 200
+    sp_names = {p["name"] for p in sp_resp.get_json()["players"]}
+    assert sp_names == {"SP Zero", "SP Four"}
+
+    rp_resp = client.get("/api/players/browse?pos=RP")
+    assert rp_resp.status_code == 200
+    rp_names = {p["name"] for p in rp_resp.get_json()["players"]}
+    assert rp_names == {"RP Five"}
+
+
+def test_browse_response_includes_delta_roto_for_fa_with_audit_hit(client, kv_isolation):
+    """Pin delta_roto shape: FA whose name appears in roster_audit candidates
+    surfaces the precomputed dict so the frontend Compute button can mutate
+    in place.
+    """
+    kv = get_kv()
+    kv.set(
+        redis_key(CacheKey.ROS_PROJECTIONS),
+        json.dumps(
+            {
+                "hitters": [
+                    {
+                        "name": "Roster OF",
+                        "player_type": "hitter",
+                        "team": "ATL",
+                        "r": 50,
+                        "hr": 10,
+                        "rbi": 40,
+                        "sb": 2,
+                        "h": 110,
+                        "ab": 450,
+                    },
+                    {
+                        "name": "FA Stud",
+                        "player_type": "hitter",
+                        "team": "BOS",
+                        "r": 90,
+                        "hr": 30,
+                        "rbi": 100,
+                        "sb": 10,
+                        "h": 160,
+                        "ab": 550,
+                    },
+                ],
+                "pitchers": [],
+            }
+        ),
+    )
+    kv.set(
+        redis_key(CacheKey.POSITIONS),
+        json.dumps(
+            {
+                "roster of": ["OF"],
+                "fa stud": ["OF"],
+            }
+        ),
+    )
+    kv.set(
+        redis_key(CacheKey.ROSTER),
+        json.dumps([{"name": "Roster OF", "player_type": "hitter", "positions": ["OF"]}]),
+    )
+    kv.set(redis_key(CacheKey.OPP_ROSTERS), json.dumps({}))
+    kv.set(
+        redis_key(CacheKey.ROSTER_AUDIT),
+        json.dumps(
+            [
+                {
+                    "player": "Roster OF",
+                    "candidates": [
+                        {
+                            "name": "FA Stud",
+                            "delta_roto": {
+                                "total": 1.5,
+                                "categories": {"R": {"roto_delta": 0.5}, "HR": {"roto_delta": 1.0}},
+                            },
+                        },
+                    ],
+                },
+            ]
+        ),
+    )
+
+    resp = client.get("/api/players/browse?pos=OF")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    fa = next(p for p in body["players"] if p["name"] == "FA Stud")
+    assert fa["delta_roto"] == {
+        "total": 1.5,
+        "categories": {"R": {"roto_delta": 0.5}, "HR": {"roto_delta": 1.0}},
+    }
+    # Rostered player gets no delta_roto.
+    rostered = next(p for p in body["players"] if p["name"] == "Roster OF")
+    assert rostered["delta_roto"] is None
+
+
+def test_browse_hitter_response_includes_required_stat_fields(client, kv_isolation):
+    """The frontend table renders per-type stat fields directly. Pin the
+    legacy field names so a refactor of _build_player_record can't silently
+    drop them.
+    """
+    _seed_browse_caches()
+    resp = client.get("/api/players/browse?pos=OF")
+    assert resp.status_code == 200
+    fa = next(p for p in resp.get_json()["players"] if p["name"] == "OF FA A")
+    for field in ("R", "HR", "RBI", "SB", "AVG", "h", "ab"):
+        assert field in fa, f"missing hitter field: {field}"
+    # And no pitcher fields leak through.
+    for field in ("W", "K", "SV", "ERA", "WHIP", "ip", "er", "bb", "h_allowed"):
+        assert field not in fa, f"unexpected pitcher field on hitter: {field}"
+
+
+def test_browse_pitcher_response_includes_required_stat_fields(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/browse?pos=SP")
+    assert resp.status_code == 200
+    sp = next(p for p in resp.get_json()["players"] if p["name"] == "SP FA A")
+    for field in ("W", "K", "SV", "ERA", "WHIP", "ip", "er", "bb", "h_allowed"):
+        assert field in sp, f"missing pitcher field: {field}"
+    for field in ("R", "HR", "RBI", "SB", "AVG", "h", "ab"):
+        assert field not in sp, f"unexpected hitter field on pitcher: {field}"
+
+
+def test_find_returns_substring_matches(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/find?q=fa")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    names = {p["name"] for p in body["players"]}
+    # "fa" matches every FA-named player (OF FA A/B/C and SP FA A).
+    assert "OF FA A" in names
+    assert "OF FA B" in names
+    assert "OF FA C" in names
+    assert "SP FA A" in names
+
+    # Case-insensitivity: uppercase query returns the same matches.
+    resp_upper = client.get("/api/players/find?q=FA")
+    assert resp_upper.status_code == 200
+    assert {p["name"] for p in resp_upper.get_json()["players"]} == names
+
+
+def test_find_rejects_short_query(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/find?q=a")
+    assert resp.status_code == 400
+
+
+def test_find_missing_q_returns_400(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/find")
+    assert resp.status_code == 400
+
+
+def test_find_caps_at_25_results(client, kv_isolation):
+    kv = get_kv()
+    hitters = [
+        {
+            "name": f"Smithers {i}",
+            "player_type": "hitter",
+            "team": "BOS",
+            "r": 50,
+            "hr": 10,
+            "rbi": 40,
+            "sb": 2,
+            "h": 100,
+            "ab": 400,
+        }
+        for i in range(30)
+    ]
+    kv.set(redis_key(CacheKey.ROS_PROJECTIONS), json.dumps({"hitters": hitters, "pitchers": []}))
+    kv.set(redis_key(CacheKey.POSITIONS), json.dumps({f"smithers {i}": ["OF"] for i in range(30)}))
+    kv.set(redis_key(CacheKey.ROSTER), json.dumps([]))
+    kv.set(redis_key(CacheKey.OPP_ROSTERS), json.dumps({}))
+    kv.set(redis_key(CacheKey.ROSTER_AUDIT), json.dumps([]))
+    resp = client.get("/api/players/find?q=smith")
+    assert resp.status_code == 200
+    assert len(resp.get_json()["players"]) == 25
+
+
+def test_lookup_returns_players_in_request_order(client, kv_isolation):
+    names = _seed_browse_caches()
+    resp = client.get(f"/api/players/lookup?keys={names['fa_b']}::hitter,{names['mine']}::hitter")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    returned = [p["name"] for p in body["players"]]
+    assert returned == [names["fa_b"], names["mine"]]
+
+
+def test_lookup_silently_drops_misses(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/lookup?keys=Nobody::hitter,OF FA A::hitter")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert [p["name"] for p in body["players"]] == ["OF FA A"]
+
+
+def test_lookup_missing_keys_returns_400(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/lookup")
+    assert resp.status_code == 400
+
+
+def test_lookup_handles_malformed_inputs(client, kv_isolation):
+    _seed_browse_caches()
+    # Blank keys param -> 400 (same as missing).
+    assert client.get("/api/players/lookup?keys=").status_code == 400
+    # All-malformed pairs -> 200 with empty list (no separator, bad type).
+    body = client.get("/api/players/lookup?keys=NoSeparator,Soto::nope").get_json()
+    assert body == {"players": []}
+
+
+def test_lookup_normalizes_case_for_matching(client, kv_isolation):
+    names = _seed_browse_caches()
+    # Lowercase request matches the upper-cased seeded name via normalize_name.
+    resp = client.get(f"/api/players/lookup?keys={names['fa_a'].lower()}::hitter")
+    assert resp.status_code == 200
+    assert [p["name"] for p in resp.get_json()["players"]] == [names["fa_a"]]

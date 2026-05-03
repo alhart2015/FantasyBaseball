@@ -114,7 +114,13 @@ const PITCHING_CATS = ['W', 'K', 'SV', 'ERA', 'WHIP'];
 const RATE_CATS = new Set(['AVG', 'ERA', 'WHIP']);
 const ASC_DEFAULT = new Set(['rank', 'name', 'positions', 'team', 'owner', 'ERA', 'WHIP']);
 
-let allPlayers = null;
+let loadMode = 'empty';        // 'empty' | 'position' | 'search'
+let loadedPos = null;
+let nextFaOffset = 0;
+let hasMoreFa = false;
+let currentPlayers = [];
+let loadInFlight = false;
+let loadSeq = 0;
 let sortCol = 'rank';
 let sortAsc = true;
 let selectedPlayers = []; // array of player objects, max 2
@@ -128,43 +134,153 @@ const bodyEl = document.getElementById('table-body');
 const countEl = document.getElementById('player-count');
 const emptyEl = document.getElementById('empty-msg');
 
-emptyEl.textContent = 'Loading player data...';
-fetch('/api/players/browse')
-    .then(r => r.json())
-    .then(data => {
-        allPlayers = data;
+// "Load more FAs" button (created lazily, lives below the table).
+const loadMoreEl = document.createElement('div');
+loadMoreEl.id = 'load-more-wrap';
+loadMoreEl.style.cssText = 'text-align:center; margin:16px 0; display:none;';
+loadMoreEl.innerHTML =
+    '<button id="load-more-btn" style="padding:6px 18px; background:none; ' +
+    'border:1px solid var(--panel-border); color:var(--text-secondary); ' +
+    'border-radius:4px; cursor:pointer; font-size:13px;">Load more FAs</button>';
+tableEl.parentNode.insertBefore(loadMoreEl, tableEl.nextSibling);
+
+document.getElementById('load-more-btn').addEventListener('click', loadMoreFAs);
+
+function fetchBrowse(pos, faOffset) {
+    const url = '/api/players/browse?pos=' + encodeURIComponent(pos) +
+                '&fa_offset=' + faOffset;
+    return fetch(url).then(r => r.json());
+}
+
+function loadPosition(pos) {
+    if (!pos) {
+        loadMode = 'empty';
+        loadedPos = null;
+        currentPlayers = [];
+        nextFaOffset = 0;
+        hasMoreFa = false;
+        nameFilter.value = '';
         render();
-
-        // Auto-compare from URL params: /players?compare=Name::type,Name::type
-        const compareParam = new URLSearchParams(window.location.search).get('compare');
-        if (compareParam && allPlayers) {
-            const keys = compareParam.split(',').map(k => k.trim());
-            selectedPlayers = [];
-            for (const key of keys) {
-                const sep = key.lastIndexOf('::');
-                if (sep === -1) continue;
-                const name = key.substring(0, sep);
-                const ptype = key.substring(sep + 2);
-                const p = allPlayers.find(pl => pl.name === name && pl.player_type === ptype);
-                if (p) selectedPlayers.push(p);
-            }
-            if (selectedPlayers.length === 2) {
-                render();
-                updateComparison();
-            }
-        }
-    })
-    .catch(() => {
-        emptyEl.textContent = 'Failed to load player data.';
+        return;
+    }
+    const reqId = ++loadSeq;
+    loadInFlight = true;
+    emptyEl.textContent = 'Loading...';
+    emptyEl.style.display = '';
+    tableEl.style.display = 'none';
+    loadMoreEl.style.display = 'none';
+    fetchBrowse(pos, 0).then(data => {
+        if (reqId !== loadSeq) return;
+        loadInFlight = false;
+        if (data.error) { emptyEl.textContent = data.error; return; }
+        loadMode = 'position';
+        loadedPos = pos;
+        currentPlayers = data.players;
+        hasMoreFa = data.has_more_fa;
+        nextFaOffset = data.next_fa_offset;
+        render();
+    }).catch(() => {
+        if (reqId !== loadSeq) return;
+        loadInFlight = false;
+        emptyEl.textContent = 'Failed to load players.';
     });
+}
 
-posFilter.addEventListener('change', render);
+function loadMoreFAs() {
+    if (loadInFlight || !loadedPos || !hasMoreFa) return;
+    const reqId = ++loadSeq;
+    const requestedPos = loadedPos;
+    const btn = document.getElementById('load-more-btn');
+    btn.disabled = true;
+    btn.textContent = 'Loading...';
+    loadInFlight = true;
+    fetchBrowse(requestedPos, nextFaOffset).then(data => {
+        if (reqId !== loadSeq) return;
+        loadInFlight = false;
+        btn.disabled = false;
+        btn.textContent = 'Load more FAs';
+        if (data.error) return;
+        currentPlayers = currentPlayers.concat(data.players);
+        hasMoreFa = data.has_more_fa;
+        nextFaOffset = data.next_fa_offset;
+        render();
+    }).catch(() => {
+        if (reqId !== loadSeq) return;
+        loadInFlight = false;
+        btn.disabled = false;
+        btn.textContent = 'Load more FAs';
+    });
+}
+
+function runNameSearch(q) {
+    const reqId = ++loadSeq;
+    loadInFlight = true;
+    emptyEl.textContent = 'Searching...';
+    emptyEl.style.display = '';
+    tableEl.style.display = 'none';
+    loadMoreEl.style.display = 'none';
+    fetch('/api/players/find?q=' + encodeURIComponent(q))
+        .then(r => r.json())
+        .then(data => {
+            if (reqId !== loadSeq) return;
+            loadInFlight = false;
+            if (data.error) { emptyEl.textContent = data.error; return; }
+            loadMode = 'search';
+            currentPlayers = data.players;
+            hasMoreFa = false;
+            render();
+        })
+        .catch(() => {
+            if (reqId !== loadSeq) return;
+            loadInFlight = false;
+            emptyEl.textContent = 'Search failed.';
+        });
+}
+
+posFilter.addEventListener('change', () => loadPosition(posFilter.value));
 faOnly.addEventListener('change', render);
+
 let _debounce;
 nameFilter.addEventListener('input', () => {
     clearTimeout(_debounce);
-    _debounce = setTimeout(render, 150);
+    _debounce = setTimeout(() => {
+        const q = nameFilter.value.trim();
+        if (loadMode === 'position') {
+            // Filter the loaded set client-side.
+            render();
+        } else if (q.length >= 2) {
+            runNameSearch(q);
+        } else {
+            loadMode = 'empty';
+            currentPlayers = [];
+            render();
+        }
+    }, 150);
 });
+
+// Auto-compare via URL: /players?compare=Name::type,Name::type
+const compareParam = new URLSearchParams(window.location.search).get('compare');
+if (compareParam) {
+    fetch('/api/players/lookup?keys=' + encodeURIComponent(compareParam))
+        .then(r => r.json())
+        .then(data => {
+            // Only auto-populate if the user hasn't started selecting
+            // players manually. URL is "first paint" only.
+            if (selectedPlayers.length > 0) return;
+            selectedPlayers = data.players || [];
+            render();
+            if (selectedPlayers.length === 2) {
+                updateComparison();
+            } else if (selectedPlayers.length === 1) {
+                compPanel.style.display = '';
+                compValidation.textContent = 'Select one more player to compare.';
+            }
+        })
+        .catch(() => {
+            compPanel.style.display = '';
+            compValidation.textContent = 'Failed to load comparison from URL.';
+        });
+}
 
 function isMixedFilter(pos) {
     return pos === 'ALL';
@@ -172,19 +288,6 @@ function isMixedFilter(pos) {
 
 function isHitterFilter(pos) {
     return pos === 'ALL_HIT' || ['C','1B','2B','3B','SS','OF'].includes(pos);
-}
-
-function matchesPosition(player, pos) {
-    if (pos === 'ALL') return true;
-    if (pos === 'ALL_HIT') return player.player_type === 'hitter';
-    if (pos === 'ALL_PIT') return player.player_type === 'pitcher';
-    if (player.positions && player.positions.includes(pos)) return true;
-    // Yahoo only returns "P" for pitchers — infer SP/RP from saves
-    if (player.player_type === 'pitcher' && player.positions && player.positions.includes('P')) {
-        if (pos === 'SP') return (player.SV || 0) < 5;
-        if (pos === 'RP') return (player.SV || 0) >= 5;
-    }
-    return false;
 }
 
 function fmt(val, cat) {
@@ -216,24 +319,18 @@ function deltaRotoCell(p) {
 }
 
 function render() {
-    if (!allPlayers) return;
-    const pos = posFilter.value;
-    const nameQ = nameFilter.value.trim().toLowerCase();
-
-    // Require either a position or a name query (min 2 chars without position)
-    if (!pos && nameQ.length < 2) {
+    if (loadMode === 'empty') {
         tableEl.style.display = 'none';
+        loadMoreEl.style.display = 'none';
         emptyEl.style.display = '';
-        emptyEl.textContent = nameQ.length > 0
-            ? 'Type at least 2 characters to search all players.'
-            : 'Select a position or search by name.';
+        emptyEl.textContent = 'Select a position or search by name.';
         countEl.textContent = '';
         return;
     }
 
-    const mixed = isMixedFilter(pos) || !pos;
-    const effectivePos = pos || 'ALL';
-    const isHitter = !mixed && isHitterFilter(pos);
+    const nameQ = nameFilter.value.trim().toLowerCase();
+    const mixed = !loadedPos || isMixedFilter(loadedPos);
+    const isHitter = !mixed && isHitterFilter(loadedPos);
     const cats = mixed ? [] : (isHitter ? HITTING_CATS : PITCHING_CATS);
     const validCols = new Set(['rank', 'name', 'positions', 'team', 'owner', 'sgp', 'delta_roto', ...cats]);
     if (!validCols.has(sortCol)) {
@@ -241,11 +338,13 @@ function render() {
         sortAsc = true;
     }
 
-    // Filter
-    let filtered = allPlayers.filter(p => {
-        if (!matchesPosition(p, effectivePos)) return false;
+    // Filter — server already handled position. Name-substring filter applies
+    // only when a position is loaded; in search mode the server already
+    // produced the result set.
+    let filtered = currentPlayers.filter(p => {
         if (faOnly.checked && p.owner) return false;
-        if (nameQ && !p.name.toLowerCase().includes(nameQ)) return false;
+        if (loadMode === 'position' && nameQ &&
+            !p.name.toLowerCase().includes(nameQ)) return false;
         return true;
     });
 
@@ -366,8 +465,8 @@ function render() {
                         btn.title = data.error;
                         return;
                     }
-                    // Cache on the allPlayers record so sorts pick it up
-                    const record = allPlayers.find(p => p.name === name && p.player_type === ptype);
+                    // Cache on the currentPlayers record so sorts pick it up
+                    const record = currentPlayers.find(p => p.name === name && p.player_type === ptype);
                     if (record) record.delta_roto = data.delta_roto;
                     const td = btn.closest('td');
                     if (td) td.innerHTML = deltaRotoCell(record || { delta_roto: data.delta_roto, owner: null });
@@ -381,6 +480,7 @@ function render() {
 
     tableEl.style.display = '';
     emptyEl.style.display = 'none';
+    loadMoreEl.style.display = (loadMode === 'position' && hasMoreFa) ? '' : 'none';
     countEl.textContent = filtered.length + ' player' + (filtered.length !== 1 ? 's' : '');
 }
 
