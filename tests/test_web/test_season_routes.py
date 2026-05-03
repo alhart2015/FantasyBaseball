@@ -601,3 +601,99 @@ def test_browse_missing_pos_returns_400(client, kv_isolation):
     _seed_browse_caches()
     resp = client.get("/api/players/browse")
     assert resp.status_code == 400
+
+
+def test_browse_all_hit_paginates_with_fa_offset(client, kv_isolation):
+    _seed_browse_caches()
+    # Default fa_limit for ALL_HIT is 20, but the seed only has 3 FAs.
+    # Asking for fa_offset=2 with fa_limit=2 should return one FA, no rostered.
+    resp = client.get("/api/players/browse?pos=ALL_HIT&fa_limit=2&fa_offset=2")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    fa_count = sum(1 for p in body["players"] if p["owner"] is None)
+    rostered_count = sum(1 for p in body["players"] if p["owner"] is not None)
+    assert fa_count == 1
+    assert rostered_count == 0
+    assert body["has_more_fa"] is False
+
+
+def test_browse_empty_cache_returns_empty_envelope(client, kv_isolation):
+    # Do not seed — ROS_PROJECTIONS missing.
+    resp = client.get("/api/players/browse?pos=OF")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body == {"players": [], "has_more_fa": False, "next_fa_offset": 0}
+
+
+def test_browse_sp_rp_split_on_sv_threshold(client, kv_isolation):
+    # Three pitchers: sv=0 (SP), sv=4 (SP — strict <), sv=5 (RP — boundary).
+    kv = get_kv()
+    kv.set(
+        redis_key(CacheKey.ROS_PROJECTIONS),
+        json.dumps(
+            {
+                "hitters": [],
+                "pitchers": [
+                    {
+                        "name": "SP Zero",
+                        "player_type": "pitcher",
+                        "team": "BOS",
+                        "w": 12,
+                        "k": 180,
+                        "sv": 0,
+                        "ip": 180.0,
+                        "er": 60,
+                        "bb": 50,
+                        "h_allowed": 150,
+                    },
+                    {
+                        "name": "SP Four",
+                        "player_type": "pitcher",
+                        "team": "NYY",
+                        "w": 10,
+                        "k": 160,
+                        "sv": 4,
+                        "ip": 170.0,
+                        "er": 65,
+                        "bb": 55,
+                        "h_allowed": 155,
+                    },
+                    {
+                        "name": "RP Five",
+                        "player_type": "pitcher",
+                        "team": "LAD",
+                        "w": 3,
+                        "k": 70,
+                        "sv": 5,
+                        "ip": 60.0,
+                        "er": 22,
+                        "bb": 20,
+                        "h_allowed": 50,
+                    },
+                ],
+            }
+        ),
+    )
+    kv.set(
+        redis_key(CacheKey.POSITIONS),
+        json.dumps(
+            {
+                "sp zero": ["P"],
+                "sp four": ["P"],
+                "rp five": ["P"],
+            }
+        ),
+    )
+    kv.set(redis_key(CacheKey.ROSTER), json.dumps([]))
+    kv.set(redis_key(CacheKey.OPP_ROSTERS), json.dumps({}))
+    kv.set(redis_key(CacheKey.ROSTER_AUDIT), json.dumps([]))
+
+    sp_resp = client.get("/api/players/browse?pos=SP")
+    assert sp_resp.status_code == 200
+    sp_names = {p["name"] for p in sp_resp.get_json()["players"]}
+    assert sp_names == {"SP Zero", "SP Four"}
+
+    rp_resp = client.get("/api/players/browse?pos=RP")
+    assert rp_resp.status_code == 200
+    rp_names = {p["name"] for p in rp_resp.get_json()["players"]}
+    assert rp_names == {"RP Five"}
