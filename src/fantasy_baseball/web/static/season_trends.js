@@ -52,10 +52,15 @@
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        interaction: { mode: "nearest", axis: "x", intersect: false },
+        // axis: "xy" picks the dataset closest to the cursor by 2D
+        // distance. With axis: "x" every dataset ties at any cursor x
+        // (they all have a point at every x-index), so Chart.js falls
+        // back to dataset order and the first one stays "focused" no
+        // matter where you hover.
+        interaction: { mode: "nearest", axis: "xy", intersect: false },
         plugins: {
           legend: { position: "right", onHover: undefined },
-          tooltip: { mode: "nearest", intersect: false },
+          tooltip: { mode: "nearest", axis: "xy", intersect: false },
         },
         scales: {
           y: { beginAtZero: false },
