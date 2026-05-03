@@ -451,39 +451,110 @@ def _seed_browse_caches():
     """
     kv = get_kv()
     of_hitters = [
-        {"name": "OF FA A", "player_type": "hitter", "team": "BOS",
-         "r": 90, "hr": 30, "rbi": 100, "sb": 10, "h": 160, "ab": 550},
-        {"name": "OF FA B", "player_type": "hitter", "team": "NYY",
-         "r": 80, "hr": 25, "rbi": 90, "sb": 8, "h": 150, "ab": 540},
-        {"name": "OF FA C", "player_type": "hitter", "team": "LAD",
-         "r": 70, "hr": 20, "rbi": 80, "sb": 6, "h": 140, "ab": 530},
-        {"name": "OF Mine", "player_type": "hitter", "team": "ATL",
-         "r": 95, "hr": 32, "rbi": 105, "sb": 12, "h": 165, "ab": 555},
-        {"name": "OF Opp", "player_type": "hitter", "team": "HOU",
-         "r": 88, "hr": 28, "rbi": 95, "sb": 9, "h": 155, "ab": 545},
+        {
+            "name": "OF FA A",
+            "player_type": "hitter",
+            "team": "BOS",
+            "r": 90,
+            "hr": 30,
+            "rbi": 100,
+            "sb": 10,
+            "h": 160,
+            "ab": 550,
+        },
+        {
+            "name": "OF FA B",
+            "player_type": "hitter",
+            "team": "NYY",
+            "r": 80,
+            "hr": 25,
+            "rbi": 90,
+            "sb": 8,
+            "h": 150,
+            "ab": 540,
+        },
+        {
+            "name": "OF FA C",
+            "player_type": "hitter",
+            "team": "LAD",
+            "r": 70,
+            "hr": 20,
+            "rbi": 80,
+            "sb": 6,
+            "h": 140,
+            "ab": 530,
+        },
+        {
+            "name": "OF Mine",
+            "player_type": "hitter",
+            "team": "ATL",
+            "r": 95,
+            "hr": 32,
+            "rbi": 105,
+            "sb": 12,
+            "h": 165,
+            "ab": 555,
+        },
+        {
+            "name": "OF Opp",
+            "player_type": "hitter",
+            "team": "HOU",
+            "r": 88,
+            "hr": 28,
+            "rbi": 95,
+            "sb": 9,
+            "h": 155,
+            "ab": 545,
+        },
     ]
     sp_pitchers = [
-        {"name": "SP FA A", "player_type": "pitcher", "team": "BOS",
-         "w": 12, "k": 180, "sv": 0, "ip": 180.0, "er": 60, "bb": 50, "h_allowed": 150},
+        {
+            "name": "SP FA A",
+            "player_type": "pitcher",
+            "team": "BOS",
+            "w": 12,
+            "k": 180,
+            "sv": 0,
+            "ip": 180.0,
+            "er": 60,
+            "bb": 50,
+            "h_allowed": 150,
+        },
     ]
-    kv.set(redis_key(CacheKey.ROS_PROJECTIONS),
-           json.dumps({"hitters": of_hitters, "pitchers": sp_pitchers}))
-    kv.set(redis_key(CacheKey.POSITIONS), json.dumps({
-        "of fa a": ["OF"],
-        "of fa b": ["OF"],
-        "of fa c": ["OF"],
-        "of mine": ["OF"],
-        "of opp": ["OF"],
-        "sp fa a": ["P"],
-    }))
-    kv.set(redis_key(CacheKey.ROSTER),
-           json.dumps([{"name": "OF Mine", "player_type": "hitter"}]))
-    kv.set(redis_key(CacheKey.OPP_ROSTERS), json.dumps({
-        "Rivals": [{"name": "OF Opp", "player_type": "hitter"}],
-    }))
+    kv.set(
+        redis_key(CacheKey.ROS_PROJECTIONS),
+        json.dumps({"hitters": of_hitters, "pitchers": sp_pitchers}),
+    )
+    kv.set(
+        redis_key(CacheKey.POSITIONS),
+        json.dumps(
+            {
+                "of fa a": ["OF"],
+                "of fa b": ["OF"],
+                "of fa c": ["OF"],
+                "of mine": ["OF"],
+                "of opp": ["OF"],
+                "sp fa a": ["P"],
+            }
+        ),
+    )
+    kv.set(redis_key(CacheKey.ROSTER), json.dumps([{"name": "OF Mine", "player_type": "hitter"}]))
+    kv.set(
+        redis_key(CacheKey.OPP_ROSTERS),
+        json.dumps(
+            {
+                "Rivals": [{"name": "OF Opp", "player_type": "hitter"}],
+            }
+        ),
+    )
     kv.set(redis_key(CacheKey.ROSTER_AUDIT), json.dumps([]))
-    return {"fa_a": "OF FA A", "fa_b": "OF FA B", "fa_c": "OF FA C",
-            "mine": "OF Mine", "opp": "OF Opp"}
+    return {
+        "fa_a": "OF FA A",
+        "fa_b": "OF FA B",
+        "fa_c": "OF FA C",
+        "mine": "OF Mine",
+        "opp": "OF Opp",
+    }
 
 
 def test_browse_specific_position_returns_rostered_and_top_fas(client, kv_isolation):
