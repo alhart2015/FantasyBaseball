@@ -604,6 +604,12 @@ class RefreshRun:
                 "preseason_team_sds": team_sds_to_json(self.preseason_team_sds),
             },
         )
+
+        from fantasy_baseball.data.kv_store import get_kv
+        from fantasy_baseball.data.redis_store import write_projected_standings_snapshot
+
+        write_projected_standings_snapshot(get_kv(), self.projected_standings)
+
         write_cache(
             CacheKey.STANDINGS_BREAKDOWN,
             build_standings_breakdown_payload(all_team_rosters, self.effective_date),

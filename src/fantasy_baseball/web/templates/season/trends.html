@@ -1,0 +1,66 @@
+{% extends "season/base.html" %}
+{% block title %}Trends - Season Dashboard{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+.trends-section { margin-bottom: 32px; }
+.trends-section h2 { margin: 0 0 8px; }
+.tab-strip {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.tab-strip button {
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.tab-strip button:hover { background: var(--paper-edge); }
+.tab-strip button.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.chart-wrapper {
+  position: relative;
+  height: 360px;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<h1>Trends</h1>
+<p style="color: var(--text-secondary); margin-top: 0;">
+  Roto and per-stat movement across the season. Click a team in the legend to hide it; hover a line to focus it.
+</p>
+
+<section class="trends-section">
+  <h2>Actual Standings</h2>
+  <nav class="tab-strip" data-target="actual">
+    <button type="button" class="active" data-tab="roto">Roto Points</button>
+    {% for cat in categories %}
+    <button type="button" data-tab="{{ cat }}">{{ cat }}</button>
+    {% endfor %}
+  </nav>
+  <div class="chart-wrapper"><canvas id="chart-actual"></canvas></div>
+</section>
+
+<section class="trends-section">
+  <h2>Projected ERoto</h2>
+  <nav class="tab-strip" data-target="projected">
+    <button type="button" class="active" data-tab="roto">Roto Points</button>
+    {% for cat in categories %}
+    <button type="button" data-tab="{{ cat }}">{{ cat }}</button>
+    {% endfor %}
+  </nav>
+  <div class="chart-wrapper"><canvas id="chart-projected"></canvas></div>
+</section>
+
+<script src="{{ url_for('static', filename='season_trends.js') }}"></script>
+{% endblock %}

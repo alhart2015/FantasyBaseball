@@ -842,3 +842,111 @@ def _compute_pending_moves_diff(
             "drops": drops,
         }
     ]
+
+
+def build_trends_series(client, *, user_team: str) -> dict:
+    """Read both history hashes and return the /api/trends/series payload.
+
+    Shape:
+        {
+          "user_team": str,
+          "categories": list[str],   # ["R", "HR", ..., "WHIP"]
+          "actual":    {"dates": [...], "teams": {name: {"roto_points": [...], "stats": {cat: [...]}}}},
+          "projected": {"dates": [...], "teams": {name: {"roto_points": [...], "stats": {cat: [...]}}}},
+        }
+
+    Per-snapshot per-category totals come from ``score_roto``. For the
+    actual series we prefer Yahoo's ``yahoo_points_for`` total when
+    every entry on that snapshot has it, matching the /standings page.
+    Teams that appear in some snapshots but not others get ``None`` on
+    the missing dates so Chart.js renders a gap.
+    """
+    from fantasy_baseball.data.redis_store import (
+        get_projected_standings_history,
+        get_standings_history,
+    )
+
+    categories = [c.value for c in ALL_CATEGORIES]
+
+    actual_history = get_standings_history(client)
+    projected_history = get_projected_standings_history(client)
+
+    def _emit_actual() -> dict:
+        if not actual_history:
+            return {"dates": [], "teams": {}}
+        dates = sorted(actual_history.keys())
+        all_team_names: set[str] = set()
+        for d in dates:
+            for entry in actual_history[d].entries:
+                all_team_names.add(entry.team_name)
+
+        teams: dict[str, dict] = {
+            name: {
+                "roto_points": [],
+                "stats": {cat: [] for cat in categories},
+            }
+            for name in all_team_names
+        }
+        for d in dates:
+            standings = actual_history[d]
+            roto = score_roto(cast("Any", standings))
+            present = {e.team_name: e for e in standings.entries}
+            yahoo_authoritative = bool(present) and all(
+                e.yahoo_points_for is not None for e in present.values()
+            )
+            for name in all_team_names:
+                row = present.get(name)
+                if row is None:
+                    teams[name]["roto_points"].append(None)
+                    for cat in categories:
+                        teams[name]["stats"][cat].append(None)
+                    continue
+                if yahoo_authoritative:
+                    # yahoo_authoritative guarantees yahoo_points_for is non-None.
+                    teams[name]["roto_points"].append(float(row.yahoo_points_for))  # type: ignore[arg-type]
+                else:
+                    teams[name]["roto_points"].append(float(roto[name].total))
+                stats_dict = row.stats.to_dict()
+                for cat in categories:
+                    teams[name]["stats"][cat].append(stats_dict[cat])
+        return {"dates": dates, "teams": teams}
+
+    def _emit_projected() -> dict:
+        if not projected_history:
+            return {"dates": [], "teams": {}}
+        dates = sorted(projected_history.keys())
+        all_team_names: set[str] = set()
+        for d in dates:
+            for entry in projected_history[d].entries:
+                all_team_names.add(entry.team_name)
+
+        teams: dict[str, dict] = {
+            name: {
+                "roto_points": [],
+                "stats": {cat: [] for cat in categories},
+            }
+            for name in all_team_names
+        }
+        for d in dates:
+            projected = projected_history[d]
+            roto = score_roto(cast("Any", projected))
+            present = {e.team_name: e for e in projected.entries}
+            for name in all_team_names:
+                row = present.get(name)
+                if row is None:
+                    teams[name]["roto_points"].append(None)
+                    for cat in categories:
+                        teams[name]["stats"][cat].append(None)
+                    continue
+                teams[name]["roto_points"].append(float(roto[name].total))
+                stats_dict = row.stats.to_dict()
+                for cat in categories:
+                    teams[name]["stats"][cat].append(stats_dict[cat])
+        return {"dates": dates, "teams": teams}
+
+    return {
+        "user_team": user_team,
+        "categories": categories,
+        "actual": _emit_actual(),
+        "projected": _emit_projected(),
+    }

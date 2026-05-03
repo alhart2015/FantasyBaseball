@@ -66,6 +66,19 @@ class TestRefreshShape:
         for key in expected_keys:
             assert fake_redis.get(redis_key(key)) is not None, f"Missing cache key: {key}"
 
+    def test_projected_standings_history_populated(self, configured_test_env, fake_redis):
+        """Each refresh appends a snapshot to projected_standings_history."""
+        from fantasy_baseball.data.redis_store import get_projected_standings_history
+
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
+
+        history = get_projected_standings_history(fake_redis)
+        assert len(history) >= 1, "Expected at least one projected standings snapshot"
+        _snap_date, projected = next(iter(history.items()))
+        assert len(projected.entries) == 12
+        assert {e.team_name for e in projected.entries} == {f"Team {i:02d}" for i in range(1, 13)}
+
     def test_standings_shape(self, configured_test_env, fake_redis):
         with patched_refresh_environment(fake_redis):
             refresh_pipeline.run_full_refresh()

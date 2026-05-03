@@ -142,7 +142,7 @@ def _load_yahoo_league():
     return league, find_user_team_key(fetch_teams(league), config.team_name)
 
 
-def _load_projections():
+def load_projections():
     """Load projections from Redis. Returns (hitters, pitchers, rest_of_season_hitters, rest_of_season_pitchers)."""
     import pandas as pd
 
@@ -433,6 +433,24 @@ def register_routes(app: Flask) -> None:
             categories=[c.value for c in ALL_CATEGORIES],
             all_categories=ALL_CATEGORIES,
         )
+
+    @app.route("/trends")
+    def trends():
+        meta = read_meta()
+        return render_template(
+            "season/trends.html",
+            meta=meta,
+            active_page="trends",
+            categories=[c.value for c in ALL_CATEGORIES],
+        )
+
+    @app.route("/api/trends/series")
+    def api_trends_series():
+        from fantasy_baseball.data.kv_store import get_kv
+        from fantasy_baseball.web.season_data import build_trends_series
+
+        config = _load_config()
+        return jsonify(build_trends_series(get_kv(), user_team=config.team_name))
 
     @app.route("/lineup")
     def lineup():
@@ -1331,7 +1349,7 @@ def register_routes(app: Flask) -> None:
 
         try:
             hitters_proj, pitchers_proj, rest_of_season_hitters, rest_of_season_pitchers = (
-                _load_projections()
+                load_projections()
             )
         except Exception as e:
             return jsonify({"error": f"Failed to load projections: {e}"}), 500
