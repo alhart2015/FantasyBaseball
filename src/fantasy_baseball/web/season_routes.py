@@ -928,31 +928,23 @@ def register_routes(app: Flask) -> None:
             return 20
         return POSITION_POOL_SIZES[pos]
 
-    def _pos_sgp_key(d: dict, ptype: PlayerType) -> float:
-        """SGP for a raw projection dict (used as a sort key)."""
-        from fantasy_baseball.models.player import HitterStats, PitcherStats
-
-        ros: HitterStats | PitcherStats
-        if ptype == PlayerType.HITTER:
-            ros = HitterStats.from_dict(d)
-        else:
-            ros = PitcherStats.from_dict(d)
-        ros.compute_sgp()
-        return ros.sgp or 0.0
-
     def _split_rostered_and_fa(
         ros_cache: dict,
         pos_map: dict[str, list[str]],
         owner_map: dict[str, str],
         pos: str,
-    ) -> tuple[list[tuple[dict, PlayerType]], list[tuple[dict, PlayerType]]]:
+    ) -> tuple[list[tuple[dict, PlayerType, float]], list[tuple[dict, PlayerType, float]]]:
         """Walk ros_projections once; return (rostered, fa) lists of
-        (projection_dict, ptype) tuples eligible for ``pos``.
+        (projection_dict, ptype, sgp) triples eligible for ``pos``.
+
+        SGP is computed once during the walk so the handler can sort and
+        build records without re-running ``compute_sgp`` on the survivors.
         """
+        from fantasy_baseball.models.player import HitterStats, PitcherStats
         from fantasy_baseball.utils.name_utils import normalize_name
 
-        rostered: list[tuple[dict, PlayerType]] = []
-        fas: list[tuple[dict, PlayerType]] = []
+        rostered: list[tuple[dict, PlayerType, float]] = []
+        fas: list[tuple[dict, PlayerType, float]] = []
         for pool_key, ptype in (
             ("hitters", PlayerType.HITTER),
             ("pitchers", PlayerType.PITCHER),
@@ -962,7 +954,15 @@ def register_routes(app: Flask) -> None:
                 pos_list = pos_map.get(norm, [])
                 if not _ros_eligible_at(d, ptype, pos_list, pos):
                     continue
-                (rostered if owner_map.get(norm) else fas).append((d, ptype))
+                ros: HitterStats | PitcherStats
+                if ptype == PlayerType.HITTER:
+                    ros = HitterStats.from_dict(d)
+                else:
+                    ros = PitcherStats.from_dict(d)
+                ros.compute_sgp()
+                sgp = ros.sgp if ros.sgp is not None else 0.0
+                bucket = rostered if owner_map.get(norm) else fas
+                bucket.append((d, ptype, sgp))
         return rostered, fas
 
     def _build_player_record(
@@ -973,8 +973,15 @@ def register_routes(app: Flask) -> None:
         rankings_cache: dict,
         audit_index: dict[tuple[str, str], dict],
         worst_by_pos: dict[str, str],
+        sgp_hint: float | None = None,
     ) -> dict[str, Any]:
-        """Build the per-player browse-page record from a ros_projections row."""
+        """Build the per-player browse-page record from a ros_projections row.
+
+        When ``sgp_hint`` is provided the cached SGP is used directly,
+        avoiding a redundant ``compute_sgp`` call. Safe because
+        ``HitterStats.compute_sgp`` / ``PitcherStats.compute_sgp`` only
+        assign ``self.sgp`` and return it.
+        """
         from fantasy_baseball.lineup.roster_audit import fa_target_positions
         from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, RankInfo
         from fantasy_baseball.models.positions import Position
@@ -993,7 +1000,10 @@ def register_routes(app: Flask) -> None:
             ros = HitterStats.from_dict(d)
         else:
             ros = PitcherStats.from_dict(d)
-        ros.compute_sgp()
+        if sgp_hint is not None:
+            ros.sgp = sgp_hint
+        else:
+            ros.compute_sgp()
 
         rank_info = lookup_rank(rankings_cache, fg_id, name, ptype)
         positions = [Position.parse(pos) for pos in pos_map.get(norm, [])]
@@ -1136,7 +1146,7 @@ def register_routes(app: Flask) -> None:
             ctx["owner_map"],
             pos,
         )
-        fas.sort(key=lambda t: _pos_sgp_key(t[0], t[1]), reverse=True)
+        fas.sort(key=lambda t: t[2], reverse=True)
 
         fa_slice = fas[fa_offset : fa_offset + fa_limit]
         has_more_fa = (fa_offset + fa_limit) < len(fas)
@@ -1144,7 +1154,7 @@ def register_routes(app: Flask) -> None:
 
         rows: list[dict[str, Any]] = []
         if fa_offset == 0:
-            for d, ptype in rostered:
+            for d, ptype, sgp in rostered:
                 rows.append(
                     _build_player_record(
                         d,
@@ -1154,9 +1164,10 @@ def register_routes(app: Flask) -> None:
                         ctx["rankings_cache"],
                         ctx["audit_index"],
                         ctx["worst_by_pos"],
+                        sgp_hint=sgp,
                     )
                 )
-        for d, ptype in fa_slice:
+        for d, ptype, sgp in fa_slice:
             rows.append(
                 _build_player_record(
                     d,
@@ -1166,6 +1177,7 @@ def register_routes(app: Flask) -> None:
                     ctx["rankings_cache"],
                     ctx["audit_index"],
                     ctx["worst_by_pos"],
+                    sgp_hint=sgp,
                 )
             )
 
