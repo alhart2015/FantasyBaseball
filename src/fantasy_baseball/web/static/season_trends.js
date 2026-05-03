@@ -34,6 +34,10 @@
         data: data.slice(),
         borderColor: color,
         backgroundColor: color,
+        // _origColor is the immutable source of truth for this team's
+        // color. dimOthers / resetAlpha read it to compute live
+        // borderColor / backgroundColor without ever mutating it.
+        _origColor: color,
         borderWidth: name === userTeam ? 4 : 2,
         pointRadius: 2,
         pointHoverRadius: 5,
@@ -98,7 +102,6 @@
 
   function dimOthers(chart, focusedIdx) {
     chart.data.datasets.forEach((ds, i) => {
-      if (!ds._origColor) ds._origColor = ds.borderColor;
       const baseColor = ds._origColor;
       if (i === focusedIdx) {
         ds.borderColor = baseColor;
@@ -113,10 +116,8 @@
 
   function resetAlpha(chart) {
     chart.data.datasets.forEach((ds) => {
-      if (ds._origColor) {
-        ds.borderColor = ds._origColor;
-        ds.backgroundColor = ds._origColor;
-      }
+      ds.borderColor = ds._origColor;
+      ds.backgroundColor = ds._origColor;
     });
     chart.update("none");
   }
@@ -124,7 +125,6 @@
   function applyTab(chart, target, tab) {
     const series = payload[target];
     chart.data.datasets.forEach((ds) => {
-      delete ds._origColor;
       const team = series.teams[ds.label];
       if (!team) {
         ds.data = [];
