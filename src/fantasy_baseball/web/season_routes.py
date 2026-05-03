@@ -918,9 +918,9 @@ def register_routes(app: Flask) -> None:
         if pos in HITTER_SOURCE_POSITIONS:
             return ptype == PlayerType.HITTER and pos in pos_list
         if pos == "SP":
-            return ptype == PlayerType.PITCHER and (d.get("sv") or 0) < RP_SV_THRESHOLD
+            return ptype == PlayerType.PITCHER and d.get("sv", 0) < RP_SV_THRESHOLD
         if pos == "RP":
-            return ptype == PlayerType.PITCHER and (d.get("sv") or 0) >= RP_SV_THRESHOLD
+            return ptype == PlayerType.PITCHER and d.get("sv", 0) >= RP_SV_THRESHOLD
         return False
 
     def _default_fa_limit(pos: str) -> int:
