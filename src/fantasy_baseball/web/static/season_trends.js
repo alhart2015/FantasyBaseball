@@ -44,8 +44,9 @@
   }
 
   function buildChart(canvasId, dates, datasets) {
-    const ctx = document.getElementById(canvasId).getContext("2d");
-    return new Chart(ctx, {
+    const canvas = document.getElementById(canvasId);
+    const ctx = canvas.getContext("2d");
+    const chart = new Chart(ctx, {
       type: "line",
       data: { labels: dates, datasets: datasets },
       options: {
@@ -60,7 +61,7 @@
           y: { beginAtZero: false },
           x: { ticks: { autoSkip: true, maxTicksLimit: 10 } },
         },
-        onHover: (evt, activeEls, chart) => {
+        onHover: (evt, activeEls) => {
           if (!activeEls || activeEls.length === 0) {
             resetAlpha(chart);
             return;
@@ -70,6 +71,13 @@
         },
       },
     });
+    // `interaction.mode: "nearest"` with `intersect: false` always picks a
+    // nearest dataset while the cursor is inside the plot area, so onHover
+    // never sees an empty activeEls there. The dim state would persist
+    // forever once the cursor leaves the canvas — clear it explicitly on
+    // mouseleave.
+    canvas.addEventListener("mouseleave", () => resetAlpha(chart));
+    return chart;
   }
 
   function withAlpha(hex, alpha) {
