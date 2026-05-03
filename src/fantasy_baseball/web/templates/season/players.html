@@ -188,11 +188,14 @@ function loadPosition(pos) {
 
 function loadMoreFAs() {
     if (loadInFlight || !loadedPos || !hasMoreFa) return;
+    const reqId = ++loadSeq;
+    const requestedPos = loadedPos;
     const btn = document.getElementById('load-more-btn');
     btn.disabled = true;
     btn.textContent = 'Loading...';
     loadInFlight = true;
-    fetchBrowse(loadedPos, nextFaOffset).then(data => {
+    fetchBrowse(requestedPos, nextFaOffset).then(data => {
+        if (reqId !== loadSeq) return;
         loadInFlight = false;
         btn.disabled = false;
         btn.textContent = 'Load more FAs';
@@ -202,6 +205,7 @@ function loadMoreFAs() {
         nextFaOffset = data.next_fa_offset;
         render();
     }).catch(() => {
+        if (reqId !== loadSeq) return;
         loadInFlight = false;
         btn.disabled = false;
         btn.textContent = 'Load more FAs';
