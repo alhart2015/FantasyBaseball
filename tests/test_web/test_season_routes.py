@@ -699,6 +699,118 @@ def test_browse_sp_rp_split_on_sv_threshold(client, kv_isolation):
     assert rp_names == {"RP Five"}
 
 
+def test_browse_response_includes_delta_roto_for_fa_with_audit_hit(client, kv_isolation):
+    """Pin delta_roto shape: FA whose name appears in roster_audit candidates
+    surfaces the precomputed dict so the frontend Compute button can mutate
+    in place.
+    """
+    kv = get_kv()
+    kv.set(
+        redis_key(CacheKey.ROS_PROJECTIONS),
+        json.dumps(
+            {
+                "hitters": [
+                    {
+                        "name": "Roster OF",
+                        "player_type": "hitter",
+                        "team": "ATL",
+                        "r": 50,
+                        "hr": 10,
+                        "rbi": 40,
+                        "sb": 2,
+                        "h": 110,
+                        "ab": 450,
+                    },
+                    {
+                        "name": "FA Stud",
+                        "player_type": "hitter",
+                        "team": "BOS",
+                        "r": 90,
+                        "hr": 30,
+                        "rbi": 100,
+                        "sb": 10,
+                        "h": 160,
+                        "ab": 550,
+                    },
+                ],
+                "pitchers": [],
+            }
+        ),
+    )
+    kv.set(
+        redis_key(CacheKey.POSITIONS),
+        json.dumps(
+            {
+                "roster of": ["OF"],
+                "fa stud": ["OF"],
+            }
+        ),
+    )
+    kv.set(
+        redis_key(CacheKey.ROSTER),
+        json.dumps([{"name": "Roster OF", "player_type": "hitter", "positions": ["OF"]}]),
+    )
+    kv.set(redis_key(CacheKey.OPP_ROSTERS), json.dumps({}))
+    kv.set(
+        redis_key(CacheKey.ROSTER_AUDIT),
+        json.dumps(
+            [
+                {
+                    "player": "Roster OF",
+                    "candidates": [
+                        {
+                            "name": "FA Stud",
+                            "delta_roto": {
+                                "total": 1.5,
+                                "categories": {"R": {"roto_delta": 0.5}, "HR": {"roto_delta": 1.0}},
+                            },
+                        },
+                    ],
+                },
+            ]
+        ),
+    )
+
+    resp = client.get("/api/players/browse?pos=OF")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    fa = next(p for p in body["players"] if p["name"] == "FA Stud")
+    assert fa["delta_roto"] == {
+        "total": 1.5,
+        "categories": {"R": {"roto_delta": 0.5}, "HR": {"roto_delta": 1.0}},
+    }
+    # Rostered player gets no delta_roto.
+    rostered = next(p for p in body["players"] if p["name"] == "Roster OF")
+    assert rostered["delta_roto"] is None
+
+
+def test_browse_hitter_response_includes_required_stat_fields(client, kv_isolation):
+    """The frontend table renders per-type stat fields directly. Pin the
+    legacy field names so a refactor of _build_player_record can't silently
+    drop them.
+    """
+    _seed_browse_caches()
+    resp = client.get("/api/players/browse?pos=OF")
+    assert resp.status_code == 200
+    fa = next(p for p in resp.get_json()["players"] if p["name"] == "OF FA A")
+    for field in ("R", "HR", "RBI", "SB", "AVG", "h", "ab"):
+        assert field in fa, f"missing hitter field: {field}"
+    # And no pitcher fields leak through.
+    for field in ("W", "K", "SV", "ERA", "WHIP", "ip", "er", "bb", "h_allowed"):
+        assert field not in fa, f"unexpected pitcher field on hitter: {field}"
+
+
+def test_browse_pitcher_response_includes_required_stat_fields(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/browse?pos=SP")
+    assert resp.status_code == 200
+    sp = next(p for p in resp.get_json()["players"] if p["name"] == "SP FA A")
+    for field in ("W", "K", "SV", "ERA", "WHIP", "ip", "er", "bb", "h_allowed"):
+        assert field in sp, f"missing pitcher field: {field}"
+    for field in ("R", "HR", "RBI", "SB", "AVG", "h", "ab"):
+        assert field not in sp, f"unexpected hitter field on pitcher: {field}"
+
+
 def test_find_returns_substring_matches(client, kv_isolation):
     _seed_browse_caches()
     resp = client.get("/api/players/find?q=fa")
