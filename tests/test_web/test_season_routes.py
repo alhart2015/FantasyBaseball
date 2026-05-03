@@ -1,8 +1,11 @@
+import json
 from unittest.mock import patch
 
 import pytest
 
 from fantasy_baseball.data import kv_store
+from fantasy_baseball.data.cache_keys import redis_key
+from fantasy_baseball.data.kv_store import get_kv
 from fantasy_baseball.web.season_app import create_app
 from fantasy_baseball.web.season_data import CacheKey
 
@@ -439,3 +442,91 @@ def test_sync_from_remote_surfaces_errors_as_500(client, monkeypatch):
     resp = client.post("/api/sync-from-remote")
     assert resp.status_code == 500
     assert "Upstash creds missing" in resp.get_json()["error"]
+
+
+def _seed_browse_caches():
+    """Seed ros_projections + positions + roster + opp_rosters + audit
+    into the active KV store. Returns the seeded names so tests can assert
+    on specific players.
+    """
+    kv = get_kv()
+    of_hitters = [
+        {"name": "OF FA A", "player_type": "hitter", "team": "BOS",
+         "r": 90, "hr": 30, "rbi": 100, "sb": 10, "h": 160, "ab": 550},
+        {"name": "OF FA B", "player_type": "hitter", "team": "NYY",
+         "r": 80, "hr": 25, "rbi": 90, "sb": 8, "h": 150, "ab": 540},
+        {"name": "OF FA C", "player_type": "hitter", "team": "LAD",
+         "r": 70, "hr": 20, "rbi": 80, "sb": 6, "h": 140, "ab": 530},
+        {"name": "OF Mine", "player_type": "hitter", "team": "ATL",
+         "r": 95, "hr": 32, "rbi": 105, "sb": 12, "h": 165, "ab": 555},
+        {"name": "OF Opp", "player_type": "hitter", "team": "HOU",
+         "r": 88, "hr": 28, "rbi": 95, "sb": 9, "h": 155, "ab": 545},
+    ]
+    sp_pitchers = [
+        {"name": "SP FA A", "player_type": "pitcher", "team": "BOS",
+         "w": 12, "k": 180, "sv": 0, "ip": 180.0, "er": 60, "bb": 50, "h_allowed": 150},
+    ]
+    kv.set(redis_key(CacheKey.ROS_PROJECTIONS),
+           json.dumps({"hitters": of_hitters, "pitchers": sp_pitchers}))
+    kv.set(redis_key(CacheKey.POSITIONS), json.dumps({
+        "of fa a": ["OF"],
+        "of fa b": ["OF"],
+        "of fa c": ["OF"],
+        "of mine": ["OF"],
+        "of opp": ["OF"],
+        "sp fa a": ["P"],
+    }))
+    kv.set(redis_key(CacheKey.ROSTER),
+           json.dumps([{"name": "OF Mine", "player_type": "hitter"}]))
+    kv.set(redis_key(CacheKey.OPP_ROSTERS), json.dumps({
+        "Rivals": [{"name": "OF Opp", "player_type": "hitter"}],
+    }))
+    kv.set(redis_key(CacheKey.ROSTER_AUDIT), json.dumps([]))
+    return {"fa_a": "OF FA A", "fa_b": "OF FA B", "fa_c": "OF FA C",
+            "mine": "OF Mine", "opp": "OF Opp"}
+
+
+def test_browse_specific_position_returns_rostered_and_top_fas(client, kv_isolation):
+    names = _seed_browse_caches()
+    resp = client.get("/api/players/browse?pos=OF&fa_limit=2&fa_offset=0")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    returned = {p["name"] for p in body["players"]}
+    assert returned == {names["mine"], names["opp"], names["fa_a"], names["fa_b"]}
+    assert body["has_more_fa"] is True
+    assert body["next_fa_offset"] == 2
+
+
+def test_browse_load_more_paginates_fas_only(client, kv_isolation):
+    names = _seed_browse_caches()
+    resp = client.get("/api/players/browse?pos=OF&fa_limit=2&fa_offset=2")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    returned = {p["name"] for p in body["players"]}
+    assert returned == {names["fa_c"]}
+    assert body["has_more_fa"] is False
+    assert body["next_fa_offset"] == 3
+
+
+def test_browse_all_hit_caps_at_20_fas(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/browse?pos=ALL_HIT&fa_offset=0")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    fa_count = sum(1 for p in body["players"] if p["owner"] is None)
+    rostered_count = sum(1 for p in body["players"] if p["owner"] is not None)
+    assert fa_count == 3
+    assert rostered_count == 2
+    assert body["has_more_fa"] is False
+
+
+def test_browse_invalid_pos_returns_400(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/browse?pos=Bogus")
+    assert resp.status_code == 400
+
+
+def test_browse_missing_pos_returns_400(client, kv_isolation):
+    _seed_browse_caches()
+    resp = client.get("/api/players/browse")
+    assert resp.status_code == 400
