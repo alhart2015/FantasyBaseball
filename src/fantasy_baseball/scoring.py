@@ -504,16 +504,26 @@ def _compute_pitcher_pool_factors(
     league_context: LeagueContext,
     projection_source: ProjectionSource,
 ) -> dict[str, float]:
-    """Pool-slot pitcher displacement: keep top-N by leave-one-out
-    team-ΔRoto, where N is the count of active P-slot pitchers.
+    """Pool-slot pitcher displacement: keep top-N (by team-ΔRoto), where
+    N is the count of active P-slot pitchers.
 
     Excess pitchers get sf=0. Excess can include IL pitchers — the
     model treats IL guys as competing for the same playing-time pool
     as active pitchers, so a weak IL pitcher with poor projection can
     be "benched" while an elite active closer is preserved.
 
-    No-op when the pool already fits in the available slots (no
-    pitcher needs to sit). Skips pitchers without ROS projections.
+    Iterative-greedy selection: each round, evaluate every remaining
+    candidate against the current post-cut roster state and bench the
+    one whose removal preserves the highest team roto pts. After each
+    cut, the next round's marginals are recomputed from the new state,
+    so cumulative damage in scarce categories (e.g. cutting a second
+    closer after losing the first) shows up as a much larger marginal
+    than independent leave-one-out would suggest. This avoids the
+    pathology where two closers each look "affordable" in isolation
+    but together crash a category by several roto pts.
+
+    No-op when the pool already fits in the available slots. Skips
+    pitchers without ROS projections.
     """
     pool = [
         p
@@ -525,15 +535,7 @@ def _compute_pitcher_pool_factors(
     if excess <= 0:
         return {}
 
-    # Build the team-stats baseline with every pitcher in the pool counted
-    # at full scale (no displacement applied to anyone). Hitters carry
-    # their normal factors via the running roster passed in.
     full_pool_roster: list[Player | dict] = [*all_il, *all_active]
-    full_team_stats = project_team_stats(
-        full_pool_roster,
-        displacement=False,
-        projection_source=projection_source,
-    )
 
     def team_pts(stats: CategoryStats) -> float:
         all_team_stats: dict[str, CategoryStats] = dict(league_context.baseline_other_team_stats)
@@ -542,29 +544,34 @@ def _compute_pitcher_pool_factors(
             league_context.team_name
         ].total
 
-    full_pts = team_pts(full_team_stats)
-
-    # For each pitcher, compute the team pts when THEY are zeroed (others
-    # at full). Marginal contribution = full_pts - leave_pts. Higher
-    # marginal value = harder to lose = should keep.
-    scored: list[tuple[Player, float]] = []
-    for p in pool:
-        hyp_roster = [
-            _scale_stats(q, 0.0) if isinstance(q, Player) and q.name == p.name else q
-            for q in full_pool_roster
+    def state_with(zero_names: set[str]) -> list[Player | dict]:
+        return [
+            _scale_stats(p, 0.0) if isinstance(p, Player) and p.name in zero_names else p
+            for p in full_pool_roster
         ]
-        leave_stats = project_team_stats(
-            hyp_roster,
-            displacement=False,
-            projection_source=projection_source,
-        )
-        marginal = full_pts - team_pts(leave_stats)
-        scored.append((p, marginal))
 
-    # Sort by marginal value descending; the bottom `excess` get benched.
-    scored.sort(key=lambda item: item[1], reverse=True)
-    benched = scored[slot_count:]
-    return {p.name: 0.0 for p, _ in benched}
+    benched: set[str] = set()
+    remaining = list(pool)
+    for _ in range(excess):
+        best_cand: Player | None = None
+        best_pts = -float("inf")
+        for cand in remaining:
+            hyp_roster = state_with(benched | {cand.name})
+            stats = project_team_stats(
+                hyp_roster,
+                displacement=False,
+                projection_source=projection_source,
+            )
+            pts = team_pts(stats)
+            if pts > best_pts:
+                best_pts = pts
+                best_cand = cand
+        if best_cand is None:
+            break
+        benched.add(best_cand.name)
+        remaining = [p for p in remaining if p.name != best_cand.name]
+
+    return {name: 0.0 for name in benched}
 
 
 def _scale_stats(p: Player, factor: float) -> dict[str, float | PlayerType]:
