@@ -7,7 +7,7 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚾</text></svg>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400..700&family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=JetBrains+Mono:wght@400;500&display=swap">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800;900&family=Newsreader:opsz,wght@6..72,400..700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
     <link rel="stylesheet" href="{{ url_for('static', filename='season.css') }}">
     {% block head_extra %}{% endblock %}
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
@@ -15,42 +15,47 @@
 <body>
     <div class="layout">
         <nav class="sidebar">
-            <div class="sidebar-header">Hart of the Order</div>
+            <div class="sidebar-header">
+                <div class="brand-mark">Hart of <em>the</em><br>Order</div>
+                <div class="brand-sub">
+                    {% if meta and meta.get('week') %}2026 · Wk {{ meta['week'] }}{% else %}2026{% endif %}
+                </div>
+            </div>
             <a href="{{ url_for('standings') }}"
                class="nav-link {% if active_page == 'standings' %}active{% endif %}">
-                Standings
+                <span class="diamond"></span>Standings
             </a>
             <a href="{{ url_for('trends') }}"
                class="nav-link {% if active_page == 'trends' %}active{% endif %}">
-                Trends
+                <span class="diamond"></span>Trends
             </a>
             <a href="{{ url_for('lineup') }}"
                class="nav-link {% if active_page == 'lineup' %}active{% endif %}">
-                Lineup
+                <span class="diamond"></span>Lineup
             </a>
             <a href="{{ url_for('roster_audit') }}"
                class="nav-link {% if active_page == 'roster_audit' %}active{% endif %}">
-                Roster Audit
+                <span class="diamond"></span>Roster Audit
             </a>
             <a href="{{ url_for('waivers_trades') }}"
                class="nav-link {% if active_page == 'waivers_trades' %}active{% endif %}">
-                Trades
+                <span class="diamond"></span>Trades
             </a>
             <a href="{{ url_for('player_search') }}"
                class="nav-link {% if active_page == 'players' %}active{% endif %}">
-                Players
+                <span class="diamond"></span>Players
             </a>
             <a href="{{ url_for('luck') }}"
                class="nav-link {% if active_page == 'luck' %}active{% endif %}">
-                Luck
+                <span class="diamond"></span>Luck
             </a>
             <a href="{{ url_for('transactions') }}"
                class="nav-link {% if active_page == 'transactions' %}active{% endif %}">
-                Transactions
+                <span class="diamond"></span>Transactions
             </a>
             <a href="{{ url_for('logs') }}"
                class="nav-link {% if active_page == 'logs' %}active{% endif %}">
-                Logs
+                <span class="diamond"></span>Logs
             </a>
             <div class="sidebar-footer">
                 <div class="refresh-info"

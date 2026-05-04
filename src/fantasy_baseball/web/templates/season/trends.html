@@ -5,7 +5,15 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <style>
 .trends-section { margin-bottom: 32px; }
-.trends-section h2 { margin: 0 0 8px; }
+.trends-section h2 {
+  margin: 0 0 8px;
+  font-family: 'Newsreader', serif;
+  font-weight: 400;
+  font-style: italic;
+  font-size: 28px;
+  letter-spacing: -0.018em;
+  color: var(--ink);
+}
 .tab-strip {
   display: flex;
   gap: 4px;
@@ -13,30 +21,41 @@
   flex-wrap: wrap;
 }
 .tab-strip button {
-  background: var(--card-bg);
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
-  padding: 4px 10px;
-  font-size: 13px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  padding: 5px 12px;
+  font-family: 'Outfit', sans-serif;
+  font-size: 12.5px;
+  font-weight: 500;
   cursor: pointer;
   border-radius: 4px;
+  transition: all .12s;
 }
-.tab-strip button:hover { background: var(--paper-edge); }
+.tab-strip button:hover {
+  background: var(--surface-soft);
+  color: var(--ink);
+}
 .tab-strip button.active {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
+  background: var(--amber);
+  color: var(--bg);
+  border-color: var(--amber);
+  font-weight: 600;
 }
 .chart-wrapper {
   position: relative;
   height: 360px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
 }
 </style>
 {% endblock %}
 
 {% block content %}
-<h1>Trends</h1>
-<p style="color: var(--text-secondary); margin-top: 0;">
+<h1 style="font-family: 'Newsreader', serif; font-weight: 400; font-style: italic; font-size: 48px; letter-spacing: -0.025em; margin-bottom: 8px;">Trends</h1>
+<p style="color: var(--ink-soft); margin-top: 0; font-family: 'Outfit', sans-serif;">
   Roto and per-stat movement across the season. Click a team in the legend to hide it; hover a line to focus it.
 </p>
 

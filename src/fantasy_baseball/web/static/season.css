@@ -1,58 +1,90 @@
 /* === Season Dashboard Styles === */
 
 :root {
-    /* Paper + ink + gold — global tokens.
-       Pages render cream-on-cream by default; the .page-X wrappers add
-       editorial typography and bespoke component theming on top. */
-    --paper:        #F8F5EE;
-    --paper-edge:   #EFE9D8;
-    --paper-tint:   #F2EDE0;
-    --paper-deep:   #ECE4CD;
-    --ink:          #1A1612;
-    --ink-soft:     #6B6258;
-    --ink-faint:    #9A8F7E;
-    --rule:         #E1D9C4;
-    --rule-strong:  #B8AC8E;
+    /* === C-Dark canonical palette (Phase 1) ===
+       Reference: design_mocks/C_hybrid_dark.html
+       Surfaces are deep stadium black-blue; chalk text on top;
+       sodium amber as single accent reserved for user-team & primary CTA. */
 
-    --gold:         #B8860B;
-    --gold-deep:    #7C5A0A;
-    --gold-bright:  #D4A933;
-    --gold-soft:    rgba(184, 134, 11, 0.10);
-    --gold-amber:   #C8851A;
+    /* Surfaces */
+    --bg:           #0E1218;
+    --surface:      #161B23;
+    --surface-soft: #1D232E;
 
-    --lead:         #5C7A2E;
-    --lead-deep:    #3F5A1A;
-    --lead-soft:    rgba(92, 122, 46, 0.10);
-    --trail:        #8B2C2C;
-    --trail-deep:   #5F1F1F;
-    --trail-soft:   rgba(139, 44, 44, 0.08);
+    /* Lines */
+    --line:         #262E3B;
+    --line-strong:  #3A4252;
 
-    /* Legacy semantic tokens — every existing var(--bg)/var(--text)/etc.
-       reference across templates, JS, and CSS resolves through these. */
-    --bg:             var(--paper-tint);
-    --panel-bg:       var(--paper-deep);
-    --panel-border:   var(--rule-strong);
-    --card-bg:        var(--paper);
-    --accent:         var(--gold);
+    /* Ink (text) */
+    --ink:          #ECE7DA;
+    --ink-soft:     #B8BFCA;
+    --ink-faint:    #5A6271;
+
+    /* Sodium amber — single spotlight accent */
+    --amber:        #F4B41A;
+    --amber-deep:   #C8910C;
+    --amber-soft:   rgba(244,180,26,0.14);
+
+    /* Outfield grass — leading / positive */
+    --field:        #4FB358;
+    --field-deep:   #2E7D32;
+    --field-soft:   rgba(79,179,88,0.14);
+
+    /* Clay rust — trailing / negative / seam color */
+    --clay:         #E06A55;
+    --clay-deep:    #B85240;
+    --clay-soft:    rgba(224,106,85,0.12);
+
+    /* Medal colors for top-3 rank coloring (used by .page-standings) */
+    --silver:       #B0B6C0;
+    --bronze:       #C99F70;
+
+    /* === Legacy aliases — keep so existing var() references work.
+           To be removed in Phase 5 cleanup. === */
+    --paper:        var(--surface);
+    --paper-edge:   var(--surface-soft);
+    --paper-tint:   var(--bg);
+    --paper-deep:   var(--surface);
+    --rule:         var(--line);
+    --rule-strong:  var(--line-strong);
+
+    --gold:         var(--amber);
+    --gold-deep:    var(--amber-deep);
+    --gold-bright:  var(--amber);
+    --gold-soft:    var(--amber-soft);
+    --gold-amber:   var(--amber);
+
+    --lead:         var(--field);
+    --lead-deep:    var(--field-deep);
+    --lead-soft:    var(--field-soft);
+    --trail:        var(--clay);
+    --trail-deep:   var(--clay-deep);
+    --trail-soft:   var(--clay-soft);
+
+    /* === Semantic aliases — keep so existing references work. === */
+    --panel-bg:       var(--surface-soft);
+    --panel-border:   var(--line-strong);
+    --card-bg:        var(--surface);
+    --accent:         var(--amber);
     --text:           var(--ink);
     --text-primary:   var(--ink);
     --text-secondary: var(--ink-soft);
     --text-dim:       var(--ink-faint);
-    --success:        var(--lead);
-    --warning:        var(--gold-amber);
-    --danger:         var(--trail);
-    --border:         var(--rule);
-    --row-highlight:  var(--gold-soft);
+    --success:        var(--field);
+    --warning:        var(--amber);
+    --danger:         var(--clay);
+    --border:         var(--line);
+    --row-highlight:  var(--amber-soft);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: var(--paper-tint);
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
     color: var(--ink);
     min-height: 100vh;
-    letter-spacing: 0.005em;
+    letter-spacing: -0.005em;
 }
 
 .layout {
@@ -60,90 +92,129 @@ body {
     min-height: 100vh;
 }
 
+/* === Sidebar (C-Dark) === */
+
 .sidebar {
     width: 220px;
-    background: var(--paper-deep);
-    border-right: 1px solid var(--rule-strong);
+    background: var(--surface);
+    border-right: 1px solid var(--line);
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
     position: sticky;
     top: 0;
     height: 100vh;
-    box-shadow: inset -3px 0 0 -2px var(--gold);
+    box-shadow: none;
 }
 
 .sidebar-header {
-    padding: 22px 22px 18px;
-    font-family: 'Fraunces', 'Times New Roman', serif;
-    font-style: italic;
-    font-size: 22px;
-    font-weight: 500;
-    color: var(--ink);
-    letter-spacing: -0.015em;
-    line-height: 1.05;
-    font-variation-settings: "opsz" 60, "SOFT" 50;
-    border-bottom: 1px solid var(--rule);
+    padding: 28px 22px 22px;
+    border-bottom: 1px solid var(--line);
     position: relative;
 }
-.sidebar-header::before {
-    content: "◆";
-    color: var(--gold);
-    font-size: 9px;
-    font-style: normal;
-    margin-right: 8px;
-    vertical-align: 4px;
-}
+/* Stitched-seam under the wordmark — replaces the gold underline bar */
 .sidebar-header::after {
-    content: "";
+    content: '';
     position: absolute;
     left: 22px;
+    right: 22px;
     bottom: -1px;
-    width: 36px;
-    height: 2px;
-    background: var(--gold);
+    height: 6px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 6' preserveAspectRatio='none'><path d='M0 2 Q 7.5 0 15 2 T 30 2 T 45 2 T 60 2 T 75 2 T 90 2 T 105 2 T 120 2 T 135 2 T 150 2 T 165 2 T 180 2 T 195 2 T 210 2 T 225 2 T 240 2' fill='none' stroke='%23E06A55' stroke-width='1.2' opacity='0.85'/><path d='M0 4 Q 7.5 6 15 4 T 30 4 T 45 4 T 60 4 T 75 4 T 90 4 T 105 4 T 120 4 T 135 4 T 150 4 T 165 4 T 180 4 T 195 4 T 210 4 T 225 4 T 240 4' fill='none' stroke='%23E06A55' stroke-width='1.2' opacity='0.85'/></svg>");
+    background-size: 240px 6px;
+    background-repeat: repeat-x;
+}
+.brand-mark {
+    font-family: 'Newsreader', 'Times New Roman', serif;
+    font-weight: 500;
+    font-size: 22px;
+    line-height: 1.05;
+    letter-spacing: -0.018em;
+    color: var(--ink);
+    font-variation-settings: "opsz" 28;
+}
+.brand-mark em {
+    font-style: italic;
+    font-weight: 400;
+    color: var(--clay);
+}
+.brand-sub {
+    margin-top: 8px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    font-family: 'Big Shoulders Display', sans-serif;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.24em;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+}
+.brand-sub::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    transform: rotate(45deg);
+    background: var(--amber);
+    display: inline-block;
+    box-shadow: 0 0 8px rgba(244, 180, 26, 0.45);
 }
 
 .nav-link {
-    display: block;
-    padding: 11px 22px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 22px 11px 19px;
     color: var(--ink-soft);
     text-decoration: none;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 11.5px;
-    font-weight: 600;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    opacity: 1;
+    font-family: 'Outfit', sans-serif;
+    font-weight: 500;
+    font-size: 13.5px;
+    letter-spacing: -0.005em;
+    text-transform: none;
     border-left: 3px solid transparent;
-    padding-left: 19px;
-    transition: color 0.15s, background 0.15s, border-left-color 0.15s;
+    transition: all 0.12s;
 }
 
 .nav-link:hover {
     color: var(--ink);
-    background: var(--paper);
+    background: rgba(244, 180, 26, 0.04);
 }
 
 .nav-link.active {
     color: var(--ink);
-    background: var(--paper);
-    border-left-color: var(--gold);
-    font-weight: 700;
+    background: linear-gradient(90deg, rgba(244, 180, 26, 0.10), transparent 60%);
+    border-left-color: var(--amber);
+    font-weight: 600;
+}
+
+.nav-link .diamond {
+    width: 6px;
+    height: 6px;
+    transform: rotate(45deg);
+    border: 1.5px solid var(--ink-faint);
+    transition: all 0.12s;
+    flex-shrink: 0;
+}
+
+.nav-link.active .diamond {
+    background: var(--amber);
+    border-color: var(--amber);
+    box-shadow: 0 0 6px rgba(244, 180, 26, 0.5);
 }
 
 .sidebar-footer {
     margin-top: auto;
-    padding: 16px 22px 20px;
-    border-top: 1px solid var(--rule);
-    background: var(--paper-deep);
+    padding: 18px 22px 22px;
+    border-top: 1px solid var(--line);
+    background: var(--surface);
 }
 
 .refresh-info {
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Big Shoulders Display', sans-serif;
     font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.16em;
+    font-weight: 700;
+    letter-spacing: 0.22em;
     text-transform: uppercase;
     color: var(--ink-faint);
     margin-bottom: 12px;
@@ -151,45 +222,44 @@ body {
 
 .btn-refresh {
     width: 100%;
-    padding: 9px 16px;
-    background: var(--gold);
-    color: var(--paper);
-    border: 1px solid var(--gold);
-    border-radius: 2px;
+    padding: 11px 14px;
+    background: var(--amber);
+    color: var(--bg);
+    border: 0;
+    border-radius: 6px;
     cursor: pointer;
-    font-family: 'DM Sans', sans-serif;
-    font-weight: 700;
-    font-size: 11px;
-    letter-spacing: 0.16em;
+    font-family: 'Big Shoulders Display', sans-serif;
+    font-weight: 800;
+    font-size: 12.5px;
+    letter-spacing: 0.20em;
     text-transform: uppercase;
-    box-shadow: 0 1px 0 var(--gold-deep);
-    transition: background 0.15s, border-color 0.15s;
+    box-shadow: none;
+    transition: background 0.15s;
 }
 
 .btn-refresh:hover {
-    background: var(--gold-deep);
-    border-color: var(--gold-deep);
+    background: var(--amber-deep);
 }
 .btn-refresh:disabled {
-    background: var(--paper-tint);
-    border-color: var(--rule-strong);
+    background: var(--surface-soft);
+    border: 0;
     color: var(--ink-faint);
     cursor: default;
     box-shadow: none;
 }
 
-/* Logout link inline-styled in base.html — reads as ink-soft via tokens */
+/* Logout link inline-styled in base.html */
 .sidebar-footer a[href*="logout"] {
-    font-family: 'DM Sans', sans-serif;
-    font-size: 10px !important;
-    font-weight: 600;
-    letter-spacing: 0.14em !important;
-    text-transform: uppercase;
+    font-family: 'Outfit', sans-serif;
+    font-size: 11px !important;
+    font-weight: 500;
+    letter-spacing: 0.04em !important;
+    text-transform: none;
     color: var(--ink-faint) !important;
     transition: color 0.15s;
 }
 .sidebar-footer a[href*="logout"]:hover {
-    color: var(--trail-deep) !important;
+    color: var(--clay) !important;
 }
 
 .content {
@@ -289,11 +359,11 @@ td.cat-bottom { color: var(--danger); font-weight: bold; }
    burgundy (trail) so the signal lives on cream. The .page-standings
    wrapper layers a slightly different intensity over this default. */
 td[style*="--pos"] {
-    background: rgba(92, 122, 46, calc(var(--pos) * 0.20));
+    background: rgba(79, 179, 88, calc(var(--pos) * 0.20));
     color: color-mix(in srgb, var(--ink), var(--lead-deep) calc(var(--pos) * 70%));
 }
 td[style*="--neg"] {
-    background: rgba(139, 44, 44, calc(var(--neg) * 0.20));
+    background: rgba(224, 106, 85, calc(var(--neg) * 0.20));
     color: color-mix(in srgb, var(--ink), var(--trail-deep) calc(var(--neg) * 70%));
 }
 
@@ -487,11 +557,11 @@ td[style*="--neg"] {
 
 /* Stat color coding (used by lineup partials; .page-lineup adds bolder
    per-page overrides). Retoned for the paper palette. */
-.stat-hot-2 { color: var(--lead-deep); font-weight: 700; background: rgba(92, 122, 46, 0.18); }
-.stat-hot-1 { color: var(--lead-deep); background: rgba(92, 122, 46, 0.08); }
+.stat-hot-2 { color: var(--lead-deep); font-weight: 700; background: rgba(79, 179, 88, 0.18); }
+.stat-hot-1 { color: var(--lead-deep); background: rgba(79, 179, 88, 0.08); }
 .stat-neutral { }
-.stat-cold-1 { color: var(--trail-deep); background: rgba(139, 44, 44, 0.08); }
-.stat-cold-2 { color: var(--trail-deep); font-weight: 700; background: rgba(139, 44, 44, 0.18); }
+.stat-cold-1 { color: var(--trail-deep); background: rgba(224, 106, 85, 0.08); }
+.stat-cold-2 { color: var(--trail-deep); font-weight: 700; background: rgba(224, 106, 85, 0.18); }
 
 /* ROS deviation indicators — shows how much actual+ROS has shifted from preseason in SGP units */
 .stat-ros-up, .stat-ros-down { position: relative; }
@@ -575,31 +645,8 @@ td[style*="--neg"] {
    ===================================================================== */
 
 .page-standings {
-    /* paper + ink */
-    --paper:        #F8F5EE;
-    --paper-edge:   #EFE9D8;
-    --paper-tint:   #F2EDE0;
-    --ink:          #1A1612;
-    --ink-soft:     #6B6258;
-    --ink-faint:    #9A8F7E;
-    --rule:         #E1D9C4;
-    --rule-strong:  #B8AC8E;
-
-    /* gold spectrum */
-    --gold:         #B8860B;
-    --gold-deep:    #7C5A0A;
-    --gold-bright:  #D4A933;
-    --gold-soft:    rgba(184, 134, 11, 0.10);
-    --silver:       #8E8B85;
-    --bronze:       #9C6B3F;
-
-    /* leading / trailing — desaturated to live next to gold */
-    --lead:         #5C7A2E;
-    --lead-deep:    #3F5A1A;
-    --trail:        #8B2C2C;
-    --trail-deep:   #5F1F1F;
-
-    /* paper sheet on dark workspace */
+    /* Inherits palette from :root (C-dark). Page wrapper sets only
+       layout (margin/padding), bg image, and typography below. */
     background: var(--paper);
     color: var(--ink);
     margin: -24px -32px;     /* counter the .content padding so paper bleeds edge-to-edge */
@@ -609,9 +656,9 @@ td[style*="--neg"] {
     box-shadow: none;
     /* faint paper grain */
     background-image:
-        radial-gradient(circle at 20% 10%, rgba(184, 134, 11, 0.04), transparent 60%),
-        radial-gradient(circle at 80% 90%, rgba(184, 134, 11, 0.03), transparent 50%);
-    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+        radial-gradient(circle at 20% 10%, rgba(244, 180, 26, 0.04), transparent 60%),
+        radial-gradient(circle at 80% 90%, rgba(244, 180, 26, 0.03), transparent 50%);
+    font-family: 'Outfit', system-ui, -apple-system, sans-serif;
     font-size: 14px;
     letter-spacing: 0.005em;
 }
@@ -635,7 +682,7 @@ td[style*="--neg"] {
     background: var(--gold);
 }
 .page-standings .page-header h2 {
-    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-family: 'Newsreader', 'Times New Roman', serif;
     font-style: italic;
     font-weight: 400;
     font-size: 64px;
@@ -650,7 +697,7 @@ td[style*="--neg"] {
     font-style: normal;
 }
 .page-standings .week-label {
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.18em;
@@ -682,7 +729,7 @@ td[style*="--neg"] {
     opacity: 1;
     padding: 8px 18px 10px;
     margin-bottom: -1px;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11.5px;
     font-weight: 600;
     letter-spacing: 0.14em;
@@ -728,7 +775,7 @@ td[style*="--neg"] {
 .page-standings .data-table th {
     background: transparent;
     color: var(--ink-soft);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-weight: 700;
     font-size: 10.5px;
     letter-spacing: 0.16em;
@@ -746,7 +793,7 @@ td[style*="--neg"] {
 }
 
 .page-standings .data-table .team-name {
-    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-family: 'Newsreader', 'Times New Roman', serif;
     font-weight: 500;
     font-size: 15px;
     font-variation-settings: "opsz" 30;
@@ -764,7 +811,7 @@ td[style*="--neg"] {
 
 /* Rank column: bigger, serif, gold for top three */
 .page-standings .data-table tbody td:first-child {
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-weight: 500;
     font-size: 17px;
     color: var(--ink-faint);
@@ -811,11 +858,11 @@ td[style*="--neg"] {
    The template still sets --pos or --neg in [0, 1]; we just retune
    the alpha and ink so the cells read as warm stains on cream paper. */
 .page-standings .data-table td[style*="--pos"] {
-    background: rgba(92, 122, 46, calc(var(--pos) * 0.18));
+    background: rgba(79, 179, 88, calc(var(--pos) * 0.18));
     color: color-mix(in srgb, var(--ink), var(--lead-deep) calc(var(--pos) * 75%));
 }
 .page-standings .data-table td[style*="--neg"] {
-    background: rgba(139, 44, 44, calc(var(--neg) * 0.18));
+    background: rgba(224, 106, 85, calc(var(--neg) * 0.18));
     color: color-mix(in srgb, var(--ink), var(--trail-deep) calc(var(--neg) * 75%));
 }
 
@@ -834,7 +881,7 @@ td[style*="--neg"] {
     padding: 18px 20px;
 }
 .page-standings .card h3 {
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-style: italic;
     font-weight: 500;
     color: var(--ink) !important;   /* override inline color: var(--warning) on Category Risk header */
@@ -843,7 +890,7 @@ td[style*="--neg"] {
 }
 
 .page-standings .baseline-caption {
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11px;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -852,7 +899,7 @@ td[style*="--neg"] {
 }
 
 .page-standings .placeholder-text {
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-style: italic;
     font-size: 16px;
     color: var(--ink-soft);
@@ -881,13 +928,13 @@ td[style*="--neg"] {
     border-radius: 2px;
     box-shadow: 0 24px 48px -8px rgba(0, 0, 0, 0.45);
     padding: 22px 28px;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
 }
 #breakdown-modal::backdrop {
     background: rgba(26, 22, 18, 0.55);
 }
 #breakdown-modal-title {
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-style: italic;
     font-weight: 500;
     font-size: 22px;
@@ -920,7 +967,7 @@ td[style*="--neg"] {
     font-weight: 600;
 }
 .breakdown-status-badge.no-projection {
-    background: rgba(184, 134, 11, 0.18);
+    background: rgba(244, 180, 26, 0.18);
     color: var(--gold-deep, #7C5A0A);
     border-color: var(--gold, #B8860B);
 }
@@ -973,30 +1020,7 @@ td[style*="--neg"] {
    ===================================================================== */
 
 .page-lineup {
-    /* shared paper + ink + gold spectrum (mirrors .page-standings) */
-    --paper:        #F8F5EE;
-    --paper-edge:   #EFE9D8;
-    --paper-tint:   #F2EDE0;
-    --paper-deep:   #ECE4CD;
-    --ink:          #1A1612;
-    --ink-soft:     #6B6258;
-    --ink-faint:    #9A8F7E;
-    --rule:         #E1D9C4;
-    --rule-strong:  #B8AC8E;
-
-    --gold:         #B8860B;
-    --gold-deep:    #7C5A0A;
-    --gold-bright:  #D4A933;
-    --gold-soft:    rgba(184, 134, 11, 0.10);
-    --gold-amber:   #C8851A;
-
-    --lead:         #5C7A2E;
-    --lead-deep:    #3F5A1A;
-    --lead-soft:    rgba(92, 122, 46, 0.10);
-    --trail:        #8B2C2C;
-    --trail-deep:   #5F1F1F;
-    --trail-soft:   rgba(139, 44, 44, 0.08);
-
+    /* Inherits palette from :root (C-dark). */
     background: var(--paper);
     color: var(--ink);
     margin: -24px -32px;
@@ -1005,9 +1029,9 @@ td[style*="--neg"] {
     /* Body is now also cream — page differentiates by bg only. */
     box-shadow: none;
     background-image:
-        radial-gradient(circle at 20% 10%, rgba(184, 134, 11, 0.04), transparent 60%),
-        radial-gradient(circle at 80% 90%, rgba(184, 134, 11, 0.03), transparent 50%);
-    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+        radial-gradient(circle at 20% 10%, rgba(244, 180, 26, 0.04), transparent 60%),
+        radial-gradient(circle at 80% 90%, rgba(244, 180, 26, 0.03), transparent 50%);
+    font-family: 'Outfit', system-ui, -apple-system, sans-serif;
     font-size: 13px;
     letter-spacing: 0.005em;
 }
@@ -1033,7 +1057,7 @@ td[style*="--neg"] {
     background: var(--gold);
 }
 .page-lineup .page-header h2 {
-    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-family: 'Newsreader', 'Times New Roman', serif;
     font-style: italic;
     font-weight: 400;
     font-size: 52px;
@@ -1049,7 +1073,7 @@ td[style*="--neg"] {
     font-style: normal;
 }
 .page-lineup .week-label {
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.18em;
@@ -1073,7 +1097,7 @@ td[style*="--neg"] {
     border: 1px solid var(--rule-strong) !important;
     border-radius: 2px !important;
     padding: 6px 28px 6px 12px !important;
-    font-family: 'DM Sans', sans-serif !important;
+    font-family: 'Outfit', sans-serif !important;
     font-size: 12px !important;
     font-weight: 500 !important;
     letter-spacing: 0.04em !important;
@@ -1095,7 +1119,7 @@ td[style*="--neg"] {
 }
 .page-lineup #opponent-status {
     color: var(--ink-soft) !important;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11px;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -1120,7 +1144,7 @@ td[style*="--neg"] {
     background: var(--gold);
 }
 .page-lineup .section-header h3 {
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-style: italic;
     font-weight: 500;
     font-size: 22px;
@@ -1129,7 +1153,7 @@ td[style*="--neg"] {
 }
 .page-lineup .section-header .opp-rank {
     color: var(--ink-soft) !important;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11px !important;
     letter-spacing: 0.1em;
     text-transform: uppercase;
@@ -1139,7 +1163,7 @@ td[style*="--neg"] {
 
 .page-lineup .btn-optimize {
     border-radius: 2px;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.14em;
@@ -1178,7 +1202,7 @@ td[style*="--neg"] {
 }
 .page-lineup .moves-banner h4 {
     color: var(--gold-deep) !important;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 10.5px;
     font-weight: 700;
     letter-spacing: 0.18em;
@@ -1195,7 +1219,7 @@ td[style*="--neg"] {
 }
 .page-lineup .move-row {
     color: var(--ink);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 12px;
 }
 .page-lineup .move-row strong { color: var(--ink); }
@@ -1222,7 +1246,7 @@ td[style*="--neg"] {
 .page-lineup .data-table th {
     background: transparent;
     color: var(--ink-soft);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-weight: 700;
     font-size: 10px;
     letter-spacing: 0.16em;
@@ -1238,7 +1262,7 @@ td[style*="--neg"] {
     color: var(--ink);
 }
 .page-lineup .data-table td[style*="text-align: left"] {
-    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-family: 'Newsreader', 'Times New Roman', serif;
     font-weight: 500;
     font-size: 14px;
     font-variation-settings: "opsz" 30;
@@ -1247,7 +1271,7 @@ td[style*="--neg"] {
 }
 /* "Elig" / positions column — small DM Sans caps */
 .page-lineup .data-table td[style*="font-size: 11px"] {
-    font-family: 'DM Sans', sans-serif !important;
+    font-family: 'Outfit', sans-serif !important;
     font-size: 10.5px !important;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -1295,12 +1319,12 @@ td[style*="--neg"] {
 /* ── Pace signal — z-score classes (preserved, retoned) ───────────── */
 
 .page-lineup .stat-hot-2 {
-    background: rgba(92, 122, 46, 0.20);
+    background: rgba(79, 179, 88, 0.20);
     color: var(--lead-deep);
     font-weight: 700;
 }
 .page-lineup .stat-hot-1 {
-    background: rgba(92, 122, 46, 0.09);
+    background: rgba(79, 179, 88, 0.09);
     color: var(--lead-deep);
 }
 .page-lineup .stat-neutral {
@@ -1308,11 +1332,11 @@ td[style*="--neg"] {
     color: var(--ink);
 }
 .page-lineup .stat-cold-1 {
-    background: rgba(139, 44, 44, 0.08);
+    background: rgba(224, 106, 85, 0.08);
     color: var(--trail-deep);
 }
 .page-lineup .stat-cold-2 {
-    background: rgba(139, 44, 44, 0.18);
+    background: rgba(224, 106, 85, 0.18);
     color: var(--trail-deep);
     font-weight: 700;
 }
@@ -1390,7 +1414,7 @@ td[style*="--neg"] {
     border-bottom: 1px solid var(--rule);
     color: var(--ink-soft);
     padding: 10px 14px 10px 28px;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11.5px;
 }
 .page-lineup .expand-content strong { color: var(--ink); font-weight: 600; }
@@ -1404,7 +1428,7 @@ td[style*="--neg"] {
     border-top: 3px solid var(--gold);
     border-radius: 2px;
     padding: 10px 14px;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11px;
     box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.45);
     min-width: 200px;
@@ -1434,7 +1458,7 @@ td[style*="--neg"] {
     margin: 6px 0;
 }
 .page-lineup .stat-cell .tooltip > div[style*="font-weight: 600"]:first-child {
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-style: italic;
     font-weight: 500 !important;
     font-size: 13px;
@@ -1450,7 +1474,7 @@ td[style*="--neg"] {
 .page-lineup .rank-badge {
     background: var(--gold-soft);
     color: var(--gold-deep);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.04em;
@@ -1466,7 +1490,7 @@ td[style*="--neg"] {
     border: 1px solid var(--rule-strong);
     border-top: 3px solid var(--gold);
     box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.45);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 10.5px;
 }
 .page-lineup .rank-tooltip::after { display: none; }
@@ -1474,7 +1498,7 @@ td[style*="--neg"] {
 
 /* ── Placeholder text ─────────────────────────────────────────────── */
 .page-lineup .placeholder-text {
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-style: italic;
     font-size: 16px;
     color: var(--ink-soft);
@@ -1532,45 +1556,7 @@ td[style*="--neg"] {
    ===================================================================== */
 
 .page-trades {
-    --paper:        #F8F5EE;
-    --paper-edge:   #EFE9D8;
-    --paper-tint:   #F2EDE0;
-    --paper-deep:   #ECE4CD;
-    --ink:          #1A1612;
-    --ink-soft:     #6B6258;
-    --ink-faint:    #9A8F7E;
-    --rule:         #E1D9C4;
-    --rule-strong:  #B8AC8E;
-
-    --gold:         #B8860B;
-    --gold-deep:    #7C5A0A;
-    --gold-bright:  #D4A933;
-    --gold-soft:    rgba(184, 134, 11, 0.10);
-    --gold-amber:   #C8851A;
-
-    --lead:         #5C7A2E;
-    --lead-deep:    #3F5A1A;
-    --lead-soft:    rgba(92, 122, 46, 0.10);
-    --trail:        #8B2C2C;
-    --trail-deep:   #5F1F1F;
-    --trail-soft:   rgba(139, 44, 44, 0.08);
-
-    /* Token remap — inline `style="color: var(--success)"` etc. now
-       resolve to the paper palette inside this page. */
-    --success:        var(--lead);
-    --danger:         var(--trail);
-    --warning:        var(--gold-amber);
-    --text:           var(--ink);
-    --text-primary:   var(--ink);
-    --text-secondary: var(--ink-soft);
-    --accent:         var(--gold);
-    --bg:             var(--paper);
-    --panel-bg:       var(--paper-tint);
-    --panel-border:   var(--rule-strong);
-    --card-bg:        var(--paper-tint);
-    --row-highlight:  var(--gold-soft);
-    --border:         var(--rule);
-
+    /* Inherits palette + semantic tokens from :root (C-dark). */
     background: var(--paper);
     color: var(--ink);
     margin: -24px -32px;
@@ -1579,9 +1565,9 @@ td[style*="--neg"] {
     /* Body is now also cream — page differentiates by bg only. */
     box-shadow: none;
     background-image:
-        radial-gradient(circle at 20% 10%, rgba(184, 134, 11, 0.04), transparent 60%),
-        radial-gradient(circle at 80% 90%, rgba(184, 134, 11, 0.03), transparent 50%);
-    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+        radial-gradient(circle at 20% 10%, rgba(244, 180, 26, 0.04), transparent 60%),
+        radial-gradient(circle at 80% 90%, rgba(244, 180, 26, 0.03), transparent 50%);
+    font-family: 'Outfit', system-ui, -apple-system, sans-serif;
     font-size: 13px;
     letter-spacing: 0.005em;
 }
@@ -1605,7 +1591,7 @@ td[style*="--neg"] {
     background: var(--gold);
 }
 .page-trades .page-header h2 {
-    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-family: 'Newsreader', 'Times New Roman', serif;
     font-style: italic;
     font-weight: 400;
     font-size: 52px;
@@ -1620,7 +1606,7 @@ td[style*="--neg"] {
     font-style: normal;
 }
 .page-trades .week-label {
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.18em;
@@ -1643,7 +1629,7 @@ td[style*="--neg"] {
     padding: 0 0 6px !important;
     border-bottom: 1px solid var(--rule);
     color: var(--ink) !important;
-    font-family: 'Fraunces', serif !important;
+    font-family: 'Newsreader', serif !important;
     font-style: italic;
     font-weight: 500 !important;
     font-size: 22px !important;
@@ -1675,7 +1661,7 @@ td[style*="--neg"] {
     border: 1px solid var(--rule-strong) !important;
     border-radius: 2px !important;
     color: var(--ink) !important;
-    font-family: 'DM Sans', sans-serif !important;
+    font-family: 'Outfit', sans-serif !important;
     font-size: 13px !important;
 }
 .page-trades #trade-search-input::placeholder {
@@ -1694,7 +1680,7 @@ td[style*="--neg"] {
     color: var(--ink-soft);
     opacity: 1;
     padding: 7px 14px;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.14em;
@@ -1744,7 +1730,7 @@ td[style*="--neg"] {
     align-items: center;
 }
 .page-trades .card h4 {
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-style: italic;
     font-weight: 500;
     font-size: 18px;
@@ -1758,7 +1744,7 @@ td[style*="--neg"] {
 }
 .page-trades .trade-details thead th {
     color: var(--ink-soft);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-weight: 700;
     font-size: 10px;
     letter-spacing: 0.14em;
@@ -1773,7 +1759,7 @@ td[style*="--neg"] {
     border-bottom: 1px solid var(--rule);
 }
 .page-trades .trade-details tbody th {
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-weight: 600;
     font-size: 11px;
     letter-spacing: 0.08em;
@@ -1799,7 +1785,7 @@ td[style*="--neg"] {
     border: 1px solid var(--rule-strong);
     border-radius: 2px;
     color: var(--ink);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 12px;
     padding: 6px 28px 6px 12px;
     margin-left: 8px;
@@ -1817,7 +1803,7 @@ td[style*="--neg"] {
 }
 .page-trades label[for="bt-opponent"],
 .page-trades label[for="bt-waiver-search"] {
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 10.5px;
     font-weight: 700;
     letter-spacing: 0.14em;
@@ -1832,7 +1818,7 @@ td[style*="--neg"] {
     padding: 14px 16px !important;
 }
 .page-trades .bt-panel h4 {
-    font-family: 'Fraunces', serif !important;
+    font-family: 'Newsreader', serif !important;
     font-style: italic;
     font-weight: 500;
     font-size: 16px !important;
@@ -1854,7 +1840,7 @@ td[style*="--neg"] {
 }
 .page-trades .bt-slot-label {
     color: var(--ink-soft) !important;
-    font-family: 'DM Sans', sans-serif !important;
+    font-family: 'Outfit', sans-serif !important;
     font-size: 10px !important;
     font-weight: 700;
     letter-spacing: 0.1em;
@@ -1893,7 +1879,7 @@ td[style*="--neg"] {
 }
 .page-trades .bt-zone-label {
     color: var(--ink-soft) !important;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 9.5px !important;
     font-weight: 700;
     letter-spacing: 0.16em !important;
@@ -1914,7 +1900,7 @@ td[style*="--neg"] {
     border: 1px solid var(--rule-strong) !important;
     border-radius: 2px !important;
     color: var(--ink) !important;
-    font-family: 'DM Sans', sans-serif !important;
+    font-family: 'Outfit', sans-serif !important;
     font-size: 11px !important;
     font-weight: 500;
     padding: 3px 8px !important;
@@ -1944,7 +1930,7 @@ td[style*="--neg"] {
     border: 1px solid var(--rule-strong);
     border-radius: 2px;
     color: var(--ink);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 12px;
     padding: 6px 10px;
     margin-top: 4px;
@@ -1963,7 +1949,7 @@ td[style*="--neg"] {
 .page-trades .bt-suggestions li {
     background: var(--paper-tint) !important;
     color: var(--ink);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 12px;
     padding: 5px 10px !important;
     border-bottom: 1px solid var(--rule);
@@ -2002,20 +1988,20 @@ td[style*="--neg"] {
     border-radius: 2px;
     color: var(--trail-deep) !important;
     padding: 12px 16px;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 13px;
 }
 
 /* Trade card-header layout — make it a flex row so JS-injected divs lay out */
 .page-trades .card-header > div:first-child {
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-weight: 500;
     color: var(--ink);
 }
 
 /* Result delta-roto totals headline */
 .page-trades #bt-result h4 {
-    font-family: 'Fraunces', serif !important;
+    font-family: 'Newsreader', serif !important;
     font-style: italic;
     font-weight: 500 !important;
     font-size: 17px !important;
@@ -2026,7 +2012,7 @@ td[style*="--neg"] {
 }
 
 .page-trades .placeholder-text {
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-style: italic;
     font-size: 16px;
     color: var(--ink-soft);
@@ -2047,43 +2033,7 @@ td[style*="--neg"] {
    ===================================================================== */
 
 .page-players {
-    --paper:        #F8F5EE;
-    --paper-edge:   #EFE9D8;
-    --paper-tint:   #F2EDE0;
-    --paper-deep:   #ECE4CD;
-    --ink:          #1A1612;
-    --ink-soft:     #6B6258;
-    --ink-faint:    #9A8F7E;
-    --rule:         #E1D9C4;
-    --rule-strong:  #B8AC8E;
-
-    --gold:         #B8860B;
-    --gold-deep:    #7C5A0A;
-    --gold-bright:  #D4A933;
-    --gold-soft:    rgba(184, 134, 11, 0.10);
-    --gold-amber:   #C8851A;
-
-    --lead:         #5C7A2E;
-    --lead-deep:    #3F5A1A;
-    --lead-soft:    rgba(92, 122, 46, 0.10);
-    --trail:        #8B2C2C;
-    --trail-deep:   #5F1F1F;
-    --trail-soft:   rgba(139, 44, 44, 0.08);
-
-    --success:        var(--lead);
-    --danger:         var(--trail);
-    --warning:        var(--gold-amber);
-    --text:           var(--ink);
-    --text-primary:   var(--ink);
-    --text-secondary: var(--ink-soft);
-    --accent:         var(--gold);
-    --bg:             var(--paper);
-    --panel-bg:       var(--paper-tint);
-    --panel-border:   var(--rule-strong);
-    --card-bg:        var(--paper-tint);
-    --row-highlight:  var(--gold-soft);
-    --border:         var(--rule);
-
+    /* Inherits palette + semantic tokens from :root (C-dark). */
     background: var(--paper);
     color: var(--ink);
     margin: -24px -32px;
@@ -2092,9 +2042,9 @@ td[style*="--neg"] {
     /* Body is now also cream — page differentiates by bg only. */
     box-shadow: none;
     background-image:
-        radial-gradient(circle at 20% 10%, rgba(184, 134, 11, 0.04), transparent 60%),
-        radial-gradient(circle at 80% 90%, rgba(184, 134, 11, 0.03), transparent 50%);
-    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+        radial-gradient(circle at 20% 10%, rgba(244, 180, 26, 0.04), transparent 60%),
+        radial-gradient(circle at 80% 90%, rgba(244, 180, 26, 0.03), transparent 50%);
+    font-family: 'Outfit', system-ui, -apple-system, sans-serif;
     font-size: 13px;
     letter-spacing: 0.005em;
 }
@@ -2118,7 +2068,7 @@ td[style*="--neg"] {
     background: var(--gold);
 }
 .page-players .page-header h2 {
-    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-family: 'Newsreader', 'Times New Roman', serif;
     font-style: italic;
     font-weight: 400;
     font-size: 52px;
@@ -2133,7 +2083,7 @@ td[style*="--neg"] {
     font-style: normal;
 }
 .page-players .week-label {
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.18em;
@@ -2160,7 +2110,7 @@ td[style*="--neg"] {
     border: 1px solid var(--rule-strong) !important;
     border-radius: 2px !important;
     color: var(--ink) !important;
-    font-family: 'DM Sans', sans-serif !important;
+    font-family: 'Outfit', sans-serif !important;
     font-size: 12px !important;
     padding: 7px 12px !important;
 }
@@ -2188,7 +2138,7 @@ td[style*="--neg"] {
 }
 .page-players .filter-bar label {
     color: var(--ink-soft);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11.5px;
     letter-spacing: 0.04em;
     font-weight: 500;
@@ -2199,7 +2149,7 @@ td[style*="--neg"] {
 
 .page-players #player-count {
     color: var(--ink-soft);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11px;
     letter-spacing: 0.1em;
     text-transform: uppercase;
@@ -2221,7 +2171,7 @@ td[style*="--neg"] {
 .page-players .data-table th {
     background: transparent;
     color: var(--ink-soft);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-weight: 700;
     font-size: 10px;
     letter-spacing: 0.16em;
@@ -2239,7 +2189,7 @@ td[style*="--neg"] {
 }
 .page-players .data-table td[style*="text-align:left"],
 .page-players .data-table td[style*="text-align: left"] {
-    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-family: 'Newsreader', 'Times New Roman', serif;
     font-weight: 500;
     font-size: 14px;
     font-variation-settings: "opsz" 30;
@@ -2280,7 +2230,7 @@ td[style*="--neg"] {
     border: 1px solid var(--rule-strong) !important;
     border-radius: 2px !important;
     color: var(--ink-soft) !important;
-    font-family: 'DM Sans', sans-serif !important;
+    font-family: 'Outfit', sans-serif !important;
     font-size: 9.5px !important;
     font-weight: 700;
     letter-spacing: 0.1em !important;
@@ -2294,7 +2244,7 @@ td[style*="--neg"] {
 
 .page-players #empty-msg {
     color: var(--ink-soft);
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-style: italic;
     font-size: 15px;
 }
@@ -2309,7 +2259,7 @@ td[style*="--neg"] {
     padding: 22px 24px !important;
 }
 .page-players #comparison-panel h3 {
-    font-family: 'Fraunces', serif !important;
+    font-family: 'Newsreader', serif !important;
     font-style: italic;
     font-weight: 500;
     color: var(--ink) !important;
@@ -2317,7 +2267,7 @@ td[style*="--neg"] {
     letter-spacing: -0.005em;
 }
 .page-players #comparison-panel h4 {
-    font-family: 'Fraunces', serif !important;
+    font-family: 'Newsreader', serif !important;
     font-style: italic;
     font-weight: 500;
     color: var(--ink) !important;
@@ -2328,7 +2278,7 @@ td[style*="--neg"] {
     background: transparent !important;
     border: 1px solid var(--rule-strong) !important;
     color: var(--ink-soft) !important;
-    font-family: 'DM Sans', sans-serif !important;
+    font-family: 'Outfit', sans-serif !important;
     font-size: 10.5px !important;
     font-weight: 700;
     letter-spacing: 0.12em;
@@ -2347,7 +2297,7 @@ td[style*="--neg"] {
 }
 .page-players #compare-validation {
     color: var(--ink-soft) !important;
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-style: italic;
     font-size: 13px;
 }
@@ -2372,7 +2322,7 @@ td[style*="--neg"] {
     background: transparent;
     border: 1px solid var(--rule-strong);
     color: var(--ink-soft);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 10.5px;
     font-weight: 700;
     letter-spacing: 0.14em;
@@ -2395,13 +2345,13 @@ td[style*="--neg"] {
 #standings-subtitle.lineup-themed { /* no-op anchor */ }
 .page-players #standings-subtitle {
     color: var(--ink-soft) !important;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11px !important;
     letter-spacing: 0.06em;
 }
 .page-players #standings-after-label {
     color: var(--ink-soft) !important;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 10.5px !important;
     font-weight: 700;
     letter-spacing: 0.14em !important;
@@ -2410,7 +2360,7 @@ td[style*="--neg"] {
 
 .page-players #standings-unavailable {
     color: var(--ink-soft) !important;
-    font-family: 'Fraunces', serif !important;
+    font-family: 'Newsreader', serif !important;
     font-style: italic !important;
     border-top: 1px solid var(--rule) !important;
     padding-top: 14px !important;
@@ -2472,9 +2422,9 @@ td[style*="--neg"] {
     padding: 32px 44px 56px;
     min-height: calc(100vh + 24px);
     background-image:
-        radial-gradient(circle at 20% 10%, rgba(184, 134, 11, 0.04), transparent 60%),
-        radial-gradient(circle at 80% 90%, rgba(184, 134, 11, 0.03), transparent 50%);
-    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+        radial-gradient(circle at 20% 10%, rgba(244, 180, 26, 0.04), transparent 60%),
+        radial-gradient(circle at 80% 90%, rgba(244, 180, 26, 0.03), transparent 50%);
+    font-family: 'Outfit', system-ui, -apple-system, sans-serif;
     font-size: 13px;
     letter-spacing: 0.005em;
 }
@@ -2503,7 +2453,7 @@ td[style*="--neg"] {
 .page-luck > h2,
 .page-transactions .page-header h2,
 .page-logs .page-header h2 {
-    font-family: 'Fraunces', 'Times New Roman', serif !important;
+    font-family: 'Newsreader', 'Times New Roman', serif !important;
     font-style: italic;
     font-weight: 400 !important;
     font-size: 52px !important;
@@ -2533,7 +2483,7 @@ td[style*="--neg"] {
 
 .page-luck > p {
     color: var(--ink-soft) !important;
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-style: italic;
     font-size: 14px !important;
     margin-bottom: 18px;
@@ -2552,7 +2502,7 @@ td[style*="--neg"] {
     text-align: right;
     padding: 10px 10px 8px;
     color: var(--ink-soft) !important;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-weight: 700;
     font-size: 10.5px !important;
     letter-spacing: 0.16em;
@@ -2573,7 +2523,7 @@ td[style*="--neg"] {
 }
 .page-luck .spoe-table td:nth-child(2) {
     text-align: left;
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-weight: 500;
     font-size: 14px;
 }
@@ -2583,7 +2533,7 @@ td[style*="--neg"] {
 
 .page-luck .spoe-positive { color: var(--lead-deep) !important; font-weight: 700; }
 .page-luck .spoe-negative { color: var(--trail-deep) !important; font-weight: 700; }
-.page-luck .rank-num { color: var(--ink-faint) !important; font-family: 'Fraunces', serif; font-weight: 500; font-size: 15px; }
+.page-luck .rank-num { color: var(--ink-faint) !important; font-family: 'Newsreader', serif; font-weight: 500; font-size: 15px; }
 
 .page-luck .expandable { cursor: pointer; }
 .page-luck .expandable:hover { background: var(--gold-soft); }
@@ -2602,7 +2552,7 @@ td[style*="--neg"] {
 .page-luck .detail-table th {
     text-align: right !important;
     color: var(--ink-soft) !important;
-    font-family: 'DM Sans', sans-serif !important;
+    font-family: 'Outfit', sans-serif !important;
     font-weight: 700 !important;
     font-size: 9.5px !important;
     letter-spacing: 0.14em;
@@ -2618,7 +2568,7 @@ td[style*="--neg"] {
     font-size: 11.5px;
     border-bottom: 1px solid var(--rule);
 }
-.page-luck .detail-table td:first-child { text-align: left !important; font-family: 'DM Sans', sans-serif; font-weight: 500; }
+.page-luck .detail-table td:first-child { text-align: left !important; font-family: 'Outfit', sans-serif; font-weight: 500; }
 
 /* ── TRANSACTIONS ─────────────────────────────────────────────────── */
 
@@ -2635,7 +2585,7 @@ td[style*="--neg"] {
 .page-transactions .data-table th {
     background: transparent;
     color: var(--ink-soft);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-weight: 700;
     font-size: 10px;
     letter-spacing: 0.16em;
@@ -2652,7 +2602,7 @@ td[style*="--neg"] {
 }
 .page-transactions .data-table .team-name {
     text-align: left;
-    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-family: 'Newsreader', 'Times New Roman', serif;
     font-weight: 500;
     font-size: 14px;
     font-variation-settings: "opsz" 30;
@@ -2690,7 +2640,7 @@ td[style*="--neg"] {
 }
 .page-transactions .txn-inner-table th {
     color: var(--ink-soft) !important;
-    font-family: 'DM Sans', sans-serif !important;
+    font-family: 'Outfit', sans-serif !important;
     font-weight: 700 !important;
     font-size: 9.5px !important;
     letter-spacing: 0.14em;
@@ -2711,7 +2661,7 @@ td[style*="--neg"] {
     background: var(--gold-soft) !important;
     color: var(--gold-deep) !important;
     border: 1px solid var(--gold);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 9.5px !important;
     font-weight: 700;
     letter-spacing: 0.1em;
@@ -2721,7 +2671,7 @@ td[style*="--neg"] {
 }
 
 .page-transactions .placeholder-text {
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-style: italic;
     font-size: 16px;
     color: var(--ink-soft);
@@ -2744,7 +2694,7 @@ td[style*="--neg"] {
     opacity: 1;
     padding: 8px 18px 10px;
     margin-bottom: -1px;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11.5px;
     font-weight: 600;
     letter-spacing: 0.14em;
@@ -2782,7 +2732,7 @@ td[style*="--neg"] {
 .page-logs .log-header:hover { background: var(--gold-soft); }
 
 .page-logs .log-job {
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-style: italic;
     font-weight: 500;
     font-size: 15px;
@@ -2807,7 +2757,7 @@ td[style*="--neg"] {
     color: var(--lead-deep) !important;
     border: 1px solid var(--lead);
     border-radius: 2px;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 9.5px !important;
     font-weight: 700 !important;
     letter-spacing: 0.14em;
@@ -2819,7 +2769,7 @@ td[style*="--neg"] {
     color: var(--trail-deep) !important;
     border: 1px solid var(--trail);
     border-radius: 2px;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 9.5px !important;
     font-weight: 700 !important;
     letter-spacing: 0.14em;
@@ -2868,13 +2818,13 @@ td[style*="--neg"] {
 }
 .page-logs .page-header #fetch-ros-status {
     color: var(--ink-soft) !important;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11px !important;
     letter-spacing: 0.04em;
 }
 
 .page-logs .placeholder-text {
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-style: italic;
     font-size: 16px;
     color: var(--ink-soft);
@@ -2908,9 +2858,9 @@ td[style*="--neg"] {
     padding: 32px 44px 56px;
     min-height: calc(100vh + 24px);
     background-image:
-        radial-gradient(circle at 20% 10%, rgba(184, 134, 11, 0.04), transparent 60%),
-        radial-gradient(circle at 80% 90%, rgba(184, 134, 11, 0.03), transparent 50%);
-    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+        radial-gradient(circle at 20% 10%, rgba(244, 180, 26, 0.04), transparent 60%),
+        radial-gradient(circle at 80% 90%, rgba(244, 180, 26, 0.03), transparent 50%);
+    font-family: 'Outfit', system-ui, -apple-system, sans-serif;
     font-size: 13px;
     letter-spacing: 0.005em;
 }
@@ -2934,7 +2884,7 @@ td[style*="--neg"] {
     background: var(--gold);
 }
 .page-roster-audit .page-header h2 {
-    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-family: 'Newsreader', 'Times New Roman', serif;
     font-style: italic;
     font-weight: 400;
     font-size: 52px;
@@ -2949,7 +2899,7 @@ td[style*="--neg"] {
     font-style: normal;
 }
 .page-roster-audit .week-label {
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.18em;
@@ -2967,7 +2917,7 @@ td[style*="--neg"] {
 
 /* The summary lede paragraph above the table */
 .page-roster-audit > p {
-    font-family: 'Fraunces', serif !important;
+    font-family: 'Newsreader', serif !important;
     font-style: italic;
     font-size: 14px !important;
     color: var(--ink-soft) !important;
@@ -2988,7 +2938,7 @@ td[style*="--neg"] {
 .page-roster-audit .audit-table th {
     text-align: left;
     color: var(--ink-soft) !important;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-weight: 700;
     font-size: 10px !important;
     letter-spacing: 0.16em;
@@ -3006,7 +2956,7 @@ td[style*="--neg"] {
 }
 /* Slot column — small caps DM Sans, like a positional label */
 .page-roster-audit .audit-table tbody td:first-child {
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-weight: 700;
     font-size: 11px;
     letter-spacing: 0.1em;
@@ -3017,7 +2967,7 @@ td[style*="--neg"] {
 /* Player name columns (cols 2 and 4) — Fraunces */
 .page-roster-audit .audit-table tbody td:nth-child(2),
 .page-roster-audit .audit-table tbody td:nth-child(4) {
-    font-family: 'Fraunces', 'Times New Roman', serif;
+    font-family: 'Newsreader', 'Times New Roman', serif;
     font-weight: 500;
     font-size: 14px;
     font-variation-settings: "opsz" 30;
@@ -3027,7 +2977,7 @@ td[style*="--neg"] {
    styled the same way — use a more specific selector because the
    nested table is also .audit-table. */
 .page-roster-audit .audit-detail .audit-table tbody td:first-child {
-    font-family: 'Fraunces', serif !important;
+    font-family: 'Newsreader', serif !important;
     font-weight: 500 !important;
     font-size: 13px !important;
     text-transform: none !important;
@@ -3052,14 +3002,14 @@ td[style*="--neg"] {
     box-shadow: inset 3px 0 0 var(--gold);
 }
 .page-roster-audit .audit-row.has-upgrade:hover {
-    background: linear-gradient(to right, rgba(184, 134, 11, 0.18), transparent 70%);
+    background: linear-gradient(to right, rgba(244, 180, 26, 0.18), transparent 70%);
 }
 
 /* ── gap-badge traffic light (load-bearing signal) ────────────────── */
 
 .page-roster-audit .gap-badge {
     display: inline-block;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-weight: 700;
     font-size: 10.5px !important;
     letter-spacing: 0.06em;
@@ -3084,7 +3034,7 @@ td[style*="--neg"] {
 }
 .page-roster-audit .gap-none {
     color: var(--ink-faint) !important;
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Outfit', sans-serif;
     font-size: 11px !important;
     font-style: italic;
 }
@@ -3099,7 +3049,7 @@ td[style*="--neg"] {
     border-bottom: 1px solid var(--rule);
 }
 .page-roster-audit .audit-detail > td > div:first-child {
-    font-family: 'Fraunces', serif !important;
+    font-family: 'Newsreader', serif !important;
     font-style: italic;
     font-weight: 500 !important;
     font-size: 14px !important;
@@ -3129,7 +3079,7 @@ td[style*="--neg"] {
     border: 1px solid var(--gold) !important;
     border-radius: 2px !important;
     color: var(--gold-deep) !important;
-    font-family: 'DM Sans', sans-serif !important;
+    font-family: 'Outfit', sans-serif !important;
     font-size: 9.5px !important;
     font-weight: 700 !important;
     letter-spacing: 0.14em !important;
@@ -3147,7 +3097,7 @@ td[style*="--neg"] {
 /* Player pos / type tags — small caps DM Sans on cream */
 .page-roster-audit .player-pos {
     color: var(--ink-faint) !important;
-    font-family: 'DM Sans', sans-serif !important;
+    font-family: 'Outfit', sans-serif !important;
     font-size: 10px !important;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -3157,7 +3107,7 @@ td[style*="--neg"] {
     background: var(--paper-deep) !important;
     color: var(--ink-soft) !important;
     border: 1px solid var(--rule);
-    font-family: 'DM Sans', sans-serif !important;
+    font-family: 'Outfit', sans-serif !important;
     font-size: 9px !important;
     font-weight: 600;
     letter-spacing: 0.1em;
@@ -3170,7 +3120,7 @@ td[style*="--neg"] {
 /* "—" placeholder when no upgrade is available */
 .page-roster-audit .audit-table td[style*="font-style: italic"] {
     color: var(--ink-faint) !important;
-    font-family: 'Fraunces', serif !important;
+    font-family: 'Newsreader', serif !important;
     font-size: 14px !important;
 }
 
@@ -3185,7 +3135,7 @@ td[style*="--neg"] {
 .page-roster-audit .cat-loss { color: var(--trail-deep); font-weight: 600; }
 
 .page-roster-audit .placeholder-text {
-    font-family: 'Fraunces', serif;
+    font-family: 'Newsreader', serif;
     font-style: italic;
     font-size: 16px;
     color: var(--ink-soft);
