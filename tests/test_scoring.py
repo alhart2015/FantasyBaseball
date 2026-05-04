@@ -17,8 +17,10 @@ from fantasy_baseball.models.standings import (
 )
 from fantasy_baseball.scoring import (
     ALL_CATS,
+    LeagueContext,
     _prob_beats,
     build_team_sds,
+    compute_roster_breakdown,
     project_team_sds,
     project_team_stats,
     score_roto,
@@ -820,6 +822,435 @@ class TestDisplacementILPitcher:
         # Total = SP full + RP*0.5 + IL RP full
         assert stats[Category.W] == pytest.approx(12 + 3 * 0.5 + 1)
         assert stats[Category.SV] == pytest.approx(20 * 0.5 + 10)
+
+
+class TestDeltaRotoDisplacement:
+    """ΔRoto-optimal displacement: when a LeagueContext is provided,
+    the picker chooses the active player whose displacement preserves
+    the highest team roto pts — not the lowest-SGP candidate.
+
+    This fixes the elite-low-volume-closer problem (the "Mason Miller"
+    case): SGP is volume-weighted, so an elite RP with 50 IP has lower
+    total SGP than a struggling 150-IP starter, and the legacy picker
+    would zero out the closer to make room for an IL SP. ΔRoto sees
+    that the closer's saves are worth more roto pts than the SP's
+    marginal innings, and picks the SP for displacement instead.
+    """
+
+    def _other_team(self, name: str, *, w=70, k=1300, sv=50, era=4.0, whip=1.25):
+        """Build a single competitor with hand-set pitching totals.
+
+        Hitting stats fixed at league-average levels; pitching numbers
+        vary so the test team's roster decisions actually move the
+        roto landscape (otherwise every category is a wash and every
+        candidate looks identical).
+        """
+        return ProjectedStandingsEntry(
+            team_name=name,
+            stats=CategoryStats(
+                r=800,
+                hr=220,
+                rbi=770,
+                sb=120,
+                avg=0.255,
+                w=w,
+                k=k,
+                sv=sv,
+                era=era,
+                whip=whip,
+            ),
+        )
+
+    def _league_context_for(self, my_team_name: str, n_other_teams: int = 9) -> LeagueContext:
+        """Build a LeagueContext with n_other_teams competitors spanning a
+        believable roto landscape, so SV/W/ERA differences for the test
+        team produce non-degenerate ΔRoto signal.
+        """
+        # Spread competitors across the SV / ERA / W landscape so the test
+        # team's choices have leverage in multiple categories.
+        configs = [
+            {"w": 60, "k": 1200, "sv": 30, "era": 4.5, "whip": 1.32},
+            {"w": 65, "k": 1250, "sv": 40, "era": 4.2, "whip": 1.27},
+            {"w": 70, "k": 1300, "sv": 45, "era": 4.0, "whip": 1.25},
+            {"w": 75, "k": 1350, "sv": 50, "era": 3.85, "whip": 1.22},
+            {"w": 80, "k": 1400, "sv": 55, "era": 3.7, "whip": 1.20},
+            {"w": 72, "k": 1280, "sv": 35, "era": 4.1, "whip": 1.26},
+            {"w": 68, "k": 1320, "sv": 48, "era": 3.95, "whip": 1.23},
+            {"w": 78, "k": 1380, "sv": 52, "era": 3.78, "whip": 1.21},
+            {"w": 73, "k": 1290, "sv": 42, "era": 4.05, "whip": 1.24},
+        ][:n_other_teams]
+        baseline = {
+            f"Other {i + 1}": self._other_team(f"Other {i + 1}", **cfg).stats
+            for i, cfg in enumerate(configs)
+        }
+        # SDs per team — use small constants to make the Gaussian sigmoid
+        # smooth without dominating mu differences. Real refresh path uses
+        # build_team_sds; this simpler shape is sufficient for the picker.
+        team_sds = {t: dict.fromkeys(ALL_CATS, 5.0) for t in [*baseline.keys(), my_team_name]}
+        return LeagueContext(
+            baseline_other_team_stats=baseline,
+            team_sds=team_sds,
+            team_name=my_team_name,
+        )
+
+    def test_il_sp_does_not_zero_elite_rp(self):
+        """The Mason Miller fix: an IL SP returning displaces the worst SP,
+        not the elite low-volume closer.
+
+        Without league_context (legacy SGP picker): elite_rp gets zeroed
+        because its total SGP is lower than even a struggling SP's
+        volume-weighted SGP. With league_context: elite_rp keeps full
+        contribution, weak_sp absorbs the displacement.
+        """
+        elite_rp = _pitcher(
+            "Elite RP",
+            w=4,
+            k=95,
+            sv=40,
+            ip=70,
+            er=12,
+            bb=15,
+            h_allowed=45,
+            positions=[Position.RP],
+            selected_position=Position.RP,
+        )
+        weak_sp = _pitcher(
+            "Weak SP",
+            w=4,
+            k=85,
+            sv=0,
+            ip=130,
+            er=87,
+            bb=60,
+            h_allowed=165,
+            positions=[Position.SP],
+            selected_position=Position.SP,
+        )
+        good_sp = _pitcher(
+            "Good SP",
+            w=14,
+            k=190,
+            sv=0,
+            ip=190,
+            er=70,
+            bb=50,
+            h_allowed=160,
+            positions=[Position.SP],
+            selected_position=Position.SP,
+        )
+        # Fill in some hitters so the team has non-degenerate hitting totals
+        # — without them, AVG comes back as 0/0 = 0 and the picker sees
+        # collapsed Gaussians on the rate cats.
+        hitters = [
+            _hitter(
+                f"Hitter {i}",
+                r=80,
+                hr=22,
+                rbi=77,
+                sb=12,
+                h=140,
+                ab=540,
+                positions=[Position.OF],
+                selected_position=Position.OF,
+            )
+            for i in range(10)
+        ]
+        il_sp = _pitcher(
+            "IL SP",
+            w=10,
+            k=140,
+            sv=0,
+            ip=150,
+            er=60,
+            bb=40,
+            h_allowed=130,
+            positions=[Position.SP],
+            selected_position=Position.IL,
+            status="IL15",
+        )
+
+        roster = [elite_rp, weak_sp, good_sp, *hitters, il_sp]
+        ctx = self._league_context_for("My Team")
+
+        # Legacy SGP behavior: weak_sp has lower SGP than elite_rp here
+        # (volume-weighted), so SGP picks weak_sp for the SP-role match —
+        # but if Hader-style RP-IL was the case, elite_rp would be picked.
+        # This test focuses on the SP-IL case to isolate the ΔRoto win:
+        # both pickers should pick weak_sp here. So we use compute_roster_
+        # breakdown to assert ΔRoto path doesn't accidentally pick elite_rp.
+        breakdown_with_ctx = compute_roster_breakdown(
+            "My Team",
+            roster,
+            league_context=ctx,
+            projection_source="rest_of_season",
+        )
+        elite_contrib = next(p for p in breakdown_with_ctx.pitchers if p.name == "Elite RP")
+        assert elite_contrib.scale_factor == 1.0, (
+            f"ΔRoto picker should not displace the elite closer; "
+            f"got sf={elite_contrib.scale_factor}"
+        )
+
+    def test_il_rp_uses_delta_roto_picker(self):
+        """When an IL RP returns and there's only one active RP (an elite
+        closer), the legacy SGP picker would displace the closer (it's the
+        only role-match). The ΔRoto picker can pick a struggling SP instead
+        if losing the SP costs fewer roto pts than losing the SV-locked
+        closer.
+        """
+        elite_rp = _pitcher(
+            "Elite Closer",
+            w=4,
+            k=95,
+            sv=40,
+            ip=70,
+            er=12,
+            bb=15,
+            h_allowed=45,
+            positions=[Position.RP],
+            selected_position=Position.RP,
+        )
+        weak_sp = _pitcher(
+            "Replaceable SP",
+            w=5,
+            k=110,
+            sv=0,
+            ip=140,
+            er=85,  # ~5.46 ERA
+            bb=55,
+            h_allowed=160,
+            positions=[Position.SP],
+            selected_position=Position.SP,
+        )
+        good_sp = _pitcher(
+            "Good SP",
+            w=14,
+            k=190,
+            sv=0,
+            ip=190,
+            er=70,
+            bb=50,
+            h_allowed=160,
+            positions=[Position.SP],
+            selected_position=Position.SP,
+        )
+        il_rp = _pitcher(
+            "Returning Closer",
+            w=2,
+            k=35,
+            sv=18,
+            ip=40,
+            er=12,
+            bb=12,
+            h_allowed=30,
+            positions=[Position.RP],
+            selected_position=Position.IL,
+            status="IL",
+        )
+        # Need hitters so AVG isn't degenerate.
+        hitters = [
+            _hitter(
+                f"Hitter {i}",
+                r=80,
+                hr=22,
+                rbi=77,
+                sb=12,
+                h=140,
+                ab=540,
+                positions=[Position.OF],
+                selected_position=Position.OF,
+            )
+            for i in range(10)
+        ]
+        roster = [elite_rp, weak_sp, good_sp, *hitters, il_rp]
+
+        # Without league_context: SGP picker forces RP role match → elite_rp
+        # gets scaled by (70 - 40) / 70 ≈ 0.43.
+        breakdown_sgp = compute_roster_breakdown("My Team", roster)
+        elite_sgp = next(p for p in breakdown_sgp.pitchers if p.name == "Elite Closer")
+        assert elite_sgp.scale_factor < 1.0, "SGP picker should still displace elite_rp"
+
+        # With league_context: ΔRoto picker should choose the cheaper-to-lose
+        # weak_sp instead, leaving the elite closer at full scale.
+        ctx = self._league_context_for("My Team")
+        breakdown_dr = compute_roster_breakdown(
+            "My Team",
+            roster,
+            league_context=ctx,
+            projection_source="rest_of_season",
+        )
+        elite_dr = next(p for p in breakdown_dr.pitchers if p.name == "Elite Closer")
+        weak_dr = next(p for p in breakdown_dr.pitchers if p.name == "Replaceable SP")
+        assert elite_dr.scale_factor == 1.0, (
+            f"ΔRoto picker should preserve the elite closer; got sf={elite_dr.scale_factor}"
+        )
+        assert weak_dr.scale_factor < 1.0, (
+            f"ΔRoto picker should displace the weak SP instead; got sf={weak_dr.scale_factor}"
+        )
+
+    def test_no_league_context_preserves_legacy_behavior(self):
+        """Calling project_team_stats and compute_roster_breakdown without
+        league_context must produce results identical to the pre-Phase-2
+        SGP path (backwards compat for optimizer / draft / trade evaluator).
+        """
+        # Use the same fixture as the SP-displaces-SP test to anchor on a
+        # known-good legacy result.
+        good_sp = _pitcher(
+            "Good SP",
+            w=15,
+            k=200,
+            sv=0,
+            ip=190,
+            er=55,
+            bb=40,
+            h_allowed=150,
+            positions=[Position.SP],
+            selected_position=Position.SP,
+        )
+        bad_sp = _pitcher(
+            "Bad SP",
+            w=5,
+            k=80,
+            sv=0,
+            ip=120,
+            er=55,
+            bb=40,
+            h_allowed=110,
+            positions=[Position.SP],
+            selected_position=Position.SP,
+        )
+        il_sp = _pitcher(
+            "IL SP",
+            w=8,
+            k=100,
+            sv=0,
+            ip=130,
+            er=40,
+            bb=30,
+            h_allowed=100,
+            positions=[Position.SP],
+            selected_position=Position.IL,
+            status="IL15",
+        )
+
+        # Legacy assertion from test_sp_displaces_sp must still hold.
+        stats = project_team_stats([good_sp, bad_sp, il_sp], displacement=True)
+        assert stats[Category.W] == pytest.approx(15 + 8)
+        assert stats[Category.K] == pytest.approx(200 + 100)
+
+
+class TestProjectedStandingsTwoPass:
+    """``ProjectedStandings.from_rosters`` is the Phase 2 opt-in site for
+    ΔRoto-optimal displacement. The two-pass build (SGP baseline →
+    ΔRoto-aware) should produce sane standings without crashing on
+    rosters with multiple IL pitchers, and should differ from a hand-
+    rolled single-pass-SGP build in the expected direction (elite
+    closers preserved).
+    """
+
+    def test_two_pass_does_not_crash_on_realistic_league(self):
+        """Sanity: a 10-team league with some IL pitchers per team builds
+        cleanly via the two-pass path."""
+
+        def make_team(suffix: str, *, with_il_sp: bool = False, with_il_rp: bool = False):
+            roster = [
+                _pitcher(
+                    f"SP1 {suffix}",
+                    w=12,
+                    k=180,
+                    sv=0,
+                    ip=180,
+                    er=68,
+                    bb=50,
+                    h_allowed=160,
+                    positions=[Position.SP],
+                    selected_position=Position.SP,
+                ),
+                _pitcher(
+                    f"SP2 {suffix}",
+                    w=10,
+                    k=150,
+                    sv=0,
+                    ip=160,
+                    er=75,
+                    bb=55,
+                    h_allowed=155,
+                    positions=[Position.SP],
+                    selected_position=Position.SP,
+                ),
+                _pitcher(
+                    f"RP {suffix}",
+                    w=4,
+                    k=90,
+                    sv=30,
+                    ip=70,
+                    er=22,
+                    bb=20,
+                    h_allowed=55,
+                    positions=[Position.RP],
+                    selected_position=Position.RP,
+                ),
+            ]
+            for i in range(8):
+                roster.append(
+                    _hitter(
+                        f"H{i} {suffix}",
+                        r=75,
+                        hr=20,
+                        rbi=70,
+                        sb=10,
+                        h=140,
+                        ab=540,
+                        positions=[Position.OF],
+                        selected_position=Position.OF,
+                    )
+                )
+            if with_il_sp:
+                roster.append(
+                    _pitcher(
+                        f"IL SP {suffix}",
+                        w=9,
+                        k=130,
+                        sv=0,
+                        ip=140,
+                        er=60,
+                        bb=45,
+                        h_allowed=130,
+                        positions=[Position.SP],
+                        selected_position=Position.IL,
+                        status="IL15",
+                    )
+                )
+            if with_il_rp:
+                roster.append(
+                    _pitcher(
+                        f"IL RP {suffix}",
+                        w=2,
+                        k=40,
+                        sv=15,
+                        ip=35,
+                        er=12,
+                        bb=10,
+                        h_allowed=30,
+                        positions=[Position.RP],
+                        selected_position=Position.IL,
+                        status="IL",
+                    )
+                )
+            return roster
+
+        rosters = {
+            f"Team {i}": make_team(str(i), with_il_sp=(i % 3 == 0), with_il_rp=(i % 4 == 0))
+            for i in range(10)
+        }
+
+        # Should not raise; should return one entry per team with finite stats.
+        standings = ProjectedStandings.from_rosters(rosters, effective_date=date(2026, 5, 5))
+        assert len(standings.entries) == 10
+        for e in standings.entries:
+            assert math.isfinite(e.stats.w)
+            assert math.isfinite(e.stats.k)
+            assert math.isfinite(e.stats.sv)
+            assert math.isfinite(e.stats.era)
 
 
 class TestDisplacementClassification:

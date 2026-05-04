@@ -113,12 +113,52 @@ def build_standings_breakdown_payload(
     One :class:`RosterBreakdown` per team, serialized to a JSON-safe
     dict and keyed by team name. ``effective_date`` is included to
     match the :class:`ProjectedStandings` payload shape.
+
+    Uses the same two-pass ΔRoto-optimal displacement as
+    :meth:`ProjectedStandings.from_rosters`, so per-player ``raw_stats *
+    scale_factor`` aggregates here match the standings widget exactly:
+
+    1. Pass 1 — SGP-based displacement → baseline ``{team: stats}``.
+    2. Pass 2 — each team picks its displacement targets via ΔRoto,
+       evaluating against frozen pass-1 baseline of other teams.
+
+    Without the two-pass, the breakdown would show different scale
+    factors than the standings (e.g., Mason Miller at sf=0.25 in the
+    breakdown but at sf≈1.0 in the projected standings), which would
+    desync the modal drilldown from the headline numbers.
     """
-    from fantasy_baseball.scoring import compute_roster_breakdown
+    from fantasy_baseball.scoring import (
+        LeagueContext,
+        build_team_sds,
+        compute_roster_breakdown,
+        project_team_stats,
+    )
+
+    # Pass 1: SGP-based baseline {team: stats}. Same projection_source
+    # as ProjectedStandings.from_rosters so the contexts align.
+    baseline_stats = {
+        tname: project_team_stats(
+            roster,
+            displacement=True,
+            projection_source="full_season_projection",
+        )
+        for tname, roster in team_rosters.items()
+    }
+    team_sds = build_team_sds(team_rosters, sd_scale=1.0)
 
     teams_payload: dict[str, dict] = {}
     for team_name, roster in team_rosters.items():
-        teams_payload[team_name] = compute_roster_breakdown(team_name, roster).to_dict()
+        ctx = LeagueContext(
+            baseline_other_team_stats={t: s for t, s in baseline_stats.items() if t != team_name},
+            team_sds=team_sds,
+            team_name=team_name,
+        )
+        teams_payload[team_name] = compute_roster_breakdown(
+            team_name,
+            roster,
+            league_context=ctx,
+            projection_source="full_season_projection",
+        ).to_dict()
     return {
         "effective_date": effective_date.isoformat(),
         "teams": teams_payload,

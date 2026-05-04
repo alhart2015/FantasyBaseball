@@ -217,30 +217,69 @@ def _real_positions(p: Player) -> frozenset[Position]:
     return frozenset(p.positions) - _GENERIC_SLOTS
 
 
+@dataclass(frozen=True)
+class LeagueContext:
+    """League-wide context that lets displacement target selection use
+    ΔRoto (team roto pts impact) instead of raw SGP.
+
+    SGP-based selection is volume-weighted and systematically picks
+    elite-but-low-volume players (closers) for displacement, since
+    their total SGP is small next to a 150-IP starter. ΔRoto sees that
+    losing 27 SV costs a roto point in SV but losing one SP's IP
+    barely moves K/W standings — and picks the actually-droppable arm.
+
+    Used at the standings-build layer only (``ProjectedStandings`` and
+    ``build_standings_breakdown_payload``); other callers pass ``None``
+    and keep the SGP picker.
+
+    Fields:
+        baseline_other_team_stats: ``{team_name: CategoryStats}`` for
+            every OTHER team in the league, frozen from a pass-1 SGP
+            standings build. Excludes the team being optimized.
+        team_sds: per-team category SDs (from ``build_team_sds``), used
+            by the Gaussian-pairwise scorer for variance pricing.
+        team_name: the team whose roster the picker is currently
+            evaluating displacement candidates for.
+    """
+
+    baseline_other_team_stats: Mapping[str, CategoryStats]
+    team_sds: Mapping[str, Mapping[Category, float]]
+    team_name: str
+
+
 def _find_worst_match(
     il_player: Player,
     active_players: list[Player],
     already_displaced: set[str],
+    *,
+    league_context: LeagueContext | None = None,
+    current_roster: list[Player | dict] | None = None,
+    projection_source: ProjectionSource = "rest_of_season",
 ) -> Player | None:
-    """Find the worst active player (by SGP) sharing a positional role.
+    """Find the displacement target for ``il_player``.
 
-    For pitchers: match SP vs RP role.
-    For hitters: match on overlapping real positions; fallback to worst
-    hitter overall if no position match.
+    For pitchers: any active pitcher is eligible (SP/RP roles are not
+    fungible in real-life production but ARE fungible in fantasy P
+    slots — Hader returning bumps the worst arm overall, not the only
+    same-role match). For hitters: prefer overlapping real positions
+    (1B-only can't fill SS slot), fall back to any active hitter.
+
+    Selection rule: when ``league_context`` is provided, picks the
+    candidate that maximizes the team's expected roto pts after the
+    displacement (ΔRoto-optimal). Otherwise picks the lowest-SGP
+    candidate (the historical behavior).
 
     Returns None if no eligible active player exists.
     """
     candidates: list[Player] = []
 
     if il_player.player_type == PlayerType.PITCHER:
-        role = _pitcher_role(il_player)
         for a in active_players:
             if a.name in already_displaced:
                 continue
             if a.player_type != PlayerType.PITCHER:
                 continue
-            if _pitcher_role(a) == role:
-                candidates.append(a)
+            candidates.append(a)
     else:
         il_positions = _real_positions(il_player)
         # First pass: overlapping real positions
@@ -263,8 +302,67 @@ def _find_worst_match(
     if not candidates:
         return None
 
-    # Worst = lowest total SGP
+    if league_context is not None and current_roster is not None:
+        return _find_delta_roto_optimal(
+            il_player,
+            candidates,
+            current_roster,
+            league_context,
+            projection_source,
+        )
+
+    # Fallback: SGP-based (legacy behavior, used when no league context).
+    # Note for pitchers: this can incorrectly pick an elite low-volume
+    # closer (Mason Miller) over a struggling starter, because SGP is
+    # volume-weighted. Standings/breakdown call sites should pass
+    # league_context to enable the ΔRoto-optimal picker.
     return min(candidates, key=lambda a: _player_sgp(a))
+
+
+def _find_delta_roto_optimal(
+    il_player: Player,
+    candidates: list[Player],
+    current_roster: list[Player | dict],
+    ctx: LeagueContext,
+    projection_source: ProjectionSource,
+) -> Player | None:
+    """Pick the candidate whose displacement maximizes team roto pts.
+
+    For each candidate, builds a hypothetical roster with that
+    candidate scaled by the displacement factor, sums the team's
+    projected stats (with ``displacement=False`` to avoid recursion;
+    upstream displacement state is already baked into
+    ``current_roster``), then scores via :func:`score_roto_dict`
+    against the frozen baseline of other teams' stats.
+    """
+    il_pt = _playing_time(il_player)
+    if il_pt <= 0:
+        # IL player has no playing-time projection — fall back to SGP picker
+        # so we at least pick *some* target deterministically.
+        return min(candidates, key=lambda a: _player_sgp(a))
+
+    best_target: Player | None = None
+    best_pts = -float("inf")
+    for cand in candidates:
+        active_pt = _playing_time(cand)
+        if active_pt <= 0:
+            continue
+        factor = max(0.0, active_pt - il_pt) / active_pt
+        hyp_roster: list[Player | dict] = [
+            _scale_stats(cand, factor) if isinstance(p, Player) and p.name == cand.name else p
+            for p in current_roster
+        ]
+        team_stats = project_team_stats(
+            hyp_roster, displacement=False, projection_source=projection_source
+        )
+        all_team_stats: dict[str, CategoryStats] = dict(ctx.baseline_other_team_stats)
+        all_team_stats[ctx.team_name] = team_stats
+        roto = score_roto(_dict_table(all_team_stats), team_sds=ctx.team_sds)
+        pts = roto[ctx.team_name].total
+        if pts > best_pts:
+            best_pts = pts
+            best_target = cand
+    return best_target
 
 
 def _player_sgp(p: Player) -> float:
@@ -275,23 +373,49 @@ def _player_sgp(p: Player) -> float:
 
 
 def _compute_displacement_factors(
-    active: list[Player], il_players: list[Player]
+    active: list[Player],
+    il_players: list[Player],
+    *,
+    league_context: LeagueContext | None = None,
+    projection_source: ProjectionSource = "rest_of_season",
 ) -> dict[str, float]:
     """Map active-player-name → scale factor for IL-induced displacement.
 
     Processes IL players in descending playing-time order; each picks
-    the worst SGP-matching active player (via ``_find_worst_match``) and
+    the displacement target via :func:`_find_worst_match` (ΔRoto-optimal
+    when ``league_context`` is provided, lowest-SGP otherwise) and
     scales them by ``max(0, active_pt - il_pt) / active_pt``. Each
     active player is displaced at most once.
+
+    Greedy across IL players: each pick commits before the next IL
+    player is processed, with the running-state roster (IL players at
+    full-scale + already-applied displacements) passed to the picker so
+    ΔRoto evaluation sees the current team rather than the pre-IL state.
     """
     il_sorted = sorted(il_players, key=_playing_time, reverse=True)
     already_displaced: set[str] = set()
     factors: dict[str, float] = {}
+
+    # Build the running-state roster for the ΔRoto picker. IL players
+    # contribute at full scale (per the displacement model's "they'll
+    # come back" assumption); active players start unscaled and are
+    # progressively scaled as picks are made.
+    running_roster: list[Player | dict] = []
+    if league_context is not None:
+        running_roster = [*il_players, *active]
+
     for il_p in il_sorted:
         il_pt = _playing_time(il_p)
         if il_pt <= 0:
             continue
-        target = _find_worst_match(il_p, active, already_displaced)
+        target = _find_worst_match(
+            il_p,
+            active,
+            already_displaced,
+            league_context=league_context,
+            current_roster=running_roster if league_context is not None else None,
+            projection_source=projection_source,
+        )
         if target is None:
             continue
         active_pt = _playing_time(target)
@@ -300,6 +424,13 @@ def _compute_displacement_factors(
         factor = max(0.0, active_pt - il_pt) / active_pt
         already_displaced.add(target.name)
         factors[target.name] = factor
+        # Bake this pick into the running roster so the next IL player's
+        # picker sees the post-displacement state.
+        if league_context is not None:
+            running_roster = [
+                _scale_stats(p, factor) if isinstance(p, Player) and p.name == target.name else p
+                for p in running_roster
+            ]
     return factors
 
 
@@ -394,7 +525,12 @@ class RosterBreakdown:
         )
 
 
-def _apply_displacement(roster: list[Player]) -> list[Player | dict]:
+def _apply_displacement(
+    roster: list[Player],
+    *,
+    league_context: LeagueContext | None = None,
+    projection_source: ProjectionSource = "rest_of_season",
+) -> list[Player | dict]:
     """Partition roster into active/bench/IL and apply displacement scaling.
 
     Classification is slot-first:
@@ -404,9 +540,14 @@ def _apply_displacement(roster: list[Player]) -> list[Player | dict]:
       status on an active-slotted player is ignored — the manager's
       slot choice wins.
     - Slot in ``IL_SLOTS`` (IL, IL+, DL, DL+) → IL. Counted at full
-      ROS and displaces the worst SGP-matched active player.
+      ROS and displaces an active player (per ``_find_worst_match``).
     - BN slot + IL status → IL (same displacement path).
     - BN slot + healthy → excluded.
+
+    When ``league_context`` is provided, the displacement target is
+    chosen via ΔRoto-optimal selection (preserves elite low-volume
+    players like closers from being unfairly bumped by high-volume IL
+    starters). Otherwise targets are picked by lowest SGP.
 
     Returns a list where each entry is either an unmodified Player
     (active, unaffected; or IL, full-scale) or a dict of scaled stats
@@ -418,7 +559,12 @@ def _apply_displacement(roster: list[Player]) -> list[Player | dict]:
     typed = [p for p in roster if isinstance(p, Player)]
 
     active, il_players, _bench = _classify_roster(typed)
-    displacement_factors = _compute_displacement_factors(active, il_players)
+    displacement_factors = _compute_displacement_factors(
+        active,
+        il_players,
+        league_context=league_context,
+        projection_source=projection_source,
+    )
 
     # Build output: IL players at full scale + active with displacement.
     # Bench players are excluded entirely.
@@ -449,16 +595,31 @@ def _raw_stats_for(p: Player) -> dict[str, float]:
     return {k: _safe(getattr(stats, k, 0)) for k in keys}
 
 
-def compute_roster_breakdown(team_name: str, roster: list[Player]) -> RosterBreakdown:
+def compute_roster_breakdown(
+    team_name: str,
+    roster: list[Player],
+    *,
+    league_context: LeagueContext | None = None,
+    projection_source: ProjectionSource = "rest_of_season",
+) -> RosterBreakdown:
     """Return per-player contributions for ``roster``, tagged with status.
 
     Uses the same slot-first classification as :func:`_apply_displacement`,
     and the same displacement-factor math. The aggregate over
     ``raw_stats[cat] * scale_factor`` per category equals
     :func:`project_team_stats` with ``displacement=True``.
+
+    When ``league_context`` is provided, displacement targets are chosen
+    via ΔRoto-optimal selection (matches the standings layer); without
+    it, the legacy SGP picker is used.
     """
     active, il_players, bench = _classify_roster(roster)
-    displacement_factors = _compute_displacement_factors(active, il_players)
+    displacement_factors = _compute_displacement_factors(
+        active,
+        il_players,
+        league_context=league_context,
+        projection_source=projection_source,
+    )
 
     contributions: list[PlayerContribution] = []
 
@@ -520,6 +681,7 @@ def project_team_stats(
     *,
     displacement: bool = False,
     projection_source: ProjectionSource = "rest_of_season",
+    league_context: LeagueContext | None = None,
 ) -> CategoryStats:
     """Sum projected stats for a roster into a CategoryStats.
 
@@ -566,7 +728,11 @@ def project_team_stats(
     Step 9 cleanup can revisit.
     """
     if displacement:
-        roster = _apply_displacement(roster)
+        roster = _apply_displacement(
+            roster,
+            league_context=league_context,
+            projection_source=projection_source,
+        )
 
     r = hr = rbi = sb = h_total = ab_total = 0.0
     w = k = sv = ip_total = er_total = bb_total = ha_total = 0.0
