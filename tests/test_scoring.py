@@ -1138,6 +1138,306 @@ class TestDeltaRotoDisplacement:
         assert stats[Category.K] == pytest.approx(200 + 100)
 
 
+class TestPitcherPoolModel:
+    """Phase 3: when ``league_context`` is provided, pitcher displacement
+    switches from per-IL-player substitution to a pool-slot model.
+
+    Pool = active + IL pitchers. Top-N (by leave-one-out team-ΔRoto) play
+    at full scale; bottom (pool_size - active_p_slots) get sf=0 -- even
+    when those are IL pitchers themselves. This matches the real-world
+    fantasy decision (when an IL guy returns, the manager benches the
+    worst remaining pitcher, not necessarily a same-role match) and
+    avoids the substitution model's tendency to zero out elite
+    low-volume closers when high-volume IL starters are returning.
+    """
+
+    def _other_team(self, name: str, *, w=70, k=1300, sv=50, era=4.0, whip=1.25):
+        return ProjectedStandingsEntry(
+            team_name=name,
+            stats=CategoryStats(
+                r=800,
+                hr=220,
+                rbi=770,
+                sb=120,
+                avg=0.255,
+                w=w,
+                k=k,
+                sv=sv,
+                era=era,
+                whip=whip,
+            ),
+        )
+
+    def _league_context_for(self, my_team_name: str) -> "LeagueContext":
+        configs = [
+            {"w": 60, "k": 1200, "sv": 30, "era": 4.5, "whip": 1.32},
+            {"w": 65, "k": 1250, "sv": 40, "era": 4.2, "whip": 1.27},
+            {"w": 70, "k": 1300, "sv": 45, "era": 4.0, "whip": 1.25},
+            {"w": 75, "k": 1350, "sv": 50, "era": 3.85, "whip": 1.22},
+            {"w": 80, "k": 1400, "sv": 55, "era": 3.7, "whip": 1.20},
+            {"w": 72, "k": 1280, "sv": 35, "era": 4.1, "whip": 1.26},
+            {"w": 68, "k": 1320, "sv": 48, "era": 3.95, "whip": 1.23},
+            {"w": 78, "k": 1380, "sv": 52, "era": 3.78, "whip": 1.21},
+            {"w": 73, "k": 1290, "sv": 42, "era": 4.05, "whip": 1.24},
+        ]
+        baseline = {
+            f"Other {i + 1}": self._other_team(f"Other {i + 1}", **cfg).stats
+            for i, cfg in enumerate(configs)
+        }
+        team_sds = {t: dict.fromkeys(ALL_CATS, 5.0) for t in [*baseline.keys(), my_team_name]}
+        return LeagueContext(
+            baseline_other_team_stats=baseline,
+            team_sds=team_sds,
+            team_name=my_team_name,
+        )
+
+    def _hitters(self, n=10):
+        return [
+            _hitter(
+                f"H{i}",
+                r=80,
+                hr=22,
+                rbi=77,
+                sb=12,
+                h=140,
+                ab=540,
+                positions=[Position.OF],
+                selected_position=Position.OF,
+            )
+            for i in range(n)
+        ]
+
+    def test_pool_preserves_two_active_closers_when_il_starter_returns(self):
+        """Hart-like scenario: 2 elite closers + several SPs + one IL SP.
+        Pool model picks the top-9 from the pool; both closers should
+        survive because their per-IP value beats the worst SPs.
+
+        The substitution model under SGP would have role-restricted the
+        IL SP to bump an SP, but greedy ΔRoto-substitution can
+        sometimes zero a closer when high-IP IL pitchers cascade. Pool
+        model's leave-one-out comparison protects high-leverage
+        low-volume players when their absolute marginal pts > a
+        dispensable starter's.
+        """
+        elite_closer_a = _pitcher(
+            "Closer A",
+            w=4,
+            k=95,
+            sv=40,
+            ip=70,
+            er=12,
+            bb=15,
+            h_allowed=45,
+            positions=[Position.RP],
+            selected_position=Position.RP,
+        )
+        elite_closer_b = _pitcher(
+            "Closer B",
+            w=3,
+            k=80,
+            sv=32,
+            ip=60,
+            er=15,
+            bb=18,
+            h_allowed=42,
+            positions=[Position.RP],
+            selected_position=Position.RP,
+        )
+        # 7 starters of varying quality
+        starters = [
+            _pitcher(
+                f"SP{i}",
+                w=12 - i,
+                k=180 - 10 * i,
+                sv=0,
+                ip=180,
+                er=60 + 3 * i,
+                bb=50,
+                h_allowed=160 + i,
+                positions=[Position.SP],
+                selected_position=Position.SP,
+            )
+            for i in range(7)
+        ]
+        weak_sp = _pitcher(
+            "Weak SP",
+            w=4,
+            k=85,
+            sv=0,
+            ip=130,
+            er=87,
+            bb=60,
+            h_allowed=165,
+            positions=[Position.SP],
+            selected_position=Position.SP,
+        )
+        il_sp = _pitcher(
+            "IL SP",
+            w=10,
+            k=140,
+            sv=0,
+            ip=150,
+            er=60,
+            bb=40,
+            h_allowed=130,
+            positions=[Position.SP],
+            selected_position=Position.IL,
+            status="IL15",
+        )
+
+        # 9 active P slots (7 starters + 2 closers); pool size 10 (+ IL); excess 1.
+        roster = [elite_closer_a, elite_closer_b, *starters, weak_sp, *self._hitters(), il_sp]
+        ctx = self._league_context_for("My Team")
+
+        bd = compute_roster_breakdown(
+            "My Team",
+            roster,
+            league_context=ctx,
+            projection_source="rest_of_season",
+        )
+        sf = {c.name: c.scale_factor for c in bd.pitchers}
+        assert sf["Closer A"] == 1.0, "Pool model should preserve the elite closer"
+        assert sf["Closer B"] == 1.0, "Pool model should preserve the second closer too"
+        assert sf["IL SP"] == 1.0, "IL SP should fully count (model assumes recovery)"
+        # Exactly one pitcher gets benched — should be the lowest-marginal SP,
+        # not either closer or the IL SP.
+        benched = [name for name, factor in sf.items() if factor == 0.0]
+        assert len(benched) == 1
+        assert benched[0] not in {"Closer A", "Closer B", "IL SP"}
+
+    def test_pool_can_bench_an_il_pitcher_when_it_has_weakest_marginal(self):
+        """Key Phase 3 behavior: the pool can drop an IL pitcher itself
+        when active pitchers have stronger marginal contributions —
+        which is what real managers would do (don't activate a weak
+        returner over a productive incumbent).
+        """
+        # 9 strong active pitchers — every one is hard to lose
+        strong_actives = [
+            _pitcher(
+                f"Strong{i}",
+                w=15,
+                k=200,
+                sv=0,
+                ip=200,
+                er=60,
+                bb=45,
+                h_allowed=155,
+                positions=[Position.SP],
+                selected_position=Position.SP,
+            )
+            for i in range(9)
+        ]
+        # IL pitcher with weak projection (recently injured, low expected value)
+        weak_il = _pitcher(
+            "Weak IL",
+            w=2,
+            k=40,
+            sv=0,
+            ip=50,
+            er=35,
+            bb=25,
+            h_allowed=70,
+            positions=[Position.SP],
+            selected_position=Position.IL,
+            status="IL60",
+        )
+
+        roster = [*strong_actives, weak_il, *self._hitters()]
+        ctx = self._league_context_for("My Team")
+
+        bd = compute_roster_breakdown(
+            "My Team",
+            roster,
+            league_context=ctx,
+            projection_source="rest_of_season",
+        )
+        sf = {c.name: c.scale_factor for c in bd.pitchers}
+        # Pool size 10, active P slots 9, excess 1. The weakest pitcher
+        # is the IL guy — they get benched, all 9 actives preserved.
+        assert sf["Weak IL"] == 0.0, "Pool model should bench the weak IL pitcher"
+        for i in range(9):
+            assert sf[f"Strong{i}"] == 1.0, f"Strong{i} should be preserved"
+
+    def test_pool_no_op_when_all_pitchers_fit_in_slots(self):
+        """If pool size <= active P slot count, nothing gets benched.
+        Vacuously true since the team has exactly enough pitchers."""
+        actives = [
+            _pitcher(
+                f"P{i}",
+                w=10,
+                k=150,
+                sv=0,
+                ip=150,
+                er=55,
+                bb=45,
+                h_allowed=130,
+                positions=[Position.SP],
+                selected_position=Position.SP,
+            )
+            for i in range(7)
+        ]
+        roster = [*actives, *self._hitters()]
+        ctx = self._league_context_for("My Team")
+
+        bd = compute_roster_breakdown(
+            "My Team",
+            roster,
+            league_context=ctx,
+            projection_source="rest_of_season",
+        )
+        sf = {c.name: c.scale_factor for c in bd.pitchers}
+        for i in range(7):
+            assert sf[f"P{i}"] == 1.0
+
+    def test_pool_model_inactive_without_league_context(self):
+        """Backwards compat: without league_context, pitcher displacement
+        falls back to the legacy per-IL-player substitution (SGP-based
+        target picking). Phase 1's test_sp_displaces_sp result still
+        holds verbatim."""
+        good_sp = _pitcher(
+            "Good SP",
+            w=15,
+            k=200,
+            sv=0,
+            ip=190,
+            er=55,
+            bb=40,
+            h_allowed=150,
+            positions=[Position.SP],
+            selected_position=Position.SP,
+        )
+        bad_sp = _pitcher(
+            "Bad SP",
+            w=5,
+            k=80,
+            sv=0,
+            ip=120,
+            er=55,
+            bb=40,
+            h_allowed=110,
+            positions=[Position.SP],
+            selected_position=Position.SP,
+        )
+        il_sp = _pitcher(
+            "IL SP",
+            w=8,
+            k=100,
+            sv=0,
+            ip=130,
+            er=40,
+            bb=30,
+            h_allowed=100,
+            positions=[Position.SP],
+            selected_position=Position.IL,
+            status="IL15",
+        )
+        # Without league_context: substitution model — Bad SP scaled to 0
+        # (factor = max(0, 120-130)/120 = 0), totals match Phase 1 test.
+        stats = project_team_stats([good_sp, bad_sp, il_sp], displacement=True)
+        assert stats[Category.W] == pytest.approx(15 + 8)
+        assert stats[Category.K] == pytest.approx(200 + 100)
+
+
 class TestProjectedStandingsTwoPass:
     """``ProjectedStandings.from_rosters`` is the Phase 2 opt-in site for
     ΔRoto-optimal displacement. The two-pass build (SGP baseline →
