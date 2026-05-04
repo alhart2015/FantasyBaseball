@@ -217,30 +217,69 @@ def _real_positions(p: Player) -> frozenset[Position]:
     return frozenset(p.positions) - _GENERIC_SLOTS
 
 
+@dataclass(frozen=True)
+class LeagueContext:
+    """League-wide context that lets displacement target selection use
+    ΔRoto (team roto pts impact) instead of raw SGP.
+
+    SGP-based selection is volume-weighted and systematically picks
+    elite-but-low-volume players (closers) for displacement, since
+    their total SGP is small next to a 150-IP starter. ΔRoto sees that
+    losing 27 SV costs a roto point in SV but losing one SP's IP
+    barely moves K/W standings — and picks the actually-droppable arm.
+
+    Used at the standings-build layer only (``ProjectedStandings`` and
+    ``build_standings_breakdown_payload``); other callers pass ``None``
+    and keep the SGP picker.
+
+    Fields:
+        baseline_other_team_stats: ``{team_name: CategoryStats}`` for
+            every OTHER team in the league, frozen from a pass-1 SGP
+            standings build. Excludes the team being optimized.
+        team_sds: per-team category SDs (from ``build_team_sds``), used
+            by the Gaussian-pairwise scorer for variance pricing.
+        team_name: the team whose roster the picker is currently
+            evaluating displacement candidates for.
+    """
+
+    baseline_other_team_stats: Mapping[str, CategoryStats]
+    team_sds: Mapping[str, Mapping[Category, float]]
+    team_name: str
+
+
 def _find_worst_match(
     il_player: Player,
     active_players: list[Player],
     already_displaced: set[str],
+    *,
+    league_context: LeagueContext | None = None,
+    current_roster: list[Player | dict] | None = None,
+    projection_source: ProjectionSource = "rest_of_season",
 ) -> Player | None:
-    """Find the worst active player (by SGP) sharing a positional role.
+    """Find the displacement target for ``il_player``.
 
-    For pitchers: match SP vs RP role.
-    For hitters: match on overlapping real positions; fallback to worst
-    hitter overall if no position match.
+    For pitchers: any active pitcher is eligible (SP/RP roles are not
+    fungible in real-life production but ARE fungible in fantasy P
+    slots — Hader returning bumps the worst arm overall, not the only
+    same-role match). For hitters: prefer overlapping real positions
+    (1B-only can't fill SS slot), fall back to any active hitter.
+
+    Selection rule: when ``league_context`` is provided, picks the
+    candidate that maximizes the team's expected roto pts after the
+    displacement (ΔRoto-optimal). Otherwise picks the lowest-SGP
+    candidate (the historical behavior).
 
     Returns None if no eligible active player exists.
     """
     candidates: list[Player] = []
 
     if il_player.player_type == PlayerType.PITCHER:
-        role = _pitcher_role(il_player)
         for a in active_players:
             if a.name in already_displaced:
                 continue
             if a.player_type != PlayerType.PITCHER:
                 continue
-            if _pitcher_role(a) == role:
-                candidates.append(a)
+            candidates.append(a)
     else:
         il_positions = _real_positions(il_player)
         # First pass: overlapping real positions
@@ -263,8 +302,67 @@ def _find_worst_match(
     if not candidates:
         return None
 
-    # Worst = lowest total SGP
+    if league_context is not None and current_roster is not None:
+        return _find_delta_roto_optimal(
+            il_player,
+            candidates,
+            current_roster,
+            league_context,
+            projection_source,
+        )
+
+    # Fallback: SGP-based (legacy behavior, used when no league context).
+    # Note for pitchers: this can incorrectly pick an elite low-volume
+    # closer (Mason Miller) over a struggling starter, because SGP is
+    # volume-weighted. Standings/breakdown call sites should pass
+    # league_context to enable the ΔRoto-optimal picker.
     return min(candidates, key=lambda a: _player_sgp(a))
+
+
+def _find_delta_roto_optimal(
+    il_player: Player,
+    candidates: list[Player],
+    current_roster: list[Player | dict],
+    ctx: LeagueContext,
+    projection_source: ProjectionSource,
+) -> Player | None:
+    """Pick the candidate whose displacement maximizes team roto pts.
+
+    For each candidate, builds a hypothetical roster with that
+    candidate scaled by the displacement factor, sums the team's
+    projected stats (with ``displacement=False`` to avoid recursion;
+    upstream displacement state is already baked into
+    ``current_roster``), then scores via :func:`score_roto_dict`
+    against the frozen baseline of other teams' stats.
+    """
+    il_pt = _playing_time(il_player)
+    if il_pt <= 0:
+        # IL player has no playing-time projection — fall back to SGP picker
+        # so we at least pick *some* target deterministically.
+        return min(candidates, key=lambda a: _player_sgp(a))
+
+    best_target: Player | None = None
+    best_pts = -float("inf")
+    for cand in candidates:
+        active_pt = _playing_time(cand)
+        if active_pt <= 0:
+            continue
+        factor = max(0.0, active_pt - il_pt) / active_pt
+        hyp_roster: list[Player | dict] = [
+            _scale_stats(cand, factor) if isinstance(p, Player) and p.name == cand.name else p
+            for p in current_roster
+        ]
+        team_stats = project_team_stats(
+            hyp_roster, displacement=False, projection_source=projection_source
+        )
+        all_team_stats: dict[str, CategoryStats] = dict(ctx.baseline_other_team_stats)
+        all_team_stats[ctx.team_name] = team_stats
+        roto = score_roto(_dict_table(all_team_stats), team_sds=ctx.team_sds)
+        pts = roto[ctx.team_name].total
+        if pts > best_pts:
+            best_pts = pts
+            best_target = cand
+    return best_target
 
 
 def _player_sgp(p: Player) -> float:
@@ -275,23 +373,112 @@ def _player_sgp(p: Player) -> float:
 
 
 def _compute_displacement_factors(
-    active: list[Player], il_players: list[Player]
+    active: list[Player],
+    il_players: list[Player],
+    *,
+    league_context: LeagueContext | None = None,
+    projection_source: ProjectionSource = "rest_of_season",
 ) -> dict[str, float]:
-    """Map active-player-name → scale factor for IL-induced displacement.
+    """Map player-name → scale factor for IL-induced displacement.
 
-    Processes IL players in descending playing-time order; each picks
-    the worst SGP-matching active player (via ``_find_worst_match``) and
-    scales them by ``max(0, active_pt - il_pt) / active_pt``. Each
-    active player is displaced at most once.
+    Hitters (always) and pitchers (when ``league_context`` is None) use
+    the legacy substitution model: process IL players in descending
+    playing-time order; each picks the displacement target via
+    :func:`_find_worst_match` and scales them by
+    ``max(0, active_pt - il_pt) / active_pt``.
+
+    Pitchers WITH ``league_context`` use the pool-slot model: pool all
+    pitchers (active + IL), rank by leave-one-out team-ΔRoto, the
+    bottom (pool_size - active_p_slots) get sf=0 — even when those are
+    IL pitchers themselves. This matches real-world fantasy decisions
+    (when an IL guy returns, the manager benches the worst remaining
+    pitcher overall, not necessarily the role-matched one), and avoids
+    the substitution model's tendency to zero out elite low-volume
+    closers when high-volume IL starters are returning.
+
+    Each player appears in factors at most once. Players not in the
+    returned dict contribute at full scale (sf=1.0 implicit).
     """
-    il_sorted = sorted(il_players, key=_playing_time, reverse=True)
+    factors: dict[str, float] = {}
+
+    # Hitters: always legacy substitution (position constraints make a
+    # pool-slot model more complex; out of scope for the current change).
+    active_hitters = [p for p in active if p.player_type == PlayerType.HITTER]
+    il_hitters = [p for p in il_players if p.player_type == PlayerType.HITTER]
+    factors.update(
+        _compute_substitution_factors(
+            active_hitters,
+            il_hitters,
+            league_context=league_context,
+            projection_source=projection_source,
+            all_active=active,
+            all_il=il_players,
+        )
+    )
+
+    # Pitchers: pool-slot model with league_context, substitution otherwise.
+    active_pitchers = [p for p in active if p.player_type == PlayerType.PITCHER]
+    il_pitchers = [p for p in il_players if p.player_type == PlayerType.PITCHER]
+    if league_context is not None:
+        factors.update(
+            _compute_pitcher_pool_factors(
+                active_pitchers,
+                il_pitchers,
+                all_active=active,
+                all_il=il_players,
+                league_context=league_context,
+                projection_source=projection_source,
+            )
+        )
+    else:
+        factors.update(
+            _compute_substitution_factors(
+                active_pitchers,
+                il_pitchers,
+                league_context=None,
+                projection_source=projection_source,
+                all_active=active,
+                all_il=il_players,
+            )
+        )
+
+    return factors
+
+
+def _compute_substitution_factors(
+    active_subset: list[Player],
+    il_subset: list[Player],
+    *,
+    league_context: LeagueContext | None,
+    projection_source: ProjectionSource,
+    all_active: list[Player],
+    all_il: list[Player],
+) -> dict[str, float]:
+    """Legacy per-IL-player substitution displacement, restricted to a
+    player-type subset. ``all_active``/``all_il`` (the full team) are
+    used to build the ΔRoto picker's running-state roster so cross-type
+    interactions are scored correctly.
+    """
+    il_sorted = sorted(il_subset, key=_playing_time, reverse=True)
     already_displaced: set[str] = set()
     factors: dict[str, float] = {}
+
+    running_roster: list[Player | dict] = []
+    if league_context is not None:
+        running_roster = [*all_il, *all_active]
+
     for il_p in il_sorted:
         il_pt = _playing_time(il_p)
         if il_pt <= 0:
             continue
-        target = _find_worst_match(il_p, active, already_displaced)
+        target = _find_worst_match(
+            il_p,
+            active_subset,
+            already_displaced,
+            league_context=league_context,
+            current_roster=running_roster if league_context is not None else None,
+            projection_source=projection_source,
+        )
         if target is None:
             continue
         active_pt = _playing_time(target)
@@ -300,7 +487,91 @@ def _compute_displacement_factors(
         factor = max(0.0, active_pt - il_pt) / active_pt
         already_displaced.add(target.name)
         factors[target.name] = factor
+        if league_context is not None:
+            running_roster = [
+                _scale_stats(p, factor) if isinstance(p, Player) and p.name == target.name else p
+                for p in running_roster
+            ]
     return factors
+
+
+def _compute_pitcher_pool_factors(
+    active_pitchers: list[Player],
+    il_pitchers: list[Player],
+    *,
+    all_active: list[Player],
+    all_il: list[Player],
+    league_context: LeagueContext,
+    projection_source: ProjectionSource,
+) -> dict[str, float]:
+    """Pool-slot pitcher displacement: keep top-N (by team-ΔRoto), where
+    N is the count of active P-slot pitchers.
+
+    Excess pitchers get sf=0. Excess can include IL pitchers — the
+    model treats IL guys as competing for the same playing-time pool
+    as active pitchers, so a weak IL pitcher with poor projection can
+    be "benched" while an elite active closer is preserved.
+
+    Iterative-greedy selection: each round, evaluate every remaining
+    candidate against the current post-cut roster state and bench the
+    one whose removal preserves the highest team roto pts. After each
+    cut, the next round's marginals are recomputed from the new state,
+    so cumulative damage in scarce categories (e.g. cutting a second
+    closer after losing the first) shows up as a much larger marginal
+    than independent leave-one-out would suggest. This avoids the
+    pathology where two closers each look "affordable" in isolation
+    but together crash a category by several roto pts.
+
+    No-op when the pool already fits in the available slots. Skips
+    pitchers without ROS projections.
+    """
+    pool = [
+        p
+        for p in [*active_pitchers, *il_pitchers]
+        if p.rest_of_season is not None and _playing_time(p) > 0
+    ]
+    slot_count = len(active_pitchers)
+    excess = len(pool) - slot_count
+    if excess <= 0:
+        return {}
+
+    full_pool_roster: list[Player | dict] = [*all_il, *all_active]
+
+    def team_pts(stats: CategoryStats) -> float:
+        all_team_stats: dict[str, CategoryStats] = dict(league_context.baseline_other_team_stats)
+        all_team_stats[league_context.team_name] = stats
+        return score_roto(_dict_table(all_team_stats), team_sds=league_context.team_sds)[
+            league_context.team_name
+        ].total
+
+    def state_with(zero_names: set[str]) -> list[Player | dict]:
+        return [
+            _scale_stats(p, 0.0) if isinstance(p, Player) and p.name in zero_names else p
+            for p in full_pool_roster
+        ]
+
+    benched: set[str] = set()
+    remaining = list(pool)
+    for _ in range(excess):
+        best_cand: Player | None = None
+        best_pts = -float("inf")
+        for cand in remaining:
+            hyp_roster = state_with(benched | {cand.name})
+            stats = project_team_stats(
+                hyp_roster,
+                displacement=False,
+                projection_source=projection_source,
+            )
+            pts = team_pts(stats)
+            if pts > best_pts:
+                best_pts = pts
+                best_cand = cand
+        if best_cand is None:
+            break
+        benched.add(best_cand.name)
+        remaining = [p for p in remaining if p.name != best_cand.name]
+
+    return {name: 0.0 for name in benched}
 
 
 def _scale_stats(p: Player, factor: float) -> dict[str, float | PlayerType]:
@@ -394,7 +665,12 @@ class RosterBreakdown:
         )
 
 
-def _apply_displacement(roster: list[Player]) -> list[Player | dict]:
+def _apply_displacement(
+    roster: list[Player],
+    *,
+    league_context: LeagueContext | None = None,
+    projection_source: ProjectionSource = "rest_of_season",
+) -> list[Player | dict]:
     """Partition roster into active/bench/IL and apply displacement scaling.
 
     Classification is slot-first:
@@ -404,27 +680,40 @@ def _apply_displacement(roster: list[Player]) -> list[Player | dict]:
       status on an active-slotted player is ignored — the manager's
       slot choice wins.
     - Slot in ``IL_SLOTS`` (IL, IL+, DL, DL+) → IL. Counted at full
-      ROS and displaces the worst SGP-matched active player.
+      ROS and displaces an active player (per ``_find_worst_match``).
     - BN slot + IL status → IL (same displacement path).
     - BN slot + healthy → excluded.
 
+    When ``league_context`` is provided, pitcher displacement uses the
+    pool-slot model (top-N by team-ΔRoto play; bottom of pool gets sf=0,
+    even when those are IL pitchers themselves) and hitter displacement
+    uses ΔRoto-optimal substitution. Otherwise both use the legacy SGP
+    substitution model.
+
     Returns a list where each entry is either an unmodified Player
     (active, unaffected; or IL, full-scale) or a dict of scaled stats
-    (active, displaced). Non-Player entries in the input (dicts from
-    draft scripts) pass through untouched.
+    (any player with a sub-1.0 factor — including IL pitchers in the
+    pool model). Non-Player entries in the input (dicts from draft
+    scripts) pass through untouched.
     """
     # Non-Player entries pass through untouched (draft scripts use dicts).
     pass_through: list[Player | dict] = [p for p in roster if not isinstance(p, Player)]
     typed = [p for p in roster if isinstance(p, Player)]
 
     active, il_players, _bench = _classify_roster(typed)
-    displacement_factors = _compute_displacement_factors(active, il_players)
+    displacement_factors = _compute_displacement_factors(
+        active,
+        il_players,
+        league_context=league_context,
+        projection_source=projection_source,
+    )
 
-    # Build output: IL players at full scale + active with displacement.
-    # Bench players are excluded entirely.
+    # Build output: each player in active or IL is either passed through
+    # at full scale or scaled per the factors dict. Pool model can put an
+    # IL pitcher in factors with sf=0; substitution model only ever puts
+    # active players in factors. Bench players are excluded entirely.
     result: list[Player | dict] = list(pass_through)
-    result.extend(il_players)
-    for p in active:
+    for p in [*il_players, *active]:
         if p.name in displacement_factors:
             result.append(_scale_stats(p, displacement_factors[p.name]))
         else:
@@ -449,16 +738,31 @@ def _raw_stats_for(p: Player) -> dict[str, float]:
     return {k: _safe(getattr(stats, k, 0)) for k in keys}
 
 
-def compute_roster_breakdown(team_name: str, roster: list[Player]) -> RosterBreakdown:
+def compute_roster_breakdown(
+    team_name: str,
+    roster: list[Player],
+    *,
+    league_context: LeagueContext | None = None,
+    projection_source: ProjectionSource = "rest_of_season",
+) -> RosterBreakdown:
     """Return per-player contributions for ``roster``, tagged with status.
 
     Uses the same slot-first classification as :func:`_apply_displacement`,
     and the same displacement-factor math. The aggregate over
     ``raw_stats[cat] * scale_factor`` per category equals
     :func:`project_team_stats` with ``displacement=True``.
+
+    When ``league_context`` is provided, displacement targets are chosen
+    via ΔRoto-optimal selection (matches the standings layer); without
+    it, the legacy SGP picker is used.
     """
     active, il_players, bench = _classify_roster(roster)
-    displacement_factors = _compute_displacement_factors(active, il_players)
+    displacement_factors = _compute_displacement_factors(
+        active,
+        il_players,
+        league_context=league_context,
+        projection_source=projection_source,
+    )
 
     contributions: list[PlayerContribution] = []
 
@@ -483,12 +787,20 @@ def compute_roster_breakdown(team_name: str, roster: list[Player]) -> RosterBrea
         )
 
     for p in il_players:
-        status = (
-            ContributionStatus.NO_PROJECTION
-            if p.rest_of_season is None
-            else ContributionStatus.IL_FULL
-        )
-        factor = 0.0 if status == ContributionStatus.NO_PROJECTION else 1.0
+        if p.rest_of_season is None:
+            status = ContributionStatus.NO_PROJECTION
+            factor = 0.0
+        elif p.name in displacement_factors:
+            # Pool model can put an IL pitcher in the bench tier (sf=0)
+            # when the team's other pitchers are projected to outproduce
+            # the returning IL guy. Tag as DISPLACED to surface this in
+            # the breakdown UI rather than IL_FULL (which would
+            # mis-imply they're contributing).
+            status = ContributionStatus.DISPLACED
+            factor = displacement_factors[p.name]
+        else:
+            status = ContributionStatus.IL_FULL
+            factor = 1.0
         contributions.append(
             PlayerContribution(
                 name=p.name,
@@ -520,6 +832,7 @@ def project_team_stats(
     *,
     displacement: bool = False,
     projection_source: ProjectionSource = "rest_of_season",
+    league_context: LeagueContext | None = None,
 ) -> CategoryStats:
     """Sum projected stats for a roster into a CategoryStats.
 
@@ -566,7 +879,11 @@ def project_team_stats(
     Step 9 cleanup can revisit.
     """
     if displacement:
-        roster = _apply_displacement(roster)
+        roster = _apply_displacement(
+            roster,
+            league_context=league_context,
+            projection_source=projection_source,
+        )
 
     r = hr = rbi = sb = h_total = ab_total = 0.0
     w = k = sv = ip_total = er_total = bb_total = ha_total = 0.0

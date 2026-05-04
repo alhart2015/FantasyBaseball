@@ -267,6 +267,21 @@ class ProjectedStandings:
         ``rest_of_season`` (ROS-only) instead so a hot-YTD player's locked
         accumulated value doesn't bias start/sit and trade decisions.
 
+        Two-pass build to enable ΔRoto-optimal displacement:
+
+        1. Pass 1 — SGP-based displacement (legacy heuristic). Produces
+           a baseline ``{team: stats}`` snapshot.
+        2. Pass 2 — for each team, re-run with a ``LeagueContext`` that
+           freezes the OTHER teams' pass-1 stats; the displacement picker
+           now chooses the active player whose scaling preserves the
+           highest team roto pts (rather than the lowest-SGP candidate,
+           which systematically misvalues elite low-volume closers).
+
+        Other callers of ``project_team_stats`` (optimizer, draft,
+        trade evaluator) keep the SGP picker — they don't have league
+        context handy in their hot paths and the ΔRoto upgrade was
+        scoped to standings-only.
+
         TODO: Replace this approximation with current_standings + ROS
         contribution when team-level YTD AB ingest lands. Yahoo standings
         only surface AVG, not H/AB components, so the rate-stat
@@ -274,8 +289,36 @@ class ProjectedStandings:
         ``docs/feature_specs/ros_only_decision_projections.md`` Phase 3
         scope reduction (deferred to follow-up).
         """
-        from fantasy_baseball.scoring import project_team_stats
+        from fantasy_baseball.scoring import (
+            LeagueContext,
+            build_team_sds,
+            project_team_stats,
+        )
 
+        # Pass 1: SGP-based displacement → baseline {team: stats}.
+        baseline_stats: dict[str, CategoryStats] = {
+            tname: project_team_stats(
+                roster,
+                displacement=True,
+                projection_source="full_season_projection",
+            )
+            for tname, roster in team_rosters.items()
+        }
+
+        # Variance estimates per team (used by the Gaussian pairwise scorer
+        # inside the ΔRoto picker). Built off the same rosters; SGP-based
+        # displacement is fine for the SD baseline — small re-displacement
+        # shifts don't materially change the per-cat SD.
+        # Cast to dict[str, list] for build_team_sds — from_rosters accepts
+        # any Mapping at the public API boundary, but the SDs builder uses
+        # the narrower invariant type.
+        team_sds = build_team_sds(
+            {tname: list(roster) for tname, roster in team_rosters.items()},
+            sd_scale=1.0,
+        )
+
+        # Pass 2: each team re-displaces against frozen baseline-of-others
+        # using the ΔRoto-optimal picker.
         return cls(
             effective_date=effective_date,
             entries=[
@@ -285,6 +328,13 @@ class ProjectedStandings:
                         roster,
                         displacement=True,
                         projection_source="full_season_projection",
+                        league_context=LeagueContext(
+                            baseline_other_team_stats={
+                                t: s for t, s in baseline_stats.items() if t != tname
+                            },
+                            team_sds=team_sds,
+                            team_name=tname,
+                        ),
                     ),
                 )
                 for tname, roster in team_rosters.items()
