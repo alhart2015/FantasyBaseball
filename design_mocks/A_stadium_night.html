@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Standings — A: Stadium Night</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚾</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@400;600;700;800;900&family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <style>
+    /* ───────────────────────────────────────────────────────────────
+       A · STADIUM NIGHT
+       Dark brutalist scoreboard. Sodium amber on stadium black.
+       Big Shoulders Display (jumbotron) + Geist (body) + JetBrains Mono (numbers).
+       Stitched-seam dividers, diamond-glyph nav, glow-on-user-row.
+       ─────────────────────────────────────────────────────────────── */
+    :root {
+      --bg:           #0A0E14;
+      --bg-elev:      #141A22;
+      --bg-card:      #1A2230;
+      --line:         #232C3B;
+      --line-strong:  #36425A;
+      --chalk:        #ECE7DA;
+      --chalk-dim:    #A8AFBC;
+      --chalk-faint:  #6B7282;
+      --amber:        #F4B41A;
+      --amber-deep:   #B8830C;
+      --grass:        #3FA34D;
+      --grass-soft:   rgba(63,163,77,0.15);
+      --clay:         #C8553D;
+      --clay-soft:    rgba(200,85,61,0.15);
+      --user:         #F4B41A;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { background: var(--bg); }
+    body {
+      color: var(--chalk);
+      font-family: 'Geist', -apple-system, sans-serif;
+      min-height: 100vh;
+      letter-spacing: 0.005em;
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -10%, rgba(244,180,26,0.05), transparent 60%),
+        radial-gradient(ellipse 60% 40% at 90% 100%, rgba(63,163,77,0.04), transparent 60%);
+      background-attachment: fixed;
+    }
+
+    /* faint scanline atmosphere */
+    body::after {
+      content:'';
+      position:fixed; inset:0; pointer-events:none; z-index:1;
+      background: repeating-linear-gradient(0deg, transparent 0 2px, rgba(255,255,255,0.008) 2px 3px);
+    }
+
+    .layout { display: flex; min-height: 100vh; position: relative; z-index: 2; }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      width: 240px;
+      background: var(--bg-elev);
+      border-right: 1px solid var(--line);
+      display: flex; flex-direction: column;
+      position: sticky; top: 0; height: 100vh;
+      flex-shrink: 0;
+    }
+    .sidebar-header {
+      padding: 28px 24px 22px;
+      border-bottom: 1px solid var(--line);
+      position: relative;
+    }
+    .sidebar-header::after {
+      content:''; position:absolute; left:24px; bottom:-1px;
+      width: 36px; height: 2px; background: var(--amber);
+    }
+    .brand-mark {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-weight: 900;
+      font-size: 26px;
+      line-height: 0.92;
+      letter-spacing: 0.005em;
+      color: var(--chalk);
+      text-transform: uppercase;
+    }
+    .brand-sub {
+      margin-top: 8px;
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-weight: 700;
+      font-size: 10.5px;
+      letter-spacing: 0.30em;
+      color: var(--amber);
+      text-transform: uppercase;
+    }
+    .nav-link {
+      display: flex; align-items: center; gap: 12px;
+      padding: 13px 24px 13px 21px;
+      color: var(--chalk-dim);
+      text-decoration: none;
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-weight: 700;
+      font-size: 13px;
+      letter-spacing: 0.20em;
+      text-transform: uppercase;
+      border-left: 3px solid transparent;
+      transition: all .15s;
+    }
+    .nav-link:hover { background: rgba(244,180,26,0.04); color: var(--chalk); }
+    .nav-link.active {
+      color: var(--chalk);
+      background: linear-gradient(90deg, rgba(244,180,26,0.10), transparent 60%);
+      border-left-color: var(--amber);
+    }
+    .nav-link .diamond {
+      width: 7px; height: 7px;
+      transform: rotate(45deg);
+      border: 1.5px solid var(--chalk-faint);
+      transition: all .15s;
+    }
+    .nav-link.active .diamond {
+      background: var(--amber);
+      border-color: var(--amber);
+      box-shadow: 0 0 6px rgba(244,180,26,0.55);
+    }
+    .sidebar-footer {
+      margin-top: auto;
+      padding: 20px 24px;
+      border-top: 1px solid var(--line);
+    }
+    .refresh-info {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-weight: 700;
+      font-size: 10px;
+      letter-spacing: 0.26em;
+      color: var(--chalk-faint);
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .btn-refresh {
+      width: 100%;
+      padding: 11px 14px;
+      background: var(--amber);
+      color: var(--bg);
+      border: 0;
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-weight: 800;
+      font-size: 12px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .btn-refresh:hover { background: var(--amber-deep); }
+
+    /* ── Content ── */
+    .content {
+      flex: 1;
+      padding: 36px 44px 80px;
+      max-width: 1500px;
+    }
+
+    .page-header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 32px;
+      padding-bottom: 22px;
+      margin-bottom: 26px;
+      border-bottom: 1px solid var(--line);
+    }
+    .page-title {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-weight: 900;
+      font-size: 76px;
+      line-height: 0.86;
+      letter-spacing: 0.005em;
+      text-transform: uppercase;
+      color: var(--chalk);
+    }
+    .page-title .punch {
+      color: var(--amber);
+    }
+    .page-context {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-weight: 700;
+      font-size: 12px;
+      letter-spacing: 0.26em;
+      color: var(--chalk-faint);
+      text-transform: uppercase;
+      margin-top: 14px;
+      display: flex; gap: 16px; align-items: center;
+    }
+    .page-context .dot { color: var(--amber); }
+
+    /* ── Scoreboard strip (stadium KPI cards) ── */
+    .scoreboard {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-bottom: 28px;
+    }
+    .score-card {
+      position: relative;
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      padding: 22px 22px 20px 26px;
+      overflow: hidden;
+    }
+    .score-card::before {
+      content:''; position:absolute; top:0; left:0; bottom:0;
+      width: 3px; background: var(--amber);
+    }
+    .score-card.grass::before { background: var(--grass); }
+    .score-card.clay::before  { background: var(--clay); }
+    .score-card-label {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-weight: 700;
+      font-size: 10.5px;
+      letter-spacing: 0.28em;
+      color: var(--chalk-faint);
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .score-card-value {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-weight: 900;
+      font-size: 44px;
+      line-height: 0.95;
+      color: var(--chalk);
+      letter-spacing: 0.005em;
+    }
+    .score-card-trend {
+      margin-top: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 500;
+      font-size: 11.5px;
+      color: var(--grass);
+      letter-spacing: 0.04em;
+    }
+    .score-card-trend.down { color: var(--clay); }
+
+    /* ── Stitched-seam divider ── */
+    .seam {
+      height: 14px;
+      margin: 28px 0 26px;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 14' preserveAspectRatio='none'><path d='M0 5 Q 7.5 0 15 5 T 30 5 T 45 5 T 60 5 T 75 5 T 90 5 T 105 5 T 120 5 T 135 5 T 150 5 T 165 5 T 180 5 T 195 5 T 210 5 T 225 5 T 240 5' fill='none' stroke='%23C8553D' stroke-width='1.4' opacity='0.8'/><path d='M0 9 Q 7.5 14 15 9 T 30 9 T 45 9 T 60 9 T 75 9 T 90 9 T 105 9 T 120 9 T 135 9 T 150 9 T 165 9 T 180 9 T 195 9 T 210 9 T 225 9 T 240 9' fill='none' stroke='%23C8553D' stroke-width='1.4' opacity='0.8'/></svg>");
+      background-size: 240px 14px;
+      background-repeat: repeat-x;
+      opacity: 0.7;
+    }
+
+    /* ── Pill toggles ── */
+    .pill-group {
+      display: flex; gap: 0;
+      margin-bottom: 16px;
+      border: 1px solid var(--line-strong);
+      width: fit-content;
+    }
+    .pill {
+      background: var(--bg-elev);
+      color: var(--chalk-dim);
+      border: 0;
+      padding: 11px 22px;
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-weight: 800;
+      font-size: 12.5px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      cursor: pointer;
+      border-right: 1px solid var(--line-strong);
+      transition: all .12s;
+    }
+    .pill:last-child { border-right: 0; }
+    .pill:hover:not(.active) { color: var(--chalk); background: var(--bg-card); }
+    .pill.active {
+      background: var(--amber);
+      color: var(--bg);
+    }
+    .sub-pills { display: flex; gap: 4px; margin-bottom: 18px; }
+    .sub-pill {
+      background: transparent;
+      color: var(--chalk-faint);
+      border: 1px solid var(--line);
+      padding: 6px 14px;
+      font-family: 'Geist', sans-serif;
+      font-weight: 600;
+      font-size: 11px;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all .12s;
+    }
+    .sub-pill:hover { color: var(--chalk-dim); border-color: var(--line-strong); }
+    .sub-pill.active {
+      color: var(--amber);
+      border-color: var(--amber-deep);
+      background: rgba(244,180,26,0.06);
+    }
+
+    /* ── Standings table ── */
+    .standings-frame {
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      box-shadow: 0 0 0 1px rgba(244,180,26,0.04), 0 30px 60px -30px rgba(0,0,0,0.6);
+    }
+    table.standings { width: 100%; border-collapse: collapse; }
+    .standings thead th {
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-weight: 700;
+      font-size: 11px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--chalk-faint);
+      padding: 16px 8px;
+      text-align: center;
+      background: var(--bg);
+      border-bottom: 1px solid var(--line-strong);
+      white-space: nowrap;
+    }
+    .standings thead th.team-col { text-align: left; padding-left: 22px; }
+    .standings thead th.rank-col { width: 56px; }
+    .standings thead th.total-col { color: var(--amber); padding-right: 22px; }
+    .standings thead th.cat-hit { color: #B8E5C0; }
+    .standings thead th.cat-pit { color: #C8E0F4; }
+
+    .standings tbody td {
+      padding: 15px 8px;
+      text-align: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--chalk-dim);
+      border-bottom: 1px solid var(--line);
+      transition: background .12s;
+    }
+    .standings tbody tr:last-child td { border-bottom: 0; }
+    .standings tbody tr:hover td { background: rgba(244,180,26,0.025); }
+    .rank-col {
+      font-family: 'Big Shoulders Display', sans-serif !important;
+      font-weight: 800 !important;
+      font-size: 19px !important;
+      color: var(--chalk-faint) !important;
+      width: 56px;
+    }
+    .team-col {
+      text-align: left !important;
+      padding-left: 22px !important;
+      font-family: 'Geist', sans-serif !important;
+      font-weight: 600 !important;
+      font-size: 14px !important;
+      color: var(--chalk) !important;
+      letter-spacing: 0.005em;
+      width: 240px;
+    }
+    .stat-cell { font-variant-numeric: tabular-nums; }
+
+    /* Cell intensity by roto rank 1-10 */
+    .stat-cell[data-rank="10"] { background: rgba(63,163,77,0.22); color: #B8E5C0; }
+    .stat-cell[data-rank="9"]  { background: rgba(63,163,77,0.16); color: #ABDDB3; }
+    .stat-cell[data-rank="8"]  { background: rgba(63,163,77,0.10); color: #9ED2A8; }
+    .stat-cell[data-rank="7"]  { background: rgba(63,163,77,0.05); color: #B8C9B5; }
+    .stat-cell[data-rank="6"]  { color: var(--chalk-dim); }
+    .stat-cell[data-rank="5"]  { color: var(--chalk-dim); }
+    .stat-cell[data-rank="4"]  { background: rgba(200,85,61,0.05); color: #C9B6B0; }
+    .stat-cell[data-rank="3"]  { background: rgba(200,85,61,0.10); color: #E8B5A8; }
+    .stat-cell[data-rank="2"]  { background: rgba(200,85,61,0.16); color: #F0A595; }
+    .stat-cell[data-rank="1"]  { background: rgba(200,85,61,0.22); color: #F89585; }
+
+    .total-col {
+      font-family: 'Big Shoulders Display', sans-serif !important;
+      font-weight: 800 !important;
+      font-size: 22px !important;
+      color: var(--amber) !important;
+      letter-spacing: 0.015em;
+      padding-right: 22px !important;
+    }
+
+    /* User row */
+    tr.user-team td {
+      background: linear-gradient(90deg, rgba(244,180,26,0.10) 0%, rgba(244,180,26,0.03) 35%, transparent 70%) !important;
+    }
+    tr.user-team td:first-child {
+      box-shadow: inset 4px 0 0 var(--amber);
+    }
+    tr.user-team .team-col {
+      color: var(--amber) !important;
+      font-weight: 700 !important;
+    }
+    tr.user-team .total-col {
+      text-shadow: 0 0 18px rgba(244,180,26,0.6);
+    }
+    .user-tag {
+      display: inline-block;
+      margin-left: 10px;
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-weight: 700;
+      font-size: 9.5px;
+      letter-spacing: 0.24em;
+      color: var(--bg);
+      background: var(--amber);
+      padding: 2px 6px 1px;
+      vertical-align: 2px;
+    }
+
+    /* Footer / context note */
+    .legend {
+      margin-top: 22px;
+      display: flex; justify-content: space-between; align-items: center;
+      font-family: 'Big Shoulders Display', sans-serif;
+      font-weight: 700;
+      font-size: 10.5px;
+      letter-spacing: 0.24em;
+      color: var(--chalk-faint);
+      text-transform: uppercase;
+    }
+    .legend-key { display: flex; gap: 18px; align-items: center; }
+    .legend-swatch {
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .legend-swatch i {
+      width: 14px; height: 10px; display: inline-block;
+    }
+    .legend-swatch i.lead { background: var(--grass-soft); border: 1px solid var(--grass); }
+    .legend-swatch i.trail { background: var(--clay-soft); border: 1px solid var(--clay); }
+    .legend-swatch i.user-key { background: var(--amber); }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav class="sidebar">
+      <div class="sidebar-header">
+        <div class="brand-mark">Hart of<br>the Order</div>
+        <div class="brand-sub">2026 · Wk 5</div>
+      </div>
+      <a href="#" class="nav-link active"><span class="diamond"></span>Standings</a>
+      <a href="#" class="nav-link"><span class="diamond"></span>Trends</a>
+      <a href="#" class="nav-link"><span class="diamond"></span>Lineup</a>
+      <a href="#" class="nav-link"><span class="diamond"></span>Roster Audit</a>
+      <a href="#" class="nav-link"><span class="diamond"></span>Trades</a>
+      <a href="#" class="nav-link"><span class="diamond"></span>Players</a>
+      <a href="#" class="nav-link"><span class="diamond"></span>Luck</a>
+      <a href="#" class="nav-link"><span class="diamond"></span>Transactions</a>
+      <a href="#" class="nav-link"><span class="diamond"></span>Logs</a>
+      <div class="sidebar-footer">
+        <div class="refresh-info">Last refresh · 2h ago</div>
+        <button class="btn-refresh">Refresh Data</button>
+      </div>
+    </nav>
+
+    <main class="content">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Standings<span class="punch">.</span></h1>
+          <div class="page-context">
+            <span>Week 5</span><span class="dot">◆</span>
+            <span>10-Team Roto</span><span class="dot">◆</span>
+            <span>Last refresh 2h ago</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="scoreboard">
+        <div class="score-card">
+          <div class="score-card-label">Your Rank</div>
+          <div class="score-card-value">4<span style="font-size:24px;color:var(--chalk-faint);">th</span></div>
+          <div class="score-card-trend">▲ 1 since last week</div>
+        </div>
+        <div class="score-card">
+          <div class="score-card-label">Total Pts</div>
+          <div class="score-card-value">65.0</div>
+          <div class="score-card-trend">▲ 4.5 since last week</div>
+        </div>
+        <div class="score-card clay">
+          <div class="score-card-label">Behind 1st</div>
+          <div class="score-card-value">−10.0</div>
+          <div class="score-card-trend down">vs Sons of Bochy</div>
+        </div>
+        <div class="score-card grass">
+          <div class="score-card-label">Above 5th</div>
+          <div class="score-card-value">+6.0</div>
+          <div class="score-card-trend">vs Big Heart Hitters</div>
+        </div>
+      </div>
+
+      <div class="seam"></div>
+
+      <div class="pill-group">
+        <button class="pill active">Current</button>
+        <button class="pill">Projected</button>
+        <button class="pill">Monte Carlo</button>
+      </div>
+      <div class="sub-pills">
+        <button class="sub-pill active">Roto Points</button>
+        <button class="sub-pill">Stat Totals</button>
+      </div>
+
+      <div class="standings-frame">
+        <table class="standings">
+          <thead>
+            <tr>
+              <th class="rank-col">#</th>
+              <th class="team-col">Team</th>
+              <th class="cat-hit">R</th>
+              <th class="cat-hit">HR</th>
+              <th class="cat-hit">RBI</th>
+              <th class="cat-hit">SB</th>
+              <th class="cat-hit">AVG</th>
+              <th class="cat-pit">W</th>
+              <th class="cat-pit">SV</th>
+              <th class="cat-pit">K</th>
+              <th class="cat-pit">ERA</th>
+              <th class="cat-pit">WHIP</th>
+              <th class="total-col">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="rank-col">1</td>
+              <td class="team-col">Sons of Bochy</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="total-col">75.0</td>
+            </tr>
+            <tr>
+              <td class="rank-col">2</td>
+              <td class="team-col">The Bombers</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="total-col">72.0</td>
+            </tr>
+            <tr>
+              <td class="rank-col">3</td>
+              <td class="team-col">Walk-Off Warriors</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="total-col">71.0</td>
+            </tr>
+            <tr class="user-team">
+              <td class="rank-col">4</td>
+              <td class="team-col">Hart of the Order<span class="user-tag">You</span></td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="total-col">65.0</td>
+            </tr>
+            <tr>
+              <td class="rank-col">5</td>
+              <td class="team-col">Big Heart Hitters</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="total-col">59.0</td>
+            </tr>
+            <tr>
+              <td class="rank-col">6</td>
+              <td class="team-col">The Cycle</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="total-col">53.0</td>
+            </tr>
+            <tr>
+              <td class="rank-col">7</td>
+              <td class="team-col">Foul Tip Society</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="total-col">51.0</td>
+            </tr>
+            <tr>
+              <td class="rank-col">8</td>
+              <td class="team-col">Diamond Dust</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="total-col">51.0</td>
+            </tr>
+            <tr>
+              <td class="rank-col">9</td>
+              <td class="team-col">Backwards K</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="total-col">43.0</td>
+            </tr>
+            <tr>
+              <td class="rank-col">10</td>
+              <td class="team-col">Bullpen Buddies</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="total-col">10.0</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="legend">
+        <div class="legend-key">
+          <span class="legend-swatch"><i class="lead"></i> Leading category</span>
+          <span class="legend-swatch"><i class="trail"></i> Trailing category</span>
+          <span class="legend-swatch"><i class="user-key"></i> Your team</span>
+        </div>
+        <div>10 Teams · 5×5 Roto</div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

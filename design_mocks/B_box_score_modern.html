@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Standings — B: Box Score Modern</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚾</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400..700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <style>
+    /* ───────────────────────────────────────────────────────────────
+       B · BOX SCORE MODERN
+       Light, gallery-white, analytical. Newsreader serif + Outfit body.
+       Pitch-type colored chips for category headers, sparklines on user row,
+       spray-chart watermark in header. Statcast-influenced.
+       ─────────────────────────────────────────────────────────────── */
+    :root {
+      --bg:           #FAFAF7;
+      --surface:      #FFFFFF;
+      --surface-soft: #F4F2EC;
+      --line:         #E4E1D6;
+      --line-strong:  #C9C4B5;
+      --ink:          #0F1620;
+      --ink-soft:     #4A5460;
+      --ink-dim:      #87909D;
+      --ink-faint:    #B7BCC4;
+
+      --primary:      #1E5BA8;     /* Dodger blue — primary accent */
+      --primary-deep: #143F76;
+      --primary-soft: #E5EFFA;
+      --field:        #2E7D32;     /* outfield grass */
+      --field-soft:   #E5F2E6;
+      --clay:         #C0392B;     /* clay/cards red */
+      --clay-soft:    #F8E5E2;
+      --gold:         #C28D26;     /* dugout brass — used sparingly */
+
+      /* Pitch-type chips */
+      --pt-fb: #C0392B;   /* fastball — red */
+      --pt-sl: #1E5BA8;   /* slider — blue */
+      --pt-ch: #2E7D32;   /* changeup — green */
+      --pt-cb: #6B3DA8;   /* curve — purple */
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { background: var(--bg); }
+    body {
+      color: var(--ink);
+      font-family: 'Outfit', -apple-system, sans-serif;
+      min-height: 100vh;
+      letter-spacing: -0.005em;
+    }
+
+    .layout { display: flex; min-height: 100vh; }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      width: 232px;
+      background: var(--surface);
+      border-right: 1px solid var(--line);
+      display: flex; flex-direction: column;
+      position: sticky; top: 0; height: 100vh;
+      flex-shrink: 0;
+    }
+    .sidebar-header {
+      padding: 28px 24px 24px;
+      border-bottom: 1px solid var(--line);
+    }
+    .brand-mark {
+      font-family: 'Newsreader', serif;
+      font-weight: 500;
+      font-size: 22px;
+      line-height: 1.05;
+      letter-spacing: -0.018em;
+      color: var(--ink);
+      font-variation-settings: "opsz" 28;
+    }
+    .brand-mark em {
+      font-style: italic;
+      font-weight: 400;
+      color: var(--primary);
+    }
+    .brand-sub {
+      margin-top: 8px;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 600;
+      font-size: 10.5px;
+      letter-spacing: 0.18em;
+      color: var(--ink-dim);
+      text-transform: uppercase;
+    }
+    .nav-link {
+      display: flex; align-items: center; gap: 10px;
+      padding: 11px 24px 11px 21px;
+      color: var(--ink-soft);
+      text-decoration: none;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 500;
+      font-size: 13.5px;
+      letter-spacing: -0.005em;
+      border-left: 3px solid transparent;
+      transition: all .12s;
+    }
+    .nav-link:hover { background: var(--surface-soft); color: var(--ink); }
+    .nav-link.active {
+      color: var(--ink);
+      background: var(--primary-soft);
+      border-left-color: var(--primary);
+      font-weight: 600;
+    }
+    .nav-link::before {
+      content:''; width: 4px; height: 4px; border-radius: 50%;
+      background: var(--ink-faint); transition: all .12s;
+    }
+    .nav-link.active::before { background: var(--primary); transform: scale(1.6); }
+    .sidebar-footer {
+      margin-top: auto;
+      padding: 20px 24px;
+      border-top: 1px solid var(--line);
+    }
+    .refresh-info {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 500;
+      font-size: 11px;
+      color: var(--ink-dim);
+      margin-bottom: 12px;
+    }
+    .btn-refresh {
+      width: 100%;
+      padding: 10px 14px;
+      background: var(--ink);
+      color: var(--bg);
+      border: 0;
+      border-radius: 6px;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 600;
+      font-size: 12.5px;
+      letter-spacing: 0.005em;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .btn-refresh:hover { background: var(--primary); }
+
+    /* ── Content ── */
+    .content {
+      flex: 1;
+      padding: 36px 48px 80px;
+      max-width: 1500px;
+    }
+
+    /* Hero header with spray-chart watermark */
+    .hero {
+      position: relative;
+      padding: 8px 0 28px;
+      margin-bottom: 32px;
+      border-bottom: 1px solid var(--line);
+      overflow: hidden;
+    }
+    .hero-watermark {
+      position: absolute;
+      right: -40px; top: -20px;
+      width: 320px; height: 280px;
+      opacity: 0.10;
+      pointer-events: none;
+    }
+    .hero-eyebrow {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 600;
+      font-size: 11px;
+      letter-spacing: 0.22em;
+      color: var(--primary);
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .hero-title {
+      font-family: 'Newsreader', serif;
+      font-weight: 400;
+      font-size: 64px;
+      line-height: 0.96;
+      letter-spacing: -0.028em;
+      color: var(--ink);
+      font-variation-settings: "opsz" 60;
+    }
+    .hero-title em {
+      font-style: italic;
+      font-weight: 400;
+      color: var(--primary);
+    }
+    .hero-meta {
+      display: flex; gap: 28px; margin-top: 20px;
+      font-family: 'Outfit', sans-serif;
+      font-size: 13px;
+      color: var(--ink-soft);
+    }
+    .hero-meta strong {
+      color: var(--ink);
+      font-weight: 600;
+      margin-left: 4px;
+    }
+
+    /* ── KPI cards ── */
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-bottom: 32px;
+    }
+    .kpi {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 18px 20px;
+      transition: all .15s;
+    }
+    .kpi:hover { border-color: var(--line-strong); box-shadow: 0 4px 12px -4px rgba(15,22,32,0.08); }
+    .kpi-label {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 500;
+      font-size: 11px;
+      letter-spacing: 0.10em;
+      color: var(--ink-dim);
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .kpi-value {
+      font-family: 'Newsreader', serif;
+      font-weight: 400;
+      font-size: 38px;
+      line-height: 1;
+      color: var(--ink);
+      letter-spacing: -0.028em;
+      font-variation-settings: "opsz" 32;
+    }
+    .kpi-value sub {
+      font-size: 16px;
+      color: var(--ink-dim);
+      vertical-align: top;
+      margin-left: 2px;
+      font-feature-settings: "sups";
+    }
+    .kpi-trend {
+      margin-top: 10px;
+      display: flex; align-items: center; gap: 8px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11.5px;
+      font-weight: 500;
+      color: var(--field);
+    }
+    .kpi-trend.down { color: var(--clay); }
+    .kpi-trend.flat { color: var(--ink-dim); }
+    .kpi-spark {
+      width: 60px; height: 18px; flex-shrink: 0;
+    }
+
+    /* ── Pill toggles ── */
+    .pill-group {
+      display: inline-flex;
+      gap: 4px;
+      margin-bottom: 18px;
+      padding: 4px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+    .pill {
+      background: transparent;
+      color: var(--ink-soft);
+      border: 0;
+      padding: 9px 18px;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 500;
+      font-size: 13px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all .12s;
+    }
+    .pill:hover:not(.active) { color: var(--ink); background: var(--surface-soft); }
+    .pill.active {
+      background: var(--ink);
+      color: var(--bg);
+      font-weight: 600;
+    }
+    .sub-pills { display: flex; gap: 10px; margin-bottom: 20px; align-items: center; }
+    .sub-pill {
+      background: transparent;
+      color: var(--ink-dim);
+      border: 0;
+      padding: 4px 0;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 500;
+      font-size: 12.5px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all .12s;
+    }
+    .sub-pill:hover { color: var(--ink); }
+    .sub-pill.active {
+      color: var(--ink);
+      border-bottom-color: var(--primary);
+      font-weight: 600;
+    }
+    .sub-divider {
+      color: var(--ink-faint);
+      margin: 0 4px;
+    }
+
+    /* ── Standings table ── */
+    .standings-frame {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(15,22,32,0.04);
+    }
+    table.standings { width: 100%; border-collapse: collapse; }
+    .standings thead { background: var(--surface-soft); }
+    .standings thead th {
+      padding: 14px 6px 12px;
+      text-align: center;
+      border-bottom: 1px solid var(--line);
+      font-weight: 600;
+      font-size: 12px;
+      color: var(--ink-soft);
+      letter-spacing: -0.005em;
+      white-space: nowrap;
+    }
+    .standings thead th.team-col { text-align: left; padding-left: 22px; }
+    .standings thead th.rank-col { width: 48px; }
+    .standings thead th.total-col { padding-right: 22px; }
+
+    .cat-chip {
+      display: inline-block;
+      padding: 3px 8px 2px;
+      border-radius: 5px;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 700;
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      color: var(--surface);
+    }
+    .cat-chip.r    { background: var(--pt-fb); }
+    .cat-chip.hr   { background: var(--pt-fb); }
+    .cat-chip.rbi  { background: var(--pt-fb); }
+    .cat-chip.sb   { background: var(--pt-ch); }
+    .cat-chip.avg  { background: var(--pt-cb); }
+    .cat-chip.w    { background: var(--pt-sl); }
+    .cat-chip.sv   { background: var(--pt-sl); }
+    .cat-chip.k    { background: var(--pt-sl); }
+    .cat-chip.era  { background: var(--ink); }
+    .cat-chip.whip { background: var(--ink); }
+
+    .standings tbody td {
+      padding: 14px 6px;
+      text-align: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13.5px;
+      font-weight: 500;
+      color: var(--ink-soft);
+      border-bottom: 1px solid var(--line);
+      transition: background .12s;
+    }
+    .standings tbody tr:last-child td { border-bottom: 0; }
+    .standings tbody tr:hover td { background: var(--surface-soft); }
+    .rank-col {
+      font-family: 'Newsreader', serif !important;
+      font-weight: 400 !important;
+      font-style: italic;
+      font-size: 18px !important;
+      color: var(--ink-dim) !important;
+      width: 48px;
+    }
+    .team-col {
+      text-align: left !important;
+      padding-left: 22px !important;
+      font-family: 'Outfit', sans-serif !important;
+      font-weight: 500 !important;
+      font-size: 14px !important;
+      color: var(--ink) !important;
+      letter-spacing: -0.005em;
+      width: 230px;
+    }
+    .stat-cell { font-variant-numeric: tabular-nums; }
+
+    /* Cell intensity by roto rank 1-10 (light-on-light pastels) */
+    .stat-cell[data-rank="10"] { background: #D9EAD9; color: #1E5C22; }
+    .stat-cell[data-rank="9"]  { background: #E2EEDF; color: #2E7D32; }
+    .stat-cell[data-rank="8"]  { background: #EBF3E6; color: #3E8841; }
+    .stat-cell[data-rank="7"]  { background: #F2F6EC; color: #538555; }
+    .stat-cell[data-rank="6"]  { color: var(--ink-soft); }
+    .stat-cell[data-rank="5"]  { color: var(--ink-soft); }
+    .stat-cell[data-rank="4"]  { background: #FAF0EE; color: #B26859; }
+    .stat-cell[data-rank="3"]  { background: #F6E5E1; color: #A04F40; }
+    .stat-cell[data-rank="2"]  { background: #F1D8D2; color: #8E3A2D; }
+    .stat-cell[data-rank="1"]  { background: #ECCAC2; color: #7A2C20; }
+
+    .total-col {
+      font-family: 'Newsreader', serif !important;
+      font-weight: 500 !important;
+      font-size: 22px !important;
+      color: var(--ink) !important;
+      letter-spacing: -0.018em;
+      padding-right: 22px !important;
+      font-variation-settings: "opsz" 24;
+    }
+
+    /* User row */
+    tr.user-team td {
+      background: var(--primary-soft) !important;
+    }
+    tr.user-team td:first-child {
+      box-shadow: inset 4px 0 0 var(--primary);
+    }
+    tr.user-team .team-col {
+      color: var(--primary-deep) !important;
+      font-weight: 600 !important;
+    }
+    tr.user-team .total-col {
+      color: var(--primary-deep) !important;
+    }
+    .user-tag {
+      display: inline-block;
+      margin-left: 10px;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 600;
+      font-size: 9.5px;
+      letter-spacing: 0.14em;
+      color: var(--surface);
+      background: var(--primary);
+      padding: 2px 6px 1px;
+      border-radius: 3px;
+      vertical-align: 2px;
+      text-transform: uppercase;
+    }
+
+    /* Sparklines on user row totals */
+    .total-with-spark {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 10px;
+    }
+    .total-spark {
+      width: 56px; height: 16px;
+    }
+
+    /* Footer / legend */
+    .legend {
+      margin-top: 24px;
+      display: flex; justify-content: space-between; align-items: center;
+      font-family: 'Outfit', sans-serif;
+      font-size: 12px;
+      color: var(--ink-dim);
+    }
+    .legend-key { display: flex; gap: 18px; align-items: center; }
+    .legend-swatch {
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .legend-swatch i {
+      width: 12px; height: 12px; display: inline-block; border-radius: 3px;
+    }
+    .legend-swatch i.lead { background: #D9EAD9; border: 1px solid #2E7D32; }
+    .legend-swatch i.trail { background: #ECCAC2; border: 1px solid #C0392B; }
+    .legend-swatch i.user-key { background: var(--primary); }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav class="sidebar">
+      <div class="sidebar-header">
+        <div class="brand-mark">Hart of <em>the</em><br>Order</div>
+        <div class="brand-sub">2026 · Week 5</div>
+      </div>
+      <a href="#" class="nav-link active">Standings</a>
+      <a href="#" class="nav-link">Trends</a>
+      <a href="#" class="nav-link">Lineup</a>
+      <a href="#" class="nav-link">Roster Audit</a>
+      <a href="#" class="nav-link">Trades</a>
+      <a href="#" class="nav-link">Players</a>
+      <a href="#" class="nav-link">Luck</a>
+      <a href="#" class="nav-link">Transactions</a>
+      <a href="#" class="nav-link">Logs</a>
+      <div class="sidebar-footer">
+        <div class="refresh-info">Last refresh · 2h ago</div>
+        <button class="btn-refresh">Refresh Data</button>
+      </div>
+    </nav>
+
+    <main class="content">
+      <div class="hero">
+        <!-- Spray-chart watermark: stylized infield + outfield arc with hit marks -->
+        <svg class="hero-watermark" viewBox="0 0 320 280" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <!-- outfield arc -->
+          <path d="M 30 240 A 130 130 0 0 1 290 240" stroke="#0F1620" stroke-width="1.5" fill="none"/>
+          <!-- foul lines -->
+          <line x1="160" y1="240" x2="30" y2="240" stroke="#0F1620" stroke-width="1"/>
+          <line x1="160" y1="240" x2="290" y2="240" stroke="#0F1620" stroke-width="1"/>
+          <!-- infield diamond -->
+          <path d="M 160 240 L 200 200 L 160 160 L 120 200 Z" stroke="#0F1620" stroke-width="1.5" fill="none"/>
+          <!-- pitcher mound -->
+          <circle cx="160" cy="200" r="4" fill="#0F1620"/>
+          <!-- hit marks -->
+          <circle cx="80"  cy="160" r="3" fill="#1E5BA8"/>
+          <circle cx="110" cy="120" r="3" fill="#1E5BA8"/>
+          <circle cx="160" cy="100" r="3" fill="#C0392B"/>
+          <circle cx="210" cy="115" r="3" fill="#1E5BA8"/>
+          <circle cx="240" cy="155" r="3" fill="#2E7D32"/>
+          <circle cx="100" cy="200" r="3" fill="#2E7D32"/>
+          <circle cx="220" cy="200" r="3" fill="#1E5BA8"/>
+          <circle cx="135" cy="180" r="3" fill="#C0392B"/>
+        </svg>
+        <div class="hero-eyebrow">2026 Season · Roto</div>
+        <h1 class="hero-title">Standings <em>through Week 5</em></h1>
+        <div class="hero-meta">
+          <span>Refreshed <strong>2h ago</strong></span>
+          <span>Format <strong>10-Team H2H Roto</strong></span>
+          <span>Categories <strong>5×5</strong></span>
+        </div>
+      </div>
+
+      <div class="kpis">
+        <div class="kpi">
+          <div class="kpi-label">Your Rank</div>
+          <div class="kpi-value">4<sub>th</sub></div>
+          <div class="kpi-trend">
+            <svg class="kpi-spark" viewBox="0 0 60 18" fill="none">
+              <polyline points="0,14 12,12 24,10 36,8 48,6 60,4" stroke="#2E7D32" stroke-width="1.5" fill="none"/>
+            </svg>
+            ▲ 1 wk/wk
+          </div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Total Pts</div>
+          <div class="kpi-value">65.0</div>
+          <div class="kpi-trend">
+            <svg class="kpi-spark" viewBox="0 0 60 18" fill="none">
+              <polyline points="0,15 12,13 24,11 36,9 48,6 60,4" stroke="#2E7D32" stroke-width="1.5" fill="none"/>
+            </svg>
+            ▲ 4.5
+          </div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Behind 1st</div>
+          <div class="kpi-value">−10.0</div>
+          <div class="kpi-trend down">
+            <svg class="kpi-spark" viewBox="0 0 60 18" fill="none">
+              <polyline points="0,8 12,9 24,10 36,11 48,9 60,10" stroke="#C0392B" stroke-width="1.5" fill="none"/>
+            </svg>
+            Sons of Bochy
+          </div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Above 5th</div>
+          <div class="kpi-value">+6.0</div>
+          <div class="kpi-trend">
+            <svg class="kpi-spark" viewBox="0 0 60 18" fill="none">
+              <polyline points="0,12 12,11 24,10 36,9 48,7 60,5" stroke="#2E7D32" stroke-width="1.5" fill="none"/>
+            </svg>
+            Big Heart Hitters
+          </div>
+        </div>
+      </div>
+
+      <div class="pill-group">
+        <button class="pill active">Current</button>
+        <button class="pill">Projected</button>
+        <button class="pill">Monte Carlo</button>
+      </div>
+      <div class="sub-pills">
+        <button class="sub-pill active">Roto Points</button>
+        <span class="sub-divider">/</span>
+        <button class="sub-pill">Stat Totals</button>
+      </div>
+
+      <div class="standings-frame">
+        <table class="standings">
+          <thead>
+            <tr>
+              <th class="rank-col">#</th>
+              <th class="team-col">Team</th>
+              <th><span class="cat-chip r">R</span></th>
+              <th><span class="cat-chip hr">HR</span></th>
+              <th><span class="cat-chip rbi">RBI</span></th>
+              <th><span class="cat-chip sb">SB</span></th>
+              <th><span class="cat-chip avg">AVG</span></th>
+              <th><span class="cat-chip w">W</span></th>
+              <th><span class="cat-chip sv">SV</span></th>
+              <th><span class="cat-chip k">K</span></th>
+              <th><span class="cat-chip era">ERA</span></th>
+              <th><span class="cat-chip whip">WHIP</span></th>
+              <th class="total-col">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="rank-col">1</td>
+              <td class="team-col">Sons of Bochy</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="total-col">75.0</td>
+            </tr>
+            <tr>
+              <td class="rank-col">2</td>
+              <td class="team-col">The Bombers</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="total-col">72.0</td>
+            </tr>
+            <tr>
+              <td class="rank-col">3</td>
+              <td class="team-col">Walk-Off Warriors</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="total-col">71.0</td>
+            </tr>
+            <tr class="user-team">
+              <td class="rank-col">4</td>
+              <td class="team-col">Hart of the Order<span class="user-tag">You</span></td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="total-col">
+                <span class="total-with-spark">
+                  65.0
+                  <svg class="total-spark" viewBox="0 0 56 16" fill="none">
+                    <polyline points="0,12 11,11 22,10 33,8 44,6 56,4" stroke="#1E5BA8" stroke-width="1.5" fill="none"/>
+                  </svg>
+                </span>
+              </td>
+            </tr>
+            <tr>
+              <td class="rank-col">5</td>
+              <td class="team-col">Big Heart Hitters</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="8">8.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="total-col">59.0</td>
+            </tr>
+            <tr>
+              <td class="rank-col">6</td>
+              <td class="team-col">The Cycle</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="total-col">53.0</td>
+            </tr>
+            <tr>
+              <td class="rank-col">7</td>
+              <td class="team-col">Foul Tip Society</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="6">6.0</td>
+              <td class="stat-cell" data-rank="7">7.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="total-col">51.0</td>
+            </tr>
+            <tr>
+              <td class="rank-col">8</td>
+              <td class="team-col">Diamond Dust</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="4">4.0</td>
+              <td class="stat-cell" data-rank="3">3.0</td>
+              <td class="stat-cell" data-rank="5">5.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="total-col">51.0</td>
+            </tr>
+            <tr>
+              <td class="rank-col">9</td>
+              <td class="team-col">Backwards K</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="9">9.0</td>
+              <td class="stat-cell" data-rank="10">10.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="stat-cell" data-rank="2">2.0</td>
+              <td class="total-col">43.0</td>
+            </tr>
+            <tr>
+              <td class="rank-col">10</td>
+              <td class="team-col">Bullpen Buddies</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="stat-cell" data-rank="1">1.0</td>
+              <td class="total-col">10.0</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="legend">
+        <div class="legend-key">
+          <span class="legend-swatch"><i class="lead"></i> Leading</span>
+          <span class="legend-swatch"><i class="trail"></i> Trailing</span>
+          <span class="legend-swatch"><i class="user-key"></i> Your team</span>
+        </div>
+        <div>10 Teams · 5×5 Roto · Updated 2h ago</div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
