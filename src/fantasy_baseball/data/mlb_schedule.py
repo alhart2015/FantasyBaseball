@@ -113,6 +113,7 @@ def fetch_week_schedule(start_date: str, end_date: str, lookback_days: int = 0) 
         "team_abbrev_map": team_name_map,
         "start_date": start_date,
         "end_date": end_date,
+        "lookback_days": lookback_days,
         "fetched_at": local_now().isoformat(timespec="seconds"),
     }
 
@@ -134,16 +135,21 @@ def load_schedule_cache(path: Path) -> dict | None:
         return cast(dict[str, Any], json.load(f))
 
 
-def get_week_schedule(start_date: str, end_date: str, cache_path: Path) -> dict | None:
+def get_week_schedule(
+    start_date: str,
+    end_date: str,
+    cache_path: Path,
+    lookback_days: int = 0,
+) -> dict | None:
     """Main entry point for fetching the week schedule.
 
     Tries a live fetch first; on success, caches the result. On API
-    failure, falls back to the cache if the cached dates match the
-    requested dates. Returns None if both live and cached data are
-    unavailable or stale.
+    failure, falls back to the cache if the cached date range AND
+    ``lookback_days`` match the requested ones. Returns None if both
+    live and cached data are unavailable or stale.
     """
     try:
-        data = fetch_week_schedule(start_date, end_date)
+        data = fetch_week_schedule(start_date, end_date, lookback_days=lookback_days)
         save_schedule_cache(data, cache_path)
         return data
     except Exception:
@@ -153,13 +159,19 @@ def get_week_schedule(start_date: str, end_date: str, cache_path: Path) -> dict 
     if cached is None:
         return None
 
-    if cached.get("start_date") != start_date or cached.get("end_date") != end_date:
+    if (
+        cached.get("start_date") != start_date
+        or cached.get("end_date") != end_date
+        or cached.get("lookback_days", 0) != lookback_days
+    ):
         logger.warning(
-            "Cached schedule dates (%s–%s) do not match requested dates (%s–%s); ignoring cache",
+            "Cached schedule (%s-%s, lookback=%s) does not match requested (%s-%s, lookback=%s); ignoring cache",
             cached.get("start_date"),
             cached.get("end_date"),
+            cached.get("lookback_days", 0),
             start_date,
             end_date,
+            lookback_days,
         )
         return None
 

@@ -387,3 +387,52 @@ class TestGetWeekSchedule:
         result = get_week_schedule("2026-04-07", "2026-04-13", cache_path)
 
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# TestGetWeekScheduleLookback
+# ---------------------------------------------------------------------------
+
+
+class TestGetWeekScheduleLookback:
+    @patch("fantasy_baseball.data.mlb_schedule.fetch_week_schedule")
+    def test_passes_lookback_through(self, mock_fetch, tmp_path):
+        mock_fetch.return_value = {
+            "games_per_team": {},
+            "probable_pitchers": [],
+            "team_abbrev_map": {},
+            "start_date": "2026-05-05",
+            "end_date": "2026-05-11",
+            "lookback_days": 14,
+            "fetched_at": "2026-05-05T08:00:00",
+        }
+        cache_path = tmp_path / "schedule.json"
+
+        result = get_week_schedule("2026-05-05", "2026-05-11", cache_path, lookback_days=14)
+
+        mock_fetch.assert_called_once_with("2026-05-05", "2026-05-11", lookback_days=14)
+        assert result["lookback_days"] == 14
+
+    @patch(
+        "fantasy_baseball.data.mlb_schedule.fetch_week_schedule",
+        side_effect=RuntimeError("api down"),
+    )
+    def test_cache_match_includes_lookback(self, _mock_fetch, tmp_path):
+        cache_path = tmp_path / "schedule.json"
+        # Cache from a prior 0-lookback fetch
+        save_schedule_cache(
+            {
+                "games_per_team": {},
+                "probable_pitchers": [],
+                "team_abbrev_map": {},
+                "start_date": "2026-05-05",
+                "end_date": "2026-05-11",
+                "lookback_days": 0,
+                "fetched_at": "2026-05-04T08:00:00",
+            },
+            cache_path,
+        )
+
+        # Caller now wants 14-day lookback - cache must NOT match.
+        result = get_week_schedule("2026-05-05", "2026-05-11", cache_path, lookback_days=14)
+        assert result is None
