@@ -60,7 +60,34 @@ def build_team_game_index(
     Returns a chronological list (by date, then game_number). Each
     entry exposes the opponent and the announced starter for that team.
     """
-    raise NotImplementedError("Implemented in Task 4")
+    slots: list[GameSlot] = []
+    for game in probable_pitchers:
+        if game["away_team"] == team_abbrev:
+            opponent = game["home_team"]
+            indicator = "@"
+            starter = game.get("away_pitcher", "") or ""
+        elif game["home_team"] == team_abbrev:
+            opponent = game["away_team"]
+            indicator = "vs"
+            starter = game.get("home_pitcher", "") or ""
+        else:
+            continue
+
+        if starter == "TBD":
+            starter = ""
+
+        slots.append(
+            GameSlot(
+                date=game["date"],
+                game_number=int(game.get("game_number", 1) or 1),
+                opponent=opponent,
+                indicator=indicator,
+                announced_starter=starter,
+            )
+        )
+
+    slots.sort(key=lambda s: (s.date, s.game_number))
+    return slots
 
 
 def find_anchor_index(
