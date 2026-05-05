@@ -127,7 +127,14 @@ def project_start_indices(
     exceeding ``total_games - 1``. Returns an empty list if anchor_index
     is negative.
     """
-    raise NotImplementedError("Implemented in Task 6")
+    if anchor_index < 0:
+        return []
+    indices: list[int] = []
+    nxt = anchor_index + step
+    while nxt < total_games:
+        indices.append(nxt)
+        nxt += step
+    return indices
 
 
 def compose_pitcher_entries(

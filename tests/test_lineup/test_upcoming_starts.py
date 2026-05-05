@@ -7,6 +7,7 @@ from fantasy_baseball.lineup.upcoming_starts import (
     StartEntry,
     build_team_game_index,
     find_anchor_index,
+    project_start_indices,
 )
 
 
@@ -144,3 +145,23 @@ class TestFindAnchorIndex:
         games = [_slot("2026-05-01", "TEX", ann="José Berríos")]
         idx = find_anchor_index(games, "Jose Berrios", today=_date(2026, 5, 7))
         assert idx == 0
+
+
+class TestProjectStartIndices:
+    def test_simple_rotation_one_projection(self):
+        # 10 games total, anchor at index 2 -> projections at 7
+        assert project_start_indices(anchor_index=2, total_games=10, step=5) == [7]
+
+    def test_two_projections_within_window(self):
+        # anchor 0, total 12 -> 5, 10
+        assert project_start_indices(anchor_index=0, total_games=12, step=5) == [5, 10]
+
+    def test_no_projection_when_anchor_at_end(self):
+        assert project_start_indices(anchor_index=7, total_games=10, step=5) == []
+
+    def test_anchor_index_negative_returns_empty(self):
+        assert project_start_indices(anchor_index=-1, total_games=10, step=5) == []
+
+    def test_step_other_than_five(self):
+        # 6-man rotation = step 6
+        assert project_start_indices(anchor_index=0, total_games=20, step=6) == [6, 12, 18]
