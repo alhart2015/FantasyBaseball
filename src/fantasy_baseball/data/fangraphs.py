@@ -1,5 +1,6 @@
-import pandas as pd
 from pathlib import Path
+
+import pandas as pd
 
 from fantasy_baseball.models.player import PlayerType
 
@@ -29,6 +30,7 @@ PITCHING_COLUMN_MAP: dict[str, str] = {
     "ERA": "era",
     "WHIP": "whip",
     "SV": "sv",
+    "GS": "gs",
     "ADP": "adp",
     "ER": "er",
     "BB": "bb",

@@ -1,7 +1,8 @@
 import json
 import logging
 from collections import defaultdict
-from datetime import datetime
+from datetime import date as _date
+from datetime import timedelta as _timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -46,14 +47,29 @@ def _build_team_name_map() -> dict[str, str]:
     return name_map
 
 
-def fetch_week_schedule(start_date: str, end_date: str) -> dict:
+def fetch_week_schedule(start_date: str, end_date: str, lookback_days: int = 0) -> dict:
     """Fetch the MLB schedule for a date range and return structured data.
 
     Filters to regular-season games only (game_type == "R").
     Returns game counts per team (FanGraphs abbreviations), probable
     pitchers, team abbreviation map, and metadata.
+
+    When ``lookback_days > 0``, the actual statsapi call covers
+    ``(start_date - lookback_days) .. end_date``. The returned
+    ``start_date`` and ``end_date`` fields still reflect the original
+    scoring window, not the lookback span. ``games_per_team`` only
+    counts games inside ``start_date..end_date`` so existing consumers
+    that read it as the per-team count for the scoring week stay correct.
+
+    Each ``probable_pitchers`` entry includes ``game_number`` (defaults
+    to 1; >1 marks the second game of a doubleheader). Sorting by
+    (date, game_number) gives a stable chronological order.
     """
-    games = statsapi.schedule(start_date, end_date)
+    fetch_start = start_date
+    if lookback_days > 0:
+        fetch_start = (_date.fromisoformat(start_date) - _timedelta(days=lookback_days)).isoformat()
+
+    games = statsapi.schedule(fetch_start, end_date)
     team_name_map = _build_team_name_map()
 
     games_per_team: dict[str, int] = defaultdict(int)
@@ -70,19 +86,25 @@ def fetch_week_schedule(start_date: str, end_date: str) -> dict:
         away_abbrev = team_name_map.get(away_name, away_name)
         home_abbrev = team_name_map.get(home_name, home_name)
 
-        games_per_team[away_abbrev] += 1
-        games_per_team[home_abbrev] += 1
+        # Per-team game counts: scoring-week only, so other consumers
+        # of games_per_team don't see lookback games.
+        if game_date >= start_date:
+            games_per_team[away_abbrev] += 1
+            games_per_team[home_abbrev] += 1
 
         away_pitcher = game.get("away_probable_pitcher", "") or "TBD"
         home_pitcher = game.get("home_probable_pitcher", "") or "TBD"
 
-        probable_pitchers.append({
-            "date": game_date,
-            "away_team": away_abbrev,
-            "home_team": home_abbrev,
-            "away_pitcher": away_pitcher,
-            "home_pitcher": home_pitcher,
-        })
+        probable_pitchers.append(
+            {
+                "date": game_date,
+                "game_number": int(game.get("game_num", 1) or 1),
+                "away_team": away_abbrev,
+                "home_team": home_abbrev,
+                "away_pitcher": away_pitcher,
+                "home_pitcher": home_pitcher,
+            }
+        )
 
     return {
         "games_per_team": dict(games_per_team),
@@ -90,6 +112,7 @@ def fetch_week_schedule(start_date: str, end_date: str) -> dict:
         "team_abbrev_map": team_name_map,
         "start_date": start_date,
         "end_date": end_date,
+        "lookback_days": lookback_days,
         "fetched_at": local_now().isoformat(timespec="seconds"),
     }
 
@@ -111,16 +134,21 @@ def load_schedule_cache(path: Path) -> dict | None:
         return cast(dict[str, Any], json.load(f))
 
 
-def get_week_schedule(start_date: str, end_date: str, cache_path: Path) -> dict | None:
+def get_week_schedule(
+    start_date: str,
+    end_date: str,
+    cache_path: Path,
+    lookback_days: int = 0,
+) -> dict | None:
     """Main entry point for fetching the week schedule.
 
     Tries a live fetch first; on success, caches the result. On API
-    failure, falls back to the cache if the cached dates match the
-    requested dates. Returns None if both live and cached data are
-    unavailable or stale.
+    failure, falls back to the cache if the cached date range AND
+    ``lookback_days`` match the requested ones. Returns None if both
+    live and cached data are unavailable or stale.
     """
     try:
-        data = fetch_week_schedule(start_date, end_date)
+        data = fetch_week_schedule(start_date, end_date, lookback_days=lookback_days)
         save_schedule_cache(data, cache_path)
         return data
     except Exception:
@@ -130,13 +158,19 @@ def get_week_schedule(start_date: str, end_date: str, cache_path: Path) -> dict 
     if cached is None:
         return None
 
-    if cached.get("start_date") != start_date or cached.get("end_date") != end_date:
+    if (
+        cached.get("start_date") != start_date
+        or cached.get("end_date") != end_date
+        or cached.get("lookback_days", 0) != lookback_days
+    ):
         logger.warning(
-            "Cached schedule dates (%s–%s) do not match requested dates (%s–%s); ignoring cache",
+            "Cached schedule (%s-%s, lookback=%s) does not match requested (%s-%s, lookback=%s); ignoring cache",
             cached.get("start_date"),
             cached.get("end_date"),
+            cached.get("lookback_days", 0),
             start_date,
             end_date,
+            lookback_days,
         )
         return None
 

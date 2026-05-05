@@ -418,3 +418,87 @@ class TestFullSeasonProjectionsLoad:
         ), "Expected the missing-full-season warning; saw: " + ", ".join(
             r.getMessage() for r in caplog.records
         )
+
+
+class TestProbableStartersWiring:
+    """Task 10: ``_fetch_probable_starters`` must request a 14-day
+    lookback from ``get_week_schedule`` and pre-filter the roster to
+    SP-eligible + projected gs > 0 before invoking
+    ``get_probable_starters``. The upcoming-starts module needs each
+    pitcher's most recent start as the rotation anchor; closers/RPs
+    should not propagate downstream as fake "starting" pitchers."""
+
+    def test_fetch_probable_starters_passes_lookback_and_filters_sp(
+        self,
+        monkeypatch,
+        configured_test_env,
+        fake_redis,
+    ):
+        import pandas as pd
+
+        from fantasy_baseball.data import mlb_schedule
+        from fantasy_baseball.lineup import matchups as _matchups
+        from fantasy_baseball.models.player import Player, PlayerType
+        from fantasy_baseball.models.positions import Position
+        from fantasy_baseball.web import refresh_pipeline as rp_mod
+
+        captured: dict = {}
+
+        def fake_get_week_schedule(start_date, end_date, cache_path, lookback_days=0):
+            captured["lookback_days"] = lookback_days
+            return {
+                "probable_pitchers": [],
+                "start_date": start_date,
+                "end_date": end_date,
+            }
+
+        def fake_get_probable_starters(pitcher_roster, schedule, **kwargs):
+            captured["roster_names"] = [p.name for p in pitcher_roster]
+            return []
+
+        # Patch get_week_schedule at the source module — _fetch_probable_starters
+        # imports it lazily inside the method, so the binding is resolved at
+        # call time.
+        monkeypatch.setattr(mlb_schedule, "get_week_schedule", fake_get_week_schedule)
+        monkeypatch.setattr(_matchups, "get_probable_starters", fake_get_probable_starters)
+        monkeypatch.setattr(_matchups, "get_team_batting_stats", lambda _path: {})
+        # Don't actually hit the KV — write_cache is fine to no-op.
+        monkeypatch.setattr(rp_mod, "write_cache", lambda *a, **kw: None)
+
+        run = rp_mod.RefreshRun()
+        run.start_date = "2026-04-13"
+        run.end_date = "2026-04-19"
+        run.roster_players = [
+            Player(
+                name="Bryan Woo",
+                player_type=PlayerType.PITCHER,
+                positions=[Position.SP, Position.P],
+                selected_position=Position.P,
+                team="SEA",
+            ),
+            Player(
+                name="Mason Miller",
+                player_type=PlayerType.PITCHER,
+                positions=[Position.RP, Position.P],
+                selected_position=Position.P,
+                team="OAK",
+            ),
+        ]
+        run.pitchers_proj = pd.DataFrame(
+            [
+                {"name": "Bryan Woo", "gs": 22, "ip": 130.0},
+                {"name": "Mason Miller", "gs": 0, "ip": 60.0},
+            ]
+        )
+
+        run._fetch_probable_starters()
+
+        assert captured["lookback_days"] == 14, (
+            f"Expected lookback_days=14; got {captured.get('lookback_days')!r}"
+        )
+        assert "Bryan Woo" in captured["roster_names"], (
+            f"SP with gs>0 should pass through; got {captured['roster_names']}"
+        )
+        assert "Mason Miller" not in captured["roster_names"], (
+            f"RP with gs=0 should be filtered out; got {captured['roster_names']}"
+        )

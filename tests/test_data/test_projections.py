@@ -48,6 +48,24 @@ class TestBlendProjections:
         expected_era = 71.0 * 9 / 197.5
         assert cole["era"] == pytest.approx(expected_era, abs=0.01)
 
+    def test_blend_preserves_gs_column(self, fixtures_dir):
+        """Regression: `gs` must survive the pitcher blend pipeline so
+        upcoming-starts (filter_starting_pitchers in lineup/upcoming_starts.py)
+        can distinguish SPs from RPs. Without GS in PITCHING_COLUMN_MAP and
+        `gs` in PITCHING_COUNTING_COLS, the blend silently dropped the
+        column and every refresh wrote an empty PROBABLE_STARTERS cache."""
+        _hitters, pitchers, _ = blend_projections(
+            fixtures_dir,
+            systems=["steamer", "zips"],
+        )
+        assert "gs" in pitchers.columns
+        cole = pitchers[pitchers["name"] == "Gerrit Cole"].iloc[0]
+        # Steamer GS=32, ZiPS GS=31, equal weight -> 31.5
+        assert cole["gs"] == pytest.approx(31.5)
+        # Closer should still have gs=0
+        clase = pitchers[pitchers["name"] == "Emmanuel Clase"].iloc[0]
+        assert clase["gs"] == 0
+
     def test_blended_whip_recomputed_from_components(self, fixtures_dir):
         _hitters, pitchers, _ = blend_projections(
             fixtures_dir,
@@ -168,6 +186,43 @@ class TestMatchRosterToProjections:
         assert result[0].rest_of_season.hr == 45
         assert result[0].rest_of_season.avg == 0.291
         assert result[0].positions == ["OF"]
+
+    def test_player_team_populated_from_projection_row(self):
+        """Player.team must come from the projection row's `team` column.
+
+        Without this, lineup.matchups.get_probable_starters silently
+        skips every roster pitcher (it filters by `pitcher.team` to
+        select team-game indices), so the Upcoming Starts widget would
+        be permanently empty in production.
+        """
+        roster = [
+            {"name": "Gerrit Cole", "positions": ["SP"], "player_id": "9"},
+        ]
+        hitters = pd.DataFrame(columns=["name", "_name_norm", "player_type"])
+        pitchers = pd.DataFrame(
+            [
+                {
+                    "name": "Gerrit Cole",
+                    "_name_norm": "gerrit cole",
+                    "team": "NYY",
+                    "ip": 200.0,
+                    "w": 15,
+                    "k": 220,
+                    "sv": 0,
+                    "er": 70,
+                    "bb": 50,
+                    "h_allowed": 175,
+                    "era": 3.15,
+                    "whip": 1.10,
+                    "gs": 32,
+                    "player_type": "pitcher",
+                }
+            ]
+        )
+
+        result = match_roster_to_projections(roster, hitters, pitchers)
+        assert len(result) == 1
+        assert result[0].team == "NYY"
 
     def test_pitcher_returns_pitcher_stats(self):
         roster = [

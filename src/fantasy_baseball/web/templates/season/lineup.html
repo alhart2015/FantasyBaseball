@@ -155,54 +155,69 @@
 {# Probable starters section #}
 {% if starters %}
 <div class="section-header" style="margin-top: 24px;">
-    <h3>Probable Starters</h3>
+    <h3>Upcoming Starts</h3>
 </div>
+
+<style>
+  .upcoming-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    margin: 2px 4px 2px 0;
+    border-radius: 12px;
+    font-size: 0.85em;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .upcoming-chip.q-great {
+    background: var(--badge-success-bg, #1b3b1b);
+    color: var(--badge-success-fg, #c4f3c4);
+    border-color: var(--badge-success-fg, #4caf50);
+  }
+  .upcoming-chip.q-fair {
+    background: var(--badge-warning-bg, #3b3b1b);
+    color: var(--badge-warning-fg, #f3e3c4);
+    border-color: var(--badge-warning-fg, #d3a64c);
+  }
+  .upcoming-chip.q-tough {
+    background: var(--badge-danger-bg, #3b1b1b);
+    color: var(--badge-danger-fg, #f3c4c4);
+    border-color: var(--badge-danger-fg, #d34c4c);
+  }
+  .upcoming-chip.projected {
+    border-style: dashed;
+    opacity: 0.85;
+  }
+</style>
 
 <table class="data-table">
     <thead>
         <tr>
-            <th>Pitcher</th>
-            <th>Day</th>
-            <th>Opponent</th>
-            <th>Matchup</th>
-            <th>Starts</th>
+            <th style="text-align: left;">Pitcher</th>
+            <th style="text-align: left;">Upcoming Starts</th>
+            <th>Total</th>
         </tr>
     </thead>
     <tbody>
     {% for s in starters %}
-        <tr class="expandable" onclick="toggleExpand(this)">
+        <tr>
             <td style="text-align: left; font-weight: 500;">{{ s.pitcher }}</td>
-            <td>{{ s.days }}</td>
-            <td>{{ s.opponents }}</td>
-            <td>
-                {% if s.matchup_quality == "Great" %}
-                <span class="badge badge-success">Great</span>
-                {% elif s.matchup_quality == "Fair" %}
-                <span class="badge badge-warning">Fair</span>
-                {% elif s.matchup_quality == "Tough" %}
-                <span class="badge badge-danger">Tough</span>
-                {% endif %}
+            <td style="text-align: left;">
+                {% for m in s.matchups %}
+                    <span class="upcoming-chip
+                              {% if m.matchup_quality == 'Great' %}q-great{% elif m.matchup_quality == 'Tough' %}q-tough{% else %}q-fair{% endif %}
+                              {% if not m.announced %}projected{% endif %}"
+                          title="{{ m.day }} {{ m.indicator }} {{ m.opponent }}{% if m.detail and m.detail.ops %} — OPS {{ m.detail.ops }} ({{ m.detail.ops_rank }}th), K% {{ m.detail.k_pct }} ({{ m.detail.k_rank }}th){% endif %}{% if not m.announced %} · projected from rotation{% endif %}">
+                        {{ m.day }} {{ m.indicator }}{{ m.opponent }}
+                        {% if m.detail and m.detail.ops_rank %}
+                          <span style="opacity: 0.75;">({{ m.detail.ops_rank }})</span>
+                        {% endif %}
+                    </span>
+                {% endfor %}
             </td>
             <td>
                 {{ s.starts }}
                 {% if s.starts and s.starts | int >= 2 %}
                 <span class="badge badge-info" style="margin-left: 4px;">2-start</span>
-                {% endif %}
-            </td>
-        </tr>
-        <tr class="expand-content">
-            <td colspan="5">
-                {% for m in s.matchups %}
-                <div style="padding: 4px 0;">
-                    <strong>{{ m.day }}</strong> {{ m.indicator }} {{ m.opponent }}
-                    {% if m.detail and m.detail.ops %}
-                    — OPS: {{ m.detail.ops }} ({{ m.detail.ops_rank }}th)
-                    · K%: {{ m.detail.k_pct }}% ({{ m.detail.k_rank }}th)
-                    {% endif %}
-                </div>
-                {% endfor %}
-                {% if not s.matchups %}
-                <div style="padding: 4px 0; color: var(--text-secondary);">No matchup detail available.</div>
                 {% endif %}
             </td>
         </tr>
@@ -216,13 +231,6 @@
 
 <script>
 var userTeamKey = "{{ user_team_key }}";
-
-function toggleExpand(row) {
-    var next = row.nextElementSibling;
-    if (next && next.classList.contains('expand-content')) {
-        next.classList.toggle('open');
-    }
-}
 
 function runOptimize(btn) {
     btn.disabled = true;
