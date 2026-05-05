@@ -547,10 +547,13 @@ def match_roster_to_projections(
         else:
             parsed_slot = Position.parse(raw_slot)
 
+        proj_team_raw = proj.get("team", "")
+        team = "" if proj_team_raw is None else str(proj_team_raw)
         p = Player(
             name=name,
             player_type=ptype,
             positions=parsed_positions,
+            team=team,
             yahoo_id=player.get("player_id", ""),
             selected_position=parsed_slot,
             status=player.get("status", ""),

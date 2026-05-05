@@ -187,6 +187,43 @@ class TestMatchRosterToProjections:
         assert result[0].rest_of_season.avg == 0.291
         assert result[0].positions == ["OF"]
 
+    def test_player_team_populated_from_projection_row(self):
+        """Player.team must come from the projection row's `team` column.
+
+        Without this, lineup.matchups.get_probable_starters silently
+        skips every roster pitcher (it filters by `pitcher.team` to
+        select team-game indices), so the Upcoming Starts widget would
+        be permanently empty in production.
+        """
+        roster = [
+            {"name": "Gerrit Cole", "positions": ["SP"], "player_id": "9"},
+        ]
+        hitters = pd.DataFrame(columns=["name", "_name_norm", "player_type"])
+        pitchers = pd.DataFrame(
+            [
+                {
+                    "name": "Gerrit Cole",
+                    "_name_norm": "gerrit cole",
+                    "team": "NYY",
+                    "ip": 200.0,
+                    "w": 15,
+                    "k": 220,
+                    "sv": 0,
+                    "er": 70,
+                    "bb": 50,
+                    "h_allowed": 175,
+                    "era": 3.15,
+                    "whip": 1.10,
+                    "gs": 32,
+                    "player_type": "pitcher",
+                }
+            ]
+        )
+
+        result = match_roster_to_projections(roster, hitters, pitchers)
+        assert len(result) == 1
+        assert result[0].team == "NYY"
+
     def test_pitcher_returns_pitcher_stats(self):
         roster = [
             {
