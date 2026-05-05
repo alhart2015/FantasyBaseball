@@ -232,13 +232,6 @@
 <script>
 var userTeamKey = "{{ user_team_key }}";
 
-function toggleExpand(row) {
-    var next = row.nextElementSibling;
-    if (next && next.classList.contains('expand-content')) {
-        next.classList.toggle('open');
-    }
-}
-
 function runOptimize(btn) {
     btn.disabled = true;
     btn.textContent = 'Optimizing...';
