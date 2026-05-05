@@ -3,7 +3,7 @@
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -11,7 +11,6 @@ import pandas as pd
 import statsapi
 
 from fantasy_baseball.data.mlb_schedule import normalize_team_abbrev
-from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.time_utils import local_today
 
 logger = logging.getLogger(__name__)
@@ -283,124 +282,109 @@ def get_probable_starters(
     schedule: dict[str, Any],
     matchup_factors: dict[str, dict[str, float]] | None = None,
     team_stats: dict[str, dict[str, float]] | None = None,
+    today: date | None = None,
+    window_start: date | None = None,
+    window_end: date | None = None,
 ) -> list[dict[str, Any]]:
-    """Cross-reference roster pitchers with the weekly schedule.
+    """Build per-pitcher rollups of upcoming starts in the scoring week.
 
-    Returns structured data for each start found, sorted by date.
-    Each entry has: pitcher, date, day, opponent, indicator (@/vs),
-    matchup_quality (Great/Fair/Tough), starts (count for that pitcher),
-    and detail (ops, ops_rank, k_pct, k_rank) for expandable UI rows.
+    Combines MLB-announced probables with rotation projections. Each
+    rollup row carries:
+        pitcher, starts, days, opponents, matchup_quality (worst-case),
+        matchups (list of per-start StartEntry dicts including ``announced``).
 
     Args:
-        pitcher_roster: List of player dicts/Series with "name" key.
-        schedule: Result of get_week_schedule() with "probable_pitchers".
-        matchup_factors: Result of calculate_matchup_factors(). Used for
-            quality badges. If None, falls back to raw OPS thresholds.
-        team_stats: Raw team batting stats {abbrev: {ops, k_pct}}.
-            Used for detail data (OPS rank, K% rank).
+        pitcher_roster: roster pitchers (must have .name and .team).
+        schedule: result of get_week_schedule() containing probable_pitchers.
+        matchup_factors: result of calculate_matchup_factors().
+        team_stats: raw team batting stats {abbrev: {ops, k_pct}}.
+        today: cutoff for anchor lookup. Defaults to local_today().
+        window_start, window_end: scoring-week bounds. Default to the
+            schedule dict's start_date/end_date.
     """
+    from fantasy_baseball.lineup.upcoming_starts import (
+        build_team_game_index,
+        compose_pitcher_entries,
+    )
+
     if not schedule or not schedule.get("probable_pitchers"):
         return []
 
-    roster_names = {normalize_name(p.name) for p in pitcher_roster}
+    pps = schedule["probable_pitchers"]
 
-    # Pre-compute rankings for detail display
+    if today is None:
+        today = local_today()
+    if window_start is None:
+        window_start = date.fromisoformat(schedule["start_date"])
+    if window_end is None:
+        window_end = date.fromisoformat(schedule["end_date"])
+
+    matchup_factors = matchup_factors or {}
+    team_stats = team_stats or {}
+
     if team_stats:
         ops_ranked = sorted(team_stats.items(), key=lambda x: x[1]["ops"], reverse=True)
-        k_ranked = sorted(team_stats.items(), key=lambda x: x[1]["k_pct"], reverse=False)
+        k_ranked = sorted(team_stats.items(), key=lambda x: x[1]["k_pct"])
         ops_rank_map = {abbrev: i + 1 for i, (abbrev, _) in enumerate(ops_ranked)}
         k_rank_map = {abbrev: i + 1 for i, (abbrev, _) in enumerate(k_ranked)}
     else:
         ops_rank_map = {}
         k_rank_map = {}
 
-    # Collect starts per pitcher
-    pitcher_starts: dict[str, list[dict[str, Any]]] = {}
+    rollups: list[dict[str, Any]] = []
+    for pitcher in pitcher_roster:
+        team_abbrev = getattr(pitcher, "team", "") or ""
+        if not team_abbrev:
+            continue
 
-    for game in schedule["probable_pitchers"]:
-        for side in ("away", "home"):
-            pitcher_name = game.get(f"{side}_pitcher", "TBD")
-            if not pitcher_name or pitcher_name == "TBD":
-                continue
-            if normalize_name(pitcher_name) not in roster_names:
-                continue
+        team_games = build_team_game_index(pps, team_abbrev)
+        if not team_games:
+            continue
 
-            opponent = game["home_team"] if side == "away" else game["away_team"]
-            indicator = "@" if side == "away" else "vs"
+        entries = compose_pitcher_entries(
+            pitcher.name,
+            team_games,
+            today=today,
+            window_start=window_start,
+            window_end=window_end,
+            matchup_factors=matchup_factors,
+            team_stats=team_stats,
+            ops_rank_map=ops_rank_map,
+            k_rank_map=k_rank_map,
+        )
+        if not entries:
+            continue
 
-            # Parse day name from date
-            try:
-                from datetime import datetime as dt
-
-                day = dt.strptime(game["date"], "%Y-%m-%d").strftime("%a")
-            except (ValueError, KeyError):
-                day = "?"
-
-            # Matchup quality badge
-            if matchup_factors and opponent in matchup_factors:
-                f = matchup_factors[opponent]["era_whip_factor"]
-                if f <= 0.93:
-                    quality = "Great"
-                elif f >= 1.03:
-                    quality = "Tough"
-                else:
-                    quality = "Fair"
-            elif team_stats and opponent in team_stats:
-                avg_ops = sum(s["ops"] for s in team_stats.values()) / len(team_stats)
-                ops = team_stats[opponent]["ops"]
-                if ops < avg_ops * 0.95:
-                    quality = "Great"
-                elif ops > avg_ops * 1.05:
-                    quality = "Tough"
-                else:
-                    quality = "Fair"
-            else:
-                quality = "Fair"
-
-            # Detail data for expandable rows
-            opp_stats = team_stats.get(opponent, {}) if team_stats else {}
-            detail = {
-                "ops": round(opp_stats.get("ops", 0.0), 3),
-                "ops_rank": ops_rank_map.get(opponent, 0),
-                "k_pct": round(opp_stats.get("k_pct", 0.0) * 100, 1)
-                if opp_stats.get("k_pct", 0) < 1
-                else round(opp_stats.get("k_pct", 0.0), 1),
-                "k_rank": k_rank_map.get(opponent, 0),
-            }
-
-            start_entry = {
-                "date": game.get("date", ""),
-                "day": day,
-                "opponent": opponent,
-                "indicator": indicator,
-                "matchup_quality": quality,
-                "detail": detail,
-            }
-
-            if pitcher_name not in pitcher_starts:
-                pitcher_starts[pitcher_name] = []
-            pitcher_starts[pitcher_name].append(start_entry)
-
-    # Flatten into per-pitcher summaries
-    result: list[dict[str, Any]] = []
-    for pitcher_name, starts in pitcher_starts.items():
-        starts.sort(key=lambda s: s["date"])
-        result.append(
+        matchups: list[dict[str, Any]] = [
             {
-                "pitcher": pitcher_name,
-                "starts": len(starts),
-                "days": ", ".join(s["day"] for s in starts),
-                "opponents": ", ".join(f"{s['indicator']} {s['opponent']}" for s in starts),
-                "matchup_quality": (
-                    "Tough"
-                    if any(s["matchup_quality"] == "Tough" for s in starts)
-                    else "Fair"
-                    if any(s["matchup_quality"] == "Fair" for s in starts)
-                    else "Great"
-                ),
-                "matchups": starts,
+                "date": e.date,
+                "day": e.day,
+                "opponent": e.opponent,
+                "indicator": e.indicator,
+                "announced": e.announced,
+                "matchup_quality": e.matchup_quality,
+                "detail": e.detail,
+            }
+            for e in entries
+        ]
+        # Worst-of rollup quality: Tough > Fair > Great
+        if any(m["matchup_quality"] == "Tough" for m in matchups):
+            roll_quality = "Tough"
+        elif any(m["matchup_quality"] == "Fair" for m in matchups):
+            roll_quality = "Fair"
+        else:
+            roll_quality = "Great"
+
+        rollups.append(
+            {
+                "pitcher": pitcher.name,
+                "starts": len(matchups),
+                "days": ", ".join(m["day"] for m in matchups),
+                "opponents": ", ".join(f"{m['indicator']} {m['opponent']}" for m in matchups),
+                "matchup_quality": roll_quality,
+                "matchups": matchups,
             }
         )
 
-    result.sort(key=lambda s: (-s["starts"], s["pitcher"]))
-    return result
+    rollups.sort(key=lambda s: (-s["starts"], s["pitcher"]))
+    return rollups
