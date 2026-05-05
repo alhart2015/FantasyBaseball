@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Counting stats to blend directly (weighted average)
 HITTING_COUNTING_COLS: list[str] = ["r", "hr", "rbi", "sb", "h", "ab", "pa"]
-PITCHING_COUNTING_COLS: list[str] = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
+PITCHING_COUNTING_COLS: list[str] = ["w", "k", "sv", "ip", "er", "bb", "h_allowed", "gs"]
 
 
 def normalize_rest_of_season_to_full_season(

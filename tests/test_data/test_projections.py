@@ -48,6 +48,24 @@ class TestBlendProjections:
         expected_era = 71.0 * 9 / 197.5
         assert cole["era"] == pytest.approx(expected_era, abs=0.01)
 
+    def test_blend_preserves_gs_column(self, fixtures_dir):
+        """Regression: `gs` must survive the pitcher blend pipeline so
+        upcoming-starts (filter_starting_pitchers in lineup/upcoming_starts.py)
+        can distinguish SPs from RPs. Without GS in PITCHING_COLUMN_MAP and
+        `gs` in PITCHING_COUNTING_COLS, the blend silently dropped the
+        column and every refresh wrote an empty PROBABLE_STARTERS cache."""
+        _hitters, pitchers, _ = blend_projections(
+            fixtures_dir,
+            systems=["steamer", "zips"],
+        )
+        assert "gs" in pitchers.columns
+        cole = pitchers[pitchers["name"] == "Gerrit Cole"].iloc[0]
+        # Steamer GS=32, ZiPS GS=31, equal weight -> 31.5
+        assert cole["gs"] == pytest.approx(31.5)
+        # Closer should still have gs=0
+        clase = pitchers[pitchers["name"] == "Emmanuel Clase"].iloc[0]
+        assert clase["gs"] == 0
+
     def test_blended_whip_recomputed_from_components(self, fixtures_dir):
         _hitters, pitchers, _ = blend_projections(
             fixtures_dir,

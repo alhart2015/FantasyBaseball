@@ -77,6 +77,31 @@ class TestParsePitchingCsv:
         cole = df[df["name"] == "Gerrit Cole"].iloc[0]
         assert cole["h_allowed"] == 154
 
+    def test_games_started_mapped_from_GS(self, fixtures_dir):
+        """Regression: GS must flow through parse_pitching_csv as `gs` so
+        downstream filter_starting_pitchers (upcoming-starts plan) can
+        distinguish SPs from RPs. Bug fix: PITCHING_COLUMN_MAP previously
+        omitted the GS->gs entry, leaving the source column un-renamed and
+        getting dropped by the blend pipeline."""
+        df = parse_pitching_csv(fixtures_dir / "steamer_pitchers.csv")
+        assert "gs" in df.columns
+        cole = df[df["name"] == "Gerrit Cole"].iloc[0]
+        assert cole["gs"] == 32
+        clase = df[df["name"] == "Emmanuel Clase"].iloc[0]
+        assert clase["gs"] == 0  # closer
+
+    def test_parse_succeeds_when_GS_column_absent(self, tmp_path):
+        """`gs` is optional — older CSVs without a GS column still parse.
+        REQUIRED_PITCHING_COLS does not include `gs`."""
+        csv = tmp_path / "no_gs.csv"
+        csv.write_text(
+            "Name,Team,IP,W,SO,ERA,WHIP,SV,ER,BB,H\n"
+            "Some Pitcher,XYZ,180,10,170,3.50,1.20,0,70,55,160\n"
+        )
+        df = parse_pitching_csv(csv)
+        assert "gs" not in df.columns
+        assert df.iloc[0]["name"] == "Some Pitcher"
+
 
 class TestLoadProjectionSet:
     def test_loads_matching_files(self, fixtures_dir):
