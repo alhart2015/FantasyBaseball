@@ -2,7 +2,6 @@ import json
 import logging
 from collections import defaultdict
 from datetime import date as _date
-from datetime import datetime
 from datetime import timedelta as _timedelta
 from pathlib import Path
 from typing import Any, cast
