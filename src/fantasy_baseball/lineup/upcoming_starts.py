@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
+from fantasy_baseball.utils.name_utils import normalize_name
+
 
 @dataclass(frozen=True)
 class GameSlot:
@@ -101,7 +103,17 @@ def find_anchor_index(
     accent/case-insensitive (delegates to normalize_name). Returns
     ``None`` if the pitcher has no eligible past start in the index.
     """
-    raise NotImplementedError("Implemented in Task 5")
+    target = normalize_name(pitcher_name)
+    today_iso = today.isoformat()
+    anchor: int | None = None
+    for i, slot in enumerate(team_games):
+        if slot.date >= today_iso:
+            continue
+        if not slot.announced_starter:
+            continue
+        if normalize_name(slot.announced_starter) == target:
+            anchor = i
+    return anchor
 
 
 def project_start_indices(

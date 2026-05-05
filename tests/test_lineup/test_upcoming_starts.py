@@ -1,9 +1,12 @@
 """Unit tests for the rotation anchor + projection logic."""
 
+from datetime import date as _date
+
 from fantasy_baseball.lineup.upcoming_starts import (
     GameSlot,
     StartEntry,
     build_team_game_index,
+    find_anchor_index,
 )
 
 
@@ -101,3 +104,43 @@ class TestBuildTeamGameIndex:
     def test_empty_when_team_not_in_schedule(self):
         pps = [_pp("2026-05-05", "NYY", "BOS")]
         assert build_team_game_index(pps, "SEA") == []
+
+
+def _slot(d, opp, ann="", ind="@", num=1):
+    return GameSlot(date=d, game_number=num, opponent=opp, indicator=ind, announced_starter=ann)
+
+
+class TestFindAnchorIndex:
+    def test_finds_most_recent_past_start(self):
+        games = [
+            _slot("2026-05-01", "TEX", ann="Bryan Woo"),
+            _slot("2026-05-03", "LAD", ann="Castillo"),
+            _slot("2026-05-06", "TEX", ann="Bryan Woo"),
+        ]
+        idx = find_anchor_index(games, "Bryan Woo", today=_date(2026, 5, 7))
+        assert idx == 2  # the May 6 start
+
+    def test_excludes_today_and_future(self):
+        games = [
+            _slot("2026-05-01", "TEX", ann="Bryan Woo"),
+            _slot("2026-05-07", "LAD", ann="Bryan Woo"),  # today — excluded
+            _slot("2026-05-08", "LAD", ann="Bryan Woo"),  # future — excluded
+        ]
+        idx = find_anchor_index(games, "Bryan Woo", today=_date(2026, 5, 7))
+        assert idx == 0
+
+    def test_returns_none_when_no_match(self):
+        games = [_slot("2026-05-01", "TEX", ann="Castillo")]
+        idx = find_anchor_index(games, "Bryan Woo", today=_date(2026, 5, 7))
+        assert idx is None
+
+    def test_returns_none_when_pitcher_has_only_future_starts(self):
+        games = [_slot("2026-05-08", "TEX", ann="Bryan Woo")]
+        idx = find_anchor_index(games, "Bryan Woo", today=_date(2026, 5, 7))
+        assert idx is None
+
+    def test_name_match_is_accent_insensitive(self):
+        # normalize_name strips accents, so "José Berríos" and "Jose Berrios" match.
+        games = [_slot("2026-05-01", "TEX", ann="José Berríos")]
+        idx = find_anchor_index(games, "Jose Berrios", today=_date(2026, 5, 7))
+        assert idx == 0
