@@ -43,6 +43,85 @@ def _mock_teams_response():
 
 
 # ---------------------------------------------------------------------------
+# TestFetchWeekScheduleLookback
+# ---------------------------------------------------------------------------
+
+
+class TestFetchWeekScheduleLookback:
+    @patch("fantasy_baseball.data.mlb_schedule.statsapi")
+    def test_lookback_extends_start_date(self, mock_api):
+        # Teams call (for _build_team_name_map)
+        mock_api.get.return_value = _mock_teams_response()
+        # Schedule call returns games across both lookback and window
+        mock_api.schedule.return_value = [
+            _make_game(
+                "New York Yankees", "Boston Red Sox", "2026-04-25", away_pitcher="Gerrit Cole"
+            ),
+            _make_game(
+                "New York Yankees", "Boston Red Sox", "2026-05-05", away_pitcher="Carlos Rodon"
+            ),
+        ]
+
+        result = fetch_week_schedule("2026-05-05", "2026-05-11", lookback_days=14)
+
+        # statsapi.schedule called with start = 2026-05-05 - 14d = 2026-04-21
+        mock_api.schedule.assert_called_once_with("2026-04-21", "2026-05-11")
+        # Both past and current games appear in probable_pitchers
+        assert len(result["probable_pitchers"]) == 2
+        # The returned start_date/end_date still reflect the scoring week
+        assert result["start_date"] == "2026-05-05"
+        assert result["end_date"] == "2026-05-11"
+
+    @patch("fantasy_baseball.data.mlb_schedule.statsapi")
+    def test_default_lookback_is_zero(self, mock_api):
+        mock_api.get.return_value = _mock_teams_response()
+        mock_api.schedule.return_value = []
+        fetch_week_schedule("2026-05-05", "2026-05-11")
+        mock_api.schedule.assert_called_once_with("2026-05-05", "2026-05-11")
+
+    @patch("fantasy_baseball.data.mlb_schedule.statsapi")
+    def test_game_number_captured(self, mock_api):
+        mock_api.get.return_value = _mock_teams_response()
+        mock_api.schedule.return_value = [
+            {
+                **_make_game(
+                    "New York Yankees",
+                    "Boston Red Sox",
+                    "2026-05-05",
+                    away_pitcher="A",
+                    home_pitcher="B",
+                ),
+                "game_num": 1,
+            },
+            {
+                **_make_game(
+                    "New York Yankees",
+                    "Boston Red Sox",
+                    "2026-05-05",
+                    away_pitcher="C",
+                    home_pitcher="D",
+                ),
+                "game_num": 2,
+            },
+        ]
+        result = fetch_week_schedule("2026-05-05", "2026-05-11")
+        pps = result["probable_pitchers"]
+        assert len(pps) == 2
+        assert pps[0]["game_number"] == 1
+        assert pps[1]["game_number"] == 2
+
+    @patch("fantasy_baseball.data.mlb_schedule.statsapi")
+    def test_game_number_defaults_to_one(self, mock_api):
+        # statsapi may omit game_num for non-doubleheader games
+        mock_api.get.return_value = _mock_teams_response()
+        mock_api.schedule.return_value = [
+            _make_game("New York Yankees", "Boston Red Sox", "2026-05-05"),
+        ]
+        result = fetch_week_schedule("2026-05-05", "2026-05-11")
+        assert result["probable_pitchers"][0]["game_number"] == 1
+
+
+# ---------------------------------------------------------------------------
 # TestNormalizeTeamAbbrev
 # ---------------------------------------------------------------------------
 
