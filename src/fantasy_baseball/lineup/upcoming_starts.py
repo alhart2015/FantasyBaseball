@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+from datetime import datetime as _datetime
 from typing import Any
 
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -137,6 +138,49 @@ def project_start_indices(
     return indices
 
 
+def _day_name(date_iso: str) -> str:
+    return _datetime.strptime(date_iso, "%Y-%m-%d").strftime("%a")
+
+
+def _matchup_quality(
+    factors: dict[str, dict[str, float]],
+    team_stats: dict[str, dict[str, float]],
+    opponent: str,
+) -> str:
+    if opponent in factors:
+        f = factors[opponent]["era_whip_factor"]
+        if f <= 0.93:
+            return "Great"
+        if f >= 1.03:
+            return "Tough"
+        return "Fair"
+    if team_stats:
+        avg_ops = sum(s["ops"] for s in team_stats.values()) / max(len(team_stats), 1)
+        ops = team_stats.get(opponent, {}).get("ops", avg_ops)
+        if ops < avg_ops * 0.95:
+            return "Great"
+        if ops > avg_ops * 1.05:
+            return "Tough"
+    return "Fair"
+
+
+def _build_detail(
+    team_stats: dict[str, dict[str, float]],
+    ops_rank_map: dict[str, int],
+    k_rank_map: dict[str, int],
+    opponent: str,
+) -> dict[str, Any]:
+    opp = team_stats.get(opponent, {})
+    raw_k = opp.get("k_pct", 0.0)
+    k_display = round(raw_k * 100, 1) if raw_k < 1 else round(raw_k, 1)
+    return {
+        "ops": round(opp.get("ops", 0.0), 3),
+        "ops_rank": ops_rank_map.get(opponent, 0),
+        "k_pct": k_display,
+        "k_rank": k_rank_map.get(opponent, 0),
+    }
+
+
 def compose_pitcher_entries(
     pitcher_name: str,
     team_games: list[GameSlot],
@@ -160,4 +204,56 @@ def compose_pitcher_entries(
     payload by looking up the opponent in ``matchup_factors`` and
     ``team_stats``. Rows are sorted by date then game_number.
     """
-    raise NotImplementedError("Implemented in Task 7")
+    target = normalize_name(pitcher_name)
+    win_start_iso = window_start.isoformat()
+    win_end_iso = window_end.isoformat()
+
+    in_window = lambda d: win_start_iso <= d <= win_end_iso  # noqa: E731
+
+    used_indices: set[int] = set()
+    entries: list[StartEntry] = []
+
+    for i, slot in enumerate(team_games):
+        if not in_window(slot.date):
+            continue
+        if not slot.announced_starter:
+            continue
+        if normalize_name(slot.announced_starter) != target:
+            continue
+        used_indices.add(i)
+        entries.append(
+            StartEntry(
+                date=slot.date,
+                day=_day_name(slot.date),
+                opponent=slot.opponent,
+                indicator=slot.indicator,
+                announced=True,
+                matchup_quality=_matchup_quality(matchup_factors, team_stats, slot.opponent),
+                detail=_build_detail(team_stats, ops_rank_map, k_rank_map, slot.opponent),
+            )
+        )
+
+    anchor = find_anchor_index(team_games, pitcher_name, today)
+    if anchor is not None:
+        for idx in project_start_indices(anchor, len(team_games), step=5):
+            if idx in used_indices:
+                continue
+            slot = team_games[idx]
+            if not in_window(slot.date):
+                continue
+            if slot.announced_starter and normalize_name(slot.announced_starter) != target:
+                continue
+            entries.append(
+                StartEntry(
+                    date=slot.date,
+                    day=_day_name(slot.date),
+                    opponent=slot.opponent,
+                    indicator=slot.indicator,
+                    announced=False,
+                    matchup_quality=_matchup_quality(matchup_factors, team_stats, slot.opponent),
+                    detail=_build_detail(team_stats, ops_rank_map, k_rank_map, slot.opponent),
+                )
+            )
+
+    entries.sort(key=lambda e: e.date)
+    return entries

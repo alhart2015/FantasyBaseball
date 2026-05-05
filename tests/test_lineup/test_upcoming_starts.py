@@ -6,6 +6,7 @@ from fantasy_baseball.lineup.upcoming_starts import (
     GameSlot,
     StartEntry,
     build_team_game_index,
+    compose_pitcher_entries,
     find_anchor_index,
     project_start_indices,
 )
@@ -165,3 +166,207 @@ class TestProjectStartIndices:
     def test_step_other_than_five(self):
         # 6-man rotation = step 6
         assert project_start_indices(anchor_index=0, total_games=20, step=6) == [6, 12, 18]
+
+
+def _seq(*specs):
+    """Build a team game index from compact specs: (date, opp, ann, indicator, num)."""
+    out = []
+    for spec in specs:
+        d, opp, ann = spec[:3]
+        ind = spec[3] if len(spec) > 3 else "@"
+        num = spec[4] if len(spec) > 4 else 1
+        out.append(
+            GameSlot(date=d, game_number=num, opponent=opp, indicator=ind, announced_starter=ann)
+        )
+    return out
+
+
+_FACTORS = {
+    "TEX": {"era_whip_factor": 0.90, "k_factor": 1.05},  # Great
+    "LAD": {"era_whip_factor": 1.10, "k_factor": 0.95},  # Tough
+    "HOU": {"era_whip_factor": 1.00, "k_factor": 1.00},  # Fair
+}
+_TEAM_STATS = {
+    "TEX": {"ops": 0.700, "k_pct": 0.24},
+    "LAD": {"ops": 0.800, "k_pct": 0.20},
+    "HOU": {"ops": 0.750, "k_pct": 0.22},
+}
+_OPS_RANK = {"TEX": 25, "LAD": 4, "HOU": 14}
+_K_RANK = {"TEX": 8, "LAD": 26, "HOU": 14}
+
+
+class TestComposePitcherEntries:
+    def test_simple_5_day_rotation_no_off_day(self):
+        # Mon..Sun. Anchor: pitcher started Mon -> projected Sat.
+        team_games = _seq(
+            ("2026-05-04", "TEX", "Bryan Woo", "@"),  # past anchor (yesterday)
+            ("2026-05-05", "TEX", "", "@"),
+            ("2026-05-06", "TEX", "", "@"),
+            ("2026-05-07", "TEX", "", "@"),
+            ("2026-05-08", "TEX", "", "@"),
+            ("2026-05-09", "TEX", "", "@"),  # +5 -> projected
+            ("2026-05-10", "TEX", "", "@"),
+        )
+        entries = compose_pitcher_entries(
+            "Bryan Woo",
+            team_games,
+            today=_date(2026, 5, 5),
+            window_start=_date(2026, 5, 5),
+            window_end=_date(2026, 5, 11),
+            matchup_factors=_FACTORS,
+            team_stats=_TEAM_STATS,
+            ops_rank_map=_OPS_RANK,
+            k_rank_map=_K_RANK,
+        )
+        assert len(entries) == 1
+        e = entries[0]
+        assert e.date == "2026-05-09"
+        assert e.day == "Sat"
+        assert e.opponent == "TEX"
+        assert e.announced is False
+        assert e.matchup_quality == "Great"
+        assert e.detail["ops_rank"] == 25
+
+    def test_off_day_extends_calendar_gap(self):
+        # Anchor Mon (idx 0). Team games after anchor: Tue, Wed, [off Thu],
+        # Fri, Sat, Sun. Sun is the 5th team-game post-anchor (idx 5),
+        # so the projected start lands on Sun = 2026-05-10. Compare with
+        # test_simple_5_day_rotation_no_off_day: same anchor, but no off-day
+        # so the 5th team-game is Sat = 2026-05-09. The off-day pushes the
+        # next start one calendar day later — that's the gap "extension."
+        team_games = _seq(
+            ("2026-05-04", "TEX", "Bryan Woo", "@"),  # anchor (idx 0)
+            ("2026-05-05", "TEX", "", "@"),  # idx 1
+            ("2026-05-06", "TEX", "", "@"),  # idx 2
+            # No 2026-05-07 entry — off day
+            ("2026-05-08", "TEX", "", "@"),  # idx 3
+            ("2026-05-09", "TEX", "", "@"),  # idx 4
+            ("2026-05-10", "TEX", "", "@"),  # idx 5 — 5th team-game post-anchor
+        )
+        entries = compose_pitcher_entries(
+            "Bryan Woo",
+            team_games,
+            today=_date(2026, 5, 5),
+            window_start=_date(2026, 5, 5),
+            window_end=_date(2026, 5, 11),
+            matchup_factors=_FACTORS,
+            team_stats=_TEAM_STATS,
+            ops_rank_map=_OPS_RANK,
+            k_rank_map=_K_RANK,
+        )
+        assert len(entries) == 1
+        assert entries[0].date == "2026-05-10"
+
+    def test_announced_start_takes_precedence_over_projection(self):
+        # Anchor Mon, MLB announces same pitcher Sat. Result: 1 entry, announced=True.
+        team_games = _seq(
+            ("2026-05-04", "TEX", "Bryan Woo", "@"),  # anchor
+            *[("2026-05-0" + str(d), "TEX", "", "@") for d in range(5, 9)],
+            ("2026-05-09", "TEX", "Bryan Woo", "@"),  # announced same date as projection
+            ("2026-05-10", "TEX", "", "@"),
+        )
+        entries = compose_pitcher_entries(
+            "Bryan Woo",
+            team_games,
+            today=_date(2026, 5, 5),
+            window_start=_date(2026, 5, 5),
+            window_end=_date(2026, 5, 11),
+            matchup_factors=_FACTORS,
+            team_stats=_TEAM_STATS,
+            ops_rank_map=_OPS_RANK,
+            k_rank_map=_K_RANK,
+        )
+        assert len(entries) == 1
+        assert entries[0].date == "2026-05-09"
+        assert entries[0].announced is True
+
+    def test_announced_other_pitcher_drops_projection(self):
+        # Projection lands on a game where MLB has someone else announced.
+        team_games = _seq(
+            ("2026-05-04", "TEX", "Bryan Woo", "@"),  # anchor
+            *[("2026-05-0" + str(d), "TEX", "", "@") for d in range(5, 9)],
+            ("2026-05-09", "TEX", "Castillo", "@"),  # someone else announced
+            ("2026-05-10", "TEX", "", "@"),
+        )
+        entries = compose_pitcher_entries(
+            "Bryan Woo",
+            team_games,
+            today=_date(2026, 5, 5),
+            window_start=_date(2026, 5, 5),
+            window_end=_date(2026, 5, 11),
+            matchup_factors=_FACTORS,
+            team_stats=_TEAM_STATS,
+            ops_rank_map=_OPS_RANK,
+            k_rank_map=_K_RANK,
+        )
+        assert entries == []
+
+    def test_two_start_week_from_old_anchor(self):
+        # Build a 21-game team stream where the anchor sits at index 0
+        # (2026-04-25, ten days before the window opens). Anchor + 5/10/15/20
+        # land at indices 5, 10, 15, 20 — i.e. dates 04-30, 05-05, 05-10, 05-15.
+        # Window is 2026-05-05..2026-05-11, so projections at 05-05 and 05-10
+        # both fall inside it; 04-30 (before) and 05-15 (after) are excluded.
+        from datetime import timedelta as _td
+
+        base = _date(2026, 4, 25)
+        team_games: list[GameSlot] = []
+        for i in range(21):
+            d = (base + _td(days=i)).isoformat()
+            ann = "Bryan Woo" if i == 0 else ""
+            opp = "TEX" if i < 14 else "LAD"
+            team_games.append(
+                GameSlot(date=d, game_number=1, opponent=opp, indicator="@", announced_starter=ann)
+            )
+
+        entries = compose_pitcher_entries(
+            "Bryan Woo",
+            team_games,
+            today=_date(2026, 5, 5),
+            window_start=_date(2026, 5, 5),
+            window_end=_date(2026, 5, 11),
+            matchup_factors=_FACTORS,
+            team_stats=_TEAM_STATS,
+            ops_rank_map=_OPS_RANK,
+            k_rank_map=_K_RANK,
+        )
+        assert len(entries) == 2
+        assert entries[0].date == "2026-05-05"
+        assert entries[1].date == "2026-05-10"
+        assert all(e.announced is False for e in entries)
+
+    def test_no_anchor_yields_only_announced(self):
+        # No past start by this pitcher; MLB announces them mid-week.
+        team_games = _seq(
+            ("2026-05-04", "TEX", "OtherGuy", "@"),
+            *[("2026-05-0" + str(d), "TEX", "", "@") for d in range(5, 9)],
+            ("2026-05-09", "TEX", "Bryan Woo", "@"),
+        )
+        entries = compose_pitcher_entries(
+            "Bryan Woo",
+            team_games,
+            today=_date(2026, 5, 5),
+            window_start=_date(2026, 5, 5),
+            window_end=_date(2026, 5, 11),
+            matchup_factors=_FACTORS,
+            team_stats=_TEAM_STATS,
+            ops_rank_map=_OPS_RANK,
+            k_rank_map=_K_RANK,
+        )
+        assert len(entries) == 1
+        assert entries[0].announced is True
+
+    def test_empty_when_pitcher_has_no_starts(self):
+        team_games = _seq(("2026-05-05", "TEX", "OtherGuy", "@"))
+        entries = compose_pitcher_entries(
+            "Bryan Woo",
+            team_games,
+            today=_date(2026, 5, 5),
+            window_start=_date(2026, 5, 5),
+            window_end=_date(2026, 5, 11),
+            matchup_factors=_FACTORS,
+            team_stats=_TEAM_STATS,
+            ops_rank_map=_OPS_RANK,
+            k_rank_map=_K_RANK,
+        )
+        assert entries == []
