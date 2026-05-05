@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Counting stats to blend directly (weighted average)
 HITTING_COUNTING_COLS: list[str] = ["r", "hr", "rbi", "sb", "h", "ab", "pa"]
-PITCHING_COUNTING_COLS: list[str] = ["w", "k", "sv", "ip", "er", "bb", "h_allowed", "gs"]
+PITCHING_COUNTING_COLS: list[str] = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
 
 
 def normalize_rest_of_season_to_full_season(
@@ -547,13 +547,10 @@ def match_roster_to_projections(
         else:
             parsed_slot = Position.parse(raw_slot)
 
-        proj_team_raw = proj.get("team", "")
-        team = "" if proj_team_raw is None else str(proj_team_raw)
         p = Player(
             name=name,
             player_type=ptype,
             positions=parsed_positions,
-            team=team,
             yahoo_id=player.get("player_id", ""),
             selected_position=parsed_slot,
             status=player.get("status", ""),

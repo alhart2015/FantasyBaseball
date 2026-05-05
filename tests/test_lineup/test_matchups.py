@@ -1,4 +1,3 @@
-from datetime import date
 from unittest.mock import patch
 
 import pandas as pd
@@ -7,11 +6,8 @@ from fantasy_baseball.lineup.matchups import (
     adjust_pitcher_projection,
     calculate_matchup_factors,
     fetch_team_batting_stats,
-    get_probable_starters,
     normalize_team_batting_stats,
 )
-from fantasy_baseball.models.player import Player, PlayerType
-from fantasy_baseball.models.positions import Position
 
 
 def test_normalize_team_batting_stats():
@@ -276,134 +272,3 @@ def test_full_pipeline():
     # Two-start pitcher facing both -> blended
     adj_both = adjust_pitcher_projection(pitcher, [factors["COL"], factors["LAD"]])
     assert adj_easy["era"] < adj_both["era"] < adj_hard["era"]
-
-
-def _make_sched(pps):
-    return {"probable_pitchers": pps}
-
-
-def _pitcher(name, team="SEA"):
-    p = Player(name=name, player_type=PlayerType.PITCHER, positions=[Position.SP])
-    p.team = team
-    return p
-
-
-class TestGetProbableStartersV2:
-    def test_announced_only_passes_through(self):
-        sched = _make_sched(
-            [
-                {
-                    "date": "2026-05-05",
-                    "game_number": 1,
-                    "away_team": "SEA",
-                    "home_team": "LAD",
-                    "away_pitcher": "Bryan Woo",
-                    "home_pitcher": "TBD",
-                },
-            ]
-        )
-        team_stats = {"LAD": {"ops": 0.800, "k_pct": 0.20}}
-        out = get_probable_starters(
-            pitcher_roster=[_pitcher("Bryan Woo")],
-            schedule=sched,
-            matchup_factors={"LAD": {"era_whip_factor": 1.10, "k_factor": 0.95}},
-            team_stats=team_stats,
-            today=date(2026, 5, 5),
-            window_start=date(2026, 5, 5),
-            window_end=date(2026, 5, 11),
-        )
-        assert len(out) == 1
-        assert out[0]["pitcher"] == "Bryan Woo"
-        assert out[0]["starts"] == 1
-        assert out[0]["matchups"][0]["announced"] is True
-
-    def test_projected_added_when_no_announcement(self):
-        # Anchor in lookback (May 1), team has no off-day; projection -> May 6.
-        pps = [
-            {
-                "date": d,
-                "game_number": 1,
-                "away_team": "SEA",
-                "home_team": "LAD",
-                "away_pitcher": ann,
-                "home_pitcher": "TBD",
-            }
-            for d, ann in [
-                ("2026-05-01", "Bryan Woo"),  # anchor
-                ("2026-05-02", ""),
-                ("2026-05-03", ""),
-                ("2026-05-04", ""),
-                ("2026-05-05", ""),
-                ("2026-05-06", ""),  # +5 -> projected
-            ]
-        ]
-        out = get_probable_starters(
-            pitcher_roster=[_pitcher("Bryan Woo")],
-            schedule={"probable_pitchers": pps},
-            matchup_factors={"LAD": {"era_whip_factor": 1.0, "k_factor": 1.0}},
-            team_stats={"LAD": {"ops": 0.750, "k_pct": 0.22}},
-            today=date(2026, 5, 5),
-            window_start=date(2026, 5, 5),
-            window_end=date(2026, 5, 11),
-        )
-        assert len(out) == 1
-        assert out[0]["starts"] == 1
-        assert out[0]["matchups"][0]["date"] == "2026-05-06"
-        assert out[0]["matchups"][0]["announced"] is False
-
-    def test_pitcher_with_no_starts_is_excluded(self):
-        out = get_probable_starters(
-            pitcher_roster=[_pitcher("Ghost Pitcher")],
-            schedule={
-                "probable_pitchers": [
-                    {
-                        "date": "2026-05-05",
-                        "game_number": 1,
-                        "away_team": "SEA",
-                        "home_team": "LAD",
-                        "away_pitcher": "TBD",
-                        "home_pitcher": "TBD",
-                    },
-                ]
-            },
-            matchup_factors={},
-            team_stats={},
-            today=date(2026, 5, 5),
-            window_start=date(2026, 5, 5),
-            window_end=date(2026, 5, 11),
-        )
-        assert out == []
-
-    def test_player_team_used_to_select_team_games(self):
-        # Pitcher's team is NYY; their LAD game shouldn't be considered.
-        sched = _make_sched(
-            [
-                {
-                    "date": "2026-05-05",
-                    "game_number": 1,
-                    "away_team": "SEA",
-                    "home_team": "LAD",
-                    "away_pitcher": "Bryan Woo",
-                    "home_pitcher": "TBD",
-                },
-                {
-                    "date": "2026-05-05",
-                    "game_number": 1,
-                    "away_team": "NYY",
-                    "home_team": "BOS",
-                    "away_pitcher": "Gerrit Cole",
-                    "home_pitcher": "TBD",
-                },
-            ]
-        )
-        out = get_probable_starters(
-            pitcher_roster=[_pitcher("Gerrit Cole", team="NYY")],
-            schedule=sched,
-            matchup_factors={"BOS": {"era_whip_factor": 1.0, "k_factor": 1.0}},
-            team_stats={"BOS": {"ops": 0.750, "k_pct": 0.22}},
-            today=date(2026, 5, 5),
-            window_start=date(2026, 5, 5),
-            window_end=date(2026, 5, 11),
-        )
-        assert len(out) == 1
-        assert out[0]["matchups"][0]["opponent"] == "BOS"

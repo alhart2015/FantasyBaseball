@@ -845,36 +845,29 @@ class RefreshRun:
         from fantasy_baseball.data.mlb_schedule import get_week_schedule
         from fantasy_baseball.lineup.matchups import (
             calculate_matchup_factors,
-            get_probable_starters,
             get_team_batting_stats,
         )
-        from fantasy_baseball.lineup.upcoming_starts import filter_starting_pitchers
 
         assert self.start_date is not None
         assert self.end_date is not None
         assert self.roster_players is not None
-        assert self.pitchers_proj is not None
 
         self._progress("Fetching schedule and matchup data...")
         project_root = Path(__file__).resolve().parents[3]
         schedule_cache_path = project_root / "data" / "weekly_schedule.json"
-        # 14-day lookback: the upcoming-starts module needs each pitcher's
-        # most recent start as the rotation anchor for projecting forward.
-        schedule = get_week_schedule(
-            self.start_date,
-            self.end_date,
-            schedule_cache_path,
-            lookback_days=14,
-        )
+        schedule = get_week_schedule(self.start_date, self.end_date, schedule_cache_path)
 
         batting_stats_cache_path = project_root / "data" / "team_batting_stats.json"
         team_stats = get_team_batting_stats(batting_stats_cache_path)
         matchup_factors = calculate_matchup_factors(team_stats)
 
-        sp_roster = filter_starting_pitchers(self.roster_players, self.pitchers_proj)
+        pitcher_roster_for_schedule = [
+            p for p in self.roster_players if set(p.positions) & PITCHER_POSITIONS
+        ]
+        from fantasy_baseball.lineup.matchups import get_probable_starters
 
         probable_starters = get_probable_starters(
-            sp_roster,
+            pitcher_roster_for_schedule,
             schedule or {},
             matchup_factors=matchup_factors,
             team_stats=team_stats,
