@@ -947,15 +947,20 @@ class TestComposePitcherEntries:
         assert e.detail["ops_rank"] == 25
 
     def test_off_day_extends_calendar_gap(self):
-        # Mon, Tue, off-Wed, Thu, Fri, Sat -> Sat is 5th game, projected start.
+        # Anchor Mon (idx 0). Team games after anchor: Tue, Wed, [off Thu],
+        # Fri, Sat, Sun. Sun is the 5th team-game post-anchor (idx 5),
+        # so the projected start lands on Sun = 2026-05-10. Compare with
+        # test_simple_5_day_rotation_no_off_day: same anchor, but no off-day
+        # so the 5th team-game is Sat = 2026-05-09. The off-day pushes the
+        # next start one calendar day later — that's the gap "extension."
         team_games = _seq(
-            ("2026-05-04", "TEX", "Bryan Woo", "@"),  # anchor
-            ("2026-05-05", "TEX", "", "@"),
-            ("2026-05-06", "TEX", "", "@"),
+            ("2026-05-04", "TEX", "Bryan Woo", "@"),  # anchor (idx 0)
+            ("2026-05-05", "TEX", "", "@"),           # idx 1
+            ("2026-05-06", "TEX", "", "@"),           # idx 2
             # No 2026-05-07 entry — off day
-            ("2026-05-08", "TEX", "", "@"),
-            ("2026-05-09", "TEX", "", "@"),  # 5th game from anchor
-            ("2026-05-10", "TEX", "", "@"),
+            ("2026-05-08", "TEX", "", "@"),           # idx 3
+            ("2026-05-09", "TEX", "", "@"),           # idx 4
+            ("2026-05-10", "TEX", "", "@"),           # idx 5 — 5th team-game post-anchor
         )
         entries = compose_pitcher_entries(
             "Bryan Woo",
@@ -969,7 +974,7 @@ class TestComposePitcherEntries:
             k_rank_map=_K_RANK,
         )
         assert len(entries) == 1
-        assert entries[0].date == "2026-05-09"
+        assert entries[0].date == "2026-05-10"
 
     def test_announced_start_takes_precedence_over_projection(self):
         # Anchor Mon, MLB announces same pitcher Sat. Result: 1 entry, announced=True.
