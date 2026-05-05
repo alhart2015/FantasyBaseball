@@ -22,6 +22,9 @@ from datetime import date
 from datetime import datetime as _datetime
 from typing import Any
 
+import pandas as pd
+
+from fantasy_baseball.models.positions import Position
 from fantasy_baseball.utils.name_utils import normalize_name
 
 
@@ -257,3 +260,31 @@ def compose_pitcher_entries(
 
     entries.sort(key=lambda e: e.date)
     return entries
+
+
+def filter_starting_pitchers(
+    roster: list[Any],
+    pitchers_proj: pd.DataFrame,
+) -> list[Any]:
+    """Keep only roster members who are SP-eligible AND projected gs > 0.
+
+    Players missing from the projection frame, or with a projection row
+    that has no ``gs`` column / non-positive gs, are dropped.
+    """
+    if pitchers_proj is None or pitchers_proj.empty or "gs" not in pitchers_proj.columns:
+        return []
+    if "_name_norm" not in pitchers_proj.columns:
+        # Defensive: refresh pipeline always attaches _name_norm, but tests may not.
+        pitchers_proj = pitchers_proj.copy()
+        pitchers_proj["_name_norm"] = pitchers_proj["name"].apply(normalize_name)
+
+    gs_by_name = dict(zip(pitchers_proj["_name_norm"], pitchers_proj["gs"], strict=False))
+
+    kept: list[Any] = []
+    for player in roster:
+        if Position.SP not in player.positions:
+            continue
+        gs = gs_by_name.get(normalize_name(player.name), 0.0) or 0.0
+        if gs > 0:
+            kept.append(player)
+    return kept

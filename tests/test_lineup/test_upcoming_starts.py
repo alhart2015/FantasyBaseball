@@ -2,14 +2,19 @@
 
 from datetime import date as _date
 
+import pandas as pd
+
 from fantasy_baseball.lineup.upcoming_starts import (
     GameSlot,
     StartEntry,
     build_team_game_index,
     compose_pitcher_entries,
+    filter_starting_pitchers,
     find_anchor_index,
     project_start_indices,
 )
+from fantasy_baseball.models.player import Player, PlayerType
+from fantasy_baseball.models.positions import Position
 
 
 def test_game_slot_fields():
@@ -370,3 +375,51 @@ class TestComposePitcherEntries:
             k_rank_map=_K_RANK,
         )
         assert entries == []
+
+
+def _player(name, positions):
+    return Player(name=name, player_type=PlayerType.PITCHER, positions=positions)
+
+
+class TestFilterStartingPitchers:
+    def _proj(self, rows):
+        df = pd.DataFrame(rows)
+        # Tests provide _name_norm explicitly to avoid coupling to normalize_name internals
+        return df
+
+    def test_keeps_sp_eligible_with_positive_gs(self):
+        roster = [
+            _player("Bryan Woo", [Position.SP]),
+            _player("Mason Miller", [Position.RP]),
+        ]
+        proj = self._proj(
+            [
+                {"_name_norm": "bryan woo", "gs": 28.0},
+                {"_name_norm": "mason miller", "gs": 0.0},
+            ]
+        )
+        kept = filter_starting_pitchers(roster, proj)
+        assert [p.name for p in kept] == ["Bryan Woo"]
+
+    def test_drops_sp_eligible_with_zero_gs(self):
+        # Swingman: SP+RP eligible but projected as a reliever.
+        roster = [_player("AJ Puk", [Position.SP, Position.RP])]
+        proj = self._proj([{"_name_norm": "aj puk", "gs": 0.0}])
+        assert filter_starting_pitchers(roster, proj) == []
+
+    def test_drops_sp_eligible_missing_from_projections(self):
+        # No projection row at all -> excluded (can't verify gs > 0).
+        roster = [_player("Unknown Guy", [Position.SP])]
+        proj = self._proj([])
+        assert filter_starting_pitchers(roster, proj) == []
+
+    def test_drops_pure_rp(self):
+        roster = [_player("Mason Miller", [Position.RP])]
+        proj = self._proj([{"_name_norm": "mason miller", "gs": 0.0}])
+        assert filter_starting_pitchers(roster, proj) == []
+
+    def test_handles_missing_gs_column(self):
+        # Older projection blob without a gs column -> exclude all (defensive).
+        roster = [_player("Bryan Woo", [Position.SP])]
+        proj = self._proj([{"_name_norm": "bryan woo", "ip": 180.0}])
+        assert filter_starting_pitchers(roster, proj) == []
