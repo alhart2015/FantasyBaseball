@@ -243,3 +243,20 @@ This section is appended to as work happens. Each milestone gets a dated entry.
 - Brainstormed scope: hitters only, projection-agnostic empirical thresholds, Statcast in scope, isolated local DuckDB.
 - Decisions captured in the table above. Branch `analysis/hot-streaks` created off main.
 - Next: wait for spec review, then move to writing the implementation plan for Phase 1 (data layer).
+
+### 2026-05-06 — Phase 1 (data layer) implemented
+
+- All 11 plan tasks executed via subagent-driven TDD: DuckDB schema, idempotent loaders, qualified-hitter fetch, per-season game log fetch, per-PA Statcast fetch via pybaseball, fetch_season orchestrator, CLI script.
+- 33 unit tests covering schema, upserts, existence queries, parsing, chunking, orchestration, and per-player exception handling. Full project suite passes.
+- Streaks package added to mypy strict overrides.
+- New gitignored directory `data/streaks/` for the local DuckDB; `notebooks/streaks/` reserved for Phase 2-3 research notebooks.
+
+#### Known issues / follow-ups for Phase 1 acceptance
+
+1. **Statcast partial-load handling.** The orchestrator skips Statcast for a season if *any* dates from that season are already loaded (all-or-nothing). An interrupted prior run could leave the DuckDB with a few days of Statcast and silently skip the rest on the next run. Mitigation today: row-count sanity check at acceptance time (~150K-200K rows expected per season; obvious if missing). Recovery: `DELETE FROM hitter_statcast_pa WHERE date BETWEEN '<season>-03-15' AND '<season>-11-15'` and re-run. Phase 2 cleanup: convert to gap-filling (chunk-by-chunk skip of already-loaded dates).
+2. **Plan test bug (Task 8).** The plan's `test_pitches_to_pa_rows_assigns_pa_index_per_player_per_date` had inconsistent sort/assertion logic; fixed during implementation by splitting into per-player sub-lists. Original plan file not updated; future re-runs of this plan should use the fixed test.
+
+#### Next milestone
+
+- **Phase 1 acceptance run** (manual, not yet done): execute `python scripts/streaks/fetch_history.py --season 2025` and validate row counts (~150-200 qualified hitters, ~25K-30K game logs, ~150K-200K Statcast PAs, DB size ~50-150 MB). Repeat for 2024 and 2023 if 2025 looks right.
+- After acceptance, write Phase 2 plan (window aggregation + threshold calibration).
