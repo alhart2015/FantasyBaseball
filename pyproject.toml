@@ -31,6 +31,8 @@ dev = [
     "vulture>=2.11",
     "types-PyYAML>=6.0",
     "types-requests>=2.31",
+    "duckdb>=1.0",
+    "pybaseball>=2.2",
 ]
 
 [tool.setuptools.packages.find]
