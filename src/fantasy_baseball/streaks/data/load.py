@@ -38,3 +38,27 @@ def upsert_hitter_games(conn: duckdb.DuckDBPyConnection, rows: list[dict[str, An
         f"VALUES ({placeholders})"
     )
     conn.executemany(sql, [tuple(r[c] for c in _HITTER_GAME_COLS) for r in rows])
+
+
+_STATCAST_COLS = (
+    "player_id",
+    "date",
+    "pa_index",
+    "event",
+    "launch_speed",
+    "launch_angle",
+    "estimated_woba_using_speedangle",
+    "barrel",
+)
+
+
+def upsert_statcast_pa(conn: duckdb.DuckDBPyConnection, rows: list[dict[str, Any]]) -> None:
+    """Insert or replace rows in `hitter_statcast_pa` keyed by (player_id, date, pa_index)."""
+    if not rows:
+        return
+    placeholders = ", ".join(["?"] * len(_STATCAST_COLS))
+    sql = (
+        f"INSERT OR REPLACE INTO hitter_statcast_pa ({', '.join(_STATCAST_COLS)}) "
+        f"VALUES ({placeholders})"
+    )
+    conn.executemany(sql, [tuple(r[c] for c in _STATCAST_COLS) for r in rows])

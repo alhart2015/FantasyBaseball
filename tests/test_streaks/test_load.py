@@ -5,7 +5,7 @@ from datetime import date
 import duckdb
 import pytest
 
-from fantasy_baseball.streaks.data.load import upsert_hitter_games
+from fantasy_baseball.streaks.data.load import upsert_hitter_games, upsert_statcast_pa
 from fantasy_baseball.streaks.data.schema import init_schema
 
 
@@ -59,4 +59,44 @@ def test_upsert_hitter_games_updates_on_pk_collision(conn):
 def test_upsert_hitter_games_empty_list_is_noop(conn):
     upsert_hitter_games(conn, [])
     count = conn.execute("SELECT COUNT(*) FROM hitter_games").fetchone()[0]
+    assert count == 0
+
+
+def _statcast_row(player_id=660271, dt=date(2024, 4, 1), pa_index=1, event="single"):
+    return {
+        "player_id": player_id,
+        "date": dt,
+        "pa_index": pa_index,
+        "event": event,
+        "launch_speed": 95.5,
+        "launch_angle": 12.0,
+        "estimated_woba_using_speedangle": 0.45,
+        "barrel": False,
+    }
+
+
+def test_upsert_statcast_pa_inserts(conn):
+    upsert_statcast_pa(conn, [_statcast_row(pa_index=1), _statcast_row(pa_index=2)])
+    count = conn.execute("SELECT COUNT(*) FROM hitter_statcast_pa").fetchone()[0]
+    assert count == 2
+
+
+def test_upsert_statcast_pa_is_idempotent(conn):
+    upsert_statcast_pa(conn, [_statcast_row(pa_index=1)])
+    upsert_statcast_pa(conn, [_statcast_row(pa_index=1)])
+    count = conn.execute("SELECT COUNT(*) FROM hitter_statcast_pa").fetchone()[0]
+    assert count == 1
+
+
+def test_upsert_statcast_pa_handles_null_event(conn):
+    row = _statcast_row()
+    row["event"] = None
+    upsert_statcast_pa(conn, [row])
+    out = conn.execute("SELECT event FROM hitter_statcast_pa").fetchone()
+    assert out[0] is None
+
+
+def test_upsert_statcast_pa_empty_noop(conn):
+    upsert_statcast_pa(conn, [])
+    count = conn.execute("SELECT COUNT(*) FROM hitter_statcast_pa").fetchone()[0]
     assert count == 0
