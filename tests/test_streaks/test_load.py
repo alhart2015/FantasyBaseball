@@ -5,7 +5,12 @@ from datetime import date
 import duckdb
 import pytest
 
-from fantasy_baseball.streaks.data.load import upsert_hitter_games, upsert_statcast_pa
+from fantasy_baseball.streaks.data.load import (
+    existing_player_seasons,
+    existing_statcast_dates,
+    upsert_hitter_games,
+    upsert_statcast_pa,
+)
 from fantasy_baseball.streaks.data.schema import init_schema
 
 
@@ -100,3 +105,33 @@ def test_upsert_statcast_pa_empty_noop(conn):
     upsert_statcast_pa(conn, [])
     count = conn.execute("SELECT COUNT(*) FROM hitter_statcast_pa").fetchone()[0]
     assert count == 0
+
+
+def test_existing_player_seasons_empty(conn):
+    assert existing_player_seasons(conn) == set()
+
+
+def test_existing_player_seasons_returns_distinct_pairs(conn):
+    upsert_hitter_games(
+        conn,
+        [
+            _row(player_id=660271, dt=date(2024, 4, 1)),
+            _row(player_id=660271, dt=date(2024, 4, 2)),  # same (player, season)
+            _row(player_id=545361, dt=date(2024, 4, 1)),
+        ],
+    )
+    pairs = existing_player_seasons(conn)
+    assert pairs == {(660271, 2024), (545361, 2024)}
+
+
+def test_existing_statcast_dates_returns_distinct_dates(conn):
+    upsert_statcast_pa(
+        conn,
+        [
+            _statcast_row(pa_index=1, dt=date(2024, 4, 1)),
+            _statcast_row(pa_index=2, dt=date(2024, 4, 1)),  # same date
+            _statcast_row(pa_index=1, dt=date(2024, 4, 2)),
+        ],
+    )
+    dates = existing_statcast_dates(conn)
+    assert dates == {date(2024, 4, 1), date(2024, 4, 2)}

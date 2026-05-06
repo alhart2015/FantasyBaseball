@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 import duckdb
@@ -62,3 +63,23 @@ def upsert_statcast_pa(conn: duckdb.DuckDBPyConnection, rows: list[dict[str, Any
         f"VALUES ({placeholders})"
     )
     conn.executemany(sql, [tuple(r[c] for c in _STATCAST_COLS) for r in rows])
+
+
+def existing_player_seasons(
+    conn: duckdb.DuckDBPyConnection,
+) -> set[tuple[int, int]]:
+    """Return distinct (player_id, season) pairs already loaded in hitter_games.
+
+    Used by fetch orchestration to skip player-seasons we've already pulled.
+    """
+    rows = conn.execute("SELECT DISTINCT player_id, season FROM hitter_games").fetchall()
+    return {(int(r[0]), int(r[1])) for r in rows}
+
+
+def existing_statcast_dates(conn: duckdb.DuckDBPyConnection) -> set[date]:
+    """Return distinct calendar dates already loaded in hitter_statcast_pa.
+
+    Used by Statcast fetch to skip date ranges we've already pulled.
+    """
+    rows = conn.execute("SELECT DISTINCT date FROM hitter_statcast_pa").fetchall()
+    return {r[0] for r in rows}
