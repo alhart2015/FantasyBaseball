@@ -69,7 +69,11 @@ def fetch_week_schedule(start_date: str, end_date: str, lookback_days: int = 0) 
     if lookback_days > 0:
         fetch_start = (_date.fromisoformat(start_date) - _timedelta(days=lookback_days)).isoformat()
 
-    games = statsapi.schedule(fetch_start, end_date)
+    # statsapi.schedule's first positional arg is `date`, not `start_date`.
+    # Calling positionally caused the wrapper's input normalization to
+    # collapse the range to `date=end_date` and return only one day of
+    # games. Use kwargs so the wrapper actually emits `startDate`/`endDate`.
+    games = statsapi.schedule(start_date=fetch_start, end_date=end_date)
     team_name_map = _build_team_name_map()
 
     games_per_team: dict[str, int] = defaultdict(int)

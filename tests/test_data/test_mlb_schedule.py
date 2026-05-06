@@ -65,7 +65,9 @@ class TestFetchWeekScheduleLookback:
         result = fetch_week_schedule("2026-05-05", "2026-05-11", lookback_days=14)
 
         # statsapi.schedule called with start = 2026-05-05 - 14d = 2026-04-21
-        mock_api.schedule.assert_called_once_with("2026-04-21", "2026-05-11")
+        mock_api.schedule.assert_called_once_with(
+            start_date="2026-04-21", end_date="2026-05-11"
+        )
         # Both past and current games appear in probable_pitchers
         assert len(result["probable_pitchers"]) == 2
         # The returned start_date/end_date still reflect the scoring week
@@ -77,7 +79,9 @@ class TestFetchWeekScheduleLookback:
         mock_api.get.return_value = _mock_teams_response()
         mock_api.schedule.return_value = []
         fetch_week_schedule("2026-05-05", "2026-05-11")
-        mock_api.schedule.assert_called_once_with("2026-05-05", "2026-05-11")
+        mock_api.schedule.assert_called_once_with(
+            start_date="2026-05-05", end_date="2026-05-11"
+        )
 
     @patch("fantasy_baseball.data.mlb_schedule.statsapi")
     def test_game_number_captured(self, mock_api):
