@@ -1,0 +1,245 @@
+# Hot/Cold Streak Analysis — Design Spec
+
+## Problem
+
+Roster decisions in a Yahoo H2H roto league are made weekly: who starts, who sits, who to drop, who to pick up. The current toolkit (lineup optimizer, waiver scorer, trade evaluator) drives all of these off rest-of-season projections. Projections are the right answer in expectation, but they don't answer a different question fantasy managers ask constantly:
+
+> *Player X has been on fire / ice cold for the last week. Should I expect that to continue?*
+
+The intuition is that *some* short-term performance variation is real (a swing fix, a velocity bump, a new role) and some is luck (BABIP regression, sequencing, schedule). Acting on streaks indiscriminately is bad — chasing hot players overpays for noise. Ignoring streaks entirely is also bad — fantasy systems that are 100% projection-based miss real signal.
+
+This project aims to:
+
+1. Empirically define what "hot" and "cold" mean over short windows (3-14 days), with universal thresholds calibrated from history rather than imposed by gut feel.
+2. Measure how often hot/cold streaks actually persist into the following week — establishing whether there's any predictive signal at all.
+3. Identify peripheral metrics (BABIP, K%, BB%, exit velocity, barrel rate, xwOBA) that distinguish "real" streaks from luck-driven streaks.
+4. Eventually fold the resulting predictions into roster decisions — first as a Sunday research report, later (if signal is real) as a dashboard panel and lineup-optimizer adjustment.
+
+This is a long-running, research-first effort. Methodology may evolve. The Progress Log at the bottom of this document tracks what's been done and what's been learned.
+
+## Scope: hitters only for v1
+
+Pitchers are deferred. Hitter game cadence is uniform (4-7 games/week, 3-5 PA/game) and a 7-day window is a clean unit of analysis. Starting pitchers get 1-2 starts/week and need a per-start window — different baselines, different methodology. Relief pitchers are even noisier (small per-outing samples, role-driven save volatility). We will revisit pitcher methodology after the hitter pipeline is proven and shows signal.
+
+## Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Streak unit | Player-level composite + per-category labels | Composite drives roster decisions; per-category exposes which stat is hot/cold |
+| Baseline | Empirical absolute thresholds from historical distributions | Projection-agnostic — 3 HR in a week is hot regardless of who was projected to hit them |
+| Threshold method | 90th / 10th percentile within (category × window × playing-time bucket) | Lets data set the bar; stratification controls for opportunity |
+| Playing-time strata | low (5-9 PA) / mid (10-19 PA) / high (20+ PA); skip <5 PA | Otherwise platoon hitters skew thresholds |
+| Windows studied | 3-day, 7-day, 14-day | Calibrate which is most predictive; don't pre-commit |
+| Categories tracked | HR, R, RBI, SB, AVG | The five hitter roto categories; nothing else relevant for decisions |
+| Composite score | (# hot categories) − (# cold categories), range −5 to +5 | Simple, interpretable, no coefficients to tune |
+| Predictive features | Counting + rate + Statcast peripherals (BABIP, K%, BB%, ISO, GB/FB, EV, barrel%, xwOBA) | Statcast gives the strongest "is this real?" signal |
+| Historical scope | 2023, 2024, 2025 (3 seasons) | 2026 reserved as out-of-sample. 5 seasons would be more data but Statcast pulls scale linearly |
+| Player qualification | ≥150 PA in the season (player-season-level filter) | Once a player qualifies, all their windows enter the threshold calibration, stratified by PT bucket — including their low-PA weeks. Filters out cup-of-coffee callups entirely without trimming legitimate platoon weeks |
+| Storage | DuckDB at `data/streaks/streaks.duckdb`, gitignored | Analytical workload (window funcs, percentiles, joins on millions of rows); pandas/parquet integration; isolated from production cache |
+| Statcast client | `pybaseball` against Baseball Savant | The standard; new dependency but well-maintained |
+| Repo location | New `src/fantasy_baseball/streaks/` package + `scripts/streaks/` | Discoverable but isolated from production pipeline |
+| Production coupling | None in v1 | `streaks/` does not import from `web/`, `lineup/`, or `data/redis_store.py` and vice versa |
+| v1 deliverable | Jupyter notebooks + a CLI Sunday report | Lowest engineering bar for evolving research questions |
+| Production integration | Deferred to v2/v3 (dashboard panel, optimizer adjustment) | Only worth building if v1 establishes real signal |
+
+## Architecture
+
+```
+src/fantasy_baseball/streaks/
+├── __init__.py
+├── data/
+│   ├── fetch_history.py    # MLB Stats API + pybaseball Statcast pulls
+│   ├── schema.py           # DuckDB DDL
+│   └── load.py             # idempotent inserts
+├── windows.py              # rolling-window aggregation (per player, per date, per N days)
+├── thresholds.py           # empirical percentile calibration
+├── labels.py               # apply thresholds to compute hot/cold flags + composite
+├── analysis/
+│   ├── continuation.py     # base-rate calculations
+│   └── predictors.py       # logistic regression / gbm fits
+└── reports/
+    └── weekly.py           # Sunday CLI report generator
+
+scripts/streaks/
+├── fetch_history.py        # entry point: fetch one season
+├── compute_labels.py       # entry point: rebuild thresholds + label all windows
+├── run_analysis.py         # entry point: regenerate analysis tables
+└── weekly_report.py        # entry point: print/write current-week report
+
+notebooks/streaks/          # gitignored
+├── 01_distributions.ipynb
+├── 02_continuation.ipynb
+└── 03_predictors.ipynb
+
+data/streaks/               # gitignored
+└── streaks.duckdb
+```
+
+**Hard isolation from the production stack.** Nothing in `streaks/` imports from `web/refresh_pipeline.py`, `data/redis_store.py`, or `lineup/`. Conversely, the existing pipeline does not import from `streaks/`. We will revisit this boundary if and when v2 (dashboard panel) lands.
+
+## Data Layer
+
+### Sources
+
+- **Per-game game logs**: MLB Stats API via the existing `analysis/game_logs.py` helpers. The current code fetches one season; we extend it to accept arbitrary seasons. Cost: one HTTP call per (player, season). Slow but free.
+- **Per-PA Statcast**: `pybaseball.statcast()` against Baseball Savant. Returns one row per pitch, which we filter to terminal-PA events and aggregate. Cost: ~1 GB total for 3 seasons of qualifying hitters; pulled in chunks by date range.
+- **Peripherals (BABIP, ISO, K%, BB%, GB/FB)**: computed from the same game logs and per-PA Statcast events. No separate FanGraphs scrape.
+
+### DuckDB schema
+
+```sql
+CREATE TABLE hitter_games (
+    player_id INTEGER,           -- mlbam_id
+    name VARCHAR,
+    team VARCHAR,
+    season INTEGER,
+    date DATE,
+    pa INTEGER, ab INTEGER, h INTEGER, hr INTEGER,
+    r INTEGER, rbi INTEGER, sb INTEGER, bb INTEGER, k INTEGER,
+    PRIMARY KEY (player_id, date)
+);
+
+CREATE TABLE hitter_statcast_pa (
+    player_id INTEGER,
+    date DATE,
+    pa_index INTEGER,           -- 1, 2, 3... within game
+    event VARCHAR,              -- single, double, hr, strikeout, walk, ...
+    launch_speed DOUBLE,        -- exit velocity
+    launch_angle DOUBLE,
+    estimated_woba_using_speedangle DOUBLE,  -- xwOBA
+    barrel BOOLEAN,
+    PRIMARY KEY (player_id, date, pa_index)
+);
+
+CREATE TABLE hitter_windows (
+    player_id INTEGER,
+    window_end DATE,
+    window_days INTEGER,        -- 3, 7, or 14
+    pa INTEGER, hr INTEGER, r INTEGER, rbi INTEGER, sb INTEGER,
+    avg DOUBLE, babip DOUBLE, k_pct DOUBLE, bb_pct DOUBLE, iso DOUBLE,
+    ev_avg DOUBLE, barrel_pct DOUBLE, xwoba_avg DOUBLE,
+    pt_bucket VARCHAR,          -- 'low' | 'mid' | 'high'
+    PRIMARY KEY (player_id, window_end, window_days)
+);
+
+CREATE TABLE thresholds (
+    season_set VARCHAR,         -- e.g. '2023-2025' for the calibration set
+    category VARCHAR,           -- 'hr' | 'r' | 'rbi' | 'sb' | 'avg'
+    window_days INTEGER,
+    pt_bucket VARCHAR,
+    p10 DOUBLE,
+    p90 DOUBLE,
+    PRIMARY KEY (season_set, category, window_days, pt_bucket)
+);
+
+CREATE TABLE hitter_streak_labels (
+    player_id INTEGER,
+    window_end DATE,
+    window_days INTEGER,
+    category VARCHAR,
+    label VARCHAR,              -- 'hot' | 'cold' | 'neutral'
+    PRIMARY KEY (player_id, window_end, window_days, category)
+);
+```
+
+### Idempotency
+
+`fetch_history.py` skips player-seasons already present in `hitter_games`. Statcast pulls are by date range and skip dates already present in `hitter_statcast_pa`. Window aggregation rebuilds rows for any (player, date) that changed since last run. Threshold calibration always rebuilds (fast). Labels rebuild when thresholds or windows change.
+
+## Streak Definition
+
+For a hitter on date D, with a window of N days (3, 7, or 14):
+
+1. Aggregate games in [D-N+1, D] → one row in `hitter_windows`.
+2. Determine playing-time bucket from the window's PA count.
+3. For each of the 5 categories, look up the threshold for (category, window, PT bucket).
+4. Label = "hot" if the count (or AVG) exceeds the 90th-percentile threshold; "cold" if below the 10th; "neutral" otherwise.
+5. Composite score = (# hot categories) − (# cold categories). Neutral categories contribute 0. Range −5 (cold across the board) to +5 (hot across the board).
+
+Window-end-anchored definition (any 7-day window ending on D) — *not* run-based ("hit safely in 5 straight games"). Run-based streaks are noisier and the literature is sparse.
+
+## Continuation Analysis (the research)
+
+For each labeled (player, window_end, category) row in `hitter_streak_labels` from 2023-2024 (held-out test year: 2025):
+
+- Compute the *next* window's outcome (the same player's category result over [window_end+1, window_end+N]).
+- Tabulate:
+  - P(next window above bucket median | current label = hot)
+  - P(next window below bucket median | current label = cold)
+  - Compare to unconditional rates. If hot → 50% and base rate is 50%, no signal.
+- Stratify by streak strength (90th vs 95th vs 99th percentile crossings), by PT bucket, by category, by player's full-season skill level (e.g. quartile of season HR rate).
+
+**Phase 3 go/no-go gate**: if hot/cold labels show no meaningful lift over base rates after stratification, stop and reframe before building the predictive model.
+
+If signal exists, fit a logistic model — one model *per category* (HR, R, RBI, SB, AVG):
+
+```
+P(category continues hot/cold) ~ streak_strength + babip + k_pct + bb_pct + iso
+                               + ev_avg + barrel_pct + xwoba_avg
+                               + season_rate_in_category + pt_bucket
+```
+
+`season_rate_in_category` is the player's full-season rate for the predicted category (e.g. season HR/PA when modeling HR continuation) — proxies for "is this player capable of this kind of streak?" GB/FB is derived from `launch_angle` rather than stored separately.
+
+Train on 2023-2024, validate on 2025. Report: coefficient signs, p-values, ROC-AUC, calibration plot, top features by importance.
+
+## Outputs
+
+### v1 (research artifacts)
+
+- `notebooks/streaks/01_distributions.ipynb` — distribution plots, threshold calibration outputs, sanity checks (do thresholds make intuitive sense?).
+- `notebooks/streaks/02_continuation.ipynb` — base-rate tables, plots of streak persistence by category and PT bucket. Lift over base rate per (category × window × strength) cell.
+- `notebooks/streaks/03_predictors.ipynb` — logistic model fits, coefficient interpretation, calibration plots, held-out 2025 accuracy.
+- `scripts/streaks/weekly_report.py` — CLI that pulls current-season game logs, applies the calibrated thresholds, runs the model, and emits a Sunday report:
+  - Hot rostered hitters (ranked by composite score, then strength)
+  - Cold rostered hitters (same)
+  - Per-category labels for each
+  - Continuation confidence score from the model
+  - Top 1-2 peripheral drivers per player ("Soto: hot streak supported by 95th-percentile barrel rate and stable BABIP — likely real")
+  - Suggested action lines (start/sit/stash) — heuristic on top of model score, no Yahoo integration
+
+### v2 / v3 (deferred)
+
+- Dashboard panel on the season dashboard surfacing the same data.
+- Lineup-optimizer adjustment — multiplicative tweak to ROS projections for the next week based on continuation probability.
+
+## Phasing
+
+| Phase | Scope | Gate |
+|-------|-------|------|
+| 1 | Data layer: fetch + DuckDB schema + load 3 seasons of game logs and Statcast | Data quality checks pass; row counts plausible |
+| 2 | Window aggregation + threshold calibration + labeling | Notebook 01 produces threshold tables that pass eyeball test |
+| 3 | Continuation base rates | **Go/no-go**: do hot/cold labels show meaningful lift over base rates? |
+| 4 | Predictive model | Held-out 2025 ROC-AUC ≥ 0.55 (i.e. better than coin flip) |
+| 5 | Weekly Sunday report | Manually validated against 2-3 weeks of 2026 data |
+| B (deferred) | Dashboard panel | Methodology proven through v1 |
+| C (deferred) | Optimizer integration | Dashboard panel running for ≥4 weeks without surprises |
+
+## Assumptions and Open Questions
+
+- **90/10 percentiles**, not 95/5. More sample, less extreme labels. Will revisit if the analysis shows the bar is too low.
+- **PT buckets at 5/10/20 PA.** Bucket boundaries are eyeballed; could be revisited based on the playing-time distribution.
+- **Statcast coverage starts 2015** but quality (especially xwOBA) improved over time. 2023-2025 is well within the high-quality era.
+- **`pybaseball` reliability**: the package occasionally breaks when Baseball Savant changes its endpoints. Keep version pinned in dev deps.
+- **`hitter_statcast_pa` size**: ~600 PA/qualified-hitter × ~250 hitters × 3 seasons ≈ 450K rows. Manageable in DuckDB.
+- **Player ID alignment**: this project keys on MLB AM ID (integer), not the project's `name::player_type` convention. We only need name-based joining at the report-generation step (matching streak players to Yahoo roster). Use `data/db.py` to map mlbam_id ↔ name when building the weekly report.
+- **Test coverage**: research code has lighter test bar than production. Unit tests for `windows.py`, `thresholds.py`, `labels.py` (the core math). Notebooks not tested.
+- **Lint / mypy**: streaks modules added to `[tool.mypy].files` and conform to project lint rules from day one. Cheaper than retrofitting.
+
+## Dependencies (new)
+
+- `duckdb` (Python package)
+- `pybaseball`
+- `polars` *(optional — pandas works but polars+duckdb is faster for the analytical queries; defer until performance is a problem)*
+
+To be added to `pyproject.toml` `[project.optional-dependencies].dev` (research tooling, not production-required) when Phase 1 lands.
+
+## Progress Log
+
+This section is appended to as work happens. Each milestone gets a dated entry.
+
+### 2026-05-06 — design spec written
+
+- Brainstormed scope: hitters only, projection-agnostic empirical thresholds, Statcast in scope, isolated local DuckDB.
+- Decisions captured in the table above. Branch `analysis/hot-streaks` created off main.
+- Next: wait for spec review, then move to writing the implementation plan for Phase 1 (data layer).
