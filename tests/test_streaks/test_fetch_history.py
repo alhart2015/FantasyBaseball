@@ -149,3 +149,35 @@ def test_fetch_season_uses_correct_date_range_for_statcast(conn):
     # Statcast range should span 3/15 .. 11/15 of the season year (covers all of MLB regular season + playoffs)
     assert captured["start"] == date(2024, 3, 15)
     assert captured["end"] == date(2024, 11, 15)
+
+
+def test_fetch_season_continues_after_per_player_failure(conn):
+    """If one player's game-log fetch raises, the loop should log and continue."""
+
+    def _raises_for_trout(player_id, name, team, season, **_kwargs):
+        if player_id == 660271:
+            raise RuntimeError("simulated 404 from MLB Stats API")
+        return _stub_game_logs(player_id, name, team, season)
+
+    with (
+        patch(
+            "fantasy_baseball.streaks.data.fetch_history.fetch_qualified_hitters",
+            return_value=_stub_qualified(),
+        ),
+        patch(
+            "fantasy_baseball.streaks.data.fetch_history.fetch_hitter_season_game_logs",
+            side_effect=_raises_for_trout,
+        ),
+        patch(
+            "fantasy_baseball.streaks.data.fetch_history.fetch_statcast_pa_for_date_range",
+            side_effect=_stub_statcast,
+        ),
+    ):
+        summary = fetch_season(season=2024, conn=conn)
+
+    # Other Hitter still loaded; Trout silently skipped via exception handler
+    games = conn.execute("SELECT player_id FROM hitter_games").fetchall()
+    player_ids = {row[0] for row in games}
+    assert player_ids == {545361}
+    assert summary["players_fetched"] == 2  # both attempted
+    assert summary["game_log_rows"] == 1  # only one succeeded
