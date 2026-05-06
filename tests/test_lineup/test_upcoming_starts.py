@@ -423,3 +423,20 @@ class TestFilterStartingPitchers:
         roster = [_player("Bryan Woo", [Position.SP])]
         proj = self._proj([{"_name_norm": "bryan woo", "ip": 180.0}])
         assert filter_starting_pitchers(roster, proj) == []
+
+    def test_p_only_yahoo_league_keeps_starters(self):
+        # Yahoo "P-only" leagues (no SP/RP distinction) tag every pitcher as
+        # just [Position.P]. The filter must still keep starters in this case;
+        # gs > 0 does the actual starter-vs-reliever separation.
+        roster = [
+            _player("Bryan Woo", [Position.P]),
+            _player("Mason Miller", [Position.P]),  # closer in a P-only league
+        ]
+        proj = self._proj(
+            [
+                {"_name_norm": "bryan woo", "gs": 29.9},
+                {"_name_norm": "mason miller", "gs": 0.0},
+            ]
+        )
+        kept = filter_starting_pitchers(roster, proj)
+        assert [p.name for p in kept] == ["Bryan Woo"]

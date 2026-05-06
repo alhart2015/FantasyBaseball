@@ -266,11 +266,21 @@ def filter_starting_pitchers(
     roster: list[Any],
     pitchers_proj: pd.DataFrame,
 ) -> list[Any]:
-    """Keep only roster members who are SP-eligible AND projected gs > 0.
+    """Keep only roster pitchers projected to start at least one game.
+
+    Pitcher-eligible (P / SP / RP) AND projection ``gs > 0``. The
+    eligibility gate uses ``is_pitcher`` rather than a strict
+    ``Position.SP`` check because some Yahoo leagues use a single
+    universal ``P`` slot — every pitcher's eligibility list is just
+    ``[P]`` regardless of starter/reliever role, so an SP-only check
+    drops the entire pitcher staff. ``gs > 0`` does the real work of
+    excluding closers/setup men.
 
     Players missing from the projection frame, or with a projection row
     that has no ``gs`` column / non-positive gs, are dropped.
     """
+    from fantasy_baseball.utils.positions import is_pitcher
+
     if pitchers_proj is None or pitchers_proj.empty or "gs" not in pitchers_proj.columns:
         return []
     if "_name_norm" not in pitchers_proj.columns:
@@ -282,7 +292,7 @@ def filter_starting_pitchers(
 
     kept: list[Any] = []
     for player in roster:
-        if Position.SP not in player.positions:
+        if not is_pitcher(player.positions):
             continue
         gs = gs_by_name.get(normalize_name(player.name), 0.0) or 0.0
         if gs > 0:
