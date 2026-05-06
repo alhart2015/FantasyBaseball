@@ -96,9 +96,10 @@ def get_connection(path: Path | str = DEFAULT_DB_PATH) -> duckdb.DuckDBPyConnect
 
     Parent directory is created if missing. Schema is initialized on every open.
     """
-    if path != ":memory:":
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-    conn = duckdb.connect(str(path))
+    path_str = str(path)
+    if path_str != ":memory:":
+        Path(path_str).parent.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(path_str)
     init_schema(conn)
     return conn
 
