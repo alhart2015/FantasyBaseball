@@ -12,6 +12,7 @@ from fantasy_baseball.streaks.data.load import (
     upsert_statcast_pa,
 )
 from fantasy_baseball.streaks.data.schema import init_schema
+from fantasy_baseball.streaks.models import HitterGame, HitterStatcastPA
 
 
 @pytest.fixture
@@ -23,22 +24,22 @@ def conn():
 
 
 def _row(player_id=660271, dt=date(2024, 4, 1), hr=1):
-    return {
-        "player_id": player_id,
-        "name": "Mike Trout",
-        "team": "LAA",
-        "season": 2024,
-        "date": dt,
-        "pa": 4,
-        "ab": 3,
-        "h": 1,
-        "hr": hr,
-        "r": 1,
-        "rbi": 2,
-        "sb": 0,
-        "bb": 1,
-        "k": 1,
-    }
+    return HitterGame(
+        player_id=player_id,
+        name="Mike Trout",
+        team="LAA",
+        season=2024,
+        date=dt,
+        pa=4,
+        ab=3,
+        h=1,
+        hr=hr,
+        r=1,
+        rbi=2,
+        sb=0,
+        bb=1,
+        k=1,
+    )
 
 
 def test_upsert_hitter_games_inserts_rows(conn):
@@ -68,16 +69,16 @@ def test_upsert_hitter_games_empty_list_is_noop(conn):
 
 
 def _statcast_row(player_id=660271, dt=date(2024, 4, 1), pa_index=1, event="single"):
-    return {
-        "player_id": player_id,
-        "date": dt,
-        "pa_index": pa_index,
-        "event": event,
-        "launch_speed": 95.5,
-        "launch_angle": 12.0,
-        "estimated_woba_using_speedangle": 0.45,
-        "barrel": False,
-    }
+    return HitterStatcastPA(
+        player_id=player_id,
+        date=dt,
+        pa_index=pa_index,
+        event=event,
+        launch_speed=95.5,
+        launch_angle=12.0,
+        estimated_woba_using_speedangle=0.45,
+        barrel=False,
+    )
 
 
 def test_upsert_statcast_pa_inserts(conn):
@@ -94,9 +95,7 @@ def test_upsert_statcast_pa_is_idempotent(conn):
 
 
 def test_upsert_statcast_pa_handles_null_event(conn):
-    row = _statcast_row()
-    row["event"] = None
-    upsert_statcast_pa(conn, [row])
+    upsert_statcast_pa(conn, [_statcast_row(event=None)])
     out = conn.execute("SELECT event FROM hitter_statcast_pa").fetchone()
     assert out[0] is None
 

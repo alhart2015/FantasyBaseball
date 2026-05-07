@@ -56,28 +56,28 @@ def test_pitches_to_pa_rows_assigns_pa_index_per_player_per_date():
     rows = pitches_to_pa_rows(df)
 
     trout_rows = sorted(
-        (r for r in rows if r["player_id"] == 660271),
-        key=lambda r: (r["date"], r["pa_index"]),
+        (r for r in rows if r.player_id == 660271),
+        key=lambda r: (r.date, r.pa_index),
     )
     other_rows = sorted(
-        (r for r in rows if r["player_id"] == 545361),
-        key=lambda r: (r["date"], r["pa_index"]),
+        (r for r in rows if r.player_id == 545361),
+        key=lambda r: (r.date, r.pa_index),
     )
 
     # Trout 4/1: 2 PAs, indices 1 and 2
-    assert trout_rows[0]["date"] == date(2024, 4, 1)
-    assert trout_rows[0]["pa_index"] == 1
-    assert trout_rows[0]["event"] == "single"
-    assert trout_rows[1]["pa_index"] == 2
-    assert trout_rows[1]["event"] == "double"
-    assert trout_rows[1]["barrel"] is True
+    assert trout_rows[0].date == date(2024, 4, 1)
+    assert trout_rows[0].pa_index == 1
+    assert trout_rows[0].event == "single"
+    assert trout_rows[1].pa_index == 2
+    assert trout_rows[1].event == "double"
+    assert trout_rows[1].barrel is True
     # Trout 4/2: 1 PA, index 1
-    assert trout_rows[2]["date"] == date(2024, 4, 2)
-    assert trout_rows[2]["pa_index"] == 1
+    assert trout_rows[2].date == date(2024, 4, 2)
+    assert trout_rows[2].pa_index == 1
     # Other player 4/1: 1 PA, index 1, NaN launch_speed → None
-    assert other_rows[0]["date"] == date(2024, 4, 1)
-    assert other_rows[0]["pa_index"] == 1
-    assert other_rows[0]["launch_speed"] is None
+    assert other_rows[0].date == date(2024, 4, 1)
+    assert other_rows[0].pa_index == 1
+    assert other_rows[0].launch_speed is None
 
 
 def test_pitches_to_pa_rows_handles_missing_barrel_column():
@@ -92,7 +92,7 @@ def test_pitches_to_pa_rows_handles_missing_barrel_column():
         }
     )
     rows = pitches_to_pa_rows(df)
-    assert rows[0]["barrel"] is None
+    assert rows[0].barrel is None
 
 
 def test_fetch_statcast_pa_for_date_range_concatenates_chunks():
@@ -126,4 +126,4 @@ def test_fetch_statcast_pa_for_date_range_concatenates_chunks():
     ):
         rows = fetch_statcast_pa_for_date_range(date(2024, 4, 1), date(2024, 4, 14))
     assert len(rows) == 2
-    assert {r["event"] for r in rows} == {"single", "home_run"}
+    assert {r.event for r in rows} == {"single", "home_run"}

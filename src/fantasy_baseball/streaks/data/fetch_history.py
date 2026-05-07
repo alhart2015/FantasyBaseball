@@ -40,25 +40,25 @@ def fetch_season(season: int, conn: duckdb.DuckDBPyConnection, min_pa: int = 150
     logger.info("Season %s: %d qualified hitters", season, len(qualified))
 
     already = existing_player_seasons(conn)
-    to_fetch = [q for q in qualified if (q["player_id"], season) not in already]
+    to_fetch = [q for q in qualified if (q.player_id, season) not in already]
     logger.info("Season %s: %d new players to fetch", season, len(to_fetch))
 
     game_log_rows = 0
     for i, player in enumerate(to_fetch):
         try:
-            rows = fetch_hitter_season_game_logs(
-                player_id=player["player_id"],
-                name=player["name"],
-                team=player["team"],
+            games = fetch_hitter_season_game_logs(
+                player_id=player.player_id,
+                name=player.name,
+                team=player.team,
                 season=season,
             )
-            upsert_hitter_games(conn, rows)
-            game_log_rows += len(rows)
+            upsert_hitter_games(conn, games)
+            game_log_rows += len(games)
         except (requests.RequestException, KeyError, ValueError) as e:
             logger.warning(
                 "Game log fetch failed for %s (%s): %s",
-                player["name"],
-                player["player_id"],
+                player.name,
+                player.player_id,
                 e,
             )
         if (i + 1) % 25 == 0:
@@ -72,9 +72,9 @@ def fetch_season(season: int, conn: duckdb.DuckDBPyConnection, min_pa: int = 150
     statcast_rows = 0
     season_dates_loaded = {d for d in loaded_dates if d.year == season}
     if not season_dates_loaded:
-        rows = fetch_statcast_pa_for_date_range(start, end)
-        upsert_statcast_pa(conn, rows)
-        statcast_rows = len(rows)
+        statcast_pa = fetch_statcast_pa_for_date_range(start, end)
+        upsert_statcast_pa(conn, statcast_pa)
+        statcast_rows = len(statcast_pa)
     else:
         logger.info(
             "Season %s: %d Statcast dates already loaded, skipping Statcast pull",

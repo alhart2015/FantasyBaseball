@@ -2,30 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import astuple, fields
 from datetime import date
-from typing import Any
 
 import duckdb
 
-_HITTER_GAME_COLS = (
-    "player_id",
-    "name",
-    "team",
-    "season",
-    "date",
-    "pa",
-    "ab",
-    "h",
-    "hr",
-    "r",
-    "rbi",
-    "sb",
-    "bb",
-    "k",
-)
+from fantasy_baseball.streaks.models import HitterGame, HitterStatcastPA
+
+_HITTER_GAME_COLS = tuple(f.name for f in fields(HitterGame))
+_STATCAST_COLS = tuple(f.name for f in fields(HitterStatcastPA))
 
 
-def upsert_hitter_games(conn: duckdb.DuckDBPyConnection, rows: list[dict[str, Any]]) -> None:
+def upsert_hitter_games(
+    conn: duckdb.DuckDBPyConnection, rows: Sequence[HitterGame]
+) -> None:
     """Insert or replace rows in `hitter_games` keyed by (player_id, date).
 
     Empty input is a no-op. DuckDB's `INSERT OR REPLACE` handles PK
@@ -38,22 +29,12 @@ def upsert_hitter_games(conn: duckdb.DuckDBPyConnection, rows: list[dict[str, An
         f"INSERT OR REPLACE INTO hitter_games ({', '.join(_HITTER_GAME_COLS)}) "
         f"VALUES ({placeholders})"
     )
-    conn.executemany(sql, [tuple(r[c] for c in _HITTER_GAME_COLS) for r in rows])
+    conn.executemany(sql, [astuple(r) for r in rows])
 
 
-_STATCAST_COLS = (
-    "player_id",
-    "date",
-    "pa_index",
-    "event",
-    "launch_speed",
-    "launch_angle",
-    "estimated_woba_using_speedangle",
-    "barrel",
-)
-
-
-def upsert_statcast_pa(conn: duckdb.DuckDBPyConnection, rows: list[dict[str, Any]]) -> None:
+def upsert_statcast_pa(
+    conn: duckdb.DuckDBPyConnection, rows: Sequence[HitterStatcastPA]
+) -> None:
     """Insert or replace rows in `hitter_statcast_pa` keyed by (player_id, date, pa_index)."""
     if not rows:
         return
@@ -62,7 +43,7 @@ def upsert_statcast_pa(conn: duckdb.DuckDBPyConnection, rows: list[dict[str, Any
         f"INSERT OR REPLACE INTO hitter_statcast_pa ({', '.join(_STATCAST_COLS)}) "
         f"VALUES ({placeholders})"
     )
-    conn.executemany(sql, [tuple(r[c] for c in _STATCAST_COLS) for r in rows])
+    conn.executemany(sql, [astuple(r) for r in rows])
 
 
 def existing_player_seasons(

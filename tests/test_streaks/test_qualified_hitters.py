@@ -6,6 +6,7 @@ from fantasy_baseball.streaks.data.qualified_hitters import (
     fetch_qualified_hitters,
     parse_leader_row,
 )
+from fantasy_baseball.streaks.models import QualifiedHitter
 
 
 def test_parse_leader_row_extracts_id_name_team_pa():
@@ -15,12 +16,7 @@ def test_parse_leader_row_extracts_id_name_team_pa():
         "value": "162",
     }
     parsed = parse_leader_row(row)
-    assert parsed == {
-        "player_id": 660271,
-        "name": "Mike Trout",
-        "team": "LAA",
-        "pa": 162,
-    }
+    assert parsed == QualifiedHitter(player_id=660271, name="Mike Trout", team="LAA", pa=162)
 
 
 def test_parse_leader_row_handles_missing_team():
@@ -30,7 +26,7 @@ def test_parse_leader_row_handles_missing_team():
         "value": "150",
     }
     parsed = parse_leader_row(row)
-    assert parsed["team"] is None
+    assert parsed.team is None
 
 
 def test_fetch_qualified_hitters_filters_below_min_pa():
@@ -62,7 +58,7 @@ def test_fetch_qualified_hitters_filters_below_min_pa():
         return_value=fake_response,
     ):
         result = fetch_qualified_hitters(season=2024, min_pa=150)
-    ids = {r["player_id"] for r in result}
+    ids = {r.player_id for r in result}
     assert ids == {1, 2}  # 3 is below cutoff
 
 

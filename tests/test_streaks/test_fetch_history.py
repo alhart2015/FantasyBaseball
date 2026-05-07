@@ -9,6 +9,7 @@ import requests
 
 from fantasy_baseball.streaks.data.fetch_history import fetch_season
 from fantasy_baseball.streaks.data.schema import init_schema
+from fantasy_baseball.streaks.models import HitterGame, HitterStatcastPA, QualifiedHitter
 
 
 @pytest.fixture
@@ -21,44 +22,44 @@ def conn():
 
 def _stub_qualified():
     return [
-        {"player_id": 660271, "name": "Mike Trout", "team": "LAA", "pa": 162},
-        {"player_id": 545361, "name": "Other Hitter", "team": "BOS", "pa": 200},
+        QualifiedHitter(player_id=660271, name="Mike Trout", team="LAA", pa=162),
+        QualifiedHitter(player_id=545361, name="Other Hitter", team="BOS", pa=200),
     ]
 
 
 def _stub_game_logs(player_id, name, team, season):
     return [
-        {
-            "player_id": player_id,
-            "name": name,
-            "team": team,
-            "season": season,
-            "date": "2024-04-01",
-            "pa": 4,
-            "ab": 3,
-            "h": 1,
-            "hr": 1,
-            "r": 1,
-            "rbi": 2,
-            "sb": 0,
-            "bb": 1,
-            "k": 1,
-        }
+        HitterGame(
+            player_id=player_id,
+            name=name,
+            team=team,
+            season=season,
+            date=date(2024, 4, 1),
+            pa=4,
+            ab=3,
+            h=1,
+            hr=1,
+            r=1,
+            rbi=2,
+            sb=0,
+            bb=1,
+            k=1,
+        )
     ]
 
 
 def _stub_statcast(start, end):
     return [
-        {
-            "player_id": 660271,
-            "date": date(2024, 4, 1),
-            "pa_index": 1,
-            "event": "single",
-            "launch_speed": 95.0,
-            "launch_angle": 10.0,
-            "estimated_woba_using_speedangle": 0.4,
-            "barrel": False,
-        }
+        HitterStatcastPA(
+            player_id=660271,
+            date=date(2024, 4, 1),
+            pa_index=1,
+            event="single",
+            launch_speed=95.0,
+            launch_angle=10.0,
+            estimated_woba_using_speedangle=0.4,
+            barrel=False,
+        )
     ]
 
 

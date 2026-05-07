@@ -1,11 +1,13 @@
 """Tests for streaks-specific game log parsing and per-season fetch."""
 
+from datetime import date
 from unittest.mock import Mock, patch
 
 from fantasy_baseball.streaks.data.game_logs import (
     fetch_hitter_season_game_logs,
     parse_hitter_game_log_full,
 )
+from fantasy_baseball.streaks.models import HitterGame
 
 
 def _split(date="2024-04-01", **stat_overrides):
@@ -32,22 +34,22 @@ def test_parse_hitter_game_log_full_extracts_all_columns():
         team="LAA",
         season=2024,
     )
-    assert row == {
-        "player_id": 660271,
-        "name": "Mike Trout",
-        "team": "LAA",
-        "season": 2024,
-        "date": "2024-04-01",
-        "pa": 4,
-        "ab": 3,
-        "h": 1,
-        "hr": 1,
-        "r": 1,
-        "rbi": 2,
-        "sb": 0,
-        "bb": 1,
-        "k": 1,
-    }
+    assert row == HitterGame(
+        player_id=660271,
+        name="Mike Trout",
+        team="LAA",
+        season=2024,
+        date=date(2024, 4, 1),
+        pa=4,
+        ab=3,
+        h=1,
+        hr=1,
+        r=1,
+        rbi=2,
+        sb=0,
+        bb=1,
+        k=1,
+    )
 
 
 def test_parse_hitter_game_log_full_defaults_missing_stats_to_zero():
@@ -58,8 +60,8 @@ def test_parse_hitter_game_log_full_defaults_missing_stats_to_zero():
         team=None,
         season=2024,
     )
-    assert row["pa"] == 0
-    assert row["bb"] == 0
+    assert row.pa == 0
+    assert row.bb == 0
 
 
 def test_fetch_hitter_season_game_logs_returns_one_row_per_split():
@@ -82,11 +84,11 @@ def test_fetch_hitter_season_game_logs_returns_one_row_per_split():
             player_id=660271, name="Mike Trout", team="LAA", season=2024
         )
     assert len(rows) == 2
-    assert rows[0]["date"] == "2024-04-01"
-    assert rows[0]["hr"] == 1
-    assert rows[1]["hr"] == 0
-    assert all(r["player_id"] == 660271 for r in rows)
-    assert all(r["season"] == 2024 for r in rows)
+    assert rows[0].date == date(2024, 4, 1)
+    assert rows[0].hr == 1
+    assert rows[1].hr == 0
+    assert all(r.player_id == 660271 for r in rows)
+    assert all(r.season == 2024 for r in rows)
 
 
 def test_fetch_hitter_season_game_logs_handles_empty_splits():
