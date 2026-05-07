@@ -31,6 +31,8 @@ dev = [
     "vulture>=2.11",
     "types-PyYAML>=6.0",
     "types-requests>=2.31",
+    "duckdb>=1.0",
+    "pybaseball>=2.2",
 ]
 
 [tool.setuptools.packages.find]
@@ -80,6 +82,7 @@ files = [
     "src/fantasy_baseball/scoring.py",
     "src/fantasy_baseball/sgp/",
     "src/fantasy_baseball/simulation.py",
+    "src/fantasy_baseball/streaks/",
     "src/fantasy_baseball/trades/evaluate.py",
     "src/fantasy_baseball/trades/multi_trade.py",
     "src/fantasy_baseball/utils/",
@@ -107,6 +110,7 @@ module = [
     "fantasy_baseball.lineup.*",
     "fantasy_baseball.models.*",
     "fantasy_baseball.sgp.*",
+    "fantasy_baseball.streaks.*",
     "fantasy_baseball.trades.*",
     "fantasy_baseball.utils.*",
 ]

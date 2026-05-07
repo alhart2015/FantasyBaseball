@@ -33,3 +33,7 @@ data/cache_archive/
 
 # SQLite databases (populated at runtime)
 data/*.db
+
+# Hot streak analysis: local DuckDB + research notebooks (not source of truth)
+data/streaks/
+notebooks/streaks/
