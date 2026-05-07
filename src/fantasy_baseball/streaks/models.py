@@ -10,6 +10,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from typing import Literal
+
+PtBucket = Literal["low", "mid", "high"]
+StreakCategory = Literal["hr", "r", "rbi", "sb", "avg"]
+StreakLabel = Literal["hot", "cold", "neutral"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +97,7 @@ class HitterWindow:
     ev_avg: float | None
     barrel_pct: float | None
     xwoba_avg: float | None
-    pt_bucket: str
+    pt_bucket: PtBucket
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,9 +108,9 @@ class Threshold:
     """
 
     season_set: str
-    category: str
+    category: StreakCategory
     window_days: int
-    pt_bucket: str
+    pt_bucket: PtBucket
     p10: float
     p90: float
 
@@ -120,5 +125,5 @@ class HitterStreakLabel:
     player_id: int
     window_end: date
     window_days: int
-    category: str
-    label: str
+    category: StreakCategory
+    label: StreakLabel
