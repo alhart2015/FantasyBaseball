@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import duckdb
 import pytest
+import requests
 
 from fantasy_baseball.streaks.data.fetch_history import fetch_season
 from fantasy_baseball.streaks.data.schema import init_schema
@@ -25,7 +26,7 @@ def _stub_qualified():
     ]
 
 
-def _stub_game_logs(player_id, name, team, season, **_kwargs):
+def _stub_game_logs(player_id, name, team, season):
     return [
         {
             "player_id": player_id,
@@ -46,7 +47,7 @@ def _stub_game_logs(player_id, name, team, season, **_kwargs):
     ]
 
 
-def _stub_statcast(start, end, **_kwargs):
+def _stub_statcast(start, end):
     return [
         {
             "player_id": 660271,
@@ -82,7 +83,7 @@ def test_fetch_season_loads_game_logs_and_statcast(conn):
     statcast = conn.execute("SELECT COUNT(*) FROM hitter_statcast_pa").fetchone()[0]
     assert games == 2  # one row each for Trout and Other Hitter
     assert statcast == 1
-    assert summary["players_fetched"] == 2
+    assert summary["players_attempted"] == 2
     assert summary["game_log_rows"] == 2
     assert summary["statcast_rows"] == 1
 
@@ -98,7 +99,7 @@ def test_fetch_season_skips_already_loaded_players(conn):
 
     fetch_calls: list[int] = []
 
-    def _record_calls(player_id, name, team, season, **_kwargs):
+    def _record_calls(player_id, name, team, season):
         fetch_calls.append(player_id)
         return _stub_game_logs(player_id, name, team, season)
 
@@ -125,7 +126,7 @@ def test_fetch_season_skips_already_loaded_players(conn):
 def test_fetch_season_uses_correct_date_range_for_statcast(conn):
     captured: dict[str, date] = {}
 
-    def _capture_dates(start, end, **_kwargs):
+    def _capture_dates(start, end):
         captured["start"] = start
         captured["end"] = end
         return []
@@ -152,11 +153,11 @@ def test_fetch_season_uses_correct_date_range_for_statcast(conn):
 
 
 def test_fetch_season_continues_after_per_player_failure(conn):
-    """If one player's game-log fetch raises, the loop should log and continue."""
+    """If one player's game-log fetch raises a transient HTTP error, the loop logs and continues."""
 
-    def _raises_for_trout(player_id, name, team, season, **_kwargs):
+    def _raises_for_trout(player_id, name, team, season):
         if player_id == 660271:
-            raise RuntimeError("simulated 404 from MLB Stats API")
+            raise requests.HTTPError("simulated 404 from MLB Stats API")
         return _stub_game_logs(player_id, name, team, season)
 
     with (
@@ -179,5 +180,5 @@ def test_fetch_season_continues_after_per_player_failure(conn):
     games = conn.execute("SELECT player_id FROM hitter_games").fetchall()
     player_ids = {row[0] for row in games}
     assert player_ids == {545361}
-    assert summary["players_fetched"] == 2  # both attempted
+    assert summary["players_attempted"] == 2  # both attempted
     assert summary["game_log_rows"] == 1  # only one succeeded

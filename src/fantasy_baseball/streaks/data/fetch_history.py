@@ -12,6 +12,7 @@ from datetime import date
 from typing import Any
 
 import duckdb
+import requests
 
 from fantasy_baseball.streaks.data.game_logs import fetch_hitter_season_game_logs
 from fantasy_baseball.streaks.data.load import (
@@ -53,7 +54,7 @@ def fetch_season(season: int, conn: duckdb.DuckDBPyConnection, min_pa: int = 150
             )
             upsert_hitter_games(conn, rows)
             game_log_rows += len(rows)
-        except Exception as e:
+        except (requests.RequestException, KeyError, ValueError) as e:
             logger.warning(
                 "Game log fetch failed for %s (%s): %s",
                 player["name"],
@@ -83,7 +84,7 @@ def fetch_season(season: int, conn: duckdb.DuckDBPyConnection, min_pa: int = 150
 
     return {
         "season": season,
-        "players_fetched": len(to_fetch),
+        "players_attempted": len(to_fetch),
         "game_log_rows": game_log_rows,
         "statcast_rows": statcast_rows,
     }

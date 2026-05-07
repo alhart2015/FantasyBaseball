@@ -8,7 +8,6 @@ the (player_id, date, pa_index) primary key.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Iterator
 from datetime import date, timedelta
 from typing import Any
@@ -34,18 +33,15 @@ def filter_terminal_pa(df: pd.DataFrame) -> pd.DataFrame:
     return df[df["events"].notna()].reset_index(drop=True)
 
 
-def _val_or_none(v: Any) -> Any:
-    """Convert pandas/numpy NaN to None; pass everything else through unchanged."""
-    if isinstance(v, float) and math.isnan(v):
-        return None
-    return v
+def _na_to_none(v: Any) -> Any:
+    return None if pd.isna(v) else v
 
 
 def pitches_to_pa_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
     """Convert a Statcast pitch DataFrame to upsert-ready PA rows.
 
     Filters to terminal PAs, assigns pa_index per (batter, game_date), and
-    converts NaN values to None.
+    converts NaN/NaT/pd.NA values to None.
     """
     df = filter_terminal_pa(df)
     if df.empty:
@@ -61,10 +57,10 @@ def pitches_to_pa_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
                 "player_id": int(r.batter),
                 "date": pd.to_datetime(r.game_date).date(),
                 "pa_index": int(r.pa_index),
-                "event": _val_or_none(r.events),
-                "launch_speed": _val_or_none(getattr(r, "launch_speed", None)),
-                "launch_angle": _val_or_none(getattr(r, "launch_angle", None)),
-                "estimated_woba_using_speedangle": _val_or_none(
+                "event": _na_to_none(r.events),
+                "launch_speed": _na_to_none(getattr(r, "launch_speed", None)),
+                "launch_angle": _na_to_none(getattr(r, "launch_angle", None)),
+                "estimated_woba_using_speedangle": _na_to_none(
                     getattr(r, "estimated_woba_using_speedangle", None)
                 ),
                 "barrel": (bool(r.barrel) if has_barrel and not pd.isna(r.barrel) else None),
