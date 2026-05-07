@@ -95,6 +95,31 @@ def test_pitches_to_pa_rows_handles_missing_barrel_column():
     assert rows[0].barrel is None
 
 
+def test_pitches_to_pa_rows_unboxes_numpy_scalars():
+    """DuckDB's executemany binder rejects numpy.int64/float64 — values must be native Python."""
+    df = pd.DataFrame(
+        {
+            "events": ["single"],
+            "batter": [660271],
+            "game_date": ["2024-04-01"],
+            "launch_speed": [95.0],
+            "launch_angle": [10.0],
+            "estimated_woba_using_speedangle": [0.4],
+            "barrel": [1],
+        }
+    )
+    row = pitches_to_pa_rows(df)[0]
+    # Type, not just value — numpy.float64 is a subclass of float so a
+    # naive isinstance(row.launch_speed, float) check would pass even on
+    # the broken pre-fix path. type() exact-match catches it.
+    assert type(row.launch_speed) is float
+    assert type(row.launch_angle) is float
+    assert type(row.estimated_woba_using_speedangle) is float
+    assert type(row.player_id) is int
+    assert type(row.pa_index) is int
+    assert type(row.barrel) is bool
+
+
 def test_fetch_statcast_pa_for_date_range_concatenates_chunks():
     from fantasy_baseball.streaks.data.statcast import fetch_statcast_pa_for_date_range
 
