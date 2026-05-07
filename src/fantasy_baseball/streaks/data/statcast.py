@@ -36,7 +36,17 @@ def filter_terminal_pa(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _na_to_none(v: Any) -> Any:
-    return None if pd.isna(v) else v
+    """Convert pandas/numpy missing values to None and unbox numpy scalars.
+
+    DuckDB's Python binder doesn't auto-coerce ``numpy.int64`` / ``numpy.float64``
+    via the array-protocol path used by ``executemany``, so we call ``.item()``
+    on any object that has it (numpy scalars do; native Python types don't).
+    """
+    if pd.isna(v):
+        return None
+    if hasattr(v, "item"):
+        return v.item()
+    return v
 
 
 def pitches_to_pa_rows(df: pd.DataFrame) -> list[HitterStatcastPA]:
