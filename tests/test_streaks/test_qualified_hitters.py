@@ -4,51 +4,37 @@ from unittest.mock import patch
 
 from fantasy_baseball.streaks.data.qualified_hitters import (
     fetch_qualified_hitters,
-    parse_leader_row,
+    parse_season_split,
 )
 from fantasy_baseball.streaks.models import QualifiedHitter
 
 
-def test_parse_leader_row_extracts_id_name_team_pa():
-    row = {
-        "person": {"id": 660271, "fullName": "Mike Trout"},
-        "team": {"abbreviation": "LAA"},
-        "value": "162",
+def _split(player_id, name, team_abbrev, pa):
+    return {
+        "player": {"id": player_id, "fullName": name},
+        "team": {"abbreviation": team_abbrev} if team_abbrev else {},
+        "stat": {"plateAppearances": pa},
     }
-    parsed = parse_leader_row(row)
+
+
+def test_parse_season_split_extracts_id_name_team_pa():
+    parsed = parse_season_split(_split(660271, "Mike Trout", "LAA", 162))
     assert parsed == QualifiedHitter(player_id=660271, name="Mike Trout", team="LAA", pa=162)
 
 
-def test_parse_leader_row_handles_missing_team():
-    row = {
-        "person": {"id": 545361, "fullName": "Free Agent"},
-        "team": {},
-        "value": "150",
-    }
-    parsed = parse_leader_row(row)
+def test_parse_season_split_handles_missing_team():
+    parsed = parse_season_split(_split(545361, "Free Agent", None, 150))
     assert parsed.team is None
 
 
 def test_fetch_qualified_hitters_filters_below_min_pa():
     fake_response = {
-        "leagueLeaders": [
+        "stats": [
             {
-                "leaders": [
-                    {
-                        "person": {"id": 1, "fullName": "Above Cutoff"},
-                        "team": {"abbreviation": "NYY"},
-                        "value": "151",
-                    },
-                    {
-                        "person": {"id": 2, "fullName": "Right At Cutoff"},
-                        "team": {"abbreviation": "BOS"},
-                        "value": "150",
-                    },
-                    {
-                        "person": {"id": 3, "fullName": "Below Cutoff"},
-                        "team": {"abbreviation": "TBR"},
-                        "value": "149",
-                    },
+                "splits": [
+                    _split(1, "Above Cutoff", "NYY", 151),
+                    _split(2, "Right At Cutoff", "BOS", 150),
+                    _split(3, "Below Cutoff", "TBR", 149),
                 ]
             }
         ]
@@ -65,11 +51,13 @@ def test_fetch_qualified_hitters_filters_below_min_pa():
 def test_fetch_qualified_hitters_passes_correct_params():
     with patch(
         "fantasy_baseball.streaks.data.qualified_hitters.statsapi.get",
-        return_value={"leagueLeaders": [{"leaders": []}]},
+        return_value={"stats": [{"splits": []}]},
     ) as mock:
         fetch_qualified_hitters(season=2024)
     args, kwargs = mock.call_args
-    assert args[0] == "stats_leaders"
+    assert args[0] == "stats"
+    assert kwargs["params"]["stats"] == "season"
+    assert kwargs["params"]["group"] == "hitting"
     assert kwargs["params"]["season"] == 2024
-    assert kwargs["params"]["leaderCategories"] == "plateAppearances"
-    assert kwargs["params"]["statGroup"] == "hitting"
+    assert kwargs["params"]["sportId"] == 1
+    assert kwargs["params"]["playerPool"] == "All"
