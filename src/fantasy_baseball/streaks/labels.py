@@ -27,7 +27,9 @@ logger = logging.getLogger(__name__)
 def apply_labels(conn: duckdb.DuckDBPyConnection, *, season_set: str) -> int:
     """Rebuild ``hitter_streak_labels`` from ``hitter_windows`` joined to thresholds.
 
-    Returns total rows written across all categories.
+    Returns total rows written across all categories. Note: only one season_set's
+    labels are usable at a time — calling with a different ``season_set`` wipes
+    prior labels (the labels table has no ``season_set`` column).
     """
     # Full wipe: the labels table has no season_set column, and labels are
     # tied to the most recent calibration. A scoped delete would leave stale
