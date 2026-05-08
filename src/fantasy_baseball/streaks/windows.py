@@ -19,9 +19,12 @@ Idempotent: the upsert uses ``INSERT OR REPLACE`` keyed by
 from __future__ import annotations
 
 import logging
+from dataclasses import fields
 
 import duckdb
 import pandas as pd
+
+from fantasy_baseball.streaks.models import HitterWindow
 
 logger = logging.getLogger(__name__)
 
@@ -180,29 +183,13 @@ def _assign_pt_bucket(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     bins = [4, 9, 19, 10**9]
     labels = ["low", "mid", "high"]
-    out["pt_bucket"] = pd.cut(out["pa"], bins=bins, labels=labels).astype("string")
+    out["pt_bucket"] = pd.cut(out["pa"], bins=bins, labels=labels, right=True).astype("string")
     return out
 
 
-_HITTER_WINDOWS_COLS: tuple[str, ...] = (
-    "player_id",
-    "window_end",
-    "window_days",
-    "pa",
-    "hr",
-    "r",
-    "rbi",
-    "sb",
-    "avg",
-    "babip",
-    "k_pct",
-    "bb_pct",
-    "iso",
-    "ev_avg",
-    "barrel_pct",
-    "xwoba_avg",
-    "pt_bucket",
-)
+# Derived from the dataclass per the streaks/models.py single-source-of-truth
+# convention (matches the load.py pattern for HitterGame and HitterStatcastPA).
+_HITTER_WINDOWS_COLS: tuple[str, ...] = tuple(f.name for f in fields(HitterWindow))
 
 
 def compute_windows(conn: duckdb.DuckDBPyConnection) -> int:

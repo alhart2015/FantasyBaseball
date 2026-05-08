@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import fields
 
-from fantasy_baseball.streaks.models import HitterGame, HitterStatcastPA
+from fantasy_baseball.streaks.models import HitterGame, HitterStatcastPA, HitterWindow
 
 
 def test_hitter_game_fields_in_expected_order() -> None:
@@ -58,3 +58,26 @@ def test_hitter_statcast_pa_fields_in_expected_order() -> None:
         "hit_distance_sc",
     )
     assert tuple(f.name for f in fields(HitterStatcastPA)) == expected
+
+
+def test_hitter_window_fields_in_expected_order() -> None:
+    expected = (
+        "player_id",
+        "window_end",
+        "window_days",
+        "pa",
+        "hr",
+        "r",
+        "rbi",
+        "sb",
+        "avg",
+        "babip",
+        "k_pct",
+        "bb_pct",
+        "iso",
+        "ev_avg",
+        "barrel_pct",
+        "xwoba_avg",
+        "pt_bucket",
+    )
+    assert tuple(f.name for f in fields(HitterWindow)) == expected
