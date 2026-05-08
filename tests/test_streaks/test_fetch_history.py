@@ -45,6 +45,16 @@ def _stub_game_logs(player_id, name, team, season):
             sb=0,
             bb=1,
             k=1,
+            b2=0,
+            b3=0,
+            sf=0,
+            hbp=0,
+            ibb=0,
+            cs=0,
+            gidp=0,
+            sh=0,
+            ci=0,
+            is_home=True,
         )
     ]
 
@@ -60,6 +70,10 @@ def _stub_statcast(start, end):
             launch_angle=10.0,
             estimated_woba_using_speedangle=0.4,
             barrel=False,
+            at_bat_number=1,
+            bb_type=None,
+            estimated_ba_using_speedangle=None,
+            hit_distance_sc=None,
         )
     ]
 
@@ -95,7 +109,9 @@ def test_fetch_season_skips_already_loaded_players(conn):
     conn.execute(
         """
         INSERT INTO hitter_games VALUES
-        (660271, 744000, 'Mike Trout', 'LAA', 2024, '2024-03-28', 4, 3, 1, 1, 1, 2, 0, 1, 1)
+        (660271, 744000, 'Mike Trout', 'LAA', 2024, '2024-03-28',
+         4, 3, 1, 1, 1, 2, 0, 1, 1,
+         0, 0, 0, 0, 0, 0, 0, 0, 0, TRUE)
         """
     )
 
@@ -184,3 +200,86 @@ def test_fetch_season_continues_after_per_player_failure(conn):
     assert player_ids == {545361}
     assert summary["players_attempted"] == 2  # both attempted
     assert summary["game_log_rows"] == 1  # only one succeeded
+
+
+def test_fetch_season_counts_pa_identity_violations(monkeypatch, tmp_path) -> None:
+    """A game with PA != AB+BB+HBP+SF+SH+CI is logged + counted, not raised."""
+    from datetime import date
+
+    from fantasy_baseball.streaks.data import fetch_history as fh
+    from fantasy_baseball.streaks.data.schema import get_connection
+    from fantasy_baseball.streaks.models import HitterGame, QualifiedHitter
+
+    # One player; one good game, one game with a PA gap of +1.
+    good = HitterGame(
+        player_id=1,
+        game_pk=1,
+        name="X",
+        team=None,
+        season=2025,
+        date=date(2025, 4, 1),
+        pa=4,
+        ab=3,
+        h=1,
+        hr=0,
+        r=0,
+        rbi=0,
+        sb=0,
+        bb=1,
+        k=1,
+        b2=0,
+        b3=0,
+        sf=0,
+        hbp=0,
+        ibb=0,
+        cs=0,
+        gidp=0,
+        sh=0,
+        ci=0,
+        is_home=True,
+    )
+    bad = HitterGame(
+        player_id=1,
+        game_pk=2,
+        name="X",
+        team=None,
+        season=2025,
+        date=date(2025, 4, 2),
+        pa=5,
+        ab=3,
+        h=1,
+        hr=0,
+        r=0,
+        rbi=0,
+        sb=0,
+        bb=1,
+        k=1,
+        b2=0,
+        b3=0,
+        sf=0,
+        hbp=0,
+        ibb=0,
+        cs=0,
+        gidp=0,
+        sh=0,
+        ci=0,
+        is_home=True,
+    )
+
+    monkeypatch.setattr(
+        fh,
+        "fetch_qualified_hitters",
+        lambda season, min_pa: [QualifiedHitter(player_id=1, name="X", team=None, pa=200)],
+    )
+    monkeypatch.setattr(
+        fh,
+        "fetch_hitter_season_game_logs",
+        lambda player_id, name, team, season: [good, bad],
+    )
+    monkeypatch.setattr(fh, "fetch_statcast_pa_for_date_range", lambda start, end: [])
+
+    conn = get_connection(tmp_path / "t.duckdb")
+    summary = fh.fetch_season(season=2025, conn=conn)
+
+    assert summary["pa_identity_violations"] == 1
+    assert summary["game_log_rows"] == 2  # both rows still loaded
