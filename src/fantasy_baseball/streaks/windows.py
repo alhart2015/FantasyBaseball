@@ -71,7 +71,14 @@ def _compute_rolling_sums(conn: duckdb.DuckDBPyConnection, window_days: int) -> 
             .sum()  # collapse doubleheaders into one daily row
             .reindex(idx, fill_value=0)
         )
-        rolling = per_day.rolling(window=window_days, min_periods=1).sum().astype(int)
+        # fillna(0) makes the NOT NULL invariant on _SUM_COLS explicit at the
+        # cast site rather than relying on upstream schema enforcement.
+        rolling = (
+            per_day.rolling(window=window_days, min_periods=1)
+            .sum()
+            .fillna(0)
+            .astype(int)
+        )
         rolling = rolling.reset_index().rename(columns={"index": "window_end"})
         rolling.insert(0, "player_id", int(player_id))
         rolling["window_days"] = window_days
