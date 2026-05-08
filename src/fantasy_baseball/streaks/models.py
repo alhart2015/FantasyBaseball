@@ -35,10 +35,13 @@ class QualifiedHitter:
 class HitterGame:
     """One game of hitter counting stats. Maps to `hitter_games` row.
 
-    PK is (player_id, date).
+    PK is (player_id, game_pk). ``game_pk`` is the MLB Stats API gamePk
+    integer — unique per game, so it disambiguates doubleheaders that
+    share a date. ``date`` stays as a non-PK column for query convenience.
     """
 
     player_id: int
+    game_pk: int
     name: str
     team: str | None
     season: int

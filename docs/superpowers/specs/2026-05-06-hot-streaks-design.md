@@ -262,7 +262,27 @@ This section is appended to as work happens. Each milestone gets a dated entry.
 4. **`pa_index` stability.** `statcast.py::pitches_to_pa_rows` assigns `pa_index` from `groupby([batter, game_date]).cumcount()+1` after sorting by `[batter, game_date]` — no within-game secondary sort. Re-fetching the same date range can shuffle `pa_index` for the same plate appearance. For Phase 1 (counting / aggregating PAs) this is harmless. For Phase 2 if streak labels need to walk events in chronological order, sort by `[batter, game_date, at_bat_number]` (pybaseball exposes that column) before computing `pa_index`.
 5. **`summary["players_fetched"]` semantics.** Currently counts attempted players (including those whose game-log fetch raised). The variable name reads like "succeeded." Either rename to `players_attempted` or add a separate `players_succeeded` field for log-readability. Cosmetic — pin the meaning in Phase 2 cleanup.
 
+### 2026-05-07 — Phase 1 acceptance (with fixes)
+
+The first acceptance run on 2025 surfaced three bugs, all fixed:
+
+1. **numpy scalar binding crash** (PR #57). `_na_to_none` returned non-NaN values unchanged, so numpy scalars (int64 / float64) reached DuckDB's `executemany` binder, which doesn't auto-coerce them. Fix: `_na_to_none` now calls `.item()` on any object that has it (numpy scalars do; native Python types don't), unboxing to native Python.
+2. **`/stats/leaders` 100-cap** (PR #58). The MLB Stats API leaderboard endpoint silently caps at 100 results regardless of the `limit` parameter. The bottom of the cap sits ~560 PA, well above our 150 PA cutoff. Switched to `/stats?stats=season&playerPool=All`, which returns every player who took ≥1 PA (~750/year). Filter client-side to ≥min_pa as before.
+3. **Doubleheader collisions** (this PR). The PK was `(player_id, date)`, so when a player played two games on the same date, the second game's stats overwrote the first via `INSERT OR REPLACE`. Pre-fix, ~440 game-log rows per season silently disappeared. Fix: PK is now `(player_id, game_pk)`, where `game_pk` is the MLB Stats API gamePk integer (unique per game).
+
+**Final acceptance numbers** (post-fixes):
+
+| Season | Qualified hitters | Game logs | Statcast PAs |
+|--------|------------------:|----------:|-------------:|
+| 2023   | 404 | 44,208 | 202,177 |
+| 2024   | 410 | 45,030 | 197,983 |
+| 2025   | 393 | 43,826 | 198,203 |
+| **Total** | **1,207 player-seasons** | **133,064 game logs** | **598,363 Statcast PAs** |
+
+DB size: **40 MB** for the full 3-season corpus (DuckDB columnar compression — uncompressed would be ~450 MB).
+
+The original spec estimates were off: ~400 hitters/season (not 150-200), ~44K game logs/season (not 25-30K), Statcast rows accurate (~200K). DB size much smaller than expected.
+
 #### Next milestone
 
-- **Phase 1 acceptance run** (manual, not yet done): execute `python scripts/streaks/fetch_history.py --season 2025` and validate row counts (~150-200 qualified hitters, ~25K-30K game logs, ~150K-200K Statcast PAs, DB size ~50-150 MB). Repeat for 2024 and 2023 if 2025 looks right.
-- After acceptance, write Phase 2 plan (window aggregation + threshold calibration).
+- **Phase 2 planning.** Window aggregation (`hitter_windows` population) + empirical threshold calibration (`thresholds`) + streak labeling (`hitter_streak_labels`). Decide BABIP/ISO sourcing (extend `hitter_games` with 2B/3B/SF/HBP, or derive from per-PA Statcast events). Address the all-or-nothing Statcast skip and `pa_index` chronological stability if Phase 2 needs them.

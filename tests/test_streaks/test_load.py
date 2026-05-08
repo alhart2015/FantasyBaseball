@@ -23,9 +23,14 @@ def conn():
     c.close()
 
 
-def _row(player_id=660271, dt=date(2024, 4, 1), hr=1):
+def _row(player_id=660271, dt=date(2024, 4, 1), hr=1, game_pk=None):
+    """Default game_pk derives from the date so distinct dates get distinct
+    PKs while same-date rows (used by the collision test) still collide."""
+    if game_pk is None:
+        game_pk = int(dt.strftime("%Y%m%d"))
     return HitterGame(
         player_id=player_id,
+        game_pk=game_pk,
         name="Mike Trout",
         team="LAA",
         season=2024,

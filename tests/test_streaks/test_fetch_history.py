@@ -31,6 +31,7 @@ def _stub_game_logs(player_id, name, team, season):
     return [
         HitterGame(
             player_id=player_id,
+            game_pk=745000 + player_id % 1000,
             name=name,
             team=team,
             season=season,
@@ -94,7 +95,7 @@ def test_fetch_season_skips_already_loaded_players(conn):
     conn.execute(
         """
         INSERT INTO hitter_games VALUES
-        (660271, 'Mike Trout', 'LAA', 2024, '2024-03-28', 4, 3, 1, 1, 1, 2, 0, 1, 1)
+        (660271, 744000, 'Mike Trout', 'LAA', 2024, '2024-03-28', 4, 3, 1, 1, 1, 2, 0, 1, 1)
         """
     )
 

@@ -26,10 +26,16 @@ def parse_hitter_game_log_full(
     team: str | None,
     season: int,
 ) -> HitterGame:
-    """Parse one /people/{id}/stats?stats=gameLog split into a :class:`HitterGame`."""
+    """Parse one /people/{id}/stats?stats=gameLog split into a :class:`HitterGame`.
+
+    Uses the split's ``game.gamePk`` (a unique MLB game identifier) for
+    the row PK alongside ``player_id`` so doubleheader games on the same
+    date don't collide.
+    """
     stat = split.get("stat", {})
     return HitterGame(
         player_id=player_id,
+        game_pk=int(split["game"]["gamePk"]),
         name=name,
         team=team,
         season=season,

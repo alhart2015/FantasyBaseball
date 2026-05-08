@@ -10,7 +10,7 @@ from fantasy_baseball.streaks.data.game_logs import (
 from fantasy_baseball.streaks.models import HitterGame
 
 
-def _split(date="2024-04-01", **stat_overrides):
+def _split(date="2024-04-01", game_pk=745444, **stat_overrides):
     stat = {
         "plateAppearances": 4,
         "atBats": 3,
@@ -23,7 +23,7 @@ def _split(date="2024-04-01", **stat_overrides):
         "strikeOuts": 1,
     }
     stat.update(stat_overrides)
-    return {"date": date, "stat": stat}
+    return {"date": date, "stat": stat, "game": {"gamePk": game_pk}}
 
 
 def test_parse_hitter_game_log_full_extracts_all_columns():
@@ -36,6 +36,7 @@ def test_parse_hitter_game_log_full_extracts_all_columns():
     )
     assert row == HitterGame(
         player_id=660271,
+        game_pk=745444,
         name="Mike Trout",
         team="LAA",
         season=2024,
@@ -54,7 +55,7 @@ def test_parse_hitter_game_log_full_extracts_all_columns():
 
 def test_parse_hitter_game_log_full_defaults_missing_stats_to_zero():
     row = parse_hitter_game_log_full(
-        {"date": "2024-04-01", "stat": {}},
+        {"date": "2024-04-01", "stat": {}, "game": {"gamePk": 1}},
         player_id=1,
         name="X",
         team=None,
@@ -62,6 +63,28 @@ def test_parse_hitter_game_log_full_defaults_missing_stats_to_zero():
     )
     assert row.pa == 0
     assert row.bb == 0
+
+
+def test_parse_hitter_game_log_full_disambiguates_doubleheaders():
+    """Two splits sharing a date but with distinct game_pks must produce
+    distinct HitterGame instances — that's the whole point of the PK fix."""
+    g1 = parse_hitter_game_log_full(
+        _split(date="2024-07-04", game_pk=746001, homeRuns=1),
+        player_id=660271,
+        name="Mike Trout",
+        team="LAA",
+        season=2024,
+    )
+    g2 = parse_hitter_game_log_full(
+        _split(date="2024-07-04", game_pk=746002, homeRuns=2),
+        player_id=660271,
+        name="Mike Trout",
+        team="LAA",
+        season=2024,
+    )
+    assert g1.date == g2.date
+    assert g1.game_pk != g2.game_pk
+    assert g1.hr == 1 and g2.hr == 2
 
 
 def test_fetch_hitter_season_game_logs_returns_one_row_per_split():
@@ -72,8 +95,8 @@ def test_fetch_hitter_season_game_logs_returns_one_row_per_split():
             "stats": [
                 {
                     "splits": [
-                        _split(date="2024-04-01"),
-                        _split(date="2024-04-02", homeRuns=0),
+                        _split(date="2024-04-01", game_pk=745444),
+                        _split(date="2024-04-02", game_pk=745445, homeRuns=0),
                     ]
                 }
             ]
