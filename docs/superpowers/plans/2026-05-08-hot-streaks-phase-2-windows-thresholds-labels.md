@@ -1565,7 +1565,7 @@ def test_add_statcast_peripherals_aggregates_per_window() -> None:
         HitterStatcastPA(
             player_id=1, date=date(2025, 4, 3), pa_index=i, event="strikeout",
             launch_speed=None, launch_angle=None,
-            estimated_woba_using_speedangle=0.0, barrel=True,
+            estimated_woba_using_speedangle=0.0, barrel=(i == 1),
             at_bat_number=i, bb_type=None,
             estimated_ba_using_speedangle=0.0, hit_distance_sc=None,
         )
