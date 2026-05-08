@@ -286,3 +286,25 @@ The original spec estimates were off: ~400 hitters/season (not 150-200), ~44K ga
 #### Next milestone
 
 - **Phase 2 planning.** Window aggregation (`hitter_windows` population) + empirical threshold calibration (`thresholds`) + streak labeling (`hitter_streak_labels`). Decide BABIP/ISO sourcing (extend `hitter_games` with 2B/3B/SF/HBP, or derive from per-PA Statcast events). Address the all-or-nothing Statcast skip and `pa_index` chronological stability if Phase 2 needs them.
+
+### 2026-05-08 — Phase 2 schema migration + re-fetch
+
+Migrated the local DuckDB to the Phase 2 schema (DROP+`init_schema`, then re-ran `scripts/streaks/fetch_history.py` for all three seasons). The expanded `hitter_games` schema captures the full PA decomposition (`b2/b3/sf/hbp/ibb/cs/gidp/sh/ci`) plus `is_home`; the expanded `hitter_statcast_pa` adds `at_bat_number/bb_type/estimated_ba_using_speedangle/hit_distance_sc`.
+
+Row counts match Phase 1 acceptance exactly (134,441 game logs / 598,363 Statcast PAs / 1,207 player-seasons across 2023-2025).
+
+PA-identity check (`pa == ab + bb + hbp + sf + sh + ci`): 0 violations in 2024 and 2023; 2 in 2025 (José Ramírez 2025-09-03 game_pk=776474, gap +1; Dominic Canzone 2025-09-18 game_pk=776272, gap +1). 2/134,441 = 0.0015%, well under the plan's ~50/season investigation threshold. Likely a single rare component the MLB Stats API exposes under a slightly different field name; not blocking.
+
+Drift sums for the new columns (per ~400 qualified hitters/season) all in expected ranges:
+- doubles 7-8K, triples 600-700, SF ~1.2K, HBP ~1.7-1.9K, IBB ~500
+- CS ~800-900, GIDP ~3K, SH ~350-450, CI ~80-90, `is_home` 50.0-50.2%
+
+Statcast new-column non-null share:
+- `at_bat_number`: 100% (always present on terminal PAs)
+- `bb_type`: 67-68% (null on K/BB/HBP, which together are ~32% of PAs — math checks)
+- `estimated_ba_using_speedangle`: 62-63% (subset of batted balls with measurable EV/angle)
+- `launch_speed`: 64-66%
+
+#### Next milestone
+
+- **Phase 2 implementation continuing.** Tasks 8-14 of the Phase 2 plan: `windows.py` (rolling sums + rate stats + Statcast peripherals + PT bucket), `thresholds.py` (DuckDB `percentile_cont` over qualified-hitter rows), `labels.py` (hot/cold/neutral application), CLIs, and the Phase-2 acceptance notebook (`01_distributions.ipynb`).
