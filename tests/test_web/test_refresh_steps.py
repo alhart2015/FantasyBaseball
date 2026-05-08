@@ -321,6 +321,35 @@ class TestComputeLineupMoves:
                 assert swap["start"]["player"] == "Nola"
                 assert swap["bench"]["player"] == "Strider"
 
+    def test_hitter_start_never_pairs_with_pitcher_bench(self):
+        # Guardrail: a hitter START must NOT pair with a pitcher BENCH even
+        # when no compatible same-type partner exists. If the per-type loop
+        # in _pair_swaps were ever flattened to a single zip(), this test
+        # would fail with a nonsense Judge ⇄ Strider swap.
+        judge = _player(
+            "Judge", positions=["OF"], selected_position="BN", ros=HitterStats(sgp=11.0)
+        )
+        strider = _player(
+            "Strider",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="P",
+            ros=PitcherStats(sgp=4.0),
+        )
+        result = compute_lineup_moves(
+            optimal_hitters=[
+                HitterAssignment(slot=Position.OF, name="Judge", player=judge, roto_delta=0.55),
+            ],
+            optimal_pitchers=[],
+            pitcher_bench=[strider],
+            roster_players=[judge, strider],
+        )
+        assert result["swaps"] == []
+        assert len(result["unpaired_starts"]) == 1
+        assert result["unpaired_starts"][0]["player"] == "Judge"
+        assert len(result["unpaired_benches"]) == 1
+        assert result["unpaired_benches"][0]["player"] == "Strider"
+
     def test_asymmetric_more_starts_than_benches_emits_unpaired(self):
         # Player just returned from IL, opening a 2nd P slot; only 1 of the
         # 2 currently-active pitchers should be benched, but both bench

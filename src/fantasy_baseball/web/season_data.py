@@ -591,10 +591,15 @@ def _compute_team_totals_pace(
     return totals
 
 
-_EMPTY_MOVES: dict = {"swaps": [], "unpaired_starts": [], "unpaired_benches": []}
+_legacy_moves_warning_logged = False
 
 
-def _normalize_moves(raw) -> dict:
+def _empty_moves() -> dict:
+    """Fresh empty-shape moves dict. Avoids shared-list aliasing across callers."""
+    return {"swaps": [], "unpaired_starts": [], "unpaired_benches": []}
+
+
+def _normalize_moves(raw: object) -> dict:
     """Coerce cached ``moves`` field into the structured shape.
 
     Returns the empty shape for any of these cases:
@@ -603,9 +608,24 @@ def _normalize_moves(raw) -> dict:
     - a dict missing the expected keys
 
     Otherwise returns the raw dict with each list defaulted to ``[]``.
+
+    Logs a warning ONCE per process when the legacy list shape is detected,
+    so an operator can correlate "user reports the lineup looks optimal but
+    isn't" with "we shipped the swap-pairs change and the cache hasn't been
+    refreshed yet." The next refresh repopulates the cache in the new shape
+    and the warning stops firing.
     """
+    if isinstance(raw, list):
+        global _legacy_moves_warning_logged
+        if not _legacy_moves_warning_logged:
+            log.warning(
+                "Legacy list-shaped lineup moves cache detected; "
+                "rendering as optimal until next refresh repopulates it."
+            )
+            _legacy_moves_warning_logged = True
+        return _empty_moves()
     if not isinstance(raw, dict):
-        return dict(_EMPTY_MOVES)
+        return _empty_moves()
     return {
         "swaps": list(raw.get("swaps") or []),
         "unpaired_starts": list(raw.get("unpaired_starts") or []),
