@@ -40,3 +40,29 @@ def test_get_connection_creates_parent_dir(tmp_path):
     tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
     assert "hitter_games" in tables
     conn.close()
+
+
+def test_hitter_games_has_new_phase_2_columns() -> None:
+    conn = get_connection(":memory:")
+    rows = conn.execute("PRAGMA table_info('hitter_games')").fetchall()
+    cols = {r[1]: r[2] for r in rows}  # name -> type
+    assert cols["b2"] == "INTEGER"
+    assert cols["b3"] == "INTEGER"
+    assert cols["sf"] == "INTEGER"
+    assert cols["hbp"] == "INTEGER"
+    assert cols["ibb"] == "INTEGER"
+    assert cols["cs"] == "INTEGER"
+    assert cols["gidp"] == "INTEGER"
+    assert cols["sh"] == "INTEGER"
+    assert cols["ci"] == "INTEGER"
+    assert cols["is_home"] == "BOOLEAN"
+
+
+def test_hitter_statcast_pa_has_new_phase_2_columns() -> None:
+    conn = get_connection(":memory:")
+    rows = conn.execute("PRAGMA table_info('hitter_statcast_pa')").fetchall()
+    cols = {r[1]: r[2] for r in rows}
+    assert cols["at_bat_number"] == "INTEGER"
+    assert cols["bb_type"] == "VARCHAR"
+    assert cols["estimated_ba_using_speedangle"] == "DOUBLE"
+    assert cols["hit_distance_sc"] == "DOUBLE"
