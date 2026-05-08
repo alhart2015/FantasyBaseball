@@ -38,6 +38,12 @@ class HitterGame:
     PK is (player_id, game_pk). ``game_pk`` is the MLB Stats API gamePk
     integer — unique per game, so it disambiguates doubleheaders that
     share a date. ``date`` stays as a non-PK column for query convenience.
+
+    Captures every box-score component the streaks project needs for rate
+    stats (BABIP/ISO from b2/b3/sf), refined walk rate (uBB% from ibb),
+    PA-identity reconciliation (pa = ab + bb + hbp + sf + sh + ci), and
+    plausible Phase 3+ context (cs for SB attempts, gidp for luck signal,
+    is_home for park splits).
     """
 
     player_id: int
@@ -55,16 +61,25 @@ class HitterGame:
     sb: int
     bb: int
     k: int
+    b2: int
+    b3: int
+    sf: int
+    hbp: int
+    ibb: int
+    cs: int
+    gidp: int
+    sh: int
+    ci: int
+    is_home: bool
 
 
 @dataclass(frozen=True, slots=True)
 class HitterStatcastPA:
     """One terminal-PA row from Baseball Savant. Maps to `hitter_statcast_pa` row.
 
-    PK is (player_id, date, pa_index). pa_index is sort-derived
-    (groupby+cumcount within `pitches_to_pa_rows`) and is not currently
-    chronologically stable across re-fetches; suitable for counting and
-    aggregation, not for ordered event walks.
+    PK is (player_id, date, pa_index). ``pa_index`` is now derived after
+    sorting by ``at_bat_number`` within (batter, game_date), so it is
+    chronologically stable across re-fetches.
     """
 
     player_id: int
@@ -75,6 +90,10 @@ class HitterStatcastPA:
     launch_angle: float | None
     estimated_woba_using_speedangle: float | None
     barrel: bool | None
+    at_bat_number: int | None
+    bb_type: str | None
+    estimated_ba_using_speedangle: float | None
+    hit_distance_sc: float | None
 
 
 @dataclass(frozen=True, slots=True)
