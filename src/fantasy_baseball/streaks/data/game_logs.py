@@ -64,14 +64,7 @@ def parse_hitter_game_log_full(
 
 
 def pa_identity_gap(g: HitterGame) -> int:
-    """Return ``g.pa - (ab + bb + hbp + sf + sh + ci)``.
-
-    Zero means the box-score components sum to PA. A non-zero gap signals
-    either an upstream API drift (a new component we don't capture) or a
-    parser bug — the orchestrator logs a warning and counts violations
-    rather than raising, so a single bad row doesn't kill a multi-hour
-    season fetch.
-    """
+    """Return ``g.pa - (ab + bb + hbp + sf + sh + ci)``; nonzero = drift."""
     return g.pa - (g.ab + g.bb + g.hbp + g.sf + g.sh + g.ci)
 
 

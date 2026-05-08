@@ -268,3 +268,35 @@ def test_pa_identity_gap_detects_drift() -> None:
     )
     # PA=5, components sum to 4 -> gap of +1
     assert pa_identity_gap(g) == 1
+
+
+def test_pa_identity_gap_detects_overcount() -> None:
+    g = HitterGame(
+        player_id=1,
+        game_pk=1,
+        name="X",
+        team=None,
+        season=2025,
+        date=date(2025, 4, 1),
+        pa=4,
+        ab=3,
+        h=1,
+        hr=0,
+        r=0,
+        rbi=0,
+        sb=0,
+        bb=1,
+        k=1,
+        b2=0,
+        b3=0,
+        sf=1,
+        hbp=0,
+        ibb=0,
+        cs=0,
+        gidp=0,
+        sh=0,
+        ci=0,
+        is_home=True,
+    )
+    # PA=4, components sum to 5 (e.g. parser double-counted SF) -> gap of -1
+    assert pa_identity_gap(g) == -1
