@@ -308,3 +308,32 @@ Statcast new-column non-null share:
 #### Next milestone
 
 - **Phase 2 implementation continuing.** Tasks 8-14 of the Phase 2 plan: `windows.py` (rolling sums + rate stats + Statcast peripherals + PT bucket), `thresholds.py` (DuckDB `percentile_cont` over qualified-hitter rows), `labels.py` (hot/cold/neutral application), CLIs, and the Phase-2 acceptance notebook (`01_distributions.ipynb`).
+
+### 2026-05-08 — Phase 2 (windows, thresholds, labels) accepted
+
+All 14 plan tasks landed. `compute_windows` + `compute_thresholds` +
+`apply_labels` chained via `scripts/streaks/compute_labels.py`. Real-data
+run on the 2023-2025 corpus produced:
+
+| Stage | Rows | Notes |
+|-------|-----:|-------|
+| `hitter_windows` | 521,127 | one row per (player, calendar_date in [first_played, last_played], window_days ∈ {3, 7, 14}) where PA ≥ 5 |
+| `thresholds` | 45 | 5 categories × 3 windows × 3 PT buckets |
+| `hitter_streak_labels` | 2,605,635 | 521,127 × 5 categories |
+
+Threshold eyeball checklist (notebook `01_distributions.ipynb`):
+
+- HR / 7d / high p90 = 2 (plan guess ~3 — slightly lower in reality, but 2 HR in a single 20+ PA week is genuinely the 90th percentile)
+- AVG / 14d / high p90 = .348 (plan guess .375-.420 — author was slightly optimistic)
+- AVG / 14d / high p10 = .150 (plan guess .150-.190) ✓
+- SB / 7d / high p90 = 2 (plan guess ~2) ✓
+- p10 ≤ p90 holds across all 45 strata ✓
+- Bucket monotonicity for counting cats: rough but plateau-prone because the discrete distribution clamps p10 to 0
+
+**Methodology surprise to revisit in Phase 3:** for sparse counting categories (HR, SB), p10 collapses to 0 in every bucket because most weeks have zero events even for high-PA hitters. The "cold" label therefore covers any window with zero events — a much wider net than "below the 10th percentile of nonzero counts." Phase 3 may want a different rule for sparse counts (e.g., a per-category lower bound that requires PA ≥ N before "cold").
+
+Also flagged but deferred: `_add_statcast_peripherals` per-window mask loop is O(windows × daily_rows) and dominated wall-time on the real corpus (~5 minutes of the ~7-minute pipeline run); cumulative-sum-on-dense-calendar refactor noted in the function docstring.
+
+#### Next milestone
+
+- **Phase 3 — continuation analysis (the go/no-go gate).** For each labeled (player, window_end, category) row in 2023-2024, compute the next-window outcome and tabulate persistence rates. Stratify by streak strength, PT bucket, and player-season skill quartile. Compare to base rates. Hold 2025 out as the test set; 2026 is out-of-sample for production inference. The Phase 2 methodology surprise (p10=0 for sparse counts) is a Phase 3 design input — decide whether to redefine "cold" for sparse cats before fitting continuation models.
