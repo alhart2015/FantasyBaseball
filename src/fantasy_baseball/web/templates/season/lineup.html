@@ -46,18 +46,52 @@
 <p class="placeholder-text">No lineup data. Click "Refresh Data" to fetch from Yahoo.</p>
 {% else %}
 
-{# Moves banner #}
-{% if lineup.moves %}
+{# Moves banner — paired swaps first, then unpaired single-side moves #}
+{% set move_total = lineup.moves.swaps | length
+                    + lineup.moves.unpaired_starts | length
+                    + lineup.moves.unpaired_benches | length %}
+{% if move_total > 0 %}
 <div class="moves-banner">
-    <h4>Suggested Moves ({{ lineup.moves | length }})</h4>
-    {% for move in lineup.moves %}
-    <div class="move-row">
-        <span class="badge {% if move.action == 'START' %}badge-success{% elif move.action == 'BENCH' %}badge-warning{% else %}badge-info{% endif %}">
-            {{ move.action }}
+    <h4>Suggested Moves ({{ move_total }})</h4>
+
+    {% for swap in lineup.moves.swaps %}
+    <div class="move-row swap-row">
+        <span class="badge badge-info">SWAP</span>
+        <span class="swap-side">
+            <strong>{{ swap.start.player }}</strong>
+            <span class="slot-arrow">{{ swap.start.from }} &rarr; {{ swap.start.to }}</span>
         </span>
+        <span class="swap-arrow">&#8646;</span>
+        <span class="swap-side">
+            <strong>{{ swap.bench.player }}</strong>
+            <span class="slot-arrow">{{ swap.bench.from }} &rarr; {{ swap.bench.to }}</span>
+        </span>
+        {% if swap.start.roto_delta is not none %}
+        <span class="roto-chip {% if swap.start.roto_delta > 0 %}roto-chip-pos{% endif %}">
+            {% if swap.start.roto_delta > 0 %}+{% endif %}{{ "%.2f"|format(swap.start.roto_delta) }} ΔRoto
+        </span>
+        {% endif %}
+    </div>
+    {% endfor %}
+
+    {% for move in lineup.moves.unpaired_starts %}
+    <div class="move-row">
+        <span class="badge badge-success">START</span>
         <span><strong>{{ move.player }}</strong></span>
-        {% if move.slot %}<span>&rarr; {{ move.slot }}</span>{% endif %}
-        {% if move.reason %}<span style="color: var(--text-secondary); font-size: 11px;">{{ move.reason }}</span>{% endif %}
+        <span class="slot-arrow">{{ move.from }} &rarr; {{ move.to }}</span>
+        {% if move.roto_delta is not none %}
+        <span class="roto-chip {% if move.roto_delta > 0 %}roto-chip-pos{% endif %}">
+            {% if move.roto_delta > 0 %}+{% endif %}{{ "%.2f"|format(move.roto_delta) }} ΔRoto
+        </span>
+        {% endif %}
+    </div>
+    {% endfor %}
+
+    {% for move in lineup.moves.unpaired_benches %}
+    <div class="move-row">
+        <span class="badge badge-warning">BENCH</span>
+        <span><strong>{{ move.player }}</strong></span>
+        <span class="slot-arrow">{{ move.from }} &rarr; {{ move.to }}</span>
     </div>
     {% endfor %}
 </div>

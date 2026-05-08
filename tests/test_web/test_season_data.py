@@ -519,10 +519,21 @@ def _sample_optimal():
     return {
         "hitters": {"C": "Adley Rutschman", "OF": "Masataka Yoshida"},
         "pitchers": {},
-        "moves": [
-            {"action": "START", "player": "Masataka Yoshida", "slot": "OF", "reason": "SGP: 1.9"},
-            {"action": "BENCH", "player": "Mike Trout", "slot": "IL", "reason": "IL-eligible"},
-        ],
+        "moves": {
+            "swaps": [
+                {
+                    "start": {
+                        "player": "Masataka Yoshida",
+                        "from": "BN",
+                        "to": "OF",
+                        "roto_delta": 0.42,
+                    },
+                    "bench": {"player": "Mike Trout", "from": "OF", "to": "BN"},
+                },
+            ],
+            "unpaired_starts": [],
+            "unpaired_benches": [],
+        },
     }
 
 
@@ -536,13 +547,34 @@ def test_format_lineup_separates_hitters_pitchers():
 def test_format_lineup_detects_suboptimal():
     data = format_lineup_for_display(_sample_roster(), _sample_optimal())
     assert data["is_optimal"] is False
-    assert len(data["moves"]) == 2
+    assert len(data["moves"]["swaps"]) == 1
+    assert data["moves"]["swaps"][0]["start"]["player"] == "Masataka Yoshida"
 
 
 def test_format_lineup_optimal_when_no_moves():
-    optimal = {"hitters": {}, "pitchers": {}, "moves": []}
+    optimal = {
+        "hitters": {},
+        "pitchers": {},
+        "moves": {"swaps": [], "unpaired_starts": [], "unpaired_benches": []},
+    }
     data = format_lineup_for_display(_sample_roster(), optimal)
     assert data["is_optimal"] is True
+
+
+def test_format_lineup_treats_legacy_list_moves_as_optimal():
+    """Cached payload from before the swap-pairs change had ``moves`` as
+    a flat list. During the deploy gap (cache populated but refresh
+    hasn't re-run yet) the page must not blow up — render as 'optimal'
+    until the next refresh updates the shape.
+    """
+    optimal = {
+        "hitters": {},
+        "pitchers": {},
+        "moves": [{"action": "START", "player": "Foo", "slot": "OF"}],
+    }
+    data = format_lineup_for_display(_sample_roster(), optimal)
+    assert data["is_optimal"] is True
+    assert data["moves"] == {"swaps": [], "unpaired_starts": [], "unpaired_benches": []}
 
 
 def test_format_lineup_passes_ros_data_through():

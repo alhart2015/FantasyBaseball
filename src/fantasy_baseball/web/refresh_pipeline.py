@@ -827,10 +827,12 @@ class RefreshRun:
         assert self.roster_players is not None
 
         self._progress("Computing lineup moves...")
-        optimal_assignments = {a.slot.value: a.name for a in self.optimal_hitters}
-        for i, starter in enumerate(self.optimal_pitchers_starters):
-            optimal_assignments[f"P_{i + 1}"] = starter.name
-        moves = compute_lineup_moves(optimal_assignments, self.roster_players)
+        moves = compute_lineup_moves(
+            optimal_hitters=self.optimal_hitters,
+            optimal_pitchers=self.optimal_pitchers_starters,
+            pitcher_bench=self.optimal_pitchers_bench,
+            roster_players=self.roster_players,
+        )
 
         optimal_data = {
             "hitter_lineup": [a.to_dict() for a in self.optimal_hitters],

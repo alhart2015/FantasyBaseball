@@ -2,12 +2,14 @@
 run_full_refresh that are specific to the refresh orchestration
 (not general enough to push into a domain module)."""
 
+from fantasy_baseball.lineup.optimizer import HitterAssignment, PitcherStarter
 from fantasy_baseball.models.player import (
     HitterStats,
     PitcherStats,
     Player,
     PlayerType,
 )
+from fantasy_baseball.models.positions import Position
 from fantasy_baseball.web.refresh_steps import (
     build_positions_map,
     compute_lineup_moves,
@@ -152,107 +154,294 @@ class TestMergeMatchedAndRawRoster:
 
 
 class TestComputeLineupMoves:
-    def test_bench_to_starter_emits_start_move(self):
-        # Player on BN; optimizer wants them at OF
-        ros = HitterStats(sgp=12.5)
-        p = _player("Soto", selected_position="BN", ros=ros)
-        optimal = {"OF_1": "Soto"}
-        moves = compute_lineup_moves(optimal, [p])
-        assert len(moves) == 1
-        assert moves[0]["action"] == "START"
-        assert moves[0]["player"] == "Soto"
-        assert moves[0]["slot"] == "OF"
-        assert "12.5" in moves[0]["reason"]
-
-    def test_starter_to_starter_emits_no_move(self):
-        # Player already at OF; optimizer keeps them at OF — no move
-        p = _player("Soto", selected_position="OF")
-        optimal = {"OF_1": "Soto"}
-        assert compute_lineup_moves(optimal, [p]) == []
-
-    def test_il_to_starter_emits_start_move(self):
-        # IL counts as bench-like
-        p = _player("Soto", selected_position="IL")
-        optimal = {"OF_1": "Soto"}
-        moves = compute_lineup_moves(optimal, [p])
-        assert len(moves) == 1
-        assert moves[0]["action"] == "START"
-
-    def test_starter_to_bench_emits_start_move(self):
-        # Optimizer demoting a starter to bench also counts
-        # (loop only iterates optimal slots, so this case fires when
-        # the same player appears in optimal under a BN_x slot).
-        p = _player("Soto", selected_position="OF")
-        optimal = {"BN_1": "Soto"}
-        moves = compute_lineup_moves(optimal, [p])
-        assert len(moves) == 1
-        assert moves[0]["slot"] == "BN"
-
-    def test_player_not_on_roster_skipped(self):
-        # Defensive: optimizer references a name not in roster_players
-        p = _player("Other", selected_position="OF")
-        optimal = {"OF_1": "Ghost"}
-        assert compute_lineup_moves(optimal, [p]) == []
-
-    def test_player_with_no_selected_position_treated_as_bench(self):
-        # selected_position is None → falls back to "BN"
-        p = _player("Soto", selected_position=None)
-        # With no current slot and optimizer wanting OF, it's bench→starter
-        optimal = {"OF_1": "Soto"}
-        moves = compute_lineup_moves(optimal, [p])
-        assert len(moves) == 1
-
-    def test_slot_suffix_stripped(self):
-        # OF_1 vs OF_2 — both should be treated as OF
-        p = _player("Soto", selected_position="OF")
-        optimal = {"OF_2": "Soto"}
-        # Current is OF, target is OF (after stripping _2) → no move
-        assert compute_lineup_moves(optimal, [p]) == []
-
-    def test_benched_pitcher_emits_start_move(self):
-        # Pitcher on BN; optimizer wants them at P_N → emit START with slot "P"
-        ros = PitcherStats(sgp=8.5)
-        nola = _player(
-            "Nola",
-            player_type=PlayerType.PITCHER,
-            positions=["SP", "P"],
-            selected_position="BN",
-            ros=ros,
-        )
-        optimal = {"P_3": "Nola"}
-        moves = compute_lineup_moves(optimal, [nola])
-        assert len(moves) == 1
-        assert moves[0]["action"] == "START"
-        assert moves[0]["player"] == "Nola"
-        assert moves[0]["slot"] == "P"
-        assert "8.5" in moves[0]["reason"]
-
-    def test_active_pitcher_emits_no_move(self):
-        # Pitcher already at P; optimizer keeps them at P_N → no move
+    def test_no_moves_when_lineup_already_optimal(self):
+        # All starters in active slots, all bench players already on bench.
+        soto = _player("Soto", selected_position="OF", ros=HitterStats(sgp=10.0))
         nola = _player(
             "Nola",
             player_type=PlayerType.PITCHER,
             positions=["SP", "P"],
             selected_position="P",
+            ros=PitcherStats(sgp=8.0),
         )
-        optimal = {"P_5": "Nola"}
-        assert compute_lineup_moves(optimal, [nola]) == []
+        result = compute_lineup_moves(
+            optimal_hitters=[
+                HitterAssignment(slot=Position.OF, name="Soto", player=soto, roto_delta=0.5)
+            ],
+            optimal_pitchers=[PitcherStarter(name="Nola", player=nola, roto_delta=0.4)],
+            pitcher_bench=[],
+            roster_players=[soto, nola],
+        )
+        assert result == {"swaps": [], "unpaired_starts": [], "unpaired_benches": []}
 
-    def test_mixed_hitter_and_pitcher_slots(self):
-        # Combined optimal lineup with both hitters and pitchers
-        soto = _player("Soto", ros=HitterStats(sgp=12.0), selected_position="BN")
+    def test_single_pitcher_swap_pairs_by_type(self):
+        # Nola on BN, Strider on P; optimizer wants Nola active, Strider benched.
         nola = _player(
             "Nola",
             player_type=PlayerType.PITCHER,
             positions=["SP", "P"],
             selected_position="BN",
+            ros=PitcherStats(sgp=8.0),
+        )
+        strider = _player(
+            "Strider",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="P",
+            ros=PitcherStats(sgp=4.0),
+        )
+        result = compute_lineup_moves(
+            optimal_hitters=[],
+            optimal_pitchers=[PitcherStarter(name="Nola", player=nola, roto_delta=0.42)],
+            pitcher_bench=[strider],
+            roster_players=[nola, strider],
+        )
+        assert len(result["swaps"]) == 1
+        swap = result["swaps"][0]
+        assert swap["start"] == {"player": "Nola", "from": "BN", "to": "P", "roto_delta": 0.42}
+        assert swap["bench"] == {"player": "Strider", "from": "P", "to": "BN"}
+        assert result["unpaired_starts"] == []
+        assert result["unpaired_benches"] == []
+
+    def test_hitter_swap_pairs_by_exact_slot(self):
+        # Judge on BN (OF-eligible) replacing Acuna at OF — same base slot,
+        # pass 1 should pair them.
+        acuna = _player("Acuna", positions=["OF"], selected_position="OF", ros=HitterStats(sgp=6.0))
+        judge = _player(
+            "Judge", positions=["OF"], selected_position="BN", ros=HitterStats(sgp=11.0)
+        )
+        soto = _player("Soto", positions=["OF"], selected_position="OF", ros=HitterStats(sgp=12.0))
+        result = compute_lineup_moves(
+            optimal_hitters=[
+                HitterAssignment(slot=Position.OF, name="Soto", player=soto, roto_delta=0.6),
+                HitterAssignment(slot=Position.OF, name="Judge", player=judge, roto_delta=0.55),
+            ],
+            optimal_pitchers=[],
+            pitcher_bench=[],
+            roster_players=[acuna, judge, soto],
+        )
+        assert len(result["swaps"]) == 1
+        swap = result["swaps"][0]
+        assert swap["start"]["player"] == "Judge"
+        assert swap["start"]["from"] == "BN"
+        assert swap["start"]["to"] == "OF"
+        assert swap["start"]["roto_delta"] == 0.55
+        assert swap["bench"]["player"] == "Acuna"
+        assert swap["bench"]["from"] == "OF"
+        assert swap["bench"]["to"] == "BN"
+
+    def test_pitcher_swap_pairs_by_descending_roto_then_sgp(self):
+        # Two starts (high-ΔRoto + low-ΔRoto) and two benches (high-SGP +
+        # low-SGP) should pair high-with-high, low-with-low — pass 2 ordering.
+        nola = _player(
+            "Nola",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="BN",
+            ros=PitcherStats(sgp=8.0),
+        )
+        skenes = _player(
+            "Skenes",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="BN",
+            ros=PitcherStats(sgp=2.0),
+        )
+        strider = _player(
+            "Strider",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="P",
+            ros=PitcherStats(sgp=4.0),
+        )
+        gausman = _player(
+            "Gausman",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="P",
+            ros=PitcherStats(sgp=1.0),
+        )
+        # Inputs are deliberately ordered so that pass-1 sequential
+        # consumption (without the pre-sort) would pair Skenes↔Strider —
+        # which contradicts the assertion. With the pre-sort, starts are
+        # reordered to [Nola, Skenes] and benches to [Strider, Gausman],
+        # and the correct pairings emerge. Removing the pre-sort breaks
+        # this test.
+        result = compute_lineup_moves(
+            optimal_hitters=[],
+            optimal_pitchers=[
+                PitcherStarter(name="Skenes", player=skenes, roto_delta=0.10),
+                PitcherStarter(name="Nola", player=nola, roto_delta=0.50),
+            ],
+            pitcher_bench=[strider, gausman],
+            roster_players=[nola, skenes, strider, gausman],
+        )
+        assert len(result["swaps"]) == 2
+        # Highest ΔRoto start (Nola) pairs with highest SGP bench (Strider, sgp=4)
+        # Lowest ΔRoto start (Skenes) pairs with lowest SGP bench (Gausman, sgp=1)
+        nola_swap = next(s for s in result["swaps"] if s["start"]["player"] == "Nola")
+        skenes_swap = next(s for s in result["swaps"] if s["start"]["player"] == "Skenes")
+        assert nola_swap["bench"]["player"] == "Strider"
+        assert skenes_swap["bench"]["player"] == "Gausman"
+
+    def test_mixed_hitter_and_pitcher_swaps_dont_cross_types(self):
+        judge = _player(
+            "Judge", positions=["OF"], selected_position="BN", ros=HitterStats(sgp=11.0)
+        )
+        acuna = _player("Acuna", positions=["OF"], selected_position="OF", ros=HitterStats(sgp=6.0))
+        nola = _player(
+            "Nola",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="BN",
+            ros=PitcherStats(sgp=8.0),
+        )
+        strider = _player(
+            "Strider",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="P",
+            ros=PitcherStats(sgp=4.0),
+        )
+        result = compute_lineup_moves(
+            optimal_hitters=[
+                HitterAssignment(slot=Position.OF, name="Judge", player=judge, roto_delta=0.55),
+            ],
+            optimal_pitchers=[
+                PitcherStarter(name="Nola", player=nola, roto_delta=0.42),
+            ],
+            pitcher_bench=[strider],
+            roster_players=[judge, acuna, nola, strider],
+        )
+        assert len(result["swaps"]) == 2
+        for swap in result["swaps"]:
+            if swap["start"]["player"] == "Judge":
+                assert swap["bench"]["player"] == "Acuna"
+            else:
+                assert swap["start"]["player"] == "Nola"
+                assert swap["bench"]["player"] == "Strider"
+
+    def test_hitter_start_never_pairs_with_pitcher_bench(self):
+        # Guardrail: a hitter START must NOT pair with a pitcher BENCH even
+        # when no compatible same-type partner exists. If the per-type loop
+        # in _pair_swaps were ever flattened to a single zip(), this test
+        # would fail with a nonsense Judge ⇄ Strider swap.
+        judge = _player(
+            "Judge", positions=["OF"], selected_position="BN", ros=HitterStats(sgp=11.0)
+        )
+        strider = _player(
+            "Strider",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="P",
+            ros=PitcherStats(sgp=4.0),
+        )
+        result = compute_lineup_moves(
+            optimal_hitters=[
+                HitterAssignment(slot=Position.OF, name="Judge", player=judge, roto_delta=0.55),
+            ],
+            optimal_pitchers=[],
+            pitcher_bench=[strider],
+            roster_players=[judge, strider],
+        )
+        assert result["swaps"] == []
+        assert len(result["unpaired_starts"]) == 1
+        assert result["unpaired_starts"][0]["player"] == "Judge"
+        assert len(result["unpaired_benches"]) == 1
+        assert result["unpaired_benches"][0]["player"] == "Strider"
+
+    def test_asymmetric_more_starts_than_benches_emits_unpaired(self):
+        # Player just returned from IL, opening a 2nd P slot; only 1 of the
+        # 2 currently-active pitchers should be benched, but both bench
+        # pitchers should be activated → 2 starts, 1 bench → 1 swap + 1
+        # unpaired_start.
+        nola = _player(
+            "Nola",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="BN",
+            ros=PitcherStats(sgp=8.0),
+        )
+        skenes = _player(
+            "Skenes",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="BN",
             ros=PitcherStats(sgp=7.0),
         )
-        optimal = {"OF_1": "Soto", "P_1": "Nola"}
-        moves = compute_lineup_moves(optimal, [soto, nola])
-        assert len(moves) == 2
-        slots = {m["slot"] for m in moves}
-        assert slots == {"OF", "P"}
+        strider = _player(
+            "Strider",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="P",
+            ros=PitcherStats(sgp=4.0),
+        )
+        # Inputs put the LOWER-ΔRoto start (Skenes) first; without the
+        # pre-sort, pass 1 would greedily pair Skenes with Strider and
+        # leave Nola unpaired. The assertions below only hold because
+        # _pair_swaps sorts starts by descending roto_delta first.
+        result = compute_lineup_moves(
+            optimal_hitters=[],
+            optimal_pitchers=[
+                PitcherStarter(name="Skenes", player=skenes, roto_delta=0.30),
+                PitcherStarter(name="Nola", player=nola, roto_delta=0.50),
+            ],
+            pitcher_bench=[strider],
+            roster_players=[nola, skenes, strider],
+        )
+        # Higher ΔRoto start pairs with the bench; lower ΔRoto goes unpaired.
+        assert len(result["swaps"]) == 1
+        assert result["swaps"][0]["start"]["player"] == "Nola"
+        assert result["swaps"][0]["bench"]["player"] == "Strider"
+        assert len(result["unpaired_starts"]) == 1
+        assert result["unpaired_starts"][0]["player"] == "Skenes"
+        assert result["unpaired_starts"][0]["roto_delta"] == 0.30
+        assert result["unpaired_benches"] == []
+
+    def test_partial_counterfactual_zero_roto_delta_still_renders(self):
+        # If optimizer returns roto_delta=0.0 (partial counterfactual case
+        # in optimizer.py), the value still propagates as 0.0 — not None.
+        nola = _player(
+            "Nola",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="BN",
+            ros=PitcherStats(sgp=8.0),
+        )
+        strider = _player(
+            "Strider",
+            player_type=PlayerType.PITCHER,
+            positions=["SP", "P"],
+            selected_position="P",
+            ros=PitcherStats(sgp=4.0),
+        )
+        result = compute_lineup_moves(
+            optimal_hitters=[],
+            optimal_pitchers=[PitcherStarter(name="Nola", player=nola, roto_delta=0.0)],
+            pitcher_bench=[strider],
+            roster_players=[nola, strider],
+        )
+        assert result["swaps"][0]["start"]["roto_delta"] == 0.0
+
+    def test_il_player_in_optimal_treated_as_bench_crossing(self):
+        # Player on IL shouldn't normally appear in optimal_pitchers, but
+        # if a roster has IL-but-now-active state during transition, we
+        # still surface them.
+        soto = _player("Soto", selected_position="IL", ros=HitterStats(sgp=12.0))
+        result = compute_lineup_moves(
+            optimal_hitters=[
+                HitterAssignment(slot=Position.OF, name="Soto", player=soto, roto_delta=0.6),
+            ],
+            optimal_pitchers=[],
+            pitcher_bench=[],
+            roster_players=[soto],
+        )
+        # No bench partner → unpaired start.
+        assert result["swaps"] == []
+        assert len(result["unpaired_starts"]) == 1
+        assert result["unpaired_starts"][0]["player"] == "Soto"
+        assert result["unpaired_starts"][0]["from"] == "IL"
+        assert result["unpaired_starts"][0]["to"] == "OF"
 
 
 class TestBuildPositionsMap:

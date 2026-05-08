@@ -430,6 +430,22 @@ td[style*="--neg"] {
     margin-bottom: 6px;
 }
 
+.swap-row { gap: 10px; }
+.swap-side { display: inline-flex; align-items: baseline; gap: 6px; }
+.swap-arrow { color: var(--text-secondary); font-size: 14px; }
+.slot-arrow { color: var(--text-secondary); font-size: 11px; letter-spacing: 0.04em; }
+.roto-chip {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-size: 10.5px;
+    background: var(--paper-tint);
+    color: var(--text-secondary);
+    border: 1px solid var(--rule);
+    margin-left: auto;
+}
+.roto-chip-pos { color: var(--success, #2e7d32); border-color: var(--success, #2e7d32); }
+
 .trade-swap {
     display: flex;
     align-items: center;

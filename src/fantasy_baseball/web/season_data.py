@@ -591,6 +591,48 @@ def _compute_team_totals_pace(
     return totals
 
 
+_legacy_moves_warning_logged = False
+
+
+def _empty_moves() -> dict:
+    """Fresh empty-shape moves dict. Avoids shared-list aliasing across callers."""
+    return {"swaps": [], "unpaired_starts": [], "unpaired_benches": []}
+
+
+def _normalize_moves(raw: object) -> dict:
+    """Coerce cached ``moves`` field into the structured shape.
+
+    Returns the empty shape for any of these cases:
+    - ``None`` (no optimizer output yet)
+    - a list (legacy cache from before the swap-pairs change)
+    - a dict missing the expected keys
+
+    Otherwise returns the raw dict with each list defaulted to ``[]``.
+
+    Logs a warning ONCE per process when the legacy list shape is detected,
+    so an operator can correlate "user reports the lineup looks optimal but
+    isn't" with "we shipped the swap-pairs change and the cache hasn't been
+    refreshed yet." The next refresh repopulates the cache in the new shape
+    and the warning stops firing.
+    """
+    if isinstance(raw, list):
+        global _legacy_moves_warning_logged
+        if not _legacy_moves_warning_logged:
+            log.warning(
+                "Legacy list-shaped lineup moves cache detected; "
+                "rendering as optimal until next refresh repopulates it."
+            )
+            _legacy_moves_warning_logged = True
+        return _empty_moves()
+    if not isinstance(raw, dict):
+        return _empty_moves()
+    return {
+        "swaps": list(raw.get("swaps") or []),
+        "unpaired_starts": list(raw.get("unpaired_starts") or []),
+        "unpaired_benches": list(raw.get("unpaired_benches") or []),
+    }
+
+
 def format_lineup_for_display(roster: list[dict], optimal: dict | None) -> dict:
     """Format roster + optimizer output for the lineup template."""
     from fantasy_baseball.analysis.pace import compute_overall_pace
@@ -657,24 +699,30 @@ def format_lineup_for_display(roster: list[dict], optimal: dict | None) -> dict:
     hitters.sort(key=lambda h: (slot_rank.get(h["selected_position"], 99), -(h["sgp"] or 0)))
     pitchers.sort(key=lambda p: (p["is_bench"], -(p["sgp"] or 0)))
 
-    moves = optimal.get("moves", []) if optimal else []
+    raw_moves = optimal.get("moves") if optimal else None
+    moves = _normalize_moves(raw_moves)
+    move_count = (
+        len(moves["swaps"]) + len(moves["unpaired_starts"]) + len(moves["unpaired_benches"])
+    )
 
     return {
         "hitters": hitters,
         "pitchers": pitchers,
         "hitter_totals": _compute_team_totals_pace(hitters, PlayerType.HITTER),
         "pitcher_totals": _compute_team_totals_pace(pitchers, PlayerType.PITCHER),
-        "is_optimal": len(moves) == 0,
+        "is_optimal": move_count == 0,
         "moves": moves,
     }
 
 
 def run_optimize() -> dict:
-    """Re-run lineup optimizer from cached data. Returns moves list."""
+    """Re-run lineup optimizer from cached data. Returns moves payload."""
     optimal = read_cache(CacheKey.LINEUP_OPTIMAL)
-    if isinstance(optimal, dict):
-        return {"moves": optimal.get("moves", []), "is_optimal": len(optimal.get("moves", [])) == 0}
-    return {"moves": [], "is_optimal": True}
+    moves = _normalize_moves(optimal.get("moves") if isinstance(optimal, dict) else None)
+    move_count = (
+        len(moves["swaps"]) + len(moves["unpaired_starts"]) + len(moves["unpaired_benches"])
+    )
+    return {"moves": moves, "is_optimal": move_count == 0}
 
 
 def compute_comparison_standings(

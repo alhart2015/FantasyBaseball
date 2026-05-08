@@ -110,7 +110,11 @@ class TestRefreshShape:
             refresh_pipeline.run_full_refresh()
         data = _read(fake_redis, "lineup_optimal")
         assert {"hitter_lineup", "pitcher_starters", "pitcher_bench", "moves"} <= data.keys()
-        assert isinstance(data["moves"], list)
+        assert isinstance(data["moves"], dict)
+        assert {"swaps", "unpaired_starts", "unpaired_benches"} <= data["moves"].keys()
+        assert isinstance(data["moves"]["swaps"], list)
+        assert isinstance(data["moves"]["unpaired_starts"], list)
+        assert isinstance(data["moves"]["unpaired_benches"], list)
 
     def test_monte_carlo_shape(self, configured_test_env, fake_redis):
         with patched_refresh_environment(fake_redis):
@@ -154,9 +158,17 @@ class TestRefreshInvariants:
         roster = _read(self.fake_redis, "roster")
         optimal = _read(self.fake_redis, "lineup_optimal")
         roster_names = {p["name"] for p in roster}
-        for move in optimal["moves"]:
+        moves = optimal["moves"]
+        for swap in moves["swaps"]:
+            assert swap["start"]["player"] in roster_names, (
+                f"Swap start references {swap['start']['player']!r} not on roster"
+            )
+            assert swap["bench"]["player"] in roster_names, (
+                f"Swap bench references {swap['bench']['player']!r} not on roster"
+            )
+        for move in moves["unpaired_starts"] + moves["unpaired_benches"]:
             assert move["player"] in roster_names, (
-                f"Move references {move['player']!r} not on roster"
+                f"Unpaired move references {move['player']!r} not on roster"
             )
 
     def test_positions_map_covers_roster_and_opponents_and_fas(self):
@@ -225,12 +237,24 @@ class TestPitcherLineupMoves:
             refresh_pipeline.run_full_refresh()
 
         optimal = _read(fake_redis, "lineup_optimal")
-        pitcher_starts = [
-            m for m in optimal["moves"] if m["slot"] == "P" and m["action"] == "START"
-        ]
-        assert any(m["player"] == "Pitcher060" for m in pitcher_starts), (
-            f"Expected START move for benched Pitcher060; got moves={optimal['moves']}"
+        moves = optimal["moves"]
+
+        def name_of(move_side):
+            return move_side["player"]
+
+        # Pitcher060 should appear as a START (either inside a swap or unpaired).
+        starting_names = {name_of(s["start"]) for s in moves["swaps"]}
+        starting_names |= {name_of(m) for m in moves["unpaired_starts"]}
+        assert "Pitcher060" in starting_names, (
+            f"Expected Pitcher060 to be activated; got moves={moves}"
         )
+        # And the START should be a P-target (no hitter slot for a pitcher).
+        for swap in moves["swaps"]:
+            if swap["start"]["player"] == "Pitcher060":
+                assert swap["start"]["to"] == "P"
+        for m in moves["unpaired_starts"]:
+            if m["player"] == "Pitcher060":
+                assert m["to"] == "P"
 
 
 class TestMonteCarloROSBranch:
