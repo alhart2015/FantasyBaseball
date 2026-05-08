@@ -1,7 +1,7 @@
 """CLI: run the Phase 2 schema migration against the local streaks DuckDB.
 
 Usage:
-    python -m scripts.streaks.migrate [--db PATH]
+    python -m scripts.streaks.migrate [--db-path PATH]
 
 After this, re-run::
 
@@ -27,12 +27,12 @@ from fantasy_baseball.streaks.data.schema import DEFAULT_DB_PATH, get_connection
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Migrate streaks DB to Phase 2 schema.")
-    parser.add_argument("--db", default=str(DEFAULT_DB_PATH), help="Path to streaks.duckdb")
+    parser.add_argument("--db-path", type=Path, default=DEFAULT_DB_PATH)
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-    conn = get_connection(args.db)
+    conn = get_connection(args.db_path)
     try:
         migrate_to_phase_2(conn)
     finally:
