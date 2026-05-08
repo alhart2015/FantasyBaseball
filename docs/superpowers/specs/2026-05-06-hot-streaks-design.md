@@ -270,16 +270,16 @@ The first acceptance run on 2025 surfaced three bugs, all fixed:
 2. **`/stats/leaders` 100-cap** (PR #58). The MLB Stats API leaderboard endpoint silently caps at 100 results regardless of the `limit` parameter. The bottom of the cap sits ~560 PA, well above our 150 PA cutoff. Switched to `/stats?stats=season&playerPool=All`, which returns every player who took ≥1 PA (~750/year). Filter client-side to ≥min_pa as before.
 3. **Doubleheader collisions** (this PR). The PK was `(player_id, date)`, so when a player played two games on the same date, the second game's stats overwrote the first via `INSERT OR REPLACE`. Pre-fix, ~440 game-log rows per season silently disappeared. Fix: PK is now `(player_id, game_pk)`, where `game_pk` is the MLB Stats API gamePk integer (unique per game).
 
-**Final acceptance numbers** (post-fixes):
+**Final acceptance numbers** (after re-fetch on the post-doubleheader-fix schema):
 
 | Season | Qualified hitters | Game logs | Statcast PAs |
 |--------|------------------:|----------:|-------------:|
-| 2023   | 404 | 44,208 | 202,177 |
-| 2024   | 410 | 45,030 | 197,983 |
-| 2025   | 393 | 43,826 | 198,203 |
-| **Total** | **1,207 player-seasons** | **133,064 game logs** | **598,363 Statcast PAs** |
+| 2023   | 404 | 44,707 | 202,177 |
+| 2024   | 410 | 45,472 | 197,983 |
+| 2025   | 393 | 44,262 | 198,203 |
+| **Total** | **1,207 player-seasons** | **134,441 game logs** | **598,363 Statcast PAs** |
 
-DB size: **40 MB** for the full 3-season corpus (DuckDB columnar compression — uncompressed would be ~450 MB).
+DB size: **40.5 MB** for the full 3-season corpus (DuckDB columnar compression — uncompressed would be ~450 MB). The doubleheader fix recovered 1,377 game-log rows that the original `(player_id, date)` PK had silently overwritten.
 
 The original spec estimates were off: ~400 hitters/season (not 150-200), ~44K game logs/season (not 25-30K), Statcast rows accurate (~200K). DB size much smaller than expected.
 
