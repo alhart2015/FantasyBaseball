@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 
 from fantasy_baseball.streaks.data.game_logs import (
     fetch_hitter_season_game_logs,
+    pa_identity_gap,
     parse_hitter_game_log_full,
 )
 from fantasy_baseball.streaks.models import HitterGame
@@ -34,6 +35,8 @@ def test_parse_hitter_game_log_full_extracts_all_columns():
         team="LAA",
         season=2024,
     )
+    # _split() omits b2/b3/sf/hbp/ibb/cs/gidp/sh/ci and isHome, so the parser
+    # defaults those to 0 / True per the missing-field contract.
     assert row == HitterGame(
         player_id=660271,
         game_pk=745444,
@@ -50,6 +53,16 @@ def test_parse_hitter_game_log_full_extracts_all_columns():
         sb=0,
         bb=1,
         k=1,
+        b2=0,
+        b3=0,
+        sf=0,
+        hbp=0,
+        ibb=0,
+        cs=0,
+        gidp=0,
+        sh=0,
+        ci=0,
+        is_home=True,
     )
 
 
@@ -121,3 +134,137 @@ def test_fetch_hitter_season_game_logs_handles_empty_splits():
     with patch("fantasy_baseball.streaks.data.game_logs.requests.get", return_value=fake_resp):
         rows = fetch_hitter_season_game_logs(player_id=1, name="X", team=None, season=2024)
     assert rows == []
+
+
+def _make_split(
+    stat: dict, *, is_home: bool = True, game_pk: int = 1, date: str = "2025-04-01"
+) -> dict:
+    return {
+        "game": {"gamePk": game_pk},
+        "date": date,
+        "isHome": is_home,
+        "stat": stat,
+    }
+
+
+def test_parse_captures_new_fields() -> None:
+    split = _make_split(
+        {
+            "plateAppearances": 5,
+            "atBats": 4,
+            "hits": 2,
+            "homeRuns": 1,
+            "runs": 1,
+            "rbi": 2,
+            "stolenBases": 0,
+            "baseOnBalls": 1,
+            "strikeOuts": 1,
+            "doubles": 1,
+            "triples": 0,
+            "sacFlies": 0,
+            "hitByPitch": 0,
+            "intentionalWalks": 0,
+            "caughtStealing": 0,
+            "groundIntoDoublePlay": 0,
+            "sacBunts": 0,
+            "catchersInterference": 0,
+        },
+        is_home=False,
+    )
+    g = parse_hitter_game_log_full(split, player_id=1, name="X", team="ABC", season=2025)
+    assert g.b2 == 1
+    assert g.b3 == 0
+    assert g.sf == 0
+    assert g.hbp == 0
+    assert g.ibb == 0
+    assert g.cs == 0
+    assert g.gidp == 0
+    assert g.sh == 0
+    assert g.ci == 0
+    assert g.is_home is False
+
+
+def test_parse_treats_missing_fields_as_zero() -> None:
+    # Older API responses or partial splits may omit columns. Default to 0
+    # so the row still loads and the identity check catches genuine drift.
+    split = _make_split(
+        {
+            "plateAppearances": 1,
+            "atBats": 1,
+            "hits": 0,
+            "homeRuns": 0,
+            "runs": 0,
+            "rbi": 0,
+            "stolenBases": 0,
+            "baseOnBalls": 0,
+            "strikeOuts": 1,
+        }
+    )
+    g = parse_hitter_game_log_full(split, player_id=1, name="X", team=None, season=2025)
+    assert g.b2 == 0 and g.b3 == 0 and g.sf == 0 and g.hbp == 0
+    assert g.ibb == 0 and g.cs == 0 and g.gidp == 0 and g.sh == 0 and g.ci == 0
+    assert g.is_home is True  # default
+
+
+def test_pa_identity_gap_zero_for_clean_row() -> None:
+    g = HitterGame(
+        player_id=1,
+        game_pk=1,
+        name="X",
+        team=None,
+        season=2025,
+        date=date(2025, 4, 1),
+        pa=5,
+        ab=3,
+        h=1,
+        hr=0,
+        r=0,
+        rbi=0,
+        sb=0,
+        bb=1,
+        k=1,
+        b2=0,
+        b3=0,
+        sf=1,
+        hbp=0,
+        ibb=0,
+        cs=0,
+        gidp=0,
+        sh=0,
+        ci=0,
+        is_home=True,
+    )
+    # 5 == 3 + 1 + 0 + 1 + 0 + 0
+    assert pa_identity_gap(g) == 0
+
+
+def test_pa_identity_gap_detects_drift() -> None:
+    g = HitterGame(
+        player_id=1,
+        game_pk=1,
+        name="X",
+        team=None,
+        season=2025,
+        date=date(2025, 4, 1),
+        pa=5,
+        ab=3,
+        h=1,
+        hr=0,
+        r=0,
+        rbi=0,
+        sb=0,
+        bb=1,
+        k=1,
+        b2=0,
+        b3=0,
+        sf=0,
+        hbp=0,
+        ibb=0,
+        cs=0,
+        gidp=0,
+        sh=0,
+        ci=0,
+        is_home=True,
+    )
+    # PA=5, components sum to 4 -> gap of +1
+    assert pa_identity_gap(g) == 1

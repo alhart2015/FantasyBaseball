@@ -2,8 +2,9 @@
 
 This is a streaks-specific parser that captures every column the
 `hitter_games` table needs (player_id, name, team, season, plus bb/k that
-the existing analysis/game_logs.py omits). The HTTP shape is identical;
-only the parsing differs.
+the existing analysis/game_logs.py omits, plus the Phase 2 box-score
+expansion: b2/b3/sf/hbp/ibb/cs/gidp/sh/ci, plus split-level is_home).
+The HTTP shape is identical; only the parsing differs.
 """
 
 from __future__ import annotations
@@ -49,7 +50,29 @@ def parse_hitter_game_log_full(
         sb=int(stat.get("stolenBases", 0)),
         bb=int(stat.get("baseOnBalls", 0)),
         k=int(stat.get("strikeOuts", 0)),
+        b2=int(stat.get("doubles", 0)),
+        b3=int(stat.get("triples", 0)),
+        sf=int(stat.get("sacFlies", 0)),
+        hbp=int(stat.get("hitByPitch", 0)),
+        ibb=int(stat.get("intentionalWalks", 0)),
+        cs=int(stat.get("caughtStealing", 0)),
+        gidp=int(stat.get("groundIntoDoublePlay", 0)),
+        sh=int(stat.get("sacBunts", 0)),
+        ci=int(stat.get("catchersInterference", 0)),
+        is_home=bool(split.get("isHome", True)),
     )
+
+
+def pa_identity_gap(g: HitterGame) -> int:
+    """Return ``g.pa - (ab + bb + hbp + sf + sh + ci)``.
+
+    Zero means the box-score components sum to PA. A non-zero gap signals
+    either an upstream API drift (a new component we don't capture) or a
+    parser bug — the orchestrator logs a warning and counts violations
+    rather than raising, so a single bad row doesn't kill a multi-hour
+    season fetch.
+    """
+    return g.pa - (g.ab + g.bb + g.hbp + g.sf + g.sh + g.ci)
 
 
 def fetch_hitter_season_game_logs(
