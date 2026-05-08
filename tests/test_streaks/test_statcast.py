@@ -152,3 +152,109 @@ def test_fetch_statcast_pa_for_date_range_concatenates_chunks():
         rows = fetch_statcast_pa_for_date_range(date(2024, 4, 1), date(2024, 4, 14))
     assert len(rows) == 2
     assert {r.event for r in rows} == {"single", "home_run"}
+
+
+def test_pitches_to_pa_rows_captures_new_statcast_fields() -> None:
+    df = pd.DataFrame(
+        [
+            {
+                "batter": 1,
+                "game_date": "2025-04-01",
+                "events": "single",
+                "launch_speed": 100.0,
+                "launch_angle": 12.0,
+                "estimated_woba_using_speedangle": 0.85,
+                "barrel": False,
+                "at_bat_number": 1,
+                "bb_type": "line_drive",
+                "estimated_ba_using_speedangle": 0.71,
+                "hit_distance_sc": 220.0,
+            }
+        ]
+    )
+    rows = pitches_to_pa_rows(df)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.at_bat_number == 1
+    assert r.bb_type == "line_drive"
+    assert r.estimated_ba_using_speedangle == 0.71
+    assert r.hit_distance_sc == 220.0
+
+
+def test_pitches_to_pa_rows_assigns_pa_index_in_at_bat_number_order() -> None:
+    # Same player, same date, three PAs; pass them in shuffled order with
+    # at_bat_numbers 1, 2, 3 — pa_index should track at_bat_number, not
+    # input row order.
+    df = pd.DataFrame(
+        [
+            {
+                "batter": 1,
+                "game_date": "2025-04-01",
+                "events": "double",
+                "launch_speed": None,
+                "launch_angle": None,
+                "estimated_woba_using_speedangle": None,
+                "barrel": None,
+                "at_bat_number": 3,
+                "bb_type": None,
+                "estimated_ba_using_speedangle": None,
+                "hit_distance_sc": None,
+            },
+            {
+                "batter": 1,
+                "game_date": "2025-04-01",
+                "events": "strikeout",
+                "launch_speed": None,
+                "launch_angle": None,
+                "estimated_woba_using_speedangle": None,
+                "barrel": None,
+                "at_bat_number": 1,
+                "bb_type": None,
+                "estimated_ba_using_speedangle": None,
+                "hit_distance_sc": None,
+            },
+            {
+                "batter": 1,
+                "game_date": "2025-04-01",
+                "events": "walk",
+                "launch_speed": None,
+                "launch_angle": None,
+                "estimated_woba_using_speedangle": None,
+                "barrel": None,
+                "at_bat_number": 2,
+                "bb_type": None,
+                "estimated_ba_using_speedangle": None,
+                "hit_distance_sc": None,
+            },
+        ]
+    )
+    rows = pitches_to_pa_rows(df)
+    by_pa_index = {r.pa_index: r for r in rows}
+    assert by_pa_index[1].event == "strikeout"  # at_bat_number=1
+    assert by_pa_index[2].event == "walk"  # at_bat_number=2
+    assert by_pa_index[3].event == "double"  # at_bat_number=3
+
+
+def test_pitches_to_pa_rows_handles_missing_at_bat_number_column() -> None:
+    # Older Savant exports may not include at_bat_number. Fall back to
+    # row order within (batter, game_date) — matches the Phase 1 behavior.
+    df = pd.DataFrame(
+        [
+            {
+                "batter": 1,
+                "game_date": "2025-04-01",
+                "events": "single",
+                "launch_speed": None,
+                "launch_angle": None,
+                "estimated_woba_using_speedangle": None,
+                "barrel": None,
+                "bb_type": None,
+                "estimated_ba_using_speedangle": None,
+                "hit_distance_sc": None,
+            },
+        ]
+    )
+    rows = pitches_to_pa_rows(df)
+    assert len(rows) == 1
+    assert rows[0].pa_index == 1
+    assert rows[0].at_bat_number is None
