@@ -115,11 +115,11 @@ def _add_statcast_peripherals(conn: duckdb.DuckDBPyConnection, sums: pd.DataFram
     runs in the database; the result is a small per-(player, day) frame
     that we then sum-then-divide across the window in pandas.
 
-    Perf note: the inner per-window mask loop is O(windows × daily_rows).
-    On a 3-season corpus that's ~250K windows × ~120K daily rows. If this
+    Perf note: the inner per-window mask loop is O(windows x daily_rows).
+    On a 3-season corpus that's ~250K windows x ~120K daily rows. If this
     becomes the dominant cost in compute_windows, replace with cumulative
     sums on the dense calendar (mirroring _compute_rolling_sums) so each
-    window is a vectorized cumulative[end] − cumulative[start − 1] subtract.
+    window is a vectorized cumulative[end] - cumulative[start - 1] subtract.
     """
     if sums.empty:
         out = sums.copy()
