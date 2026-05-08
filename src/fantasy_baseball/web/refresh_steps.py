@@ -72,27 +72,25 @@ def compute_lineup_moves(
             "unpaired_benches": [{"player", "from", "to"}, ...],
         }
 
-    Pairing is two-pass greedy:
+    Pairing is two-pass greedy. Both passes consume starts in descending
+    ``roto_delta`` order and benches in descending current SGP order, so the
+    documented "highest-impact start pairs with highest-loss bench" property
+    holds regardless of caller input order.
 
     1. Exact base-slot match (a START with target slot ``S`` pairs with a
        BENCH whose vacated slot was ``S``). Handles the common hitter case.
-    2. Type-compatible by ΔRoto / SGP order — remaining starts sorted by
-       descending ``roto_delta`` pair with remaining benches sorted by
-       descending current SGP, only within the same player type
+    2. Type-compatible by ΔRoto / SGP order — remaining starts pair with
+       remaining benches only within the same player type
        (hitter↔hitter, pitcher↔pitcher).
 
     Anything left after both passes is returned as ``unpaired_starts`` /
     ``unpaired_benches`` (rare: caused by IL transitions or asymmetric
     roster changes).
     """
-    by_name: dict[str, Player] = {p.name: p for p in roster_players}
-
     # --- Build START moves (bench → active boundary crossings) ---
     starts: list[dict] = []
     for assignment in optimal_hitters:
-        player = by_name.get(assignment.name)
-        if player is None:
-            continue
+        player = assignment.player
         current = player.selected_position or "BN"
         target = assignment.slot.value
         if current in BENCH_SLOTS and target not in BENCH_SLOTS:
@@ -106,9 +104,7 @@ def compute_lineup_moves(
                 }
             )
     for starter in optimal_pitchers:
-        player = by_name.get(starter.name)
-        if player is None:
-            continue
+        player = starter.player
         current = player.selected_position or "BN"
         if current in BENCH_SLOTS:
             starts.append(
@@ -169,7 +165,7 @@ def _player_sgp(player: Player) -> float:
         return 0.0
     if player.rest_of_season.sgp is not None:
         return float(player.rest_of_season.sgp)
-    return float(player.rest_of_season.compute_sgp() or 0.0)
+    return float(player.rest_of_season.compute_sgp())
 
 
 def _pair_swaps(starts: list[dict], benches: list[dict]) -> dict:
@@ -178,8 +174,13 @@ def _pair_swaps(starts: list[dict], benches: list[dict]) -> dict:
     See :func:`compute_lineup_moves` for the algorithm description. Mutates
     nothing in the inputs; returns a fresh dict with stripped private keys.
     """
-    starts = list(starts)
-    benches = list(benches)
+    # Pre-sort once so BOTH passes see starts in descending ΔRoto order and
+    # benches in descending SGP order. Pass 1's "first match wins" then
+    # produces the documented behavior (highest-impact start pairs with the
+    # highest-loss compatible bench within the slot constraint) regardless
+    # of caller input order.
+    starts = sorted(starts, key=lambda s: -s["roto_delta"])
+    benches = sorted(benches, key=lambda b: -b["_sgp"])
     swaps: list[dict] = []
 
     # Pass 1: exact base-slot match. A START with target slot S pairs with
@@ -196,16 +197,11 @@ def _pair_swaps(starts: list[dict], benches: list[dict]) -> dict:
 
     # Pass 2: type-compatible by descending ΔRoto / descending SGP. Pair
     # within HITTER first, then PITCHER, so cross-type pairings can't sneak
-    # in via index drift.
+    # in via index drift. Inputs are already sorted globally, so per-type
+    # filtering preserves order.
     for ptype in (PlayerType.HITTER, PlayerType.PITCHER):
-        type_starts = sorted(
-            (s for s in starts if s["_player_type"] == ptype),
-            key=lambda s: -s["roto_delta"],
-        )
-        type_benches = sorted(
-            (b for b in benches if b["_player_type"] == ptype),
-            key=lambda b: -b["_sgp"],
-        )
+        type_starts = [s for s in starts if s["_player_type"] == ptype]
+        type_benches = [b for b in benches if b["_player_type"] == ptype]
         for start, bench in zip(type_starts, type_benches, strict=False):
             swaps.append(_to_swap(start, bench))
             starts.remove(start)

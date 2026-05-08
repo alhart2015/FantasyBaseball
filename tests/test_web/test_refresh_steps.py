@@ -261,13 +261,16 @@ class TestComputeLineupMoves:
             selected_position="P",
             ros=PitcherStats(sgp=1.0),
         )
+        # Inputs are deliberately ordered AGAINST the expected pairing
+        # (low-ΔRoto start first, low-SGP bench first) so the assertion
+        # only holds because _pair_swaps pre-sorts both lists.
         result = compute_lineup_moves(
             optimal_hitters=[],
             optimal_pitchers=[
-                PitcherStarter(name="Nola", player=nola, roto_delta=0.50),
                 PitcherStarter(name="Skenes", player=skenes, roto_delta=0.10),
+                PitcherStarter(name="Nola", player=nola, roto_delta=0.50),
             ],
-            pitcher_bench=[strider, gausman],
+            pitcher_bench=[gausman, strider],
             roster_players=[nola, skenes, strider, gausman],
         )
         assert len(result["swaps"]) == 2
@@ -341,11 +344,15 @@ class TestComputeLineupMoves:
             selected_position="P",
             ros=PitcherStats(sgp=4.0),
         )
+        # Inputs put the LOWER-ΔRoto start (Skenes) first; without the
+        # pre-sort, pass 1 would greedily pair Skenes with Strider and
+        # leave Nola unpaired. The assertions below only hold because
+        # _pair_swaps sorts starts by descending roto_delta first.
         result = compute_lineup_moves(
             optimal_hitters=[],
             optimal_pitchers=[
-                PitcherStarter(name="Nola", player=nola, roto_delta=0.50),
                 PitcherStarter(name="Skenes", player=skenes, roto_delta=0.30),
+                PitcherStarter(name="Nola", player=nola, roto_delta=0.50),
             ],
             pitcher_bench=[strider],
             roster_players=[nola, skenes, strider],
