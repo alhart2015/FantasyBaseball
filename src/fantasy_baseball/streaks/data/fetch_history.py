@@ -85,6 +85,8 @@ def fetch_season(season: int, conn: duckdb.DuckDBPyConnection, min_pa: int = 150
     start = date(season, *_SEASON_START_MMDD)
     end = date(season, *_SEASON_END_MMDD)
     loaded_dates = existing_statcast_dates(conn)
+    # If we've already loaded any dates in this season, skip Statcast (a partial
+    # load is rare; we treat it as an all-or-nothing per-season pull for simplicity).
     statcast_rows = 0
     season_dates_loaded = {d for d in loaded_dates if d.year == season}
     if not season_dates_loaded:
