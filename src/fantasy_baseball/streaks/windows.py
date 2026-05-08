@@ -169,3 +169,74 @@ def _add_statcast_peripherals(conn: duckdb.DuckDBPyConnection, sums: pd.DataFram
             )
     peripherals = pd.DataFrame(out_rows)
     return sums.merge(peripherals, on=["player_id", "window_end", "window_days"], how="left")
+
+
+def _assign_pt_bucket(df: pd.DataFrame) -> pd.DataFrame:
+    """Assign 'low' (5-9) / 'mid' (10-19) / 'high' (>=20) based on PA.
+
+    Caller must have already filtered PA<5 rows out — this helper does not
+    re-filter (the schema requires pt_bucket NOT NULL).
+    """
+    out = df.copy()
+    bins = [4, 9, 19, 10**9]
+    labels = ["low", "mid", "high"]
+    out["pt_bucket"] = pd.cut(out["pa"], bins=bins, labels=labels).astype("string")
+    return out
+
+
+_HITTER_WINDOWS_COLS: tuple[str, ...] = (
+    "player_id",
+    "window_end",
+    "window_days",
+    "pa",
+    "hr",
+    "r",
+    "rbi",
+    "sb",
+    "avg",
+    "babip",
+    "k_pct",
+    "bb_pct",
+    "iso",
+    "ev_avg",
+    "barrel_pct",
+    "xwoba_avg",
+    "pt_bucket",
+)
+
+
+def compute_windows(conn: duckdb.DuckDBPyConnection) -> int:
+    """Rebuild ``hitter_windows`` from ``hitter_games`` + ``hitter_statcast_pa``.
+
+    Generates rows for every (player, calendar_date in
+    [first_played, last_played], window_days in {3, 7, 14}) where the
+    window's PA >= 5. Returns the total row count written.
+
+    Idempotent: ``INSERT OR REPLACE`` keyed by (player_id, window_end, window_days).
+    """
+    all_rows: list[pd.DataFrame] = []
+    for window_days in WINDOW_DAYS:
+        sums = _compute_rolling_sums(conn, window_days=window_days)
+        sums = sums[sums["pa"] >= 5].copy()
+        if sums.empty:
+            continue
+        sums = _add_rate_stats(sums)
+        sums = _add_statcast_peripherals(conn, sums)
+        sums = _assign_pt_bucket(sums)
+        all_rows.append(sums)
+
+    if not all_rows:
+        return 0
+
+    out = pd.concat(all_rows, ignore_index=True)[list(_HITTER_WINDOWS_COLS)]
+    placeholders = ", ".join(["?"] * len(_HITTER_WINDOWS_COLS))
+    sql = (
+        f"INSERT OR REPLACE INTO hitter_windows ({', '.join(_HITTER_WINDOWS_COLS)}) "
+        f"VALUES ({placeholders})"
+    )
+    rows = [
+        tuple(None if pd.isna(v) else v for v in r) for r in out.itertuples(index=False, name=None)
+    ]
+    conn.executemany(sql, rows)
+    logger.info("Wrote %d rows to hitter_windows", len(rows))
+    return len(rows)

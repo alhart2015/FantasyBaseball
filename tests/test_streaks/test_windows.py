@@ -17,7 +17,9 @@ from fantasy_baseball.streaks.models import HitterGame, HitterStatcastPA
 from fantasy_baseball.streaks.windows import (
     _add_rate_stats,
     _add_statcast_peripherals,
+    _assign_pt_bucket,
     _compute_rolling_sums,
+    compute_windows,
 )
 
 
@@ -257,3 +259,51 @@ def test_add_statcast_peripherals_returns_nan_for_window_with_no_statcast_data()
     assert pd.isna(row["ev_avg"])
     assert pd.isna(row["barrel_pct"])
     assert pd.isna(row["xwoba_avg"])
+
+
+def test_assign_pt_bucket_boundaries() -> None:
+    df = pd.DataFrame({"pa": [5, 9, 10, 19, 20, 50]})
+    out = _assign_pt_bucket(df)
+    # _assign_pt_bucket assumes the PA>=5 filter has already been applied.
+    assert list(out["pt_bucket"]) == ["low", "low", "mid", "mid", "high", "high"], out
+
+
+def test_compute_windows_filters_pa_lt_5_and_writes_buckets() -> None:
+    conn = get_connection(":memory:")
+    # Player 1: 8 PA over 3 days (low bucket for 3-day window)
+    # Player 2: 2 PA over 3 days (filtered out)
+    upsert_hitter_games(
+        conn,
+        [
+            _g(1, 1, pa=4, ab=4, h=1),
+            _g(1, 2, pa=2, ab=2, h=0),
+            _g(1, 3, pa=2, ab=2, h=1),
+            _g(2, 1, pa=1, ab=1, h=0),
+            _g(2, 2, pa=1, ab=1, h=0),
+        ],
+    )
+    n = compute_windows(conn)
+    assert n > 0
+    rows = conn.execute(
+        "SELECT player_id, window_end, window_days, pa, pt_bucket "
+        "FROM hitter_windows ORDER BY player_id, window_end, window_days"
+    ).fetchall()
+    by_key = {(r[0], r[1], r[2]): r for r in rows}
+    # 3-day window ending 4/3 for player 1: PA = 4+2+2 = 8 -> 'low'
+    key = (1, date(2025, 4, 3), 3)
+    assert key in by_key
+    assert by_key[key][3] == 8
+    assert by_key[key][4] == "low"
+    # Player 2 should have no rows (all windows have PA<5)
+    assert all(r[0] != 2 for r in rows)
+
+
+def test_compute_windows_is_idempotent() -> None:
+    conn = get_connection(":memory:")
+    upsert_hitter_games(conn, [_g(1, d, pa=5, ab=4, h=1) for d in range(1, 8)])
+    n1 = compute_windows(conn)
+    n2 = compute_windows(conn)
+    # Same input -> same row count, no PK duplications.
+    assert n1 == n2
+    total = conn.execute("SELECT COUNT(*) FROM hitter_windows").fetchone()[0]
+    assert total == n1
