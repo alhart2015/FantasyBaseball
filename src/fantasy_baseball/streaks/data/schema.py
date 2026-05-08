@@ -16,6 +16,7 @@ _SCHEMA_DDL = [
     """
     CREATE TABLE IF NOT EXISTS hitter_games (
         player_id INTEGER NOT NULL,
+        game_pk INTEGER NOT NULL,
         name VARCHAR NOT NULL,
         team VARCHAR,
         season INTEGER NOT NULL,
@@ -29,7 +30,7 @@ _SCHEMA_DDL = [
         sb INTEGER NOT NULL,
         bb INTEGER NOT NULL,
         k INTEGER NOT NULL,
-        PRIMARY KEY (player_id, date)
+        PRIMARY KEY (player_id, game_pk)
     )
     """,
     """
