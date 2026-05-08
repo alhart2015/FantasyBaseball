@@ -73,15 +73,92 @@ def _compute_rolling_sums(conn: duckdb.DuckDBPyConnection, window_days: int) -> 
         )
         # fillna(0) makes the NOT NULL invariant on _SUM_COLS explicit at the
         # cast site rather than relying on upstream schema enforcement.
-        rolling = (
-            per_day.rolling(window=window_days, min_periods=1)
-            .sum()
-            .fillna(0)
-            .astype(int)
-        )
+        rolling = per_day.rolling(window=window_days, min_periods=1).sum().fillna(0).astype(int)
         rolling = rolling.reset_index().rename(columns={"index": "window_end"})
         rolling.insert(0, "player_id", int(player_id))
         rolling["window_days"] = window_days
         out_frames.append(rolling)
 
     return pd.concat(out_frames, ignore_index=True)
+
+
+def _add_rate_stats(sums: pd.DataFrame) -> pd.DataFrame:
+    """Add avg, babip, iso, k_pct, bb_pct columns to a rolling-sums frame.
+
+    NaN where the denominator is zero (e.g. zero-PA windows from off-day
+    rows that haven't been filtered yet).
+    """
+    out = sums.copy()
+    ab = out["ab"].astype("float64")
+    pa = out["pa"].astype("float64")
+    babip_denom = (out["ab"] - out["k"] - out["hr"] + out["sf"]).astype("float64")
+    iso_num = (out["b2"] + 2 * out["b3"] + 3 * out["hr"]).astype("float64")
+
+    # ``.where(denom > 0)`` returns NaN where the denominator is zero, so
+    # we never produce inf (numerators are finite ints). No need for the
+    # deprecated ``mode.use_inf_as_na`` option context.
+    out["avg"] = (out["h"] / ab).where(ab > 0)
+    out["babip"] = ((out["h"] - out["hr"]) / babip_denom).where(babip_denom > 0)
+    out["iso"] = (iso_num / ab).where(ab > 0)
+    out["k_pct"] = (out["k"] / pa).where(pa > 0)
+    out["bb_pct"] = (out["bb"] / pa).where(pa > 0)
+    return out
+
+
+def _add_statcast_peripherals(conn: duckdb.DuckDBPyConnection, sums: pd.DataFrame) -> pd.DataFrame:
+    """Left-join per-window EV/barrel%/xwOBA averages from hitter_statcast_pa.
+
+    Computed in DuckDB SQL keyed on (player_id, date) so the aggregation
+    runs in the database; the result is a small per-(player, day) frame
+    that we then sum-then-divide across the window in pandas.
+    """
+    if sums.empty:
+        for col in ("ev_avg", "barrel_pct", "xwoba_avg"):
+            sums[col] = pd.NA
+        return sums
+
+    daily = conn.execute(
+        """
+        SELECT
+            player_id,
+            date,
+            SUM(launch_speed) FILTER (WHERE launch_speed IS NOT NULL) AS ls_sum,
+            COUNT(launch_speed) FILTER (WHERE launch_speed IS NOT NULL) AS ls_n,
+            SUM(CASE WHEN barrel THEN 1 ELSE 0 END) FILTER (WHERE barrel IS NOT NULL) AS barrel_sum,
+            COUNT(*) FILTER (WHERE barrel IS NOT NULL) AS barrel_n,
+            SUM(estimated_woba_using_speedangle) FILTER (WHERE estimated_woba_using_speedangle IS NOT NULL) AS xwoba_sum,
+            COUNT(estimated_woba_using_speedangle) FILTER (WHERE estimated_woba_using_speedangle IS NOT NULL) AS xwoba_n
+        FROM hitter_statcast_pa
+        GROUP BY player_id, date
+        """
+    ).df()
+    daily["date"] = pd.to_datetime(daily["date"])
+
+    out_rows: list[dict[str, float | int | pd.Timestamp]] = []
+    for window_days, window_group in sums.groupby("window_days", sort=False):
+        end_dates = window_group[["player_id", "window_end"]].drop_duplicates()
+        for _, row in end_dates.iterrows():
+            pid = int(row["player_id"])
+            end = row["window_end"]
+            start = end - pd.Timedelta(days=int(window_days) - 1)
+            mask = (daily["player_id"] == pid) & (daily["date"] >= start) & (daily["date"] <= end)
+            sub = daily.loc[mask]
+            ls_n = int(sub["ls_n"].sum())
+            barrel_n = int(sub["barrel_n"].sum())
+            xwoba_n = int(sub["xwoba_n"].sum())
+            out_rows.append(
+                {
+                    "player_id": pid,
+                    "window_end": end,
+                    "window_days": int(window_days),
+                    "ev_avg": float(sub["ls_sum"].sum()) / ls_n if ls_n else float("nan"),
+                    "barrel_pct": float(sub["barrel_sum"].sum()) / barrel_n
+                    if barrel_n
+                    else float("nan"),
+                    "xwoba_avg": float(sub["xwoba_sum"].sum()) / xwoba_n
+                    if xwoba_n
+                    else float("nan"),
+                }
+            )
+    peripherals = pd.DataFrame(out_rows)
+    return sums.merge(peripherals, on=["player_id", "window_end", "window_days"], how="left")
