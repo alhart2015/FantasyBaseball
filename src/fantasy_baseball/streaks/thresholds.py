@@ -18,9 +18,11 @@ import logging
 
 import duckdb
 
+from fantasy_baseball.streaks.models import StreakCategory
+
 logger = logging.getLogger(__name__)
 
-CATEGORIES: tuple[str, ...] = ("hr", "r", "rbi", "sb", "avg")
+CATEGORIES: tuple[StreakCategory, ...] = ("hr", "r", "rbi", "sb", "avg")
 
 
 def compute_thresholds(
@@ -75,38 +77,42 @@ def compute_thresholds(
     # INSERT OR REPLACE alone would leave them behind).
     conn.execute("DELETE FROM thresholds WHERE season_set = ?", [season_set])
 
-    written = 0
+    insert_rows: list[tuple[str, StreakCategory, int, str, float, float]] = []
     for category in CATEGORIES:
         # AVG is a rate column; counting cats are int columns -- both live
-        # under a same-named column in hitter_windows, so the same template
-        # works for either.
-        col = category
+        # under a same-named column in hitter_windows.
         rows = conn.execute(
             f"""
             WITH src AS ({windows_sql})
             SELECT
                 window_days,
                 pt_bucket,
-                percentile_cont(0.1) WITHIN GROUP (ORDER BY {col}) AS p10,
-                percentile_cont(0.9) WITHIN GROUP (ORDER BY {col}) AS p90
+                percentile_cont(0.1) WITHIN GROUP (ORDER BY {category}) AS p10,
+                percentile_cont(0.9) WITHIN GROUP (ORDER BY {category}) AS p90
             FROM src
-            WHERE {col} IS NOT NULL
+            WHERE {category} IS NOT NULL
             GROUP BY window_days, pt_bucket
             HAVING COUNT(*) >= 1
             """
         ).fetchall()
         for window_days, pt_bucket, p10, p90 in rows:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO thresholds
-                (season_set, category, window_days, pt_bucket, p10, p90)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                [season_set, category, int(window_days), pt_bucket, float(p10), float(p90)],
+            insert_rows.append(
+                (season_set, category, int(window_days), pt_bucket, float(p10), float(p90))
             )
-            written += 1
-    logger.info("Wrote %d threshold rows for season_set=%s", written, season_set)
-    return written
+
+    if insert_rows:
+        # Plain INSERT (not OR REPLACE) — the upfront DELETE above cleared the
+        # season_set's rows so no PK collision is possible.
+        conn.executemany(
+            """
+            INSERT INTO thresholds
+            (season_set, category, window_days, pt_bucket, p10, p90)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            insert_rows,
+        )
+    logger.info("Wrote %d threshold rows for season_set=%s", len(insert_rows), season_set)
+    return len(insert_rows)
 
 
 def _parse_season_set(season_set: str) -> list[int]:

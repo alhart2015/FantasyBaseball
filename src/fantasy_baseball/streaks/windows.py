@@ -24,11 +24,12 @@ from dataclasses import fields
 import duckdb
 import pandas as pd
 
-from fantasy_baseball.streaks.models import HitterWindow
+from fantasy_baseball.streaks.models import HitterWindow, PtBucket
 
 logger = logging.getLogger(__name__)
 
 WINDOW_DAYS: tuple[int, ...] = (3, 7, 14)
+PT_BUCKETS: tuple[PtBucket, ...] = ("low", "mid", "high")
 
 # Box-score components we sum across windows. PA stays the canonical PA
 # count even though it's also derivable from the components — the loader's
@@ -50,39 +51,58 @@ _SUM_COLS: tuple[str, ...] = (
 )
 
 
+def _build_per_day_frames(conn: duckdb.DuckDBPyConnection) -> dict[int, pd.DataFrame]:
+    """Build per-player dense-calendar daily frames once.
+
+    Returns ``{player_id: per_day_frame}`` where each frame is indexed by
+    every calendar day in ``[first_played, last_played]`` (zero-fill on
+    off-days, doubleheaders collapsed to one row). Hoisted out of
+    :func:`_compute_rolling_sums` so :func:`compute_windows` can build it
+    once and reuse across the 3 window sizes.
+    """
+    games = conn.execute(f"SELECT player_id, date, {', '.join(_SUM_COLS)} FROM hitter_games").df()
+    if games.empty:
+        return {}
+    games["date"] = pd.to_datetime(games["date"])
+    frames: dict[int, pd.DataFrame] = {}
+    for player_id, player_games in games.groupby("player_id", sort=False):
+        first_played = player_games["date"].min()
+        last_played = player_games["date"].max()
+        idx = pd.date_range(first_played, last_played, freq="D")
+        frames[int(player_id)] = (
+            player_games.set_index("date")[list(_SUM_COLS)]
+            .groupby(level=0)
+            .sum()  # collapse doubleheaders into one daily row
+            .reindex(idx, fill_value=0)
+        )
+    return frames
+
+
+def _rolling_sums_from_per_day(
+    per_day_frames: dict[int, pd.DataFrame], window_days: int
+) -> pd.DataFrame:
+    """Apply a rolling-sum pass over pre-built per-day frames."""
+    if not per_day_frames:
+        return pd.DataFrame(columns=["player_id", "window_end", "window_days", *_SUM_COLS])
+    out_frames: list[pd.DataFrame] = []
+    for player_id, per_day in per_day_frames.items():
+        # fillna(0) makes the NOT NULL invariant on _SUM_COLS explicit at the
+        # cast site rather than relying on upstream schema enforcement.
+        rolling = per_day.rolling(window=window_days, min_periods=1).sum().fillna(0).astype(int)
+        rolling = rolling.reset_index().rename(columns={"index": "window_end"})
+        rolling.insert(0, "player_id", player_id)
+        rolling["window_days"] = window_days
+        out_frames.append(rolling)
+    return pd.concat(out_frames, ignore_index=True)
+
+
 def _compute_rolling_sums(conn: duckdb.DuckDBPyConnection, window_days: int) -> pd.DataFrame:
     """Return a DataFrame of rolling sums for every (player, calendar-date) pair.
 
     Columns: player_id, window_end (Timestamp), window_days, plus one column
     per name in ``_SUM_COLS``. No PA<5 filter applied here — caller filters.
     """
-    games = conn.execute(f"SELECT player_id, date, {', '.join(_SUM_COLS)} FROM hitter_games").df()
-    if games.empty:
-        return pd.DataFrame(columns=["player_id", "window_end", "window_days", *_SUM_COLS])
-
-    games["date"] = pd.to_datetime(games["date"])
-
-    out_frames: list[pd.DataFrame] = []
-    for player_id, player_games in games.groupby("player_id", sort=False):
-        first_played = player_games["date"].min()
-        last_played = player_games["date"].max()
-        # Reindex to a continuous daily calendar between first and last played.
-        idx = pd.date_range(first_played, last_played, freq="D")
-        per_day = (
-            player_games.set_index("date")[list(_SUM_COLS)]
-            .groupby(level=0)
-            .sum()  # collapse doubleheaders into one daily row
-            .reindex(idx, fill_value=0)
-        )
-        # fillna(0) makes the NOT NULL invariant on _SUM_COLS explicit at the
-        # cast site rather than relying on upstream schema enforcement.
-        rolling = per_day.rolling(window=window_days, min_periods=1).sum().fillna(0).astype(int)
-        rolling = rolling.reset_index().rename(columns={"index": "window_end"})
-        rolling.insert(0, "player_id", int(player_id))
-        rolling["window_days"] = window_days
-        out_frames.append(rolling)
-
-    return pd.concat(out_frames, ignore_index=True)
+    return _rolling_sums_from_per_day(_build_per_day_frames(conn), window_days)
 
 
 def _add_rate_stats(sums: pd.DataFrame) -> pd.DataFrame:
@@ -182,13 +202,13 @@ def _assign_pt_bucket(df: pd.DataFrame) -> pd.DataFrame:
     """
     out = df.copy()
     bins = [4, 9, 19, 10**9]
-    labels = ["low", "mid", "high"]
-    out["pt_bucket"] = pd.cut(out["pa"], bins=bins, labels=labels, right=True).astype("string")
+    out["pt_bucket"] = pd.cut(out["pa"], bins=bins, labels=list(PT_BUCKETS), right=True).astype(
+        "string"
+    )
     return out
 
 
-# Derived from the dataclass per the streaks/models.py single-source-of-truth
-# convention (matches the load.py pattern for HitterGame and HitterStatcastPA).
+# Derived from the dataclass per the models.py single-source-of-truth convention.
 _HITTER_WINDOWS_COLS: tuple[str, ...] = tuple(f.name for f in fields(HitterWindow))
 
 
@@ -201,9 +221,12 @@ def compute_windows(conn: duckdb.DuckDBPyConnection) -> int:
 
     Idempotent: ``INSERT OR REPLACE`` keyed by (player_id, window_end, window_days).
     """
+    # Build the per-player dense calendar once and reuse across window sizes —
+    # the SQL read + groupby + reindex is the dominant cost in this function.
+    per_day_frames = _build_per_day_frames(conn)
     all_rows: list[pd.DataFrame] = []
     for window_days in WINDOW_DAYS:
-        sums = _compute_rolling_sums(conn, window_days=window_days)
+        sums = _rolling_sums_from_per_day(per_day_frames, window_days)
         sums = sums[sums["pa"] >= 5].copy()
         if sums.empty:
             continue
@@ -221,9 +244,10 @@ def compute_windows(conn: duckdb.DuckDBPyConnection) -> int:
         f"INSERT OR REPLACE INTO hitter_windows ({', '.join(_HITTER_WINDOWS_COLS)}) "
         f"VALUES ({placeholders})"
     )
-    rows = [
-        tuple(None if pd.isna(v) else v for v in r) for r in out.itertuples(index=False, name=None)
-    ]
+    # Vectorized NaN-to-None for DuckDB binding (faster than per-row pd.isna scan
+    # at ~500K rows x 17 cols).
+    out_obj = out.astype(object).where(out.notna(), None)
+    rows = list(out_obj.itertuples(index=False, name=None))
     conn.executemany(sql, rows)
     logger.info("Wrote %d rows to hitter_windows", len(rows))
     return len(rows)
