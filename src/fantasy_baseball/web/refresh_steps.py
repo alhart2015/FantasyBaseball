@@ -6,6 +6,7 @@ because they only exist to compose those domains' outputs into the
 shape the cache files need.
 """
 
+from fantasy_baseball.lineup.optimizer import HitterAssignment, PitcherStarter
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import BENCH_SLOTS
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -50,46 +51,182 @@ def merge_matched_and_raw_roster(
 
 
 def compute_lineup_moves(
-    optimal_assignments: dict[str, str],
+    optimal_hitters: list[HitterAssignment],
+    optimal_pitchers: list[PitcherStarter],
+    pitcher_bench: list[Player],
     roster_players: list[Player],
-) -> list[dict]:
-    """Compare optimizer output to current slots; emit START moves.
+) -> dict:
+    """Compare optimizer output to current slots; emit paired swap rows.
 
-    Accepts both hitter assignments (e.g. ``OF_1``, ``Util``) and
-    pitcher slots (``P_1`` ... ``P_N``) in a single dict. Only emits a
-    move when the player is crossing the bench/active boundary. Slot
-    keys may have suffixes like ``OF_1`` or ``P_3`` — only the prefix
-    before ``_`` matters for comparison.
+    Returns a structured payload:
+
+        {
+            "swaps": [
+                {
+                    "start": {"player", "from", "to", "roto_delta"},
+                    "bench": {"player", "from", "to"},
+                },
+                ...
+            ],
+            "unpaired_starts":  [{"player", "from", "to", "roto_delta"}, ...],
+            "unpaired_benches": [{"player", "from", "to"}, ...],
+        }
+
+    Pairing is two-pass greedy:
+
+    1. Exact base-slot match (a START with target slot ``S`` pairs with a
+       BENCH whose vacated slot was ``S``). Handles the common hitter case.
+    2. Type-compatible by ΔRoto / SGP order — remaining starts sorted by
+       descending ``roto_delta`` pair with remaining benches sorted by
+       descending current SGP, only within the same player type
+       (hitter↔hitter, pitcher↔pitcher).
+
+    Anything left after both passes is returned as ``unpaired_starts`` /
+    ``unpaired_benches`` (rare: caused by IL transitions or asymmetric
+    roster changes).
     """
-    moves: list[dict] = []
-    for slot, player_name in optimal_assignments.items():
-        for player in roster_players:
-            if player.name != player_name:
-                continue
-            current_slot = player.selected_position or "BN"
-            base_slot = slot.split("_")[0]
-            if current_slot != base_slot and (
-                current_slot in BENCH_SLOTS or base_slot in BENCH_SLOTS
-            ):
-                if player.rest_of_season is not None:
-                    sgp = (
-                        player.rest_of_season.sgp
-                        if player.rest_of_season.sgp is not None
-                        else player.rest_of_season.compute_sgp()
-                    )
-                    reason = f"SGP: {sgp:.1f}"
-                else:
-                    reason = "Optimal slot"
-                moves.append(
-                    {
-                        "action": "START",
-                        "player": player_name,
-                        "slot": base_slot,
-                        "reason": reason,
-                    }
-                )
-            break
-    return moves
+    by_name: dict[str, Player] = {p.name: p for p in roster_players}
+
+    # --- Build START moves (bench → active boundary crossings) ---
+    starts: list[dict] = []
+    for assignment in optimal_hitters:
+        player = by_name.get(assignment.name)
+        if player is None:
+            continue
+        current = player.selected_position or "BN"
+        target = assignment.slot.value
+        if current in BENCH_SLOTS and target not in BENCH_SLOTS:
+            starts.append(
+                {
+                    "player": player.name,
+                    "from": current,
+                    "to": target,
+                    "roto_delta": assignment.roto_delta,
+                    "_player_type": PlayerType.HITTER,
+                }
+            )
+    for starter in optimal_pitchers:
+        player = by_name.get(starter.name)
+        if player is None:
+            continue
+        current = player.selected_position or "BN"
+        if current in BENCH_SLOTS:
+            starts.append(
+                {
+                    "player": player.name,
+                    "from": current,
+                    "to": "P",
+                    "roto_delta": starter.roto_delta,
+                    "_player_type": PlayerType.PITCHER,
+                }
+            )
+
+    # --- Build BENCH moves (active → bench boundary crossings) ---
+    benches: list[dict] = []
+    optimal_hitter_names = {a.name for a in optimal_hitters}
+    for player in roster_players:
+        if player.player_type != PlayerType.HITTER:
+            continue
+        current = player.selected_position or "BN"
+        if current in BENCH_SLOTS:
+            continue
+        if player.name in optimal_hitter_names:
+            continue
+        benches.append(
+            {
+                "player": player.name,
+                "from": current,
+                "to": "BN",
+                "_player_type": PlayerType.HITTER,
+                "_sgp": _player_sgp(player),
+            }
+        )
+    for player in pitcher_bench:
+        current = player.selected_position or "BN"
+        if current in BENCH_SLOTS:
+            continue
+        benches.append(
+            {
+                "player": player.name,
+                "from": current,
+                "to": "BN",
+                "_player_type": PlayerType.PITCHER,
+                "_sgp": _player_sgp(player),
+            }
+        )
+
+    return _pair_swaps(starts, benches)
+
+
+def _player_sgp(player: Player) -> float:
+    """Best-effort SGP read from a Player; 0.0 if no projection attached.
+
+    Used as the bench-side ordering key in pass 2 of swap pairing — higher
+    SGP means a bigger contribution lost when benched, so it should pair
+    with the highest-impact START.
+    """
+    if player.rest_of_season is None:
+        return 0.0
+    if player.rest_of_season.sgp is not None:
+        return float(player.rest_of_season.sgp)
+    return float(player.rest_of_season.compute_sgp() or 0.0)
+
+
+def _pair_swaps(starts: list[dict], benches: list[dict]) -> dict:
+    """Two-pass greedy pairing of START and BENCH moves.
+
+    See :func:`compute_lineup_moves` for the algorithm description. Mutates
+    nothing in the inputs; returns a fresh dict with stripped private keys.
+    """
+    starts = list(starts)
+    benches = list(benches)
+    swaps: list[dict] = []
+
+    # Pass 1: exact base-slot match. A START with target slot S pairs with
+    # a BENCH whose vacated slot was S. Same-type only (slot equality
+    # already implies same type, but the explicit check guards future
+    # additions).
+    for start in list(starts):
+        for bench in benches:
+            if start["to"] == bench["from"] and start["_player_type"] == bench["_player_type"]:
+                swaps.append(_to_swap(start, bench))
+                starts.remove(start)
+                benches.remove(bench)
+                break
+
+    # Pass 2: type-compatible by descending ΔRoto / descending SGP. Pair
+    # within HITTER first, then PITCHER, so cross-type pairings can't sneak
+    # in via index drift.
+    for ptype in (PlayerType.HITTER, PlayerType.PITCHER):
+        type_starts = sorted(
+            (s for s in starts if s["_player_type"] == ptype),
+            key=lambda s: -s["roto_delta"],
+        )
+        type_benches = sorted(
+            (b for b in benches if b["_player_type"] == ptype),
+            key=lambda b: -b["_sgp"],
+        )
+        for start, bench in zip(type_starts, type_benches, strict=False):
+            swaps.append(_to_swap(start, bench))
+            starts.remove(start)
+            benches.remove(bench)
+
+    return {
+        "swaps": swaps,
+        "unpaired_starts": [_strip_private(s) for s in starts],
+        "unpaired_benches": [_strip_private(b) for b in benches],
+    }
+
+
+def _to_swap(start: dict, bench: dict) -> dict:
+    return {
+        "start": _strip_private(start),
+        "bench": {k: v for k, v in bench.items() if not k.startswith("_") and k != "_sgp"},
+    }
+
+
+def _strip_private(move: dict) -> dict:
+    return {k: v for k, v in move.items() if not k.startswith("_")}
 
 
 def build_positions_map(
