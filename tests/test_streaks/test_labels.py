@@ -180,43 +180,80 @@ def test_sparse_labels_low_rate_player_never_cold() -> None:
 
 
 def test_sparse_labels_high_rate_player_can_be_cold_at_zero() -> None:
-    """Player 5 has hr_per_pa=0.10. For a 14-day window with 50 PA the expected
-    HR is 5; P(X=0)=e^-5 ≈ 0.007, deeply in the bottom 10%. Any zero-HR 14d
-    window for pid 5 should be cold under poisson_p10."""
+    """A player with high projected HR rate going zero HR over a 14-day window
+    should be labeled cold under poisson_p10. We build a custom fixture: 60
+    days of high-PA games for pid 100, but the first 20 days are zero-HR (so
+    several 14d windows ending in those days are zero-HR while still meeting
+    the 'high' PT bucket / qualifying-PA thresholds).
+    """
     conn = get_connection(":memory:")
-    _seed_population_with_projections(conn)
-    apply_labels(conn, season_set="2025")
-    # Find a zero-HR 14-day window for pid 5 (the synthetic seed has pid 5
-    # hitting 1 HR every 2 days, so a window across an off-stretch has HR=0).
-    rows = conn.execute(
-        """
-        SELECT w.window_end, w.hr, w.pa
-        FROM hitter_windows w
-        WHERE w.player_id = 5 AND w.window_days = 14 AND w.hr = 0 AND w.pa >= 5
-        LIMIT 5
-        """
-    ).fetchall()
-    if not rows:
-        # The seed is dense enough that pid 5 may never have a zero-HR 14d
-        # window; fall back to checking the rule fired for *some* zero-HR row.
-        assert (
-            conn.execute(
-                "SELECT 1 FROM hitter_streak_labels "
-                "WHERE category='hr' AND cold_method='poisson_p10' AND label='cold' LIMIT 1"
-            ).fetchone()
-            is None
-            or True
+    games: list[HitterGame] = []
+    for d in range(1, 61):
+        # Days 1-20: zero HR. Days 21+: 1 HR every other day.
+        hr = 1 if (d > 20 and d % 2 == 0) else 0
+        games.append(
+            HitterGame(
+                player_id=100,
+                game_pk=100_000 + d,
+                name="ColdSlugger",
+                team="ABC",
+                season=2025,
+                date=_BASE + timedelta(days=d - 1),
+                pa=4,
+                ab=4,
+                h=1,
+                hr=hr,
+                r=0,
+                rbi=0,
+                sb=0,
+                bb=0,
+                k=1,
+                b2=0,
+                b3=0,
+                sf=0,
+                hbp=0,
+                ibb=0,
+                cs=0,
+                gidp=0,
+                sh=0,
+                ci=0,
+                is_home=True,
+            )
         )
-        return
-    for end, _hr, _pa in rows:
-        label = conn.execute(
-            "SELECT label FROM hitter_streak_labels "
-            "WHERE player_id=5 AND window_end=? AND window_days=14 "
-            "AND category='hr' AND cold_method='poisson_p10'",
-            [end],
-        ).fetchone()
-        assert label is not None
-        assert label[0] == "cold"
+    upsert_hitter_games(conn, games)
+    upsert_projection_rates(
+        conn,
+        [
+            HitterProjectionRate(
+                player_id=100, season=2025, hr_per_pa=0.10, sb_per_pa=0.0, n_systems=2
+            )
+        ],
+    )
+    compute_windows(conn)
+    compute_thresholds(conn, season_set="2025", qualifying_pa=150)
+    apply_labels(conn, season_set="2025")
+
+    # Days 14-20 each anchor a 14-day window covering only the zero-HR period.
+    # pid 100's hr_per_pa=0.10 x ~50 PA window = expected ~5 HR; P(X<=1) << 0.10
+    # so Poisson p10 -> cold for those zero-HR windows.
+    cold_rows = conn.execute(
+        """
+        SELECT COUNT(*) FROM hitter_streak_labels l
+        JOIN hitter_windows w
+          ON w.player_id = l.player_id
+         AND w.window_end = l.window_end
+         AND w.window_days = l.window_days
+        WHERE l.player_id = 100
+          AND l.category = 'hr'
+          AND l.cold_method = 'poisson_p10'
+          AND l.label = 'cold'
+          AND w.window_days = 14
+        """
+    ).fetchone()[0]
+    assert cold_rows >= 1, (
+        "Expected at least one cold-HR poisson_p10 label for the zero-HR 14d "
+        "stretch; got 0 — is the sparse-cat Poisson cold path firing at all?"
+    )
 
 
 def test_sparse_labels_unprojected_player_skipped() -> None:
