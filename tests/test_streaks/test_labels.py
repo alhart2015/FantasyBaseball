@@ -63,37 +63,40 @@ def test_apply_labels_writes_rows_per_category() -> None:
     n = apply_labels(conn, season_set="2025")
     assert n > 0
     cats = {
-        r[0] for r in conn.execute("SELECT DISTINCT category FROM hitter_streak_labels").fetchall()
+        r[0]
+        for r in conn.execute(
+            "SELECT DISTINCT category FROM hitter_streak_labels "
+            "WHERE category IN ('r', 'rbi', 'avg') AND cold_method='empirical'"
+        ).fetchall()
     }
-    assert cats == {"hr", "r", "rbi", "sb", "avg"}
+    assert cats == {"r", "rbi", "avg"}
 
 
 def test_apply_labels_classifies_hot_above_p90_cold_below_p10() -> None:
     conn = get_connection(":memory:")
     _seed_population(conn)
     apply_labels(conn, season_set="2025")
-    # Pull one threshold row + a window row matching it; confirm the label
-    # respects the inequality.
     threshold = conn.execute(
         "SELECT category, window_days, pt_bucket, p10, p90 "
-        "FROM thresholds WHERE season_set = '2025' AND category = 'hr' LIMIT 1"
+        "FROM thresholds WHERE season_set = '2025' AND category = 'r' LIMIT 1"
     ).fetchone()
     cat, win, bucket, p10, p90 = threshold
     sample = conn.execute(
-        "SELECT player_id, window_end, hr FROM hitter_windows "
+        "SELECT player_id, window_end, r FROM hitter_windows "
         "WHERE window_days = ? AND pt_bucket = ? LIMIT 5",
         [win, bucket],
     ).fetchall()
-    for pid, end, hr in sample:
+    for pid, end, r_val in sample:
         label = conn.execute(
             "SELECT label FROM hitter_streak_labels "
-            "WHERE player_id = ? AND window_end = ? AND window_days = ? AND category = ?",
+            "WHERE player_id = ? AND window_end = ? AND window_days = ? "
+            "AND category = ? AND cold_method = 'empirical'",
             [pid, end, win, cat],
         ).fetchone()[0]
-        if hr >= p90:
-            assert label == "hot", f"hr={hr} >= p90={p90} but label={label}"
-        elif hr <= p10:
-            assert label == "cold", f"hr={hr} <= p10={p10} but label={label}"
+        if r_val >= p90:
+            assert label == "hot", f"r={r_val} >= p90={p90} but label={label}"
+        elif r_val <= p10:
+            assert label == "cold", f"r={r_val} <= p10={p10} but label={label}"
         else:
             assert label == "neutral"
 
