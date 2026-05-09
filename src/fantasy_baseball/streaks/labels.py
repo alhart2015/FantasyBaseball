@@ -126,15 +126,19 @@ def _apply_sparse_labels(conn: duckdb.DuckDBPyConnection, *, season_set: str) ->
         )
         return 0
 
-    # Empirical p90 for hot, looked up per (window_days, pt_bucket).
-    p90_lookup = (
-        conn.execute(
-            "SELECT category, window_days, pt_bucket, p90 FROM thresholds WHERE season_set = ?",
-            [season_set],
-        )
-        .df()
-        .set_index(["category", "window_days", "pt_bucket"])["p90"]
-    )
+    # Empirical p90 for hot, fetched as a small per-(category, window_days,
+    # pt_bucket) frame and merged onto df below.
+    thresholds_df = conn.execute(
+        "SELECT category, window_days, pt_bucket, p90 FROM thresholds WHERE season_set = ?",
+        [season_set],
+    ).df()
+
+    # Per-row identity columns are the same across all categories and
+    # cold_methods; build the Python lists once and reuse.
+    pid_arr = df["player_id"].astype(int).to_numpy().tolist()
+    end_arr = df["window_end"].to_numpy().tolist()
+    wd_arr = df["window_days"].astype(int).to_numpy().tolist()
+    n = len(df)
 
     rows: list[tuple[int, object, int, str, str, str]] = []
     for category in SPARSE_CATEGORIES:
@@ -143,16 +147,14 @@ def _apply_sparse_labels(conn: duckdb.DuckDBPyConnection, *, season_set: str) ->
         expected = (df[rate_col] * df["window_pa"]).to_numpy(dtype=float)
         counts = df[count_col].to_numpy(dtype=int)
 
-        # Hot: empirical p90 (same in both poisson methods).
-        # Look up p90 per row using a vectorized index. The lambda's
-        # `cat=category` default binds the loop variable per iteration so
-        # ruff's B023 (late-binding closure) doesn't fire.
-        hot_p90 = df.apply(
-            lambda r, cat=category: p90_lookup.get(
-                (cat, int(r["window_days"]), str(r["pt_bucket"])), np.nan
-            ),
-            axis=1,
-        ).to_numpy(dtype=float)
+        # Hot: empirical p90 (same in both poisson methods). Vectorized
+        # via a left-merge on a tiny per-category threshold frame; rows
+        # without a matching threshold get NaN p90 and so can't be hot.
+        cat_thresholds = thresholds_df.loc[
+            thresholds_df["category"] == category, ["window_days", "pt_bucket", "p90"]
+        ].rename(columns={"p90": "_hot_p90"})
+        merged = df.merge(cat_thresholds, on=["window_days", "pt_bucket"], how="left")
+        hot_p90 = merged["_hot_p90"].to_numpy(dtype=float)
         is_hot = (~np.isnan(hot_p90)) & (counts >= hot_p90)
 
         for cold_method, percentile in POISSON_PERCENTILES:
@@ -163,17 +165,18 @@ def _apply_sparse_labels(conn: duckdb.DuckDBPyConnection, *, season_set: str) ->
             is_cold = counts < k
             # Build label: hot wins ties (a window in both buckets is hot).
             labels = np.where(is_hot, "hot", np.where(is_cold, "cold", "neutral"))
-            for i, label in enumerate(labels):
-                rows.append(
-                    (
-                        int(df["player_id"].iat[i]),
-                        df["window_end"].iat[i],
-                        int(df["window_days"].iat[i]),
-                        category,
-                        cold_method,
-                        str(label),
-                    )
+            label_list = labels.tolist()
+            rows.extend(
+                zip(
+                    pid_arr,
+                    end_arr,
+                    wd_arr,
+                    [category] * n,
+                    [cold_method] * n,
+                    label_list,
+                    strict=True,
                 )
+            )
 
     conn.executemany(
         "INSERT INTO hitter_streak_labels "
