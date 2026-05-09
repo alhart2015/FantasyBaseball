@@ -38,3 +38,18 @@ def migrate_to_phase_2(conn: duckdb.DuckDBPyConnection) -> None:
         logger.info("Dropped %s", table)
     init_schema(conn)
     logger.info("Recreated all streaks tables via init_schema")
+
+
+def migrate_to_phase_3(conn: duckdb.DuckDBPyConnection) -> None:
+    """Drop only `hitter_streak_labels` (which has a PK shape change) and let
+    `init_schema` recreate it with the Phase 3 PK — plus any new Phase 3 tables
+    that are missing (`hitter_projection_rates`, `continuation_rates`).
+
+    `hitter_games` / `hitter_statcast_pa` / `hitter_windows` / `thresholds` are
+    untouched: their schema didn't change. Labels are pure derived data and are
+    rebuilt by `apply_labels` after this migration.
+    """
+    conn.execute("DROP TABLE IF EXISTS hitter_streak_labels")
+    logger.info("Dropped hitter_streak_labels (PK shape change for cold_method)")
+    init_schema(conn)
+    logger.info("Recreated hitter_streak_labels + Phase 3 tables via init_schema")
