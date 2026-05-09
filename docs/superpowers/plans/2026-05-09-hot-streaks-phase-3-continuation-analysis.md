@@ -2101,6 +2101,80 @@ test2 = conn.execute(
 print(f"Test 2: {test2} of 5 categories with >=2pp lift in 7d.  {'PASS' if test2 >= 3 else 'FAIL'}")
 
 # %% [markdown]
+# ## Poisson distribution calibration check
+#
+# The sparse-cat (HR / SB) cold rule assumes window counts follow a Poisson
+# distribution with rate = projected_rate × window_PA. The math is principled
+# (each PA is approximately Bernoulli; sum-of-Bernoullis = Binomial; Binomial
+# → Poisson when N is large and p is small — Var differs by ~5-7% at our
+# parameters). But the calibration deserves an empirical eyeball before we
+# trust it for the cold-label rule.
+#
+# We bin windows by expected HR count, plot the empirical PMF against
+# Poisson(λ=bin_center).pmf, and check that the bottom-decile / bottom-
+# quintile thresholds the Poisson rule is using line up with the empirical
+# bottom-decile / bottom-quintile of actual outcomes.
+
+# %%
+import numpy as np
+from scipy.stats import poisson as poisson_dist
+
+calib = conn.execute(
+    """
+    SELECT
+        w.pa AS window_pa,
+        w.hr,
+        w.sb,
+        p.hr_per_pa * w.pa AS expected_hr,
+        p.sb_per_pa * w.pa AS expected_sb
+    FROM hitter_windows w
+    INNER JOIN hitter_projection_rates p
+      ON p.player_id = w.player_id
+     AND p.season = EXTRACT(YEAR FROM w.window_end)::INTEGER
+    WHERE w.window_days = 7
+    """
+).df()
+print(f"Total 7-day projected windows: {len(calib):,}")
+
+# Pick a workable bin for HR (most informative range — lower bins are too
+# noisy because both empirical and Poisson are dominated by zeros, higher
+# bins have too few rows).
+bin_lo, bin_hi, lam_center = 1.5, 2.5, 2.0
+sub = calib[(calib["expected_hr"] >= bin_lo) & (calib["expected_hr"] < bin_hi)]
+print(f"Calibration bin (HR): expected ∈ [{bin_lo}, {bin_hi}), N = {len(sub):,} windows")
+
+max_hr = max(int(sub["hr"].max()), 6)
+emp_pmf = (
+    sub["hr"].value_counts(normalize=True).reindex(range(max_hr + 1), fill_value=0.0).sort_index()
+)
+poiss_pmf = pd.Series(
+    poisson_dist.pmf(np.arange(max_hr + 1), lam_center), index=range(max_hr + 1)
+)
+
+fig, ax = plt.subplots(figsize=(8, 5))
+x = np.arange(max_hr + 1)
+ax.bar(x - 0.2, emp_pmf.to_numpy(), width=0.4, label="empirical", color="steelblue")
+ax.bar(x + 0.2, poiss_pmf.to_numpy(), width=0.4, label=f"Poisson(λ={lam_center})", color="orange")
+ax.set_xlabel("HR in 7-day window")
+ax.set_ylabel("P(count)")
+ax.set_title(f"Calibration: empirical vs Poisson, expected_HR ∈ [{bin_lo}, {bin_hi})")
+ax.legend()
+plt.show()
+
+emp_p10 = sub["hr"].quantile(0.10)
+emp_p20 = sub["hr"].quantile(0.20)
+poiss_p10 = int(poisson_dist.ppf(0.10, lam_center))
+poiss_p20 = int(poisson_dist.ppf(0.20, lam_center))
+print(f"  empirical bottom-10th HR: {emp_p10}    Poisson p10 (rule threshold): {poiss_p10}")
+print(f"  empirical bottom-20th HR: {emp_p20}    Poisson p20 (rule threshold): {poiss_p20}")
+print()
+print("Interpretation:")
+print("  If empirical bottom-10th < Poisson p10: real-world counts are overdispersed — our")
+print("    cold rule is conservative (under-labels cold).")
+print("  If empirical bottom-10th > Poisson p10: counts are underdispersed — rule over-labels.")
+print("  If they match within ±1 count: Poisson is calibrated and the rule is well-tuned.")
+
+# %% [markdown]
 # ## Notes / methodology surprises to record in the spec progress entry
 #
 # - Where the lift is concentrated (which categories, windows, buckets).
@@ -2108,6 +2182,9 @@ print(f"Test 2: {test2} of 5 categories with >=2pp lift in 7d.  {'PASS' if test2
 #   observed lift × cell-size tradeoff.
 # - Cells that came back with N < 1000 — are any of them load-bearing
 #   for the Phase 4 plan?
+# - Poisson calibration result above — log the empirical-vs-rule
+#   comparison so Phase 4 knows whether to trust the rule unmodified or
+#   add an overdispersion correction.
 
 # %%
 print("Done.")
