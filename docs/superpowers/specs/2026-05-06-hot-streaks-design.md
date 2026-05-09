@@ -286,3 +286,54 @@ The original spec estimates were off: ~400 hitters/season (not 150-200), ~44K ga
 #### Next milestone
 
 - **Phase 2 planning.** Window aggregation (`hitter_windows` population) + empirical threshold calibration (`thresholds`) + streak labeling (`hitter_streak_labels`). Decide BABIP/ISO sourcing (extend `hitter_games` with 2B/3B/SF/HBP, or derive from per-PA Statcast events). Address the all-or-nothing Statcast skip and `pa_index` chronological stability if Phase 2 needs them.
+
+### 2026-05-08 — Phase 2 schema migration + re-fetch
+
+Migrated the local DuckDB to the Phase 2 schema (DROP+`init_schema`, then re-ran `scripts/streaks/fetch_history.py` for all three seasons). The expanded `hitter_games` schema captures the full PA decomposition (`b2/b3/sf/hbp/ibb/cs/gidp/sh/ci`) plus `is_home`; the expanded `hitter_statcast_pa` adds `at_bat_number/bb_type/estimated_ba_using_speedangle/hit_distance_sc`.
+
+Row counts match Phase 1 acceptance exactly (134,441 game logs / 598,363 Statcast PAs / 1,207 player-seasons across 2023-2025).
+
+PA-identity check (`pa == ab + bb + hbp + sf + sh + ci`): 0 violations in 2024 and 2023; 2 in 2025 (José Ramírez 2025-09-03 game_pk=776474, gap +1; Dominic Canzone 2025-09-18 game_pk=776272, gap +1). 2/134,441 = 0.0015%, well under the plan's ~50/season investigation threshold. Likely a single rare component the MLB Stats API exposes under a slightly different field name; not blocking.
+
+Drift sums for the new columns (per ~400 qualified hitters/season) all in expected ranges:
+- doubles 7-8K, triples 600-700, SF ~1.2K, HBP ~1.7-1.9K, IBB ~500
+- CS ~800-900, GIDP ~3K, SH ~350-450, CI ~80-90, `is_home` 50.0-50.2%
+
+Statcast new-column non-null share:
+- `at_bat_number`: 100% (always present on terminal PAs)
+- `bb_type`: 67-68% (null on K/BB/HBP, which together are ~32% of PAs — math checks)
+- `estimated_ba_using_speedangle`: 62-63% (subset of batted balls with measurable EV/angle)
+- `launch_speed`: 64-66%
+
+#### Next milestone
+
+- **Phase 2 implementation continuing.** Tasks 8-14 of the Phase 2 plan: `windows.py` (rolling sums + rate stats + Statcast peripherals + PT bucket), `thresholds.py` (DuckDB `percentile_cont` over qualified-hitter rows), `labels.py` (hot/cold/neutral application), CLIs, and the Phase-2 acceptance notebook (`01_distributions.ipynb`).
+
+### 2026-05-08 — Phase 2 (windows, thresholds, labels) accepted
+
+All 14 plan tasks landed. `compute_windows` + `compute_thresholds` +
+`apply_labels` chained via `scripts/streaks/compute_labels.py`. Real-data
+run on the 2023-2025 corpus produced:
+
+| Stage | Rows | Notes |
+|-------|-----:|-------|
+| `hitter_windows` | 521,127 | one row per (player, calendar_date in [first_played, last_played], window_days ∈ {3, 7, 14}) where PA ≥ 5 |
+| `thresholds` | 45 | 5 categories × 3 windows × 3 PT buckets |
+| `hitter_streak_labels` | 2,605,635 | 521,127 × 5 categories |
+
+Threshold eyeball checklist (notebook `01_distributions.ipynb`):
+
+- HR / 7d / high p90 = 2 (plan guess ~3 — slightly lower in reality, but 2 HR in a single 20+ PA week is genuinely the 90th percentile)
+- AVG / 14d / high p90 = .348 (plan guess .375-.420 — author was slightly optimistic)
+- AVG / 14d / high p10 = .150 (plan guess .150-.190) ✓
+- SB / 7d / high p90 = 2 (plan guess ~2) ✓
+- p10 ≤ p90 holds across all 45 strata ✓
+- Bucket monotonicity for counting cats: rough but plateau-prone because the discrete distribution clamps p10 to 0
+
+**Methodology surprise to revisit in Phase 3:** for sparse counting categories (HR, SB), p10 collapses to 0 in every bucket because most weeks have zero events even for high-PA hitters. The "cold" label therefore covers any window with zero events — a much wider net than "below the 10th percentile of nonzero counts." Phase 3 may want a different rule for sparse counts (e.g., a per-category lower bound that requires PA ≥ N before "cold").
+
+Also flagged but deferred: `_add_statcast_peripherals` per-window mask loop is O(windows × daily_rows) and dominated wall-time on the real corpus (~5 minutes of the ~7-minute pipeline run); cumulative-sum-on-dense-calendar refactor noted in the function docstring.
+
+#### Next milestone
+
+- **Phase 3 — continuation analysis (the go/no-go gate).** For each labeled (player, window_end, category) row in 2023-2024, compute the next-window outcome and tabulate persistence rates. Stratify by streak strength, PT bucket, and player-season skill quartile. Compare to base rates. Hold 2025 out as the test set; 2026 is out-of-sample for production inference. The Phase 2 methodology surprise (p10=0 for sparse counts) is a Phase 3 design input — decide whether to redefine "cold" for sparse cats before fitting continuation models.

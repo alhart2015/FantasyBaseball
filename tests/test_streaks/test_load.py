@@ -44,6 +44,16 @@ def _row(player_id=660271, dt=date(2024, 4, 1), hr=1, game_pk=None):
         sb=0,
         bb=1,
         k=1,
+        b2=0,
+        b3=0,
+        sf=0,
+        hbp=0,
+        ibb=0,
+        cs=0,
+        gidp=0,
+        sh=0,
+        ci=0,
+        is_home=True,
     )
 
 
@@ -83,6 +93,10 @@ def _statcast_row(player_id=660271, dt=date(2024, 4, 1), pa_index=1, event="sing
         launch_angle=12.0,
         estimated_woba_using_speedangle=0.45,
         barrel=False,
+        at_bat_number=pa_index,
+        bb_type=None,
+        estimated_ba_using_speedangle=0.40,
+        hit_distance_sc=None,
     )
 
 

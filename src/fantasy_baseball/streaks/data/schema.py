@@ -30,6 +30,16 @@ _SCHEMA_DDL = [
         sb INTEGER NOT NULL,
         bb INTEGER NOT NULL,
         k INTEGER NOT NULL,
+        b2 INTEGER NOT NULL,
+        b3 INTEGER NOT NULL,
+        sf INTEGER NOT NULL,
+        hbp INTEGER NOT NULL,
+        ibb INTEGER NOT NULL,
+        cs INTEGER NOT NULL,
+        gidp INTEGER NOT NULL,
+        sh INTEGER NOT NULL,
+        ci INTEGER NOT NULL,
+        is_home BOOLEAN NOT NULL,
         PRIMARY KEY (player_id, game_pk)
     )
     """,
@@ -43,6 +53,10 @@ _SCHEMA_DDL = [
         launch_angle DOUBLE,
         estimated_woba_using_speedangle DOUBLE,
         barrel BOOLEAN,
+        at_bat_number INTEGER,
+        bb_type VARCHAR,
+        estimated_ba_using_speedangle DOUBLE,
+        hit_distance_sc DOUBLE,
         PRIMARY KEY (player_id, date, pa_index)
     )
     """,

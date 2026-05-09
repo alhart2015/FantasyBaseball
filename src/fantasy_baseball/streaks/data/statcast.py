@@ -52,17 +52,26 @@ def _na_to_none(v: Any) -> Any:
 def pitches_to_pa_rows(df: pd.DataFrame) -> list[HitterStatcastPA]:
     """Convert a Statcast pitch DataFrame to a list of :class:`HitterStatcastPA`.
 
-    Filters to terminal PAs, assigns pa_index per (batter, game_date), and
-    converts NaN/NaT/pd.NA values to None.
+    Filters to terminal PAs, sorts by ``[batter, game_date, at_bat_number]``
+    (so ``pa_index`` is chronologically stable across re-fetches), assigns
+    ``pa_index`` per (batter, game_date), and converts NaN/NaT/pd.NA values
+    to None.
     """
     df = filter_terminal_pa(df)
     if df.empty:
         return []
-    df = df.sort_values(["batter", "game_date"]).reset_index(drop=True)
+    sort_cols = ["batter", "game_date"]
+    if "at_bat_number" in df.columns:
+        sort_cols.append("at_bat_number")
+    df = df.sort_values(sort_cols).reset_index(drop=True)
     df["pa_index"] = df.groupby(["batter", "game_date"]).cumcount() + 1
 
     rows: list[HitterStatcastPA] = []
     has_barrel = "barrel" in df.columns
+    has_at_bat_number = "at_bat_number" in df.columns
+    has_bb_type = "bb_type" in df.columns
+    has_xba = "estimated_ba_using_speedangle" in df.columns
+    has_distance = "hit_distance_sc" in df.columns
     for r in df.itertuples(index=False):
         rows.append(
             HitterStatcastPA(
@@ -76,6 +85,18 @@ def pitches_to_pa_rows(df: pd.DataFrame) -> list[HitterStatcastPA]:
                     getattr(r, "estimated_woba_using_speedangle", None)
                 ),
                 barrel=(bool(r.barrel) if has_barrel and not pd.isna(r.barrel) else None),
+                at_bat_number=(
+                    _na_to_none(getattr(r, "at_bat_number", None)) if has_at_bat_number else None
+                ),
+                bb_type=(_na_to_none(getattr(r, "bb_type", None)) if has_bb_type else None),
+                estimated_ba_using_speedangle=(
+                    _na_to_none(getattr(r, "estimated_ba_using_speedangle", None))
+                    if has_xba
+                    else None
+                ),
+                hit_distance_sc=(
+                    _na_to_none(getattr(r, "hit_distance_sc", None)) if has_distance else None
+                ),
             )
         )
     return rows
