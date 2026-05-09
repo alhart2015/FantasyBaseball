@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from dataclasses import fields
 
-from fantasy_baseball.streaks.models import HitterGame, HitterStatcastPA, HitterWindow
+from fantasy_baseball.streaks.models import (
+    HitterGame,
+    HitterStatcastPA,
+    HitterStreakLabel,
+    HitterWindow,
+)
 
 
 def test_hitter_game_fields_in_expected_order() -> None:
@@ -81,3 +86,35 @@ def test_hitter_window_fields_in_expected_order() -> None:
         "pt_bucket",
     )
     assert tuple(f.name for f in fields(HitterWindow)) == expected
+
+
+def test_hitter_streak_label_includes_cold_method() -> None:
+    expected = ("player_id", "window_end", "window_days", "category", "cold_method", "label")
+    assert tuple(f.name for f in fields(HitterStreakLabel)) == expected
+
+
+def test_hitter_projection_rate_fields_in_expected_order() -> None:
+    from fantasy_baseball.streaks.models import HitterProjectionRate
+
+    expected = ("player_id", "season", "hr_per_pa", "sb_per_pa", "n_systems")
+    assert tuple(f.name for f in fields(HitterProjectionRate)) == expected
+
+
+def test_continuation_rate_fields_in_expected_order() -> None:
+    from fantasy_baseball.streaks.models import ContinuationRate
+
+    expected = (
+        "season_set",
+        "category",
+        "window_days",
+        "pt_bucket",
+        "strength_bucket",
+        "direction",
+        "cold_method",
+        "n_labeled",
+        "n_continued",
+        "p_continued",
+        "p_baserate",
+        "lift",
+    )
+    assert tuple(f.name for f in fields(ContinuationRate)) == expected
