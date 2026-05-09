@@ -56,8 +56,10 @@ def _load_one_system(path: Path) -> pd.DataFrame:
     Computes hr_per_pa and sb_per_pa per row.
     """
     df = pd.read_csv(path, encoding="utf-8-sig")
-    if "MLBAMID" not in df.columns:
-        logger.warning("File %s has no MLBAMID column; skipping", path)
+    required = {"MLBAMID", "PA", "HR", "SB"}
+    missing = required - set(df.columns)
+    if missing:
+        logger.warning("File %s missing required columns %s; skipping", path, sorted(missing))
         return pd.DataFrame(columns=["MLBAMID", "PA", "hr_per_pa", "sb_per_pa"])
     df["MLBAMID"] = pd.to_numeric(df["MLBAMID"], errors="coerce")
     df = df.dropna(subset=["MLBAMID"])

@@ -114,3 +114,21 @@ def test_load_projection_rates_drops_rows_without_mlbamid(tmp_path: Path) -> Non
     )
     rates = load_projection_rates(tmp_path, season=2024)
     assert {r.player_id for r in rates} == {1}
+
+
+def test_load_projection_rates_skips_files_missing_required_columns(tmp_path: Path) -> None:
+    """A CSV missing PA/HR/SB columns is skipped (warning) without raising."""
+    base = tmp_path / "2024"
+    base.mkdir()
+    # File 1: missing HR column entirely.
+    pd.DataFrame(
+        [{"Name": "X", "PA": 500, "SB": 5, "MLBAMID": 1}], columns=["Name", "PA", "SB", "MLBAMID"]
+    ).to_csv(base / "broken-hitters.csv", index=False)
+    # File 2: well-formed.
+    _write_proj_csv(
+        base / "steamer-hitters.csv",
+        [{"Name": "Y", "PA": 500, "HR": 20, "SB": 5, "MLBAMID": 2}],
+    )
+    rates = load_projection_rates(tmp_path, season=2024)
+    # Only the well-formed file's player should be emitted.
+    assert {r.player_id for r in rates} == {2}
