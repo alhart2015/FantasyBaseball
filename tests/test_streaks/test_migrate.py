@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import duckdb
 
-from fantasy_baseball.streaks.data.migrate import migrate_to_phase_2
+from fantasy_baseball.streaks.data.migrate import migrate_to_phase_2, migrate_to_phase_3
 from fantasy_baseball.streaks.data.schema import get_connection
 
 
@@ -121,8 +121,6 @@ def test_migrate_to_phase_3_resets_labels_and_keeps_other_tables() -> None:
     """`migrate_to_phase_3` drops hitter_streak_labels and recreates it with
     the new PK, but does NOT touch hitter_games / hitter_windows / thresholds.
     """
-    from fantasy_baseball.streaks.data.migrate import migrate_to_phase_3
-
     conn = get_connection(":memory:")
     # Seed something in hitter_games so we can assert it survives.
     conn.execute(
@@ -146,8 +144,6 @@ def test_migrate_to_phase_3_resets_labels_and_keeps_other_tables() -> None:
 
 
 def test_migrate_to_phase_3_is_idempotent() -> None:
-    from fantasy_baseball.streaks.data.migrate import migrate_to_phase_3
-
     conn = get_connection(":memory:")
     migrate_to_phase_3(conn)
     migrate_to_phase_3(conn)  # second call must not raise
