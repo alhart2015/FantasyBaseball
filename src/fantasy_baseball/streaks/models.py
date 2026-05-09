@@ -15,6 +15,8 @@ from typing import Literal
 PtBucket = Literal["low", "mid", "high"]
 StreakCategory = Literal["hr", "r", "rbi", "sb", "avg"]
 StreakLabel = Literal["hot", "cold", "neutral"]
+ColdMethod = Literal["empirical", "poisson_p10", "poisson_p20"]
+StreakDirection = Literal["above", "below"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,10 +137,6 @@ class Threshold:
     pt_bucket: PtBucket
     p10: float
     p90: float
-
-
-ColdMethod = Literal["empirical", "poisson_p10", "poisson_p20"]
-StreakDirection = Literal["above", "below"]
 
 
 @dataclass(frozen=True, slots=True)

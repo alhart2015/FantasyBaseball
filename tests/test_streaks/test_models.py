@@ -9,7 +9,9 @@ from __future__ import annotations
 from dataclasses import fields
 
 from fantasy_baseball.streaks.models import (
+    ContinuationRate,
     HitterGame,
+    HitterProjectionRate,
     HitterStatcastPA,
     HitterStreakLabel,
     HitterWindow,
@@ -94,15 +96,11 @@ def test_hitter_streak_label_includes_cold_method() -> None:
 
 
 def test_hitter_projection_rate_fields_in_expected_order() -> None:
-    from fantasy_baseball.streaks.models import HitterProjectionRate
-
     expected = ("player_id", "season", "hr_per_pa", "sb_per_pa", "n_systems")
     assert tuple(f.name for f in fields(HitterProjectionRate)) == expected
 
 
 def test_continuation_rate_fields_in_expected_order() -> None:
-    from fantasy_baseball.streaks.models import ContinuationRate
-
     expected = (
         "season_set",
         "category",
