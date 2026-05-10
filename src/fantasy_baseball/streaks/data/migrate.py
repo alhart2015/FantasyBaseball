@@ -51,3 +51,28 @@ def migrate_to_phase_3(conn: duckdb.DuckDBPyConnection) -> None:
     logger.info("Dropped hitter_streak_labels (PK shape change for cold_method)")
     init_schema(conn)
     logger.info("Recreated hitter_streak_labels + Phase 3 tables via init_schema")
+
+
+def migrate_to_phase_4(conn: duckdb.DuckDBPyConnection) -> None:
+    """Add Phase 4 columns/tables. Idempotent and non-destructive.
+
+    Adds three nullable rate columns to ``hitter_projection_rates``
+    (``r_per_pa``, ``rbi_per_pa``, ``avg``) so dense-cat continuation
+    models can take ``season_rate_in_category`` as a feature. Then calls
+    ``init_schema`` to ensure the ``model_fits`` table exists.
+
+    Existing Phase 3 rows (hr_per_pa + sb_per_pa only) survive with NULL
+    in the new columns. Re-run ``scripts/streaks/load_projections.py``
+    after this migration to backfill them.
+
+    ``hitter_games`` / ``hitter_statcast_pa`` / ``hitter_windows`` /
+    ``thresholds`` / ``hitter_streak_labels`` / ``continuation_rates``
+    are untouched.
+    """
+    for col in ("r_per_pa", "rbi_per_pa", "avg"):
+        conn.execute(
+            f"ALTER TABLE hitter_projection_rates ADD COLUMN IF NOT EXISTS {col} DOUBLE"
+        )
+        logger.info("ALTER hitter_projection_rates ADD COLUMN IF NOT EXISTS %s", col)
+    init_schema(conn)
+    logger.info("Recreated/ensured Phase 4 tables via init_schema (model_fits)")
