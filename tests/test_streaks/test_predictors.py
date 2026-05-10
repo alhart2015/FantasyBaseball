@@ -4,9 +4,16 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import numpy as np
+import pandas as pd
+from sklearn.pipeline import Pipeline
+
 from fantasy_baseball.streaks.analysis.predictors import (
+    DEFAULT_C_GRID,
     EXPECTED_FEATURE_COLUMNS,
+    FitResult,
     build_training_frame,
+    fit_one_model,
 )
 from fantasy_baseball.streaks.data.load import upsert_hitter_games, upsert_statcast_pa
 from fantasy_baseball.streaks.data.load_projections import upsert_projection_rates
@@ -214,3 +221,47 @@ def test_build_training_frame_includes_season_rate_for_dense_cats() -> None:
     assert df["season_rate_in_category"].notna().all()
     # In the fixture, high-rate players have r_per_pa=0.15 and low-rate=0.10.
     assert set(df["season_rate_in_category"].round(2)).issubset({0.10, 0.15})
+
+
+def _make_synthetic_X_y(
+    n_rows: int = 200, n_features: int = 12, seed: int = 0
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+    """Synthetic, linearly-separable-ish dataset for fit-loop unit tests."""
+    rng = np.random.default_rng(seed)
+    X = pd.DataFrame(
+        rng.normal(size=(n_rows, n_features)),
+        columns=list(EXPECTED_FEATURE_COLUMNS),
+    )
+    # Make target weakly dependent on the first feature.
+    logits = X[EXPECTED_FEATURE_COLUMNS[0]].to_numpy() + 0.5 * rng.normal(size=n_rows)
+    y = (logits > 0).astype(int)
+    groups = rng.integers(low=1, high=10, size=n_rows)
+    return X, y, groups
+
+
+def test_fit_one_model_returns_fitresult_with_pipeline_and_metrics() -> None:
+    X, y, groups = _make_synthetic_X_y()
+    result = fit_one_model(X, y, groups, C_grid=DEFAULT_C_GRID, n_splits=5, random_state=42)
+    assert isinstance(result, FitResult)
+    assert isinstance(result.pipeline, Pipeline)
+    assert result.chosen_C in DEFAULT_C_GRID
+    assert 0.0 <= result.cv_auc_mean <= 1.0
+    assert result.cv_auc_std >= 0.0
+    # AUC for a linearly-separable-ish target should be well above 0.5.
+    assert result.cv_auc_mean > 0.55
+
+
+def test_fit_one_model_pipeline_is_fitted_on_full_train() -> None:
+    """Pipeline.predict_proba should succeed without further fit."""
+    X, y, groups = _make_synthetic_X_y()
+    result = fit_one_model(X, y, groups, C_grid=DEFAULT_C_GRID, n_splits=5, random_state=42)
+    proba = result.pipeline.predict_proba(X)
+    assert proba.shape == (len(X), 2)
+    assert ((proba >= 0) & (proba <= 1)).all()
+
+
+def test_fit_one_model_picks_highest_cv_auc() -> None:
+    """When the C-grid has a single value, that value is selected."""
+    X, y, groups = _make_synthetic_X_y()
+    result = fit_one_model(X, y, groups, C_grid=(1.0,), n_splits=5, random_state=42)
+    assert result.chosen_C == 1.0

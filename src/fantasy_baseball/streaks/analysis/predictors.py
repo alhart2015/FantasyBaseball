@@ -9,10 +9,17 @@ for the design decisions captured at the top of this module.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
+from dataclasses import dataclass
 
 import duckdb
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import GroupKFold
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 from fantasy_baseball.streaks.models import StreakCategory, StreakDirection
 
@@ -316,3 +323,99 @@ def build_training_frame(
 
     keep_cols = [*EXPECTED_FEATURE_COLUMNS, "target", "player_id", "season", "window_end"]
     return df[keep_cols].reset_index(drop=True)
+
+
+DEFAULT_C_GRID: tuple[float, ...] = (0.01, 0.1, 1.0, 10.0)
+
+
+@dataclass(frozen=True)
+class FitResult:
+    """One fitted model + the CV metrics that selected it."""
+
+    pipeline: Pipeline
+    chosen_C: float
+    cv_auc_mean: float
+    cv_auc_std: float
+    cv_auc_per_fold: tuple[float, ...]
+
+
+def _build_pipeline(C: float, random_state: int) -> Pipeline:
+    return Pipeline(
+        steps=[
+            ("scaler", StandardScaler()),
+            (
+                "lr",
+                LogisticRegression(
+                    C=C,
+                    penalty="l2",
+                    solver="lbfgs",
+                    max_iter=1000,
+                    random_state=random_state,
+                ),
+            ),
+        ]
+    )
+
+
+def fit_one_model(
+    X: pd.DataFrame,
+    y: np.ndarray | pd.Series,
+    groups: np.ndarray | pd.Series,
+    *,
+    C_grid: Iterable[float] = DEFAULT_C_GRID,
+    n_splits: int = 5,
+    random_state: int = 42,
+) -> FitResult:
+    """Player-grouped 5-fold CV over an L2 strength grid, then refit on full
+    train. Returns the refit pipeline + per-fold AUC stats for the chosen C.
+
+    All inputs are positional from the caller's perspective; ``X`` columns must
+    match ``EXPECTED_FEATURE_COLUMNS`` (the scaler is column-order-agnostic but
+    consumers of FitResult.pipeline.coef_ assume this order).
+    """
+    y_arr = np.asarray(y, dtype=int)
+    groups_arr = np.asarray(groups, dtype=int)
+    grid = tuple(C_grid)
+
+    best_C: float | None = None
+    best_mean: float = -np.inf
+    best_std: float = 0.0
+    best_per_fold: tuple[float, ...] = ()
+
+    for C in grid:
+        per_fold: list[float] = []
+        cv = GroupKFold(n_splits=n_splits)
+        for train_idx, val_idx in cv.split(X, y_arr, groups=groups_arr):
+            pipe = _build_pipeline(C=C, random_state=random_state)
+            pipe.fit(X.iloc[train_idx], y_arr[train_idx])
+            val_proba = pipe.predict_proba(X.iloc[val_idx])[:, 1]
+            if len(np.unique(y_arr[val_idx])) < 2:
+                # Degenerate fold — single class in val. Skip rather than
+                # crash; sklearn.roc_auc_score requires both classes.
+                continue
+            per_fold.append(float(roc_auc_score(y_arr[val_idx], val_proba)))
+        if not per_fold:
+            logger.warning("No usable folds for C=%g (every fold had a single-class val set)", C)
+            continue
+        mean = float(np.mean(per_fold))
+        std = float(np.std(per_fold))
+        if mean > best_mean:
+            best_C = C
+            best_mean = mean
+            best_std = std
+            best_per_fold = tuple(per_fold)
+
+    if best_C is None:
+        raise RuntimeError("fit_one_model: no C value produced any usable CV fold")
+
+    # Refit on full train with the chosen C.
+    final = _build_pipeline(C=best_C, random_state=random_state)
+    final.fit(X, y_arr)
+
+    return FitResult(
+        pipeline=final,
+        chosen_C=best_C,
+        cv_auc_mean=best_mean,
+        cv_auc_std=best_std,
+        cv_auc_per_fold=best_per_fold,
+    )
