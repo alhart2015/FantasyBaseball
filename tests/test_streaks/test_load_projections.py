@@ -5,15 +5,24 @@ from fantasy_baseball.streaks.data.schema import get_connection
 from fantasy_baseball.streaks.models import HitterProjectionRate
 
 
-def _row(pid: int, season: int, hr_pa: float = 0.05, sb_pa: float = 0.02, n: int = 2):
+def _row(
+    pid: int,
+    season: int,
+    hr_pa: float = 0.05,
+    sb_pa: float = 0.02,
+    r_pa: float | None = None,
+    rbi_pa: float | None = None,
+    avg: float | None = None,
+    n: int = 2,
+):
     return HitterProjectionRate(
         player_id=pid,
         season=season,
         hr_per_pa=hr_pa,
         sb_per_pa=sb_pa,
-        r_per_pa=None,
-        rbi_per_pa=None,
-        avg=None,
+        r_per_pa=r_pa,
+        rbi_per_pa=rbi_pa,
+        avg=avg,
         n_systems=n,
     )
 
@@ -40,3 +49,26 @@ def test_upsert_projection_rates_empty_input_is_noop() -> None:
     upsert_projection_rates(conn, [])
     n = conn.execute("SELECT COUNT(*) FROM hitter_projection_rates").fetchone()[0]
     assert n == 0
+
+
+def test_upsert_projection_rates_persists_dense_cat_fields() -> None:
+    conn = get_connection(":memory:")
+    upsert_projection_rates(
+        conn,
+        [_row(1, 2024, hr_pa=0.05, sb_pa=0.02, r_pa=0.15, rbi_pa=0.18, avg=0.275)],
+    )
+    row = conn.execute(
+        "SELECT hr_per_pa, sb_per_pa, r_per_pa, rbi_per_pa, avg "
+        "FROM hitter_projection_rates WHERE player_id=1 AND season=2024"
+    ).fetchone()
+    assert row == (0.05, 0.02, 0.15, 0.18, 0.275)
+
+
+def test_upsert_projection_rates_persists_nulls_for_dense_cat_fields() -> None:
+    conn = get_connection(":memory:")
+    upsert_projection_rates(conn, [_row(1, 2024)])  # all dense fields default None
+    row = conn.execute(
+        "SELECT r_per_pa, rbi_per_pa, avg FROM hitter_projection_rates "
+        "WHERE player_id=1 AND season=2024"
+    ).fetchone()
+    assert row == (None, None, None)
