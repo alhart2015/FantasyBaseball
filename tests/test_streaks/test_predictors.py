@@ -6,15 +6,19 @@ from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
+import pytest
 from sklearn.pipeline import Pipeline
 
 from fantasy_baseball.streaks.analysis.predictors import (
     DEFAULT_C_GRID,
     EXPECTED_FEATURE_COLUMNS,
+    EvaluationResult,
     FitResult,
     bootstrap_coef_ci,
     build_training_frame,
+    evaluate_model,
     fit_one_model,
+    permutation_feature_importance,
 )
 from fantasy_baseball.streaks.data.load import upsert_hitter_games, upsert_statcast_pa
 from fantasy_baseball.streaks.data.load_projections import upsert_projection_rates
@@ -302,3 +306,36 @@ def test_bootstrap_coef_ci_intervals_narrow_with_more_resamples() -> None:
     )
     for _col, (lo, hi) in cis.items():
         assert np.isfinite(lo) and np.isfinite(hi)
+
+
+def test_evaluate_model_returns_auc_and_reliability_bins() -> None:
+    X, y, groups = _make_synthetic_X_y(n_rows=300)
+    result = fit_one_model(X, y, groups, C_grid=(1.0,), n_splits=5, random_state=42)
+    eval_result = evaluate_model(pipeline=result.pipeline, X=X, y=y, n_bins=10)
+    assert isinstance(eval_result, EvaluationResult)
+    assert 0.0 <= eval_result.auc <= 1.0
+    # 10 reliability bins, each with (mean_predicted, mean_observed, count).
+    assert len(eval_result.reliability_bin_centers) == len(eval_result.reliability_observed)
+    assert (np.asarray(eval_result.reliability_bin_counts) >= 0).all()
+
+
+def test_evaluate_model_auc_matches_sklearn_directly() -> None:
+    from sklearn.metrics import roc_auc_score as _roc
+
+    X, y, groups = _make_synthetic_X_y(n_rows=300)
+    result = fit_one_model(X, y, groups, C_grid=(1.0,), n_splits=5, random_state=42)
+    eval_result = evaluate_model(pipeline=result.pipeline, X=X, y=y, n_bins=10)
+    direct = _roc(y, result.pipeline.predict_proba(X)[:, 1])
+    assert eval_result.auc == pytest.approx(direct, rel=1e-9)
+
+
+def test_permutation_feature_importance_returns_per_feature_mean_and_std() -> None:
+    X, y, groups = _make_synthetic_X_y(n_rows=300)
+    result = fit_one_model(X, y, groups, C_grid=(1.0,), n_splits=5, random_state=42)
+    importance = permutation_feature_importance(
+        pipeline=result.pipeline, X_val=X, y_val=y, n_repeats=5, random_state=42
+    )
+    assert set(importance.keys()) == set(X.columns)
+    for _col, (mean_drop, std_drop) in importance.items():
+        assert np.isfinite(mean_drop)
+        assert std_drop >= 0.0

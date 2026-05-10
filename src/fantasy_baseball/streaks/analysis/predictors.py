@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import duckdb
 import numpy as np
 import pandas as pd
+from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import GroupKFold
@@ -486,3 +487,89 @@ def bootstrap_coef_ci(
         else:
             out[name] = (float(np.percentile(col, 5)), float(np.percentile(col, 95)))
     return out
+
+
+@dataclass(frozen=True)
+class EvaluationResult:
+    """ROC-AUC + reliability diagram for one model on one held-out set.
+
+    Bin arrays have the same length and are aligned 1:1 — index k refers to
+    the same (non-empty) bin in all three.
+    """
+
+    auc: float
+    reliability_bin_centers: tuple[float, ...]
+    reliability_observed: tuple[float, ...]
+    reliability_bin_counts: tuple[int, ...]
+
+
+def evaluate_model(
+    *,
+    pipeline: Pipeline,
+    X: pd.DataFrame,
+    y: np.ndarray | pd.Series,
+    n_bins: int = 10,
+) -> EvaluationResult:
+    """Held-out AUC + reliability diagram (n_bins equal-width bins).
+
+    Empty bins are dropped from the returned arrays; the three reliability_*
+    tuples stay aligned. ``bin_centers`` are the bin midpoints, not the mean
+    predicted probability in the bin — simpler to interpret on a reliability
+    plot, and accurate to within bin width / 2 of the mean.
+    """
+    y_arr = np.asarray(y, dtype=int)
+    proba = pipeline.predict_proba(X)[:, 1]
+    auc = float(roc_auc_score(y_arr, proba))
+
+    bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+    bin_idx = np.clip(np.searchsorted(bin_edges, proba, side="right") - 1, 0, n_bins - 1)
+
+    bin_centers: list[float] = []
+    bin_observed: list[float] = []
+    bin_counts: list[int] = []
+    for k in range(n_bins):
+        mask = bin_idx == k
+        if not mask.any():
+            continue
+        bin_centers.append(0.5 * (bin_edges[k] + bin_edges[k + 1]))
+        bin_observed.append(float(y_arr[mask].mean()))
+        bin_counts.append(int(mask.sum()))
+
+    return EvaluationResult(
+        auc=auc,
+        reliability_bin_centers=tuple(bin_centers),
+        reliability_observed=tuple(bin_observed),
+        reliability_bin_counts=tuple(bin_counts),
+    )
+
+
+def permutation_feature_importance(
+    *,
+    pipeline: Pipeline,
+    X_val: pd.DataFrame,
+    y_val: np.ndarray | pd.Series,
+    n_repeats: int = 10,
+    random_state: int = 42,
+) -> dict[str, tuple[float, float]]:
+    """Sklearn permutation importance on the validation set.
+
+    For each feature: shuffle it, measure AUC drop, repeat ``n_repeats`` times,
+    report (mean_drop, std_drop).
+    """
+    y_arr = np.asarray(y_val, dtype=int)
+
+    def _scorer(estimator, X_, y_):
+        return roc_auc_score(y_, estimator.predict_proba(X_)[:, 1])
+
+    result = permutation_importance(
+        pipeline,
+        X_val,
+        y_arr,
+        scoring=_scorer,
+        n_repeats=n_repeats,
+        random_state=random_state,
+    )
+    return {
+        name: (float(result.importances_mean[i]), float(result.importances_std[i]))
+        for i, name in enumerate(X_val.columns)
+    }
