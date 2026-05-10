@@ -134,6 +134,24 @@ _SCHEMA_DDL = [
         PRIMARY KEY (season_set, category, window_days, pt_bucket, strength_bucket, direction, cold_method)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS model_fits (
+        model_id VARCHAR NOT NULL,
+        category VARCHAR NOT NULL,
+        direction VARCHAR NOT NULL,
+        season_set VARCHAR NOT NULL,
+        window_days INTEGER NOT NULL,
+        cold_method VARCHAR NOT NULL,
+        chosen_C DOUBLE NOT NULL,
+        cv_auc_mean DOUBLE NOT NULL,
+        cv_auc_std DOUBLE NOT NULL,
+        val_auc DOUBLE NOT NULL,
+        n_train_rows INTEGER NOT NULL,
+        n_val_rows INTEGER NOT NULL,
+        fit_timestamp TIMESTAMP NOT NULL,
+        PRIMARY KEY (model_id)
+    )
+    """,
 ]
 
 
