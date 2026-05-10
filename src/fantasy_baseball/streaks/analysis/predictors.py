@@ -327,6 +327,10 @@ def build_training_frame(
 
 DEFAULT_C_GRID: tuple[float, ...] = (0.01, 0.1, 1.0, 10.0)
 
+# Name of the LogisticRegression step inside the Pipeline. Extracted as a
+# constant so `_build_pipeline` and `bootstrap_coef_ci` agree on the key.
+_LR_STEP_NAME = "lr"
+
 
 @dataclass(frozen=True)
 class FitResult:
@@ -344,7 +348,7 @@ def _build_pipeline(C: float, random_state: int) -> Pipeline:
         steps=[
             ("scaler", StandardScaler()),
             (
-                "lr",
+                _LR_STEP_NAME,
                 LogisticRegression(
                     C=C,
                     penalty="l2",
@@ -423,7 +427,6 @@ def fit_one_model(
 
 def bootstrap_coef_ci(
     *,
-    pipeline: Pipeline,
     X: pd.DataFrame,
     y: np.ndarray | pd.Series,
     groups: np.ndarray | pd.Series,
@@ -442,11 +445,9 @@ def bootstrap_coef_ci(
     Returns ``{feature_name: (p5, p95)}`` — 5th / 95th percentiles over the
     bootstrap distribution.
 
-    Note: ``pipeline`` is passed in for ergonomics but not modified; we
-    rebuild fresh pipelines via _build_pipeline to keep the original's
-    fitted state intact.
+    Note: this function refits internally given ``chosen_C`` — it does not
+    depend on any externally fitted pipeline state.
     """
-    del pipeline  # Reserved in the signature for ergonomic call sites; not used.
     y_arr = np.asarray(y, dtype=int)
     groups_arr = np.asarray(groups, dtype=int)
     feature_names = list(X.columns)
@@ -474,7 +475,7 @@ def bootstrap_coef_ci(
             continue
         pipe = _build_pipeline(C=chosen_C, random_state=random_state)
         pipe.fit(X_boot, y_boot)
-        coef_samples[i, :] = pipe.named_steps["lr"].coef_.ravel()
+        coef_samples[i, :] = pipe.named_steps[_LR_STEP_NAME].coef_.ravel()
 
     out: dict[str, tuple[float, float]] = {}
     for j, name in enumerate(feature_names):

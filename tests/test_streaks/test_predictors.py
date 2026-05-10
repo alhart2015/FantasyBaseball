@@ -272,7 +272,6 @@ def test_bootstrap_coef_ci_returns_per_feature_intervals() -> None:
     X, y, groups = _make_synthetic_X_y(n_rows=300)
     result = fit_one_model(X, y, groups, C_grid=(1.0,), n_splits=5, random_state=42)
     cis = bootstrap_coef_ci(
-        pipeline=result.pipeline,
         X=X,
         y=y,
         groups=groups,
@@ -294,7 +293,6 @@ def test_bootstrap_coef_ci_intervals_narrow_with_more_resamples() -> None:
     X, y, groups = _make_synthetic_X_y(n_rows=300)
     result = fit_one_model(X, y, groups, C_grid=(1.0,), n_splits=5, random_state=42)
     cis = bootstrap_coef_ci(
-        pipeline=result.pipeline,
         X=X,
         y=y,
         groups=groups,
