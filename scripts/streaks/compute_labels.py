@@ -32,6 +32,12 @@ def main(argv: list[str] | None = None) -> int:
 
     conn = get_connection(args.db_path)
     try:
+        n_proj = conn.execute("SELECT COUNT(*) FROM hitter_projection_rates").fetchone()[0]
+        if n_proj == 0:
+            print(
+                "WARNING: hitter_projection_rates is empty; sparse-cat (HR/SB) labels will be skipped. "
+                "Run scripts/streaks/load_projections.py first to populate."
+            )
         n_windows = compute_windows(conn)
         n_thresholds = compute_thresholds(
             conn, season_set=args.season_set, qualifying_pa=args.qualifying_pa
@@ -42,7 +48,8 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"windows: {n_windows} rows; "
         f"thresholds: {n_thresholds} rows for season_set={args.season_set}; "
-        f"labels: {n_labels} rows."
+        f"labels: {n_labels} rows; "
+        f"projection_rates: {n_proj} rows."
     )
     return 0
 

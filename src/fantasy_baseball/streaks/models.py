@@ -15,6 +15,8 @@ from typing import Literal
 PtBucket = Literal["low", "mid", "high"]
 StreakCategory = Literal["hr", "r", "rbi", "sb", "avg"]
 StreakLabel = Literal["hot", "cold", "neutral"]
+ColdMethod = Literal["empirical", "poisson_p10", "poisson_p20"]
+StreakDirection = Literal["above", "below"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,13 +141,66 @@ class Threshold:
 
 @dataclass(frozen=True, slots=True)
 class HitterStreakLabel:
-    """One hot/cold label for a (player, window, category). Maps to `hitter_streak_labels` row.
+    """One hot/cold/neutral label for a (player, window, category, cold_method).
 
-    PK is (player_id, window_end, window_days, category). Populated in Phase 2.
+    PK is (player_id, window_end, window_days, category, cold_method).
+
+    `cold_method` distinguishes the rule that produced the cold determination:
+    - 'empirical' for dense cats (R/RBI/AVG): uses calibrated p10 from `thresholds`.
+    - 'poisson_p10' / 'poisson_p20' for sparse cats (HR/SB): uses skill-relative
+      `Poisson(proj_rate * window_PA).ppf(0.1 | 0.2)`.
+
+    For sparse cats, two rows are written per (player, window, cat) — one per
+    Poisson percentile. The hot determination (empirical p90) is identical
+    across both rows; we duplicate rather than introduce a third schema.
     """
 
     player_id: int
     window_end: date
     window_days: int
     category: StreakCategory
+    cold_method: ColdMethod
     label: StreakLabel
+
+
+@dataclass(frozen=True, slots=True)
+class HitterProjectionRate:
+    """Per-season blended projection rate for a single hitter.
+
+    PK is (player_id, season). Rates are season-prior blended means
+    (HR/projected_PA, SB/projected_PA) across all available systems.
+    `n_systems` records the count of systems that contributed; rows with
+    n_systems < 2 are still kept (caller decides whether to use them).
+    """
+
+    player_id: int
+    season: int
+    hr_per_pa: float
+    sb_per_pa: float
+    n_systems: int
+
+
+@dataclass(frozen=True, slots=True)
+class ContinuationRate:
+    """One stratum of the Phase 3 continuation analysis output.
+
+    PK is (season_set, category, window_days, pt_bucket, strength_bucket,
+    direction, cold_method).
+
+    Each row answers: "of windows labeled <direction> in this stratum, what
+    fraction had next-window outcome on the same side of expectation, vs the
+    base rate computed over all windows in that stratum?"
+    """
+
+    season_set: str
+    category: StreakCategory
+    window_days: int
+    pt_bucket: PtBucket
+    strength_bucket: str
+    direction: StreakDirection
+    cold_method: ColdMethod
+    n_labeled: int
+    n_continued: int
+    p_continued: float
+    p_baserate: float
+    lift: float

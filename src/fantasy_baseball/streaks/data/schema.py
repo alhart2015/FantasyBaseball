@@ -99,8 +99,36 @@ _SCHEMA_DDL = [
         window_end DATE NOT NULL,
         window_days INTEGER NOT NULL,
         category VARCHAR NOT NULL,
+        cold_method VARCHAR NOT NULL,
         label VARCHAR NOT NULL,
-        PRIMARY KEY (player_id, window_end, window_days, category)
+        PRIMARY KEY (player_id, window_end, window_days, category, cold_method)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS hitter_projection_rates (
+        player_id INTEGER NOT NULL,
+        season INTEGER NOT NULL,
+        hr_per_pa DOUBLE NOT NULL,
+        sb_per_pa DOUBLE NOT NULL,
+        n_systems INTEGER NOT NULL,
+        PRIMARY KEY (player_id, season)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS continuation_rates (
+        season_set VARCHAR NOT NULL,
+        category VARCHAR NOT NULL,
+        window_days INTEGER NOT NULL,
+        pt_bucket VARCHAR NOT NULL,
+        strength_bucket VARCHAR NOT NULL,
+        direction VARCHAR NOT NULL,
+        cold_method VARCHAR NOT NULL,
+        n_labeled INTEGER NOT NULL,
+        n_continued INTEGER NOT NULL,
+        p_continued DOUBLE NOT NULL,
+        p_baserate DOUBLE NOT NULL,
+        lift DOUBLE NOT NULL,
+        PRIMARY KEY (season_set, category, window_days, pt_bucket, strength_bucket, direction, cold_method)
     )
     """,
 ]

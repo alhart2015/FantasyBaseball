@@ -1,13 +1,11 @@
-"""CLI: run the Phase 2 schema migration against the local streaks DuckDB.
+"""CLI: run the streaks DuckDB schema migration.
 
 Usage:
-    python -m scripts.streaks.migrate [--db-path PATH]
+    python -m scripts.streaks.migrate [--db-path PATH] [--phase {2,3}]
 
-After this, re-run::
-
-    python -m scripts.streaks.fetch_history --season 2023
-    python -m scripts.streaks.fetch_history --season 2024
-    python -m scripts.streaks.fetch_history --season 2025
+Default is ``--phase 3`` (latest). After Phase 2 migration, re-run history
+fetch (``python -m scripts.streaks.fetch_history --season ...``). After
+Phase 3 migration, re-run ``apply_labels`` to repopulate labels.
 """
 
 from __future__ import annotations
@@ -21,20 +19,24 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from fantasy_baseball.streaks.data.migrate import migrate_to_phase_2
+from fantasy_baseball.streaks.data.migrate import migrate_to_phase_2, migrate_to_phase_3
 from fantasy_baseball.streaks.data.schema import DEFAULT_DB_PATH, get_connection
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Migrate streaks DB to Phase 2 schema.")
+    parser = argparse.ArgumentParser(description="Migrate the streaks DuckDB schema.")
     parser.add_argument("--db-path", type=Path, default=DEFAULT_DB_PATH)
+    parser.add_argument("--phase", type=int, choices=[2, 3], default=3)
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     conn = get_connection(args.db_path)
     try:
-        migrate_to_phase_2(conn)
+        if args.phase == 2:
+            migrate_to_phase_2(conn)
+        else:
+            migrate_to_phase_3(conn)
     finally:
         conn.close()
     return 0

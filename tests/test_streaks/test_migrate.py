@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import duckdb
 
-from fantasy_baseball.streaks.data.migrate import migrate_to_phase_2
+from fantasy_baseball.streaks.data.migrate import migrate_to_phase_2, migrate_to_phase_3
+from fantasy_baseball.streaks.data.schema import get_connection
 
 
 def _phase_1_schema(conn: duckdb.DuckDBPyConnection) -> None:
@@ -114,3 +115,38 @@ def test_migrate_creates_downstream_tables() -> None:
     for table in ("hitter_windows", "thresholds", "hitter_streak_labels"):
         # Should not raise CatalogException.
         conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+
+
+def test_migrate_to_phase_3_resets_labels_and_keeps_other_tables() -> None:
+    """`migrate_to_phase_3` drops hitter_streak_labels and recreates it with
+    the new PK, but does NOT touch hitter_games / hitter_windows / thresholds.
+    """
+    conn = get_connection(":memory:")
+    # Seed something in hitter_games so we can assert it survives.
+    conn.execute(
+        "INSERT INTO hitter_games VALUES (1, 100, 'X', 'TEAM', 2025, '2025-04-01', "
+        "4, 4, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, true)"
+    )
+    # Seed an old-shape label row to confirm it gets cleared.
+    conn.execute(
+        "INSERT INTO hitter_streak_labels (player_id, window_end, window_days, category, "
+        "cold_method, label) VALUES (1, '2025-04-08', 7, 'hr', 'empirical', 'cold')"
+    )
+
+    migrate_to_phase_3(conn)
+
+    # Labels are wiped...
+    n_labels = conn.execute("SELECT COUNT(*) FROM hitter_streak_labels").fetchone()[0]
+    assert n_labels == 0
+    # ...but games are not.
+    n_games = conn.execute("SELECT COUNT(*) FROM hitter_games").fetchone()[0]
+    assert n_games == 1
+
+
+def test_migrate_to_phase_3_is_idempotent() -> None:
+    conn = get_connection(":memory:")
+    migrate_to_phase_3(conn)
+    migrate_to_phase_3(conn)  # second call must not raise
+    info = conn.execute("PRAGMA table_info('hitter_streak_labels')").fetchall()
+    pk_cols = [r[1] for r in info if r[5]]
+    assert "cold_method" in pk_cols

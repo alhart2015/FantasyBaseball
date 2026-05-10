@@ -19,6 +19,7 @@ Idempotent: the upsert uses ``INSERT OR REPLACE`` keyed by
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import fields
 
 import duckdb
@@ -128,25 +129,27 @@ def _add_rate_stats(sums: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _add_statcast_peripherals(conn: duckdb.DuckDBPyConnection, sums: pd.DataFrame) -> pd.DataFrame:
-    """Left-join per-window EV/barrel%/xwOBA averages from hitter_statcast_pa.
+_STATCAST_SUM_COLS: tuple[str, ...] = (
+    "ls_sum",
+    "ls_n",
+    "barrel_sum",
+    "barrel_n",
+    "xwoba_sum",
+    "xwoba_n",
+)
 
-    Computed in DuckDB SQL keyed on (player_id, date) so the aggregation
-    runs in the database; the result is a small per-(player, day) frame
-    that we then sum-then-divide across the window in pandas.
 
-    Perf note: the inner per-window mask loop is O(windows x daily_rows).
-    On a 3-season corpus that's ~250K windows x ~120K daily rows. If this
-    becomes the dominant cost in compute_windows, replace with cumulative
-    sums on the dense calendar (mirroring _compute_rolling_sums) so each
-    window is a vectorized cumulative[end] - cumulative[start - 1] subtract.
+def _build_daily_statcast(conn: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+    """Run the (player_id, date) statcast GROUP BY once and return a flat frame.
+
+    Returned columns: player_id (int), date (Timestamp), ls_sum, ls_n,
+    barrel_sum, barrel_n, xwoba_sum, xwoba_n. Empty frame if the source
+    table has no rows.
+
+    Hoisted out of :func:`_add_statcast_peripherals` so :func:`compute_windows`
+    can run the SQL aggregate once and reuse the result across the 3
+    window sizes.
     """
-    if sums.empty:
-        out = sums.copy()
-        for col in ("ev_avg", "barrel_pct", "xwoba_avg"):
-            out[col] = pd.NA
-        return out
-
     daily = conn.execute(
         """
         SELECT
@@ -162,36 +165,113 @@ def _add_statcast_peripherals(conn: duckdb.DuckDBPyConnection, sums: pd.DataFram
         GROUP BY player_id, date
         """
     ).df()
+    if daily.empty:
+        return daily
     daily["date"] = pd.to_datetime(daily["date"])
+    daily["player_id"] = daily["player_id"].astype(int)
+    return daily
 
-    out_rows: list[dict[str, float | int | pd.Timestamp]] = []
-    for window_days, window_group in sums.groupby("window_days", sort=False):
-        end_dates = window_group[["player_id", "window_end"]].drop_duplicates()
-        for _, row in end_dates.iterrows():
-            pid = int(row["player_id"])
-            end = row["window_end"]
-            start = end - pd.Timedelta(days=int(window_days) - 1)
-            mask = (daily["player_id"] == pid) & (daily["date"] >= start) & (daily["date"] <= end)
-            sub = daily.loc[mask]
-            ls_n = int(sub["ls_n"].sum())
-            barrel_n = int(sub["barrel_n"].sum())
-            xwoba_n = int(sub["xwoba_n"].sum())
-            out_rows.append(
-                {
-                    "player_id": pid,
-                    "window_end": end,
-                    "window_days": int(window_days),
-                    "ev_avg": float(sub["ls_sum"].sum()) / ls_n if ls_n else float("nan"),
-                    "barrel_pct": float(sub["barrel_sum"].sum()) / barrel_n
-                    if barrel_n
-                    else float("nan"),
-                    "xwoba_avg": float(sub["xwoba_sum"].sum()) / xwoba_n
-                    if xwoba_n
-                    else float("nan"),
-                }
+
+def _add_statcast_peripherals_from_daily(
+    daily: pd.DataFrame, sums: pd.DataFrame, window_days: int
+) -> pd.DataFrame:
+    """Left-join per-window EV/barrel%/xwOBA averages onto ``sums``.
+
+    ``sums`` must contain a single ``window_days`` value. ``daily`` is
+    the pre-aggregated per-player statcast frame produced by
+    :func:`_build_daily_statcast`. Players in ``sums`` with no rows in
+    ``daily`` get NaN peripherals via the final left-merge.
+
+    Implementation: per-player dense calendar + pandas rolling sum, same
+    pattern :func:`_build_per_day_frames` uses for box-score rolls. The
+    calendar spans both the player's statcast date range and the window
+    of (player_id, window_end) keys we need so every requested window
+    has a row.
+    """
+    if sums.empty:
+        out = sums.copy()
+        for col in ("ev_avg", "barrel_pct", "xwoba_avg"):
+            out[col] = pd.NA
+        return out
+
+    wd = int(window_days)
+
+    # Targets we need a peripheral row for: every (player_id, window_end)
+    # in ``sums``. Used to bound the per-player calendar so the rolling
+    # output always contains the window_end key for the merge.
+    sums_end_by_pid = sums.groupby("player_id", sort=False)["window_end"].agg(["min", "max"])
+
+    peripheral_blocks: list[pd.DataFrame] = []
+    if not daily.empty:
+        # Pre-build a {player_id: per-player daily frame} mapping.
+        # Tight loop below indexes into this rather than re-grouping.
+        daily_grouped = {int(pid): df for pid, df in daily.groupby("player_id", sort=False)}
+        for pid_int, (end_min, end_max) in sums_end_by_pid.iterrows():
+            pid_int = int(pid_int)
+            daily_player = daily_grouped.get(pid_int)
+            if daily_player is None:
+                continue  # no statcast PAs for this player; left-merge -> NaN
+            first_d = daily_player["date"].min()
+            last_d = daily_player["date"].max()
+            calendar_start = min(first_d, end_min - pd.Timedelta(days=wd - 1))
+            calendar_end = max(last_d, end_max)
+            idx = pd.date_range(calendar_start, calendar_end, freq="D")
+            per_day = (
+                daily_player.set_index("date")[list(_STATCAST_SUM_COLS)]
+                .groupby(level=0)
+                .sum()
+                .reindex(idx, fill_value=0)
             )
-    peripherals = pd.DataFrame(out_rows)
+            rolling = per_day.rolling(window=wd, min_periods=1).sum()
+            rolling = rolling.reset_index().rename(columns={"index": "window_end"})
+            rolling.insert(0, "player_id", pid_int)
+            peripheral_blocks.append(rolling)
+
+    if peripheral_blocks:
+        roll_df = pd.concat(peripheral_blocks, ignore_index=True)
+        ls_n = roll_df["ls_n"].astype("float64")
+        barrel_n = roll_df["barrel_n"].astype("float64")
+        xwoba_n = roll_df["xwoba_n"].astype("float64")
+        peripherals = pd.DataFrame(
+            {
+                "player_id": roll_df["player_id"].astype(int),
+                "window_end": roll_df["window_end"],
+                "ev_avg": (roll_df["ls_sum"] / ls_n).where(ls_n > 0),
+                "barrel_pct": (roll_df["barrel_sum"] / barrel_n).where(barrel_n > 0),
+                "xwoba_avg": (roll_df["xwoba_sum"] / xwoba_n).where(xwoba_n > 0),
+            }
+        )
+    else:
+        peripherals = pd.DataFrame(
+            columns=["player_id", "window_end", "ev_avg", "barrel_pct", "xwoba_avg"]
+        )
+
+    # Add window_days back so the merge key matches sums.
+    peripherals["window_days"] = wd
     return sums.merge(peripherals, on=["player_id", "window_end", "window_days"], how="left")
+
+
+def _add_statcast_peripherals(conn: duckdb.DuckDBPyConnection, sums: pd.DataFrame) -> pd.DataFrame:
+    """Backwards-compatible wrapper: build daily statcast then join.
+
+    The optimized :func:`compute_windows` builds the daily aggregate once
+    via :func:`_build_daily_statcast` and reuses across window sizes;
+    direct callers (tests, ad-hoc tooling) can still use this single-call
+    form. ``sums`` must contain a single ``window_days`` value.
+    """
+    if sums.empty:
+        out = sums.copy()
+        for col in ("ev_avg", "barrel_pct", "xwoba_avg"):
+            out[col] = pd.NA
+        return out
+    unique_wd = sums["window_days"].astype(int).unique()
+    if len(unique_wd) != 1:
+        raise ValueError(
+            "_add_statcast_peripherals expects sums to contain a single window_days "
+            f"value; got {sorted(unique_wd.tolist())}"
+        )
+    daily = _build_daily_statcast(conn)
+    return _add_statcast_peripherals_from_daily(daily, sums, int(unique_wd[0]))
 
 
 def _assign_pt_bucket(df: pd.DataFrame) -> pd.DataFrame:
@@ -221,33 +301,123 @@ def compute_windows(conn: duckdb.DuckDBPyConnection) -> int:
 
     Idempotent: ``INSERT OR REPLACE`` keyed by (player_id, window_end, window_days).
     """
+    overall_t0 = time.perf_counter()
+    n_games_row = conn.execute("SELECT COUNT(*) FROM hitter_games").fetchone()
+    n_games = int(n_games_row[0]) if n_games_row is not None else 0
+    logger.info("compute_windows: starting; %d rows in hitter_games", n_games)
+
     # Build the per-player dense calendar once and reuse across window sizes —
     # the SQL read + groupby + reindex is the dominant cost in this function.
+    t0 = time.perf_counter()
     per_day_frames = _build_per_day_frames(conn)
+    total_per_day_rows = sum(len(f) for f in per_day_frames.values())
+    logger.info(
+        "compute_windows: built %d per-day frames (%d total rows) in %.2fs",
+        len(per_day_frames),
+        total_per_day_rows,
+        time.perf_counter() - t0,
+    )
+
+    # Pre-compute the per-(player_id, date) statcast aggregate once and reuse
+    # across window sizes — same idea as per_day_frames. Returned as a dict of
+    # per-player dense-calendar frames so each window-size pass can roll over
+    # them without re-running the GROUP BY.
+    t0 = time.perf_counter()
+    daily_statcast = _build_daily_statcast(conn)
+    logger.info(
+        "compute_windows: built daily statcast aggregate (%d rows) in %.2fs",
+        len(daily_statcast),
+        time.perf_counter() - t0,
+    )
+
     all_rows: list[pd.DataFrame] = []
     for window_days in WINDOW_DAYS:
+        t0 = time.perf_counter()
         sums = _rolling_sums_from_per_day(per_day_frames, window_days)
+        n_pre = len(sums)
         sums = sums[sums["pa"] >= 5].copy()
+        logger.info(
+            "compute_windows: rolling sums for %dd done in %.2fs (%d -> %d rows after PA>=5)",
+            window_days,
+            time.perf_counter() - t0,
+            n_pre,
+            len(sums),
+        )
         if sums.empty:
             continue
+
+        t0 = time.perf_counter()
         sums = _add_rate_stats(sums)
-        sums = _add_statcast_peripherals(conn, sums)
+        logger.info(
+            "compute_windows: rate stats applied for %dd in %.2fs",
+            window_days,
+            time.perf_counter() - t0,
+        )
+
+        t0 = time.perf_counter()
+        sums = _add_statcast_peripherals_from_daily(daily_statcast, sums, window_days)
+        logger.info(
+            "compute_windows: peripherals applied for %dd in %.2fs (%d rows)",
+            window_days,
+            time.perf_counter() - t0,
+            len(sums),
+        )
+
+        t0 = time.perf_counter()
         sums = _assign_pt_bucket(sums)
+        logger.info(
+            "compute_windows: pt_bucket assigned for %dd in %.2fs",
+            window_days,
+            time.perf_counter() - t0,
+        )
         all_rows.append(sums)
 
     if not all_rows:
+        logger.info("compute_windows: no rows produced; returning 0")
         return 0
 
+    t0 = time.perf_counter()
     out = pd.concat(all_rows, ignore_index=True)[list(_HITTER_WINDOWS_COLS)]
-    placeholders = ", ".join(["?"] * len(_HITTER_WINDOWS_COLS))
-    sql = (
-        f"INSERT OR REPLACE INTO hitter_windows ({', '.join(_HITTER_WINDOWS_COLS)}) "
-        f"VALUES ({placeholders})"
+    logger.info(
+        "compute_windows: concatenated %d frames -> %d rows in %.2fs",
+        len(all_rows),
+        len(out),
+        time.perf_counter() - t0,
     )
-    # Vectorized NaN-to-None for DuckDB binding (faster than per-row pd.isna scan
-    # at ~500K rows x 17 cols).
-    out_obj = out.astype(object).where(out.notna(), None)
-    rows = list(out_obj.itertuples(index=False, name=None))
-    conn.executemany(sql, rows)
-    logger.info("Wrote %d rows to hitter_windows", len(rows))
-    return len(rows)
+
+    t0 = time.perf_counter()
+    n_written = _bulk_replace_hitter_windows(conn, out)
+    logger.info(
+        "compute_windows: wrote %d rows to hitter_windows in %.2fs",
+        n_written,
+        time.perf_counter() - t0,
+    )
+    logger.info("compute_windows: total elapsed %.2fs", time.perf_counter() - overall_t0)
+    return n_written
+
+
+def _bulk_replace_hitter_windows(conn: duckdb.DuckDBPyConnection, out: pd.DataFrame) -> int:
+    """Replace contents of ``hitter_windows`` with rows in ``out``.
+
+    Uses DuckDB's pandas registration to bulk-INSERT in C rather than
+    row-by-row ``executemany`` (which is O(N) Python-level binding and
+    runs into the minutes range for ~1M rows). Functionally equivalent
+    to ``INSERT OR REPLACE`` keyed by the PK because we DELETE the table
+    contents first inside the same transaction.
+    """
+    # Coerce window_end to date (DuckDB DATE column) — pandas may have it
+    # as a Timestamp; the DuckDB pandas-register path handles datetime64
+    # correctly so we don't need to convert per-row.
+    df = out  # noqa: F841 — referenced via DuckDB's pandas scan below
+    conn.execute("BEGIN TRANSACTION")
+    try:
+        conn.execute("DELETE FROM hitter_windows")
+        conn.execute(
+            f"INSERT INTO hitter_windows ({', '.join(_HITTER_WINDOWS_COLS)}) "
+            f"SELECT {', '.join(_HITTER_WINDOWS_COLS)} FROM df"
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return len(out)
