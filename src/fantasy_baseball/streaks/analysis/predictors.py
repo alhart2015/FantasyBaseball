@@ -419,3 +419,69 @@ def fit_one_model(
         cv_auc_std=best_std,
         cv_auc_per_fold=best_per_fold,
     )
+
+
+def bootstrap_coef_ci(
+    *,
+    pipeline: Pipeline,
+    X: pd.DataFrame,
+    y: np.ndarray | pd.Series,
+    groups: np.ndarray | pd.Series,
+    chosen_C: float,
+    n_resamples: int = 200,
+    random_state: int = 42,
+) -> dict[str, tuple[float, float]]:
+    """Player-grouped bootstrap CIs on L2-regularized coefficients.
+
+    For each of ``n_resamples`` iterations:
+      1. Sample N players with replacement from the unique groups.
+      2. Assemble the bootstrap training set from all rows of those players.
+      3. Refit a fresh pipeline with the same chosen_C on that resample.
+      4. Append the coefficient vector to the running list.
+
+    Returns ``{feature_name: (p5, p95)}`` — 5th / 95th percentiles over the
+    bootstrap distribution.
+
+    Note: ``pipeline`` is passed in for ergonomics but not modified; we
+    rebuild fresh pipelines via _build_pipeline to keep the original's
+    fitted state intact.
+    """
+    del pipeline  # Reserved in the signature for ergonomic call sites; not used.
+    y_arr = np.asarray(y, dtype=int)
+    groups_arr = np.asarray(groups, dtype=int)
+    feature_names = list(X.columns)
+    n_features = len(feature_names)
+    rng = np.random.default_rng(random_state)
+
+    unique_players = np.unique(groups_arr)
+    coef_samples = np.empty((n_resamples, n_features), dtype=float)
+
+    for i in range(n_resamples):
+        sampled_players = rng.choice(unique_players, size=len(unique_players), replace=True)
+        # Assemble rows belonging to any sampled player. A player sampled twice
+        # contributes their rows twice (the correct bootstrap behavior — it's
+        # the players, not the rows, we resample).
+        row_chunks: list[np.ndarray] = []
+        for p in sampled_players:
+            row_chunks.append(np.where(groups_arr == p)[0])
+        rows = np.concatenate(row_chunks)
+        X_boot = X.iloc[rows]
+        y_boot = y_arr[rows]
+        if len(np.unique(y_boot)) < 2:
+            # Degenerate resample — single class. Skip; fill with NaN
+            # placeholder so np.percentile later ignores it.
+            coef_samples[i, :] = np.nan
+            continue
+        pipe = _build_pipeline(C=chosen_C, random_state=random_state)
+        pipe.fit(X_boot, y_boot)
+        coef_samples[i, :] = pipe.named_steps["lr"].coef_.ravel()
+
+    out: dict[str, tuple[float, float]] = {}
+    for j, name in enumerate(feature_names):
+        col = coef_samples[:, j]
+        col = col[np.isfinite(col)]
+        if len(col) == 0:
+            out[name] = (float("nan"), float("nan"))
+        else:
+            out[name] = (float(np.percentile(col, 5)), float(np.percentile(col, 95)))
+    return out

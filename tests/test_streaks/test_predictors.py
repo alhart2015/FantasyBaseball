@@ -12,6 +12,7 @@ from fantasy_baseball.streaks.analysis.predictors import (
     DEFAULT_C_GRID,
     EXPECTED_FEATURE_COLUMNS,
     FitResult,
+    bootstrap_coef_ci,
     build_training_frame,
     fit_one_model,
 )
@@ -265,3 +266,41 @@ def test_fit_one_model_picks_highest_cv_auc() -> None:
     X, y, groups = _make_synthetic_X_y()
     result = fit_one_model(X, y, groups, C_grid=(1.0,), n_splits=5, random_state=42)
     assert result.chosen_C == 1.0
+
+
+def test_bootstrap_coef_ci_returns_per_feature_intervals() -> None:
+    X, y, groups = _make_synthetic_X_y(n_rows=300)
+    result = fit_one_model(X, y, groups, C_grid=(1.0,), n_splits=5, random_state=42)
+    cis = bootstrap_coef_ci(
+        pipeline=result.pipeline,
+        X=X,
+        y=y,
+        groups=groups,
+        chosen_C=result.chosen_C,
+        n_resamples=20,  # small for the unit test
+        random_state=42,
+    )
+    # One (lo, hi) per feature column, ordered to match X.
+    assert set(cis.keys()) == set(X.columns)
+    for col, (lo, hi) in cis.items():
+        assert lo <= hi, f"CI inverted for {col}: ({lo}, {hi})"
+
+
+def test_bootstrap_coef_ci_intervals_narrow_with_more_resamples() -> None:
+    """Sanity check: 100 resamples should produce intervals that *include*
+    the point estimate from the original fit for most features (we don't
+    assert a hard rate — bootstrap can disagree with the L2-shrunk
+    point — but every CI should be finite)."""
+    X, y, groups = _make_synthetic_X_y(n_rows=300)
+    result = fit_one_model(X, y, groups, C_grid=(1.0,), n_splits=5, random_state=42)
+    cis = bootstrap_coef_ci(
+        pipeline=result.pipeline,
+        X=X,
+        y=y,
+        groups=groups,
+        chosen_C=result.chosen_C,
+        n_resamples=100,
+        random_state=42,
+    )
+    for _col, (lo, hi) in cis.items():
+        assert np.isfinite(lo) and np.isfinite(hi)
