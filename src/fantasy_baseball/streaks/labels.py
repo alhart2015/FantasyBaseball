@@ -25,6 +25,7 @@ import logging
 
 import duckdb
 import numpy as np
+import pandas as pd
 from scipy.stats import poisson
 
 from fantasy_baseball.streaks.models import StreakCategory
@@ -133,14 +134,21 @@ def _apply_sparse_labels(conn: duckdb.DuckDBPyConnection, *, season_set: str) ->
         [season_set],
     ).df()
 
-    # Per-row identity columns are the same across all categories and
-    # cold_methods; build the Python lists once and reuse.
-    pid_arr = df["player_id"].astype(int).to_numpy().tolist()
-    end_arr = df["window_end"].to_numpy().tolist()
-    wd_arr = df["window_days"].astype(int).to_numpy().tolist()
+    # Per-row identity arrays — same across all (category, cold_method)
+    # blocks. NumPy arrays so we can stack them with concatenate without
+    # round-tripping through Python lists.
+    pid_arr = df["player_id"].astype(int).to_numpy()
+    end_arr = df["window_end"].to_numpy()
+    wd_arr = df["window_days"].astype(int).to_numpy()
     n = len(df)
 
-    rows: list[tuple[int, object, int, str, str, str]] = []
+    pid_blocks: list[np.ndarray] = []
+    end_blocks: list[np.ndarray] = []
+    wd_blocks: list[np.ndarray] = []
+    cat_blocks: list[np.ndarray] = []
+    cm_blocks: list[np.ndarray] = []
+    label_blocks: list[np.ndarray] = []
+
     for category in SPARSE_CATEGORIES:
         rate_col = f"{category}_per_pa"
         count_col = category
@@ -165,23 +173,29 @@ def _apply_sparse_labels(conn: duckdb.DuckDBPyConnection, *, season_set: str) ->
             is_cold = counts < k
             # Build label: hot wins ties (a window in both buckets is hot).
             labels = np.where(is_hot, "hot", np.where(is_cold, "cold", "neutral"))
-            label_list = labels.tolist()
-            rows.extend(
-                zip(
-                    pid_arr,
-                    end_arr,
-                    wd_arr,
-                    [category] * n,
-                    [cold_method] * n,
-                    label_list,
-                    strict=True,
-                )
-            )
+            pid_blocks.append(pid_arr)
+            end_blocks.append(end_arr)
+            wd_blocks.append(wd_arr)
+            cat_blocks.append(np.full(n, category, dtype=object))
+            cm_blocks.append(np.full(n, cold_method, dtype=object))
+            label_blocks.append(labels)
 
-    conn.executemany(
+    rows_df = pd.DataFrame(  # referenced by name in the DuckDB SQL below
+        {
+            "player_id": np.concatenate(pid_blocks),
+            "window_end": np.concatenate(end_blocks),
+            "window_days": np.concatenate(wd_blocks),
+            "category": np.concatenate(cat_blocks),
+            "cold_method": np.concatenate(cm_blocks),
+            "label": np.concatenate(label_blocks),
+        }
+    )
+    n_rows = len(rows_df)
+    # Bulk INSERT via DuckDB's pandas scan — orders of magnitude faster
+    # than Python-level executemany at multi-million-row sizes.
+    conn.execute(
         "INSERT INTO hitter_streak_labels "
         "(player_id, window_end, window_days, category, cold_method, label) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        rows,
+        "SELECT player_id, window_end, window_days, category, cold_method, label FROM rows_df"
     )
-    return len(rows)
+    return n_rows

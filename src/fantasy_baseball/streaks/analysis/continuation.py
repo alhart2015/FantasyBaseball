@@ -139,19 +139,35 @@ def _continuation_rows_dense(
     df = df.merge(labels, on=["player_id", "window_end", "window_days"], how="inner")
 
     # Strength bucket: "p10_q1".."p10_q5" for cold; "p90_q1".."p90_q5" for hot;
-    # "neutral" otherwise. Quintile within the labeled population.
-    df["strength_bucket"] = df.apply(lambda r: _dense_strength_bucket(r, df), axis=1)
+    # "neutral" otherwise. Quintile within each label's population.
+    df["strength_bucket"] = _dense_strength_buckets(df)
     return _aggregate_rows(df, season_set=season_set, category=category, cold_method="empirical")
 
 
-def _dense_strength_bucket(row: pd.Series, df: pd.DataFrame) -> str:
-    if row["label"] == "neutral":
-        return "neutral"
-    same_label = df[df["label"] == row["label"]]
-    quintiles = same_label["value"].quantile([0.2, 0.4, 0.6, 0.8])
-    val = row["value"]
-    qbin = sum(val > q for q in quintiles)  # 0..4 -> q1..q5
-    return f"{row['label']}_q{qbin + 1}"
+def _dense_strength_buckets(df: pd.DataFrame) -> pd.Series:
+    """Vectorized strength-bucket assignment for the dense-cat path.
+
+    Replaces a per-row ``df.apply`` that recomputed the same-label quantiles
+    inside every call (O(N x N_label) at hundreds-of-thousands of rows).
+    Computes quintiles once per label and uses ``np.searchsorted`` for the
+    bucket bin lookup.
+    """
+    out = pd.Series(np.full(len(df), "neutral", dtype=object), index=df.index)
+    for label in ("hot", "cold"):
+        mask = df["label"].to_numpy() == label
+        if not mask.any():
+            continue
+        values = df.loc[mask, "value"].to_numpy()
+        quintiles = np.quantile(values, [0.2, 0.4, 0.6, 0.8])
+        # ``np.searchsorted(quintiles, val, side='left')`` returns the
+        # number of quintiles strictly less than val — equivalent to the
+        # prior ``sum(val > q for q in quintiles)`` row-by-row logic.
+        # Ties on a quintile boundary land in the lower bucket.
+        qbins = np.searchsorted(quintiles, values, side="left")
+        # Cap at 4 in case of floating-point edge cases.
+        qbins = np.clip(qbins, 0, 4)
+        out.loc[mask] = [f"{label}_q{int(b) + 1}" for b in qbins]
+    return out
 
 
 def _continuation_rows_sparse(
@@ -189,22 +205,50 @@ def _continuation_rows_sparse(
         df["expected_current"] = df[rate_col] * df["current_pa"]
         denom = df["expected_current"].pow(0.5).replace(0, np.nan)
         df["z"] = (df["value"] - df["expected_current"]) / denom
-        df["strength_bucket"] = df.apply(lambda r: _sparse_strength_bucket(r), axis=1)
+        df["strength_bucket"] = _sparse_strength_buckets(df)
         rows.extend(
             _aggregate_rows(df, season_set=season_set, category=category, cold_method=cold_method)
         )
     return rows
 
 
-def _sparse_strength_bucket(row: pd.Series) -> str:
-    if row["label"] == "neutral":
-        return "neutral"
-    z = row.get("z")
-    if z is None or pd.isna(z):
-        return f"{row['label']}_zna"
-    # Round to nearest half-integer sigma; clamp to [-3, +3].
-    half = max(-3.0, min(3.0, round(z * 2) / 2.0))
-    return f"{row['label']}_{half:+.1f}sigma"
+def _sparse_strength_buckets(df: pd.DataFrame) -> pd.Series:
+    """Vectorized strength-bucket assignment for the sparse-cat path.
+
+    Replaces a per-row ``df.apply`` that ran the same arithmetic on each
+    of ~1M rows. Bucket is ``{label}_{half:+.1f}sigma`` where ``half`` is
+    the z-score rounded to the nearest half-integer and clamped to
+    ``[-3, +3]``; rows with NaN z fall into ``{label}_zna``; neutral rows
+    stay neutral.
+
+    Implementation: ``half`` ranges over only 13 distinct values
+    (-3.0, -2.5, ..., +3.0). We pre-format those 13 suffixes and look
+    them up by integer index instead of formatting each row.
+    """
+    label = df["label"].to_numpy()
+    z = df["z"].to_numpy(dtype=float)
+    is_labeled = label != "neutral"
+    is_zna = is_labeled & np.isnan(z)
+    is_z = is_labeled & ~np.isnan(z)
+
+    # 13 fixed-width suffixes indexed by ``half_idx`` (= 0..12 for
+    # half = -3.0..+3.0 in 0.5 steps).
+    half_step_table = np.array([f"_{(-3.0 + 0.5 * i):+.1f}sigma" for i in range(13)], dtype=object)
+
+    out = np.full(len(df), "neutral", dtype=object)
+    if is_z.any():
+        # half = round(z*2)/2 clamped to [-3, +3]. half_idx = (half + 3) * 2.
+        # Compute half_idx only over non-NaN labeled rows to avoid
+        # ``invalid value encountered in cast`` from NaN -> int64.
+        z_subset = z[is_z]
+        half_idx_subset = np.clip(np.rint(z_subset * 2).astype(np.int64) + 6, 0, 12)
+        out[is_z] = np.char.add(
+            label[is_z].astype(str),
+            half_step_table[half_idx_subset].astype(str),
+        )
+    if is_zna.any():
+        out[is_zna] = np.char.add(label[is_zna].astype(str), "_zna")
+    return pd.Series(out, index=df.index)
 
 
 def _aggregate_rows(
