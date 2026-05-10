@@ -337,3 +337,113 @@ Also flagged but deferred: `_add_statcast_peripherals` per-window mask loop is O
 #### Next milestone
 
 - **Phase 3 — continuation analysis (the go/no-go gate).** For each labeled (player, window_end, category) row in 2023-2024, compute the next-window outcome and tabulate persistence rates. Stratify by streak strength, PT bucket, and player-season skill quartile. Compare to base rates. Hold 2025 out as the test set; 2026 is out-of-sample for production inference. The Phase 2 methodology surprise (p10=0 for sparse counts) is a Phase 3 design input — decide whether to redefine "cold" for sparse cats before fitting continuation models.
+
+### 2026-05-09 — Phase 3 (continuation analysis) accepted
+
+All 13 plan tasks landed. New schema: `hitter_projection_rates` (PK
+`player_id, season`), `continuation_rates` (PK `season_set, category,
+window_days, pt_bucket, strength_bucket, direction, cold_method`), and an
+extended `hitter_streak_labels` PK that includes `cold_method`. Sparse-cat
+(HR, SB) cold labels migrated from empirical p10 (which collapsed to
+"0 = cold" for ~80% of windows) to skill-relative Poisson lower-tail rules
+anchored on preseason projection rates. Skill baseline: mean blend of all
+available preseason projection systems per season (Steamer + ZiPS for
+2023-2025 → 5,101 projection-rate rows total). Two parallel rules —
+`cold_method='poisson_p10'` and `cold_method='poisson_p20'` — are labeled
+in the same pass; Phase 4 reads from whichever shows better lift.
+
+Pipeline runtime on the real 2023-2025 corpus, after the perf-todo work in
+Tasks 6+9 was vectorized (commit `7b8bb98`):
+
+- `compute_windows`: ~22 sec (down from ~21 min before vectorization)
+- `compute_labels` end-to-end: ~85 sec
+- `run_continuation`: ~10 sec
+- Total: ~95 sec wall time
+
+Real-data row counts:
+
+| Stage | Rows | Notes |
+|-------|-----:|-------|
+| `hitter_projection_rates` | 5,101 | Steamer + ZiPS, 2023-2025 |
+| `hitter_windows` | 521,127 | 3d=143,988, 7d=181,427, 14d=195,712 |
+| `thresholds` | 45 | 5 cats × 3 windows × 3 buckets |
+| `hitter_streak_labels` | 3,642,065 | dense (R/RBI/AVG empirical): 521,127 each. Sparse (HR/SB) × 2 methods: 519,671 rows each |
+| `continuation_rates` | 409 | per-stratum lift outputs after dropping neutral rows |
+
+Sparse cold-label rates (the methodology surprise we predicted: Poisson
+p10 makes cold labels very rare for sparse cats):
+
+- HR poisson_p10: 1,025 cold / 119,079 hot / 399,567 neutral (0.2% cold rate)
+- HR poisson_p20: 7,105 cold (1.4% cold rate)
+- SB poisson_p10: 573 cold (0.1% cold rate)
+- SB poisson_p20: 2,621 cold (0.5% cold rate)
+
+This confirms the analysis from the plan's Q4 brainstorm: at our parameter
+ranges, only the elite 14d-window cases produce cold-HR/SB labels under
+Poisson p10.
+
+**Go/no-go gate result: PASS (by a wide margin).**
+
+- **Test 1:** ≥1 cell with N≥1000 and lift≥5pp. **96 cells qualify.** ✓
+- **Test 2:** ≥3 of 5 categories show ≥2pp 7d lift. **All 5 categories qualify.** ✓
+
+Headline lifts (max lift per cat × window × cold_method, restricted to
+N≥1000):
+
+| Category | Window | Cold method | Max lift | Where |
+|----------|-------:|-------------|---------:|-------|
+| AVG | 14d | empirical | +8.00pp | cold_q3, high bucket, below |
+| HR | 14d | poisson_p10 / p20 | +12.84pp | hot_+3.0σ, high bucket, above |
+| R | 14d | empirical | +24.22pp | hot_q5, high bucket, above |
+| RBI | 14d | empirical | +19.92pp | hot_q5, high bucket, above |
+| SB | 7d | poisson_p10 / p20 | +26.60pp | hot_+1.5σ, high bucket, above |
+
+Hot persistence is the dominant signal across all categories. The 14d
+window has the strongest signal for most cats (longer windows = less
+noise). For SB the 7d window is comparable to 14d, suggesting SB hot
+streaks are more transient.
+
+Methodology surprises / notes for Phase 4:
+
+- Sparse cold cells (HR/SB cold under Poisson) are too small (under 1k
+  rows in most strata) to evaluate reliably — exactly as predicted.
+  Phase 4 modeling should focus on hot persistence for sparse cats.
+- Empirical p10 vs p20 produced essentially identical lift numbers in the
+  cells where both fired — the difference is in row count, not in signal
+  strength. The acceptance notebook's cell-size table shows p20 has more
+  strata at higher N; Phase 4 may prefer p20 for sample-size reasons.
+- 14d windows dominate the lift charts. Phase 4 may want to focus modeling
+  on the 14d window first.
+- Poisson calibration cell in the notebook overlays empirical PMF on
+  Poisson(λ=2.0) for the `expected_HR ∈ [1.5, 2.5]` bin — log the result
+  so Phase 4 knows whether to trust the rule unmodified or add an
+  overdispersion correction.
+
+Perf-todo work (commit `7b8bb98`). Three independent CPU-bound bottlenecks
+were fixed before the acceptance run could finish:
+
+- `compute_windows` final write: replaced `executemany` of 521K × 17-col
+  rows with `INSERT ... FROM df` (DuckDB's pandas-scan path).
+- `_apply_sparse_labels`: same fix, 3.64M label rows.
+- `_dense_strength_bucket` / `_sparse_strength_bucket`: replaced per-row
+  `df.apply` lambdas with vectorized `np.searchsorted` / numpy z-score
+  quantization.
+
+Pre-existing issues called out (not from Phase 3):
+
+- `scripts/debug_eroto_avg.py` has 6 RUF100 noqa-directive lints +
+  format drift (unrelated to streaks).
+- `tests/test_data/test_mlb_schedule.py` has format drift (unrelated to
+  streaks).
+- `[tool.mypy].files` references a non-existent
+  `src/fantasy_baseball/lineup/weighted_sgp.py` (config drift, unrelated
+  to streaks).
+- These are flagged for a separate cleanup pass; they don't gate Phase 3
+  acceptance.
+
+#### Next milestone
+
+- **Phase 4 — predictive model.** Fit per-category logistic regressions
+  with continuation as the target. Train on 2023-2024, validate on 2025.
+  Calibration plot, ROC-AUC, top features by |coef|. Gate: held-out
+  ROC-AUC ≥ 0.55 in at least 3 of 5 categories.
