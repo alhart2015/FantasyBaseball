@@ -13,8 +13,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fantasy_baseball.draft.eroto_recs import rank_candidates  # noqa: E402
-from fantasy_baseball.draft.recs_integration import compute_rec_inputs  # noqa: E402
+from fantasy_baseball.draft.eroto_recs import rank_candidates
+from fantasy_baseball.draft.recs_integration import compute_rec_inputs
 
 
 def main() -> None:

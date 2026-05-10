@@ -24,7 +24,6 @@ from typing import Any
 
 import pandas as pd
 
-from fantasy_baseball.models.positions import Position
 from fantasy_baseball.utils.name_utils import normalize_name
 
 
