@@ -1,10 +1,20 @@
 """Read FanGraphs preseason projection CSVs and blend per-PA rates.
 
-Reads every `<system>-hitters*.csv` under `data/projections/{season}/`,
+Reads every ``<system>-hitters*.csv`` under ``data/projections/{season}/``,
 filters to rows with PA >= ``PROJECTION_PA_FLOOR`` (drops org filler / NRI
-spring rows), coerces MLBAMID to int, and computes per-system HR/PA and
-SB/PA. Returns one ``HitterProjectionRate`` per (player_id, season) with
-the simple arithmetic mean across the systems that included that player.
+spring rows), coerces MLBAMID to int, and computes per-system rates for
+all five fantasy categories:
+
+- ``hr_per_pa`` = HR / PA
+- ``sb_per_pa`` = SB / PA
+- ``r_per_pa`` = R / PA
+- ``rbi_per_pa`` = RBI / PA
+- ``avg`` = projected AVG (already a rate in FanGraphs CSVs; no PA divisor)
+
+Returns one ``HitterProjectionRate`` per (player_id, season) with the
+simple arithmetic mean across the systems that included that player.
+Old-style CSVs lacking R/RBI/AVG columns produce ``None`` for those rates
+(rather than crashing) — caller decides whether to use them.
 
 Filename pattern variation: 2025's CSVs are named ``<system>-hitters-2025.csv``;
 other years use ``<system>-hitters.csv``. The discovery glob matches both.
@@ -19,17 +29,22 @@ import logging
 from collections.abc import Iterable
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from fantasy_baseball.streaks.models import HitterProjectionRate
 
 logger = logging.getLogger(__name__)
 
-# Drops org-filler rows (Steamer projects ~3,500-4,500 hitters/year, mostly
-# 1-50 PA blowouts of MiLB depth charts; ZiPS does the same with ~1,700-2,000).
-# The floor matches what we use for the draft pipeline elsewhere; revisit
-# only if it bites a real player who genuinely projects below it.
 PROJECTION_PA_FLOOR = 200
+
+_DENSE_CAT_SOURCE_COLS: tuple[tuple[str, str, bool], ...] = (
+    # (source_csv_col, output_rate_col, is_per_pa_count)
+    # is_per_pa_count=True: divide by PA. False: already a rate (AVG).
+    ("R", "r_per_pa", True),
+    ("RBI", "rbi_per_pa", True),
+    ("AVG", "avg", False),
+)
 
 
 def discover_projection_files(projections_root: Path, *, season: int) -> list[Path]:
@@ -41,33 +56,39 @@ def discover_projection_files(projections_root: Path, *, season: int) -> list[Pa
     season_dir = projections_root / str(season)
     if not season_dir.is_dir():
         return []
-    files = [
+    return [
         p
         for p in season_dir.iterdir()
         if p.is_file() and p.suffix == ".csv" and "hitters" in p.name and "pitchers" not in p.name
     ]
-    return files
 
 
 def _load_one_system(path: Path) -> pd.DataFrame:
-    """Load one system's projection CSV into a 4-column frame keyed by MLBAMID.
+    """Load one system's projection CSV.
 
-    Drops rows missing MLBAMID and rows below ``PROJECTION_PA_FLOOR`` PA.
-    Computes hr_per_pa and sb_per_pa per row.
+    Output columns: MLBAMID, PA, hr_per_pa, sb_per_pa, r_per_pa, rbi_per_pa, avg.
+    Dense-cat rate columns are NaN if the source CSV is missing R/RBI/AVG.
     """
     df = pd.read_csv(path, encoding="utf-8-sig")
     required = {"MLBAMID", "PA", "HR", "SB"}
     missing = required - set(df.columns)
     if missing:
         logger.warning("File %s missing required columns %s; skipping", path, sorted(missing))
-        return pd.DataFrame(columns=["MLBAMID", "PA", "hr_per_pa", "sb_per_pa"])
+        return pd.DataFrame(
+            columns=["MLBAMID", "PA", "hr_per_pa", "sb_per_pa", "r_per_pa", "rbi_per_pa", "avg"]
+        )
     df["MLBAMID"] = pd.to_numeric(df["MLBAMID"], errors="coerce")
     df = df.dropna(subset=["MLBAMID"])
     df["MLBAMID"] = df["MLBAMID"].astype(int)
     df = df[df["PA"] >= PROJECTION_PA_FLOOR].copy()
     df["hr_per_pa"] = df["HR"] / df["PA"]
     df["sb_per_pa"] = df["SB"] / df["PA"]
-    return df[["MLBAMID", "PA", "hr_per_pa", "sb_per_pa"]]
+    for src_col, out_col, is_per_pa_count in _DENSE_CAT_SOURCE_COLS:
+        if src_col in df.columns:
+            df[out_col] = (df[src_col] / df["PA"]) if is_per_pa_count else df[src_col]
+        else:
+            df[out_col] = np.nan
+    return df[["MLBAMID", "PA", "hr_per_pa", "sb_per_pa", "r_per_pa", "rbi_per_pa", "avg"]]
 
 
 def load_projection_rates(projections_root: Path, *, season: int) -> list[HitterProjectionRate]:
@@ -76,6 +97,9 @@ def load_projection_rates(projections_root: Path, *, season: int) -> list[Hitter
     Returns one ``HitterProjectionRate`` per (player_id, season). Players who
     appear in only one system are emitted with ``n_systems=1`` (caller decides
     whether to filter). Players who appear in no system are not emitted.
+
+    Dense-cat fields (r_per_pa, rbi_per_pa, avg) are ``None`` when no system
+    that included the player carried that source column (old-style CSVs).
     """
     files = discover_projection_files(projections_root, season=season)
     if not files:
@@ -92,25 +116,32 @@ def load_projection_rates(projections_root: Path, *, season: int) -> list[Hitter
         return []
     stacked = pd.concat(frames, ignore_index=True)
 
+    # NaN-aware mean: a player missing R from one system still gets the other
+    # system's R contribution. Pandas mean() skips NaN by default.
     blended = stacked.groupby("MLBAMID", as_index=False).agg(
         hr_per_pa=("hr_per_pa", "mean"),
         sb_per_pa=("sb_per_pa", "mean"),
+        r_per_pa=("r_per_pa", "mean"),
+        rbi_per_pa=("rbi_per_pa", "mean"),
+        avg=("avg", "mean"),
         n_systems=("PA", "count"),
     )
 
-    return [
-        HitterProjectionRate(
-            player_id=int(r.MLBAMID),
-            season=season,
-            hr_per_pa=float(r.hr_per_pa),
-            sb_per_pa=float(r.sb_per_pa),
-            r_per_pa=None,
-            rbi_per_pa=None,
-            avg=None,
-            n_systems=int(r.n_systems),
+    out: list[HitterProjectionRate] = []
+    for r in blended.itertuples(index=False):
+        out.append(
+            HitterProjectionRate(
+                player_id=int(r.MLBAMID),
+                season=season,
+                hr_per_pa=float(r.hr_per_pa),
+                sb_per_pa=float(r.sb_per_pa),
+                r_per_pa=None if pd.isna(r.r_per_pa) else float(r.r_per_pa),
+                rbi_per_pa=None if pd.isna(r.rbi_per_pa) else float(r.rbi_per_pa),
+                avg=None if pd.isna(r.avg) else float(r.avg),
+                n_systems=int(r.n_systems),
+            )
         )
-        for r in blended.itertuples(index=False)
-    ]
+    return out
 
 
 def load_projection_rates_for_seasons(

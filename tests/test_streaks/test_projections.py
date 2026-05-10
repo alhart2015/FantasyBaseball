@@ -132,3 +132,68 @@ def test_load_projection_rates_skips_files_missing_required_columns(tmp_path: Pa
     rates = load_projection_rates(tmp_path, season=2024)
     # Only the well-formed file's player should be emitted.
     assert {r.player_id for r in rates} == {2}
+
+
+def test_load_projection_rates_blends_dense_categories(tmp_path: Path) -> None:
+    base = tmp_path / "2024"
+    base.mkdir()
+    # Steamer: 600 PA, 30 HR, 10 SB, 90 R, 100 RBI, .280 AVG.
+    # ZiPS:    600 PA, 36 HR, 14 SB, 100 R, 110 RBI, .300 AVG.
+    # Blended rates: HR=0.055/PA, SB=0.020/PA, R=0.158333/PA, RBI=0.175/PA, AVG=0.290.
+    pd.DataFrame(
+        [
+            {
+                "Name": "P",
+                "PA": 600,
+                "HR": 30,
+                "SB": 10,
+                "R": 90,
+                "RBI": 100,
+                "AVG": 0.280,
+                "MLBAMID": 100,
+            }
+        ],
+        columns=["Name", "PA", "HR", "SB", "R", "RBI", "AVG", "MLBAMID"],
+    ).to_csv(base / "steamer-hitters.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "Name": "P",
+                "PA": 600,
+                "HR": 36,
+                "SB": 14,
+                "R": 100,
+                "RBI": 110,
+                "AVG": 0.300,
+                "MLBAMID": 100,
+            }
+        ],
+        columns=["Name", "PA", "HR", "SB", "R", "RBI", "AVG", "MLBAMID"],
+    ).to_csv(base / "zips-hitters.csv", index=False)
+
+    rates = load_projection_rates(tmp_path, season=2024)
+    assert len(rates) == 1
+    r = rates[0]
+    assert r.hr_per_pa == pytest.approx(0.055, rel=1e-6)
+    assert r.sb_per_pa == pytest.approx(0.020, rel=1e-6)
+    assert r.r_per_pa == pytest.approx((90 + 100) / 2 / 600, rel=1e-6)
+    assert r.rbi_per_pa == pytest.approx((100 + 110) / 2 / 600, rel=1e-6)
+    assert r.avg == pytest.approx(0.290, rel=1e-6)
+    assert r.n_systems == 2
+
+
+def test_load_projection_rates_handles_missing_dense_columns(tmp_path: Path) -> None:
+    """If a CSV is missing R/RBI/AVG columns (older fixtures), the loader emits
+    the rate row with NULL in those fields rather than crashing."""
+    base = tmp_path / "2024"
+    base.mkdir()
+    # Old-style CSV: only Name/PA/HR/SB/MLBAMID.
+    pd.DataFrame(
+        [{"Name": "P", "PA": 600, "HR": 30, "SB": 12, "MLBAMID": 100}],
+        columns=["Name", "PA", "HR", "SB", "MLBAMID"],
+    ).to_csv(base / "steamer-hitters.csv", index=False)
+    rates = load_projection_rates(tmp_path, season=2024)
+    assert len(rates) == 1
+    assert rates[0].r_per_pa is None
+    assert rates[0].rbi_per_pa is None
+    assert rates[0].avg is None
