@@ -76,7 +76,6 @@ files = [
     "src/fantasy_baseball/lineup/roster_audit.py",
     "src/fantasy_baseball/lineup/upcoming_starts.py",
     "src/fantasy_baseball/lineup/waivers.py",
-    "src/fantasy_baseball/lineup/weighted_sgp.py",
     "src/fantasy_baseball/lineup/yahoo_roster.py",
     "src/fantasy_baseball/models/",
     "src/fantasy_baseball/scoring.py",

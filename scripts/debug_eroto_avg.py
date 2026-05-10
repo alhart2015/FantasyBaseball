@@ -14,9 +14,9 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fantasy_baseball.draft.recs_integration import compute_rec_inputs  # noqa: E402
-from fantasy_baseball.scoring import score_roto_dict  # noqa: E402
-from fantasy_baseball.trades.evaluate import (  # noqa: E402
+from fantasy_baseball.draft.recs_integration import compute_rec_inputs
+from fantasy_baseball.scoring import score_roto_dict
+from fantasy_baseball.trades.evaluate import (
     apply_swap_delta,
     player_rest_of_season_stats,
 )
@@ -39,8 +39,12 @@ def main() -> None:
 
     cruz_ros = player_rest_of_season_stats(cruz)
     rep_ros = player_rest_of_season_stats(of_rep)
-    print(f"Cruz ROS: ab={cruz_ros['ab']:.0f}  hits-implied={cruz_ros['ab']*cruz_ros['AVG']:.1f}  avg={cruz_ros['AVG']:.3f}  R={cruz_ros['R']:.1f}  HR={cruz_ros['HR']:.1f}  RBI={cruz_ros['RBI']:.1f}  SB={cruz_ros['SB']:.1f}")
-    print(f"Happ ROS: ab={rep_ros['ab']:.0f}  hits-implied={rep_ros['ab']*rep_ros['AVG']:.1f}  avg={rep_ros['AVG']:.3f}  R={rep_ros['R']:.1f}  HR={rep_ros['HR']:.1f}  RBI={rep_ros['RBI']:.1f}  SB={rep_ros['SB']:.1f}")
+    print(
+        f"Cruz ROS: ab={cruz_ros['ab']:.0f}  hits-implied={cruz_ros['ab'] * cruz_ros['AVG']:.1f}  avg={cruz_ros['AVG']:.3f}  R={cruz_ros['R']:.1f}  HR={cruz_ros['HR']:.1f}  RBI={cruz_ros['RBI']:.1f}  SB={cruz_ros['SB']:.1f}"
+    )
+    print(
+        f"Happ ROS: ab={rep_ros['ab']:.0f}  hits-implied={rep_ros['ab'] * rep_ros['AVG']:.1f}  avg={rep_ros['AVG']:.3f}  R={rep_ros['R']:.1f}  HR={rep_ros['HR']:.1f}  RBI={rep_ros['RBI']:.1f}  SB={rep_ros['SB']:.1f}"
+    )
     print()
 
     # Team baseline
@@ -72,14 +76,18 @@ def main() -> None:
         before = roto_before[team][f"{cat}_pts"]
         after = roto_after[team][f"{cat}_pts"]
         print(f"  {cat:6s}  before={before:.4f}  after={after:.4f}  delta={after - before:+.5f}")
-    print(f"  TOTAL   before={roto_before[team]['total']:.4f}  after={roto_after[team]['total']:.4f}  delta={roto_after[team]['total'] - roto_before[team]['total']:+.5f}")
+    print(
+        f"  TOTAL   before={roto_before[team]['total']:.4f}  after={roto_after[team]['total']:.4f}  delta={roto_after[team]['total'] - roto_before[team]['total']:+.5f}"
+    )
     print()
 
     # Inspect team SDs for AVG
     print("Per-team AVG / SD spread:")
     for tname in sorted(all_before):
         avg = all_before[tname]["AVG"]
-        sd = inputs.team_sds.get(tname, {}).get(__import__("fantasy_baseball.utils.constants", fromlist=["Category"]).Category.AVG, 0.0)
+        sd = inputs.team_sds.get(tname, {}).get(
+            __import__("fantasy_baseball.utils.constants", fromlist=["Category"]).Category.AVG, 0.0
+        )
         print(f"  {tname:35s}  AVG={avg:.4f}  sd_avg={sd:.5f}")
 
 
