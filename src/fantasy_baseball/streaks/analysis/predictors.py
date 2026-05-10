@@ -9,7 +9,6 @@ for the design decisions captured at the top of this module.
 from __future__ import annotations
 
 import logging
-import re
 
 import duckdb
 import numpy as np
@@ -34,6 +33,11 @@ PHASE_4_MODELS: tuple[tuple[StreakCategory, StreakDirection], ...] = (
 DENSE_CATS: frozenset[StreakCategory] = frozenset({"r", "rbi", "avg"})
 SPARSE_CATS: frozenset[StreakCategory] = frozenset({"hr", "sb"})
 
+# Defense-in-depth guard for SQL interpolation in the helpers below: even
+# though ``category`` is typed as ``StreakCategory`` (a Literal), Python does
+# not enforce Literal membership at runtime.
+_VALID_CATEGORIES: frozenset[str] = frozenset({"hr", "r", "rbi", "sb", "avg"})
+
 # Sparse hot rows are duplicated across poisson_p10/poisson_p20 in
 # hitter_streak_labels. Phase 4 dedupes to a single partition for training.
 SPARSE_HOT_COLD_METHOD = "poisson_p20"
@@ -53,24 +57,6 @@ EXPECTED_FEATURE_COLUMNS: tuple[str, ...] = (
     "pt_bucket_mid",
     "pt_bucket_high",
 )
-
-# Parsing rules for strength_bucket → numeric.
-_DENSE_BUCKET_RE = re.compile(r"^(hot|cold)_q([1-5])$")
-_SPARSE_BUCKET_RE = re.compile(r"^(hot|cold)_([+-]?\d+\.\d)sigma$")
-
-
-def _parse_strength_numeric(bucket: str) -> float | None:
-    """Encode Phase 3's strength_bucket string as a numeric feature.
-
-    - Dense quintiles "hot_qN" / "cold_qN" → integer 1..5.
-    - Sparse half-sigma buckets "hot_+1.5sigma" → 1.5 (signed float).
-    - "{label}_zna" or any other shape → None (caller drops the row).
-    """
-    if m := _DENSE_BUCKET_RE.match(bucket):
-        return float(m.group(2))
-    if m := _SPARSE_BUCKET_RE.match(bucket):
-        return float(m.group(2))
-    return None
 
 
 def _parse_season_set(season_set: str) -> list[int]:
@@ -248,10 +234,9 @@ def _build_training_frame_sparse(
     df = df.dropna(subset=["z"])
     if df.empty:
         return df
-    # Half-sigma value, clamped to [+0.5, +3.0] for hot models (z is positive
-    # by definition of hot under empirical p90). Cold edge cases (z below 0)
-    # shouldn't occur for hot rows; clip for safety.
-    half = np.clip(np.round(df["z"].to_numpy() * 2) / 2.0, 0.5, 3.0)
+    # Half-sigma value, clamped to [0.0, 3.0] to match Phase 3's encoding;
+    # hot rows by construction have z >= 0.
+    half = np.clip(np.round(df["z"].to_numpy() * 2) / 2.0, 0.0, 3.0)
     df["streak_strength_numeric"] = half
     return df
 
@@ -279,6 +264,8 @@ def build_training_frame(
 
     Empty DataFrame is returned when no labeled rows survive — caller handles.
     """
+    if category not in _VALID_CATEGORIES:
+        raise ValueError(f"unknown streak category: {category!r}")
     seasons = _parse_season_set(season_set)
     if category in SPARSE_CATS:
         if direction != "above":
