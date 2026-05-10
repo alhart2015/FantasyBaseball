@@ -7,7 +7,14 @@ from fantasy_baseball.streaks.models import HitterProjectionRate
 
 def _row(pid: int, season: int, hr_pa: float = 0.05, sb_pa: float = 0.02, n: int = 2):
     return HitterProjectionRate(
-        player_id=pid, season=season, hr_per_pa=hr_pa, sb_per_pa=sb_pa, n_systems=n
+        player_id=pid,
+        season=season,
+        hr_per_pa=hr_pa,
+        sb_per_pa=sb_pa,
+        r_per_pa=None,
+        rbi_per_pa=None,
+        avg=None,
+        n_systems=n,
     )
 
 

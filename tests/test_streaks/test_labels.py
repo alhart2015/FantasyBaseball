@@ -141,7 +141,16 @@ def _seed_population_with_projections(conn) -> None:
     """
     _seed_population(conn)  # writes games + windows + thresholds
     proj_rows = [
-        HitterProjectionRate(player_id=pid, season=2025, hr_per_pa=hr, sb_per_pa=sb, n_systems=2)
+        HitterProjectionRate(
+            player_id=pid,
+            season=2025,
+            hr_per_pa=hr,
+            sb_per_pa=sb,
+            r_per_pa=None,
+            rbi_per_pa=None,
+            avg=None,
+            n_systems=2,
+        )
         for pid, hr, sb in [
             (1, 0.005, 0.005),
             (2, 0.020, 0.015),
@@ -225,7 +234,14 @@ def test_sparse_labels_high_rate_player_can_be_cold_at_zero() -> None:
         conn,
         [
             HitterProjectionRate(
-                player_id=100, season=2025, hr_per_pa=0.10, sb_per_pa=0.0, n_systems=2
+                player_id=100,
+                season=2025,
+                hr_per_pa=0.10,
+                sb_per_pa=0.0,
+                r_per_pa=None,
+                rbi_per_pa=None,
+                avg=None,
+                n_systems=2,
             )
         ],
     )

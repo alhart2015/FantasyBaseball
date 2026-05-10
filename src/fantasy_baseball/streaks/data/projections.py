@@ -104,6 +104,9 @@ def load_projection_rates(projections_root: Path, *, season: int) -> list[Hitter
             season=season,
             hr_per_pa=float(r.hr_per_pa),
             sb_per_pa=float(r.sb_per_pa),
+            r_per_pa=None,
+            rbi_per_pa=None,
+            avg=None,
             n_systems=int(r.n_systems),
         )
         for r in blended.itertuples(index=False)

@@ -110,6 +110,9 @@ _SCHEMA_DDL = [
         season INTEGER NOT NULL,
         hr_per_pa DOUBLE NOT NULL,
         sb_per_pa DOUBLE NOT NULL,
+        r_per_pa DOUBLE,
+        rbi_per_pa DOUBLE,
+        avg DOUBLE,
         n_systems INTEGER NOT NULL,
         PRIMARY KEY (player_id, season)
     )

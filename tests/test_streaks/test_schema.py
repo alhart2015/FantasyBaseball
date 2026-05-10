@@ -89,7 +89,16 @@ def test_hitter_projection_rates_table_exists() -> None:
     conn = get_connection(":memory:")
     info = conn.execute("PRAGMA table_info('hitter_projection_rates')").fetchall()
     cols = [r[1] for r in info]
-    assert cols == ["player_id", "season", "hr_per_pa", "sb_per_pa", "n_systems"]
+    assert cols == [
+        "player_id",
+        "season",
+        "hr_per_pa",
+        "sb_per_pa",
+        "r_per_pa",
+        "rbi_per_pa",
+        "avg",
+        "n_systems",
+    ]
     pk_cols = [r[1] for r in info if r[5]]
     assert pk_cols == ["player_id", "season"]
 
