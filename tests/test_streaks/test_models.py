@@ -126,6 +126,15 @@ def test_model_fit_fields_in_expected_order() -> None:
         "n_train_rows",
         "n_val_rows",
         "fit_timestamp",
+        # Phase B: persisted pipeline state for ``load_models_from_fits``.
+        # Nullable for backward compatibility with Phase 4 rows that pre-date
+        # Phase B and don't carry the pipeline parameters needed to round-trip.
+        "feature_columns",
+        "coef",
+        "intercept",
+        "scaler_mean",
+        "scaler_scale",
+        "dense_quintile_cutoffs",
     )
     assert tuple(f.name for f in fields(ModelFit)) == expected
 

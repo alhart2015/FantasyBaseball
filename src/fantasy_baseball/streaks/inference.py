@@ -33,7 +33,9 @@ from typing import Literal
 import duckdb
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 from fantasy_baseball.streaks.analysis.predictors import (
     DENSE_CATS,
@@ -263,6 +265,11 @@ def refit_models_for_report(
             dense_quintile_cutoffs=cutoffs,
         )
         model_id = f"{cat}_{'hot' if direction == 'above' else 'cold'}_{season_set_train}"
+        # Persist pipeline params so ``load_models_from_fits`` can reconstruct
+        # the fitted Pipeline without retraining. Coef / mean / scale are stored
+        # column-aligned with ``feature_columns`` — that order is the contract.
+        scaler = fit_result.pipeline.named_steps[_SCALER_STEP_NAME]
+        lr = fit_result.pipeline.named_steps[_LR_STEP_NAME]
         fit_rows.append(
             ModelFit(
                 model_id=model_id,
@@ -278,12 +285,156 @@ def refit_models_for_report(
                 n_train_rows=len(df),
                 n_val_rows=0,
                 fit_timestamp=timestamp,
+                feature_columns=tuple(EXPECTED_FEATURE_COLUMNS),
+                coef=tuple(float(c) for c in lr.coef_.ravel()),
+                intercept=float(lr.intercept_[0]),
+                scaler_mean=tuple(float(m) for m in scaler.mean_),
+                scaler_scale=tuple(float(s) for s in scaler.scale_),
+                dense_quintile_cutoffs=cutoffs,
             )
         )
 
     upsert_model_fits(conn, fit_rows)
     logger.info("refit_models_for_report: wrote %d model_fits rows", len(fit_rows))
     return fits
+
+
+# Defense-in-depth: even though category/direction/cold_method are typed as
+# Literals downstream, DuckDB returns plain strings and the report layer is
+# downstream of any future schema corruption — narrow + validate here.
+_VALID_REPORT_CATEGORIES: frozenset[str] = frozenset(REPORT_CATEGORIES)
+_VALID_DIRECTIONS: frozenset[str] = frozenset({"above", "below"})
+_VALID_COLD_METHODS: frozenset[str] = frozenset({"empirical", "poisson_p10", "poisson_p20"})
+
+
+def _narrow_category(value: str) -> StreakCategory:
+    if value not in _VALID_REPORT_CATEGORIES:
+        raise RuntimeError(f"unexpected category {value!r} in model_fits")
+    return value  # type: ignore[return-value]
+
+
+def _narrow_direction(value: str) -> StreakDirection:
+    if value not in _VALID_DIRECTIONS:
+        raise RuntimeError(f"unexpected direction {value!r} in model_fits")
+    return value  # type: ignore[return-value]
+
+
+def _narrow_cold_method(value: str) -> ColdMethod:
+    if value not in _VALID_COLD_METHODS:
+        raise RuntimeError(f"unexpected cold_method {value!r} in model_fits")
+    return value  # type: ignore[return-value]
+
+
+def load_models_from_fits(
+    conn: duckdb.DuckDBPyConnection,
+) -> dict[tuple[StreakCategory, StreakDirection], FittedModel]:
+    """Reconstruct fitted Pipelines from the most recent ``model_fits`` rows.
+
+    Selects the most recent ``fit_timestamp`` group; for each ``(category,
+    direction)`` row in that group, rebuilds a ``Pipeline`` of
+    :class:`StandardScaler` + :class:`LogisticRegression` whose parameters are
+    set directly from the persisted coefficients / intercept / scaler mean
+    / scaler scale. The result produces byte-identical predictions to the
+    original fit (no retraining).
+
+    Skips rows where the persisted pipeline params are NULL — those are
+    pre-Phase-B audit rows that don't carry the state needed to round-trip.
+    Raises :class:`RuntimeError` if ``model_fits`` is empty.
+    """
+    rows = conn.execute(
+        """
+        SELECT category, direction, cold_method, dense_quintile_cutoffs,
+               feature_columns, coef, intercept,
+               scaler_mean, scaler_scale, fit_timestamp
+        FROM model_fits
+        WHERE fit_timestamp = (SELECT MAX(fit_timestamp) FROM model_fits)
+        """
+    ).fetchall()
+    if not rows:
+        raise RuntimeError("model_fits is empty; refit before loading")
+
+    out: dict[tuple[StreakCategory, StreakDirection], FittedModel] = {}
+    for (
+        category,
+        direction,
+        cold_method,
+        quintile_cutoffs,
+        feature_columns,
+        coef,
+        intercept,
+        scaler_mean,
+        scaler_scale,
+        _fit_timestamp,
+    ) in rows:
+        if (
+            feature_columns is None
+            or coef is None
+            or intercept is None
+            or scaler_mean is None
+            or scaler_scale is None
+        ):
+            # Pre-Phase-B row — can't reconstruct, skip rather than crash.
+            logger.info(
+                "load_models_from_fits: skipping (%s, %s) — missing pipeline params",
+                category,
+                direction,
+            )
+            continue
+
+        cat_narrow = _narrow_category(str(category))
+        dir_narrow = _narrow_direction(str(direction))
+        cm_narrow = _narrow_cold_method(str(cold_method))
+
+        scaler = StandardScaler()
+        scaler.mean_ = np.asarray(scaler_mean, dtype=np.float64)
+        scaler.scale_ = np.asarray(scaler_scale, dtype=np.float64)
+        scaler.var_ = scaler.scale_**2
+        scaler.n_features_in_ = len(feature_columns)
+        scaler.feature_names_in_ = np.asarray(feature_columns, dtype=object)
+
+        clf = LogisticRegression()
+        clf.coef_ = np.asarray([coef], dtype=np.float64)
+        clf.intercept_ = np.asarray([intercept], dtype=np.float64)
+        clf.classes_ = np.asarray([0, 1])
+        clf.n_features_in_ = len(feature_columns)
+        # Deliberately *do not* set ``clf.feature_names_in_`` — the LR step
+        # inside a Pipeline receives the scaler's numpy output, never a
+        # DataFrame, so populating feature_names_in_ here would trigger
+        # sklearn's "X does not have valid feature names" UserWarning at every
+        # predict_proba call. Setting it on the scaler is sufficient: the
+        # scaler validates the inbound DataFrame, then forwards a feature-name
+        # -less ndarray to the LR — matching the behavior of a freshly fit
+        # Pipeline.
+
+        # Step names must match the predictors module so ``top_drivers`` (and
+        # any other consumer that pulls ``named_steps["lr"]``) keeps working
+        # on loaded pipelines exactly as it does on freshly-fit ones.
+        pipeline = Pipeline([(_SCALER_STEP_NAME, scaler), (_LR_STEP_NAME, clf)])
+        cutoffs: tuple[float, float, float, float] | None
+        if quintile_cutoffs is None:
+            cutoffs = None
+        else:
+            # DuckDB returns DOUBLE[] as a Python list; the dataclass field
+            # is a 4-tuple by contract.
+            if len(quintile_cutoffs) != 4:
+                raise RuntimeError(
+                    f"dense_quintile_cutoffs must have length 4 for ({cat_narrow}, "
+                    f"{dir_narrow}); got {len(quintile_cutoffs)}"
+                )
+            cutoffs = (
+                float(quintile_cutoffs[0]),
+                float(quintile_cutoffs[1]),
+                float(quintile_cutoffs[2]),
+                float(quintile_cutoffs[3]),
+            )
+        out[(cat_narrow, dir_narrow)] = FittedModel(
+            pipeline=pipeline,
+            category=cat_narrow,
+            direction=dir_narrow,
+            cold_method=cm_narrow,
+            dense_quintile_cutoffs=cutoffs,
+        )
+    return out
 
 
 def _dense_streak_strength(value: float, cutoffs: tuple[float, float, float, float]) -> float:

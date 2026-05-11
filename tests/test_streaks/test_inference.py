@@ -5,8 +5,10 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 from datetime import date, timedelta
 
+import pandas as pd
 import pytest
 
+from fantasy_baseball.streaks.analysis.predictors import EXPECTED_FEATURE_COLUMNS
 from fantasy_baseball.streaks.data.schema import get_connection
 from fantasy_baseball.streaks.inference import (
     REPORT_CATEGORIES,
@@ -17,6 +19,7 @@ from fantasy_baseball.streaks.inference import (
     _dense_quintile_cutoffs,
     _dense_streak_strength,
     _sparse_streak_strength,
+    load_models_from_fits,
     refit_models_for_report,
     score_player_windows,
     top_drivers,
@@ -28,6 +31,45 @@ def _seed_two_seasons(conn) -> None:
     """Seed enough data that refit_models_for_report has a 2-season train set."""
     _seed_pipeline(conn, season=2023)
     _seed_pipeline(conn, season=2024)
+
+
+@pytest.fixture
+def seeded_pipeline_conn():
+    """Phase-4 fit + persist sequence on a 2-season fixture.
+
+    Mirrors the setup used by every fit-and-score test in this file: 2023+2024
+    seasons seeded, then ``refit_models_for_report`` invoked so ``model_fits``
+    has the fresh rows the loader will read back.
+    """
+    conn = get_connection(":memory:")
+    _seed_two_seasons(conn)
+    refit_models_for_report(conn, season_set_train="2023-2024", window_days=14)
+    return conn
+
+
+def _example_feature_row() -> pd.DataFrame:
+    """Single-row DataFrame in EXPECTED_FEATURE_COLUMNS order.
+
+    Constant non-trivial values so the StandardScaler transform produces
+    a deterministic non-zero input to LogisticRegression — predict_proba
+    will return identical numbers across fresh vs loaded pipelines only
+    if every step is correctly reconstructed.
+    """
+    row = {
+        "streak_strength_numeric": 3.0,
+        "babip": 0.310,
+        "k_pct": 0.22,
+        "bb_pct": 0.08,
+        "iso": 0.180,
+        "ev_avg": 90.0,
+        "barrel_pct": 0.08,
+        "xwoba_avg": 0.355,
+        "season_rate_in_category": 0.15,
+        "pt_bucket_low": 0,
+        "pt_bucket_mid": 1,
+        "pt_bucket_high": 0,
+    }
+    return pd.DataFrame([row], columns=list(EXPECTED_FEATURE_COLUMNS))
 
 
 def test_dense_streak_strength_bins_to_quintile() -> None:
@@ -237,3 +279,33 @@ def test_score_skip_reasons_are_typed() -> None:
     # Smoke test that the Literal narrows correctly at runtime via constructor.
     skip = ScoreSkip(player_id=7, reason="no_window")
     assert skip.reason == "no_window"
+
+
+def test_load_models_from_fits_round_trips_predictions(seeded_pipeline_conn) -> None:
+    """A model loaded from model_fits scores identically to the freshly-refit one (within tolerance)."""
+    fresh = refit_models_for_report(
+        seeded_pipeline_conn, season_set_train="2023-2024", window_days=14
+    )
+    loaded = load_models_from_fits(seeded_pipeline_conn)
+
+    assert set(loaded.keys()) == set(fresh.keys())
+    X = _example_feature_row()  # 1-row DataFrame matching EXPECTED_FEATURE_COLUMNS
+    for key, fresh_model in fresh.items():
+        loaded_model = loaded[key]
+        p_fresh = fresh_model.pipeline.predict_proba(X)[0, 1]
+        p_loaded = loaded_model.pipeline.predict_proba(X)[0, 1]
+        assert abs(p_fresh - p_loaded) < 1e-9, (
+            f"Mismatch for {key}: fresh={p_fresh}, loaded={p_loaded}"
+        )
+        # Quintile cutoffs should also round-trip exactly for dense cats.
+        if fresh_model.dense_quintile_cutoffs is None:
+            assert loaded_model.dense_quintile_cutoffs is None
+        else:
+            assert loaded_model.dense_quintile_cutoffs == fresh_model.dense_quintile_cutoffs
+        assert loaded_model.cold_method == fresh_model.cold_method
+
+
+def test_load_models_from_fits_raises_when_table_empty() -> None:
+    conn = get_connection(":memory:")
+    with pytest.raises(RuntimeError, match="model_fits is empty"):
+        load_models_from_fits(conn)
