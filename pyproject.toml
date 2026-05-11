@@ -162,6 +162,12 @@ ignore = [
 # predict_* recency models share a fixed (projection, games, cutoff) signature
 # so they can be swapped at the call site.
 "src/fantasy_baseball/analysis/recency.py" = ["ARG001"]
+# Streaks Sunday report intentionally uses σ (sigma), − (true minus), → (arrow),
+# and — (em dash) for visual quality. RUF001 / RUF002 / RUF003 flag these as
+# ambiguous; suppressing for the report layer and its tests/CLI.
+"src/fantasy_baseball/streaks/reports/sunday.py" = ["RUF001", "RUF002", "RUF003"]
+"scripts/streaks/run_sunday_report.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_streaks/test_sunday_report.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["fantasy_baseball"]
