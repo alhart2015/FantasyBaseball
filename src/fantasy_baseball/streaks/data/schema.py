@@ -110,6 +110,9 @@ _SCHEMA_DDL = [
         season INTEGER NOT NULL,
         hr_per_pa DOUBLE NOT NULL,
         sb_per_pa DOUBLE NOT NULL,
+        r_per_pa DOUBLE,
+        rbi_per_pa DOUBLE,
+        avg DOUBLE,
         n_systems INTEGER NOT NULL,
         PRIMARY KEY (player_id, season)
     )
@@ -129,6 +132,24 @@ _SCHEMA_DDL = [
         p_baserate DOUBLE NOT NULL,
         lift DOUBLE NOT NULL,
         PRIMARY KEY (season_set, category, window_days, pt_bucket, strength_bucket, direction, cold_method)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS model_fits (
+        model_id VARCHAR NOT NULL,
+        category VARCHAR NOT NULL,
+        direction VARCHAR NOT NULL,
+        season_set VARCHAR NOT NULL,
+        window_days INTEGER NOT NULL,
+        cold_method VARCHAR NOT NULL,
+        chosen_C DOUBLE NOT NULL,
+        cv_auc_mean DOUBLE NOT NULL,
+        cv_auc_std DOUBLE NOT NULL,
+        val_auc DOUBLE NOT NULL,
+        n_train_rows INTEGER NOT NULL,
+        n_val_rows INTEGER NOT NULL,
+        fit_timestamp TIMESTAMP NOT NULL,
+        PRIMARY KEY (model_id)
     )
     """,
 ]

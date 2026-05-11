@@ -9,7 +9,7 @@ source of truth for column names and order.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 
 PtBucket = Literal["low", "mid", "high"]
@@ -167,9 +167,17 @@ class HitterStreakLabel:
 class HitterProjectionRate:
     """Per-season blended projection rate for a single hitter.
 
-    PK is (player_id, season). Rates are season-prior blended means
-    (HR/projected_PA, SB/projected_PA) across all available systems.
-    `n_systems` records the count of systems that contributed; rows with
+    PK is (player_id, season). Rates are season-prior blended arithmetic means
+    across all available systems (Steamer + ZiPS for 2023-2025; up to 5 systems
+    for 2026+). All five fantasy categories are stored so per-category models
+    in Phase 4 can take ``season_rate_in_category`` as a feature.
+
+    For backward compatibility with rows written by the Phase 3 loader (which
+    only populated hr_per_pa / sb_per_pa), the dense-cat fields are nullable
+    until ``scripts/streaks/load_projections.py`` is re-run after the Phase 4
+    migration.
+
+    ``n_systems`` records the count of systems that contributed; rows with
     n_systems < 2 are still kept (caller decides whether to use them).
     """
 
@@ -177,6 +185,9 @@ class HitterProjectionRate:
     season: int
     hr_per_pa: float
     sb_per_pa: float
+    r_per_pa: float | None
+    rbi_per_pa: float | None
+    avg: float | None
     n_systems: int
 
 
@@ -204,3 +215,34 @@ class ContinuationRate:
     p_continued: float
     p_baserate: float
     lift: float
+
+
+@dataclass(frozen=True, slots=True)
+class ModelFit:
+    """One row of the Phase 4 ``model_fits`` audit table.
+
+    PK is ``model_id`` (synthetic string like 'hr_hot_2023-2024').
+
+    - ``cold_method`` is the partition of `hitter_streak_labels` the training
+      rows were drawn from. Dense cats use 'empirical'; sparse hot uses
+      'poisson_p20' (deduplication choice — see plan design decision #10).
+    - ``chosen_C`` is the L2 strength selected by GroupKFold over a fixed grid.
+    - ``cv_auc_mean`` / ``cv_auc_std`` are the per-fold AUC stats for that C.
+    - ``val_auc`` is the single-shot 2025 ROC-AUC — the gate metric.
+    - ``n_train_rows`` / ``n_val_rows`` are post-filter row counts (drop
+      strength=zna, drop NULL season_rate, drop NULL peripherals).
+    """
+
+    model_id: str
+    category: StreakCategory
+    direction: StreakDirection
+    season_set: str
+    window_days: int
+    cold_method: ColdMethod
+    chosen_C: float
+    cv_auc_mean: float
+    cv_auc_std: float
+    val_auc: float
+    n_train_rows: int
+    n_val_rows: int
+    fit_timestamp: datetime

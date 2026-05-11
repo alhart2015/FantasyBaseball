@@ -150,3 +150,46 @@ def test_migrate_to_phase_3_is_idempotent() -> None:
     info = conn.execute("PRAGMA table_info('hitter_streak_labels')").fetchall()
     pk_cols = [r[1] for r in info if r[5]]
     assert "cold_method" in pk_cols
+
+
+def test_migrate_to_phase_4_adds_dense_cat_columns_and_model_fits() -> None:
+    from fantasy_baseball.streaks.data.migrate import migrate_to_phase_4
+
+    conn = get_connection(":memory:")
+    # init_schema in get_connection() already wrote Phase 4 columns — but the
+    # migration must still be safe to run against a fresh DB.
+    migrate_to_phase_4(conn)
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info('hitter_projection_rates')").fetchall()}
+    assert {"r_per_pa", "rbi_per_pa", "avg"}.issubset(cols)
+    model_fits_cols = {r[1] for r in conn.execute("PRAGMA table_info('model_fits')").fetchall()}
+    assert "model_id" in model_fits_cols
+
+
+def test_migrate_to_phase_4_preserves_existing_rate_rows() -> None:
+    """The migration must NOT clobber existing hitter_projection_rates rows —
+    Phase 3 rows have NULL r/rbi/avg until load_projections is re-run."""
+    from fantasy_baseball.streaks.data.migrate import migrate_to_phase_4
+
+    conn = get_connection(":memory:")
+    conn.execute(
+        "INSERT INTO hitter_projection_rates "
+        "(player_id, season, hr_per_pa, sb_per_pa, n_systems) "
+        "VALUES (1, 2024, 0.05, 0.02, 2)"
+    )
+    migrate_to_phase_4(conn)
+    row = conn.execute(
+        "SELECT hr_per_pa, sb_per_pa, r_per_pa FROM hitter_projection_rates "
+        "WHERE player_id = 1 AND season = 2024"
+    ).fetchone()
+    assert row == (0.05, 0.02, None)
+
+
+def test_migrate_to_phase_4_is_idempotent() -> None:
+    from fantasy_baseball.streaks.data.migrate import migrate_to_phase_4
+
+    conn = get_connection(":memory:")
+    migrate_to_phase_4(conn)
+    migrate_to_phase_4(conn)  # second call must not raise
+    cols = {r[1] for r in conn.execute("PRAGMA table_info('hitter_projection_rates')").fetchall()}
+    assert {"r_per_pa", "rbi_per_pa", "avg"}.issubset(cols)

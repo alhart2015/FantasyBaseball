@@ -95,9 +95,39 @@ def test_hitter_streak_label_includes_cold_method() -> None:
     assert tuple(f.name for f in fields(HitterStreakLabel)) == expected
 
 
-def test_hitter_projection_rate_fields_in_expected_order() -> None:
-    expected = ("player_id", "season", "hr_per_pa", "sb_per_pa", "n_systems")
+def test_hitter_projection_rate_includes_dense_cat_rates() -> None:
+    expected = (
+        "player_id",
+        "season",
+        "hr_per_pa",
+        "sb_per_pa",
+        "r_per_pa",
+        "rbi_per_pa",
+        "avg",
+        "n_systems",
+    )
     assert tuple(f.name for f in fields(HitterProjectionRate)) == expected
+
+
+def test_model_fit_fields_in_expected_order() -> None:
+    from fantasy_baseball.streaks.models import ModelFit
+
+    expected = (
+        "model_id",
+        "category",
+        "direction",
+        "season_set",
+        "window_days",
+        "cold_method",
+        "chosen_C",
+        "cv_auc_mean",
+        "cv_auc_std",
+        "val_auc",
+        "n_train_rows",
+        "n_val_rows",
+        "fit_timestamp",
+    )
+    assert tuple(f.name for f in fields(ModelFit)) == expected
 
 
 def test_continuation_rate_fields_in_expected_order() -> None:

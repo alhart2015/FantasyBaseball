@@ -17,6 +17,7 @@ def test_init_schema_creates_all_tables():
         "hitter_streak_labels",
         "hitter_projection_rates",
         "continuation_rates",
+        "model_fits",
     }
 
 
@@ -25,7 +26,7 @@ def test_init_schema_is_idempotent():
     init_schema(conn)
     init_schema(conn)  # should not raise
     tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
-    assert len(tables) == 7
+    assert len(tables) == 8
 
 
 def test_get_connection_in_memory_string():
@@ -89,7 +90,16 @@ def test_hitter_projection_rates_table_exists() -> None:
     conn = get_connection(":memory:")
     info = conn.execute("PRAGMA table_info('hitter_projection_rates')").fetchall()
     cols = [r[1] for r in info]
-    assert cols == ["player_id", "season", "hr_per_pa", "sb_per_pa", "n_systems"]
+    assert cols == [
+        "player_id",
+        "season",
+        "hr_per_pa",
+        "sb_per_pa",
+        "r_per_pa",
+        "rbi_per_pa",
+        "avg",
+        "n_systems",
+    ]
     pk_cols = [r[1] for r in info if r[5]]
     assert pk_cols == ["player_id", "season"]
 
@@ -113,3 +123,34 @@ def test_continuation_rates_table_exists() -> None:
         "lift",
     }
     assert expected_cols.issubset(cols)
+
+
+def test_hitter_projection_rates_has_dense_cat_columns() -> None:
+    conn = get_connection(":memory:")
+    info = conn.execute("PRAGMA table_info('hitter_projection_rates')").fetchall()
+    cols = {r[1] for r in info}
+    assert {"r_per_pa", "rbi_per_pa", "avg"}.issubset(cols)
+
+
+def test_model_fits_table_exists() -> None:
+    conn = get_connection(":memory:")
+    info = conn.execute("PRAGMA table_info('model_fits')").fetchall()
+    cols = {r[1] for r in info}
+    expected_cols = {
+        "model_id",
+        "category",
+        "direction",
+        "season_set",
+        "window_days",
+        "cold_method",
+        "chosen_C",
+        "cv_auc_mean",
+        "cv_auc_std",
+        "val_auc",
+        "n_train_rows",
+        "n_val_rows",
+        "fit_timestamp",
+    }
+    assert expected_cols.issubset(cols)
+    pk_cols = [r[1] for r in info if r[5]]
+    assert pk_cols == ["model_id"]
