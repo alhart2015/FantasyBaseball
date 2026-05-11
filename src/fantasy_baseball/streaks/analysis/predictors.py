@@ -361,7 +361,7 @@ def _build_pipeline(C: float, random_state: int) -> Pipeline:
                 _LR_STEP_NAME,
                 LogisticRegression(
                     C=C,
-                    penalty="l2",
+                    l1_ratio=0.0,
                     solver="lbfgs",
                     max_iter=1000,
                     random_state=random_state,
