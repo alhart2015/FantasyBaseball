@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Literal
 
 import duckdb
 import numpy as np
@@ -22,7 +24,8 @@ from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from fantasy_baseball.streaks.models import StreakCategory, StreakDirection
+from fantasy_baseball.streaks.data.load_model_fits import upsert_model_fits
+from fantasy_baseball.streaks.models import ModelFit, StreakCategory, StreakDirection
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +51,7 @@ _VALID_CATEGORIES: frozenset[str] = frozenset({"hr", "r", "rbi", "sb", "avg"})
 
 # Sparse hot rows are duplicated across poisson_p10/poisson_p20 in
 # hitter_streak_labels. Phase 4 dedupes to a single partition for training.
-SPARSE_HOT_COLD_METHOD = "poisson_p20"
+SPARSE_HOT_COLD_METHOD: Literal["poisson_p20"] = "poisson_p20"
 
 # Final ordered list of feature column names in the training frame.
 EXPECTED_FEATURE_COLUMNS: tuple[str, ...] = (
@@ -573,3 +576,192 @@ def permutation_feature_importance(
         name: (float(result.importances_mean[i]), float(result.importances_std[i]))
         for i, name in enumerate(X_val.columns)
     }
+
+
+@dataclass(frozen=True)
+class PerModelResult:
+    """Everything the notebook needs for one (category, direction)."""
+
+    fit: FitResult
+    evaluation: EvaluationResult
+    coef_ci: dict[str, tuple[float, float]]
+    permutation_importance: dict[str, tuple[float, float]]
+    n_train_rows: int
+    n_val_rows: int
+    cold_method: Literal["empirical", "poisson_p20"]
+
+
+@dataclass(frozen=True)
+class AllModelsResult:
+    """Output of fit_all_models — one entry per (category, direction) pair."""
+
+    fits: dict[tuple[StreakCategory, StreakDirection], PerModelResult | None]
+    season_set_train: str
+    season_set_val: str
+    window_days: int
+
+
+def _split_frame_by_season(
+    df: pd.DataFrame, *, season_set_train: str, season_set_val: str
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Partition the unified training frame by season."""
+    train_seasons = set(_parse_season_set(season_set_train))
+    val_seasons = set(_parse_season_set(season_set_val))
+    df_train = df[df["season"].isin(train_seasons)].copy()
+    df_val = df[df["season"].isin(val_seasons)].copy()
+    return df_train, df_val
+
+
+def _fit_one_phase_4_model(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    category: StreakCategory,
+    direction: StreakDirection,
+    season_set_train: str,
+    season_set_val: str,
+    window_days: int,
+    C_grid: Iterable[float],
+    n_bootstrap: int,
+    random_state: int,
+) -> PerModelResult | None:
+    """Build train + val frames for one model; fit, evaluate, bootstrap, importance."""
+    all_seasons = _parse_season_set(season_set_train) + _parse_season_set(season_set_val)
+    season_set_combined = f"{min(all_seasons)}-{max(all_seasons)}"
+    full = build_training_frame(
+        conn,
+        category=category,
+        direction=direction,
+        season_set=season_set_combined,
+        window_days=window_days,
+    )
+    if full.empty:
+        logger.info("No training frame rows for (%s, %s) — skipping", category, direction)
+        return None
+
+    df_train, df_val = _split_frame_by_season(
+        full, season_set_train=season_set_train, season_set_val=season_set_val
+    )
+    if df_train.empty or df_val.empty:
+        logger.info(
+            "Train/val split empty for (%s, %s): train=%d val=%d — skipping",
+            category,
+            direction,
+            len(df_train),
+            len(df_val),
+        )
+        return None
+
+    feature_cols = list(EXPECTED_FEATURE_COLUMNS)
+    X_train = df_train[feature_cols]
+    y_train = df_train["target"].to_numpy()
+    groups = df_train["player_id"].to_numpy()
+    X_val = df_val[feature_cols]
+    y_val = df_val["target"].to_numpy()
+
+    if len(np.unique(y_train)) < 2 or len(np.unique(y_val)) < 2:
+        logger.info("Single-class target for (%s, %s) — skipping", category, direction)
+        return None
+
+    fit_result = fit_one_model(
+        X_train,
+        y_train,
+        groups,
+        C_grid=C_grid,
+        n_splits=5,
+        random_state=random_state,
+    )
+    eval_result = evaluate_model(pipeline=fit_result.pipeline, X=X_val, y=y_val, n_bins=10)
+    # NOTE: bootstrap_coef_ci no longer takes a `pipeline` kwarg (was dropped
+    # in commit 9640cf2 because the function refits internally from chosen_C).
+    coef_ci = bootstrap_coef_ci(
+        X=X_train,
+        y=y_train,
+        groups=groups,
+        chosen_C=fit_result.chosen_C,
+        n_resamples=n_bootstrap,
+        random_state=random_state,
+    )
+    importance = permutation_feature_importance(
+        pipeline=fit_result.pipeline,
+        X_val=X_val,
+        y_val=y_val,
+        n_repeats=10,
+        random_state=random_state,
+    )
+    cold_method: Literal["empirical", "poisson_p20"] = (
+        SPARSE_HOT_COLD_METHOD if category in SPARSE_CATS else "empirical"
+    )
+    return PerModelResult(
+        fit=fit_result,
+        evaluation=eval_result,
+        coef_ci=coef_ci,
+        permutation_importance=importance,
+        n_train_rows=len(df_train),
+        n_val_rows=len(df_val),
+        cold_method=cold_method,
+    )
+
+
+def fit_all_models(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    season_set_train: str = "2023-2024",
+    season_set_val: str = "2025",
+    window_days: int = 14,
+    C_grid: Iterable[float] = DEFAULT_C_GRID,
+    n_bootstrap: int = 200,
+    random_state: int = 42,
+) -> AllModelsResult:
+    """Fit all 8 Phase 4 models, persist metadata to model_fits, return results.
+
+    Skips any model whose training or validation frame is empty (logs the
+    skip and records ``None`` in the result dict). All non-skipped models
+    write one row to ``model_fits``.
+    """
+    fits: dict[tuple[StreakCategory, StreakDirection], PerModelResult | None] = {}
+    fit_rows: list[ModelFit] = []
+    timestamp = datetime.now(UTC)
+
+    for cat, direction in PHASE_4_MODELS:
+        per_model = _fit_one_phase_4_model(
+            conn,
+            category=cat,
+            direction=direction,
+            season_set_train=season_set_train,
+            season_set_val=season_set_val,
+            window_days=window_days,
+            C_grid=C_grid,
+            n_bootstrap=n_bootstrap,
+            random_state=random_state,
+        )
+        fits[(cat, direction)] = per_model
+        if per_model is None:
+            continue
+        model_id = f"{cat}_{'hot' if direction == 'above' else 'cold'}_{season_set_train}"
+        fit_rows.append(
+            ModelFit(
+                model_id=model_id,
+                category=cat,
+                direction=direction,
+                season_set=season_set_train,
+                window_days=window_days,
+                cold_method=per_model.cold_method,
+                chosen_C=per_model.fit.chosen_C,
+                cv_auc_mean=per_model.fit.cv_auc_mean,
+                cv_auc_std=per_model.fit.cv_auc_std,
+                val_auc=per_model.evaluation.auc,
+                n_train_rows=per_model.n_train_rows,
+                n_val_rows=per_model.n_val_rows,
+                fit_timestamp=timestamp,
+            )
+        )
+
+    upsert_model_fits(conn, fit_rows)
+    logger.info("Wrote %d rows to model_fits", len(fit_rows))
+
+    return AllModelsResult(
+        fits=fits,
+        season_set_train=season_set_train,
+        season_set_val=season_set_val,
+        window_days=window_days,
+    )

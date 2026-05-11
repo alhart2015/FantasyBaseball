@@ -12,11 +12,14 @@ from sklearn.pipeline import Pipeline
 from fantasy_baseball.streaks.analysis.predictors import (
     DEFAULT_C_GRID,
     EXPECTED_FEATURE_COLUMNS,
+    PHASE_4_MODELS,
+    AllModelsResult,
     EvaluationResult,
     FitResult,
     bootstrap_coef_ci,
     build_training_frame,
     evaluate_model,
+    fit_all_models,
     fit_one_model,
     permutation_feature_importance,
 )
@@ -339,3 +342,70 @@ def test_permutation_feature_importance_returns_per_feature_mean_and_std() -> No
     for _col, (mean_drop, std_drop) in importance.items():
         assert np.isfinite(mean_drop)
         assert std_drop >= 0.0
+
+
+def _seed_two_season_pipeline(conn) -> None:
+    """Seed two seasons so the orchestrator has both train and val to work with."""
+    _seed_pipeline(conn, n_players=20, n_days=90, season=2023)
+    _seed_pipeline(conn, n_players=20, n_days=90, season=2024)
+    # Re-run thresholds and labels for the combined season_set.
+    compute_thresholds(conn, season_set="2023-2024", qualifying_pa=50)
+    apply_labels(conn, season_set="2023-2024")
+
+
+def test_fit_all_models_returns_one_result_per_phase_4_model(tmp_path) -> None:
+    conn = get_connection(":memory:")
+    _seed_two_season_pipeline(conn)
+    # For the unit test we use 2023 as train and 2024 as val just to exercise
+    # the orchestrator's two-frame plumbing. (Real-data acceptance uses
+    # 2023-2024 train / 2025 val.)
+    result = fit_all_models(
+        conn,
+        season_set_train="2023",
+        season_set_val="2024",
+        window_days=14,
+        C_grid=(1.0,),
+        n_bootstrap=10,
+        random_state=42,
+    )
+    assert isinstance(result, AllModelsResult)
+    # If the synthetic fixture is too small to produce any labeled rows for a
+    # given (cat, dir), the orchestrator records a None fit for it. The
+    # length of the dict still matches the model spec.
+    assert len(result.fits) == len(PHASE_4_MODELS)
+
+
+def test_fit_all_models_writes_to_model_fits_table() -> None:
+    conn = get_connection(":memory:")
+    _seed_two_season_pipeline(conn)
+    fit_all_models(
+        conn,
+        season_set_train="2023",
+        season_set_val="2024",
+        window_days=14,
+        C_grid=(1.0,),
+        n_bootstrap=10,
+        random_state=42,
+    )
+    n = conn.execute("SELECT COUNT(*) FROM model_fits").fetchone()[0]
+    # At least one model should have produced enough rows to fit.
+    assert n >= 1
+
+
+def test_fit_all_models_skips_models_with_no_training_rows() -> None:
+    """If a (cat, dir) frame is empty after filtering, the result entry is
+    None and no row is written to model_fits for it."""
+    conn = get_connection(":memory:")
+    # Bare init — no seeded data.
+    result = fit_all_models(
+        conn,
+        season_set_train="2099",
+        season_set_val="2100",
+        window_days=14,
+        C_grid=(1.0,),
+        n_bootstrap=10,
+        random_state=42,
+    )
+    assert all(v is None for v in result.fits.values())
+    n = conn.execute("SELECT COUNT(*) FROM model_fits").fetchone()[0]
+    assert n == 0
