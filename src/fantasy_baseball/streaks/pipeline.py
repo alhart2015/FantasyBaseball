@@ -91,11 +91,14 @@ def _to_yahoo_hitter(entry: dict[str, Any]) -> YahooHitter:
 def _fetch_yahoo_hitters(
     league: Any, *, team_name: str
 ) -> tuple[list[YahooHitter], list[YahooHitter]]:
-    """Fetch the user's roster + dedup'd FAs across hitter positions.
+    """Yahoo roster + dedup'd FA fetch across hitter positions, parallel
+    across positions.
 
-    Identical to ``scripts/streaks/run_sunday_report.py::_fetch_yahoo_data``.
-    Lifted here so dashboard refresh and the Sunday CLI share one
-    implementation. The CLI will be refactored in Task 5 to delegate.
+    Returns ``(roster_hitters, fa_hitters)``. The FA list is name-dedup'd
+    across positions -- Yahoo returns the same player under each of their
+    eligible positions, so we'd see duplicates without this. FA fetches
+    fan out across positions via ThreadPoolExecutor since each call is an
+    independent synchronous HTTP round-trip.
     """
     teams = fetch_teams(league)
     user_team_key = find_user_team_key(teams, team_name)

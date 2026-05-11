@@ -95,11 +95,14 @@ league:
 
     output_dir = tmp_path / "reports"
     with (
-        patch.object(run_sunday_report, "fetch_season", _fake_fetch_season),
+        patch("fantasy_baseball.streaks.pipeline.fetch_season", _fake_fetch_season),
         patch("fantasy_baseball.auth.yahoo_auth.get_yahoo_session", _fake_get_yahoo_session),
         patch("fantasy_baseball.auth.yahoo_auth.get_league", _fake_get_league),
-        patch.object(run_sunday_report, "_fetch_yahoo_data", _fake_fetch_yahoo_data),
-        patch.object(run_sunday_report, "local_today", lambda: date(2024, 6, 30)),
+        patch(
+            "fantasy_baseball.streaks.pipeline._fetch_yahoo_hitters",
+            _fake_fetch_yahoo_data,
+        ),
+        patch("fantasy_baseball.streaks.pipeline.local_today", lambda: date(2024, 6, 30)),
     ):
         exit_code = run_sunday_report.main(
             [
