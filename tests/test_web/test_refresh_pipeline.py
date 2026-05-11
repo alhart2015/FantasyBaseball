@@ -526,3 +526,188 @@ class TestProbableStartersWiring:
         assert "Mason Miller" not in captured["roster_names"], (
             f"RP with gs=0 should be filtered out; got {captured['roster_names']}"
         )
+
+
+# --------------------------------------------------------------------- #
+#         Task 8 — RefreshRun._compute_streaks (streak cache step)       #
+# --------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def kv_isolation(tmp_path, monkeypatch):
+    """Per-test isolated SQLite KV.
+
+    Mirrors the fixture in ``test_season_routes.py``. ``write_cache``
+    and ``get_kv`` route through ``kv_store.get_kv()``; pointing the KV
+    at an empty tmp_path file lets ``_compute_streaks`` write through
+    the real cache layer without polluting other tests' state.
+    """
+    from fantasy_baseball.data import kv_store
+
+    monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(tmp_path / "test.db"))
+    kv_store._reset_singleton()
+    yield
+    kv_store._reset_singleton()
+
+
+def _build_refresh_run_for_streak_test():
+    """Build a minimal ``RefreshRun`` for unit-testing ``_compute_streaks``.
+
+    Mirrors how ``test_fetch_probable_starters_passes_lookback_and_filters_sp``
+    builds a bare ``RefreshRun`` and sets just the attributes the step
+    reads. ``_compute_streaks`` needs ``self.config`` (team_name,
+    league_id, season_year), ``self.league`` (opaque sentinel — the
+    streak pipeline is patched out so it's never dereferenced), and the
+    inherited ``self.logger`` / ``self._progress``.
+    """
+    from fantasy_baseball.config import LeagueConfig
+    from fantasy_baseball.web.refresh_pipeline import RefreshRun
+
+    run = RefreshRun()
+    run.config = LeagueConfig(
+        league_id=123,
+        num_teams=12,
+        game_code="mlb",
+        team_name="t",
+        draft_position=1,
+        keepers=[],
+        roster_slots={},
+        projection_systems=["atc"],
+        projection_weights={"atc": 1.0},
+        sgp_overrides={},
+        teams={},
+        strategy="no_punt_opp",
+        scoring_mode="var",
+        season_year=2026,
+        season_start="2026-03-27",
+        season_end="2026-09-28",
+    )
+    # Opaque sentinel — compute_streak_report is monkeypatched so the
+    # value is never inspected.
+    run.league = object()
+    return run
+
+
+def test_compute_streaks_writes_cache(monkeypatch, kv_isolation) -> None:
+    """_compute_streaks wraps compute_streak_report + serializes + writes cache."""
+    import json
+    from datetime import date
+
+    from fantasy_baseball.data import kv_store
+    from fantasy_baseball.data.cache_keys import CacheKey, redis_key
+    from fantasy_baseball.streaks.inference import Driver, PlayerCategoryScore
+    from fantasy_baseball.streaks.reports.sunday import Report, ReportRow
+
+    score = PlayerCategoryScore(
+        player_id=1,
+        category="hr",
+        label="hot",
+        probability=0.6,
+        drivers=(Driver(feature="barrel_pct", z_score=1.0),),
+        window_end=date(2026, 5, 10),
+    )
+    row = ReportRow(
+        name="X",
+        positions=("OF",),
+        player_id=1,
+        composite=1,
+        scores={"hr": score},
+        max_probability=0.6,
+    )
+    fake_report = Report(
+        report_date=date(2026, 5, 11),
+        window_end=date(2026, 5, 10),
+        team_name="t",
+        league_id=1,
+        season_set_train="2023-2025",
+        roster_rows=(row,),
+        fa_rows=(),
+        driver_lines=(),
+        skipped=(),
+    )
+
+    monkeypatch.setattr(
+        "fantasy_baseball.web.refresh_pipeline.compute_streak_report",
+        lambda *a, **kw: fake_report,
+    )
+    # ``compute_streak_report`` is the only thing that touches DuckDB —
+    # since we're patching it, also short-circuit the get_connection
+    # call so no real DB file is opened.
+    monkeypatch.setattr(
+        "fantasy_baseball.web.refresh_pipeline.get_connection",
+        lambda *a, **kw: _FakeConn(),
+    )
+
+    run = _build_refresh_run_for_streak_test()
+    run._compute_streaks()
+
+    cached = kv_store.get_kv().get(redis_key(CacheKey.STREAK_SCORES))
+    assert cached is not None
+    payload = json.loads(cached)
+    assert payload["team_name"] == "t"
+    assert len(payload["roster_rows"]) == 1
+
+
+def test_compute_streaks_swallows_failures(monkeypatch, kv_isolation, caplog) -> None:
+    """A failure in compute_streak_report logs but doesn't crash the pipeline."""
+    from fantasy_baseball.data import kv_store
+    from fantasy_baseball.data.cache_keys import CacheKey, redis_key
+
+    def _boom(*a, **kw):
+        raise RuntimeError("DuckDB unhappy")
+
+    monkeypatch.setattr("fantasy_baseball.web.refresh_pipeline.compute_streak_report", _boom)
+    monkeypatch.setattr(
+        "fantasy_baseball.web.refresh_pipeline.get_connection",
+        lambda *a, **kw: _FakeConn(),
+    )
+
+    run = _build_refresh_run_for_streak_test()
+    with caplog.at_level("ERROR", logger="fantasy_baseball.web.refresh_pipeline"):
+        run._compute_streaks()  # must not raise
+
+    cached = kv_store.get_kv().get(redis_key(CacheKey.STREAK_SCORES))
+    assert cached is None  # not overwritten on failure
+
+    # ``log.exception`` attaches the original exception via ``exc_info``;
+    # the formatted record has the traceback text, but ``record.message``
+    # is just the log call's static string. Check both surfaces so we
+    # confirm the underlying error was actually captured (not silently
+    # swallowed with a generic message).
+    def _record_carries_boom(r) -> bool:
+        if "DuckDB unhappy" in r.getMessage():
+            return True
+        return bool(r.exc_info and "DuckDB unhappy" in str(r.exc_info[1]))
+
+    assert any(_record_carries_boom(r) for r in caplog.records)
+
+
+def test_compute_streaks_closes_connection_on_failure(monkeypatch, kv_isolation) -> None:
+    """The DuckDB connection must be closed even when streak compute raises."""
+
+    closed = {"n": 0}
+
+    class _TrackingConn:
+        def close(self) -> None:
+            closed["n"] += 1
+
+    monkeypatch.setattr(
+        "fantasy_baseball.web.refresh_pipeline.get_connection",
+        lambda *a, **kw: _TrackingConn(),
+    )
+
+    def _boom(*a, **kw):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr("fantasy_baseball.web.refresh_pipeline.compute_streak_report", _boom)
+
+    run = _build_refresh_run_for_streak_test()
+    run._compute_streaks()
+    assert closed["n"] == 1, "connection must be closed on failure"
+
+
+class _FakeConn:
+    """Tiny stand-in for a DuckDB connection — only ``close()`` is exercised."""
+
+    def close(self) -> None:
+        return None
