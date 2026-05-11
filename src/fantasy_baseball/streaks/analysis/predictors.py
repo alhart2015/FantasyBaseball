@@ -625,7 +625,11 @@ def _fit_one_phase_4_model(
     random_state: int,
 ) -> PerModelResult | None:
     """Build train + val frames for one model; fit, evaluate, bootstrap, importance."""
-    all_seasons = _parse_season_set(season_set_train) + _parse_season_set(season_set_val)
+    train_set = set(_parse_season_set(season_set_train))
+    val_set = set(_parse_season_set(season_set_val))
+    if train_set & val_set:
+        raise ValueError(f"train and val season sets overlap: {sorted(train_set & val_set)}")
+    all_seasons = sorted(train_set | val_set)
     season_set_combined = f"{min(all_seasons)}-{max(all_seasons)}"
     full = build_training_frame(
         conn,
@@ -671,8 +675,6 @@ def _fit_one_phase_4_model(
         random_state=random_state,
     )
     eval_result = evaluate_model(pipeline=fit_result.pipeline, X=X_val, y=y_val, n_bins=10)
-    # NOTE: bootstrap_coef_ci no longer takes a `pipeline` kwarg (was dropped
-    # in commit 9640cf2 because the function refits internally from chosen_C).
     coef_ci = bootstrap_coef_ci(
         X=X_train,
         y=y_train,
