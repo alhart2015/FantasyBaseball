@@ -27,7 +27,6 @@ from fantasy_baseball.scoring import team_sds_from_json
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, RATE_STATS, Category
 from fantasy_baseball.web.season_data import (
     CacheKey,
-    read_cache,
     read_cache_dict,
     read_cache_list,
     read_meta,
@@ -453,8 +452,7 @@ def register_routes(app: Flask) -> None:
     @app.route("/streaks")
     def streaks():
         meta = read_meta()
-        payload_raw = read_cache(CacheKey.STREAK_SCORES)
-        payload = payload_raw if isinstance(payload_raw, dict) else None
+        payload = read_cache_dict(CacheKey.STREAK_SCORES)
         return render_template(
             "season/streaks.html",
             meta=meta,
