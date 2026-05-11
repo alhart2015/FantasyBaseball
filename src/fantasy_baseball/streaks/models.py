@@ -91,7 +91,7 @@ class HitterStatcastPA:
     launch_speed: float | None
     launch_angle: float | None
     estimated_woba_using_speedangle: float | None
-    barrel: bool | None
+    launch_speed_angle: int | None
     at_bat_number: int | None
     bb_type: str | None
     estimated_ba_using_speedangle: float | None

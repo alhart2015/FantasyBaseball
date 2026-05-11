@@ -52,7 +52,7 @@ _SCHEMA_DDL = [
         launch_speed DOUBLE,
         launch_angle DOUBLE,
         estimated_woba_using_speedangle DOUBLE,
-        barrel BOOLEAN,
+        launch_speed_angle INTEGER,
         at_bat_number INTEGER,
         bb_type VARCHAR,
         estimated_ba_using_speedangle DOUBLE,

@@ -110,7 +110,8 @@ def _seed_pipeline(conn, *, n_players: int = 16, n_days: int = 90, season: int =
                         launch_speed=92.0 if high else 85.0,
                         launch_angle=15.0,
                         estimated_woba_using_speedangle=0.400 if high else 0.280,
-                        barrel=high and pa_idx == 0,
+                        # 6 == barrel (Statcast classifier); 3 == under for low-EV contact
+                        launch_speed_angle=6 if (high and pa_idx == 0) else 3,
                         at_bat_number=pa_idx + 1,
                         bb_type="line_drive",
                         estimated_ba_using_speedangle=0.330 if high else 0.230,

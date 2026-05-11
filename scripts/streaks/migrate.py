@@ -1,13 +1,15 @@
 """CLI: run the streaks DuckDB schema migration.
 
 Usage:
-    python -m scripts.streaks.migrate [--db-path PATH] [--phase {2,3,4}]
+    python -m scripts.streaks.migrate [--db-path PATH] [--phase {2,3,4,5}]
 
-Default is ``--phase 4`` (latest). After Phase 2 migration, re-run history
+Default is ``--phase 5`` (latest). After Phase 2 migration, re-run history
 fetch (``python -m scripts.streaks.fetch_history --season ...``). After
 Phase 3 migration, re-run ``apply_labels`` to repopulate labels. After
 Phase 4 migration, re-run ``scripts/streaks/load_projections.py`` to
-backfill the new dense-cat rate columns.
+backfill the new dense-cat rate columns. After Phase 5 migration, re-run
+``scripts/streaks/fetch_history.py --force-statcast --season {year}`` for
+each year to populate ``launch_speed_angle`` on existing PA rows.
 """
 
 from __future__ import annotations
@@ -25,26 +27,29 @@ from fantasy_baseball.streaks.data.migrate import (
     migrate_to_phase_2,
     migrate_to_phase_3,
     migrate_to_phase_4,
+    migrate_to_phase_5,
 )
 from fantasy_baseball.streaks.data.schema import DEFAULT_DB_PATH, get_connection
+
+_PHASE_FUNCS = {
+    2: migrate_to_phase_2,
+    3: migrate_to_phase_3,
+    4: migrate_to_phase_4,
+    5: migrate_to_phase_5,
+}
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Migrate the streaks DuckDB schema.")
     parser.add_argument("--db-path", type=Path, default=DEFAULT_DB_PATH)
-    parser.add_argument("--phase", type=int, choices=[2, 3, 4], default=4)
+    parser.add_argument("--phase", type=int, choices=sorted(_PHASE_FUNCS), default=5)
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     conn = get_connection(args.db_path)
     try:
-        if args.phase == 2:
-            migrate_to_phase_2(conn)
-        elif args.phase == 3:
-            migrate_to_phase_3(conn)
-        else:
-            migrate_to_phase_4(conn)
+        _PHASE_FUNCS[args.phase](conn)
     finally:
         conn.close()
     return 0

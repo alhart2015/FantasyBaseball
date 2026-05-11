@@ -69,7 +69,7 @@ def _stub_statcast(start, end):
             launch_speed=95.0,
             launch_angle=10.0,
             estimated_woba_using_speedangle=0.4,
-            barrel=False,
+            launch_speed_angle=3,
             at_bat_number=1,
             bb_type=None,
             estimated_ba_using_speedangle=None,

@@ -58,7 +58,7 @@ def test_hitter_statcast_pa_fields_in_expected_order() -> None:
         "launch_speed",
         "launch_angle",
         "estimated_woba_using_speedangle",
-        "barrel",
+        "launch_speed_angle",
         "at_bat_number",
         "bb_type",
         "estimated_ba_using_speedangle",

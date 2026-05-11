@@ -92,7 +92,7 @@ def _statcast_row(player_id=660271, dt=date(2024, 4, 1), pa_index=1, event="sing
         launch_speed=95.5,
         launch_angle=12.0,
         estimated_woba_using_speedangle=0.45,
-        barrel=False,
+        launch_speed_angle=3,
         at_bat_number=pa_index,
         bb_type=None,
         estimated_ba_using_speedangle=0.40,

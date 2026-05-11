@@ -192,7 +192,7 @@ def test_add_statcast_peripherals_aggregates_per_window() -> None:
                 launch_speed=100.0,
                 launch_angle=10.0,
                 estimated_woba_using_speedangle=0.8,
-                barrel=False,
+                launch_speed_angle=3,  # under — non-barrel
                 at_bat_number=i,
                 bb_type="line_drive",
                 estimated_ba_using_speedangle=0.6,
@@ -201,10 +201,10 @@ def test_add_statcast_peripherals_aggregates_per_window() -> None:
             for i in (1, 2, 3)
         ]
         + [
-            # NOTE: only pa_index=1 has barrel=True so the assertion below
-            # ("1 of 5 barrels = 0.2") is consistent with the fixture. The
-            # plan snippet had ``barrel=True`` for both 4/3 PAs which would
-            # produce 0.4, not 0.2 — fixed here to match the asserted spec.
+            # NOTE: only pa_index=1 has launch_speed_angle=6 (barrel) so the
+            # assertion below ("1 of 5 barrels = 0.2") is consistent with the
+            # fixture. pa_index=2 uses 5 (solid contact) to exercise the
+            # non-barrel branch of the SUM(CASE WHEN ... = 6) aggregation.
             HitterStatcastPA(
                 player_id=1,
                 date=date(2025, 4, 3),
@@ -213,7 +213,7 @@ def test_add_statcast_peripherals_aggregates_per_window() -> None:
                 launch_speed=None,
                 launch_angle=None,
                 estimated_woba_using_speedangle=0.0,
-                barrel=(i == 1),
+                launch_speed_angle=(6 if i == 1 else 5),
                 at_bat_number=i,
                 bb_type=None,
                 estimated_ba_using_speedangle=0.0,

@@ -24,6 +24,13 @@ def main() -> int:
     parser.add_argument("--season", type=int, required=True)
     parser.add_argument("--min-pa", type=int, default=150)
     parser.add_argument("--db-path", type=Path, default=DEFAULT_DB_PATH)
+    parser.add_argument(
+        "--force-statcast",
+        action="store_true",
+        help="Re-fetch and upsert Statcast PAs even when dates for this season "
+        "are already in the DB. Used to backfill new columns after a schema "
+        "migration (INSERT OR REPLACE updates existing PK rows in place).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -33,7 +40,12 @@ def main() -> int:
 
     conn = get_connection(args.db_path)
     try:
-        summary = fetch_season(season=args.season, conn=conn, min_pa=args.min_pa)
+        summary = fetch_season(
+            season=args.season,
+            conn=conn,
+            min_pa=args.min_pa,
+            force_statcast=args.force_statcast,
+        )
     finally:
         conn.close()
 
