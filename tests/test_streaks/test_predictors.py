@@ -232,12 +232,12 @@ def test_build_training_frame_includes_season_rate_for_dense_cats() -> None:
 
 
 def _make_synthetic_X_y(
-    n_rows: int = 200, n_features: int = 12, seed: int = 0
+    n_rows: int = 200, seed: int = 0
 ) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
     """Synthetic, linearly-separable-ish dataset for fit-loop unit tests."""
     rng = np.random.default_rng(seed)
     X = pd.DataFrame(
-        rng.normal(size=(n_rows, n_features)),
+        rng.normal(size=(n_rows, len(EXPECTED_FEATURE_COLUMNS))),
         columns=list(EXPECTED_FEATURE_COLUMNS),
     )
     # Make target weakly dependent on the first feature.
