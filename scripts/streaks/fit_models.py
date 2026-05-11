@@ -56,7 +56,9 @@ def main(argv: list[str] | None = None) -> int:
     print()
     print(f"Phase 4 fit summary — train={args.season_set_train} / val={args.season_set_val}")
     print("-" * 75)
-    print(f"{'model_id':30s} {'C':>6s} {'cv_auc':>8s} {'val_auc':>8s} {'n_train':>8s} {'n_val':>8s}")
+    print(
+        f"{'model_id':30s} {'C':>6s} {'cv_auc':>8s} {'val_auc':>8s} {'n_train':>8s} {'n_val':>8s}"
+    )
     per_cat_max: dict[str, float] = {}
     for (cat, direction), per_model in result.fits.items():
         if per_model is None:
