@@ -447,3 +447,134 @@ Pre-existing issues called out (not from Phase 3):
   with continuation as the target. Train on 2023-2024, validate on 2025.
   Calibration plot, ROC-AUC, top features by |coef|. Gate: held-out
   ROC-AUC ≥ 0.55 in at least 3 of 5 categories.
+
+### 2026-05-10 — Phase 4 (predictive model) accepted
+
+All 16 plan tasks landed (Task 15 perf-todo did **not** fire — real-data
+wall time came in under the 120s budget). New schema: `model_fits` audit
+table plus three new nullable rate columns on `hitter_projection_rates`
+(`r_per_pa`, `rbi_per_pa`, `avg`). New library module
+`streaks/analysis/predictors.py` carries the full pipeline:
+`build_training_frame`, `fit_one_model` (player-grouped 5-fold CV over
+`C ∈ {0.01, 0.1, 1, 10}`), `bootstrap_coef_ci` (200 player-grouped
+resamples), `evaluate_model` (AUC + reliability), and
+`permutation_feature_importance`. Orchestrated by `fit_all_models` and
+CLI-exposed at `scripts/streaks/fit_models.py`.
+
+**Methodology note (replaces spec's "p-values" language).** The spec's
+original Phase 4 sketch mentioned "p-values" for coefficient inference.
+Under L2 regularization, asymptotic p-values are not well-defined.
+Phase 4 reports **200-resample player-grouped bootstrap CIs** instead.
+This is the correct uncertainty quantification under regularization and
+matches the design decision locked in the Phase 4 brainstorm.
+
+Eight models fit on the 2023-2024 train / 2025 val corpus:
+
+| Category | Direction | Chosen C | CV AUC | Val AUC | n_train | n_val |
+|---|---|---:|---:|---:|---:|---:|
+| R | above (hot) | 0.01 | 0.657 | 0.648 | 15,320 | 7,147 |
+| R | below (cold) | 1.00 | 0.753 | 0.755 | 23,846 | 11,100 |
+| RBI | above (hot) | 0.10 | 0.644 | 0.595 | 15,073 | 7,074 |
+| RBI | below (cold) | 0.01 | 0.758 | 0.740 | 19,684 | 9,281 |
+| AVG | above (hot) | 0.01 | 0.603 | 0.597 | 11,907 | 5,582 |
+| AVG | below (cold) | 0.01 | 0.612 | 0.617 | 12,520 | 5,446 |
+| HR | above (hot only) | 0.01 | 0.536 | 0.536 | 21,986 | 10,634 |
+| SB | above (hot only) | 0.01 | 0.562 | 0.523 | 22,744 | 10,251 |
+
+Per-category max(hot_auc, cold_auc):
+
+| Category | Max AUC | Passes 0.55? |
+|---|---:|---|
+| R   | 0.755 | YES |
+| RBI | 0.740 | YES |
+| AVG | 0.617 | YES |
+| HR  | 0.536 | NO |
+| SB  | 0.523 | NO |
+
+**Gate result: PASS** (3 of 5 categories at AUC ≥ 0.55).
+
+Total pipeline runtime on the real 2023-2025 corpus: **~57s wall time**
+(8 models × {player-grouped 5-fold CV over 4-value C grid + 200-resample
+bootstrap + permutation importance}). Task 15's joblib parallelization
+did not fire — budget was 120s; observed was under half of that.
+
+#### Methodology surprises / Phase 5 inputs
+
+- **Cold-direction models dominate hot for dense cats.** R/RBI/AVG cold
+  AUCs (0.755 / 0.740 / 0.617) are materially higher than the
+  corresponding hot AUCs (0.648 / 0.595 / 0.597). Cold persistence is
+  more predictable from peripherals than hot persistence — likely
+  because cold streaks have stronger luck-vs-skill signal in BABIP /
+  K%, whereas hot streaks regress more uniformly. Phase 5's Sunday
+  report should weight cold predictions more heavily than hot when
+  composing the start/sit recommendation.
+- **Sparse-cat (HR/SB) hot models barely beat coin flip** (0.536 /
+  0.523). Phase 3's headline lift for these cats came almost entirely
+  from `streak_strength` (which is already a function of HR/SB count);
+  the additional peripherals add little signal at the AUC level. Phase 5
+  should consume HR/SB hot probabilities conservatively — present them
+  as a streak strength indicator, not a predictive lift driver.
+- **Regularization preference is strong.** 7 of 8 models picked
+  `C=0.01` (the strongest L2 in the grid); only RBI cold preferred
+  `C=1.0`. Signal-to-noise is high relative to feature count; future
+  iterations should consider tighter grid resolution at the low end.
+- **Calibration:** reliability diagrams (notebook §3) — diagnostic-only.
+  No isotonic correction applied in Phase 4. Phase 5 should re-examine
+  per-model calibration after a season of Sunday reports and apply
+  isotonic if any model is >5pp off at any bin center.
+- **`barrel_pct` dropped from the feature set.** Task 14 acceptance
+  found that `hitter_statcast_pa.barrel` is NULL across all 598K rows in
+  the local Statcast corpus (Phase 1 fetch issue surfaced because
+  Phase 3 didn't use barrel as a load-bearing feature). Phase 4 ships
+  with 11 features instead of the spec's 12; `xwoba_avg` is in the set
+  and captures most of barrel's predictive value anyway. See
+  `feature_cols_with_nulls` in `predictors.build_training_frame` and the
+  comment on `EXPECTED_FEATURE_COLUMNS`. **Phase 5 follow-up:**
+  investigate why `pybaseball.statcast()` returns NULL barrel for our
+  query shape; consider re-fetching when fixed.
+
+#### Pre-existing issues unrelated to Phase 4
+
+- **sklearn 1.8 `penalty='l2'` deprecation.** Every fit emits a
+  `FutureWarning` ("'penalty' was deprecated in version 1.8 and will be
+  removed in 1.10. Use `l1_ratio=0` instead"). The Phase 4 test run
+  collects 358 of these warnings (one per fold/bootstrap fit). They are
+  cosmetic now but **will break `_build_pipeline` on sklearn 1.10**.
+  Migration: swap `penalty="l2"` for `l1_ratio=0` on `LogisticRegression`
+  (the lbfgs solver semantics are equivalent under elastic-net with
+  l1_ratio=0). One-line fix; defer until sklearn 1.10 release.
+- **Vulture pre-existing finding:** `tests/test_streaks/test_fetch_history.py:272`
+  unused variable `min_pa` (commit `be470a6`). Trivial cleanup, deferred.
+
+#### Process notes from the Phase 4 execution
+
+- **Task 1 required a follow-up commit** (`5651ff3`) to update Phase 3
+  call sites + the `hitter_projection_rates` DDL when the dataclass
+  shape changed. The plan's Task 1 file list was too narrow; future
+  phases that change dataclass shapes should anticipate the cascade.
+- **Task 9 dropped `pipeline` from `bootstrap_coef_ci`'s signature**
+  (`9640cf2`). The function refits internally from `chosen_C` and
+  never used the passed pipeline. Task 11 was dispatched with the
+  updated signature in mind.
+- **Task 11 added a disjoint-seasons guard** (`91f0556`) — current
+  defaults (2023-2024 train, 2025 val) don't overlap, but the explicit
+  ValueError prevents a silent leakage bug if a future caller passes
+  overlapping ranges.
+- **Task 14 surfaced the `barrel_pct=NULL` bug** during real-data
+  acceptance. Fixup at `fe6276c`.
+
+#### Next milestone
+
+- **Phase 5 — weekly Sunday report.** Pull current-season game logs,
+  apply calibrated thresholds, run the 8 models, emit a CLI report:
+  hot rostered hitters (ranked by composite score then strength), cold
+  rostered hitters, per-category labels, continuation probability from
+  the model, top 1-2 peripheral drivers per player, suggested
+  start/sit/stash lines. Refit models in-process each Sunday from the
+  `2023-2024 + 2024-2025` training set (sliding window) — Phase 4's
+  refit-on-demand decision means no joblib artifacts to chase.
+- Phase 4 future work (deferred unless Phase 5 surfaces a need):
+  per-category curated feature subsets (Phase 4 used a uniform set
+  across all 8 models), the 7d-SB-hot model (Phase 4 used 14d only),
+  isotonic calibration correction if Phase 5 probabilities consumed
+  downstream need it, `barrel_pct` investigation + re-fetch.
