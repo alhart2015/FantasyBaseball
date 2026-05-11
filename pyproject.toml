@@ -33,6 +33,7 @@ dev = [
     "types-requests>=2.31",
     "duckdb>=1.0",
     "pybaseball>=2.2",
+    "scikit-learn>=1.5",
 ]
 
 [tool.setuptools.packages.find]
