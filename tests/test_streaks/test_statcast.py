@@ -50,7 +50,8 @@ def test_pitches_to_pa_rows_assigns_pa_index_per_player_per_date():
             "launch_speed": [95.0, 102.0, None, 110.0],
             "launch_angle": [10.0, 25.0, None, 28.0],
             "estimated_woba_using_speedangle": [0.4, 0.7, 0.0, 0.95],
-            "barrel": [0, 1, 0, 1],
+            # Statcast's 1-6 classifier (6=barrel). The strikeout is non-batted-ball -> NaN.
+            "launch_speed_angle": pd.array([3, 6, None, 6], dtype="Int64"),
         }
     )
     rows = pitches_to_pa_rows(df)
@@ -68,9 +69,10 @@ def test_pitches_to_pa_rows_assigns_pa_index_per_player_per_date():
     assert trout_rows[0].date == date(2024, 4, 1)
     assert trout_rows[0].pa_index == 1
     assert trout_rows[0].event == "single"
+    assert trout_rows[0].launch_speed_angle == 3
     assert trout_rows[1].pa_index == 2
     assert trout_rows[1].event == "double"
-    assert trout_rows[1].barrel is True
+    assert trout_rows[1].launch_speed_angle == 6  # barrel
     # Trout 4/2: 1 PA, index 1
     assert trout_rows[2].date == date(2024, 4, 2)
     assert trout_rows[2].pa_index == 1
@@ -78,9 +80,10 @@ def test_pitches_to_pa_rows_assigns_pa_index_per_player_per_date():
     assert other_rows[0].date == date(2024, 4, 1)
     assert other_rows[0].pa_index == 1
     assert other_rows[0].launch_speed is None
+    assert other_rows[0].launch_speed_angle is None
 
 
-def test_pitches_to_pa_rows_handles_missing_barrel_column():
+def test_pitches_to_pa_rows_handles_missing_launch_speed_angle_column():
     df = pd.DataFrame(
         {
             "events": ["single"],
@@ -92,7 +95,7 @@ def test_pitches_to_pa_rows_handles_missing_barrel_column():
         }
     )
     rows = pitches_to_pa_rows(df)
-    assert rows[0].barrel is None
+    assert rows[0].launch_speed_angle is None
 
 
 def test_pitches_to_pa_rows_unboxes_numpy_scalars():
@@ -105,7 +108,7 @@ def test_pitches_to_pa_rows_unboxes_numpy_scalars():
             "launch_speed": [95.0],
             "launch_angle": [10.0],
             "estimated_woba_using_speedangle": [0.4],
-            "barrel": [1],
+            "launch_speed_angle": pd.array([6], dtype="Int64"),
         }
     )
     row = pitches_to_pa_rows(df)[0]
@@ -117,7 +120,7 @@ def test_pitches_to_pa_rows_unboxes_numpy_scalars():
     assert type(row.estimated_woba_using_speedangle) is float
     assert type(row.player_id) is int
     assert type(row.pa_index) is int
-    assert type(row.barrel) is bool
+    assert type(row.launch_speed_angle) is int
 
 
 def test_fetch_statcast_pa_for_date_range_concatenates_chunks():
@@ -131,7 +134,7 @@ def test_fetch_statcast_pa_for_date_range_concatenates_chunks():
             "launch_speed": [95.0],
             "launch_angle": [10.0],
             "estimated_woba_using_speedangle": [0.4],
-            "barrel": [0],
+            "launch_speed_angle": pd.array([3], dtype="Int64"),
         }
     )
     chunk_b = pd.DataFrame(
@@ -142,7 +145,7 @@ def test_fetch_statcast_pa_for_date_range_concatenates_chunks():
             "launch_speed": [110.0],
             "launch_angle": [28.0],
             "estimated_woba_using_speedangle": [0.95],
-            "barrel": [1],
+            "launch_speed_angle": pd.array([6], dtype="Int64"),
         }
     )
     with patch(
@@ -164,7 +167,7 @@ def test_pitches_to_pa_rows_captures_new_statcast_fields() -> None:
                 "launch_speed": 100.0,
                 "launch_angle": 12.0,
                 "estimated_woba_using_speedangle": 0.85,
-                "barrel": False,
+                "launch_speed_angle": 4,  # flare/burner
                 "at_bat_number": 1,
                 "bb_type": "line_drive",
                 "estimated_ba_using_speedangle": 0.71,
@@ -194,7 +197,7 @@ def test_pitches_to_pa_rows_assigns_pa_index_in_at_bat_number_order() -> None:
                 "launch_speed": None,
                 "launch_angle": None,
                 "estimated_woba_using_speedangle": None,
-                "barrel": None,
+                "launch_speed_angle": None,
                 "at_bat_number": 3,
                 "bb_type": None,
                 "estimated_ba_using_speedangle": None,
@@ -207,7 +210,7 @@ def test_pitches_to_pa_rows_assigns_pa_index_in_at_bat_number_order() -> None:
                 "launch_speed": None,
                 "launch_angle": None,
                 "estimated_woba_using_speedangle": None,
-                "barrel": None,
+                "launch_speed_angle": None,
                 "at_bat_number": 1,
                 "bb_type": None,
                 "estimated_ba_using_speedangle": None,
@@ -220,7 +223,7 @@ def test_pitches_to_pa_rows_assigns_pa_index_in_at_bat_number_order() -> None:
                 "launch_speed": None,
                 "launch_angle": None,
                 "estimated_woba_using_speedangle": None,
-                "barrel": None,
+                "launch_speed_angle": None,
                 "at_bat_number": 2,
                 "bb_type": None,
                 "estimated_ba_using_speedangle": None,
@@ -247,7 +250,7 @@ def test_pitches_to_pa_rows_handles_missing_at_bat_number_column() -> None:
                 "launch_speed": None,
                 "launch_angle": None,
                 "estimated_woba_using_speedangle": None,
-                "barrel": None,
+                "launch_speed_angle": None,
                 "bb_type": None,
                 "estimated_ba_using_speedangle": None,
                 "hit_distance_sc": None,

@@ -146,6 +146,11 @@ def _build_daily_statcast(conn: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     barrel_sum, barrel_n, xwoba_sum, xwoba_n. Empty frame if the source
     table has no rows.
 
+    ``barrel`` is derived from Statcast's ``launch_speed_angle`` classifier
+    (value 6 == barrel; values 1-5 are weaker contact tiers; NULL on
+    non-batted-ball PAs). We pivot here rather than store a redundant
+    derived column.
+
     Hoisted out of :func:`_add_statcast_peripherals` so :func:`compute_windows`
     can run the SQL aggregate once and reuse the result across the 3
     window sizes.
@@ -157,8 +162,9 @@ def _build_daily_statcast(conn: duckdb.DuckDBPyConnection) -> pd.DataFrame:
             date,
             SUM(launch_speed) FILTER (WHERE launch_speed IS NOT NULL) AS ls_sum,
             COUNT(launch_speed) FILTER (WHERE launch_speed IS NOT NULL) AS ls_n,
-            SUM(CASE WHEN barrel THEN 1 ELSE 0 END) FILTER (WHERE barrel IS NOT NULL) AS barrel_sum,
-            COUNT(*) FILTER (WHERE barrel IS NOT NULL) AS barrel_n,
+            SUM(CASE WHEN launch_speed_angle = 6 THEN 1 ELSE 0 END)
+                FILTER (WHERE launch_speed_angle IS NOT NULL) AS barrel_sum,
+            COUNT(*) FILTER (WHERE launch_speed_angle IS NOT NULL) AS barrel_n,
             SUM(estimated_woba_using_speedangle) FILTER (WHERE estimated_woba_using_speedangle IS NOT NULL) AS xwoba_sum,
             COUNT(estimated_woba_using_speedangle) FILTER (WHERE estimated_woba_using_speedangle IS NOT NULL) AS xwoba_n
         FROM hitter_statcast_pa

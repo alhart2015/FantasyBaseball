@@ -76,3 +76,28 @@ def migrate_to_phase_4(conn: duckdb.DuckDBPyConnection) -> None:
         logger.info("ALTER hitter_projection_rates ADD COLUMN IF NOT EXISTS %s", col)
     init_schema(conn)
     logger.info("Recreated/ensured Phase 4 tables via init_schema (model_fits)")
+
+
+def migrate_to_phase_5(conn: duckdb.DuckDBPyConnection) -> None:
+    """Replace ``hitter_statcast_pa.barrel`` (BOOLEAN) with ``launch_speed_angle``
+    (INTEGER, Statcast's 1-6 batted-ball classifier).
+
+    ``barrel`` was always NULL in pre-Phase-5 fetches because pybaseball never
+    returned a ``barrel`` column. The canonical Statcast classifier is
+    ``launch_speed_angle`` where value 6 == barrel; lower values are weaker
+    contact tiers (1=weak, 2=topped, 3=under, 4=flare/burner, 5=solid).
+    ``windows.py`` derives ``barrel_pct`` from ``launch_speed_angle = 6``.
+
+    Idempotent and non-destructive: existing PA rows survive with
+    ``launch_speed_angle = NULL`` after the migration. Re-run
+    ``scripts/streaks/fetch_history.py --force-statcast --season {year}``
+    for each year of data to backfill the new column via INSERT OR REPLACE.
+    """
+    init_schema(conn)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info('hitter_statcast_pa')").fetchall()}
+    if "launch_speed_angle" not in cols:
+        conn.execute("ALTER TABLE hitter_statcast_pa ADD COLUMN launch_speed_angle INTEGER")
+        logger.info("ALTER hitter_statcast_pa ADD COLUMN launch_speed_angle INTEGER")
+    if "barrel" in cols:
+        conn.execute("ALTER TABLE hitter_statcast_pa DROP COLUMN barrel")
+        logger.info("ALTER hitter_statcast_pa DROP COLUMN barrel")

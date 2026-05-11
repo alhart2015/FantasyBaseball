@@ -67,12 +67,16 @@ def pitches_to_pa_rows(df: pd.DataFrame) -> list[HitterStatcastPA]:
     df["pa_index"] = df.groupby(["batter", "game_date"]).cumcount() + 1
 
     rows: list[HitterStatcastPA] = []
-    has_barrel = "barrel" in df.columns
+    has_lsa = "launch_speed_angle" in df.columns
     has_at_bat_number = "at_bat_number" in df.columns
     has_bb_type = "bb_type" in df.columns
     has_xba = "estimated_ba_using_speedangle" in df.columns
     has_distance = "hit_distance_sc" in df.columns
     for r in df.itertuples(index=False):
+        # launch_speed_angle is Statcast's 1-6 batted-ball classifier
+        # (1=weak, 2=topped, 3=under, 4=flare/burner, 5=solid, 6=barrel).
+        # NULL on non-batted-ball PAs (K/BB/HBP).
+        lsa_raw = getattr(r, "launch_speed_angle", None) if has_lsa else None
         rows.append(
             HitterStatcastPA(
                 player_id=int(r.batter),
@@ -84,7 +88,7 @@ def pitches_to_pa_rows(df: pd.DataFrame) -> list[HitterStatcastPA]:
                 estimated_woba_using_speedangle=_na_to_none(
                     getattr(r, "estimated_woba_using_speedangle", None)
                 ),
-                barrel=(bool(r.barrel) if has_barrel and not pd.isna(r.barrel) else None),
+                launch_speed_angle=(None if pd.isna(lsa_raw) else int(lsa_raw)),
                 at_bat_number=(
                     _na_to_none(getattr(r, "at_bat_number", None)) if has_at_bat_number else None
                 ),

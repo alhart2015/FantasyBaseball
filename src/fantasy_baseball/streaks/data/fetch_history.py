@@ -34,12 +34,23 @@ _SEASON_START_MMDD = (3, 15)
 _SEASON_END_MMDD = (11, 15)
 
 
-def fetch_season(season: int, conn: duckdb.DuckDBPyConnection, min_pa: int = 150) -> dict[str, Any]:
+def fetch_season(
+    season: int,
+    conn: duckdb.DuckDBPyConnection,
+    min_pa: int = 150,
+    *,
+    force_statcast: bool = False,
+) -> dict[str, Any]:
     """Fetch and load one season of game logs + Statcast PA data.
 
     Returns a summary dict with row counts and a ``pa_identity_violations``
     count (games where ``pa != ab + bb + hbp + sf + sh + ci`` — logged at
     WARNING but never raised, so a single bad row can't kill a 2-hour fetch).
+
+    When ``force_statcast`` is True, re-fetches Statcast PAs for the season
+    even if dates are already loaded. ``upsert_statcast_pa`` uses INSERT OR
+    REPLACE so existing PK rows get updated in place — used to backfill new
+    columns (e.g. ``launch_speed_angle`` after the Phase 5 migration).
     """
     qualified = fetch_qualified_hitters(season=season, min_pa=min_pa)
     logger.info("Season %s: %d qualified hitters", season, len(qualified))
@@ -89,7 +100,13 @@ def fetch_season(season: int, conn: duckdb.DuckDBPyConnection, min_pa: int = 150
     # load is rare; we treat it as an all-or-nothing per-season pull for simplicity).
     statcast_rows = 0
     season_dates_loaded = {d for d in loaded_dates if d.year == season}
-    if not season_dates_loaded:
+    if force_statcast or not season_dates_loaded:
+        if force_statcast and season_dates_loaded:
+            logger.info(
+                "Season %s: --force-statcast set; re-fetching despite %d loaded dates",
+                season,
+                len(season_dates_loaded),
+            )
         statcast_pa = fetch_statcast_pa_for_date_range(start, end)
         upsert_statcast_pa(conn, statcast_pa)
         statcast_rows = len(statcast_pa)

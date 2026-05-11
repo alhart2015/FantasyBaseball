@@ -193,3 +193,70 @@ def test_migrate_to_phase_4_is_idempotent() -> None:
     migrate_to_phase_4(conn)  # second call must not raise
     cols = {r[1] for r in conn.execute("PRAGMA table_info('hitter_projection_rates')").fetchall()}
     assert {"r_per_pa", "rbi_per_pa", "avg"}.issubset(cols)
+
+
+def _phase_4_statcast_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Recreate the pre-Phase-5 hitter_statcast_pa shape (with ``barrel`` column)."""
+    conn.execute(
+        """
+        CREATE TABLE hitter_statcast_pa (
+            player_id INTEGER NOT NULL,
+            date DATE NOT NULL,
+            pa_index INTEGER NOT NULL,
+            event VARCHAR,
+            launch_speed DOUBLE,
+            launch_angle DOUBLE,
+            estimated_woba_using_speedangle DOUBLE,
+            barrel BOOLEAN,
+            at_bat_number INTEGER,
+            bb_type VARCHAR,
+            estimated_ba_using_speedangle DOUBLE,
+            hit_distance_sc DOUBLE,
+            PRIMARY KEY (player_id, date, pa_index)
+        )
+        """
+    )
+
+
+def test_migrate_to_phase_5_swaps_barrel_for_launch_speed_angle() -> None:
+    from fantasy_baseball.streaks.data.migrate import migrate_to_phase_5
+
+    conn = duckdb.connect(":memory:")
+    _phase_4_statcast_schema(conn)
+    conn.execute(
+        "INSERT INTO hitter_statcast_pa VALUES "
+        "(1, '2024-04-01', 1, 'single', 95.0, 10.0, 0.4, false, 1, 'line_drive', 0.4, 200.0)"
+    )
+
+    migrate_to_phase_5(conn)
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info('hitter_statcast_pa')").fetchall()}
+    assert "launch_speed_angle" in cols
+    assert "barrel" not in cols
+    # Existing row survives with NULL launch_speed_angle (backfill via re-fetch).
+    n = conn.execute("SELECT COUNT(*) FROM hitter_statcast_pa").fetchone()[0]
+    assert n == 1
+    lsa = conn.execute("SELECT launch_speed_angle FROM hitter_statcast_pa").fetchone()[0]
+    assert lsa is None
+
+
+def test_migrate_to_phase_5_is_idempotent() -> None:
+    from fantasy_baseball.streaks.data.migrate import migrate_to_phase_5
+
+    conn = get_connection(":memory:")  # already Phase 5 schema
+    migrate_to_phase_5(conn)
+    migrate_to_phase_5(conn)  # second call must not raise
+    cols = {r[1] for r in conn.execute("PRAGMA table_info('hitter_statcast_pa')").fetchall()}
+    assert "launch_speed_angle" in cols
+    assert "barrel" not in cols
+
+
+def test_migrate_to_phase_5_safe_on_fresh_db() -> None:
+    """Running migrate_to_phase_5 on a fresh DB (already has lsa, no barrel) is a no-op."""
+    from fantasy_baseball.streaks.data.migrate import migrate_to_phase_5
+
+    conn = get_connection(":memory:")
+    migrate_to_phase_5(conn)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info('hitter_statcast_pa')").fetchall()}
+    assert "launch_speed_angle" in cols
+    assert "barrel" not in cols

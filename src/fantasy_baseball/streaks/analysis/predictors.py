@@ -54,14 +54,6 @@ _VALID_CATEGORIES: frozenset[str] = frozenset({"hr", "r", "rbi", "sb", "avg"})
 SPARSE_HOT_COLD_METHOD: Literal["poisson_p20"] = "poisson_p20"
 
 # Final ordered list of feature column names in the training frame.
-#
-# Phase 4 acceptance found that ``hitter_statcast_pa.barrel`` is NULL for the
-# full 598K-row local Statcast corpus (Phase 1 fetch issue, surfaced 2026-05-10
-# because Phase 3 did not use ``barrel_pct`` as a load-bearing feature). With
-# all windows showing ``barrel_pct = NULL`` the dropna below would empty every
-# model's training frame. We omit ``barrel_pct`` from the Phase 4 feature set
-# pending a separate fix to the Statcast fetch; ``xwoba_avg`` is the dominant
-# Statcast peripheral and captures most of barrel's signal anyway.
 EXPECTED_FEATURE_COLUMNS: tuple[str, ...] = (
     "streak_strength_numeric",
     "babip",
@@ -69,6 +61,7 @@ EXPECTED_FEATURE_COLUMNS: tuple[str, ...] = (
     "bb_pct",
     "iso",
     "ev_avg",
+    "barrel_pct",
     "xwoba_avg",
     "season_rate_in_category",
     "pt_bucket_low",
@@ -120,6 +113,7 @@ def _build_training_frame_dense(
             w.bb_pct,
             w.iso,
             w.ev_avg,
+            w.barrel_pct,
             w.xwoba_avg,
             p.{rate_col} AS season_rate_in_category,
             l.label,
@@ -210,6 +204,7 @@ def _build_training_frame_sparse(
             w.bb_pct,
             w.iso,
             w.ev_avg,
+            w.barrel_pct,
             w.xwoba_avg,
             p.{rate_col} AS season_rate_in_category,
             l.label,
@@ -317,14 +312,14 @@ def build_training_frame(
         df[f"pt_bucket_{bucket}"] = (df["pt_bucket"] == bucket).astype(int)
 
     # Drop rows with any NULL peripheral feature (~3% of windows; tolerable
-    # loss). ``barrel_pct`` is intentionally not in this list — see the
-    # comment on ``EXPECTED_FEATURE_COLUMNS`` above.
+    # loss).
     feature_cols_with_nulls = [
         "babip",
         "k_pct",
         "bb_pct",
         "iso",
         "ev_avg",
+        "barrel_pct",
         "xwoba_avg",
     ]
     df = df.dropna(subset=feature_cols_with_nulls)
