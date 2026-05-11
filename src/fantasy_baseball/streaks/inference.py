@@ -394,63 +394,15 @@ def _label_cold_method(category: StreakCategory) -> ColdMethod:
     return SPARSE_HOT_COLD_METHOD if category in SPARSE_CATS else "empirical"
 
 
-def _most_recent_window(
-    conn: duckdb.DuckDBPyConnection,
-    *,
-    player_id: int,
-    window_days: int,
-    window_end_on_or_before: date,
-) -> pd.Series | None:
-    """Pull the latest ``hitter_windows`` row for the player, with its label.
-
-    The label row is joined per-category and pivoted in the caller — this
-    helper only returns the window.
-    """
-    df = conn.execute(
-        """
-        SELECT player_id, window_end, window_days, pa, hr, r, rbi, sb, avg,
-               babip, k_pct, bb_pct, iso, ev_avg, barrel_pct, xwoba_avg,
-               pt_bucket
-        FROM hitter_windows
-        WHERE player_id = ?
-          AND window_days = ?
-          AND window_end <= ?
-        ORDER BY window_end DESC
-        LIMIT 1
-        """,
-        [int(player_id), int(window_days), window_end_on_or_before],
-    ).df()
-    if df.empty:
-        return None
-    return df.iloc[0]
+# Defense-in-depth guard for the label loader: even though ``category``
+# is typed as :data:`StreakCategory` (a Literal), Python does not enforce
+# Literal membership at runtime and the table is shared with Phase 4
+# pipelines, so a corrupted row would otherwise leak through.
+_VALID_CATEGORIES: frozenset[StreakCategory] = frozenset(REPORT_CATEGORIES)
 
 
-def _category_label(
-    conn: duckdb.DuckDBPyConnection,
-    *,
-    player_id: int,
-    window_end: date,
-    window_days: int,
-    category: StreakCategory,
-) -> StreakLabel | None:
-    """Read the stored label for one (player, window, category).
-
-    Returns ``None`` if no row exists (e.g. sparse-cat row missing
-    because the player has no projection rate — the sparse label writer
-    skips those).
-    """
-    cold_method = _label_cold_method(category)
-    row = conn.execute(
-        """
-        SELECT label FROM hitter_streak_labels
-        WHERE player_id = ? AND window_end = ? AND window_days = ?
-              AND category = ? AND cold_method = ?
-        """,
-        [int(player_id), window_end, int(window_days), category, cold_method],
-    ).fetchone()
-    if row is None:
-        return None
-    label = row[0]
+def _coerce_label(label: str) -> StreakLabel:
+    """Narrow a raw label string from DuckDB to the StreakLabel Literal."""
     if label == "hot":
         return "hot"
     if label == "cold":
@@ -460,22 +412,136 @@ def _category_label(
     raise RuntimeError(f"unexpected label {label!r} in hitter_streak_labels")
 
 
-def _projection_rate(
+def _load_most_recent_windows(
     conn: duckdb.DuckDBPyConnection,
     *,
-    player_id: int,
+    player_ids: list[int],
+    window_days: int,
+    window_end_on_or_before: date,
+) -> dict[int, pd.Series]:
+    """Pull the most-recent ``hitter_windows`` row for every player in one query.
+
+    Returns ``{player_id: window_series}`` for players that have at least
+    one window on or before the cutoff date. Players without a window
+    are absent from the returned dict — callers translate that to a
+    ``no_window`` skip.
+
+    Uses a registered DataFrame to feed the player_ids in, then a
+    QUALIFY ROW_NUMBER pattern to keep only the latest row per player.
+    """
+    if not player_ids:
+        return {}
+    players_df = pd.DataFrame({"player_id": player_ids})  # noqa: F841 — registered via pandas scan
+    df = conn.execute(
+        """
+        SELECT w.player_id, w.window_end, w.window_days, w.pa, w.hr, w.r, w.rbi,
+               w.sb, w.avg, w.babip, w.k_pct, w.bb_pct, w.iso, w.ev_avg,
+               w.barrel_pct, w.xwoba_avg, w.pt_bucket
+        FROM hitter_windows w
+        INNER JOIN players_df p ON p.player_id = w.player_id
+        WHERE w.window_days = ?
+          AND w.window_end <= ?
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY w.player_id ORDER BY w.window_end DESC) = 1
+        """,
+        [int(window_days), window_end_on_or_before],
+    ).df()
+    return {int(row["player_id"]): row for _, row in df.iterrows()}
+
+
+def _load_labels(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    windows: dict[int, pd.Series],
+    window_days: int,
+) -> dict[tuple[int, StreakCategory], StreakLabel]:
+    """Pull labels for every scored (player, window_end, category) in one query.
+
+    Filters in SQL to the per-cat ``cold_method`` partition used at
+    training time so the in-memory dict has at most one entry per
+    (player_id, category). Missing entries — e.g. sparse-cat rows
+    skipped because the player has no projection rate — translate to a
+    ``neutral`` label at the call site.
+    """
+    if not windows:
+        return {}
+    targets = pd.DataFrame(  # noqa: F841 — referenced via pandas scan below
+        [
+            {"player_id": pid, "window_end": pd.Timestamp(row["window_end"]).date()}
+            for pid, row in windows.items()
+        ]
+    )
+    df = conn.execute(
+        """
+        SELECT l.player_id, l.category, l.cold_method, l.label
+        FROM hitter_streak_labels l
+        INNER JOIN targets t
+          ON t.player_id = l.player_id AND t.window_end = l.window_end
+        WHERE l.window_days = ?
+          AND (
+            (l.category IN ('r', 'rbi', 'avg') AND l.cold_method = 'empirical')
+            OR (l.category IN ('hr', 'sb') AND l.cold_method = 'poisson_p20')
+          )
+        """,
+        [int(window_days)],
+    ).df()
+    out: dict[tuple[int, StreakCategory], StreakLabel] = {}
+    for row in df.itertuples(index=False):
+        cat = row.category
+        if cat not in _VALID_CATEGORIES:
+            continue
+        out[(int(row.player_id), cat)] = _coerce_label(str(row.label))
+    return out
+
+
+def _load_projection_rates(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    player_ids: list[int],
     season: int,
-    category: StreakCategory,
-) -> float | None:
-    """Pull the per-category 2026 rate for one player; ``None`` if missing."""
-    rate_col = "avg" if category == "avg" else f"{category}_per_pa"
-    row = conn.execute(
-        f"SELECT {rate_col} FROM hitter_projection_rates WHERE player_id = ? AND season = ?",
-        [int(player_id), int(season)],
-    ).fetchone()
-    if row is None or row[0] is None:
-        return None
-    return float(row[0])
+) -> dict[tuple[int, StreakCategory], float]:
+    """Pull all per-category projection rates for the listed players in one query.
+
+    Returns ``{(player_id, category): rate}`` with absent entries for any
+    (player, cat) where the rate is NULL.
+    """
+    if not player_ids:
+        return {}
+    players_df = pd.DataFrame({"player_id": player_ids})  # noqa: F841 — pandas scan
+    df = conn.execute(
+        """
+        SELECT p.player_id, p.hr_per_pa, p.sb_per_pa, p.r_per_pa, p.rbi_per_pa, p.avg
+        FROM hitter_projection_rates p
+        INNER JOIN players_df pl ON pl.player_id = p.player_id
+        WHERE p.season = ?
+        """,
+        [int(season)],
+    ).df()
+    out: dict[tuple[int, StreakCategory], float] = {}
+    cat_columns: tuple[tuple[StreakCategory, str], ...] = (
+        ("hr", "hr_per_pa"),
+        ("sb", "sb_per_pa"),
+        ("r", "r_per_pa"),
+        ("rbi", "rbi_per_pa"),
+        ("avg", "avg"),
+    )
+    for row in df.itertuples(index=False):
+        pid = int(row.player_id)
+        for cat, col in cat_columns:
+            value = getattr(row, col)
+            if value is not None and not pd.isna(value):
+                out[(pid, cat)] = float(value)
+    return out
+
+
+_PERIPHERAL_COLS: tuple[str, ...] = (
+    "babip",
+    "k_pct",
+    "bb_pct",
+    "iso",
+    "ev_avg",
+    "barrel_pct",
+    "xwoba_avg",
+)
 
 
 def score_player_windows(
@@ -498,153 +564,116 @@ def score_player_windows(
     Returns ``(scores, skips)``. ``scores`` contains one entry per
     (player, category) for every player who has a window — neutral
     categories included so the report's roster grid is uniform.
+
+    Performance: pulls windows / labels / projection rates in three
+    bulk queries up front, then iterates in pure Python. The previous
+    implementation issued one query per (player, category, lookup),
+    which was ~500 round-trips per report run.
     """
+    unique_ids = list(dict.fromkeys(int(p) for p in player_ids))
+    if not unique_ids:
+        return [], []
+
+    windows = _load_most_recent_windows(
+        conn,
+        player_ids=unique_ids,
+        window_days=window_days,
+        window_end_on_or_before=window_end_on_or_before,
+    )
+    labels = _load_labels(conn, windows=windows, window_days=window_days)
+    rates = _load_projection_rates(conn, player_ids=unique_ids, season=scoring_season)
+
     scores: list[PlayerCategoryScore] = []
     skips: list[ScoreSkip] = []
 
-    for player_id in player_ids:
-        window = _most_recent_window(
-            conn,
-            player_id=player_id,
-            window_days=window_days,
-            window_end_on_or_before=window_end_on_or_before,
-        )
+    for player_id in unique_ids:
+        window = windows.get(player_id)
         if window is None:
             skips.append(ScoreSkip(player_id=player_id, reason="no_window"))
             continue
         window_end = pd.Timestamp(window["window_end"]).date()
+        peripherals_null = any(pd.isna(window[c]) for c in _PERIPHERAL_COLS)
 
         for category in REPORT_CATEGORIES:
-            label = _category_label(
-                conn,
+            label = labels.get((player_id, category), "neutral")
+            score = _score_one(
                 player_id=player_id,
-                window_end=window_end,
-                window_days=window_days,
                 category=category,
-            )
-            # Missing sparse-cat label rows mean we have no projection
-            # rate for the player — there's nothing the model can score.
-            if label is None:
-                scores.append(
-                    PlayerCategoryScore(
-                        player_id=player_id,
-                        category=category,
-                        label="neutral",
-                        probability=None,
-                        drivers=(),
-                        window_end=window_end,
-                    )
-                )
-                continue
-
-            if label == "neutral":
-                scores.append(
-                    PlayerCategoryScore(
-                        player_id=player_id,
-                        category=category,
-                        label="neutral",
-                        probability=None,
-                        drivers=(),
-                        window_end=window_end,
-                    )
-                )
-                continue
-
-            direction: StreakDirection = "above" if label == "hot" else "below"
-            model = models.get((category, direction))
-            if model is None:
-                # Sparse cats are hot-only in Phase 4: sb cold / hr cold have
-                # no trained model. We still surface the label.
-                scores.append(
-                    PlayerCategoryScore(
-                        player_id=player_id,
-                        category=category,
-                        label=label,
-                        probability=None,
-                        drivers=(),
-                        window_end=window_end,
-                    )
-                )
-                continue
-
-            season_rate = _projection_rate(
-                conn,
-                player_id=player_id,
-                season=scoring_season,
-                category=category,
-            )
-            if season_rate is None:
-                # Dense cat label says hot/cold but we have no projection rate
-                # for the feature vector. Skip — the model can't predict.
-                scores.append(
-                    PlayerCategoryScore(
-                        player_id=player_id,
-                        category=category,
-                        label=label,
-                        probability=None,
-                        drivers=(),
-                        window_end=window_end,
-                    )
-                )
-                continue
-
-            # Compute streak_strength_numeric matching training-time encoding.
-            if category in DENSE_CATS:
-                assert model.dense_quintile_cutoffs is not None
-                strength = _dense_streak_strength(
-                    value=float(window[category]),
-                    cutoffs=model.dense_quintile_cutoffs,
-                )
-            else:
-                strength = (
-                    _sparse_streak_strength(
-                        value=int(window[category]),
-                        window_pa=int(window["pa"]),
-                        season_rate=season_rate,
-                    )
-                    or 0.0
-                )
-
-            # Drop rows with NULL peripherals — we can't fill them and the
-            # model was trained on rows without nulls.
-            peripheral_cols = (
-                "babip",
-                "k_pct",
-                "bb_pct",
-                "iso",
-                "ev_avg",
-                "barrel_pct",
-                "xwoba_avg",
-            )
-            if any(pd.isna(window[c]) for c in peripheral_cols):
-                scores.append(
-                    PlayerCategoryScore(
-                        player_id=player_id,
-                        category=category,
-                        label=label,
-                        probability=None,
-                        drivers=(),
-                        window_end=window_end,
-                    )
-                )
-                continue
-
-            feature_row = _build_feature_row(
+                label=label,
                 window=window,
-                season_rate=season_rate,
-                streak_strength_numeric=strength,
+                window_end=window_end,
+                peripherals_null=peripherals_null,
+                models=models,
+                season_rate=rates.get((player_id, category)),
             )
-            proba = float(model.pipeline.predict_proba(feature_row)[0, 1])
-            drivers = top_drivers(pipeline=model.pipeline, feature_row=feature_row, k=2)
-            scores.append(
-                PlayerCategoryScore(
-                    player_id=player_id,
-                    category=category,
-                    label=label,
-                    probability=proba,
-                    drivers=drivers,
-                    window_end=window_end,
-                )
-            )
+            scores.append(score)
 
     return scores, skips
+
+
+def _score_one(
+    *,
+    player_id: int,
+    category: StreakCategory,
+    label: StreakLabel,
+    window: pd.Series,
+    window_end: date,
+    peripherals_null: bool,
+    models: dict[tuple[StreakCategory, StreakDirection], FittedModel],
+    season_rate: float | None,
+) -> PlayerCategoryScore:
+    """Build the score for one (player, category) given pre-loaded inputs.
+
+    Returns a ``PlayerCategoryScore`` with ``probability=None`` whenever
+    we can't score: neutral label, no trained model (sparse cold), no
+    projection rate, or NULL peripherals in the current window.
+    """
+    base = PlayerCategoryScore(
+        player_id=player_id,
+        category=category,
+        label=label,
+        probability=None,
+        drivers=(),
+        window_end=window_end,
+    )
+    if label == "neutral":
+        return base
+
+    direction: StreakDirection = "above" if label == "hot" else "below"
+    model = models.get((category, direction))
+    # Sparse cats are hot-only in Phase 4 (sb cold / hr cold have no model);
+    # missing rate or NULL peripherals mean we can't build the feature vector.
+    if model is None or season_rate is None or peripherals_null:
+        return base
+
+    if category in DENSE_CATS:
+        assert model.dense_quintile_cutoffs is not None
+        strength = _dense_streak_strength(
+            value=float(window[category]),
+            cutoffs=model.dense_quintile_cutoffs,
+        )
+    else:
+        strength = (
+            _sparse_streak_strength(
+                value=int(window[category]),
+                window_pa=int(window["pa"]),
+                season_rate=season_rate,
+            )
+            or 0.0
+        )
+
+    feature_row = _build_feature_row(
+        window=window,
+        season_rate=season_rate,
+        streak_strength_numeric=strength,
+    )
+    proba = float(model.pipeline.predict_proba(feature_row)[0, 1])
+    drivers = top_drivers(pipeline=model.pipeline, feature_row=feature_row, k=2)
+    return PlayerCategoryScore(
+        player_id=player_id,
+        category=category,
+        label=label,
+        probability=proba,
+        drivers=drivers,
+        window_end=window_end,
+    )

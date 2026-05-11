@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 
@@ -97,20 +98,26 @@ def _fetch_yahoo_data(league, *, team_name: str) -> tuple[list[YahooHitter], lis
     roster_raw = fetch_roster(league, user_team_key)
     roster_hitters = [_to_yahoo_hitter(p) for p in roster_raw]
 
-    seen: set[str] = set()
-    fa_hitters: list[YahooHitter] = []
-    for pos in _HITTER_FA_POSITIONS:
+    # Fan out Yahoo FA fetches across positions in parallel — each call
+    # is a synchronous HTTP round-trip and they're independent. Same
+    # pattern as :class:`RefreshRun` in web/refresh_pipeline.py.
+    def _fetch_one(pos: str) -> list[dict]:
         try:
-            fa_raw = fetch_free_agents(league, pos, count=50)
+            return fetch_free_agents(league, pos, count=50)
         except Exception:
             logger.exception("Free agent fetch failed at position %s; continuing", pos)
-            continue
-        for fa in fa_raw:
-            key = fa["name"].lower().strip()
-            if key in seen:
-                continue
-            seen.add(key)
-            fa_hitters.append(_to_yahoo_hitter(fa))
+            return []
+
+    seen: set[str] = set()
+    fa_hitters: list[YahooHitter] = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for fa_raw in pool.map(_fetch_one, _HITTER_FA_POSITIONS):
+            for fa in fa_raw:
+                key = fa["name"].lower().strip()
+                if key in seen:
+                    continue
+                seen.add(key)
+                fa_hitters.append(_to_yahoo_hitter(fa))
     return roster_hitters, fa_hitters
 
 
