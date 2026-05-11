@@ -176,7 +176,7 @@ def _top_cat_label(row: dict[str, Any], tone: Literal["hot", "cold"]) -> str:
     for cat_value, score in row["scores"].items():
         if score["label"] != target:
             continue
-        prob = score["probability"] or 0.0
+        prob = score["probability"] if score["probability"] is not None else 0.0
         candidates.append((prob, cat_value))
     if not candidates:
         return "—"
