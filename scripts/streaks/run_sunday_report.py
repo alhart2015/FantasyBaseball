@@ -91,6 +91,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # Terminal renderer uses Unicode glyphs (true minus, sigma, em dash). On
+    # Windows the default stdout encoding is cp1252, which raises on these.
+    # reconfigure() is a no-op on POSIX where stdout is already utf-8.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     config = load_config(args.league_config)

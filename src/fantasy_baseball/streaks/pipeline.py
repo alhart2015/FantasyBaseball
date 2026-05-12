@@ -194,6 +194,16 @@ def compute_streak_report(
     else:
         logger.info("Reusing models from model_fits")
         models = load_models_from_fits(conn)
+        if not models:
+            # Every persisted row was a pre-Phase-B row with NULL pipeline
+            # params (typical right after the Phase B migration). Force a
+            # refit so subsequent runs can reuse normally.
+            logger.info(
+                "No reconstructable models in model_fits; refitting on %s", season_set_train
+            )
+            models = refit_models_for_report(
+                conn, season_set_train=season_set_train, window_days=window_days
+            )
 
     roster_hitters, fa_hitters = _fetch_yahoo_hitters(league, team_name=team_name)
     logger.info(
