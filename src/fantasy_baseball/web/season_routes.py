@@ -470,17 +470,24 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/lineup")
     def lineup():
+        from fantasy_baseball.streaks.dashboard import build_indicator
+
         meta = read_meta()
         roster_raw = read_cache_list(CacheKey.ROSTER)
         optimal_raw = read_cache_dict(CacheKey.LINEUP_OPTIMAL)
         starters_raw = read_cache_list(CacheKey.PROBABLE_STARTERS)
         pending_moves_raw = read_cache_list(CacheKey.PENDING_MOVES) or []
+        streak_payload = read_cache_dict(CacheKey.STREAK_SCORES)
 
         lineup_data = None
         if roster_raw:
             from fantasy_baseball.web.season_data import format_lineup_for_display
 
             lineup_data = format_lineup_for_display(roster_raw, optimal_raw)
+            # Attach per-hitter streak chip data so the tbody partial can
+            # render a chip column without re-reading the cache itself.
+            for hitter in lineup_data["hitters"]:
+                hitter["streak_indicator"] = build_indicator(hitter["name"], streak_payload)
 
         # Build teams list for opponent selector dropdown
         from fantasy_baseball.web.season_data import get_teams_list
