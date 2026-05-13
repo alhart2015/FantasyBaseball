@@ -6,6 +6,7 @@ import pandas as pd
 
 from fantasy_baseball.lineup.upcoming_starts import (
     GameSlot,
+    MatchupContext,
     StartEntry,
     build_team_game_index,
     compose_pitcher_entries,
@@ -15,6 +16,90 @@ from fantasy_baseball.lineup.upcoming_starts import (
 )
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import Position
+
+
+def _build_ctx(team_stats: dict[str, dict[str, float]]) -> MatchupContext:
+    """Build a MatchupContext from raw team stats.
+
+    Mirrors what ``matchups.get_probable_starters`` does in production:
+    park-neutralizes each team's season OPS/K% by their home park factor,
+    builds the sorted league baseline, and computes raw season ranks
+    for tooltip display.
+    """
+    from fantasy_baseball.data.park_factors import get_park_factor, park_neutral_value
+
+    neutral_ops = {
+        abbrev: park_neutral_value(s["ops"], get_park_factor(abbrev, "ops"))
+        for abbrev, s in team_stats.items()
+    }
+    neutral_k = {
+        abbrev: park_neutral_value(s["k_pct"], get_park_factor(abbrev, "k"))
+        for abbrev, s in team_stats.items()
+    }
+    ops_ranked = sorted(team_stats.items(), key=lambda x: x[1]["ops"], reverse=True)
+    k_ranked = sorted(team_stats.items(), key=lambda x: x[1]["k_pct"])
+    return MatchupContext(
+        team_stats=team_stats,
+        neutral_ops=neutral_ops,
+        neutral_k_pct=neutral_k,
+        neutral_ops_sorted_desc=tuple(sorted(neutral_ops.values(), reverse=True)),
+        neutral_k_pct_sorted_asc=tuple(sorted(neutral_k.values())),
+        ops_rank_map={a: i + 1 for i, (a, _) in enumerate(ops_ranked)},
+        k_rank_map={a: i + 1 for i, (a, _) in enumerate(k_ranked)},
+    )
+
+
+def _league_avg_stats() -> dict[str, dict[str, float]]:
+    """30-team synthetic league with a spread of OPS / K% values.
+
+    Spans ~.640 to .790 OPS (realistic) and ~18% to 27% K% (realistic).
+    Includes the real abbreviations so park factor lookups hit the
+    actual table, not the 1.00 fallback.
+    """
+    teams = [
+        "LAD",
+        "NYY",
+        "ATL",
+        "HOU",
+        "BAL",
+        "TEX",
+        "BOS",
+        "PHI",
+        "TOR",
+        "ARI",
+        "SEA",
+        "CHC",
+        "MIN",
+        "CLE",
+        "MIL",
+        "DET",
+        "STL",
+        "SDP",
+        "TBR",
+        "SFG",
+        "NYM",
+        "LAA",
+        "CIN",
+        "KCR",
+        "WSN",
+        "CHW",
+        "PIT",
+        "MIA",
+        "ATH",
+        "COL",
+    ]
+    out: dict[str, dict[str, float]] = {}
+    for i, team in enumerate(teams):
+        # OPS descends from .790 to .640 by 0.005 per step.
+        # K% climbs from 0.18 to 0.27 by ~0.003 per step (low-K teams are
+        # the toughest matchups, so they're at the top of the OPS list
+        # too, which is realistic -- good contact hitters tend to score
+        # more runs).
+        out[team] = {
+            "ops": round(0.790 - 0.005 * i, 3),
+            "k_pct": round(0.18 + (0.27 - 0.18) * i / 29, 4),
+        }
+    return out
 
 
 def test_game_slot_fields():
@@ -186,18 +271,8 @@ def _seq(*specs):
     return out
 
 
-_FACTORS = {
-    "TEX": {"era_whip_factor": 0.90, "k_factor": 1.05},  # Great
-    "LAD": {"era_whip_factor": 1.10, "k_factor": 0.95},  # Tough
-    "HOU": {"era_whip_factor": 1.00, "k_factor": 1.00},  # Fair
-}
-_TEAM_STATS = {
-    "TEX": {"ops": 0.700, "k_pct": 0.24},
-    "LAD": {"ops": 0.800, "k_pct": 0.20},
-    "HOU": {"ops": 0.750, "k_pct": 0.22},
-}
-_OPS_RANK = {"TEX": 25, "LAD": 4, "HOU": 14}
-_K_RANK = {"TEX": 8, "LAD": 26, "HOU": 14}
+_LEAGUE = _league_avg_stats()
+_CTX = _build_ctx(_LEAGUE)
 
 
 class TestComposePitcherEntries:
@@ -214,14 +289,12 @@ class TestComposePitcherEntries:
         )
         entries = compose_pitcher_entries(
             "Bryan Woo",
+            "SEA",
             team_games,
             today=_date(2026, 5, 5),
             window_start=_date(2026, 5, 5),
             window_end=_date(2026, 5, 11),
-            matchup_factors=_FACTORS,
-            team_stats=_TEAM_STATS,
-            ops_rank_map=_OPS_RANK,
-            k_rank_map=_K_RANK,
+            ctx=_CTX,
         )
         assert len(entries) == 1
         e = entries[0]
@@ -229,8 +302,12 @@ class TestComposePitcherEntries:
         assert e.day == "Sat"
         assert e.opponent == "TEX"
         assert e.announced is False
-        assert e.matchup_quality == "Great"
-        assert e.detail["ops_rank"] == 25
+        # TEX sits at OPS index 5 in the synthetic league (top-6 offense)
+        # and the venue is TEX's hitter-friendly park -- should color Tough.
+        assert e.matchup_quality == "Tough"
+        # Raw season rank is still preserved for tooltip context.
+        assert e.detail["ops_rank"] == 6
+        assert e.detail["venue"] == "TEX"
 
     def test_off_day_extends_calendar_gap(self):
         # Anchor Mon (idx 0). Team games after anchor: Tue, Wed, [off Thu],
@@ -238,26 +315,24 @@ class TestComposePitcherEntries:
         # so the projected start lands on Sun = 2026-05-10. Compare with
         # test_simple_5_day_rotation_no_off_day: same anchor, but no off-day
         # so the 5th team-game is Sat = 2026-05-09. The off-day pushes the
-        # next start one calendar day later — that's the gap "extension."
+        # next start one calendar day later -- that's the gap "extension."
         team_games = _seq(
             ("2026-05-04", "TEX", "Bryan Woo", "@"),  # anchor (idx 0)
             ("2026-05-05", "TEX", "", "@"),  # idx 1
             ("2026-05-06", "TEX", "", "@"),  # idx 2
-            # No 2026-05-07 entry — off day
+            # No 2026-05-07 entry -- off day
             ("2026-05-08", "TEX", "", "@"),  # idx 3
             ("2026-05-09", "TEX", "", "@"),  # idx 4
-            ("2026-05-10", "TEX", "", "@"),  # idx 5 — 5th team-game post-anchor
+            ("2026-05-10", "TEX", "", "@"),  # idx 5 -- 5th team-game post-anchor
         )
         entries = compose_pitcher_entries(
             "Bryan Woo",
+            "SEA",
             team_games,
             today=_date(2026, 5, 5),
             window_start=_date(2026, 5, 5),
             window_end=_date(2026, 5, 11),
-            matchup_factors=_FACTORS,
-            team_stats=_TEAM_STATS,
-            ops_rank_map=_OPS_RANK,
-            k_rank_map=_K_RANK,
+            ctx=_CTX,
         )
         assert len(entries) == 1
         assert entries[0].date == "2026-05-10"
@@ -272,14 +347,12 @@ class TestComposePitcherEntries:
         )
         entries = compose_pitcher_entries(
             "Bryan Woo",
+            "SEA",
             team_games,
             today=_date(2026, 5, 5),
             window_start=_date(2026, 5, 5),
             window_end=_date(2026, 5, 11),
-            matchup_factors=_FACTORS,
-            team_stats=_TEAM_STATS,
-            ops_rank_map=_OPS_RANK,
-            k_rank_map=_K_RANK,
+            ctx=_CTX,
         )
         assert len(entries) == 1
         assert entries[0].date == "2026-05-09"
@@ -295,21 +368,19 @@ class TestComposePitcherEntries:
         )
         entries = compose_pitcher_entries(
             "Bryan Woo",
+            "SEA",
             team_games,
             today=_date(2026, 5, 5),
             window_start=_date(2026, 5, 5),
             window_end=_date(2026, 5, 11),
-            matchup_factors=_FACTORS,
-            team_stats=_TEAM_STATS,
-            ops_rank_map=_OPS_RANK,
-            k_rank_map=_K_RANK,
+            ctx=_CTX,
         )
         assert entries == []
 
     def test_two_start_week_from_old_anchor(self):
         # Build a 21-game team stream where the anchor sits at index 0
         # (2026-04-25, ten days before the window opens). Anchor + 5/10/15/20
-        # land at indices 5, 10, 15, 20 — i.e. dates 04-30, 05-05, 05-10, 05-15.
+        # land at indices 5, 10, 15, 20 -- i.e. dates 04-30, 05-05, 05-10, 05-15.
         # Window is 2026-05-05..2026-05-11, so projections at 05-05 and 05-10
         # both fall inside it; 04-30 (before) and 05-15 (after) are excluded.
         from datetime import timedelta as _td
@@ -326,14 +397,12 @@ class TestComposePitcherEntries:
 
         entries = compose_pitcher_entries(
             "Bryan Woo",
+            "SEA",
             team_games,
             today=_date(2026, 5, 5),
             window_start=_date(2026, 5, 5),
             window_end=_date(2026, 5, 11),
-            matchup_factors=_FACTORS,
-            team_stats=_TEAM_STATS,
-            ops_rank_map=_OPS_RANK,
-            k_rank_map=_K_RANK,
+            ctx=_CTX,
         )
         assert len(entries) == 2
         assert entries[0].date == "2026-05-05"
@@ -349,14 +418,12 @@ class TestComposePitcherEntries:
         )
         entries = compose_pitcher_entries(
             "Bryan Woo",
+            "SEA",
             team_games,
             today=_date(2026, 5, 5),
             window_start=_date(2026, 5, 5),
             window_end=_date(2026, 5, 11),
-            matchup_factors=_FACTORS,
-            team_stats=_TEAM_STATS,
-            ops_rank_map=_OPS_RANK,
-            k_rank_map=_K_RANK,
+            ctx=_CTX,
         )
         assert len(entries) == 1
         assert entries[0].announced is True
@@ -365,16 +432,174 @@ class TestComposePitcherEntries:
         team_games = _seq(("2026-05-05", "TEX", "OtherGuy", "@"))
         entries = compose_pitcher_entries(
             "Bryan Woo",
+            "SEA",
             team_games,
             today=_date(2026, 5, 5),
             window_start=_date(2026, 5, 5),
             window_end=_date(2026, 5, 11),
-            matchup_factors=_FACTORS,
-            team_stats=_TEAM_STATS,
-            ops_rank_map=_OPS_RANK,
-            k_rank_map=_K_RANK,
+            ctx=_CTX,
         )
         assert entries == []
+
+
+class TestParkAdjustment:
+    """Verify the park-adjusted ranking behaves correctly across venues."""
+
+    def test_coors_makes_a_weak_offense_tougher(self):
+        # COL in the synthetic league sits at the bottom of the OPS table
+        # (a "weak" offense). But at Coors (the strongest hitter park),
+        # the effective OPS jumps -- the start should color worse than
+        # the same opponent played in a neutral park.
+        weak_team_at_coors = _seq(
+            ("2026-05-04", "COL", "Bryan Woo", "@"),
+            *[("2026-05-0" + str(d), "COL", "", "@") for d in range(5, 9)],
+            ("2026-05-09", "COL", "", "@"),  # projected start at Coors
+            ("2026-05-10", "COL", "", "@"),
+        )
+        at_coors = compose_pitcher_entries(
+            "Bryan Woo",
+            "SEA",  # pitcher's home park irrelevant for an @ game
+            weak_team_at_coors,
+            today=_date(2026, 5, 5),
+            window_start=_date(2026, 5, 5),
+            window_end=_date(2026, 5, 11),
+            ctx=_CTX,
+        )
+        # Same opponent, but hosted at a neutral park (use indicator "vs"
+        # with a pitcher whose home is neutral). LAA is ops factor 1.00.
+        weak_team_at_neutral = _seq(
+            ("2026-05-04", "COL", "Bryan Woo", "vs"),
+            *[("2026-05-0" + str(d), "COL", "", "vs") for d in range(5, 9)],
+            ("2026-05-09", "COL", "", "vs"),
+            ("2026-05-10", "COL", "", "vs"),
+        )
+        at_neutral = compose_pitcher_entries(
+            "Bryan Woo",
+            "LAA",  # neutral home park
+            weak_team_at_neutral,
+            today=_date(2026, 5, 5),
+            window_start=_date(2026, 5, 5),
+            window_end=_date(2026, 5, 11),
+            ctx=_CTX,
+        )
+        assert len(at_coors) == 1
+        assert len(at_neutral) == 1
+        # Park-adjusted rank at Coors must be tougher (lower rank number).
+        assert at_coors[0].detail["effective_ops_rank"] < at_neutral[0].detail["effective_ops_rank"]
+
+    def test_petco_eases_a_strong_offense(self):
+        # LAD is the league's #1 OPS team in the synthetic distribution.
+        # At Petco (the strongest pitcher park), they hit much less --
+        # park-adjusted rank should be easier (higher number).
+        strong_team_at_petco = _seq(
+            ("2026-05-04", "LAD", "Bryan Woo", "@"),
+            *[("2026-05-0" + str(d), "LAD", "", "@") for d in range(5, 9)],
+            ("2026-05-09", "LAD", "", "@"),
+            ("2026-05-10", "LAD", "", "@"),
+        )
+        # When LAD is the "opponent" and the pitcher's home park is Petco
+        # (SDP), an @ LAD game has venue=LAD. We need the reverse: LAD
+        # visiting Petco. Use indicator "vs" with our pitcher at SDP.
+        strong_team_at_petco = _seq(
+            ("2026-05-04", "LAD", "Bryan Woo", "vs"),
+            *[("2026-05-0" + str(d), "LAD", "", "vs") for d in range(5, 9)],
+            ("2026-05-09", "LAD", "", "vs"),
+            ("2026-05-10", "LAD", "", "vs"),
+        )
+        at_petco = compose_pitcher_entries(
+            "Bryan Woo",
+            "SDP",  # pitcher home = Petco
+            strong_team_at_petco,
+            today=_date(2026, 5, 5),
+            window_start=_date(2026, 5, 5),
+            window_end=_date(2026, 5, 11),
+            ctx=_CTX,
+        )
+        # Compare to LAD at LAD's home park.
+        strong_team_at_home = _seq(
+            ("2026-05-04", "LAD", "Bryan Woo", "@"),
+            *[("2026-05-0" + str(d), "LAD", "", "@") for d in range(5, 9)],
+            ("2026-05-09", "LAD", "", "@"),
+            ("2026-05-10", "LAD", "", "@"),
+        )
+        at_home = compose_pitcher_entries(
+            "Bryan Woo",
+            "SDP",
+            strong_team_at_home,
+            today=_date(2026, 5, 5),
+            window_start=_date(2026, 5, 5),
+            window_end=_date(2026, 5, 11),
+            ctx=_CTX,
+        )
+        assert len(at_petco) == 1
+        assert len(at_home) == 1
+        # Park-adjusted rank at Petco must be easier (higher rank number).
+        assert at_petco[0].detail["effective_ops_rank"] > at_home[0].detail["effective_ops_rank"]
+
+    def test_venue_resolves_to_opponent_for_away_games(self):
+        team_games = _seq(
+            ("2026-05-04", "COL", "Bryan Woo", "@"),
+            *[("2026-05-0" + str(d), "COL", "", "@") for d in range(5, 9)],
+            ("2026-05-09", "COL", "", "@"),
+            ("2026-05-10", "COL", "", "@"),
+        )
+        entries = compose_pitcher_entries(
+            "Bryan Woo",
+            "SEA",
+            team_games,
+            today=_date(2026, 5, 5),
+            window_start=_date(2026, 5, 5),
+            window_end=_date(2026, 5, 11),
+            ctx=_CTX,
+        )
+        assert entries[0].detail["venue"] == "COL"
+
+    def test_venue_resolves_to_pitcher_team_for_home_games(self):
+        team_games = _seq(
+            ("2026-05-04", "COL", "Bryan Woo", "vs"),
+            *[("2026-05-0" + str(d), "COL", "", "vs") for d in range(5, 9)],
+            ("2026-05-09", "COL", "", "vs"),
+            ("2026-05-10", "COL", "", "vs"),
+        )
+        entries = compose_pitcher_entries(
+            "Bryan Woo",
+            "SEA",
+            team_games,
+            today=_date(2026, 5, 5),
+            window_start=_date(2026, 5, 5),
+            window_end=_date(2026, 5, 11),
+            ctx=_CTX,
+        )
+        assert entries[0].detail["venue"] == "SEA"
+
+    def test_color_band_distribution_is_roughly_balanced(self):
+        """Color bands should split the league into rough thirds when
+        opponents are drawn evenly. Direct refutation of the original
+        'all reds and yellows' bug: with the new logic, ~1/3 of starts
+        against a balanced opponent sample should color Great."""
+        from fantasy_baseball.lineup.upcoming_starts import _matchup_quality
+
+        # Walk every team as opponent at their own home park (the most
+        # common case for an away-pitcher start). With park-neutral
+        # ranking the distribution should be roughly even across bands.
+        bands = {"Tough": 0, "Fair": 0, "Great": 0}
+        for team in _LEAGUE:
+            quality, _, _ = _matchup_quality(team, team, _CTX)
+            bands[quality] += 1
+        # Each band should land within 7-13 of a perfect 10/10/10 split.
+        # That gives the test some slack for K%/OPS not perfectly aligning
+        # while still failing loudly if any band collapses to ~0 again.
+        assert 7 <= bands["Tough"] <= 13, f"Tough bucket lopsided: {bands}"
+        assert 7 <= bands["Fair"] <= 13, f"Fair bucket lopsided: {bands}"
+        assert 7 <= bands["Great"] <= 13, f"Great bucket lopsided: {bands}"
+
+    def test_missing_opponent_falls_back_to_fair(self):
+        from fantasy_baseball.lineup.upcoming_starts import _matchup_quality
+
+        quality, ops_rank, k_rank = _matchup_quality("XXX", "XXX", _CTX)
+        assert quality == "Fair"
+        assert ops_rank == 0
+        assert k_rank == 0
 
 
 def _player(name, positions):

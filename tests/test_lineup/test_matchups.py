@@ -306,7 +306,6 @@ class TestGetProbableStartersV2:
         out = get_probable_starters(
             pitcher_roster=[_pitcher("Bryan Woo")],
             schedule=sched,
-            matchup_factors={"LAD": {"era_whip_factor": 1.10, "k_factor": 0.95}},
             team_stats=team_stats,
             today=date(2026, 5, 5),
             window_start=date(2026, 5, 5),
@@ -340,7 +339,6 @@ class TestGetProbableStartersV2:
         out = get_probable_starters(
             pitcher_roster=[_pitcher("Bryan Woo")],
             schedule={"probable_pitchers": pps},
-            matchup_factors={"LAD": {"era_whip_factor": 1.0, "k_factor": 1.0}},
             team_stats={"LAD": {"ops": 0.750, "k_pct": 0.22}},
             today=date(2026, 5, 5),
             window_start=date(2026, 5, 5),
@@ -366,7 +364,6 @@ class TestGetProbableStartersV2:
                     },
                 ]
             },
-            matchup_factors={},
             team_stats={},
             today=date(2026, 5, 5),
             window_start=date(2026, 5, 5),
@@ -399,7 +396,6 @@ class TestGetProbableStartersV2:
         out = get_probable_starters(
             pitcher_roster=[_pitcher("Gerrit Cole", team="NYY")],
             schedule=sched,
-            matchup_factors={"BOS": {"era_whip_factor": 1.0, "k_factor": 1.0}},
             team_stats={"BOS": {"ops": 0.750, "k_pct": 0.22}},
             today=date(2026, 5, 5),
             window_start=date(2026, 5, 5),

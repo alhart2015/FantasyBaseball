@@ -280,7 +280,6 @@ def get_team_batting_stats(
 def get_probable_starters(
     pitcher_roster: list[Any],
     schedule: dict[str, Any],
-    matchup_factors: dict[str, dict[str, float]] | None = None,
     team_stats: dict[str, dict[str, float]] | None = None,
     today: date | None = None,
     window_start: date | None = None,
@@ -293,16 +292,23 @@ def get_probable_starters(
         pitcher, starts, days, opponents, matchup_quality (worst-case),
         matchups (list of per-start StartEntry dicts including ``announced``).
 
+    Matchup quality is park-adjusted: each opponent's season OPS/K% is
+    neutralized for their home-park effect, then re-inflated by the
+    actual venue's park factor, and the effective values are ranked
+    against the league's park-neutral baseline. See
+    ``upcoming_starts._matchup_quality``.
+
     Args:
         pitcher_roster: roster pitchers (must have .name and .team).
         schedule: result of get_week_schedule() containing probable_pitchers.
-        matchup_factors: result of calculate_matchup_factors().
         team_stats: raw team batting stats {abbrev: {ops, k_pct}}.
         today: cutoff for anchor lookup. Defaults to local_today().
         window_start, window_end: scoring-week bounds. Default to the
             schedule dict's start_date/end_date.
     """
+    from fantasy_baseball.data.park_factors import get_park_factor, park_neutral_value
     from fantasy_baseball.lineup.upcoming_starts import (
+        MatchupContext,
         build_team_game_index,
         compose_pitcher_entries,
     )
@@ -319,17 +325,45 @@ def get_probable_starters(
     if window_end is None:
         window_end = date.fromisoformat(schedule["end_date"])
 
-    matchup_factors = matchup_factors or {}
     team_stats = team_stats or {}
 
+    # Build the rank context once for all pitchers. Park-neutralize each
+    # team's season OPS/K% using *their* home park factor, then keep the
+    # sorted distributions as the league baseline for ranking each start.
     if team_stats:
+        neutral_ops = {
+            abbrev: park_neutral_value(s["ops"], get_park_factor(abbrev, "ops"))
+            for abbrev, s in team_stats.items()
+        }
+        neutral_k = {
+            abbrev: park_neutral_value(s["k_pct"], get_park_factor(abbrev, "k"))
+            for abbrev, s in team_stats.items()
+        }
+        neutral_ops_sorted_desc = tuple(sorted(neutral_ops.values(), reverse=True))
+        neutral_k_sorted_asc = tuple(sorted(neutral_k.values()))
+        # Raw season ranks (not park-adjusted) -- displayed in tooltip so
+        # the user can see how the opponent ranks before the park nudge.
         ops_ranked = sorted(team_stats.items(), key=lambda x: x[1]["ops"], reverse=True)
         k_ranked = sorted(team_stats.items(), key=lambda x: x[1]["k_pct"])
         ops_rank_map = {abbrev: i + 1 for i, (abbrev, _) in enumerate(ops_ranked)}
         k_rank_map = {abbrev: i + 1 for i, (abbrev, _) in enumerate(k_ranked)}
     else:
+        neutral_ops = {}
+        neutral_k = {}
+        neutral_ops_sorted_desc = ()
+        neutral_k_sorted_asc = ()
         ops_rank_map = {}
         k_rank_map = {}
+
+    ctx = MatchupContext(
+        team_stats=team_stats,
+        neutral_ops=neutral_ops,
+        neutral_k_pct=neutral_k,
+        neutral_ops_sorted_desc=neutral_ops_sorted_desc,
+        neutral_k_pct_sorted_asc=neutral_k_sorted_asc,
+        ops_rank_map=ops_rank_map,
+        k_rank_map=k_rank_map,
+    )
 
     rollups: list[dict[str, Any]] = []
     for pitcher in pitcher_roster:
@@ -343,14 +377,12 @@ def get_probable_starters(
 
         entries = compose_pitcher_entries(
             pitcher.name,
+            team_abbrev,
             team_games,
             today=today,
             window_start=window_start,
             window_end=window_end,
-            matchup_factors=matchup_factors,
-            team_stats=team_stats,
-            ops_rank_map=ops_rank_map,
-            k_rank_map=k_rank_map,
+            ctx=ctx,
         )
         if not entries:
             continue

@@ -857,7 +857,6 @@ class RefreshRun:
     def _fetch_probable_starters(self):
         from fantasy_baseball.data.mlb_schedule import get_week_schedule
         from fantasy_baseball.lineup.matchups import (
-            calculate_matchup_factors,
             get_probable_starters,
             get_team_batting_stats,
         )
@@ -882,14 +881,12 @@ class RefreshRun:
 
         batting_stats_cache_path = project_root / "data" / "team_batting_stats.json"
         team_stats = get_team_batting_stats(batting_stats_cache_path)
-        matchup_factors = calculate_matchup_factors(team_stats)
 
         sp_roster = filter_starting_pitchers(self.roster_players, self.pitchers_proj)
 
         probable_starters = get_probable_starters(
             sp_roster,
             schedule or {},
-            matchup_factors=matchup_factors,
             team_stats=team_stats,
         )
         write_cache(CacheKey.PROBABLE_STARTERS, probable_starters)

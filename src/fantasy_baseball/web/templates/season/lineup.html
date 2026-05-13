@@ -241,10 +241,10 @@
                     <span class="upcoming-chip
                               {% if m.matchup_quality == 'Great' %}q-great{% elif m.matchup_quality == 'Tough' %}q-tough{% else %}q-fair{% endif %}
                               {% if not m.announced %}projected{% endif %}"
-                          title="{{ m.day }} {{ m.indicator }} {{ m.opponent }}{% if m.detail and m.detail.ops %} — OPS {{ m.detail.ops }} ({{ m.detail.ops_rank }}th), K% {{ m.detail.k_pct }} ({{ m.detail.k_rank }}th){% endif %}{% if not m.announced %} · projected from rotation{% endif %}">
+                          title="{{ m.day }} {{ m.indicator }} {{ m.opponent }}{% if m.detail and m.detail.ops %} -- OPS {{ m.detail.ops }} (season #{{ m.detail.ops_rank }}, eff #{{ m.detail.effective_ops_rank }} at {{ m.detail.venue }}), K% {{ m.detail.k_pct }} (season #{{ m.detail.k_rank }}, eff #{{ m.detail.effective_k_rank }}){% endif %}{% if not m.announced %} -- projected from rotation{% endif %}">
                         {{ m.day }} {{ m.indicator }}{{ m.opponent }}
-                        {% if m.detail and m.detail.ops_rank %}
-                          <span style="opacity: 0.75;">({{ m.detail.ops_rank }})</span>
+                        {% if m.detail and m.detail.effective_ops_rank %}
+                          <span style="opacity: 0.75;">({{ m.detail.effective_ops_rank }})</span>
                         {% endif %}
                     </span>
                 {% endfor %}
