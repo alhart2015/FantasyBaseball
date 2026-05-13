@@ -11,9 +11,12 @@ from fantasy_baseball.web.season_app import create_app
 
 @pytest.fixture
 def client():
+    """Pre-authenticated test client (whole site is behind login)."""
     app = create_app()
     app.config["TESTING"] = True
     with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess["authenticated"] = True
         yield client
 
 
@@ -34,17 +37,11 @@ def _fake_cache(monkeypatch, values: dict):
     monkeypatch.setattr(routes, "read_cache_list", fake_read_cache_list)
 
 
-def _auth(client):
-    with client.session_transaction() as sess:
-        sess["authenticated"] = True
-
-
 def player_key_json(p: dict) -> str:
     return f"{p['name']}::{p['player_type']}"
 
 
 def test_evaluate_trade_returns_400_on_missing_opponent(client, monkeypatch):
-    _auth(client)
     _fake_cache(
         monkeypatch,
         {
@@ -63,7 +60,6 @@ def test_evaluate_trade_returns_400_on_missing_opponent(client, monkeypatch):
 
 
 def test_evaluate_trade_returns_legal_result_shape(client, monkeypatch):
-    _auth(client)
     from fantasy_baseball.models.player import HitterStats, Player
 
     def _hit(name, r=70):
@@ -155,7 +151,6 @@ def test_evaluate_trade_returns_legal_result_shape(client, monkeypatch):
 
 def test_evaluate_trade_response_includes_view_blocks(client, monkeypatch):
     """The response carries roto / ev_roto / stat_totals blocks for the 3-mode UI."""
-    _auth(client)
     from fantasy_baseball.models.player import HitterStats, Player
 
     def _hit(name, r=70):

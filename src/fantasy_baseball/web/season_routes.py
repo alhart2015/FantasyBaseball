@@ -1,6 +1,5 @@
 """Route handlers for the season dashboard."""
 
-import functools
 import hmac
 import logging
 import math
@@ -85,32 +84,37 @@ def _get_admin_password():
     return os.environ.get("ADMIN_PASSWORD", "dev")
 
 
-def _require_auth(f):
-    """Decorator that requires admin password for protected routes.
+# Endpoints reachable without an authenticated session. Everything else
+# is gated by ``_global_auth_gate`` registered as a before_request hook.
+_AUTH_EXEMPT_ENDPOINTS = frozenset({"login", "logout", "static"})
+
+
+def _global_auth_gate():
+    """Reject unauthenticated requests for any non-exempt endpoint.
 
     Supports two auth methods:
     - Session cookie (browser login via /login)
     - Bearer token header (for automated jobs like QStash cron)
+
+    Registered via ``app.before_request`` so adding a new route is
+    automatically protected — no per-handler decorator to remember.
     """
-
-    @functools.wraps(f)
-    def wrapper(*args, **kwargs):
-        if session.get("authenticated"):
-            return f(*args, **kwargs)
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-            if hmac.compare_digest(token, _get_admin_password()):
-                return f(*args, **kwargs)
-        if (
-            request.path.startswith("/api/")
-            or request.is_json
-            or request.content_type == "application/json"
-        ):
-            return jsonify({"error": "Authentication required"}), 401
-        return redirect(url_for("login", next=request.path))
-
-    return wrapper
+    if request.endpoint in _AUTH_EXEMPT_ENDPOINTS:
+        return None
+    if session.get("authenticated"):
+        return None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        if hmac.compare_digest(token, _get_admin_password()):
+            return None
+    if (
+        request.path.startswith("/api/")
+        or request.is_json
+        or request.content_type == "application/json"
+    ):
+        return jsonify({"error": "Authentication required"}), 401
+    return redirect(url_for("login", next=request.path))
 
 
 def _load_config():
@@ -353,6 +357,8 @@ def _optimize_one_side(
 
 
 def register_routes(app: Flask) -> None:
+
+    app.before_request(_global_auth_gate)
 
     @app.route("/")
     def index():
@@ -671,7 +677,6 @@ def register_routes(app: Flask) -> None:
         return jsonify(results)
 
     @app.route("/api/waiver-search")
-    @_require_auth
     def api_waiver_search():
         from fantasy_baseball.models.player import Player
         from fantasy_baseball.trades.multi_trade import build_waiver_pool
@@ -704,7 +709,6 @@ def register_routes(app: Flask) -> None:
         return jsonify(matches[:20])
 
     @app.route("/api/evaluate-trade", methods=["POST"])
-    @_require_auth
     def api_evaluate_trade():
         from fantasy_baseball.models.player import Player
         from fantasy_baseball.trades.multi_trade import (
@@ -792,7 +796,6 @@ def register_routes(app: Flask) -> None:
         )
 
     @app.route("/api/optimize-trade-lineup", methods=["POST"])
-    @_require_auth
     def api_optimize_trade_lineup():
         from fantasy_baseball.lineup.optimizer import (
             optimize_hitter_lineup,
@@ -1543,6 +1546,9 @@ def register_routes(app: Flask) -> None:
             admin_pw = _get_admin_password()
             if admin_pw and hmac.compare_digest(password, admin_pw):
                 session["authenticated"] = True
+                # Opt into the app-wide PERMANENT_SESSION_LIFETIME so the
+                # cookie outlives the browser tab/process.
+                session.permanent = True
                 next_url = request.args.get("next", url_for("standings"))
                 return redirect(next_url)
             error = "Wrong password"
@@ -1554,7 +1560,6 @@ def register_routes(app: Flask) -> None:
         return redirect(url_for("standings"))
 
     @app.route("/logs")
-    @_require_auth
     def logs():
         meta = read_meta()
         from fantasy_baseball.web.job_logger import get_all_logs
@@ -1578,7 +1583,6 @@ def register_routes(app: Flask) -> None:
         return jsonify(get_teams_list(_standings_from_cache(standings), config.team_name))
 
     @app.route("/api/opponent/<team_key>/lineup")
-    @_require_auth
     def api_opponent_lineup(team_key):
         import time
 
@@ -1657,7 +1661,6 @@ def register_routes(app: Flask) -> None:
         return jsonify(response_data)
 
     @app.route("/api/refresh", methods=["POST"])
-    @_require_auth
     def api_refresh():
         from fantasy_baseball.web.refresh_pipeline import (
             run_full_refresh,
@@ -1677,7 +1680,6 @@ def register_routes(app: Flask) -> None:
         return jsonify(get_refresh_status())
 
     @app.route("/api/sync-from-remote", methods=["POST"])
-    @_require_auth
     def api_sync_from_remote():
         """Pull the Upstash KV down to the local SQLite KV.
 
@@ -1704,7 +1706,6 @@ def register_routes(app: Flask) -> None:
         return jsonify({"ok": True, "summary": stats.summary()})
 
     @app.route("/api/fetch-ros-projections", methods=["POST"])
-    @_require_auth
     def api_fetch_rest_of_season_projections():
         """Kick off a ROS projection fetch in a background thread.
 

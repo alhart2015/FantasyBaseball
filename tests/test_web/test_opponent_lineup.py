@@ -134,6 +134,19 @@ class TestGetTeamsList:
 
 @pytest.fixture
 def client():
+    """Pre-authenticated test client. With the whole site behind login,
+    tests that exercise route handlers need an authenticated session."""
+    app = create_app()
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        with c.session_transaction() as sess:
+            sess["authenticated"] = True
+        yield c
+
+
+@pytest.fixture
+def unauth_client():
+    """Anonymous test client for verifying the login gate itself."""
     app = create_app()
     app.config["TESTING"] = True
     with app.test_client() as c:
@@ -439,22 +452,17 @@ class TestOpponentCache:
 
 
 class TestApiOpponentLineup:
-    def test_requires_auth(self, client):
-        resp = client.get("/api/opponent/469.l.5652.t.8/lineup")
+    def test_requires_auth(self, unauth_client):
+        resp = unauth_client.get("/api/opponent/469.l.5652.t.8/lineup")
         # Should redirect to login (302) or return 401
         assert resp.status_code in (302, 401)
 
     def test_returns_404_without_standings(self, client):
-        with client.session_transaction() as sess:
-            sess["authenticated"] = True
         with patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=None):
             resp = client.get("/api/opponent/469.l.5652.t.8/lineup")
         assert resp.status_code == 404
 
     def test_returns_lineup_data(self, client):
-        with client.session_transaction() as sess:
-            sess["authenticated"] = True
-
         hitters_proj, pitchers_proj = _sample_projections()
 
         def mock_cache(key):

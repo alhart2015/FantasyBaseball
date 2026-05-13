@@ -11,9 +11,12 @@ from fantasy_baseball.web.season_app import create_app
 
 @pytest.fixture
 def client():
+    """Pre-authenticated test client (whole site is behind login)."""
     app = create_app()
     app.config["TESTING"] = True
     with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess["authenticated"] = True
         yield client
 
 
@@ -30,11 +33,6 @@ def _fake_cache(monkeypatch, values: dict):
 
     monkeypatch.setattr(routes, "read_cache_dict", fake_read_cache_dict)
     monkeypatch.setattr(routes, "read_cache_list", fake_read_cache_list)
-
-
-def _auth(client):
-    with client.session_transaction() as sess:
-        sess["authenticated"] = True
 
 
 def player_key_json(p: dict) -> str:
@@ -112,7 +110,6 @@ def _setup_minimal_rosters():
 
 
 def test_optimize_route_returns_400_on_missing_opponent(client, monkeypatch):
-    _auth(client)
     _fake_cache(
         monkeypatch,
         {
@@ -128,7 +125,6 @@ def test_optimize_route_returns_400_on_missing_opponent(client, monkeypatch):
 
 
 def test_optimize_route_returns_slots_for_legal_trade(client, monkeypatch):
-    _auth(client)
     me, opp, ps = _setup_minimal_rosters()
     _fake_cache(
         monkeypatch,
@@ -177,7 +173,6 @@ def test_optimize_route_numbers_repeated_slots(client, monkeypatch):
     match, so a bare "OF" zone leaves the OF rows empty. Single-count
     slots like UTIL=1 stay bare ("UTIL").
     """
-    _auth(client)
     me, opp, ps = _setup_minimal_rosters()
     _fake_cache(
         monkeypatch,
@@ -212,7 +207,6 @@ def test_optimize_route_numbers_repeated_slots(client, monkeypatch):
 
 
 def test_optimize_route_rejects_illegal_trade(client, monkeypatch):
-    _auth(client)
     me, opp, ps = _setup_minimal_rosters()
     _fake_cache(
         monkeypatch,

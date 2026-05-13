@@ -34,6 +34,8 @@ def client():
     app = create_app()
     app.config["TESTING"] = True
     with app.test_client() as c:
+        with c.session_transaction() as sess:
+            sess["authenticated"] = True
         yield c
 
 

@@ -1,55 +1,78 @@
-{% extends "season/base.html" %}
-{% block title %}Login — Season Dashboard{% endblock %}
-{% block content %}
-
-<style>
-.login-form {
-    max-width: 320px;
-    margin: 80px auto;
-}
-.login-form h2 {
-    margin-bottom: 16px;
-    font-size: 18px;
-}
-.login-input {
-    width: 100%;
-    padding: 10px;
-    background: var(--card-bg);
-    color: var(--text);
-    border: 1px solid var(--panel-border);
-    border-radius: 4px;
-    font-size: 14px;
-    margin-bottom: 12px;
-}
-.login-input:focus { outline: 1px solid var(--accent); }
-.login-btn {
-    width: 100%;
-    padding: 10px;
-    background: var(--accent);
-    color: #000;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-weight: 600;
-    font-size: 14px;
-}
-.login-btn:hover { opacity: 0.85; }
-.login-error {
-    color: var(--danger);
-    font-size: 13px;
-    margin-bottom: 12px;
-}
-</style>
-
-<div class="login-form">
-    <h2>Admin Login</h2>
-    {% if error %}
-    <div class="login-error">{{ error }}</div>
-    {% endif %}
-    <form method="post">
-        <input type="password" name="password" class="login-input" placeholder="Password" autofocus>
-        <button type="submit" class="login-btn">Login</button>
-    </form>
-</div>
-
-{% endblock %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login — Season Dashboard</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9918;</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800;900&family=Newsreader:opsz,wght@6..72,400..700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+    <link rel="stylesheet" href="{{ url_for('static', filename='season.css') }}">
+    <style>
+    body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        margin: 0;
+    }
+    .login-form {
+        width: 100%;
+        max-width: 320px;
+        padding: 24px;
+    }
+    .login-form h2 {
+        margin: 0 0 4px 0;
+        font-size: 22px;
+    }
+    .login-form .brand-sub {
+        margin-bottom: 20px;
+        font-size: 12px;
+        color: var(--text-secondary);
+    }
+    .login-input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 10px;
+        background: var(--card-bg);
+        color: var(--text);
+        border: 1px solid var(--panel-border);
+        border-radius: 4px;
+        font-size: 14px;
+        margin-bottom: 12px;
+    }
+    .login-input:focus { outline: 1px solid var(--accent); }
+    .login-btn {
+        width: 100%;
+        padding: 10px;
+        background: var(--accent);
+        color: #000;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 14px;
+    }
+    .login-btn:hover { opacity: 0.85; }
+    .login-error {
+        color: var(--danger);
+        font-size: 13px;
+        margin-bottom: 12px;
+    }
+    </style>
+</head>
+<body>
+    <div class="login-form">
+        <h2>Hart of <em>the</em> Order</h2>
+        <div class="brand-sub">Season Dashboard</div>
+        {% if error %}
+        <div class="login-error">{{ error }}</div>
+        {% endif %}
+        <form method="post">
+            <input type="password" name="password" class="login-input" placeholder="Password" autofocus>
+            <button type="submit" class="login-btn">Login</button>
+        </form>
+    </div>
+</body>
+</html>

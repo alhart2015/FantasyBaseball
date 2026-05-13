@@ -16,15 +16,13 @@ from fantasy_baseball.web.season_app import create_app
 
 @pytest.fixture
 def client():
+    """Pre-authenticated test client (whole site is behind login)."""
     app = create_app()
     app.config["TESTING"] = True
     with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess["authenticated"] = True
         yield client
-
-
-def _auth(client):
-    with client.session_transaction() as sess:
-        sess["authenticated"] = True
 
 
 def _fake_cache(monkeypatch, values: dict):
@@ -109,7 +107,6 @@ def _seed_cache(monkeypatch):
 
 def test_trade_search_response_includes_canonical_keys_away(client, monkeypatch):
     """``mode=away`` candidates expose ``send_key``/``receive_key``."""
-    _auth(client)
     _seed_cache(monkeypatch)
 
     import fantasy_baseball.web.season_routes as routes
@@ -159,7 +156,6 @@ def test_trade_search_response_includes_canonical_keys_away(client, monkeypatch)
 
 def test_trade_search_response_includes_canonical_keys_for(client, monkeypatch):
     """``mode=for`` candidates also expose ``send_key``/``receive_key``."""
-    _auth(client)
     _seed_cache(monkeypatch)
 
     import fantasy_baseball.web.season_routes as routes
