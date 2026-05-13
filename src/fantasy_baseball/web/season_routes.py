@@ -1679,32 +1679,6 @@ def register_routes(app: Flask) -> None:
 
         return jsonify(get_refresh_status())
 
-    @app.route("/api/sync-from-remote", methods=["POST"])
-    def api_sync_from_remote():
-        """Pull the Upstash KV down to the local SQLite KV.
-
-        Lightweight alternative to ``/api/refresh`` for local dev: no
-        Yahoo fetch, no recomputation — just a fresh copy of whatever
-        the most recent QStash-driven refresh wrote to Upstash. Only
-        meaningful off-Render; on Render the Upstash KV is authoritative
-        and has nothing to sync to.
-        """
-        from fantasy_baseball.data.kv_store import is_remote
-        from fantasy_baseball.data.kv_sync import sync_remote_to_local
-
-        if is_remote():
-            return jsonify(
-                {"error": "sync-from-remote is local-only; on Render Upstash is authoritative"}
-            ), 400
-
-        try:
-            stats = sync_remote_to_local()
-        except Exception as exc:
-            log.warning(f"sync_remote_to_local failed: {exc}")
-            return jsonify({"error": str(exc)}), 500
-
-        return jsonify({"ok": True, "summary": stats.summary()})
-
     @app.route("/api/fetch-ros-projections", methods=["POST"])
     def api_fetch_rest_of_season_projections():
         """Kick off a ROS projection fetch in a background thread.
