@@ -260,3 +260,85 @@ def test_migrate_to_phase_5_safe_on_fresh_db() -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info('hitter_statcast_pa')").fetchall()}
     assert "launch_speed_angle" in cols
     assert "barrel" not in cols
+
+
+def _phase_4_model_fits_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    """Recreate the pre-Phase-B model_fits shape (audit columns only)."""
+    conn.execute(
+        """
+        CREATE TABLE model_fits (
+            model_id VARCHAR NOT NULL,
+            category VARCHAR NOT NULL,
+            direction VARCHAR NOT NULL,
+            season_set VARCHAR NOT NULL,
+            window_days INTEGER NOT NULL,
+            cold_method VARCHAR NOT NULL,
+            chosen_C DOUBLE NOT NULL,
+            cv_auc_mean DOUBLE NOT NULL,
+            cv_auc_std DOUBLE NOT NULL,
+            val_auc DOUBLE NOT NULL,
+            n_train_rows INTEGER NOT NULL,
+            n_val_rows INTEGER NOT NULL,
+            fit_timestamp TIMESTAMP NOT NULL,
+            PRIMARY KEY (model_id)
+        )
+        """
+    )
+
+
+def test_migrate_to_phase_b_adds_pipeline_state_columns() -> None:
+    """Phase B adds 6 nullable columns to model_fits so the dashboard refresh
+    can reconstruct fitted Pipelines without retraining."""
+    from fantasy_baseball.streaks.data.migrate import migrate_to_phase_b
+
+    conn = duckdb.connect(":memory:")
+    _phase_4_model_fits_schema(conn)
+    # Seed a Phase 4 row to confirm it survives the migration with NULLs in
+    # the new columns.
+    conn.execute(
+        "INSERT INTO model_fits VALUES ('m', 'r', 'above', '2023-2024', 14, "
+        "'empirical', 1.0, 0.55, 0.02, 0.56, 1000, 500, '2026-01-01 00:00:00')"
+    )
+
+    migrate_to_phase_b(conn)
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info('model_fits')").fetchall()}
+    for col in (
+        "feature_columns",
+        "coef",
+        "intercept",
+        "scaler_mean",
+        "scaler_scale",
+        "dense_quintile_cutoffs",
+    ):
+        assert col in cols, f"expected {col} in model_fits after Phase B migration"
+    # Existing row survives with NULL in the new columns.
+    n = conn.execute("SELECT COUNT(*) FROM model_fits").fetchone()[0]
+    assert n == 1
+    row = conn.execute(
+        "SELECT feature_columns, coef, intercept, scaler_mean, scaler_scale, "
+        "dense_quintile_cutoffs FROM model_fits"
+    ).fetchone()
+    assert row == (None, None, None, None, None, None)
+
+
+def test_migrate_to_phase_b_is_idempotent() -> None:
+    from fantasy_baseball.streaks.data.migrate import migrate_to_phase_b
+
+    conn = get_connection(":memory:")  # already Phase B schema
+    migrate_to_phase_b(conn)
+    migrate_to_phase_b(conn)  # second call must not raise
+    cols = {r[1] for r in conn.execute("PRAGMA table_info('model_fits')").fetchall()}
+    assert "feature_columns" in cols
+    assert "coef" in cols
+
+
+def test_migrate_to_phase_b_safe_on_fresh_db() -> None:
+    """Running migrate_to_phase_b on a fresh DB (already has the columns) is a no-op."""
+    from fantasy_baseball.streaks.data.migrate import migrate_to_phase_b
+
+    conn = get_connection(":memory:")
+    migrate_to_phase_b(conn)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info('model_fits')").fetchall()}
+    assert "feature_columns" in cols
+    assert "dense_quintile_cutoffs" in cols

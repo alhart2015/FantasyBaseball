@@ -149,6 +149,19 @@ _SCHEMA_DDL = [
         n_train_rows INTEGER NOT NULL,
         n_val_rows INTEGER NOT NULL,
         fit_timestamp TIMESTAMP NOT NULL,
+        -- Phase B: persisted Pipeline parameters so the dashboard refresh can
+        -- reconstruct fitted models without retraining. ``feature_columns``,
+        -- ``coef``, ``scaler_mean``, ``scaler_scale`` are aligned 1:1 in the
+        -- same column order. ``dense_quintile_cutoffs`` is the 4-tuple of
+        -- quintile breakpoints used to recompute ``streak_strength_numeric``
+        -- at inference time for dense cats; NULL for sparse cats (which use
+        -- a Poisson z-score formula instead).
+        feature_columns VARCHAR[],
+        coef DOUBLE[],
+        intercept DOUBLE,
+        scaler_mean DOUBLE[],
+        scaler_scale DOUBLE[],
+        dense_quintile_cutoffs DOUBLE[],
         PRIMARY KEY (model_id)
     )
     """,

@@ -905,3 +905,110 @@ def test_lookup_normalizes_case_for_matching(client, kv_isolation):
     resp = client.get(f"/api/players/lookup?keys={names['fa_a'].lower()}::hitter")
     assert resp.status_code == 200
     assert [p["name"] for p in resp.get_json()["players"]] == [names["fa_a"]]
+
+
+# --- /lineup streak chip injection ----------------------------------------------------
+
+
+def _seed_streak_cache_for(
+    name: str,
+    *,
+    composite: int,
+    hot_cat: str,
+    prob: float,
+) -> None:
+    """Seed CacheKey.STREAK_SCORES with one roster row for ``name``.
+
+    Mirrors the helper in tests/test_web/test_streaks_route.py — kept
+    separate so this test module stays self-contained.
+    """
+    from datetime import date
+
+    from fantasy_baseball.streaks.dashboard import serialize_report
+    from fantasy_baseball.streaks.inference import Driver, PlayerCategoryScore
+    from fantasy_baseball.streaks.reports.sunday import (
+        DriverLine,
+        Report,
+        ReportRow,
+    )
+    from fantasy_baseball.web.season_data import write_cache
+
+    score = PlayerCategoryScore(
+        player_id=1,
+        category=hot_cat,  # type: ignore[arg-type]
+        label="hot",
+        probability=prob,
+        drivers=(Driver(feature="barrel_pct", z_score=1.0),),
+        window_end=date(2026, 5, 10),
+    )
+    row = ReportRow(
+        name=name,
+        positions=("OF",),
+        player_id=1,
+        composite=composite,
+        scores={hot_cat: score},  # type: ignore[dict-item]
+        max_probability=prob,
+    )
+    dl = DriverLine(
+        player_name=name,
+        category=hot_cat,  # type: ignore[arg-type]
+        label="hot",
+        probability=prob,
+        drivers=(Driver(feature="barrel_pct", z_score=1.0),),
+    )
+    rpt = Report(
+        report_date=date(2026, 5, 11),
+        window_end=date(2026, 5, 10),
+        team_name="Hart of the Order",
+        league_id=5652,
+        season_set_train="2023-2025",
+        roster_rows=(row,),
+        fa_rows=(),
+        driver_lines=(dl,),
+        skipped=(),
+    )
+    write_cache(CacheKey.STREAK_SCORES, serialize_report(rpt))
+
+
+def _seed_minimum_lineup_caches(hitter_names: list[str]) -> None:
+    """Seed the minimum cache entries the /lineup route needs to render hitter rows.
+
+    Writes ROSTER (each name as a hitter at OF) plus an empty LINEUP_OPTIMAL
+    so format_lineup_for_display produces hitter dicts that flow into the
+    tbody partial.
+    """
+    from fantasy_baseball.web import season_data
+
+    roster = [
+        {
+            "name": name,
+            "positions": ["OF"],
+            "selected_position": "OF",
+            "player_id": str(i + 1),
+            "status": "",
+        }
+        for i, name in enumerate(hitter_names)
+    ]
+    season_data.write_cache(CacheKey.ROSTER, roster)
+    season_data.write_cache(CacheKey.LINEUP_OPTIMAL, {"hitters": {}, "pitchers": {}, "moves": []})
+    season_data.write_cache(CacheKey.META, {"last_refresh": "9:00 AM"})
+
+
+def test_lineup_injects_streak_chip_when_cache_present(client, kv_isolation) -> None:
+    """When STREAK_SCORES is in cache, the lineup hitters table renders chips."""
+    _seed_streak_cache_for("Roster Guy", composite=2, hot_cat="hr", prob=0.62)
+    _seed_minimum_lineup_caches(hitter_names=["Roster Guy"])
+
+    resp = client.get("/lineup")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "streak-chip" in body
+    assert "HOT &middot; HR" in body or "HOT · HR" in body
+
+
+def test_lineup_renders_dash_chip_when_no_streak_cache(client, kv_isolation) -> None:
+    _seed_minimum_lineup_caches(hitter_names=["Roster Guy"])
+    resp = client.get("/lineup")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "streak-chip streak-neutral" in body

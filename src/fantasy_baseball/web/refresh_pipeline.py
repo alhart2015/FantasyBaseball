@@ -21,6 +21,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fantasy_baseball.models.positions import BENCH_SLOTS
+from fantasy_baseball.streaks.dashboard import serialize_report
+from fantasy_baseball.streaks.data.schema import DEFAULT_DB_PATH, get_connection
+from fantasy_baseball.streaks.pipeline import compute_streak_report
 from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 from fantasy_baseball.utils.time_utils import (
@@ -285,6 +288,7 @@ class RefreshRun:
             self._run_ros_monte_carlo()
             self._compute_spoe()
             self._analyze_transactions()
+            self._compute_streaks()
             self._write_meta()
 
             self.logger.finish("ok")
@@ -1128,6 +1132,42 @@ class RefreshRun:
         cache_data = build_cache_output(stored_txns)
         write_cache(CacheKey.TRANSACTION_ANALYZER, cache_data)
         self._progress(f"Analyzed {len(stored_txns)} total transaction(s)")
+
+    # --- Step 15b: Compute streak scores for /streaks + lineup chips ---
+    def _compute_streaks(self) -> None:
+        """Run the full streak pipeline + serialize + write cache.
+
+        Failures are logged but not re-raised — streak data is
+        non-load-bearing for the rest of the dashboard. The DuckDB
+        connection is closed in a ``finally`` so a failure inside
+        ``compute_streak_report`` still releases the file lock.
+        """
+        self._progress("Computing streak scores...")
+        try:
+            assert self.config is not None
+            assert self.league is not None
+            project_root = Path(__file__).resolve().parents[3]
+            conn = get_connection(DEFAULT_DB_PATH)
+            try:
+                report = compute_streak_report(
+                    conn,
+                    league=self.league,
+                    team_name=self.config.team_name,
+                    league_id=self.config.league_id,
+                    projections_root=project_root / "data" / "projections",
+                    scoring_season=self.config.season_year,
+                    top_n_fas=50,
+                )
+            finally:
+                conn.close()
+            payload = serialize_report(report)
+            write_cache(CacheKey.STREAK_SCORES, payload)
+            self._progress(
+                f"Streak scores cached: {len(report.roster_rows)} roster, {len(report.fa_rows)} FAs"
+            )
+        except Exception:
+            log.exception("Streak computation failed; cache unchanged")
+            self._progress("Streak computation failed (continuing)")
 
     # --- Step 16: Write meta ---
     def _write_meta(self):

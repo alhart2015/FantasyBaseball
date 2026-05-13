@@ -3179,3 +3179,62 @@ td[style*="--neg"] {
 .bt-move-drop { color: var(--text-secondary); }
 .bt-move-shuffle { color: var(--text); }
 @media (max-width: 768px) { .bt-moves-grid { grid-template-columns: 1fr; } }
+
+/* === Hot Streaks — chips + Streaks page tables === */
+
+/* Streaks chip — used on /streaks tables and /lineup hitters tbody.
+   Palette: clay (red/rust) for hot, cool blue for cold, muted surface for neutral.
+   Project has no canonical blue var, so cold falls back to literal hex from the C-dark mock. */
+.streak-chip {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.streak-chip.streak-hot     { background: var(--clay-soft); color: var(--clay); }
+.streak-chip.streak-cold    { background: #1f3556;          color: #9fc1ff; }
+.streak-chip.streak-neutral { background: var(--surface-soft); color: var(--ink-faint); }
+.streak-chip + .streak-chip { margin-left: 4px; }
+
+/* Streaks page layout */
+.streaks-section { margin-bottom: 32px; }
+.streaks-section h2 { font-size: 18px; margin: 0 0 8px; }
+.streaks-section .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+.streaks-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.streaks-table th {
+    text-align: left;
+    padding: 8px 10px;
+    cursor: pointer;
+    user-select: none;
+    border-bottom: 1px solid var(--border);
+}
+.streaks-table th[data-sort-dir="asc"]::after  { content: " ▲"; opacity: 0.6; }
+.streaks-table th[data-sort-dir="desc"]::after { content: " ▼"; opacity: 0.6; }
+.streaks-table td { padding: 6px 10px; border-bottom: 1px solid var(--surface-soft); }
+.streaks-table tr:hover td { background: rgba(255, 255, 255, 0.02); }
+
+/* Drivers list (per-player hot/cold reason breakdown) */
+.drivers { list-style: none; padding: 0; margin: 0; font-size: 13px; }
+.drivers li { padding: 4px 0; border-bottom: 1px solid var(--surface-soft); }
+
+/* Empty state for /streaks before first refresh */
+.empty-state {
+    padding: 32px;
+    background: var(--surface);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    text-align: center;
+}

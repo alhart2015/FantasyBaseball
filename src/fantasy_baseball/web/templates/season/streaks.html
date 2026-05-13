@@ -1,0 +1,94 @@
+{% extends "season/base.html" %}
+{% block title %}Streaks · {{ super() }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Streaks</h1>
+  {% if payload %}
+    <p class="page-sub">
+      Week of {{ payload.report_date }}
+      {% if payload.window_end %} · Window ends {{ payload.window_end }}{% endif %}
+    </p>
+  {% endif %}
+</div>
+
+{% if not payload %}
+  <div class="empty-state">
+    <p>No streak data yet — run a refresh to compute streak signals.</p>
+  </div>
+{% else %}
+  <section class="streaks-section">
+    <h2>Your Roster</h2>
+    <table class="streaks-table" data-sortable>
+      <thead>
+        <tr>
+          <th onclick="sortStreaksTable(this, 'name', 'asc')">Name</th>
+          <th onclick="sortStreaksTable(this, 'pos', 'asc')">Pos</th>
+          <th onclick="sortStreaksTable(this, 'avg', 'desc')">AVG</th>
+          <th onclick="sortStreaksTable(this, 'hr', 'desc')">HR</th>
+          <th onclick="sortStreaksTable(this, 'r', 'desc')">R</th>
+          <th onclick="sortStreaksTable(this, 'rbi', 'desc')">RBI</th>
+          <th onclick="sortStreaksTable(this, 'sb', 'desc')">SB</th>
+          <th onclick="sortStreaksTable(this, 'cmp', 'desc')">Cmp</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in payload.roster_rows %}
+          {% include "season/_streaks_row.html" %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="streaks-section">
+    <div class="section-head">
+      <h2>Top Free Agent Signals</h2>
+      <label>Show top:
+        <select id="fa-count" onchange="filterFaRows(this.value)">
+          <option value="10">10</option>
+          <option value="25">25</option>
+          <option value="50">50</option>
+        </select>
+      </label>
+    </div>
+    <table class="streaks-table" data-sortable id="fa-table">
+      <thead>
+        <tr>
+          <th>Name</th><th>Pos</th><th>Active Cats</th><th>|Cmp|</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in payload.fa_rows %}
+        <tr data-rank="{{ loop.index }}">
+          <td>{{ row.name }}</td>
+          <td>{{ row.positions | join(", ") }}</td>
+          <td>
+            {% for cat, score in row.scores.items() if score.label != "neutral" %}
+              <span class="streak-chip streak-{{ score.label }}">{{ cat | upper }}</span>
+            {% endfor %}
+          </td>
+          <td>{{ row.composite | abs }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="streaks-section">
+    <h2>Drivers</h2>
+    <ul class="drivers">
+      {% for dl in payload.driver_lines %}
+        <li>
+          <strong>{{ dl.player_name }}</strong> ·
+          {{ dl.category | upper }} {{ dl.label | upper }} ({{ (dl.probability * 100) | round | int }}%):
+          {% for d in dl.drivers %}
+            {{ d.feature }} {{ "%+0.1f"|format(d.z_score) }}z{% if not loop.last %}, {% endif %}
+          {% endfor %}
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  <script src="{{ url_for('static', filename='streaks.js') }}"></script>
+{% endif %}
+{% endblock %}

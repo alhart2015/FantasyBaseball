@@ -70,9 +70,7 @@ def migrate_to_phase_4(conn: duckdb.DuckDBPyConnection) -> None:
     are untouched.
     """
     for col in ("r_per_pa", "rbi_per_pa", "avg"):
-        conn.execute(
-            f"ALTER TABLE hitter_projection_rates ADD COLUMN IF NOT EXISTS {col} DOUBLE"
-        )
+        conn.execute(f"ALTER TABLE hitter_projection_rates ADD COLUMN IF NOT EXISTS {col} DOUBLE")
         logger.info("ALTER hitter_projection_rates ADD COLUMN IF NOT EXISTS %s", col)
     init_schema(conn)
     logger.info("Recreated/ensured Phase 4 tables via init_schema (model_fits)")
@@ -101,3 +99,37 @@ def migrate_to_phase_5(conn: duckdb.DuckDBPyConnection) -> None:
     if "barrel" in cols:
         conn.execute("ALTER TABLE hitter_statcast_pa DROP COLUMN barrel")
         logger.info("ALTER hitter_statcast_pa DROP COLUMN barrel")
+
+
+def migrate_to_phase_b(conn: duckdb.DuckDBPyConnection) -> None:
+    """Add Phase B pipeline-state columns to ``model_fits``. Idempotent.
+
+    Adds six nullable columns so ``load_models_from_fits`` can reconstruct
+    fitted Pipelines without retraining:
+
+    - ``feature_columns`` (VARCHAR[]) — the in-order feature names.
+    - ``coef`` (DOUBLE[]) — LogisticRegression coefficient vector.
+    - ``intercept`` (DOUBLE) — LogisticRegression intercept scalar.
+    - ``scaler_mean`` / ``scaler_scale`` (DOUBLE[]) — StandardScaler params.
+    - ``dense_quintile_cutoffs`` (DOUBLE[]) — quintile breakpoints used to
+      reproduce ``streak_strength_numeric`` at inference time (NULL for
+      sparse cats).
+
+    Existing Phase 4 rows survive with NULL in the new columns; the loader
+    skips rows it cannot reconstruct, so the next ``refit_models_for_report``
+    call repopulates them automatically.
+    """
+    init_schema(conn)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info('model_fits')").fetchall()}
+    additions = (
+        ("feature_columns", "VARCHAR[]"),
+        ("coef", "DOUBLE[]"),
+        ("intercept", "DOUBLE"),
+        ("scaler_mean", "DOUBLE[]"),
+        ("scaler_scale", "DOUBLE[]"),
+        ("dense_quintile_cutoffs", "DOUBLE[]"),
+    )
+    for col, sql_type in additions:
+        if col not in cols:
+            conn.execute(f"ALTER TABLE model_fits ADD COLUMN {col} {sql_type}")
+            logger.info("ALTER model_fits ADD COLUMN %s %s", col, sql_type)

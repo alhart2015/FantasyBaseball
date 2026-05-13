@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Season Dashboard{% endblock %}</title>
+    <title>Streaks · Season Dashboard</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚾</text></svg>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800;900&family=Newsreader:opsz,wght@6..72,400..700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
-    <link rel="stylesheet" href="{{ url_for('static', filename='season.css') }}">
-    {% block head_extra %}{% endblock %}
+    <link rel="stylesheet" href="/static/season.css">
+    
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
 </head>
 <body>
@@ -18,74 +18,178 @@
             <div class="sidebar-header">
                 <div class="brand-mark">Hart of <em>the</em><br>Order</div>
                 <div class="brand-sub">
-                    {% if meta and meta.get('week') %}2026 · Wk {{ meta['week'] }}{% else %}2026{% endif %}
+                    2026
                 </div>
             </div>
-            <a href="{{ url_for('standings') }}"
-               class="nav-link {% if active_page == 'standings' %}active{% endif %}">
+            <a href="/standings"
+               class="nav-link ">
                 <span class="diamond"></span>Standings
             </a>
-            <a href="{{ url_for('trends') }}"
-               class="nav-link {% if active_page == 'trends' %}active{% endif %}">
+            <a href="/trends"
+               class="nav-link ">
                 <span class="diamond"></span>Trends
             </a>
-            <a href="{{ url_for('lineup') }}"
-               class="nav-link {% if active_page == 'lineup' %}active{% endif %}">
+            <a href="/lineup"
+               class="nav-link ">
                 <span class="diamond"></span>Lineup
             </a>
-            <a href="{{ url_for('streaks') }}"
-               class="nav-link {% if active_page == 'streaks' %}active{% endif %}">
+            <a href="/streaks"
+               class="nav-link active">
                 <span class="diamond"></span>Streaks
             </a>
-            <a href="{{ url_for('roster_audit') }}"
-               class="nav-link {% if active_page == 'roster_audit' %}active{% endif %}">
+            <a href="/roster-audit"
+               class="nav-link ">
                 <span class="diamond"></span>Roster Audit
             </a>
-            <a href="{{ url_for('waivers_trades') }}"
-               class="nav-link {% if active_page == 'waivers_trades' %}active{% endif %}">
+            <a href="/waivers-trades"
+               class="nav-link ">
                 <span class="diamond"></span>Trades
             </a>
-            <a href="{{ url_for('player_search') }}"
-               class="nav-link {% if active_page == 'players' %}active{% endif %}">
+            <a href="/players"
+               class="nav-link ">
                 <span class="diamond"></span>Players
             </a>
-            <a href="{{ url_for('luck') }}"
-               class="nav-link {% if active_page == 'luck' %}active{% endif %}">
+            <a href="/luck"
+               class="nav-link ">
                 <span class="diamond"></span>Luck
             </a>
-            <a href="{{ url_for('transactions') }}"
-               class="nav-link {% if active_page == 'transactions' %}active{% endif %}">
+            <a href="/transactions"
+               class="nav-link ">
                 <span class="diamond"></span>Transactions
             </a>
-            <a href="{{ url_for('logs') }}"
-               class="nav-link {% if active_page == 'logs' %}active{% endif %}">
+            <a href="/logs"
+               class="nav-link ">
                 <span class="diamond"></span>Logs
             </a>
             <div class="sidebar-footer">
                 <div class="refresh-info"
-                     {% if meta and meta.get('last_refresh') %}
-                     data-last-refresh="{{ meta['last_refresh'] }}"
-                     {% endif %}>
-                    {% if meta and meta.get('last_refresh') %}
-                        Last refresh: {{ meta['last_refresh'] }}
-                        <span id="staleness-indicator" style="display: none; margin-left: 4px; font-size: 11px;"></span>
-                    {% else %}
+                     >
+                    
                         No data yet
-                    {% endif %}
+                    
                 </div>
-                {% if session.get('authenticated') %}
-                <button class="btn-refresh" id="refresh-btn" onclick="startRefresh()">Refresh Data</button>
-                <button class="btn-refresh" id="sync-btn" onclick="syncFromRemote()"
-                        style="margin-top: 4px; font-size: 11px; padding: 4px 8px;">Sync from remote</button>
-                <div id="refresh-progress" style="display: none; font-size: 11px; color: var(--accent); margin-top: 6px;"></div>
-                <a href="{{ url_for('logout') }}" style="display: block; margin-top: 8px; font-size: 11px; color: var(--text-secondary); text-decoration: none;">Logout</a>
-                {% else %}
-                <a href="{{ url_for('login') }}" class="btn-refresh" style="display: block; text-align: center; text-decoration: none; margin-top: 6px;">Login</a>
-                {% endif %}
+                
+                <a href="/login" class="btn-refresh" style="display: block; text-align: center; text-decoration: none; margin-top: 6px;">Login</a>
+                
             </div>
         </nav>
         <main class="content">
-            {% block content %}{% endblock %}
+            
+<div class="page-header">
+  <h1>Streaks</h1>
+  
+    <p class="page-sub">
+      Week of 2026-05-11
+       · Window ends 2026-05-10
+    </p>
+  
+</div>
+
+
+  <section class="streaks-section">
+    <h2>Your Roster</h2>
+    <table class="streaks-table" data-sortable>
+      <thead>
+        <tr>
+          <th onclick="sortStreaksTable(this, 'name', 'asc')">Name</th>
+          <th onclick="sortStreaksTable(this, 'pos', 'asc')">Pos</th>
+          <th onclick="sortStreaksTable(this, 'avg', 'desc')">AVG</th>
+          <th onclick="sortStreaksTable(this, 'hr', 'desc')">HR</th>
+          <th onclick="sortStreaksTable(this, 'r', 'desc')">R</th>
+          <th onclick="sortStreaksTable(this, 'rbi', 'desc')">RBI</th>
+          <th onclick="sortStreaksTable(this, 'sb', 'desc')">SB</th>
+          <th onclick="sortStreaksTable(this, 'cmp', 'desc')">Cmp</th>
+        </tr>
+      </thead>
+      <tbody>
+        
+          <tr>
+  <td>Canon Player</td>
+  <td>OF</td>
+  
+    
+    <td>
+      
+        —
+      
+    </td>
+  
+    
+    <td>
+      
+        <span class="streak-chip streak-hot">HOT</span>
+      
+    </td>
+  
+    
+    <td>
+      
+        —
+      
+    </td>
+  
+    
+    <td>
+      
+        —
+      
+    </td>
+  
+    
+    <td>
+      
+        —
+      
+    </td>
+  
+  <td>+1</td>
+</tr>
+        
+      </tbody>
+    </table>
+  </section>
+
+  <section class="streaks-section">
+    <div class="section-head">
+      <h2>Top Free Agent Signals</h2>
+      <label>Show top:
+        <select id="fa-count" onchange="filterFaRows(this.value)">
+          <option value="10">10</option>
+          <option value="25">25</option>
+          <option value="50">50</option>
+        </select>
+      </label>
+    </div>
+    <table class="streaks-table" data-sortable id="fa-table">
+      <thead>
+        <tr>
+          <th>Name</th><th>Pos</th><th>Active Cats</th><th>|Cmp|</th>
+        </tr>
+      </thead>
+      <tbody>
+        
+      </tbody>
+    </table>
+  </section>
+
+  <section class="streaks-section">
+    <h2>Drivers</h2>
+    <ul class="drivers">
+      
+        <li>
+          <strong>Canon Player</strong> ·
+          HR HOT (62%):
+          
+            barrel_pct +1.8z
+          
+        </li>
+      
+    </ul>
+  </section>
+
+  <script src="/static/streaks.js"></script>
+
+
         </main>
     </div>
 <script>

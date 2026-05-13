@@ -1,0 +1,15 @@
+<tr>
+  <td>{{ row.name }}</td>
+  <td>{{ row.positions | join(", ") }}</td>
+  {% for cat in ["avg", "hr", "r", "rbi", "sb"] %}
+    {% set score = row.scores.get(cat) %}
+    <td>
+      {% if score and score.label != "neutral" %}
+        <span class="streak-chip streak-{{ score.label }}">{{ score.label | upper }}</span>
+      {% else %}
+        —
+      {% endif %}
+    </td>
+  {% endfor %}
+  <td>{{ "%+d"|format(row.composite) }}</td>
+</tr>

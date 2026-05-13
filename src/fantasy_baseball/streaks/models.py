@@ -219,7 +219,7 @@ class ContinuationRate:
 
 @dataclass(frozen=True, slots=True)
 class ModelFit:
-    """One row of the Phase 4 ``model_fits`` audit table.
+    """One row of the Phase 4 ``model_fits`` audit + Phase B pipeline-state table.
 
     PK is ``model_id`` (synthetic string like 'hr_hot_2023-2024').
 
@@ -231,6 +231,23 @@ class ModelFit:
     - ``val_auc`` is the single-shot 2025 ROC-AUC — the gate metric.
     - ``n_train_rows`` / ``n_val_rows`` are post-filter row counts (drop
       strength=zna, drop NULL season_rate, drop NULL peripherals).
+
+    Phase B added the persisted-pipeline fields so the dashboard refresh can
+    reconstruct fitted ``StandardScaler`` + ``LogisticRegression`` pipelines
+    from this table without retraining. All five are nullable for backward
+    compatibility with Phase 4 rows that pre-date Phase B (which left them
+    NULL); the loader treats NULL as "this row cannot be reconstructed."
+
+    - ``feature_columns`` — the in-order feature names the model was trained
+      on. Aligned 1:1 with ``coef`` / ``scaler_mean`` / ``scaler_scale``.
+    - ``coef`` — the LogisticRegression coefficient vector (one entry per
+      feature; binary classifier so this is a single row).
+    - ``intercept`` — the LogisticRegression intercept (scalar).
+    - ``scaler_mean`` / ``scaler_scale`` — StandardScaler params per feature.
+    - ``dense_quintile_cutoffs`` — 4-tuple of quintile breakpoints over the
+      training population's category values; required to recompute
+      ``streak_strength_numeric`` at inference time for dense cats. NULL for
+      sparse cats (which use a Poisson z-score formula instead).
     """
 
     model_id: str
@@ -246,3 +263,9 @@ class ModelFit:
     n_train_rows: int
     n_val_rows: int
     fit_timestamp: datetime
+    feature_columns: tuple[str, ...] | None = None
+    coef: tuple[float, ...] | None = None
+    intercept: float | None = None
+    scaler_mean: tuple[float, ...] | None = None
+    scaler_scale: tuple[float, ...] | None = None
+    dense_quintile_cutoffs: tuple[float, float, float, float] | None = None

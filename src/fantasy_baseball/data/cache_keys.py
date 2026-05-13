@@ -32,6 +32,7 @@ class CacheKey(StrEnum):
     FULL_SEASON_PROJECTIONS = "full_season_projections"
     POSITIONS = "positions"
     STANDINGS_BREAKDOWN = "standings_breakdown"
+    STREAK_SCORES = "streak_scores"
 
 
 def redis_key(key: CacheKey) -> str:
