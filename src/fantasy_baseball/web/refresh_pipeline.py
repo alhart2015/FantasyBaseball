@@ -21,9 +21,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fantasy_baseball.models.positions import BENCH_SLOTS
-from fantasy_baseball.streaks.dashboard import serialize_report
-from fantasy_baseball.streaks.data.schema import DEFAULT_DB_PATH, get_connection
-from fantasy_baseball.streaks.pipeline import compute_streak_report
+
+# Streaks imports are deliberately deferred to inside ``_compute_streaks``:
+# ``streaks.dashboard``, ``streaks.data.schema``, and ``streaks.pipeline``
+# all transitively import ``duckdb`` at module load. duckdb is a [dev]
+# extra and is not installed on Render — pulling it in at module import
+# would 500 every route that lazy-imports refresh_pipeline (including the
+# QStash-driven /api/refresh path that's load-bearing for the daily
+# refresh). ``_compute_streaks`` is itself a no-op on Render (see
+# ``is_remote()`` gate there), so the imports never actually need to run
+# in production. See PR #72 for the parallel /lineup fix.
 from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 from fantasy_baseball.utils.time_utils import (
@@ -1137,11 +1144,30 @@ class RefreshRun:
     def _compute_streaks(self) -> None:
         """Run the full streak pipeline + serialize + write cache.
 
+        Skipped on Render: duckdb is a [dev] extra (not installed on
+        Render) and the streaks.duckdb file is gitignored (not deployed
+        either). The cache is populated by running
+        ``scripts/refresh_remote.py`` from a developer machine, which
+        writes ``STREAK_SCORES`` directly to Upstash. The existing
+        Upstash value survives the Render-side refresh untouched.
+
         Failures are logged but not re-raised — streak data is
         non-load-bearing for the rest of the dashboard. The DuckDB
         connection is closed in a ``finally`` so a failure inside
         ``compute_streak_report`` still releases the file lock.
         """
+        from fantasy_baseball.data.kv_store import is_remote
+
+        if is_remote():
+            self._progress("Skipping streak compute on Render (run refresh_remote.py locally)")
+            return
+
+        # Local-only imports: see the module-level comment about the deferred
+        # streaks imports for the full rationale.
+        from fantasy_baseball.streaks.dashboard import serialize_report
+        from fantasy_baseball.streaks.data.schema import DEFAULT_DB_PATH, get_connection
+        from fantasy_baseball.streaks.pipeline import compute_streak_report
+
         self._progress("Computing streak scores...")
         try:
             assert self.config is not None

@@ -470,7 +470,10 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/lineup")
     def lineup():
-        from fantasy_baseball.streaks.dashboard import build_indicator
+        # Import from streaks.indicator (not streaks.dashboard) — dashboard.py
+        # pulls in duckdb-using modules at load time, which Render does not
+        # have installed. The indicator module is intentionally duckdb-free.
+        from fantasy_baseball.streaks.indicator import build_indicator
 
         meta = read_meta()
         roster_raw = read_cache_list(CacheKey.ROSTER)

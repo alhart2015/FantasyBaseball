@@ -626,15 +626,16 @@ def test_compute_streaks_writes_cache(monkeypatch, kv_isolation) -> None:
         skipped=(),
     )
 
+    # ``_compute_streaks`` lazy-imports compute_streak_report and
+    # get_connection inside the function (see refresh_pipeline.py module
+    # docstring for why), so patches must target the source modules, not
+    # ``refresh_pipeline``.
     monkeypatch.setattr(
-        "fantasy_baseball.web.refresh_pipeline.compute_streak_report",
+        "fantasy_baseball.streaks.pipeline.compute_streak_report",
         lambda *a, **kw: fake_report,
     )
-    # ``compute_streak_report`` is the only thing that touches DuckDB —
-    # since we're patching it, also short-circuit the get_connection
-    # call so no real DB file is opened.
     monkeypatch.setattr(
-        "fantasy_baseball.web.refresh_pipeline.get_connection",
+        "fantasy_baseball.streaks.data.schema.get_connection",
         lambda *a, **kw: _FakeConn(),
     )
 
@@ -656,9 +657,9 @@ def test_compute_streaks_swallows_failures(monkeypatch, kv_isolation, caplog) ->
     def _boom(*a, **kw):
         raise RuntimeError("DuckDB unhappy")
 
-    monkeypatch.setattr("fantasy_baseball.web.refresh_pipeline.compute_streak_report", _boom)
+    monkeypatch.setattr("fantasy_baseball.streaks.pipeline.compute_streak_report", _boom)
     monkeypatch.setattr(
-        "fantasy_baseball.web.refresh_pipeline.get_connection",
+        "fantasy_baseball.streaks.data.schema.get_connection",
         lambda *a, **kw: _FakeConn(),
     )
 
@@ -692,18 +693,86 @@ def test_compute_streaks_closes_connection_on_failure(monkeypatch, kv_isolation)
             closed["n"] += 1
 
     monkeypatch.setattr(
-        "fantasy_baseball.web.refresh_pipeline.get_connection",
+        "fantasy_baseball.streaks.data.schema.get_connection",
         lambda *a, **kw: _TrackingConn(),
     )
 
     def _boom(*a, **kw):
         raise RuntimeError("kaboom")
 
-    monkeypatch.setattr("fantasy_baseball.web.refresh_pipeline.compute_streak_report", _boom)
+    monkeypatch.setattr("fantasy_baseball.streaks.pipeline.compute_streak_report", _boom)
 
     run = _build_refresh_run_for_streak_test()
     run._compute_streaks()
     assert closed["n"] == 1, "connection must be closed on failure"
+
+
+def test_compute_streaks_skipped_on_render(monkeypatch, kv_isolation) -> None:
+    """On Render, ``_compute_streaks`` must early-return without touching DuckDB.
+
+    Render has no duckdb installed and no streaks.duckdb file — the
+    cache is populated from a developer machine via
+    ``scripts/refresh_remote.py``. The Render-side daily refresh must
+    NOT attempt streak compute (which would crash on the ``import
+    duckdb`` inside ``streaks.pipeline``) and must NOT overwrite the
+    cached STREAK_SCORES that the developer machine wrote.
+    """
+    from fantasy_baseball.data import kv_store
+    from fantasy_baseball.data.cache_keys import CacheKey, redis_key
+
+    monkeypatch.setenv("RENDER", "true")
+    kv_store._reset_singleton()
+
+    # Seed an existing cache so we can prove the Render-side refresh
+    # didn't clobber it.
+    kv_store.get_kv().set(redis_key(CacheKey.STREAK_SCORES), '{"sentinel": "do-not-overwrite"}')
+
+    # If _compute_streaks tried to run, this patch would make it crash —
+    # but the is_remote() gate must short-circuit before reaching it.
+    def _explode(*a, **kw):
+        raise AssertionError("compute_streak_report must not be called on Render")
+
+    monkeypatch.setattr("fantasy_baseball.streaks.pipeline.compute_streak_report", _explode)
+
+    run = _build_refresh_run_for_streak_test()
+    run._compute_streaks()  # must not raise
+
+    cached = kv_store.get_kv().get(redis_key(CacheKey.STREAK_SCORES))
+    assert cached == '{"sentinel": "do-not-overwrite"}', "Render refresh overwrote the cache"
+
+
+def test_refresh_pipeline_imports_without_duckdb() -> None:
+    """Regression: ``refresh_pipeline`` must load without duckdb installed.
+
+    Render's daily QStash-driven refresh hits ``/api/refresh``, which
+    lazy-imports ``refresh_pipeline``. If anything at the module-level
+    of ``refresh_pipeline`` (or its imports) does ``import duckdb``,
+    the route 500s and the daily refresh dies. This test runs the
+    import in a subprocess with ``sys.modules['duckdb'] = None`` so
+    any latent ``import duckdb`` fails the subprocess.
+    """
+    import subprocess
+    import sys
+
+    src = (
+        "import sys\n"
+        "sys.modules['duckdb'] = None\n"  # force ImportError on `import duckdb`
+        "import fantasy_baseball.web.refresh_pipeline  # noqa: F401\n"
+        "from fantasy_baseball.web.refresh_pipeline import run_full_refresh, RefreshRun\n"
+        "assert callable(run_full_refresh)\n"
+        "assert RefreshRun is not None\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", src],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, (
+        f"refresh_pipeline pulled in duckdb-tainted modules at load.\n"
+        f"stdout: {result.stdout}\n"
+        f"stderr: {result.stderr}"
+    )
 
 
 class _FakeConn:
