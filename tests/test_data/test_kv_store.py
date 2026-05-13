@@ -12,6 +12,7 @@ Two properties matter most:
 
 from __future__ import annotations
 
+import os
 import time
 
 import pytest
@@ -90,6 +91,59 @@ def test_build_explicit_upstash_kv_works_off_render(monkeypatch):
     from fantasy_baseball.data.kv_store import UpstashKVStore
 
     assert isinstance(kv, UpstashKVStore)
+
+
+def test_load_dotenv_strips_wrapping_quotes(monkeypatch, tmp_path):
+    """Values wrapped in matching double/single quotes are unquoted —
+    otherwise httpx and other downstream consumers reject the value
+    because it doesn't start with a recognized scheme/character.
+
+    Regression: ``UPSTASH_REDIS_REST_URL="https://..."`` in .env was
+    being stored as the literal string ``"https://..."`` (quotes
+    included), so httpx raised UnsupportedProtocol on the first call.
+    """
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        'UPSTASH_REDIS_REST_URL="https://fake.upstash.io"\n'
+        "UPSTASH_REDIS_REST_TOKEN='single-quoted-token'\n"
+        "BARE_VALUE=no-quotes\n"
+        "MISMATCHED=\"x'\n"
+        'EMPTY_QUOTED=""\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(kv_store, "_PROJECT_ROOT", tmp_path)
+    for name in (
+        "UPSTASH_REDIS_REST_URL",
+        "UPSTASH_REDIS_REST_TOKEN",
+        "BARE_VALUE",
+        "MISMATCHED",
+        "EMPTY_QUOTED",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    kv_store._load_dotenv_if_present()
+
+    assert os.environ["UPSTASH_REDIS_REST_URL"] == "https://fake.upstash.io"
+    assert os.environ["UPSTASH_REDIS_REST_TOKEN"] == "single-quoted-token"
+    assert os.environ["BARE_VALUE"] == "no-quotes"
+    # Mismatched quotes: don't strip — the user's value is genuinely weird.
+    assert os.environ["MISMATCHED"] == "\"x'"
+    # Empty quoted value collapses to empty string.
+    assert os.environ["EMPTY_QUOTED"] == ""
+
+
+def test_load_dotenv_real_env_var_wins_over_file(monkeypatch, tmp_path):
+    """``setdefault`` semantics: a value already in the real environment
+    is not overwritten by .env (matches the existing contract — real
+    env vars always win)."""
+    env_file = tmp_path / ".env"
+    env_file.write_text('UPSTASH_REDIS_REST_URL="https://from-dotenv"\n', encoding="utf-8")
+    monkeypatch.setattr(kv_store, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://from-real-env")
+
+    kv_store._load_dotenv_if_present()
+
+    assert os.environ["UPSTASH_REDIS_REST_URL"] == "https://from-real-env"
 
 
 # --- SqliteKVStore behavioral tests ---

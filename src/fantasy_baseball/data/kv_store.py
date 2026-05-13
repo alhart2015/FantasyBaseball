@@ -225,7 +225,14 @@ _kv_singleton_lock = threading.Lock()
 def _load_dotenv_if_present() -> None:
     """Load project-root .env so local scripts can reach Upstash
     without callers having to source it. ``setdefault`` — real env
-    vars always win."""
+    vars always win.
+
+    Strips a single layer of wrapping double or single quotes from
+    values, matching python-dotenv's behavior. Without this, a line
+    like ``KEY="https://x"`` would put the literal string
+    ``"https://x"`` (quotes included) into the environment, and
+    downstream consumers like httpx reject it as malformed.
+    """
     env_path = _PROJECT_ROOT / ".env"
     if not env_path.exists():
         return
@@ -234,7 +241,10 @@ def _load_dotenv_if_present() -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+            value = value[1:-1]
+        os.environ.setdefault(key.strip(), value)
 
 
 def get_kv() -> KVStore:
