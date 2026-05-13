@@ -1671,9 +1671,21 @@ def test_build_trends_series_actual_only(fake_redis):
     assert out["actual"]["dates"] == ["2026-04-15"]
     assert set(out["actual"]["teams"].keys()) == {"Alpha", "Beta"}
     alpha = out["actual"]["teams"]["Alpha"]
+    beta = out["actual"]["teams"]["Beta"]
     assert alpha["roto_points"] == [78.5]  # Yahoo authority preferred
-    assert alpha["stats"]["R"] == [45]
+    # Counting stats: per-date leader sits at 0, others at (value - leader).
+    # Alpha leads every counting stat, so its row is all zeros; Beta is the gap.
+    assert alpha["stats"]["R"] == [0]
+    assert beta["stats"]["R"] == [38 - 45]
+    assert alpha["stats"]["HR"] == [0]
+    assert beta["stats"]["HR"] == [9 - 12]
+    assert alpha["stats"]["W"] == [0]
+    assert beta["stats"]["W"] == [2 - 3]
+    # Ratio stats are still raw totals.
+    assert alpha["stats"]["AVG"] == [0.268]
+    assert beta["stats"]["AVG"] == [0.255]
     assert alpha["stats"]["WHIP"] == [1.14]
+    assert beta["stats"]["WHIP"] == [1.22]
     assert out["projected"] == {"dates": [], "teams": {}}
 
 
@@ -1746,10 +1758,13 @@ def test_build_trends_series_gap_handling(fake_redis):
 
     out = build_trends_series(fake_redis, user_team="Alpha")
     assert out["actual"]["dates"] == ["2026-04-01", "2026-04-02"]
+    alpha = out["actual"]["teams"]["Alpha"]
     beta = out["actual"]["teams"]["Beta"]
     assert beta["roto_points"][0] == 4.0
     assert beta["roto_points"][1] is None
-    assert beta["stats"]["R"][0] == 5
+    # Day 1: leader is Alpha (R=10) -> Alpha 0, Beta -5. Day 2: Beta missing -> None.
+    assert alpha["stats"]["R"] == [0, 0]
+    assert beta["stats"]["R"][0] == 5 - 10
     assert beta["stats"]["R"][1] is None
 
 
@@ -1793,4 +1808,118 @@ def test_build_trends_series_projected_uses_score_roto(fake_redis):
     alpha_total = out["projected"]["teams"]["Alpha"]["roto_points"][0]
     beta_total = out["projected"]["teams"]["Beta"]["roto_points"][0]
     assert alpha_total > beta_total
-    assert out["projected"]["teams"]["Alpha"]["stats"]["R"] == [880]
+    # Alpha leads R (880 > 820) so it sits at 0; Beta is -60.
+    assert out["projected"]["teams"]["Alpha"]["stats"]["R"] == [0]
+    assert out["projected"]["teams"]["Beta"]["stats"]["R"] == [820 - 880]
+
+
+def test_build_trends_series_counting_delta_per_date_independent(fake_redis):
+    """The per-date leader is computed independently per date and per stat.
+
+    Different teams can lead different stats on different dates; ratio stats
+    (AVG, ERA, WHIP) must stay as raw totals because their best-direction
+    differs (lower is better for ERA/WHIP).
+    """
+    import json
+
+    from fantasy_baseball.data import redis_store
+
+    def _entry(name: str, stats: dict) -> dict:
+        return {
+            "name": name,
+            "team_key": f"T.{name[0]}",
+            "rank": 1,
+            "stats": stats,
+            "yahoo_points_for": None,
+            "extras": {},
+        }
+
+    # Day 1: Alpha leads HR (15 vs 10), Beta leads SB (20 vs 5).
+    # Day 2: Beta leads HR (25 vs 20), Alpha leads SB (12 vs 8).
+    day1_alpha = {
+        "R": 30,
+        "HR": 15,
+        "RBI": 25,
+        "SB": 5,
+        "AVG": 0.260,
+        "W": 2,
+        "K": 50,
+        "SV": 1,
+        "ERA": 4.00,
+        "WHIP": 1.30,
+    }
+    day1_beta = {
+        "R": 28,
+        "HR": 10,
+        "RBI": 22,
+        "SB": 20,
+        "AVG": 0.245,
+        "W": 3,
+        "K": 60,
+        "SV": 2,
+        "ERA": 3.50,
+        "WHIP": 1.20,
+    }
+    day2_alpha = {
+        "R": 60,
+        "HR": 20,
+        "RBI": 55,
+        "SB": 12,
+        "AVG": 0.262,
+        "W": 5,
+        "K": 110,
+        "SV": 3,
+        "ERA": 3.90,
+        "WHIP": 1.28,
+    }
+    day2_beta = {
+        "R": 58,
+        "HR": 25,
+        "RBI": 50,
+        "SB": 8,
+        "AVG": 0.250,
+        "W": 6,
+        "K": 120,
+        "SV": 4,
+        "ERA": 3.40,
+        "WHIP": 1.18,
+    }
+
+    fake_redis.hset(
+        redis_store.STANDINGS_HISTORY_KEY,
+        "2026-04-01",
+        json.dumps(
+            {
+                "effective_date": "2026-04-01",
+                "teams": [_entry("Alpha", day1_alpha), _entry("Beta", day1_beta)],
+            }
+        ),
+    )
+    fake_redis.hset(
+        redis_store.STANDINGS_HISTORY_KEY,
+        "2026-04-08",
+        json.dumps(
+            {
+                "effective_date": "2026-04-08",
+                "teams": [_entry("Alpha", day2_alpha), _entry("Beta", day2_beta)],
+            }
+        ),
+    )
+
+    from fantasy_baseball.web.season_data import build_trends_series
+
+    out = build_trends_series(fake_redis, user_team="Alpha")
+    teams = out["actual"]["teams"]
+
+    # HR: Alpha leads day1 (15), Beta leads day2 (25).
+    assert teams["Alpha"]["stats"]["HR"] == [0, 20 - 25]
+    assert teams["Beta"]["stats"]["HR"] == [10 - 15, 0]
+
+    # SB: Beta leads day1 (20), Alpha leads day2 (12).
+    assert teams["Alpha"]["stats"]["SB"] == [5 - 20, 0]
+    assert teams["Beta"]["stats"]["SB"] == [0, 8 - 12]
+
+    # Ratio stats: raw totals, no delta.
+    assert teams["Alpha"]["stats"]["AVG"] == [0.260, 0.262]
+    assert teams["Beta"]["stats"]["ERA"] == [3.50, 3.40]
+    assert teams["Alpha"]["stats"]["WHIP"] == [1.30, 1.28]
