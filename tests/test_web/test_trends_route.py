@@ -55,6 +55,9 @@ def test_api_trends_series_empty(app):
         "WHIP",
         "SV",
     ]
+    # season_trends.js reads counting_stats from this payload to decide which
+    # tabs get the "distance from 1st" y-axis title. Locks the API/UI contract.
+    assert sorted(payload["counting_stats"]) == ["HR", "K", "R", "RBI", "SB", "SV", "W"]
     assert payload["actual"] == {"dates": [], "teams": {}}
     assert payload["projected"] == {"dates": [], "teams": {}}
 

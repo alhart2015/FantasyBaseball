@@ -15,6 +15,7 @@ from fantasy_baseball.scoring import score_roto, score_roto_dict
 from fantasy_baseball.trades.evaluate import build_swap_standings, find_player_by_name
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
+    COUNTING_STATS,
     HITTER_PROJ_KEYS,
     PITCHER_PROJ_KEYS,
     Category,
@@ -892,13 +893,48 @@ def _compute_pending_moves_diff(
     ]
 
 
+_COUNTING_STAT_VALUES: frozenset[str] = frozenset(c.value for c in COUNTING_STATS)
+
+
+def _apply_counting_delta_to_leader(teams: dict[str, dict], categories: list[str]) -> None:
+    """Mutate ``teams`` in place: replace each counting-stat total with the per-date
+    gap to the leader. Counting stats are :data:`COUNTING_STATS` (R, HR, RBI, SB,
+    W, K, SV). After transformation the per-date leader sits at ``0`` and every
+    other team sits at ``value - leader_value`` (<= 0). Ratio stats (AVG, ERA,
+    WHIP) are left as raw totals — direction differs (lower is better for
+    ERA/WHIP), so a uniform "max is the leader" treatment would misrepresent
+    them. ``None`` entries (team missing on that date) stay ``None``.
+    """
+    counting_cats = [cat for cat in categories if cat in _COUNTING_STAT_VALUES]
+    if not counting_cats or not teams:
+        return
+    team_names = list(teams.keys())
+    num_dates = len(teams[team_names[0]]["stats"][counting_cats[0]])
+    for cat in counting_cats:
+        for d in range(num_dates):
+            present = [
+                teams[name]["stats"][cat][d]
+                for name in team_names
+                if teams[name]["stats"][cat][d] is not None
+            ]
+            if not present:
+                continue
+            leader = max(present)
+            for name in team_names:
+                v = teams[name]["stats"][cat][d]
+                if v is None:
+                    continue
+                teams[name]["stats"][cat][d] = v - leader
+
+
 def build_trends_series(client, *, user_team: str) -> dict:
     """Read both history hashes and return the /api/trends/series payload.
 
     Shape:
         {
           "user_team": str,
-          "categories": list[str],   # ["R", "HR", ..., "WHIP"]
+          "categories":     list[str],  # ["R", "HR", ..., "WHIP"]
+          "counting_stats": list[str],  # categories the per-date delta transform applies to
           "actual":    {"dates": [...], "teams": {name: {"roto_points": [...], "stats": {cat: [...]}}}},
           "projected": {"dates": [...], "teams": {name: {"roto_points": [...], "stats": {cat: [...]}}}},
         }
@@ -908,6 +944,12 @@ def build_trends_series(client, *, user_team: str) -> dict:
     every entry on that snapshot has it, matching the /standings page.
     Teams that appear in some snapshots but not others get ``None`` on
     the missing dates so Chart.js renders a gap.
+
+    Counting-stat tabs (R, HR, RBI, SB, W, K, SV) are emitted as the per-date
+    distance from the leader rather than raw totals — the leader sits at 0 and
+    other teams sit at ``value - leader_value`` (<= 0). This makes "how far
+    behind first" the read on every counting-stat chart. Ratio stats (AVG, ERA,
+    WHIP) remain raw totals because their best-direction differs.
     """
     from fantasy_baseball.data.redis_store import (
         get_projected_standings_history,
@@ -957,6 +999,7 @@ def build_trends_series(client, *, user_team: str) -> dict:
                 stats_dict = row.stats.to_dict()
                 for cat in categories:
                     teams[name]["stats"][cat].append(stats_dict[cat])
+        _apply_counting_delta_to_leader(teams, categories)
         return {"dates": dates, "teams": teams}
 
     def _emit_projected() -> dict:
@@ -990,11 +1033,13 @@ def build_trends_series(client, *, user_team: str) -> dict:
                 stats_dict = row.stats.to_dict()
                 for cat in categories:
                     teams[name]["stats"][cat].append(stats_dict[cat])
+        _apply_counting_delta_to_leader(teams, categories)
         return {"dates": dates, "teams": teams}
 
     return {
         "user_team": user_team,
         "categories": categories,
+        "counting_stats": sorted(_COUNTING_STAT_VALUES),
         "actual": _emit_actual(),
         "projected": _emit_projected(),
     }

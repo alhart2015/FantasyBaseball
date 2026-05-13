@@ -56,6 +56,11 @@ ALL_CATEGORIES: list[Category] = HITTING_CATEGORIES + PITCHING_CATEGORIES
 RATE_STATS: frozenset[Category] = frozenset({Category.AVG, Category.ERA, Category.WHIP})
 INVERSE_STATS: frozenset[Category] = frozenset({Category.ERA, Category.WHIP})  # Lower is better
 
+# Counting categories (R, HR, RBI, SB, W, K, SV) — every roto category that
+# isn't a rate. Derived so adding a new ``Category`` member auto-routes to
+# either rate or counting without a second edit.
+COUNTING_STATS: frozenset[Category] = frozenset(ALL_CATEGORIES) - RATE_STATS
+
 DEFAULT_ROSTER_SLOTS: dict[str, int] = {
     "C": 1,
     "1B": 1,

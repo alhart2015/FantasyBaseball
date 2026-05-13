@@ -15,6 +15,15 @@
   const USER_COLOR = "#e15759";
 
   let payload = null;
+  // Populated from payload.counting_stats on fetch — the API is the
+  // source of truth for which categories arrive as "distance from leader".
+  let countingStats = new Set();
+
+  function yAxisTitle(tab) {
+    if (tab === "roto") return "Roto points";
+    if (countingStats.has(tab)) return tab + " - distance from 1st";
+    return tab;
+  }
 
   function colorForTeam(name, userTeam, sortedNames) {
     if (name === userTeam) return USER_COLOR;
@@ -67,7 +76,10 @@
           tooltip: { mode: "nearest", axis: "xy", intersect: false },
         },
         scales: {
-          y: { beginAtZero: false },
+          y: {
+            beginAtZero: false,
+            title: { display: true, text: yAxisTitle("roto") },
+          },
           x: { ticks: { autoSkip: true, maxTicksLimit: 10 } },
         },
         onHover: (evt, activeEls) => {
@@ -132,6 +144,7 @@
       }
       ds.data = (tab === "roto" ? team.roto_points : team.stats[tab] || []).slice();
     });
+    chart.options.scales.y.title.text = yAxisTitle(tab);
     resetAlpha(chart);
     chart.update();
   }
@@ -167,6 +180,7 @@
       })
       .then((data) => {
         payload = data;
+        countingStats = new Set(data.counting_stats || []);
         const userTeam = data.user_team;
 
         if (!data.actual || !data.actual.dates || data.actual.dates.length === 0) {
