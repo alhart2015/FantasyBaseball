@@ -12,6 +12,19 @@ from fantasy_baseball.web.season_data import CacheKey
 
 @pytest.fixture
 def client():
+    """Pre-authenticated test client. The whole site is behind login,
+    so most tests need a session that has already passed the gate."""
+    app = create_app()
+    app.config["TESTING"] = True
+    with app.test_client() as client:
+        with client.session_transaction() as sess:
+            sess["authenticated"] = True
+        yield client
+
+
+@pytest.fixture
+def unauth_client():
+    """Anonymous test client for verifying the login gate itself."""
     app = create_app()
     app.config["TESTING"] = True
     with app.test_client() as client:
@@ -160,28 +173,69 @@ def test_refresh_status_not_running(client):
     assert data["running"] is False
 
 
-def test_unauthed_api_returns_json_401_not_redirect(client):
+def test_unauthed_api_returns_json_401_not_redirect(unauth_client):
     """Unauthenticated /api/* GETs must return JSON 401, not redirect to /login.
 
     The mobile lineup page relies on `r.json()` to read errors; a 302 to the HTML
     login page makes JSON parsing fail with a confusing browser-specific error.
     """
-    resp = client.get("/api/opponent/mlb.l.1.t.1/lineup")
+    resp = unauth_client.get("/api/opponent/mlb.l.1.t.1/lineup")
     assert resp.status_code == 401
     assert resp.content_type.startswith("application/json")
     assert resp.get_json() == {"error": "Authentication required"}
 
 
-def test_unauthed_html_page_still_redirects_to_login(client):
+def test_unauthed_html_page_still_redirects_to_login(unauth_client):
     """Non-API routes should still redirect to /login when unauthenticated."""
-    resp = client.get("/logs")
+    resp = unauth_client.get("/logs")
     assert resp.status_code == 302
     assert "/login" in resp.headers["Location"]
 
 
+def test_unauthed_standings_redirects_to_login(unauth_client):
+    """Once the site is fully gated, even the default landing page
+    must demand auth instead of leaking standings data."""
+    resp = unauth_client.get("/standings")
+    assert resp.status_code == 302
+    assert "/login" in resp.headers["Location"]
+
+
+def test_unauthed_teams_api_returns_json_401(unauth_client):
+    """Previously-public JSON APIs must now 401, not leak data."""
+    resp = unauth_client.get("/api/teams")
+    assert resp.status_code == 401
+    assert resp.get_json() == {"error": "Authentication required"}
+
+
+def test_bearer_token_still_works_for_protected_route(unauth_client, monkeypatch):
+    """QStash cron hits /api/refresh-status with a Bearer token; the
+    global gate must accept that path without a session cookie."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-pw")
+    resp = unauth_client.get("/api/refresh-status", headers={"Authorization": "Bearer test-pw"})
+    assert resp.status_code == 200
+
+
+def test_login_page_is_accessible_without_auth(unauth_client):
+    resp = unauth_client.get("/login")
+    assert resp.status_code == 200
+    assert b"Login" in resp.data
+
+
+def test_login_then_access_protected_route(unauth_client, monkeypatch):
+    """Round-trip: POST /login, follow the redirect, hit /standings."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-pw")
+    resp = unauth_client.post("/login", data={"password": "test-pw"})
+    assert resp.status_code == 302
+    # session cookie is now set on the client; protected GET should pass
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=None),
+        patch("fantasy_baseball.web.season_routes.read_cache_list", return_value=None),
+    ):
+        resp = unauth_client.get("/standings")
+    assert resp.status_code == 200
+
+
 def test_logs_page_renders(client):
-    with client.session_transaction() as sess:
-        sess["authenticated"] = True
     with patch("fantasy_baseball.web.job_logger._get_redis", return_value=None):
         resp = client.get("/logs")
     assert resp.status_code == 200
@@ -384,9 +438,9 @@ def _auth(client):
         sess["authenticated"] = True
 
 
-def test_sync_from_remote_requires_auth(client):
+def test_sync_from_remote_requires_auth(unauth_client):
     """Unauth'd requests return 401 (matches other write endpoints)."""
-    resp = client.post("/api/sync-from-remote")
+    resp = unauth_client.post("/api/sync-from-remote")
     assert resp.status_code == 401
 
 

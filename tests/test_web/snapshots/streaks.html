@@ -68,9 +68,11 @@
                         No data yet
                     
                 </div>
-                
-                <a href="/login" class="btn-refresh" style="display: block; text-align: center; text-decoration: none; margin-top: 6px;">Login</a>
-                
+                <button class="btn-refresh" id="refresh-btn" onclick="startRefresh()">Refresh Data</button>
+                <button class="btn-refresh" id="sync-btn" onclick="syncFromRemote()"
+                        style="margin-top: 4px; font-size: 11px; padding: 4px 8px;">Sync from remote</button>
+                <div id="refresh-progress" style="display: none; font-size: 11px; color: var(--accent); margin-top: 6px;"></div>
+                <a href="/logout" style="display: block; margin-top: 8px; font-size: 11px; color: var(--text-secondary); text-decoration: none;">Logout</a>
             </div>
         </nav>
         <main class="content">

@@ -25,8 +25,16 @@ def app(monkeypatch, fake_redis):
     return application
 
 
-def test_trends_page_renders(app):
+def _authed_client(app):
+    """Helper: every /trends test below needs to be past the login gate."""
     client = app.test_client()
+    with client.session_transaction() as sess:
+        sess["authenticated"] = True
+    return client
+
+
+def test_trends_page_renders(app):
+    client = _authed_client(app)
     resp = client.get("/trends")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
@@ -35,7 +43,7 @@ def test_trends_page_renders(app):
 
 
 def test_api_trends_series_empty(app):
-    client = app.test_client()
+    client = _authed_client(app)
     resp = client.get("/api/trends/series")
     assert resp.status_code == 200
     payload = resp.get_json()
@@ -93,7 +101,7 @@ def test_api_trends_series_with_data(app, fake_redis):
             }
         ),
     )
-    client = app.test_client()
+    client = _authed_client(app)
     payload = client.get("/api/trends/series").get_json()
     assert payload["actual"]["dates"] == ["2026-04-15"]
     assert "Alpha" in payload["actual"]["teams"]
