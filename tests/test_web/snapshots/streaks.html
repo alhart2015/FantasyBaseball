@@ -88,6 +88,7 @@
 
   <section class="streaks-section">
     <h2>Your Roster</h2>
+    <p class="streaks-hint">Click a row to see the drivers behind that prediction.</p>
     <table class="streaks-table" data-sortable>
       <thead>
         <tr>
@@ -103,14 +104,16 @@
       </thead>
       <tbody>
         
-          <tr>
+          
+
+<tr class="expandable" onclick="toggleStreakRow(this)">
   <td>Canon Player</td>
   <td>OF</td>
   
     
     <td>
       
-        —
+        --
       
     </td>
   
@@ -124,25 +127,42 @@
     
     <td>
       
-        —
+        --
       
     </td>
   
     
     <td>
       
-        —
+        --
       
     </td>
   
     
     <td>
       
-        —
+        --
       
     </td>
   
   <td>+1</td>
+</tr>
+<tr class="expand-content">
+  <td colspan="8">
+    
+      <div class="streak-drivers">
+        
+          <div class="streak-driver-line">
+            <span class="streak-driver-cat">HR HOT (62%)</span>
+            <span class="streak-driver-sep">--</span>
+            
+              <span class="streak-driver-z">barrel_pct +1.8z</span>
+            
+          </div>
+        
+      </div>
+    
+  </td>
 </tr>
         
       </tbody>
@@ -170,21 +190,6 @@
         
       </tbody>
     </table>
-  </section>
-
-  <section class="streaks-section">
-    <h2>Drivers</h2>
-    <ul class="drivers">
-      
-        <li>
-          <strong>Canon Player</strong> ·
-          HR HOT (62%):
-          
-            barrel_pct +1.8z
-          
-        </li>
-      
-    </ul>
   </section>
 
   <script src="/static/streaks.js"></script>
