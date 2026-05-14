@@ -741,6 +741,143 @@ def test_compute_streaks_skipped_on_render(monkeypatch, kv_isolation) -> None:
     assert cached == '{"sentinel": "do-not-overwrite"}', "Render refresh overwrote the cache"
 
 
+def test_compute_streaks_mirrors_to_remote_upstash(monkeypatch, kv_isolation) -> None:
+    """Local _compute_streaks pushes STREAK_SCORES to remote Upstash so
+    Render reads fresh data without a manual sync step. The local SQLite
+    write still happens; the remote push is in addition.
+    """
+    from datetime import date
+
+    from fantasy_baseball.data.cache_keys import CacheKey, redis_key
+    from fantasy_baseball.streaks.inference import Driver, PlayerCategoryScore
+    from fantasy_baseball.streaks.reports.sunday import Report, ReportRow
+
+    score = PlayerCategoryScore(
+        player_id=1,
+        category="hr",
+        label="hot",
+        probability=0.6,
+        drivers=(Driver(feature="barrel_pct", z_score=1.0),),
+        window_end=date(2026, 5, 10),
+    )
+    row = ReportRow(
+        name="X",
+        positions=("OF",),
+        player_id=1,
+        composite=1,
+        scores={"hr": score},
+        max_probability=0.6,
+    )
+    fake_report = Report(
+        report_date=date(2026, 5, 11),
+        window_end=date(2026, 5, 10),
+        team_name="t",
+        league_id=1,
+        season_set_train="2023-2025",
+        roster_rows=(row,),
+        fa_rows=(),
+        driver_lines=(),
+        skipped=(),
+    )
+    monkeypatch.setattr(
+        "fantasy_baseball.streaks.pipeline.compute_streak_report",
+        lambda *a, **kw: fake_report,
+    )
+    monkeypatch.setattr(
+        "fantasy_baseball.streaks.data.schema.get_connection",
+        lambda *a, **kw: _FakeConn(),
+    )
+
+    # Stand-in remote: capture set() calls without touching the network.
+    class _FakeRemote:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def set(self, key: str, value: str) -> None:
+            self.calls.append((key, value))
+
+    fake_remote = _FakeRemote()
+
+    # Creds must be present for the mirror path to engage.
+    monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://example.invalid")
+    monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "tok")
+    monkeypatch.setattr(
+        "fantasy_baseball.data.kv_store.build_explicit_upstash_kv",
+        lambda: fake_remote,
+    )
+
+    run = _build_refresh_run_for_streak_test()
+    run._compute_streaks()
+
+    assert len(fake_remote.calls) == 1, "remote.set must be invoked exactly once"
+    key, value = fake_remote.calls[0]
+    assert key == redis_key(CacheKey.STREAK_SCORES)
+    payload = json.loads(value)
+    assert payload["team_name"] == "t"
+    assert len(payload["roster_rows"]) == 1
+
+
+def test_compute_streaks_no_remote_mirror_without_creds(monkeypatch, kv_isolation) -> None:
+    """Without Upstash env vars, the remote mirror is skipped quietly —
+    don't crash a fresh local clone that has no .env yet.
+    """
+    from datetime import date
+
+    from fantasy_baseball.streaks.inference import Driver, PlayerCategoryScore
+    from fantasy_baseball.streaks.reports.sunday import Report, ReportRow
+
+    score = PlayerCategoryScore(
+        player_id=1,
+        category="hr",
+        label="hot",
+        probability=0.6,
+        drivers=(Driver(feature="barrel_pct", z_score=1.0),),
+        window_end=date(2026, 5, 10),
+    )
+    row = ReportRow(
+        name="X",
+        positions=("OF",),
+        player_id=1,
+        composite=1,
+        scores={"hr": score},
+        max_probability=0.6,
+    )
+    fake_report = Report(
+        report_date=date(2026, 5, 11),
+        window_end=date(2026, 5, 10),
+        team_name="t",
+        league_id=1,
+        season_set_train="2023-2025",
+        roster_rows=(row,),
+        fa_rows=(),
+        driver_lines=(),
+        skipped=(),
+    )
+    monkeypatch.setattr(
+        "fantasy_baseball.streaks.pipeline.compute_streak_report",
+        lambda *a, **kw: fake_report,
+    )
+    monkeypatch.setattr(
+        "fantasy_baseball.streaks.data.schema.get_connection",
+        lambda *a, **kw: _FakeConn(),
+    )
+
+    monkeypatch.delenv("UPSTASH_REDIS_REST_URL", raising=False)
+    monkeypatch.delenv("UPSTASH_REDIS_REST_TOKEN", raising=False)
+
+    # If the mirror path ran, it would call this and fail the test.
+    def _explode() -> None:
+        raise AssertionError("build_explicit_upstash_kv must not be called without creds")
+
+    monkeypatch.setattr(
+        "fantasy_baseball.data.kv_store.build_explicit_upstash_kv",
+        _explode,
+    )
+
+    run = _build_refresh_run_for_streak_test()
+    run._compute_streaks()  # must not raise
+
+
 def test_refresh_pipeline_imports_without_duckdb() -> None:
     """Regression: ``refresh_pipeline`` must load without duckdb installed.
 
