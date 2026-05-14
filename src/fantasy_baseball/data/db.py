@@ -558,49 +558,6 @@ def append_roster_snapshot(conn, roster, snapshot_date, week_num, team) -> None:
     conn.commit()
 
 
-def append_standings_snapshot(conn, standings, year, snapshot_date) -> None:
-    """Insert one row per team into standings.
-
-    ``standings`` is a list of team dicts::
-
-        [{"name": "...", "team_key": "469.l.5652.t.4", "rank": 1,
-          "stats": {"R": 100, "HR": 30, ...}}, ...]
-
-    Stat keys are case-insensitive.  ``team_key`` is optional — missing
-    keys write as NULL.  Uses INSERT OR IGNORE so repeated calls with
-    the same (year, snapshot_date, team) are idempotent.
-    """
-    rows = []
-    for entry in standings:
-        stats = {k.lower(): v for k, v in entry.get("stats", {}).items()}
-        rows.append((
-            year,
-            snapshot_date,
-            entry["name"],
-            entry.get("team_key"),
-            entry.get("rank"),
-            stats.get("r"),
-            stats.get("hr"),
-            stats.get("rbi"),
-            stats.get("sb"),
-            stats.get("avg"),
-            stats.get("w"),
-            stats.get("k"),
-            stats.get("sv"),
-            stats.get("era"),
-            stats.get("whip"),
-        ))
-
-    conn.executemany(
-        "INSERT OR IGNORE INTO standings "
-        "(year, snapshot_date, team, team_key, rank, "
-        " r, hr, rbi, sb, avg, w, k, sv, era, whip) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        rows,
-    )
-    conn.commit()
-
-
 def insert_transactions(conn, transactions):
     """Insert scored transaction rows. Uses INSERT OR IGNORE for idempotency."""
     rows = []
