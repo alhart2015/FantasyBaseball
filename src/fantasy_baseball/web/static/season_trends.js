@@ -13,6 +13,8 @@
     "#9c755f", "#3a9da3", "#86bc4f", "#b07aa1",
   ];
   const USER_COLOR = "#e15759";
+  // Lower-is-better stats: flip the y-axis so the leader sits on top.
+  const INVERSE_STATS = new Set(["ERA", "WHIP"]);
 
   let payload = null;
   // Populated from payload.counting_stats on fetch — the API is the
@@ -23,6 +25,10 @@
     if (tab === "roto") return "Roto points";
     if (countingStats.has(tab)) return tab + " - distance from 1st";
     return tab;
+  }
+
+  function yAxisReversed(tab) {
+    return INVERSE_STATS.has(tab);
   }
 
   function colorForTeam(name, userTeam, sortedNames) {
@@ -78,6 +84,7 @@
         scales: {
           y: {
             beginAtZero: false,
+            reverse: yAxisReversed("roto"),
             title: { display: true, text: yAxisTitle("roto") },
           },
           x: { ticks: { autoSkip: true, maxTicksLimit: 10 } },
@@ -145,6 +152,7 @@
       ds.data = (tab === "roto" ? team.roto_points : team.stats[tab] || []).slice();
     });
     chart.options.scales.y.title.text = yAxisTitle(tab);
+    chart.options.scales.y.reverse = yAxisReversed(tab);
     resetAlpha(chart);
     chart.update();
   }
