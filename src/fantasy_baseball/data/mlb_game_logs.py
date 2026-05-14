@@ -1,8 +1,7 @@
 """MLB Stats API game log fetching → Redis aggregates.
 
-Replaces the SQLite-backed fetch_and_load_game_logs in data/db.py. Builds
-per-player counting-stat totals in memory during a parallel per-player
-fetch, then writes two Redis keys:
+Builds per-player counting-stat totals in memory during a parallel
+per-player fetch, then writes two Redis keys:
 
 - ``game_log_totals:hitters``  → {mlbam_id: {"name": str, "pa": int, ...}}
 - ``game_log_totals:pitchers`` → {mlbam_id: {"name": str, "ip": float, ...}}
@@ -11,6 +10,7 @@ fetch, then writes two Redis keys:
 ``games_elapsed`` counts distinct calendar dates encountered across every
 player's game log — i.e. how many MLB game-days have been played.
 """
+
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,9 +32,7 @@ def _empty_pitcher_total() -> dict:
     return total
 
 
-def fetch_game_log_totals(
-    season: int, progress_cb=None
-) -> tuple[dict, dict, int]:
+def fetch_game_log_totals(season: int, progress_cb=None) -> tuple[dict, dict, int]:
     """Fetch all MLB game logs for *season*, accumulate totals per player,
     write Redis keys, and return (hitters_totals, pitchers_totals, games_elapsed).
 
@@ -89,12 +87,14 @@ def fetch_game_log_totals(
             pos_type = entry.get("position", {}).get("type", "")
             player_type = PlayerType.PITCHER if pos_type == "Pitcher" else PlayerType.HITTER
 
-            players.append({
-                "mlbam_id": mlbam_id,
-                "name": person.get("fullName", ""),
-                "team": team_abbrev,
-                "player_type": player_type,
-            })
+            players.append(
+                {
+                    "mlbam_id": mlbam_id,
+                    "name": person.get("fullName", ""),
+                    "team": team_abbrev,
+                    "player_type": player_type,
+                }
+            )
 
     if progress_cb:
         progress_cb(f"Found {len(players)} MLB players, fetching game logs...")

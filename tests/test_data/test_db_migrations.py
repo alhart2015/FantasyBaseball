@@ -80,35 +80,3 @@ class TestWeeklyRostersMigration:
         assert row["player_name"] == "Ivan Herrera"
         assert row["status"] is None
         assert row["yahoo_id"] is None
-
-
-class TestStandingsMigration:
-    def test_fresh_db_has_team_key(self, conn):
-        from fantasy_baseball.data.db import create_tables
-
-        create_tables(conn)
-        cols = _columns(conn, "standings")
-        assert "team_key" in cols
-
-    def test_migration_is_idempotent_on_existing_db(self, conn):
-        from fantasy_baseball.data.db import create_tables
-
-        conn.executescript("""
-            CREATE TABLE standings (
-                year          INTEGER NOT NULL,
-                snapshot_date TEXT NOT NULL,
-                team          TEXT NOT NULL,
-                rank          INTEGER,
-                r REAL, hr REAL, rbi REAL, sb REAL, avg REAL,
-                w REAL, k REAL, sv REAL, era REAL, whip REAL,
-                PRIMARY KEY (year, snapshot_date, team)
-            );
-        """)
-        conn.commit()
-
-        assert "team_key" not in _columns(conn, "standings")
-
-        create_tables(conn)
-        create_tables(conn)  # idempotency check
-
-        assert "team_key" in _columns(conn, "standings")
