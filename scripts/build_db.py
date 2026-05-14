@@ -22,7 +22,6 @@ from fantasy_baseball.data.db import (
     load_draft_results,
     load_positions,
     load_raw_projections,
-    load_standings,
     load_weekly_rosters,
 )
 from fantasy_baseball.data.yahoo_players import load_positions_cache
@@ -30,11 +29,9 @@ from fantasy_baseball.data.yahoo_players import load_positions_cache
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 DRAFTS_PATH = PROJECT_ROOT / "data" / "historical_drafts_resolved.json"
-STANDINGS_PATH = PROJECT_ROOT / "data" / "historical_standings.json"
 ROSTERS_DIR = PROJECT_ROOT / "data" / "rosters"
 POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
 WEEKLY_ROSTERS_PATH = PROJECT_ROOT / "data" / "weekly_rosters_2026.json"
-STANDINGS_2026_PATH = PROJECT_ROOT / "data" / "standings_2026.json"
 
 
 SNAPSHOT_TABLES = [
@@ -43,12 +40,6 @@ SNAPSHOT_TABLES = [
         WEEKLY_ROSTERS_PATH,
         "roster snapshots",
         "SELECT * FROM weekly_rosters WHERE snapshot_date >= '2026-'",
-    ),
-    (
-        "standings",
-        STANDINGS_2026_PATH,
-        "standings snapshots",
-        "SELECT * FROM standings WHERE year = 2026 AND snapshot_date != 'final'",
     ),
 ]
 
@@ -93,11 +84,6 @@ def main():
         load_draft_results(conn, DRAFTS_PATH)
         draft_count = conn.execute("SELECT COUNT(*) FROM draft_results").fetchone()[0]
         print(f"  Loaded {draft_count} draft picks")
-
-    if STANDINGS_PATH.exists():
-        load_standings(conn, STANDINGS_PATH)
-        standings_count = conn.execute("SELECT COUNT(*) FROM standings").fetchone()[0]
-        print(f"  Loaded {standings_count} standings rows")
 
     # Load rosters BEFORE projections so roster names are available for quality checks
     roster_names = None

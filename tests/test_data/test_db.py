@@ -11,12 +11,11 @@ from fantasy_baseball.data.db import (
     load_draft_results,
     load_positions,
     load_raw_projections,
-    load_standings,
     load_weekly_rosters,
 )
 
 
-def test_create_tables_creates_all_five(tmp_path):
+def test_create_tables_creates_core_tables(tmp_path):
     db_path = tmp_path / "test.db"
     conn = sqlite3.connect(db_path)
     create_tables(conn)
@@ -26,7 +25,6 @@ def test_create_tables_creates_all_five(tmp_path):
     assert "blended_projections" in tables
     assert "draft_results" in tables
     assert "weekly_rosters" in tables
-    assert "standings" in tables
     conn.close()
 
 
@@ -284,46 +282,6 @@ def test_load_draft_results(tmp_path):
     conn.close()
 
 
-def test_load_standings(tmp_path):
-    standings = {
-        "2023": {
-            "standings": [
-                {
-                    "name": "Hart of the Order",
-                    "team_key": "k1",
-                    "rank": 1,
-                    "stats": {
-                        "R": 900,
-                        "HR": 250,
-                        "RBI": 880,
-                        "SB": 150,
-                        "AVG": 0.260,
-                        "W": 80,
-                        "K": 1400,
-                        "SV": 90,
-                        "ERA": 3.60,
-                        "WHIP": 1.20,
-                    },
-                },
-            ]
-        }
-    }
-    path = tmp_path / "standings.json"
-    path.write_text(json.dumps(standings))
-
-    db_path = tmp_path / "test.db"
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    create_tables(conn)
-    load_standings(conn, path)
-
-    row = conn.execute("SELECT * FROM standings").fetchone()
-    assert row["year"] == 2023
-    assert row["snapshot_date"] == "final"
-    assert row["r"] == 900
-    conn.close()
-
-
 def test_load_weekly_rosters(tmp_path):
     roster_dir = tmp_path / "rosters"
     roster_dir.mkdir()
@@ -372,35 +330,6 @@ def test_build_db_end_to_end(tmp_path):
         json.dumps({"2026": [{"pick": 1, "round": 1, "team": "Hart", "player": "James Wood"}]})
     )
 
-    standings_path = tmp_path / "standings.json"
-    standings_path.write_text(
-        json.dumps(
-            {
-                "2025": {
-                    "standings": [
-                        {
-                            "name": "Hart",
-                            "team_key": "k1",
-                            "rank": 1,
-                            "stats": {
-                                "R": 900,
-                                "HR": 250,
-                                "RBI": 880,
-                                "SB": 150,
-                                "AVG": 0.260,
-                                "W": 80,
-                                "K": 1400,
-                                "SV": 90,
-                                "ERA": 3.60,
-                                "WHIP": 1.20,
-                            },
-                        }
-                    ]
-                }
-            }
-        )
-    )
-
     db_path = tmp_path / "test.db"
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -408,7 +337,6 @@ def test_build_db_end_to_end(tmp_path):
     load_raw_projections(conn, tmp_path / "projections")
     load_blended_projections(conn, tmp_path / "projections", ["steamer"], {"steamer": 1.0})
     load_draft_results(conn, drafts_path)
-    load_standings(conn, standings_path)
 
     # Verify queries
     wood = conn.execute(
@@ -420,9 +348,6 @@ def test_build_db_end_to_end(tmp_path):
     assert draft["player"] == "James Wood"
     # fg_id should be resolved since raw_projections has James Wood for 2026
     assert draft["fg_id"] == "29518"
-
-    standings = conn.execute("SELECT * FROM standings WHERE year=2025").fetchone()
-    assert standings["r"] == 900
 
     conn.close()
 

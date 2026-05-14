@@ -74,17 +74,6 @@ CREATE TABLE IF NOT EXISTS weekly_rosters (
     PRIMARY KEY (snapshot_date, team, slot, player_name)
 );
 
-CREATE TABLE IF NOT EXISTS standings (
-    year          INTEGER NOT NULL,
-    snapshot_date TEXT NOT NULL,
-    team          TEXT NOT NULL,
-    team_key      TEXT,
-    rank          INTEGER,
-    r REAL, hr REAL, rbi REAL, sb REAL, avg REAL,
-    w REAL, k REAL, sv REAL, era REAL, whip REAL,
-    PRIMARY KEY (year, snapshot_date, team)
-);
-
 CREATE TABLE IF NOT EXISTS positions (
     name       TEXT NOT NULL PRIMARY KEY,
     positions  TEXT NOT NULL
@@ -159,7 +148,6 @@ def create_tables(conn):
     # Idempotent column additions for tables that predate later schema bumps.
     _add_column_if_missing(conn, "weekly_rosters", "status", "TEXT")
     _add_column_if_missing(conn, "weekly_rosters", "yahoo_id", "TEXT")
-    _add_column_if_missing(conn, "standings", "team_key", "TEXT")
 
 
 # FanGraphs CSV column → DB column, for hitters
@@ -397,60 +385,6 @@ def load_draft_results(conn, drafts_path) -> None:
     conn.executemany(
         "INSERT OR IGNORE INTO draft_results (year, pick, round, team, player, fg_id) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        rows,
-    )
-    conn.commit()
-
-
-def load_standings(conn, standings_path) -> None:
-    """Load historical standings from ``standings_path`` (JSON) into ``standings``.
-
-    Expected structure::
-
-        {
-          "2023": {
-            "standings": [
-              {"name": "...", "team_key": "...", "rank": 1,
-               "stats": {"R": 900, "HR": 250, ...}}
-            ]
-          }
-        }
-
-    Each team is inserted with ``snapshot_date = 'final'``.  Stat keys in the
-    JSON are case-insensitive and mapped to their lowercase DB column names.
-    Uses INSERT OR IGNORE so repeated calls are idempotent.
-    """
-    standings_path = Path(standings_path)
-    data = json.loads(standings_path.read_text(encoding="utf-8"))
-
-    rows = []
-    for year_str, year_data in data.items():
-        year = int(year_str)
-        for entry in year_data.get("standings", []):
-            stats = {k.lower(): v for k, v in entry.get("stats", {}).items()}
-            rows.append(
-                (
-                    year,
-                    "final",
-                    entry["name"],
-                    entry.get("rank"),
-                    stats.get("r"),
-                    stats.get("hr"),
-                    stats.get("rbi"),
-                    stats.get("sb"),
-                    stats.get("avg"),
-                    stats.get("w"),
-                    stats.get("k"),
-                    stats.get("sv"),
-                    stats.get("era"),
-                    stats.get("whip"),
-                )
-            )
-
-    conn.executemany(
-        "INSERT OR IGNORE INTO standings "
-        "(year, snapshot_date, team, rank, r, hr, rbi, sb, avg, w, k, sv, era, whip) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()
