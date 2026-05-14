@@ -25,6 +25,7 @@ def test_create_tables_creates_core_tables(tmp_path):
     assert "blended_projections" in tables
     assert "draft_results" in tables
     assert "weekly_rosters" in tables
+    assert "positions" in tables
     conn.close()
 
 
