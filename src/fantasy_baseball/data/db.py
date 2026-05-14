@@ -85,25 +85,6 @@ CREATE TABLE IF NOT EXISTS standings (
     PRIMARY KEY (year, snapshot_date, team)
 );
 
-CREATE TABLE IF NOT EXISTS game_logs (
-    season       INTEGER NOT NULL,
-    mlbam_id     INTEGER NOT NULL,
-    name         TEXT NOT NULL,
-    team         TEXT,
-    player_type  TEXT NOT NULL,          -- hitter, pitcher
-    date         TEXT NOT NULL,          -- YYYY-MM-DD
-    -- Hitter stats
-    pa INTEGER, ab INTEGER, h INTEGER, r INTEGER, hr INTEGER,
-    rbi INTEGER, sb INTEGER,
-    -- Pitcher stats
-    ip REAL, k INTEGER, er INTEGER, bb INTEGER, h_allowed INTEGER,
-    w INTEGER, sv INTEGER, gs INTEGER,
-    PRIMARY KEY (season, mlbam_id, date)
-);
-
-CREATE INDEX IF NOT EXISTS idx_game_logs_name ON game_logs(name);
-CREATE INDEX IF NOT EXISTS idx_game_logs_date ON game_logs(season, date);
-
 CREATE TABLE IF NOT EXISTS positions (
     name       TEXT NOT NULL PRIMARY KEY,
     positions  TEXT NOT NULL
@@ -124,24 +105,6 @@ CREATE TABLE IF NOT EXISTS ros_blended_projections (
     era REAL, whip REAL,
     adp REAL,
     PRIMARY KEY (year, snapshot_date, fg_id)
-);
-
-CREATE TABLE IF NOT EXISTS transactions (
-    year            INTEGER NOT NULL,
-    transaction_id  TEXT NOT NULL,
-    timestamp       TEXT,
-    team            TEXT NOT NULL,
-    team_key        TEXT,
-    type            TEXT NOT NULL,
-    add_name        TEXT,
-    add_player_id   TEXT,
-    add_positions   TEXT,
-    drop_name       TEXT,
-    drop_player_id  TEXT,
-    drop_positions  TEXT,
-    value           REAL,
-    paired_with     TEXT,
-    PRIMARY KEY (year, transaction_id)
 );
 """
 

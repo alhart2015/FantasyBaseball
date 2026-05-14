@@ -33,7 +33,6 @@ DRAFTS_PATH = PROJECT_ROOT / "data" / "historical_drafts_resolved.json"
 STANDINGS_PATH = PROJECT_ROOT / "data" / "historical_standings.json"
 ROSTERS_DIR = PROJECT_ROOT / "data" / "rosters"
 POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
-GAME_LOGS_PATH = PROJECT_ROOT / "data" / "game_logs_2026.json"
 WEEKLY_ROSTERS_PATH = PROJECT_ROOT / "data" / "weekly_rosters_2026.json"
 STANDINGS_2026_PATH = PROJECT_ROOT / "data" / "standings_2026.json"
 
@@ -50,12 +49,6 @@ SNAPSHOT_TABLES = [
         STANDINGS_2026_PATH,
         "standings snapshots",
         "SELECT * FROM standings WHERE year = 2026 AND snapshot_date != 'final'",
-    ),
-    (
-        "game_logs",
-        GAME_LOGS_PATH,
-        "game log entries",
-        "SELECT * FROM game_logs WHERE season = 2026",
     ),
 ]
 

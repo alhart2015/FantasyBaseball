@@ -1,18 +1,17 @@
 #!/usr/bin/env python
-"""Clear transaction scores so the next refresh re-computes them.
+"""Clear cached transaction scores so the next refresh re-computes them.
 
 Use this after changing ``score_transaction`` — most recently, the
-migration from wSGP to ΔRoto. The script clears the legacy SQLite
-``transactions`` table and (with ``--redis``) the Redis
-``cache:transactions`` + ``cache:transaction_analyzer`` keys so the
-next refresh re-fetches every transaction from Yahoo and re-scores
-against today's projected standings. Historical scores are an
-approximation in both directions — ROS projections aren't frozen
-per-day — but this is the only way to pick up scoring-logic changes
-retroactively.
+migration from wSGP to ΔRoto. The script clears the local disk cache
+and (with ``--redis``) the Redis ``cache:transactions`` +
+``cache:transaction_analyzer`` keys so the next refresh re-fetches
+every transaction from Yahoo and re-scores against today's projected
+standings. Historical scores are an approximation in both directions
+— ROS projections aren't frozen per-day — but this is the only way
+to pick up scoring-logic changes retroactively.
 
 Usage:
-    python scripts/rescore_transactions.py           # local DB only
+    python scripts/rescore_transactions.py           # local cache only
     python scripts/rescore_transactions.py --redis    # also clear Redis cache
 """
 
@@ -30,24 +29,9 @@ def main():
     )
     args = parser.parse_args()
 
-    from fantasy_baseball.data.db import create_tables, get_connection
-
-    conn = get_connection()
-    create_tables(conn)
-
-    count = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
-    if count == 0:
-        print("No transactions in local DB — nothing to clear.")
-    else:
-        conn.execute("DELETE FROM transactions")
-        conn.commit()
-        print(f"Cleared {count} transactions from local DB.")
-
-    conn.close()
-
-    # Clear local disk cache too — read_cache() reads local first, so
-    # stale JSON here would make the refresh see every txn as already-known
-    # and skip re-scoring (the whole point of this script).
+    # Clear local disk cache — read_cache() reads local first, so stale
+    # JSON here would make the refresh see every txn as already-known and
+    # skip re-scoring (the whole point of this script).
     project_root = Path(__file__).resolve().parents[1]
     for fname in ("transactions.json", "transaction_analyzer.json"):
         p = project_root / "data" / "cache" / fname
