@@ -14,12 +14,14 @@ is one-way: this module imports from ``season_data``, never the reverse.
 import json
 import logging
 import math
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from fantasy_baseball.data.cache_keys import redis_key
 from fantasy_baseball.models.positions import BENCH_SLOTS
 
 # Streaks imports are deliberately deferred to inside ``_compute_streaks``:
@@ -90,6 +92,34 @@ def try_acquire_refresh_slot() -> bool:
 def _set_refresh_progress(msg: str) -> None:
     with _refresh_lock:
         _refresh_status["progress"] = msg
+
+
+def _push_streak_scores_to_remote(payload: dict) -> None:
+    """Mirror the freshly-computed STREAK_SCORES payload to remote Upstash.
+
+    Local refreshes are the sole authoritative source of streak data
+    (duckdb / streaks.duckdb only exist on dev boxes — Render's daily
+    refresh short-circuits in ``_compute_streaks``). Without this push,
+    the remote dashboard only sees streak updates after a manual
+    local->remote sync. Pushing the single cache entry here removes
+    that manual step.
+
+    Skipped silently when Upstash creds are absent (CI / fresh checkout)
+    and on failure, since streak data is non-load-bearing for the rest
+    of the dashboard.
+    """
+    if not (
+        os.environ.get("UPSTASH_REDIS_REST_URL") and os.environ.get("UPSTASH_REDIS_REST_TOKEN")
+    ):
+        return
+    try:
+        from fantasy_baseball.data.cache_keys import CacheKey as _CacheKey
+        from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
+
+        remote = build_explicit_upstash_kv()
+        remote.set(redis_key(_CacheKey.STREAK_SCORES), json.dumps(payload))
+    except Exception as exc:
+        log.warning(f"Failed to mirror streak_scores to remote Upstash: {exc}")
 
 
 def _write_spoe_snapshot(spoe_result: dict) -> None:
@@ -1185,6 +1215,7 @@ class RefreshRun:
                 conn.close()
             payload = serialize_report(report)
             write_cache(CacheKey.STREAK_SCORES, payload)
+            _push_streak_scores_to_remote(payload)
             self._progress(
                 f"Streak scores cached: {len(report.roster_rows)} roster, {len(report.fa_rows)} FAs"
             )
