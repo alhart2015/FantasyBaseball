@@ -31,7 +31,6 @@ def test_create_tables_creates_all_five(tmp_path):
 
 
 def test_create_tables_creates_ros_blended_projections(tmp_path):
-    """Task 1: ros_blended_projections table is created by create_tables()."""
     db_path = tmp_path / "test.db"
     conn = sqlite3.connect(db_path)
     create_tables(conn)

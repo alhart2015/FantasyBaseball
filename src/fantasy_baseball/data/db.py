@@ -536,11 +536,6 @@ def load_weekly_rosters(conn, rosters_dir) -> None:
     conn.commit()
 
 
-# ---------------------------------------------------------------------------
-# Live append functions (called from the dashboard refresh)
-# ---------------------------------------------------------------------------
-
-
 def load_positions(conn, positions: dict[str, list[str]]) -> None:
     """Load position eligibility into the positions table.
 
