@@ -19,6 +19,7 @@
 {% else %}
   <section class="streaks-section">
     <h2>Your Roster</h2>
+    <p class="streaks-hint">Click a row to see the drivers behind that prediction.</p>
     <table class="streaks-table" data-sortable>
       <thead>
         <tr>
@@ -72,21 +73,6 @@
         {% endfor %}
       </tbody>
     </table>
-  </section>
-
-  <section class="streaks-section">
-    <h2>Drivers</h2>
-    <ul class="drivers">
-      {% for dl in payload.driver_lines %}
-        <li>
-          <strong>{{ dl.player_name }}</strong> ·
-          {{ dl.category | upper }} {{ dl.label | upper }} ({{ (dl.probability * 100) | round | int }}%):
-          {% for d in dl.drivers %}
-            {{ d.feature }} {{ "%+0.1f"|format(d.z_score) }}z{% if not loop.last %}, {% endif %}
-          {% endfor %}
-        </li>
-      {% endfor %}
-    </ul>
   </section>
 
   <script src="{{ url_for('static', filename='streaks.js') }}"></script>

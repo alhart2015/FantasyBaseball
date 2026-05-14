@@ -1,4 +1,8 @@
-<tr>
+{# Two-row pair: the visible roster row + its drivers detail twin. The
+   parent streaks.html provides `payload` (so we can pull driver_lines
+   for this player) and `row`. Click the header row to toggle. #}
+{% set player_drivers = payload.driver_lines | selectattr("player_name", "equalto", row.name) | list %}
+<tr class="expandable" onclick="toggleStreakRow(this)">
   <td>{{ row.name }}</td>
   <td>{{ row.positions | join(", ") }}</td>
   {% for cat in ["avg", "hr", "r", "rbi", "sb"] %}
@@ -7,9 +11,28 @@
       {% if score and score.label != "neutral" %}
         <span class="streak-chip streak-{{ score.label }}">{{ score.label | upper }}</span>
       {% else %}
-        —
+        --
       {% endif %}
     </td>
   {% endfor %}
   <td>{{ "%+d"|format(row.composite) }}</td>
+</tr>
+<tr class="expand-content">
+  <td colspan="8">
+    {% if player_drivers %}
+      <div class="streak-drivers">
+        {% for dl in player_drivers %}
+          <div class="streak-driver-line">
+            <span class="streak-driver-cat">{{ dl.category | upper }} {{ dl.label | upper }} ({{ (dl.probability * 100) | round | int }}%)</span>
+            <span class="streak-driver-sep">--</span>
+            {% for d in dl.drivers %}
+              <span class="streak-driver-z">{{ d.feature }} {{ "%+0.1f"|format(d.z_score) }}z</span>{% if not loop.last %}<span class="streak-driver-sep">,</span>{% endif %}
+            {% endfor %}
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="streak-no-drivers">No driver detail available for this player.</div>
+    {% endif %}
+  </td>
 </tr>

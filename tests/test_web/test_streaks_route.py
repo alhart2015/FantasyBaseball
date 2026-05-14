@@ -89,7 +89,14 @@ def test_streaks_route_with_seeded_cache(client, kv_isolation) -> None:
     body = resp.data.decode()
     assert "Your Roster" in body
     assert "Top Free Agent Signals" in body
-    assert "Drivers" in body
+    # Drivers render inline as the click-to-expand twin of each roster row,
+    # not as a standalone section. Assert on the per-row markup + a driver
+    # feature so a regression in either the expand wrapper or the player
+    # filter is caught.
+    assert 'class="expandable"' in body
+    assert 'class="expand-content"' in body
+    assert "streak-drivers" in body
+    assert "barrel_pct" in body
     assert "Test Player" in body
 
 

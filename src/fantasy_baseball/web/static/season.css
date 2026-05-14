@@ -3226,9 +3226,41 @@ td[style*="--neg"] {
 .streaks-table td { padding: 6px 10px; border-bottom: 1px solid var(--surface-soft); }
 .streaks-table tr:hover td { background: rgba(255, 255, 255, 0.02); }
 
-/* Drivers list (per-player hot/cold reason breakdown) */
-.drivers { list-style: none; padding: 0; margin: 0; font-size: 13px; }
-.drivers li { padding: 4px 0; border-bottom: 1px solid var(--surface-soft); }
+/* Click-to-expand drivers row on the roster table. Header rows are
+   <tr.expandable> and the immediately-following <tr.expand-content>
+   holds the per-player driver breakdown. Hover/cursor + open-state
+   visibility come from the global .expandable / .expand-content rules. */
+.streaks-hint {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin: 0 0 8px;
+    font-style: italic;
+}
+.streaks-table .expand-content > td {
+    padding: 10px 14px 12px 22px;
+    background: var(--paper-tint);
+    border-bottom: 1px solid var(--surface-soft);
+}
+.streak-drivers {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12px;
+}
+.streak-driver-line { color: var(--ink-soft); }
+.streak-driver-cat {
+    color: var(--ink);
+    font-weight: 600;
+    margin-right: 4px;
+}
+.streak-driver-z { color: var(--ink-soft); }
+.streak-driver-sep { color: var(--ink-faint); margin: 0 4px; }
+.streak-no-drivers {
+    color: var(--ink-faint);
+    font-style: italic;
+    font-size: 12px;
+}
 
 /* Empty state for /streaks before first refresh */
 .empty-state {
