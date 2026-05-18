@@ -5,7 +5,7 @@ scripts/summary.py (in-season weekly projections), and
 the season dashboard (web/season_data.py).
 """
 
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -64,22 +64,17 @@ PITCHER_IDX = {s: i for i, s in enumerate(PITCHER_CORR_STATS)}
 def _flatten_full_season(p: Any) -> dict[str, Any]:
     """Flatten a player to a dict with full-season counting stats at top level.
 
-    Player objects: delegate to ``to_flat_dict_full_season``.
-
-    Dict inputs: if ``full_season_projection`` is nested, overlay it onto
-    top-level (matches the Player-object behavior). Otherwise pass
-    through unchanged so legacy callers that build dicts with flat
-    top-level stats keep working.
+    Player objects delegate to ``to_flat_dict_full_season``. Dict inputs with
+    nested ``full_season_projection`` get it overlaid onto the top level;
+    legacy dicts with only flat top-level stats pass through unchanged.
     """
     if hasattr(p, "to_flat_dict_full_season"):
         result: dict[str, Any] = p.to_flat_dict_full_season()
         return result
-    if not isinstance(p, dict):
-        raise TypeError(f"_flatten_full_season: expected Player or dict, got {type(p).__name__}")
     fs = p.get("full_season_projection")
     if isinstance(fs, dict):
         return {**p, **fs}
-    return p
+    return cast(dict[str, Any], p)
 
 
 def simulate_season(
@@ -581,11 +576,8 @@ def run_ros_monte_carlo(
         {"team_results": {team: {median_pts, p10, p90, first_pct, top3_pct}},
          "category_risk": {cat: {median_pts, p10, p90, top3_pct, bot3_pct}}}
     """
-    # Convert Player objects to flat dicts using FULL-SEASON projections.
-    # simulate_remaining_season expects full-season stats so its
-    # ``rem = max(0, sim - actuals)`` math yields the simulated remaining
-    # contribution. Flattening rest_of_season here would make YTD cancel
-    # itself out and silently rank teams on ROS-only production.
+    # simulate_remaining_season derives ROS from full-season minus YTD; flatten
+    # full-season here so that math is well-formed (see _flatten_full_season).
     flat_rosters: dict[str, list[dict]] = {}
     for team_key, players in team_rosters.items():
         flat_rosters[team_key] = [_flatten_full_season(p) for p in players]

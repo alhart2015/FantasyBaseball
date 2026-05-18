@@ -192,19 +192,14 @@ class Player:
         name = d.get("name", "")
         player_type = PlayerType(d.get("player_type", "hitter"))
 
-        # Stat bags: detect nested vs flat format. ``to_flat_dict`` produces
-        # BOTH (flat top-level for legacy consumers + nested bags), so we
-        # check the nested bags even when flat keys are present — otherwise
-        # round-tripping a cache:roster entry silently drops
-        # ``full_season_projection`` and downstream consumers (notably the
-        # ROS Monte Carlo) lose the YTD signal.
+        # ``to_flat_dict`` emits flat top-level stats AND nested bags, so
+        # flat stat keys do not imply absence of nested bags.
         ros_raw = d.get("rest_of_season")
         fs_raw = d.get("full_season_projection")
         pre_raw = d.get("preseason")
         cur_raw = d.get("current")
 
         if ros_raw is None and _has_stat_keys(d, player_type):
-            # Legacy flat-only format — all stats at top level, treat as ROS.
             ros = _make_stats(d, player_type)
         else:
             ros = _make_stats(ros_raw, player_type) if ros_raw is not None else None
@@ -282,38 +277,27 @@ class Player:
             d["pace"] = self.pace
         return d
 
-    def to_flat_dict(self) -> dict[str, Any]:
-        """Serialize with ROS stats flattened to top level for legacy consumers.
-
-        Produces both flat keys (r, hr, rbi...) AND nested ros dict.
-        Used for cache serialization and backward compatibility with
-        functions that expect flat stat keys.
-        """
+    def _to_flat_dict_with(self, src: HitterStats | PitcherStats | None) -> dict[str, Any]:
+        """Produce a dict with ``src`` stats flattened over the standard serialization."""
         d = self.to_dict()
-        if self.rest_of_season is not None:
-            d.update(self.rest_of_season.to_dict())
+        if src is not None:
+            d.update(src.to_dict())
         return d
+
+    def to_flat_dict(self) -> dict[str, Any]:
+        """Serialize with ROS stats flattened to top level for legacy consumers."""
+        return self._to_flat_dict_with(self.rest_of_season)
 
     def to_flat_dict_full_season(self) -> dict[str, Any]:
         """Serialize with full-season (YTD + ROS) stats flattened to top level.
 
-        Used by ``simulate_remaining_season``, which expects full-season
-        stat totals so that its ``rem = max(0, sim - actuals)``
-        subtraction yields the simulated *remaining* contribution. If
-        ``rest_of_season`` were flattened instead, ``sim`` would already
-        be the ROS portion and the YTD addition then cancels out — the
-        simulation would silently ignore actual season-to-date
-        performance and rank teams as if every season started fresh.
-
-        Falls back to ``rest_of_season`` at preseason when
-        ``full_season_projection`` is unset (before any games, ROS and
-        full-season are identical).
+        Used by ``simulate_remaining_season``: its ``rem = max(0, sim - actuals)``
+        math derives ROS internally, so flattening ROS-only here would zero out
+        the YTD contribution. Falls back to ``rest_of_season`` at preseason when
+        ``full_season_projection`` is unset (ROS and full-season are identical
+        before any games).
         """
-        d = self.to_dict()
-        src = self.full_season_projection or self.rest_of_season
-        if src is not None:
-            d.update(src.to_dict())
-        return d
+        return self._to_flat_dict_with(self.full_season_projection or self.rest_of_season)
 
     def is_on_il(self) -> bool:
         """True if the player is on the IL by Yahoo status or selected slot.
