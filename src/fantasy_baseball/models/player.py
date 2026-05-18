@@ -192,27 +192,26 @@ class Player:
         name = d.get("name", "")
         player_type = PlayerType(d.get("player_type", "hitter"))
 
-        # Stat bags: detect nested vs flat format
-        if _has_stat_keys(d, player_type):
-            # Flat format — all stats at top level, treat as ROS
+        # Stat bags: detect nested vs flat format. ``to_flat_dict`` produces
+        # BOTH (flat top-level for legacy consumers + nested bags), so we
+        # check the nested bags even when flat keys are present — otherwise
+        # round-tripping a cache:roster entry silently drops
+        # ``full_season_projection`` and downstream consumers (notably the
+        # ROS Monte Carlo) lose the YTD signal.
+        ros_raw = d.get("rest_of_season")
+        fs_raw = d.get("full_season_projection")
+        pre_raw = d.get("preseason")
+        cur_raw = d.get("current")
+
+        if ros_raw is None and _has_stat_keys(d, player_type):
+            # Legacy flat-only format — all stats at top level, treat as ROS.
             ros = _make_stats(d, player_type)
-            preseason = None
-            current = None
-            full_season_projection = None
         else:
-            ros_raw = d.get("rest_of_season")
             ros = _make_stats(ros_raw, player_type) if ros_raw is not None else None
 
-            fs_raw = d.get("full_season_projection")
-            full_season_projection = (
-                _make_stats(fs_raw, player_type) if fs_raw is not None else None
-            )
-
-            pre_raw = d.get("preseason")
-            preseason = _make_stats(pre_raw, player_type) if pre_raw is not None else None
-
-            cur_raw = d.get("current")
-            current = _make_stats(cur_raw, player_type) if cur_raw is not None else None
+        full_season_projection = _make_stats(fs_raw, player_type) if fs_raw is not None else None
+        preseason = _make_stats(pre_raw, player_type) if pre_raw is not None else None
+        current = _make_stats(cur_raw, player_type) if cur_raw is not None else None
 
         rank_raw = d.get("rank")
         rank = RankInfo.from_dict(rank_raw) if isinstance(rank_raw, dict) else RankInfo()
@@ -293,6 +292,27 @@ class Player:
         d = self.to_dict()
         if self.rest_of_season is not None:
             d.update(self.rest_of_season.to_dict())
+        return d
+
+    def to_flat_dict_full_season(self) -> dict[str, Any]:
+        """Serialize with full-season (YTD + ROS) stats flattened to top level.
+
+        Used by ``simulate_remaining_season``, which expects full-season
+        stat totals so that its ``rem = max(0, sim - actuals)``
+        subtraction yields the simulated *remaining* contribution. If
+        ``rest_of_season`` were flattened instead, ``sim`` would already
+        be the ROS portion and the YTD addition then cancels out — the
+        simulation would silently ignore actual season-to-date
+        performance and rank teams as if every season started fresh.
+
+        Falls back to ``rest_of_season`` at preseason when
+        ``full_season_projection`` is unset (before any games, ROS and
+        full-season are identical).
+        """
+        d = self.to_dict()
+        src = self.full_season_projection or self.rest_of_season
+        if src is not None:
+            d.update(src.to_dict())
         return d
 
     def is_on_il(self) -> bool:
