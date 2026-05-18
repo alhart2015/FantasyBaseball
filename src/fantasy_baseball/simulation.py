@@ -5,6 +5,8 @@ scripts/summary.py (in-season weekly projections), and
 the season dashboard (web/season_data.py).
 """
 
+from typing import Any, cast
+
 import numpy as np
 
 from fantasy_baseball.models.player import PlayerType
@@ -57,6 +59,22 @@ PITCHER_COV = _build_cov_matrix(PITCHER_CORR_STATS, PITCHER_CORRELATION)
 # Map stat name -> index in the correlated draw vector.
 HITTER_IDX = {s: i for i, s in enumerate(HITTER_CORR_STATS)}
 PITCHER_IDX = {s: i for i, s in enumerate(PITCHER_CORR_STATS)}
+
+
+def _flatten_full_season(p: Any) -> dict[str, Any]:
+    """Flatten a player to a dict with full-season counting stats at top level.
+
+    Player objects delegate to ``to_flat_dict_full_season``. Dict inputs with
+    nested ``full_season_projection`` get it overlaid onto the top level;
+    legacy dicts with only flat top-level stats pass through unchanged.
+    """
+    if hasattr(p, "to_flat_dict_full_season"):
+        result: dict[str, Any] = p.to_flat_dict_full_season()
+        return result
+    fs = p.get("full_season_projection")
+    if isinstance(fs, dict):
+        return {**p, **fs}
+    return cast(dict[str, Any], p)
 
 
 def simulate_season(
@@ -558,12 +576,11 @@ def run_ros_monte_carlo(
         {"team_results": {team: {median_pts, p10, p90, first_pct, top3_pct}},
          "category_risk": {cat: {median_pts, p10, p90, top3_pct, bot3_pct}}}
     """
-    # Convert Player objects to flat dicts for the simulation internals.
+    # simulate_remaining_season derives ROS from full-season minus YTD; flatten
+    # full-season here so that math is well-formed (see _flatten_full_season).
     flat_rosters: dict[str, list[dict]] = {}
     for team_key, players in team_rosters.items():
-        flat_rosters[team_key] = [
-            p.to_flat_dict() if hasattr(p, "to_flat_dict") else p for p in players
-        ]
+        flat_rosters[team_key] = [_flatten_full_season(p) for p in players]
 
     rng = np.random.default_rng(seed)
     team_names = list(flat_rosters.keys())

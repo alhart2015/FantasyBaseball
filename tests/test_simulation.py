@@ -223,3 +223,123 @@ class TestRunRosMonteCarlo:
             assert set(cr[cat].keys()) == expected_cat_keys, (
                 f"{cat} keys: {set(cr[cat].keys())} != {expected_cat_keys}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Regression: run_ros_monte_carlo must flatten full-season projections
+# ---------------------------------------------------------------------------
+
+
+class TestRosMonteCarloUsesFullSeason:
+    """run_ros_monte_carlo must operate on full-season (ROS+YTD) stats so the
+    YTD-blending math in simulate_remaining_season is well-formed."""
+
+    def test_player_input_uses_full_season_projection(self):
+        """Team A wins on full-season R only when MC honors full_season_projection."""
+        from fantasy_baseball.models.player import (
+            HitterStats,
+            PitcherStats,
+            Player,
+            PlayerType,
+        )
+
+        def hitter(name, ros_r, fs_r):
+            return Player(
+                name=name,
+                player_type=PlayerType.HITTER,
+                positions=[],
+                team="",
+                rest_of_season=HitterStats(
+                    pa=350, ab=315, h=82, r=ros_r, hr=8, rbi=40, sb=4, avg=0.260
+                ),
+                full_season_projection=HitterStats(
+                    pa=650, ab=585, h=152, r=fs_r, hr=15, rbi=75, sb=8, avg=0.260
+                ),
+            )
+
+        def pitcher(name):
+            return Player(
+                name=name,
+                player_type=PlayerType.PITCHER,
+                positions=[],
+                team="",
+                rest_of_season=PitcherStats(
+                    ip=100, w=6, k=95, sv=0, er=38, bb=28, h_allowed=85, era=3.42, whip=1.13
+                ),
+                full_season_projection=PitcherStats(
+                    ip=180, w=11, k=170, sv=0, er=68, bb=50, h_allowed=155, era=3.40, whip=1.14
+                ),
+            )
+
+        # A's R is back-loaded into YTD (full-season 440 vs 360 actual), B's is
+        # spread evenly (380 full-season vs 20 actual). A wins R only if MC
+        # ranks on full-season; ROS-only collapses both to ~max(actual, ROS).
+        rosters = {
+            "Team A": [hitter(f"A{i}", ros_r=20, fs_r=110) for i in range(4)]
+            + [pitcher(f"AP{i}") for i in range(3)],
+            "Team B": [hitter(f"B{i}", ros_r=90, fs_r=95) for i in range(4)]
+            + [pitcher(f"BP{i}") for i in range(3)],
+        }
+        common_actuals = {
+            "HR": 30,
+            "RBI": 140,
+            "SB": 15,
+            "AVG": 0.260,
+            "W": 15,
+            "K": 240,
+            "SV": 0,
+            "ERA": 3.40,
+            "WHIP": 1.14,
+        }
+        actuals = {
+            "Team A": {"R": 360, **common_actuals},
+            "Team B": {"R": 20, **common_actuals},
+        }
+
+        result = run_ros_monte_carlo(
+            team_rosters=rosters,
+            actual_standings=actuals,
+            fraction_remaining=0.5,
+            h_slots=3,
+            p_slots=2,
+            user_team_name="Team A",
+            n_iterations=200,
+            seed=42,
+        )
+
+        tr = result["team_results"]
+        assert tr["Team A"]["first_pct"] > tr["Team B"]["first_pct"], (
+            f"A:{tr['Team A']['first_pct']}% vs B:{tr['Team B']['first_pct']}%"
+        )
+
+    def test_dict_input_with_nested_full_season(self):
+        """Dict inputs with nested full_season_projection get flattened."""
+        from fantasy_baseball.simulation import _flatten_full_season
+
+        p = {
+            "name": "X",
+            "player_type": "hitter",
+            "r": 20,  # ROS-flat
+            "full_season_projection": {
+                "r": 100,
+                "hr": 25,
+                "rbi": 80,
+                "sb": 5,
+                "h": 150,
+                "ab": 550,
+                "pa": 600,
+                "avg": 0.272,
+            },
+        }
+        flat = _flatten_full_season(p)
+        assert flat["r"] == 100, "full_season_projection should overlay ROS"
+        assert flat["hr"] == 25
+
+    def test_dict_input_without_full_season_passes_through(self):
+        """Legacy dicts with only flat top-level stats are preserved."""
+        from fantasy_baseball.simulation import _flatten_full_season
+
+        p = {"name": "X", "player_type": "hitter", "r": 80, "hr": 25}
+        flat = _flatten_full_season(p)
+        assert flat["r"] == 80
+        assert flat["hr"] == 25

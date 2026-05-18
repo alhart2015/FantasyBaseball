@@ -406,6 +406,34 @@ class TestToFlatDict:
         assert d["name"] == "Unknown"
         assert "hr" not in d
 
+    def test_to_flat_dict_full_season_prefers_full_season_projection(self):
+        from fantasy_baseball.models.player import HitterStats, Player
+
+        p = Player(
+            name="Aaron Judge",
+            player_type="hitter",
+            rest_of_season=HitterStats(pa=300, ab=260, h=70, r=45, hr=18, rbi=44, sb=3, avg=0.269),
+            full_season_projection=HitterStats(
+                pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290
+            ),
+        )
+        d = p.to_flat_dict_full_season()
+        assert d["r"] == 95
+        assert d["hr"] == 38
+        assert d["rest_of_season"]["r"] == 45  # nested still present
+
+    def test_to_flat_dict_full_season_falls_back_to_ros(self):
+        """Preseason: full_season_projection unset, fall back to rest_of_season."""
+        from fantasy_baseball.models.player import HitterStats, Player
+
+        p = Player(
+            name="Rookie",
+            player_type="hitter",
+            rest_of_season=HitterStats(pa=600, ab=500, h=145, r=95, hr=38, rbi=92, sb=7, avg=0.290),
+        )
+        d = p.to_flat_dict_full_season()
+        assert d["r"] == 95
+
 
 class TestSgpComputation:
     def test_hitter_stats_compute_sgp(self):
