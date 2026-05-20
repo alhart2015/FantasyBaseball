@@ -136,7 +136,7 @@ def _refresh_streaks_db(
     """Steps 1-4 of the pipeline: fetch -> load projections -> windows -> labels."""
     if not skip_fetch:
         logger.info("Fetching %d game logs + Statcast (incremental)...", season)
-        summary = fetch_season(season=season, conn=conn)
+        summary = fetch_season(season=season, conn=conn, incremental=True)
         logger.info("fetch_season summary: %s", summary)
     else:
         logger.info("--skip-fetch set; using cached game logs + Statcast")
