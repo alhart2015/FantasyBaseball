@@ -18,19 +18,11 @@ from fantasy_baseball.data.db import (
 )
 from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.draft.board import build_draft_board
+from fantasy_baseball.simulation import simulate_season
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
-    HITTING_COUNTING,
-    INJURY_PROB,
-    INJURY_SEVERITY,
     INVERSE_STATS,
-    PITCHING_COUNTING,
-    REPLACEMENT_HITTER,
-    REPLACEMENT_RP,
-    REPLACEMENT_SP,
-    STAT_VARIANCE,
 )
-from fantasy_baseball.utils.name_utils import normalize_name
 
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
@@ -420,77 +412,9 @@ DRAFT_2025 = [
     (23, "Gabriel Moreno", "Springfield Isotopes"),
 ]
 
-# Re-export under short names for backtest_trades.py compatibility
+# Local aliases used in the standings comparison below.
 ALL_CATS = ALL_CATEGORIES
 INVERSE = INVERSE_STATS
-
-
-def sim_season(rosters, rng, h_slots=13, p_slots=9):
-    stats = {}
-    for team, players in rosters.items():
-        hitters = [p for p in players if p["player_type"] == "hitter"]
-        pitchers = [p for p in players if p["player_type"] == "pitcher"]
-        ah, ap = [], []
-        for h in hitters:
-            frac = (
-                rng.uniform(*INJURY_SEVERITY["hitter"])
-                if rng.random() < INJURY_PROB["hitter"]
-                else 0
-            )
-            row = {}
-            for col in HITTING_COUNTING:
-                base = float(h.get(col, 0) or 0)
-                sv = STAT_VARIANCE.get(col, 0.0)
-                varied = max(0, base * (1 + rng.normal(0, sv))) if sv else base
-                row[col] = varied * (1 - frac) + REPLACEMENT_HITTER.get(col, 0) * frac
-            ah.append(row)
-        for p in pitchers:
-            frac = (
-                rng.uniform(*INJURY_SEVERITY["pitcher"])
-                if rng.random() < INJURY_PROB["pitcher"]
-                else 0
-            )
-            repl = REPLACEMENT_RP if float(p.get("sv", 0) or 0) >= 15 else REPLACEMENT_SP
-            row = {}
-            for col in PITCHING_COUNTING:
-                base = float(p.get(col, 0) or 0)
-                sv = STAT_VARIANCE.get(col, 0.0)
-                varied = max(0, base * (1 + rng.normal(0, sv))) if sv else base
-                row[col] = varied * (1 - frac) + repl.get(col, 0) * frac
-            ap.append(row)
-        ah.sort(key=lambda x: x["r"] + x["hr"] + x["rbi"] + x["sb"], reverse=True)
-        ap.sort(key=lambda x: (x.get("sv", 0) >= 15, x["w"] + x["k"] + x["sv"]), reverse=True)
-        ah, ap = ah[:h_slots], ap[:p_slots]
-
-        r = sum(x["r"] for x in ah)
-        hr = sum(x["hr"] for x in ah)
-        rbi = sum(x["rbi"] for x in ah)
-        sb = sum(x["sb"] for x in ah)
-        th = sum(x["h"] for x in ah)
-        tab = sum(x["ab"] for x in ah)
-        avg = th / tab if tab > 0 else 0
-        w = sum(x["w"] for x in ap)
-        k = sum(x["k"] for x in ap)
-        sv = sum(x["sv"] for x in ap)
-        tip = sum(x["ip"] for x in ap)
-        ter = sum(x["er"] for x in ap)
-        tbb = sum(x["bb"] for x in ap)
-        tha = sum(x["h_allowed"] for x in ap)
-        era = ter * 9 / tip if tip > 0 else 99
-        whip = (tbb + tha) / tip if tip > 0 else 99
-        stats[team] = {
-            "R": r,
-            "HR": hr,
-            "RBI": rbi,
-            "SB": sb,
-            "AVG": avg,
-            "W": w,
-            "K": k,
-            "SV": sv,
-            "ERA": era,
-            "WHIP": whip,
-        }
-    return stats
 
 
 def main():
@@ -527,7 +451,7 @@ def main():
             team_rosters[team] = []
         key = ascii_name(player)
         if key in board_lookup:
-            team_rosters[team].append(board.loc[board_lookup[key]])
+            team_rosters[team].append(board.loc[board_lookup[key]].to_dict())
             matched += 1
         else:
             # Try without suffixes
@@ -535,7 +459,7 @@ def main():
             found = False
             for bkey, bidx in board_lookup.items():
                 if key_clean == bkey or (len(key_clean) > 5 and key_clean in bkey):
-                    team_rosters[team].append(board.loc[bidx])
+                    team_rosters[team].append(board.loc[bidx].to_dict())
                     matched += 1
                     found = True
                     break
@@ -557,14 +481,17 @@ def main():
     all_cat_med = {t: {c: [] for c in ALL_CATS} for t in team_rosters}
 
     for _ in range(N):
-        stats = sim_season(team_rosters, rng)
+        stats, _ = simulate_season(team_rosters, rng, h_slots=13, p_slots=9)
         results = {}
         for cat in ALL_CATS:
+            # simulate_season returns string-keyed stats; Category is a plain
+            # Enum, so index it by cat.value.
+            key = cat.value
             rev = cat not in INVERSE
-            ranked = sorted(stats.keys(), key=lambda t: stats[t][cat], reverse=rev)
+            ranked = sorted(stats.keys(), key=lambda t, k=key: stats[t][k], reverse=rev)
             for i, t in enumerate(ranked):
                 results.setdefault(t, {})[f"{cat}_pts"] = len(stats) - i
-                results[t].setdefault("stats", {})[cat] = stats[t][cat]
+                results[t].setdefault("stats", {})[cat] = stats[t][key]
         for t in results:
             results[t]["total"] = sum(results[t][f"{c}_pts"] for c in ALL_CATS)
         for t in team_rosters:
@@ -608,13 +535,14 @@ def main():
     print(f"{'Cat':>5} {'Actual':>8} {'Sim Med':>8} {'Diff%':>7}")
     print("-" * 30)
     for cat in ALL_CATS:
-        act_val = ACTUAL["Hart of the Order"].get(cat, 0)
+        label = cat.value
+        act_val = ACTUAL["Hart of the Order"].get(label, 0)
         sim_val = np.median(all_cat_med["Hart of the Order"][cat])
         diff_pct = (sim_val - act_val) / act_val * 100 if act_val != 0 else 0
-        if cat in ("AVG", "ERA", "WHIP"):
-            print(f"{cat:>5} {act_val:>8.3f} {sim_val:>8.3f} {diff_pct:>+6.1f}%")
+        if label in ("AVG", "ERA", "WHIP"):
+            print(f"{label:>5} {act_val:>8.3f} {sim_val:>8.3f} {diff_pct:>+6.1f}%")
         else:
-            print(f"{cat:>5} {act_val:>8.0f} {sim_val:>8.0f} {diff_pct:>+6.1f}%")
+            print(f"{label:>5} {act_val:>8.0f} {sim_val:>8.0f} {diff_pct:>+6.1f}%")
 
 
 if __name__ == "__main__":

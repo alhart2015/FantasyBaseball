@@ -1,9 +1,15 @@
 """Tests for Monte Carlo simulation functions (ROS extensions)."""
 
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.simulation import (
+    _apply_variance,
+    _playing_time_scales,
+    _projected_volume,
     run_ros_monte_carlo,
     simulate_remaining_season,
 )
@@ -216,6 +222,75 @@ class TestYtdPlayingTime:
             p_slots=2,
         )
         assert constant_out["Team A"]["ERA"] != pytest.approx(real_out["Team A"]["ERA"])
+
+
+class TestProjectedVolume:
+    """Curve-lookup volume: PA for hitters (AB/0.90 fallback), IP for pitchers."""
+
+    def test_hitter_uses_pa_when_present(self):
+        assert _projected_volume({"pa": 600, "ab": 540}, is_hitter=True) == 600
+
+    def test_hitter_falls_back_to_ab_over_per_pa(self):
+        assert _projected_volume({"ab": 540}, is_hitter=True) == pytest.approx(540 / 0.90)
+
+    def test_pitcher_uses_ip(self):
+        assert _projected_volume({"ip": 180}, is_hitter=False) == 180
+
+    def test_nan_coerced_to_zero(self):
+        # NaN PA/AB/IP (pandas-sourced dicts) must not slip through as NaN.
+        assert _projected_volume({"ab": float("nan")}, is_hitter=True) == 0.0
+        assert _projected_volume({"ip": float("nan")}, is_hitter=False) == 0.0
+
+
+class TestPlayingTimeScales:
+    """The two-sided, volume-scaled playing-time multiplier."""
+
+    def test_full_season_returns_curve_mean_when_no_spread(self):
+        players = [_make_hitter("A"), _make_hitter("B")]
+        with patch("fantasy_baseball.simulation.playing_time_params", return_value=(0.8, 0.0)):
+            scales = _playing_time_scales(players, PlayerType.HITTER, np.random.default_rng(1), 1.0)
+        assert scales == pytest.approx([0.8, 0.8])
+
+    def test_partial_season_damps_haircut(self):
+        players = [_make_hitter("A")]
+        with patch("fantasy_baseball.simulation.playing_time_params", return_value=(0.8, 0.0)):
+            scales = _playing_time_scales(players, PlayerType.HITTER, np.random.default_rng(1), 0.5)
+        # Only the remaining half is at risk: eff_mean = 1 - (1 - 0.8) * 0.5 = 0.9
+        assert scales == pytest.approx([0.9])
+
+    def test_two_sided_and_clipped(self):
+        players = [_make_hitter(f"H{i}") for i in range(4000)]
+        with patch("fantasy_baseball.simulation.playing_time_params", return_value=(1.0, 0.3)):
+            scales = _playing_time_scales(players, PlayerType.HITTER, np.random.default_rng(0), 1.0)
+        assert (scales > 1.0).any()  # a player can beat his projection (old model could not)
+        assert (scales < 1.0).any()
+        assert scales.min() >= 0.0
+        assert scales.max() <= 2.0
+        assert scales.mean() == pytest.approx(1.0, abs=0.02)
+
+
+class TestApplyVariancePlayingTime:
+    """Injury-report logging and replacement backfill under the new model."""
+
+    def test_logs_notable_playing_time_loss(self):
+        out: list = []
+        with patch("fantasy_baseball.simulation.playing_time_params", return_value=(0.5, 0.0)):
+            _apply_variance([_make_hitter("X")], PlayerType.HITTER, np.random.default_rng(1), out)
+        assert out == [("X", pytest.approx(0.5))]
+
+    def test_does_not_log_minor_loss(self):
+        out: list = []
+        with patch("fantasy_baseball.simulation.playing_time_params", return_value=(0.95, 0.0)):
+            _apply_variance([_make_hitter("X")], PlayerType.HITTER, np.random.default_rng(1), out)
+        assert out == []  # frac_missed 0.05 < _NOTABLE_PT_LOSS (0.15)
+
+    def test_replacement_backfill_keeps_stats_positive(self):
+        out: list = []
+        with patch("fantasy_baseball.simulation.playing_time_params", return_value=(0.3, 0.0)):
+            adj = _apply_variance(
+                [_make_hitter("X", r=80)], PlayerType.HITTER, np.random.default_rng(1), out
+            )
+        assert adj[0]["r"] > 0  # replacement fills the missed 0.7 fraction
 
 
 # ---------------------------------------------------------------------------

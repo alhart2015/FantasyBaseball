@@ -30,9 +30,7 @@ from fantasy_baseball.models.standings import (
 )
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import (
-    ALL_CATEGORIES as ALL_CATS,
-)
-from fantasy_baseball.utils.constants import (
+    AB_PER_PA,
     HITTING_COUNTING,
     PITCHING_COUNTING,
     STARTER_IP_THRESHOLD,
@@ -40,11 +38,15 @@ from fantasy_baseball.utils.constants import (
     Category,
 )
 from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES as ALL_CATS,
+)
+from fantasy_baseball.utils.constants import (
     INVERSE_STATS as INVERSE_CATS,
 )
 from fantasy_baseball.utils.constants import (
     safe_float as _safe,
 )
+from fantasy_baseball.utils.playing_time import playing_time_params
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 ProjectionSource = Literal["rest_of_season", "full_season_projection"]
@@ -920,6 +922,22 @@ def project_team_stats(
     )
 
 
+def _full_season_volume(p, is_hitter: bool) -> float:
+    """Full-season projected playing time for the playing-time curve lookup.
+
+    Reads PA (hitters) / IP (pitchers) from the full-season projection so the
+    cv_pt band matches the calibration and the MC. Falls back to ROS at
+    preseason (``_stat`` handles that) and to AB/0.90 when a dict caller has
+    ``ab`` but not ``pa``.
+    """
+    if is_hitter:
+        pa = _stat(p, "pa", "full_season_projection")
+        if pa > 0:
+            return float(pa)
+        return float(_stat(p, "ab", "full_season_projection")) / AB_PER_PA
+    return float(_stat(p, "ip", "full_season_projection"))
+
+
 def project_team_sds(
     roster,
     *,
@@ -927,12 +945,17 @@ def project_team_sds(
 ) -> dict[Category, float]:
     """Aggregate per-player projection variance into team-level SDs.
 
-    Uses ``STAT_VARIANCE`` (per-stat CV calibrated from 2022-2024
-    Steamer+ZiPS vs actuals) under a player-independence assumption:
+    Combines two independent per-player variance sources in quadrature for the
+    counting categories: performance (``STAT_VARIANCE`` per-stat CV, calibrated
+    2022-2024 Steamer+ZiPS vs actuals) and playing time (``cv_pt`` from the
+    calibrated playing-time model, ``utils.playing_time``):
 
-        SD_cat_team = CV_cat * sqrt(sum_over_players(stat_i^2))
+        SD_cat_team = sqrt(sum_i stat_i^2 * (CV_cat^2 + cv_pt_i^2))
 
-    Rate stats propagate through their component totals:
+    Under a player-independence assumption. Playing-time variance is NOT added
+    to the rate categories (AVG/ERA/WHIP): a player's missed time scales his
+    numerator and denominator together, so it cancels out of a rate. Those keep
+    the performance-only propagation:
 
         SD_AVG  = CV_h * sqrt(sum h_i^2) / sum_AB
         SD_ERA  = 9 * CV_er * sqrt(sum er_i^2) / sum_IP
@@ -950,20 +973,32 @@ def project_team_sds(
 
     h_sum_sq: dict[str, float] = {k: 0.0 for k in HITTING_COUNTING}
     p_sum_sq: dict[str, float] = {k: 0.0 for k in PITCHING_COUNTING}
+    # Playing-time variance contribution sum_i (stat_i^2 * cv_pt_i^2), counting
+    # categories only (rate stats are playing-time-invariant; see docstring).
+    h_pt_sq: dict[str, float] = {k: 0.0 for k in ("r", "hr", "rbi", "sb")}
+    p_pt_sq: dict[str, float] = {k: 0.0 for k in ("w", "k", "sv")}
     total_ab = 0.0
     total_ip = 0.0
 
     for p in roster:
         ptype = _get(p, "player_type")
         if ptype == PlayerType.HITTER:
+            cv_pt_sq = playing_time_params(PlayerType.HITTER, _full_season_volume(p, True))[1] ** 2
             for k in HITTING_COUNTING:
                 v = _stat(p, k)
                 h_sum_sq[k] += v * v
+                if k in h_pt_sq:
+                    h_pt_sq[k] += v * v * cv_pt_sq
             total_ab += _stat(p, "ab")
         elif ptype == PlayerType.PITCHER:
+            cv_pt_sq = (
+                playing_time_params(PlayerType.PITCHER, _full_season_volume(p, False))[1] ** 2
+            )
             for k in PITCHING_COUNTING:
                 v = _stat(p, k)
                 p_sum_sq[k] += v * v
+                if k in p_pt_sq:
+                    p_pt_sq[k] += v * v * cv_pt_sq
             total_ip += _stat(p, "ip")
 
     sds: dict[Category, float] = dict.fromkeys(ALL_CATS, 0.0)
@@ -973,9 +1008,9 @@ def project_team_sds(
         ("rbi", Category.RBI),
         ("sb", Category.SB),
     ]:
-        sds[cat] = STAT_VARIANCE[stat_key] * sqrt(h_sum_sq[stat_key])
+        sds[cat] = sqrt(STAT_VARIANCE[stat_key] ** 2 * h_sum_sq[stat_key] + h_pt_sq[stat_key])
     for stat_key, cat in [("w", Category.W), ("k", Category.K), ("sv", Category.SV)]:
-        sds[cat] = STAT_VARIANCE[stat_key] * sqrt(p_sum_sq[stat_key])
+        sds[cat] = sqrt(STAT_VARIANCE[stat_key] ** 2 * p_sum_sq[stat_key] + p_pt_sq[stat_key])
     if total_ab > 0:
         sds[Category.AVG] = STAT_VARIANCE["h"] * sqrt(h_sum_sq["h"]) / total_ab
     if total_ip > 0:

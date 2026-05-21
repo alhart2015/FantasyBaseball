@@ -117,17 +117,16 @@ PITCHING_COUNTING: list[str] = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
 HITTER_PROJ_KEYS: list[str] = ["pa", "r", "hr", "rbi", "sb", "h", "ab", "avg"]
 PITCHER_PROJ_KEYS: list[str] = ["ip", "w", "k", "sv", "er", "bb", "h_allowed", "era", "whip"]
 
-# Monte Carlo simulation parameters (single source of truth)
-INJURY_PROB: dict[str, float] = {"pitcher": 0.45, "hitter": 0.18}
-INJURY_SEVERITY: dict[str, tuple[float, float]] = {
-    "pitcher": (0.20, 0.60),
-    "hitter": (0.15, 0.40),
-}
+# League at-bats per plate appearance. Stable (~0.88-0.91 across teams/seasons);
+# used to convert between PA and AB (refresh pipeline) and as the AB->PA fallback
+# in the playing-time curve lookup when a dict carries ``ab`` but not ``pa``.
+AB_PER_PA: float = 0.90
+
 # Per-stat performance variance (SD of actual/projected ratio residuals).
 # Calibrated from Steamer+ZiPS projections vs MLB actuals, 2022-2024.
-# Per-PA rates for hitters, per-IP rates for pitchers (isolates
-# performance variance from playing time, which the injury model handles).
-# Stats with 0.0 variance (ab, ip) are playing-time-only — no perf multiplier.
+# Per-PA rates for hitters, per-IP rates for pitchers (isolates performance
+# variance from playing time, which the playing-time model handles; see
+# PLAYING_TIME_CURVES). Stats with 0.0 variance (ab, ip) are playing-time-only.
 STAT_VARIANCE: dict[str, float] = {
     # Hitter counting stats
     "r": 0.156,
@@ -144,6 +143,42 @@ STAT_VARIANCE: dict[str, float] = {
     "er": 0.252,
     "bb": 0.257,
     "h_allowed": 0.143,
+}
+
+# Playing-time model: realized PA/IP relative to projection, calibrated from
+# 2022-2025 Steamer+ZiPS vs actuals on the rosterable population (volume floor
+# at the >=90%-MLB-appearance knee for hitters/SP; MLB-appearance required for
+# RP). See scripts/calibrate_playing_time.py. Two-sided (a player can beat his
+# projection) and volume-scaled, which a single league-wide injury haircut
+# cannot represent.
+#
+# Per (type, role), the curve maps projected volume (PA for hitters, IP for
+# pitchers) to (mean_scale, cv_pt): mean_scale is the multiplicative haircut on
+# projected counting stats; cv_pt is the SD of actual/projected playing time.
+# Both are monotone in volume (more projected volume -> higher, tighter). The
+# lookup interpolates between band centers (see utils/playing_time.py); pitcher
+# role is SP if projected IP >= STARTER_IP_THRESHOLD else RP (PitcherStats has
+# no GS field, so IP is the only role signal available at deployment).
+PLAYING_TIME_MAX_SCALE: float = 2.0  # clip ceiling on the per-player scale draw
+PLAYING_TIME_CURVES: dict[str, list[dict[str, float]]] = {
+    "hitters": [
+        {"vol": 382.5, "mean_scale": 0.7518, "cv_pt": 0.4181},
+        {"vol": 440.9, "mean_scale": 0.8352, "cv_pt": 0.3751},
+        {"vol": 498.8, "mean_scale": 0.8352, "cv_pt": 0.3267},
+        {"vol": 563.9, "mean_scale": 0.9102, "cv_pt": 0.2556},
+        {"vol": 629.0, "mean_scale": 0.9452, "cv_pt": 0.1929},
+    ],
+    "SP": [
+        {"vol": 109.4, "mean_scale": 0.8052, "cv_pt": 0.4650},
+        {"vol": 126.6, "mean_scale": 0.8437, "cv_pt": 0.4504},
+        {"vol": 147.1, "mean_scale": 0.8544, "cv_pt": 0.3693},
+        {"vol": 169.9, "mean_scale": 0.8544, "cv_pt": 0.3002},
+    ],
+    "RP": [
+        {"vol": 48.3, "mean_scale": 0.7579, "cv_pt": 0.4758},
+        {"vol": 58.4, "mean_scale": 0.7861, "cv_pt": 0.4172},
+        {"vol": 71.5, "mean_scale": 0.7861, "cv_pt": 0.4172},
+    ],
 }
 
 # Empirical correlation matrices for correlated variance draws.

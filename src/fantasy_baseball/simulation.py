@@ -1,4 +1,4 @@
-"""Monte Carlo season simulation with injuries and stat variance.
+"""Monte Carlo season simulation with playing-time and stat variance.
 
 Shared by scripts/simulate_draft.py (post-draft --monte-carlo),
 scripts/summary.py (in-season weekly projections), and
@@ -12,26 +12,32 @@ import numpy as np
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.utils.constants import (
-    ALL_CATEGORIES as ALL_CATS,
-)
-from fantasy_baseball.utils.constants import (
+    AB_PER_PA,
     CLOSER_SV_THRESHOLD,
     HITTER_CORR_STATS,
     HITTER_CORRELATION,
     HITTING_COUNTING,
-    INJURY_PROB,
-    INJURY_SEVERITY,
     MANAGEMENT_ADJUSTMENT,
     MANAGEMENT_ADJUSTMENT_DEFAULT,
     PITCHER_CORR_STATS,
     PITCHER_CORRELATION,
     PITCHING_COUNTING,
+    PLAYING_TIME_MAX_SCALE,
     REPLACEMENT_HITTER,
     REPLACEMENT_RP,
     REPLACEMENT_SP,
     STAT_VARIANCE,
+    safe_float,
 )
+from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES as ALL_CATS,
+)
+from fantasy_baseball.utils.playing_time import playing_time_params
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
+
+# Minimum simulated playing-time loss worth logging as a notable absence (vs a
+# routine few-percent shortfall), since the playing-time scale is continuous.
+_NOTABLE_PT_LOSS = 0.15
 
 
 def _build_cov_matrix(
@@ -83,10 +89,10 @@ def simulate_season(
     h_slots: int = 13,
     p_slots: int = 9,
 ) -> tuple[dict, dict]:
-    """Run one simulated season with injuries and stat variance.
+    """Run one simulated season with playing-time and stat variance.
 
-    For each team, applies random injuries (probability-based) and
-    performance variance to every player, then selects the best
+    For each team, applies a two-sided playing-time multiplier and
+    correlated performance variance to every player, then selects the best
     h_slots hitters and p_slots pitchers as the active roster.
     Bench players don't contribute stats.
 
@@ -344,6 +350,47 @@ def simulate_remaining_season(
     return team_stats, injuries
 
 
+def _projected_volume(p: Any, is_hitter: bool) -> float:
+    """Projected full-season playing time for the curve lookup.
+
+    Hitters use projected PA; pitchers projected IP. Falls back to AB/AB_PER_PA
+    when a dict caller carries ``ab`` but not ``pa``. ``safe_float`` coerces
+    missing/NaN to 0.0 so bad data lands on the lowest (most conservative) curve
+    band rather than slipping through as NaN and mapping to the best band.
+    """
+    if is_hitter:
+        pa = safe_float(p.get("pa"))
+        if pa > 0:
+            return pa
+        return safe_float(p.get("ab")) / AB_PER_PA
+    return safe_float(p.get("ip"))
+
+
+def _playing_time_scales(
+    players: list,
+    player_type: str,
+    rng: np.random.Generator,
+    fraction_remaining: float,
+) -> np.ndarray:
+    """Per-player two-sided playing-time multiplier (1.0 == exactly as projected).
+
+    Draws ``scale ~ Normal(mean_scale, cv_pt)`` from the calibrated curve
+    (``utils.playing_time``), clipped to ``[0, PLAYING_TIME_MAX_SCALE]``. Over a
+    partial season only the remaining playing time is at risk, so the haircut
+    and spread are damped: ``eff_mean = 1 - (1 - mean_scale) * fraction_remaining``
+    and ``eff_sd = cv_pt * sqrt(fraction_remaining)``.
+    """
+    is_hitter = player_type == PlayerType.HITTER
+    n = len(players)
+    means = np.empty(n)
+    sds = np.empty(n)
+    for i, p in enumerate(players):
+        mean_scale, cv_pt = playing_time_params(player_type, _projected_volume(p, is_hitter))
+        means[i] = 1.0 - (1.0 - mean_scale) * fraction_remaining
+        sds[i] = cv_pt * (fraction_remaining**0.5)
+    return np.clip(rng.normal(means, sds), 0.0, PLAYING_TIME_MAX_SCALE)
+
+
 def _apply_variance(
     players: list,
     player_type: str,
@@ -351,22 +398,25 @@ def _apply_variance(
     injuries_out: list,
     fraction_remaining: float = 1.0,
 ) -> list[dict]:
-    """Apply injury and correlated performance variance to a list of players.
+    """Apply playing-time and correlated performance variance to a list of players.
 
-    Uses multivariate normal draws so that correlated stats (e.g. HR and RBI)
-    move together realistically, while less-correlated stats (e.g. HR and SB)
-    vary more independently. Correlations and per-stat sigmas are calibrated
-    from historical projection-vs-actual residuals (2022-2024).
+    Two independent sources of variance per player:
 
-    When fraction_remaining < 1.0, injury probability and covariance are scaled
-    down proportionally (less variance and injury risk for a partial season).
+    - Playing time: a two-sided multiplier ``scale`` from the calibrated
+      playing-time model (``_playing_time_scales``). ``scale`` can exceed 1.0
+      (a player beats his projected PA/IP) or fall below it; the missed
+      fraction ``max(0, 1 - scale)`` is backfilled with replacement-level
+      production and logged on the injuries report when notable.
+    - Performance: correlated multivariate-normal draws so related stats
+      (e.g. HR and RBI) move together. Per-stat sigmas and correlations are
+      calibrated from projection-vs-actual rate residuals (2022-2024); the
+      covariance is scaled by ``fraction_remaining`` for partial seasons.
 
-    Mutates injuries_out by appending (name, frac_missed) for injured players.
+    Mutates ``injuries_out`` by appending ``(name, frac_missed)`` for players
+    whose simulated playing-time loss is at least ``_NOTABLE_PT_LOSS``.
     """
     is_hitter = player_type == PlayerType.HITTER
     counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
-    injury_prob = INJURY_PROB[player_type] * fraction_remaining
-    injury_lo, injury_hi = INJURY_SEVERITY[player_type]
     base_cov = HITTER_COV if is_hitter else PITCHER_COV
     cov = base_cov * fraction_remaining
     idx_map = HITTER_IDX if is_hitter else PITCHER_IDX
@@ -378,18 +428,15 @@ def _apply_variance(
         return []
 
     # Batch all random draws for the entire player list at once
-    injury_rolls = rng.random(n)
-    injury_severities = rng.uniform(injury_lo, injury_hi, n)
+    scales = _playing_time_scales(players, player_type, rng, fraction_remaining)
     all_draws = rng.multivariate_normal(mean, cov, size=n)
 
     adjusted = []
     for i, p in enumerate(players):
-        frac_missed = 0.0
-        if injury_rolls[i] < injury_prob:
-            frac_missed = injury_severities[i]
+        scale = float(scales[i])
+        frac_missed = max(0.0, 1.0 - scale)
+        if frac_missed >= _NOTABLE_PT_LOSS:
             injuries_out.append((p.get("name", "?"), frac_missed))
-
-        scale = 1.0 - frac_missed
 
         if is_hitter:
             repl = REPLACEMENT_HITTER
