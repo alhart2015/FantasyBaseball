@@ -166,7 +166,7 @@ def simulate_season(
 
 # Fallback full-season team totals for the actual+simulated rate-stat blend,
 # used only when a team's real accumulated AB/IP aren't supplied. Real values
-# (threaded from Yahoo standings `extras`) are preferred — these constants are
+# (threaded from Yahoo standings `extras`) are preferred -- these constants are
 # a last resort and 1450 IP runs high for a 9-pitcher league.
 _TYPICAL_TEAM_AB = 5500
 _TYPICAL_TEAM_IP = 1450
@@ -182,7 +182,7 @@ def _ytd_playing_time(
     (the season-dashboard threads them in from Yahoo standings ``extras``;
     AB is derived from real PA at the pipeline boundary). Falls back to the
     league-typical full-season constant scaled by ``fraction_elapsed`` only
-    when the real values are absent — keeping older callers that pass bare
+    when the real values are absent -- keeping older callers that pass bare
     category dicts working unchanged.
     """
     ab = actuals.get("AB")
@@ -305,9 +305,8 @@ def simulate_remaining_season(
         rem_k = max(0, sim_k - actuals.get("K", 0))
         rem_sv = max(0, sim_sv - actuals.get("SV", 0))
 
-        # Convert YTD rate stats to component totals for blending. Uses the
-        # team's real accumulated AB/IP when supplied; otherwise estimates
-        # from league-typical full-season constants (see _ytd_playing_time).
+        # Recover YTD component totals (H, ER, H+BB) from the rate stats so they
+        # can be added to the simulated remainder before re-deriving rates.
         fraction_elapsed = 1.0 - fraction_remaining
         actual_ab, actual_ip = _ytd_playing_time(actuals, fraction_elapsed)
         actual_h = actuals.get("AVG", 0) * actual_ab

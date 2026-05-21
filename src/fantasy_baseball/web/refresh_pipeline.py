@@ -1014,8 +1014,7 @@ class RefreshRun:
             # threading each team's real accumulated AB/IP so the ROS blend
             # weights YTD by actual playing time rather than a league-typical
             # constant. Yahoo ships PA/IP on standings extras; AB is PA scaled
-            # by the stable league AB-per-PA ratio. Teams missing extras fall
-            # back to the constant inside simulate_remaining_season.
+            # by the stable league AB-per-PA ratio.
             actual_standings_dict: dict[str, dict[str, float]] = {}
             for e in self.standings.entries:
                 row = e.stats.to_dict()
