@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fantasy_baseball.streaks.pipeline import _should_refit
+from pathlib import Path
+
+from fantasy_baseball.streaks.pipeline import _refresh_streaks_db, _should_refit
 
 
 def test_should_refit_true_when_no_fits(seeded_pipeline_conn_no_fits) -> None:
@@ -23,6 +25,39 @@ def test_should_refit_true_when_forced_even_if_recent(
     seeded_pipeline_conn_with_recent_fits,
 ) -> None:
     assert _should_refit(seeded_pipeline_conn_with_recent_fits, max_age_days=14, force=True) is True
+
+
+def test_refresh_streaks_db_passes_incremental_to_fetch_season(
+    seeded_pipeline_conn_no_fits, monkeypatch, tmp_path
+) -> None:
+    """The in-flight pipeline must fetch incrementally; otherwise top players
+    freeze at the date of their first ingestion (see fetch_history bug fix)."""
+    captured: dict[str, object] = {}
+
+    def _capture(*, season, conn, **kw):
+        captured["season"] = season
+        captured.update(kw)
+        return {"season": season, "stub": True}
+
+    monkeypatch.setattr("fantasy_baseball.streaks.pipeline.fetch_season", _capture)
+
+    # Minimal projection CSV so load_projection_rates_for_seasons doesn't blow up.
+    projections_root: Path = tmp_path / "projections"
+    season_dir = projections_root / "2024"
+    season_dir.mkdir(parents=True)
+    (season_dir / "steamer-hitters.csv").write_text(
+        "Name,MLBAMID,PA,HR,R,RBI,SB,AVG\nA,2,600,30,90,108,24,0.275\n"
+    )
+
+    _refresh_streaks_db(
+        seeded_pipeline_conn_no_fits,
+        season=2024,
+        season_set_train="2023-2024",
+        projections_root=projections_root,
+        skip_fetch=False,
+    )
+
+    assert captured.get("incremental") is True
 
 
 def test_compute_streak_report_end_to_end(

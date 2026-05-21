@@ -141,6 +141,128 @@ def test_fetch_season_skips_already_loaded_players(conn):
     assert fetch_calls == [545361]
 
 
+def test_fetch_season_incremental_refetches_already_loaded_players(conn):
+    """In incremental mode, players already in hitter_games are re-fetched so the
+    upsert can fill in any new games since the last run.
+
+    Bug history: the default fetch_season treats (player_id, season) as terminal
+    once any row exists, so the entire core of the league froze at the date of
+    the first refresh. Incremental mode is what pipeline.py's "(incremental)"
+    log line implied all along but never actually delivered.
+    """
+    # Pre-populate Trout through 2026-05-10. A subsequent incremental run
+    # should still call fetch_hitter_season_game_logs for him.
+    conn.execute(
+        """
+        INSERT INTO hitter_games VALUES
+        (660271, 744000, 'Mike Trout', 'LAA', 2026, '2026-05-10',
+         4, 3, 1, 1, 1, 2, 0, 1, 1,
+         0, 0, 0, 0, 0, 0, 0, 0, 0, TRUE)
+        """
+    )
+
+    fetch_calls: list[int] = []
+
+    def _record_calls(player_id, name, team, season):
+        fetch_calls.append(player_id)
+        return _stub_game_logs(player_id, name, team, season)
+
+    with (
+        patch(
+            "fantasy_baseball.streaks.data.fetch_history.fetch_qualified_hitters",
+            return_value=_stub_qualified(),
+        ),
+        patch(
+            "fantasy_baseball.streaks.data.fetch_history.fetch_hitter_season_game_logs",
+            side_effect=_record_calls,
+        ),
+        patch(
+            "fantasy_baseball.streaks.data.fetch_history.fetch_statcast_pa_for_date_range",
+            side_effect=_stub_statcast,
+        ),
+    ):
+        fetch_season(season=2026, conn=conn, incremental=True)
+
+    # Both players must be fetched — incremental mode does not skip the
+    # already-loaded one.
+    assert sorted(fetch_calls) == [545361, 660271]
+
+
+def test_fetch_season_incremental_statcast_fetches_from_max_loaded_plus_one(conn):
+    """Incremental mode must resume the Statcast pull where it left off.
+
+    Otherwise model peripherals (barrel%, xwOBA, EV) freeze at the date of the
+    first refresh -- same shape as the game-log staleness bug, applied to a
+    different table.
+    """
+    # Pre-populate one statcast row at 2026-04-15 to mark "we've loaded through here".
+    conn.execute(
+        """
+        INSERT INTO hitter_statcast_pa
+        (player_id, date, pa_index, event, launch_speed, launch_angle,
+         estimated_woba_using_speedangle, launch_speed_angle, at_bat_number,
+         bb_type, estimated_ba_using_speedangle, hit_distance_sc)
+        VALUES (660271, '2026-04-15', 1, 'single', 95.0, 10.0, 0.4, 3, 1, NULL, NULL, NULL)
+        """
+    )
+
+    captured: dict[str, date] = {}
+
+    def _capture_dates(start, end):
+        captured["start"] = start
+        captured["end"] = end
+        return []
+
+    with (
+        patch(
+            "fantasy_baseball.streaks.data.fetch_history.fetch_qualified_hitters",
+            return_value=_stub_qualified(),
+        ),
+        patch(
+            "fantasy_baseball.streaks.data.fetch_history.fetch_hitter_season_game_logs",
+            side_effect=_stub_game_logs,
+        ),
+        patch(
+            "fantasy_baseball.streaks.data.fetch_history.fetch_statcast_pa_for_date_range",
+            side_effect=_capture_dates,
+        ),
+    ):
+        fetch_season(season=2026, conn=conn, incremental=True)
+
+    # Should resume one day after the last loaded statcast date.
+    assert captured["start"] == date(2026, 4, 16)
+    assert captured["end"] == date(2026, 11, 15)
+
+
+def test_fetch_season_incremental_statcast_full_range_when_nothing_loaded(conn):
+    """With no prior Statcast dates, incremental mode behaves like an initial load."""
+    captured: dict[str, date] = {}
+
+    def _capture_dates(start, end):
+        captured["start"] = start
+        captured["end"] = end
+        return []
+
+    with (
+        patch(
+            "fantasy_baseball.streaks.data.fetch_history.fetch_qualified_hitters",
+            return_value=_stub_qualified(),
+        ),
+        patch(
+            "fantasy_baseball.streaks.data.fetch_history.fetch_hitter_season_game_logs",
+            side_effect=_stub_game_logs,
+        ),
+        patch(
+            "fantasy_baseball.streaks.data.fetch_history.fetch_statcast_pa_for_date_range",
+            side_effect=_capture_dates,
+        ),
+    ):
+        fetch_season(season=2026, conn=conn, incremental=True)
+
+    assert captured["start"] == date(2026, 3, 15)
+    assert captured["end"] == date(2026, 11, 15)
+
+
 def test_fetch_season_uses_correct_date_range_for_statcast(conn):
     captured: dict[str, date] = {}
 

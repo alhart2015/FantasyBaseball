@@ -8,7 +8,7 @@ Statcast window.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import duckdb
@@ -40,6 +40,7 @@ def fetch_season(
     min_pa: int = 150,
     *,
     force_statcast: bool = False,
+    incremental: bool = False,
 ) -> dict[str, Any]:
     """Fetch and load one season of game logs + Statcast PA data.
 
@@ -51,13 +52,28 @@ def fetch_season(
     even if dates are already loaded. ``upsert_statcast_pa`` uses INSERT OR
     REPLACE so existing PK rows get updated in place — used to backfill new
     columns (e.g. ``launch_speed_angle`` after the Phase 5 migration).
+
+    When ``incremental`` is True, every qualified hitter is fetched even if
+    they already have rows in ``hitter_games``. ``upsert_hitter_games`` is
+    keyed by ``(player_id, game_pk)`` so previously-loaded games are
+    overwritten in place and new games append. Use this for the in-flight
+    season; the default ``False`` keeps the cheap skip-if-loaded behavior
+    that closed historical backfills rely on.
     """
     qualified = fetch_qualified_hitters(season=season, min_pa=min_pa)
     logger.info("Season %s: %d qualified hitters", season, len(qualified))
 
-    already = existing_player_seasons(conn)
-    to_fetch = [q for q in qualified if (q.player_id, season) not in already]
-    logger.info("Season %s: %d new players to fetch", season, len(to_fetch))
+    if incremental:
+        to_fetch = list(qualified)
+        logger.info(
+            "Season %s: incremental mode -- refetching all %d qualified hitters",
+            season,
+            len(to_fetch),
+        )
+    else:
+        already = existing_player_seasons(conn)
+        to_fetch = [q for q in qualified if (q.player_id, season) not in already]
+        logger.info("Season %s: %d new players to fetch", season, len(to_fetch))
 
     game_log_rows = 0
     pa_identity_violations = 0
@@ -96,17 +112,36 @@ def fetch_season(
     start = date(season, *_SEASON_START_MMDD)
     end = date(season, *_SEASON_END_MMDD)
     loaded_dates = existing_statcast_dates(conn)
-    # If we've already loaded any dates in this season, skip Statcast (a partial
-    # load is rare; we treat it as an all-or-nothing per-season pull for simplicity).
     statcast_rows = 0
     season_dates_loaded = {d for d in loaded_dates if d.year == season}
-    if force_statcast or not season_dates_loaded:
-        if force_statcast and season_dates_loaded:
+    if force_statcast:
+        if season_dates_loaded:
             logger.info(
                 "Season %s: --force-statcast set; re-fetching despite %d loaded dates",
                 season,
                 len(season_dates_loaded),
             )
+        statcast_pa = fetch_statcast_pa_for_date_range(start, end)
+        upsert_statcast_pa(conn, statcast_pa)
+        statcast_rows = len(statcast_pa)
+    elif incremental:
+        # Resume one day after the last loaded date. If none loaded, fall back
+        # to the full season window. upsert_statcast_pa is idempotent on
+        # (player_id, date, pa_index) so any same-day rebroadcast is harmless.
+        statcast_start = (
+            max(season_dates_loaded) + timedelta(days=1) if season_dates_loaded else start
+        )
+        if statcast_start <= end:
+            statcast_pa = fetch_statcast_pa_for_date_range(statcast_start, end)
+            upsert_statcast_pa(conn, statcast_pa)
+            statcast_rows = len(statcast_pa)
+        else:
+            logger.info(
+                "Season %s: Statcast already loaded through %s; nothing new to fetch",
+                season,
+                max(season_dates_loaded),
+            )
+    elif not season_dates_loaded:
         statcast_pa = fetch_statcast_pa_for_date_range(start, end)
         upsert_statcast_pa(conn, statcast_pa)
         statcast_rows = len(statcast_pa)
