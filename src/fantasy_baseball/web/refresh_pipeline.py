@@ -33,7 +33,7 @@ from fantasy_baseball.models.positions import BENCH_SLOTS
 # refresh). ``_compute_streaks`` is itself a no-op on Render (see
 # ``is_remote()`` gate there), so the imports never actually need to run
 # in production. See PR #72 for the parallel /lineup fix.
-from fantasy_baseball.utils.constants import Category
+from fantasy_baseball.utils.constants import Category, OpportunityStat
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 from fantasy_baseball.utils.time_utils import (
     compute_effective_date,
@@ -61,6 +61,11 @@ if TYPE_CHECKING:
     from fantasy_baseball.models.team import Team
 
 log = logging.getLogger(__name__)
+
+# League at-bats per plate appearance. Stable (~0.88-0.91 across teams/seasons),
+# so converting real accumulated PA -> AB for the ROS blend is far tighter than
+# a full-season AB constant scaled by elapsed fraction.
+_AB_PER_PA = 0.90
 
 _refresh_lock = threading.Lock()
 _refresh_status = {"running": False, "progress": "", "error": None}
@@ -1005,8 +1010,22 @@ class RefreshRun:
             if self.matched:
                 rest_of_season_mc_rosters[self.config.team_name] = self.matched
 
-            # Build actual standings dict (uppercase-string-keyed per category)
-            actual_standings_dict = {e.team_name: e.stats.to_dict() for e in self.standings.entries}
+            # Build actual standings dict (uppercase-string-keyed per category),
+            # threading each team's real accumulated AB/IP so the ROS blend
+            # weights YTD by actual playing time rather than a league-typical
+            # constant. Yahoo ships PA/IP on standings extras; AB is PA scaled
+            # by the stable league AB-per-PA ratio. Teams missing extras fall
+            # back to the constant inside simulate_remaining_season.
+            actual_standings_dict: dict[str, dict[str, float]] = {}
+            for e in self.standings.entries:
+                row = e.stats.to_dict()
+                ip = e.extras.get(OpportunityStat.IP)
+                pa = e.extras.get(OpportunityStat.PA)
+                if ip is not None:
+                    row["IP"] = float(ip)
+                if pa is not None:
+                    row["AB"] = float(pa) * _AB_PER_PA
+                actual_standings_dict[e.team_name] = row
 
             if rest_of_season_mc_rosters:
                 self.rest_of_season_mc = run_ros_monte_carlo(
