@@ -165,6 +165,59 @@ class TestSimulateRemainingSeason:
             assert injuries[team] == []
 
 
+class TestYtdPlayingTime:
+    """The YTD blend weight must use real accumulated AB/IP when available,
+    not a league-typical full-season constant scaled by elapsed fraction.
+
+    Bug: `_TYPICAL_TEAM_IP = 1450` is too high for a 9-pitcher league, so the
+    actual-vs-remaining blend over-weighted YTD pace against the projection's
+    regression. Real PA/IP ride along on the standings (Yahoo `extras`)."""
+
+    def test_uses_real_values_when_present(self):
+        from fantasy_baseball.simulation import _ytd_playing_time
+
+        ab, ip = _ytd_playing_time({"AB": 2000.0, "IP": 400.0}, fraction_elapsed=0.3)
+        assert ab == pytest.approx(2000.0)
+        assert ip == pytest.approx(400.0)
+
+    def test_falls_back_to_typical_constants_when_absent(self):
+        from fantasy_baseball.simulation import (
+            _TYPICAL_TEAM_AB,
+            _TYPICAL_TEAM_IP,
+            _ytd_playing_time,
+        )
+
+        ab, ip = _ytd_playing_time({}, fraction_elapsed=0.3)
+        assert ab == pytest.approx(_TYPICAL_TEAM_AB * 0.3)
+        assert ip == pytest.approx(_TYPICAL_TEAM_IP * 0.3)
+
+    def test_real_ip_flows_through_and_changes_era_blend(self):
+        """Real IP that flips the YTD-vs-sim clamp must change the blended ERA."""
+        rosters = _build_two_team_rosters()
+        base = _build_actual_standings()
+
+        constant_out, _ = simulate_remaining_season(
+            base,
+            rosters,
+            fraction_remaining=0.5,
+            rng=np.random.default_rng(7),
+            h_slots=3,
+            p_slots=2,
+        )
+        # Real accumulated IP far below the 1450*0.5 constant estimate -> YTD
+        # no longer dominates, so the blend leans on the simulated remainder.
+        with_real = {t: {**s, "IP": 100.0, "AB": 400.0} for t, s in base.items()}
+        real_out, _ = simulate_remaining_season(
+            with_real,
+            rosters,
+            fraction_remaining=0.5,
+            rng=np.random.default_rng(7),
+            h_slots=3,
+            p_slots=2,
+        )
+        assert constant_out["Team A"]["ERA"] != pytest.approx(real_out["Team A"]["ERA"])
+
+
 # ---------------------------------------------------------------------------
 # Task 6 tests: run_ros_monte_carlo
 # ---------------------------------------------------------------------------

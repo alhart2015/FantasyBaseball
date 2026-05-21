@@ -164,9 +164,32 @@ def simulate_season(
     return team_stats, injuries
 
 
-# Typical full-season team totals for blending actual + simulated rate stats.
+# Fallback full-season team totals for the actual+simulated rate-stat blend,
+# used only when a team's real accumulated AB/IP aren't supplied. Real values
+# (threaded from Yahoo standings `extras`) are preferred — these constants are
+# a last resort and 1450 IP runs high for a 9-pitcher league.
 _TYPICAL_TEAM_AB = 5500
 _TYPICAL_TEAM_IP = 1450
+
+
+def _ytd_playing_time(
+    actuals: dict[str, float],
+    fraction_elapsed: float,
+) -> tuple[float, float]:
+    """Return (actual_ab, actual_ip) for the YTD-vs-remaining blend.
+
+    Prefers the team's real accumulated AB/IP when present in ``actuals``
+    (the season-dashboard threads them in from Yahoo standings ``extras``;
+    AB is derived from real PA at the pipeline boundary). Falls back to the
+    league-typical full-season constant scaled by ``fraction_elapsed`` only
+    when the real values are absent — keeping older callers that pass bare
+    category dicts working unchanged.
+    """
+    ab = actuals.get("AB")
+    ip = actuals.get("IP")
+    actual_ab = float(ab) if ab is not None else _TYPICAL_TEAM_AB * fraction_elapsed
+    actual_ip = float(ip) if ip is not None else _TYPICAL_TEAM_IP * fraction_elapsed
+    return actual_ab, actual_ip
 
 
 def simulate_remaining_season(
@@ -282,10 +305,11 @@ def simulate_remaining_season(
         rem_k = max(0, sim_k - actuals.get("K", 0))
         rem_sv = max(0, sim_sv - actuals.get("SV", 0))
 
-        # Estimate actual component stats from rate stats for blending
+        # Convert YTD rate stats to component totals for blending. Uses the
+        # team's real accumulated AB/IP when supplied; otherwise estimates
+        # from league-typical full-season constants (see _ytd_playing_time).
         fraction_elapsed = 1.0 - fraction_remaining
-        actual_ab = _TYPICAL_TEAM_AB * fraction_elapsed
-        actual_ip = _TYPICAL_TEAM_IP * fraction_elapsed
+        actual_ab, actual_ip = _ytd_playing_time(actuals, fraction_elapsed)
         actual_h = actuals.get("AVG", 0) * actual_ab
         actual_er = actuals.get("ERA", 0) * actual_ip / 9
         actual_h_plus_bb = actuals.get("WHIP", 0) * actual_ip
