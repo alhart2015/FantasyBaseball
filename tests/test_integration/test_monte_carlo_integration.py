@@ -350,73 +350,82 @@ class TestWinRateDistribution:
 
 
 class TestInjuryEffects:
-    """Injury system reduces stats and replacement players contribute."""
+    """Playing-time haircut reduces stats and replacement players backfill.
+
+    The MC now models playing time as a two-sided ``scale`` multiplier from the
+    calibrated curve (``simulation.playing_time_params``); these tests patch it
+    to a fixed ``(mean_scale, cv_pt)`` to exercise the haircut and backfill.
+    """
 
     NUM_SIMS = 200
 
-    def test_injuries_reduce_stats(self, team_rosters):
-        """Sims with injury_prob=0 should produce higher average counting
-        stats than sims with normal injury probability.
+    def test_playing_time_haircut_reduces_stats(self, team_rosters):
+        """Holding spread at zero, a sub-1 mean_scale lowers counting totals.
+
+        Both runs fix cv_pt=0 so they differ ONLY in the mean haircut -- this
+        isolates the haircut from the separate (and opposing) effect where
+        playing-time SPREAD inflates the selected-lineup total via top-N active
+        roster selection. The full-scale run also logs no injuries.
         """
-        rng_normal = np.random.default_rng(999)
-        rng_no_inj = np.random.default_rng(999)
+        rng_hc = np.random.default_rng(999)
+        rng_full = np.random.default_rng(999)
 
         counting_cats = ["R", "HR", "RBI", "SB", "W", "K", "SV"]
-        normal_totals = {cat: 0.0 for cat in counting_cats}
-        no_inj_totals = {cat: 0.0 for cat in counting_cats}
-
-        no_injury_probs = {"pitcher": 0.0, "hitter": 0.0}
+        hc_totals = {cat: 0.0 for cat in counting_cats}
+        full_totals = {cat: 0.0 for cat in counting_cats}
 
         for _ in range(self.NUM_SIMS):
-            # Normal run
-            stats_n, _ = simulate_season(team_rosters, rng_normal)
-            for team in team_rosters:
-                for cat in counting_cats:
-                    normal_totals[cat] += stats_n[team][cat]
-
-            # No injury run (patch INJURY_PROB to zero)
+            # Haircut run: scale fixed at 0.85 (no spread).
             with patch(
-                "fantasy_baseball.simulation.INJURY_PROB",
-                no_injury_probs,
+                "fantasy_baseball.simulation.playing_time_params",
+                return_value=(0.85, 0.0),
             ):
-                stats_ni, injuries_ni = simulate_season(
-                    team_rosters,
-                    rng_no_inj,
-                )
+                stats_hc, _ = simulate_season(team_rosters, rng_hc)
             for team in team_rosters:
                 for cat in counting_cats:
-                    no_inj_totals[cat] += stats_ni[team][cat]
+                    hc_totals[cat] += stats_hc[team][cat]
 
-            # Verify no injuries occurred in the patched run
+            # Full run: scale fixed at exactly 1.0 (no loss, no spread).
+            with patch(
+                "fantasy_baseball.simulation.playing_time_params",
+                return_value=(1.0, 0.0),
+            ):
+                stats_full, injuries_full = simulate_season(team_rosters, rng_full)
             for team in team_rosters:
-                assert len(injuries_ni[team]) == 0, (
-                    f"Injuries should not occur with prob=0, but {team} had {injuries_ni[team]}"
+                for cat in counting_cats:
+                    full_totals[cat] += stats_full[team][cat]
+
+            # scale==1 means frac_missed==0, so nothing is logged as injured.
+            for team in team_rosters:
+                assert len(injuries_full[team]) == 0, (
+                    f"Full scale -> no injuries, but {team} had {injuries_full[team]}"
                 )
 
-        # With injuries, aggregate counting stats should be lower
         for cat in counting_cats:
-            assert normal_totals[cat] < no_inj_totals[cat], (
-                f"Category {cat}: normal={normal_totals[cat]:.1f} should be "
-                f"less than no-injury={no_inj_totals[cat]:.1f}"
+            assert hc_totals[cat] < full_totals[cat], (
+                f"Category {cat}: haircut={hc_totals[cat]:.1f} should be "
+                f"less than full-scale={full_totals[cat]:.1f}"
             )
 
     def test_replacement_players_contribute_during_injury(self, team_rosters):
-        """When a player is injured, the team's stats should not drop to
-        zero in that player's categories -- replacement backfill works.
+        """A large playing-time loss should still leave stats positive because
+        replacement-level production backfills the missed fraction.
         """
-        # Force all players to be injured by setting injury probability to 1.0
-        full_injury = {"pitcher": 1.0, "hitter": 1.0}
         rng = np.random.default_rng(7777)
 
-        with patch("fantasy_baseball.simulation.INJURY_PROB", full_injury):
+        # Force a big loss for every player: scale fixed at 0.3 (frac_missed 0.7).
+        with patch(
+            "fantasy_baseball.simulation.playing_time_params",
+            return_value=(0.3, 0.0),
+        ):
             stats, injuries = simulate_season(team_rosters, rng)
 
-        # Every team should have injuries
+        # frac_missed 0.7 exceeds the report threshold, so every team has injuries.
         for team in team_rosters:
-            assert len(injuries[team]) > 0, f"Team '{team}' should have injuries with prob=1.0"
+            assert len(injuries[team]) > 0, f"Team '{team}' should have injuries with scale=0.3"
 
-        # Even with all players injured, stats should not be zero because
-        # replacement players backfill during the missed fraction
+        # Even with everyone losing 70% of playing time, stats stay positive
+        # because replacement players backfill the missed fraction.
         for team in team_rosters:
             ts = stats[team]
             assert ts["R"] > 0, f"{team} R should be > 0 with replacement"

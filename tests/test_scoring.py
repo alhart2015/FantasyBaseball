@@ -1,5 +1,6 @@
 import math
 from datetime import date
+from unittest.mock import patch
 
 import pytest
 
@@ -264,7 +265,20 @@ def _make_pitcher(name, **stats):
 
 
 class TestProjectTeamSDs:
-    """Per-team-per-category SD from analytical variance propagation."""
+    """Per-team-per-category SD from analytical variance propagation.
+
+    These pin the performance-only (CV) propagation, so the autouse fixture
+    neutralizes the playing-time term (cv_pt=0); the playing-time term is
+    covered separately in :class:`TestProjectTeamSDsPlayingTime`.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_playing_time_variance(self):
+        with patch(
+            "fantasy_baseball.scoring.playing_time_params",
+            return_value=(1.0, 0.0),
+        ):
+            yield
 
     def test_empty_roster_returns_zeros(self):
         sds = project_team_sds([])
@@ -312,6 +326,47 @@ class TestProjectTeamSDs:
         p = _make_hitter("A", r=50, hr=10, rbi=40, sb=5, h=100, ab=400)
         sds = project_team_sds([p])
         assert set(sds.keys()) == set(ALL_CATS)
+
+
+class TestProjectTeamSDsPlayingTime:
+    """The playing-time (cv_pt) term added to counting-category SDs."""
+
+    def test_counting_sd_adds_cv_pt_in_quadrature(self):
+        p = _make_hitter("A", r=80, hr=20, rbi=70, sb=10, h=150, ab=500)
+        with patch(
+            "fantasy_baseball.scoring.playing_time_params",
+            return_value=(0.85, 0.30),
+        ):
+            sds = project_team_sds([p])
+        # SD_R = sqrt(CV_r^2 + cv_pt^2) * r  (single player)
+        assert sds[Category.R] == pytest.approx(80 * math.sqrt(STAT_VARIANCE["r"] ** 2 + 0.30**2))
+        assert sds[Category.HR] == pytest.approx(20 * math.sqrt(STAT_VARIANCE["hr"] ** 2 + 0.30**2))
+
+    def test_cv_pt_widens_counting_sd(self):
+        p = _make_hitter("A", r=80, hr=20, rbi=70, sb=10, h=150, ab=500)
+        with patch("fantasy_baseball.scoring.playing_time_params", return_value=(0.85, 0.0)):
+            tight = project_team_sds([p])[Category.R]
+        with patch("fantasy_baseball.scoring.playing_time_params", return_value=(0.85, 0.30)):
+            wide = project_team_sds([p])[Category.R]
+        assert wide > tight
+
+    def test_rate_sd_unaffected_by_cv_pt(self):
+        a = _make_hitter("A", r=0, hr=0, rbi=0, sb=0, h=150, ab=500)
+        b = _make_pitcher("B", w=0, k=0, sv=0, ip=180, er=60, bb=40, h_allowed=140)
+        with patch("fantasy_baseball.scoring.playing_time_params", return_value=(0.85, 0.0)):
+            base = project_team_sds([a, b])
+        with patch("fantasy_baseball.scoring.playing_time_params", return_value=(0.85, 0.40)):
+            wide = project_team_sds([a, b])
+        # Playing time scales numerator and denominator together -> cancels.
+        assert wide[Category.AVG] == pytest.approx(base[Category.AVG])
+        assert wide[Category.ERA] == pytest.approx(base[Category.ERA])
+        assert wide[Category.WHIP] == pytest.approx(base[Category.WHIP])
+
+    def test_cv_pt_zero_recovers_cv_only_formula(self):
+        p = _make_hitter("A", r=80, hr=20, rbi=70, sb=10, h=150, ab=500)
+        with patch("fantasy_baseball.scoring.playing_time_params", return_value=(1.0, 0.0)):
+            sds = project_team_sds([p])
+        assert sds[Category.R] == pytest.approx(STAT_VARIANCE["r"] * 80)
 
     def test_displacement_kwarg_defaults_true(self):
         # Bench players excluded by default. A bench-slot hitter should
