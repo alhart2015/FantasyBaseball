@@ -117,6 +117,11 @@ PITCHING_COUNTING: list[str] = ["w", "k", "sv", "ip", "er", "bb", "h_allowed"]
 HITTER_PROJ_KEYS: list[str] = ["pa", "r", "hr", "rbi", "sb", "h", "ab", "avg"]
 PITCHER_PROJ_KEYS: list[str] = ["ip", "w", "k", "sv", "er", "bb", "h_allowed", "era", "whip"]
 
+# League at-bats per plate appearance. Stable (~0.88-0.91 across teams/seasons);
+# used to convert between PA and AB (refresh pipeline) and as the AB->PA fallback
+# in the playing-time curve lookup when a dict carries ``ab`` but not ``pa``.
+AB_PER_PA: float = 0.90
+
 # Per-stat performance variance (SD of actual/projected ratio residuals).
 # Calibrated from Steamer+ZiPS projections vs MLB actuals, 2022-2024.
 # Per-PA rates for hitters, per-IP rates for pitchers (isolates performance
@@ -143,9 +148,9 @@ STAT_VARIANCE: dict[str, float] = {
 # Playing-time model: realized PA/IP relative to projection, calibrated from
 # 2022-2025 Steamer+ZiPS vs actuals on the rosterable population (volume floor
 # at the >=90%-MLB-appearance knee for hitters/SP; MLB-appearance required for
-# RP). See scripts/calibrate_playing_time.py. Supersedes the old one-sided
-# INJURY_PROB/INJURY_SEVERITY haircut, which was 2-3x too tight and could never
-# model a player exceeding his projection.
+# RP). See scripts/calibrate_playing_time.py. Two-sided (a player can beat his
+# projection) and volume-scaled, which a single league-wide injury haircut
+# cannot represent.
 #
 # Per (type, role), the curve maps projected volume (PA for hitters, IP for
 # pitchers) to (mean_scale, cv_pt): mean_scale is the multiplicative haircut on

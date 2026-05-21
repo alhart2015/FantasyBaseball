@@ -35,6 +35,14 @@ class TestPlayingTimeParams:
         assert mean_scale == pytest.approx(band["mean_scale"])
         assert cv_pt == pytest.approx(band["cv_pt"])
 
+    def test_nan_volume_maps_to_lowest_band(self):
+        # Bad/missing data must land on the conservative (lowest-volume) band,
+        # not slip through NaN comparisons to the best band.
+        low = PLAYING_TIME_CURVES["hitters"][0]
+        mean_scale, cv_pt = playing_time_params(PlayerType.HITTER, float("nan"))
+        assert mean_scale == pytest.approx(low["mean_scale"])
+        assert cv_pt == pytest.approx(low["cv_pt"])
+
     def test_pitcher_high_ip_uses_sp_curve(self):
         band = PLAYING_TIME_CURVES["SP"][2]  # vol 147.1
         mean_scale, cv_pt = playing_time_params(PlayerType.PITCHER, band["vol"])

@@ -33,13 +33,18 @@ def _interp(points: list[dict[str, float]], volume: float, field: str) -> float:
 
     ``points`` is the curve for one (type, role), sorted ascending by ``vol``.
     """
-    if volume <= points[0]["vol"]:
+    # NaN volume (bad/missing data) -> lowest band, the conservative end. Must
+    # come first: every comparison against NaN is False, which would otherwise
+    # fall through to the highest (best) band.
+    if volume != volume or volume <= points[0]["vol"]:
         return points[0][field]
     if volume >= points[-1]["vol"]:
         return points[-1][field]
     for lo, hi in pairwise(points):
         if volume <= hi["vol"]:
             span = hi["vol"] - lo["vol"]
+            if span == 0:
+                return lo[field]
             t = (volume - lo["vol"]) / span
             return lo[field] + t * (hi[field] - lo[field])
     return points[-1][field]

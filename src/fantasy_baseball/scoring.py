@@ -30,14 +30,15 @@ from fantasy_baseball.models.standings import (
 )
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import (
-    ALL_CATEGORIES as ALL_CATS,
-)
-from fantasy_baseball.utils.constants import (
+    AB_PER_PA,
     HITTING_COUNTING,
     PITCHING_COUNTING,
     STARTER_IP_THRESHOLD,
     STAT_VARIANCE,
     Category,
+)
+from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES as ALL_CATS,
 )
 from fantasy_baseball.utils.constants import (
     INVERSE_STATS as INVERSE_CATS,
@@ -49,11 +50,6 @@ from fantasy_baseball.utils.playing_time import playing_time_params
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 ProjectionSource = Literal["rest_of_season", "full_season_projection"]
-
-# AB->PA fallback for the playing-time curve lookup when a dict caller carries
-# ``ab`` but not ``pa``. Mirrors the same constant in simulation.py /
-# refresh_pipeline.py (consolidation is a noted follow-up).
-_AB_PER_PA = 0.90
 
 
 class TeamStatsRow(Protocol):
@@ -938,7 +934,7 @@ def _full_season_volume(p, is_hitter: bool) -> float:
         pa = _stat(p, "pa", "full_season_projection")
         if pa > 0:
             return float(pa)
-        return float(_stat(p, "ab", "full_season_projection")) / _AB_PER_PA
+        return float(_stat(p, "ab", "full_season_projection")) / AB_PER_PA
     return float(_stat(p, "ip", "full_season_projection"))
 
 

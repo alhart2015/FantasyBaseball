@@ -236,6 +236,11 @@ class TestProjectedVolume:
     def test_pitcher_uses_ip(self):
         assert _projected_volume({"ip": 180}, is_hitter=False) == 180
 
+    def test_nan_coerced_to_zero(self):
+        # NaN PA/AB/IP (pandas-sourced dicts) must not slip through as NaN.
+        assert _projected_volume({"ab": float("nan")}, is_hitter=True) == 0.0
+        assert _projected_volume({"ip": float("nan")}, is_hitter=False) == 0.0
+
 
 class TestPlayingTimeScales:
     """The two-sided, volume-scaled playing-time multiplier."""

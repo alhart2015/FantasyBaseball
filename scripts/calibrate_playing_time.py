@@ -48,6 +48,8 @@ from sklearn.isotonic import IsotonicRegression
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from fantasy_baseball.utils.constants import STARTER_IP_THRESHOLD
+
 PROJ_DIR = PROJECT_ROOT / "data" / "projections"
 STATS_DIR = PROJECT_ROOT / "data" / "stats"
 
@@ -72,7 +74,9 @@ YEARS = [2022, 2023, 2024, 2025]
 # the model is actually applied. Calibrating on the same signal keeps the curve
 # lookup consistent between here and simulation.py / scoring.py.
 HITTER_MIN_PA = 350
-SP_IP_THRESHOLD = 100  # SP if projected IP >= this; RP otherwise. Also the SP floor.
+# Reuse the deployment threshold so calibration and the runtime curve lookup
+# (utils.playing_time) can never silently drift. Also the SP volume floor.
+SP_IP_THRESHOLD = STARTER_IP_THRESHOLD
 
 # Floor for the projection merge (kept low; group filters below do the real work).
 MERGE_MIN_PA = 200
@@ -265,7 +269,7 @@ def main() -> None:
     print("\n" + "=" * 72)
     print("CALIBRATED CURVES (band centers; model interpolates between them)")
     print("=" * 72)
-    print("\n_PLAYING_TIME_CURVES = {")
+    print("\nPLAYING_TIME_CURVES = {")
     for key, pts in curves.items():
         print(f"    {key!r}: [")
         for p in pts:

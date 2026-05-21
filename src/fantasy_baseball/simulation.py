@@ -1,4 +1,4 @@
-"""Monte Carlo season simulation with injuries and stat variance.
+"""Monte Carlo season simulation with playing-time and stat variance.
 
 Shared by scripts/simulate_draft.py (post-draft --monte-carlo),
 scripts/summary.py (in-season weekly projections), and
@@ -12,9 +12,7 @@ import numpy as np
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.utils.constants import (
-    ALL_CATEGORIES as ALL_CATS,
-)
-from fantasy_baseball.utils.constants import (
+    AB_PER_PA,
     CLOSER_SV_THRESHOLD,
     HITTER_CORR_STATS,
     HITTER_CORRELATION,
@@ -29,19 +27,16 @@ from fantasy_baseball.utils.constants import (
     REPLACEMENT_RP,
     REPLACEMENT_SP,
     STAT_VARIANCE,
+    safe_float,
+)
+from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES as ALL_CATS,
 )
 from fantasy_baseball.utils.playing_time import playing_time_params
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
-# League at-bats per plate appearance, for the AB->PA fallback when a player
-# dict carries ``ab`` but not ``pa`` (some draft-side dict callers). Stable
-# ~0.90 across teams/seasons.
-_AB_PER_PA = 0.90
-
-# Minimum simulated playing-time loss to log on the injuries report. The
-# playing-time scale is continuous now, so "injured" is no longer binary;
-# this threshold keeps the report meaningful (a notable absence, not a
-# routine few-percent shortfall).
+# Minimum simulated playing-time loss worth logging as a notable absence (vs a
+# routine few-percent shortfall), since the playing-time scale is continuous.
 _NOTABLE_PT_LOSS = 0.15
 
 
@@ -94,10 +89,10 @@ def simulate_season(
     h_slots: int = 13,
     p_slots: int = 9,
 ) -> tuple[dict, dict]:
-    """Run one simulated season with injuries and stat variance.
+    """Run one simulated season with playing-time and stat variance.
 
-    For each team, applies random injuries (probability-based) and
-    performance variance to every player, then selects the best
+    For each team, applies a two-sided playing-time multiplier and
+    correlated performance variance to every player, then selects the best
     h_slots hitters and p_slots pitchers as the active roster.
     Bench players don't contribute stats.
 
@@ -358,16 +353,17 @@ def simulate_remaining_season(
 def _projected_volume(p: Any, is_hitter: bool) -> float:
     """Projected full-season playing time for the curve lookup.
 
-    Hitters use projected PA; pitchers projected IP. Falls back to AB/0.90
-    when a dict caller carries ``ab`` but not ``pa``.
+    Hitters use projected PA; pitchers projected IP. Falls back to AB/AB_PER_PA
+    when a dict caller carries ``ab`` but not ``pa``. ``safe_float`` coerces
+    missing/NaN to 0.0 so bad data lands on the lowest (most conservative) curve
+    band rather than slipping through as NaN and mapping to the best band.
     """
     if is_hitter:
-        pa = p.get("pa")
-        if pa is not None and pa > 0:
-            return float(pa)
-        return float(p.get("ab", 0) or 0) / _AB_PER_PA
-    ip = p.get("ip")
-    return float(ip) if ip is not None else 0.0
+        pa = safe_float(p.get("pa"))
+        if pa > 0:
+            return pa
+        return safe_float(p.get("ab")) / AB_PER_PA
+    return safe_float(p.get("ip"))
 
 
 def _playing_time_scales(
