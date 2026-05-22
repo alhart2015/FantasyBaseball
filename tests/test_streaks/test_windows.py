@@ -340,14 +340,11 @@ def _windows_frame(n_rows: int) -> pd.DataFrame:
 
 def test_bulk_replace_keeps_on_disk_db_flat_across_runs(tmp_path) -> None:
     """Regression: rebuilding ``hitter_windows`` repeatedly must not bloat
-    the on-disk DuckDB.
-
-    The old ``DELETE FROM`` + ``INSERT`` pattern left tombstoned row groups
-    that DuckDB never reclaims, growing the file ~15x over 40 rebuilds and
-    ballooning the real DB to ~12 GiB. ``_bulk_replace_hitter_windows`` now
-    DROPs + recreates the table, which frees the blocks for reuse so the
-    file stays flat. Each iteration reconnects + CHECKPOINTs to mirror the
-    separate-process refreshes that caused the original bloat.
+    the on-disk DuckDB. See
+    :func:`fantasy_baseball.streaks.windows._bulk_replace_hitter_windows`
+    for why DROP+recreate stays flat where DELETE+INSERT bloated ~15x. Each
+    iteration reconnects + CHECKPOINTs to mirror the separate-process
+    refreshes that caused the original bloat.
     """
     db = tmp_path / "w.duckdb"
     n_rows = 3000

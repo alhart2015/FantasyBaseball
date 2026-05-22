@@ -130,8 +130,7 @@ def compact_database(
         raise FileNotFoundError(f"No DuckDB file at {db_path}")
 
     compact_path = db_path.with_name(db_path.name + _COMPACT_SUFFIX)
-    if compact_path.exists():
-        compact_path.unlink()
+    compact_path.unlink(missing_ok=True)  # clear any stale temp from an aborted run
 
     size_before = db_path.stat().st_size
     logger.info("Compacting %s (%d bytes)...", db_path, size_before)
@@ -172,8 +171,7 @@ def compact_database(
     if replace:
         if keep_backup:
             backup_path = db_path.with_name(db_path.name + _BACKUP_SUFFIX)
-            if backup_path.exists():
-                backup_path.unlink()
+            backup_path.unlink(missing_ok=True)  # rename target must not exist (Windows)
             db_path.rename(backup_path)
             logger.info("Backed up original to %s", backup_path)
         else:

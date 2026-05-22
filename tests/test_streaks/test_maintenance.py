@@ -1,9 +1,9 @@
 """Tests for streaks DuckDB compaction (:mod:`...streaks.data.maintenance`).
 
-The bloat fixture reproduces the real cause of the unbounded growth: the
-pipeline rebuilds ``hitter_windows`` via ``DELETE FROM`` + bulk ``INSERT``
-on every run, and DuckDB does not vacuum the tombstoned row groups in
-place, so repeated runs inflate the file far past the logical row count.
+The bloat fixture reproduces the historical ``hitter_windows`` write
+pattern that caused the growth -- see
+:func:`fantasy_baseball.streaks.windows._bulk_replace_hitter_windows` for
+why it bloated and how the DROP+recreate fix avoids it.
 """
 
 from __future__ import annotations
