@@ -179,12 +179,10 @@ def optimize_hitter_lineup(
     n_slots = len(slot_positions)
     ctx = _TeamContext(full_roster, projected_standings, team_name, team_sds)
 
-    field_stats = {
-        e.team_name: e.stats for e in projected_standings.entries if e.team_name != team_name
-    }
+    field_stats = projected_standings.field_stats(team_name)
 
     if n_slots == 0 or len(hitters) < n_slots:
-        # Fewer hitters than slots — fall back to the best feasible partial lineup.
+        # Fewer hitters than slots -- fall back to the best feasible partial lineup.
         partial_best: tuple[float, list[Player], list[Position]] | None = None
         for size in range(min(len(hitters), n_slots), 0, -1):
             for subset in combinations(hitters, size):
@@ -219,7 +217,7 @@ def optimize_hitter_lineup(
 
     best_total, active_subset, assignment, bench = best
 
-    # Active pitchers on this roster — identical in before/after, so they
+    # Active pitchers on this roster -- identical in before/after, so they
     # cancel in the marginal but anchor the band at the correct full-team
     # operating point on the win-probability S-curve.
     pitcher_half = [
@@ -244,7 +242,7 @@ def optimize_hitter_lineup(
         if alt_best is None:
             # No feasible full-size replacement lineup (the roster is too
             # thin to cover every slot without this starter). Counterfactual
-            # is "starter benched, their slot left empty" — score the rest
+            # is "starter benched, their slot left empty" -- score the rest
             # of the optimal lineup without them.
             no_rep_subset = [p for p in active_subset if p is not starter]
             no_rep_assn = [
@@ -295,9 +293,7 @@ def optimize_pitcher_lineup(
     k = min(slots, len(pitchers))
     ctx = _TeamContext(full_roster, projected_standings, team_name, team_sds)
 
-    field_stats = {
-        e.team_name: e.stats for e in projected_standings.entries if e.team_name != team_name
-    }
+    field_stats = projected_standings.field_stats(team_name)
 
     best = None
     for subset in combinations(pitchers, k):
@@ -308,7 +304,7 @@ def optimize_pitcher_lineup(
 
     best_total, active_subset, bench = best  # type: ignore[misc]
 
-    # Active hitters on this roster — identical in before/after, so they
+    # Active hitters on this roster -- identical in before/after, so they
     # cancel in the marginal but anchor the band at the correct full-team
     # operating point on the win-probability S-curve.
     hitter_half = [
@@ -331,7 +327,7 @@ def optimize_pitcher_lineup(
         if alt_best is None:
             # No feasible full-size replacement (roster has exactly k
             # pitchers, no bench). Counterfactual is "starter benched,
-            # their slot left empty" — score the other k-1 starters alone.
+            # their slot left empty" -- score the other k-1 starters alone.
             no_rep_subset = [p for p in active_subset if p is not starter]
             alt_best = _score_pitcher_subset(ctx, no_rep_subset, [*bench, starter])
             alt_best_subset = no_rep_subset

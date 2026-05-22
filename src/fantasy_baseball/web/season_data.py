@@ -786,9 +786,7 @@ def compute_comparison_standings(
 
     delta_roto = score_swap(ev_roto_before, ev_roto_after, user_team_name)
 
-    field_stats = {
-        e.team_name: e.stats for e in projected_standings.entries if e.team_name != user_team_name
-    }
+    field_stats = projected_standings.field_stats(user_team_name)
     band = compute_one_for_one_band(
         roster_player_name,
         other_player,

@@ -263,9 +263,7 @@ def evaluate_multi_trade(
     # --- 5. Monte-Carlo confidence band --------------------------------------
     from fantasy_baseball.lineup.delta_roto import compute_delta_roto_band
 
-    field_stats = {
-        e.team_name: e.stats for e in projected_standings.entries if e.team_name != hart_name
-    }
+    field_stats = projected_standings.field_stats(hart_name)
     before_players = [my_idx[k] for k in before_mine if k in my_idx]
     after_players = [all_mine_by_key[k] for k in after_mine if k in all_mine_by_key]
     band_result = compute_delta_roto_band(

@@ -232,6 +232,13 @@ class ProjectedStandings:
             out[entry.team_name] = entry
         return out
 
+    def field_stats(self, exclude: str) -> dict[str, CategoryStats]:
+        """Stats for every team except ``exclude`` (the user's team).
+
+        The fixed field for deltaRoto confidence-band sampling.
+        """
+        return {e.team_name: e.stats for e in self.entries if e.team_name != exclude}
+
     @classmethod
     def from_json(cls, d: Mapping[str, Any]) -> ProjectedStandings:
         if not isinstance(d, Mapping) or "teams" not in d or "effective_date" not in d:

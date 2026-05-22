@@ -7,8 +7,10 @@ formats bands identically.
 
 from __future__ import annotations
 
+from typing import Literal
 
-def band_class(mean: float, sd: float) -> str:
+
+def band_class(mean: float, sd: float) -> Literal["real", "coin-flip", "downgrade"]:
     """Verdict from a deltaRoto band, keyed on whether +/-1 SD crosses zero.
 
     real      -- band entirely above zero (mean - sd > 0, ~P(help) >= 84%)
@@ -20,8 +22,3 @@ def band_class(mean: float, sd: float) -> str:
     if mean + sd < 0:
         return "downgrade"
     return "coin-flip"
-
-
-def band_label(mean: float, sd: float) -> str:
-    """ASCII band string, e.g. ``+1.9 +/- 2.3``."""
-    return f"{mean:+.1f} +/- {sd:.1f}"

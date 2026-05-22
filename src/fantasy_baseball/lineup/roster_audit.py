@@ -292,9 +292,7 @@ def audit_roster(
 
     # Field stats for the MC confidence band: all OTHER teams' CategoryStats,
     # held fixed while we sample variance for the user's before/after roster.
-    field_stats = {
-        e.team_name: e.stats for e in projected_standings.entries if e.team_name != team_name
-    }
+    field_stats = projected_standings.field_stats(team_name)
 
     entries: list[AuditEntry] = []
     for player in active_roster:
