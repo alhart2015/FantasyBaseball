@@ -733,6 +733,8 @@ def register_routes(app: Flask) -> None:
         proj_cache = read_cache_dict(CacheKey.PROJECTIONS) or {}
         projected_standings_raw = proj_cache.get("projected_standings")
         team_sds = _team_sds_from_cache(proj_cache.get("team_sds"))
+        fr = proj_cache.get("fraction_remaining")
+        fr = 1.0 if fr is None else float(fr)
         if not projected_standings_raw:
             return jsonify({"error": "No projected standings. Run a refresh first."}), 404
 
@@ -761,6 +763,7 @@ def register_routes(app: Flask) -> None:
             projected_standings=_projected_from_cache(projected_standings_raw),
             team_sds=team_sds,
             roster_slots=config.roster_slots,
+            fraction_remaining=fr,
         )
 
         def _serialize_view(view) -> dict:
@@ -792,6 +795,7 @@ def register_routes(app: Flask) -> None:
                 "roto": _serialize_view(result.roto),
                 "ev_roto": _serialize_view(result.ev_roto),
                 "stat_totals": _serialize_view(result.stat_totals),
+                "band": result.band,
             }
         )
 
@@ -826,6 +830,8 @@ def register_routes(app: Flask) -> None:
         proj_cache = read_cache_dict(CacheKey.PROJECTIONS) or {}
         projected_standings_raw = proj_cache.get("projected_standings")
         team_sds = _team_sds_from_cache(proj_cache.get("team_sds"))
+        fr_opt = proj_cache.get("fraction_remaining")
+        fr_opt = 1.0 if fr_opt is None else float(fr_opt)
         if not projected_standings_raw:
             return jsonify({"error": "No projected standings. Run a refresh first."}), 404
 
@@ -890,6 +896,7 @@ def register_routes(app: Flask) -> None:
             projected_standings=projected,
             team_sds=team_sds,
             roster_slots=config.roster_slots,
+            fraction_remaining=fr_opt,
         )
         if not result.legal:
             return jsonify({"ok": False, "reason": result.reason or "Trade is not legal"})

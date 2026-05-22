@@ -257,6 +257,7 @@ def test_evaluate_2_for_2_legal_returns_delta():
         projected_standings=standings,
         team_sds=None,
         roster_slots=ROSTER_SLOTS_STANDARD,
+        fraction_remaining=0.6,
     )
     assert result.legal is True, result.reason
     cat_sum = sum(cd.delta for cd in result.categories.values())
@@ -332,6 +333,7 @@ def test_2_for_3_with_drop_is_legal_and_scores():
         projected_standings=standings,
         team_sds=None,
         roster_slots=ROSTER_SLOTS_STANDARD,
+        fraction_remaining=0.6,
     )
     assert result.legal is False
     assert "Opponent" in result.reason
@@ -361,6 +363,7 @@ def test_2_for_3_drop_on_both_sides_is_legal():
         projected_standings=standings,
         team_sds=None,
         roster_slots=ROSTER_SLOTS_STANDARD,
+        fraction_remaining=0.6,
     )
     assert result.legal is False
     assert "22" in result.reason
@@ -391,6 +394,7 @@ def test_2_for_2_plus_drop_plus_waiver_add_is_legal():
         projected_standings=standings,
         team_sds=None,
         roster_slots=ROSTER_SLOTS_STANDARD,
+        fraction_remaining=0.6,
     )
     assert result.legal is True, result.reason
     assert set(result.categories.keys()) >= {"R", "HR"}
@@ -427,6 +431,7 @@ def test_received_player_marked_bench_does_not_contribute():
         projected_standings=standings,
         team_sds=None,
         roster_slots=ROSTER_SLOTS_STANDARD,
+        fraction_remaining=0.6,
     )
     r_bench = evaluate_multi_trade(
         proposal=proposal_bench,
@@ -437,6 +442,7 @@ def test_received_player_marked_bench_does_not_contribute():
         projected_standings=standings,
         team_sds=None,
         roster_slots=ROSTER_SLOTS_STANDARD,
+        fraction_remaining=0.6,
     )
     assert r_all.legal is True
     assert r_bench.legal is True
@@ -467,6 +473,7 @@ def test_il_players_excluded_from_size_count():
         projected_standings=standings,
         team_sds=None,
         roster_slots=ROSTER_SLOTS_STANDARD,
+        fraction_remaining=0.6,
     )
     assert result.legal is True, result.reason
 
@@ -488,6 +495,7 @@ def test_unknown_player_key_returns_illegal_with_reason():
         projected_standings=standings,
         team_sds=None,
         roster_slots=ROSTER_SLOTS_STANDARD,
+        fraction_remaining=0.6,
     )
     assert result.legal is False
     assert "Ghost" in result.reason
@@ -558,6 +566,7 @@ def test_evaluate_multi_trade_populates_view_blocks():
         projected_standings=standings,
         team_sds=None,
         roster_slots=ROSTER_SLOTS_STANDARD,
+        fraction_remaining=1.0,
     )
 
     assert result.legal, result.reason
@@ -578,6 +587,27 @@ def test_evaluate_multi_trade_populates_view_blocks():
     # When team_sds is None, score_roto_dict returns integer roto, so ev_roto == roto here.
     for cat, cd in result.categories.items():
         assert result.ev_roto.categories[cat].delta == cd.delta
+
+
+def test_legal_trade_result_has_band():
+    """A legal trade result includes a band dict with the expected keys."""
+    proposal, hart_name, hart_roster, opp_rosters, standings = _build_min_legal_proposal_fixture()
+
+    result = evaluate_multi_trade(
+        proposal=proposal,
+        hart_name=hart_name,
+        hart_roster=hart_roster,
+        opp_rosters=opp_rosters,
+        waiver_pool={},
+        projected_standings=standings,
+        team_sds=None,
+        roster_slots=ROSTER_SLOTS_STANDARD,
+        fraction_remaining=0.6,
+    )
+
+    assert result.legal, result.reason
+    assert result.band is not None
+    assert set(result.band.keys()) == {"mean", "sd", "p_positive", "verdict"}
 
 
 def test_build_waiver_pool_excludes_rostered_players():

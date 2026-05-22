@@ -726,6 +726,12 @@ document.addEventListener('DOMContentLoaded', function() {
       '</div>';
 
     const target = document.getElementById("bt-result-deltas");
+    if (data.band) {
+      const m = data.band.mean, s = data.band.sd;
+      target.insertAdjacentHTML('afterbegin',
+        '<div class="band-line band-' + data.band.verdict + '">' +
+        (m >= 0 ? '+' : '') + m.toFixed(1) + ' +/- ' + s.toFixed(1) + ' roto</div>');
+    }
     const payload = {
       roto: data.roto || {delta_total: 0, categories: {}},
       ev_roto: data.ev_roto || {delta_total: 0, categories: {}},

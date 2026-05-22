@@ -107,6 +107,7 @@ def test_evaluate_trade_returns_legal_result_shape(client, monkeypatch):
             "projections": {
                 "projected_standings": projected_standings,
                 "team_sds": None,
+                "fraction_remaining": 0.6,
             },
             "ros_projections": {"hitters": [], "pitchers": []},
         },
@@ -193,7 +194,11 @@ def test_evaluate_trade_response_includes_view_blocks(client, monkeypatch):
         {
             "roster": me,
             "opp_rosters": {"Rival": opp},
-            "projections": {"projected_standings": projected_standings, "team_sds": None},
+            "projections": {
+                "projected_standings": projected_standings,
+                "team_sds": None,
+                "fraction_remaining": 0.6,
+            },
             "ros_projections": {"hitters": [], "pitchers": []},
         },
     )
@@ -257,3 +262,8 @@ def test_evaluate_trade_response_includes_view_blocks(client, monkeypatch):
         assert (
             body["roto"]["categories"][cat]["delta"] == body["ev_roto"]["categories"][cat]["delta"]
         )
+
+    # Legal trade response must carry a band object.
+    assert "band" in body, "response missing 'band' key"
+    assert body["band"] is not None
+    assert set(body["band"].keys()) == {"mean", "sd", "p_positive", "verdict"}
