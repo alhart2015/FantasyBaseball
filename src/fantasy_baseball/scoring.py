@@ -938,6 +938,80 @@ def _full_season_volume(p, is_hitter: bool) -> float:
     return float(_stat(p, "ip", "full_season_projection"))
 
 
+def player_category_variance(player) -> dict:
+    """Per-player variance contribution for each category.
+
+    Returns a dict keyed by :class:`Category` for counting categories and by
+    raw string keys for the rate-assembly components that ``project_team_sds``
+    needs to fold into team-level rate SDs.
+
+    **Counting categories** (R, HR, RBI, SB for hitters; W, K, SV for pitchers):
+    Combines performance (``STAT_VARIANCE`` CV) and playing-time (``cv_pt``)
+    variance in quadrature for a single player::
+
+        var_cat = stat^2 * (CV_cat^2 + cv_pt^2)
+
+    **Rate categories** (AVG, ERA, WHIP) are NOT representable as simple
+    per-player variances because the rate denominator (total AB / total IP) is a
+    team-level quantity.  Instead, this function returns the raw squared numerator
+    components so the caller can assemble the team-level rate SD:
+
+    Hitters expose:
+      - ``"h_sq"`` (float): projected-hits squared (``h^2``)
+      - ``"ab"``   (float): projected at-bats
+
+    Pitchers expose:
+      - ``"er_sq"`` (float): projected-ER squared
+      - ``"bb_sq"`` (float): projected-BB squared
+      - ``"ha_sq"`` (float): projected-hits-allowed squared
+      - ``"ip"``    (float): projected innings pitched
+
+    Playing time does NOT contribute to rate-component sums (missed time cancels
+    in numerator/denominator; see ``project_team_sds`` docstring).
+
+    Unknown player types return an empty dict.
+    """
+    ptype = _get(player, "player_type")
+    result: dict = {}
+
+    if ptype == PlayerType.HITTER:
+        cv_pt_sq = playing_time_params(PlayerType.HITTER, _full_season_volume(player, True))[1] ** 2
+        for stat_key, cat in [
+            ("r", Category.R),
+            ("hr", Category.HR),
+            ("rbi", Category.RBI),
+            ("sb", Category.SB),
+        ]:
+            v = _stat(player, stat_key)
+            result[cat] = v * v * (STAT_VARIANCE[stat_key] ** 2 + cv_pt_sq)
+        # Rate-assembly components (playing-time-invariant; cv_pt NOT added).
+        h = _stat(player, "h")
+        result["h_sq"] = h * h
+        result["ab"] = _stat(player, "ab")
+
+    elif ptype == PlayerType.PITCHER:
+        cv_pt_sq = (
+            playing_time_params(PlayerType.PITCHER, _full_season_volume(player, False))[1] ** 2
+        )
+        for stat_key, cat in [
+            ("w", Category.W),
+            ("k", Category.K),
+            ("sv", Category.SV),
+        ]:
+            v = _stat(player, stat_key)
+            result[cat] = v * v * (STAT_VARIANCE[stat_key] ** 2 + cv_pt_sq)
+        # Rate-assembly components (playing-time-invariant).
+        er = _stat(player, "er")
+        bb = _stat(player, "bb")
+        ha = _stat(player, "h_allowed")
+        result["er_sq"] = er * er
+        result["bb_sq"] = bb * bb
+        result["ha_sq"] = ha * ha
+        result["ip"] = _stat(player, "ip")
+
+    return result
+
+
 def project_team_sds(
     roster,
     *,
@@ -971,46 +1045,40 @@ def project_team_sds(
     if displacement:
         roster = _apply_displacement(roster)
 
+    # Counting-category variance sums (from player_category_variance).
+    h_var: dict[Category, float] = {
+        c: 0.0 for c in (Category.R, Category.HR, Category.RBI, Category.SB)
+    }
+    p_var: dict[Category, float] = {c: 0.0 for c in (Category.W, Category.K, Category.SV)}
+    # Rate-assembly sums (playing-time-invariant; keyed by raw stat string).
     h_sum_sq: dict[str, float] = {k: 0.0 for k in HITTING_COUNTING}
     p_sum_sq: dict[str, float] = {k: 0.0 for k in PITCHING_COUNTING}
-    # Playing-time variance contribution sum_i (stat_i^2 * cv_pt_i^2), counting
-    # categories only (rate stats are playing-time-invariant; see docstring).
-    h_pt_sq: dict[str, float] = {k: 0.0 for k in ("r", "hr", "rbi", "sb")}
-    p_pt_sq: dict[str, float] = {k: 0.0 for k in ("w", "k", "sv")}
     total_ab = 0.0
     total_ip = 0.0
 
     for p in roster:
         ptype = _get(p, "player_type")
+        contrib = player_category_variance(p)
         if ptype == PlayerType.HITTER:
-            cv_pt_sq = playing_time_params(PlayerType.HITTER, _full_season_volume(p, True))[1] ** 2
-            for k in HITTING_COUNTING:
-                v = _stat(p, k)
-                h_sum_sq[k] += v * v
-                if k in h_pt_sq:
-                    h_pt_sq[k] += v * v * cv_pt_sq
-            total_ab += _stat(p, "ab")
+            for cat in (Category.R, Category.HR, Category.RBI, Category.SB):
+                h_var[cat] += contrib.get(cat, 0.0)
+            # Rate components
+            h_sum_sq["h"] += contrib.get("h_sq", 0.0)
+            total_ab += contrib.get("ab", 0.0)
         elif ptype == PlayerType.PITCHER:
-            cv_pt_sq = (
-                playing_time_params(PlayerType.PITCHER, _full_season_volume(p, False))[1] ** 2
-            )
-            for k in PITCHING_COUNTING:
-                v = _stat(p, k)
-                p_sum_sq[k] += v * v
-                if k in p_pt_sq:
-                    p_pt_sq[k] += v * v * cv_pt_sq
-            total_ip += _stat(p, "ip")
+            for cat in (Category.W, Category.K, Category.SV):
+                p_var[cat] += contrib.get(cat, 0.0)
+            # Rate components
+            p_sum_sq["er"] += contrib.get("er_sq", 0.0)
+            p_sum_sq["bb"] += contrib.get("bb_sq", 0.0)
+            p_sum_sq["h_allowed"] += contrib.get("ha_sq", 0.0)
+            total_ip += contrib.get("ip", 0.0)
 
     sds: dict[Category, float] = dict.fromkeys(ALL_CATS, 0.0)
-    for stat_key, cat in [
-        ("r", Category.R),
-        ("hr", Category.HR),
-        ("rbi", Category.RBI),
-        ("sb", Category.SB),
-    ]:
-        sds[cat] = sqrt(STAT_VARIANCE[stat_key] ** 2 * h_sum_sq[stat_key] + h_pt_sq[stat_key])
-    for stat_key, cat in [("w", Category.W), ("k", Category.K), ("sv", Category.SV)]:
-        sds[cat] = sqrt(STAT_VARIANCE[stat_key] ** 2 * p_sum_sq[stat_key] + p_pt_sq[stat_key])
+    for cat in (Category.R, Category.HR, Category.RBI, Category.SB):
+        sds[cat] = sqrt(h_var[cat])
+    for cat in (Category.W, Category.K, Category.SV):
+        sds[cat] = sqrt(p_var[cat])
     if total_ab > 0:
         sds[Category.AVG] = STAT_VARIANCE["h"] * sqrt(h_sum_sq["h"]) / total_ab
     if total_ip > 0:

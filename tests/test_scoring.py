@@ -22,6 +22,7 @@ from fantasy_baseball.scoring import (
     _prob_beats,
     build_team_sds,
     compute_roster_breakdown,
+    player_category_variance,
     project_team_sds,
     project_team_stats,
     score_roto,
@@ -383,6 +384,94 @@ class TestProjectTeamSDsPlayingTime:
         sds_with_bench = project_team_sds([active, bench])
         sds_active_only = project_team_sds([active])
         assert sds_with_bench[Category.R] == pytest.approx(sds_active_only[Category.R])
+
+
+class TestPlayerCategoryVariance:
+    """player_category_variance returns per-player variance contributions
+    that are consistent with project_team_sds (variances sum across players).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_playing_time_variance(self):
+        with patch(
+            "fantasy_baseball.scoring.playing_time_params",
+            return_value=(1.0, 0.0),
+        ):
+            yield
+
+    def test_hitter_variance_sums_to_team_sd(self):
+        """Two identical hitters: team variance == 2 * single-player variance."""
+        p1 = _make_hitter("H1", r=100, hr=30, rbi=90, sb=10, h=150, ab=550)
+        p2 = _make_hitter("H2", r=100, hr=30, rbi=90, sb=10, h=150, ab=550)
+        team_sd_r = project_team_sds([p1, p2], displacement=False)[Category.R]
+        one = player_category_variance(p1)[Category.R]
+        assert one > 0
+        assert team_sd_r**2 == pytest.approx(2 * one, rel=1e-6)
+
+    def test_hitter_variance_covers_all_counting_cats(self):
+        """player_category_variance covers R, HR, RBI, SB for hitters."""
+        p = _make_hitter("H", r=80, hr=20, rbi=70, sb=10, h=150, ab=500)
+        var = player_category_variance(p)
+        for cat in (Category.R, Category.HR, Category.RBI, Category.SB):
+            assert cat in var
+            assert var[cat] >= 0
+
+    def test_hitter_variance_matches_cv_formula(self):
+        """Single hitter counting variance == (CV_stat * stat)^2."""
+        p = _make_hitter("H", r=80, hr=20, rbi=70, sb=10, h=150, ab=500)
+        var = player_category_variance(p)
+        assert var[Category.R] == pytest.approx((STAT_VARIANCE["r"] * 80) ** 2)
+        assert var[Category.HR] == pytest.approx((STAT_VARIANCE["hr"] * 20) ** 2)
+
+    def test_pitcher_variance_sums_to_team_sd(self):
+        """Two identical pitchers: team variance == 2 * single-player variance."""
+        p1 = _make_pitcher("P1", w=12, k=180, sv=5, ip=180, er=60, bb=40, h_allowed=150)
+        p2 = _make_pitcher("P2", w=12, k=180, sv=5, ip=180, er=60, bb=40, h_allowed=150)
+        team_sd_k = project_team_sds([p1, p2], displacement=False)[Category.K]
+        one = player_category_variance(p1)[Category.K]
+        assert one > 0
+        assert team_sd_k**2 == pytest.approx(2 * one, rel=1e-6)
+
+    def test_pitcher_variance_covers_counting_cats(self):
+        """player_category_variance covers W, K, SV for pitchers."""
+        p = _make_pitcher("P", w=12, k=180, sv=5, ip=180, er=60, bb=40, h_allowed=150)
+        var = player_category_variance(p)
+        for cat in (Category.W, Category.K, Category.SV):
+            assert cat in var
+            assert var[cat] >= 0
+
+    def test_playing_time_term_included_in_variance(self):
+        """With cv_pt > 0 the variance is strictly larger than CV-only."""
+        p = _make_hitter("H", r=80, hr=20, rbi=70, sb=10, h=150, ab=500)
+        with patch(
+            "fantasy_baseball.scoring.playing_time_params",
+            return_value=(1.0, 0.0),
+        ):
+            var_tight = player_category_variance(p)[Category.R]
+        with patch(
+            "fantasy_baseball.scoring.playing_time_params",
+            return_value=(0.85, 0.30),
+        ):
+            var_wide = player_category_variance(p)[Category.R]
+        assert var_wide > var_tight
+
+    def test_rate_component_sums_present_for_hitter(self):
+        """player_category_variance exposes h_sq and ab for rate assembly."""
+        p = _make_hitter("H", r=80, hr=20, rbi=70, sb=10, h=150, ab=550)
+        var = player_category_variance(p)
+        assert "h_sq" in var
+        assert "ab" in var
+        assert var["h_sq"] == pytest.approx(150**2)
+        assert var["ab"] == pytest.approx(550)
+
+    def test_rate_component_sums_present_for_pitcher(self):
+        """player_category_variance exposes er_sq, bb_sq, ha_sq, ip for rate assembly."""
+        p = _make_pitcher("P", w=12, k=180, sv=5, ip=180, er=60, bb=40, h_allowed=150)
+        var = player_category_variance(p)
+        for key in ("er_sq", "bb_sq", "ha_sq", "ip"):
+            assert key in var
+        assert var["er_sq"] == pytest.approx(60**2)
+        assert var["ip"] == pytest.approx(180)
 
 
 class TestScoreRoto:
