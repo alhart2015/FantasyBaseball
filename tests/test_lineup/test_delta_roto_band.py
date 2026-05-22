@@ -18,6 +18,8 @@ import pytest
 
 from fantasy_baseball.lineup.delta_roto import (
     DeltaRotoBand,
+    _swap_category_variance,
+    _swap_sets,
     compute_delta_roto,
     compute_delta_roto_band,
     compute_one_for_one_band,
@@ -28,7 +30,9 @@ from fantasy_baseball.models.standings import (
     ProjectedStandings,
     ProjectedStandingsEntry,
 )
-from fantasy_baseball.scoring import build_team_sds, project_team_stats
+from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto_dict
+from fantasy_baseball.trades.evaluate import aggregate_player_stats, apply_swap_delta
+from fantasy_baseball.utils.constants import Category
 
 FRACTION_REMAINING = 0.6
 
@@ -49,7 +53,9 @@ def _hitter(name: str, **ros: float) -> Player:
 def _pitcher(name: str, **ros: float) -> Player:
     base = dict(ip=180, w=12, k=190, sv=0, er=68, bb=48, h_allowed=150)
     base.update(ros)
-    stats = PitcherStats(**base)
+    # from_dict computes ERA/WHIP from the er/bb/h_allowed/ip components; the
+    # bare PitcherStats(**base) constructor would leave them at 0.
+    stats = PitcherStats.from_dict(base)
     return Player(
         name=name,
         player_type=PlayerType.PITCHER,
@@ -301,3 +307,133 @@ def test_to_dict_includes_verdict(sample_swap: _Swap) -> None:
     d = band.to_dict()
     assert set(d) == {"mean", "sd", "p_positive", "verdict"}
     assert d["verdict"] in {"real", "coin-flip", "downgrade"}
+
+
+def test_two_for_one_band_mean_matches_multi_swap_ev() -> None:
+    """A 2-out / 1-in swap: band.mean equals the multi-swap EV delta.
+
+    Locks the general before/after path (the one ``multi_trade`` and
+    ``compute_delta_roto`` share) for N-for-M swaps. The expected mean is
+    hand-rolled the same way ``multi_trade`` derives it: aggregate the OUT
+    players' ROS, aggregate the IN player's ROS, apply the swap delta to
+    the user's projected row, then take the ``score_roto_dict`` total
+    before/after diff with the same ``team_sds``. Also asserts sd > 0
+    (real per-category stat uncertainty enters the band).
+    """
+    before = [_hitter(f"H{i}") for i in range(13)]
+    # Two players leave, one stronger player enters.
+    out_a = before[11]
+    out_b = before[12]
+    add_player = _hitter("BigBat", hr=45, r=105, rbi=110, sb=18)
+    after = [p for p in before if p.name not in {out_a.name, out_b.name}] + [add_player]
+
+    field = _field()
+    me_stats = project_team_stats(before)
+    entries = [ProjectedStandingsEntry(team_name="Me", stats=me_stats)]
+    entries += [ProjectedStandingsEntry(team_name=t, stats=cs) for t, cs in field.items()]
+    projected = ProjectedStandings(effective_date=date(2026, 4, 1), entries=entries)
+    rosters = {"Me": before, **{t: [] for t in field}}
+    team_sds = build_team_sds(rosters, sd_scale=FRACTION_REMAINING**0.5)
+
+    band = compute_delta_roto_band(
+        before_players=before,
+        after_players=after,
+        field_stats=field,
+        team_name="Me",
+        fraction_remaining=FRACTION_REMAINING,
+        projected_standings=projected,
+        team_sds=team_sds,
+    )
+
+    # Hand-rolled multi-swap EV: aggregate OUT and IN ROS, apply the swap
+    # delta, diff the score_roto_dict totals. Mirrors multi_trade's mean.
+    all_before = {e.team_name: e.stats.to_dict() for e in projected.entries}
+    loses_ros = aggregate_player_stats([out_a, out_b])
+    gains_ros = aggregate_player_stats([add_player])
+    user_after = apply_swap_delta(all_before["Me"], loses_ros, gains_ros)
+    all_after = dict(all_before)
+    all_after["Me"] = user_after
+    roto_before = score_roto_dict(all_before, team_sds=team_sds)
+    roto_after = score_roto_dict(all_after, team_sds=team_sds)
+    expected_mean = roto_after["Me"]["total"] - roto_before["Me"]["total"]
+
+    assert band.mean == pytest.approx(expected_mean, abs=1e-9)
+    assert band.sd > 0
+
+
+def _pitcher_field() -> dict[str, CategoryStats]:
+    """Field with ERA/WHIP centered near a pitcher-heavy user roster.
+
+    ``_field`` pins ERA at 3.8 / WHIP at 1.20, which the staff below
+    (ERA ~3.4) clears comfortably, parking the rate categories off the
+    steep part of the curve. Raising the field ERA/WHIP to straddle the
+    user's keeps the ERA/WHIP win-probabilities responsive so a rate-edge
+    swap moves both the mean and the band.
+    """
+    field: dict[str, CategoryStats] = {}
+    for i in range(8):
+        field[f"Team{i}"] = CategoryStats(
+            r=800 + i * 15,
+            hr=220 + i * 5,
+            rbi=780 + i * 12,
+            sb=110 + i * 4,
+            avg=0.255 + i * 0.002,
+            w=70 + i * 2,
+            k=1100 + i * 20,
+            sv=70,
+            era=3.30 + i * 0.04,
+            whip=1.15 + i * 0.01,
+        )
+    return field
+
+
+def test_rate_category_pitcher_swap_band_responds() -> None:
+    """A pitcher swap whose edge is in ERA (a rate category) moves the band.
+
+    Exercises the ERA/WHIP branch of ``_swap_category_variance``: dropping
+    a high-ERA arm for an equal-volume low-ERA arm improves the team ERA
+    (an inverse stat, so lower is better -> positive mean) and shifts the
+    team's rate variance, so sd > 0. Holds IP roughly constant so the edge
+    lands in the rate, not in counting K/W.
+    """
+    # Six-arm staff: five solid, one weak ERA arm to be dropped.
+    before = [_pitcher(f"P{i}", ip=170, w=11, k=180, er=60, bb=45, h_allowed=145) for i in range(5)]
+    weak = _pitcher("WeakArm", ip=170, w=11, k=180, er=100, bb=45, h_allowed=145)
+    before = [*before, weak]
+    # Equal-volume replacement with a much better ERA (fewer ER, same IP).
+    strong = _pitcher("StrongArm", ip=170, w=11, k=180, er=45, bb=45, h_allowed=145)
+
+    field = _pitcher_field()
+    me_stats = project_team_stats(before)
+    entries = [ProjectedStandingsEntry(team_name="Me", stats=me_stats)]
+    entries += [ProjectedStandingsEntry(team_name=t, stats=cs) for t, cs in field.items()]
+    projected = ProjectedStandings(effective_date=date(2026, 4, 1), entries=entries)
+    rosters = {"Me": before, **{t: [] for t in field}}
+    team_sds = build_team_sds(rosters, sd_scale=FRACTION_REMAINING**0.5)
+
+    after = [p for p in before if p.name != "WeakArm"] + [strong]
+
+    # Pin the ERA branch directly: the rate-variance term must be positive
+    # in its own right, so the test would fail if the ERA/WHIP branch of
+    # _swap_category_variance regressed to 0 (the counting K/W noise alone
+    # would otherwise keep band.sd > 0 and mask the regression).
+    in_players, out_players = _swap_sets(before, after)
+    era_sigma2 = _swap_category_variance(
+        Category.ERA, in_players, out_players, before, after, FRACTION_REMAINING
+    )
+    assert era_sigma2 > 0
+
+    band = compute_delta_roto_band(
+        before_players=before,
+        after_players=after,
+        field_stats=field,
+        team_name="Me",
+        fraction_remaining=FRACTION_REMAINING,
+        projected_standings=projected,
+        team_sds=team_sds,
+    )
+
+    # Improving ERA (inverse stat) is a gain -> positive mean; the rate
+    # variance shifts -> the band has positive width.
+    assert band.mean > 0
+    assert band.sd > 0

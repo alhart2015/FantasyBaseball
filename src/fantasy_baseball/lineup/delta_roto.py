@@ -213,8 +213,8 @@ def _ev_delta_and_stats(
     projected_standings: ProjectedStandings,
     team_name: str,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
-) -> tuple[float, CategoryStats, CategoryStats]:
-    """EV deltaRoto total plus the before/after user-team stat rows.
+) -> tuple[float, CategoryStats, CategoryStats, list[Player], list[Player]]:
+    """EV deltaRoto total, before/after stat rows, and the IN/OUT sets.
 
     Mean mechanism (identical to :func:`compute_delta_roto`,
     :mod:`multi_trade`, and the audit): start from the user's
@@ -226,7 +226,9 @@ def _ev_delta_and_stats(
     ``apply_swap_delta`` is the same call.
 
     Also returns the user team's before/after :class:`CategoryStats` rows
-    so the sd path can read the per-category baseline mean and shift.
+    so the sd path can read the per-category baseline mean and shift, and
+    the IN/OUT player lists from :func:`_swap_sets` so the caller need not
+    recompute the split.
     """
     from fantasy_baseball.scoring import score_roto_dict
     from fantasy_baseball.trades.evaluate import aggregate_player_stats, apply_swap_delta
@@ -248,7 +250,7 @@ def _ev_delta_and_stats(
 
     before_cs = CategoryStats.from_dict(user_before_dict)
     after_cs = CategoryStats.from_dict(user_after_dict)
-    return total, before_cs, after_cs
+    return total, before_cs, after_cs, in_players, out_players
 
 
 def _swap_category_variance(
@@ -276,6 +278,15 @@ def _swap_category_variance(
     ``project_team_sds`` (a defensible marginal-variance estimate: the
     rate-variance change attributable to the swap), scaled by
     ``fraction_remaining``.
+
+    Caveat: a swap that shifts the team's rate MEAN but leaves its rate
+    VARIANCE roughly unchanged (e.g. swapping a high-volume arm for an
+    equal-volume arm with a worse ERA -- same IP and similar er^2, so
+    ``project_team_sds`` barely moves) yields a near-zero rate variance
+    here. The band width does NOT track that mean shift; the mean-only
+    move is captured by the EV ``mean`` (via ``apply_swap_delta``), not by
+    this term. Readers should not infer the rate band reflects the mean
+    change.
     """
     from fantasy_baseball.scoring import player_category_variance, project_team_sds
 
@@ -409,11 +420,9 @@ def compute_delta_roto_band(
             ``score_roto`` uses for the points curve. ``None`` falls back
             to the rank step function (no curve softness).
     """
-    mean, before_cs, after_cs = _ev_delta_and_stats(
+    mean, before_cs, after_cs, in_players, out_players = _ev_delta_and_stats(
         before_players, after_players, projected_standings, team_name, team_sds
     )
-
-    in_players, out_players = _swap_sets(before_players, after_players)
 
     var_total = 0.0
     for cat in ALL_CATEGORIES:
