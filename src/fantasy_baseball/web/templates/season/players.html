@@ -654,9 +654,9 @@ function renderDeltaRoto(dr, band) {
     if (!dr) { el.style.display = 'none'; return; }
     let html;
     if (band) {
-        const m = band.mean, s = band.sd;
+        const m = band.mean, s = band.sd, pct = Math.round(band.p_positive * 100);
         html = '<div class="band-line band-' + band.verdict + '" style="font-weight:700; font-size:15px;">' +
-            (m >= 0 ? '+' : '') + m.toFixed(1) + ' +/- ' + s.toFixed(1) + ' roto</div>';
+            (m >= 0 ? '+' : '') + m.toFixed(1) + ' +/- ' + s.toFixed(1) + ' roto  -  ' + pct + '% to help</div>';
     } else {
         const color = dr.total > 0.01 ? 'var(--success)' : (dr.total < -0.01 ? 'var(--danger)' : 'var(--text-secondary)');
         html = '<span style="font-weight:600">deltaRoto: </span>' +

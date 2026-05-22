@@ -251,9 +251,9 @@ function renderTradeCard(t, gIdx, cIdx) {
     html += '</div>';
     html += '<div style="display: flex; gap: 12px; align-items: center;">';
     if (t.band) {
-        var m = t.band.mean, s = t.band.sd;
+        var m = t.band.mean, s = t.band.sd, pct = Math.round(t.band.p_positive * 100);
         html += '<span class="band-line band-' + t.band.verdict + '" style="font-weight: bold; font-size: 13px;">' +
-            (m >= 0 ? '+' : '') + m.toFixed(1) + ' +/- ' + s.toFixed(1) + ' roto</span>';
+            (m >= 0 ? '+' : '') + m.toFixed(1) + ' +/- ' + s.toFixed(1) + ' roto  -  ' + pct + '% to help</span>';
     } else {
         var dc = t.hart_delta >= 0 ? 'var(--success)' : 'var(--danger)';
         html += '<span style="color: ' + dc + '; font-weight: bold; font-size: 13px;">' + (t.hart_delta >= 0 ? '+' : '') + t.hart_delta.toFixed(2) + ' \u0394Roto</span>';
