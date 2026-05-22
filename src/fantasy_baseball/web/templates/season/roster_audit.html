@@ -1,4 +1,5 @@
 {% extends "season/base.html" %}
+{% from "season/macros.html" import band_chip %}
 {% block title %}Roster Audit — Season Dashboard{% endblock %}
 {% block content %}
 
@@ -9,6 +10,7 @@
 .audit-detail.open { display: table-row; }
 .cat-impact { display: flex; flex-wrap: wrap; margin-top: 6px; }
 </style>
+{% set VERDICT_GAP = {'real':'gap-positive','coin-flip':'gap-marginal','downgrade':'gap-negative'} %}
 
 <div class="page-roster-audit">
 <div class="page-header">
@@ -67,8 +69,7 @@
         <td>
             {% if entry.candidates and entry.candidates[0].band %}
             {% set b = entry.candidates[0].band %}
-            {% set gap = {'real':'gap-positive','coin-flip':'gap-marginal','downgrade':'gap-negative'}[b.verdict] %}
-            <span class="gap-badge {{ gap }}">{{ "%+.1f"|format(b.mean) }} +/- {{ "%.1f"|format(b.sd) }}</span>
+            {{ band_chip(b, 'gap-badge ' ~ VERDICT_GAP[b.verdict]) }}
             {% else %}
             <span class="gap-none">&mdash;</span>
             {% endif %}
@@ -109,9 +110,7 @@
                     </td>
                     <td style="text-align:right">
                         {% if c.band %}
-                        {% set cb = c.band %}
-                        {% set cgap = {'real':'gap-positive','coin-flip':'gap-marginal','downgrade':'gap-negative'}[cb.verdict] %}
-                        <span class="gap-badge {{ cgap }}">{{ "%+.1f"|format(cb.mean) }} +/- {{ "%.1f"|format(cb.sd) }}</span>
+                        {{ band_chip(c.band, 'gap-badge ' ~ VERDICT_GAP[c.band.verdict]) }}
                         {% else %}
                         <span style="color:var(--text-secondary)">&mdash;</span>
                         {% endif %}

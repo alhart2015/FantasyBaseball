@@ -610,6 +610,44 @@ def test_legal_trade_result_has_band():
     assert set(result.band.keys()) == {"mean", "sd", "p_positive", "verdict"}
 
 
+def test_band_mean_consistent_with_ev_roto_delta_total():
+    """band['mean'] must equal ev_roto.delta_total within rounding (~0.01).
+
+    The analytic band's mean is defined as the EV deltaRoto, computed by
+    the same call-path as evaluate_multi_trade's ev_roto ViewBlock.  They
+    share the same apply_swap_delta + score_roto_dict path so the values
+    are identical before rounding; the serialised band['mean'] is rounded
+    to 2 decimal places and ev_roto.delta_total is also rounded to 2 dp in
+    the response, so any difference beyond floating-point noise is a bug.
+    """
+    proposal, hart_name, hart_roster, opp_rosters, standings = _build_min_legal_proposal_fixture()
+
+    result = evaluate_multi_trade(
+        proposal=proposal,
+        hart_name=hart_name,
+        hart_roster=hart_roster,
+        opp_rosters=opp_rosters,
+        waiver_pool={},
+        projected_standings=standings,
+        team_sds=None,
+        roster_slots=ROSTER_SLOTS_STANDARD,
+        fraction_remaining=0.6,
+    )
+
+    assert result.legal, result.reason
+    assert result.band is not None
+
+    # band is already serialised to dict by to_dict(); mean is rounded to 2 dp.
+    band_mean = result.band["mean"]
+    ev_total = result.ev_roto.delta_total
+
+    assert abs(band_mean - ev_total) < 0.01, (
+        f"band['mean']={band_mean} differs from ev_roto.delta_total={ev_total} by more than 0.01"
+    )
+    # Verify all expected keys are present.
+    assert set(result.band.keys()) == {"mean", "sd", "p_positive", "verdict"}
+
+
 def test_build_waiver_pool_excludes_rostered_players():
     a = _make_hitter("Alice")
     b = _make_hitter("Bob")

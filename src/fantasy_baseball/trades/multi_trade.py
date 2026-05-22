@@ -272,8 +272,8 @@ def evaluate_multi_trade(
         field_stats,
         hart_name,
         fraction_remaining,
-        n_draws=400,
-        seed=0,
+        projected_standings=projected_standings,
+        team_sds=team_sds,
     )
 
     return MultiTradeResult(

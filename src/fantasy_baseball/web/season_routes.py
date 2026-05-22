@@ -655,12 +655,53 @@ def register_routes(app: Flask) -> None:
         # Decorate each candidate with canonical name::player_type keys
         # so client code (Compare button) can build /players?compare=...
         # URLs without re-deriving the player_type lookup. Fail loudly on
-        # missing player_type — defaulting would silently miscategorize
+        # missing player_type -- defaulting would silently miscategorize
         # pitcher trades as hitter trades (CLAUDE.md: never key on bare names).
         for group in results:
             for cand in group.get("candidates", []):
                 cand["send_key"] = f"{cand['send']}::{cand['send_player_type']}"
                 cand["receive_key"] = f"{cand['receive']}::{cand['receive_player_type']}"
+
+        # Decorate each candidate with the analytic band (cheap: closed-form).
+        # band is None when projected_standings is unavailable or an error occurs;
+        # never 500 the search.
+        if projected_standings is not None:
+            from fantasy_baseball.lineup.delta_roto import compute_one_for_one_band
+
+            fr = proj_cache.get("fraction_remaining")
+            fr = 1.0 if fr is None else float(fr)
+
+            for group in results:
+                opp_name = group.get("opponent", "")
+                opp_roster_for_group = opp_rosters.get(opp_name, [])
+                opp_by_key = {f"{p.name}::{p.player_type}": p for p in opp_roster_for_group}
+                for cand in group.get("candidates", []):
+                    try:
+                        receive_key = cand.get("receive_key") or (
+                            f"{cand['receive']}::{cand['receive_player_type']}"
+                        )
+                        receive_player = opp_by_key.get(receive_key)
+                        if receive_player is None:
+                            cand["band"] = None
+                            continue
+                        field_stats = projected_standings.field_stats(config.team_name)
+                        band = compute_one_for_one_band(
+                            drop_name=cand["send"],
+                            add_player=receive_player,
+                            active_players=hart_roster,
+                            field_stats=field_stats,
+                            team_name=config.team_name,
+                            fraction_remaining=fr,
+                            projected_standings=projected_standings,
+                            team_sds=team_sds,
+                        )
+                        cand["band"] = band.to_dict()
+                    except Exception:
+                        cand["band"] = None
+        else:
+            for group in results:
+                for cand in group.get("candidates", []):
+                    cand["band"] = None
 
         return jsonify(results)
 
@@ -797,8 +838,8 @@ def register_routes(app: Flask) -> None:
         from fantasy_baseball.models.positions import IL_SLOTS
         from fantasy_baseball.trades.multi_trade import (
             TradeProposal,
+            _can_roster_after,
             build_waiver_pool,
-            evaluate_multi_trade,
             player_key,
         )
 
@@ -863,31 +904,26 @@ def register_routes(app: Flask) -> None:
             p for p in opp_rosters[opponent] if player_key(p) not in (received_keys | opp_drop_keys)
         ] + sent
 
-        # Legality check: reuse the full evaluator so size mismatches surface
-        # the same way the trade evaluator UI reports them.
-        legality_proposal = TradeProposal(
-            opponent=opponent,
-            send=proposal.send,
-            receive=proposal.receive,
-            my_drops=proposal.my_drops,
-            opp_drops=proposal.opp_drops,
-            my_adds=proposal.my_adds,
-            my_active_ids=set(),
+        # Legality check: size-only check using _can_roster_after, mirroring
+        # exactly what evaluate_multi_trade does without the costly band
+        # computation (the band result is not used here).
+        my_removals = proposal.send + proposal.my_drops
+        my_additions = received + my_adds_p
+        my_ok, my_reason = _can_roster_after(
+            hart_roster, my_removals, my_additions, config.roster_slots
         )
+        if not my_ok:
+            return jsonify({"ok": False, "reason": f"My team: {my_reason}"})
+
+        opp_removals = proposal.receive + proposal.opp_drops
+        opp_additions = sent
+        opp_ok, opp_reason = _can_roster_after(
+            opp_rosters[opponent], opp_removals, opp_additions, config.roster_slots
+        )
+        if not opp_ok:
+            return jsonify({"ok": False, "reason": f"Opponent: {opp_reason}"})
+
         projected = _projected_from_cache(projected_standings_raw)
-        result = evaluate_multi_trade(
-            proposal=legality_proposal,
-            hart_name=config.team_name,
-            hart_roster=hart_roster,
-            opp_rosters=opp_rosters,
-            waiver_pool=waiver_pool,
-            projected_standings=projected,
-            team_sds=team_sds,
-            roster_slots=config.roster_slots,
-            fraction_remaining=fr_opt,
-        )
-        if not result.legal:
-            return jsonify({"ok": False, "reason": result.reason or "Trade is not legal"})
 
         try:
             my_slots = _optimize_one_side(

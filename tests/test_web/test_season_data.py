@@ -1125,6 +1125,65 @@ class TestComparisonConsistencyInvariant:
         assert result["before"]["stats"]["My Team"]["HR"] == canonical_stats["HR"]
         assert result["before"]["stats"]["My Team"]["R"] == canonical_stats["R"]
 
+    def test_band_mean_equals_delta_roto_total(self):
+        """band.mean must equal delta_roto.total within rounding.
+
+        The analytic band reuses the EV deltaRoto as its mean, so the
+        compare panel only needs to display the band (no separate EV
+        span).  This test locks that consistency contract: if the two
+        values drift apart the UI would be misleading.
+        """
+        from fantasy_baseball.models.player import HitterStats, Player
+        from fantasy_baseball.web.season_data import compute_comparison_standings
+
+        roster = self._build_roster()
+        from fantasy_baseball.scoring import project_team_stats
+
+        user_stats = project_team_stats(roster)
+        projected_standings = [
+            {"name": "My Team", "team_key": "", "rank": 0, "stats": user_stats.to_dict()},
+            {
+                "name": "Rival",
+                "team_key": "",
+                "rank": 0,
+                "stats": {
+                    "R": 680,
+                    "HR": 190,
+                    "RBI": 680,
+                    "SB": 110,
+                    "AVG": 0.255,
+                    "W": 85,
+                    "K": 1100,
+                    "SV": 40,
+                    "ERA": 3.80,
+                    "WHIP": 1.25,
+                },
+            },
+        ]
+        other_player = Player(
+            name="Replacement",
+            player_type="hitter",
+            rest_of_season=HitterStats(pa=600, ab=530, h=140, r=75, hr=28, rbi=85, sb=3, avg=0.264),
+        )
+
+        result = compute_comparison_standings(
+            roster_player_name="Star Hitter",
+            other_player=other_player,
+            user_roster=roster,
+            projected_standings=_projected_from_raw(projected_standings),
+            user_team_name="My Team",
+            fraction_remaining=0.6,
+        )
+
+        assert "band" in result
+        assert "delta_roto" in result
+        band_mean = result["band"]["mean"]
+        delta_total = result["delta_roto"]["total"]
+        assert band_mean == pytest.approx(delta_total, abs=0.01), (
+            f"band.mean ({band_mean}) diverged from delta_roto.total ({delta_total}); "
+            "the analytic band must reuse the EV deltaRoto as its mean"
+        )
+
 
 class TestComparisonProjectionOverride:
     """Verify roster_player_projection overrides roster cache stats.

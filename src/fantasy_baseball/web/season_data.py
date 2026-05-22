@@ -352,7 +352,6 @@ def build_opponent_lineup(
         entry = player.to_flat_dict()
         entry.setdefault("sgp", 0.0)
         entry["delta_roto"] = None  # opponent rows don't have a swap delta
-        entry["band"] = None
 
         # ROS projection tooltip data — overwrite both nested ros dict AND the flat
         # stat keys, so the lineup template's `h[rest_of_season_key]` access pattern
@@ -390,7 +389,6 @@ def build_opponent_lineup(
             entry = dict(raw_player)
             entry["sgp"] = 0.0
             entry["delta_roto"] = None
-            entry["band"] = None
             entry["pace"] = {}
             entry["overall_pace"] = compute_overall_pace(entry["pace"])
             enriched.append(entry)
@@ -794,8 +792,8 @@ def compute_comparison_standings(
         field_stats,
         user_team_name,
         fraction_remaining,
-        n_draws=400,
-        seed=0,
+        projected_standings=projected_standings,
+        team_sds=team_sds,
     )
 
     return {
