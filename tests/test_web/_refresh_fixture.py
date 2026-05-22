@@ -535,6 +535,15 @@ def patched_refresh_environment(
         # refresh_pipeline imports _get_redis at module level, so we also
         # have to patch the local name there (``_write_spoe_snapshot`` uses it).
         patch("fantasy_baseball.web.refresh_pipeline._get_redis", return_value=fake_redis),
+        # _compute_streaks connects to the real local streaks.duckdb (multi-GB
+        # on dev boxes) and runs the full streak inference -- no place in a
+        # mocked integration test, and it hung the whole suite once the DB grew
+        # large. Stub it; the dedicated test_compute_streaks_* tests cover this
+        # step with their own get_connection / compute_streak_report mocks.
+        patch(
+            "fantasy_baseball.web.refresh_pipeline.RefreshRun._compute_streaks",
+            return_value=None,
+        ),
     ]
 
     started = []
