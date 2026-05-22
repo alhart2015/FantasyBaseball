@@ -354,6 +354,10 @@ def test_band_cell_macro_maps_verdict_to_gap_color_and_renders_tooltip():
         down = tmpl.render(b={"mean": -1.2, "sd": 0.5, "p_positive": 0.1, "verdict": "downgrade"})
         assert "gap-badge gap-negative" in down
 
+        # An unexpected verdict must degrade to a neutral badge, not 500 the page.
+        unknown = tmpl.render(b={"mean": 0.0, "sd": 0.2, "p_positive": 0.5, "verdict": "???"})
+        assert "gap-badge gap-marginal" in unknown
+
 
 def test_lineup_delta_roto_renders_band_cell_with_tooltip(client, kv_isolation):
     """A lineup row with an optimizer band shows the colored rectangle + the
