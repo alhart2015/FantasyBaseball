@@ -67,7 +67,7 @@
             <span class="slot-arrow">{{ swap.bench.from }} &rarr; {{ swap.bench.to }}</span>
         </span>
         {% if swap.start.band %}
-        <span class="roto-chip band-{{ swap.start.band.verdict }}">{{ "%+.1f"|format(swap.start.band.mean) }} +/- {{ "%.1f"|format(swap.start.band.sd) }} dRoto</span>
+        <span class="roto-chip band-{{ swap.start.band.verdict }}" title="deltaRoto {{ '%+.2f'|format(swap.start.band.mean) }}, SD {{ '%.2f'|format(swap.start.band.sd) }}, P(helps) {{ (swap.start.band.p_positive * 100)|round|int }}%">{{ "%+.1f"|format(swap.start.band.mean) }} dRoto</span>
         {% elif swap.start.roto_delta is not none %}
         <span class="roto-chip {% if swap.start.roto_delta > 0 %}roto-chip-pos{% endif %}">
             {% if swap.start.roto_delta > 0 %}+{% endif %}{{ "%.2f"|format(swap.start.roto_delta) }} dRoto
@@ -82,7 +82,7 @@
         <span><strong>{{ move.player }}</strong></span>
         <span class="slot-arrow">{{ move.from }} &rarr; {{ move.to }}</span>
         {% if move.band %}
-        <span class="roto-chip band-{{ move.band.verdict }}">{{ "%+.1f"|format(move.band.mean) }} +/- {{ "%.1f"|format(move.band.sd) }} dRoto</span>
+        <span class="roto-chip band-{{ move.band.verdict }}" title="deltaRoto {{ '%+.2f'|format(move.band.mean) }}, SD {{ '%.2f'|format(move.band.sd) }}, P(helps) {{ (move.band.p_positive * 100)|round|int }}%">{{ "%+.1f"|format(move.band.mean) }} dRoto</span>
         {% elif move.roto_delta is not none %}
         <span class="roto-chip {% if move.roto_delta > 0 %}roto-chip-pos{% endif %}">
             {% if move.roto_delta > 0 %}+{% endif %}{{ "%.2f"|format(move.roto_delta) }} dRoto

@@ -67,7 +67,7 @@
         </td>
         {% endfor %}
         <td>{{ "%.2f" | format(p.sgp) if p.sgp is not none else "&mdash;" }}</td>
-        <td>{% if p.delta_roto is not none %}{{ "%+.2f"|format(p.delta_roto) }}{% else %}&mdash;{% endif %}</td>
+        <td>{% if p.band %}<span class="band-{{ p.band.verdict }}" title="deltaRoto {{ '%+.2f'|format(p.band.mean) }}, SD {{ '%.2f'|format(p.band.sd) }}, P(helps) {{ (p.band.p_positive * 100)|round|int }}%">{{ "%+.2f"|format(p.band.mean) }}</span>{% elif p.delta_roto is not none %}{{ "%+.2f"|format(p.delta_roto) }}{% else %}&mdash;{% endif %}</td>
         <td>
             {% if p.status %}
             <span class="badge badge-il">{{ p.status }}</span>
