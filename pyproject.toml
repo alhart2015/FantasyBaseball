@@ -25,6 +25,8 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "pytest-timeout>=2.3",
+    "pytest-xdist>=3.6",
     "mypy>=1.10",
     "fakeredis>=2.21",
     "ruff>=0.6",
@@ -121,6 +123,16 @@ strict_equality = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+# Per-test wall-clock cap so a future hang fails fast with a stack dump
+# instead of stalling the suite for ~30 min (which is what the unmocked
+# streaks step on the multi-GB local DuckDB did before PR #86). 300s is
+# ~5x the slowest legitimate test (the streaks fixtures fit sklearn models
+# in ~35-55s setup+call), so real tests never false-fail. The "thread"
+# method is mandatory on Windows: the default "signal" method needs
+# SIGALRM, which Windows lacks. Override per-test with
+# @pytest.mark.timeout(N) (0 disables).
+timeout = 300
+timeout_method = "thread"
 
 [tool.ruff]
 line-length = 100
