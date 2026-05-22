@@ -250,8 +250,14 @@ function renderTradeCard(t, gIdx, cIdx) {
     }
     html += '</div>';
     html += '<div style="display: flex; gap: 12px; align-items: center;">';
-    var dc = t.hart_delta >= 0 ? 'var(--success)' : 'var(--danger)';
-    html += '<span style="color: ' + dc + '; font-weight: bold; font-size: 13px;">' + (t.hart_delta >= 0 ? '+' : '') + t.hart_delta.toFixed(2) + ' \u0394Roto</span>';
+    if (t.band) {
+        var m = t.band.mean, s = t.band.sd;
+        html += '<span class="band-line band-' + t.band.verdict + '" style="font-weight: bold; font-size: 13px;">' +
+            (m >= 0 ? '+' : '') + m.toFixed(1) + ' +/- ' + s.toFixed(1) + ' roto</span>';
+    } else {
+        var dc = t.hart_delta >= 0 ? 'var(--success)' : 'var(--danger)';
+        html += '<span style="color: ' + dc + '; font-weight: bold; font-size: 13px;">' + (t.hart_delta >= 0 ? '+' : '') + t.hart_delta.toFixed(2) + ' \u0394Roto</span>';
+    }
     html += '</div></div>';
 
     html += '<div id="' + id + '-detail" class="trade-details">';

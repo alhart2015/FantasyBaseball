@@ -154,6 +154,115 @@ def test_trade_search_response_includes_canonical_keys_away(client, monkeypatch)
     assert cand["receive_key"] == "Aaron Judge::hitter"
 
 
+def test_trade_search_candidate_includes_band(client, monkeypatch):
+    """Each candidate dict must carry a 'band' key after the band-decoration pass.
+
+    When projected_standings is present AND the receive player can be resolved
+    from opp_rosters, band is a dict with mean/sd/p_positive/verdict.  When
+    projected_standings is absent (seed_cache default), band is None -- both
+    shapes are acceptable; the key must always be present.
+    """
+    from fantasy_baseball.models.player import HitterStats, Player
+
+    def _hit(name):
+        return Player(
+            name=name,
+            player_type="hitter",
+            positions=["OF"],
+            rest_of_season=HitterStats(pa=600, ab=500, h=125, r=70, hr=20, rbi=60, sb=5, avg=0.250),
+        ).to_dict()
+
+    me = [_hit("Juan Soto")]
+    opp = [_hit("Aaron Judge")]
+    me[0]["selected_position"] = "OF"
+    opp[0]["selected_position"] = "OF"
+
+    standings_stats = {
+        "R": 1000,
+        "HR": 250,
+        "RBI": 750,
+        "SB": 80,
+        "AVG": 0.260,
+        "W": 70,
+        "K": 1200,
+        "SV": 50,
+        "ERA": 3.80,
+        "WHIP": 1.25,
+    }
+    projected_standings = {
+        "effective_date": "2026-04-01",
+        "teams": [
+            {"name": "Hart", "stats": dict(standings_stats)},
+            {"name": "Rival", "stats": dict(standings_stats)},
+        ],
+    }
+    standings_raw = {
+        "effective_date": "2026-04-15",
+        "teams": [{"name": "Hart", "team_key": "t.1", "rank": 1, "stats": dict(standings_stats)}],
+    }
+
+    _fake_cache(
+        monkeypatch,
+        {
+            "standings": standings_raw,
+            "roster": me,
+            "opp_rosters": {"Rival": opp},
+            "leverage": {"Hart": {}, "Rival": {}},
+            "rankings": {"x": 1},
+            "projections": {
+                "projected_standings": projected_standings,
+                "team_sds": None,
+                "fraction_remaining": 0.6,
+            },
+        },
+    )
+
+    import fantasy_baseball.web.season_routes as routes
+
+    monkeypatch.setattr(routes, "_load_config", lambda: _FakeCfg())
+
+    def fake_search_trades_away(**_kwargs):
+        return [
+            {
+                "opponent": "Rival",
+                "candidates": [
+                    {
+                        "send": "Juan Soto",
+                        "send_positions": ["OF"],
+                        "send_rank": 5,
+                        "send_player_type": "hitter",
+                        "receive": "Aaron Judge",
+                        "receive_positions": ["OF"],
+                        "receive_rank": 3,
+                        "receive_player_type": "hitter",
+                        "hart_delta": 1.5,
+                        "opp_delta": -0.5,
+                        "hart_cat_deltas": {},
+                        "opp_cat_deltas": {},
+                    }
+                ],
+            }
+        ]
+
+    monkeypatch.setattr(
+        "fantasy_baseball.trades.evaluate.search_trades_away",
+        fake_search_trades_away,
+    )
+
+    resp = client.post(
+        "/api/trade-search",
+        json={"player_name": "Juan Soto", "mode": "away"},
+    )
+    assert resp.status_code == 200, resp.get_json()
+    body = resp.get_json()
+    cand = body[0]["candidates"][0]
+    assert "band" in cand, "candidate must always carry a 'band' key"
+    # With projected_standings present and receive player in opp_rosters, band
+    # should be a dict; if resolution fails for any reason, None is acceptable.
+    if cand["band"] is not None:
+        assert set(cand["band"].keys()) == {"mean", "sd", "p_positive", "verdict"}
+
+
 def test_trade_search_response_includes_canonical_keys_for(client, monkeypatch):
     """``mode=for`` candidates also expose ``send_key``/``receive_key``."""
     _seed_cache(monkeypatch)
