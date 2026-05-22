@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 from fantasy_baseball.data.kv_store import KVStore, get_kv, is_remote
-from fantasy_baseball.lineup.delta_roto import score_swap
+from fantasy_baseball.lineup.delta_roto import compute_one_for_one_band, score_swap
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import BENCH_SLOTS
 from fantasy_baseball.models.standings import ProjectedStandings, Standings, StandingsEntry
@@ -733,6 +733,7 @@ def compute_comparison_standings(
     projected_standings: ProjectedStandings,
     user_team_name: str,
     *,
+    fraction_remaining: float = 1.0,
     roster_player_projection: "Player | None" = None,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
 ) -> dict:
@@ -777,6 +778,20 @@ def compute_comparison_standings(
 
     delta_roto = score_swap(ev_roto_before, ev_roto_after, user_team_name)
 
+    field_stats = {
+        e.team_name: e.stats for e in projected_standings.entries if e.team_name != user_team_name
+    }
+    band = compute_one_for_one_band(
+        roster_player_name,
+        other_player,
+        user_roster,
+        field_stats,
+        user_team_name,
+        fraction_remaining,
+        n_draws=400,
+        seed=0,
+    )
+
     return {
         "before": {
             "stats": all_stats_before,
@@ -789,6 +804,7 @@ def compute_comparison_standings(
             "ev_roto": ev_roto_after,
         },
         "delta_roto": delta_roto.to_dict(),
+        "band": band.to_dict(),
         "categories": [c.value for c in ALL_CATEGORIES],
         "user_team": user_team_name,
     }

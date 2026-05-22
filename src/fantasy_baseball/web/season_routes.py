@@ -1394,6 +1394,9 @@ def register_routes(app: Flask) -> None:
 
         config = _load_config()
 
+        fr_raw = proj_cache.get("fraction_remaining")
+        fr = 1.0 if fr_raw is None else float(fr_raw)
+
         from fantasy_baseball.web.season_data import compute_comparison_standings
 
         result = compute_comparison_standings(
@@ -1402,6 +1405,7 @@ def register_routes(app: Flask) -> None:
             user_roster=user_roster,
             projected_standings=_projected_from_cache(projected_standings),
             user_team_name=config.team_name,
+            fraction_remaining=fr,
             roster_player_projection=roster_player_projection,
             team_sds=_team_sds_from_cache(proj_cache.get("team_sds")),
         )
