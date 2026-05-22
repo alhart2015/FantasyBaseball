@@ -5,7 +5,12 @@ deltaRoto so it is identical to the point estimate, and ``sd``
 propagates the swapped players' per-category stat variance through each
 category's Gaussian roto-points curve. These tests pin the mean-equals-EV
 contract, the honest-signal property (noisier categories -> wider band),
-determinism, and the crosses-zero verdict mapping.
+determinism, and the P(helps) verdict mapping.
+
+Verdict rule (user-requested, replacing the old +/-1 SD crosses-zero rule):
+  p_positive > 0.75 -> "real"
+  p_positive < 0.25 -> "downgrade"
+  else              -> "coin-flip"
 """
 
 from __future__ import annotations
@@ -269,36 +274,48 @@ def test_noisy_category_swap_has_wider_band() -> None:
     assert sb_band.sd > r_band.sd
 
 
-def test_band_class_real_when_band_clears_zero() -> None:
-    """A large positive swap whose mean - sd > 0 reads 'real'."""
+def test_band_class_real_when_p_positive_high() -> None:
+    """A large positive swap with p_positive > 0.75 reads 'real'.
+
+    Verdict is now keyed on P(helps) >= 75% (user-requested change,
+    replacing the old +/-1 SD crosses-zero rule).
+    """
     before = [_hitter(f"H{i}") for i in range(13)]
     add_player = _hitter("Monster", r=140, hr=50, rbi=140, sb=30)
     swap = _build_swap(before, "H12", add_player)
     band = compute_delta_roto_band(**swap.band_kwargs)
-    assert band.mean - band.sd > 0
+    assert band.p_positive > 0.75
     assert band.to_dict()["verdict"] == "real"
 
 
-def test_band_class_downgrade_when_band_below_zero() -> None:
-    """A clearly negative swap whose mean + sd < 0 reads 'downgrade'."""
+def test_band_class_downgrade_when_p_positive_low() -> None:
+    """A clearly negative swap with p_positive < 0.25 reads 'downgrade'.
+
+    Verdict is now keyed on P(helps) <= 25% (user-requested change,
+    replacing the old +/-1 SD crosses-zero rule).
+    """
     before = [_hitter(f"H{i}") for i in range(13)]
     # Replace a strong starter with a weak player -> negative delta.
     before = [_hitter("Star", r=120, hr=40, rbi=120, sb=25), *before[1:]]
     add_player = _hitter("Scrub", r=20, hr=2, rbi=18, sb=1)
     swap = _build_swap(before, "Star", add_player)
     band = compute_delta_roto_band(**swap.band_kwargs)
-    assert band.mean + band.sd < 0
+    assert band.p_positive < 0.25
     assert band.to_dict()["verdict"] == "downgrade"
 
 
-def test_band_class_coin_flip_when_band_straddles_zero() -> None:
-    """A small swap whose band straddles zero reads 'coin-flip'."""
+def test_band_class_coin_flip_when_p_positive_near_50() -> None:
+    """A marginal swap with p_positive near 0.5 reads 'coin-flip'.
+
+    Verdict is now keyed on P(helps) -- 25% to 75% is coin-flip
+    (user-requested change, replacing the old +/-1 SD crosses-zero rule).
+    """
     before = [_hitter(f"H{i}") for i in range(13)]
     # Add a player nearly identical to the dropped one, nudged in noisy SB.
     add_player = _hitter("Marginal", sb=16)
     swap = _build_swap(before, "H12", add_player)
     band = compute_delta_roto_band(**swap.band_kwargs)
-    assert band.mean - band.sd <= 0 <= band.mean + band.sd
+    assert 0.25 <= band.p_positive <= 0.75
     assert band.to_dict()["verdict"] == "coin-flip"
 
 

@@ -136,7 +136,7 @@ class DeltaRotoBand:
     (identical, not an approximation). ``sd`` is the analytic standard
     deviation of the deltaRoto under the swapped players' per-category
     stat uncertainty, and ``p_positive`` is the Gaussian probability the
-    swap helps. ``to_dict`` calls :func:`band_class` so the crosses-zero
+    swap helps. ``to_dict`` calls :func:`band_class` so the P(helps)
     verdict is computed once, in Python, for every surface.
     """
 
@@ -151,7 +151,7 @@ class DeltaRotoBand:
             "mean": round(self.mean, 2),
             "sd": round(self.sd, 2),
             "p_positive": round(self.p_positive, 3),
-            "verdict": band_class(self.mean, self.sd),
+            "verdict": band_class(self.p_positive),
         }
 
 
@@ -438,8 +438,13 @@ def compute_delta_roto_band(
     sd = math.sqrt(var_total)
     if sd > 0.0:
         p_positive = _normal_cdf(mean / sd)
+    elif mean > 0:
+        p_positive = 1.0
+    elif mean < 0:
+        p_positive = 0.0
     else:
-        p_positive = 1.0 if mean > 0 else 0.0
+        # mean == 0, sd == 0 (identity swap): neutral, maps to coin-flip.
+        p_positive = 0.5
     return DeltaRotoBand(mean=mean, sd=sd, p_positive=p_positive)
 
 
