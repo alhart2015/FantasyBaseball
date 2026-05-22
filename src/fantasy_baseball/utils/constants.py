@@ -220,6 +220,17 @@ PITCHER_CORRELATION: list[list[float]] = [
 # full season. Normalized to sum to zero (roto is zero-sum).
 # Each entry is (mean_adjustment, sd). Applied per-simulation as
 # N(mean, sd) added to a team's roto total after scoring.
+#
+# SHELVED 2026-05-21: no longer surfaced on the season dashboard. With only
+# three seasons (2023-2025) of draft-to-finish data, most per-team means are
+# noise -- e.g. Hart of the Order's +11.1 +/- 14.4 has a confidence interval
+# that straddles zero, while Hello Peanuts' +17.1 +/- 8.4 is more clearly
+# real signal. The code path (apply_management_adjustment, use_management=True)
+# is left intact for reactivation once more seasons accumulate.
+# FUTURE REFINEMENT: discount each mean by its SD -- shrink toward zero in
+# proportion to the uncertainty (e.g. weight by a t-stat like mean/sd) so
+# low-confidence estimates stop moving the standings as much as high-confidence
+# ones, instead of trusting every mean equally.
 MANAGEMENT_ADJUSTMENT: dict[str, tuple[float, float]] = {
     "Hello Peanuts!": (+17.1, 8.4),
     "Boston Estrellas": (+12.8, 7.8),

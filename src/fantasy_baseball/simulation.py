@@ -469,6 +469,12 @@ def apply_management_adjustment(
 ) -> dict[str, dict[str, float]]:
     """Scale team stats by in-season management quality before roto scoring.
 
+    NOTE (shelved 2026-05-21): not currently surfaced on the season
+    dashboard -- the 2023-2025 calibration is too noisy to display. See
+    MANAGEMENT_ADJUSTMENT in utils.constants for the SD-discount refinement
+    idea (weight each mean by its confidence). Kept intact for reactivation
+    once more seasons of data accumulate.
+
     For each team, draws a management factor from a normal distribution
     calibrated from historical draft-to-finish performance (2023-2025).
     Good managers (positive adjustment) get a stat boost representing

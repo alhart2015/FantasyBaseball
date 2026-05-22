@@ -373,9 +373,7 @@ def register_routes(app: Flask) -> None:
         preseason_data = None
         current_projected_data = None
         mc_data = None
-        mc_mgmt_data = None
         rest_of_season_mc_data = None
-        rest_of_season_mgmt_mc_data = None
         baseline_meta = None
         raw_breakdown = None
 
@@ -415,17 +413,9 @@ def register_routes(app: Flask) -> None:
                 baseline_meta = raw_mc.get("baseline_meta")
                 if raw_mc.get("base"):
                     mc_data = format_monte_carlo_for_display(raw_mc["base"], config.team_name)
-                if raw_mc.get("with_management"):
-                    mc_mgmt_data = format_monte_carlo_for_display(
-                        raw_mc["with_management"], config.team_name
-                    )
                 if raw_mc.get("rest_of_season"):
                     rest_of_season_mc_data = format_monte_carlo_for_display(
                         raw_mc["rest_of_season"], config.team_name
-                    )
-                if raw_mc.get("rest_of_season_with_management"):
-                    rest_of_season_mgmt_mc_data = format_monte_carlo_for_display(
-                        raw_mc["rest_of_season_with_management"], config.team_name
                     )
 
         return render_template(
@@ -437,10 +427,8 @@ def register_routes(app: Flask) -> None:
             current_projected=current_projected_data,
             standings_breakdown=raw_breakdown,
             mc=mc_data,
-            mc_mgmt=mc_mgmt_data,
             baseline_meta=baseline_meta,
             rest_of_season_mc=rest_of_season_mc_data,
-            rest_of_season_mgmt_mc=rest_of_season_mgmt_mc_data,
             categories=[c.value for c in ALL_CATEGORIES],
             all_categories=ALL_CATEGORIES,
         )
