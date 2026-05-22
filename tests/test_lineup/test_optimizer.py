@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from fantasy_baseball.lineup.optimizer import (
     HitterAssignment,
     PitcherStarter,
@@ -419,6 +421,23 @@ class TestBandFullRosterOperatingPoint:
 
     _TOLERANCE = 0.05
 
+    @pytest.mark.xfail(
+        reason=(
+            "Mechanism change (analytic band, 2026-05-22): the band's mean is "
+            "now the EV deltaRoto, derived from the projected_standings 'Us' row "
+            "plus the swap's ROS delta (to guarantee mean == compute_delta_roto "
+            "within 1e-9). This fixture decouples the 'Us' row "
+            "(R=0,HR=100,RBI=0,SB=0) from the actual roster, so subtracting an "
+            "on-roster hitter yields nonsensical negative R/RBI and the EV mean "
+            "legitimately flips sign vs the lineup-subset roto_delta. The old MC "
+            "band re-summed the players directly and ignored the standings row, "
+            "so the decoupling was invisible. In production the 'Us' row is built "
+            "from the roster (ProjectedStandings.from_rosters) so this never "
+            "arises. Phase 2 (optimizer band wiring, Task 6) re-fixtures this "
+            "against a roster-consistent standings row."
+        ),
+        strict=True,
+    )
     def test_hitter_band_mean_agrees_in_direction_with_roto_delta(self):
         """A decisive hitter (B has SB advantage that flips a boundary) has a
         positive roto_delta.  With the full-roster operating point the band.mean

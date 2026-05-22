@@ -355,8 +355,8 @@ def audit_roster(
                 field_stats,
                 team_name,
                 fraction_remaining,
-                n_draws=300,
-                seed=0,
+                projected_standings=projected_standings,
+                team_sds=team_sds,
             )
 
             scored.append(

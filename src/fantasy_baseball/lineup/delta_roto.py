@@ -1,20 +1,33 @@
-"""deltaRoto — roto-point impact metric for player swaps.
+"""deltaRoto -- roto-point impact metric for player swaps.
 
 Uses EV-based score_roto, so deltaRoto.total is simply the change in
 total expected roto points across all categories. No tuning knobs,
-no tie bands, no defensive-comfort heuristic — the Gaussian pairwise
+no tie bands, no defensive-comfort heuristic -- the Gaussian pairwise
 win-probabilities price projection uncertainty and vulnerability
 directly into the score.
+
+The confidence band (:class:`DeltaRotoBand`) is closed-form, not Monte
+Carlo: its ``mean`` reuses the EV deltaRoto so it is identical to the
+point estimate, and its ``sd`` propagates the swapped players'
+per-category stat variance through each category's Gaussian
+roto-points curve via a fixed Gauss-Hermite rule. Deterministic and
+cheap enough to run inline.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from fantasy_baseball.models.standings import CategoryStats
-from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
+from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES,
+    COUNTING_STATS,
+    INVERSE_STATS,
+    Category,
+)
 
 if TYPE_CHECKING:
     from fantasy_baseball.models.player import Player
@@ -53,7 +66,7 @@ def score_swap(
 
     Total is the change in team total EV roto points. Each category's
     ``roto_delta`` is the change in that category's EV points for the
-    user's team. No discounts, no penalties — the EV already reflects
+    user's team. No discounts, no penalties -- the EV already reflects
     projection uncertainty, defensive vulnerability, and boundary
     proximity via the sigmoid on pairwise win probabilities.
     """
@@ -84,7 +97,7 @@ def compute_delta_roto(
     When ``team_sds`` is provided, ``score_roto`` uses pairwise Gaussian
     win-probabilities so a swap's impact reflects projection
     uncertainty (ERoto). Pass ``None`` explicitly for exact-rank
-    semantics — no default: callers must make the choice so we can't
+    semantics -- no default: callers must make the choice so we can't
     silently fall back to integer roto by forgetting the argument.
 
     Args:
@@ -94,7 +107,7 @@ def compute_delta_roto(
         projected_standings: end-of-season stats for all teams.
         team_name: user's team name.
         team_sds: ``{team: {Category: sd}}`` for EV scoring, or ``None``
-            for rank-based. Required keyword — no default.
+            for rank-based. Required keyword -- no default.
 
     Raises:
         ValueError: if drop_name is not found on the roster.
@@ -117,13 +130,14 @@ def compute_delta_roto(
 
 @dataclass
 class DeltaRotoBand:
-    """Monte-Carlo confidence band for a before->after deltaRoto.
+    """Closed-form confidence band for a before->after deltaRoto.
 
-    ``mean`` approximately tracks the EV point estimate from
-    :func:`compute_delta_roto`; ``sd`` and ``p_positive`` describe how
-    often the swap actually helps once playing-time and performance
-    variance are sampled. ``to_dict`` calls :func:`band_class` so the
-    crosses-zero verdict is computed once, in Python, for every surface.
+    ``mean`` is the EV point estimate from :func:`compute_delta_roto`
+    (identical, not an approximation). ``sd`` is the analytic standard
+    deviation of the deltaRoto under the swapped players' per-category
+    stat uncertainty, and ``p_positive`` is the Gaussian probability the
+    swap helps. ``to_dict`` calls :func:`band_class` so the crosses-zero
+    verdict is computed once, in Python, for every surface.
     """
 
     mean: float
@@ -141,35 +155,223 @@ class DeltaRotoBand:
         }
 
 
-def _sum_realized(realized_rows: list[dict[str, Any]]) -> CategoryStats:
-    """Sum one realization's per-player rows into a team CategoryStats.
+# Fixed 9-node Gauss-Hermite (probabilists') quadrature for integrating a
+# function of dX ~ N(d_mu, sigma^2). Nodes/weights from
+# numpy.polynomial.hermite_e.hermegauss(9), whose weight function is
+# exp(-x^2/2), so E[f(X)] = sum_k (w_k / sqrt(2*pi)) * f(d_mu + sigma * z_k).
+# Hardcoded so the band carries no numpy dependency and stays deterministic.
+_GH_NODES: tuple[float, ...] = (
+    -4.512745863399783,
+    -3.20542900285647,
+    -2.07684797867783,
+    -1.0232556637891326,
+    0.0,
+    1.0232556637891326,
+    2.07684797867783,
+    3.20542900285647,
+    4.512745863399783,
+)
+_GH_WEIGHTS: tuple[float, ...] = (
+    5.601272441031135e-05,
+    0.0069913404977412184,
+    0.12512187656567714,
+    0.6118617025232779,
+    1.0185664100087874,
+    0.6118617025232779,
+    0.12512187656567714,
+    0.0069913404977412184,
+    5.601272441031135e-05,
+)
+_GH_NORM = math.sqrt(2.0 * math.pi)
 
-    Mirrors ``simulation.simulate_season``: counting stats sum directly,
-    rate stats recombine from component totals (H/AB, ER/IP, (BB+H)/IP).
+
+def _normal_cdf(z: float) -> float:
+    """Standard-normal CDF via math.erf."""
+    return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+
+
+def _swap_sets(
+    before_players: list[Player],
+    after_players: list[Player],
+) -> tuple[list[Player], list[Player]]:
+    """Players entering (IN) and leaving (OUT) the user's roster.
+
+    A player is IN if their name is in ``after`` but not ``before``, OUT
+    if in ``before`` but not ``after``. Players shared by both lists
+    cancel (common random numbers) and contribute no variance.
     """
-    from fantasy_baseball.models.player import PlayerType
-    from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
+    before_names = {p.name for p in before_players}
+    after_names = {p.name for p in after_players}
+    in_players = [p for p in after_players if p.name not in before_names]
+    out_players = [p for p in before_players if p.name not in after_names]
+    return in_players, out_players
 
-    h = [r for r in realized_rows if r["player_type"] == PlayerType.HITTER]
-    p = [r for r in realized_rows if r["player_type"] == PlayerType.PITCHER]
-    ab = sum(x["ab"] for x in h)
-    hits = sum(x["h"] for x in h)
-    ip = sum(x["ip"] for x in p)
-    er = sum(x["er"] for x in p)
-    bb = sum(x["bb"] for x in p)
-    ha = sum(x["h_allowed"] for x in p)
-    return CategoryStats(
-        r=sum(x["r"] for x in h),
-        hr=sum(x["hr"] for x in h),
-        rbi=sum(x["rbi"] for x in h),
-        sb=sum(x["sb"] for x in h),
-        avg=calculate_avg(hits, ab),
-        w=sum(x["w"] for x in p),
-        k=sum(x["k"] for x in p),
-        sv=sum(x.get("sv", 0) for x in p),
-        era=calculate_era(er, ip),
-        whip=calculate_whip(bb, ha, ip),
-    )
+
+def _ev_delta_and_stats(
+    before_players: list[Player],
+    after_players: list[Player],
+    projected_standings: ProjectedStandings,
+    team_name: str,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
+) -> tuple[float, CategoryStats, CategoryStats]:
+    """EV deltaRoto total plus the before/after user-team stat rows.
+
+    Mean mechanism (identical to :func:`compute_delta_roto`,
+    :mod:`multi_trade`, and the audit): start from the user's
+    ``projected_standings`` row, subtract the aggregated ROS of the OUT
+    players, add the aggregated ROS of the IN players, score before/after
+    with ``team_sds``, take the total delta. For a one-for-one swap this
+    is exactly ``compute_delta_roto(...).total`` because a single-player
+    ``aggregate_player_stats`` equals ``player_rest_of_season_stats`` and
+    ``apply_swap_delta`` is the same call.
+
+    Also returns the user team's before/after :class:`CategoryStats` rows
+    so the sd path can read the per-category baseline mean and shift.
+    """
+    from fantasy_baseball.scoring import score_roto_dict
+    from fantasy_baseball.trades.evaluate import aggregate_player_stats, apply_swap_delta
+
+    in_players, out_players = _swap_sets(before_players, after_players)
+    loses_ros = aggregate_player_stats(out_players)
+    gains_ros = aggregate_player_stats(in_players)
+
+    all_before = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
+    user_before_dict = all_before[team_name]
+    user_after_dict = apply_swap_delta(user_before_dict, loses_ros, gains_ros)
+
+    all_after = dict(all_before)
+    all_after[team_name] = user_after_dict
+
+    roto_before = score_roto_dict(all_before, team_sds=team_sds)
+    roto_after = score_roto_dict(all_after, team_sds=team_sds)
+    total = roto_after[team_name]["total"] - roto_before[team_name]["total"]
+
+    before_cs = CategoryStats.from_dict(user_before_dict)
+    after_cs = CategoryStats.from_dict(user_after_dict)
+    return total, before_cs, after_cs
+
+
+def _swap_category_variance(
+    cat: Category,
+    in_players: list[Player],
+    out_players: list[Player],
+    before_players: list[Player],
+    after_players: list[Player],
+    fraction_remaining: float,
+) -> float:
+    """Variance of the swap's change in the user's category-``cat`` total.
+
+    Counting categories (R, HR, RBI, SB, W, K, SV): variances add across
+    players, so ``sigma2 = fraction_remaining * sum over IN and OUT
+    players of player_category_variance(p)[cat]``. Both the entering and
+    leaving players' uncertainties contribute. Scaled by
+    ``fraction_remaining`` because variance is proportional to the
+    remaining season (matches ``build_team_sds`` using
+    ``sd_scale = sqrt(fraction_remaining)``).
+
+    Rate categories (AVG, ERA, WHIP): not additive per player (shared
+    denominator), so the marginal variance is the change in the team's
+    rate variance between the after- and before-rosters. We take the
+    absolute difference of the two team-level rate variances from
+    ``project_team_sds`` (a defensible marginal-variance estimate: the
+    rate-variance change attributable to the swap), scaled by
+    ``fraction_remaining``.
+    """
+    from fantasy_baseball.scoring import player_category_variance, project_team_sds
+
+    if cat in COUNTING_STATS:
+        total = 0.0
+        for p in (*in_players, *out_players):
+            total += player_category_variance(p).get(cat, 0.0)
+        return fraction_remaining * total
+
+    # Rate category: derive from before/after team-level rate SDs.
+    sd_before = project_team_sds(before_players, displacement=False).get(cat, 0.0)
+    sd_after = project_team_sds(after_players, displacement=False).get(cat, 0.0)
+    return fraction_remaining * abs(sd_after * sd_after - sd_before * sd_before)
+
+
+def _category_points(
+    x: float,
+    field_means: list[float],
+    combined_sds: list[float],
+    *,
+    higher_is_better: bool,
+) -> float:
+    """User's category points at realized total ``x``.
+
+    ``pts(x) = 1 + sum_j Phi((x - mu_j) / s_j)`` over the fixed field,
+    the same Gaussian-pairwise expectation ``score_roto`` sums. For
+    inverse categories (ERA, WHIP) lower is better, so the difference is
+    flipped. A zero combined SD degrades to the rank step function.
+    """
+    pts = 1.0
+    for mu_j, s_j in zip(field_means, combined_sds, strict=True):
+        diff = (x - mu_j) if higher_is_better else (mu_j - x)
+        if s_j <= 0.0:
+            pts += 1.0 if diff > 0 else (0.0 if diff < 0 else 0.5)
+        else:
+            pts += _normal_cdf(diff / s_j)
+    return pts
+
+
+def _category_delta_variance(
+    cat: Category,
+    before_cs: CategoryStats,
+    after_cs: CategoryStats,
+    field_stats: Mapping[str, CategoryStats],
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
+    team_name: str,
+    sigma2: float,
+) -> float:
+    """Variance of the category-``cat`` roto-points delta under the swap.
+
+    The user's realized category total is ``mu_b + dX`` where ``mu_b`` is
+    the before-swap category mean and ``dX ~ N(d_mu, sigma2)`` with
+    ``d_mu`` the EV stat shift. The category points delta is
+    ``dpts = pts(mu_b + dX) - pts(mu_b)``, holding the (cancelling)
+    shared roster at its mean. We integrate ``Var(dpts) = E[dpts^2] -
+    E[dpts]^2`` with a fixed Gauss-Hermite rule.
+
+    With ``team_sds=None`` the curve degrades to the rank step function
+    (same as ``score_roto``); the band then reflects only whether the
+    EV stat shift crosses a rank boundary.
+    """
+    if sigma2 <= 0.0:
+        return 0.0
+
+    sds = team_sds or {}
+    higher_is_better = cat not in INVERSE_STATS
+    sd_me = sds.get(team_name, {}).get(cat, 0.0)
+    field_means: list[float] = []
+    combined_sds: list[float] = []
+    for tname, cs in field_stats.items():
+        field_means.append(cs[cat])
+        sd_j = sds.get(tname, {}).get(cat, 0.0)
+        combined_sds.append(math.sqrt(sd_me * sd_me + sd_j * sd_j))
+
+    mu_b = before_cs[cat]
+    d_mu = after_cs[cat] - before_cs[cat]
+    sigma = math.sqrt(sigma2)
+
+    base_pts = _category_points(mu_b, field_means, combined_sds, higher_is_better=higher_is_better)
+
+    e_dpts = 0.0
+    e_dpts_sq = 0.0
+    for node, weight in zip(_GH_NODES, _GH_WEIGHTS, strict=True):
+        dx = d_mu + sigma * node
+        dpts = (
+            _category_points(
+                mu_b + dx, field_means, combined_sds, higher_is_better=higher_is_better
+            )
+            - base_pts
+        )
+        w = weight / _GH_NORM
+        e_dpts += w * dpts
+        e_dpts_sq += w * dpts * dpts
+
+    var = e_dpts_sq - e_dpts * e_dpts
+    return max(var, 0.0)
 
 
 def compute_delta_roto_band(
@@ -179,60 +381,57 @@ def compute_delta_roto_band(
     team_name: str,
     fraction_remaining: float,
     *,
-    n_draws: int = 400,
-    seed: int = 0,
+    projected_standings: ProjectedStandings,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
 ) -> DeltaRotoBand:
-    """Monte-Carlo the deltaRoto of a before->after roster change.
+    """Closed-form confidence band for a before->after roster change.
 
-    Each draw samples realized stats for the union of both rosters ONCE
-    via the calibrated variance model (``simulation._apply_variance``),
-    so players shared between before and after get identical realized
-    stats within a draw (common random numbers). The before and after
-    subsets of that single realization are summed and scored against a
-    FIXED field (``field_stats``); the per-draw delta is
-    ``after_total - before_total``. Returns the mean, sd, and fraction
-    of draws above zero.
+    ``mean`` is the EV deltaRoto (identical to
+    :func:`compute_delta_roto` for a one-for-one swap; see
+    :func:`_ev_delta_and_stats`). ``sd`` propagates the swapped players'
+    per-category stat variance through each category's Gaussian
+    roto-points curve, summing per-category variances under a
+    category-independence assumption. Deterministic -- no sampling.
 
     Args:
-        before_players: roster before the change.
-        after_players: roster after the change.
-        field_stats: other teams' fixed point CategoryStats, keyed by name.
-        team_name: user's team name (the key the swap is scored under).
-        fraction_remaining: portion of the season left to simulate.
-        n_draws: number of Monte-Carlo draws.
-        seed: RNG seed for reproducibility.
+        before_players: the user's roster before the change.
+        after_players: the user's roster after the change. ``before`` and
+            ``after`` differ only by the swapped players; shared players
+            cancel.
+        field_stats: the other teams' fixed point :class:`CategoryStats`,
+            keyed by team name (``projected_standings.field_stats(team)``).
+        team_name: the user's team name (the key the swap is scored under).
+        fraction_remaining: portion of the season left -- scales variance.
+        projected_standings: full projected standings, used to anchor the
+            EV mean on the user's projected row.
+        team_sds: ``{team: {Category: sd}}``, already scaled by
+            ``sqrt(fraction_remaining)`` -- the same combined-SD softness
+            ``score_roto`` uses for the points curve. ``None`` falls back
+            to the rank step function (no curve softness).
     """
-    import numpy as np
-
-    from fantasy_baseball.models.player import PlayerType
-    from fantasy_baseball.scoring import score_roto_dict
-    from fantasy_baseball.simulation import _apply_variance, _flatten_full_season
-
-    before_names = [p.name for p in before_players]
-    after_names = [p.name for p in after_players]
-    union = list({p.name: p for p in (after_players + before_players)}.values())
-    union_h = [_flatten_full_season(p) for p in union if p.player_type == PlayerType.HITTER]
-    union_p = [_flatten_full_season(p) for p in union if p.player_type == PlayerType.PITCHER]
-
-    rng = np.random.default_rng(seed)
-    field_table = dict(field_stats)
-    deltas = np.empty(n_draws)
-    for i in range(n_draws):
-        inj: list[tuple[str, float]] = []
-        rows = _apply_variance(union_h, PlayerType.HITTER, rng, inj, fraction_remaining)
-        rows += _apply_variance(union_p, PlayerType.PITCHER, rng, inj, fraction_remaining)
-        by_name = {r["name"]: r for r in rows}
-        before_cs = _sum_realized([by_name[n] for n in before_names])
-        after_cs = _sum_realized([by_name[n] for n in after_names])
-        b = score_roto_dict({team_name: before_cs, **field_table}, team_sds=None)
-        a = score_roto_dict({team_name: after_cs, **field_table}, team_sds=None)
-        deltas[i] = a[team_name]["total"] - b[team_name]["total"]
-
-    return DeltaRotoBand(
-        mean=float(np.mean(deltas)),
-        sd=float(np.std(deltas)),
-        p_positive=float(np.mean(deltas > 0)),
+    mean, before_cs, after_cs = _ev_delta_and_stats(
+        before_players, after_players, projected_standings, team_name, team_sds
     )
+
+    in_players, out_players = _swap_sets(before_players, after_players)
+
+    var_total = 0.0
+    for cat in ALL_CATEGORIES:
+        sigma2 = _swap_category_variance(
+            cat, in_players, out_players, before_players, after_players, fraction_remaining
+        )
+        if sigma2 <= 0.0:
+            continue
+        var_total += _category_delta_variance(
+            cat, before_cs, after_cs, field_stats, team_sds, team_name, sigma2
+        )
+
+    sd = math.sqrt(var_total)
+    if sd > 0.0:
+        p_positive = _normal_cdf(mean / sd)
+    else:
+        p_positive = 1.0 if mean > 0 else 0.0
+    return DeltaRotoBand(mean=mean, sd=sd, p_positive=p_positive)
 
 
 def compute_one_for_one_band(
@@ -243,13 +442,14 @@ def compute_one_for_one_band(
     team_name: str,
     fraction_remaining: float,
     *,
-    n_draws: int = 400,
-    seed: int = 0,
+    projected_standings: ProjectedStandings,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
 ) -> DeltaRotoBand:
     """Band for a one-for-one swap: drop ``drop_name``, add ``add_player``.
 
     Thin wrapper that builds the before/after rosters and delegates to
-    :func:`compute_delta_roto_band`.
+    :func:`compute_delta_roto_band`. The band's ``mean`` equals
+    ``compute_delta_roto(drop_name, add_player, ...).total``.
     """
     before = list(active_players)
     after = [p for p in active_players if p.name != drop_name] + [add_player]
@@ -259,6 +459,6 @@ def compute_one_for_one_band(
         field_stats,
         team_name,
         fraction_remaining,
-        n_draws=n_draws,
-        seed=seed,
+        projected_standings=projected_standings,
+        team_sds=team_sds,
     )
