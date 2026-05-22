@@ -162,6 +162,12 @@
 <script src="{{ url_for('static', filename='three_mode_delta_view.js') }}"></script>
 
 <script>
+function bandLineHTML(band, tag, styleAttr) {
+  var m = band.mean, s = band.sd, pct = Math.round(band.p_positive * 100);
+  return '<' + tag + ' class="band-line band-' + band.verdict + '"' + (styleAttr ? ' style="' + styleAttr + '"' : '') +
+         '>' + (m >= 0 ? '+' : '') + m.toFixed(1) + ' +/- ' + s.toFixed(1) + ' roto  -  ' + pct + '% to help</' + tag + '>';
+}
+
 function toggleSection(id) {
     var body = document.getElementById('section-' + id);
     var chevron = document.getElementById('chevron-' + id);
@@ -251,9 +257,7 @@ function renderTradeCard(t, gIdx, cIdx) {
     html += '</div>';
     html += '<div style="display: flex; gap: 12px; align-items: center;">';
     if (t.band) {
-        var m = t.band.mean, s = t.band.sd, pct = Math.round(t.band.p_positive * 100);
-        html += '<span class="band-line band-' + t.band.verdict + '" style="font-weight: bold; font-size: 13px;">' +
-            (m >= 0 ? '+' : '') + m.toFixed(1) + ' +/- ' + s.toFixed(1) + ' roto  -  ' + pct + '% to help</span>';
+        html += bandLineHTML(t.band, 'span', 'font-weight: bold; font-size: 13px;');
     } else {
         var dc = t.hart_delta >= 0 ? 'var(--success)' : 'var(--danger)';
         html += '<span style="color: ' + dc + '; font-weight: bold; font-size: 13px;">' + (t.hart_delta >= 0 ? '+' : '') + t.hart_delta.toFixed(2) + ' \u0394Roto</span>';
@@ -733,10 +737,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const target = document.getElementById("bt-result-deltas");
     if (data.band) {
-      const m = data.band.mean, s = data.band.sd;
-      target.insertAdjacentHTML('afterbegin',
-        '<div class="band-line band-' + data.band.verdict + '">' +
-        (m >= 0 ? '+' : '') + m.toFixed(1) + ' +/- ' + s.toFixed(1) + ' roto</div>');
+      target.insertAdjacentHTML('afterbegin', bandLineHTML(data.band, 'div', ''));
     }
     const payload = {
       roto: data.roto || {delta_total: 0, categories: {}},

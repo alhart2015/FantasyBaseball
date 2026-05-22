@@ -1,3 +1,7 @@
+{% macro band_chip(b, css_class, label='') -%}
+<span class="{{ css_class }}" title="deltaRoto {{ '%+.2f'|format(b.mean) }}, SD {{ '%.2f'|format(b.sd) }}, P(helps) {{ (b.p_positive * 100)|round|int }}%">{{ '%+.1f'|format(b.mean) }}{% if label %} {{ label }}{% endif %}</span>
+{%- endmacro %}
+
 {%- macro rank_badge(rank_obj) -%}
 {%- if rank_obj and rank_obj.rest_of_season -%}
 <span class="rank-badge">#{{ rank_obj.rest_of_season }}
