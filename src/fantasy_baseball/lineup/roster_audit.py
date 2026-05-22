@@ -290,8 +290,8 @@ def audit_roster(
     roto_before = score_roto_dict(all_before, team_sds=team_sds)
     user_before_stats = all_before[team_name]
 
-    # Field stats for the MC confidence band: all OTHER teams' CategoryStats,
-    # held fixed while we sample variance for the user's before/after roster.
+    # Field stats for the analytic confidence band: all OTHER teams' CategoryStats,
+    # held fixed while computing the closed-form band for the user's before/after roster.
     field_stats = projected_standings.field_stats(team_name)
 
     entries: list[AuditEntry] = []
