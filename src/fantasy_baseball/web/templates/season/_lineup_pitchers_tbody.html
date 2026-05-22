@@ -1,7 +1,7 @@
 {# Pitcher table body. See _lineup_hitters_tbody.html for shape contract.
    Caller passes `players` (pitcher entries) and `totals` (pitcher_totals).
 #}
-{% from "season/macros.html" import rank_badge, band_chip %}
+{% from "season/macros.html" import rank_badge, band_cell %}
 {% if totals %}
 {% set t = totals %}
 <tr class="totals-row">
@@ -67,7 +67,7 @@
         </td>
         {% endfor %}
         <td>{{ "%.2f" | format(p.sgp) if p.sgp is not none else "&mdash;" }}</td>
-        <td>{% if p.band %}{{ band_chip(p.band, 'band-' ~ p.band.verdict) }}{% elif p.delta_roto is not none %}{{ "%+.2f"|format(p.delta_roto) }}{% else %}&mdash;{% endif %}</td>
+        <td>{% if p.band %}{{ band_cell(p.band) }}{% elif p.delta_roto is not none %}{{ "%+.2f"|format(p.delta_roto) }}{% else %}&mdash;{% endif %}</td>
         <td>
             {% if p.status %}
             <span class="badge badge-il">{{ p.status }}</span>

@@ -2,6 +2,25 @@
 <span class="{{ css_class }}" title="deltaRoto {{ '%+.2f'|format(b.mean) }}, SD {{ '%.2f'|format(b.sd) }}, P(helps) {{ (b.p_positive * 100)|round|int }}%">{{ '%+.1f'|format(b.mean) }}{% if label %} {{ label }}{% endif %}</span>
 {%- endmacro %}
 
+{# deltaRoto band as a colored rectangle (gap-badge) plus a rich hover
+   tooltip (mean / SD / P(helps)). Single source of truth for the band
+   display on the lineup and roster-audit tables -- both surfaces render
+   identically. The hover requires the shared _stat_cell_tooltip.html JS
+   to be included on the page (it binds `.stat-cell` elements). The
+   verdict->gap mapping mirrors band_format.band_class. #}
+{% macro band_cell(b) -%}
+{%- set GAP = {'real': 'gap-positive', 'coin-flip': 'gap-marginal', 'downgrade': 'gap-negative'} -%}
+<span class="stat-cell band-cell">
+    <span class="gap-badge {{ GAP[b.verdict] }}">{{ '%+.1f'|format(b.mean) }}</span>
+    <div class="tooltip">
+        <div style="font-weight: 600; margin-bottom: 6px;">deltaRoto band</div>
+        <div class="tooltip-row"><span class="tooltip-label">deltaRoto</span><span class="tooltip-val">{{ '%+.2f'|format(b.mean) }}</span></div>
+        <div class="tooltip-row"><span class="tooltip-label">Std dev</span><span class="tooltip-val">{{ '%.2f'|format(b.sd) }}</span></div>
+        <div class="tooltip-row"><span class="tooltip-label">P(helps)</span><span class="tooltip-val">{{ (b.p_positive * 100)|round|int }}%</span></div>
+    </div>
+</span>
+{%- endmacro %}
+
 {%- macro rank_badge(rank_obj) -%}
 {%- if rank_obj and rank_obj.rest_of_season -%}
 <span class="rank-badge">#{{ rank_obj.rest_of_season }}

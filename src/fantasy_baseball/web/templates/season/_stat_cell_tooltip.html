@@ -1,0 +1,46 @@
+{# Shared stat-cell hover tooltip mechanism.
+
+   Any element with class `stat-cell` that contains a child `.tooltip`
+   gets a hover tooltip. The tooltip is `position: fixed` and placed by
+   JS (above or below the cell depending on viewport room) so it escapes
+   the `.content` `overflow-y: auto` clip -- a plain CSS `position:
+   absolute` tooltip would be cut off on the first/last rows.
+
+   `window.bindTooltips()` is idempotent (it removes its own listeners
+   before re-adding) so callers can re-bind after swapping table HTML
+   (e.g. the lineup page's opponent view). Included by lineup.html and
+   roster_audit.html. #}
+<script>
+function showTooltip() {
+    var tip = this.querySelector('.tooltip');
+    if (!tip) return;
+    tip.style.display = 'block';
+    var rect = this.getBoundingClientRect();
+    var tipH = tip.offsetHeight;
+    if (rect.bottom + tipH + 8 < window.innerHeight) {
+        tip.style.top = (rect.bottom + 4) + 'px';
+    } else {
+        tip.style.top = (rect.top - tipH - 4) + 'px';
+    }
+    var tipW = tip.offsetWidth;
+    var left = rect.left + rect.width / 2 - tipW / 2;
+    left = Math.max(4, Math.min(left, window.innerWidth - tipW - 4));
+    tip.style.left = left + 'px';
+}
+
+function hideTooltip() {
+    var tip = this.querySelector('.tooltip');
+    if (tip) tip.style.display = 'none';
+}
+
+function bindTooltips() {
+    document.querySelectorAll('.stat-cell').forEach(function(cell) {
+        cell.removeEventListener('mouseenter', showTooltip);
+        cell.removeEventListener('mouseleave', hideTooltip);
+        cell.addEventListener('mouseenter', showTooltip);
+        cell.addEventListener('mouseleave', hideTooltip);
+    });
+}
+
+bindTooltips();
+</script>
