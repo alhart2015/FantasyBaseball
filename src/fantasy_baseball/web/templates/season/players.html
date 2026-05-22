@@ -652,17 +652,17 @@ function renderDeltaRoto(dr, band) {
         standingsSection.insertBefore(el, standingsSection.firstChild.nextSibling);
     }
     if (!dr) { el.style.display = 'none'; return; }
-    let bandHtml = '';
+    let html;
     if (band) {
         const m = band.mean, s = band.sd;
-        bandHtml = '<div class="band-line band-' + band.verdict + '">' +
+        html = '<div class="band-line band-' + band.verdict + '" style="font-weight:700; font-size:15px;">' +
             (m >= 0 ? '+' : '') + m.toFixed(1) + ' +/- ' + s.toFixed(1) + ' roto</div>';
+    } else {
+        const color = dr.total > 0.01 ? 'var(--success)' : (dr.total < -0.01 ? 'var(--danger)' : 'var(--text-secondary)');
+        html = '<span style="font-weight:600">deltaRoto: </span>' +
+            '<span style="font-weight:700; font-size:15px; color:' + color + '">' +
+            (dr.total > 0 ? '+' : '') + dr.total.toFixed(1) + ' roto pts</span>';
     }
-    const color = dr.total > 0.01 ? 'var(--success)' : (dr.total < -0.01 ? 'var(--danger)' : 'var(--text-secondary)');
-    let html = bandHtml +
-        '<span style="font-weight:600">deltaRoto: </span>' +
-        '<span style="font-weight:700; font-size:15px; color:' + color + '">' +
-        (dr.total > 0 ? '+' : '') + dr.total.toFixed(1) + ' roto pts</span>';
 
     const catParts = [];
     const cats = dr.categories;
