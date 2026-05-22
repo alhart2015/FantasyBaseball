@@ -352,6 +352,7 @@ def build_opponent_lineup(
         entry = player.to_flat_dict()
         entry.setdefault("sgp", 0.0)
         entry["delta_roto"] = None  # opponent rows don't have a swap delta
+        entry["band"] = None
 
         # ROS projection tooltip data — overwrite both nested ros dict AND the flat
         # stat keys, so the lineup template's `h[rest_of_season_key]` access pattern
@@ -389,6 +390,7 @@ def build_opponent_lineup(
             entry = dict(raw_player)
             entry["sgp"] = 0.0
             entry["delta_roto"] = None
+            entry["band"] = None
             entry["pace"] = {}
             entry["overall_pace"] = compute_overall_pace(entry["pace"])
             enriched.append(entry)
@@ -642,16 +644,21 @@ def format_lineup_for_display(roster: list[dict], optimal: dict | None) -> dict:
     hitters = []
     pitchers = []
 
-    # Name -> roto_delta lookup built from optimizer output. Starters get a
-    # delta; bench/IL players are absent (rendered as "—").
+    # Name -> roto_delta and band lookups built from optimizer output. Starters get a
+    # delta; bench/IL players are absent (rendered as "--").
     roto_delta_by_name: dict[str, float] = {}
+    band_by_name: dict[str, dict] = {}
     if optimal:
         for a in optimal.get("hitter_lineup", []) or []:
             if "name" in a and "roto_delta" in a:
                 roto_delta_by_name[a["name"]] = a["roto_delta"]
+            if "name" in a and a.get("band") is not None:
+                band_by_name[a["name"]] = a["band"]
         for s in optimal.get("pitcher_starters", []) or []:
             if "name" in s and "roto_delta" in s:
                 roto_delta_by_name[s["name"]] = s["roto_delta"]
+            if "name" in s and s.get("band") is not None:
+                band_by_name[s["name"]] = s["band"]
 
     for p in roster:
         player = Player.from_dict(p)
@@ -676,6 +683,7 @@ def format_lineup_for_display(roster: list[dict], optimal: dict | None) -> dict:
             "status": player.status,
             "sgp": ros_sgp,
             "delta_roto": roto_delta_by_name.get(player.name),
+            "band": band_by_name.get(player.name),
             "games": p.get("games_this_week", 0),
             "is_bench": pos in BENCH_SLOTS,
             "is_il": "IL" in player.status or pos == "IL",

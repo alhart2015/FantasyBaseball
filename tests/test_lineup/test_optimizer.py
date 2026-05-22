@@ -114,6 +114,47 @@ class TestBasic:
         assert slot_counts[Position.OF] == 3
         assert slot_counts[Position.UTIL] == 1
 
+    def test_hitter_band_present_when_fraction_remaining_given(self):
+        """Passing fraction_remaining attaches a band dict to each assignment."""
+        a = _hitter("A", ["OF"], r=80, hr=25)
+        b = _hitter("B", ["OF"], r=70, hr=20)
+        c = _hitter("C", ["OF"], r=60, hr=15)
+        slots = {"OF": 2, "BN": 1, "P": 9, "IL": 0}
+        standings = _standings(
+            _standing("Us", R=0, HR=0),
+            _standing("Rival", R=1, HR=1),
+        )
+        lineup = optimize_hitter_lineup(
+            hitters=[a, b, c],
+            full_roster=[a, b, c],
+            projected_standings=standings,
+            team_name="Us",
+            roster_slots=slots,
+            fraction_remaining=0.6,
+        )
+        assert len(lineup) == 2
+        d = lineup[0].to_dict()
+        assert "band" in d
+        assert d["band"] is not None
+        band_keys = set(d["band"].keys())
+        assert band_keys == {"mean", "sd", "p_positive", "verdict"}
+
+    def test_hitter_band_none_when_fraction_remaining_omitted(self):
+        """Without fraction_remaining, band stays None."""
+        a = _hitter("A", ["OF"], r=80, hr=25)
+        b = _hitter("B", ["OF"], r=70, hr=20)
+        slots = {"OF": 1, "BN": 1, "P": 9, "IL": 0}
+        standings = _standings(_standing("Us"), _standing("Rival", R=1, HR=1))
+        lineup = optimize_hitter_lineup(
+            hitters=[a, b],
+            full_roster=[a, b],
+            projected_standings=standings,
+            team_name="Us",
+            roster_slots=slots,
+        )
+        assert lineup[0].band is None
+        assert lineup[0].to_dict()["band"] is None
+
 
 class TestERotoMaximization:
     def test_picks_hitter_who_lifts_category_boundary(self):
@@ -339,3 +380,26 @@ class TestPitcherOptimizer:
         assert starters[0].roto_delta > 0, (
             f"decisive closer C must have positive roto_delta, got {starters[0].roto_delta}"
         )
+
+    def test_pitcher_band_present_when_fraction_remaining_given(self):
+        """Passing fraction_remaining attaches a band dict with expected keys."""
+        a = _pitcher("A", ["SP"], ip=200, w=15, k=230, sv=0, era=3.00, whip=1.05)
+        c = _pitcher("C", ["RP"], ip=65, w=3, k=80, sv=35, era=2.50, whip=1.00)
+        pitchers = [a, c]
+        standings = _standings(
+            _standing("Us"),
+            _standing("Rival", W=0, K=0, SV=20, ERA=0, WHIP=0),
+        )
+        starters, _ = optimize_pitcher_lineup(
+            pitchers=pitchers,
+            full_roster=pitchers,
+            projected_standings=standings,
+            team_name="Us",
+            slots=2,
+            fraction_remaining=0.6,
+        )
+        assert len(starters) == 2
+        d = starters[0].to_dict()
+        assert "band" in d
+        assert d["band"] is not None
+        assert set(d["band"].keys()) == {"mean", "sd", "p_positive", "verdict"}

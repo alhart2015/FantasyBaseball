@@ -34,7 +34,14 @@ class TestHitterAssignment:
 
     def test_to_dict_rounds_roto_delta(self):
         a = HitterAssignment(slot=Position.OF, name="Judge", player=_hitter(), roto_delta=1.2345)
-        assert a.to_dict() == {"slot": "OF", "name": "Judge", "roto_delta": 1.23}
+        assert a.to_dict() == {"slot": "OF", "name": "Judge", "roto_delta": 1.23, "band": None}
+
+    def test_to_dict_includes_band_when_set(self):
+        band = {"mean": 0.5, "sd": 0.3, "p_positive": 0.7, "verdict": "pos"}
+        a = HitterAssignment(
+            slot=Position.OF, name="Judge", player=_hitter(), roto_delta=1.0, band=band
+        )
+        assert a.to_dict()["band"] == band
 
 
 class TestPitcherStarter:
@@ -47,4 +54,9 @@ class TestPitcherStarter:
 
     def test_to_dict_rounds_roto_delta(self):
         s = PitcherStarter(name="Skubal", player=_pitcher(), roto_delta=0.5678)
-        assert s.to_dict() == {"name": "Skubal", "roto_delta": 0.57}
+        assert s.to_dict() == {"name": "Skubal", "roto_delta": 0.57, "band": None}
+
+    def test_to_dict_includes_band_when_set(self):
+        band = {"mean": 0.2, "sd": 0.4, "p_positive": 0.55, "verdict": "uncertain"}
+        s = PitcherStarter(name="Skubal", player=_pitcher(), roto_delta=0.5, band=band)
+        assert s.to_dict()["band"] == band
