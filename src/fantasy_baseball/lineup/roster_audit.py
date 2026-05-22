@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from fantasy_baseball.lineup.delta_roto import score_swap
+from fantasy_baseball.lineup.delta_roto import compute_one_for_one_band, score_swap
 from fantasy_baseball.lineup.optimizer import (
     HitterAssignment,
     PitcherStarter,
@@ -203,6 +203,7 @@ def audit_roster(
     *,
     projected_standings: ProjectedStandings,
     team_name: str,
+    fraction_remaining: float,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
     optimal_hitters: list[HitterAssignment] | None = None,
     optimal_pitchers: list[PitcherStarter] | None = None,
@@ -289,6 +290,10 @@ def audit_roster(
     roto_before = score_roto_dict(all_before, team_sds=team_sds)
     user_before_stats = all_before[team_name]
 
+    # Field stats for the MC confidence band: all OTHER teams' CategoryStats,
+    # held fixed while we sample variance for the user's before/after roster.
+    field_stats = projected_standings.field_stats(team_name)
+
     entries: list[AuditEntry] = []
     for player in active_roster:
         entry = AuditEntry(
@@ -343,6 +348,17 @@ def audit_roster(
 
             sgp_gap = round(fa_sgp.get(fa.name, 0.0) - player_sgp.get(player.name, 0.0), 2)
 
+            band = compute_one_for_one_band(
+                player.name,
+                fa,
+                active_roster,
+                field_stats,
+                team_name,
+                fraction_remaining,
+                n_draws=300,
+                seed=0,
+            )
+
             scored.append(
                 {
                     "name": fa.name,
@@ -351,6 +367,7 @@ def audit_roster(
                     "sgp": round(fa_sgp.get(fa.name, 0.0), 2),
                     "gap": sgp_gap,
                     "delta_roto": dr.to_dict(),
+                    "band": band.to_dict(),
                     "player_id": fa.yahoo_id,
                 }
             )

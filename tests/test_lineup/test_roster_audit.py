@@ -318,6 +318,7 @@ class TestAuditRoster:
             {"OF": 1, "P": 3, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
 
         # Should have an entry for every roster player
@@ -341,6 +342,7 @@ class TestAuditRoster:
             {"OF": 1, "P": 0, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
         assert len(results) == 1
         assert results[0].best_fa is None
@@ -363,6 +365,7 @@ class TestAuditRoster:
             {"1B": 1, "OF": 1, "P": 0, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
 
         def _sort_key(e):
@@ -383,6 +386,7 @@ class TestAuditRoster:
             {"OF": 1, "P": 0, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
         assert len(results) == 1
         assert results[0].best_fa is None
@@ -438,6 +442,7 @@ class TestAuditRoster:
             {"OF": 1, "P": 2, "BN": 1, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
         # The bad RP should have the Good SP as best_fa (cross-type upgrade)
         bad_rp_entry = next(e for e in results if e.player == "Bad RP")
@@ -486,6 +491,7 @@ class TestAuditRoster:
             {"OF": 1, "P": 1, "BN": 1, "IL": 1},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
 
         # IL player should appear with slot="IL" and no upgrade
@@ -537,6 +543,7 @@ class TestAuditRoster:
             {"C": 1, "OF": 1, "P": 1, "BN": 1, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
 
         # Neither hitter should be recommended to drop for a pitcher —
@@ -582,6 +589,7 @@ class TestAuditRoster:
             {"OF": 1, "P": 3, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
 
         weak_entry = next(e for e in results if e.player == "Weak OF")
@@ -616,6 +624,7 @@ class TestAuditRoster:
             {"OF": 1, "P": 1, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
         star = next(e for e in results if e.player == "Star OF")
         assert star.best_fa is None
@@ -693,6 +702,7 @@ class TestAuditRoster:
             {"OF": 1, "P": 3, "BN": 1, "IL": 2},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
         weak = next(e for e in results if e.player == "Weak SP")
         assert weak.candidates, "weak SP should have at least one candidate"
@@ -727,6 +737,7 @@ class TestAuditRoster:
             {"OF": 1, "P": 1, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
         weak = next(e for e in results if e.player == "Weak OF")
         cand_names = {c["name"] for c in weak.candidates}
@@ -749,6 +760,7 @@ class TestAuditRoster:
             {"OF": 1, "P": 0, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
         assert results[0].best_fa is None
         assert results[0].gap == 0.0
@@ -821,6 +833,7 @@ class TestAuditILFilterUsesSlotOrStatus:
             roster_slots,
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
 
         il_entries = [e for e in entries if e.player == "IL Pitcher"]
@@ -855,6 +868,7 @@ class TestAuditILFilterUsesSlotOrStatus:
             roster_slots,
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
 
         il_entries = [e for e in entries if e.player == "IL Pitcher"]
@@ -890,6 +904,7 @@ class TestAuditILFilterUsesSlotOrStatus:
             roster_slots,
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
 
         il_entries = [e for e in entries if e.player == "Bench IL Hitter"]
@@ -922,6 +937,7 @@ class TestRegressionFixtures:
             {"C": 1, "OF": 1, "P": 1, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
         herrera = next(e for e in results if e.player == "Herrera")
         # Collapsed row shows no upgrade
@@ -1014,6 +1030,7 @@ class TestRegressionFixtures:
             {"OF": 1, "P": 1, "BN": 0, "IL": 0},
             projected_standings=_minimal_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
         )
         adolis = next(e for e in results if e.player == "Adolis")
         cand_names = {c["name"] for c in adolis.candidates}
@@ -1059,6 +1076,7 @@ class TestAuditRosterTeamSDs:
             {"OF": 1, "P": 0, "BN": 0, "IL": 0},
             projected_standings=self._twelve_team_sb_standings(),
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
             team_sds=None,
         )
         drop_entry = next(e for e in entries if e.player == "Drop")
@@ -1079,11 +1097,73 @@ class TestAuditRosterTeamSDs:
             {"OF": 1, "P": 0, "BN": 0, "IL": 0},
             projected_standings=standings,
             team_name=TEAM_NAME,
+            fraction_remaining=1.0,
             team_sds=team_sds,
         )
         drop_entry = next(e for e in entries if e.player == "Drop")
         sb_delta = drop_entry.candidates[0]["delta_roto"]["categories"]["SB"]["roto_delta"]
         assert abs(sb_delta) < 0.5
+
+
+class TestAuditRosterBand:
+    """audit_roster attaches a MC confidence band to each scored candidate."""
+
+    def test_band_keys_present_on_scored_candidates(self):
+        """Every scored candidate dict has 'band' with the expected sub-keys."""
+        roster = [
+            _hitter("Weak OF", ["OF"], r=30, hr=5, rbi=20, sb=1, avg=0.220, ab=300, h=66),
+            _pitcher(
+                "Decent SP",
+                ["SP"],
+                ip=180,
+                w=12,
+                k=180,
+                era=3.50,
+                whip=1.20,
+                er=70,
+                bb=40,
+                h_allowed=176,
+            ),
+            _pitcher(
+                "Decent RP",
+                ["RP"],
+                ip=60,
+                w=3,
+                k=60,
+                era=3.00,
+                whip=1.17,
+                sv=20,
+                er=20,
+                bb=20,
+                h_allowed=50,
+            ),
+        ]
+        free_agents = [
+            _hitter("Better OF", ["OF"], r=80, hr=28, rbi=85, sb=12, avg=0.280, ab=550, h=154),
+            _hitter("Decent OF", ["OF"], r=60, hr=18, rbi=65, sb=6, avg=0.260, ab=500, h=130),
+        ]
+        results = audit_roster(
+            roster,
+            free_agents,
+            {"OF": 1, "P": 2, "BN": 0, "IL": 0},
+            projected_standings=_minimal_standings(),
+            team_name=TEAM_NAME,
+            fraction_remaining=0.6,
+        )
+
+        weak_entry = next(e for e in results if e.player == "Weak OF")
+        assert weak_entry.candidates, "expected at least one scored candidate"
+
+        required_band_keys = {"mean", "sd", "p_positive", "verdict"}
+        for c in weak_entry.candidates:
+            assert "band" in c, f"candidate {c['name']} missing 'band' key"
+            band = c["band"]
+            assert required_band_keys == set(band.keys()), (
+                f"band keys mismatch: {set(band.keys())} != {required_band_keys}"
+            )
+            assert band["sd"] >= 0, f"sd must be non-negative, got {band['sd']}"
+            assert 0.0 <= band["p_positive"] <= 1.0
+            assert band["verdict"] in {"real", "coin-flip", "downgrade"}
 
 
 class TestWorstRosterByPosition:

@@ -21,12 +21,14 @@ class HitterAssignment:
     name: str
     player: Player
     roto_delta: float
+    band: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "slot": self.slot.value,
             "name": self.name,
             "roto_delta": round(self.roto_delta, 2),
+            "band": self.band,
         }
 
 
@@ -35,9 +37,14 @@ class PitcherStarter:
     name: str
     player: Player
     roto_delta: float
+    band: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "roto_delta": round(self.roto_delta, 2)}
+        return {
+            "name": self.name,
+            "roto_delta": round(self.roto_delta, 2),
+            "band": self.band,
+        }
 
 
 def _build_hitter_slot_positions(roster_slots: dict[str, int]) -> list[Position]:
@@ -161,6 +168,7 @@ def optimize_hitter_lineup(
     team_name: str,
     roster_slots: dict[str, int] | None = None,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
+    fraction_remaining: float | None = None,
 ) -> list[HitterAssignment]:
     """Return the ERoto-maximizing active hitter lineup."""
     if not hitters:
@@ -171,8 +179,10 @@ def optimize_hitter_lineup(
     n_slots = len(slot_positions)
     ctx = _TeamContext(full_roster, projected_standings, team_name, team_sds)
 
+    field_stats = projected_standings.field_stats(team_name)
+
     if n_slots == 0 or len(hitters) < n_slots:
-        # Fewer hitters than slots — fall back to the best feasible partial lineup.
+        # Fewer hitters than slots -- fall back to the best feasible partial lineup.
         partial_best: tuple[float, list[Player], list[Position]] | None = None
         for size in range(min(len(hitters), n_slots), 0, -1):
             for subset in combinations(hitters, size):
@@ -207,10 +217,19 @@ def optimize_hitter_lineup(
 
     best_total, active_subset, assignment, bench = best
 
+    # Active pitchers on this roster -- identical in before/after, so they
+    # cancel in the marginal but anchor the band at the correct full-team
+    # operating point on the win-probability S-curve.
+    pitcher_half = [
+        p for p in full_roster if set(p.positions) & PITCHER_ELIGIBLE and not p.is_on_il()
+    ]
+
     roto_deltas: dict[str, float] = {}
+    bands: dict[str, dict[str, Any]] = {}
     for starter in active_subset:
         remaining_hitters = [h for h in hitters if h is not starter]
-        alt_best = None
+        alt_best: float | None = None
+        alt_best_subset: list[Player] = []
         for sub in combinations(remaining_hitters, n_slots):
             assn = _feasible_assignment(list(sub), slot_positions)
             if assn is None:
@@ -219,17 +238,33 @@ def optimize_hitter_lineup(
             t = _score_hitter_subset(ctx, list(sub), assn, sub_bench)
             if alt_best is None or t > alt_best:
                 alt_best = t
+                alt_best_subset = list(sub)
         if alt_best is None:
             # No feasible full-size replacement lineup (the roster is too
             # thin to cover every slot without this starter). Counterfactual
-            # is "starter benched, their slot left empty" — score the rest
+            # is "starter benched, their slot left empty" -- score the rest
             # of the optimal lineup without them.
             no_rep_subset = [p for p in active_subset if p is not starter]
             no_rep_assn = [
                 a for p, a in zip(active_subset, assignment, strict=False) if p is not starter
             ]
             alt_best = _score_hitter_subset(ctx, no_rep_subset, no_rep_assn, [*bench, starter])
+            alt_best_subset = no_rep_subset
         roto_deltas[starter.name] = best_total - alt_best
+
+        if fraction_remaining is not None:
+            from fantasy_baseball.lineup.delta_roto import compute_delta_roto_band
+
+            band_result = compute_delta_roto_band(
+                [*alt_best_subset, *pitcher_half],
+                [*active_subset, *pitcher_half],
+                field_stats,
+                team_name,
+                fraction_remaining,
+                n_draws=300,
+                seed=0,
+            )
+            bands[starter.name] = band_result.to_dict()
 
     return [
         HitterAssignment(
@@ -237,6 +272,7 @@ def optimize_hitter_lineup(
             name=p.name,
             player=p,
             roto_delta=roto_deltas.get(p.name, 0.0),
+            band=bands.get(p.name),
         )
         for p, slot in zip(active_subset, assignment, strict=False)
     ]
@@ -249,12 +285,15 @@ def optimize_pitcher_lineup(
     team_name: str,
     slots: int = 9,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
+    fraction_remaining: float | None = None,
 ) -> tuple[list[PitcherStarter], list[Player]]:
     """Return (starters with roto_delta, bench) maximizing ERoto."""
     if not pitchers or slots <= 0:
         return [], list(pitchers)
     k = min(slots, len(pitchers))
     ctx = _TeamContext(full_roster, projected_standings, team_name, team_sds)
+
+    field_stats = projected_standings.field_stats(team_name)
 
     best = None
     for subset in combinations(pitchers, k):
@@ -265,26 +304,57 @@ def optimize_pitcher_lineup(
 
     best_total, active_subset, bench = best  # type: ignore[misc]
 
+    # Active hitters on this roster -- identical in before/after, so they
+    # cancel in the marginal but anchor the band at the correct full-team
+    # operating point on the win-probability S-curve.
+    hitter_half = [
+        p for p in full_roster if not (set(p.positions) & PITCHER_ELIGIBLE) and not p.is_on_il()
+    ]
+
     roto_deltas: dict[str, float] = {}
+    bands: dict[str, dict[str, Any]] = {}
     for starter in active_subset:
         remaining = [p for p in pitchers if p is not starter]
-        alt_best = None
+        alt_best: float | None = None
+        alt_best_subset: list[Player] = []
         if len(remaining) >= k:
             for sub in combinations(remaining, k):
                 sub_bench = [p for p in remaining if p not in sub] + [starter]
                 t = _score_pitcher_subset(ctx, list(sub), sub_bench)
                 if alt_best is None or t > alt_best:
                     alt_best = t
+                    alt_best_subset = list(sub)
         if alt_best is None:
             # No feasible full-size replacement (roster has exactly k
             # pitchers, no bench). Counterfactual is "starter benched,
-            # their slot left empty" — score the other k-1 starters alone.
+            # their slot left empty" -- score the other k-1 starters alone.
             no_rep_subset = [p for p in active_subset if p is not starter]
             alt_best = _score_pitcher_subset(ctx, no_rep_subset, [*bench, starter])
+            alt_best_subset = no_rep_subset
         roto_deltas[starter.name] = best_total - alt_best
 
+        if fraction_remaining is not None:
+            from fantasy_baseball.lineup.delta_roto import compute_delta_roto_band
+
+            band_result = compute_delta_roto_band(
+                [*alt_best_subset, *hitter_half],
+                [*active_subset, *hitter_half],
+                field_stats,
+                team_name,
+                fraction_remaining,
+                n_draws=300,
+                seed=0,
+            )
+            bands[starter.name] = band_result.to_dict()
+
     starters = [
-        PitcherStarter(name=p.name, player=p, roto_delta=roto_deltas[p.name]) for p in active_subset
+        PitcherStarter(
+            name=p.name,
+            player=p,
+            roto_delta=roto_deltas[p.name],
+            band=bands.get(p.name),
+        )
+        for p in active_subset
     ]
     return starters, bench
 

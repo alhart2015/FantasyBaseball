@@ -114,6 +114,47 @@ class TestBasic:
         assert slot_counts[Position.OF] == 3
         assert slot_counts[Position.UTIL] == 1
 
+    def test_hitter_band_present_when_fraction_remaining_given(self):
+        """Passing fraction_remaining attaches a band dict to each assignment."""
+        a = _hitter("A", ["OF"], r=80, hr=25)
+        b = _hitter("B", ["OF"], r=70, hr=20)
+        c = _hitter("C", ["OF"], r=60, hr=15)
+        slots = {"OF": 2, "BN": 1, "P": 9, "IL": 0}
+        standings = _standings(
+            _standing("Us", R=0, HR=0),
+            _standing("Rival", R=1, HR=1),
+        )
+        lineup = optimize_hitter_lineup(
+            hitters=[a, b, c],
+            full_roster=[a, b, c],
+            projected_standings=standings,
+            team_name="Us",
+            roster_slots=slots,
+            fraction_remaining=0.6,
+        )
+        assert len(lineup) == 2
+        d = lineup[0].to_dict()
+        assert "band" in d
+        assert d["band"] is not None
+        band_keys = set(d["band"].keys())
+        assert band_keys == {"mean", "sd", "p_positive", "verdict"}
+
+    def test_hitter_band_none_when_fraction_remaining_omitted(self):
+        """Without fraction_remaining, band stays None."""
+        a = _hitter("A", ["OF"], r=80, hr=25)
+        b = _hitter("B", ["OF"], r=70, hr=20)
+        slots = {"OF": 1, "BN": 1, "P": 9, "IL": 0}
+        standings = _standings(_standing("Us"), _standing("Rival", R=1, HR=1))
+        lineup = optimize_hitter_lineup(
+            hitters=[a, b],
+            full_roster=[a, b],
+            projected_standings=standings,
+            team_name="Us",
+            roster_slots=slots,
+        )
+        assert lineup[0].band is None
+        assert lineup[0].to_dict()["band"] is None
+
 
 class TestERotoMaximization:
     def test_picks_hitter_who_lifts_category_boundary(self):
@@ -338,4 +379,96 @@ class TestPitcherOptimizer:
         assert starters[0].name == "C"
         assert starters[0].roto_delta > 0, (
             f"decisive closer C must have positive roto_delta, got {starters[0].roto_delta}"
+        )
+
+    def test_pitcher_band_present_when_fraction_remaining_given(self):
+        """Passing fraction_remaining attaches a band dict with expected keys."""
+        a = _pitcher("A", ["SP"], ip=200, w=15, k=230, sv=0, era=3.00, whip=1.05)
+        c = _pitcher("C", ["RP"], ip=65, w=3, k=80, sv=35, era=2.50, whip=1.00)
+        pitchers = [a, c]
+        standings = _standings(
+            _standing("Us"),
+            _standing("Rival", W=0, K=0, SV=20, ERA=0, WHIP=0),
+        )
+        starters, _ = optimize_pitcher_lineup(
+            pitchers=pitchers,
+            full_roster=pitchers,
+            projected_standings=standings,
+            team_name="Us",
+            slots=2,
+            fraction_remaining=0.6,
+        )
+        assert len(starters) == 2
+        d = starters[0].to_dict()
+        assert "band" in d
+        assert d["band"] is not None
+        assert set(d["band"].keys()) == {"mean", "sd", "p_positive", "verdict"}
+
+
+class TestBandFullRosterOperatingPoint:
+    """Verify Fix 2: the band is evaluated at the full-team operating point.
+
+    When a hitter swap is evaluated, the active pitchers are included in both
+    the before and after player lists so _sum_realized scores a complete roster.
+    This means band.mean and roto_delta agree in sign for a decisive starter
+    (both > 0, both < 0, or both within a small tolerance of 0).
+
+    The tolerance is generous because the MC band is stochastic; the test
+    checks directional agreement only, not exact equality.
+    """
+
+    _TOLERANCE = 0.05
+
+    def test_hitter_band_mean_agrees_in_direction_with_roto_delta(self):
+        """A decisive hitter (B has SB advantage that flips a boundary) has a
+        positive roto_delta.  With the full-roster operating point the band.mean
+        must also be positive (or within tolerance of zero — the point is it
+        cannot diverge wildly negative while roto_delta is clearly positive).
+        """
+        # Hitters: B is decisive on SB, A is strong on HR.
+        a = _hitter("A", ["OF"], r=80, hr=40, rbi=90, sb=5, h=120, ab=450)
+        b = _hitter("B", ["OF"], r=70, hr=20, rbi=70, sb=25, h=120, ab=450)
+        c = _hitter("C", ["OF"], r=60, hr=18, rbi=60, sb=8, h=120, ab=450)
+
+        # Include a pitcher so the hitter-optimizer has a non-trivial other_half
+        # to include in the band call (the fix under test).
+        p1 = _pitcher("P1", ["SP"], ip=180, w=12, k=180, sv=0, era=3.50, whip=1.20)
+        p2 = _pitcher("P2", ["RP"], ip=65, w=3, k=80, sv=25, era=2.80, whip=1.10)
+
+        hitters = [a, b, c]
+        full_roster = [a, b, c, p1, p2]
+
+        slots = {"OF": 1, "BN": 2, "P": 9, "IL": 0}
+        standings = _standings(
+            _standing("Us", R=0, HR=100, RBI=0, SB=0, AVG=0),
+            _standing("Rival", R=0, HR=30, RBI=0, SB=20, AVG=0),
+            _standing("Third", R=0, HR=20, RBI=0, SB=15, AVG=0),
+        )
+        lineup = optimize_hitter_lineup(
+            hitters=hitters,
+            full_roster=full_roster,
+            projected_standings=standings,
+            team_name="Us",
+            roster_slots=slots,
+            fraction_remaining=0.6,
+        )
+
+        # Optimizer must still choose B (the decisive SB hitter).
+        assert len(lineup) == 1
+        starter = lineup[0]
+        assert starter.name == "B"
+        assert starter.roto_delta > 0, (
+            f"decisive starter B must have positive roto_delta, got {starter.roto_delta}"
+        )
+
+        band = starter.band
+        assert band is not None, "band must be present when fraction_remaining is given"
+        band_mean = band["mean"]
+
+        # Both roto_delta and band.mean must be positive (or negligibly small).
+        # A large negative band.mean while roto_delta > 0 signals the wrong
+        # operating point (the other half of categories was scored as zero).
+        assert band_mean > -self._TOLERANCE, (
+            f"band.mean {band_mean:.4f} strongly disagrees with roto_delta "
+            f"{starter.roto_delta:.4f} — likely wrong operating point"
         )

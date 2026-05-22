@@ -628,7 +628,7 @@ function fetchStandings(rosterPlayer, otherPlayer) {
             if (mySeq !== fetchSeq) return;
             if (data.error) return;
             standingsData = data;
-            renderDeltaRoto(data.delta_roto);
+            renderDeltaRoto(data.delta_roto, data.band);
             document.getElementById('standings-subtitle').textContent =
                 'Replacing ' + rosterPlayer.name + ' with ' + otherPlayer.name;
             document.getElementById('standings-after-label').textContent =
@@ -642,7 +642,7 @@ function fetchStandings(rosterPlayer, otherPlayer) {
         });
 }
 
-function renderDeltaRoto(dr) {
+function renderDeltaRoto(dr, band) {
     let el = document.getElementById('delta-roto-summary');
     if (!el) {
         el = document.createElement('div');
@@ -652,8 +652,15 @@ function renderDeltaRoto(dr) {
         standingsSection.insertBefore(el, standingsSection.firstChild.nextSibling);
     }
     if (!dr) { el.style.display = 'none'; return; }
+    let bandHtml = '';
+    if (band) {
+        const m = band.mean, s = band.sd;
+        bandHtml = '<div class="band-line band-' + band.verdict + '">' +
+            (m >= 0 ? '+' : '') + m.toFixed(1) + ' +/- ' + s.toFixed(1) + ' roto</div>';
+    }
     const color = dr.total > 0.01 ? 'var(--success)' : (dr.total < -0.01 ? 'var(--danger)' : 'var(--text-secondary)');
-    let html = '<span style="font-weight:600">deltaRoto: </span>' +
+    let html = bandHtml +
+        '<span style="font-weight:600">deltaRoto: </span>' +
         '<span style="font-weight:700; font-size:15px; color:' + color + '">' +
         (dr.total > 0 ? '+' : '') + dr.total.toFixed(1) + ' roto pts</span>';
 

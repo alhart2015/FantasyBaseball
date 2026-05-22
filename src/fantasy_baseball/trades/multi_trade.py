@@ -78,6 +78,7 @@ class MultiTradeResult:
     stat_totals: ViewBlock = field(
         default_factory=lambda: ViewBlock(delta_total=0.0, categories={})
     )
+    band: dict[str, float | str] | None = None
 
 
 def player_key(player: Player) -> str:
@@ -115,6 +116,7 @@ def evaluate_multi_trade(
     projected_standings: ProjectedStandings,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
     roster_slots: dict[str, int],
+    fraction_remaining: float,
 ) -> MultiTradeResult:
     """Evaluate an arbitrary N-for-M trade with optional drops and adds.
 
@@ -258,6 +260,22 @@ def evaluate_multi_trade(
         categories[cat.value] = CategoryDelta(before=b, after=a, delta=a - b)
         total_delta += a - b
 
+    # --- 5. Monte-Carlo confidence band --------------------------------------
+    from fantasy_baseball.lineup.delta_roto import compute_delta_roto_band
+
+    field_stats = projected_standings.field_stats(hart_name)
+    before_players = [my_idx[k] for k in before_mine if k in my_idx]
+    after_players = [all_mine_by_key[k] for k in after_mine if k in all_mine_by_key]
+    band_result = compute_delta_roto_band(
+        before_players,
+        after_players,
+        field_stats,
+        hart_name,
+        fraction_remaining,
+        n_draws=400,
+        seed=0,
+    )
+
     return MultiTradeResult(
         legal=True,
         reason=None,
@@ -266,6 +284,7 @@ def evaluate_multi_trade(
         roto=roto_view,
         ev_roto=ev_roto_view,
         stat_totals=stat_totals_view,
+        band=band_result.to_dict(),
     )
 
 

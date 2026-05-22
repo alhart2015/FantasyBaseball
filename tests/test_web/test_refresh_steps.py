@@ -198,7 +198,13 @@ class TestComputeLineupMoves:
         )
         assert len(result["swaps"]) == 1
         swap = result["swaps"][0]
-        assert swap["start"] == {"player": "Nola", "from": "BN", "to": "P", "roto_delta": 0.42}
+        assert swap["start"] == {
+            "player": "Nola",
+            "from": "BN",
+            "to": "P",
+            "roto_delta": 0.42,
+            "band": None,
+        }
         assert swap["bench"] == {"player": "Strider", "from": "P", "to": "BN"}
         assert result["unpaired_starts"] == []
         assert result["unpaired_benches"] == []

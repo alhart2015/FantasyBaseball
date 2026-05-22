@@ -65,13 +65,12 @@
         </td>
         <td>{{ "%.2f"|format(entry.best_fa_sgp) }}</td>
         <td>
-            {% if entry.candidates and entry.candidates[0].delta_roto %}
-            {% set dr = entry.candidates[0].delta_roto.total %}
-            <span class="gap-badge {% if dr >= 1.0 %}gap-positive{% elif dr > 0 %}gap-marginal{% else %}gap-negative{% endif %}">
-                {{ "%+.2f"|format(dr) }}
-            </span>
+            {% if entry.candidates and entry.candidates[0].band %}
+            {% set b = entry.candidates[0].band %}
+            {% set gap = {'real':'gap-positive','coin-flip':'gap-marginal','downgrade':'gap-negative'}[b.verdict] %}
+            <span class="gap-badge {{ gap }}">{{ "%+.1f"|format(b.mean) }} +/- {{ "%.1f"|format(b.sd) }}</span>
             {% else %}
-            <span class="gap-none">—</span>
+            <span class="gap-none">&mdash;</span>
             {% endif %}
         </td>
         {% else %}
@@ -109,13 +108,12 @@
                         </span>
                     </td>
                     <td style="text-align:right">
-                        {% if c.delta_roto %}
-                        {% set dr = c.delta_roto.total %}
-                        <span style="font-weight:600; color: {% if dr > 0.01 %}var(--success){% elif dr < -0.01 %}var(--danger){% else %}var(--text-secondary){% endif %}">
-                            {{ "%+.2f"|format(dr) }}
-                        </span>
+                        {% if c.band %}
+                        {% set cb = c.band %}
+                        {% set cgap = {'real':'gap-positive','coin-flip':'gap-marginal','downgrade':'gap-negative'}[cb.verdict] %}
+                        <span class="gap-badge {{ cgap }}">{{ "%+.1f"|format(cb.mean) }} +/- {{ "%.1f"|format(cb.sd) }}</span>
                         {% else %}
-                        <span style="color:var(--text-secondary)">—</span>
+                        <span style="color:var(--text-secondary)">&mdash;</span>
                         {% endif %}
                     </td>
                     <td style="text-align:right">

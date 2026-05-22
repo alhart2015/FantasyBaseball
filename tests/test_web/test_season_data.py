@@ -868,6 +868,79 @@ class TestComputeComparisonStandings:
         )
         assert "error" in result
 
+    def test_band_present_on_successful_swap(self):
+        """A successful roster-vs-non-roster comparison includes a 'band' dict."""
+        from fantasy_baseball.models.player import HitterStats, Player
+        from fantasy_baseball.web.season_data import compute_comparison_standings
+
+        roster = [
+            Player(
+                name="Willy Adames",
+                player_type="hitter",
+                rest_of_season=HitterStats(
+                    pa=650, ab=567, h=133, r=80, hr=25, rbi=81, sb=11, avg=0.235
+                ),
+            ),
+        ]
+        other_player = Player(
+            name="Ezequiel Tovar",
+            player_type="hitter",
+            rest_of_season=HitterStats(pa=590, ab=513, h=135, r=73, hr=20, rbi=74, sb=8, avg=0.263),
+        )
+        projected_standings = [
+            {
+                "name": "My Team",
+                "team_key": "",
+                "rank": 0,
+                "stats": {
+                    "R": 700,
+                    "HR": 200,
+                    "RBI": 700,
+                    "SB": 100,
+                    "AVG": 0.260,
+                    "W": 80,
+                    "K": 1200,
+                    "SV": 50,
+                    "ERA": 3.50,
+                    "WHIP": 1.20,
+                },
+            },
+            {
+                "name": "Other Team",
+                "team_key": "",
+                "rank": 0,
+                "stats": {
+                    "R": 680,
+                    "HR": 190,
+                    "RBI": 680,
+                    "SB": 110,
+                    "AVG": 0.255,
+                    "W": 85,
+                    "K": 1100,
+                    "SV": 40,
+                    "ERA": 3.80,
+                    "WHIP": 1.25,
+                },
+            },
+        ]
+
+        result = compute_comparison_standings(
+            roster_player_name="Willy Adames",
+            other_player=other_player,
+            user_roster=roster,
+            projected_standings=_projected_from_raw(projected_standings),
+            user_team_name="My Team",
+            fraction_remaining=0.6,
+        )
+
+        assert "band" in result
+        band = result["band"]
+        assert set(band.keys()) == {"mean", "sd", "p_positive", "verdict"}
+        assert isinstance(band["mean"], float)
+        assert isinstance(band["sd"], float)
+        assert isinstance(band["p_positive"], float)
+        assert isinstance(band["verdict"], str)
+
 
 class TestComparisonConsistencyInvariant:
     """Document and test compute_comparison_standings' contract.

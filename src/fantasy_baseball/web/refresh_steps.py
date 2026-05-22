@@ -100,6 +100,7 @@ def compute_lineup_moves(
                     "from": current,
                     "to": target,
                     "roto_delta": assignment.roto_delta,
+                    "band": assignment.band,
                     "_player_type": PlayerType.HITTER,
                 }
             )
@@ -113,6 +114,7 @@ def compute_lineup_moves(
                     "from": current,
                     "to": "P",
                     "roto_delta": starter.roto_delta,
+                    "band": starter.band,
                     "_player_type": PlayerType.PITCHER,
                 }
             )

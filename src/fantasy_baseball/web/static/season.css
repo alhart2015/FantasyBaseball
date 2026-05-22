@@ -446,6 +446,15 @@ td[style*="--neg"] {
 }
 .roto-chip-pos { color: var(--success, #2e7d32); border-color: var(--success, #2e7d32); }
 
+/* deltaRoto confidence band verdict colors. The verdict is computed once in
+   Python (lineup/band_format.band_class) and read as band.verdict; these
+   classes only paint it. Used by the JS-rendered surfaces (trade builder,
+   player comparison) and the lineup band cells/chips. */
+.band-real      { color: var(--lead-deep, #2e7d32); }
+.band-coin-flip { color: var(--gold-deep, #b8860b); }
+.band-downgrade { color: var(--trail-deep, #c0392b); }
+.band-line { font-weight: 700; font-size: 13px; margin-bottom: 6px; }
+
 .trade-swap {
     display: flex;
     align-items: center;
