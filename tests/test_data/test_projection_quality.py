@@ -18,6 +18,58 @@ class TestQualityReport:
 
 
 class TestCheckProjectionQuality:
+    def test_does_not_crash_on_nan_name_row(self):
+        """Regression: a projection df with a NaN name (blank CSV row) reaching
+        the roster-coverage check must not raise. Production failure was
+        'normalize() argument 2 must be str, not float' in _check_roster_coverage,
+        which killed the daily ROS fetch."""
+        hitters = pd.DataFrame(
+            [
+                {
+                    "name": "Aaron Judge",
+                    "hr": 45,
+                    "r": 110,
+                    "rbi": 120,
+                    "sb": 5,
+                    "h": 160,
+                    "ab": 550,
+                    "fg_id": "1",
+                },
+                {
+                    "name": float("nan"),
+                    "hr": 10,
+                    "r": 40,
+                    "rbi": 50,
+                    "sb": 1,
+                    "h": 80,
+                    "ab": 350,
+                    "fg_id": "99",
+                },
+            ]
+        )
+        pitchers = pd.DataFrame(
+            [
+                {
+                    "name": "Gerrit Cole",
+                    "w": 15,
+                    "k": 240,
+                    "sv": 0,
+                    "ip": 200,
+                    "er": 70,
+                    "bb": 56,
+                    "h_allowed": 154,
+                    "fg_id": "2",
+                },
+            ]
+        )
+        system_dfs = {
+            "steamer": (hitters.copy(), pitchers.copy()),
+            "zips": (hitters.copy(), pitchers.copy()),
+        }
+        # Must not raise.
+        report = check_projection_quality(system_dfs, roster_names={"aaron judge"})
+        assert isinstance(report, QualityReport)
+
     def test_returns_report_with_no_issues(self):
         """Two identical systems should produce no warnings."""
         hitters = pd.DataFrame(
