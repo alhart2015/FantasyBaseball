@@ -219,6 +219,13 @@ def optimize_hitter_lineup(
 
     best_total, active_subset, assignment, bench = best
 
+    # Active pitchers on this roster — identical in before/after, so they
+    # cancel in the marginal but anchor the band at the correct full-team
+    # operating point on the win-probability S-curve.
+    pitcher_half = [
+        p for p in full_roster if set(p.positions) & PITCHER_ELIGIBLE and not p.is_on_il()
+    ]
+
     roto_deltas: dict[str, float] = {}
     bands: dict[str, dict[str, Any]] = {}
     for starter in active_subset:
@@ -251,8 +258,8 @@ def optimize_hitter_lineup(
             from fantasy_baseball.lineup.delta_roto import compute_delta_roto_band
 
             band_result = compute_delta_roto_band(
-                list(alt_best_subset),
-                list(active_subset),
+                [*alt_best_subset, *pitcher_half],
+                [*active_subset, *pitcher_half],
                 field_stats,
                 team_name,
                 fraction_remaining,
@@ -301,6 +308,13 @@ def optimize_pitcher_lineup(
 
     best_total, active_subset, bench = best  # type: ignore[misc]
 
+    # Active hitters on this roster — identical in before/after, so they
+    # cancel in the marginal but anchor the band at the correct full-team
+    # operating point on the win-probability S-curve.
+    hitter_half = [
+        p for p in full_roster if not (set(p.positions) & PITCHER_ELIGIBLE) and not p.is_on_il()
+    ]
+
     roto_deltas: dict[str, float] = {}
     bands: dict[str, dict[str, Any]] = {}
     for starter in active_subset:
@@ -327,8 +341,8 @@ def optimize_pitcher_lineup(
             from fantasy_baseball.lineup.delta_roto import compute_delta_roto_band
 
             band_result = compute_delta_roto_band(
-                list(alt_best_subset),
-                list(active_subset),
+                [*alt_best_subset, *hitter_half],
+                [*active_subset, *hitter_half],
                 field_stats,
                 team_name,
                 fraction_remaining,
