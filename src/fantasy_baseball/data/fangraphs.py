@@ -52,6 +52,9 @@ def parse_hitting_csv(filepath: Path) -> pd.DataFrame:
     missing = [c for c in REQUIRED_HITTING_COLS if c not in df.columns]
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
+    # Drop nameless rows (blank/garbage CSV lines yield a NaN name). They carry
+    # no usable projection and would crash name normalization downstream.
+    df = df[df["name"].notna()].reset_index(drop=True)
     df["player_type"] = PlayerType.HITTER
     return df
 
@@ -64,6 +67,8 @@ def parse_pitching_csv(filepath: Path) -> pd.DataFrame:
     missing = [c for c in REQUIRED_PITCHING_COLS if c not in df.columns]
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
+    # Drop nameless rows (see parse_hitting_csv).
+    df = df[df["name"].notna()].reset_index(drop=True)
     df["player_type"] = PlayerType.PITCHER
     return df
 

@@ -42,6 +42,20 @@ class TestParseHittingCsv:
         with pytest.raises(ValueError, match="Missing required columns"):
             parse_hitting_csv(bad_csv)
 
+    def test_drops_rows_with_missing_name(self, tmp_path):
+        """A blank-name row (NaN in the name column) is garbage and must be
+        dropped at the parse boundary, so it never reaches name normalization
+        downstream. Regression for the ROS blend crash on a nameless CSV row."""
+        csv = tmp_path / "blank_name.csv"
+        csv.write_text(
+            "Name,Team,AB,H,HR,R,RBI,SB,AVG\n"
+            "Aaron Judge,NYY,550,160,45,110,120,5,0.291\n"
+            ",FA,400,100,20,60,70,3,0.250\n"
+        )
+        df = parse_hitting_csv(csv)
+        assert len(df) == 1
+        assert df.iloc[0]["name"] == "Aaron Judge"
+
 
 class TestParsePitchingCsv:
     def test_parses_standard_columns(self, fixtures_dir):
@@ -101,6 +115,18 @@ class TestParsePitchingCsv:
         df = parse_pitching_csv(csv)
         assert "gs" not in df.columns
         assert df.iloc[0]["name"] == "Some Pitcher"
+
+    def test_drops_rows_with_missing_name(self, tmp_path):
+        """Nameless rows are dropped at the parse boundary (see hitter test)."""
+        csv = tmp_path / "blank_name.csv"
+        csv.write_text(
+            "Name,Team,IP,W,SO,ERA,WHIP,SV,ER,BB,H\n"
+            "Gerrit Cole,NYY,200,15,240,3.15,1.05,0,70,56,154\n"
+            ",FA,150,8,140,4.00,1.30,0,67,50,150\n"
+        )
+        df = parse_pitching_csv(csv)
+        assert len(df) == 1
+        assert df.iloc[0]["name"] == "Gerrit Cole"
 
 
 class TestLoadProjectionSet:
