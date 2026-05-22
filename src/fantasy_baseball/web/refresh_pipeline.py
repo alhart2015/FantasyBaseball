@@ -956,6 +956,7 @@ class RefreshRun:
             self.config.roster_slots,
             projected_standings=self.projected_standings,
             team_name=self.config.team_name,
+            fraction_remaining=self.fraction_remaining,
             team_sds=self.team_sds,
             optimal_hitters=self.optimal_hitters,
             optimal_pitchers=self.optimal_pitchers_starters,
