@@ -1,7 +1,5 @@
 from datetime import date
 
-import pytest
-
 from fantasy_baseball.lineup.optimizer import (
     HitterAssignment,
     PitcherStarter,
@@ -15,6 +13,7 @@ from fantasy_baseball.models.standings import (
     ProjectedStandings,
     ProjectedStandingsEntry,
 )
+from fantasy_baseball.scoring import project_team_stats
 
 CATEGORIES = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
 
@@ -411,37 +410,25 @@ class TestBandFullRosterOperatingPoint:
     """Verify Fix 2: the band is evaluated at the full-team operating point.
 
     When a hitter swap is evaluated, the active pitchers are included in both
-    the before and after player lists so _sum_realized scores a complete roster.
-    This means band.mean and roto_delta agree in sign for a decisive starter
-    (both > 0, both < 0, or both within a small tolerance of 0).
+    the before and after player lists so the analytic band scores a complete
+    roster. This means band.mean and roto_delta agree in sign for a decisive
+    starter (both > 0, both < 0, or both within a small tolerance of 0).
 
-    The tolerance is generous because the MC band is stochastic; the test
-    checks directional agreement only, not exact equality.
+    The analytic band's mean is the EV deltaRoto derived from the
+    projected_standings 'Us' row plus the swap's ROS delta. The 'Us' row
+    must be consistent with the roster; otherwise subtracting an on-roster
+    hitter yields nonsensical negative stats and the band mean diverges from
+    roto_delta. In production the 'Us' row is always built from the roster
+    (ProjectedStandings.from_rosters). The fixture here mirrors that by
+    calling project_team_stats(full_roster) to build the 'Us' row.
     """
 
     _TOLERANCE = 0.05
 
-    @pytest.mark.xfail(
-        reason=(
-            "Mechanism change (analytic band, 2026-05-22): the band's mean is "
-            "now the EV deltaRoto, derived from the projected_standings 'Us' row "
-            "plus the swap's ROS delta (to guarantee mean == compute_delta_roto "
-            "within 1e-9). This fixture decouples the 'Us' row "
-            "(R=0,HR=100,RBI=0,SB=0) from the actual roster, so subtracting an "
-            "on-roster hitter yields nonsensical negative R/RBI and the EV mean "
-            "legitimately flips sign vs the lineup-subset roto_delta. The old MC "
-            "band re-summed the players directly and ignored the standings row, "
-            "so the decoupling was invisible. In production the 'Us' row is built "
-            "from the roster (ProjectedStandings.from_rosters) so this never "
-            "arises. Phase 2 (optimizer band wiring, Task 6) re-fixtures this "
-            "against a roster-consistent standings row."
-        ),
-        strict=True,
-    )
     def test_hitter_band_mean_agrees_in_direction_with_roto_delta(self):
         """A decisive hitter (B has SB advantage that flips a boundary) has a
-        positive roto_delta.  With the full-roster operating point the band.mean
-        must also be positive (or within tolerance of zero — the point is it
+        positive roto_delta. With the full-roster operating point the band.mean
+        must also be positive (or within tolerance of zero -- the point is it
         cannot diverge wildly negative while roto_delta is clearly positive).
         """
         # Hitters: B is decisive on SB, A is strong on HR.
@@ -450,7 +437,8 @@ class TestBandFullRosterOperatingPoint:
         c = _hitter("C", ["OF"], r=60, hr=18, rbi=60, sb=8, h=120, ab=450)
 
         # Include a pitcher so the hitter-optimizer has a non-trivial other_half
-        # to include in the band call (the fix under test).
+        # to include in the band call (the fix under test: active pitchers anchor
+        # the band at the correct full-team operating point).
         p1 = _pitcher("P1", ["SP"], ip=180, w=12, k=180, sv=0, era=3.50, whip=1.20)
         p2 = _pitcher("P2", ["RP"], ip=65, w=3, k=80, sv=25, era=2.80, whip=1.10)
 
@@ -458,8 +446,17 @@ class TestBandFullRosterOperatingPoint:
         full_roster = [a, b, c, p1, p2]
 
         slots = {"OF": 1, "BN": 2, "P": 9, "IL": 0}
+
+        # Build the "Us" standing row from the actual roster so band.mean
+        # (which reads the projected_standings "Us" row) is consistent with
+        # roto_delta (which is scored over the same players).
+        # project_team_stats sums ROS stats; no displacement needed here
+        # because full_roster has no IL/bench markers in the test context.
+        us_stats = project_team_stats(full_roster, displacement=False)
+        us_stats_dict = us_stats.to_dict()
+
         standings = _standings(
-            _standing("Us", R=0, HR=100, RBI=0, SB=0, AVG=0),
+            ProjectedStandingsEntry(team_name="Us", stats=CategoryStats.from_dict(us_stats_dict)),
             _standing("Rival", R=0, HR=30, RBI=0, SB=20, AVG=0),
             _standing("Third", R=0, HR=20, RBI=0, SB=15, AVG=0),
         )
@@ -489,5 +486,5 @@ class TestBandFullRosterOperatingPoint:
         # operating point (the other half of categories was scored as zero).
         assert band_mean > -self._TOLERANCE, (
             f"band.mean {band_mean:.4f} strongly disagrees with roto_delta "
-            f"{starter.roto_delta:.4f} — likely wrong operating point"
+            f"{starter.roto_delta:.4f} -- likely wrong operating point"
         )

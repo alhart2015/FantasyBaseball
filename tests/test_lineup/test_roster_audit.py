@@ -1230,3 +1230,173 @@ class TestFATargetPositions:
         from fantasy_baseball.lineup.roster_audit import fa_target_positions
 
         assert fa_target_positions("pitcher", ["P"], 25.0) == ["RP"]
+
+
+class TestBandConsistency:
+    """Analytic band consistency and performance contracts.
+
+    band["mean"] must equal candidate["delta_roto"]["total"] within 1e-9
+    (both are the same EV delta -- the band is not an approximation).
+    The analytic band must also be cheap: audit_roster over ~45 FAs
+    must complete in well under 3 seconds.
+    """
+
+    def _make_standings(self):
+        """Minimal 2-team standings for band-consistency tests."""
+        base = {
+            "R": 700,
+            "HR": 180,
+            "RBI": 700,
+            "SB": 80,
+            "AVG": 0.255,
+            "W": 65,
+            "K": 1100,
+            "SV": 45,
+            "ERA": 3.60,
+            "WHIP": 1.22,
+            "AB": 4800,
+            "H": 1224,
+            "IP": 1350,
+            "ER": 540,
+            "BB": 405,
+            "H_ALLOWED": 1215,
+        }
+        return _projected(
+            [
+                {"name": TEAM_NAME, "stats": dict(base)},
+                {"name": "Opponent", "stats": {**base, "SB": 50, "HR": 160}},
+            ]
+        )
+
+    def test_band_mean_equals_delta_roto_total(self):
+        """band["mean"] == candidate["delta_roto"]["total"] within 1e-9.
+
+        The analytic band's mean is the EV deltaRoto -- not a separate
+        estimate. Both must agree exactly (modulo floating-point round trip
+        from .to_dict() rounding to 2 d.p.).
+        """
+        roster = [
+            _hitter("Weak OF", ["OF"], r=30, hr=5, rbi=20, sb=1, avg=0.220, ab=300, h=66),
+            _pitcher(
+                "Decent SP",
+                ["SP"],
+                ip=180,
+                w=12,
+                k=180,
+                era=3.50,
+                whip=1.20,
+                er=70,
+                bb=40,
+                h_allowed=176,
+            ),
+        ]
+        free_agents = [
+            _hitter("Better OF", ["OF"], r=80, hr=28, rbi=85, sb=12, avg=0.280, ab=550, h=154),
+            _hitter("Decent OF", ["OF"], r=65, hr=18, rbi=65, sb=6, avg=0.260, ab=500, h=130),
+        ]
+        results = audit_roster(
+            roster,
+            free_agents,
+            {"OF": 1, "P": 1, "BN": 0, "IL": 0},
+            projected_standings=self._make_standings(),
+            team_name=TEAM_NAME,
+            fraction_remaining=0.6,
+        )
+
+        weak = next(e for e in results if e.player == "Weak OF")
+        assert weak.candidates, "expected scored candidates for Weak OF"
+
+        for c in weak.candidates:
+            dr_total = c["delta_roto"]["total"]
+            band_mean = c["band"]["mean"]
+            # Both are rounded to 2 d.p. by .to_dict() -- tolerance matches
+            # the rounding of two independent .round(2) calls.
+            assert abs(band_mean - dr_total) < 0.011, (
+                f"band.mean {band_mean} != delta_roto.total {dr_total} for "
+                f"candidate {c['name']} (should agree within round-trip precision)"
+            )
+
+    def test_perf_smoke_45_free_agents(self):
+        """audit_roster over ~45 FAs completes in well under 3 seconds.
+
+        The analytic band has no sampling loop so the cost is linear in
+        the number of categories (10) and Gauss-Hermite nodes (9),
+        not in n_draws. A 45-FA audit should be sub-second on any
+        reasonable machine; 3s is a generous ceiling.
+        """
+        import time
+
+        roster = [
+            _hitter("Weak OF", ["OF"], r=30, hr=5, rbi=20, sb=1, avg=0.220, ab=300, h=66),
+            _pitcher(
+                "Decent SP",
+                ["SP"],
+                ip=180,
+                w=12,
+                k=180,
+                era=3.50,
+                whip=1.20,
+                er=70,
+                bb=40,
+                h_allowed=176,
+            ),
+            _pitcher(
+                "Decent RP",
+                ["RP"],
+                ip=60,
+                w=3,
+                k=60,
+                era=3.00,
+                whip=1.17,
+                sv=20,
+                er=20,
+                bb=20,
+                h_allowed=50,
+            ),
+        ]
+        # 30 OF + 15 SP free agents = 45 total
+        free_agents = [
+            _hitter(
+                f"FA OF {i}",
+                ["OF"],
+                r=50 + i,
+                hr=10 + i // 3,
+                rbi=50 + i,
+                sb=3 + i % 5,
+                avg=0.245 + i * 0.001,
+                ab=450 + i * 2,
+                h=int((0.245 + i * 0.001) * (450 + i * 2)),
+            )
+            for i in range(30)
+        ] + [
+            _pitcher(
+                f"FA SP {i}",
+                ["SP"],
+                ip=150 + i,
+                w=9 + i // 5,
+                k=140 + i * 2,
+                era=3.20 + i * 0.05,
+                whip=1.10 + i * 0.01,
+                er=int((3.20 + i * 0.05) * (150 + i) / 9),
+                bb=30 + i,
+                h_allowed=140 + i,
+            )
+            for i in range(15)
+        ]
+
+        t0 = time.perf_counter()
+        results = audit_roster(
+            roster,
+            free_agents,
+            {"OF": 1, "P": 2, "BN": 0, "IL": 0},
+            projected_standings=self._make_standings(),
+            team_name=TEAM_NAME,
+            fraction_remaining=0.6,
+        )
+        elapsed = time.perf_counter() - t0
+
+        assert len(results) == len(roster), "audit must produce one entry per roster player"
+        assert elapsed < 3.0, (
+            f"audit_roster over 45 FAs took {elapsed:.2f}s -- analytic band "
+            f"must be cheap enough to stay well under 3s"
+        )
