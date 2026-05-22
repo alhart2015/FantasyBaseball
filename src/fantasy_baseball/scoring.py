@@ -938,7 +938,7 @@ def _full_season_volume(p, is_hitter: bool) -> float:
     return float(_stat(p, "ip", "full_season_projection"))
 
 
-def player_category_variance(player) -> dict:
+def player_category_variance(player) -> dict[Category | str, float]:
     """Per-player variance contribution for each category.
 
     Returns a dict keyed by :class:`Category` for counting categories and by
@@ -972,7 +972,7 @@ def player_category_variance(player) -> dict:
     Unknown player types return an empty dict.
     """
     ptype = _get(player, "player_type")
-    result: dict = {}
+    result: dict[Category | str, float] = {}
 
     if ptype == PlayerType.HITTER:
         cv_pt_sq = playing_time_params(PlayerType.HITTER, _full_season_volume(player, True))[1] ** 2
@@ -1051,21 +1051,23 @@ def project_team_sds(
     }
     p_var: dict[Category, float] = {c: 0.0 for c in (Category.W, Category.K, Category.SV)}
     # Rate-assembly sums (playing-time-invariant; keyed by raw stat string).
-    h_sum_sq: dict[str, float] = {k: 0.0 for k in HITTING_COUNTING}
-    p_sum_sq: dict[str, float] = {k: 0.0 for k in PITCHING_COUNTING}
+    # Only the keys that are actually read below are initialized here.
+    h_sum_sq: dict[str, float] = {"h": 0.0}
+    p_sum_sq: dict[str, float] = {k: 0.0 for k in ("er", "bb", "h_allowed")}
     total_ab = 0.0
     total_ip = 0.0
 
     for p in roster:
         ptype = _get(p, "player_type")
-        contrib = player_category_variance(p)
         if ptype == PlayerType.HITTER:
+            contrib = player_category_variance(p)
             for cat in (Category.R, Category.HR, Category.RBI, Category.SB):
                 h_var[cat] += contrib.get(cat, 0.0)
             # Rate components
             h_sum_sq["h"] += contrib.get("h_sq", 0.0)
             total_ab += contrib.get("ab", 0.0)
         elif ptype == PlayerType.PITCHER:
+            contrib = player_category_variance(p)
             for cat in (Category.W, Category.K, Category.SV):
                 p_var[cat] += contrib.get(cat, 0.0)
             # Rate components

@@ -473,6 +473,11 @@ class TestPlayerCategoryVariance:
         assert var["er_sq"] == pytest.approx(60**2)
         assert var["ip"] == pytest.approx(180)
 
+    def test_unknown_player_type_returns_empty_dict(self):
+        """Unknown player_type returns an empty dict (no crash, no contributions)."""
+        p = {"player_type": "unknown"}
+        assert player_category_variance(p) == {}
+
 
 class TestScoreRoto:
     def test_two_teams_simple(self):
