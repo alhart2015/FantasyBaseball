@@ -15,9 +15,11 @@ from fantasy_baseball.streaks.data.load import upsert_hitter_games, upsert_statc
 from fantasy_baseball.streaks.data.schema import get_connection
 from fantasy_baseball.streaks.models import HitterGame, HitterStatcastPA
 from fantasy_baseball.streaks.windows import (
+    _HITTER_WINDOWS_COLS,
     _add_rate_stats,
     _add_statcast_peripherals,
     _assign_pt_bucket,
+    _bulk_replace_hitter_windows,
     _compute_rolling_sums,
     compute_windows,
 )
@@ -307,3 +309,69 @@ def test_compute_windows_is_idempotent() -> None:
     assert n1 == n2
     total = conn.execute("SELECT COUNT(*) FROM hitter_windows").fetchone()[0]
     assert total == n1
+
+
+def _windows_frame(n_rows: int) -> pd.DataFrame:
+    """A DataFrame shaped like ``compute_windows`` output (all 17 columns)."""
+    frame = pd.DataFrame(
+        {
+            "player_id": [i % 500 for i in range(n_rows)],
+            "window_end": pd.to_datetime("2024-01-01")
+            + pd.to_timedelta([i // 500 for i in range(n_rows)], unit="D"),
+            "window_days": 14,
+            "pa": [(i % 25) + 5 for i in range(n_rows)],
+            "hr": 1,
+            "r": 1,
+            "rbi": 1,
+            "sb": 0,
+            "avg": 0.250,
+            "babip": 0.300,
+            "k_pct": 0.200,
+            "bb_pct": 0.080,
+            "iso": 0.150,
+            "ev_avg": 89.0,
+            "barrel_pct": 0.080,
+            "xwoba_avg": 0.330,
+            "pt_bucket": "mid",
+        }
+    )
+    return frame[list(_HITTER_WINDOWS_COLS)]
+
+
+def test_bulk_replace_keeps_on_disk_db_flat_across_runs(tmp_path) -> None:
+    """Regression: rebuilding ``hitter_windows`` repeatedly must not bloat
+    the on-disk DuckDB.
+
+    The old ``DELETE FROM`` + ``INSERT`` pattern left tombstoned row groups
+    that DuckDB never reclaims, growing the file ~15x over 40 rebuilds and
+    ballooning the real DB to ~12 GiB. ``_bulk_replace_hitter_windows`` now
+    DROPs + recreates the table, which frees the blocks for reuse so the
+    file stays flat. Each iteration reconnects + CHECKPOINTs to mirror the
+    separate-process refreshes that caused the original bloat.
+    """
+    db = tmp_path / "w.duckdb"
+    n_rows = 3000
+
+    def _run() -> int:
+        conn = get_connection(db)
+        try:
+            n = _bulk_replace_hitter_windows(conn, _windows_frame(n_rows))
+            conn.execute("CHECKPOINT")
+            return n
+        finally:
+            conn.close()
+
+    _run()
+    n_written = _run()
+    size_warm = db.stat().st_size
+
+    for _ in range(25):
+        assert _run() == n_rows
+    size_final = db.stat().st_size
+
+    assert n_written == n_rows
+    # Flat (DROP+recreate) stays ~1x; the old DELETE+INSERT path would be
+    # ~10x+ over this many rebuilds. 3x is a generous regression bound.
+    assert size_final < size_warm * 3, (
+        f"hitter_windows DB bloated across rebuilds: {size_warm} -> {size_final} bytes"
+    )

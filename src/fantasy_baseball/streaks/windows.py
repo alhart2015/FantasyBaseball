@@ -12,8 +12,9 @@ Pandas is the right tool here because per-player reindexing + rolling +
 join is awkward in pure SQL; DuckDB handles the percentile work in
 :mod:`thresholds`.
 
-Idempotent: the upsert uses ``INSERT OR REPLACE`` keyed by
-``(player_id, window_end, window_days)``.
+Full rebuild: each call replaces all of ``hitter_windows`` (DROP +
+recreate + bulk INSERT) -- see :func:`_bulk_replace_hitter_windows` for
+why DROP beats DELETE here.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from dataclasses import fields
 import duckdb
 import pandas as pd
 
+from fantasy_baseball.streaks.data.schema import init_schema
 from fantasy_baseball.streaks.models import HitterWindow, PtBucket
 
 logger = logging.getLogger(__name__)
@@ -305,7 +307,8 @@ def compute_windows(conn: duckdb.DuckDBPyConnection) -> int:
     [first_played, last_played], window_days in {3, 7, 14}) where the
     window's PA >= 5. Returns the total row count written.
 
-    Idempotent: ``INSERT OR REPLACE`` keyed by (player_id, window_end, window_days).
+    Idempotent: rebuilds ``hitter_windows`` from scratch (DROP + recreate +
+    bulk INSERT) on every call.
     """
     overall_t0 = time.perf_counter()
     n_games_row = conn.execute("SELECT COUNT(*) FROM hitter_games").fetchone()
@@ -407,17 +410,28 @@ def _bulk_replace_hitter_windows(conn: duckdb.DuckDBPyConnection, out: pd.DataFr
 
     Uses DuckDB's pandas registration to bulk-INSERT in C rather than
     row-by-row ``executemany`` (which is O(N) Python-level binding and
-    runs into the minutes range for ~1M rows). Functionally equivalent
-    to ``INSERT OR REPLACE`` keyed by the PK because we DELETE the table
-    contents first inside the same transaction.
+    runs into the minutes range for ~1M rows).
+
+    DROP + recreate (not DELETE + INSERT) is deliberate. ``DELETE`` only
+    tombstones the existing row groups; the following ``INSERT`` appends
+    fresh ones, and DuckDB never vacuums the dead blocks in place. Because
+    this reruns on every refresh -- and far more often from the dev/eval
+    scripts that recompute windows -- DELETE+INSERT grew the file ~15x
+    over 40 runs in testing and ballooned the real DB to ~12 GiB for
+    ~550k rows. ``DROP TABLE`` frees the table's blocks for reuse so the
+    file stays flat across runs; ``init_schema`` recreates it from the
+    canonical DDL (PK + NOT NULL intact). The whole swap runs in one
+    transaction, so a failed INSERT rolls back to the prior table. Mirrors
+    the DROP + ``init_schema`` pattern in
+    :mod:`fantasy_baseball.streaks.data.migrate`.
     """
-    # Coerce window_end to date (DuckDB DATE column) — pandas may have it
-    # as a Timestamp; the DuckDB pandas-register path handles datetime64
-    # correctly so we don't need to convert per-row.
-    df = out  # noqa: F841 — referenced via DuckDB's pandas scan below
+    # ``window_end`` arrives as a pandas Timestamp; DuckDB's pandas-register
+    # path maps datetime64 -> DATE, so no per-row coercion is needed.
+    df = out  # noqa: F841 -- referenced via DuckDB's pandas scan below
     conn.execute("BEGIN TRANSACTION")
     try:
-        conn.execute("DELETE FROM hitter_windows")
+        conn.execute("DROP TABLE IF EXISTS hitter_windows")
+        init_schema(conn)
         conn.execute(
             f"INSERT INTO hitter_windows ({', '.join(_HITTER_WINDOWS_COLS)}) "
             f"SELECT {', '.join(_HITTER_WINDOWS_COLS)} FROM df"

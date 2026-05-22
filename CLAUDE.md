@@ -24,6 +24,7 @@ Tests are the primary regression-prevention mechanism in this repo. A failing te
 ```bash
 pip install -e ".[dev]"          # Install package + dev deps (editable mode)
 pytest -v                        # Run all tests
+pytest -n auto                   # Run the whole suite in parallel (~4x faster; needs pytest-xdist)
 pytest tests/test_sgp/ -v        # Run one test directory
 pytest tests/test_draft/test_board.py::test_apply_keepers -v  # Single test
 python scripts/run_draft_dashboard.py  # Web-only draft dashboard (default port 5050)

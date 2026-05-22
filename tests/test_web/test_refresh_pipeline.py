@@ -707,37 +707,58 @@ def test_compute_streaks_closes_connection_on_failure(monkeypatch, kv_isolation)
     assert closed["n"] == 1, "connection must be closed on failure"
 
 
-def test_compute_streaks_skipped_on_render(monkeypatch, kv_isolation) -> None:
+def test_compute_streaks_skipped_on_render(monkeypatch, fake_redis) -> None:
     """On Render, ``_compute_streaks`` must early-return without touching DuckDB.
 
-    Render has no duckdb installed and no streaks.duckdb file — the
+    Render has no duckdb installed and no streaks.duckdb file -- the
     cache is populated from a developer machine via
     ``scripts/refresh_remote.py``. The Render-side daily refresh must
     NOT attempt streak compute (which would crash on the ``import
     duckdb`` inside ``streaks.pipeline``) and must NOT overwrite the
     cached STREAK_SCORES that the developer machine wrote.
+
+    Hermetic: ``get_kv`` is faked to an in-memory store so the RENDER=true
+    path never builds a real Upstash client. The previous version called
+    ``kv_store.get_kv()`` directly under ``RENDER=true``, which built a
+    live client from the .env creds and wrote the sentinel to *prod*
+    Upstash -- a prod-polluting external dependency that made the test
+    flaky in full-suite ordering. Unroutable creds are set as a second
+    layer of defense.
     """
     from fantasy_baseball.data import kv_store
     from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 
     monkeypatch.setenv("RENDER", "true")
-    kv_store._reset_singleton()
+    # Defense in depth: even if a real client were built, it must not be
+    # able to reach prod Upstash (the repo .env holds real creds).
+    monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://example.invalid")
+    monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "tok")
+    # The cache the Render refresh reads/writes is faked in-memory; this
+    # test is about the is_remote() gate, not the Upstash backend.
+    monkeypatch.setattr(kv_store, "get_kv", lambda: fake_redis)
 
     # Seed an existing cache so we can prove the Render-side refresh
     # didn't clobber it.
-    kv_store.get_kv().set(redis_key(CacheKey.STREAK_SCORES), '{"sentinel": "do-not-overwrite"}')
+    fake_redis.set(redis_key(CacheKey.STREAK_SCORES), '{"sentinel": "do-not-overwrite"}')
 
-    # If _compute_streaks tried to run, this patch would make it crash —
-    # but the is_remote() gate must short-circuit before reaching it.
-    def _explode(*a, **kw):
-        raise AssertionError("compute_streak_report must not be called on Render")
+    # The gate must short-circuit before _compute_streaks opens DuckDB.
+    # _compute_streaks swallows exceptions, so a raise alone wouldn't fail
+    # the test -- track the call instead and assert it never happened.
+    opened = {"n": 0}
 
-    monkeypatch.setattr("fantasy_baseball.streaks.pipeline.compute_streak_report", _explode)
+    def _tracking_get_connection(*a, **kw):
+        opened["n"] += 1
+        raise AssertionError("get_connection must not be called on Render")
+
+    monkeypatch.setattr(
+        "fantasy_baseball.streaks.data.schema.get_connection", _tracking_get_connection
+    )
 
     run = _build_refresh_run_for_streak_test()
     run._compute_streaks()  # must not raise
 
-    cached = kv_store.get_kv().get(redis_key(CacheKey.STREAK_SCORES))
+    assert opened["n"] == 0, "is_remote() gate must short-circuit before DuckDB access"
+    cached = fake_redis.get(redis_key(CacheKey.STREAK_SCORES))
     assert cached == '{"sentinel": "do-not-overwrite"}', "Render refresh overwrote the cache"
 
 
