@@ -332,6 +332,110 @@ def test_full_lineup_page_with_cached_data(client, kv_isolation):
     assert "Optimal" in html  # should show optimal button since no moves
 
 
+def test_band_cell_macro_maps_verdict_to_gap_color_and_renders_tooltip():
+    """band_cell renders the shared gap-badge rectangle (verdict->color)
+    plus a rich hover tooltip with deltaRoto / SD / P(helps)."""
+    app = create_app()
+    with app.app_context():
+        tmpl = app.jinja_env.from_string(
+            "{% from 'season/macros.html' import band_cell %}{{ band_cell(b) }}"
+        )
+
+        real = tmpl.render(b={"mean": 1.1, "sd": 0.4, "p_positive": 0.82, "verdict": "real"})
+        assert "gap-badge gap-positive" in real  # rectangle, green verdict
+        assert 'class="tooltip"' in real  # rich hover, not just title=
+        assert "+1.1" in real  # mean on the badge
+        assert "P(helps)" in real and "82%" in real
+        assert "Std dev" in real
+
+        coin = tmpl.render(b={"mean": 0.0, "sd": 0.3, "p_positive": 0.5, "verdict": "coin-flip"})
+        assert "gap-badge gap-marginal" in coin
+
+        down = tmpl.render(b={"mean": -1.2, "sd": 0.5, "p_positive": 0.1, "verdict": "downgrade"})
+        assert "gap-badge gap-negative" in down
+
+        # An unexpected verdict must degrade to a neutral badge, not 500 the page.
+        unknown = tmpl.render(b={"mean": 0.0, "sd": 0.2, "p_positive": 0.5, "verdict": "???"})
+        assert "gap-badge gap-marginal" in unknown
+
+
+def test_lineup_delta_roto_renders_band_cell_with_tooltip(client, kv_isolation):
+    """A lineup row with an optimizer band shows the colored rectangle + the
+    hover tooltip, and the shared tooltip JS partial is wired into the page."""
+    from fantasy_baseball.web import season_data
+
+    roster = [
+        {
+            "name": "Adley Rutschman",
+            "positions": ["C"],
+            "selected_position": "C",
+            "player_id": "1",
+            "status": "",
+        }
+    ]
+    optimal = {
+        "hitter_lineup": [
+            {
+                "name": "Adley Rutschman",
+                "roto_delta": 1.1,
+                "band": {"mean": 1.1, "sd": 0.4, "p_positive": 0.82, "verdict": "real"},
+            }
+        ],
+        "pitcher_starters": [],
+    }
+    season_data.write_cache(CacheKey.ROSTER, roster)
+    season_data.write_cache(CacheKey.LINEUP_OPTIMAL, optimal)
+    season_data.write_cache(CacheKey.META, {"last_refresh": "9:00 AM"})
+
+    resp = client.get("/lineup")
+    assert resp.status_code == 200
+    html = resp.data.decode()
+    assert "gap-badge gap-positive" in html  # same rectangle as roster audit
+    assert "P(helps)" in html and "82%" in html  # rich hover content
+    assert "Std dev" in html
+    assert "function bindTooltips()" in html  # shared tooltip partial included
+
+
+def test_roster_audit_delta_roto_renders_band_cell_with_tooltip(client, kv_isolation):
+    """The roster-audit deltaRoto column keeps the rectangle and now gains the
+    same rich hover tooltip + the shared tooltip JS partial."""
+    from fantasy_baseball.web import season_data
+
+    audit = [
+        {
+            "slot": "C",
+            "player": "Adley Rutschman",
+            "player_type": "hitter",
+            "positions": ["C"],
+            "player_sgp": 2.0,
+            "best_fa": "Backup Catcher",
+            "best_fa_positions": ["C"],
+            "best_fa_type": "hitter",
+            "best_fa_sgp": 2.6,
+            "candidates": [
+                {
+                    "name": "Backup Catcher",
+                    "positions": ["C"],
+                    "player_type": "hitter",
+                    "sgp": 2.6,
+                    "gap": 0.6,
+                    "delta_roto": {"total": 1.1},
+                    "band": {"mean": 1.1, "sd": 0.4, "p_positive": 0.82, "verdict": "real"},
+                }
+            ],
+        }
+    ]
+    season_data.write_cache(CacheKey.ROSTER_AUDIT, audit)
+    season_data.write_cache(CacheKey.META, {"last_refresh": "9:00 AM"})
+
+    resp = client.get("/roster-audit")
+    assert resp.status_code == 200
+    html = resp.data.decode()
+    assert "gap-badge gap-positive" in html
+    assert "P(helps)" in html and "82%" in html
+    assert "function bindTooltips()" in html  # shared tooltip partial included
+
+
 def test_full_trades_page_renders(client):
     """Integration test: trades page renders without waiver data."""
     resp = client.get("/waivers-trades")
