@@ -265,6 +265,8 @@ class ProjectedStandings:
         cls,
         team_rosters: Mapping[str, Any],
         effective_date: date,
+        *,
+        fraction_remaining: float = 1.0,
     ) -> ProjectedStandings:
         """Build from {team_name: roster_list} using project_team_stats.
 
@@ -321,7 +323,12 @@ class ProjectedStandings:
         # the narrower invariant type.
         team_sds = build_team_sds(
             {tname: list(roster) for tname, roster in team_rosters.items()},
-            sd_scale=1.0,
+            # Damp by sqrt(fraction_remaining) so the picker's uncertainty
+            # matches the canonical team_sds the optimizer / deltaRoto use.
+            # (A hardcoded 1.0 used full-season variance and over-softened
+            # mid-season lineup decisions vs every other consumer.) Default
+            # 1.0 is correct preseason, when the full season is still ahead.
+            sd_scale=fraction_remaining**0.5,
         )
 
         # Pass 2: each team re-displaces against frozen baseline-of-others
