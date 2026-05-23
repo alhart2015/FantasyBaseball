@@ -132,14 +132,13 @@ def _solve_lineup(
     projected_standings: ProjectedStandings,
     team_name: str,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
-    fraction_remaining: float | None,  # noqa: ARG001
 ):
     """Run both optimizers over ``pool``; return
     ``(hitter_assignments, pitcher_starters, pitcher_bench)``.
 
-    ``fraction_remaining`` is accepted for interface consistency but always
-    forwarded as None so the optimizers skip per-starter band computation
-    (the planner computes a plan-level band separately).
+    Both optimizer calls use ``fraction_remaining=None`` so they skip
+    per-starter band computation; the planner computes a plan-level band
+    separately.
     """
     hitters = [p for p in pool if p.player_type != PlayerType.PITCHER]
     pitchers = [p for p in pool if p.player_type == PlayerType.PITCHER]
