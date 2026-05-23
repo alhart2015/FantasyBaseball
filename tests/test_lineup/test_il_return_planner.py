@@ -2,6 +2,8 @@ from fantasy_baseball.lineup.il_return_planner import (
     IlReturnPlanResult,
     Move,
     MovePlan,
+    _activate,
+    _build_pool,
     _counts_against_cap,
     roster_capacity,
 )
@@ -94,3 +96,36 @@ class TestDataclasses:
             "plans": [],
             "warning": None,
         }
+
+
+class TestActivate:
+    def test_activate_clears_il_signals(self):
+        hader = _pitcher("Hader", slot="IL", status="IL15")
+        cleared = _activate(hader)
+        assert cleared.status == ""
+        assert cleared.selected_position is None
+        assert cleared.name == "Hader"
+        # Original is untouched (dataclasses.replace returns a copy).
+        assert hader.status == "IL15"
+
+
+class TestBuildPool:
+    def test_pool_includes_counted_bodies_plus_returning_il_slot_players(self):
+        active = _pitcher("Active", slot="P")
+        webb = _pitcher("Webb", slot="BN", status="IL10")  # counts (BN)
+        hader = _pitcher("Hader", slot="IL", status="IL15")  # exempt (IL slot)
+        parked = _pitcher("Parked", slot="IL", status="IL60")  # not activated
+        roster = [active, webb, hader, parked]
+
+        pool = _build_pool(roster, activating_il=[webb, hader])
+        names = {p.name for p in pool}
+        # Active + Webb (already counted) + Hader (added from IL). Parked excluded.
+        assert names == {"Active", "Webb", "Hader"}
+        # Activated players have IL signals cleared.
+        webb_p = next(p for p in pool if p.name == "Webb")
+        hader_p = next(p for p in pool if p.name == "Hader")
+        assert webb_p.status == "" and webb_p.selected_position is None
+        assert hader_p.status == "" and hader_p.selected_position is None
+        # Non-activated active player is unchanged.
+        active_p = next(p for p in pool if p.name == "Active")
+        assert active_p.selected_position == Position.P

@@ -9,6 +9,7 @@ forced drops and returns the top transaction plans ranked by deltaRoto.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -94,3 +95,28 @@ def _counts_against_cap(p: Player) -> bool:
     drop.
     """
     return p.selected_position not in IL_SLOTS
+
+
+def _activate(p: Player) -> Player:
+    """Return a copy with IL signals cleared so the optimizer treats the
+    player as active-eligible. ``is_on_il()`` and the optimizers would
+    otherwise keep excluding a returning IL player."""
+    return dataclasses.replace(p, status="", selected_position=None)
+
+
+def _build_pool(roster: list[Player], activating_il: list[Player]) -> list[Player]:
+    """The set of players competing for active/bench slots after activation.
+
+    = current counted bodies (active + healthy bench + any BN+IL-status
+    players) UNION the activating players that were in true IL slots.
+    Activating players get their IL signals cleared. Unchecked IL players
+    stay parked and are excluded.
+    """
+    activating_names = {p.name for p in activating_il}
+    counted = [p for p in roster if _counts_against_cap(p)]
+    counted_names = {p.name for p in counted}
+    extra = [p for p in activating_il if p.name not in counted_names]
+    pool: list[Player] = []
+    for p in counted + extra:
+        pool.append(_activate(p) if p.name in activating_names else p)
+    return pool
