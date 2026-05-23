@@ -428,3 +428,52 @@ class TestPlanIlReturns:
         assert result.overflow == 0
         assert len(result.plans) == 1
         assert result.plans[0].drops == []
+
+    def test_activating_a_hitter_is_symmetric(self):
+        # Roster: 1 C, 2 OF, 1 P, 1 BN, 1 IL -> capacity = 5.
+        # Five players fill all five counted slots; Trout is parked in the IL
+        # slot (exempt). Activating Trout brings the pool to 6 > capacity=5,
+        # forcing exactly one drop.
+        slots = {"C": 1, "OF": 2, "P": 1, "BN": 1, "IL": 1}
+        c1 = _hitter("C1", ["C"], r=70, hr=18, rbi=65, sb=4, avg=0.270, ab=500, h=135)
+        of1 = _hitter("OF1", ["OF"], r=80, hr=24, rbi=80, sb=10, avg=0.280, ab=540, h=151)
+        of2 = _hitter("OF2", ["OF"], r=30, hr=4, rbi=20, sb=1, avg=0.215, ab=300, h=64)  # weakest
+        sp1 = _good_pitcher("SP1", k=170)
+        bn1 = _hitter("BN1", ["OF"], r=55, hr=12, rbi=50, sb=3, avg=0.250, ab=400, h=100)
+        sp1.selected_position = Position.P
+        c1.selected_position = Position.C
+        of1.selected_position = Position.OF
+        of2.selected_position = Position.OF
+        bn1.selected_position = Position.BN
+        # Elite IL outfielder returning.
+        trout = _hitter("Trout", ["OF"], r=110, hr=45, rbi=120, sb=25, avg=0.320, ab=560, h=179)
+        trout.selected_position = Position.parse("IL")
+        trout.status = "IL15"
+        # counted = 5 (c1, of1, of2, sp1, bn1); Trout in IL slot is exempt.
+        roster = [c1, of1, of2, sp1, bn1, trout]
+
+        result = plan_il_returns(
+            roster,
+            [trout],
+            slots,
+            projected_standings=_standings(),
+            team_name=TEAM_NAME,
+            fraction_remaining=1.0,
+            team_sds=None,
+        )
+
+        assert result.capacity == 5
+        assert result.overflow == 1  # activating Trout (IL slot) forces one drop
+        assert result.plans, "expected at least one plan"
+        top = result.plans[0]
+        assert len(top.drops) == 1
+        # The weakest body (OF2) is the cheapest drop -> top plan (deltaRoto-max,
+        # tie-broken by lowest SGP).
+        assert top.drops == ["OF2"]
+        # Symmetry: the returning hitter is integrated off the IL (no longer "IL").
+        by_name = {m.name: m for m in top.moves}
+        assert by_name["Trout"].from_slot == "IL"
+        assert by_name["Trout"].to_slot != "IL"
+        assert by_name["Trout"].player_type == "hitter"
+        # The drop is rendered as a DROP move.
+        assert by_name["OF2"].to_slot == "DROP"
