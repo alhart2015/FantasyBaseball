@@ -13,12 +13,16 @@ import dataclasses
 import logging
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
+from itertools import combinations
 from typing import Any
 
+from fantasy_baseball.lineup.delta_roto import compute_delta_roto_band
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS, Position
 from fantasy_baseball.models.standings import ProjectedStandings
+from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import Category
 
 logger = logging.getLogger(__name__)
@@ -210,3 +214,194 @@ def _build_moves(
             )
     moves.sort(key=lambda m: m.name)
     return moves
+
+
+def _sgp(p: Player, denoms) -> float:
+    if p.rest_of_season is None:
+        return 0.0
+    return calculate_player_sgp(p.rest_of_season, denoms)
+
+
+def _make_plan(
+    roster: list[Player],
+    pool: list[Player],
+    dropset: tuple[Player, ...],
+    base_h,
+    base_ps,
+    before_active: list[Player],
+    roster_slots: dict[str, int],
+    projected_standings: ProjectedStandings,
+    team_name: str,
+    team_sds,
+    fraction_remaining: float,
+    bn_slots: int,
+) -> MovePlan | None:
+    """Solve one drop-set into a MovePlan, or None if infeasible.
+
+    Only re-solves the side(s) the drop touches; the untouched side reuses
+    the pre-drop baseline (the lineup there is identical). Feasibility:
+    the benched survivors must fit in the BN slots.
+    """
+    drop_names = {p.name for p in dropset}
+    survivors = [p for p in pool if p.name not in drop_names]
+    dropped_hitter = any(p.player_type != PlayerType.PITCHER for p in dropset)
+    dropped_pitcher = any(p.player_type == PlayerType.PITCHER for p in dropset)
+
+    # Re-solve only the side(s) the drop touches; reuse the pre-drop baseline
+    # for the untouched side (its lineup is unchanged). An empty dropset
+    # (overflow <= 0) touches neither and reuses both baselines.
+    if dropped_hitter:
+        h_assign = optimize_hitter_lineup(
+            hitters=[p for p in survivors if p.player_type != PlayerType.PITCHER],
+            full_roster=survivors,
+            projected_standings=projected_standings,
+            team_name=team_name,
+            roster_slots=roster_slots,
+            team_sds=team_sds,
+            fraction_remaining=None,
+        )
+    else:
+        h_assign = base_h
+
+    if dropped_pitcher:
+        ps, _ = optimize_pitcher_lineup(
+            pitchers=[p for p in survivors if p.player_type == PlayerType.PITCHER],
+            full_roster=survivors,
+            projected_standings=projected_standings,
+            team_name=team_name,
+            slots=roster_slots.get("P", 9),
+            team_sds=team_sds,
+            fraction_remaining=None,
+        )
+    else:
+        ps = base_ps
+
+    active_names = {a.name for a in h_assign} | {s.name for s in ps}
+    benched = [p for p in survivors if p.name not in active_names]
+    if len(benched) > bn_slots:
+        return None  # infeasible: can't bench everyone left over
+
+    after_active = [a.player for a in h_assign] + [s.player for s in ps]
+    try:
+        band = compute_delta_roto_band(
+            before_active,
+            after_active,
+            projected_standings.field_stats(team_name),
+            team_name,
+            fraction_remaining,
+            projected_standings=projected_standings,
+            team_sds=team_sds,
+        )
+    except KeyError as exc:
+        logger.warning("IL plan band failed for drop %s: %s", sorted(drop_names), exc)
+        return None
+
+    moves = _build_moves(roster, pool, h_assign, ps, drop_names)
+    return MovePlan(
+        drops=sorted(drop_names),
+        moves=moves,
+        delta_roto=band.mean,
+        band=band.to_dict(),
+    )
+
+
+def plan_il_returns(
+    roster: list[Player],
+    activating_il: list[Player],
+    roster_slots: dict[str, int],
+    *,
+    projected_standings: ProjectedStandings,
+    team_name: str,
+    fraction_remaining: float,
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None,
+    max_plans: int = 5,
+) -> IlReturnPlanResult:
+    """Plan the roster moves to reactivate ``activating_il`` players.
+
+    Returns up to ``max_plans`` plans ranked by deltaRoto descending. Each
+    plan's deltaRoto is the cost of its forced drop relative to the pre-drop
+    ideal lineup (which already includes the returning players, so the
+    activation gain the standings already price is not double-counted).
+    """
+    capacity = roster_capacity(roster_slots)
+    activating_names = [p.name for p in activating_il]
+
+    if not activating_il:
+        return IlReturnPlanResult(activating=[], capacity=capacity, overflow=0, plans=[])
+
+    pool = _build_pool(roster, activating_il)
+    overflow = len(pool) - capacity
+    denoms = get_sgp_denominators()
+    bn_slots = roster_slots.get("BN", 0)
+
+    # Pre-drop ideal lineup -> the band baseline (returning players present here).
+    base_h, base_ps, _ = _solve_lineup(pool, roster_slots, projected_standings, team_name, team_sds)
+    before_active = [a.player for a in base_h] + [s.player for s in base_ps]
+
+    if overflow <= 0:
+        plan = _make_plan(
+            roster,
+            pool,
+            (),
+            base_h,
+            base_ps,
+            before_active,
+            roster_slots,
+            projected_standings,
+            team_name,
+            team_sds,
+            fraction_remaining,
+            bn_slots,
+        )
+        plans = [plan] if plan is not None else []
+        return IlReturnPlanResult(
+            activating=activating_names, capacity=capacity, overflow=0, plans=plans
+        )
+
+    # Forced drops: enumerate drop-sets of size `overflow`. For overflow >= 3
+    # (rare) restrict to the bottom-12 bodies by SGP to bound the combinatorics.
+    droppable = pool
+    if overflow >= 3:
+        droppable = sorted(pool, key=lambda p: _sgp(p, denoms))[:12]
+
+    scored: list[MovePlan] = []
+    for dropset in combinations(droppable, overflow):
+        plan = _make_plan(
+            roster,
+            pool,
+            dropset,
+            base_h,
+            base_ps,
+            before_active,
+            roster_slots,
+            projected_standings,
+            team_name,
+            team_sds,
+            fraction_remaining,
+            bn_slots,
+        )
+        if plan is not None:
+            scored.append(plan)
+
+    if not scored:
+        return IlReturnPlanResult(
+            activating=activating_names,
+            capacity=capacity,
+            overflow=overflow,
+            plans=[],
+            warning=f"No legal roster after dropping {overflow} player(s).",
+        )
+
+    # Rank by deltaRoto; tie-break by dropping the lower-SGP body.
+    name_to_player = {p.name: p for p in pool}
+
+    def _dropped_sgp(plan: MovePlan) -> float:
+        return sum(_sgp(name_to_player[n], denoms) for n in plan.drops if n in name_to_player)
+
+    scored.sort(key=lambda p: (p.delta_roto, -_dropped_sgp(p)), reverse=True)
+    return IlReturnPlanResult(
+        activating=activating_names,
+        capacity=capacity,
+        overflow=overflow,
+        plans=scored[:max_plans],
+    )

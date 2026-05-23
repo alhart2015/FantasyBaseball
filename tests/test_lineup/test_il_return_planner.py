@@ -7,6 +7,7 @@ from fantasy_baseball.lineup.il_return_planner import (
     _build_pool,
     _counts_against_cap,
     _solve_lineup,
+    plan_il_returns,
     roster_capacity,
 )
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
@@ -54,6 +55,44 @@ def _standings():
             "teams": [
                 {"name": TEAM_NAME, "stats": dict(base)},
                 {"name": "Opponent", "stats": {**base, "SV": 30, "ERA": 3.80}},
+            ],
+        }
+    )
+
+
+def _contending_standings():
+    """Standings where the team is contending in strikeouts (opponent K=450).
+
+    The Webb/Hader roster's pitchers share identical IP/ER/BB/H_allowed/W,
+    so K is the only lever distinguishing them. Webb-out lineups top out at
+    425 K and Webb-in lineups reach 475-480, so an opponent K of 450 makes
+    Webb's strikeouts flip the category -- Webb is then strictly worth
+    starting (no value-neutral tie).
+    """
+    base = {
+        "R": 800,
+        "HR": 200,
+        "RBI": 800,
+        "SB": 100,
+        "AVG": 0.260,
+        "W": 70,
+        "K": 1200,
+        "SV": 50,
+        "ERA": 3.50,
+        "WHIP": 1.20,
+        "AB": 5000,
+        "H": 1300,
+        "IP": 1400,
+        "ER": 560,
+        "BB": 420,
+        "H_ALLOWED": 1300,
+    }
+    return ProjectedStandings.from_json(
+        {
+            "effective_date": "2026-04-01",
+            "teams": [
+                {"name": TEAM_NAME, "stats": dict(base)},
+                {"name": "Opponent", "stats": {**base, "K": 450, "SV": 30, "ERA": 3.80}},
             ],
         }
     )
@@ -260,3 +299,132 @@ class TestBuildMoves:
         assert "Active" not in by_name
         # player_type populated
         assert by_name["Webb"].player_type == "pitcher"
+
+
+SMALL_SLOTS = {
+    "C": 1,
+    "1B": 1,
+    "2B": 1,
+    "3B": 1,
+    "SS": 1,
+    "OF": 3,
+    "UTIL": 1,
+    "P": 3,
+    "BN": 1,
+    "IL": 2,
+}  # 9 hitter + 3 P + 1 BN = capacity 13
+
+
+def _full_hitters():
+    specs = [
+        ("C1", ["C"]),
+        ("1B1", ["1B"]),
+        ("2B1", ["2B"]),
+        ("3B1", ["3B"]),
+        ("SS1", ["SS"]),
+        ("OFa", ["OF"]),
+        ("OFb", ["OF"]),
+        ("OFc", ["OF"]),
+        ("UT", ["1B"]),
+    ]
+    return [
+        _hitter(n, pos, r=75, hr=22, rbi=75, sb=8, avg=0.275, ab=520, h=143) for n, pos in specs
+    ]
+
+
+def _webb_hader_roster():
+    hitters = _full_hitters()  # 9 counted
+    sp1 = _good_pitcher("SP1", k=160, era=3.4, whip=1.15)
+    sp2 = _good_pitcher("SP2", k=155, era=3.5, whip=1.18)
+    scrub = _pitcher("Scrub", slot="P")  # weak (ip=60,k=60,era=3.0 defaults)
+    sp1.selected_position = Position.P
+    sp2.selected_position = Position.P
+    webb = _good_pitcher("Webb", k=210, era=2.7, whip=1.02)
+    webb.selected_position = Position.BN
+    webb.status = "IL10"  # BN + IL status -> counts
+    hader = _good_pitcher("Hader", k=110, sv=35, era=2.4, whip=0.95)
+    hader.selected_position = Position.parse("IL")
+    hader.status = "IL15"  # true IL slot -> exempt
+    return [*hitters, sp1, sp2, scrub, webb, hader]
+
+
+class TestPlanIlReturns:
+    def test_webb_hader_forces_one_drop_and_benches_a_pitcher(self):
+        roster = _webb_hader_roster()
+        webb = next(p for p in roster if p.name == "Webb")
+        hader = next(p for p in roster if p.name == "Hader")
+
+        result = plan_il_returns(
+            roster,
+            [webb, hader],
+            SMALL_SLOTS,
+            projected_standings=_contending_standings(),
+            team_name=TEAM_NAME,
+            fraction_remaining=1.0,
+            team_sds=None,
+        )
+
+        assert result.overflow == 1, "activating Hader (IL slot) forces exactly one drop"
+        assert result.capacity == 13
+        assert result.plans, "expected at least one plan"
+        assert len(result.plans) <= 5
+
+        top = result.plans[0]
+        assert len(top.drops) == 1
+        assert top.drops == ["Scrub"]
+
+        by_name = {m.name: m for m in top.moves}
+        assert by_name["Webb"].to_slot == "P"
+        assert by_name["Hader"].to_slot == "P"
+        benched = [m for m in top.moves if m.to_slot == "BN" and m.player_type == "pitcher"]
+        assert len(benched) == 1
+        assert by_name["Scrub"].to_slot == "DROP"
+
+    def test_plans_sorted_by_delta_roto_desc(self):
+        roster = _webb_hader_roster()
+        webb = next(p for p in roster if p.name == "Webb")
+        hader = next(p for p in roster if p.name == "Hader")
+        result = plan_il_returns(
+            roster,
+            [webb, hader],
+            SMALL_SLOTS,
+            projected_standings=_contending_standings(),
+            team_name=TEAM_NAME,
+            fraction_remaining=1.0,
+            team_sds=None,
+        )
+        deltas = [p.delta_roto for p in result.plans]
+        assert deltas == sorted(deltas, reverse=True)
+        for p in result.plans:
+            assert set(p.band.keys()) == {"mean", "sd", "p_positive", "verdict"}
+
+    def test_no_activation_returns_empty(self):
+        roster = _webb_hader_roster()
+        result = plan_il_returns(
+            roster,
+            [],
+            SMALL_SLOTS,
+            projected_standings=_contending_standings(),
+            team_name=TEAM_NAME,
+            fraction_remaining=1.0,
+            team_sds=None,
+        )
+        assert result.plans == []
+        assert result.activating == []
+
+    def test_open_bench_means_no_drop(self):
+        roster = [p for p in _webb_hader_roster() if p.name != "Scrub"]
+        webb = next(p for p in roster if p.name == "Webb")
+        hader = next(p for p in roster if p.name == "Hader")
+        result = plan_il_returns(
+            roster,
+            [webb, hader],
+            SMALL_SLOTS,
+            projected_standings=_contending_standings(),
+            team_name=TEAM_NAME,
+            fraction_remaining=1.0,
+            team_sds=None,
+        )
+        assert result.overflow == 0
+        assert len(result.plans) == 1
+        assert result.plans[0].drops == []
