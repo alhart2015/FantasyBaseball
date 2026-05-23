@@ -11,11 +11,15 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from fantasy_baseball.models.player import Player
+from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
+from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS, Position
+from fantasy_baseball.models.standings import ProjectedStandings
+from fantasy_baseball.utils.constants import Category
 
 logger = logging.getLogger(__name__)
 
@@ -120,3 +124,41 @@ def _build_pool(roster: list[Player], activating_il: list[Player]) -> list[Playe
     for p in counted + extra:
         pool.append(_activate(p) if p.name in activating_names else p)
     return pool
+
+
+def _solve_lineup(
+    pool: list[Player],
+    roster_slots: dict[str, int],
+    projected_standings: ProjectedStandings,
+    team_name: str,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
+    fraction_remaining: float | None,  # noqa: ARG001
+):
+    """Run both optimizers over ``pool``; return
+    ``(hitter_assignments, pitcher_starters, pitcher_bench)``.
+
+    ``fraction_remaining`` is accepted for interface consistency but always
+    forwarded as None so the optimizers skip per-starter band computation
+    (the planner computes a plan-level band separately).
+    """
+    hitters = [p for p in pool if p.player_type != PlayerType.PITCHER]
+    pitchers = [p for p in pool if p.player_type == PlayerType.PITCHER]
+    hitter_assignments = optimize_hitter_lineup(
+        hitters=hitters,
+        full_roster=pool,
+        projected_standings=projected_standings,
+        team_name=team_name,
+        roster_slots=roster_slots,
+        team_sds=team_sds,
+        fraction_remaining=None,
+    )
+    pitcher_starters, pitcher_bench = optimize_pitcher_lineup(
+        pitchers=pitchers,
+        full_roster=pool,
+        projected_standings=projected_standings,
+        team_name=team_name,
+        slots=roster_slots.get("P", 9),
+        team_sds=team_sds,
+        fraction_remaining=None,
+    )
+    return hitter_assignments, pitcher_starters, pitcher_bench

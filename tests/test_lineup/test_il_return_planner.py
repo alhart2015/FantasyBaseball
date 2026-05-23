@@ -5,10 +5,12 @@ from fantasy_baseball.lineup.il_return_planner import (
     _activate,
     _build_pool,
     _counts_against_cap,
+    _solve_lineup,
     roster_capacity,
 )
-from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
+from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import Position
+from fantasy_baseball.models.standings import ProjectedStandings
 
 ROSTER_SLOTS = {
     "C": 1,
@@ -22,6 +24,38 @@ ROSTER_SLOTS = {
     "BN": 1,
     "IL": 2,
 }
+
+TEAM_NAME = "Test Team"
+
+
+def _standings():
+    base = {
+        "R": 800,
+        "HR": 200,
+        "RBI": 800,
+        "SB": 100,
+        "AVG": 0.260,
+        "W": 70,
+        "K": 1200,
+        "SV": 50,
+        "ERA": 3.50,
+        "WHIP": 1.20,
+        "AB": 5000,
+        "H": 1300,
+        "IP": 1400,
+        "ER": 560,
+        "BB": 420,
+        "H_ALLOWED": 1300,
+    }
+    return ProjectedStandings.from_json(
+        {
+            "effective_date": "2026-04-01",
+            "teams": [
+                {"name": TEAM_NAME, "stats": dict(base)},
+                {"name": "Opponent", "stats": {**base, "SV": 30, "ERA": 3.80}},
+            ],
+        }
+    )
 
 
 def _pitcher(name, slot=None, status=""):
@@ -42,6 +76,44 @@ def _pitcher(name, slot=None, status=""):
         ),
         selected_position=Position.parse(slot) if slot else None,
         status=status,
+    )
+
+
+def _hitter(name, positions, slot=None, **stats):
+    return Player(
+        name=name,
+        player_type=PlayerType.HITTER,
+        positions=[Position.parse(p) for p in positions],
+        rest_of_season=HitterStats(
+            pa=int(stats.get("ab", 500) * 1.15),
+            ab=stats.get("ab", 500),
+            h=stats.get("h", 130),
+            r=stats.get("r", 70),
+            hr=stats.get("hr", 20),
+            rbi=stats.get("rbi", 70),
+            sb=stats.get("sb", 5),
+            avg=stats.get("avg", 0.260),
+        ),
+        selected_position=Position.parse(slot) if slot else None,
+    )
+
+
+def _good_pitcher(name, **stats):
+    return Player(
+        name=name,
+        player_type=PlayerType.PITCHER,
+        positions=[Position.P],
+        rest_of_season=PitcherStats(
+            ip=stats.get("ip", 180.0),
+            w=stats.get("w", 14.0),
+            k=stats.get("k", 200.0),
+            sv=stats.get("sv", 0.0),
+            er=stats.get("er", 56.0),
+            bb=stats.get("bb", 35.0),
+            h_allowed=stats.get("h_allowed", 150.0),
+            era=stats.get("era", 2.80),
+            whip=stats.get("whip", 1.05),
+        ),
     )
 
 
@@ -129,3 +201,22 @@ class TestBuildPool:
         # Non-activated active player is unchanged.
         active_p = next(p for p in pool if p.name == "Active")
         assert active_p.selected_position == Position.P
+
+
+class TestSolveLineup:
+    def test_solver_returns_active_and_bench(self):
+        hitters = [_hitter("OF1", ["OF"])]
+        pitchers = [
+            _good_pitcher("Ace", k=220),
+            _good_pitcher("Mid", k=150, era=3.5, whip=1.2),
+            _good_pitcher("Low", k=120, era=4.0, whip=1.3),
+        ]
+        slots = {"OF": 1, "P": 1, "BN": 1, "IL": 0}
+        h_assign, ps, pb = _solve_lineup(
+            hitters + pitchers, slots, _standings(), TEAM_NAME, None, None
+        )
+        assert len(h_assign) == 1
+        assert h_assign[0].name == "OF1"
+        assert len(ps) == 1  # one P slot
+        assert len(pb) == 2  # two pitchers benched
+        assert ps[0].name in {"Ace", "Mid", "Low"}
