@@ -91,6 +91,8 @@
                         <th style="text-align:right">SGP</th>
                         <th style="text-align:right">SGP Gap</th>
                         <th style="text-align:right">deltaRoto</th>
+                        <th style="text-align:right">Std dev</th>
+                        <th style="text-align:right">P(helps)</th>
                         <th></th>
                     </tr>
                 </thead>
@@ -113,6 +115,12 @@
                         {% else %}
                         <span style="color:var(--text-secondary)">&mdash;</span>
                         {% endif %}
+                    </td>
+                    <td style="text-align:right">
+                        {% if c.band %}{{ "%.2f"|format(c.band.sd) }}{% else %}<span style="color:var(--text-secondary)">&mdash;</span>{% endif %}
+                    </td>
+                    <td style="text-align:right">
+                        {% if c.band %}{{ (c.band.p_positive * 100)|round|int }}%{% else %}<span style="color:var(--text-secondary)">&mdash;</span>{% endif %}
                     </td>
                     <td style="text-align:right">
                         <a href="/players?compare={{ entry.player | urlencode }}::{{ entry.player_type }},{{ c.name | urlencode }}::{{ c.player_type }}"
