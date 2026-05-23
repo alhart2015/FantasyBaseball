@@ -161,3 +161,52 @@ def _solve_lineup(
         fraction_remaining=None,
     )
     return hitter_assignments, pitcher_starters, pitcher_bench
+
+
+def _slot_value(p: Player) -> str:
+    """The player's current slot label, defaulting to BN when unset."""
+    return p.selected_position.value if p.selected_position is not None else "BN"
+
+
+def _build_moves(
+    roster: list[Player],
+    pool: list[Player],
+    hitter_assignments,
+    pitcher_starters,
+    dropped_names: set[str],
+) -> list[Move]:
+    """Build the transaction list for one plan.
+
+    ``from_slot`` is the player's CURRENT slot on ``roster`` (so a returning
+    IL player reads as ``IL`` and Webb as ``BN``); ``to_slot`` is the
+    assigned active slot, ``BN``, or ``DROP``. Only players whose slot
+    changes get a move. Sorted by name for deterministic output.
+    """
+    orig_slot = {p.name: _slot_value(p) for p in roster}
+    type_by_name = {p.name: p.player_type.value for p in pool}
+
+    active_slot: dict[str, str] = {a.name: a.slot.value for a in hitter_assignments}
+    for s in pitcher_starters:
+        active_slot[s.name] = "P"
+
+    moves: list[Move] = []
+    for p in pool:
+        name = p.name
+        frm = orig_slot.get(name, "BN")
+        if name in dropped_names:
+            to = "DROP"
+        elif name in active_slot:
+            to = active_slot[name]
+        else:
+            to = "BN"
+        if frm != to:
+            moves.append(
+                Move(
+                    name=name,
+                    player_type=type_by_name.get(name, ""),
+                    from_slot=frm,
+                    to_slot=to,
+                )
+            )
+    moves.sort(key=lambda m: m.name)
+    return moves

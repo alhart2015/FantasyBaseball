@@ -3,6 +3,7 @@ from fantasy_baseball.lineup.il_return_planner import (
     Move,
     MovePlan,
     _activate,
+    _build_moves,
     _build_pool,
     _counts_against_cap,
     _solve_lineup,
@@ -218,3 +219,44 @@ class TestSolveLineup:
         assert len(ps) == 1  # one P slot
         assert len(pb) == 2  # two pitchers benched
         assert ps[0].name in {"Ace", "Mid", "Low"}
+
+
+class TestBuildMoves:
+    def test_moves_capture_activation_bench_and_drop(self):
+        active = _pitcher("Active", slot="P")
+        webb = _pitcher("Webb", slot="BN", status="IL10")
+        hader = _pitcher("Hader", slot="IL", status="IL15")
+        scrub = _pitcher("Scrub", slot="P")
+        roster = [active, webb, hader, scrub]
+        pool = _build_pool(roster, [webb, hader])
+        assert {p.name for p in pool} == {"Active", "Webb", "Hader", "Scrub"}
+
+        from fantasy_baseball.lineup.optimizer import PitcherStarter
+
+        active_player = next(p for p in pool if p.name == "Active")
+        webb_player = next(p for p in pool if p.name == "Webb")
+        pitcher_starters = [
+            PitcherStarter(name="Active", player=active_player, roto_delta=0.0),
+            PitcherStarter(name="Webb", player=webb_player, roto_delta=0.0),
+        ]
+        moves = _build_moves(
+            roster=roster,
+            pool=pool,
+            hitter_assignments=[],
+            pitcher_starters=pitcher_starters,
+            dropped_names={"Scrub"},
+        )
+        by_name = {m.name: m for m in moves}
+        # Webb activates from BN -> P
+        assert by_name["Webb"].from_slot == "BN"
+        assert by_name["Webb"].to_slot == "P"
+        # Hader was IL, not active, not dropped -> goes to BN
+        assert by_name["Hader"].from_slot == "IL"
+        assert by_name["Hader"].to_slot == "BN"
+        # Scrub dropped
+        assert by_name["Scrub"].to_slot == "DROP"
+        assert by_name["Scrub"].from_slot == "P"
+        # Active stays in P -> no move emitted
+        assert "Active" not in by_name
+        # player_type populated
+        assert by_name["Webb"].player_type == "pitcher"
