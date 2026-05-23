@@ -190,7 +190,7 @@ function toggleAuditDetail(id) {
       return;
     }
     out.innerHTML = '<p>Computing...</p>';
-    fetch('/api/il-return-plan?activate=' + encodeURIComponent(ids.join(',')))
+    fetch('/api/il-return-plan?activate=' + ids.map(encodeURIComponent).join(','))
       .then(function (r) { return r.json(); })
       .then(render)
       .catch(function (e) { out.innerHTML = '<p>Error: ' + e + '</p>'; });
