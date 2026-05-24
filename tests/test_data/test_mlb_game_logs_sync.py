@@ -1,4 +1,6 @@
-from fantasy_baseball.data import mlb_game_logs
+from datetime import UTC, datetime
+
+from fantasy_baseball.data import mlb_game_logs, redis_store
 from fantasy_baseball.data.mlb_game_logs import (
     _merge_player_games,
     _sum_hitting,
@@ -160,3 +162,196 @@ def test_fetch_positions_empty_short_circuits(monkeypatch):
 
     monkeypatch.setattr(mlb_game_logs.requests, "get", boom)
     assert mlb_game_logs._fetch_positions([]) == {}
+
+
+# Reusable synthetic box scores (verified field names).
+_OHTANI = {
+    "person": {"id": 660271, "fullName": "Shohei Ohtani"},
+    "stats": {
+        "batting": {
+            "plateAppearances": 4,
+            "atBats": 3,
+            "hits": 0,
+            "runs": 1,
+            "homeRuns": 0,
+            "rbi": 0,
+            "stolenBases": 0,
+        },
+        "pitching": {
+            "inningsPitched": "6.0",
+            "strikeOuts": 8,
+            "earnedRuns": 0,
+            "baseOnBalls": 0,
+            "hits": 5,
+            "wins": 0,
+            "saves": 0,
+            "gamesStarted": 1,
+            "gamesPlayed": 1,
+        },
+    },
+}
+_BETTS_MOPUP = {
+    "person": {"id": 605141, "fullName": "Mookie Betts"},
+    "stats": {
+        "batting": {
+            "plateAppearances": 5,
+            "atBats": 5,
+            "hits": 2,
+            "runs": 1,
+            "homeRuns": 0,
+            "rbi": 1,
+            "stolenBases": 0,
+        },
+        "pitching": {
+            "inningsPitched": "1.0",
+            "strikeOuts": 0,
+            "earnedRuns": 3,
+            "baseOnBalls": 1,
+            "hits": 2,
+            "wins": 0,
+            "saves": 0,
+            "gamesStarted": 0,
+            "gamesPlayed": 1,
+        },
+    },
+}
+
+
+def _final(game_pk, date, game_number=1):
+    return {
+        "gamePk": game_pk,
+        "gameNumber": game_number,
+        "officialDate": date,
+        "gameType": "R",
+        "status": {"abstractGameState": "Final"},
+    }
+
+
+def _patch_mlb(
+    monkeypatch,
+    *,
+    season_games=None,
+    changed_games=None,
+    boxscores=None,
+    positions=None,
+    positions_raises=False,
+):
+    monkeypatch.setattr(mlb_game_logs, "_fetch_season_games", lambda s: season_games or [])
+    monkeypatch.setattr(mlb_game_logs, "_fetch_changed_games", lambda s, since: changed_games or [])
+    monkeypatch.setattr(mlb_game_logs, "_fetch_boxscore", lambda gp: (boxscores or {})[gp])
+
+    def _pos(ids):
+        if positions_raises:
+            raise RuntimeError("people endpoint down")
+        return {str(i): (positions or {}).get(str(i)) for i in ids}
+
+    monkeypatch.setattr(mlb_game_logs, "_fetch_positions", _pos)
+
+
+NOW = datetime(2026, 5, 24, 13, 0, tzinfo=UTC)
+
+
+def test_backfill_records_two_way_and_filters_mopup(monkeypatch, fake_redis):
+    _patch_mlb(
+        monkeypatch,
+        season_games=[_final(100, "2026-04-01")],
+        boxscores={
+            100: {
+                "teams": {
+                    "home": {"players": {"ID660271": _OHTANI, "ID605141": _BETTS_MOPUP}},
+                    "away": {"players": {}},
+                }
+            }
+        },
+        positions={"660271": "Y", "605141": "6"},
+    )
+    mlb_game_logs.sync_game_logs(fake_redis, 2026, now_utc=NOW)
+
+    assert redis_store.get_player_game_log(fake_redis, 2026, "660271", "hitting")["games"]
+    assert redis_store.get_player_game_log(fake_redis, 2026, "660271", "pitching")["games"]
+    hitters = redis_store.get_game_log_totals(fake_redis, "hitters")
+    pitchers = redis_store.get_game_log_totals(fake_redis, "pitchers")
+    assert hitters["660271"]["ab"] == 3 and hitters["660271"]["name"] == "Shohei Ohtani"
+    assert pitchers["660271"]["k"] == 8 and pitchers["660271"]["ip"] == 6.0
+
+    assert hitters["605141"]["h"] == 2
+    assert "605141" not in pitchers
+    assert redis_store.get_player_game_log(fake_redis, 2026, "605141", "pitching") is None
+
+    assert redis_store.get_game_logs_watermark(fake_redis, 2026) == NOW.isoformat()
+    assert redis_store.get_season_progress(fake_redis)["games_elapsed"] == 1
+
+
+def test_incremental_correction_overwrites_by_gamepk(monkeypatch, fake_redis):
+    redis_store.set_game_logs_watermark(fake_redis, 2026, "2026-05-23T13:00:00+00:00")
+    redis_store.set_player_game_log(
+        fake_redis,
+        2026,
+        "660271",
+        "hitting",
+        {
+            "name": "Shohei Ohtani",
+            "games": [
+                {
+                    "gamePk": 100,
+                    "gameNumber": 1,
+                    "date": "2026-04-01",
+                    "pa": 4,
+                    "ab": 3,
+                    "h": 0,
+                    "hr": 0,
+                    "r": 1,
+                    "rbi": 0,
+                    "sb": 0,
+                }
+            ],
+        },
+    )
+    corrected = {
+        **_OHTANI,
+        "stats": {**_OHTANI["stats"], "batting": {**_OHTANI["stats"]["batting"], "hits": 2}},
+    }
+    _patch_mlb(
+        monkeypatch,
+        changed_games=[_final(100, "2026-04-01")],
+        boxscores={
+            100: {"teams": {"home": {"players": {"ID660271": corrected}}, "away": {"players": {}}}}
+        },
+        positions={"660271": "Y"},
+    )
+    mlb_game_logs.sync_game_logs(fake_redis, 2026, now_utc=NOW)
+    games = redis_store.get_player_game_log(fake_redis, 2026, "660271", "hitting")["games"]
+    assert len(games) == 1 and games[0]["h"] == 2
+    assert redis_store.get_game_log_totals(fake_redis, "hitters")["660271"]["h"] == 2
+
+
+def test_watermark_not_advanced_when_position_unresolved(monkeypatch, fake_redis):
+    redis_store.set_game_logs_watermark(fake_redis, 2026, "2026-05-23T13:00:00+00:00")
+    _patch_mlb(
+        monkeypatch,
+        changed_games=[_final(100, "2026-04-01")],
+        boxscores={
+            100: {"teams": {"home": {"players": {"ID660271": _OHTANI}}, "away": {"players": {}}}}
+        },
+        positions_raises=True,
+    )
+    mlb_game_logs.sync_game_logs(fake_redis, 2026, now_utc=NOW)
+    assert redis_store.get_player_game_log(fake_redis, 2026, "660271", "hitting")["games"]
+    assert redis_store.get_player_game_log(fake_redis, 2026, "660271", "pitching") is None
+    assert redis_store.get_game_logs_watermark(fake_redis, 2026) == "2026-05-23T13:00:00+00:00"
+
+
+def test_fetch_game_log_totals_preserves_public_contract(monkeypatch, fake_redis):
+    monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", lambda: fake_redis)
+    _patch_mlb(
+        monkeypatch,
+        season_games=[_final(100, "2026-04-01")],
+        boxscores={
+            100: {"teams": {"home": {"players": {"ID660271": _OHTANI}}, "away": {"players": {}}}}
+        },
+        positions={"660271": "Y"},
+    )
+    hitters, pitchers, games_elapsed = mlb_game_logs.fetch_game_log_totals(2026)
+    assert hitters["660271"]["ab"] == 3
+    assert pitchers["660271"]["k"] == 8
+    assert games_elapsed == 1

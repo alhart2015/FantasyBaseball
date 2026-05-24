@@ -12,9 +12,32 @@ filter keyed on primaryPosition keeps Ohtani while dropping mop-up innings.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime
 from typing import Any
 
 import requests
+
+from fantasy_baseball.data.mlb_boxscore import (
+    boxscore_hitter_row,
+    boxscore_pitcher_row,
+    iter_boxscore_players,
+    should_record_pitching,
+)
+from fantasy_baseball.data.redis_store import (
+    get_game_log_dates,
+    get_game_log_totals,
+    get_game_logs_watermark,
+    get_player_game_log,
+    get_player_positions,
+    get_season_progress,
+    set_game_log_dates,
+    set_game_log_totals,
+    set_game_logs_watermark,
+    set_player_game_log,
+    set_player_positions,
+    set_season_progress,
+)
 
 _MLB_API = "https://statsapi.mlb.com/api/v1"
 
@@ -125,3 +148,151 @@ def _fetch_positions(mlbam_ids: list[int]) -> dict[str, str | None]:
     for person in resp.json().get("people", []):
         out[str(person["id"])] = person.get("primaryPosition", {}).get("code")
     return out
+
+
+def _fetch_boxscores(
+    games: list[dict[str, Any]], progress_cb
+) -> tuple[dict[int, dict[str, Any]], set[int]]:
+    """Fetch box scores in parallel. Returns ({gamePk: boxscore}, failed_gamePks)."""
+    results: dict[int, dict[str, Any]] = {}
+    failed: set[int] = set()
+
+    def _one(game: dict[str, Any]) -> tuple[int, dict[str, Any] | None]:
+        gp = game["gamePk"]
+        try:
+            return gp, _fetch_boxscore(gp)
+        except Exception:
+            return gp, None
+
+    with ThreadPoolExecutor(max_workers=15) as pool:
+        futures = [pool.submit(_one, g) for g in games]
+        for i, future in enumerate(as_completed(futures), 1):
+            gp, box = future.result()
+            if box is None:
+                failed.add(gp)
+            else:
+                results[gp] = box
+            if progress_cb and i % 50 == 0:
+                progress_cb(f"Box scores: {i}/{len(games)}...")
+    return results, failed
+
+
+def _resolve_positions(client, season: int, pitching_ids: list[str]) -> dict[str, str]:
+    """Return {mlbam_id: pos_code} for the given ids, fetching uncached ones.
+
+    On a fetch failure the missing ids stay absent so the caller can retry
+    (declines to advance the watermark). A fetched-but-null code is stored
+    as "" -- a resolved "not a pitcher", never retried.
+    """
+    cache = get_player_positions(client, season)
+    missing = [pid for pid in pitching_ids if pid not in cache]
+    if missing:
+        try:
+            fetched = _fetch_positions([int(p) for p in missing])
+        except Exception:
+            return cache
+        for pid in missing:
+            cache[pid] = fetched.get(pid) or ""
+        set_player_positions(client, season, cache)
+    return cache
+
+
+def _upsert_and_roll(client, season: int, group: str, by_player: dict[str, dict[str, Any]]) -> None:
+    """Merge each player's new rows into their stored log and refresh the rollup."""
+    if not by_player:
+        return
+    rollup_type = "hitters" if group == "hitting" else "pitchers"
+    rollup = get_game_log_totals(client, rollup_type)
+    for mlbam_id, payload in by_player.items():
+        existing = get_player_game_log(client, season, mlbam_id, group)
+        merged = _merge_player_games(existing, payload["name"], payload["rows"])
+        set_player_game_log(client, season, mlbam_id, group, merged)
+        totals = (
+            _sum_hitting(merged["games"]) if group == "hitting" else _sum_pitching(merged["games"])
+        )
+        rollup[mlbam_id] = {"name": merged["name"], **totals}
+    set_game_log_totals(client, rollup_type, rollup)
+
+
+def _sync(client, season: int, games: list[dict[str, Any]], now_utc: datetime, progress_cb) -> None:
+    boxscores, failed = _fetch_boxscores(games, progress_cb)
+    all_ok = not failed
+    ctx = {g["gamePk"]: _game_context(g) for g in games}
+
+    hitting: dict[str, dict[str, Any]] = {}
+    pitching: dict[str, dict[str, Any]] = {}
+    dates: set[str] = set()
+    for gp, box in boxscores.items():
+        _pk, gnum, date = ctx[gp]
+        dates.add(date)
+        for mlbam_id, name, batting, pitch in iter_boxscore_players(box):
+            if batting:
+                h = hitting.setdefault(mlbam_id, {"name": name, "rows": {}})
+                h["name"] = name or h["name"]
+                h["rows"][gp] = boxscore_hitter_row(batting, gp, gnum, date)
+            if pitch:
+                p = pitching.setdefault(mlbam_id, {"name": name, "rows": {}})
+                p["name"] = name or p["name"]
+                p["rows"][gp] = boxscore_pitcher_row(pitch, gp, gnum, date)
+
+    positions = _resolve_positions(client, season, list(pitching.keys()))
+    kept_pitching: dict[str, dict[str, Any]] = {}
+    for mlbam_id, payload in pitching.items():
+        if mlbam_id not in positions:
+            all_ok = False  # unresolved (fetch blip) -> retry next run
+            continue
+        if should_record_pitching(positions[mlbam_id]):
+            kept_pitching[mlbam_id] = payload
+
+    _upsert_and_roll(client, season, "hitting", hitting)
+    _upsert_and_roll(client, season, "pitching", kept_pitching)
+
+    if dates:
+        merged_dates = set(get_game_log_dates(client, season)) | dates
+        set_game_log_dates(client, season, list(merged_dates))
+    set_season_progress(
+        client,
+        games_elapsed=len(get_game_log_dates(client, season)),
+        total=162,
+        as_of=now_utc.date().isoformat(),
+    )
+
+    if all_ok:
+        set_game_logs_watermark(client, season, now_utc.isoformat())
+    if progress_cb:
+        progress_cb(f"Game logs synced: {len(games)} games (clean={all_ok})")
+
+
+def sync_game_logs(
+    client, season: int, *, progress_cb=None, now_utc: datetime | None = None
+) -> None:
+    """Backfill (no watermark) or incremental (changes feed) sync into ``client``."""
+    now_utc = now_utc or datetime.now(UTC)
+    watermark = get_game_logs_watermark(client, season)
+    if watermark is None:
+        if progress_cb:
+            progress_cb("No watermark; backfilling full season game logs...")
+        games = [g for g in _fetch_season_games(season) if _is_regular_final(g)]
+    else:
+        if progress_cb:
+            progress_cb(f"Incremental game-log sync since {watermark}...")
+        games = [g for g in _fetch_changed_games(season, watermark) if _is_regular_final(g)]
+    _sync(client, season, games, now_utc, progress_cb)
+
+
+def fetch_game_log_totals(season: int, progress_cb=None) -> tuple[dict, dict, int]:
+    """Sync game logs and return (hitters_totals, pitchers_totals, games_elapsed).
+
+    Public entry point preserved for ``refresh_pipeline`` and ``season_routes``;
+    both ignore the return value. Totals are read back from the derived rollup
+    so the shape is unchanged. ``get_kv`` is imported lazily so tests that patch
+    ``kv_store.get_kv`` take effect at call time.
+    """
+    from fantasy_baseball.data.kv_store import get_kv
+
+    client = get_kv()
+    sync_game_logs(client, season, progress_cb=progress_cb)
+    hitters = get_game_log_totals(client, "hitters")
+    pitchers = get_game_log_totals(client, "pitchers")
+    games_elapsed = get_season_progress(client)["games_elapsed"]
+    return hitters, pitchers, games_elapsed
