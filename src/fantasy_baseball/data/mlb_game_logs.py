@@ -14,6 +14,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import requests
+
+_MLB_API = "https://statsapi.mlb.com/api/v1"
+
 _HITTER_KEYS = ("pa", "ab", "h", "r", "hr", "rbi", "sb")
 _PITCHER_KEYS = ("ip", "k", "er", "bb", "h_allowed", "w", "sv")
 
@@ -51,4 +55,72 @@ def _sum_pitching(games: list[dict[str, Any]]) -> dict[str, float | int]:
         for k in ("k", "er", "bb", "h_allowed", "w", "sv"):
             out[k] += g.get(k, 0) or 0
     out["ip"] = round(out["ip"], 4)
+    return out
+
+
+def _is_regular_final(game: dict[str, Any]) -> bool:
+    """True for a completed regular-season game."""
+    return (
+        game.get("gameType") == "R" and game.get("status", {}).get("abstractGameState") == "Final"
+    )
+
+
+def _game_context(game: dict[str, Any]) -> tuple[int, int, str]:
+    """(gamePk, gameNumber, officialDate) from a schedule/changes game dict."""
+    game_pk = game["gamePk"]
+    game_number = game.get("gameNumber", 1)
+    date = game.get("officialDate") or (game.get("gameDate") or "")[:10]
+    return game_pk, game_number, date
+
+
+def _fetch_changed_games(season: int, since_iso: str) -> list[dict[str, Any]]:
+    """MLB games (all types) changed since ``since_iso``, scoped to MLB + season."""
+    params: dict[str, str | int] = {
+        "updatedSince": since_iso,
+        "sportId": 1,
+        "season": season,
+    }
+    resp = requests.get(
+        f"{_MLB_API}/game/changes",
+        params=params,
+        timeout=25,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return [g for d in data.get("dates", []) for g in d.get("games", [])]
+
+
+def _fetch_season_games(season: int) -> list[dict[str, Any]]:
+    """All regular-season MLB games for ``season`` (backfill enumeration)."""
+    s_params: dict[str, str | int] = {"sportId": 1, "season": season, "gameType": "R"}
+    resp = requests.get(
+        f"{_MLB_API}/schedule",
+        params=s_params,
+        timeout=25,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return [g for d in data.get("dates", []) for g in d.get("games", [])]
+
+
+def _fetch_boxscore(game_pk: int) -> dict[str, Any]:
+    resp = requests.get(f"{_MLB_API}/game/{game_pk}/boxscore", timeout=20)
+    resp.raise_for_status()
+    data: dict[str, Any] = resp.json()
+    return data
+
+
+def _fetch_positions(mlbam_ids: list[int]) -> dict[str, str]:
+    """Batch primaryPosition.code lookup. {str(id): code}; code may be None."""
+    if not mlbam_ids:
+        return {}
+    resp = requests.get(
+        f"{_MLB_API}/people",
+        params={"personIds": ",".join(str(i) for i in mlbam_ids)},
+        timeout=20,
+    )
+    resp.raise_for_status()
+    out: dict[str, str] = {}
+    for person in resp.json().get("people", []):
+        out[str(person["id"])] = person.get("primaryPosition", {}).get("code")
     return out
