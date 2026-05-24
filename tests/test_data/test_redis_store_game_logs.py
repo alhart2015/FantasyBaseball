@@ -1,4 +1,4 @@
-"""Tests for game_log_totals + season_progress helpers."""
+"""Tests for game_log_totals, season_progress, and per-player game-log helpers."""
 
 import json
 
@@ -129,6 +129,10 @@ def test_player_game_log_rejects_bad_group(fake_redis):
         redis_store.set_player_game_log(fake_redis, 2026, "1", "fielding", {})
     with pytest.raises(ValueError, match="group must be"):
         redis_store.get_player_game_log(fake_redis, 2026, "1", "fielding")
+    with pytest.raises(ValueError, match="group must be"):
+        redis_store.get_player_game_log(None, 2026, "1", "fielding")
+    with pytest.raises(ValueError, match="group must be"):
+        redis_store.set_player_game_log(None, 2026, "1", "fielding", {})
 
 
 def test_player_game_log_corrupt_returns_none(fake_redis):

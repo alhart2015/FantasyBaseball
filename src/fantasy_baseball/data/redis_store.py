@@ -522,9 +522,10 @@ def _player_game_log_key(season: int, mlbam_id: str, group: str) -> str:
 
 def get_player_game_log(client, season: int, mlbam_id: str, group: str) -> dict | None:
     """Read one player's per-game log for a group. None on missing/corrupt/None client."""
+    key = _player_game_log_key(season, mlbam_id, group)
     if client is None:
         return None
-    raw = client.get(_player_game_log_key(season, mlbam_id, group))
+    raw = client.get(key)
     if raw is None:
         return None
     try:
@@ -536,9 +537,10 @@ def get_player_game_log(client, season: int, mlbam_id: str, group: str) -> dict 
 
 def set_player_game_log(client, season: int, mlbam_id: str, group: str, payload: dict) -> None:
     """Overwrite one player's per-game log for a group. No-op when client is None."""
+    key = _player_game_log_key(season, mlbam_id, group)
     if client is None:
         return
-    client.set(_player_game_log_key(season, mlbam_id, group), json.dumps(payload))
+    client.set(key, json.dumps(payload))
 
 
 def _game_logs_watermark_key(season: int) -> str:
