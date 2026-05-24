@@ -137,6 +137,28 @@
     {% endfor %}
     </tbody>
 </table>
+
+<section class="il-returns" id="il-returns" style="margin-top:2rem">
+  <h2>IL Returns</h2>
+  {% set il_players = audit | selectattr('slot', 'equalto', 'IL') | list %}
+  {% if not il_players %}
+    <p style="color:var(--text-secondary)">No IL players on your roster.</p>
+  {% else %}
+    <p style="color:var(--text-secondary)">
+      Check the players returning this week to see the best drop/start/bench plans.
+    </p>
+    <div class="il-checkboxes" style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1rem">
+      {% for e in il_players %}
+      <label><input type="checkbox" class="il-activate"
+                    value="{{ e.player_id }}" data-name="{{ e.player }}">
+        {{ e.player }}</label>
+      {% endfor %}
+    </div>
+    <div id="il-plan-results"><p style="color:var(--text-secondary)">
+      Select returning players to see move plans.</p></div>
+  {% endif %}
+</section>
+
 {% endif %}
 
 </div>
@@ -146,6 +168,59 @@ function toggleAuditDetail(id) {
     const row = document.getElementById(id);
     if (row) row.classList.toggle('open');
 }
+</script>
+
+<script>
+(function () {
+  var boxes = document.querySelectorAll('.il-activate');
+  if (!boxes.length) return;
+  boxes.forEach(function (cb) { cb.addEventListener('change', refresh); });
+
+  function gapClass(v) {
+    if (v === 'real') return 'gap-positive';
+    if (v === 'downgrade') return 'gap-negative';
+    return 'gap-marginal';
+  }
+  function refresh() {
+    var ids = Array.prototype.slice.call(document.querySelectorAll('.il-activate:checked'))
+      .map(function (c) { return c.value; });
+    var out = document.getElementById('il-plan-results');
+    if (!ids.length) {
+      out.innerHTML = '<p style="color:var(--text-secondary)">Select returning players to see move plans.</p>';
+      return;
+    }
+    out.innerHTML = '<p>Computing...</p>';
+    fetch('/api/il-return-plan?activate=' + ids.map(encodeURIComponent).join(','))
+      .then(function (r) { return r.json(); })
+      .then(render)
+      .catch(function (e) { out.innerHTML = '<p>Error: ' + e + '</p>'; });
+  }
+  function render(res) {
+    var out = document.getElementById('il-plan-results');
+    if (res.error) { out.innerHTML = '<p>' + res.error + '</p>'; return; }
+    if (res.warning) { out.innerHTML = '<p>' + res.warning + '</p>'; return; }
+    if (!res.plans || !res.plans.length) {
+      out.innerHTML = '<p>No legal plans found.</p>'; return;
+    }
+    var html = '<p style="color:var(--text-secondary)">Roster cap ' + res.capacity +
+      '; must drop ' + res.overflow + '.</p>';
+    res.plans.forEach(function (p) {
+      var b = p.band;
+      var sign = b.mean >= 0 ? '+' : '';
+      html += '<div class="il-plan" style="border:1px solid var(--border);border-radius:6px;padding:0.75rem;margin-bottom:0.75rem">';
+      html += '<div><span class="gap-badge ' + gapClass(b.verdict) + '">' +
+        sign + b.mean.toFixed(1) + '</span> ' +
+        'Std dev ' + b.sd.toFixed(2) + ' &middot; P(helps) ' +
+        Math.round(b.p_positive * 100) + '%</div>';
+      html += '<ul style="margin:0.5rem 0 0;padding-left:1.25rem">';
+      p.moves.forEach(function (m) {
+        html += '<li>' + m.name + ': ' + m.from_slot + ' -&gt; ' + m.to_slot + '</li>';
+      });
+      html += '</ul></div>';
+    });
+    out.innerHTML = html;
+  }
+})();
 </script>
 
 {# Hover tooltips for the deltaRoto band cells (mean / SD / P(helps)). #}

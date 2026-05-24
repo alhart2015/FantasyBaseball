@@ -2115,6 +2115,22 @@ class TestScoreRotoEV:
 # ── ProjectedStandings.from_rosters / build_team_sds ────────────────
 
 
+def _spy_sd_scale(monkeypatch) -> dict[str, float]:
+    """Capture the ``sd_scale`` passed to ``build_team_sds`` so a test can
+    assert how ``ProjectedStandings.from_rosters`` damps its picker SDs."""
+    from fantasy_baseball import scoring
+
+    captured: dict[str, float] = {}
+    real = scoring.build_team_sds
+
+    def spy(team_rosters, sd_scale):
+        captured["sd_scale"] = sd_scale
+        return real(team_rosters, sd_scale)
+
+    monkeypatch.setattr(scoring, "build_team_sds", spy)
+    return captured
+
+
 class TestProjectedStandingsFromRosters:
     """``ProjectedStandings.from_rosters`` wraps ``project_team_stats`` per team."""
 
@@ -2124,6 +2140,25 @@ class TestProjectedStandingsFromRosters:
         assert isinstance(result, ProjectedStandings)
         assert result.effective_date == date(2026, 4, 15)
         assert {e.team_name for e in result.entries} == {"Alpha", "Beta"}
+
+    def test_scales_picker_sds_by_sqrt_fraction_remaining(self, monkeypatch):
+        """The displacement picker's SDs must damp by sqrt(fraction_remaining),
+        matching the canonical team_sds the optimizer/deltaRoto use -- not the
+        full-season sd_scale=1.0 the standings build previously hardcoded
+        (which over-softened mid-season lineup decisions vs every other
+        consumer)."""
+        captured = _spy_sd_scale(monkeypatch)
+        ProjectedStandings.from_rosters(
+            {"A": [], "B": []}, effective_date=date(2026, 5, 5), fraction_remaining=0.25
+        )
+        assert captured["sd_scale"] == pytest.approx(0.5)  # sqrt(0.25)
+
+    def test_picker_sds_default_to_full_season_when_fraction_unset(self, monkeypatch):
+        """Default (no fraction_remaining) keeps sd_scale=1.0 -- correct for
+        preseason (full season remaining) and backward-compatible."""
+        captured = _spy_sd_scale(monkeypatch)
+        ProjectedStandings.from_rosters({"A": [], "B": []}, effective_date=date(2026, 5, 5))
+        assert captured["sd_scale"] == pytest.approx(1.0)
 
     def test_returns_one_entry_per_team(self):
         rosters = {

@@ -147,6 +147,8 @@ def _write_spoe_snapshot(spoe_result: dict) -> None:
 def build_standings_breakdown_payload(
     team_rosters: dict[str, list["Player"]],
     effective_date: date,
+    *,
+    fraction_remaining: float = 1.0,
 ) -> dict:
     """Build the STANDINGS_BREAKDOWN cache payload for ``team_rosters``.
 
@@ -184,7 +186,10 @@ def build_standings_breakdown_payload(
         )
         for tname, roster in team_rosters.items()
     }
-    team_sds = build_team_sds(team_rosters, sd_scale=1.0)
+    # Match ProjectedStandings.from_rosters: damp the picker's SDs by
+    # sqrt(fraction_remaining) so the breakdown's displacement decisions
+    # agree with the standings widget and the canonical team_sds.
+    team_sds = build_team_sds(team_rosters, sd_scale=fraction_remaining**0.5)
 
     teams_payload: dict[str, dict] = {}
     for team_name, roster in team_rosters.items():
@@ -637,16 +642,21 @@ class RefreshRun:
         all_team_rosters = {self.config.team_name: self.matched}
         all_team_rosters.update(self.opp_rosters)
 
-        self.projected_standings = ProjectedStandings.from_rosters(
-            all_team_rosters, effective_date=self.effective_date
-        )
-
+        # Compute fraction_remaining first so the standings build can damp its
+        # displacement-picker SDs by sqrt(fraction_remaining) -- matching the
+        # canonical team_sds below and every other ERoto consumer.
         self.fraction_remaining = compute_fraction_remaining(
             date.fromisoformat(self.config.season_start),
             date.fromisoformat(self.config.season_end),
             local_today(),
         )
         self.sd_scale = math.sqrt(self.fraction_remaining)
+
+        self.projected_standings = ProjectedStandings.from_rosters(
+            all_team_rosters,
+            effective_date=self.effective_date,
+            fraction_remaining=self.fraction_remaining,
+        )
 
         self.team_sds = build_team_sds(all_team_rosters, self.sd_scale)
 
@@ -693,7 +703,11 @@ class RefreshRun:
 
         write_cache(
             CacheKey.STANDINGS_BREAKDOWN,
-            build_standings_breakdown_payload(all_team_rosters, self.effective_date),
+            build_standings_breakdown_payload(
+                all_team_rosters,
+                self.effective_date,
+                fraction_remaining=self.fraction_remaining,
+            ),
         )
         self._progress(f"Projected standings for {len(self.projected_standings.entries)} teams")
 

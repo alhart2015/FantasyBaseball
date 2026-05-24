@@ -1,4 +1,5 @@
 import json
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -1102,3 +1103,120 @@ def test_lineup_renders_dash_chip_when_no_streak_cache(client, kv_isolation) -> 
     assert resp.status_code == 200
     body = resp.data.decode()
     assert "streak-chip streak-neutral" in body
+
+
+# --- /api/il-return-plan ---------------------------------------------------------------
+
+
+def _il_fake_cache(monkeypatch, values: dict) -> None:
+    """Patch read_cache_dict/read_cache_list to read from an in-memory map.
+
+    Mirrors the fake-cache helper in test_optimize_trade_lineup_route.py so the
+    IL planner route's optimizer loop runs against a tiny roster (fast) instead
+    of a full-league shape.
+    """
+
+    def fake_read_cache_dict(key, *_a, **_k):
+        v = values.get(key.value)
+        return v if isinstance(v, dict) else None
+
+    def fake_read_cache_list(key, *_a, **_k):
+        v = values.get(key.value)
+        return v if isinstance(v, list) else None
+
+    import fantasy_baseball.web.season_routes as routes
+
+    monkeypatch.setattr(routes, "read_cache_dict", fake_read_cache_dict)
+    monkeypatch.setattr(routes, "read_cache_list", fake_read_cache_list)
+
+
+class _IlFakeCfg:
+    """Tiny league config so optimize_*_lineup finishes in milliseconds.
+
+    Capacity (non-IL slots) = OF3 + UTIL1 + BN1 = 5. A 5-body active/bench
+    roster plus one IL-slot player overflows by 1 when the IL player is
+    activated, forcing a drop and producing non-empty plans.
+    """
+
+    team_name = "Hart"
+    roster_slots: ClassVar[dict[str, int]] = {
+        "OF": 3,
+        "UTIL": 1,
+        "BN": 1,
+        "IL": 1,
+    }
+
+
+def _patch_il_config(monkeypatch) -> None:
+    import fantasy_baseball.web.season_routes as routes
+
+    monkeypatch.setattr(routes, "_load_config", lambda: _IlFakeCfg())
+
+
+def _il_roster_and_projections():
+    """5 active/bench hitters + 1 IL-slot hitter, plus a 2-team projection."""
+    from fantasy_baseball.models.player import HitterStats, Player
+
+    def _hit(name, slot):
+        return Player(
+            name=name,
+            player_type="hitter",
+            positions=["OF"],
+            selected_position=slot,
+            rest_of_season=HitterStats(pa=600, ab=500, h=125, r=70, hr=20, rbi=60, sb=5, avg=0.250),
+        ).to_dict()
+
+    roster = [_hit(f"M{i}", "OF" if i < 3 else "UTIL" if i == 3 else "BN") for i in range(5)]
+    roster.append(_hit("IL Guy", "IL"))
+
+    standings_stats = {
+        "R": 1000,
+        "HR": 250,
+        "RBI": 750,
+        "SB": 80,
+        "AVG": 0.260,
+        "W": 70,
+        "K": 1200,
+        "SV": 50,
+        "ERA": 3.80,
+        "WHIP": 1.25,
+    }
+    projected_standings = {
+        "effective_date": "2026-04-01",
+        "teams": [
+            {"name": "Hart", "stats": dict(standings_stats)},
+            {"name": "Rival", "stats": dict(standings_stats)},
+        ],
+    }
+    return roster, projected_standings
+
+
+def test_il_return_plan_route_404_without_data(client, kv_isolation):
+    # Empty (isolated) KV -> route reports missing roster data (not a 500).
+    resp = client.get("/api/il-return-plan?activate=abc")
+    assert resp.status_code == 404
+
+
+def test_il_return_plan_route_returns_plan_shape(client, monkeypatch):
+    roster, ps = _il_roster_and_projections()
+    _il_fake_cache(
+        monkeypatch,
+        {
+            "roster": roster,
+            "projections": {
+                "projected_standings": ps,
+                "team_sds": None,
+                "fraction_remaining": 1.0,
+            },
+        },
+    )
+    _patch_il_config(monkeypatch)
+
+    resp = client.get("/api/il-return-plan")  # no activate -> activate all IL
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert set(data.keys()) >= {"activating", "capacity", "overflow", "plans"}
+    assert isinstance(data["plans"], list)
+    assert isinstance(data["capacity"], int)
+    # The IL-slot player is the one activated.
+    assert data["activating"] == ["IL Guy"]
