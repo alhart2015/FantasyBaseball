@@ -104,13 +104,14 @@ def _fetch_season_games(season: int) -> list[dict[str, Any]]:
 
 
 def _fetch_boxscore(game_pk: int) -> dict[str, Any]:
+    """Fetch one game's box score from the MLB Stats API."""
     resp = requests.get(f"{_MLB_API}/game/{game_pk}/boxscore", timeout=20)
     resp.raise_for_status()
     data: dict[str, Any] = resp.json()
     return data
 
 
-def _fetch_positions(mlbam_ids: list[int]) -> dict[str, str]:
+def _fetch_positions(mlbam_ids: list[int]) -> dict[str, str | None]:
     """Batch primaryPosition.code lookup. {str(id): code}; code may be None."""
     if not mlbam_ids:
         return {}
@@ -120,7 +121,7 @@ def _fetch_positions(mlbam_ids: list[int]) -> dict[str, str]:
         timeout=20,
     )
     resp.raise_for_status()
-    out: dict[str, str] = {}
+    out: dict[str, str | None] = {}
     for person in resp.json().get("people", []):
         out[str(person["id"])] = person.get("primaryPosition", {}).get("code")
     return out
