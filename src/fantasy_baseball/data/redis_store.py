@@ -507,3 +507,106 @@ def get_projected_standings_history(client) -> dict[str, ProjectedStandings]:
         if isinstance(data, dict):
             out[d] = ProjectedStandings.from_json(data)
     return out
+
+
+# --- Per-player raw game logs (incremental, box-score driven) ---
+
+_GAME_LOG_GROUPS = ("hitting", "pitching")
+
+
+def _player_game_log_key(season: int, mlbam_id: str, group: str) -> str:
+    if group not in _GAME_LOG_GROUPS:
+        raise ValueError(f"group must be one of {_GAME_LOG_GROUPS}, got {group!r}")
+    return f"game_logs:{season}:{mlbam_id}:{group}"
+
+
+def get_player_game_log(client, season: int, mlbam_id: str, group: str) -> dict | None:
+    """Read one player's per-game log for a group. None on missing/corrupt/None client."""
+    key = _player_game_log_key(season, mlbam_id, group)
+    if client is None:
+        return None
+    raw = client.get(key)
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def set_player_game_log(client, season: int, mlbam_id: str, group: str, payload: dict) -> None:
+    """Overwrite one player's per-game log for a group. No-op when client is None."""
+    key = _player_game_log_key(season, mlbam_id, group)
+    if client is None:
+        return
+    client.set(key, json.dumps(payload))
+
+
+def _game_logs_watermark_key(season: int) -> str:
+    return f"game_logs:{season}:fetched_through_utc"
+
+
+def get_game_logs_watermark(client, season: int) -> str | None:
+    """Read the UTC high-water mark (ISO-8601). None when missing or client is None."""
+    if client is None:
+        return None
+    raw = client.get(_game_logs_watermark_key(season))
+    return raw if isinstance(raw, str) else None
+
+
+def set_game_logs_watermark(client, season: int, iso_utc: str) -> None:
+    """Persist the UTC high-water mark. No-op when client is None."""
+    if client is None:
+        return
+    client.set(_game_logs_watermark_key(season), iso_utc)
+
+
+def _player_positions_key(season: int) -> str:
+    return f"game_logs:{season}:player_pos"
+
+
+def get_player_positions(client, season: int) -> dict[str, str]:
+    """Read the cached {mlbam_id: primaryPosition_code} map. Empty on missing/corrupt/None."""
+    if client is None:
+        return {}
+    raw = client.get(_player_positions_key(season))
+    if raw is None:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def set_player_positions(client, season: int, positions: dict[str, str]) -> None:
+    """Overwrite the cached primaryPosition map. No-op when client is None."""
+    if client is None:
+        return
+    client.set(_player_positions_key(season), json.dumps(positions))
+
+
+def _game_log_dates_key(season: int) -> str:
+    return f"game_logs:{season}:dates"
+
+
+def get_game_log_dates(client, season: int) -> list[str]:
+    """Read the sorted list of distinct ingested game dates. Empty on missing/corrupt/None."""
+    if client is None:
+        return []
+    raw = client.get(_game_log_dates_key(season))
+    if raw is None:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def set_game_log_dates(client, season: int, dates: list[str]) -> None:
+    """Overwrite the distinct game-dates list (deduped + sorted). No-op when client is None."""
+    if client is None:
+        return
+    client.set(_game_log_dates_key(season), json.dumps(sorted(set(dates))))

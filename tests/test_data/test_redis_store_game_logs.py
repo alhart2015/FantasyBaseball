@@ -1,4 +1,4 @@
-"""Tests for game_log_totals + season_progress helpers."""
+"""Tests for game_log_totals, season_progress, and per-player game-log helpers."""
 
 import json
 
@@ -96,3 +96,83 @@ def test_season_progress_returns_default_when_client_none():
 def test_set_season_progress_is_noop_when_client_none():
     # Must not raise
     assert redis_store.set_season_progress(None, games_elapsed=10) is None
+
+
+def test_player_game_log_roundtrip(fake_redis):
+    payload = {
+        "name": "Shohei Ohtani",
+        "games": [
+            {
+                "gamePk": 776213,
+                "gameNumber": 1,
+                "date": "2025-09-23",
+                "pa": 4,
+                "ab": 3,
+                "h": 0,
+                "r": 1,
+                "hr": 0,
+                "rbi": 0,
+                "sb": 0,
+            }
+        ],
+    }
+    redis_store.set_player_game_log(fake_redis, 2026, "660271", "hitting", payload)
+    assert redis_store.get_player_game_log(fake_redis, 2026, "660271", "hitting") == payload
+
+
+def test_player_game_log_missing_returns_none(fake_redis):
+    assert redis_store.get_player_game_log(fake_redis, 2026, "999", "pitching") is None
+
+
+def test_player_game_log_rejects_bad_group(fake_redis):
+    with pytest.raises(ValueError, match="group must be"):
+        redis_store.set_player_game_log(fake_redis, 2026, "1", "fielding", {})
+    with pytest.raises(ValueError, match="group must be"):
+        redis_store.get_player_game_log(fake_redis, 2026, "1", "fielding")
+    with pytest.raises(ValueError, match="group must be"):
+        redis_store.get_player_game_log(None, 2026, "1", "fielding")
+    with pytest.raises(ValueError, match="group must be"):
+        redis_store.set_player_game_log(None, 2026, "1", "fielding", {})
+
+
+def test_player_game_log_corrupt_returns_none(fake_redis):
+    fake_redis.set("game_logs:2026:1:hitting", "not json")
+    assert redis_store.get_player_game_log(fake_redis, 2026, "1", "hitting") is None
+
+
+def test_player_positions_ignores_corrupt_json(fake_redis):
+    fake_redis.set("game_logs:2026:player_pos", "not json")
+    assert redis_store.get_player_positions(fake_redis, 2026) == {}
+
+
+def test_game_log_dates_ignores_corrupt_json(fake_redis):
+    fake_redis.set("game_logs:2026:dates", "not json")
+    assert redis_store.get_game_log_dates(fake_redis, 2026) == []
+
+
+def test_watermark_roundtrip(fake_redis):
+    assert redis_store.get_game_logs_watermark(fake_redis, 2026) is None
+    redis_store.set_game_logs_watermark(fake_redis, 2026, "2026-05-24T13:00:00+00:00")
+    assert redis_store.get_game_logs_watermark(fake_redis, 2026) == "2026-05-24T13:00:00+00:00"
+
+
+def test_player_positions_roundtrip(fake_redis):
+    assert redis_store.get_player_positions(fake_redis, 2026) == {}
+    redis_store.set_player_positions(fake_redis, 2026, {"660271": "Y", "543037": "1"})
+    assert redis_store.get_player_positions(fake_redis, 2026) == {"660271": "Y", "543037": "1"}
+
+
+def test_game_log_dates_dedup_and_sort(fake_redis):
+    redis_store.set_game_log_dates(fake_redis, 2026, ["2026-04-02", "2026-04-01", "2026-04-02"])
+    assert redis_store.get_game_log_dates(fake_redis, 2026) == ["2026-04-01", "2026-04-02"]
+
+
+def test_game_log_helpers_noop_on_none_client():
+    assert redis_store.get_player_game_log(None, 2026, "1", "hitting") is None
+    assert redis_store.set_player_game_log(None, 2026, "1", "hitting", {}) is None
+    assert redis_store.get_game_logs_watermark(None, 2026) is None
+    assert redis_store.get_player_positions(None, 2026) == {}
+    assert redis_store.get_game_log_dates(None, 2026) == []
+    assert redis_store.set_game_logs_watermark(None, 2026, "x") is None
+    assert redis_store.set_player_positions(None, 2026, {}) is None
+    assert redis_store.set_game_log_dates(None, 2026, []) is None

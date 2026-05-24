@@ -1,4 +1,9 @@
-from fantasy_baseball.analysis.game_logs import parse_hitter_game_log, parse_pitcher_game_log
+from fantasy_baseball.analysis.game_logs import (
+    hitter_stats_from_statblock,
+    parse_hitter_game_log,
+    parse_pitcher_game_log,
+    pitcher_stats_from_statblock,
+)
 
 
 def test_parse_hitter_game_log():
@@ -66,3 +71,41 @@ def test_parse_pitcher_partial_innings():
     }
     result = parse_pitcher_game_log(raw_split)
     assert abs(result["ip"] - 6.3333) < 0.01
+
+
+def test_hitter_stats_from_statblock():
+    stat = {
+        "plateAppearances": 5,
+        "atBats": 4,
+        "hits": 2,
+        "homeRuns": 1,
+        "runs": 1,
+        "rbi": 2,
+        "stolenBases": 0,
+    }
+    assert hitter_stats_from_statblock(stat) == {
+        "pa": 5,
+        "ab": 4,
+        "h": 2,
+        "hr": 1,
+        "r": 1,
+        "rbi": 2,
+        "sb": 0,
+    }
+
+
+def test_pitcher_stats_from_statblock_partial_innings():
+    stat = {
+        "inningsPitched": "6.1",
+        "strikeOuts": 7,
+        "earnedRuns": 3,
+        "baseOnBalls": 2,
+        "hits": 5,
+        "wins": 0,
+        "saves": 0,
+        "gamesStarted": 1,
+        "gamesPlayed": 1,
+    }
+    out = pitcher_stats_from_statblock(stat)
+    assert abs(out["ip"] - 6.3333) < 0.01
+    assert out["k"] == 7 and out["er"] == 3 and out["h_allowed"] == 5
