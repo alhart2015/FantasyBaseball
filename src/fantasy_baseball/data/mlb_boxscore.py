@@ -59,6 +59,8 @@ def boxscore_pitcher_row(
 ) -> dict[str, Any]:
     """Build a pitching GameRow from a box-score pitching block."""
     s = pitcher_stats_from_statblock(pitching)
+    # gs/g are omitted: box-score rows are keyed by gamePk, so per-game
+    # appearance counts (always 0 or 1) are redundant.
     return {
         "gamePk": game_pk,
         "gameNumber": game_number,

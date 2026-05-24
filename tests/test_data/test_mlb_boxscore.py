@@ -39,7 +39,7 @@ def _box(*home_players):
     return {"teams": {"home": {"players": players}, "away": {"players": {}}}}
 
 
-def test_iter_skips_empty_stat_blocks():
+def test_iter_yields_empty_blocks_for_bench_player():
     rows = list(iter_boxscore_players(_box(OHTANI, BENCH)))
     by_id = {mlbam: (bat, pit) for mlbam, _name, bat, pit in rows}
     assert by_id["660271"][0] and by_id["660271"][1]  # Ohtani: both populated
