@@ -2115,6 +2115,22 @@ class TestScoreRotoEV:
 # ── ProjectedStandings.from_rosters / build_team_sds ────────────────
 
 
+def _spy_sd_scale(monkeypatch) -> dict[str, float]:
+    """Capture the ``sd_scale`` passed to ``build_team_sds`` so a test can
+    assert how ``ProjectedStandings.from_rosters`` damps its picker SDs."""
+    from fantasy_baseball import scoring
+
+    captured: dict[str, float] = {}
+    real = scoring.build_team_sds
+
+    def spy(team_rosters, sd_scale):
+        captured["sd_scale"] = sd_scale
+        return real(team_rosters, sd_scale)
+
+    monkeypatch.setattr(scoring, "build_team_sds", spy)
+    return captured
+
+
 class TestProjectedStandingsFromRosters:
     """``ProjectedStandings.from_rosters`` wraps ``project_team_stats`` per team."""
 
@@ -2131,16 +2147,7 @@ class TestProjectedStandingsFromRosters:
         full-season sd_scale=1.0 the standings build previously hardcoded
         (which over-softened mid-season lineup decisions vs every other
         consumer)."""
-        from fantasy_baseball import scoring
-
-        captured: dict[str, float] = {}
-        real = scoring.build_team_sds
-
-        def spy(team_rosters, sd_scale):
-            captured["sd_scale"] = sd_scale
-            return real(team_rosters, sd_scale)
-
-        monkeypatch.setattr(scoring, "build_team_sds", spy)
+        captured = _spy_sd_scale(monkeypatch)
         ProjectedStandings.from_rosters(
             {"A": [], "B": []}, effective_date=date(2026, 5, 5), fraction_remaining=0.25
         )
@@ -2149,16 +2156,7 @@ class TestProjectedStandingsFromRosters:
     def test_picker_sds_default_to_full_season_when_fraction_unset(self, monkeypatch):
         """Default (no fraction_remaining) keeps sd_scale=1.0 -- correct for
         preseason (full season remaining) and backward-compatible."""
-        from fantasy_baseball import scoring
-
-        captured: dict[str, float] = {}
-        real = scoring.build_team_sds
-
-        def spy(team_rosters, sd_scale):
-            captured["sd_scale"] = sd_scale
-            return real(team_rosters, sd_scale)
-
-        monkeypatch.setattr(scoring, "build_team_sds", spy)
+        captured = _spy_sd_scale(monkeypatch)
         ProjectedStandings.from_rosters({"A": [], "B": []}, effective_date=date(2026, 5, 5))
         assert captured["sd_scale"] == pytest.approx(1.0)
 

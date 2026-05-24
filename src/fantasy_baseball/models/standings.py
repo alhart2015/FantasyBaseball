@@ -323,11 +323,9 @@ class ProjectedStandings:
         # the narrower invariant type.
         team_sds = build_team_sds(
             {tname: list(roster) for tname, roster in team_rosters.items()},
-            # Damp by sqrt(fraction_remaining) so the picker's uncertainty
-            # matches the canonical team_sds the optimizer / deltaRoto use.
-            # (A hardcoded 1.0 used full-season variance and over-softened
-            # mid-season lineup decisions vs every other consumer.) Default
-            # 1.0 is correct preseason, when the full season is still ahead.
+            # Damp by sqrt(fraction_remaining) so picker SDs match the
+            # canonical team_sds used by the optimizer and deltaRoto.
+            # Default 1.0 is correct preseason (full season still ahead).
             sd_scale=fraction_remaining**0.5,
         )
 
