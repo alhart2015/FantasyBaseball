@@ -355,3 +355,17 @@ def test_fetch_game_log_totals_preserves_public_contract(monkeypatch, fake_redis
     assert hitters["660271"]["ab"] == 3
     assert pitchers["660271"]["k"] == 8
     assert games_elapsed == 1
+
+
+def test_watermark_not_advanced_when_boxscore_fetch_fails(monkeypatch, fake_redis):
+    redis_store.set_game_logs_watermark(fake_redis, 2026, "2026-05-23T13:00:00+00:00")
+    _patch_mlb(monkeypatch, changed_games=[_final(100, "2026-04-01")])
+
+    def _boom(_game_pk):
+        raise RuntimeError("boxscore 500")
+
+    monkeypatch.setattr(mlb_game_logs, "_fetch_boxscore", _boom)
+    mlb_game_logs.sync_game_logs(fake_redis, 2026, now_utc=NOW)
+    # The only game's box score failed -> nothing stored, watermark unchanged so it retries.
+    assert redis_store.get_player_game_log(fake_redis, 2026, "660271", "hitting") is None
+    assert redis_store.get_game_logs_watermark(fake_redis, 2026) == "2026-05-23T13:00:00+00:00"

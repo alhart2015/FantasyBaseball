@@ -38,11 +38,13 @@ from fantasy_baseball.data.redis_store import (
     set_player_positions,
     set_season_progress,
 )
+from fantasy_baseball.utils.time_utils import local_today
 
 _MLB_API = "https://statsapi.mlb.com/api/v1"
 
 _HITTER_KEYS = ("pa", "ab", "h", "r", "hr", "rbi", "sb")
 _PITCHER_KEYS = ("ip", "k", "er", "bb", "h_allowed", "w", "sv")
+_PITCHER_INT_KEYS = tuple(k for k in _PITCHER_KEYS if k != "ip")
 
 
 def _merge_player_games(
@@ -75,7 +77,7 @@ def _sum_pitching(games: list[dict[str, Any]]) -> dict[str, float | int]:
     out: dict[str, float | int] = {k: 0 for k in _PITCHER_KEYS}
     for g in games:
         out["ip"] += g.get("ip", 0.0) or 0.0
-        for k in ("k", "er", "bb", "h_allowed", "w", "sv"):
+        for k in _PITCHER_INT_KEYS:
             out[k] += g.get(k, 0) or 0
     out["ip"] = round(out["ip"], 4)
     return out
@@ -247,14 +249,15 @@ def _sync(client, season: int, games: list[dict[str, Any]], now_utc: datetime, p
     _upsert_and_roll(client, season, "hitting", hitting)
     _upsert_and_roll(client, season, "pitching", kept_pitching)
 
+    known_dates = set(get_game_log_dates(client, season))
     if dates:
-        merged_dates = set(get_game_log_dates(client, season)) | dates
-        set_game_log_dates(client, season, list(merged_dates))
+        known_dates |= dates
+        set_game_log_dates(client, season, list(known_dates))
     set_season_progress(
         client,
-        games_elapsed=len(get_game_log_dates(client, season)),
+        games_elapsed=len(known_dates),
         total=162,
-        as_of=now_utc.date().isoformat(),
+        as_of=local_today().isoformat(),
     )
 
     if all_ok:
