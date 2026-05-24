@@ -551,7 +551,8 @@ def get_game_logs_watermark(client, season: int) -> str | None:
     """Read the UTC high-water mark (ISO-8601). None when missing or client is None."""
     if client is None:
         return None
-    return client.get(_game_logs_watermark_key(season))
+    raw = client.get(_game_logs_watermark_key(season))
+    return raw if isinstance(raw, str) else None
 
 
 def set_game_logs_watermark(client, season: int, iso_utc: str) -> None:
