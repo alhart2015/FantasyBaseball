@@ -2093,8 +2093,7 @@ def test_category_bars_has_both_flavors_and_all_categories():
 
 def test_category_bars_normal_category_sorts_best_on_top():
     out = format_category_bars_for_display(_bars_display_dict(), _bars_display_dict())
-    runs = out["current"]["R"]
-    # Higher runs is better -> Hart (320) on top.
+    runs = out["current"]["R"]["rows"]
     assert [r["team"] for r in runs] == ["Hart of the Order", "SkeleThor"]
     assert runs[0]["value"] == 320
     assert runs[0]["sd"] == 25.0
@@ -2103,8 +2102,7 @@ def test_category_bars_normal_category_sorts_best_on_top():
 
 def test_category_bars_inverse_category_sorts_lowest_on_top():
     out = format_category_bars_for_display(_bars_display_dict(), _bars_display_dict())
-    era = out["current"]["ERA"]
-    # Lower ERA is better -> SkeleThor (3.10) on top.
+    era = out["current"]["ERA"]["rows"]
     assert [r["team"] for r in era] == ["SkeleThor", "Hart of the Order"]
     assert era[0]["value"] == 3.10
 
@@ -2122,11 +2120,53 @@ def test_category_bars_missing_sd_defaults_to_zero():
         ]
     }
     out = format_category_bars_for_display(data, data)
-    assert out["current"]["HR"][0]["sd"] == 0.0
+    assert out["current"]["HR"]["rows"][0]["sd"] == 0.0
 
 
 def test_category_bars_handles_missing_flavor():
     """Pre-refresh: a flavor's display dict may be None."""
     out = format_category_bars_for_display(None, _bars_display_dict())
     assert out["preseason"] == {}
-    assert out["current"]["R"][0]["team"] == "Hart of the Order"
+    assert out["current"]["R"]["rows"][0]["team"] == "Hart of the Order"
+
+
+def test_category_bars_attaches_user_odds():
+    """Each category entry carries the user team's odds; whole-number pcts."""
+    out = format_category_bars_for_display(_bars_display_dict(), _bars_display_dict())
+    odds = out["current"]["R"]["odds"]
+    assert set(odds.keys()) == {"first_pct", "top3_pct", "wins", "opponents"}
+    assert isinstance(odds["first_pct"], int)
+    assert isinstance(odds["top3_pct"], int)
+    assert odds["opponents"] == 1  # _bars_display_dict has 2 teams -> 1 opponent
+    assert 0 <= odds["first_pct"] <= 100
+
+    # Inverse-category wiring: the fixture's user leads R (320 vs 300) but
+    # trails ERA (3.20 vs 3.10, lower-is-better), so ERA odds must use
+    # higher_is_better=False -> lower first-place odds than R. A flipped
+    # INVERSE_CATS predicate would make these equal (and wrong).
+    era_odds = out["current"]["ERA"]["odds"]
+    assert era_odds["first_pct"] < odds["first_pct"]
+
+
+def test_category_bars_odds_none_without_user_row():
+    """No is_user team -> odds is None (line hides client-side)."""
+    data = {
+        "teams": [
+            {
+                "name": "A",
+                "team_key": "a",
+                "is_user": False,
+                "stats": CategoryStats(r=100),
+                "sds": {},
+            },
+            {
+                "name": "B",
+                "team_key": "b",
+                "is_user": False,
+                "stats": CategoryStats(r=90),
+                "sds": {},
+            },
+        ]
+    }
+    out = format_category_bars_for_display(data, data)
+    assert out["current"]["R"]["odds"] is None

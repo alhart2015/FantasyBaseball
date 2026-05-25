@@ -1,7 +1,8 @@
 /* Category Bars: ranked dot-plot of all teams for one roto category, with
  * +/-1 SD error bars. Reads the JSON embedded by standings.html, renders into
  * #category-bars-canvas, and re-renders on category/projection change.
- * Data shape: { preseason: {CAT: [{team, value, sd, is_user}, ...]}, current: {...} }
+ * Data shape: { preseason: {CAT: {rows: [{team, value, sd, is_user}, ...],
+ *   odds: {first_pct, top3_pct, wins, opponents} | null}}, current: {...} }
  */
 (function () {
   "use strict";
@@ -14,6 +15,33 @@
   var state = { projection: "current", category: "R" };
   var chart = null;
   var payload = null;
+
+  // Inline plugin: draw full-height dashed vertical lines at the user team's
+  // lower/upper bound (value -/+ sd) so every other team's dot and whiskers
+  // read directly against the user's band. Bounds are precomputed per render
+  // and read off chart.options so they track the active category/projection.
+  var userBoundsPlugin = {
+    id: "userBounds",
+    afterDatasetsDraw: function (chart) {
+      var ub = chart.options.plugins.userBounds;
+      if (!ub) return;
+      var xScale = chart.scales.x;
+      var area = chart.chartArea;
+      var c = chart.ctx;
+      c.save();
+      c.setLineDash([5, 4]);
+      c.lineWidth = 1.5;
+      c.strokeStyle = ub.color;
+      [ub.lo, ub.hi].forEach(function (v) {
+        var px = xScale.getPixelForValue(v);
+        c.beginPath();
+        c.moveTo(px, area.top);
+        c.lineTo(px, area.bottom);
+        c.stroke();
+      });
+      c.restore();
+    }
+  };
 
   function loadPayload() {
     var node = document.getElementById("category-bars-data");
@@ -30,15 +58,45 @@
     return String(Math.round(value));
   }
 
-  function rowsFor() {
-    if (!payload) return [];
+  function entryFor() {
+    if (!payload) return null;
     var flavor = payload[state.projection];
-    if (!flavor) return [];
-    return flavor[state.category] || [];
+    if (!flavor) return null;
+    return flavor[state.category] || null;
+  }
+
+  function rowsFor() {
+    var entry = entryFor();
+    return entry && entry.rows ? entry.rows : [];
+  }
+
+  function oddsFor() {
+    var entry = entryFor();
+    return entry ? entry.odds : null;
+  }
+
+  function setText(id, text) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = text;
+  }
+
+  function updateOdds() {
+    var box = document.getElementById("catbars-odds");
+    if (!box) return;
+    var odds = oddsFor();
+    if (!odds) {
+      box.style.display = "none";
+      return;
+    }
+    box.style.display = "";
+    setText("catbars-first", odds.first_pct + "%");
+    setText("catbars-top3", odds.top3_pct + "%");
+    setText("catbars-wins", odds.wins + "/" + odds.opponents);
   }
 
   function render() {
     if (payload == null) payload = loadPayload();
+    updateOdds();
     var rows = rowsFor();
     var canvas = document.getElementById("category-bars-canvas");
     var empty = document.getElementById("catbars-empty");
@@ -65,8 +123,21 @@
     var hint = document.getElementById("catbars-hint");
     if (hint) hint.style.display = INVERSE_CATS[cat] ? "" : "none";
 
+    var userRow = null;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].is_user) {
+        userRow = rows[i];
+        break;
+      }
+    }
+    var userBounds =
+      userRow && userRow.sd > 0
+        ? { lo: userRow.value - userRow.sd, hi: userRow.value + userRow.sd, color: USER_COLOR }
+        : null;
+
     var config = {
       type: "scatterWithErrorBars",
+      plugins: [userBoundsPlugin],
       data: {
         labels: labels,
         datasets: [{
@@ -88,6 +159,7 @@
         maintainAspectRatio: false,
         plugins: {
           legend: { display: false },
+          userBounds: userBounds,
           tooltip: {
             callbacks: {
               label: function (ctx) {

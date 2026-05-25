@@ -1206,21 +1206,25 @@ def test_standings_embeds_category_bars_data(client, kv_isolation):
     assert match is not None, "category-bars-data script tag not found"
     bars = json.loads(match.group(1))
 
-    # Both flavors populated from the seeded projections.
-    assert bars["current"]["R"], "current/R rows should be non-empty"
-    assert bars["preseason"]["R"], "preseason/R rows should be non-empty"
+    # Each category entry is now {"rows": [...], "odds": {...}}.
+    assert bars["current"]["R"]["rows"], "current/R rows should be non-empty"
+    assert bars["preseason"]["R"]["rows"], "preseason/R rows should be non-empty"
 
     # Best-on-top for a normal category: Hart (320 R) ranks first, inside the
     # category-bars JSON specifically (not just elsewhere on the page).
-    top_runs = bars["current"]["R"][0]
+    top_runs = bars["current"]["R"]["rows"][0]
     assert top_runs["team"] == "Hart of the Order"
     assert top_runs["value"] == 320.0
     assert top_runs["sd"] == 25.0
     assert top_runs["is_user"] is True
 
-    # Best-on-top for an inverse category: lowest ERA ranks first (end-to-end
-    # check that the inverse-sort survives the route + formatter).
-    assert bars["current"]["ERA"][0]["team"] == "SkeleThor"
+    # Best-on-top for an inverse category: lowest ERA ranks first.
+    assert bars["current"]["ERA"]["rows"][0]["team"] == "SkeleThor"
+
+    # The user team's per-category odds ride along.
+    odds = bars["current"]["R"]["odds"]
+    assert set(odds.keys()) == {"first_pct", "top3_pct", "wins", "opponents"}
+    assert odds["opponents"] == 1  # 2 teams seeded -> 1 opponent
 
 
 # --- /api/il-return-plan ---------------------------------------------------------------
