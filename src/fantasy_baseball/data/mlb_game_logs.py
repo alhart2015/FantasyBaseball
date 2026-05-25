@@ -201,7 +201,9 @@ def _collect_player_rows(
                         p = pitching.setdefault(mlbam_id, {"name": name, "rows": {}})
                         p["name"] = name or p["name"]
                         p["rows"][gp] = boxscore_pitcher_row(pitch, gp, gnum, date)
-            del future, box  # release the Future and its box score before the next one
+            # Load-bearing, not tidy-up: as_completed blocks on producing the next box
+            # while these stay bound, so dropping them now caps peak at one box, not two.
+            del future, box
             if progress_cb and i % 50 == 0:
                 progress_cb(f"Box scores: {i}/{total}...")
     return hitting, pitching, dates, failed
