@@ -1,4 +1,5 @@
 import json
+import re
 from unittest.mock import patch
 
 import pytest
@@ -1168,6 +1169,27 @@ def test_standings_embeds_category_bars_data(client, kv_isolation):
 
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    assert 'id="category-bars-data"' in body
-    assert '"preseason"' in body
-    assert "Hart of the Order" in body
+
+    match = re.search(
+        r'<script type="application/json" id="category-bars-data">(.*?)</script>',
+        body,
+        re.DOTALL,
+    )
+    assert match is not None, "category-bars-data script tag not found"
+    bars = json.loads(match.group(1))
+
+    # Both flavors populated from the seeded projections.
+    assert bars["current"]["R"], "current/R rows should be non-empty"
+    assert bars["preseason"]["R"], "preseason/R rows should be non-empty"
+
+    # Best-on-top for a normal category: Hart (320 R) ranks first, inside the
+    # category-bars JSON specifically (not just elsewhere on the page).
+    top_runs = bars["current"]["R"][0]
+    assert top_runs["team"] == "Hart of the Order"
+    assert top_runs["value"] == 320.0
+    assert top_runs["sd"] == 25.0
+    assert top_runs["is_user"] is True
+
+    # Best-on-top for an inverse category: lowest ERA ranks first (end-to-end
+    # check that the inverse-sort survives the route + formatter).
+    assert bars["current"]["ERA"][0]["team"] == "SkeleThor"
