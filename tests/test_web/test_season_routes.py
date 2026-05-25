@@ -1,4 +1,5 @@
 import json
+import re
 from typing import ClassVar
 from unittest.mock import patch
 
@@ -1103,6 +1104,123 @@ def test_lineup_renders_dash_chip_when_no_streak_cache(client, kv_isolation) -> 
     assert resp.status_code == 200
     body = resp.data.decode()
     assert "streak-chip streak-neutral" in body
+
+
+def test_standings_category_bars_empty_without_projections(client, kv_isolation):
+    """When PROJECTIONS are absent, /standings renders (200) and category-bars JSON is empty."""
+    from fantasy_baseball.web import season_data
+
+    standings = _mock_standings()
+    season_data.write_cache(CacheKey.STANDINGS, standings)
+    season_data.write_cache(CacheKey.META, {"last_refresh": "8:32 AM", "week": "3"})
+    # PROJECTIONS deliberately NOT seeded.
+
+    with patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+        mock_cfg.return_value.team_name = "Hart of the Order"
+        resp = client.get("/standings")
+
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+
+    match = re.search(
+        r'<script type="application/json" id="category-bars-data">(.*?)</script>',
+        body,
+        re.DOTALL,
+    )
+    assert match is not None, "category-bars-data script tag not found"
+    bars = json.loads(match.group(1))
+
+    assert bars == {"preseason": {}, "current": {}}
+
+
+def test_standings_embeds_category_bars_data(client, kv_isolation):
+    """When projections are cached, /standings embeds non-empty category-bars JSON."""
+    from fantasy_baseball.web import season_data
+
+    proj_standings_payload = {
+        "effective_date": "2026-04-01",
+        "teams": [
+            {
+                "name": "Hart of the Order",
+                "stats": {
+                    "R": 320,
+                    "HR": 90,
+                    "RBI": 290,
+                    "SB": 50,
+                    "AVG": 0.270,
+                    "W": 35,
+                    "K": 600,
+                    "SV": 25,
+                    "ERA": 3.50,
+                    "WHIP": 1.18,
+                },
+            },
+            {
+                "name": "SkeleThor",
+                "stats": {
+                    "R": 300,
+                    "HR": 85,
+                    "RBI": 295,
+                    "SB": 40,
+                    "AVG": 0.265,
+                    "W": 38,
+                    "K": 580,
+                    "SV": 30,
+                    "ERA": 3.40,
+                    "WHIP": 1.15,
+                },
+            },
+        ],
+    }
+    proj = {
+        "preseason_standings": proj_standings_payload,
+        "projected_standings": proj_standings_payload,
+        "preseason_team_sds": {
+            "Hart of the Order": {"R": 25.0, "ERA": 0.18},
+            "SkeleThor": {"R": 30.0, "ERA": 0.15},
+        },
+        "team_sds": {
+            "Hart of the Order": {"R": 25.0, "ERA": 0.18},
+            "SkeleThor": {"R": 30.0, "ERA": 0.15},
+        },
+        "fraction_remaining": 0.8,
+    }
+
+    standings = _mock_standings()
+    season_data.write_cache(CacheKey.STANDINGS, standings)
+    season_data.write_cache(CacheKey.PROJECTIONS, proj)
+    season_data.write_cache(CacheKey.META, {"last_refresh": "8:32 AM", "week": "3"})
+
+    with patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+        mock_cfg.return_value.team_name = "Hart of the Order"
+        resp = client.get("/standings")
+
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+
+    match = re.search(
+        r'<script type="application/json" id="category-bars-data">(.*?)</script>',
+        body,
+        re.DOTALL,
+    )
+    assert match is not None, "category-bars-data script tag not found"
+    bars = json.loads(match.group(1))
+
+    # Both flavors populated from the seeded projections.
+    assert bars["current"]["R"], "current/R rows should be non-empty"
+    assert bars["preseason"]["R"], "preseason/R rows should be non-empty"
+
+    # Best-on-top for a normal category: Hart (320 R) ranks first, inside the
+    # category-bars JSON specifically (not just elsewhere on the page).
+    top_runs = bars["current"]["R"][0]
+    assert top_runs["team"] == "Hart of the Order"
+    assert top_runs["value"] == 320.0
+    assert top_runs["sd"] == 25.0
+    assert top_runs["is_user"] is True
+
+    # Best-on-top for an inverse category: lowest ERA ranks first (end-to-end
+    # check that the inverse-sort survives the route + formatter).
+    assert bars["current"]["ERA"][0]["team"] == "SkeleThor"
 
 
 # --- /api/il-return-plan ---------------------------------------------------------------

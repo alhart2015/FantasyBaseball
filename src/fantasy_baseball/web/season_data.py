@@ -248,6 +248,53 @@ def format_standings_for_display(
     return {"teams": teams}
 
 
+def _category_bars_one_flavor(data: dict | None) -> dict[str, list[dict]]:
+    """Reshape one standings display dict into per-category ranked rows.
+
+    Each category maps to a list of ``{team, value, sd, is_user}`` sorted
+    best-on-top: counting/AVG categories descending, ERA/WHIP ascending
+    (lower is better). ``sd`` defaults to 0.0 when the category is absent
+    from a team's ``sds`` (e.g. no ``team_sds`` were cached), which renders
+    as a bare dot with no whiskers.
+    """
+    if not data or not data.get("teams"):
+        return {}
+    out: dict[str, list[dict]] = {}
+    for cat in ALL_CATEGORIES:
+        rows = [
+            {
+                "team": team["name"],
+                "value": team["stats"][cat],
+                "sd": (team.get("sds") or {}).get(cat, 0.0),
+                "is_user": team["is_user"],
+            }
+            for team in data["teams"]
+        ]
+        # reverse=True for "higher is better"; ERA/WHIP (INVERSE_CATS) sort
+        # ascending so the lowest (best) team lands on top. Python's sort is
+        # stable, so ties keep the input order.
+        rows.sort(key=lambda r: r["value"], reverse=cat not in INVERSE_CATS)
+        out[cat.value] = rows
+    return out
+
+
+def format_category_bars_for_display(
+    preseason_data: dict | None,
+    current_projected_data: dict | None,
+) -> dict[str, dict[str, list[dict]]]:
+    """Build the Category Bars chart payload from the two standings display dicts.
+
+    Returns ``{"preseason": {CAT: [rows...]}, "current": {CAT: [rows...]}}``
+    where each row is ``{team, value, sd, is_user}`` sorted best-on-top.
+    Categories use uppercase short names (R, HR, ... WHIP). A missing flavor
+    (``None``, pre-refresh) yields an empty ``{}`` for that flavor.
+    """
+    return {
+        "preseason": _category_bars_one_flavor(preseason_data),
+        "current": _category_bars_one_flavor(current_projected_data),
+    }
+
+
 def get_teams_list(standings: Standings, user_team_name: str) -> dict:
     """Build a team list for the opponent selector dropdown.
 

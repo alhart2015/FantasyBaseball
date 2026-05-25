@@ -21,6 +21,7 @@
     <button class="pill active" data-view="current" onclick="toggleTopView(this)">Current</button>
     <button class="pill" data-view="projected" onclick="toggleTopView(this)">Projected</button>
     <button class="pill" data-view="montecarlo" onclick="toggleTopView(this)">Monte Carlo</button>
+    <button class="pill" data-view="categorybars" onclick="toggleTopView(this)">Category Bars</button>
 </div>
 
 {# ── Current (actual standings, unchanged) ── #}
@@ -230,6 +231,29 @@
     </div>
 </div>
 
+{# -- Category Bars (ranked dot-plot with +/-1 SD error bars) -- #}
+<div id="view-categorybars" style="display: none;">
+    <div class="pill-group" id="catbars-proj-toggle">
+        <button class="pill active" data-cbproj="current" onclick="catBarsSetProjection(this)">Current</button>
+        <button class="pill" data-cbproj="preseason" onclick="catBarsSetProjection(this)">Preseason</button>
+    </div>
+
+    <div class="pill-group" id="catbars-cat-toggle">
+        {% for cat in all_categories %}
+        <button class="pill {% if loop.first %}active{% endif %}"
+                data-cbcat="{{ cat.value }}" onclick="catBarsSetCategory(this)">{{ cat.value }}</button>
+        {% endfor %}
+    </div>
+
+    <p id="catbars-hint" class="placeholder-text" style="display: none;">Lower is better.</p>
+    <div class="catbars-wrapper"><canvas id="category-bars-canvas"></canvas></div>
+    <p id="catbars-empty" class="placeholder-text" style="display: none;">
+        No projections available. Click "Refresh Data" first.
+    </p>
+
+    <script type="application/json" id="category-bars-data">{{ category_bars | tojson }}</script>
+</div>
+
 <dialog id="breakdown-modal">
     <div class="breakdown-modal-head">
         <h3 id="breakdown-modal-title"></h3>
@@ -320,6 +344,8 @@ function toggleTopView(el) {
     document.getElementById('view-current').style.display = v === 'current' ? '' : 'none';
     document.getElementById('view-projected').style.display = v === 'projected' ? '' : 'none';
     document.getElementById('view-montecarlo').style.display = v === 'montecarlo' ? '' : 'none';
+    document.getElementById('view-categorybars').style.display = v === 'categorybars' ? '' : 'none';
+    if (v === 'categorybars' && window.renderCategoryBars) window.renderCategoryBars();
 }
 
 /* ── Current standings sub-toggle ── */
@@ -545,6 +571,7 @@ document.addEventListener('DOMContentLoaded', () => {
     width: 100%;
     font-size: 0.9rem;
 }
+.catbars-wrapper { position: relative; height: 460px; margin-top: 0.75rem; }
 .breakdown-status-badge {
     display: inline-block;
     padding: 2px 6px;
@@ -552,6 +579,9 @@ document.addEventListener('DOMContentLoaded', () => {
     font-size: 0.7rem;
 }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-error-bars@4.4.1/build/index.umd.min.js"></script>
+<script src="{{ url_for('static', filename='season_category_bars.js') }}"></script>
 
 {% endif %}
 </div>
