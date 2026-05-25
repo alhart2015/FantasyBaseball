@@ -47,6 +47,7 @@ mypy_path = ["src"]
 files = [
     "src/fantasy_baseball/analysis/",
     "src/fantasy_baseball/auth/yahoo_auth.py",
+    "src/fantasy_baseball/category_odds.py",
     "src/fantasy_baseball/config.py",
     "src/fantasy_baseball/data/cache_keys.py",
     "src/fantasy_baseball/data/db.py",
