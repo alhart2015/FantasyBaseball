@@ -2140,6 +2140,13 @@ def test_category_bars_attaches_user_odds():
     assert odds["opponents"] == 1  # _bars_display_dict has 2 teams -> 1 opponent
     assert 0 <= odds["first_pct"] <= 100
 
+    # Inverse-category wiring: the fixture's user leads R (320 vs 300) but
+    # trails ERA (3.20 vs 3.10, lower-is-better), so ERA odds must use
+    # higher_is_better=False -> lower first-place odds than R. A flipped
+    # INVERSE_CATS predicate would make these equal (and wrong).
+    era_odds = out["current"]["ERA"]["odds"]
+    assert era_odds["first_pct"] < odds["first_pct"]
+
 
 def test_category_bars_odds_none_without_user_row():
     """No is_user team -> odds is None (line hides client-side)."""
