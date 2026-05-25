@@ -152,11 +152,28 @@ def _fetch_positions(mlbam_ids: list[int]) -> dict[str, str | None]:
     return out
 
 
-def _fetch_boxscores(
+def _collect_player_rows(
     games: list[dict[str, Any]], progress_cb
-) -> tuple[dict[int, dict[str, Any]], set[int]]:
-    """Fetch box scores in parallel. Returns ({gamePk: boxscore}, failed_gamePks)."""
-    results: dict[int, dict[str, Any]] = {}
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], set[str], set[int]]:
+    """Fetch box scores in parallel and parse each into compact per-game rows as it
+    completes, never retaining the raw box-score JSON.
+
+    Returns ``(hitting, pitching, dates, failed_gamePks)`` where ``hitting`` and
+    ``pitching`` map ``mlbam_id -> {"name", "rows": {gamePk: row}}``.
+
+    Memory: a full box score is ~1-2 MB as a Python dict, and a ``Future`` retains its
+    result until the Future itself is released. The submissions are therefore NOT bound
+    to a surviving ``futures`` list -- doing so would pin every box score (~1 GB for a
+    full-season backfill) and OOM the 512 MB instance, which is exactly the bug this
+    function exists to fix. Passing the comprehension straight into ``as_completed`` lets
+    it drop each Future as it yields it, and ``del future, box`` releases the parsed box
+    score before the next one is awaited, so peak is the compact rows plus only the
+    in-flight box scores.
+    """
+    ctx = {g["gamePk"]: _game_context(g) for g in games}
+    hitting: dict[str, dict[str, Any]] = {}
+    pitching: dict[str, dict[str, Any]] = {}
+    dates: set[str] = set()
     failed: set[int] = set()
 
     def _one(game: dict[str, Any]) -> tuple[int, dict[str, Any] | None]:
@@ -166,17 +183,28 @@ def _fetch_boxscores(
         except Exception:
             return gp, None
 
+    total = len(games)
     with ThreadPoolExecutor(max_workers=15) as pool:
-        futures = [pool.submit(_one, g) for g in games]
-        for i, future in enumerate(as_completed(futures), 1):
+        for i, future in enumerate(as_completed([pool.submit(_one, g) for g in games]), 1):
             gp, box = future.result()
             if box is None:
                 failed.add(gp)
             else:
-                results[gp] = box
+                _pk, gnum, date = ctx[gp]
+                dates.add(date)
+                for mlbam_id, name, batting, pitch in iter_boxscore_players(box):
+                    if batting:
+                        h = hitting.setdefault(mlbam_id, {"name": name, "rows": {}})
+                        h["name"] = name or h["name"]
+                        h["rows"][gp] = boxscore_hitter_row(batting, gp, gnum, date)
+                    if pitch:
+                        p = pitching.setdefault(mlbam_id, {"name": name, "rows": {}})
+                        p["name"] = name or p["name"]
+                        p["rows"][gp] = boxscore_pitcher_row(pitch, gp, gnum, date)
+            del future, box  # release the Future and its box score before the next one
             if progress_cb and i % 50 == 0:
-                progress_cb(f"Box scores: {i}/{len(games)}...")
-    return results, failed
+                progress_cb(f"Box scores: {i}/{total}...")
+    return hitting, pitching, dates, failed
 
 
 def _resolve_positions(client, season: int, pitching_ids: list[str]) -> dict[str, str]:
@@ -217,25 +245,8 @@ def _upsert_and_roll(client, season: int, group: str, by_player: dict[str, dict[
 
 
 def _sync(client, season: int, games: list[dict[str, Any]], now_utc: datetime, progress_cb) -> None:
-    boxscores, failed = _fetch_boxscores(games, progress_cb)
+    hitting, pitching, dates, failed = _collect_player_rows(games, progress_cb)
     all_ok = not failed
-    ctx = {g["gamePk"]: _game_context(g) for g in games}
-
-    hitting: dict[str, dict[str, Any]] = {}
-    pitching: dict[str, dict[str, Any]] = {}
-    dates: set[str] = set()
-    for gp, box in boxscores.items():
-        _pk, gnum, date = ctx[gp]
-        dates.add(date)
-        for mlbam_id, name, batting, pitch in iter_boxscore_players(box):
-            if batting:
-                h = hitting.setdefault(mlbam_id, {"name": name, "rows": {}})
-                h["name"] = name or h["name"]
-                h["rows"][gp] = boxscore_hitter_row(batting, gp, gnum, date)
-            if pitch:
-                p = pitching.setdefault(mlbam_id, {"name": name, "rows": {}})
-                p["name"] = name or p["name"]
-                p["rows"][gp] = boxscore_pitcher_row(pitch, gp, gnum, date)
 
     positions = _resolve_positions(client, season, list(pitching.keys()))
     kept_pitching: dict[str, dict[str, Any]] = {}

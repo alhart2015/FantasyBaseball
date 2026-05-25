@@ -26,7 +26,22 @@ def _fetch_boxscores(games, progress_cb):
 
 A full MLB box score is hundreds of KB of JSON (~1-2 MB as a Python dict). Holding ~805 of
 them simultaneously is ~1 GB, which blows the **512 MB free Render instance**. The process is
-killed around the point the logs show it die.
+killed around the point the logs show it die. (The ~1-2 MB/box figure is an estimate, not
+measured against a live box score; the death point tracking ~650/805 rather than a wall-clock
+cutoff corroborates a memory ceiling.)
+
+There are actually **two** references pinning the box scores, and the second is subtle:
+
+1. `results[gp] = box` -- the explicit accumulator.
+2. The `futures` list. `_fetch_boxscores` does `futures = [pool.submit(_one, g) for g in games]`
+   and iterates `as_completed(futures)`. A `concurrent.futures.Future` keeps its result in
+   `Future._result` **even after `.result()` is called** -- `result()` does not clear it. As long
+   as the `futures` list is alive, every `Future` (and through it every box-score dict) stays
+   referenced. Since `results[gp]` and `future._result` point at the *same* dict object, peak is
+   ~1x all box scores (not 2x), but **both** references must be gone for a box to be freed.
+
+This second point is load-bearing for the fix (see Design): dropping only the `results`
+accumulator while still binding `futures` to a surviving list frees nothing.
 
 Because `_sync` writes the per-player keys, the derived rollup, and the watermark only **after**
 the entire fetch loop finishes (`_upsert_and_roll` runs post-fetch), an interruption during the
@@ -47,7 +62,9 @@ cannot escape on its own.
 The death point (~650/805) tracks a memory ceiling far more than a clean wall-clock cutoff, and
 the memory math above is conclusive: peak memory is the **raw box scores**, not the compact
 parsed rows. (Note: the earlier /simplify efficiency review missed this -- it assumed the raw
-JSON was dropped after parsing, but `_fetch_boxscores` returns it all for a second-pass parse.)
+JSON was dropped after parsing, but `_fetch_boxscores` returns it all for a second-pass parse.
+A naive streaming refactor misses the futures-list pin in the same spirit: it looks like the box
+is dropped at the end of each iteration, but the `futures` list keeps it alive.)
 
 ## Goals
 
@@ -73,6 +90,15 @@ drop the raw box-score JSON immediately. Peak memory becomes the accumulated com
 MB for a full season) plus at most ~pool-size raw box scores in flight, instead of all ~805 at
 once.
 
+This only works if the box score is *actually* released after parsing. Two structural rules make
+that true, and **both are required** (see "Why the futures list must not survive the loop" below):
+
+1. Do **not** bind the futures to a named list that outlives the loop. Pass the submission
+   comprehension straight into `as_completed(...)`; capture `len(games)` separately for the
+   progress denominator since the list is no longer around to measure.
+2. `del future, box` at the end of each iteration so neither the parsed box nor its `Future`
+   lingers in a loop variable while the next one is awaited.
+
 Replace `_fetch_boxscores` and the second-pass parse loop in `_sync` with a single collector:
 
 ```python
@@ -95,9 +121,16 @@ def _collect_player_rows(
         except Exception:
             return gp, None
 
+    total = len(games)
     with ThreadPoolExecutor(max_workers=15) as pool:
-        futures = [pool.submit(_one, g) for g in games]
-        for i, future in enumerate(as_completed(futures), 1):
+        # Do NOT bind the submissions to a named list: a Future retains its result
+        # (the raw box score) until the Future itself is released, and a surviving
+        # `futures` list would pin all ~total box scores for the whole loop. Passing
+        # the comprehension straight in lets as_completed drop each Future as it is
+        # yielded, so only the in-flight + just-yielded box scores stay live.
+        for i, future in enumerate(
+            as_completed([pool.submit(_one, g) for g in games]), 1
+        ):
             gp, box = future.result()
             if box is None:
                 failed.add(gp)
@@ -113,9 +146,9 @@ def _collect_player_rows(
                         p = pitching.setdefault(mlbam_id, {"name": name, "rows": {}})
                         p["name"] = name or p["name"]
                         p["rows"][gp] = boxscore_pitcher_row(pitch, gp, gnum, date)
-            # `box` goes out of scope here; the raw JSON is released before the next future.
+            del future, box  # release the Future and its box score before the next one
             if progress_cb and i % 50 == 0:
-                progress_cb(f"Box scores: {i}/{len(games)}...")
+                progress_cb(f"Box scores: {i}/{total}...")
     return hitting, pitching, dates, failed
 ```
 
@@ -163,14 +196,36 @@ def _sync(client, season, games, now_utc, progress_cb) -> None:
   ~0.3 s fetch, so completed results are consumed promptly and only ~pool-size (15) raw box
   scores are live at once (~15-30 MB transient).
 
+### Why the futures list must not survive the loop
+
+The memory win above comes **entirely** from not retaining the futures, not from moving the parse.
+Moving the parse into the loop is what *lets* each box be dropped after it is consumed; not
+keeping the `futures` list (rule 1) is what *actually* drops it. Verified empirically with
+weakrefs on CPython 3.11:
+
+- **Named `futures` list kept** (the shape of both the current code and a naive streaming
+  refactor): after consuming 15 of 20 results, **all 15 are still alive** -- pinned via
+  `Future._result`. Setting the local `box = None` changes nothing.
+- **Comprehension passed straight to `as_completed`** (rule 1): after consuming 15 of 20, **0-1
+  are alive** -- `as_completed` drops each Future as it yields it, so only the current loop
+  variable can linger (and `del future, box` removes even that).
+
+A naive refactor that drops the `results` dict but still writes `futures = [pool.submit(...)]`
+would therefore have **the same ~1x-all-box-scores peak as today** and very likely OOM again at
+~650/805 -- which would falsely look like "streaming is insufficient, escalate to the batching
+fallback" when the real miss is the one-line futures-list pin.
+
 ### Verify-after-deploy
 
-- Confirm the refresh runs **off the gunicorn request thread** (the UI polls
-  `/api/refresh-status`, which implies a background worker; gunicorn `--timeout 120` would not
-  apply to a background thread). If the refresh is in fact synchronous in the request handler,
-  the killer is the 120 s timeout, not memory -- in which case streaming alone will not fix it
-  and the fallback (with checkpointing) is required. Confirm by watching whether the backfill now
-  runs past ~2 minutes to completion.
+- **Resolved (not just suspected): the refresh runs off the gunicorn request thread.**
+  `season_routes.py` spawns `threading.Thread(target=run_full_refresh, daemon=True)` and the route
+  returns immediately while the UI polls `/api/refresh-status`. `render.yaml` runs
+  `gunicorn wsgi:app --timeout 120` with **no `--workers`** flag (a single sync worker), so the
+  120 s `--timeout` governs the worker's accept-loop heartbeat -- which the background thread does
+  not block -- not the refresh. The worker restart in the evidence is the OOM killer taking the
+  whole process (and the daemon thread with it), not a request timeout. So the killer is memory,
+  the duration risk is low, and the memory budget is a single process. Still worth watching the
+  backfill run past ~2 minutes to completion as a sanity check.
 - After deploy + one refresh: `SCAN game_logs:2026:*` is non-empty, `game_logs:2026:fetched_through_utc`
   is set, Ohtani (`game_logs:2026:660271:*`) is present if he has played, and the Render memory
   metric stays under the 512 MB cap during the backfill.
@@ -208,8 +263,13 @@ insufficient.
 - Add a unit test for `_collect_player_rows` directly (patching `_fetch_boxscore`): given two
   games and canned box scores, it returns the expected hitting/pitching rows and dates; when
   `_fetch_boxscore` raises for one gamePk, that gamePk lands in `failed` and the other game is
-  still parsed. Assert the return holds only compact rows (no raw box-score dicts) -- the
-  structural guarantee that raw JSON is not retained.
+  still parsed.
+- Note the limit of that test: a "return holds only compact rows" assertion is **always** true
+  (the function returns compact rows regardless of how many box scores it pinned mid-loop), so it
+  does **not** catch the futures-retention regression. The thing that matters -- transient peak
+  memory during the loop -- is not reliably unit-testable: with a small fixture every box fits "in
+  flight," so retention vs. release is indistinguishable. The futures-list structure (rule 1) is
+  therefore guarded by code review and the explanatory comment in the collector, not by a test.
 - Memory is not unit-testable here; rely on the structural change plus the post-deploy Render
   memory metric.
 
@@ -223,10 +283,14 @@ accordingly.
 
 ## Risks
 
-- **Wrong root cause (duration, not memory):** if the backfill is synchronous in the request
-  thread, gunicorn's 120 s timeout kills it regardless of memory. Streaming would not fix that;
-  the batching + cursor fallback (durable per-batch progress) would. The verify-after-deploy step
-  distinguishes the two.
+- **Retaining the futures defeats the fix:** the single most likely way to ship this and still
+  OOM is to write `futures = [pool.submit(...)]` (the natural shape) and pin every box score
+  through `Future._result`. Guarded by rule 1, the `del future, box`, and the collector comment;
+  there is no test that would catch a regression here, so it must hold in review.
+- **Wrong root cause (duration, not memory):** ruled out -- the refresh runs on a daemon thread,
+  not the request handler, so gunicorn's 120 s timeout does not apply (see Verify-after-deploy).
+  If a future change moved the refresh back into the request path, the batching + cursor fallback
+  (durable per-batch progress) would be required instead.
 - **Completed-future buffering:** if the network is much faster than parsing, completed futures
   could buffer more than ~pool-size raw box scores. Mitigated by the wave-submission middle
   ground if observed.
