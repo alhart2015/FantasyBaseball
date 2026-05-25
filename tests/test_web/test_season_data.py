@@ -12,10 +12,11 @@ from fantasy_baseball.models.standings import (
     Standings,
     StandingsEntry,
 )
-from fantasy_baseball.utils.constants import Category
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
 from fantasy_baseball.web import season_data
 from fantasy_baseball.web.season_data import (
     CacheKey,
+    format_category_bars_for_display,
     format_lineup_for_display,
     format_monte_carlo_for_display,
     format_standings_for_display,
@@ -2055,3 +2056,77 @@ def test_build_trends_series_counting_delta_per_date_independent(fake_redis):
     assert teams["Alpha"]["stats"]["AVG"] == [0.260, 0.262]
     assert teams["Beta"]["stats"]["ERA"] == [3.50, 3.40]
     assert teams["Alpha"]["stats"]["WHIP"] == [1.30, 1.28]
+
+
+def _bars_display_dict():
+    """Two-team display dict in the shape format_standings_for_display emits.
+
+    Hart leads R (320 > 300) but trails ERA (3.20 vs 3.10 -> rival lower=better).
+    """
+    return {
+        "teams": [
+            {
+                "name": "Hart of the Order",
+                "team_key": "key_0",
+                "is_user": True,
+                "stats": CategoryStats(r=320, era=3.20),
+                "sds": {Category.R: 25.0, Category.ERA: 0.18},
+            },
+            {
+                "name": "SkeleThor",
+                "team_key": "key_1",
+                "is_user": False,
+                "stats": CategoryStats(r=300, era=3.10),
+                "sds": {Category.R: 30.0, Category.ERA: 0.15},
+            },
+        ]
+    }
+
+
+def test_category_bars_has_both_flavors_and_all_categories():
+    data = _bars_display_dict()
+    out = format_category_bars_for_display(data, data)
+    assert set(out.keys()) == {"preseason", "current"}
+    for flavor in ("preseason", "current"):
+        assert set(out[flavor].keys()) == {c.value for c in ALL_CATEGORIES}
+
+
+def test_category_bars_normal_category_sorts_best_on_top():
+    out = format_category_bars_for_display(_bars_display_dict(), _bars_display_dict())
+    runs = out["current"]["R"]
+    # Higher runs is better -> Hart (320) on top.
+    assert [r["team"] for r in runs] == ["Hart of the Order", "SkeleThor"]
+    assert runs[0]["value"] == 320
+    assert runs[0]["sd"] == 25.0
+    assert runs[0]["is_user"] is True
+
+
+def test_category_bars_inverse_category_sorts_lowest_on_top():
+    out = format_category_bars_for_display(_bars_display_dict(), _bars_display_dict())
+    era = out["current"]["ERA"]
+    # Lower ERA is better -> SkeleThor (3.10) on top.
+    assert [r["team"] for r in era] == ["SkeleThor", "Hart of the Order"]
+    assert era[0]["value"] == 3.10
+
+
+def test_category_bars_missing_sd_defaults_to_zero():
+    data = {
+        "teams": [
+            {
+                "name": "No SD Team",
+                "team_key": "k",
+                "is_user": False,
+                "stats": CategoryStats(hr=40),
+                "sds": {},  # no team_sds cached
+            }
+        ]
+    }
+    out = format_category_bars_for_display(data, data)
+    assert out["current"]["HR"][0]["sd"] == 0.0
+
+
+def test_category_bars_handles_missing_flavor():
+    """Pre-refresh: a flavor's display dict may be None."""
+    out = format_category_bars_for_display(None, _bars_display_dict())
+    assert out["preseason"] == {}
+    assert out["current"]["R"][0]["team"] == "Hart of the Order"
