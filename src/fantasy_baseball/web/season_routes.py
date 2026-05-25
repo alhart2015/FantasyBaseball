@@ -540,6 +540,46 @@ def register_routes(app: Flask) -> None:
             all_categories=ALL_CATEGORIES,
         )
 
+    @app.route("/api/il-return-plan")
+    def api_il_return_plan():
+        from fantasy_baseball.lineup.il_return_planner import plan_il_returns
+        from fantasy_baseball.models.player import Player
+
+        activate_param = request.args.get("activate", "")
+        activate_ids = {a for a in activate_param.split(",") if a}
+
+        roster_raw = read_cache_list(CacheKey.ROSTER)
+        if not roster_raw:
+            return jsonify({"error": "No roster data. Run a refresh first."}), 404
+        proj_cache = read_cache_dict(CacheKey.PROJECTIONS) or {}
+        ps_raw = proj_cache.get("projected_standings")
+        if not ps_raw:
+            return jsonify({"error": "No projected standings. Run a refresh first."}), 404
+
+        config = _load_config()
+        roster = [Player.from_dict(p) for p in roster_raw]
+        projected = _projected_from_cache(ps_raw)
+        team_sds = _team_sds_from_cache(proj_cache.get("team_sds"))
+        fr = proj_cache.get("fraction_remaining")
+        fr = 1.0 if fr is None else float(fr)
+
+        il_players = [p for p in roster if p.is_on_il()]
+        if activate_ids:
+            activating = [p for p in il_players if (p.yahoo_id or p.name) in activate_ids]
+        else:
+            activating = il_players
+
+        result = plan_il_returns(
+            roster,
+            activating,
+            config.roster_slots,
+            projected_standings=projected,
+            team_name=config.team_name,
+            fraction_remaining=fr,
+            team_sds=team_sds,
+        )
+        return jsonify(result.to_dict())
+
     @app.route("/waivers-trades")
     def waivers_trades():
         meta = read_meta()

@@ -51,11 +51,13 @@ class PitcherGameLog(TypedDict):
 GameLog = HitterGameLog | PitcherGameLog
 
 
-def parse_hitter_game_log(split: dict[str, Any]) -> HitterGameLog:
-    """Parse a single hitter game log entry from the MLB API."""
-    stat = split["stat"]
+def hitter_stats_from_statblock(stat: dict[str, Any]) -> dict[str, int]:
+    """Extract hitter counting stats from an MLB stat block.
+
+    Shared by the gameLog parser (``split["stat"]``) and the box-score
+    parser (``player["stats"]["batting"]``) -- both use these field names.
+    """
     return {
-        "date": split["date"],
         "pa": int(stat.get("plateAppearances", 0)),
         "ab": int(stat.get("atBats", 0)),
         "h": int(stat.get("hits", 0)),
@@ -66,18 +68,19 @@ def parse_hitter_game_log(split: dict[str, Any]) -> HitterGameLog:
     }
 
 
-def parse_pitcher_game_log(split: dict[str, Any]) -> PitcherGameLog:
-    """Parse a single pitcher game log entry from the MLB API."""
-    stat = split["stat"]
+def pitcher_stats_from_statblock(stat: dict[str, Any]) -> dict[str, float | int]:
+    """Extract pitcher counting stats from an MLB stat block.
+
+    Shared by the gameLog parser and the box-score parser. ``inningsPitched``
+    arrives as a string like ``"6.1"`` meaning 6 and 1/3 innings.
+    """
     ip_str = str(stat.get("inningsPitched", "0"))
-    # MLB API returns IP as "6.1" meaning 6 and 1/3
     if "." in ip_str:
         whole, frac = ip_str.split(".")
         ip = int(whole) + int(frac) / 3.0
     else:
         ip = float(ip_str)
     return {
-        "date": split["date"],
         "ip": round(ip, 4),
         "k": int(stat.get("strikeOuts", 0)),
         "er": int(stat.get("earnedRuns", 0)),
@@ -88,6 +91,16 @@ def parse_pitcher_game_log(split: dict[str, Any]) -> PitcherGameLog:
         "gs": int(stat.get("gamesStarted", 0)),
         "g": int(stat.get("gamesPlayed", 0)),
     }
+
+
+def parse_hitter_game_log(split: dict[str, Any]) -> HitterGameLog:
+    """Parse a single hitter game log entry from the MLB API."""
+    return {"date": split["date"], **hitter_stats_from_statblock(split["stat"])}  # type: ignore[typeddict-item]
+
+
+def parse_pitcher_game_log(split: dict[str, Any]) -> PitcherGameLog:
+    """Parse a single pitcher game log entry from the MLB API."""
+    return {"date": split["date"], **pitcher_stats_from_statblock(split["stat"])}  # type: ignore[typeddict-item]
 
 
 def fetch_player_game_log(mlbam_id: int, season: int, group: str = "hitting") -> list[GameLog]:
