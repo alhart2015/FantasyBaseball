@@ -1,7 +1,8 @@
 /* Category Bars: ranked dot-plot of all teams for one roto category, with
  * +/-1 SD error bars. Reads the JSON embedded by standings.html, renders into
  * #category-bars-canvas, and re-renders on category/projection change.
- * Data shape: { preseason: {CAT: [{team, value, sd, is_user}, ...]}, current: {...} }
+ * Data shape: { preseason: {CAT: {rows: [{team, value, sd, is_user}, ...],
+ *   odds: {first_pct, top3_pct, wins, opponents} | null}}, current: {...} }
  */
 (function () {
   "use strict";
