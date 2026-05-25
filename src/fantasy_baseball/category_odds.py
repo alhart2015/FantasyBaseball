@@ -47,6 +47,8 @@ class CategoryOdds:
 def _prob_opp_above(x: float, mu: float, sd: float) -> float:
     """P(an opponent ~ N(mu, sd) exceeds the fixed value x)."""
     if sd == 0.0:
+        # Degenerate (no projection uncertainty): step function, same
+        # convention as scoring._prob_beats's combined-SD==0 branch (0.5 tie).
         if mu > x:
             return 1.0
         if mu < x:
