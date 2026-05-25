@@ -1102,3 +1102,72 @@ def test_lineup_renders_dash_chip_when_no_streak_cache(client, kv_isolation) -> 
     assert resp.status_code == 200
     body = resp.data.decode()
     assert "streak-chip streak-neutral" in body
+
+
+def test_standings_embeds_category_bars_data(client, kv_isolation):
+    """When projections are cached, /standings embeds non-empty category-bars JSON."""
+    from fantasy_baseball.web import season_data
+
+    proj_standings_payload = {
+        "effective_date": "2026-04-01",
+        "teams": [
+            {
+                "name": "Hart of the Order",
+                "stats": {
+                    "R": 320,
+                    "HR": 90,
+                    "RBI": 290,
+                    "SB": 50,
+                    "AVG": 0.270,
+                    "W": 35,
+                    "K": 600,
+                    "SV": 25,
+                    "ERA": 3.50,
+                    "WHIP": 1.18,
+                },
+            },
+            {
+                "name": "SkeleThor",
+                "stats": {
+                    "R": 300,
+                    "HR": 85,
+                    "RBI": 295,
+                    "SB": 40,
+                    "AVG": 0.265,
+                    "W": 38,
+                    "K": 580,
+                    "SV": 30,
+                    "ERA": 3.40,
+                    "WHIP": 1.15,
+                },
+            },
+        ],
+    }
+    proj = {
+        "preseason_standings": proj_standings_payload,
+        "projected_standings": proj_standings_payload,
+        "preseason_team_sds": {
+            "Hart of the Order": {"R": 25.0, "ERA": 0.18},
+            "SkeleThor": {"R": 30.0, "ERA": 0.15},
+        },
+        "team_sds": {
+            "Hart of the Order": {"R": 25.0, "ERA": 0.18},
+            "SkeleThor": {"R": 30.0, "ERA": 0.15},
+        },
+        "fraction_remaining": 0.8,
+    }
+
+    standings = _mock_standings()
+    season_data.write_cache(CacheKey.STANDINGS, standings)
+    season_data.write_cache(CacheKey.PROJECTIONS, proj)
+    season_data.write_cache(CacheKey.META, {"last_refresh": "8:32 AM", "week": "3"})
+
+    with patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+        mock_cfg.return_value.team_name = "Hart of the Order"
+        resp = client.get("/standings")
+
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert 'id="category-bars-data"' in body
+    assert '"preseason"' in body
+    assert "Hart of the Order" in body

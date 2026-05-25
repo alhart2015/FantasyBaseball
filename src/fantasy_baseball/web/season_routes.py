@@ -26,6 +26,7 @@ from fantasy_baseball.scoring import team_sds_from_json
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, RATE_STATS, Category
 from fantasy_baseball.web.season_data import (
     CacheKey,
+    format_category_bars_for_display,
     read_cache_dict,
     read_cache_list,
     read_meta,
@@ -418,6 +419,10 @@ def register_routes(app: Flask) -> None:
                         raw_mc["rest_of_season"], config.team_name
                     )
 
+        category_bars = format_category_bars_for_display(
+            preseason_data, current_projected_data
+        )
+
         return render_template(
             "season/standings.html",
             meta=meta,
@@ -429,6 +434,7 @@ def register_routes(app: Flask) -> None:
             mc=mc_data,
             baseline_meta=baseline_meta,
             rest_of_season_mc=rest_of_season_mc_data,
+            category_bars=category_bars,
             categories=[c.value for c in ALL_CATEGORIES],
             all_categories=ALL_CATEGORIES,
         )
