@@ -369,3 +369,45 @@ def test_watermark_not_advanced_when_boxscore_fetch_fails(monkeypatch, fake_redi
     # The only game's box score failed -> nothing stored, watermark unchanged so it retries.
     assert redis_store.get_player_game_log(fake_redis, 2026, "660271", "hitting") is None
     assert redis_store.get_game_logs_watermark(fake_redis, 2026) == "2026-05-23T13:00:00+00:00"
+
+
+def test_collect_player_rows_parses_each_game(monkeypatch):
+    boxscores = {
+        100: {"teams": {"home": {"players": {"ID660271": _OHTANI}}, "away": {"players": {}}}},
+        101: {"teams": {"home": {"players": {"ID605141": _BETTS_MOPUP}}, "away": {"players": {}}}},
+    }
+    monkeypatch.setattr(mlb_game_logs, "_fetch_boxscore", lambda gp: boxscores[gp])
+    games = [_final(100, "2026-04-01"), _final(101, "2026-04-02")]
+
+    hitting, pitching, dates, failed = mlb_game_logs._collect_player_rows(games, None)
+
+    assert failed == set()
+    assert dates == {"2026-04-01", "2026-04-02"}
+    # Each player's rows are keyed by the gamePk they played in.
+    assert hitting["660271"]["name"] == "Shohei Ohtani"
+    assert hitting["660271"]["rows"][100]["ab"] == 3
+    assert hitting["605141"]["rows"][101]["h"] == 2
+    # Pitching is collected for everyone with a pitching block; the position-player
+    # mop-up filter is applied later in _sync, not in the collector.
+    assert set(pitching) == {"660271", "605141"}
+    assert pitching["660271"]["rows"][100]["k"] == 8
+
+
+def test_collect_player_rows_isolates_failed_gamepk(monkeypatch):
+    ok_box = {"teams": {"home": {"players": {"ID660271": _OHTANI}}, "away": {"players": {}}}}
+
+    def fetch(game_pk):
+        if game_pk == 101:
+            raise RuntimeError("boxscore 500")
+        return ok_box
+
+    monkeypatch.setattr(mlb_game_logs, "_fetch_boxscore", fetch)
+    games = [_final(100, "2026-04-01"), _final(101, "2026-04-02")]
+
+    hitting, _pitching, dates, failed = mlb_game_logs._collect_player_rows(games, None)
+
+    assert failed == {101}
+    # The failed game contributes no rows and no date; the other game still parses.
+    assert dates == {"2026-04-01"}
+    assert hitting["660271"]["rows"][100]["ab"] == 3
+    assert 101 not in hitting["660271"]["rows"]
