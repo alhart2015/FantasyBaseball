@@ -419,9 +419,7 @@ def register_routes(app: Flask) -> None:
                         raw_mc["rest_of_season"], config.team_name
                     )
 
-        category_bars = format_category_bars_for_display(
-            preseason_data, current_projected_data
-        )
+        category_bars = format_category_bars_for_display(preseason_data, current_projected_data)
 
         return render_template(
             "season/standings.html",
