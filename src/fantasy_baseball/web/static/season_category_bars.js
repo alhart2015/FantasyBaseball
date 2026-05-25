@@ -15,6 +15,33 @@
   var chart = null;
   var payload = null;
 
+  // Inline plugin: draw full-height dashed vertical lines at the user team's
+  // lower/upper bound (value -/+ sd) so every other team's dot and whiskers
+  // read directly against the user's band. Bounds are precomputed per render
+  // and read off chart.options so they track the active category/projection.
+  var userBoundsPlugin = {
+    id: "userBounds",
+    afterDatasetsDraw: function (chart) {
+      var ub = chart.options.plugins.userBounds;
+      if (!ub) return;
+      var xScale = chart.scales.x;
+      var area = chart.chartArea;
+      var c = chart.ctx;
+      c.save();
+      c.setLineDash([5, 4]);
+      c.lineWidth = 1.5;
+      c.strokeStyle = ub.color;
+      [ub.lo, ub.hi].forEach(function (v) {
+        var px = xScale.getPixelForValue(v);
+        c.beginPath();
+        c.moveTo(px, area.top);
+        c.lineTo(px, area.bottom);
+        c.stroke();
+      });
+      c.restore();
+    }
+  };
+
   function loadPayload() {
     var node = document.getElementById("category-bars-data");
     if (!node) return null;
@@ -65,8 +92,21 @@
     var hint = document.getElementById("catbars-hint");
     if (hint) hint.style.display = INVERSE_CATS[cat] ? "" : "none";
 
+    var userRow = null;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].is_user) {
+        userRow = rows[i];
+        break;
+      }
+    }
+    var userBounds =
+      userRow && userRow.sd > 0
+        ? { lo: userRow.value - userRow.sd, hi: userRow.value + userRow.sd, color: USER_COLOR }
+        : null;
+
     var config = {
       type: "scatterWithErrorBars",
+      plugins: [userBoundsPlugin],
       data: {
         labels: labels,
         datasets: [{
@@ -88,6 +128,7 @@
         maintainAspectRatio: false,
         plugins: {
           legend: { display: false },
+          userBounds: userBounds,
           tooltip: {
             callbacks: {
               label: function (ctx) {

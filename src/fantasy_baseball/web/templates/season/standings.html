@@ -245,8 +245,8 @@
         {% endfor %}
     </div>
 
-    <p id="catbars-hint" class="placeholder-text" style="display: none;">Lower is better.</p>
     <div class="catbars-wrapper"><canvas id="category-bars-canvas"></canvas></div>
+    <p id="catbars-hint" class="placeholder-text" style="display: none;">Lower is better.</p>
     <p id="catbars-empty" class="placeholder-text" style="display: none;">
         No projections available. Click "Refresh Data" first.
     </p>
@@ -572,6 +572,16 @@ document.addEventListener('DOMContentLoaded', () => {
     font-size: 0.9rem;
 }
 .catbars-wrapper { position: relative; height: 460px; margin-top: 0.75rem; }
+/* Category selector: 5 columns so the 10 cats fall on two rows (hitting on
+   top, pitching below) instead of one horizontally-scrolling strip. */
+#catbars-cat-toggle {
+    display: grid;
+    grid-template-columns: repeat(5, max-content);
+    column-gap: 6px;
+    row-gap: 4px;
+    border-bottom: none;
+}
+#catbars-cat-toggle .pill:first-child { padding-left: 18px; }
 .breakdown-status-badge {
     display: inline-block;
     padding: 2px 6px;
