@@ -1105,6 +1105,33 @@ def test_lineup_renders_dash_chip_when_no_streak_cache(client, kv_isolation) -> 
     assert "streak-chip streak-neutral" in body
 
 
+def test_standings_category_bars_empty_without_projections(client, kv_isolation):
+    """When PROJECTIONS are absent, /standings renders (200) and category-bars JSON is empty."""
+    from fantasy_baseball.web import season_data
+
+    standings = _mock_standings()
+    season_data.write_cache(CacheKey.STANDINGS, standings)
+    season_data.write_cache(CacheKey.META, {"last_refresh": "8:32 AM", "week": "3"})
+    # PROJECTIONS deliberately NOT seeded.
+
+    with patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+        mock_cfg.return_value.team_name = "Hart of the Order"
+        resp = client.get("/standings")
+
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+
+    match = re.search(
+        r'<script type="application/json" id="category-bars-data">(.*?)</script>',
+        body,
+        re.DOTALL,
+    )
+    assert match is not None, "category-bars-data script tag not found"
+    bars = json.loads(match.group(1))
+
+    assert bars == {"preseason": {}, "current": {}}
+
+
 def test_standings_embeds_category_bars_data(client, kv_isolation):
     """When projections are cached, /standings embeds non-empty category-bars JSON."""
     from fantasy_baseball.web import season_data
