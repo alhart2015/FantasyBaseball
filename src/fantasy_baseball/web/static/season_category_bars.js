@@ -113,21 +113,22 @@
   // has zero size while its view is display:none).
   window.renderCategoryBars = render;
 
-  window.catBarsSetProjection = function (el) {
-    document.querySelectorAll("#catbars-proj-toggle .pill").forEach(function (p) {
+  // Mark the clicked pill active within its group, update the matching state
+  // field, and re-render.
+  function setActivePill(groupSelector, stateKey, dataAttr, el) {
+    document.querySelectorAll(groupSelector + " .pill").forEach(function (p) {
       p.classList.remove("active");
     });
     el.classList.add("active");
-    state.projection = el.dataset.cbproj;
+    state[stateKey] = el.dataset[dataAttr];
     render();
+  }
+
+  window.catBarsSetProjection = function (el) {
+    setActivePill("#catbars-proj-toggle", "projection", "cbproj", el);
   };
 
   window.catBarsSetCategory = function (el) {
-    document.querySelectorAll("#catbars-cat-toggle .pill").forEach(function (p) {
-      p.classList.remove("active");
-    });
-    el.classList.add("active");
-    state.category = el.dataset.cbcat;
-    render();
+    setActivePill("#catbars-cat-toggle", "category", "cbcat", el);
   };
 })();
