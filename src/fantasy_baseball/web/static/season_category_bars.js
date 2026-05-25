@@ -57,15 +57,45 @@
     return String(Math.round(value));
   }
 
-  function rowsFor() {
-    if (!payload) return [];
+  function entryFor() {
+    if (!payload) return null;
     var flavor = payload[state.projection];
-    if (!flavor) return [];
-    return flavor[state.category] || [];
+    if (!flavor) return null;
+    return flavor[state.category] || null;
+  }
+
+  function rowsFor() {
+    var entry = entryFor();
+    return entry && entry.rows ? entry.rows : [];
+  }
+
+  function oddsFor() {
+    var entry = entryFor();
+    return entry ? entry.odds : null;
+  }
+
+  function setText(id, text) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = text;
+  }
+
+  function updateOdds() {
+    var box = document.getElementById("catbars-odds");
+    if (!box) return;
+    var odds = oddsFor();
+    if (!odds) {
+      box.style.display = "none";
+      return;
+    }
+    box.style.display = "";
+    setText("catbars-first", odds.first_pct + "%");
+    setText("catbars-top3", odds.top3_pct + "%");
+    setText("catbars-wins", odds.wins + "/" + odds.opponents);
   }
 
   function render() {
     if (payload == null) payload = loadPayload();
+    updateOdds();
     var rows = rowsFor();
     var canvas = document.getElementById("category-bars-canvas");
     var empty = document.getElementById("catbars-empty");
