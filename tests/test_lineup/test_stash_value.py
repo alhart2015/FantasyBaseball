@@ -354,6 +354,45 @@ def test_il_full_upgrade_recommends_dropping_weakest_stash(stash_fixture_il_full
     assert fa_row.stash_value == fa_row.gain - fa_row.cost
 
 
+def test_owned_candidates_have_zero_cost(stash_fixture_il_full):
+    """An owned player already holds his IL slot, so he pays no acquisition
+    cost: stash_value == gain, no recommended drop. (Regression: previously the
+    FA-acquisition cost was charged to owned players, yielding a confusing
+    negative stash_value even for a held arm.)"""
+    roster, standings, sds, slots, team, _weak = stash_fixture_il_full
+    result = score_stash_candidates(
+        roster=roster,
+        free_agents=[],
+        projected_standings=standings,
+        roster_slots=slots,
+        team_name=team,
+        team_sds=sds,
+        fraction_remaining=0.5,
+    )
+    owned = [c for c in result.candidates if c.owned]
+    assert owned, "expected owned IL candidates in the fixture"
+    for c in owned:
+        assert c.cost == 0.0, f"{c.name}: owned cost should be 0, got {c.cost}"
+        assert c.stash_value == c.gain
+        assert c.recommended_drop is None
+
+
+def test_no_injured_players_returns_empty_board(stash_fixture):
+    """No owned IL players and no injured FAs -> empty board, no optimizer work."""
+    roster, standings, sds, slots, team = stash_fixture  # all healthy
+    result = score_stash_candidates(
+        roster=roster,
+        free_agents=[],
+        projected_standings=standings,
+        roster_slots=slots,
+        team_name=team,
+        team_sds=sds,
+        fraction_remaining=0.5,
+    )
+    assert result.candidates == []
+    assert result.cutline_rank == slots.get("IL", 0)
+
+
 def test_open_il_slots_counts_true_il_slots_only(stash_fixture):
     roster, *_ = stash_fixture
     # With an empty IL, both IL slots are open.

@@ -19,13 +19,13 @@ the weakest owned IL stash he displaces.
 
 from __future__ import annotations
 
-import dataclasses
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from fantasy_baseball.lineup.band_format import band_class
 from fantasy_baseball.lineup.delta_roto import compute_delta_roto_band
+from fantasy_baseball.lineup.il_return_planner import _activate
 from fantasy_baseball.lineup.optimizer import (
     optimize_hitter_lineup,
     optimize_pitcher_lineup,
@@ -72,12 +72,6 @@ class StashResult:
             "candidates": [c.to_dict() for c in self.candidates],
             "warning": self.warning,
         }
-
-
-def _activate(p: Player) -> Player:
-    """Copy with IL signals cleared so the optimizer treats the player as
-    active-eligible. Identical to il_return_planner._activate."""
-    return dataclasses.replace(p, status="", selected_position=None)
 
 
 def _solve_active(
@@ -191,7 +185,7 @@ def _marginal_band(
     )
     p_hold = 1.0 - drop_band.p_positive
     return {
-        "mean": round(-drop_band.mean, 2) + 0.0,
+        "mean": round(-drop_band.mean, 2) + 0.0,  # + 0.0 flattens -0.0 -> 0.0 for JSON
         "sd": round(drop_band.sd, 2),
         "p_positive": round(p_hold, 3),
         "verdict": band_class(p_hold),
@@ -265,7 +259,7 @@ def _cost_and_drop(
     if not pool:
         return 0.0, None
     drop = min(pool, key=lambda p: gain_by_name.get(p.name, 0.0))
-    return gain_by_name.get(drop.name, 0.0), drop.name
+    return gain_by_name[drop.name], drop.name  # every owned stash was scored in pass 1
 
 
 def score_stash_candidates(
@@ -288,6 +282,13 @@ def score_stash_candidates(
     il_capacity = roster_slots.get("IL", 0)
     owned_il = _owned_il_stashes(roster)
     injured_fas = [fa for fa in free_agents if fa.is_on_il()]
+
+    # No injured players -> nothing to rank; skip the optimizer baseline entirely.
+    if not owned_il and not injured_fas:
+        return StashResult(
+            open_il_slots=_open_il_slots(roster, roster_slots),
+            cutline_rank=il_capacity,
+        )
 
     # before_active is identical for every candidate: the optimized lineup over
     # the counted (non-IL-slot) bodies, with NO candidate activated.
@@ -319,12 +320,18 @@ def score_stash_candidates(
     for player, owned in candidates_in:
         band = bands[player.name]
         gain = band["mean"]
-        cost, drop = _cost_and_drop(
-            player,
-            gain_by_name=gain_by_name,
-            roster=roster,
-            roster_slots=roster_slots,
-        )
+        # An owned player already holds his IL slot -- there is no acquisition
+        # cost, so his stash value is just his (drop-cost) gain. _cost_and_drop
+        # is only meaningful for a FA who must be slotted into a possibly-full IL.
+        if owned:
+            cost, drop = 0.0, None
+        else:
+            cost, drop = _cost_and_drop(
+                player,
+                gain_by_name=gain_by_name,
+                roster=roster,
+                roster_slots=roster_slots,
+            )
         scores.append(
             StashScore(
                 name=player.name,
