@@ -33,6 +33,7 @@ class CacheKey(StrEnum):
     POSITIONS = "positions"
     STANDINGS_BREAKDOWN = "standings_breakdown"
     STREAK_SCORES = "streak_scores"
+    STASH = "stash"
 
 
 def redis_key(key: CacheKey) -> str:
