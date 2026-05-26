@@ -2,10 +2,19 @@
 leverage-aware marginal active value, and allocate the scarce IL slots.
 
 Sibling of ``il_return_planner``: reuses the optimizer and the
-double-count-safe deltaRoto band. A candidate's Gain is the band mean of
-activating him into the optimized lineup (floored at ~0 when he can't crack
-it -- "no harm, no foul"). Cost is the IL-slot allocation cost: 0 when a slot
-is open, else the Gain of the weakest owned IL stash he displaces.
+double-count-safe deltaRoto band. A candidate's Gain depends on ownership,
+because the standings anchor (``ProjectedStandings.from_rosters``) is built
+with displacement over the FULL roster INCLUDING owned IL players:
+
+  * Injured FA -- the anchor excludes him, so Gain is the ADD-GAIN of
+    slotting him into the optimized lineup (band mean, ~0 when he can't crack
+    it -- "no harm, no foul").
+  * Owned IL stash -- the anchor already prices his ROS, so re-adding him
+    would double-count. Gain is instead the DROP-COST (how much you'd lose by
+    dropping him), mirroring ``il_return_planner``.
+
+Cost is the IL-slot allocation cost: 0 when a slot is open, else the Gain of
+the weakest owned IL stash he displaces.
 """
 
 from __future__ import annotations
@@ -15,6 +24,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from fantasy_baseball.lineup.band_format import band_class
 from fantasy_baseball.lineup.delta_roto import compute_delta_roto_band
 from fantasy_baseball.lineup.optimizer import (
     optimize_hitter_lineup,
@@ -34,7 +44,7 @@ class StashScore:
 
     name: str
     player_type: str
-    status: str  # IL10 / IL15 / IL60 / DTD / ...
+    status: str  # IL10 / IL15 / IL60 / ...
     owned: bool  # already on the user's roster
     gain: float  # marginal active value (deltaRoto band mean), floored at ~0
     cost: float  # deltaRoto sacrificed to roster him (0 if open IL slot)
@@ -102,11 +112,16 @@ def _solve_active(
 
 
 def _counted_pool(roster: list[Player], exclude_name: str | None = None) -> list[Player]:
-    """Active + bench bodies (everything not in a true IL slot), optionally
-    excluding one player by name."""
+    """Active + bench bodies with NO IL players, optionally excluding one
+    player by name.
+
+    Excludes by ``is_on_il()`` (status OR slot), not just slot: a
+    BN+IL-status player is on the IL even though he's not in a true IL slot,
+    so he must not leak into the active baseline. This matches candidate
+    selection (``_owned_il_stashes``) and the standings classifier."""
     out: list[Player] = []
     for p in roster:
-        if p.selected_position in IL_SLOTS:
+        if p.is_on_il():
             continue
         if exclude_name is not None and p.name == exclude_name:
             continue
@@ -117,6 +132,7 @@ def _counted_pool(roster: list[Player], exclude_name: str | None = None) -> list
 def _marginal_band(
     candidate: Player,
     *,
+    owned: bool,
     before_active: list[Player],
     roster: list[Player],
     roster_slots: dict[str, int],
@@ -125,19 +141,61 @@ def _marginal_band(
     team_sds: Mapping[str, Mapping[Category, float]] | None,
     fraction_remaining: float,
 ) -> dict[str, Any]:
-    """Return the deltaRoto band dict for activating ``candidate``."""
-    pool_with = [*_counted_pool(roster, exclude_name=candidate.name), _activate(candidate)]
-    after_active = _solve_active(pool_with, roster_slots, projected_standings, team_name, team_sds)
-    band = compute_delta_roto_band(
+    """Return the deltaRoto band dict for rostering ``candidate`` active.
+
+    The Gain depends on whether the candidate is already owned, because the
+    standings anchor row (``ProjectedStandings.from_rosters``) is built with
+    displacement over the FULL roster INCLUDING owned IL players -- so an
+    owned IL player's ROS is ALREADY priced into the anchor.
+
+    - FA candidate (``owned=False``): the anchor excludes him, so Gain is the
+      add-gain of slotting him in. ``before`` is the shared baseline (no
+      candidate) and ``after`` adds him.
+    - Owned IL candidate (``owned=True``): the anchor already includes him, so
+      re-adding him would double-count. Instead measure the DROP-COST -- how
+      much you'd lose by dropping him -- mirroring ``il_return_planner``, which
+      puts returning players into ``before_active`` so they cancel and the band
+      measures only the drop. ``before`` is the lineup WITH him active (matches
+      the anchor) and ``after`` is the baseline WITHOUT him; that deltaRoto is
+      negative, so the hold value is its negation.
+    """
+    field_stats = projected_standings.field_stats(team_name)
+    activated = _activate(candidate)
+    lineup_with = _solve_active(
+        [*_counted_pool(roster, exclude_name=candidate.name), activated],
+        roster_slots,
+        projected_standings,
+        team_name,
+        team_sds,
+    )
+    if not owned:
+        band = compute_delta_roto_band(
+            before_active,
+            lineup_with,
+            field_stats,
+            team_name,
+            fraction_remaining,
+            projected_standings=projected_standings,
+            team_sds=team_sds,
+        )
+        return band.to_dict()
+
+    drop_band = compute_delta_roto_band(
+        lineup_with,
         before_active,
-        after_active,
-        projected_standings.field_stats(team_name),
+        field_stats,
         team_name,
         fraction_remaining,
         projected_standings=projected_standings,
         team_sds=team_sds,
     )
-    return band.to_dict()
+    p_hold = 1.0 - drop_band.p_positive
+    return {
+        "mean": round(-drop_band.mean, 2),
+        "sd": round(drop_band.sd, 2),
+        "p_positive": round(p_hold, 3),
+        "verdict": band_class(p_hold),
+    }
 
 
 def _marginal_value(
@@ -150,10 +208,16 @@ def _marginal_value(
     team_name: str,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
     fraction_remaining: float,
+    owned: bool = False,
 ) -> float:
-    """Gain = band mean of activating ``candidate``. Floored at ~0."""
+    """Gain = band mean of rostering ``candidate`` active. Floored at ~0.
+
+    ``owned`` defaults to ``False`` (FA add-gain) for the test-only callers
+    that exercise the add-gain path; ``score_stash_candidates`` passes the
+    real flag through."""
     band = _marginal_band(
         candidate,
+        owned=owned,
         before_active=before_active,
         roster=roster,
         roster_slots=roster_slots,
@@ -186,27 +250,18 @@ def _cost_and_drop(
 ) -> tuple[float, str | None]:
     """Cost to roster ``candidate`` and the recommended drop.
 
-    - IL-eligible + open IL slot -> (0, None).
-    - IL-eligible + IL full -> displace the lowest-Gain owned IL stash
-      (IL-for-IL, the user's rule). Cost = that stash's Gain.
-    - Not IL-eligible (e.g. DTD) -> cannot use an IL slot; if an active/bench
-      body is open, (0, None), else displace the lowest-Gain active/bench body.
+    Every candidate is selected via ``is_on_il()`` (owned IL stashes + injured
+    FAs), so each one uses an IL slot:
+
+    - Open IL slot -> (0, None).
+    - IL full -> displace the lowest-Gain owned IL stash (IL-for-IL, the
+      user's rule). Cost = that stash's Gain.
     """
-    il_eligible = candidate.is_on_il()
-    if il_eligible and _open_il_slots(roster, roster_slots) > 0:
+    if _open_il_slots(roster, roster_slots) > 0:
         return 0.0, None
 
-    if il_eligible:
-        # Displace the weakest owned IL stash (exclude the candidate itself).
-        pool = [p for p in _owned_il_stashes(roster) if p.name != candidate.name]
-    else:
-        from fantasy_baseball.lineup.il_return_planner import roster_capacity
-
-        counted = _counted_pool(roster, exclude_name=candidate.name)
-        if len(counted) < roster_capacity(roster_slots):
-            return 0.0, None
-        pool = counted
-
+    # Displace the weakest owned IL stash (exclude the candidate itself).
+    pool = [p for p in _owned_il_stashes(roster) if p.name != candidate.name]
     if not pool:
         return 0.0, None
     drop = min(pool, key=lambda p: gain_by_name.get(p.name, 0.0))
@@ -245,9 +300,10 @@ def score_stash_candidates(
     candidates_in: list[tuple[Player, bool]] = [(p, True) for p in owned_il] + [
         (p, False) for p in injured_fas
     ]
-    for player, _owned in candidates_in:
+    for player, owned in candidates_in:
         bands[player.name] = _marginal_band(
             player,
+            owned=owned,
             before_active=before_active,
             roster=roster,
             roster_slots=roster_slots,
