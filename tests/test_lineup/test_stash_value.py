@@ -7,6 +7,7 @@ from fantasy_baseball.lineup.stash_value import (
     StashResult,
     StashScore,
     _activate,
+    _cost_and_drop,
     _counted_pool,
     _marginal_value,
     _open_il_slots,
@@ -17,6 +18,7 @@ from fantasy_baseball.lineup.stash_value import (
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.standings import ProjectedStandings
+from fantasy_baseball.scoring import build_team_sds
 
 EFFECTIVE_DATE = date(2026, 4, 1)
 
@@ -477,3 +479,139 @@ def test_owned_strong_il_arm_gain_is_drop_cost_not_double_count():
     # He genuinely cracks the nine, so the drop-cost is real (not ~0).
     assert expected_gain > 0.0
     assert row.gain == expected_gain
+
+
+# ---------------------------------------------------------------------------
+# v2: rate-upgrade-over-return-window gain (FA path).
+# See docs/superpowers/specs/2026-05-26-stash-value-rate-redesign-design.md
+# ---------------------------------------------------------------------------
+
+
+def _moderate_hitters():
+    """Nine user hitters at the SAME level as the opponents (r72/hr20/rbi72/
+    sb6/avg.265), so the user is on a coin-flip in every hitting category --
+    a rate upgrade tips it. Mirrors the contested production board."""
+    specs = [
+        ("C1", ["C"]),
+        ("1B1", ["1B"]),
+        ("2B1", ["2B"]),
+        ("3B1", ["3B"]),
+        ("SS1", ["SS"]),
+        ("OFa", ["OF"]),
+        ("OFb", ["OF"]),
+        ("OFc", ["OF"]),
+        ("UT", ["1B"]),
+    ]
+    out = []
+    for nm, pos in specs:
+        h = _hitter(nm, pos, r=72, hr=20, rbi=72, sb=6, avg=0.265, ab=510, h=135)
+        h.selected_position = Position.parse(pos[0])
+        out.append(h)
+    return out
+
+
+def _contested_rosters():
+    return {
+        TEAM_NAME: [*_moderate_hitters(), *_mediocre_staff()],
+        "Opp A": _opponent_roster("A", k_per_arm=720.0 / 9.0),
+        "Opp B": _opponent_roster("B", k_per_arm=720.0 / 9.0),
+    }
+
+
+@pytest.fixture
+def contested_fixture():
+    """User tied with the field in every hitting category, EV-scored, so any
+    real rate upgrade shows positive gain (no discrete-flip tuning needed)."""
+    rosters = _contested_rosters()
+    standings = ProjectedStandings.from_rosters(rosters, EFFECTIVE_DATE, fraction_remaining=0.5)
+    team_sds = build_team_sds(rosters, sd_scale=0.5**0.5)
+    return [*_moderate_hitters(), *_mediocre_staff()], standings, team_sds, STASH_SLOTS, TEAM_NAME
+
+
+def _low_volume_high_rate_hitter():
+    """120 ROS AB but elite per-AB rates. His SEASON TOTALS (12 HR) lose to a
+    healthy starter's 20, so the old total-volume model never slots him
+    (gain 0). The rate model credits his per-AB edge over the 120 AB he'll
+    actually play once back."""
+    h = _hitter("Rate Bat", ["1B"], ab=120, h=42, r=33, hr=12, rbi=36, sb=10, avg=0.350)
+    h.status = "IL15"
+    return h
+
+
+def test_injured_fa_hitter_rate_upgrade_beats_volume(contested_fixture):
+    """Core regression: a low-volume, high-rate injured FA hitter scores a
+    positive gain even though his season totals trail a healthy starter."""
+    roster, standings, sds, slots, team = contested_fixture
+    fa = _low_volume_high_rate_hitter()
+
+    result = score_stash_candidates(
+        roster=roster,
+        free_agents=[fa],
+        projected_standings=standings,
+        roster_slots=slots,
+        team_name=team,
+        team_sds=sds,
+        fraction_remaining=0.5,
+    )
+    row = next(c for c in result.candidates if c.name == "Rate Bat")
+
+    # Old model: exactly 0 (12 season HR can't out-total a 20-HR starter).
+    assert row.gain > 0.0
+    assert row.band["sd"] > 0.0  # the lineup actually changed -- a real swap
+
+
+def test_injured_fa_closer_rate_upgrade(contested_fixture):
+    """SV is just another per-volume rate: a low-IP, high-SV-rate closer beats
+    a starter who gets no saves over the closer's return window."""
+    roster, standings, sds, slots, team = contested_fixture
+    closer = _arm(
+        "Stash Closer", ip=40.0, k=55.0, sv=18.0, status="IL15", er=12.0, bb=12.0, h_allowed=28.0
+    )
+
+    result = score_stash_candidates(
+        roster=roster,
+        free_agents=[closer],
+        projected_standings=standings,
+        roster_slots=slots,
+        team_name=team,
+        team_sds=sds,
+        fraction_remaining=0.5,
+    )
+    row = next(c for c in result.candidates if c.name == "Stash Closer")
+    assert row.gain > 0.0
+
+
+def test_uncontested_fa_hitter_upgrade_is_zero(stash_fixture):
+    """Leverage still gates: when the user already wins the hitting cats
+    outright (.275/22HR vs the field's .265/20HR), a better-rate FA adds no
+    marginal roto points -> gain 0."""
+    roster, standings, sds, slots, team = stash_fixture
+    fa = _low_volume_high_rate_hitter()
+
+    result = score_stash_candidates(
+        roster=roster,
+        free_agents=[fa],
+        projected_standings=standings,
+        roster_slots=slots,
+        team_name=team,
+        team_sds=sds,
+        fraction_remaining=0.5,
+    )
+    row = next(c for c in result.candidates if c.name == "Rate Bat")
+    assert row.gain == 0.0
+
+
+def test_fa_cost_floored_at_zero():
+    """Displacing a net-negative owned IL stash must not CREDIT the candidate.
+    Cost floors at 0 -- kills the uniform -0.12 -> +0.12 artifact."""
+    weak = _arm("Weak Stash", ip=40.0, k=20.0, slot="IL", status="IL15")
+    fa = _arm("Some FA", ip=60.0, k=80.0, status="IL15")
+
+    cost, drop = _cost_and_drop(
+        fa,
+        gain_by_name={"Weak Stash": -0.12},
+        roster=[weak],
+        roster_slots={"IL": 1, "P": 9, "BN": 1},
+    )
+    assert cost == 0.0
+    assert drop == "Weak Stash"
