@@ -211,3 +211,81 @@ def _cost_and_drop(
         return 0.0, None
     drop = min(pool, key=lambda p: gain_by_name.get(p.name, 0.0))
     return gain_by_name.get(drop.name, 0.0), drop.name
+
+
+def score_stash_candidates(
+    roster: list[Player],
+    free_agents: list[Player],
+    projected_standings: ProjectedStandings,
+    roster_slots: dict[str, int],
+    team_name: str,
+    *,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
+    fraction_remaining: float,
+    max_candidates: int = 25,
+) -> StashResult:
+    """Rank injured players (owned IL + injured FAs) by stash value.
+
+    Gain = marginal active value (band mean, floored at ~0). Cost = IL-slot
+    allocation cost. stash_value = gain - cost, ranked descending. The top
+    ``IL`` -capacity candidates are worth a slot.
+    """
+    il_capacity = roster_slots.get("IL", 0)
+    owned_il = _owned_il_stashes(roster)
+    injured_fas = [fa for fa in free_agents if fa.is_on_il()]
+
+    # before_active is identical for every candidate: the optimized lineup over
+    # the counted (non-IL-slot) bodies, with NO candidate activated.
+    before_active = _solve_active(
+        _counted_pool(roster), roster_slots, projected_standings, team_name, team_sds
+    )
+
+    # Pass 1: Gain + band for every candidate (owned + FA).
+    bands: dict[str, dict[str, Any]] = {}
+    candidates_in: list[tuple[Player, bool]] = [(p, True) for p in owned_il] + [
+        (p, False) for p in injured_fas
+    ]
+    for player, _owned in candidates_in:
+        bands[player.name] = _marginal_band(
+            player,
+            before_active=before_active,
+            roster=roster,
+            roster_slots=roster_slots,
+            projected_standings=projected_standings,
+            team_name=team_name,
+            team_sds=team_sds,
+            fraction_remaining=fraction_remaining,
+        )
+    gain_by_name = {name: b["mean"] for name, b in bands.items()}
+
+    # Pass 2: Cost + stash value.
+    scores: list[StashScore] = []
+    for player, owned in candidates_in:
+        band = bands[player.name]
+        gain = band["mean"]
+        cost, drop = _cost_and_drop(
+            player,
+            gain_by_name=gain_by_name,
+            roster=roster,
+            roster_slots=roster_slots,
+        )
+        scores.append(
+            StashScore(
+                name=player.name,
+                player_type=player.player_type.value,
+                status=player.status,
+                owned=owned,
+                gain=round(gain, 2),
+                cost=round(cost, 2),
+                stash_value=round(gain - cost, 2),
+                band=band,
+                recommended_drop=drop,
+            )
+        )
+
+    scores.sort(key=lambda s: s.stash_value, reverse=True)
+    return StashResult(
+        open_il_slots=_open_il_slots(roster, roster_slots),
+        cutline_rank=il_capacity,
+        candidates=scores[:max_candidates],
+    )

@@ -8,6 +8,7 @@ from fantasy_baseball.lineup.stash_value import (
     _open_il_slots,
     _owned_il_stashes,
     _solve_active,
+    score_stash_candidates,
 )
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import Position
@@ -175,6 +176,41 @@ def stash_fixture():
     return roster, standings, team_sds, STASH_SLOTS, TEAM_NAME
 
 
+@pytest.fixture
+def stash_fixture_il_full(stash_fixture):
+    """``stash_fixture`` plus two owned IL stashes filling both IL slots.
+
+    Both IL stashes share the elite FA's IP/ER/BB/H_allowed so K is the only
+    lever. K tuning (mediocre active arms 70..78 < Weak 100 < Strong 115 <
+    elite FA 130) makes BOTH stashes crack the active nine when activated
+    (Gain > 0) while keeping Weak < Strong. Returns a 6-tuple ending in the
+    weak stash's name.
+    """
+    roster, standings, sds, slots, team = stash_fixture
+    weak = _arm(
+        "Weak Stash",
+        ip=90.0,
+        k=100.0,
+        slot="IL",
+        status="IL15",
+        er=28.0,
+        bb=22.0,
+        h_allowed=58.0,
+    )
+    strong = _arm(
+        "Strong Stash",
+        ip=90.0,
+        k=115.0,
+        slot="IL",
+        status="IL15",
+        er=28.0,
+        bb=22.0,
+        h_allowed=58.0,
+    )
+    roster = [*roster, weak, strong]
+    return roster, standings, sds, slots, team, weak.name
+
+
 def _band_mean(roster, candidate, standings, team_name, slots, sds):
     before = _solve_active(roster, slots, standings, team_name, sds)
     return _marginal_value(
@@ -248,6 +284,44 @@ def monkeypatched_il_roster(stash_fixture):
         "Injured Owned Arm", ip=80.0, k=95.0, status="IL15", er=25.0, bb=20.0, h_allowed=55.0
     )
     return [*roster, injured]
+
+
+def test_open_slot_stash_value_equals_gain_and_no_drop(stash_fixture):
+    roster, standings, sds, slots, team = stash_fixture  # empty IL
+    elite_fa = _make_elite_low_ip_pitcher()
+    result = score_stash_candidates(
+        roster=roster,
+        free_agents=[elite_fa],
+        projected_standings=standings,
+        roster_slots=slots,
+        team_name=team,
+        team_sds=sds,
+        fraction_remaining=0.5,
+    )
+    top = result.candidates[0]
+    assert top.name == elite_fa.name
+    assert top.cost == 0.0
+    assert top.stash_value == top.gain > 0.0
+    assert top.recommended_drop is None
+
+
+def test_il_full_upgrade_recommends_dropping_weakest_stash(stash_fixture_il_full):
+    # roster has 2 IL stashes: a strong one and a weak one; a better FA exists.
+    roster, standings, sds, slots, team, weak_stash_name = stash_fixture_il_full
+    better_fa = _make_elite_low_ip_pitcher()
+    result = score_stash_candidates(
+        roster=roster,
+        free_agents=[better_fa],
+        projected_standings=standings,
+        roster_slots=slots,
+        team_name=team,
+        team_sds=sds,
+        fraction_remaining=0.5,
+    )
+    fa_row = next(c for c in result.candidates if c.name == better_fa.name)
+    assert fa_row.recommended_drop == weak_stash_name
+    assert fa_row.cost > 0.0
+    assert fa_row.stash_value == fa_row.gain - fa_row.cost
 
 
 def test_open_il_slots_counts_true_il_slots_only(stash_fixture):
