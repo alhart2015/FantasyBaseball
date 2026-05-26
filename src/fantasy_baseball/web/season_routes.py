@@ -540,6 +540,22 @@ def register_routes(app: Flask) -> None:
             all_categories=ALL_CATEGORIES,
         )
 
+    @app.route("/stash")
+    def stash():
+        meta = read_meta()
+        payload = read_cache_dict(CacheKey.STASH) or {
+            "open_il_slots": 0,
+            "cutline_rank": 0,
+            "candidates": [],
+            "warning": None,
+        }
+        return render_template(
+            "season/stash.html",
+            meta=meta,
+            active_page="stash",
+            stash=payload,
+        )
+
     @app.route("/api/il-return-plan")
     def api_il_return_plan():
         from fantasy_baseball.lineup.il_return_planner import plan_il_returns

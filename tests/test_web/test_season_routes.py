@@ -1338,3 +1338,35 @@ def test_il_return_plan_route_returns_plan_shape(client, monkeypatch):
     assert isinstance(data["capacity"], int)
     # The IL-slot player is the one activated.
     assert data["activating"] == ["IL Guy"]
+
+
+def test_stash_route_renders_ranked_board(client, kv_isolation):
+    from fantasy_baseball.data.cache_keys import CacheKey
+    from fantasy_baseball.web import season_data
+
+    payload = {
+        "open_il_slots": 1,
+        "cutline_rank": 2,
+        "candidates": [
+            {
+                "name": "Blake Snell",
+                "player_type": "pitcher",
+                "status": "IL15",
+                "owned": False,
+                "gain": 4.2,
+                "cost": 0.0,
+                "stash_value": 4.2,
+                "band": {"mean": 4.2, "sd": 1.1, "p_positive": 0.91, "verdict": "real"},
+                "recommended_drop": None,
+            }
+        ],
+        "warning": None,
+    }
+    season_data.write_cache(CacheKey.STASH, payload)
+    season_data.write_cache(CacheKey.META, {"last_refresh": "9:00 AM"})
+
+    resp = client.get("/stash")
+    assert resp.status_code == 200
+    html = resp.data.decode()
+    assert "Blake Snell" in html
+    assert "Grab &amp; Stash" in html or "Grab & Stash" in html
