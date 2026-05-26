@@ -25,7 +25,7 @@ from fantasy_baseball.models.positions import IL_SLOTS
 from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.utils.constants import Category
 
-__all__ = ["StashScore", "StashResult", "score_stash_candidates"]
+__all__ = ["StashResult", "StashScore", "score_stash_candidates"]
 
 
 @dataclass
@@ -163,3 +163,51 @@ def _marginal_value(
         fraction_remaining=fraction_remaining,
     )
     return band["mean"]
+
+
+def _open_il_slots(roster: list[Player], roster_slots: dict[str, int]) -> int:
+    """IL capacity minus players currently in true IL slots."""
+    capacity = roster_slots.get("IL", 0)
+    occupied = sum(1 for p in roster if p.selected_position in IL_SLOTS)
+    return max(0, capacity - occupied)
+
+
+def _owned_il_stashes(roster: list[Player]) -> list[Player]:
+    """Owned players on the IL (slot or status)."""
+    return [p for p in roster if p.is_on_il()]
+
+
+def _cost_and_drop(
+    candidate: Player,
+    *,
+    gain_by_name: dict[str, float],
+    roster: list[Player],
+    roster_slots: dict[str, int],
+) -> tuple[float, str | None]:
+    """Cost to roster ``candidate`` and the recommended drop.
+
+    - IL-eligible + open IL slot -> (0, None).
+    - IL-eligible + IL full -> displace the lowest-Gain owned IL stash
+      (IL-for-IL, the user's rule). Cost = that stash's Gain.
+    - Not IL-eligible (e.g. DTD) -> cannot use an IL slot; if an active/bench
+      body is open, (0, None), else displace the lowest-Gain active/bench body.
+    """
+    il_eligible = candidate.is_on_il()
+    if il_eligible and _open_il_slots(roster, roster_slots) > 0:
+        return 0.0, None
+
+    if il_eligible:
+        # Displace the weakest owned IL stash (exclude the candidate itself).
+        pool = [p for p in _owned_il_stashes(roster) if p.name != candidate.name]
+    else:
+        from fantasy_baseball.lineup.il_return_planner import roster_capacity
+
+        counted = _counted_pool(roster, exclude_name=candidate.name)
+        if len(counted) < roster_capacity(roster_slots):
+            return 0.0, None
+        pool = counted
+
+    if not pool:
+        return 0.0, None
+    drop = min(pool, key=lambda p: gain_by_name.get(p.name, 0.0))
+    return gain_by_name.get(drop.name, 0.0), drop.name

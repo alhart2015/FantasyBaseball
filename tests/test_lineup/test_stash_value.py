@@ -5,6 +5,8 @@ from fantasy_baseball.lineup.stash_value import (
     StashScore,
     _activate,
     _marginal_value,
+    _open_il_slots,
+    _owned_il_stashes,
     _solve_active,
 )
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
@@ -237,3 +239,24 @@ def test_stash_result_to_dict_shape():
     assert d["cutline_rank"] == 2
     assert d["candidates"] == []
     assert d["warning"] is None
+
+
+@pytest.fixture
+def monkeypatched_il_roster(stash_fixture):
+    roster, *_ = stash_fixture
+    injured = _arm(
+        "Injured Owned Arm", ip=80.0, k=95.0, status="IL15", er=25.0, bb=20.0, h_allowed=55.0
+    )
+    return [*roster, injured]
+
+
+def test_open_il_slots_counts_true_il_slots_only(stash_fixture):
+    roster, *_ = stash_fixture
+    # With an empty IL, both IL slots are open.
+    assert _open_il_slots(roster, {"IL": 2}) == 2
+
+
+def test_owned_il_stashes_uses_is_on_il(monkeypatched_il_roster):
+    roster = monkeypatched_il_roster  # one player with status="IL15"
+    names = {p.name for p in _owned_il_stashes(roster)}
+    assert "Injured Owned Arm" in names
