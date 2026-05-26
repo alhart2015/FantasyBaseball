@@ -1342,3 +1342,75 @@ def test_il_return_plan_route_returns_plan_shape(client, monkeypatch):
     assert isinstance(data["capacity"], int)
     # The IL-slot player is the one activated.
     assert data["activating"] == ["IL Guy"]
+
+
+def test_stash_route_renders_ranked_board(client, kv_isolation):
+    from fantasy_baseball.data.cache_keys import CacheKey
+    from fantasy_baseball.web import season_data
+
+    payload = {
+        "open_il_slots": 1,
+        "cutline_rank": 2,
+        "candidates": [
+            {
+                "name": "Blake Snell",
+                "player_type": "pitcher",
+                "status": "IL15",
+                "owned": False,
+                "gain": 4.2,
+                "cost": 0.0,
+                "stash_value": 4.2,
+                "band": {"mean": 4.2, "sd": 1.1, "p_positive": 0.91, "verdict": "real"},
+                "recommended_drop": None,
+            }
+        ],
+        "warning": None,
+    }
+    season_data.write_cache(CacheKey.STASH, payload)
+    season_data.write_cache(CacheKey.META, {"last_refresh": "9:00 AM"})
+
+    resp = client.get("/stash")
+    assert resp.status_code == 200
+    html = resp.data.decode()
+    assert "Blake Snell" in html
+    assert "Grab &amp; Stash" in html or "Grab & Stash" in html
+
+
+def test_stash_below_cutline_owned_flagged_droppable(client, kv_isolation):
+    from fantasy_baseball.data.cache_keys import CacheKey
+    from fantasy_baseball.web import season_data
+
+    payload = {
+        "open_il_slots": 0,
+        "cutline_rank": 1,
+        "candidates": [
+            {
+                "name": "Better FA",
+                "player_type": "pitcher",
+                "status": "IL15",
+                "owned": False,
+                "gain": 5.0,
+                "cost": 1.0,
+                "stash_value": 4.0,
+                "band": {"mean": 4.0, "sd": 1.0, "p_positive": 0.9, "verdict": "real"},
+                "recommended_drop": "Weak Owned Stash",
+            },
+            {
+                "name": "Weak Owned Stash",
+                "player_type": "pitcher",
+                "status": "IL60",
+                "owned": True,
+                "gain": 1.0,
+                "cost": 0.0,
+                "stash_value": 1.0,
+                "band": {"mean": 1.0, "sd": 0.8, "p_positive": 0.6, "verdict": "lean"},
+                "recommended_drop": None,
+            },
+        ],
+        "warning": None,
+    }
+    season_data.write_cache(CacheKey.STASH, payload)
+    season_data.write_cache(CacheKey.META, {"last_refresh": "9:00 AM"})
+    html = client.get("/stash").data.decode()
+    assert "below-cutline" in html  # the weak owned stash is below the cutline
+    assert "Weak Owned Stash" in html

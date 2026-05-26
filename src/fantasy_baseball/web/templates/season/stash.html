@@ -1,0 +1,49 @@
+{% extends "season/base.html" %}
+{% block title %}IL Stash Board -- Season Dashboard{% endblock %}
+{% block content %}
+
+<div class="page-stash">
+<div class="page-header">
+    <h2>Grab &amp; Stash</h2>
+</div>
+
+<p class="muted">
+  Who deserves your {{ stash.cutline_rank }} IL slot(s).
+  Open IL slots: {{ stash.open_il_slots }}.
+</p>
+
+{% if stash.warning %}
+<p class="warning">{{ stash.warning }}</p>
+{% endif %}
+
+{% if not stash.candidates %}
+  <p>No injured candidates right now.</p>
+{% else %}
+<table class="stash-table">
+  <thead>
+    <tr>
+      <th>#</th><th>Player</th><th>Status</th><th>Owned</th>
+      <th>Stash value</th><th>Gain</th><th>Cost</th>
+      <th>P(helps)</th><th>Drop to add</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in stash.candidates %}
+    <tr class="{{ 'above-cutline' if loop.index <= stash.cutline_rank else 'below-cutline' }}">
+      <td>{{ loop.index }}</td>
+      <td>{{ c.name }}</td>
+      <td>{{ c.status }}</td>
+      <td>{{ 'yes' if c.owned else '-' }}</td>
+      <td>{{ '%.2f'|format(c.stash_value) }}</td>
+      <td>{{ '%.2f'|format(c.gain) }}</td>
+      <td>{{ '%.2f'|format(c.cost) }}</td>
+      <td>{{ '%.0f'|format(c.band.p_positive * 100) }}%</td>
+      <td>{{ c.recommended_drop or '-' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+</div>
+{% endblock %}

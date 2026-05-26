@@ -951,6 +951,7 @@ class RefreshRun:
         assert self.projected_standings is not None
         assert self.optimal_hitters is not None
         assert self.optimal_pitchers_starters is not None
+        assert self.fraction_remaining is not None
 
         self._progress("Running roster audit...")
         self.fa_players, _ = fetch_and_match_free_agents(
@@ -980,6 +981,38 @@ class RefreshRun:
         write_cache(CacheKey.ROSTER_AUDIT, [e.to_dict() for e in audit_results])
         upgrades = sum(1 for e in audit_results if e.gap > 0)
         self._progress(f"Roster audit: {upgrades} upgrade(s) found")
+
+        from fantasy_baseball.lineup.stash_value import StashResult, score_stash_candidates
+
+        # The stash board is a non-critical add-on. A failure here must NOT
+        # abort the rest of the refresh (Monte Carlo, standings, meta), so we
+        # degrade to an empty cached board and continue -- mirroring the
+        # streak-computation step.
+        try:
+            stash_result = score_stash_candidates(
+                self.roster_players,
+                self.fa_players,
+                self.projected_standings,
+                self.config.roster_slots,
+                self.config.team_name,
+                team_sds=self.team_sds,
+                fraction_remaining=self.fraction_remaining,
+            )
+            write_cache(CacheKey.STASH, stash_result.to_dict())
+            self._progress(f"Stash board: {len(stash_result.candidates)} injured candidate(s)")
+        except Exception:
+            log.exception("Stash board computation failed; caching empty board")
+            il_capacity = self.config.roster_slots.get("IL", 0)
+            write_cache(
+                CacheKey.STASH,
+                StashResult(
+                    open_il_slots=0,
+                    cutline_rank=il_capacity,
+                    candidates=[],
+                    warning="Stash board unavailable this refresh.",
+                ).to_dict(),
+            )
+            self._progress("Stash board: computation failed (empty board cached)")
 
     # --- Step 11: Compute per-team leverage ---
     def _compute_per_team_leverage(self):

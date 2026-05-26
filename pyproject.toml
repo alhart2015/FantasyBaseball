@@ -76,6 +76,7 @@ files = [
     "src/fantasy_baseball/draft/tracker.py",
     "src/fantasy_baseball/lineup/delta_roto.py",
     "src/fantasy_baseball/lineup/leverage.py",
+    "src/fantasy_baseball/lineup/stash_value.py",
     "src/fantasy_baseball/lineup/matchups.py",
     "src/fantasy_baseball/lineup/optimizer.py",
     "src/fantasy_baseball/lineup/roster_audit.py",
