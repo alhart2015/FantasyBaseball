@@ -75,6 +75,9 @@ tool will never even surface Snell as a pickup.
   replacement.
 - **No time-stepped Monte Carlo** with sampled return dates (Approach C, ruled
   out by the no-risk-discount decision).
+- **DTD / day-to-day players are out of scope.** `IL_STATUSES` excludes DTD/NA,
+  so `is_on_il()` is False for them and they never appear on the board. Only
+  IL-eligible players (IL10/15/60) are stash candidates.
 
 ## League context
 

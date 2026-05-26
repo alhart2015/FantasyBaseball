@@ -934,6 +934,65 @@ def test_refresh_pipeline_imports_without_duckdb() -> None:
     )
 
 
+class TestStashBoardDegradedMode:
+    """Regression guard: a failure in score_stash_candidates must NOT abort
+    the full refresh. The pipeline must degrade to an empty cached board and
+    continue writing all downstream cache keys (e.g. CacheKey.META)."""
+
+    def test_stash_failure_degrades_gracefully(
+        self,
+        configured_test_env,
+        fake_redis,
+        monkeypatch,
+        caplog,
+    ):
+        """score_stash_candidates raises -> refresh completes, empty board cached."""
+        import fantasy_baseball.lineup.stash_value as _stash_mod
+
+        monkeypatch.setattr(
+            _stash_mod,
+            "score_stash_candidates",
+            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        # Refresh must not raise even though stash computation fails.
+        with (
+            caplog.at_level("ERROR", logger="fantasy_baseball.web.refresh_pipeline"),
+            patched_refresh_environment(fake_redis),
+        ):
+            refresh_pipeline.run_full_refresh()
+
+        # A downstream cache key written AFTER _audit_roster must be present,
+        # proving the refresh continued past the failed stash step.
+        assert fake_redis.get(redis_key(CacheKey.META)) is not None, (
+            "CacheKey.META missing -- refresh must continue past stash failure"
+        )
+
+        # The stash cache must contain the empty-board sentinel.
+        raw = fake_redis.get(redis_key(CacheKey.STASH))
+        assert raw is not None, "CacheKey.STASH must be written even on failure"
+        import json
+
+        stash_data = json.loads(raw)
+        assert stash_data["candidates"] == [], (
+            f"Expected empty candidates list; got {stash_data['candidates']!r}"
+        )
+        assert stash_data["warning"] == "Stash board unavailable this refresh.", (
+            f"Expected warning message; got {stash_data.get('warning')!r}"
+        )
+
+        # The failure must have been logged (not silently swallowed).
+        def _record_carries_boom(r) -> bool:
+            if "boom" in r.getMessage():
+                return True
+            return bool(r.exc_info and "boom" in str(r.exc_info[1]))
+
+        assert any(_record_carries_boom(r) for r in caplog.records), (
+            "Expected the stash failure to be logged via log.exception; "
+            "got records: " + str([r.getMessage() for r in caplog.records])
+        )
+
+
 class _FakeConn:
     """Tiny stand-in for a DuckDB connection — only ``close()`` is exercised."""
 
