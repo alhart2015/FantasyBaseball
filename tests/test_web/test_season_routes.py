@@ -1373,21 +1373,35 @@ def test_stash_route_renders_ranked_board(client, kv_isolation):
 
 
 def test_stash_below_cutline_owned_flagged_droppable(client, kv_isolation):
-    from fantasy_baseball.web import season_data
     from fantasy_baseball.data.cache_keys import CacheKey
+    from fantasy_baseball.web import season_data
 
     payload = {
         "open_il_slots": 0,
         "cutline_rank": 1,
         "candidates": [
-            {"name": "Better FA", "player_type": "pitcher", "status": "IL15",
-             "owned": False, "gain": 5.0, "cost": 1.0, "stash_value": 4.0,
-             "band": {"mean": 4.0, "sd": 1.0, "p_positive": 0.9, "verdict": "real"},
-             "recommended_drop": "Weak Owned Stash"},
-            {"name": "Weak Owned Stash", "player_type": "pitcher", "status": "IL60",
-             "owned": True, "gain": 1.0, "cost": 0.0, "stash_value": 1.0,
-             "band": {"mean": 1.0, "sd": 0.8, "p_positive": 0.6, "verdict": "lean"},
-             "recommended_drop": None},
+            {
+                "name": "Better FA",
+                "player_type": "pitcher",
+                "status": "IL15",
+                "owned": False,
+                "gain": 5.0,
+                "cost": 1.0,
+                "stash_value": 4.0,
+                "band": {"mean": 4.0, "sd": 1.0, "p_positive": 0.9, "verdict": "real"},
+                "recommended_drop": "Weak Owned Stash",
+            },
+            {
+                "name": "Weak Owned Stash",
+                "player_type": "pitcher",
+                "status": "IL60",
+                "owned": True,
+                "gain": 1.0,
+                "cost": 0.0,
+                "stash_value": 1.0,
+                "band": {"mean": 1.0, "sd": 0.8, "p_positive": 0.6, "verdict": "lean"},
+                "recommended_drop": None,
+            },
         ],
         "warning": None,
     }

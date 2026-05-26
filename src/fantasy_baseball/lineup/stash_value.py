@@ -191,7 +191,7 @@ def _marginal_band(
     )
     p_hold = 1.0 - drop_band.p_positive
     return {
-        "mean": round(-drop_band.mean, 2),
+        "mean": round(-drop_band.mean, 2) + 0.0,
         "sd": round(drop_band.sd, 2),
         "p_positive": round(p_hold, 3),
         "verdict": band_class(p_hold),
@@ -226,7 +226,7 @@ def _marginal_value(
         team_sds=team_sds,
         fraction_remaining=fraction_remaining,
     )
-    return band["mean"]
+    return float(band["mean"])
 
 
 def _open_il_slots(roster: list[Player], roster_slots: dict[str, int]) -> int:

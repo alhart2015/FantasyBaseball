@@ -951,6 +951,7 @@ class RefreshRun:
         assert self.projected_standings is not None
         assert self.optimal_hitters is not None
         assert self.optimal_pitchers_starters is not None
+        assert self.fraction_remaining is not None
 
         self._progress("Running roster audit...")
         self.fa_players, _ = fetch_and_match_free_agents(
@@ -993,9 +994,7 @@ class RefreshRun:
             fraction_remaining=self.fraction_remaining,
         )
         write_cache(CacheKey.STASH, stash_result.to_dict())
-        self._progress(
-            f"Stash board: {len(stash_result.candidates)} injured candidate(s)"
-        )
+        self._progress(f"Stash board: {len(stash_result.candidates)} injured candidate(s)")
 
     # --- Step 11: Compute per-team leverage ---
     def _compute_per_team_leverage(self):
