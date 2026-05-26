@@ -1,20 +1,20 @@
 """Stash board -- rank injured players (owned IL + injured FAs) by their
 leverage-aware marginal active value, and allocate the scarce IL slots.
 
-Sibling of ``il_return_planner``: reuses the optimizer and the
-double-count-safe deltaRoto band. A candidate's Gain depends on ownership,
-because the standings anchor (``ProjectedStandings.from_rosters``) is built
-with displacement over the FULL roster INCLUDING owned IL players:
+Every candidate (owned IL or injured FA) is valued the SAME way: the best
+rate-over-return-window swap of his ROS rate for the W-window of the weakest
+eligible active player, scored against the user's HEALTHY ACTIVE LINEUP (every
+IL player excluded -- see ``_active_lineup_standings``). Because the baseline
+excludes ALL of the user's injured players, a candidate is a clean addition
+whether or not you already roster him -- no ownership-based double-count, and
+owned and FA candidates are directly comparable on one ranking.
 
-  * Injured FA -- the anchor excludes him, so Gain is the ADD-GAIN of
-    slotting him into the optimized lineup (band mean, ~0 when he can't crack
-    it -- "no harm, no foul").
-  * Owned IL stash -- the anchor already prices his ROS, so re-adding him
-    would double-count. Gain is instead the DROP-COST (how much you'd lose by
-    dropping him), mirroring ``il_return_planner``.
+A 100-AB injured bat is judged on the 100 ABs he'll actually play once healthy
+(rate over his return window), not his season total, so low-volume-but-elite
+players surface instead of being buried by playing-time-weighted totals.
 
-Cost is the IL-slot allocation cost: 0 when a slot is open, else the Gain of
-the weakest owned IL stash he displaces.
+Cost is the IL-slot allocation cost: 0 when a slot is open, else the (floored)
+Gain of the weakest owned IL stash he displaces.
 """
 
 from __future__ import annotations
@@ -26,14 +26,17 @@ from typing import Any
 
 from fantasy_baseball.lineup.band_format import band_class
 from fantasy_baseball.lineup.delta_roto import DeltaRotoBand, compute_delta_roto_band
-from fantasy_baseball.lineup.il_return_planner import _activate
 from fantasy_baseball.lineup.optimizer import (
     optimize_hitter_lineup,
     optimize_pitcher_lineup,
 )
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS
-from fantasy_baseball.models.standings import CategoryStats, ProjectedStandings
+from fantasy_baseball.models.standings import (
+    CategoryStats,
+    ProjectedStandings,
+    ProjectedStandingsEntry,
+)
 from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
@@ -214,8 +217,9 @@ def _best_swap_band(
     score it through the leverage-aware deltaRoto band. Gain is the best such
     swap, floored at 0 ("no harm, no foul" if he upgrades no one).
 
-    FA-only: owned IL players are already priced into the ``from_rosters``
-    anchor via displacement and use the drop-cost path instead (PR #101).
+    Used for owned IL players and FAs alike. The caller passes the
+    healthy-active-lineup baseline (``_marginal_band``), which excludes every IL
+    player, so the candidate is a clean addition regardless of ownership.
     """
     w = _ros_volume(candidate)
     if w <= 0.0:
@@ -247,92 +251,81 @@ def _best_swap_band(
     return best.to_dict()
 
 
+def _active_lineup_standings(
+    before_active: list[Player],
+    projected_standings: ProjectedStandings,
+    team_name: str,
+) -> ProjectedStandings:
+    """Standings whose USER row is the healthy active lineup only (ALL of the
+    user's injured players excluded), opponents unchanged.
+
+    This is the shared baseline every candidate is valued against. Because it
+    excludes every IL player, an owned IL candidate is a clean addition just
+    like a free agent -- no ownership-based double-count -- so owned and FA
+    candidates land on one comparable scale. Full-season source matches the
+    opponents' ``from_rosters`` rows so leverage (who's contesting which
+    category) is computed on the same basis.
+    """
+    from fantasy_baseball.scoring import project_team_stats
+
+    user_row = project_team_stats(before_active, projection_source="full_season_projection")
+    entries = [
+        ProjectedStandingsEntry(team_name=e.team_name, stats=user_row)
+        if e.team_name == team_name
+        else e
+        for e in projected_standings.entries
+    ]
+    return ProjectedStandings(effective_date=projected_standings.effective_date, entries=entries)
+
+
 def _marginal_band(
     candidate: Player,
     *,
-    owned: bool,
     before_active: list[Player],
-    roster: list[Player],
-    roster_slots: dict[str, int],
     projected_standings: ProjectedStandings,
     team_name: str,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
     fraction_remaining: float,
 ) -> dict[str, Any]:
-    """Return the deltaRoto band dict for ``candidate``'s stash Gain.
+    """deltaRoto band dict for ``candidate``'s stash Gain.
 
-    - FA candidate (``owned=False``): Gain is the rate-upgrade-over-return-window
-      value -- the best swap of his ROS rate for the W-window of the weakest
-      eligible active player (see ``_best_swap_band``). This is why an injured
-      player with little remaining VOLUME but a strong RATE still scores: a
-      100-AB bat is judged on the 100 ABs he'll play, not his season total.
-    - Owned IL candidate (``owned=True``): the ``ProjectedStandings.from_rosters``
-      anchor already prices his ROS via displacement, so re-adding him would
-      double-count (PR #101). Measure the DROP-COST instead -- the lineup WITH
-      him active vs the baseline WITHOUT -- and negate it for the hold value.
+    Owned IL players and injured FAs are valued identically: the best
+    rate-upgrade-over-return-window swap of the candidate's ROS rate for the
+    W-window of the weakest eligible active player (``_best_swap_band``),
+    scored against the user's HEALTHY ACTIVE LINEUP
+    (``_active_lineup_standings``). That baseline excludes every IL player, so a
+    candidate is a clean addition whether or not you already roster him -- no
+    double-count, and the whole board is one comparable ranking. An injured
+    player with little remaining VOLUME but a strong RATE still scores: a 100-AB
+    bat is judged on the 100 ABs he'll play, not his season total.
     """
-    field_stats = projected_standings.field_stats(team_name)
-
-    if not owned:
-        return _best_swap_band(
-            candidate,
-            before_active=before_active,
-            field_stats=field_stats,
-            projected_standings=projected_standings,
-            team_name=team_name,
-            team_sds=team_sds,
-            fraction_remaining=fraction_remaining,
-        )
-
-    activated = _activate(candidate)
-    lineup_with = _solve_active(
-        [*_counted_pool(roster, exclude_name=candidate.name), activated],
-        roster_slots,
-        projected_standings,
-        team_name,
-        team_sds,
-    )
-    drop_band = compute_delta_roto_band(
-        lineup_with,
-        before_active,
-        field_stats,
-        team_name,
-        fraction_remaining,
-        projected_standings=projected_standings,
+    baseline = _active_lineup_standings(before_active, projected_standings, team_name)
+    return _best_swap_band(
+        candidate,
+        before_active=before_active,
+        field_stats=baseline.field_stats(team_name),
+        projected_standings=baseline,
+        team_name=team_name,
         team_sds=team_sds,
+        fraction_remaining=fraction_remaining,
     )
-    p_hold = 1.0 - drop_band.p_positive
-    return {
-        "mean": round(-drop_band.mean, 2) + 0.0,  # + 0.0 flattens -0.0 -> 0.0 for JSON
-        "sd": round(drop_band.sd, 2),
-        "p_positive": round(p_hold, 3),
-        "verdict": band_class(p_hold),
-    }
 
 
 def _marginal_value(
     candidate: Player,
     *,
     before_active: list[Player],
-    roster: list[Player],
-    roster_slots: dict[str, int],
     projected_standings: ProjectedStandings,
     team_name: str,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
     fraction_remaining: float,
-    owned: bool = False,
 ) -> float:
-    """Gain = band mean of rostering ``candidate`` active. Floored at ~0.
+    """Gain = band mean of the candidate's best rate-swap. Floored at ~0.
 
-    ``owned`` defaults to ``False`` (FA add-gain) for the test-only callers
-    that exercise the add-gain path; ``score_stash_candidates`` passes the
-    real flag through."""
+    Thin wrapper over ``_marginal_band`` for the test-only callers."""
     band = _marginal_band(
         candidate,
-        owned=owned,
         before_active=before_active,
-        roster=roster,
-        roster_slots=roster_slots,
         projected_standings=projected_standings,
         team_name=team_name,
         team_sds=team_sds,
@@ -423,13 +416,10 @@ def score_stash_candidates(
     candidates_in: list[tuple[Player, bool]] = [(p, True) for p in owned_il] + [
         (p, False) for p in injured_fas
     ]
-    for player, owned in candidates_in:
+    for player, _owned in candidates_in:
         bands[player.name] = _marginal_band(
             player,
-            owned=owned,
             before_active=before_active,
-            roster=roster,
-            roster_slots=roster_slots,
             projected_standings=projected_standings,
             team_name=team_name,
             team_sds=team_sds,

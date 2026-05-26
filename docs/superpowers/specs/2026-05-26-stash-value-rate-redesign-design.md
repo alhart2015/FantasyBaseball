@@ -115,3 +115,24 @@ band(C)         = the band of the argmax swap (mean/sd/p_positive/verdict)
 - Full-season-rate option (we use ROS rates, per decision).
 - Re-optimizing the whole lineup around C (we do best pairwise swap, which matches the
   "replace player X" framing and avoids the volume-based optimizer trap).
+
+## Revision (same day): unified baseline -- owned IL valued like FAs
+
+The first cut kept owned IL players on the legacy drop-cost path (FA-only rate
+swap) to dodge the PR #101 double-count. In practice that made owned and FA
+candidates incomparable: a worse FA closer (Emilio Pagan) outranked a better
+owned closer (Josh Hader) purely because they were scored by different models.
+
+Fix: value **every** candidate (owned IL + injured FA) by the same rate-swap,
+against one shared baseline -- the user's **healthy active lineup** with ALL of
+the user's IL players excluded (`_active_lineup_standings`, full-season source
+to match the opponents' `from_rosters` rows). Because the baseline excludes
+every injured player, a candidate is a clean addition whether or not you
+already roster him, so there is no ownership-based double-count and the board
+is one comparable ranking. This removed the owned/FA branch, the per-candidate
+anchor rebuild, and the `_activate`/`_solve_active`-based drop-cost entirely.
+
+Guard: `test_owned_and_fa_player_get_equal_gain` -- the same closer scored as an
+owned IL stash and as a free agent gets equal gain (team_sds=None isolates the
+path from the two rosters' legitimately-different per-team SDs). If owned were
+re-added on top of a baseline that already counted it, the gains would diverge.
