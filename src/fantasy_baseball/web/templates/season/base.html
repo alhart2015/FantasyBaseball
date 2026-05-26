@@ -41,6 +41,10 @@
                class="nav-link {% if active_page == 'roster_audit' %}active{% endif %}">
                 <span class="diamond"></span>Roster Audit
             </a>
+            <a href="{{ url_for('stash') }}"
+               class="nav-link {% if active_page == 'stash' %}active{% endif %}">
+                <span class="diamond"></span>Grab &amp; Stash
+            </a>
             <a href="{{ url_for('waivers_trades') }}"
                class="nav-link {% if active_page == 'waivers_trades' %}active{% endif %}">
                 <span class="diamond"></span>Trades
