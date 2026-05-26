@@ -62,6 +62,7 @@ class TestRefreshShape:
             CacheKey.TRANSACTION_ANALYZER,
             CacheKey.META,
             CacheKey.OPP_ROSTERS,
+            CacheKey.STASH,
         ]
         for key in expected_keys:
             assert fake_redis.get(redis_key(key)) is not None, f"Missing cache key: {key}"

@@ -981,6 +981,22 @@ class RefreshRun:
         upgrades = sum(1 for e in audit_results if e.gap > 0)
         self._progress(f"Roster audit: {upgrades} upgrade(s) found")
 
+        from fantasy_baseball.lineup.stash_value import score_stash_candidates
+
+        stash_result = score_stash_candidates(
+            self.roster_players,
+            self.fa_players,
+            self.projected_standings,
+            self.config.roster_slots,
+            self.config.team_name,
+            team_sds=self.team_sds,
+            fraction_remaining=self.fraction_remaining,
+        )
+        write_cache(CacheKey.STASH, stash_result.to_dict())
+        self._progress(
+            f"Stash board: {len(stash_result.candidates)} injured candidate(s)"
+        )
+
     # --- Step 11: Compute per-team leverage ---
     def _compute_per_team_leverage(self):
         from fantasy_baseball.lineup.leverage import calculate_leverage
