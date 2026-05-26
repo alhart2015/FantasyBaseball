@@ -40,6 +40,49 @@ def local_kv(tmp_path) -> SqliteKVStore:
     return SqliteKVStore(tmp_path / "local.db")
 
 
+class _CountingKV:
+    """Wraps a ``KVStore`` and counts ``get`` vs ``mget`` calls.
+
+    Used to pin the read strategy of the sync: with ~1,300 prod keys, a
+    per-key ``get`` over the network made ``run_season_dashboard`` hang
+    for minutes. The sync must batch reads with ``mget`` instead.
+    """
+
+    def __init__(self, inner: SqliteKVStore):
+        self._inner = inner
+        self.get_calls = 0
+        self.mget_calls = 0
+
+    def get(self, key):
+        self.get_calls += 1
+        return self._inner.get(key)
+
+    def mget(self, *keys):
+        self.mget_calls += 1
+        return self._inner.mget(*keys)
+
+    def set(self, key, value, *, ex=None):
+        return self._inner.set(key, value, ex=ex)
+
+    def delete(self, key):
+        return self._inner.delete(key)
+
+    def keys(self, pattern):
+        return self._inner.keys(pattern)
+
+    def hget(self, hash_name, field):
+        return self._inner.hget(hash_name, field)
+
+    def hset(self, hash_name, field, value):
+        return self._inner.hset(hash_name, field, value)
+
+    def hkeys(self, hash_name):
+        return self._inner.hkeys(hash_name)
+
+    def hgetall(self, hash_name):
+        return self._inner.hgetall(hash_name)
+
+
 def test_copies_string_keys(remote_kv, local_kv):
     remote_kv.set("positions", '{"a": ["OF"]}')
     remote_kv.set("cache:standings", '{"x": 1}')
@@ -50,6 +93,64 @@ def test_copies_string_keys(remote_kv, local_kv):
     assert local_kv.get("cache:standings") == '{"x": 1}'
     assert stats.string_keys == 2
     assert stats.hash_keys == 0
+
+
+def test_string_sync_uses_batched_mget_not_per_key_get(remote_kv, local_kv):
+    """Regression: reads must be batched with mget, not one round-trip
+    per key. A 250-key remote should produce zero per-key gets and only
+    a handful of mget calls -- the original per-key loop made the startup
+    sync grind through ~1,360 sequential HTTPS GETs against Upstash."""
+    for i in range(250):
+        remote_kv.set(f"cache:k{i}", str(i))
+
+    spy = _CountingKV(remote_kv)
+    stats = sync_remote_to_local(remote=spy, local=local_kv)
+
+    # Every value still copied, in order, with correct values.
+    assert stats.string_keys == 250
+    assert local_kv.get("cache:k0") == "0"
+    assert local_kv.get("cache:k123") == "123"
+    assert local_kv.get("cache:k249") == "249"
+
+    # The load-bearing assertion: batched, not per-key.
+    assert spy.get_calls == 0
+    assert 1 <= spy.mget_calls <= 5
+
+
+def test_mget_splits_oversized_batch_and_copies_all(remote_kv, local_kv):
+    """Upstash caps a REST request at 10 MB; large game-log values can
+    push a batch over. The sync must halve and retry, not fail -- every
+    value still lands, with no fallback to per-key gets."""
+    for i in range(120):
+        remote_kv.set(f"cache:k{i}", str(i))
+
+    class _OverflowKV(_CountingKV):
+        def mget(self, *keys):
+            if len(keys) > 20:  # stand in for the 10 MB request cap
+                raise RuntimeError("ERR max request size exceeded")
+            return super().mget(*keys)
+
+    spy = _OverflowKV(remote_kv)
+    stats = sync_remote_to_local(remote=spy, local=local_kv)
+
+    assert stats.string_keys == 120
+    assert local_kv.get("cache:k0") == "0"
+    assert local_kv.get("cache:k119") == "119"
+    assert spy.get_calls == 0
+
+
+def test_mget_reraises_persistent_backend_error(remote_kv, local_kv):
+    """A real outage must surface, not loop forever: once a batch can't
+    be split further the error propagates."""
+    remote_kv.set("cache:a", "1")
+    remote_kv.set("cache:b", "2")
+
+    class _BrokenKV(_CountingKV):
+        def mget(self, *keys):
+            raise RuntimeError("upstash down")
+
+    with pytest.raises(RuntimeError, match="upstash down"):
+        sync_remote_to_local(remote=_BrokenKV(remote_kv), local=local_kv)
 
 
 def test_copies_hash_keys(remote_kv, local_kv):

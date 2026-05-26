@@ -7,6 +7,7 @@ the dashboard reads the same state the Render app writes. Skip with
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +16,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from fantasy_baseball.data.kv_store import is_remote
 from fantasy_baseball.data.kv_sync import sync_remote_to_local
 from fantasy_baseball.web.season_app import create_app
+
+
+def _should_run_sync(no_sync: bool) -> bool:
+    """Whether to run the remote->local KV sync on startup.
+
+    Runs exactly once. Skipped when ``--no-sync`` was passed, on Render
+    (where the Upstash KV is authoritative and there's nothing to sync
+    to), or inside Flask's debug-reloader child process
+    (``WERKZEUG_RUN_MAIN=true``). Without the reloader guard, ``main()``
+    executes in both the reloader supervisor and the child, so the sync
+    -- ~1,300+ network reads -- would fire twice per startup.
+    """
+    if no_sync or is_remote():
+        return False
+    # In the reloader child WERKZEUG_RUN_MAIN=="true"; only the supervisor syncs.
+    return os.environ.get("WERKZEUG_RUN_MAIN") != "true"
 
 
 def main() -> int:
@@ -32,7 +49,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if not args.no_sync and not is_remote():
+    if _should_run_sync(args.no_sync):
         print("Syncing remote Upstash KV → local SQLite...")
         stats = sync_remote_to_local()
         print(f"  synced: {stats.summary()}")
