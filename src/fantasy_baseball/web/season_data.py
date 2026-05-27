@@ -374,7 +374,8 @@ def build_opponent_lineup(
 
     Returns:
         Dict with "hitters" and "pitchers" lists, each entry containing
-        projection stats, pace data, and per-player SGP.
+        projection stats, pace data, and per-player ROS-based SGP (matching the
+        user lineup; falls back to 0.0 when no ROS projection matches).
     """
     from fantasy_baseball.analysis.pace import compute_overall_pace, compute_player_pace
     from fantasy_baseball.data.projections import match_roster_to_projections
@@ -413,8 +414,6 @@ def build_opponent_lineup(
     matched_names = set()
     enriched = []
     for player in matched:
-        if player.rest_of_season is not None:
-            player.rest_of_season.compute_sgp()
         norm = normalize_name(player.name)
         matched_names.add(norm)
 
@@ -423,20 +422,26 @@ def build_opponent_lineup(
             player.rank = RankInfo.from_dict(rank_data)
 
         entry = player.to_flat_dict()
-        entry.setdefault("sgp", 0.0)
+        entry.setdefault("sgp", 0.0)  # ROS-less fallback; overwritten below when ROS exists
         entry["delta_roto"] = None  # opponent rows don't have a swap delta
 
-        # ROS projection tooltip data — overwrite both nested ros dict AND the flat
-        # stat keys, so the lineup template's `h[rest_of_season_key]` access pattern
-        # reflects ROS-source projections (not the blended preseason from to_flat_dict).
+        # ROS projection: overwrite the SGP, the nested ros dict, AND the flat stat
+        # keys so both the `sgp` column and the `h[rest_of_season_key]` tooltips
+        # reflect ROS-source projections, not the blended preseason from
+        # to_flat_dict. SGP MUST be ROS-based to match the user lineup
+        # (format_lineup_for_display): the preseason blend carries a full-season
+        # line, ~2x a starter's remaining-season value, so sourcing SGP from it
+        # made the opponent column an apples-to-oranges comparison.
         rest_of_season_entry = rest_of_season_lookup.get(norm)
         if rest_of_season_entry and rest_of_season_entry.rest_of_season:
+            ros_stats = rest_of_season_entry.rest_of_season
+            entry["sgp"] = ros_stats.compute_sgp()
             ros_keys = (
                 ["r", "hr", "rbi", "sb", "avg"]
                 if player.player_type == PlayerType.HITTER
                 else ["w", "k", "sv", "era", "whip", "ip"]
             )
-            ros_dict = {k: getattr(rest_of_season_entry.rest_of_season, k, 0) for k in ros_keys}
+            ros_dict = {k: getattr(ros_stats, k, 0) for k in ros_keys}
             entry["rest_of_season"] = ros_dict
             entry.update(ros_dict)
 
