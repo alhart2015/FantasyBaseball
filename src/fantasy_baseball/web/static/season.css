@@ -3404,9 +3404,9 @@ td[style*="--neg"] {
     color: var(--ink);
     vertical-align: middle;
 }
-/* Numeric columns (stash value, gain, cost, P(helps)) right-align. */
-.page-stash .stash-table th:nth-child(n+5):nth-child(-n+8),
-.page-stash .stash-table td:nth-child(n+5):nth-child(-n+8) {
+/* Numeric columns (Value, P(helps)) right-align. */
+.page-stash .stash-table th:nth-child(n+5):nth-child(-n+6),
+.page-stash .stash-table td:nth-child(n+5):nth-child(-n+6) {
     text-align: right;
 }
 /* Rank column -- positional-label treatment, like the slot col on audit. */
@@ -3426,8 +3426,8 @@ td[style*="--neg"] {
     font-variation-settings: "opsz" 30;
     color: var(--ink);
 }
-/* Stash value (col 5) is the ranking metric -- give it weight. */
-.page-stash .stash-table tbody td:nth-child(5) {
+/* P(helps) (col 6) is the ranking metric -- give it weight. */
+.page-stash .stash-table tbody td:nth-child(6) {
     font-weight: 700;
     color: var(--ink);
 }
