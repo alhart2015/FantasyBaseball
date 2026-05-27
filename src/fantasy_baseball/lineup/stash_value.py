@@ -13,8 +13,11 @@ A 100-AB injured bat is judged on the 100 ABs he'll actually play once healthy
 (rate over his return window), not his season total, so low-volume-but-elite
 players surface instead of being buried by playing-time-weighted totals.
 
-Cost is the IL-slot allocation cost: 0 when a slot is open, else the (floored)
-Gain of the weakest owned IL stash he displaces.
+The board is ranked by P(helps) -- the probability the candidate's best swap
+improves the user's roto total -- with the expected Value shown alongside. There
+is no slot "cost": scarcity is priced by the cutline (the top IL-capacity
+candidates earn a slot), and ``recommended_drop`` names the owned stash a free
+agent would bump when the IL is full.
 """
 
 from __future__ import annotations
@@ -45,17 +48,21 @@ __all__ = ["StashResult", "StashScore", "score_stash_candidates"]
 
 @dataclass
 class StashScore:
-    """One injured player's stash evaluation."""
+    """One injured player's stash evaluation.
+
+    ``stash_value`` is the expected roto-point gain (band mean, floored at ~0);
+    P(helps) is ``band["p_positive"]``. The board is ranked by P(helps) (see
+    :func:`_rank_key`). There is no slot cost -- scarcity is priced by the
+    cutline, and ``recommended_drop`` names the owned stash a free agent bumps
+    when the IL is full."""
 
     name: str
     player_type: str
     status: str  # IL10 / IL15 / IL60 / ...
     owned: bool  # already on the user's roster
-    gain: float  # marginal active value (deltaRoto band mean), floored at ~0
-    cost: float  # deltaRoto sacrificed to roster him (0 if open IL slot)
-    stash_value: float  # gain - cost
-    band: dict[str, Any]  # {mean, sd, p_positive, verdict}
-    recommended_drop: str | None  # who to drop to make room (None if free slot)
+    stash_value: float  # expected roto-point gain (band mean, floored at ~0)
+    band: dict[str, Any]  # {mean, sd, p_positive, verdict}; P(helps) = p_positive
+    recommended_drop: str | None  # owned stash to drop (None if free slot / owned)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -334,6 +341,18 @@ def _marginal_value(
     return float(band["mean"])
 
 
+def _rank_key(score: StashScore) -> tuple[float, float]:
+    """Board sort key: P(helps) first, then expected Value as a deterministic
+    tie-break. Higher is better -- callers sort with ``reverse=True``.
+
+    P(helps) (``band["p_positive"]``) is the probability the candidate's best
+    swap improves the user's roto total. Ranking by it is risk-averse: a
+    smaller-but-likelier upgrade outranks a larger-but-shakier one, and it is
+    NOT the same order as ranking by Value (see the v3 design doc). Value breaks
+    ties so equal-probability rows order deterministically."""
+    return (score.band["p_positive"], score.stash_value)
+
+
 def _open_il_slots(roster: list[Player], roster_slots: dict[str, int]) -> int:
     """IL capacity minus players currently in true IL slots."""
     capacity = roster_slots.get("IL", 0)
@@ -346,35 +365,27 @@ def _owned_il_stashes(roster: list[Player]) -> list[Player]:
     return [p for p in roster if p.is_on_il()]
 
 
-def _cost_and_drop(
-    candidate: Player,
-    *,
-    gain_by_name: dict[str, float],
+def _weakest_owned_drop(
+    owned_il: list[Player],
+    bands: Mapping[str, Mapping[str, Any]],
     roster: list[Player],
     roster_slots: dict[str, int],
-) -> tuple[float, str | None]:
-    """Cost to roster ``candidate`` and the recommended drop.
+) -> str | None:
+    """Owned stash a free agent would bump, or None when an IL slot is open or
+    there are no owned stashes.
 
-    Every candidate is selected via ``is_on_il()`` (owned IL stashes + injured
-    FAs), so each one uses an IL slot:
-
-    - Open IL slot -> (0, None).
-    - IL full -> displace the lowest-Gain owned IL stash (IL-for-IL, the
-      user's rule). Cost = max(0, that stash's Gain): displacing a
-      net-negative stash never CREDITS the candidate (no -cost -> inflated
-      stash_value artifact).
-    """
-    if _open_il_slots(roster, roster_slots) > 0:
-        return 0.0, None
-
-    # Displace the weakest owned IL stash (exclude the candidate itself).
-    pool = [p for p in _owned_il_stashes(roster) if p.name != candidate.name]
-    if not pool:
-        return 0.0, None
-    drop = min(pool, key=lambda p: gain_by_name.get(p.name, 0.0))
-    # every owned stash was scored in pass 1; floor so a negative-value stash
-    # is a free drop, not a credit.
-    return max(0.0, gain_by_name[drop.name]), drop.name
+    With a free IL slot the FA just slots in -- no drop. When the IL is full we
+    name the owned stash at the BOTTOM of the board ranking (min P(helps), Value
+    breaking ties -- the same order as :func:`_rank_key`), so the suggestion is
+    consistent with how the board sorts. Slot scarcity is priced by the cutline,
+    not by a per-row cost (see the v3 design doc: a per-FA cost double-counted
+    the cutline)."""
+    if _open_il_slots(roster, roster_slots) > 0 or not owned_il:
+        return None
+    return min(
+        owned_il,
+        key=lambda p: (bands[p.name]["p_positive"], bands[p.name]["mean"]),
+    ).name
 
 
 def score_stash_candidates(
@@ -388,11 +399,14 @@ def score_stash_candidates(
     fraction_remaining: float,
     max_candidates: int = 25,
 ) -> StashResult:
-    """Rank injured players (owned IL + injured FAs) by stash value.
+    """Rank injured players (owned IL + injured FAs) by P(helps).
 
-    Gain = marginal active value (band mean, floored at ~0). Cost = IL-slot
-    allocation cost. stash_value = gain - cost, ranked descending. The top
-    ``IL`` -capacity candidates are worth a slot.
+    Each candidate's Value is its marginal active value (band mean, floored at
+    ~0); P(helps) is ``band["p_positive"]``. The board sorts by P(helps) with
+    Value breaking ties (:func:`_rank_key`); the top ``IL``-capacity candidates
+    earn a slot. For a free agent, ``recommended_drop`` names the owned stash he
+    would bump when the IL is full (the bottom of the same ranking). Slot
+    scarcity is priced by the cutline, not by a per-row cost.
     """
     il_capacity = roster_slots.get("IL", 0)
     owned_il = _owned_il_stashes(roster)
@@ -411,11 +425,11 @@ def score_stash_candidates(
         _counted_pool(roster), roster_slots, projected_standings, team_name, team_sds
     )
 
-    # Pass 1: Gain + band for every candidate (owned + FA).
-    bands: dict[str, dict[str, Any]] = {}
+    # Value + band for every candidate (owned + FA).
     candidates_in: list[tuple[Player, bool]] = [(p, True) for p in owned_il] + [
         (p, False) for p in injured_fas
     ]
+    bands: dict[str, dict[str, Any]] = {}
     for player, _owned in candidates_in:
         bands[player.name] = _marginal_band(
             player,
@@ -425,40 +439,27 @@ def score_stash_candidates(
             team_sds=team_sds,
             fraction_remaining=fraction_remaining,
         )
-    gain_by_name = {name: b["mean"] for name, b in bands.items()}
 
-    # Pass 2: Cost + stash value.
+    # One drop target for every FA when the IL is full: the bottom-ranked owned
+    # stash. None for owned players (they already hold a slot).
+    fa_drop = _weakest_owned_drop(owned_il, bands, roster, roster_slots)
+
     scores: list[StashScore] = []
     for player, owned in candidates_in:
         band = bands[player.name]
-        gain = band["mean"]
-        # An owned player already holds his IL slot -- there is no acquisition
-        # cost, so his stash value is just his (drop-cost) gain. _cost_and_drop
-        # is only meaningful for a FA who must be slotted into a possibly-full IL.
-        if owned:
-            cost, drop = 0.0, None
-        else:
-            cost, drop = _cost_and_drop(
-                player,
-                gain_by_name=gain_by_name,
-                roster=roster,
-                roster_slots=roster_slots,
-            )
         scores.append(
             StashScore(
                 name=player.name,
                 player_type=player.player_type.value,
                 status=player.status,
                 owned=owned,
-                gain=round(gain, 2),
-                cost=round(cost, 2),
-                stash_value=round(gain - cost, 2),
+                stash_value=round(band["mean"], 2),
                 band=band,
-                recommended_drop=drop,
+                recommended_drop=None if owned else fa_drop,
             )
         )
 
-    scores.sort(key=lambda s: s.stash_value, reverse=True)
+    scores.sort(key=_rank_key, reverse=True)
     return StashResult(
         open_il_slots=_open_il_slots(roster, roster_slots),
         cutline_rank=il_capacity,
