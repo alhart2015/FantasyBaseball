@@ -2,12 +2,11 @@ from datetime import date
 
 import pytest
 
-from fantasy_baseball.lineup.delta_roto import compute_delta_roto_band
+from fantasy_baseball.lineup.il_return_planner import _activate
 from fantasy_baseball.lineup.stash_value import (
     StashResult,
     StashScore,
-    _activate,
-    _counted_pool,
+    _cost_and_drop,
     _marginal_value,
     _open_il_slots,
     _owned_il_stashes,
@@ -17,6 +16,7 @@ from fantasy_baseball.lineup.stash_value import (
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.standings import ProjectedStandings
+from fantasy_baseball.scoring import build_team_sds
 
 EFFECTIVE_DATE = date(2026, 4, 1)
 
@@ -246,8 +246,6 @@ def _band_mean(roster, candidate, standings, team_name, slots, sds):
     return _marginal_value(
         candidate,
         before_active=before,
-        roster=roster,
-        roster_slots=slots,
         projected_standings=standings,
         team_name=team_name,
         team_sds=sds,
@@ -405,75 +403,188 @@ def test_owned_il_stashes_uses_is_on_il(monkeypatched_il_roster):
     assert "Injured Owned Arm" in names
 
 
-def test_owned_strong_il_arm_gain_is_drop_cost_not_double_count():
-    """Regression (spec line 293): an owned IL arm strong enough to crack the
-    active nine is ALREADY in the from_rosters standings anchor (displacement
-    counts his ROS). His reported Gain must be the il_return-style DROP-COST --
-    NOT an inflated add-gain re-applied on top of a row that already has him.
+def test_owned_and_fa_player_get_equal_gain():
+    """Unification + double-count guard: a player's stash gain must NOT depend
+    on whether you already own him. Every candidate is valued against the
+    shared healthy-active-lineup baseline (which excludes ALL IL players), so
+    scoring an elite closer as an owned IL stash matches scoring the SAME
+    closer as a free agent.
 
-    Pre-fix, ``_marginal_band`` computed (baseline) -> (baseline + him) for
-    every candidate, double-counting him for the owned path. This asserts the
-    owned candidate's reported gain equals round(-drop_band.mean, 2), where
-    drop_band measures activating-him-vs-dropping-him over the counted bodies.
-
-    Opponent K totals (666, 720) are tuned so the double-count and the
-    drop-cost DIVERGE: the IL arm displaces SP1 into the anchor at K~734, which
-    already beats both opponents (2 pts). The pre-fix add re-applies him on top
-    (overshoot to ~793) -> no extra point -> reported gain 0.0; the true
-    drop-cost (anchor 734 -> drop him -> 675, losing to Opp B=720) is +1.0. So
-    the pre-fix code reports 0.0 and this test goes RED; the fix reports +1.0
-    and it goes GREEN.
+    Replaces the old drop-cost regression. If owned players were re-added on
+    top of a baseline that already counted them, the owned gain would inflate
+    and diverge from the FA gain -- so this equality is also the double-count
+    guard. ``team_sds=None`` isolates the scoring path from the (legitimately
+    different) per-team SDs of the two rosters.
     """
-    strong_il = _arm(
-        "Strong IL Arm",
-        ip=90.0,
-        k=130.0,
-        slot="IL",
+    closer = _arm(
+        "Stash Closer",
+        ip=60.0,
+        k=80.0,
+        sv=30.0,
         status="IL15",
-        er=28.0,
-        bb=22.0,
-        h_allowed=58.0,
+        er=18.0,
+        bb=14.0,
+        h_allowed=46.0,
     )
-    user_roster = [*_full_hitters(), *_mediocre_staff(), strong_il]
-    standings = ProjectedStandings.from_rosters(
-        {
+    base = [*_moderate_hitters(), *_mediocre_staff()]
+
+    def gain_for(user_roster, free_agents):
+        rosters = {
             TEAM_NAME: user_roster,
-            "Opp A": _opponent_roster("A", k_per_arm=666.0 / 9.0),
+            "Opp A": _opponent_roster("A", k_per_arm=720.0 / 9.0),
             "Opp B": _opponent_roster("B", k_per_arm=720.0 / 9.0),
-        },
-        EFFECTIVE_DATE,
+        }
+        standings = ProjectedStandings.from_rosters(rosters, EFFECTIVE_DATE, fraction_remaining=0.5)
+        result = score_stash_candidates(
+            roster=user_roster,
+            free_agents=free_agents,
+            projected_standings=standings,
+            roster_slots=STASH_SLOTS,
+            team_name=TEAM_NAME,
+            team_sds=None,
+            fraction_remaining=0.5,
+        )
+        return next(c for c in result.candidates if c.name == "Stash Closer")
+
+    fa_row = gain_for(base, [closer])  # closer as a free agent
+    owned_row = gain_for([*base, closer], [])  # same closer, owned on the IL
+
+    assert fa_row.owned is False and owned_row.owned is True
+    assert fa_row.gain > 0.3  # elite closer into a contested SV cat is worth real points
+    assert owned_row.gain == pytest.approx(fa_row.gain, abs=0.05)
+
+
+# ---------------------------------------------------------------------------
+# v2: rate-upgrade-over-return-window gain (FA path).
+# See docs/superpowers/specs/2026-05-26-stash-value-rate-redesign-design.md
+# ---------------------------------------------------------------------------
+
+
+def _moderate_hitters():
+    """Nine user hitters at the SAME level as the opponents (r72/hr20/rbi72/
+    sb6/avg.265), so the user is on a coin-flip in every hitting category --
+    a rate upgrade tips it. Mirrors the contested production board."""
+    specs = [
+        ("C1", ["C"]),
+        ("1B1", ["1B"]),
+        ("2B1", ["2B"]),
+        ("3B1", ["3B"]),
+        ("SS1", ["SS"]),
+        ("OFa", ["OF"]),
+        ("OFb", ["OF"]),
+        ("OFc", ["OF"]),
+        ("UT", ["1B"]),
+    ]
+    out = []
+    for nm, pos in specs:
+        h = _hitter(nm, pos, r=72, hr=20, rbi=72, sb=6, avg=0.265, ab=510, h=135)
+        h.selected_position = Position.parse(pos[0])
+        out.append(h)
+    return out
+
+
+def _contested_rosters():
+    return {
+        TEAM_NAME: [*_moderate_hitters(), *_mediocre_staff()],
+        "Opp A": _opponent_roster("A", k_per_arm=720.0 / 9.0),
+        "Opp B": _opponent_roster("B", k_per_arm=720.0 / 9.0),
+    }
+
+
+@pytest.fixture
+def contested_fixture():
+    """User tied with the field in every hitting category, EV-scored, so any
+    real rate upgrade shows positive gain (no discrete-flip tuning needed)."""
+    rosters = _contested_rosters()
+    standings = ProjectedStandings.from_rosters(rosters, EFFECTIVE_DATE, fraction_remaining=0.5)
+    team_sds = build_team_sds(rosters, sd_scale=0.5**0.5)
+    return [*_moderate_hitters(), *_mediocre_staff()], standings, team_sds, STASH_SLOTS, TEAM_NAME
+
+
+def _low_volume_high_rate_hitter():
+    """120 ROS AB but elite per-AB rates. His SEASON TOTALS (12 HR) lose to a
+    healthy starter's 20, so the old total-volume model never slots him
+    (gain 0). The rate model credits his per-AB edge over the 120 AB he'll
+    actually play once back."""
+    h = _hitter("Rate Bat", ["1B"], ab=120, h=42, r=33, hr=12, rbi=36, sb=10, avg=0.350)
+    h.status = "IL15"
+    return h
+
+
+def test_injured_fa_hitter_rate_upgrade_beats_volume(contested_fixture):
+    """Core regression: a low-volume, high-rate injured FA hitter scores a
+    positive gain even though his season totals trail a healthy starter."""
+    roster, standings, sds, slots, team = contested_fixture
+    fa = _low_volume_high_rate_hitter()
+
+    result = score_stash_candidates(
+        roster=roster,
+        free_agents=[fa],
+        projected_standings=standings,
+        roster_slots=slots,
+        team_name=team,
+        team_sds=sds,
         fraction_remaining=0.5,
+    )
+    row = next(c for c in result.candidates if c.name == "Rate Bat")
+
+    # Old model: exactly 0 (12 season HR can't out-total a 20-HR starter).
+    assert row.gain > 0.0
+    assert row.band["sd"] > 0.0  # the lineup actually changed -- a real swap
+
+
+def test_injured_fa_closer_rate_upgrade(contested_fixture):
+    """SV is just another per-volume rate: a low-IP, high-SV-rate closer beats
+    a starter who gets no saves over the closer's return window."""
+    roster, standings, sds, slots, team = contested_fixture
+    closer = _arm(
+        "Stash Closer", ip=40.0, k=55.0, sv=18.0, status="IL15", er=12.0, bb=12.0, h_allowed=28.0
     )
 
     result = score_stash_candidates(
-        roster=user_roster,
-        free_agents=[],
+        roster=roster,
+        free_agents=[closer],
         projected_standings=standings,
-        roster_slots=STASH_SLOTS,
-        team_name=TEAM_NAME,
-        team_sds=None,
+        roster_slots=slots,
+        team_name=team,
+        team_sds=sds,
         fraction_remaining=0.5,
     )
-    row = next(c for c in result.candidates if c.name == "Strong IL Arm")
+    row = next(c for c in result.candidates if c.name == "Stash Closer")
+    assert row.gain > 0.0
 
-    # Expected drop-cost, computed the il_return way: before = lineup WITH him
-    # active (matches the anchor), after = baseline WITHOUT him.
-    counted = _counted_pool(user_roster, exclude_name="Strong IL Arm")
-    baseline_without = _solve_active(counted, STASH_SLOTS, standings, TEAM_NAME, None)
-    lineup_with = _solve_active(
-        [*counted, _activate(strong_il)], STASH_SLOTS, standings, TEAM_NAME, None
-    )
-    drop_band = compute_delta_roto_band(
-        lineup_with,
-        baseline_without,
-        standings.field_stats(TEAM_NAME),
-        TEAM_NAME,
-        0.5,
+
+def test_uncontested_fa_hitter_upgrade_is_zero(stash_fixture):
+    """Leverage still gates: when the user already wins the hitting cats
+    outright (.275/22HR vs the field's .265/20HR), a better-rate FA adds no
+    marginal roto points -> gain 0."""
+    roster, standings, sds, slots, team = stash_fixture
+    fa = _low_volume_high_rate_hitter()
+
+    result = score_stash_candidates(
+        roster=roster,
+        free_agents=[fa],
         projected_standings=standings,
-        team_sds=None,
+        roster_slots=slots,
+        team_name=team,
+        team_sds=sds,
+        fraction_remaining=0.5,
     )
-    expected_gain = round(-drop_band.mean, 2)
+    row = next(c for c in result.candidates if c.name == "Rate Bat")
+    assert row.gain == 0.0
 
-    # He genuinely cracks the nine, so the drop-cost is real (not ~0).
-    assert expected_gain > 0.0
-    assert row.gain == expected_gain
+
+def test_fa_cost_floored_at_zero():
+    """Displacing a net-negative owned IL stash must not CREDIT the candidate.
+    Cost floors at 0 -- kills the uniform -0.12 -> +0.12 artifact."""
+    weak = _arm("Weak Stash", ip=40.0, k=20.0, slot="IL", status="IL15")
+    fa = _arm("Some FA", ip=60.0, k=80.0, status="IL15")
+
+    cost, drop = _cost_and_drop(
+        fa,
+        gain_by_name={"Weak Stash": -0.12},
+        roster=[weak],
+        roster_slots={"IL": 1, "P": 9, "BN": 1},
+    )
+    assert cost == 0.0
+    assert drop == "Weak Stash"
