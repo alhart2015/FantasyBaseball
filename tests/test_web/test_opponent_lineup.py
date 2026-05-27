@@ -443,6 +443,75 @@ class TestBuildOpponentLineup:
         assert perez["hr"] == 18
         assert perez["rbi"] == 60
 
+    def test_pitcher_sgp_uses_ros_not_full_season(self):
+        """Opponent SP SGP must come from ROS projections (mirroring the user
+        lineup), not the preseason full-season blend. The full-season blend
+        carries ~2x the K/W of the remaining-season line, which inflated
+        opponent SP SGP into an apples-to-oranges comparison against the
+        ROS-based user column."""
+        from fantasy_baseball.models.player import PitcherStats
+        from fantasy_baseball.utils.name_utils import normalize_name
+
+        roster = [
+            {
+                "name": "Corbin Burnes",
+                "positions": ["SP"],
+                "selected_position": "SP",
+                "player_id": "200",
+                "status": "",
+            },
+        ]
+        # _sample_projections() carries the FULL-SEASON blend: 200 K / 190 IP / 14 W.
+        hitters_proj, pitchers_proj = _sample_projections()
+
+        # Rest-of-season line: roughly half the remaining volume.
+        ros_row = {
+            "name": "Corbin Burnes",
+            "fg_id": "2",
+            "player_type": "pitcher",
+            "w": 7,
+            "k": 100,
+            "sv": 0,
+            "ip": 95,
+            "er": 28,
+            "bb": 20,
+            "h_allowed": 78,
+            "era": 2.65,
+            "whip": 1.03,
+        }
+        ros_pitchers = pd.DataFrame([ros_row])
+        ros_pitchers["_name_norm"] = ros_pitchers["name"].apply(normalize_name)
+
+        result = build_opponent_lineup(
+            roster=roster,
+            opponent_name="Springfield Isotopes",
+            hitters_proj=hitters_proj,
+            pitchers_proj=pitchers_proj,
+            rest_of_season_hitters=pd.DataFrame(),
+            rest_of_season_pitchers=ros_pitchers,
+        )
+
+        burnes = result["pitchers"][0]
+        # Built the same way match_roster_to_projections builds it (from_dict),
+        # so the expected SGP is exact, not approximate-on-rate-rounding.
+        expected_ros_sgp = PitcherStats.from_dict(ros_row).compute_sgp()
+        full_season_sgp = PitcherStats.from_dict(
+            {
+                "w": 14,
+                "k": 200,
+                "sv": 0,
+                "ip": 190,
+                "er": 55,
+                "bb": 40,
+                "h_allowed": 155,
+                "era": 2.60,
+                "whip": 1.03,
+            }
+        ).compute_sgp()
+
+        assert burnes["sgp"] == pytest.approx(expected_ros_sgp)  # ROS-based
+        assert burnes["sgp"] < full_season_sgp  # not the inflated full-season number
+
 
 class TestOpponentCache:
     def test_clear_opponent_cache(self):
