@@ -16,8 +16,8 @@ players surface instead of being buried by playing-time-weighted totals.
 The board is ranked by P(helps) -- the probability the candidate's best swap
 improves the user's roto total -- with the expected Value shown alongside. There
 is no slot "cost": scarcity is priced by the cutline (the top IL-capacity
-candidates earn a slot), and ``recommended_drop`` names the owned stash a free
-agent would bump when the IL is full.
+candidates earn a slot), and each above-cutline free agent's ``recommended_drop``
+names the distinct below-cutline owned stash it would bump when the IL is full.
 """
 
 from __future__ import annotations
@@ -53,8 +53,9 @@ class StashScore:
     ``stash_value`` is the expected roto-point gain (band mean, floored at ~0);
     P(helps) is ``band["p_positive"]``. The board is ranked by P(helps) (see
     :func:`_rank_key`). There is no slot cost -- scarcity is priced by the
-    cutline, and ``recommended_drop`` names the owned stash a free agent bumps
-    when the IL is full."""
+    cutline, and an above-cutline free agent's ``recommended_drop`` names the
+    distinct below-cutline owned stash it bumps when the IL is full (see
+    :func:`_assign_recommended_drops`)."""
 
     name: str
     player_type: str
@@ -62,7 +63,7 @@ class StashScore:
     owned: bool  # already on the user's roster
     stash_value: float  # expected roto-point gain (band mean, floored at ~0)
     band: dict[str, Any]  # {mean, sd, p_positive, verdict}; P(helps) = p_positive
-    recommended_drop: str | None  # owned stash to drop (None if free slot / owned)
+    recommended_drop: str | None  # below-cutline owned stash this FA bumps; else None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -365,27 +366,59 @@ def _owned_il_stashes(roster: list[Player]) -> list[Player]:
     return [p for p in roster if p.is_on_il()]
 
 
-def _weakest_owned_drop(
-    owned_il: list[Player],
-    bands: Mapping[str, Mapping[str, Any]],
-    roster: list[Player],
-    roster_slots: dict[str, int],
-) -> str | None:
-    """Owned stash a free agent would bump, or None when an IL slot is open or
-    there are no owned stashes.
+def _assign_recommended_drops(
+    scores: list[StashScore], *, cutline_rank: int, open_il_slots: int
+) -> None:
+    """Set ``recommended_drop`` on each above-cutline free agent, in place.
 
-    With a free IL slot the FA just slots in -- no drop. When the IL is full we
-    name the owned stash at the BOTTOM of the board ranking (min P(helps), Value
-    breaking ties -- the same order as :func:`_rank_key`), so the suggestion is
-    consistent with how the board sorts. Slot scarcity is priced by the cutline,
-    not by a per-row cost (see the v3 design doc: a per-FA cost double-counted
-    the cutline)."""
-    if _open_il_slots(roster, roster_slots) > 0 or not owned_il:
-        return None
-    return min(
-        owned_il,
-        key=lambda p: (bands[p.name]["p_positive"], bands[p.name]["mean"]),
-    ).name
+    ``scores`` must already be sorted best-first by :func:`_rank_key`. The top
+    ``cutline_rank`` rows earn the IL slots. Walking those above-cutline rows
+    best-first: an owned player keeps the slot he already holds (no drop); a
+    free agent fills an open IL slot if one remains, otherwise he bumps a
+    BELOW-cutline owned stash -- one of the players who lost his slot to a better
+    candidate. Drops are paired WORST-first: the best free agent bumps the
+    weakest below-cutline owned stash, the next free agent the next-weakest, and
+    so on. So if you act on only the top recommendation you drop the stash you'd
+    miss least, and each free agent gets a DISTINCT owned stash -- the board
+    never frees the same slot twice or names an above-cutline keeper.
+    Below-cutline rows and owned rows keep ``None``.
+
+    The below-cutline owned stashes exactly cover the above-cutline free agents
+    that still need a slot once the open ones are used (the cutline balances by
+    construction); the ``next_drop`` bound is a guard against messy real-world
+    states where IL-by-status and IL-by-slot counts disagree."""
+    above = scores[:cutline_rank]
+    # Worst-first (reverse the best-first board tail): the top FA bumps the
+    # weakest owned stash, so a single add costs the user the least.
+    droppable = [s.name for s in reversed(scores[cutline_rank:]) if s.owned]
+    open_slots = open_il_slots
+    next_drop = 0
+    for score in above:
+        if score.owned:
+            continue  # already holds a slot
+        if open_slots > 0:
+            open_slots -= 1  # fills an open IL slot -- nothing to drop
+            continue
+        if next_drop < len(droppable):
+            score.recommended_drop = droppable[next_drop]
+            next_drop += 1
+
+
+def _cap_candidates(scores: list[StashScore], max_candidates: int) -> list[StashScore]:
+    """Cap the board at ``max_candidates`` rows without ever hiding an owned
+    stash. An owned stash can be named as another row's ``recommended_drop``, so
+    it must stay on the rendered board; only free agents are truncated. Owned
+    stashes are bounded by IL capacity, so the total never exceeds the cap.
+    Sorted order is preserved (callers pass an already-sorted list)."""
+    fa_budget = max(0, max_candidates - sum(1 for s in scores if s.owned))
+    capped: list[StashScore] = []
+    for score in scores:
+        if score.owned:
+            capped.append(score)
+        elif fa_budget > 0:
+            capped.append(score)
+            fa_budget -= 1
+    return capped
 
 
 def score_stash_candidates(
@@ -404,9 +437,10 @@ def score_stash_candidates(
     Each candidate's Value is its marginal active value (band mean, floored at
     ~0); P(helps) is ``band["p_positive"]``. The board sorts by P(helps) with
     Value breaking ties (:func:`_rank_key`); the top ``IL``-capacity candidates
-    earn a slot. For a free agent, ``recommended_drop`` names the owned stash he
-    would bump when the IL is full (the bottom of the same ranking). Slot
-    scarcity is priced by the cutline, not by a per-row cost.
+    earn a slot. Each above-cutline free agent's ``recommended_drop`` names the
+    distinct below-cutline owned stash it bumps when the IL is full
+    (:func:`_assign_recommended_drops`). Slot scarcity is priced by the cutline,
+    not by a per-row cost.
     """
     il_capacity = roster_slots.get("IL", 0)
     owned_il = _owned_il_stashes(roster)
@@ -440,10 +474,6 @@ def score_stash_candidates(
             fraction_remaining=fraction_remaining,
         )
 
-    # One drop target for every FA when the IL is full: the bottom-ranked owned
-    # stash. None for owned players (they already hold a slot).
-    fa_drop = _weakest_owned_drop(owned_il, bands, roster, roster_slots)
-
     scores: list[StashScore] = []
     for player, owned in candidates_in:
         band = bands[player.name]
@@ -455,13 +485,17 @@ def score_stash_candidates(
                 owned=owned,
                 stash_value=round(band["mean"], 2),
                 band=band,
-                recommended_drop=None if owned else fa_drop,
+                recommended_drop=None,
             )
         )
 
     scores.sort(key=_rank_key, reverse=True)
+    # Drops are assigned by cutline position, so the board must be sorted first:
+    # each above-cutline FA bumps a distinct below-cutline owned stash.
+    open_slots = _open_il_slots(roster, roster_slots)
+    _assign_recommended_drops(scores, cutline_rank=il_capacity, open_il_slots=open_slots)
     return StashResult(
-        open_il_slots=_open_il_slots(roster, roster_slots),
+        open_il_slots=open_slots,
         cutline_rank=il_capacity,
-        candidates=scores[:max_candidates],
+        candidates=_cap_candidates(scores, max_candidates),
     )
