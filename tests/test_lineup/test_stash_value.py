@@ -6,10 +6,12 @@ from fantasy_baseball.lineup.il_return_planner import _activate
 from fantasy_baseball.lineup.stash_value import (
     StashResult,
     StashScore,
-    _cost_and_drop,
+    _assign_recommended_drops,
+    _cap_candidates,
     _marginal_value,
     _open_il_slots,
     _owned_il_stashes,
+    _rank_key,
     _solve_active,
     score_stash_candidates,
 )
@@ -283,8 +285,6 @@ def test_stash_score_to_dict_shape():
         player_type="pitcher",
         status="IL15",
         owned=False,
-        gain=4.2,
-        cost=0.0,
         stash_value=4.2,
         band={"mean": 4.2, "sd": 1.1, "p_positive": 0.91, "verdict": "real"},
         recommended_drop=None,
@@ -292,8 +292,11 @@ def test_stash_score_to_dict_shape():
     d = s.to_dict()
     assert d["name"] == "Blake Snell"
     assert d["stash_value"] == 4.2
-    assert d["band"]["verdict"] == "real"
+    assert d["band"]["p_positive"] == 0.91
     assert d["recommended_drop"] is None
+    # cost and gain were retired in v3.
+    assert "cost" not in d
+    assert "gain" not in d
 
 
 def test_stash_result_to_dict_shape():
@@ -314,7 +317,7 @@ def monkeypatched_il_roster(stash_fixture):
     return [*roster, injured]
 
 
-def test_open_slot_stash_value_equals_gain_and_no_drop(stash_fixture):
+def test_open_slot_positive_value_and_no_drop(stash_fixture):
     roster, standings, sds, slots, team = stash_fixture  # empty IL
     elite_fa = _make_elite_low_ip_pitcher()
     result = score_stash_candidates(
@@ -328,13 +331,13 @@ def test_open_slot_stash_value_equals_gain_and_no_drop(stash_fixture):
     )
     top = result.candidates[0]
     assert top.name == elite_fa.name
-    assert top.cost == 0.0
-    assert top.stash_value == top.gain > 0.0
-    assert top.recommended_drop is None
+    assert top.stash_value > 0.0
+    assert top.stash_value == top.band["mean"]  # Value is the band mean
+    assert top.recommended_drop is None  # open slot -> nothing to drop
 
 
 def test_il_full_upgrade_recommends_dropping_weakest_stash(stash_fixture_il_full):
-    # roster has 2 IL stashes: a strong one and a weak one; a better FA exists.
+    # roster has 2 owned IL stashes (Weak < Strong); a better FA exists, IL full.
     roster, standings, sds, slots, team, weak_stash_name = stash_fixture_il_full
     better_fa = _make_elite_low_ip_pitcher()
     result = score_stash_candidates(
@@ -347,16 +350,21 @@ def test_il_full_upgrade_recommends_dropping_weakest_stash(stash_fixture_il_full
         fraction_remaining=0.5,
     )
     fa_row = next(c for c in result.candidates if c.name == better_fa.name)
+    # The FA earns a slot by bumping the WEAKEST owned stash (the one that falls
+    # below the cutline), not the stronger one that keeps its slot. Asserted
+    # against the fixture's known weak stash -- an independently-correct answer,
+    # not a re-derivation of the production selection rule.
     assert fa_row.recommended_drop == weak_stash_name
-    assert fa_row.cost > 0.0
-    assert fa_row.stash_value == fa_row.gain - fa_row.cost
+    assert fa_row.stash_value == fa_row.band["mean"]
+    # The stronger owned stash stays above the cutline and is never dropped.
+    strong_row = next(c for c in result.candidates if c.owned and c.name != weak_stash_name)
+    assert strong_row.recommended_drop is None
 
 
-def test_owned_candidates_have_zero_cost(stash_fixture_il_full):
-    """An owned player already holds his IL slot, so he pays no acquisition
-    cost: stash_value == gain, no recommended drop. (Regression: previously the
-    FA-acquisition cost was charged to owned players, yielding a confusing
-    negative stash_value even for a held arm.)"""
+def test_owned_candidates_have_no_recommended_drop(stash_fixture_il_full):
+    """An owned player already holds his IL slot, so there is nothing to drop
+    to keep him and no cost to charge: his Value is just the band mean and his
+    recommended_drop is None. (v3: cost retired entirely.)"""
     roster, standings, sds, slots, team, _weak = stash_fixture_il_full
     result = score_stash_candidates(
         roster=roster,
@@ -370,9 +378,59 @@ def test_owned_candidates_have_zero_cost(stash_fixture_il_full):
     owned = [c for c in result.candidates if c.owned]
     assert owned, "expected owned IL candidates in the fixture"
     for c in owned:
-        assert c.cost == 0.0, f"{c.name}: owned cost should be 0, got {c.cost}"
-        assert c.stash_value == c.gain
+        assert c.stash_value == c.band["mean"]
         assert c.recommended_drop is None
+
+
+def test_multiple_above_cutline_fas_get_distinct_drops(stash_fixture_il_full):
+    """Two above-cutline FAs with a full IL each bump a DISTINCT owned stash.
+
+    Regression: the old single shared drop named the one weakest owned stash for
+    EVERY FA, implying both FAs could be added by freeing the same slot."""
+    roster, standings, sds, slots, team, _weak = stash_fixture_il_full
+    elite1 = _arm("Elite One", ip=90.0, k=130.0, status="IL15", er=28.0, bb=22.0, h_allowed=58.0)
+    elite2 = _arm("Elite Two", ip=90.0, k=125.0, status="IL15", er=28.0, bb=22.0, h_allowed=58.0)
+    result = score_stash_candidates(
+        roster=roster,
+        free_agents=[elite1, elite2],
+        projected_standings=standings,
+        roster_slots=slots,
+        team_name=team,
+        team_sds=sds,
+        fraction_remaining=0.5,
+    )
+    above = result.candidates[: result.cutline_rank]
+    assert {c.name for c in above} == {"Elite One", "Elite Two"}  # both earn a slot
+    fa_drops = {c.recommended_drop for c in result.candidates if not c.owned}
+    # Each FA bumps a different owned stash -- both owned stashes, not one twice.
+    assert fa_drops == {"Weak Stash", "Strong Stash"}
+    # WORST-first: the top FA bumps the WEAKEST owned stash, so grabbing just him
+    # costs the least; the next FA bumps the stronger one.
+    assert result.candidates[0].name == "Elite One"
+    assert result.candidates[0].recommended_drop == "Weak Stash"
+    assert result.candidates[1].recommended_drop == "Strong Stash"
+
+
+def test_below_cutline_fa_has_no_drop(stash_fixture_il_full):
+    """A FA that misses the cutline is not worth adding, so it shows no drop.
+
+    Regression: the old shared drop labeled every FA -- even sub-cutline ones --
+    with the weakest owned stash, advising a drop for a player the board's own
+    cutline says not to add."""
+    roster, standings, sds, slots, team, _weak = stash_fixture_il_full
+    scrub_fa = _make_replacement_level_pitcher()  # worse than both owned stashes
+    result = score_stash_candidates(
+        roster=roster,
+        free_agents=[scrub_fa],
+        projected_standings=standings,
+        roster_slots=slots,
+        team_name=team,
+        team_sds=sds,
+        fraction_remaining=0.5,
+    )
+    scrub_row = next(c for c in result.candidates if c.name == scrub_fa.name)
+    assert result.candidates.index(scrub_row) >= result.cutline_rank  # below the cutline
+    assert scrub_row.recommended_drop is None
 
 
 def test_no_injured_players_returns_empty_board(stash_fixture):
@@ -450,8 +508,10 @@ def test_owned_and_fa_player_get_equal_gain():
     owned_row = gain_for([*base, closer], [])  # same closer, owned on the IL
 
     assert fa_row.owned is False and owned_row.owned is True
-    assert fa_row.gain > 0.3  # elite closer into a contested SV cat is worth real points
-    assert owned_row.gain == pytest.approx(fa_row.gain, abs=0.05)
+    assert fa_row.stash_value > 0.3  # elite closer into a contested SV cat is worth real points
+    assert owned_row.stash_value == pytest.approx(fa_row.stash_value, abs=0.05)
+    # Equal Value AND equal P(helps): same band whether owned or FA.
+    assert owned_row.band["p_positive"] == pytest.approx(fa_row.band["p_positive"], abs=0.02)
 
 
 # ---------------------------------------------------------------------------
@@ -529,7 +589,7 @@ def test_injured_fa_hitter_rate_upgrade_beats_volume(contested_fixture):
     row = next(c for c in result.candidates if c.name == "Rate Bat")
 
     # Old model: exactly 0 (12 season HR can't out-total a 20-HR starter).
-    assert row.gain > 0.0
+    assert row.stash_value > 0.0
     assert row.band["sd"] > 0.0  # the lineup actually changed -- a real swap
 
 
@@ -551,7 +611,7 @@ def test_injured_fa_closer_rate_upgrade(contested_fixture):
         fraction_remaining=0.5,
     )
     row = next(c for c in result.candidates if c.name == "Stash Closer")
-    assert row.gain > 0.0
+    assert row.stash_value > 0.0
 
 
 def test_uncontested_fa_hitter_upgrade_is_zero(stash_fixture):
@@ -571,20 +631,144 @@ def test_uncontested_fa_hitter_upgrade_is_zero(stash_fixture):
         fraction_remaining=0.5,
     )
     row = next(c for c in result.candidates if c.name == "Rate Bat")
-    assert row.gain == 0.0
+    assert row.stash_value == 0.0
 
 
-def test_fa_cost_floored_at_zero():
-    """Displacing a net-negative owned IL stash must not CREDIT the candidate.
-    Cost floors at 0 -- kills the uniform -0.12 -> +0.12 artifact."""
-    weak = _arm("Weak Stash", ip=40.0, k=20.0, slot="IL", status="IL15")
-    fa = _arm("Some FA", ip=60.0, k=80.0, status="IL15")
-
-    cost, drop = _cost_and_drop(
-        fa,
-        gain_by_name={"Weak Stash": -0.12},
-        roster=[weak],
-        roster_slots={"IL": 1, "P": 9, "BN": 1},
+def _score(name, *, owned, p_positive, mean=1.0):
+    """A minimal StashScore for drop-assignment / cap unit tests."""
+    return StashScore(
+        name=name,
+        player_type="pitcher",
+        status="IL15",
+        owned=owned,
+        stash_value=mean,
+        band={"mean": mean, "sd": 1.0, "p_positive": p_positive, "verdict": "real"},
+        recommended_drop=None,
     )
-    assert cost == 0.0
-    assert drop == "Weak Stash"
+
+
+def test_assign_drops_top_fa_bumps_weakest_owned():
+    """IL full, two above-cutline FAs, two below-cutline owned stashes: each FA
+    bumps a DISTINCT owned stash, WORST-first -- the top FA bumps the weakest
+    owned stash (so adding just him costs the least), the next FA the next-
+    weakest. Owned rows carry no drop."""
+    scores = [
+        _score("FA Best", owned=False, p_positive=0.95),
+        _score("FA Next", owned=False, p_positive=0.90),
+        _score("Owned Stronger", owned=True, p_positive=0.60),
+        _score("Owned Weaker", owned=True, p_positive=0.55),
+    ]
+    _assign_recommended_drops(scores, cutline_rank=2, open_il_slots=0)
+    # Top FA -> weakest owned (not the stronger one ranked just above it).
+    assert [s.recommended_drop for s in scores] == [
+        "Owned Weaker",
+        "Owned Stronger",
+        None,
+        None,
+    ]
+
+
+def test_assign_drops_skips_above_cutline_owned_keeper():
+    """An owned stash above the cutline is a keeper and is never named as a
+    drop; the FA bumps a below-cutline owned stash instead."""
+    scores = [
+        _score("Owned Keeper", owned=True, p_positive=0.95),  # above cutline -> keep
+        _score("FA", owned=False, p_positive=0.80),  # above cutline -> needs slot
+        _score("Owned Weak", owned=True, p_positive=0.40),  # below cutline -> droppable
+    ]
+    _assign_recommended_drops(scores, cutline_rank=2, open_il_slots=0)
+    fa = next(s for s in scores if s.name == "FA")
+    assert fa.recommended_drop == "Owned Weak"  # not the above-cutline keeper
+    keeper = next(s for s in scores if s.name == "Owned Keeper")
+    assert keeper.recommended_drop is None
+
+
+def test_assign_drops_open_slot_means_no_drop():
+    """An above-cutline FA that fills an open IL slot needs no drop; only the FA
+    beyond the open slots bumps an owned stash."""
+    scores = [
+        _score("FA One", owned=False, p_positive=0.95),
+        _score("FA Two", owned=False, p_positive=0.90),
+        _score("Owned Weak", owned=True, p_positive=0.40),
+    ]
+    _assign_recommended_drops(scores, cutline_rank=2, open_il_slots=1)
+    fa_one = next(s for s in scores if s.name == "FA One")
+    fa_two = next(s for s in scores if s.name == "FA Two")
+    assert fa_one.recommended_drop is None  # fills the open slot
+    assert fa_two.recommended_drop == "Owned Weak"  # no slot left -> bump
+
+
+def test_assign_drops_below_cutline_fa_gets_none():
+    """A FA below the cutline is not worth adding, so it carries no drop."""
+    scores = [
+        _score("Owned A", owned=True, p_positive=0.95),
+        _score("Owned B", owned=True, p_positive=0.90),
+        _score("FA Sub", owned=False, p_positive=0.30),  # below the 2-slot cutline
+    ]
+    _assign_recommended_drops(scores, cutline_rank=2, open_il_slots=0)
+    fa = next(s for s in scores if s.name == "FA Sub")
+    assert fa.recommended_drop is None
+
+
+def test_cap_candidates_keeps_all_owned_even_past_cap():
+    """Capping must not hide an owned stash -- it can be another row's
+    recommended_drop, so it stays visible. FAs are capped; owned are always
+    kept; the result never exceeds the cap."""
+    scores = [_score(f"FA {i}", owned=False, p_positive=0.9 - i * 0.01) for i in range(5)] + [
+        _score("Owned Tail", owned=True, p_positive=0.10)
+    ]
+    capped = _cap_candidates(scores, max_candidates=3)
+    names = [s.name for s in capped]
+    assert "Owned Tail" in names  # owned retained despite ranking past the cap
+    assert sum(1 for s in capped if not s.owned) == 2  # FAs capped to (3 - 1 owned)
+    assert len(capped) == 3
+
+
+def test_rank_key_orders_by_p_helps_then_value():
+    """Board sorts by P(helps) first: a lower-Value, higher-P(helps) candidate
+    ranks ABOVE a higher-Value, lower-P(helps) one (NOT the same order as
+    sorting by Value -- see the v3 design doc)."""
+    big_shaky = StashScore(
+        name="Big Shaky",
+        player_type="pitcher",
+        status="IL15",
+        owned=False,
+        stash_value=2.0,
+        band={"mean": 2.0, "sd": 4.0, "p_positive": 0.69, "verdict": "lean"},
+        recommended_drop=None,
+    )
+    small_sure = StashScore(
+        name="Small Sure",
+        player_type="pitcher",
+        status="IL15",
+        owned=False,
+        stash_value=1.0,
+        band={"mean": 1.0, "sd": 0.5, "p_positive": 0.98, "verdict": "real"},
+        recommended_drop=None,
+    )
+    ranked = sorted([big_shaky, small_sure], key=_rank_key, reverse=True)
+    assert [s.name for s in ranked] == ["Small Sure", "Big Shaky"]
+
+
+def test_rank_key_breaks_ties_by_value():
+    """Equal P(helps) -> higher Value ranks first (deterministic tie-break)."""
+    low_val = StashScore(
+        name="Low Val",
+        player_type="pitcher",
+        status="IL15",
+        owned=False,
+        stash_value=1.0,
+        band={"mean": 1.0, "sd": 0.5, "p_positive": 0.90, "verdict": "real"},
+        recommended_drop=None,
+    )
+    high_val = StashScore(
+        name="High Val",
+        player_type="pitcher",
+        status="IL15",
+        owned=False,
+        stash_value=2.0,
+        band={"mean": 2.0, "sd": 1.0, "p_positive": 0.90, "verdict": "real"},
+        recommended_drop=None,
+    )
+    ranked = sorted([low_val, high_val], key=_rank_key, reverse=True)
+    assert [s.name for s in ranked] == ["High Val", "Low Val"]
