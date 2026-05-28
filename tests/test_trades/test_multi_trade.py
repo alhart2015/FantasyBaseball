@@ -32,6 +32,16 @@ def test_trade_proposal_defaults_empty_lists():
     assert p.my_active_ids == set()
 
 
+def test_trade_proposal_has_opp_active_ids_default_empty_set():
+    p = TradeProposal(opponent="Foo")
+    assert p.opp_active_ids == set()
+
+
+def test_trade_proposal_accepts_opp_active_ids():
+    p = TradeProposal(opponent="Foo", opp_active_ids={"Cade Smith::pitcher"})
+    assert p.opp_active_ids == {"Cade Smith::pitcher"}
+
+
 def test_multi_trade_result_shape():
     r = MultiTradeResult(
         legal=True,

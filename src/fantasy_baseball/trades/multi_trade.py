@@ -37,6 +37,7 @@ class TradeProposal:
     opp_drops: list[str] = field(default_factory=list)
     my_adds: list[str] = field(default_factory=list)
     my_active_ids: set[str] = field(default_factory=set)
+    opp_active_ids: set[str] = field(default_factory=set)
 
 
 @dataclass
