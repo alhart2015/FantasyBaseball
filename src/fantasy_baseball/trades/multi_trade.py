@@ -7,6 +7,7 @@ the user's side. Reports delta-roto for the user's team only.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -20,6 +21,8 @@ from fantasy_baseball.trades.evaluate import (
     apply_swap_delta,
 )
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -267,37 +270,46 @@ def evaluate_multi_trade(
     ev_roto_before = score_roto_dict(before_stats, team_sds=team_sds)
     ev_roto_after = score_roto_dict(after_stats, team_sds=team_sds)
 
-    def _build_view(before_pts, after_pts) -> ViewBlock:
+    def _build_view(team_name: str, before_pts, after_pts) -> ViewBlock:
         cats: dict[str, CategoryView] = {}
         total = 0.0
         for cat in ALL_CATEGORIES:
-            b = before_pts[hart_name][f"{cat.value}_pts"]
-            a = after_pts[hart_name][f"{cat.value}_pts"]
+            b = before_pts[team_name][f"{cat.value}_pts"]
+            a = after_pts[team_name][f"{cat.value}_pts"]
             cats[cat.value] = CategoryView(before=b, after=a, delta=a - b)
             total += a - b
         return ViewBlock(delta_total=total, categories=cats)
 
-    roto_view = _build_view(roto_before, roto_after)
-    ev_roto_view = _build_view(ev_roto_before, ev_roto_after)
+    def _build_stat_totals(team_name: str) -> ViewBlock:
+        cats: dict[str, CategoryView] = {}
+        for cat in ALL_CATEGORIES:
+            b = float(before_stats[team_name][cat.value])
+            a = float(after_stats[team_name][cat.value])
+            cats[cat.value] = CategoryView(before=b, after=a, delta=a - b)
+        return ViewBlock(delta_total=0.0, categories=cats)
 
-    # Stat totals (raw category values, not roto points)
-    stat_cats: dict[str, CategoryView] = {}
-    for cat in ALL_CATEGORIES:
-        b = float(before_stats[hart_name][cat.value])
-        a = float(after_stats[hart_name][cat.value])
-        stat_cats[cat.value] = CategoryView(before=b, after=a, delta=a - b)
-    stat_totals_view = ViewBlock(delta_total=0.0, categories=stat_cats)
+    def _build_categories(team_name: str) -> dict[str, CategoryDelta]:
+        cats: dict[str, CategoryDelta] = {}
+        for cat in ALL_CATEGORIES:
+            b = ev_roto_before[team_name][f"{cat.value}_pts"]
+            a = ev_roto_after[team_name][f"{cat.value}_pts"]
+            cats[cat.value] = CategoryDelta(before=b, after=a, delta=a - b)
+        return cats
 
-    # Existing per-category eROTO output (preserved for backward compat).
-    categories: dict[str, CategoryDelta] = {}
-    total_delta = 0.0
-    for cat in ALL_CATEGORIES:
-        b = ev_roto_before[hart_name][f"{cat.value}_pts"]
-        a = ev_roto_after[hart_name][f"{cat.value}_pts"]
-        categories[cat.value] = CategoryDelta(before=b, after=a, delta=a - b)
-        total_delta += a - b
+    roto_view = _build_view(hart_name, roto_before, roto_after)
+    ev_roto_view = _build_view(hart_name, ev_roto_before, ev_roto_after)
+    stat_totals_view = _build_stat_totals(hart_name)
+    categories = _build_categories(hart_name)
+    total_delta = ev_roto_view.delta_total
 
-    # --- 5. Monte-Carlo confidence band --------------------------------------
+    opp_name = proposal.opponent
+    opp_roto_view = _build_view(opp_name, roto_before, roto_after)
+    opp_ev_roto_view = _build_view(opp_name, ev_roto_before, ev_roto_after)
+    opp_stat_totals_view = _build_stat_totals(opp_name)
+    opp_categories = _build_categories(opp_name)
+    opp_total_delta = opp_ev_roto_view.delta_total
+
+    # --- 5. Monte-Carlo confidence bands (my + opp) --------------------------
     from fantasy_baseball.lineup.delta_roto import compute_delta_roto_band
 
     field_stats = projected_standings.field_stats(hart_name)
@@ -313,6 +325,27 @@ def evaluate_multi_trade(
         team_sds=team_sds,
     )
 
+    try:
+        opp_field_stats = projected_standings.field_stats(opp_name)
+        opp_before_players = [opp_idx[k] for k in before_opp if k in opp_idx]
+        opp_after_players = [all_opp_by_key[k] for k in after_opp if k in all_opp_by_key]
+        opp_band_result = compute_delta_roto_band(
+            opp_before_players,
+            opp_after_players,
+            opp_field_stats,
+            opp_name,
+            fraction_remaining,
+            projected_standings=projected_standings,
+            team_sds=team_sds,
+        )
+        opp_band_dict = opp_band_result.to_dict()
+    except (ValueError, ZeroDivisionError, KeyError) as exc:
+        # Opp band is best-effort. Math-domain failures (e.g. zero variance for
+        # the team) fall back to None and let the UI show the plain delta.
+        # Programming errors are intentionally not caught so they surface.
+        logger.warning("opp band failed for %s: %s", opp_name, exc)
+        opp_band_dict = None
+
     return MultiTradeResult(
         legal=True,
         reason=None,
@@ -322,6 +355,12 @@ def evaluate_multi_trade(
         ev_roto=ev_roto_view,
         stat_totals=stat_totals_view,
         band=band_result.to_dict(),
+        opp_delta_total=opp_total_delta,
+        opp_categories=opp_categories,
+        opp_roto=opp_roto_view,
+        opp_ev_roto=opp_ev_roto_view,
+        opp_stat_totals=opp_stat_totals_view,
+        opp_band=opp_band_dict,
     )
 
 

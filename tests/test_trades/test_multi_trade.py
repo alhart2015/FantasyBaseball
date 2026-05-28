@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player
 from fantasy_baseball.models.standings import (
     CategoryStats,
@@ -20,6 +22,7 @@ from fantasy_baseball.trades.multi_trade import (
     evaluate_multi_trade,
     player_key,
 )
+from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATEGORIES_LOCAL
 
 
 def test_trade_proposal_defaults_empty_lists():
@@ -842,6 +845,61 @@ def test_opp_active_ids_changes_opp_stat_totals_when_lineup_differs():
     assert (
         r_bench.opp_stat_totals.categories["R"].after < r_full.opp_stat_totals.categories["R"].after
     )
+
+
+def test_opp_roto_view_is_built_against_opp_baseline():
+    """opp_roto.delta_total is the roto-point change for the opponent's team."""
+    p = _make_simple_1for1_proposal()
+    p.opp_active_ids = _opp_active_set_for_simple_fixture()
+    r = evaluate_multi_trade(proposal=p, **_eval_fixture())
+
+    assert r.legal is True
+    assert set(r.opp_roto.categories) == {c.value for c in ALL_CATEGORIES_LOCAL}
+    summed = sum(cv.delta for cv in r.opp_roto.categories.values())
+    assert abs(r.opp_roto.delta_total - summed) < 1e-9
+
+
+def test_opp_ev_roto_and_stat_totals_built():
+    p = _make_simple_1for1_proposal()
+    p.opp_active_ids = _opp_active_set_for_simple_fixture()
+    r = evaluate_multi_trade(proposal=p, **_eval_fixture())
+
+    assert r.opp_ev_roto.categories
+    assert r.opp_stat_totals.categories
+    assert r.opp_stat_totals.delta_total == 0.0  # convention: stat_totals has no scalar total
+
+
+def test_opp_band_is_present_when_team_sds_provided():
+    p = _make_simple_1for1_proposal()
+    p.opp_active_ids = _opp_active_set_for_simple_fixture()
+    fixture = _eval_fixture()
+    # Build a minimal team_sds mapping both teams to per-category SDs.
+    # Any positive float works; we just need non-None so the band path
+    # has something to work with. ERA/WHIP SDs use a small positive value
+    # as well -- they're inverse but the band handles that internally.
+    team_sds = {
+        _HART_OF_THE_ORDER: {cat: 1.0 for cat in ALL_CATEGORIES_LOCAL},
+        _OPP_TEAM: {cat: 1.0 for cat in ALL_CATEGORIES_LOCAL},
+    }
+    fixture["team_sds"] = team_sds
+    r = evaluate_multi_trade(proposal=p, **fixture)
+
+    assert r.opp_band is not None
+    assert "mean" in r.opp_band
+    assert "sd" in r.opp_band
+    assert "p_positive" in r.opp_band
+
+
+def test_my_side_results_unchanged_after_opp_additions():
+    """Regression guard: my-side roto/ev_roto/stat_totals are pinned to known
+    values so future opp-side refactors can't drift them silently."""
+    p = _make_simple_1for1_proposal()  # no opp_active_ids set -- fallback path
+    r = evaluate_multi_trade(proposal=p, **_eval_fixture())
+
+    assert r.legal is True
+    assert r.roto.delta_total == pytest.approx(0.0)
+    assert r.ev_roto.delta_total == pytest.approx(0.0)
+    assert r.stat_totals.categories["R"].after == pytest.approx(1000.0)
 
 
 def test_build_waiver_pool_excludes_rostered_players():
