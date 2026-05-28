@@ -96,7 +96,7 @@
     <button type="button" id="bt-evaluate" class="pill" disabled
             onclick="bt.evaluate()">Evaluate Trade</button>
     <button type="button" id="bt-optimize" class="pill" disabled
-            onclick="bt.optimizeLineup()">Optimize Lineup</button>
+            onclick="bt.optimizeLineup()">Optimize Both</button>
     <button type="button" id="bt-reset" class="pill"
             onclick="bt.reset()">Reset</button>
 
@@ -890,17 +890,18 @@ document.addEventListener('DOMContentLoaded', function() {
     optimizeLineup: async () => {
       if (!state.opponent) return;
       const payload = buildPayload();
+      payload.side = "both";
       const optBtn = document.getElementById("bt-optimize");
       const originalLabel = optBtn ? optBtn.textContent : "";
       // Disable + label "Optimizing…" while the request is in flight.
       // The optimizer can take 10s+ on large rosters with broad position eligibility.
       if (optBtn) {
         optBtn.disabled = true;
-        optBtn.textContent = "Optimizing…";
+        optBtn.textContent = "Optimizing both...";
       }
       function restoreButton() {
         if (optBtn) {
-          optBtn.textContent = originalLabel || "Optimize Lineup";
+          optBtn.textContent = originalLabel || "Optimize Both";
           // updateLegality will re-evaluate disabled state.
           updateLegality();
         }
@@ -938,6 +939,9 @@ document.addEventListener('DOMContentLoaded', function() {
         if (cur) state.placements.set(k, {...cur, currentSide: "opp", zone});
       }
       renderPanels();
+      if (data.partial) {
+        alert("Couldn't optimize one side -- using their current arrangement.");
+      }
       restoreButton();
       // NOTE: deliberately not auto-running evaluate; user clicks Evaluate to refresh deltas.
     },
