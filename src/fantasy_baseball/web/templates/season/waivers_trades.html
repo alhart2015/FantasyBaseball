@@ -750,28 +750,61 @@ document.addEventListener('DOMContentLoaded', function() {
   function renderResult(data) {
     const el = document.getElementById("bt-result");
     if (!el) return;
-    // Container layout: optional moves summary on top (Phase 3), deltas below.
     el.innerHTML =
       '<div id="bt-result-moves"></div>' +
-      '<div class="card" style="margin-top: 1rem;">' +
-        '<h4>Proposed trade impact</h4>' +
-        '<div id="bt-result-deltas"></div>' +
-      '</div>';
+      '<div class="bt-result-cards">' +
+        '<div class="card bt-result-card bt-result-card-my">' +
+          '<div class="bt-result-card-head">' +
+            '<span class="bt-result-card-team">' + esc((window.BT_DATA && window.BT_DATA.myTeamName) || "My Team") + '</span>' +
+            '<span id="bt-result-band-my"></span>' +
+          '</div>' +
+          '<div id="bt-result-my-deltas"></div>' +
+        '</div>' +
+        '<div class="card bt-result-card bt-result-card-opp">' +
+          '<div class="bt-result-card-head">' +
+            '<span class="bt-result-card-team">' + esc(state.opponent || "Opponent") + '</span>' +
+            '<span id="bt-result-band-opp"></span>' +
+          '</div>' +
+          '<div id="bt-result-opp-deltas"></div>' +
+        '</div>' +
+      '</div>' +
+      '<div id="bt-result-tagline" class="bt-result-tagline"></div>';
 
-    const target = document.getElementById("bt-result-deltas");
+    const myTarget = document.getElementById("bt-result-my-deltas");
+    const oppTarget = document.getElementById("bt-result-opp-deltas");
     if (data.band) {
-      target.insertAdjacentHTML('afterbegin', bandLineHTML(data.band, 'div', ''));
+      document.getElementById("bt-result-band-my").innerHTML = bandLineHTML(data.band, 'span', 'font-weight: bold;');
     }
-    const payload = {
+    if (data.opp_band) {
+      document.getElementById("bt-result-band-opp").innerHTML = bandLineHTML(data.opp_band, 'span', 'font-weight: bold;');
+    }
+
+    const myPayload = {
       roto: data.roto || {delta_total: 0, categories: {}},
       ev_roto: data.ev_roto || {delta_total: 0, categories: {}},
       stat_totals: data.stat_totals || {delta_total: 0, categories: {}},
     };
+    const oppPayload = {
+      roto: data.opp_roto || {delta_total: 0, categories: {}},
+      ev_roto: data.opp_ev_roto || {delta_total: 0, categories: {}},
+      stat_totals: data.opp_stat_totals || {delta_total: 0, categories: {}},
+    };
     if (typeof window.renderThreeModeDeltaView === "function") {
-      window.renderThreeModeDeltaView(target, payload, {initialMode: "ev_roto"});
+      window.renderThreeModeDeltaView(myTarget, myPayload, {initialMode: "ev_roto"});
+      window.renderThreeModeDeltaView(oppTarget, oppPayload, {initialMode: "ev_roto"});
     } else {
-      target.textContent = "Failed to load delta view component.";
+      myTarget.textContent = "Failed to load delta view component.";
+      oppTarget.textContent = "Failed to load delta view component.";
     }
+
+    // Tagline interprets the pair.
+    const myPos = (data.delta_total != null ? data.delta_total : 0) > 0;
+    const oppPos = (data.opp_delta_total != null ? data.opp_delta_total : 0) > 0;
+    const tag = document.getElementById("bt-result-tagline");
+    if (myPos && oppPos) tag.textContent = "Both positive -- pitch this trade";
+    else if (myPos && !oppPos) tag.textContent = "Good for you, bad for them -- unlikely to accept";
+    else if (!myPos && oppPos) tag.textContent = "Bad for you, good for them -- skip";
+    else tag.textContent = "Neither side wins -- skip";
 
     renderMovesSummary();
   }

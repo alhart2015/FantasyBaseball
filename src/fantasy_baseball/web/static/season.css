@@ -2144,11 +2144,44 @@ td[style*="--neg"] {
 .page-trades .bt-selection-strip[hidden] { display: none; }
 .page-trades .bt-selection-cancel { color: #1a1a1a; text-decoration: underline; }
 
+/* ---- Build-a-Trade: two-card result panel ---- */
+
+.page-trades .bt-result-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 12px;
+}
+.page-trades .bt-result-card {
+    padding: 12px;
+}
+.page-trades .bt-result-card-my { border-left: 4px solid var(--success, #4d8); }
+.page-trades .bt-result-card-opp { border-left: 4px solid var(--accent, #fc4); }
+.page-trades .bt-result-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    font-size: 13px;
+    font-weight: 600;
+}
+.page-trades .bt-result-tagline {
+    text-align: center;
+    padding: 10px;
+    color: var(--text-secondary);
+    font-style: italic;
+    font-size: 12px;
+}
+
 @media (min-width: 768px) {
     .page-trades .bt-rosters {
         flex-direction: row;
     }
     .page-trades .bt-panel { flex: 1; min-width: 0; }
+    .page-trades .bt-result-cards {
+        flex-direction: row;
+    }
+    .page-trades .bt-result-card { flex: 1; min-width: 0; }
 }
 
 /* =====================================================================
