@@ -539,9 +539,12 @@ document.addEventListener('DOMContentLoaded', function() {
       names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
     sel.addEventListener("change", () => {
       state.opponent = sel.value || null;
+      state.selection = null;
       rebuildPlacements();
       renderPanels();
       updateLegality();
+      const resultEl = document.getElementById("bt-result");
+      if (resultEl) resultEl.innerHTML = "";
     });
   }
 
