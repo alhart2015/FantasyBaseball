@@ -235,3 +235,88 @@ def test_optimize_route_rejects_illegal_trade(client, monkeypatch):
     body = resp.get_json()
     assert body["ok"] is False
     assert body.get("reason")
+
+
+# ---------------------------------------------------------------------------
+# side= parameter tests (Task 6)
+# ---------------------------------------------------------------------------
+#
+# NOTE: We intentionally do NOT reuse client_with_trade_fixture from
+# test_evaluate_trade_route here.  That fixture builds 23-player rosters
+# and drives the full combinatorial optimizer (Hungarian assignment across
+# all subsets), which makes each test take minutes.  The 5-player minimal
+# roster already established by _setup_minimal_rosters() above is sized so
+# the optimizer finishes in milliseconds, which is what unit tests need.
+
+
+@pytest.fixture
+def client_with_side_payload(client, monkeypatch):
+    """Yield (client, base_payload) for side-param tests.
+
+    Uses the same tiny 5-player roster from _setup_minimal_rosters() so
+    the optimizer finishes in milliseconds.
+    """
+    me, opp, ps = _setup_minimal_rosters()
+    _fake_cache(
+        monkeypatch,
+        {
+            "roster": me,
+            "opp_rosters": {"Rival": opp},
+            "projections": {"projected_standings": ps, "team_sds": None},
+            "ros_projections": {"hitters": [], "pitchers": []},
+        },
+    )
+    _patch_config(monkeypatch)
+
+    payload = {
+        "opponent": "Rival",
+        "send": [player_key_json(me[0])],
+        "receive": [player_key_json(opp[0])],
+        "my_drops": [],
+        "opp_drops": [],
+        "my_adds": [],
+    }
+    yield client, payload
+
+
+def test_optimize_lineup_default_side_is_both(client_with_side_payload):
+    client, payload = client_with_side_payload
+    # No 'side' key in payload -> default is 'both'.
+    resp = client.post("/api/optimize-trade-lineup", json=payload)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data.get("ok") is True
+    assert "my_slots" in data
+    assert "opp_slots" in data
+
+
+def test_optimize_lineup_side_my_returns_only_my_slots(client_with_side_payload):
+    client, payload = client_with_side_payload
+    payload = dict(payload)
+    payload["side"] = "my"
+    resp = client.post("/api/optimize-trade-lineup", json=payload)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "my_slots" in data
+    assert "opp_slots" not in data
+
+
+def test_optimize_lineup_side_opp_returns_only_opp_slots(client_with_side_payload):
+    client, payload = client_with_side_payload
+    payload = dict(payload)
+    payload["side"] = "opp"
+    resp = client.post("/api/optimize-trade-lineup", json=payload)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "opp_slots" in data
+    assert "my_slots" not in data
+
+
+def test_optimize_lineup_rejects_invalid_side(client_with_side_payload):
+    client, payload = client_with_side_payload
+    payload = dict(payload)
+    payload["side"] = "nonsense"
+    resp = client.post("/api/optimize-trade-lineup", json=payload)
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "side must be" in (data.get("error") or "")

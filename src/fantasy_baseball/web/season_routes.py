@@ -32,6 +32,8 @@ from fantasy_baseball.web.season_data import (
     read_meta,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _standings_from_cache(raw: dict) -> Standings:
     """Build a typed ``Standings`` from the canonical cache payload.
@@ -923,6 +925,10 @@ def register_routes(app: Flask) -> None:
         if not opponent:
             return jsonify({"error": "opponent is required"}), 400
 
+        side = (data.get("side") or "both").strip().lower()
+        if side not in _SIDE_CHOICES:
+            return jsonify({"error": "side must be 'my', 'opp', or 'both'"}), 400
+
         config = _load_config()
         roster_raw = read_cache_list(CacheKey.ROSTER)
         opp_rosters_raw = read_cache_dict(CacheKey.OPP_ROSTERS)
@@ -1000,31 +1006,56 @@ def register_routes(app: Flask) -> None:
 
         projected = _projected_from_cache(projected_standings_raw)
 
-        try:
-            my_slots = _optimize_one_side(
-                hart_post,
-                projected,
-                config.team_name,
-                config.roster_slots,
-                team_sds,
-                optimize_hitter_lineup,
-                optimize_pitcher_lineup,
-                IL_SLOTS,
-            )
-            opp_slots = _optimize_one_side(
-                opp_post,
-                projected,
-                opponent,
-                config.roster_slots,
-                team_sds,
-                optimize_hitter_lineup,
-                optimize_pitcher_lineup,
-                IL_SLOTS,
-            )
-        except ValueError as exc:
-            return jsonify({"ok": False, "reason": str(exc)})
+        result: dict[str, object] = {"ok": True}
+        partial = False
 
-        return jsonify({"ok": True, "my_slots": my_slots, "opp_slots": opp_slots})
+        if side in ("my", "both"):
+            try:
+                result["my_slots"] = _optimize_one_side(
+                    hart_post,
+                    projected,
+                    config.team_name,
+                    config.roster_slots,
+                    team_sds,
+                    optimize_hitter_lineup,
+                    optimize_pitcher_lineup,
+                    IL_SLOTS,
+                )
+            except (ValueError, ZeroDivisionError, KeyError) as exc:
+                if side == "my":
+                    return jsonify({"ok": False, "reason": str(exc)})
+                logger.warning("optimize-trade-lineup: my-side failed: %s", exc)
+                partial = True
+                result["my_slots_error"] = str(exc)
+
+        if side in ("opp", "both"):
+            try:
+                result["opp_slots"] = _optimize_one_side(
+                    opp_post,
+                    projected,
+                    opponent,
+                    config.roster_slots,
+                    team_sds,
+                    optimize_hitter_lineup,
+                    optimize_pitcher_lineup,
+                    IL_SLOTS,
+                )
+            except (ValueError, ZeroDivisionError, KeyError) as exc:
+                if side == "opp":
+                    return jsonify({"ok": False, "reason": str(exc)})
+                logger.warning("optimize-trade-lineup: opp-side failed: %s", exc)
+                partial = True
+                result["opp_slots_error"] = str(exc)
+
+        if partial:
+            result["partial"] = True
+
+        # If both branches failed in 'both' mode, we have no optimizer output --
+        # mark the response as unsuccessful so clients checking only `ok` see it.
+        if "my_slots" not in result and "opp_slots" not in result:
+            result["ok"] = False
+
+        return jsonify(result)
 
     @app.route("/players")
     def player_search():
@@ -1035,6 +1066,7 @@ def register_routes(app: Flask) -> None:
             active_page="players",
         )
 
+    _SIDE_CHOICES = {"my", "opp", "both"}
     _ALL_VARIANTS = {"ALL", "ALL_HIT", "ALL_PIT"}
     _VALID_POS = set(HITTER_SOURCE_POSITIONS) | {"SP", "RP"} | _ALL_VARIANTS
 
