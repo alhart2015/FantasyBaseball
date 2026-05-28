@@ -841,6 +841,7 @@ def register_routes(app: Flask) -> None:
             opp_drops=list(data.get("opp_drops") or []),
             my_adds=list(data.get("my_adds") or []),
             my_active_ids=set(data.get("my_active_ids") or []),
+            opp_active_ids=set(data.get("opp_active_ids") or []),
         )
 
         result = evaluate_multi_trade(
@@ -885,6 +886,20 @@ def register_routes(app: Flask) -> None:
                 "ev_roto": _serialize_view(result.ev_roto),
                 "stat_totals": _serialize_view(result.stat_totals),
                 "band": result.band,
+                # Opp-side parallel fields.
+                "opp_delta_total": round(result.opp_delta_total, 2),
+                "opp_categories": {
+                    cat: {
+                        "before": round(cd.before, 2),
+                        "after": round(cd.after, 2),
+                        "delta": round(cd.delta, 2),
+                    }
+                    for cat, cd in result.opp_categories.items()
+                },
+                "opp_roto": _serialize_view(result.opp_roto),
+                "opp_ev_roto": _serialize_view(result.opp_ev_roto),
+                "opp_stat_totals": _serialize_view(result.opp_stat_totals),
+                "opp_band": result.opp_band,
             }
         )
 

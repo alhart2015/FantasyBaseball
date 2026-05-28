@@ -267,3 +267,151 @@ def test_evaluate_trade_response_includes_view_blocks(client, monkeypatch):
     assert "band" in body, "response missing 'band' key"
     assert body["band"] is not None
     assert set(body["band"].keys()) == {"mean", "sd", "p_positive", "verdict"}
+
+
+# ---------------------------------------------------------------------------
+# Shared fixture for opp-field tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def client_with_trade_fixture(client, monkeypatch):
+    """Yield (client, payload) for a minimal legal trade against 'Rival'."""
+    from fantasy_baseball.models.player import HitterStats, Player
+
+    def _hit(name, r=70):
+        return Player(
+            name=name,
+            player_type="hitter",
+            positions=["OF"],
+            rest_of_season=HitterStats(pa=600, ab=500, h=125, r=r, hr=20, rbi=60, sb=5, avg=0.250),
+        ).to_dict()
+
+    me = [_hit(f"M{i}") for i in range(23)]
+    for i, p in enumerate(me):
+        p["selected_position"] = "BN" if i >= 21 else "OF"
+    opp = [_hit(f"R{i}") for i in range(23)]
+    for i, p in enumerate(opp):
+        p["selected_position"] = "BN" if i >= 21 else "OF"
+
+    standings_stats = {
+        "R": 1000,
+        "HR": 250,
+        "RBI": 750,
+        "SB": 80,
+        "AVG": 0.260,
+        "W": 70,
+        "K": 1200,
+        "SV": 50,
+        "ERA": 3.80,
+        "WHIP": 1.25,
+    }
+    projected_standings = {
+        "effective_date": "2026-04-01",
+        "teams": [
+            {"name": "Hart", "stats": dict(standings_stats)},
+            {"name": "Rival", "stats": dict(standings_stats)},
+            {"name": "T3", "stats": dict(standings_stats)},
+            {"name": "T4", "stats": dict(standings_stats)},
+        ],
+    }
+
+    _fake_cache(
+        monkeypatch,
+        {
+            "roster": me,
+            "opp_rosters": {"Rival": opp},
+            "projections": {
+                "projected_standings": projected_standings,
+                "team_sds": None,
+                "fraction_remaining": 0.6,
+            },
+            "ros_projections": {"hitters": [], "pitchers": []},
+        },
+    )
+
+    import fantasy_baseball.web.season_routes as routes
+
+    class _FakeCfg:
+        team_name = "Hart"
+        roster_slots: ClassVar[dict[str, int]] = {
+            "C": 1,
+            "1B": 1,
+            "2B": 1,
+            "3B": 1,
+            "SS": 1,
+            "IF": 1,
+            "OF": 4,
+            "UTIL": 2,
+            "P": 9,
+            "BN": 2,
+            "IL": 2,
+        }
+
+    monkeypatch.setattr(routes, "_load_config", lambda: _FakeCfg())
+
+    new_active = [player_key_json(p) for p in me[:21]]
+    new_active.remove(player_key_json(me[0]))
+    new_active.append(player_key_json(opp[0]))
+
+    # opp_active_ids: opp roster minus the player they're sending, plus the one they receive
+    opp_active = [player_key_json(p) for p in opp[:21]]
+    opp_active.remove(player_key_json(opp[0]))
+    opp_active.append(player_key_json(me[0]))
+
+    payload = {
+        "opponent": "Rival",
+        "send": [player_key_json(me[0])],
+        "receive": [player_key_json(opp[0])],
+        "my_drops": [],
+        "opp_drops": [],
+        "my_adds": [],
+        "my_active_ids": new_active,
+        "opp_active_ids": opp_active,
+    }
+    yield client, payload
+
+
+def test_evaluate_trade_response_includes_opp_fields(client_with_trade_fixture):
+    """Response JSON must include opp_roto, opp_ev_roto, opp_stat_totals,
+    opp_categories, opp_delta_total, opp_band."""
+    client, payload = client_with_trade_fixture
+    resp = client.post("/api/evaluate-trade", json=payload)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["legal"] is True
+    for field_name in (
+        "opp_delta_total",
+        "opp_categories",
+        "opp_roto",
+        "opp_ev_roto",
+        "opp_stat_totals",
+        "opp_band",
+    ):
+        assert field_name in data, f"missing {field_name}"
+    # opp views have the same shape as my-side views
+    assert "delta_total" in data["opp_roto"]
+    assert "categories" in data["opp_roto"]
+
+    # opp_categories has the same shape as my-side categories.
+    for cat in ("R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"):
+        assert cat in data["opp_categories"], f"opp_categories missing {cat}"
+        assert {"before", "after", "delta"} <= data["opp_categories"][cat].keys()
+
+
+def test_evaluate_trade_response_preserves_existing_fields(client_with_trade_fixture):
+    """My-side keys must still be present and at the expected nesting."""
+    client, payload = client_with_trade_fixture
+    resp = client.post("/api/evaluate-trade", json=payload)
+    data = resp.get_json()
+    for field_name in (
+        "legal",
+        "reason",
+        "delta_total",
+        "categories",
+        "roto",
+        "ev_roto",
+        "stat_totals",
+        "band",
+    ):
+        assert field_name in data, f"missing {field_name}"
