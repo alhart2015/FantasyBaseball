@@ -3,54 +3,6 @@
 {% block title %}Trades — Season Dashboard{% endblock %}
 {% block content %}
 
-<style>
-/* Layout-only rules. Page theming lives in season.css under .page-trades. */
-.section-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    cursor: pointer;
-    user-select: none;
-}
-.section-toggle .chevron.collapsed { transform: rotate(-90deg); }
-.section-body { overflow: hidden; }
-.section-body.collapsed { display: none; }
-.mb-2 { margin-bottom: 0.5rem; }
-.mt-2 { margin-top: 0.5rem; }
-.bt-suggestions {
-    list-style: none;
-    padding: 0;
-    margin: 0.25rem 0;
-    max-height: 160px;
-    overflow-y: auto;
-}
-.bt-suggestions li { cursor: pointer; }
-.bt-result { margin-top: 1rem; }
-.bt-slot-grid { display: flex; flex-direction: column; }
-.bt-slot-row { display: grid; gap: 2px; }
-.bt-slot {
-    display: flex;
-    align-items: center;
-    overflow: hidden;
-}
-.bt-ghost { display: none; }
-.bt-zone { min-height: 30px; }
-.bt-chip-player {
-    display: inline-block;
-    margin: 2px;
-    cursor: grab;
-    user-select: none;
-    max-width: 100%;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.bt-chip-player.dragging { opacity: 0.4; }
-.bt-chip-player.il { cursor: default; }
-@media (max-width: 768px) {
-    .build-trade-rosters { grid-template-columns: 1fr !important; }
-}
-</style>
 
 <div class="page-trades">
 <div class="page-header">
@@ -101,39 +53,43 @@
         <select id="bt-opponent"></select>
     </div>
 
-    <div class="build-trade-rosters" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-        <div class="bt-panel">
-            <h4>My Team</h4>
+    <div class="bt-rosters">
+        <div class="bt-panel" id="bt-panel-my">
+            <div class="bt-panel-header">
+                <span class="bt-team-name">{{ (config.team_name if config else "My Team") }}</span>
+                <span class="bt-active-count" id="bt-my-count">--/23</span>
+            </div>
             <div id="bt-my-slots" class="bt-slot-grid" data-bt-side="my"></div>
-            <div id="bt-my-bench" class="bt-zone" data-bt-side="my" data-bt-zone="BN">
-                <div class="bt-zone-label">Bench</div>
-            </div>
-            <div id="bt-my-il" class="bt-zone" data-bt-side="my">
-                <div class="bt-zone-label">IL (read-only)</div>
-            </div>
-            <div id="bt-my-drops" class="bt-zone bt-drops-zone" data-bt-side="my" data-bt-zone="DROP">
-                <div class="bt-zone-label">Drops</div>
-            </div>
-            <div class="mt-2">
+            <div class="bt-zone-label">Bench</div>
+            <div id="bt-my-bench" class="bt-zone" data-bt-side="my" data-bt-zone="BN"></div>
+            <div class="bt-zone-label">IL (read-only)</div>
+            <div id="bt-my-il" class="bt-zone" data-bt-side="my"></div>
+            <div class="bt-zone-label">Drops</div>
+            <div id="bt-my-drops" class="bt-zone bt-drops-zone" data-bt-side="my" data-bt-zone="DROP"></div>
+            <div class="bt-waiver-block">
                 <label for="bt-waiver-search">Add from Waivers</label>
-                <input type="text" id="bt-waiver-search" placeholder="Type &ge;2 letters&hellip;"
-                       autocomplete="off" />
+                <input type="text" id="bt-waiver-search" placeholder="Type &ge;2 letters&hellip;" autocomplete="off" />
                 <ul id="bt-waiver-suggestions" class="bt-suggestions"></ul>
             </div>
         </div>
-        <div class="bt-panel">
-            <h4>Opponent Team</h4>
+        <div class="bt-panel" id="bt-panel-opp">
+            <div class="bt-panel-header">
+                <span class="bt-team-name" id="bt-opp-name">Opponent</span>
+                <span class="bt-active-count" id="bt-opp-count">--/23</span>
+            </div>
             <div id="bt-opp-slots" class="bt-slot-grid" data-bt-side="opp"></div>
-            <div id="bt-opp-bench" class="bt-zone" data-bt-side="opp" data-bt-zone="BN">
-                <div class="bt-zone-label">Bench</div>
-            </div>
-            <div id="bt-opp-il" class="bt-zone" data-bt-side="opp">
-                <div class="bt-zone-label">IL (read-only)</div>
-            </div>
-            <div id="bt-opp-drops" class="bt-zone bt-drops-zone" data-bt-side="opp" data-bt-zone="DROP">
-                <div class="bt-zone-label">Drops</div>
-            </div>
+            <div class="bt-zone-label">Bench</div>
+            <div id="bt-opp-bench" class="bt-zone" data-bt-side="opp" data-bt-zone="BN"></div>
+            <div class="bt-zone-label">IL (read-only)</div>
+            <div id="bt-opp-il" class="bt-zone" data-bt-side="opp"></div>
+            <div class="bt-zone-label">Drops</div>
+            <div id="bt-opp-drops" class="bt-zone bt-drops-zone" data-bt-side="opp" data-bt-zone="DROP"></div>
         </div>
+    </div>
+
+    <div id="bt-selection-strip" class="bt-selection-strip" hidden>
+        <span class="bt-selection-text"></span>
+        <a href="#" class="bt-selection-cancel">cancel</a>
     </div>
 
     <div id="bt-legality" class="bt-legality mt-2"></div>
@@ -526,6 +482,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const cls = ["bt-chip-player"];
     if (foreign) cls.push("foreign");
     if (il) cls.push("il");
+    const isSelected = state.selection && state.selection.key === key;
+    if (isSelected) cls.push("selected");
     const dragAttr = il ? "" : `data-bt-drag-key="${esc(key)}"`;
     const positions = (p.positions || []).join("/");
     return `<span class="${cls.join(" ")}" ${dragAttr}>${esc(p.name)} <small>${esc(positions)}</small></span>`;
@@ -554,13 +512,23 @@ document.addEventListener('DOMContentLoaded', function() {
         const chips = [...state.placements.entries()]
           .filter(([, pl]) => pl.currentSide === side && pl.zone === zone)
           .map(([k]) => renderChip(k)).join("");
-        const label = zone === "DROP" ? "Drops"
-                    : zone === "IL" ? "IL (read-only)"
-                    : "Bench";
-        el.innerHTML = `<div class="bt-zone-label">${label}</div>${chips}`;
+        el.innerHTML = chips;
+      }
+
+      // Update team header active counts.
+      let activeCount = 0;
+      for (const [, pl] of state.placements) {
+        if (pl.currentSide === side && pl.zone !== "IL" && pl.zone !== "DROP") activeCount++;
+      }
+      const countEl = document.getElementById(`bt-${side}-count`);
+      if (countEl) countEl.textContent = `${activeCount}/23`;
+      if (side === "opp") {
+        const nameEl = document.getElementById("bt-opp-name");
+        if (nameEl) nameEl.textContent = state.opponent || "Opponent";
       }
     }
     attachClickHandlers();
+    renderSelectionStrip();
   }
 
   function populateOpponents() {
@@ -941,6 +909,28 @@ document.addEventListener('DOMContentLoaded', function() {
       // NOTE: deliberately not auto-running evaluate; user clicks Evaluate to refresh deltas.
     },
   };
+
+  function renderSelectionStrip() {
+    const strip = document.getElementById("bt-selection-strip");
+    if (!strip) return;
+    if (!state.selection) {
+      strip.hidden = true;
+      return;
+    }
+    const p = playerByKey(state.selection.key);
+    const name = p ? p.name : state.selection.key.split("::")[0];
+    strip.hidden = false;
+    strip.querySelector(".bt-selection-text").textContent = `Selected: ${name} -- tap a slot to swap or move`;
+  }
+
+  // Global click handler: cancel link in selection strip.
+  document.addEventListener("click", (e) => {
+    const cancel = e.target.closest(".bt-selection-cancel");
+    if (!cancel) return;
+    e.preventDefault();
+    e.stopPropagation();
+    tap({ kind: "void" });
+  });
 
   // Global click handler: deselect when clicking non-actionable area inside the trade builder.
   document.addEventListener("click", (e) => {
