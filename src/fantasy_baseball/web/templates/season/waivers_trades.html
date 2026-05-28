@@ -723,7 +723,7 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   function buildPayload() {
-    const send = [], receive = [], myDrops = [], oppDrops = [], myAdds = [], myActive = [];
+    const send = [], receive = [], myDrops = [], oppDrops = [], myAdds = [], myActive = [], oppActive = [];
     for (const [k, pl] of state.placements) {
       if (pl.zone === "DROP") {
         if (pl.origin === "my") myDrops.push(k);
@@ -736,6 +736,7 @@ document.addEventListener('DOMContentLoaded', function() {
       if (pl.currentSide === "my" && pl.origin === "opp") receive.push(k);
       if (pl.currentSide === "my" && pl.origin === "waiver") myAdds.push(k);
       if (pl.currentSide === "my" && pl.zone !== "BN") myActive.push(k);
+      if (pl.currentSide === "opp" && pl.zone !== "BN") oppActive.push(k);
     }
     return {
       opponent: state.opponent,
@@ -744,6 +745,7 @@ document.addEventListener('DOMContentLoaded', function() {
       opp_drops: oppDrops,
       my_adds: myAdds,
       my_active_ids: myActive,
+      opp_active_ids: oppActive,
     };
   }
 
