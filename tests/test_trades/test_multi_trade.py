@@ -701,6 +701,149 @@ def test_multi_trade_result_opp_fields_have_safe_defaults():
     assert r.opp_band is None
 
 
+# ---------------------------------------------------------------------------
+# Task 3 helpers: simple 1-for-1 fixture for opp active-set delta tests.
+# "Hart of the Order" sends H0, receives O0. 23 hitters each, 21 active.
+# ---------------------------------------------------------------------------
+
+_HART_OF_THE_ORDER = "Hart of the Order"
+_OPP_TEAM = "Opp Team"
+
+# Fixture-level stats used by both standings and `_eval_fixture`.
+_FIXTURE_CAT_STATS = {
+    "R": 1000.0,
+    "HR": 250.0,
+    "RBI": 750.0,
+    "SB": 80.0,
+    "AVG": 0.260,
+    "W": 70.0,
+    "K": 1200.0,
+    "SV": 50.0,
+    "ERA": 3.80,
+    "WHIP": 1.25,
+}
+
+
+def _make_simple_1for1_proposal() -> TradeProposal:
+    """1-for-1 proposal: Hart of the Order sends H0, receives O0.
+
+    my_active_ids is the proposed post-trade active set for Hart's side:
+    {H1..H20, O0}.  opp_active_ids is intentionally left empty (callers
+    that need it should assign it, or call with _opp_active_set_for_simple_fixture()).
+    """
+    hart_roster = [_hitter_with_key(f"H{i}") for i in range(23)]
+    for i, p in enumerate(hart_roster):
+        p.selected_position = "BN" if i >= 21 else "OF"
+
+    # Hart sends H0, receives O0.
+    send_key = "H0::hitter"
+    receive_key = "O0::hitter"
+
+    new_active = {f"H{i}::hitter" for i in range(1, 21)}
+    new_active.add(receive_key)  # O0 slides into Hart's active slot
+
+    return TradeProposal(
+        opponent=_OPP_TEAM,
+        send=[send_key],
+        receive=[receive_key],
+        my_active_ids=new_active,
+    )
+
+
+def _opp_active_set_for_simple_fixture() -> set[str]:
+    """Opp's proposed post-trade active set.
+
+    Before the trade, Opp has O0..O20 active (O21, O22 are BN).
+    After the trade: O0 is sent to Hart, H0 is received.
+    Post-trade active set = {O1..O20, H0}.
+    """
+    active: set[str] = {f"O{i}::hitter" for i in range(1, 21)}
+    active.add("H0::hitter")
+    return active
+
+
+def _eval_fixture() -> dict:
+    """Keyword args for evaluate_multi_trade (everything except `proposal`).
+
+    Builds a minimal 2-team league (Hart of the Order + Opp Team) with
+    23 hitters each (21 active, 2 BN) and flat projected standings.
+    """
+    hart_roster = [_hitter_with_key(f"H{i}") for i in range(23)]
+    for i, p in enumerate(hart_roster):
+        p.selected_position = "BN" if i >= 21 else "OF"
+
+    opp_roster = [_hitter_with_key(f"O{i}") for i in range(23)]
+    for i, p in enumerate(opp_roster):
+        p.selected_position = "BN" if i >= 21 else "OF"
+
+    standings = ProjectedStandings(
+        effective_date=date(2026, 4, 1),
+        entries=[
+            ProjectedStandingsEntry(
+                team_name=_HART_OF_THE_ORDER,
+                stats=CategoryStats.from_dict(_FIXTURE_CAT_STATS),
+            ),
+            ProjectedStandingsEntry(
+                team_name=_OPP_TEAM,
+                stats=CategoryStats.from_dict(_FIXTURE_CAT_STATS),
+            ),
+        ],
+    )
+
+    return dict(
+        hart_name=_HART_OF_THE_ORDER,
+        hart_roster=hart_roster,
+        opp_rosters={_OPP_TEAM: opp_roster},
+        waiver_pool={},
+        projected_standings=standings,
+        team_sds=None,
+        roster_slots=ROSTER_SLOTS_STANDARD,
+        fraction_remaining=0.6,
+    )
+
+
+def test_opp_active_ids_fallback_matches_current_roster_level_math():
+    """Without opp_active_ids, opp views must equal today's roster-level computation."""
+    # Regression guard: a 1-for-1 trade with no drops produces the same opp stat
+    # totals whether computed roster-level or active-set, because both swapped
+    # players were active. So the fallback path must equal the explicit path
+    # in this specific shape.
+    proposal_no_aids = _make_simple_1for1_proposal()
+    proposal_with_aids = _make_simple_1for1_proposal()
+    proposal_with_aids.opp_active_ids = _opp_active_set_for_simple_fixture()
+
+    fixture = _eval_fixture()
+    r_fallback = evaluate_multi_trade(proposal=proposal_no_aids, **fixture)
+    r_explicit = evaluate_multi_trade(proposal=proposal_with_aids, **fixture)
+
+    assert (
+        r_fallback.opp_stat_totals.categories["R"].after
+        == r_explicit.opp_stat_totals.categories["R"].after
+    )
+
+
+def test_opp_active_ids_changes_opp_stat_totals_when_lineup_differs():
+    """When opp_active_ids excludes a player who was active before the trade,
+    opp_stat_totals must drop that player's contribution."""
+    fixture = _eval_fixture()
+    full_active = _opp_active_set_for_simple_fixture()
+    bench_one = set(full_active)
+    bench_one.discard(next(iter(full_active)))  # bench one player
+
+    p_full = _make_simple_1for1_proposal()
+    p_full.opp_active_ids = full_active
+    p_bench = _make_simple_1for1_proposal()
+    p_bench.opp_active_ids = bench_one
+
+    r_full = evaluate_multi_trade(proposal=p_full, **fixture)
+    r_bench = evaluate_multi_trade(proposal=p_bench, **fixture)
+
+    # Benching any active hitter must reduce opp R/HR/RBI/SB after-totals.
+    assert (
+        r_bench.opp_stat_totals.categories["R"].after < r_full.opp_stat_totals.categories["R"].after
+    )
+
+
 def test_build_waiver_pool_excludes_rostered_players():
     a = _make_hitter("Alice")
     b = _make_hitter("Bob")

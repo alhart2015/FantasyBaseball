@@ -154,7 +154,7 @@ def evaluate_multi_trade(
         # Resolve drops to validate keys exist (KeyError on unknown); objects
         # themselves are unused since we pass the key lists to _can_roster_after.
         _resolve_keys(proposal.my_drops, my_idx)
-        opp_drops = _resolve_keys(proposal.opp_drops, opp_idx)
+        _resolve_keys(proposal.opp_drops, opp_idx)
         my_adds = _resolve_keys(proposal.my_adds, waiver_pool)
     except KeyError as exc:
         return MultiTradeResult(
@@ -198,9 +198,10 @@ def evaluate_multi_trade(
         )
 
     # --- 3. Build active-set deltas ------------------------------------------
-    # Combine all players that may appear in `after_mine`: current roster
-    # (my_idx), incoming trade pieces (received), and waiver adds (my_adds).
-    # Omitting `received` would silently drop incoming players from my_gains.
+    # MY side: use proposal.my_active_ids as the post-trade active set.
+    # When my_active_ids is empty (legacy callers), this treats my whole
+    # current active roster as "leaving" -- callers are expected to provide
+    # an active set when they want a meaningful delta.
     all_mine_by_key = {
         **my_idx,
         **{player_key(p): p for p in received},
@@ -214,9 +215,33 @@ def evaluate_multi_trade(
     my_loses = aggregate_player_stats(mine_leaving)
     my_gains = aggregate_player_stats(mine_entering)
 
-    # Opp: treat all non-IL as active. They lose received+opp_drops, gain sent.
-    opp_loses = aggregate_player_stats(received + opp_drops)
-    opp_gains = aggregate_player_stats(sent)
+    # OPP side: prefer active-set delta when opp_active_ids is provided;
+    # otherwise fall back to the roster-level computation (today's behavior).
+    all_opp_by_key = {
+        **opp_idx,
+        **{player_key(p): p for p in sent},
+    }
+    before_opp = _current_active_set(opp_rosters[proposal.opponent])
+
+    if proposal.opp_active_ids:
+        after_opp = set(proposal.opp_active_ids)
+        opp_leaving = [all_opp_by_key[k] for k in before_opp - after_opp if k in all_opp_by_key]
+        opp_entering = [all_opp_by_key[k] for k in after_opp - before_opp if k in all_opp_by_key]
+        opp_loses = aggregate_player_stats(opp_leaving)
+        opp_gains = aggregate_player_stats(opp_entering)
+    else:
+        # Legacy fallback: no opp_active_ids provided. Assume opp_drops
+        # vacate active slots and sent slides in. Bench-only drops are
+        # treated as no-ops on opp's stat line (consistent with the band's
+        # view, since bench players never contribute to projected_standings).
+        received_keys = {player_key(p) for p in received}
+        sent_keys = {player_key(p) for p in sent}
+        opp_drop_keys = set(proposal.opp_drops)
+        after_opp = (before_opp - received_keys - opp_drop_keys) | sent_keys
+        opp_leaving = [all_opp_by_key[k] for k in before_opp - after_opp if k in all_opp_by_key]
+        opp_entering = [all_opp_by_key[k] for k in after_opp - before_opp if k in all_opp_by_key]
+        opp_loses = aggregate_player_stats(opp_leaving)
+        opp_gains = aggregate_player_stats(opp_entering)
 
     # --- 4. Apply deltas to baseline and score -------------------------------
     if not any(e.team_name == hart_name for e in projected_standings.entries):
