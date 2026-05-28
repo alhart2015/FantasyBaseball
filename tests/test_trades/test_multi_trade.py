@@ -658,6 +658,49 @@ def test_band_mean_consistent_with_ev_roto_delta_total():
     assert set(result.band.keys()) == {"mean", "sd", "p_positive", "verdict"}
 
 
+def test_multi_trade_result_has_opp_view_blocks_and_categories():
+    from fantasy_baseball.trades.multi_trade import (
+        CategoryDelta,
+        MultiTradeResult,
+        ViewBlock,
+    )
+
+    empty_view = ViewBlock(delta_total=0.0, categories={})
+    r = MultiTradeResult(
+        legal=True,
+        reason=None,
+        delta_total=0.0,
+        categories={},
+        roto=empty_view,
+        ev_roto=empty_view,
+        stat_totals=empty_view,
+        band=None,
+        opp_delta_total=0.0,
+        opp_categories={"R": CategoryDelta(before=10.0, after=11.0, delta=1.0)},
+        opp_roto=empty_view,
+        opp_ev_roto=empty_view,
+        opp_stat_totals=empty_view,
+        opp_band=None,
+    )
+    assert r.opp_delta_total == 0.0
+    assert r.opp_categories["R"].delta == 1.0
+    assert r.opp_roto.delta_total == 0.0
+    assert r.opp_ev_roto.delta_total == 0.0
+    assert r.opp_stat_totals.delta_total == 0.0
+    assert r.opp_band is None
+
+
+def test_multi_trade_result_opp_fields_have_safe_defaults():
+    """All opp_* fields must be constructable without explicit args (parity with my-side)."""
+    r = MultiTradeResult(legal=True, reason=None, delta_total=0.0, categories={})
+    assert r.opp_delta_total == 0.0
+    assert r.opp_categories == {}
+    assert r.opp_roto.delta_total == 0.0
+    assert r.opp_ev_roto.delta_total == 0.0
+    assert r.opp_stat_totals.delta_total == 0.0
+    assert r.opp_band is None
+
+
 def test_build_waiver_pool_excludes_rostered_players():
     a = _make_hitter("Alice")
     b = _make_hitter("Bob")

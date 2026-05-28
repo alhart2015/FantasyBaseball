@@ -80,6 +80,17 @@ class MultiTradeResult:
         default_factory=lambda: ViewBlock(delta_total=0.0, categories={})
     )
     band: dict[str, float | str] | None = None
+    # --- Opponent-side parallel fields -------------------------------------
+    opp_delta_total: float = 0.0
+    opp_categories: dict[str, CategoryDelta] = field(default_factory=dict)
+    opp_roto: ViewBlock = field(default_factory=lambda: ViewBlock(delta_total=0.0, categories={}))
+    opp_ev_roto: ViewBlock = field(
+        default_factory=lambda: ViewBlock(delta_total=0.0, categories={})
+    )
+    opp_stat_totals: ViewBlock = field(
+        default_factory=lambda: ViewBlock(delta_total=0.0, categories={})
+    )
+    opp_band: dict[str, float | str] | None = None
 
 
 def player_key(player: Player) -> str:
