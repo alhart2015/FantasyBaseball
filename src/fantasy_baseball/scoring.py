@@ -491,7 +491,9 @@ def _compute_substitution_factors(
         factors[target.name] = factor
         if league_context is not None:
             running_roster = [
-                _scale_stats(p, factor, projection_source) if isinstance(p, Player) and p.name == target.name else p
+                _scale_stats(p, factor, projection_source)
+                if isinstance(p, Player) and p.name == target.name
+                else p
                 for p in running_roster
             ]
     return factors
@@ -537,15 +539,13 @@ def _compute_pitcher_pool_factors(
     from fantasy_baseball.lineup.pitcher_swap import discount_factor, swap_window_ip
 
     il_candidates = [
-        p for p in il_pitchers
-        if p.rest_of_season is not None and _playing_time(p) > 0
+        p for p in il_pitchers if p.rest_of_season is not None and _playing_time(p) > 0
     ]
     if not il_candidates:
         return {}
 
     active_pool = [
-        p for p in active_pitchers
-        if p.rest_of_season is not None and _playing_time(p) > 0
+        p for p in active_pitchers if p.rest_of_season is not None and _playing_time(p) > 0
     ]
     if not active_pool:
         # No one to discount; can't realize the swap. Conservative: skip.

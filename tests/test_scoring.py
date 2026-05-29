@@ -2784,7 +2784,9 @@ class TestScaleStatsYTDFloor:
         """Pitcher whose YTD K = full_season_k - ros_k."""
         from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
 
-        ros = PitcherStats(ip=60, w=2, k=ros_k, sv=0, er=20, bb=15, h_allowed=50, era=3.00, whip=1.08)
+        ros = PitcherStats(
+            ip=60, w=2, k=ros_k, sv=0, er=20, bb=15, h_allowed=50, era=3.00, whip=1.08
+        )
         full = PitcherStats(
             ip=120, w=8, k=full_season_k, sv=0, er=40, bb=30, h_allowed=100, era=3.00, whip=1.08
         )
@@ -2861,7 +2863,9 @@ class TestScaleStatsYTDFloor:
         from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
         from fantasy_baseball.scoring import _scale_stats
 
-        ros = PitcherStats(ip=200, w=12, k=200, sv=0, er=70, bb=40, h_allowed=160, era=3.15, whip=1.0)
+        ros = PitcherStats(
+            ip=200, w=12, k=200, sv=0, er=70, bb=40, h_allowed=160, era=3.15, whip=1.0
+        )
         p = Player(
             name="Preseason", player_type=PlayerType.PITCHER, rest_of_season=ros
         )  # no full_season_projection
@@ -2881,23 +2885,44 @@ class TestPitcherPoolRateSwap:
         from fantasy_baseball.models.positions import Position
 
         ros = PitcherStats(
-            ip=ros_ip, w=ros_ip * 0.05, k=ros_k, sv=0,
-            er=ros_ip * 0.33, bb=ros_ip * 0.25, h_allowed=ros_ip * 0.83,
-            era=3.00, whip=1.08,
+            ip=ros_ip,
+            w=ros_ip * 0.05,
+            k=ros_k,
+            sv=0,
+            er=ros_ip * 0.33,
+            bb=ros_ip * 0.25,
+            h_allowed=ros_ip * 0.83,
+            era=3.00,
+            whip=1.08,
         )
         full = PitcherStats(
-            ip=ros_ip + 30, w=(ros_ip + 30) * 0.05, k=ros_k + 30, sv=0,
-            er=(ros_ip + 30) * 0.33, bb=(ros_ip + 30) * 0.25,
-            h_allowed=(ros_ip + 30) * 0.83, era=3.00, whip=1.08,
+            ip=ros_ip + 30,
+            w=(ros_ip + 30) * 0.05,
+            k=ros_k + 30,
+            sv=0,
+            er=(ros_ip + 30) * 0.33,
+            bb=(ros_ip + 30) * 0.25,
+            h_allowed=(ros_ip + 30) * 0.83,
+            era=3.00,
+            whip=1.08,
         )
         pre = PitcherStats(
-            ip=preseason_ip, w=preseason_ip * 0.05, k=preseason_ip * 1.0, sv=0,
-            er=preseason_ip * 0.33, bb=preseason_ip * 0.25, h_allowed=preseason_ip * 0.83,
-            era=3.00, whip=1.08,
+            ip=preseason_ip,
+            w=preseason_ip * 0.05,
+            k=preseason_ip * 1.0,
+            sv=0,
+            er=preseason_ip * 0.33,
+            bb=preseason_ip * 0.25,
+            h_allowed=preseason_ip * 0.83,
+            era=3.00,
+            whip=1.08,
         )
         return Player(
-            name=name, player_type=PlayerType.PITCHER,
-            rest_of_season=ros, full_season_projection=full, preseason=pre,
+            name=name,
+            player_type=PlayerType.PITCHER,
+            rest_of_season=ros,
+            full_season_projection=full,
+            preseason=pre,
             selected_position=Position.IL,
         )
 
@@ -2907,23 +2932,44 @@ class TestPitcherPoolRateSwap:
 
         k = ros_ip * k_per_9 / 9.0
         ros = PitcherStats(
-            ip=ros_ip, w=ros_ip * 0.05, k=k, sv=0,
-            er=ros_ip * 0.40, bb=ros_ip * 0.30, h_allowed=ros_ip * 0.90,
-            era=3.60, whip=1.20,
+            ip=ros_ip,
+            w=ros_ip * 0.05,
+            k=k,
+            sv=0,
+            er=ros_ip * 0.40,
+            bb=ros_ip * 0.30,
+            h_allowed=ros_ip * 0.90,
+            era=3.60,
+            whip=1.20,
         )
         full = PitcherStats(
-            ip=ros_ip + 40, w=(ros_ip + 40) * 0.05, k=k + 40 * k_per_9 / 9.0, sv=0,
-            er=(ros_ip + 40) * 0.40, bb=(ros_ip + 40) * 0.30,
-            h_allowed=(ros_ip + 40) * 0.90, era=3.60, whip=1.20,
+            ip=ros_ip + 40,
+            w=(ros_ip + 40) * 0.05,
+            k=k + 40 * k_per_9 / 9.0,
+            sv=0,
+            er=(ros_ip + 40) * 0.40,
+            bb=(ros_ip + 40) * 0.30,
+            h_allowed=(ros_ip + 40) * 0.90,
+            era=3.60,
+            whip=1.20,
         )
         pre = PitcherStats(
-            ip=preseason_ip, w=preseason_ip * 0.05, k=preseason_ip * k_per_9 / 9.0, sv=0,
-            er=preseason_ip * 0.40, bb=preseason_ip * 0.30, h_allowed=preseason_ip * 0.90,
-            era=3.60, whip=1.20,
+            ip=preseason_ip,
+            w=preseason_ip * 0.05,
+            k=preseason_ip * k_per_9 / 9.0,
+            sv=0,
+            er=preseason_ip * 0.40,
+            bb=preseason_ip * 0.30,
+            h_allowed=preseason_ip * 0.90,
+            era=3.60,
+            whip=1.20,
         )
         return Player(
-            name=name, player_type=PlayerType.PITCHER,
-            rest_of_season=ros, full_season_projection=full, preseason=pre,
+            name=name,
+            player_type=PlayerType.PITCHER,
+            rest_of_season=ros,
+            full_season_projection=full,
+            preseason=pre,
             selected_position=Position.P,
         )
 
@@ -2934,10 +2980,11 @@ class TestPitcherPoolRateSwap:
           - discount the worst SP by 60/130 of his ROS
         It should NOT zero out Webb. It should NOT touch other active SPs.
         """
-        from fantasy_baseball.scoring import (
-            LeagueContext, _compute_pitcher_pool_factors,
-        )
         from fantasy_baseball.models.standings import CategoryStats
+        from fantasy_baseball.scoring import (
+            LeagueContext,
+            _compute_pitcher_pool_factors,
+        )
         from fantasy_baseball.utils.constants import Category
 
         webb = self._il_starter("Webb", ros_ip=60, ros_k=67, preseason_ip=200)
@@ -2949,10 +2996,12 @@ class TestPitcherPoolRateSwap:
         il = [webb]
 
         baseline = {
-            "Opp1": CategoryStats(r=0, hr=0, rbi=0, sb=0, avg=0,
-                                   w=20, k=400, sv=0, era=4.0, whip=1.3),
-            "Opp2": CategoryStats(r=0, hr=0, rbi=0, sb=0, avg=0,
-                                   w=22, k=420, sv=0, era=3.9, whip=1.28),
+            "Opp1": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=20, k=400, sv=0, era=4.0, whip=1.3
+            ),
+            "Opp2": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=22, k=420, sv=0, era=3.9, whip=1.28
+            ),
         }
         team_sds = {tn: {c: 1.0 for c in Category} for tn in ["Me", *baseline.keys()]}
         ctx = LeagueContext(
@@ -2983,10 +3032,11 @@ class TestPitcherPoolRateSwap:
         same scale factor -- not a per-stat picker. This guards against
         accidental per-category target selection in future refactors.
         """
-        from fantasy_baseball.scoring import (
-            LeagueContext, _apply_displacement,
-        )
         from fantasy_baseball.models.standings import CategoryStats
+        from fantasy_baseball.scoring import (
+            LeagueContext,
+            _apply_displacement,
+        )
         from fantasy_baseball.utils.constants import Category
 
         webb = self._il_starter("Webb", ros_ip=60, ros_k=67, preseason_ip=200)
@@ -2994,10 +3044,12 @@ class TestPitcherPoolRateSwap:
         sp_strong = self._active_starter("SP_Strong", ros_ip=140, k_per_9=10.0, preseason_ip=200)
 
         baseline = {
-            "Opp1": CategoryStats(r=0, hr=0, rbi=0, sb=0, avg=0,
-                                   w=20, k=400, sv=0, era=4.0, whip=1.3),
-            "Opp2": CategoryStats(r=0, hr=0, rbi=0, sb=0, avg=0,
-                                   w=22, k=420, sv=0, era=3.9, whip=1.28),
+            "Opp1": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=20, k=400, sv=0, era=4.0, whip=1.3
+            ),
+            "Opp2": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=22, k=420, sv=0, era=3.9, whip=1.28
+            ),
         }
         team_sds = {tn: {c: 1.0 for c in Category} for tn in ["Me", *baseline.keys()]}
         ctx = LeagueContext(
@@ -3050,32 +3102,55 @@ class TestPitcherPoolRateSwap:
         sp_b = self._active_starter("SP_B", ros_ip=135, k_per_9=9.8, preseason_ip=200)
 
         rp_ros = PitcherStats(
-            ip=25, w=1, k=20, sv=2,
-            er=12, bb=10, h_allowed=22,
-            era=4.32, whip=1.28,
+            ip=25,
+            w=1,
+            k=20,
+            sv=2,
+            er=12,
+            bb=10,
+            h_allowed=22,
+            era=4.32,
+            whip=1.28,
         )
         rp_full = PitcherStats(
-            ip=45, w=2, k=40, sv=5,
-            er=20, bb=18, h_allowed=42,
-            era=4.00, whip=1.33,
+            ip=45,
+            w=2,
+            k=40,
+            sv=5,
+            er=20,
+            bb=18,
+            h_allowed=42,
+            era=4.00,
+            whip=1.33,
         )
         rp_pre = PitcherStats(
-            ip=65, w=3, k=60, sv=7,
-            er=30, bb=24, h_allowed=58,
-            era=4.15, whip=1.26,
+            ip=65,
+            w=3,
+            k=60,
+            sv=7,
+            er=30,
+            bb=24,
+            h_allowed=58,
+            era=4.15,
+            whip=1.26,
         )
         weak_rp = Player(
-            name="Weak_RP", player_type=PlayerType.PITCHER,
-            rest_of_season=rp_ros, full_season_projection=rp_full, preseason=rp_pre,
+            name="Weak_RP",
+            player_type=PlayerType.PITCHER,
+            rest_of_season=rp_ros,
+            full_season_projection=rp_full,
+            preseason=rp_pre,
             selected_position=Position.P,
         )
         active = [sp_a, sp_b, weak_rp]
 
         baseline = {
-            "Opp1": CategoryStats(r=0, hr=0, rbi=0, sb=0, avg=0,
-                                   w=20, k=400, sv=18, era=4.0, whip=1.3),
-            "Opp2": CategoryStats(r=0, hr=0, rbi=0, sb=0, avg=0,
-                                   w=22, k=420, sv=20, era=3.9, whip=1.28),
+            "Opp1": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=20, k=400, sv=18, era=4.0, whip=1.3
+            ),
+            "Opp2": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=22, k=420, sv=20, era=3.9, whip=1.28
+            ),
         }
         team_sds = {tn: {c: 1.0 for c in Category} for tn in ["Me", *baseline.keys()]}
         ctx = LeagueContext(
