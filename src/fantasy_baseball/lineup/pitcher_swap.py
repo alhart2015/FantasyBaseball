@@ -64,9 +64,15 @@ def discount_factor(target_ros_ip: float, window: float) -> float:
     portion NOT consumed by the candidate's slot share.
 
     Returns 0.0 when the window meets or exceeds the target's ROS IP (full
-    swap-out) or when ``target_ros_ip`` is non-positive. Otherwise returns
+    swap-out) or when ``target_ros_ip`` is non-positive. Returns 1.0 when
+    ``window`` is non-positive (no consumption). Otherwise returns
     ``max(0, target_ros_ip - window) / target_ros_ip``.
+
+    The negative-window clamp guards against future callers whose arithmetic
+    may go negative; the function contract excludes amplification (return > 1).
     """
     if target_ros_ip <= 0.0:
         return 0.0
+    if window <= 0.0:
+        return 1.0
     return max(0.0, target_ros_ip - window) / target_ros_ip

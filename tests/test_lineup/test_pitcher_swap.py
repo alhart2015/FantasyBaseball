@@ -27,9 +27,11 @@ def _pitcher(name: str, *, ros_ip: float, preseason_ip: float | None = None) -> 
 
 
 def test_swap_window_same_role_with_preseason_matches_direct_ip():
-    """SP-to-SP: when both have preseason IP and similar ratios, the window
-    approximates the candidate's ROS IP -- i.e. the legacy direct-IP swap is a
-    special case of the preseason-proration formula."""
+    """SP-to-SP, IDENTICAL preseason IPs: proration reduces to the direct-IP
+    swap. This is the special case where the preseason-IP formula coincides
+    with the legacy direct-IP swap; for differing preseason IPs the two
+    diverge (see ``test_swap_window_same_role_differing_preseason_diverges``).
+    """
     candidate = _pitcher("Cand", ros_ip=60, preseason_ip=200)
     target = _pitcher("Target", ros_ip=130, preseason_ip=200)
     # 200 * (60 / 200) = 60 IP -- exactly the direct-IP swap.
@@ -97,3 +99,25 @@ def test_discount_factor_zero_window_keeps_target_full():
 def test_discount_factor_zero_target_returns_zero():
     """No ROS IP -> no way to scale -> 0 (caller should skip these targets)."""
     assert discount_factor(target_ros_ip=0.0, window=10.0) == 0.0
+
+
+def test_discount_factor_negative_window_clamps_to_full():
+    """A negative window must not amplify (return > 1.0). Callers in
+    scoring.py and stash_value.py may pass raw arithmetic that goes negative;
+    the function contract excludes amplification."""
+    assert discount_factor(target_ros_ip=100.0, window=-10.0) == 1.0
+
+
+def test_swap_window_same_role_differing_preseason_diverges():
+    """SP-to-SP, DIFFERENT preseason IPs: proration does NOT match direct-IP.
+
+    Even within the same role, the candidate's slot-share is a fraction of
+    HIS preseason workload, applied to the target's preseason workload. A
+    candidate projected for 200 preseason IP returning at 60 ROS IP (=30%
+    of his season) takes 30% of the target's preseason IP -- so a target
+    projected for only 180 IP preseason loses 54 IP, not 60.
+    """
+    candidate = _pitcher("Cand", ros_ip=60, preseason_ip=200)
+    target = _pitcher("Target", ros_ip=120, preseason_ip=180)
+    # 180 * (60 / 200) = 54 IP (NOT 60 IP -- direct-IP would over-discount)
+    assert swap_window_ip(candidate, target) == 54.0
