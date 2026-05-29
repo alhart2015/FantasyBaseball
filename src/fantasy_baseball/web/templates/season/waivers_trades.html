@@ -118,8 +118,11 @@
 
 <script>
 function bandLineHTML(band, tag, styleAttr) {
+  if (!band || typeof band.mean !== "number" || typeof band.sd !== "number" || typeof band.p_positive !== "number") {
+    return "";
+  }
   var m = band.mean, s = band.sd, pct = Math.round(band.p_positive * 100);
-  return '<' + tag + ' class="band-line band-' + band.verdict + '"' + (styleAttr ? ' style="' + styleAttr + '"' : '') +
+  return '<' + tag + ' class="band-line band-' + (band.verdict || "neutral") + '"' + (styleAttr ? ' style="' + styleAttr + '"' : '') +
          '>' + (m >= 0 ? '+' : '') + m.toFixed(1) + ' +/- ' + s.toFixed(1) + ' roto  -  ' + pct + '% to help</' + tag + '>';
 }
 
@@ -129,6 +132,12 @@ function toggleSection(id) {
     if (!body) return;
     body.classList.toggle('collapsed');
     if (chevron) chevron.classList.toggle('collapsed');
+    // If collapsing the Build-a-Trade section, clear any active selection so
+    // the fixed-position selection strip doesn't linger over empty space.
+    if (id === 'build-trade' && body.classList.contains('collapsed')
+        && window.bt && typeof window.bt._tap === 'function') {
+      window.bt._tap({ kind: 'void' });
+    }
 }
 
 function esc(s) {
@@ -285,6 +294,9 @@ document.addEventListener('DOMContentLoaded', function() {
     waiverMeta: new Map(),  // key -> {name, positions} for waiver-origin players
     selection: null,  // null | { key, fromZone, fromSide, origin }
   };
+  // Render-suppression flag: lets multi-step ops (e.g. the two-call swap in tap)
+  // skip intermediate renders so the user never sees a half-swapped state.
+  let _suppressRender = false;
 
   function playerKey(p) { return `${p.name}::${p.player_type}`; }
   function isIL(p) { return (p.selected_position || "") === "IL"; }
@@ -515,13 +527,17 @@ document.addEventListener('DOMContentLoaded', function() {
         el.innerHTML = chips;
       }
 
-      // Update team header active counts.
+      // Update team header counts: split active (stat-contributing) from bench (roster).
       let activeCount = 0;
+      let benchCount = 0;
       for (const [, pl] of state.placements) {
-        if (pl.currentSide === side && pl.zone !== "IL" && pl.zone !== "DROP") activeCount++;
+        if (pl.currentSide !== side) continue;
+        if (pl.zone === "IL" || pl.zone === "DROP") continue;
+        if (pl.zone === "BN") benchCount++;
+        else activeCount++;
       }
       const countEl = document.getElementById(`bt-${side}-count`);
-      if (countEl) countEl.textContent = `${activeCount}/23`;
+      if (countEl) countEl.textContent = `${activeCount} active + ${benchCount} bench`;
       if (side === "opp") {
         const nameEl = document.getElementById("bt-opp-name");
         if (nameEl) nameEl.textContent = state.opponent || "Opponent";
@@ -550,13 +566,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
   function placeAt(key, side, zone) {
     let cur = state.placements.get(key);
+    // Waiver-origin players can only seat to "my" side, regardless of whether
+    // they've been placed before. (The !cur path is the initial seeding; the
+    // cur path is a subsequent move.)
+    if (state.waiverMeta.has(key) && side !== "my") {
+      if (!cur) {
+        // Initial seed attempted on opp side: don't seed, just re-render.
+        if (!_suppressRender) renderPanels();
+      }
+      return;
+    }
     // Seed a waiver-origin placement on first tap onto my side.
     if (!cur && state.waiverMeta.has(key)) {
-      if (side !== "my") {
-        // Defensive: waiver players only seat to "my" side; bail if somehow called with opp.
-        renderPanels();
-        return;
-      }
       cur = { currentSide: "my", zone: "BN", origin: "waiver" };
       state.placements.set(key, cur);
       // Clear the search UI so the suggestion list doesn't linger.
@@ -577,8 +598,10 @@ document.addEventListener('DOMContentLoaded', function() {
       }
     }
     state.placements.set(key, { ...cur, currentSide: side, zone });
-    renderPanels();
-    updateLegality();
+    if (!_suppressRender) {
+      renderPanels();
+      updateLegality();
+    }
   }
 
   let _waiverTimer = null;
@@ -656,10 +679,16 @@ document.addEventListener('DOMContentLoaded', function() {
       // Tap a different player. Swap their zones/sides.
       const otherPlace = state.placements.get(target.key);
       if (!otherPlace || otherPlace.zone === "IL") return;  // can't tap IL
-      // Swap selection <-> other.
+      // Clear selection BEFORE placeAt so the renders don't see stale state.
+      // Suppress the intermediate render between the two writes so the user
+      // never sees the half-swapped state.
+      state.selection = null;
+      _suppressRender = true;
       placeAt(sel.key, otherPlace.currentSide, otherPlace.zone);
       placeAt(target.key, sel.fromSide, sel.fromZone);
-      state.selection = null;
+      _suppressRender = false;
+      renderPanels();
+      updateLegality();
       return;
     }
 
@@ -678,36 +707,46 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (target.kind === "slot") {
       if (target.zone === "IL") return;  // IL is read-only
+      // Drop zones are origin-aligned: my-origin can only drop on my side, etc.
+      // Waiver-origin players can only land on my DROP (cancel the add).
+      if (target.zone === "DROP") {
+        if (sel.origin === "my" && target.side !== "my") return;
+        if (sel.origin === "opp" && target.side !== "opp") return;
+        if (sel.origin === "waiver" && target.side !== "my") return;
+      }
+      state.selection = null;  // BEFORE placeAt so render reflects cleared selection
       placeAt(sel.key, target.side, target.zone);
-      state.selection = null;
       return;
     }
   }
 
   function attachClickHandlers() {
-    // Click on a player chip -> tap player.
-    document.querySelectorAll("#bt-my-slots .bt-chip-player, #bt-opp-slots .bt-chip-player, .bt-zone .bt-chip-player").forEach(chip => {
-      chip.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const key = chip.dataset.btDragKey;
-        if (!key) return;  // IL chips have no key
-        tap({ kind: "player", key });
+    // Event delegation on .bt-rosters: one listener for chips + slots + zones.
+    // The btClickBound flag guards against re-binding on every renderPanels().
+    const rosters = document.querySelector(".bt-rosters");
+    if (rosters && !rosters.dataset.btClickBound) {
+      rosters.dataset.btClickBound = "1";
+      rosters.addEventListener("click", (e) => {
+        // Prefer chip target (most specific) over slot/zone.
+        const chip = e.target.closest(".bt-chip-player");
+        if (chip) {
+          e.stopPropagation();
+          const key = chip.dataset.btDragKey;
+          if (!key) return;  // IL chips have no key
+          tap({ kind: "player", key });
+          return;
+        }
+        const slot = e.target.closest("[data-bt-side][data-bt-zone]");
+        if (slot) {
+          const side = slot.dataset.btSide;
+          const zone = slot.dataset.btZone;
+          if (!side || !zone) return;
+          tap({ kind: "slot", side, zone });
+        }
       });
-    });
+    }
 
-    // Click on an empty slot or zone -> tap slot.
-    document.querySelectorAll("[data-bt-side][data-bt-zone]").forEach(el => {
-      el.addEventListener("click", (e) => {
-        if (e.target.closest(".bt-chip-player")) return;  // chip handled it
-        const side = el.dataset.btSide;
-        const zone = el.dataset.btZone;
-        if (!side || !zone) return;
-        tap({ kind: "slot", side, zone });
-      });
-    });
-
-    // Click on a waiver suggestion -> tap waiver. Event-delegated to the
-    // container so re-renders don't stack listeners on the persistent <li>s.
+    // Waiver suggestion list: event-delegated like the rosters above.
     const waiverList = document.getElementById("bt-waiver-suggestions");
     if (waiverList && !waiverList.dataset.btClickBound) {
       waiverList.dataset.btClickBound = "1";
@@ -729,8 +768,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const send = [], receive = [], myDrops = [], oppDrops = [], myAdds = [], myActive = [], oppActive = [];
     for (const [k, pl] of state.placements) {
       if (pl.zone === "DROP") {
-        if (pl.origin === "my") myDrops.push(k);
-        else if (pl.origin === "opp") oppDrops.push(k);
+        // Classify by currentSide (where the user put them), not origin: even
+        // if the UI guard slips and a my-origin player lands on opp DROP, the
+        // server still sees the intent of "opp drops this".
+        if (pl.currentSide === "my") myDrops.push(k);
+        else if (pl.currentSide === "opp") oppDrops.push(k);
         // waiver-origin DROP = user dropped a waiver suggestion directly on drops: discard (no contribution)
         continue;
       }
