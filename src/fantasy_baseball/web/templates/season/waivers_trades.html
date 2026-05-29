@@ -3,54 +3,6 @@
 {% block title %}Trades — Season Dashboard{% endblock %}
 {% block content %}
 
-<style>
-/* Layout-only rules. Page theming lives in season.css under .page-trades. */
-.section-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    cursor: pointer;
-    user-select: none;
-}
-.section-toggle .chevron.collapsed { transform: rotate(-90deg); }
-.section-body { overflow: hidden; }
-.section-body.collapsed { display: none; }
-.mb-2 { margin-bottom: 0.5rem; }
-.mt-2 { margin-top: 0.5rem; }
-.bt-suggestions {
-    list-style: none;
-    padding: 0;
-    margin: 0.25rem 0;
-    max-height: 160px;
-    overflow-y: auto;
-}
-.bt-suggestions li { cursor: pointer; }
-.bt-result { margin-top: 1rem; }
-.bt-slot-grid { display: flex; flex-direction: column; }
-.bt-slot-row { display: grid; gap: 2px; }
-.bt-slot {
-    display: flex;
-    align-items: center;
-    overflow: hidden;
-}
-.bt-ghost { display: none; }
-.bt-zone { min-height: 30px; }
-.bt-chip-player {
-    display: inline-block;
-    margin: 2px;
-    cursor: grab;
-    user-select: none;
-    max-width: 100%;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.bt-chip-player.dragging { opacity: 0.4; }
-.bt-chip-player.il { cursor: default; }
-@media (max-width: 768px) {
-    .build-trade-rosters { grid-template-columns: 1fr !important; }
-}
-</style>
 
 <div class="page-trades">
 <div class="page-header">
@@ -101,46 +53,50 @@
         <select id="bt-opponent"></select>
     </div>
 
-    <div class="build-trade-rosters" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-        <div class="bt-panel">
-            <h4>My Team</h4>
+    <div class="bt-rosters">
+        <div class="bt-panel" id="bt-panel-my">
+            <div class="bt-panel-header">
+                <span class="bt-team-name">{{ (config.team_name if config else "My Team") }}</span>
+                <span class="bt-active-count" id="bt-my-count">--/23</span>
+            </div>
             <div id="bt-my-slots" class="bt-slot-grid" data-bt-side="my"></div>
-            <div id="bt-my-bench" class="bt-zone" data-bt-side="my" data-bt-zone="BN">
-                <div class="bt-zone-label">Bench</div>
-            </div>
-            <div id="bt-my-il" class="bt-zone" data-bt-side="my">
-                <div class="bt-zone-label">IL (read-only)</div>
-            </div>
-            <div id="bt-my-drops" class="bt-zone bt-drops-zone" data-bt-side="my" data-bt-zone="DROP">
-                <div class="bt-zone-label">Drops</div>
-            </div>
-            <div class="mt-2">
+            <div class="bt-zone-label">Bench</div>
+            <div id="bt-my-bench" class="bt-zone" data-bt-side="my" data-bt-zone="BN"></div>
+            <div class="bt-zone-label">IL (read-only)</div>
+            <div id="bt-my-il" class="bt-zone" data-bt-side="my"></div>
+            <div class="bt-zone-label">Drops</div>
+            <div id="bt-my-drops" class="bt-zone bt-drops-zone" data-bt-side="my" data-bt-zone="DROP"></div>
+            <div class="bt-waiver-block">
                 <label for="bt-waiver-search">Add from Waivers</label>
-                <input type="text" id="bt-waiver-search" placeholder="Type &ge;2 letters&hellip;"
-                       autocomplete="off" />
+                <input type="text" id="bt-waiver-search" placeholder="Type &ge;2 letters&hellip;" autocomplete="off" />
                 <ul id="bt-waiver-suggestions" class="bt-suggestions"></ul>
             </div>
         </div>
-        <div class="bt-panel">
-            <h4>Opponent Team</h4>
+        <div class="bt-panel" id="bt-panel-opp">
+            <div class="bt-panel-header">
+                <span class="bt-team-name" id="bt-opp-name">Opponent</span>
+                <span class="bt-active-count" id="bt-opp-count">--/23</span>
+            </div>
             <div id="bt-opp-slots" class="bt-slot-grid" data-bt-side="opp"></div>
-            <div id="bt-opp-bench" class="bt-zone" data-bt-side="opp" data-bt-zone="BN">
-                <div class="bt-zone-label">Bench</div>
-            </div>
-            <div id="bt-opp-il" class="bt-zone" data-bt-side="opp">
-                <div class="bt-zone-label">IL (read-only)</div>
-            </div>
-            <div id="bt-opp-drops" class="bt-zone bt-drops-zone" data-bt-side="opp" data-bt-zone="DROP">
-                <div class="bt-zone-label">Drops</div>
-            </div>
+            <div class="bt-zone-label">Bench</div>
+            <div id="bt-opp-bench" class="bt-zone" data-bt-side="opp" data-bt-zone="BN"></div>
+            <div class="bt-zone-label">IL (read-only)</div>
+            <div id="bt-opp-il" class="bt-zone" data-bt-side="opp"></div>
+            <div class="bt-zone-label">Drops</div>
+            <div id="bt-opp-drops" class="bt-zone bt-drops-zone" data-bt-side="opp" data-bt-zone="DROP"></div>
         </div>
+    </div>
+
+    <div id="bt-selection-strip" class="bt-selection-strip" hidden>
+        <span class="bt-selection-text"></span>
+        <a href="#" class="bt-selection-cancel">cancel</a>
     </div>
 
     <div id="bt-legality" class="bt-legality mt-2"></div>
     <button type="button" id="bt-evaluate" class="pill" disabled
             onclick="bt.evaluate()">Evaluate Trade</button>
     <button type="button" id="bt-optimize" class="pill" disabled
-            onclick="bt.optimizeLineup()">Optimize Lineup</button>
+            onclick="bt.optimizeLineup()">Optimize Both</button>
     <button type="button" id="bt-reset" class="pill"
             onclick="bt.reset()">Reset</button>
 
@@ -158,13 +114,15 @@
   };
 </script>
 
-<script src="{{ url_for('static', filename='vendor/Sortable.min.js') }}"></script>
 <script src="{{ url_for('static', filename='three_mode_delta_view.js') }}"></script>
 
 <script>
 function bandLineHTML(band, tag, styleAttr) {
+  if (!band || typeof band.mean !== "number" || typeof band.sd !== "number" || typeof band.p_positive !== "number") {
+    return "";
+  }
   var m = band.mean, s = band.sd, pct = Math.round(band.p_positive * 100);
-  return '<' + tag + ' class="band-line band-' + band.verdict + '"' + (styleAttr ? ' style="' + styleAttr + '"' : '') +
+  return '<' + tag + ' class="band-line band-' + (band.verdict || "neutral") + '"' + (styleAttr ? ' style="' + styleAttr + '"' : '') +
          '>' + (m >= 0 ? '+' : '') + m.toFixed(1) + ' +/- ' + s.toFixed(1) + ' roto  -  ' + pct + '% to help</' + tag + '>';
 }
 
@@ -174,6 +132,12 @@ function toggleSection(id) {
     if (!body) return;
     body.classList.toggle('collapsed');
     if (chevron) chevron.classList.toggle('collapsed');
+    // If collapsing the Build-a-Trade section, clear any active selection so
+    // the fixed-position selection strip doesn't linger over empty space.
+    if (id === 'build-trade' && body.classList.contains('collapsed')
+        && window.bt && typeof window.bt._tap === 'function') {
+      window.bt._tap({ kind: 'void' });
+    }
 }
 
 function esc(s) {
@@ -328,7 +292,11 @@ document.addEventListener('DOMContentLoaded', function() {
     placements: new Map(),
     initialPlacements: new Map(),  // snapshot at rebuildPlacements time, used for moves-summary diff
     waiverMeta: new Map(),  // key -> {name, positions} for waiver-origin players
+    selection: null,  // null | { key, fromZone, fromSide, origin }
   };
+  // Render-suppression flag: lets multi-step ops (e.g. the two-call swap in tap)
+  // skip intermediate renders so the user never sees a half-swapped state.
+  let _suppressRender = false;
 
   function playerKey(p) { return `${p.name}::${p.player_type}`; }
   function isIL(p) { return (p.selected_position || "") === "IL"; }
@@ -526,6 +494,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const cls = ["bt-chip-player"];
     if (foreign) cls.push("foreign");
     if (il) cls.push("il");
+    const isSelected = state.selection && state.selection.key === key;
+    if (isSelected) cls.push("selected");
     const dragAttr = il ? "" : `data-bt-drag-key="${esc(key)}"`;
     const positions = (p.positions || []).join("/");
     return `<span class="${cls.join(" ")}" ${dragAttr}>${esc(p.name)} <small>${esc(positions)}</small></span>`;
@@ -554,13 +524,27 @@ document.addEventListener('DOMContentLoaded', function() {
         const chips = [...state.placements.entries()]
           .filter(([, pl]) => pl.currentSide === side && pl.zone === zone)
           .map(([k]) => renderChip(k)).join("");
-        const label = zone === "DROP" ? "Drops"
-                    : zone === "IL" ? "IL (read-only)"
-                    : "Bench";
-        el.innerHTML = `<div class="bt-zone-label">${label}</div>${chips}`;
+        el.innerHTML = chips;
+      }
+
+      // Update team header counts: split active (stat-contributing) from bench (roster).
+      let activeCount = 0;
+      let benchCount = 0;
+      for (const [, pl] of state.placements) {
+        if (pl.currentSide !== side) continue;
+        if (pl.zone === "IL" || pl.zone === "DROP") continue;
+        if (pl.zone === "BN") benchCount++;
+        else activeCount++;
+      }
+      const countEl = document.getElementById(`bt-${side}-count`);
+      if (countEl) countEl.textContent = `${activeCount} active + ${benchCount} bench`;
+      if (side === "opp") {
+        const nameEl = document.getElementById("bt-opp-name");
+        if (nameEl) nameEl.textContent = state.opponent || "Opponent";
       }
     }
-    attachSortables();
+    attachClickHandlers();
+    renderSelectionStrip();
   }
 
   function populateOpponents() {
@@ -571,21 +555,29 @@ document.addEventListener('DOMContentLoaded', function() {
       names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
     sel.addEventListener("change", () => {
       state.opponent = sel.value || null;
+      state.selection = null;
       rebuildPlacements();
       renderPanels();
       updateLegality();
+      const resultEl = document.getElementById("bt-result");
+      if (resultEl) resultEl.innerHTML = "";
     });
   }
 
   function placeAt(key, side, zone) {
     let cur = state.placements.get(key);
-    // Seed a waiver-origin placement on first drop onto my side.
-    if (!cur && state.waiverMeta.has(key)) {
-      if (side !== "my") {
-        // SortableJS already moved the <li> into the opp panel; rebuild from state.
-        renderPanels();
-        return;
+    // Waiver-origin players can only seat to "my" side, regardless of whether
+    // they've been placed before. (The !cur path is the initial seeding; the
+    // cur path is a subsequent move.)
+    if (state.waiverMeta.has(key) && side !== "my") {
+      if (!cur) {
+        // Initial seed attempted on opp side: don't seed, just re-render.
+        if (!_suppressRender) renderPanels();
       }
+      return;
+    }
+    // Seed a waiver-origin placement on first tap onto my side.
+    if (!cur && state.waiverMeta.has(key)) {
       cur = { currentSide: "my", zone: "BN", origin: "waiver" };
       state.placements.set(key, cur);
       // Clear the search UI so the suggestion list doesn't linger.
@@ -606,8 +598,10 @@ document.addEventListener('DOMContentLoaded', function() {
       }
     }
     state.placements.set(key, { ...cur, currentSide: side, zone });
-    renderPanels();
-    updateLegality();
+    if (!_suppressRender) {
+      renderPanels();
+      updateLegality();
+    }
   }
 
   let _waiverTimer = null;
@@ -640,71 +634,145 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
 
-  function handleStart(evt) {
-    const chip = evt.item;
-    if (chip.dataset.btWaiverName) {
-      state.waiverMeta.set(chip.dataset.btDragKey, {
-        name: chip.dataset.btWaiverName,
-        positions: chip.dataset.btWaiverPositions || "",
-      });
+  function tap(target) {
+    // target = { kind: "player"|"slot"|"waiver"|"void",
+    //            key?: string,           // for kind == "player" or "waiver"
+    //            side?: "my"|"opp",      // for kind == "slot"
+    //            zone?: string }         // for kind == "slot" (slotId|"BN"|"IL"|"DROP")
+
+    // Deselect rules.
+    if (!state.selection) {
+      if (target.kind === "player") {
+        const place = state.placements.get(target.key);
+        if (!place || place.zone === "IL") return;  // IL is read-only
+        state.selection = { key: target.key, fromZone: place.zone, fromSide: place.currentSide, origin: place.origin };
+        renderPanels();
+        return;
+      }
+      if (target.kind === "waiver") {
+        // Seed a waiver-origin placement on tap, like SortableJS did onStart.
+        state.waiverMeta.set(target.key, { name: target.waiverName, positions: target.waiverPositions || "" });
+        state.placements.set(target.key, { currentSide: "my", zone: "BN", origin: "waiver" });
+        state.selection = { key: target.key, fromZone: "BN", fromSide: "my", origin: "waiver" };
+        renderPanels();
+        return;
+      }
+      return;  // idle + non-actionable target = no-op
+    }
+
+    // selected(A). Now handle all second-tap cases.
+    const sel = state.selection;
+
+    if (target.kind === "void") {
+      state.selection = null;
+      renderPanels();
+      return;
+    }
+
+    if (target.kind === "player") {
+      if (target.key === sel.key) {
+        // Tap same player -> deselect.
+        state.selection = null;
+        renderPanels();
+        return;
+      }
+      // Tap a different player. Swap their zones/sides.
+      const otherPlace = state.placements.get(target.key);
+      if (!otherPlace || otherPlace.zone === "IL") return;  // can't tap IL
+      // Clear selection BEFORE placeAt so the renders don't see stale state.
+      // Suppress the intermediate render between the two writes so the user
+      // never sees the half-swapped state.
+      state.selection = null;
+      _suppressRender = true;
+      placeAt(sel.key, otherPlace.currentSide, otherPlace.zone);
+      placeAt(target.key, sel.fromSide, sel.fromZone);
+      _suppressRender = false;
+      renderPanels();
+      updateLegality();
+      return;
+    }
+
+    if (target.kind === "waiver") {
+      // Replace selection with a fresh waiver suggestion. Revert sel to its from-place if it was a waiver-origin first-pick.
+      if (sel.origin === "waiver") {
+        state.placements.delete(sel.key);
+        state.waiverMeta.delete(sel.key);
+      }
+      state.waiverMeta.set(target.key, { name: target.waiverName, positions: target.waiverPositions || "" });
+      state.placements.set(target.key, { currentSide: "my", zone: "BN", origin: "waiver" });
+      state.selection = { key: target.key, fromZone: "BN", fromSide: "my", origin: "waiver" };
+      renderPanels();
+      return;
+    }
+
+    if (target.kind === "slot") {
+      if (target.zone === "IL") return;  // IL is read-only
+      // Drop zones are origin-aligned: my-origin can only drop on my side, etc.
+      // Waiver-origin players can only land on my DROP (cancel the add).
+      if (target.zone === "DROP") {
+        if (sel.origin === "my" && target.side !== "my") return;
+        if (sel.origin === "opp" && target.side !== "opp") return;
+        if (sel.origin === "waiver" && target.side !== "my") return;
+      }
+      state.selection = null;  // BEFORE placeAt so render reflects cleared selection
+      placeAt(sel.key, target.side, target.zone);
+      return;
     }
   }
 
-  function handleDrop(evt) {
-    if (!evt.to) return;
-    const key = evt.item.dataset.btDragKey;
-    if (!key) return;                          // IL chips have no key
-    const side = evt.to.dataset.btSide;
-    const zone = evt.to.dataset.btZone;
-    if (!side || !zone) return;
-    placeAt(key, side, zone);
-  }
-
-  function attachSortables() {
-    // Each positional slot + bench + drops is its own single-item Sortable.
-    // IL slots are excluded (read-only). Waiver suggestions are a pull-only
-    // source.
-    const droppableSelector = [
-      "#bt-my-slots .bt-slot",
-      "#bt-opp-slots .bt-slot",
-      "#bt-my-bench",
-      "#bt-opp-bench",
-      "#bt-my-drops",
-      "#bt-opp-drops",
-    ].join(", ");
-
-    for (const el of document.querySelectorAll(droppableSelector)) {
-      Sortable.get(el)?.destroy();
-      new Sortable(el, {
-        group: "trade-builder",
-        sort: false,
-        animation: 0,
-        ghostClass: "bt-ghost",
-        onStart: handleStart,
-        onEnd: handleDrop,
+  function attachClickHandlers() {
+    // Event delegation on .bt-rosters: one listener for chips + slots + zones.
+    // The btClickBound flag guards against re-binding on every renderPanels().
+    const rosters = document.querySelector(".bt-rosters");
+    if (rosters && !rosters.dataset.btClickBound) {
+      rosters.dataset.btClickBound = "1";
+      rosters.addEventListener("click", (e) => {
+        // Prefer chip target (most specific) over slot/zone.
+        const chip = e.target.closest(".bt-chip-player");
+        if (chip) {
+          e.stopPropagation();
+          const key = chip.dataset.btDragKey;
+          if (!key) return;  // IL chips have no key
+          tap({ kind: "player", key });
+          return;
+        }
+        const slot = e.target.closest("[data-bt-side][data-bt-zone]");
+        if (slot) {
+          const side = slot.dataset.btSide;
+          const zone = slot.dataset.btZone;
+          if (!side || !zone) return;
+          tap({ kind: "slot", side, zone });
+        }
       });
     }
 
-    const waiver = document.getElementById("bt-waiver-suggestions");
-    if (waiver) {
-      Sortable.get(waiver)?.destroy();
-      new Sortable(waiver, {
-        group: { name: "trade-builder", put: false },
-        sort: false,
-        animation: 0,
-        ghostClass: "bt-ghost",
-        onStart: handleStart,
-        onEnd: handleDrop,
+    // Waiver suggestion list: event-delegated like the rosters above.
+    const waiverList = document.getElementById("bt-waiver-suggestions");
+    if (waiverList && !waiverList.dataset.btClickBound) {
+      waiverList.dataset.btClickBound = "1";
+      waiverList.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const li = e.target.closest("li[data-bt-drag-key]");
+        if (!li) return;
+        tap({
+          kind: "waiver",
+          key: li.dataset.btDragKey,
+          waiverName: li.dataset.btWaiverName,
+          waiverPositions: li.dataset.btWaiverPositions || "",
+        });
       });
     }
   }
 
   function buildPayload() {
-    const send = [], receive = [], myDrops = [], oppDrops = [], myAdds = [], myActive = [];
+    const send = [], receive = [], myDrops = [], oppDrops = [], myAdds = [], myActive = [], oppActive = [];
     for (const [k, pl] of state.placements) {
       if (pl.zone === "DROP") {
-        if (pl.origin === "my") myDrops.push(k);
-        else if (pl.origin === "opp") oppDrops.push(k);
+        // Classify by currentSide (where the user put them), not origin: even
+        // if the UI guard slips and a my-origin player lands on opp DROP, the
+        // server still sees the intent of "opp drops this".
+        if (pl.currentSide === "my") myDrops.push(k);
+        else if (pl.currentSide === "opp") oppDrops.push(k);
         // waiver-origin DROP = user dropped a waiver suggestion directly on drops: discard (no contribution)
         continue;
       }
@@ -713,6 +781,7 @@ document.addEventListener('DOMContentLoaded', function() {
       if (pl.currentSide === "my" && pl.origin === "opp") receive.push(k);
       if (pl.currentSide === "my" && pl.origin === "waiver") myAdds.push(k);
       if (pl.currentSide === "my" && pl.zone !== "BN") myActive.push(k);
+      if (pl.currentSide === "opp" && pl.zone !== "BN") oppActive.push(k);
     }
     return {
       opponent: state.opponent,
@@ -721,34 +790,68 @@ document.addEventListener('DOMContentLoaded', function() {
       opp_drops: oppDrops,
       my_adds: myAdds,
       my_active_ids: myActive,
+      opp_active_ids: oppActive,
     };
   }
 
   function renderResult(data) {
     const el = document.getElementById("bt-result");
     if (!el) return;
-    // Container layout: optional moves summary on top (Phase 3), deltas below.
     el.innerHTML =
       '<div id="bt-result-moves"></div>' +
-      '<div class="card" style="margin-top: 1rem;">' +
-        '<h4>Proposed trade impact</h4>' +
-        '<div id="bt-result-deltas"></div>' +
-      '</div>';
+      '<div class="bt-result-cards">' +
+        '<div class="card bt-result-card bt-result-card-my">' +
+          '<div class="bt-result-card-head">' +
+            '<span class="bt-result-card-team">' + esc((window.BT_DATA && window.BT_DATA.myTeamName) || "My Team") + '</span>' +
+            '<span id="bt-result-band-my"></span>' +
+          '</div>' +
+          '<div id="bt-result-my-deltas"></div>' +
+        '</div>' +
+        '<div class="card bt-result-card bt-result-card-opp">' +
+          '<div class="bt-result-card-head">' +
+            '<span class="bt-result-card-team">' + esc(state.opponent || "Opponent") + '</span>' +
+            '<span id="bt-result-band-opp"></span>' +
+          '</div>' +
+          '<div id="bt-result-opp-deltas"></div>' +
+        '</div>' +
+      '</div>' +
+      '<div id="bt-result-tagline" class="bt-result-tagline"></div>';
 
-    const target = document.getElementById("bt-result-deltas");
+    const myTarget = document.getElementById("bt-result-my-deltas");
+    const oppTarget = document.getElementById("bt-result-opp-deltas");
     if (data.band) {
-      target.insertAdjacentHTML('afterbegin', bandLineHTML(data.band, 'div', ''));
+      document.getElementById("bt-result-band-my").innerHTML = bandLineHTML(data.band, 'span', 'font-weight: bold;');
     }
-    const payload = {
+    if (data.opp_band) {
+      document.getElementById("bt-result-band-opp").innerHTML = bandLineHTML(data.opp_band, 'span', 'font-weight: bold;');
+    }
+
+    const myPayload = {
       roto: data.roto || {delta_total: 0, categories: {}},
       ev_roto: data.ev_roto || {delta_total: 0, categories: {}},
       stat_totals: data.stat_totals || {delta_total: 0, categories: {}},
     };
+    const oppPayload = {
+      roto: data.opp_roto || {delta_total: 0, categories: {}},
+      ev_roto: data.opp_ev_roto || {delta_total: 0, categories: {}},
+      stat_totals: data.opp_stat_totals || {delta_total: 0, categories: {}},
+    };
     if (typeof window.renderThreeModeDeltaView === "function") {
-      window.renderThreeModeDeltaView(target, payload, {initialMode: "ev_roto"});
+      window.renderThreeModeDeltaView(myTarget, myPayload, {initialMode: "ev_roto"});
+      window.renderThreeModeDeltaView(oppTarget, oppPayload, {initialMode: "ev_roto"});
     } else {
-      target.textContent = "Failed to load delta view component.";
+      myTarget.textContent = "Failed to load delta view component.";
+      oppTarget.textContent = "Failed to load delta view component.";
     }
+
+    // Tagline interprets the pair.
+    const myPos = (data.delta_total != null ? data.delta_total : 0) > 0;
+    const oppPos = (data.opp_delta_total != null ? data.opp_delta_total : 0) > 0;
+    const tag = document.getElementById("bt-result-tagline");
+    if (myPos && oppPos) tag.textContent = "Both positive -- pitch this trade";
+    else if (myPos && !oppPos) tag.textContent = "Good for you, bad for them -- unlikely to accept";
+    else if (!myPos && oppPos) tag.textContent = "Bad for you, good for them -- skip";
+    else tag.textContent = "Neither side wins -- skip";
 
     renderMovesSummary();
   }
@@ -788,7 +891,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
   window.bt = {
     init() {
-      attachSortables();
+      attachClickHandlers();
       attachWaiverInputListener();
       populateOpponents();
       rebuildPlacements();   // with opponent=null this fills only my side
@@ -834,17 +937,18 @@ document.addEventListener('DOMContentLoaded', function() {
     optimizeLineup: async () => {
       if (!state.opponent) return;
       const payload = buildPayload();
+      payload.side = "both";
       const optBtn = document.getElementById("bt-optimize");
       const originalLabel = optBtn ? optBtn.textContent : "";
       // Disable + label "Optimizing…" while the request is in flight.
       // The optimizer can take 10s+ on large rosters with broad position eligibility.
       if (optBtn) {
         optBtn.disabled = true;
-        optBtn.textContent = "Optimizing…";
+        optBtn.textContent = "Optimizing both...";
       }
       function restoreButton() {
         if (optBtn) {
-          optBtn.textContent = originalLabel || "Optimize Lineup";
+          optBtn.textContent = originalLabel || "Optimize Both";
           // updateLegality will re-evaluate disabled state.
           updateLegality();
         }
@@ -882,16 +986,52 @@ document.addEventListener('DOMContentLoaded', function() {
         if (cur) state.placements.set(k, {...cur, currentSide: "opp", zone});
       }
       renderPanels();
+      if (data.partial) {
+        alert("Couldn't optimize one side -- using their current arrangement.");
+      }
       restoreButton();
       // NOTE: deliberately not auto-running evaluate; user clicks Evaluate to refresh deltas.
     },
   };
+
+  function renderSelectionStrip() {
+    const strip = document.getElementById("bt-selection-strip");
+    if (!strip) return;
+    if (!state.selection) {
+      strip.hidden = true;
+      return;
+    }
+    const p = playerByKey(state.selection.key);
+    const name = p ? p.name : state.selection.key.split("::")[0];
+    strip.hidden = false;
+    strip.querySelector(".bt-selection-text").textContent = `Selected: ${name} -- tap a slot to swap or move`;
+  }
+
+  // Global click handler: cancel link in selection strip.
+  document.addEventListener("click", (e) => {
+    const cancel = e.target.closest(".bt-selection-cancel");
+    if (!cancel) return;
+    e.preventDefault();
+    e.stopPropagation();
+    tap({ kind: "void" });
+  });
+
+  // Global click handler: deselect when clicking non-actionable area inside the trade builder.
+  document.addEventListener("click", (e) => {
+    if (!state.selection) return;
+    // If the click was inside the trade panel but not on any actionable element, deselect.
+    const inBuilder = e.target.closest("#section-build-trade");
+    const onActionable = e.target.closest(".bt-chip-player, [data-bt-side][data-bt-zone], #bt-waiver-suggestions li");
+    if (inBuilder && !onActionable) tap({ kind: "void" });
+  });
 
   // Debug exports (stable across tasks)
   window.bt._computeMovesSummary = computeMovesSummary;
   window.bt._state = state;
   window.bt._playerKey = playerKey;
   window.bt._isIL = isIL;
+  window.bt._selection = () => state.selection;
+  window.bt._tap = tap;
 
   document.addEventListener("DOMContentLoaded", () => window.bt.init());
 })();

@@ -32,6 +32,8 @@ from fantasy_baseball.web.season_data import (
     read_meta,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _standings_from_cache(raw: dict) -> Standings:
     """Build a typed ``Standings`` from the canonical cache payload.
@@ -271,6 +273,32 @@ def _run_rest_of_season_fetch() -> None:
 
     except Exception as exc:
         logger.finish("error", str(exc))
+
+
+def _coerce_id_list(value, field_name: str) -> set:
+    """Coerce a JSON payload value to a set of string keys.
+
+    Accepts None (-> empty set) and list-of-strings (-> set).
+    Rejects any other type (e.g., a bare string from a malformed client).
+    """
+    if value is None:
+        return set()
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list of player keys, got {type(value).__name__}")
+    return set(value)
+
+
+def _coerce_key_list(value, field_name: str) -> list:
+    """Coerce a JSON payload value to a list of string keys.
+
+    Accepts None (-> empty list) and list-of-strings (-> list).
+    Rejects any other type (e.g., a bare string from a malformed client).
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list of player keys, got {type(value).__name__}")
+    return list(value)
 
 
 def _optimize_one_side(
@@ -833,14 +861,26 @@ def register_routes(app: Flask) -> None:
         opp_rosters = {n: [Player.from_dict(p) for p in ps] for n, ps in opp_rosters_raw.items()}
         waiver_pool = build_waiver_pool(hart_roster, opp_rosters, ros_cache)
 
+        try:
+            send = _coerce_key_list(data.get("send"), "send")
+            receive = _coerce_key_list(data.get("receive"), "receive")
+            my_drops = _coerce_key_list(data.get("my_drops"), "my_drops")
+            opp_drops = _coerce_key_list(data.get("opp_drops"), "opp_drops")
+            my_adds = _coerce_key_list(data.get("my_adds"), "my_adds")
+            my_active = _coerce_id_list(data.get("my_active_ids"), "my_active_ids")
+            opp_active = _coerce_id_list(data.get("opp_active_ids"), "opp_active_ids")
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
         proposal = TradeProposal(
             opponent=opponent,
-            send=list(data.get("send") or []),
-            receive=list(data.get("receive") or []),
-            my_drops=list(data.get("my_drops") or []),
-            opp_drops=list(data.get("opp_drops") or []),
-            my_adds=list(data.get("my_adds") or []),
-            my_active_ids=set(data.get("my_active_ids") or []),
+            send=send,
+            receive=receive,
+            my_drops=my_drops,
+            opp_drops=opp_drops,
+            my_adds=my_adds,
+            my_active_ids=my_active,
+            opp_active_ids=opp_active,
         )
 
         result = evaluate_multi_trade(
@@ -885,6 +925,20 @@ def register_routes(app: Flask) -> None:
                 "ev_roto": _serialize_view(result.ev_roto),
                 "stat_totals": _serialize_view(result.stat_totals),
                 "band": result.band,
+                # Opp-side parallel fields.
+                "opp_delta_total": round(result.opp_delta_total, 2),
+                "opp_categories": {
+                    cat: {
+                        "before": round(cd.before, 2),
+                        "after": round(cd.after, 2),
+                        "delta": round(cd.delta, 2),
+                    }
+                    for cat, cd in result.opp_categories.items()
+                },
+                "opp_roto": _serialize_view(result.opp_roto),
+                "opp_ev_roto": _serialize_view(result.opp_ev_roto),
+                "opp_stat_totals": _serialize_view(result.opp_stat_totals),
+                "opp_band": result.opp_band,
             }
         )
 
@@ -908,6 +962,10 @@ def register_routes(app: Flask) -> None:
         if not opponent:
             return jsonify({"error": "opponent is required"}), 400
 
+        side = (data.get("side") or "both").strip().lower()
+        if side not in _SIDE_CHOICES:
+            return jsonify({"error": "side must be 'my', 'opp', or 'both'"}), 400
+
         config = _load_config()
         roster_raw = read_cache_list(CacheKey.ROSTER)
         opp_rosters_raw = read_cache_dict(CacheKey.OPP_ROSTERS)
@@ -929,13 +987,22 @@ def register_routes(app: Flask) -> None:
         opp_rosters = {n: [Player.from_dict(p) for p in ps] for n, ps in opp_rosters_raw.items()}
         waiver_pool = build_waiver_pool(hart_roster, opp_rosters, ros_cache)
 
+        try:
+            send = _coerce_key_list(data.get("send"), "send")
+            receive = _coerce_key_list(data.get("receive"), "receive")
+            my_drops = _coerce_key_list(data.get("my_drops"), "my_drops")
+            opp_drops = _coerce_key_list(data.get("opp_drops"), "opp_drops")
+            my_adds = _coerce_key_list(data.get("my_adds"), "my_adds")
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
         proposal = TradeProposal(
             opponent=opponent,
-            send=list(data.get("send") or []),
-            receive=list(data.get("receive") or []),
-            my_drops=list(data.get("my_drops") or []),
-            opp_drops=list(data.get("opp_drops") or []),
-            my_adds=list(data.get("my_adds") or []),
+            send=send,
+            receive=receive,
+            my_drops=my_drops,
+            opp_drops=opp_drops,
+            my_adds=my_adds,
         )
 
         # Resolve key lists into Player objects for the post-trade rosters.
@@ -985,31 +1052,63 @@ def register_routes(app: Flask) -> None:
 
         projected = _projected_from_cache(projected_standings_raw)
 
-        try:
-            my_slots = _optimize_one_side(
-                hart_post,
-                projected,
-                config.team_name,
-                config.roster_slots,
-                team_sds,
-                optimize_hitter_lineup,
-                optimize_pitcher_lineup,
-                IL_SLOTS,
-            )
-            opp_slots = _optimize_one_side(
-                opp_post,
-                projected,
-                opponent,
-                config.roster_slots,
-                team_sds,
-                optimize_hitter_lineup,
-                optimize_pitcher_lineup,
-                IL_SLOTS,
-            )
-        except ValueError as exc:
-            return jsonify({"ok": False, "reason": str(exc)})
+        result: dict[str, object] = {"ok": True}
+        partial = False
 
-        return jsonify({"ok": True, "my_slots": my_slots, "opp_slots": opp_slots})
+        if side in ("my", "both"):
+            try:
+                result["my_slots"] = _optimize_one_side(
+                    hart_post,
+                    projected,
+                    config.team_name,
+                    config.roster_slots,
+                    team_sds,
+                    optimize_hitter_lineup,
+                    optimize_pitcher_lineup,
+                    IL_SLOTS,
+                )
+            except (ValueError, ZeroDivisionError, KeyError) as exc:
+                if side == "my":
+                    return jsonify({"ok": False, "reason": str(exc)})
+                logger.warning("optimize-trade-lineup: my-side failed: %s", exc)
+                partial = True
+                result["my_slots_error"] = str(exc)
+
+        if side in ("opp", "both"):
+            try:
+                result["opp_slots"] = _optimize_one_side(
+                    opp_post,
+                    projected,
+                    opponent,
+                    config.roster_slots,
+                    team_sds,
+                    optimize_hitter_lineup,
+                    optimize_pitcher_lineup,
+                    IL_SLOTS,
+                )
+            except (ValueError, ZeroDivisionError, KeyError) as exc:
+                if side == "opp":
+                    return jsonify({"ok": False, "reason": str(exc)})
+                logger.warning("optimize-trade-lineup: opp-side failed: %s", exc)
+                partial = True
+                result["opp_slots_error"] = str(exc)
+
+        if partial:
+            result["partial"] = True
+
+        # If both branches failed in 'both' mode, we have no optimizer output --
+        # mark the response as unsuccessful so clients checking only `ok` see it.
+        if "my_slots" not in result and "opp_slots" not in result:
+            result["ok"] = False
+            # Provide a reason the client can surface in the "Cannot optimize: ..." alert.
+            errors = []
+            if "my_slots_error" in result:
+                errors.append(f"my side ({result['my_slots_error']})")
+            if "opp_slots_error" in result:
+                errors.append(f"opp side ({result['opp_slots_error']})")
+            result["reason"] = "Both sides failed: " + "; ".join(errors)
+
+        return jsonify(result)
 
     @app.route("/players")
     def player_search():
@@ -1020,6 +1119,7 @@ def register_routes(app: Flask) -> None:
             active_page="players",
         )
 
+    _SIDE_CHOICES = {"my", "opp", "both"}
     _ALL_VARIANTS = {"ALL", "ALL_HIT", "ALL_PIT"}
     _VALID_POS = set(HITTER_SOURCE_POSITIONS) | {"SP", "RP"} | _ALL_VARIANTS
 

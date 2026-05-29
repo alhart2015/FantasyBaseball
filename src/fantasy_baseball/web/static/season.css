@@ -1598,7 +1598,7 @@ td[style*="--neg"] {
     background: var(--paper);
     color: var(--ink);
     margin: -24px -32px;
-    padding: 32px 44px 56px;
+    padding: 32px 44px 60px; /* bottom 60px: room for fixed .bt-selection-strip (~44px) when visible */
     min-height: calc(100vh + 24px);
     /* Body is now also cream — page differentiates by bg only. */
     box-shadow: none;
@@ -1673,6 +1673,11 @@ td[style*="--neg"] {
     font-size: 22px !important;
     letter-spacing: -0.005em;
     position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    user-select: none;
 }
 .page-trades .section-toggle:first-of-type {
     margin-top: 22px !important;
@@ -1691,6 +1696,7 @@ td[style*="--neg"] {
     font-size: 11px !important;
     transition: transform 0.2s;
 }
+.page-trades .section-toggle .chevron.collapsed { transform: rotate(-90deg); }
 
 /* ── Trade Finder: search input + Away/For pills ──────────────────── */
 
@@ -1850,10 +1856,15 @@ td[style*="--neg"] {
 }
 
 .page-trades .bt-panel {
-    background: var(--paper);
-    border: 1px solid var(--rule-strong) !important;
-    border-radius: 2px !important;
-    padding: 14px 16px !important;
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    /* overflow: clip removed — it prevents child position:sticky on .bt-panel-header.
+       clip-path is also unnecessary here: .bt-slot-row has 8px/12px padding on every
+       side, so chip backgrounds never reach the rounded corners and there is nothing
+       to clip. The tiny visual risk of a chip escaping the rounded corner is
+       non-existent in practice. */
+    padding: 0;
 }
 .page-trades .bt-panel h4 {
     font-family: 'Newsreader', serif !important;
@@ -1870,11 +1881,18 @@ td[style*="--neg"] {
 .page-trades .bt-slot-grid {
     font-family: 'JetBrains Mono', ui-monospace, monospace;
     font-size: 11px !important;
-    gap: 3px !important;
+    display: flex;
+    flex-direction: column;
 }
 .page-trades .bt-slot-row {
-    grid-template-columns: 52px 1fr;
+    display: grid;
+    grid-template-columns: 32px 1fr;
+    gap: 8px;
+    padding: 8px 12px;
     align-items: center;
+    border-bottom: 1px solid var(--panel-border);
+    min-height: 36px;
+    cursor: pointer;
 }
 .page-trades .bt-slot-label {
     color: var(--ink-soft) !important;
@@ -1909,11 +1927,9 @@ td[style*="--neg"] {
 }
 
 .page-trades .bt-zone {
-    background: var(--paper-tint) !important;
-    border: 1px dashed var(--rule-strong) !important;
-    border-radius: 2px !important;
-    padding: 8px !important;
-    margin-top: 6px !important;
+    min-height: 36px;
+    padding: 4px 12px;
+    border-bottom: 1px solid var(--panel-border);
 }
 .page-trades .bt-zone-label {
     color: var(--ink-soft) !important;
@@ -1922,7 +1938,7 @@ td[style*="--neg"] {
     font-weight: 700;
     letter-spacing: 0.16em !important;
     text-transform: uppercase;
-    margin-bottom: 6px !important;
+    padding: 6px 12px 2px;
 }
 .page-trades .bt-drops-zone {
     border-color: var(--trail) !important;
@@ -1934,6 +1950,13 @@ td[style*="--neg"] {
 
 /* Player chips */
 .page-trades .bt-chip-player {
+    display: inline-block;
+    cursor: pointer;
+    user-select: none;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     background: var(--paper) !important;
     border: 1px solid var(--rule-strong) !important;
     border-radius: 2px !important;
@@ -1941,14 +1964,16 @@ td[style*="--neg"] {
     font-family: 'Outfit', sans-serif !important;
     font-size: 11px !important;
     font-weight: 500;
-    padding: 3px 8px !important;
+    padding: 4px 6px;
 }
 .page-trades .bt-chip-player.foreign {
     border-color: var(--lead) !important;
     background: var(--lead-soft) !important;
     color: var(--lead-deep) !important;
+    font-style: italic;
 }
 .page-trades .bt-chip-player.il {
+    cursor: default;
     border-color: var(--rule);
     background: var(--paper-tint) !important;
     color: var(--ink-faint) !important;
@@ -2061,6 +2086,106 @@ td[style*="--neg"] {
     .page-trades { margin: -16px; padding: 22px 18px 36px; }
     .page-trades .page-header h2 { font-size: 36px; }
     .page-trades .section-toggle { font-size: 17px !important; }
+}
+
+/* ---- Utility helpers (scoped to .page-trades to avoid leaking into other pages) ---- */
+
+.page-trades .section-body { overflow: hidden; }
+.page-trades .section-body.collapsed { display: none; }
+.page-trades .mb-2 { margin-bottom: 0.5rem; }
+.page-trades .mt-2 { margin-top: 0.5rem; }
+.page-trades .bt-result { margin-top: 1rem; }
+
+/* ---- Build-a-Trade: mobile-first stacked layout + selection styling ---- */
+
+.page-trades .bt-rosters {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.page-trades .bt-panel-header {
+    position: sticky;
+    top: 0;
+    background: var(--panel-header-bg, #1a3a2e);
+    padding: 10px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    z-index: 2;
+}
+#bt-panel-opp .bt-panel-header { background: #3a1e2a; }
+.page-trades .bt-team-name { font-weight: 700; }
+.page-trades .bt-active-count { color: var(--text-secondary); font-size: 11px; }
+.page-trades .bt-chip-player.selected {
+    background: rgba(255, 204, 68, 0.15);
+    box-shadow: inset 4px 0 0 #fc4, inset 0 0 0 1px #fc4;
+    font-weight: 600;
+}
+.page-trades .bt-slot-row:has(.bt-chip-player.selected) {
+    background: rgba(255, 204, 68, 0.08);
+}
+.page-trades .bt-waiver-block {
+    padding: 8px 12px 12px;
+}
+.page-trades .bt-selection-strip {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #fc4;
+    color: #1a1a1a;
+    padding: 10px 14px;
+    font-weight: 600;
+    font-size: 13px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 -3px 8px rgba(0, 0, 0, 0.4);
+    z-index: 5;
+}
+.page-trades .bt-selection-strip[hidden] { display: none; }
+.page-trades .bt-selection-cancel { color: #1a1a1a; text-decoration: underline; }
+
+/* ---- Build-a-Trade: two-card result panel ---- */
+
+.page-trades .bt-result-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 12px;
+}
+.page-trades .bt-result-card {
+    padding: 12px;
+}
+.page-trades .bt-result-card-my { border-left: 4px solid var(--success, #4d8); }
+.page-trades .bt-result-card-opp { border-left: 4px solid var(--accent, #fc4); }
+.page-trades .bt-result-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    font-size: 13px;
+    font-weight: 600;
+}
+.page-trades .bt-result-tagline {
+    text-align: center;
+    padding: 10px;
+    color: var(--text-secondary);
+    font-style: italic;
+    font-size: 12px;
+}
+
+@media (min-width: 768px) {
+    .page-trades .bt-rosters {
+        flex-direction: row;
+    }
+    .page-trades .bt-panel { flex: 1; min-width: 0; }
+    .page-trades .bt-result-cards {
+        flex-direction: row;
+    }
+    .page-trades .bt-result-card { flex: 1; min-width: 0; }
 }
 
 /* =====================================================================
