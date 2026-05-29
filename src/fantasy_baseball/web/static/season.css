@@ -1598,7 +1598,7 @@ td[style*="--neg"] {
     background: var(--paper);
     color: var(--ink);
     margin: -24px -32px;
-    padding: 32px 44px 56px;
+    padding: 32px 44px 60px; /* bottom 60px: room for fixed .bt-selection-strip (~44px) when visible */
     min-height: calc(100vh + 24px);
     /* Body is now also cream — page differentiates by bg only. */
     box-shadow: none;
@@ -1859,7 +1859,11 @@ td[style*="--neg"] {
     background: var(--panel-bg);
     border: 1px solid var(--panel-border);
     border-radius: 8px;
-    overflow: clip;
+    /* overflow: clip removed — it prevents child position:sticky on .bt-panel-header.
+       clip-path is also unnecessary here: .bt-slot-row has 8px/12px padding on every
+       side, so chip backgrounds never reach the rounded corners and there is nothing
+       to clip. The tiny visual risk of a chip escaping the rounded corner is
+       non-existent in practice. */
     padding: 0;
 }
 .page-trades .bt-panel h4 {
