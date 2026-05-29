@@ -79,6 +79,14 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* Paint the background on <html> so it covers the full scrollable canvas.
+   Body alone is unreliable when wide tables push horizontal scroll past the
+   viewport -- the propagated body background stops at body's box edge and
+   the area beyond renders as the browser's default (often white/black). */
+html {
+    background: var(--bg);
+}
+
 body {
     font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: var(--bg);
