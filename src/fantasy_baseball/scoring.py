@@ -491,7 +491,7 @@ def _compute_substitution_factors(
         factors[target.name] = factor
         if league_context is not None:
             running_roster = [
-                _scale_stats(p, factor) if isinstance(p, Player) and p.name == target.name else p
+                _scale_stats(p, factor, projection_source) if isinstance(p, Player) and p.name == target.name else p
                 for p in running_roster
             ]
     return factors
@@ -576,22 +576,50 @@ def _compute_pitcher_pool_factors(
     return {name: 0.0 for name in benched}
 
 
-def _scale_stats(p: Player, factor: float) -> dict[str, float | PlayerType]:
-    """Return a dict of scaled counting stats for the player.
+def _scale_stats(
+    p: Player,
+    factor: float,
+    projection_source: ProjectionSource = "rest_of_season",
+) -> dict[str, float | PlayerType]:
+    """Return scaled counting stats.
 
-    factor=1.0 means full stats; factor=0.0 means zeroed out. The
-    ``player_type`` key is included so callers can route the result the
-    same way they would a full Player.
+    In ``rest_of_season`` mode (default, used by the optimizer and trade
+    evaluator), returns ``ROS * factor`` -- the legacy forward-looking
+    behavior. A hot-YTD and a cold-YTD player with the same ROS contribute
+    identically to forward decisions, so start/sit calls are not biased by
+    locked totals.
+
+    In ``full_season_projection`` mode (used by the standings layer and
+    breakdown view), returns ``YTD + (ROS * factor)`` where YTD is
+    ``full_season_projection - rest_of_season``. YTD is the locked-in
+    already-played portion; it always contributes at full value regardless
+    of ``factor``. Only the forward-looking ROS portion is subject to
+    displacement scaling.
+
+    When ``full_season_projection`` is unset (preseason rosters), YTD = 0
+    and the result is ``ROS * factor`` -- matching ROS-mode behavior, which
+    is correct because no YTD has been recorded yet.
+
+    ``factor=0.0`` zeroes the ROS contribution; YTD survives in full-season
+    mode. ``factor=1.0`` returns full-season in full-season mode and ROS in
+    ROS mode.
     """
     result: dict[str, float | PlayerType] = {}
     if p.rest_of_season is None:
         return result
-    if p.player_type == PlayerType.HITTER:
-        for key in HITTING_COUNTING:
-            result[key] = _safe(getattr(p.rest_of_season, key, 0)) * factor
-    elif p.player_type == PlayerType.PITCHER:
-        for key in PITCHING_COUNTING:
-            result[key] = _safe(getattr(p.rest_of_season, key, 0)) * factor
+    keys = HITTING_COUNTING if p.player_type == PlayerType.HITTER else PITCHING_COUNTING
+    full_season = (
+        p.full_season_projection if projection_source == "full_season_projection" else None
+    )
+    for key in keys:
+        ros_val = _safe(getattr(p.rest_of_season, key, 0))
+        if full_season is not None:
+            ytd = _safe(getattr(full_season, key, 0)) - ros_val
+            if ytd < 0:
+                ytd = 0.0  # data hygiene: shouldn't happen but don't go negative
+        else:
+            ytd = 0.0
+        result[key] = ytd + ros_val * factor
     result["player_type"] = p.player_type
     return result
 
@@ -717,7 +745,7 @@ def _apply_displacement(
     result: list[Player | dict] = list(pass_through)
     for p in [*il_players, *active]:
         if p.name in displacement_factors:
-            result.append(_scale_stats(p, displacement_factors[p.name]))
+            result.append(_scale_stats(p, displacement_factors[p.name], projection_source))
         else:
             result.append(p)
 

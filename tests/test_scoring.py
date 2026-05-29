@@ -2768,3 +2768,103 @@ class TestComputeRosterBreakdown:
         c = breakdown.hitters[0]
         assert c.status == ContributionStatus.ACTIVE
         assert c.scale_factor == 1.0
+
+
+class TestScaleStatsYTDFloor:
+    """`_scale_stats` adds a YTD floor ONLY in full_season_projection mode.
+
+    In rest_of_season mode (the optimizer/trade-evaluator path) the function
+    preserves the legacy ROS-only behavior so forward-looking decisions are
+    not biased by locked YTD totals. In full_season_projection mode (the
+    standings/breakdown path) YTD always counts so displaced players don't
+    silently lose their already-recorded stats.
+    """
+
+    def _pitcher_with_ytd(self, name, ros_k, full_season_k):
+        """Pitcher whose YTD K = full_season_k - ros_k."""
+        from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
+
+        ros = PitcherStats(ip=60, w=2, k=ros_k, sv=0, er=20, bb=15, h_allowed=50, era=3.00, whip=1.08)
+        full = PitcherStats(
+            ip=120, w=8, k=full_season_k, sv=0, er=40, bb=30, h_allowed=100, era=3.00, whip=1.08
+        )
+        return Player(
+            name=name,
+            player_type=PlayerType.PITCHER,
+            rest_of_season=ros,
+            full_season_projection=full,
+        )
+
+    def test_full_season_mode_scale_zero_preserves_ytd(self):
+        """Webb with 78 YTD K + 60 ROS K, displaced (factor=0) in
+        full_season_projection mode: contributes 78 K, not 0. YTD is
+        locked-in and must not vanish from the standings view.
+        """
+        from fantasy_baseball.scoring import _scale_stats
+
+        p = self._pitcher_with_ytd("Webb", ros_k=60, full_season_k=138)
+        scaled = _scale_stats(p, 0.0, "full_season_projection")
+        # YTD = 138 - 60 = 78; ROS * 0 = 0; total = 78
+        assert scaled["k"] == 78
+
+    def test_full_season_mode_scale_one_returns_full_season(self):
+        """factor=1.0 in full_season mode yields full_season K (= YTD + ROS),
+        matching an undiscounted player's projection-source full-season read."""
+        from fantasy_baseball.scoring import _scale_stats
+
+        p = self._pitcher_with_ytd("Healthy", ros_k=120, full_season_k=200)
+        scaled = _scale_stats(p, 1.0, "full_season_projection")
+        # YTD = 200 - 120 = 80; ROS * 1 = 120; total = 200
+        assert scaled["k"] == 200
+
+    def test_full_season_mode_scale_half_keeps_full_ytd(self):
+        """factor=0.5 in full_season mode: YTD untouched, ROS halved."""
+        from fantasy_baseball.scoring import _scale_stats
+
+        p = self._pitcher_with_ytd("Half", ros_k=80, full_season_k=130)
+        scaled = _scale_stats(p, 0.5, "full_season_projection")
+        # YTD = 130 - 80 = 50; ROS * 0.5 = 40; total = 90
+        assert scaled["k"] == 90
+
+    def test_ros_mode_unchanged_legacy_behavior(self):
+        """In rest_of_season mode, the function still returns ROS * factor
+        with NO YTD floor. The optimizer's forward-looking semantics are
+        unchanged: hot-YTD and cold-YTD players with the same ROS contribute
+        identically to forward decisions.
+        """
+        from fantasy_baseball.scoring import _scale_stats
+
+        p = self._pitcher_with_ytd("Webb", ros_k=60, full_season_k=138)
+        # ROS-mode displacement: contributes 0, NOT 78. The optimizer must not
+        # see YTD bleed into displaced-player scoring.
+        scaled_zero = _scale_stats(p, 0.0, "rest_of_season")
+        assert scaled_zero["k"] == 0
+
+        # factor=0.5 in ROS mode -> ROS * 0.5 = 30, no YTD.
+        scaled_half = _scale_stats(p, 0.5, "rest_of_season")
+        assert scaled_half["k"] == 30
+
+    def test_ros_mode_default_when_source_omitted(self):
+        """Backwards compatibility: callers that don't pass source get the
+        legacy ROS-only behavior. (Same as test_ros_mode_unchanged with
+        explicit source, just verifies the default.)
+        """
+        from fantasy_baseball.scoring import _scale_stats
+
+        p = self._pitcher_with_ytd("Webb", ros_k=60, full_season_k=138)
+        scaled = _scale_stats(p, 0.0)
+        assert scaled["k"] == 0
+
+    def test_full_season_mode_falls_back_to_ros_when_no_full_season(self):
+        """Preseason rosters lack full_season_projection. Even in full_season
+        mode, scaling should behave like ROS-only (YTD = 0 by definition)."""
+        from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
+        from fantasy_baseball.scoring import _scale_stats
+
+        ros = PitcherStats(ip=200, w=12, k=200, sv=0, er=70, bb=40, h_allowed=160, era=3.15, whip=1.0)
+        p = Player(
+            name="Preseason", player_type=PlayerType.PITCHER, rest_of_season=ros
+        )  # no full_season_projection
+        scaled = _scale_stats(p, 0.5, "full_season_projection")
+        # No YTD known -> floor = 0 -> ROS * 0.5 = 100
+        assert scaled["k"] == 100
