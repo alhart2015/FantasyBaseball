@@ -3029,3 +3029,77 @@ class TestPitcherPoolRateSwap:
             assert abs(worst_scaled[key] - ros_val * expected_factor) < 1e-6, (
                 f"Stat {key} not scaled by the unified target factor"
             )
+
+    def test_starter_returning_discounts_reliever_via_preseason_proration(self):
+        """Webb (SP, 60 ROS IP, 200 preseason IP) returns to a pool whose
+        weakest arm is a reliever (25 ROS IP, 65 preseason IP). The cross-role
+        swap should discount the reliever by 65 * (60/200) = 19.5 IP, NOT by
+        60 IP (which would zero the reliever).
+        """
+        from fantasy_baseball.lineup.pitcher_swap import discount_factor
+        from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
+        from fantasy_baseball.models.positions import Position
+        from fantasy_baseball.models.standings import CategoryStats
+        from fantasy_baseball.scoring import LeagueContext, _compute_pitcher_pool_factors
+        from fantasy_baseball.utils.constants import Category
+
+        webb = self._il_starter("Webb", ros_ip=60, ros_k=67, preseason_ip=200)
+
+        # Elite SPs (untouched), one weak RP (the cross-role target).
+        sp_a = self._active_starter("SP_A", ros_ip=140, k_per_9=10.5, preseason_ip=200)
+        sp_b = self._active_starter("SP_B", ros_ip=135, k_per_9=9.8, preseason_ip=200)
+
+        rp_ros = PitcherStats(
+            ip=25, w=1, k=20, sv=2,
+            er=12, bb=10, h_allowed=22,
+            era=4.32, whip=1.28,
+        )
+        rp_full = PitcherStats(
+            ip=45, w=2, k=40, sv=5,
+            er=20, bb=18, h_allowed=42,
+            era=4.00, whip=1.33,
+        )
+        rp_pre = PitcherStats(
+            ip=65, w=3, k=60, sv=7,
+            er=30, bb=24, h_allowed=58,
+            era=4.15, whip=1.26,
+        )
+        weak_rp = Player(
+            name="Weak_RP", player_type=PlayerType.PITCHER,
+            rest_of_season=rp_ros, full_season_projection=rp_full, preseason=rp_pre,
+            selected_position=Position.P,
+        )
+        active = [sp_a, sp_b, weak_rp]
+
+        baseline = {
+            "Opp1": CategoryStats(r=0, hr=0, rbi=0, sb=0, avg=0,
+                                   w=20, k=400, sv=18, era=4.0, whip=1.3),
+            "Opp2": CategoryStats(r=0, hr=0, rbi=0, sb=0, avg=0,
+                                   w=22, k=420, sv=20, era=3.9, whip=1.28),
+        }
+        team_sds = {tn: {c: 1.0 for c in Category} for tn in ["Me", *baseline.keys()]}
+        ctx = LeagueContext(
+            baseline_other_team_stats=baseline,
+            team_sds=team_sds,
+            team_name="Me",
+        )
+
+        factors = _compute_pitcher_pool_factors(
+            active_pitchers=active,
+            il_pitchers=[webb],
+            all_active=active,
+            all_il=[webb],
+            league_context=ctx,
+            projection_source="rest_of_season",
+        )
+
+        # Webb stays active.
+        assert "Webb" not in factors
+
+        # Weak_RP should be the discount target (he's the weakest pitcher).
+        # Window = 65 * (60/200) = 19.5. Factor = (25 - 19.5) / 25.
+        assert "Weak_RP" in factors, (
+            f"Expected Weak_RP as cross-role target; picker chose {list(factors)}"
+        )
+        expected = discount_factor(target_ros_ip=25.0, window=65.0 * (60.0 / 200.0))
+        assert abs(factors["Weak_RP"] - expected) < 1e-9
