@@ -506,35 +506,49 @@ def _compute_pitcher_pool_factors(
     league_context: LeagueContext,
     projection_source: ProjectionSource,
 ) -> dict[str, float]:
-    """Pool-slot pitcher displacement: keep top-N (by team-ΔRoto), where
-    N is the count of active P-slot pitchers.
+    """Pair-swap pitcher displacement: each IL pitcher who improves team
+    DeltaRoto is activated at full ROS; one active target absorbs the discount.
 
-    Excess pitchers get sf=0. Excess can include IL pitchers — the
-    model treats IL guys as competing for the same playing-time pool
-    as active pitchers, so a weak IL pitcher with poor projection can
-    be "benched" while an elite active closer is preserved.
+    For each IL pitcher (processed in descending preseason IP -- biggest
+    expected workload first), the picker evaluates every still-undiscounted
+    active pitcher as the swap target, scoring the resulting team via
+    :func:`project_team_stats` against the frozen baseline of other teams'
+    stats. The pair maximizing team roto pts wins; the IL pitcher stays at
+    implicit sf=1.0 and the target gets ``discount_factor(target.ros.ip,
+    swap_window_ip(il, target))`` applied.
 
-    Iterative-greedy selection: each round, evaluate every remaining
-    candidate against the current post-cut roster state and bench the
-    one whose removal preserves the highest team roto pts. After each
-    cut, the next round's marginals are recomputed from the new state,
-    so cumulative damage in scarce categories (e.g. cutting a second
-    closer after losing the first) shows up as a much larger marginal
-    than independent leave-one-out would suggest. This avoids the
-    pathology where two closers each look "affordable" in isolation
-    but together crash a category by several roto pts.
+    The IL pitcher is NEVER the displaced one. If no positive-DeltaRoto swap
+    exists (every candidate target would hurt the team), the IL pitcher is
+    set to sf=0 -- the legacy zero-out for cases where the returning arm
+    truly cannot find a home in the lineup.
 
-    No-op when the pool already fits in the available slots. Skips
-    pitchers without ROS projections.
+    Same-stat invariant: the chosen target is one pitcher, scaled
+    identically across every counting category. Per-stat target selection
+    is explicitly prohibited (it would let strikeouts use one displacement
+    target and WHIP use another, producing inconsistent reasoning).
+
+    Cross-role swaps use ``pitcher_swap.swap_window_ip``, which prorates
+    by preseason IP -- a 60 ROS-IP starter consumes ~30% of a reliever's
+    preseason IP (not 60 IP, which would zero a reliever).
+
+    No-op when there are no IL pitchers to evaluate. Skips pitchers
+    without ROS projections.
     """
-    pool = [
-        p
-        for p in [*active_pitchers, *il_pitchers]
+    from fantasy_baseball.lineup.pitcher_swap import discount_factor, swap_window_ip
+
+    il_candidates = [
+        p for p in il_pitchers
         if p.rest_of_season is not None and _playing_time(p) > 0
     ]
-    slot_count = len(active_pitchers)
-    excess = len(pool) - slot_count
-    if excess <= 0:
+    if not il_candidates:
+        return {}
+
+    active_pool = [
+        p for p in active_pitchers
+        if p.rest_of_season is not None and _playing_time(p) > 0
+    ]
+    if not active_pool:
+        # No one to discount; can't realize the swap. Conservative: skip.
         return {}
 
     full_pool_roster: list[Player | dict] = [*all_il, *all_active]
@@ -546,34 +560,77 @@ def _compute_pitcher_pool_factors(
             league_context.team_name
         ].total
 
-    def state_with(zero_names: set[str]) -> list[Player | dict]:
-        return [
-            _scale_stats(p, 0.0) if isinstance(p, Player) and p.name in zero_names else p
-            for p in full_pool_roster
-        ]
+    def state_with(overrides: dict[str, float]) -> list[Player | dict]:
+        """Roster with every name in `overrides` replaced by a `_scale_stats`
+        dict at the given factor; all other players pass through."""
+        out: list[Player | dict] = []
+        for p in full_pool_roster:
+            if isinstance(p, Player) and p.name in overrides:
+                out.append(_scale_stats(p, overrides[p.name], projection_source))
+            else:
+                out.append(p)
+        return out
 
-    benched: set[str] = set()
-    remaining = list(pool)
-    for _ in range(excess):
-        best_cand: Player | None = None
-        best_pts = -float("inf")
-        for cand in remaining:
-            hyp_roster = state_with(benched | {cand.name})
+    factors: dict[str, float] = {}
+    already_discounted: set[str] = set()
+
+    # Larger preseason workloads first -- same volume-priority intent as the
+    # legacy substitution model, but for the pair-swap selector.
+    def _preseason_or_ros(p: Player) -> float:
+        if p.preseason is not None:
+            return _safe(getattr(p.preseason, "ip", 0))
+        return _playing_time(p)
+
+    il_sorted = sorted(il_candidates, key=_preseason_or_ros, reverse=True)
+
+    for il_p in il_sorted:
+        # "No swap" baseline for this IL pitcher: bench them (sf=0) and keep
+        # all currently-committed discounts. This is the cost of NOT activating
+        # the IL pitcher -- compare every candidate target against this.
+        bench_il_overrides = {**factors, il_p.name: 0.0}
+        bench_il_stats = project_team_stats(
+            state_with(bench_il_overrides),
+            displacement=False,
+            projection_source=projection_source,
+        )
+        bench_il_pts = team_pts(bench_il_stats)
+
+        # Find the (target, factor) pair that maximizes team pts when the IL
+        # pitcher is activated at full ROS and the target absorbs the swap.
+        best_target: Player | None = None
+        best_factor: float = 1.0
+        best_pts: float = -float("inf")
+        for target in active_pool:
+            if target.name in already_discounted:
+                continue
+            window = swap_window_ip(il_p, target)
+            tgt_ros_ip = _safe(getattr(target.rest_of_season, "ip", 0))
+            f = discount_factor(tgt_ros_ip, window)
+            # Swap state: IL pitcher at full ROS (not in overrides = sf=1.0),
+            # target at discount_factor, all previously committed discounts applied.
+            overrides = {**factors, target.name: f}
             stats = project_team_stats(
-                hyp_roster,
+                state_with(overrides),
                 displacement=False,
                 projection_source=projection_source,
             )
             pts = team_pts(stats)
             if pts > best_pts:
                 best_pts = pts
-                best_cand = cand
-        if best_cand is None:
-            break
-        benched.add(best_cand.name)
-        remaining = [p for p in remaining if p.name != best_cand.name]
+                best_target = target
+                best_factor = f
 
-    return {name: 0.0 for name in benched}
+        if best_target is None or best_pts <= bench_il_pts:
+            # No target makes the swap worth it relative to benching the IL
+            # pitcher. Bench the IL pitcher (legacy zero-out for "this returning
+            # arm wouldn't actually displace anyone").
+            factors[il_p.name] = 0.0
+            continue
+
+        factors[best_target.name] = best_factor
+        already_discounted.add(best_target.name)
+
+    return factors
 
 
 def _scale_stats(
