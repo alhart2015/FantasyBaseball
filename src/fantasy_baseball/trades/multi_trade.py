@@ -254,6 +254,13 @@ def evaluate_multi_trade(
             delta_total=0.0,
             categories={},
         )
+    if not any(e.team_name == proposal.opponent for e in projected_standings.entries):
+        return MultiTradeResult(
+            legal=False,
+            reason=f"Opponent {proposal.opponent} missing from projected_standings",
+            delta_total=0.0,
+            categories={},
+        )
 
     before_stats = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
     after_stats = dict(before_stats)

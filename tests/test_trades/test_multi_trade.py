@@ -902,6 +902,23 @@ def test_my_side_results_unchanged_after_opp_additions():
     assert r.stat_totals.categories["R"].after == pytest.approx(1000.0)
 
 
+def test_evaluate_multi_trade_legal_false_when_opponent_missing_from_standings():
+    fixture = _eval_fixture()
+    original_ps = fixture["projected_standings"]
+    # Remove Opp Team from projected_standings; Hart of the Order is still present.
+    fixture["projected_standings"] = ProjectedStandings(
+        effective_date=original_ps.effective_date,
+        entries=[e for e in original_ps.entries if e.team_name != _OPP_TEAM],
+    )
+    proposal = _make_simple_1for1_proposal()
+    proposal.opp_active_ids = _opp_active_set_for_simple_fixture()
+    r = evaluate_multi_trade(proposal=proposal, **fixture)
+    assert r.legal is False
+    assert r.reason is not None
+    assert "Opponent" in r.reason
+    assert _OPP_TEAM in r.reason
+
+
 def test_build_waiver_pool_excludes_rostered_players():
     a = _make_hitter("Alice")
     b = _make_hitter("Bob")
