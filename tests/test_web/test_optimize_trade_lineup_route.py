@@ -320,3 +320,30 @@ def test_optimize_lineup_rejects_invalid_side(client_with_side_payload):
     assert resp.status_code == 400
     data = resp.get_json()
     assert "side must be" in (data.get("error") or "")
+
+
+# ---------------------------------------------------------------------------
+# C6: both-sides-fail returns an informative reason
+# ---------------------------------------------------------------------------
+
+
+def test_optimize_lineup_both_fail_returns_informative_reason(
+    client_with_side_payload, monkeypatch
+):
+    """When both optimizer branches fail, ok=False with a descriptive reason."""
+    client, payload = client_with_side_payload
+
+    import fantasy_baseball.web.season_routes as routes
+
+    def _always_raise(*args, **kwargs):
+        raise ValueError("forced failure")
+
+    monkeypatch.setattr(routes, "_optimize_one_side", _always_raise)
+
+    resp = client.post("/api/optimize-trade-lineup", json=payload)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data.get("ok") is False
+    reason = data.get("reason") or ""
+    assert "Both sides failed" in reason
+    assert "forced failure" in reason

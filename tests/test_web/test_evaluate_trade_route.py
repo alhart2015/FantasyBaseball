@@ -415,3 +415,30 @@ def test_evaluate_trade_response_preserves_existing_fields(client_with_trade_fix
         "band",
     ):
         assert field_name in data, f"missing {field_name}"
+
+
+# ---------------------------------------------------------------------------
+# C1: type-guard tests for active-id list fields
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_trade_rejects_non_list_opp_active_ids(client_with_trade_fixture):
+    """A bare string for opp_active_ids must return 400, not silently corrupt."""
+    client, payload = client_with_trade_fixture
+    payload = dict(payload)
+    payload["opp_active_ids"] = "Juan Soto::hitter"  # string, not list
+    resp = client.post("/api/evaluate-trade", json=payload)
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "opp_active_ids must be a list" in (data.get("error") or "")
+
+
+def test_evaluate_trade_rejects_non_list_my_active_ids(client_with_trade_fixture):
+    """A bare string for my_active_ids must return 400, not silently corrupt."""
+    client, payload = client_with_trade_fixture
+    payload = dict(payload)
+    payload["my_active_ids"] = "Juan Soto::hitter"
+    resp = client.post("/api/evaluate-trade", json=payload)
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert "my_active_ids must be a list" in (data.get("error") or "")
