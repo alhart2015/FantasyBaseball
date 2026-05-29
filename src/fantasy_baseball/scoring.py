@@ -21,6 +21,7 @@ from enum import StrEnum
 from math import erf, sqrt
 from typing import Literal, Protocol
 
+from fantasy_baseball.lineup.pitcher_swap import discount_factor, swap_window_ip
 from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS, Position
 from fantasy_baseball.models.standings import (
@@ -381,7 +382,7 @@ def _compute_displacement_factors(
     league_context: LeagueContext | None = None,
     projection_source: ProjectionSource = "rest_of_season",
 ) -> dict[str, float]:
-    """Map player-name → scale factor for IL-induced displacement.
+    """Map player-name -> scale factor for IL-induced displacement.
 
     Hitters (always) and pitchers (when ``league_context`` is None) use
     the legacy substitution model: process IL players in descending
@@ -389,14 +390,13 @@ def _compute_displacement_factors(
     :func:`_find_worst_match` and scales them by
     ``max(0, active_pt - il_pt) / active_pt``.
 
-    Pitchers WITH ``league_context`` use the pool-slot model: pool all
-    pitchers (active + IL), rank by leave-one-out team-ΔRoto, the
-    bottom (pool_size - active_p_slots) get sf=0 — even when those are
-    IL pitchers themselves. This matches real-world fantasy decisions
-    (when an IL guy returns, the manager benches the worst remaining
-    pitcher overall, not necessarily the role-matched one), and avoids
-    the substitution model's tendency to zero out elite low-volume
-    closers when high-volume IL starters are returning.
+    Pitchers WITH ``league_context`` use the pair-swap model: each IL
+    pitcher (sorted by descending preseason IP) is activated at full ROS
+    and one active target absorbs a rate-aware discount via
+    ``pitcher_swap.swap_window_ip`` + ``pitcher_swap.discount_factor``.
+    Same-stat invariant: the chosen target is one pitcher, scaled
+    identically across every counting category. See
+    :func:`_compute_pitcher_pool_factors` for the full algorithm.
 
     Each player appears in factors at most once. Players not in the
     returned dict contribute at full scale (sf=1.0 implicit).
@@ -418,7 +418,7 @@ def _compute_displacement_factors(
         )
     )
 
-    # Pitchers: pool-slot model with league_context, substitution otherwise.
+    # Pitchers: pair-swap model with league_context, substitution otherwise.
     active_pitchers = [p for p in active if p.player_type == PlayerType.PITCHER]
     il_pitchers = [p for p in il_players if p.player_type == PlayerType.PITCHER]
     if league_context is not None:
@@ -536,8 +536,6 @@ def _compute_pitcher_pool_factors(
     No-op when there are no IL pitchers to evaluate. Skips pitchers
     without ROS projections.
     """
-    from fantasy_baseball.lineup.pitcher_swap import discount_factor, swap_window_ip
-
     il_candidates = [
         p for p in il_pitchers if p.rest_of_season is not None and _playing_time(p) > 0
     ]
@@ -772,16 +770,22 @@ def _apply_displacement(
     - BN slot + healthy → excluded.
 
     When ``league_context`` is provided, pitcher displacement uses the
-    pool-slot model (top-N by team-ΔRoto play; bottom of pool gets sf=0,
-    even when those are IL pitchers themselves) and hitter displacement
-    uses ΔRoto-optimal substitution. Otherwise both use the legacy SGP
+    pair-swap model (each IL pitcher activates at full ROS; one active
+    target absorbs a rate-aware discount; see
+    :func:`_compute_pitcher_pool_factors`) and hitter displacement uses
+    DeltaRoto-optimal substitution. Otherwise both use the legacy SGP
     substitution model.
+
+    Note: the pair-swap model only acts when there are IL pitchers to
+    activate. When the active pool exceeds the slot count with NO IL
+    pitchers present, no displacement is applied -- this is a known gap
+    relative to the legacy zero-out behavior and is acceptable for
+    typical rosters (9 P slots, rarely >9 active without IL).
 
     Returns a list where each entry is either an unmodified Player
     (active, unaffected; or IL, full-scale) or a dict of scaled stats
-    (any player with a sub-1.0 factor — including IL pitchers in the
-    pool model). Non-Player entries in the input (dicts from draft
-    scripts) pass through untouched.
+    (any player with a sub-1.0 factor). Non-Player entries in the input
+    (dicts from draft scripts) pass through untouched.
     """
     # Non-Player entries pass through untouched (draft scripts use dicts).
     pass_through: list[Player | dict] = [p for p in roster if not isinstance(p, Player)]
@@ -940,17 +944,14 @@ def project_team_stats(
     combination ships (Yahoo standings only surface AVG, not the H/AB
     components needed to recombine rate stats correctly).
 
-    Note: ``projection_source`` controls only the per-player reads in
-    ``_stat``. Displacement scaling (``_apply_displacement`` →
-    ``_scale_stats``) continues to operate on ROS playing time and ROS
-    counting stats, so a displaced active player's contribution is
-    ROS-times-factor regardless of source. With
-    ``projection_source="full_season_projection"`` this is a documented
-    approximation: undisplaced active players contribute full-season
-    totals while displaced players contribute scaled ROS, mixing units.
-    The proper combination (YTD + scaled ROS for displaced; full-season
-    for undisplaced) requires the team-level YTD ingest deferred to a
-    follow-up phase.
+    Note: ``projection_source`` propagates through ``_apply_displacement``
+    to ``_scale_stats``. In ``rest_of_season`` mode, displaced players
+    contribute ROS * factor (legacy forward-looking math used by the
+    optimizer and trade evaluator). In ``full_season_projection`` mode,
+    displaced players contribute YTD + (ROS * factor) where YTD =
+    full_season_projection - rest_of_season -- locked-in stats survive
+    scaling so the standings layer correctly preserves
+    already-recorded contributions.
 
     When ``displacement=True``, bench players are excluded and IL
     players displace the worst positional match among active players,
