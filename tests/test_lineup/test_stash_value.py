@@ -6,6 +6,7 @@ from fantasy_baseball.lineup.il_return_planner import _activate
 from fantasy_baseball.lineup.stash_value import (
     StashResult,
     StashScore,
+    _active_lineup_standings,
     _assign_recommended_drops,
     _cap_candidates,
     _marginal_value,
@@ -17,8 +18,14 @@ from fantasy_baseball.lineup.stash_value import (
 )
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import Position
-from fantasy_baseball.models.standings import ProjectedStandings
+from fantasy_baseball.models.standings import (
+    CategoryStats,
+    ProjectedStandings,
+    ProjectedStandingsEntry,
+    TeamYtdComponents,
+)
 from fantasy_baseball.scoring import build_team_sds
+from fantasy_baseball.utils.constants import Category
 
 EFFECTIVE_DATE = date(2026, 4, 1)
 
@@ -857,3 +864,103 @@ def test_synthetic_swap_starter_to_reliever_uses_preseason_proration():
     expected_k = scale * 20.0 + 67.0
     assert abs(synth.rest_of_season.ip - expected_ip) < 1e-6
     assert abs(synth.rest_of_season.k - expected_k) < 1e-6
+
+
+def test_active_lineup_standings_uses_team_ytd_not_player_full_season():
+    """REGRESSION (team-YTD projection refactor): the user-row hypothetical
+    in the stash board must reflect team_YTD + sum(player.ROS), not the
+    per-player full_season sum. Otherwise a mid-season acquisition's
+    pre-acquisition YTD inflates the user's pre-stash baseline.
+
+    Test: a roster with one pitcher whose preseason K = 200 and ROS K = 100
+    (implying player YTD K = 100 that may not all be the team's YTD).
+    Team-YTD K = 50. User row K must equal 50 + 100 = 150, NOT 200 (the
+    pre-refactor full_season floor) and NOT 100 (ROS-only).
+    """
+    # Pitcher with preseason K=200 (full_season), ROS K=100.
+    arm = Player(
+        name="Mid-Season Pickup",
+        player_type=PlayerType.PITCHER,
+        positions=[Position.P],
+        preseason=PitcherStats(
+            ip=180.0,
+            w=12.0,
+            k=200.0,
+            sv=0.0,
+            er=60.0,
+            bb=40.0,
+            h_allowed=140.0,
+            era=3.00,
+            whip=1.00,
+        ),
+        rest_of_season=PitcherStats(
+            ip=90.0,
+            w=6.0,
+            k=100.0,
+            sv=0.0,
+            er=30.0,
+            bb=20.0,
+            h_allowed=70.0,
+            era=3.00,
+            whip=1.00,
+        ),
+        selected_position=Position.P,
+    )
+
+    # Baseline projected standings: user row at K=0 placeholder, plus a
+    # second team so the spread/ranking math is well-defined.
+    baseline = ProjectedStandings(
+        effective_date=EFFECTIVE_DATE,
+        entries=[
+            ProjectedStandingsEntry(team_name=TEAM_NAME, stats=CategoryStats()),
+            ProjectedStandingsEntry(team_name="Opp A", stats=CategoryStats(k=300.0)),
+        ],
+    )
+
+    # Team-YTD has only K=50 (much less than the player's implied YTD K=100
+    # if the player was picked up mid-season). This is the key signal: the
+    # team didn't earn the pre-pickup K total, so the user row must NOT
+    # double-count it.
+    user_ytd = TeamYtdComponents(k=50.0)
+
+    result = _active_lineup_standings(
+        before_active=[arm],
+        projected_standings=baseline,
+        team_name=TEAM_NAME,
+        user_ytd_components=user_ytd,
+    )
+
+    user_row = next(e for e in result.entries if e.team_name == TEAM_NAME)
+    # Expected: team_YTD.k (50) + ROS.k (100) = 150.
+    # Pre-refactor (project_team_stats full_season): 200.
+    # ROS-only (no YTD threading): 100.
+    assert user_row.stats[Category.K] == pytest.approx(150.0, abs=1e-6)
+    # Opponent row is untouched.
+    opp_row = next(e for e in result.entries if e.team_name == "Opp A")
+    assert opp_row.stats[Category.K] == pytest.approx(300.0, abs=1e-6)
+
+
+def test_score_stash_candidates_threads_actual_standings_into_user_row():
+    """End-to-end: score_stash_candidates derives user_ytd_components from
+    actual_standings and the user-row baseline reflects team_YTD + ROS.
+
+    Sanity check (not a P(helps) assertion): the call signature accepts
+    actual_standings and the run completes without error. The deeper
+    correctness assertion lives in
+    :func:`test_active_lineup_standings_uses_team_ytd_not_player_full_season`.
+    """
+    # No injured players -> empty board, but the call must still accept
+    # actual_standings as a keyword.
+    roster = [*_full_hitters(), *_mediocre_staff()]
+    standings = _coupled_standings(roster)
+    result = score_stash_candidates(
+        roster=roster,
+        free_agents=[],
+        projected_standings=standings,
+        roster_slots=STASH_SLOTS,
+        team_name=TEAM_NAME,
+        team_sds=None,
+        fraction_remaining=0.5,
+        actual_standings=None,
+    )
+    assert result.candidates == []

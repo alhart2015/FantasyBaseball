@@ -998,6 +998,7 @@ class RefreshRun:
                 self.config.team_name,
                 team_sds=self.team_sds,
                 fraction_remaining=self.fraction_remaining,
+                actual_standings=self.standings,
             )
             write_cache(CacheKey.STASH, stash_result.to_dict())
             self._progress(f"Stash board: {len(stash_result.candidates)} injured candidate(s)")
