@@ -3625,3 +3625,45 @@ class TestComputeRosterBreakdownFullSeasonInvariant:
         assert abs(weak_contrib.contribution_stats["k"] - ytd_k) < 1e-6, (
             f"Benched IL pitcher should contribute YTD={ytd_k} K, got {weak_contrib.contribution_stats['k']}"
         )
+
+
+class TestPlayerContributionFromDictNullGuards:
+    """from_dict must not crash when persisted JSON contains explicit null
+    values for raw_stats or contribution_stats (e.g., a hand-edit, an
+    alternate serializer, or a future error-recovery write path).
+    d.get(k, default) returns the explicit None when the key is present
+    but null, not the default -- so the dict comprehension must guard.
+    """
+
+    def test_from_dict_handles_null_contribution_stats(self):
+        from fantasy_baseball.scoring import PlayerContribution
+
+        d = {
+            "name": "X",
+            "player_type": "pitcher",
+            "status": "active",
+            "scale_factor": 1.0,
+            "raw_stats": {"k": 200.0, "ip": 180.0},
+            "contribution_stats": None,
+        }
+        # Must not raise AttributeError on None.items().
+        pc = PlayerContribution.from_dict(d)
+        # When contribution_stats is null AND raw_stats is non-empty, the
+        # back-compat fallback fires (same as when the key is absent).
+        assert pc.contribution_stats.get("k") == 200.0
+
+    def test_from_dict_handles_null_raw_stats(self):
+        from fantasy_baseball.scoring import PlayerContribution
+
+        d = {
+            "name": "X",
+            "player_type": "pitcher",
+            "status": "no_projection",
+            "scale_factor": 0.0,
+            "raw_stats": None,
+            "contribution_stats": {},
+        }
+        # Must not raise AttributeError on None.items().
+        pc = PlayerContribution.from_dict(d)
+        assert pc.raw_stats == {}
+        assert pc.contribution_stats == {}

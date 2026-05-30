@@ -728,13 +728,16 @@ class PlayerContribution:
 
     @classmethod
     def from_dict(cls, d: dict) -> PlayerContribution:
-        raw_stats = {k: float(v) for k, v in d.get("raw_stats", {}).items()}
+        # `or {}` guards against explicit null values in persisted JSON.
+        # d.get(k, {}) returns the stored None when the key exists but is
+        # null, so the subsequent .items() would raise AttributeError.
+        raw_stats = {k: float(v) for k, v in (d.get("raw_stats") or {}).items()}
         # Backwards-compat: old persisted breakdowns lack contribution_stats.
         # Fall back to the legacy raw * factor computation (which is the bug
         # we're fixing, but it's the best we can do for stale persisted data
         # until the next refresh writes the new field).
         scale_factor = float(d["scale_factor"])
-        contribution_stats = {k: float(v) for k, v in d.get("contribution_stats", {}).items()}
+        contribution_stats = {k: float(v) for k, v in (d.get("contribution_stats") or {}).items()}
         if not contribution_stats and raw_stats:
             contribution_stats = {k: v * scale_factor for k, v in raw_stats.items()}
         return cls(
