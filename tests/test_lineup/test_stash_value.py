@@ -772,3 +772,52 @@ def test_rank_key_breaks_ties_by_value():
     )
     ranked = sorted([low_val, high_val], key=_rank_key, reverse=True)
     assert [s.name for s in ranked] == ["High Val", "Low Val"]
+
+
+def test_synthetic_swap_starter_to_reliever_uses_preseason_proration():
+    """SP candidate, RP incumbent: the synthetic line should subtract only
+    19.5 IP of the RP (65 preseason IP * 60/200 fraction-of-Webb's-season),
+    not 60 IP (which would zero the RP and overstate Webb's gain).
+
+    This is the cross-role bug from the displacement model fix: a starter
+    returning from IL with 60 ROS IP and 200 preseason IP consumes ~30% of
+    a reliever's preseason workload, NOT 60 IP of his ROS.
+    """
+    from fantasy_baseball.lineup.stash_value import _synthetic_swap_line
+
+    incumbent_ros = PitcherStats(
+        ip=25, w=1, k=20, sv=2, er=12, bb=10, h_allowed=22, era=4.32, whip=1.28,
+    )
+    incumbent_pre = PitcherStats(
+        ip=65, w=3, k=60, sv=7, er=30, bb=24, h_allowed=58, era=4.15, whip=1.26,
+    )
+    incumbent = Player(
+        name="RP_Incumbent", player_type=PlayerType.PITCHER,
+        rest_of_season=incumbent_ros, preseason=incumbent_pre,
+        selected_position=Position.P,
+    )
+
+    candidate_ros = PitcherStats(
+        ip=60, w=4, k=67, sv=0, er=22, bb=15, h_allowed=50, era=3.30, whip=1.08,
+    )
+    candidate_pre = PitcherStats(
+        ip=200, w=14, k=220, sv=0, er=72, bb=50, h_allowed=170, era=3.24, whip=1.10,
+    )
+    candidate = Player(
+        name="Webb", player_type=PlayerType.PITCHER,
+        rest_of_season=candidate_ros, preseason=candidate_pre,
+        selected_position=Position.IL,
+    )
+
+    # The ``w`` argument is the legacy direct-IP window. With the new shared
+    # helpers, the function derives the correct cross-role window internally
+    # from preseason IP; ``w`` is only used as a fallback when preseason data
+    # is missing.
+    synth = _synthetic_swap_line(incumbent, candidate, w=60.0)
+
+    # Cross-role: window = 65 * (60/200) = 19.5 IP. Scale = (25 - 19.5)/25.
+    scale = (25.0 - 19.5) / 25.0
+    expected_ip = scale * 25.0 + 60.0
+    expected_k = scale * 20.0 + 67.0
+    assert abs(synth.rest_of_season.ip - expected_ip) < 1e-6
+    assert abs(synth.rest_of_season.k - expected_k) < 1e-6
