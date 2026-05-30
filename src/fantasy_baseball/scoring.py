@@ -28,6 +28,7 @@ from fantasy_baseball.models.standings import (
     CategoryPoints,
     CategoryStats,
     ProjectedStandingsEntry,
+    TeamYtdComponents,
 )
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import (
@@ -257,7 +258,6 @@ def _find_worst_match(
     *,
     league_context: LeagueContext | None = None,
     current_roster: list[Player | dict] | None = None,
-    projection_source: ProjectionSource = "rest_of_season",
 ) -> Player | None:
     """Find the displacement target for ``il_player``.
 
@@ -311,7 +311,6 @@ def _find_worst_match(
             candidates,
             current_roster,
             league_context,
-            projection_source,
         )
 
     # Fallback: SGP-based (legacy behavior, used when no league context).
@@ -328,7 +327,6 @@ def _find_delta_roto_optimal(
     candidates: list[Player],
     current_roster: list[Player | dict],
     ctx: LeagueContext,
-    projection_source: ProjectionSource,
 ) -> Player | None:
     """Pick the candidate whose displacement maximizes team roto pts.
 
@@ -353,14 +351,10 @@ def _find_delta_roto_optimal(
             continue
         factor = max(0.0, active_pt - il_pt) / active_pt
         hyp_roster: list[Player | dict] = [
-            _scale_stats(cand, factor, projection_source)
-            if isinstance(p, Player) and p.name == cand.name
-            else p
+            _scale_stats(cand, factor) if isinstance(p, Player) and p.name == cand.name else p
             for p in current_roster
         ]
-        team_stats = project_team_stats(
-            hyp_roster, displacement=False, projection_source=projection_source
-        )
+        team_stats = project_team_stats(hyp_roster, displacement=False)
         all_team_stats: dict[str, CategoryStats] = dict(ctx.baseline_other_team_stats)
         all_team_stats[ctx.team_name] = team_stats
         roto = score_roto(_dict_table(all_team_stats), team_sds=ctx.team_sds)
@@ -383,7 +377,6 @@ def _compute_displacement_factors(
     il_players: list[Player],
     *,
     league_context: LeagueContext | None = None,
-    projection_source: ProjectionSource = "rest_of_season",
 ) -> dict[str, float]:
     """Map player-name -> scale factor for IL-induced displacement.
 
@@ -415,7 +408,6 @@ def _compute_displacement_factors(
             active_hitters,
             il_hitters,
             league_context=league_context,
-            projection_source=projection_source,
             all_active=active,
             all_il=il_players,
         )
@@ -432,7 +424,6 @@ def _compute_displacement_factors(
                 all_active=active,
                 all_il=il_players,
                 league_context=league_context,
-                projection_source=projection_source,
             )
         )
     else:
@@ -441,7 +432,6 @@ def _compute_displacement_factors(
                 active_pitchers,
                 il_pitchers,
                 league_context=None,
-                projection_source=projection_source,
                 all_active=active,
                 all_il=il_players,
             )
@@ -455,7 +445,6 @@ def _compute_substitution_factors(
     il_subset: list[Player],
     *,
     league_context: LeagueContext | None,
-    projection_source: ProjectionSource,
     all_active: list[Player],
     all_il: list[Player],
 ) -> dict[str, float]:
@@ -482,7 +471,6 @@ def _compute_substitution_factors(
             already_displaced,
             league_context=league_context,
             current_roster=running_roster if league_context is not None else None,
-            projection_source=projection_source,
         )
         if target is None:
             continue
@@ -494,9 +482,7 @@ def _compute_substitution_factors(
         factors[target.name] = factor
         if league_context is not None:
             running_roster = [
-                _scale_stats(p, factor, projection_source)
-                if isinstance(p, Player) and p.name == target.name
-                else p
+                _scale_stats(p, factor) if isinstance(p, Player) and p.name == target.name else p
                 for p in running_roster
             ]
     return factors
@@ -509,7 +495,6 @@ def _compute_pitcher_pool_factors(
     all_active: list[Player],
     all_il: list[Player],
     league_context: LeagueContext,
-    projection_source: ProjectionSource,
 ) -> dict[str, float]:
     """Pair-swap pitcher displacement: each IL pitcher who improves team
     DeltaRoto is activated at full ROS; one active target absorbs the discount.
@@ -567,7 +552,7 @@ def _compute_pitcher_pool_factors(
         out: list[Player | dict] = []
         for p in full_pool_roster:
             if isinstance(p, Player) and p.name in overrides:
-                out.append(_scale_stats(p, overrides[p.name], projection_source))
+                out.append(_scale_stats(p, overrides[p.name]))
             else:
                 out.append(p)
         return out
@@ -592,7 +577,6 @@ def _compute_pitcher_pool_factors(
         bench_il_stats = project_team_stats(
             state_with(bench_il_overrides),
             displacement=False,
-            projection_source=projection_source,
         )
         bench_il_pts = team_pts(bench_il_stats)
 
@@ -613,7 +597,6 @@ def _compute_pitcher_pool_factors(
             stats = project_team_stats(
                 state_with(overrides),
                 displacement=False,
-                projection_source=projection_source,
             )
             pts = team_pts(stats)
             if pts > best_pts:
@@ -637,47 +620,28 @@ def _compute_pitcher_pool_factors(
 def _scale_stats(
     p: Player,
     factor: float,
-    projection_source: ProjectionSource = "rest_of_season",
 ) -> dict[str, float | PlayerType]:
-    """Return scaled counting stats.
+    """Return per-player scaled counting stats: ``ROS * factor``.
 
-    In ``rest_of_season`` mode (default, used by the optimizer and trade
-    evaluator), returns ``ROS * factor`` -- the legacy forward-looking
-    behavior. A hot-YTD and a cold-YTD player with the same ROS contribute
-    identically to forward decisions, so start/sit calls are not biased by
-    locked totals.
+    The YTD floor added by PR #108 is removed -- per-player YTD attribution
+    incorrectly credits whoever currently owns the player with stats accrued
+    before the acquisition (e.g., a mid-season pickup's pre-pickup K's would
+    bleed into the new owner's projected total).
 
-    In ``full_season_projection`` mode (used by the standings layer and
-    breakdown view), returns ``YTD + (ROS * factor)`` where YTD is
-    ``full_season_projection - rest_of_season``. YTD is the locked-in
-    already-played portion; it always contributes at full value regardless
-    of ``factor``. Only the forward-looking ROS portion is subject to
-    displacement scaling.
+    Team YTD is now captured at the team level via :func:`team_end_of_season`
+    and :class:`TeamYtdComponents` from Yahoo standings -- i.e., only stats
+    accrued while the player was on the team count.
 
-    When ``full_season_projection`` is unset (preseason rosters), YTD = 0
-    and the result is ``ROS * factor`` -- matching ROS-mode behavior, which
-    is correct because no YTD has been recorded yet.
-
-    ``factor=0.0`` zeroes the ROS contribution; YTD survives in full-season
-    mode. ``factor=1.0`` returns full-season in full-season mode and ROS in
-    ROS mode.
+    ``factor=0.0`` zeros the contribution entirely; ``factor=1.0`` returns
+    the full ROS projection.
     """
     result: dict[str, float | PlayerType] = {}
     if p.rest_of_season is None:
         return result
     keys = HITTING_COUNTING if p.player_type == PlayerType.HITTER else PITCHING_COUNTING
-    full_season = (
-        p.full_season_projection if projection_source == "full_season_projection" else None
-    )
     for key in keys:
         ros_val = _safe(getattr(p.rest_of_season, key, 0))
-        if full_season is not None:
-            ytd = _safe(getattr(full_season, key, 0)) - ros_val
-            if ytd < 0:
-                ytd = 0.0  # data hygiene: shouldn't happen but don't go negative
-        else:
-            ytd = 0.0
-        result[key] = ytd + ros_val * factor
+        result[key] = ros_val * factor
     result["player_type"] = p.player_type
     return result
 
@@ -709,11 +673,11 @@ class PlayerContribution:
     scale_factor: float  # 0.0 to 1.0
     raw_stats: dict[str, float]  # pre-scale projection stats (for display)
     contribution_stats: dict[str, float] = field(default_factory=dict)
-    """Actual scaled contribution per counting stat -- what flows into the
-    team total. In ``full_season_projection`` mode this is
-    ``YTD + (ROS * scale_factor)``; in ``rest_of_season`` mode it is
-    ``ROS * scale_factor``. The modal renders these values directly so the
-    per-row sum matches the standings widget headline.
+    """Actual ROS-scaled contribution per counting stat -- what flows into
+    the team total: ``ROS * scale_factor``. The modal renders these values
+    directly so the per-row sum matches the ROS portion of the standings
+    widget. Team YTD lives at the team level via :func:`team_end_of_season`,
+    not on these per-player rows.
     """
 
     def to_dict(self) -> dict:
@@ -752,25 +716,41 @@ class PlayerContribution:
 
 @dataclass(frozen=True)
 class RosterBreakdown:
-    """Per-player contributions for one team, partitioned by player type."""
+    """Per-player contributions for one team, partitioned by player type.
+
+    ``team_ytd`` is the team's YTD totals block (uppercase-string-keyed,
+    matching :class:`CategoryStats`'s ``to_dict`` for counting stats plus
+    rate-stat ingredients H, AB, IP, ER, BB_plus_H_allowed). It is a
+    first-class field so it survives the
+    ``RosterBreakdown.from_dict(...).to_dict()`` round-trip that
+    ``season_routes`` does to backfill stale KV blobs. Defaults to an
+    empty dict for callers (and legacy persisted payloads) that don't
+    carry team-level YTD.
+    """
 
     team_name: str
     hitters: list[PlayerContribution]
     pitchers: list[PlayerContribution]
+    team_ytd: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
             "team_name": self.team_name,
             "hitters": [c.to_dict() for c in self.hitters],
             "pitchers": [c.to_dict() for c in self.pitchers],
+            "team_ytd": dict(self.team_ytd),
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> RosterBreakdown:
+        # `or {}` guards against explicit null values in persisted JSON --
+        # d.get("team_ytd", {}) would return None when the key exists but
+        # is null, breaking dict() construction below.
         return cls(
             team_name=d["team_name"],
             hitters=[PlayerContribution.from_dict(x) for x in d.get("hitters", [])],
             pitchers=[PlayerContribution.from_dict(x) for x in d.get("pitchers", [])],
+            team_ytd=dict(d.get("team_ytd") or {}),
         )
 
 
@@ -778,7 +758,6 @@ def _apply_displacement(
     roster: list[Player],
     *,
     league_context: LeagueContext | None = None,
-    projection_source: ProjectionSource = "rest_of_season",
 ) -> list[Player | dict]:
     """Partition roster into active/bench/IL and apply displacement scaling.
 
@@ -820,7 +799,6 @@ def _apply_displacement(
         active,
         il_players,
         league_context=league_context,
-        projection_source=projection_source,
     )
 
     # Build output: each player in active or IL is either passed through
@@ -830,30 +808,32 @@ def _apply_displacement(
     result: list[Player | dict] = list(pass_through)
     for p in [*il_players, *active]:
         if p.name in displacement_factors:
-            result.append(_scale_stats(p, displacement_factors[p.name], projection_source))
+            result.append(_scale_stats(p, displacement_factors[p.name]))
         else:
             result.append(p)
 
     return result
 
 
-def _contribution_stats_for(
-    p: Player, factor: float, projection_source: ProjectionSource
-) -> dict[str, float]:
+def _contribution_stats_for(p: Player, factor: float) -> dict[str, float]:
     """Per-player counting-stat contribution to the team total at this factor.
 
     Mirrors the math in :func:`_scale_stats` (which produces the dicts
     summed by :func:`project_team_stats`), but returns only the counting
     stats (no ``player_type`` key). Used by :func:`compute_roster_breakdown`
     so the modal can render the actual contribution directly instead of
-    multiplying raw_stats * scale_factor client-side -- the latter loses
-    the YTD floor in full_season_projection mode.
+    multiplying raw_stats * scale_factor client-side -- the latter would
+    lose any factor-aware scaling.
+
+    Returns ``ROS * factor`` per stat. Team YTD is now captured at the
+    team level via :func:`team_end_of_season` (not per-player), so this
+    helper is ROS-only regardless of caller mode.
 
     Returns ``{}`` when the player has no ROS projection.
     """
     if p.rest_of_season is None:
         return {}
-    scaled = _scale_stats(p, factor, projection_source)
+    scaled = _scale_stats(p, factor)
     # _scale_stats includes a "player_type" key for routing; strip it.
     return {k: float(v) for k, v in scaled.items() if k != "player_type"}
 
@@ -879,7 +859,7 @@ def compute_roster_breakdown(
     roster: list[Player],
     *,
     league_context: LeagueContext | None = None,
-    projection_source: ProjectionSource = "rest_of_season",
+    team_ytd: dict[str, float] | None = None,
 ) -> RosterBreakdown:
     """Return per-player contributions for ``roster``, tagged with status.
 
@@ -888,13 +868,21 @@ def compute_roster_breakdown(
     ``contribution_stats[cat]`` per category equals
     :func:`project_team_stats` with ``displacement=True``.
 
-    ``raw_stats`` is the unscaled projection (full_season in production
-    standings mode, ROS in preseason/rest_of_season mode) -- shown in the
-    modal for context. ``contribution_stats`` is the actual scaled
-    contribution per category -- what flows into the team total. The
-    modal must render ``contribution_stats[cat]`` directly to match the
-    standings widget; multiplying ``raw_stats * scale_factor`` loses the
-    YTD floor in full_season_projection mode.
+    ``raw_stats`` is the unscaled projection (``full_season_projection``
+    when available, ROS otherwise) -- shown in the modal for context.
+    ``contribution_stats`` is the actual ROS-scaled contribution per
+    category -- what flows into the team total. The modal must render
+    ``contribution_stats[cat]`` directly to match the standings widget;
+    multiplying ``raw_stats * scale_factor`` would not match because
+    ``raw_stats`` may be full-season while contributions are ROS-only.
+
+    Per-player YTD is intentionally NOT included in ``contribution_stats``
+    -- team YTD lives at the team level via :func:`team_end_of_season`
+    (from :class:`TeamYtdComponents`). Callers (the refresh pipeline) can
+    pass that block via ``team_ytd`` so it becomes a first-class field on
+    the returned :class:`RosterBreakdown` and survives the
+    season_routes ``from_dict().to_dict()`` round-trip. ``None`` defaults
+    to an empty dict (preseason / no actual standings).
 
     When ``league_context`` is provided, displacement targets are chosen
     via DeltaRoto-optimal selection (matches the standings layer); without
@@ -905,7 +893,6 @@ def compute_roster_breakdown(
         active,
         il_players,
         league_context=league_context,
-        projection_source=projection_source,
     )
 
     contributions: list[PlayerContribution] = []
@@ -927,7 +914,7 @@ def compute_roster_breakdown(
                 status=status,
                 scale_factor=factor,
                 raw_stats=_raw_stats_for(p),
-                contribution_stats=_contribution_stats_for(p, factor, projection_source),
+                contribution_stats=_contribution_stats_for(p, factor),
             )
         )
 
@@ -953,7 +940,7 @@ def compute_roster_breakdown(
                 status=status,
                 scale_factor=factor,
                 raw_stats=_raw_stats_for(p),
-                contribution_stats=_contribution_stats_for(p, factor, projection_source),
+                contribution_stats=_contribution_stats_for(p, factor),
             )
         )
 
@@ -971,49 +958,176 @@ def compute_roster_breakdown(
 
     hitters = [c for c in contributions if c.player_type == PlayerType.HITTER]
     pitchers = [c for c in contributions if c.player_type == PlayerType.PITCHER]
-    return RosterBreakdown(team_name=team_name, hitters=hitters, pitchers=pitchers)
+    return RosterBreakdown(
+        team_name=team_name,
+        hitters=hitters,
+        pitchers=pitchers,
+        team_ytd=dict(team_ytd) if team_ytd else {},
+    )
+
+
+@dataclass(frozen=True)
+class TeamRosComponents:
+    """Rest-of-season counting + rate-stat ingredients for a roster,
+    matching the :class:`TeamYtdComponents` shape so the two can be summed
+    by ``team_end_of_season`` (added in a follow-up task).
+
+    Same field set as ``TeamYtdComponents``: counting stats (R, HR, RBI,
+    SB, W, K, SV) plus rate-stat ingredients (H, AB, IP, ER, BB+H_allowed).
+    """
+
+    r: float = 0.0
+    hr: float = 0.0
+    rbi: float = 0.0
+    sb: float = 0.0
+    w: float = 0.0
+    k: float = 0.0
+    sv: float = 0.0
+    h: float = 0.0
+    ab: float = 0.0
+    ip: float = 0.0
+    er: float = 0.0
+    bb_plus_h_allowed: float = 0.0
+
+
+def project_ros_components(
+    roster: list[Player],
+    *,
+    displacement: bool = True,
+    league_context: LeagueContext | None = None,
+) -> TeamRosComponents:
+    """Sum rest-of-season counting + rate-stat ingredients across a roster.
+
+    Mirrors :func:`project_team_stats` but returns a :class:`TeamRosComponents`
+    instead of :class:`CategoryStats`. Designed to be combined with
+    :class:`TeamYtdComponents` from Yahoo standings to produce projected
+    end-of-season totals via a ``team_end_of_season`` helper (added in a
+    follow-up task) that recomputes AVG / ERA / WHIP from the summed
+    ingredients rather than averaging the precomputed rates.
+
+    Displacement scaling (active pool overlap, IL pitcher pair-swap) is
+    applied via the standard :func:`_apply_displacement` path when
+    ``displacement=True``. Each displaced player's components are scaled
+    by their displacement factor.
+    """
+    players: list[Player | dict]
+    if displacement:
+        players = _apply_displacement(
+            roster,
+            league_context=league_context,
+        )
+    else:
+        players = list(roster)
+
+    r = hr = rbi = sb = h_total = ab_total = 0.0
+    w = k = sv = ip_total = er_total = bb_total = ha_total = 0.0
+
+    for p in players:
+        ptype = _get(p, "player_type")
+        if ptype == PlayerType.HITTER:
+            r += _stat(p, "r", "rest_of_season")
+            hr += _stat(p, "hr", "rest_of_season")
+            rbi += _stat(p, "rbi", "rest_of_season")
+            sb += _stat(p, "sb", "rest_of_season")
+            h_total += _stat(p, "h", "rest_of_season")
+            ab_total += _stat(p, "ab", "rest_of_season")
+        elif ptype == PlayerType.PITCHER:
+            w += _stat(p, "w", "rest_of_season")
+            k += _stat(p, "k", "rest_of_season")
+            sv += _stat(p, "sv", "rest_of_season")
+            ip_total += _stat(p, "ip", "rest_of_season")
+            er_total += _stat(p, "er", "rest_of_season")
+            bb_total += _stat(p, "bb", "rest_of_season")
+            ha_total += _stat(p, "h_allowed", "rest_of_season")
+
+    return TeamRosComponents(
+        r=r,
+        hr=hr,
+        rbi=rbi,
+        sb=sb,
+        w=w,
+        k=k,
+        sv=sv,
+        h=h_total,
+        ab=ab_total,
+        ip=ip_total,
+        er=er_total,
+        bb_plus_h_allowed=bb_total + ha_total,
+    )
+
+
+def team_end_of_season(
+    ytd: TeamYtdComponents,
+    ros: TeamRosComponents,
+) -> CategoryStats:
+    """Combine team YTD components and ROS components into end-of-season totals.
+
+    Counting stats: simple sum (YTD + ROS).
+    Rate stats: recomputed from summed components --
+      - AVG = (YTD.h + ROS.h) / (YTD.ab + ROS.ab)
+      - ERA = 9 * (YTD.er + ROS.er) / (YTD.ip + ROS.ip)
+      - WHIP = (YTD.bb_plus_h_allowed + ROS.bb_plus_h_allowed) / (YTD.ip + ROS.ip)
+
+    Zero-AB defaults AVG to 0.0 (non-inverse: 0.0 = batting nothing = worst).
+    Zero-IP defaults ERA/WHIP to 99.0 -- matching :class:`CategoryStats`'s
+    inverse-stat defaults and :func:`utils.rate_stats.calculate_era` /
+    :func:`calculate_whip`. Returning 0.0 here would silently make a zero-IP
+    team WIN ERA/WHIP (lower is better), and Pass-1 (:func:`project_team_stats`,
+    which uses ``calculate_era``/``calculate_whip``) would disagree with
+    Pass-2 (this function) by ~99 on the same zero input.
+
+    See :class:`TeamYtdComponents` for the YTD side (from
+    :meth:`StandingsEntry.ytd_components`) and :func:`project_ros_components`
+    for the ROS side.
+    """
+    total_ab = ytd.ab + ros.ab
+    total_ip = ytd.ip + ros.ip
+    avg = (ytd.h + ros.h) / total_ab if total_ab > 0 else 0.0
+    era = 9.0 * (ytd.er + ros.er) / total_ip if total_ip > 0 else 99.0
+    whip = (ytd.bb_plus_h_allowed + ros.bb_plus_h_allowed) / total_ip if total_ip > 0 else 99.0
+    return CategoryStats(
+        r=ytd.r + ros.r,
+        hr=ytd.hr + ros.hr,
+        rbi=ytd.rbi + ros.rbi,
+        sb=ytd.sb + ros.sb,
+        avg=avg,
+        w=ytd.w + ros.w,
+        k=ytd.k + ros.k,
+        sv=ytd.sv + ros.sv,
+        era=era,
+        whip=whip,
+    )
 
 
 def project_team_stats(
     roster,
     *,
     displacement: bool = False,
-    projection_source: ProjectionSource = "rest_of_season",
     league_context: LeagueContext | None = None,
 ) -> CategoryStats:
-    """Sum projected stats for a roster into a CategoryStats.
+    """Sum projected ROS counting stats for a roster into a CategoryStats.
 
     Accepts Player dataclass objects OR plain dicts with flat stat
     keys. Rate stats (AVG, ERA, WHIP) are computed from component
     totals rather than simple sums, so the result is mathematically
     correct rather than just a naive average.
 
-    ``projection_source`` selects which projection field on each
-    :class:`Player` to sum. The default ``"rest_of_season"`` is the
-    forward-looking decision math used by the optimizer, recs, and
-    trade evaluation: a hot-YTD player and a cold-YTD player with the
-    same ROS-remaining contribute identically, so start/sit decisions
-    are not biased by locked YTD totals. ``"full_season_projection"``
-    sums ROS + YTD and is used only by
-    :meth:`ProjectedStandings.from_rosters` to preserve the
-    end-of-season-totals projection until proper standings + ROS
-    combination ships (Yahoo standings only surface AVG, not the H/AB
-    components needed to recombine rate stats correctly).
-
-    Note: ``projection_source`` propagates through ``_apply_displacement``
-    to ``_scale_stats``. In ``rest_of_season`` mode, displaced players
-    contribute ROS * factor (legacy forward-looking math used by the
-    optimizer and trade evaluator). In ``full_season_projection`` mode,
-    displaced players contribute YTD + (ROS * factor) where YTD =
-    full_season_projection - rest_of_season -- locked-in stats survive
-    scaling so the standings layer correctly preserves
-    already-recorded contributions.
+    Sums ``Player.rest_of_season`` only -- forward-looking math used by
+    the optimizer, recs, and trade evaluation. A hot-YTD player and a
+    cold-YTD player with the same ROS-remaining contribute identically,
+    so start/sit decisions are not biased by locked YTD totals. Team
+    YTD is captured at the team level via :func:`team_end_of_season`
+    (combining :class:`TeamYtdComponents` from Yahoo standings with
+    :func:`project_ros_components`), not via a per-player projection
+    field. The standings layer is responsible for adding team YTD to
+    these ROS totals when end-of-season projections are needed.
 
     When ``displacement=True``, bench players are excluded and IL
     players displace the worst positional match among active players,
     scaling down the displaced player's stats proportionally based on
-    playing time. Only activates for Player dataclass objects — dict
-    input callers are unaffected.
+    playing time. Only activates for Player dataclass objects -- dict
+    input callers are unaffected. Displaced players contribute
+    ``ROS * factor``.
 
     The dict-input path exists for backwards compatibility with
     draft-side scripts (``scripts/simulate_draft.py``,
@@ -1026,7 +1140,6 @@ def project_team_stats(
         roster = _apply_displacement(
             roster,
             league_context=league_context,
-            projection_source=projection_source,
         )
 
     r = hr = rbi = sb = h_total = ab_total = 0.0
@@ -1035,20 +1148,20 @@ def project_team_stats(
     for p in roster:
         ptype = _get(p, "player_type")
         if ptype == PlayerType.HITTER:
-            r += _stat(p, "r", projection_source)
-            hr += _stat(p, "hr", projection_source)
-            rbi += _stat(p, "rbi", projection_source)
-            sb += _stat(p, "sb", projection_source)
-            h_total += _stat(p, "h", projection_source)
-            ab_total += _stat(p, "ab", projection_source)
+            r += _stat(p, "r", "rest_of_season")
+            hr += _stat(p, "hr", "rest_of_season")
+            rbi += _stat(p, "rbi", "rest_of_season")
+            sb += _stat(p, "sb", "rest_of_season")
+            h_total += _stat(p, "h", "rest_of_season")
+            ab_total += _stat(p, "ab", "rest_of_season")
         elif ptype == PlayerType.PITCHER:
-            w += _stat(p, "w", projection_source)
-            k += _stat(p, "k", projection_source)
-            sv += _stat(p, "sv", projection_source)
-            ip_total += _stat(p, "ip", projection_source)
-            er_total += _stat(p, "er", projection_source)
-            bb_total += _stat(p, "bb", projection_source)
-            ha_total += _stat(p, "h_allowed", projection_source)
+            w += _stat(p, "w", "rest_of_season")
+            k += _stat(p, "k", "rest_of_season")
+            sv += _stat(p, "sv", "rest_of_season")
+            ip_total += _stat(p, "ip", "rest_of_season")
+            er_total += _stat(p, "er", "rest_of_season")
+            bb_total += _stat(p, "bb", "rest_of_season")
+            ha_total += _stat(p, "h_allowed", "rest_of_season")
 
     return CategoryStats(
         r=r,

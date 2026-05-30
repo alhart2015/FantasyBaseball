@@ -23,7 +23,11 @@ class Category(Enum):
 
 
 class OpportunityStat(Enum):
-    """Non-roto volume stats preserved from Yahoo standings (PA, IP).
+    """Non-roto volume stats preserved from Yahoo standings.
+
+    PA, IP are best-effort ingest. AB is enum-only until Yahoo standings
+    ingest is wired up; until then it lives on extras only when callers
+    supply it explicitly.
 
     These aren't scoring categories, but they ride alongside
     :class:`CategoryStats` on :class:`StandingsEntry.extras` so
@@ -35,6 +39,7 @@ class OpportunityStat(Enum):
 
     PA = "PA"
     IP = "IP"
+    AB = "AB"
 
 
 HITTING_CATEGORIES: list[Category] = [

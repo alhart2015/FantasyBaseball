@@ -57,7 +57,11 @@ if TYPE_CHECKING:
     from fantasy_baseball.lineup.optimizer import HitterAssignment, PitcherStarter
     from fantasy_baseball.models.league import League
     from fantasy_baseball.models.player import Player
-    from fantasy_baseball.models.standings import ProjectedStandings, Standings
+    from fantasy_baseball.models.standings import (
+        ProjectedStandings,
+        Standings,
+        TeamYtdComponents,
+    )
     from fantasy_baseball.models.team import Team
 
 log = logging.getLogger(__name__)
@@ -144,11 +148,41 @@ def _write_spoe_snapshot(spoe_result: dict) -> None:
         log.warning(f"Failed to write spoe_snapshot:{snapshot_date}: {exc}")
 
 
+def _team_ytd_block(comps: "TeamYtdComponents") -> dict[str, float]:
+    """Flatten a TeamYtdComponents to the JSON shape consumed by the
+    breakdown modal.
+
+    Keys are lowercase to mirror the per-player ``contribution_stats``
+    schema (``HITTING_COUNTING`` + ``PITCHING_COUNTING`` -- r, hr, rbi,
+    sb, h, ab, w, k, sv, ip, er, bb, h_allowed) so the modal can read
+    team_ytd via the same ``colSpec.field`` path as per-player rows.
+
+    ``bb_plus_h_allowed`` is exposed as the combined-sum key since YTD
+    only exposes ``WHIP * IP`` (the sum); we can't split it into bb /
+    h_allowed without per-game-log decomposition.
+    """
+    return {
+        "r": comps.r,
+        "hr": comps.hr,
+        "rbi": comps.rbi,
+        "sb": comps.sb,
+        "h": comps.h,
+        "ab": comps.ab,
+        "w": comps.w,
+        "k": comps.k,
+        "sv": comps.sv,
+        "ip": comps.ip,
+        "er": comps.er,
+        "bb_plus_h_allowed": comps.bb_plus_h_allowed,
+    }
+
+
 def build_standings_breakdown_payload(
     team_rosters: dict[str, list["Player"]],
     effective_date: date,
     *,
     fraction_remaining: float = 1.0,
+    actual_standings: "Standings | None" = None,
 ) -> dict:
     """Build the STANDINGS_BREAKDOWN cache payload for ``team_rosters``.
 
@@ -156,19 +190,31 @@ def build_standings_breakdown_payload(
     dict and keyed by team name. ``effective_date`` is included to
     match the :class:`ProjectedStandings` payload shape.
 
-    Uses the same two-pass ΔRoto-optimal displacement as
-    :meth:`ProjectedStandings.from_rosters`, so per-player ``contribution_stats[cat]``
-    aggregates here match the standings widget exactly:
+    Per-player rows are ROS-only (post-team-YTD refactor) so the modal
+    can render the arithmetic exposed by the standings widget:
+    ``team_YTD + sum(player ROS contribution rows) == projected_standings``
+    for every team and every category. The team's YTD totals are emitted
+    as a separate ``team_ytd`` block (derived from
+    ``StandingsEntry.ytd_components()``) so the legacy per-player
+    YTD-floor path is no longer needed here. When ``actual_standings``
+    is ``None`` (pre-season or omitted), the block is all zeros so
+    consumers don't need to branch on its presence.
 
-    1. Pass 1 — SGP-based displacement → baseline ``{team: stats}``.
-    2. Pass 2 — each team picks its displacement targets via ΔRoto,
+    Uses the same two-pass DeltaRoto-optimal displacement as
+    :meth:`ProjectedStandings.from_rosters`, on ROS components, so
+    per-player ``contribution_stats[cat]`` aggregates here match the
+    standings widget exactly:
+
+    1. Pass 1 -- SGP-based displacement on ROS -> baseline ``{team: stats}``.
+    2. Pass 2 -- each team picks its displacement targets via DeltaRoto,
        evaluating against frozen pass-1 baseline of other teams.
 
     Without the two-pass, the breakdown would show different scale
     factors than the standings (e.g., Mason Miller at sf=0.25 in the
-    breakdown but at sf≈1.0 in the projected standings), which would
+    breakdown but at sf~=1.0 in the projected standings), which would
     desync the modal drilldown from the headline numbers.
     """
+    from fantasy_baseball.models.standings import TeamYtdComponents
     from fantasy_baseball.scoring import (
         LeagueContext,
         build_team_sds,
@@ -176,20 +222,22 @@ def build_standings_breakdown_payload(
         project_team_stats,
     )
 
-    # Pass 1: SGP-based baseline {team: stats}. Same projection_source
-    # as ProjectedStandings.from_rosters so the contexts align.
+    # Pass 1: SGP-based baseline {team: stats}. Matches the ROS-only
+    # call used by ProjectedStandings.from_rosters Pass 1 so the
+    # DeltaRoto picker's baseline agrees with the standings.
     baseline_stats = {
-        tname: project_team_stats(
-            roster,
-            displacement=True,
-            projection_source="full_season_projection",
-        )
+        tname: project_team_stats(roster, displacement=True)
         for tname, roster in team_rosters.items()
     }
     # Match ProjectedStandings.from_rosters: damp the picker's SDs by
     # sqrt(fraction_remaining) so the breakdown's displacement decisions
     # agree with the standings widget and the canonical team_sds.
     team_sds = build_team_sds(team_rosters, sd_scale=fraction_remaining**0.5)
+
+    ytd_by_team: dict[str, TeamYtdComponents] = {}
+    if actual_standings is not None:
+        for entry in actual_standings.entries:
+            ytd_by_team[entry.team_name] = entry.ytd_components()
 
     teams_payload: dict[str, dict] = {}
     for team_name, roster in team_rosters.items():
@@ -198,12 +246,31 @@ def build_standings_breakdown_payload(
             team_sds=team_sds,
             team_name=team_name,
         )
-        teams_payload[team_name] = compute_roster_breakdown(
+        # team_ytd is a first-class field on RosterBreakdown so it survives the
+        # season_routes round-trip through from_dict/to_dict (used to backfill
+        # contribution_stats on stale KV blobs). Passing it through here keeps
+        # the team-YTD block out of the per-player rows -- per-player YTD
+        # attribution is intentionally not done; only stats accrued while the
+        # player was on the team count, and that bookkeeping lives at the team
+        # level via TeamYtdComponents.
+        team_ytd_components = ytd_by_team.get(team_name)
+        if team_ytd_components is None:
+            if actual_standings is not None:
+                log.warning(
+                    "Team YTD lookup miss for %r in build_standings_breakdown_payload; "
+                    "falling back to zero YTD (team_rosters key not found in "
+                    "actual_standings.entries -- apostrophe / whitespace / Unicode "
+                    "normalization drift?)",
+                    team_name,
+                )
+            team_ytd_components = TeamYtdComponents()
+        breakdown = compute_roster_breakdown(
             team_name,
             roster,
             league_context=ctx,
-            projection_source="full_season_projection",
-        ).to_dict()
+            team_ytd=_team_ytd_block(team_ytd_components),
+        )
+        teams_payload[team_name] = breakdown.to_dict()
     return {
         "effective_date": effective_date.isoformat(),
         "teams": teams_payload,
@@ -257,6 +324,12 @@ class RefreshRun:
         self.league_model: League | None = None
         self.user_team_key: str | None = None
         self.standings: Standings | None = None
+        # ytd_standings is self.standings augmented with team-YTD AB on
+        # extras (computed in _build_projected_standings). Stored on
+        # self so _audit_roster and _optimize_lineup can pass it to the
+        # stash board and optimizer user-rows -- the same scale the
+        # projected standings widget consumes.
+        self.ytd_standings: Standings | None = None
         self.projected_standings: ProjectedStandings | None = None
         self.preseason_projected_standings: ProjectedStandings | None = None
         self.team_sds: dict[str, dict[Category, float]] | None = None
@@ -627,8 +700,13 @@ class RefreshRun:
     # --- Step 4e: Build projected standings ---
     def _build_projected_standings(self):
         self._progress("Projecting end-of-season standings...")
+        from fantasy_baseball.analysis.team_ytd_attribution import compute_team_ytd_ab
         from fantasy_baseball.data.projections import hydrate_roster_entries
-        from fantasy_baseball.models.standings import ProjectedStandings
+        from fantasy_baseball.models.standings import (
+            ProjectedStandings,
+            Standings,
+            StandingsEntry,
+        )
         from fantasy_baseball.scoring import build_team_sds, team_sds_to_json
 
         assert self.config is not None
@@ -638,6 +716,7 @@ class RefreshRun:
         assert self.league_model is not None
         assert self.preseason_hitters is not None
         assert self.preseason_pitchers is not None
+        assert self.standings is not None
 
         all_team_rosters = {self.config.team_name: self.matched}
         all_team_rosters.update(self.opp_rosters)
@@ -652,9 +731,38 @@ class RefreshRun:
         )
         self.sd_scale = math.sqrt(self.fraction_remaining)
 
+        # Yahoo's team-standings response does not expose AB for this league,
+        # so derive team-YTD AB from Team.ownership_periods() intersected with
+        # per-game logs in data/roster_game_logs.json and stuff it onto
+        # extras[OpportunityStat.AB]. ytd_components() then reads AB via Tier
+        # 1 of its sourcing precedence and recombines AVG correctly downstream.
+        ab_by_team = compute_team_ytd_ab(
+            self.league_model,
+            season_start=date.fromisoformat(self.config.season_start),
+            season_end=date.fromisoformat(self.config.season_end),
+        )
+        ytd_standings = Standings(
+            effective_date=self.standings.effective_date,
+            entries=[
+                StandingsEntry(
+                    team_name=e.team_name,
+                    team_key=e.team_key,
+                    rank=e.rank,
+                    stats=e.stats,
+                    yahoo_points_for=e.yahoo_points_for,
+                    extras={
+                        **e.extras,
+                        OpportunityStat.AB: ab_by_team.get(e.team_name, 0.0),
+                    },
+                )
+                for e in self.standings.entries
+            ],
+        )
+
         self.projected_standings = ProjectedStandings.from_rosters(
             all_team_rosters,
             effective_date=self.effective_date,
+            actual_standings=ytd_standings,
             fraction_remaining=self.fraction_remaining,
         )
 
@@ -707,8 +815,13 @@ class RefreshRun:
                 all_team_rosters,
                 self.effective_date,
                 fraction_remaining=self.fraction_remaining,
+                actual_standings=ytd_standings,
             ),
         )
+        # Persist for _audit_roster (stash) and _optimize_lineup -- they
+        # need the YTD-augmented standings so the user-row sees the same
+        # AB attribution that the projected standings widget consumes.
+        self.ytd_standings = ytd_standings
         self._progress(f"Projected standings for {len(self.projected_standings.entries)} teams")
 
     # --- Step 5: Leverage weights ---
@@ -855,6 +968,19 @@ class RefreshRun:
             else:
                 hitter_players.append(player)
 
+        # actual_standings threads team_YTD into the user-row baseline that
+        # team_roto_total builds (see optimizer._resolve_user_ytd_components
+        # and team_roto_total docstrings). Without this, the user row is
+        # ROS-only while opponents (from ProjectedStandings.from_rosters) are
+        # team_YTD + ROS, putting the user in a low-mu region of the
+        # score_roto S-curve and silently saturating counting-cat deltas --
+        # the same bug PR #110 fixed for the stash board.
+        #
+        # Use the YTD-augmented standings (AB on extras) -- self.standings
+        # alone has no AB stat for this league, so AVG attribution would
+        # silently collapse to zero AB. Fall back to self.standings as a
+        # defensive net.
+        opt_actual_standings = self.ytd_standings or self.standings
         self.optimal_hitters = optimize_hitter_lineup(
             hitters=hitter_players,
             full_roster=self.roster_players,
@@ -863,6 +989,7 @@ class RefreshRun:
             roster_slots=self.config.roster_slots,
             team_sds=self.team_sds,
             fraction_remaining=self.fraction_remaining,
+            actual_standings=opt_actual_standings,
         )
         self.optimal_pitchers_starters, self.optimal_pitchers_bench = optimize_pitcher_lineup(
             pitchers=pitcher_players,
@@ -872,6 +999,7 @@ class RefreshRun:
             slots=self.config.roster_slots.get("P", 9),
             team_sds=self.team_sds,
             fraction_remaining=self.fraction_remaining,
+            actual_standings=opt_actual_standings,
         )
 
     # --- Step 8: Compare optimal to current, find moves ---
@@ -988,6 +1116,11 @@ class RefreshRun:
         # abort the rest of the refresh (Monte Carlo, standings, meta), so we
         # degrade to an empty cached board and continue -- mirroring the
         # streak-computation step.
+        # Use the YTD-augmented standings (AB on extras) when available so
+        # the stash baseline's user row matches the projected standings
+        # scale. Fall back to self.standings defensively for code paths
+        # that may not have populated ytd_standings yet.
+        stash_actual_standings = self.ytd_standings or self.standings
         try:
             stash_result = score_stash_candidates(
                 self.roster_players,
@@ -997,6 +1130,7 @@ class RefreshRun:
                 self.config.team_name,
                 team_sds=self.team_sds,
                 fraction_remaining=self.fraction_remaining,
+                actual_standings=stash_actual_standings,
             )
             write_cache(CacheKey.STASH, stash_result.to_dict())
             self._progress(f"Stash board: {len(stash_result.candidates)} injured candidate(s)")

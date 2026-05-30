@@ -15,10 +15,16 @@ from fantasy_baseball.models.standings import (
     ProjectedStandings,
     ProjectedStandingsEntry,
     Standings,
+    StandingsEntry,
 )
 from fantasy_baseball.scoring import TeamStatsTable, score_roto
 from fantasy_baseball.sgp.rankings import rank_key_from_positions
-from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
+from fantasy_baseball.utils.constants import (
+    AB_PER_PA,
+    ALL_CATEGORIES,
+    Category,
+    OpportunityStat,
+)
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era
@@ -30,9 +36,48 @@ COUNTING_CATS = ["R", "HR", "RBI", "SB", "W", "K", "SV"]
 # be up to this many spots worse-ranked than the player we receive).
 MAX_RANK_GAP = 5
 
-# Baseline estimates for AB and IP used to back out current totals
+# Legacy fallback when callers don't have access to the team's actual
+# AB / IP (preseason / draft / persisted cache without component context).
+# 5500 AB / 1450 IP are league-average end-of-season volumes. Use them
+# only as a last resort: mid-season in-app callers should pass real
+# team_ab / team_ip computed from team_YTD + ROS components, otherwise
+# rate-stat swap deltas are mis-weighted by 20-50%.
 _TEAM_AB = 5500
 _TEAM_IP = 1450
+
+
+def team_baseline_volumes(
+    entry: ProjectedStandingsEntry | StandingsEntry,
+) -> tuple[float | None, float | None]:
+    """Return (team_ab, team_ip) for ``apply_swap_delta`` from a baseline entry.
+
+    ``ProjectedStandingsEntry`` carries explicit ``total_ab`` / ``total_ip``
+    populated by :meth:`ProjectedStandings.from_rosters` from the same
+    ytd+ros components that built the entry's rate stats. Persisted
+    payloads predating those fields decay to 0.0.
+
+    ``StandingsEntry`` (used by ``compute_trade_impact`` when no
+    projected baseline is passed) sources AB from ``extras`` -- prefer
+    the direct AB stat, fall back to PA * AB_PER_PA, then read IP.
+
+    Zero on either axis means the upstream entry didn't carry component
+    context (e.g. a hand-built test entry, a persisted payload from
+    before the AB/IP carry, or a Standings entry without volume extras).
+    Returns ``None`` for that axis so ``apply_swap_delta``'s legacy
+    fallback kicks in -- the rate math then matches the pre-PR-110
+    baseline rather than silently using 0 as a denominator.
+    """
+    if isinstance(entry, ProjectedStandingsEntry):
+        ab = float(entry.total_ab)
+        ip = float(entry.total_ip)
+    else:
+        ab = float(entry.extras.get(OpportunityStat.AB, 0.0))
+        if ab <= 0.0:
+            pa = float(entry.extras.get(OpportunityStat.PA, 0.0))
+            if pa > 0.0:
+                ab = pa * AB_PER_PA
+        ip = float(entry.extras.get(OpportunityStat.IP, 0.0))
+    return (ab if ab > 0.0 else None, ip if ip > 0.0 else None)
 
 
 class OpponentGroup(TypedDict):
@@ -86,6 +131,9 @@ def apply_swap_delta(
     current_stats: dict[str, float],
     loses_ros: dict[str, Any],
     gains_ros: dict[str, Any],
+    *,
+    team_ab: float | None = None,
+    team_ip: float | None = None,
 ) -> dict[str, float]:
     """Project end-of-season team stats after swapping one player for another.
 
@@ -95,7 +143,7 @@ def apply_swap_delta(
     ``player_rest_of_season_stats`` returns).
 
     The math: ``new_stats = current_stats - loses_ros + gains_ros`` works
-    correctly because YTD games already on the team's standings are sunk —
+    correctly because YTD games already on the team's standings are sunk --
     they don't change when a player is swapped. Only the future contribution
     shifts. Passing full-season values for ``loses_ros``/``gains_ros`` would
     double-count YTD already in ``current_stats`` and produce biased deltas
@@ -108,10 +156,24 @@ def apply_swap_delta(
             Must include keys: R, HR, RBI, SB, AVG, W, K, SV, ERA, WHIP, ab, ip.
         gains_ros: ROS-remaining projection for the player being acquired.
             Same keys as loses_ros.
+        team_ab: the user's team's end-of-season AB total
+            (``ytd.ab + ros.ab`` from the same components that produced
+            ``current_stats["AVG"]``). Used as the denominator backing
+            out current hits from ``current_stats["AVG"]`` and as the
+            post-swap denominator. When ``None``, falls back to
+            :data:`_TEAM_AB` -- the legacy full-season heuristic. Pass
+            ``None`` only when components aren't available (preseason /
+            draft / persisted cache without YTD context); mid-season
+            in-app callers should pass the real number.
+        team_ip: the user's team's end-of-season IP total, analogous to
+            ``team_ab`` for ERA / WHIP. Falls back to :data:`_TEAM_IP`.
 
     Returns:
         Projected stats dict (same keys as current_stats).
     """
+    ab_baseline = float(team_ab) if team_ab is not None else _TEAM_AB
+    ip_baseline = float(team_ip) if team_ip is not None else _TEAM_IP
+
     projected = dict(current_stats)
 
     # --- Counting stats ---
@@ -121,17 +183,17 @@ def apply_swap_delta(
     # --- AVG: weighted by AB ---
     loses_ab = loses_ros["ab"]
     gains_ab = gains_ros["ab"]
-    new_ab = _TEAM_AB - loses_ab + gains_ab
-    current_hits = current_stats["AVG"] * _TEAM_AB
+    new_ab = ab_baseline - loses_ab + gains_ab
+    current_hits = current_stats["AVG"] * ab_baseline
     new_hits = current_hits - loses_ros["AVG"] * loses_ab + gains_ros["AVG"] * gains_ab
     projected["AVG"] = calculate_avg(new_hits, new_ab, default=0.0)
 
     # --- ERA: convert to ER, adjust, recompute ---
     loses_ip = loses_ros["ip"]
     gains_ip = gains_ros["ip"]
-    new_ip = _TEAM_IP - loses_ip + gains_ip
+    new_ip = ip_baseline - loses_ip + gains_ip
 
-    current_er = current_stats["ERA"] * _TEAM_IP / 9.0
+    current_er = current_stats["ERA"] * ip_baseline / 9.0
     loses_er = loses_ros["ERA"] * loses_ip / 9.0
     gains_er = gains_ros["ERA"] * gains_ip / 9.0
     new_er = current_er - loses_er + gains_er
@@ -139,7 +201,7 @@ def apply_swap_delta(
 
     # --- WHIP: total (BB+H), adjust, recompute ---
     if new_ip > 0:
-        current_bh = current_stats["WHIP"] * _TEAM_IP
+        current_bh = current_stats["WHIP"] * ip_baseline
         loses_bh = loses_ros["WHIP"] * loses_ip
         gains_bh = gains_ros["WHIP"] * gains_ip
         new_bh = current_bh - loses_bh + gains_bh
@@ -171,8 +233,15 @@ def build_swap_standings(
     loses_ros = player_rest_of_season_stats(drop_player)
     gains_ros = player_rest_of_season_stats(add_player)
     all_before = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
+    user_ab, user_ip = team_baseline_volumes(projected_standings.by_team()[user_team_name])
     all_after = dict(all_before)
-    all_after[user_team_name] = apply_swap_delta(all_before[user_team_name], loses_ros, gains_ros)
+    all_after[user_team_name] = apply_swap_delta(
+        all_before[user_team_name],
+        loses_ros,
+        gains_ros,
+        team_ab=user_ab,
+        team_ip=user_ip,
+    )
     return all_before, all_after
 
 
@@ -229,26 +298,51 @@ def compute_trade_impact(
 
     post_trade_entries: list[ProjectedStandingsEntry] = []
     for entry in baseline.entries:
-        if entry.team_name == hart_name:
-            new_stats_dict = apply_swap_delta(entry.stats.to_dict(), hart_loses_ros, hart_gains_ros)
-            post_trade_entries.append(
-                ProjectedStandingsEntry(
-                    team_name=entry.team_name,
-                    stats=CategoryStats.from_dict(new_stats_dict),
-                )
+        if entry.team_name in (hart_name, opp_name):
+            team_ab, team_ip = team_baseline_volumes(entry)
+            is_hart = entry.team_name == hart_name
+            loses_ros_side = hart_loses_ros if is_hart else opp_loses_ros
+            gains_ros_side = hart_gains_ros if is_hart else opp_gains_ros
+            new_stats_dict = apply_swap_delta(
+                entry.stats.to_dict(),
+                loses_ros_side,
+                gains_ros_side,
+                team_ab=team_ab,
+                team_ip=team_ip,
             )
-        elif entry.team_name == opp_name:
-            new_stats_dict = apply_swap_delta(entry.stats.to_dict(), opp_loses_ros, opp_gains_ros)
             post_trade_entries.append(
                 ProjectedStandingsEntry(
                     team_name=entry.team_name,
                     stats=CategoryStats.from_dict(new_stats_dict),
+                    # Carry the same denominators forward so any
+                    # downstream re-swap on this projected row uses the
+                    # same AB/IP that produced the rate stats.
+                    total_ab=(team_ab if team_ab is not None else 0.0),
+                    total_ip=(team_ip if team_ip is not None else 0.0),
                 )
             )
         else:
-            post_trade_entries.append(
-                ProjectedStandingsEntry(team_name=entry.team_name, stats=entry.stats)
-            )
+            # Preserve total_ab/total_ip when source is a projected
+            # entry; derive from Standings extras otherwise.
+            if isinstance(entry, ProjectedStandingsEntry):
+                post_trade_entries.append(
+                    ProjectedStandingsEntry(
+                        team_name=entry.team_name,
+                        stats=entry.stats,
+                        total_ab=entry.total_ab,
+                        total_ip=entry.total_ip,
+                    )
+                )
+            else:
+                src_ab, src_ip = team_baseline_volumes(entry)
+                post_trade_entries.append(
+                    ProjectedStandingsEntry(
+                        team_name=entry.team_name,
+                        stats=entry.stats,
+                        total_ab=(src_ab if src_ab is not None else 0.0),
+                        total_ip=(src_ip if src_ip is not None else 0.0),
+                    )
+                )
 
     post_trade = ProjectedStandings(
         effective_date=baseline.effective_date,

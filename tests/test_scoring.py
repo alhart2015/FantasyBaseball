@@ -169,37 +169,6 @@ class TestProjectTeamStats:
         assert project_team_stats([hot])[Category.R] == 70
         assert project_team_stats([hot])[Category.R] == project_team_stats([cold])[Category.R]
 
-    def test_project_team_stats_full_season_source_for_standings(self):
-        """``project_team_stats`` with ``projection_source='full_season_projection'``
-        sums full-season (used by ``ProjectedStandings.from_rosters`` to preserve
-        end-of-season standings projection until proper standings + ROS combination
-        lands in a follow-up phase)."""
-        p = Player(
-            name="X",
-            player_type=PlayerType.HITTER,
-            rest_of_season=HitterStats(r=70, hr=20, rbi=60, sb=5, h=100, ab=400, pa=440),
-            full_season_projection=HitterStats(r=100, hr=28, rbi=85, sb=7, h=140, ab=520, pa=580),
-        )
-        stats = project_team_stats([p], projection_source="full_season_projection")
-        assert stats[Category.R] == 100
-        assert stats[Category.HR] == 28
-
-    def test_project_team_stats_falls_back_to_rest_of_season_when_full_missing(self):
-        """When a Player has only ``rest_of_season`` set (no
-        ``full_season_projection``), ``projection_source='full_season_projection'``
-        must fall back to ``rest_of_season``. Without this, preseason rosters —
-        whose matcher only writes to ``rest_of_season`` — produce a board of
-        zeros for the preseason-standings widget."""
-        p = Player(
-            name="Preseason Hitter",
-            player_type=PlayerType.HITTER,
-            rest_of_season=HitterStats(r=100, hr=30, rbi=90, sb=10, h=140, ab=520, pa=580),
-            full_season_projection=None,
-        )
-        stats = project_team_stats([p], projection_source="full_season_projection")
-        assert stats[Category.R] == 100
-        assert stats[Category.HR] == 30
-
 
 class TestProbBeats:
     """Unit tests for the pairwise Gaussian win-probability helper."""
@@ -1131,7 +1100,6 @@ class TestDeltaRotoDisplacement:
             "My Team",
             roster,
             league_context=ctx,
-            projection_source="rest_of_season",
         )
         elite_contrib = next(p for p in breakdown_with_ctx.pitchers if p.name == "Elite RP")
         assert elite_contrib.scale_factor == 1.0, (
@@ -1225,7 +1193,6 @@ class TestDeltaRotoDisplacement:
             "My Team",
             roster,
             league_context=ctx,
-            projection_source="rest_of_season",
         )
         elite_dr = next(p for p in breakdown_dr.pitchers if p.name == "Elite Closer")
         weak_dr = next(p for p in breakdown_dr.pitchers if p.name == "Replaceable SP")
@@ -1442,7 +1409,6 @@ class TestPitcherPoolModel:
             "My Team",
             roster,
             league_context=ctx,
-            projection_source="rest_of_season",
         )
         sf = {c.name: c.scale_factor for c in bd.pitchers}
         assert sf["Closer A"] == 1.0, "Pool model should preserve the elite closer"
@@ -1498,7 +1464,6 @@ class TestPitcherPoolModel:
             "My Team",
             roster,
             league_context=ctx,
-            projection_source="rest_of_season",
         )
         sf = {c.name: c.scale_factor for c in bd.pitchers}
         # IL pitcher's projected contribution is below all active SP rates,
@@ -1533,7 +1498,6 @@ class TestPitcherPoolModel:
             "My Team",
             roster,
             league_context=ctx,
-            projection_source="rest_of_season",
         )
         sf = {c.name: c.scale_factor for c in bd.pitchers}
         for i in range(7):
@@ -2771,18 +2735,103 @@ class TestComputeRosterBreakdown:
         assert c.scale_factor == 1.0
 
 
-class TestScaleStatsYTDFloor:
-    """`_scale_stats` adds a YTD floor ONLY in full_season_projection mode.
+class TestRosterBreakdownTeamYtdRoundTrip:
+    """``RosterBreakdown.to_dict`` / ``from_dict`` must preserve ``team_ytd``.
 
-    In rest_of_season mode (the optimizer/trade-evaluator path) the function
-    preserves the legacy ROS-only behavior so forward-looking decisions are
-    not biased by locked YTD totals. In full_season_projection mode (the
-    standings/breakdown path) YTD always counts so displaced players don't
-    silently lose their already-recorded stats.
+    The standings route in season_routes round-trips each team's persisted
+    payload through ``RosterBreakdown.from_dict(...).to_dict()`` to backfill
+    the contribution_stats fallback on stale KV blobs. If ``team_ytd`` is
+    not a first-class field, the bolt-on key set by
+    ``build_standings_breakdown_payload`` gets silently stripped on the
+    round-trip and the team_ytd block never reaches the modal.
     """
 
-    def _pitcher_with_ytd(self, name, ros_k, full_season_k):
-        """Pitcher whose YTD K = full_season_k - ros_k."""
+    def test_team_ytd_round_trips_through_to_dict_from_dict(self):
+        from fantasy_baseball.scoring import RosterBreakdown
+
+        ytd_block = {
+            "R": 120.0,
+            "HR": 30.0,
+            "RBI": 110.0,
+            "SB": 15.0,
+            "W": 15.0,
+            "K": 300.0,
+            "SV": 8.0,
+            "H": 220.0,
+            "AB": 800.0,
+            "IP": 300.0,
+            "ER": 116.67,
+            "BB_plus_H_allowed": 360.0,
+        }
+        rb = RosterBreakdown(
+            team_name="Test",
+            hitters=[],
+            pitchers=[],
+            team_ytd=ytd_block,
+        )
+        round_tripped = RosterBreakdown.from_dict(rb.to_dict())
+        assert round_tripped.team_ytd == ytd_block
+        assert round_tripped.team_name == "Test"
+
+    def test_team_ytd_defaults_to_empty_when_absent(self):
+        """Backwards compat: dicts without ``team_ytd`` (legacy KV blobs)
+        deserialize to an empty dict, not a missing attribute."""
+        from fantasy_baseball.scoring import RosterBreakdown
+
+        d = {"team_name": "Test", "hitters": [], "pitchers": []}
+        rb = RosterBreakdown.from_dict(d)
+        assert rb.team_ytd == {}
+        # And it serializes back as an empty dict, not missing.
+        assert rb.to_dict()["team_ytd"] == {}
+
+    def test_compute_roster_breakdown_accepts_team_ytd_kwarg(self):
+        """``compute_roster_breakdown`` propagates a passed ``team_ytd``
+        block onto the returned breakdown, so callers (the refresh
+        pipeline) don't need to bolt it on after the fact.
+        """
+        from fantasy_baseball.scoring import compute_roster_breakdown
+
+        ytd_block = {"R": 50.0, "HR": 10.0}
+        rb = compute_roster_breakdown(
+            "Test",
+            roster=[],
+            team_ytd=ytd_block,
+        )
+        assert rb.team_ytd == ytd_block
+
+    def test_compute_roster_breakdown_team_ytd_defaults_empty(self):
+        """When ``team_ytd`` is not passed (legacy callers), the breakdown
+        carries an empty dict -- not None -- so consumers can iterate safely.
+        """
+        from fantasy_baseball.scoring import compute_roster_breakdown
+
+        rb = compute_roster_breakdown("Test", roster=[])
+        assert rb.team_ytd == {}
+
+
+class TestScaleStatsRosOnly:
+    """After the team-YTD projection refactor, ``_scale_stats`` returns
+    ``ROS * factor`` regardless of mode.
+
+    PR #108 added a per-player YTD floor (``YTD + ROS * factor``) sourced
+    from ``Player.full_season_projection`` to keep already-recorded stats
+    visible in the standings view. That attribution is wrong: a mid-season
+    pickup's pre-acquisition production gets credited to the new owner.
+
+    Team YTD is now captured at the team level via
+    :class:`TeamYtdComponents` (from Yahoo standings) combined with
+    :class:`TeamRosComponents` via :func:`team_end_of_season`, so only
+    stats accrued while the player was actually on the team count.
+    ``_scale_stats`` is therefore ROS-only for every caller.
+    """
+
+    def _pitcher_with_full_season(self, name, ros_k, full_season_k):
+        """Pitcher whose implied YTD K = full_season_k - ros_k.
+
+        full_season_projection is set so legacy callers that would have
+        triggered the YTD floor are still exercised here -- but the new
+        contract is that _scale_stats ignores it.
+        """
         from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
 
         ros = PitcherStats(
@@ -2798,69 +2847,54 @@ class TestScaleStatsYTDFloor:
             full_season_projection=full,
         )
 
-    def test_full_season_mode_scale_zero_preserves_ytd(self):
-        """Webb with 78 YTD K + 60 ROS K, displaced (factor=0) in
-        full_season_projection mode: contributes 78 K, not 0. YTD is
-        locked-in and must not vanish from the standings view.
+    def test_factor_zero_returns_zero_not_ytd_floor(self):
+        """Displaced pitcher (factor=0) contributes 0 K -- not the implied
+        per-player YTD. Team YTD is now captured at the team level via
+        team_end_of_season; per-player YTD is no longer surfaced here.
+
+        Pre-team-YTD (PR #108) behavior: full_season K = 138; ROS K = 60;
+        implied per-player YTD = 78; _scale_stats(p, 0.0) -> 78.
+        Post-team-YTD behavior: _scale_stats(p, 0.0) -> 0.
         """
         from fantasy_baseball.scoring import _scale_stats
 
-        p = self._pitcher_with_ytd("Webb", ros_k=60, full_season_k=138)
-        scaled = _scale_stats(p, 0.0, "full_season_projection")
-        # YTD = 138 - 60 = 78; ROS * 0 = 0; total = 78
-        assert scaled["k"] == 78
-
-    def test_full_season_mode_scale_one_returns_full_season(self):
-        """factor=1.0 in full_season mode yields full_season K (= YTD + ROS),
-        matching an undiscounted player's projection-source full-season read."""
-        from fantasy_baseball.scoring import _scale_stats
-
-        p = self._pitcher_with_ytd("Healthy", ros_k=120, full_season_k=200)
-        scaled = _scale_stats(p, 1.0, "full_season_projection")
-        # YTD = 200 - 120 = 80; ROS * 1 = 120; total = 200
-        assert scaled["k"] == 200
-
-    def test_full_season_mode_scale_half_keeps_full_ytd(self):
-        """factor=0.5 in full_season mode: YTD untouched, ROS halved."""
-        from fantasy_baseball.scoring import _scale_stats
-
-        p = self._pitcher_with_ytd("Half", ros_k=80, full_season_k=130)
-        scaled = _scale_stats(p, 0.5, "full_season_projection")
-        # YTD = 130 - 80 = 50; ROS * 0.5 = 40; total = 90
-        assert scaled["k"] == 90
-
-    def test_ros_mode_unchanged_legacy_behavior(self):
-        """In rest_of_season mode, the function still returns ROS * factor
-        with NO YTD floor. The optimizer's forward-looking semantics are
-        unchanged: hot-YTD and cold-YTD players with the same ROS contribute
-        identically to forward decisions.
-        """
-        from fantasy_baseball.scoring import _scale_stats
-
-        p = self._pitcher_with_ytd("Webb", ros_k=60, full_season_k=138)
-        # ROS-mode displacement: contributes 0, NOT 78. The optimizer must not
-        # see YTD bleed into displaced-player scoring.
-        scaled_zero = _scale_stats(p, 0.0, "rest_of_season")
-        assert scaled_zero["k"] == 0
-
-        # factor=0.5 in ROS mode -> ROS * 0.5 = 30, no YTD.
-        scaled_half = _scale_stats(p, 0.5, "rest_of_season")
-        assert scaled_half["k"] == 30
-
-    def test_ros_mode_default_when_source_omitted(self):
-        """Backwards compatibility: callers that don't pass source get the
-        legacy ROS-only behavior. (Same as test_ros_mode_unchanged with
-        explicit source, just verifies the default.)
-        """
-        from fantasy_baseball.scoring import _scale_stats
-
-        p = self._pitcher_with_ytd("Webb", ros_k=60, full_season_k=138)
+        p = self._pitcher_with_full_season("Webb", ros_k=60, full_season_k=138)
         scaled = _scale_stats(p, 0.0)
         assert scaled["k"] == 0
 
-    def test_full_season_mode_falls_back_to_ros_when_no_full_season(self):
-        """Preseason rosters lack full_season_projection. Even in full_season
-        mode, scaling should behave like ROS-only (YTD = 0 by definition)."""
+    def test_factor_one_returns_full_ros(self):
+        """factor=1.0 returns ROS only -- NOT full_season. Per-player
+        full_season includes pre-acquisition stats; the team-level
+        team_end_of_season helper is the only path that surfaces YTD.
+        """
+        from fantasy_baseball.scoring import _scale_stats
+
+        p = self._pitcher_with_full_season("Healthy", ros_k=120, full_season_k=200)
+        scaled = _scale_stats(p, 1.0)
+        # ROS * 1.0 = 120 (NOT full_season = 200).
+        assert scaled["k"] == 120
+
+    def test_factor_half_returns_half_ros(self):
+        """factor=0.5 returns half ROS -- no YTD floor preserved."""
+        from fantasy_baseball.scoring import _scale_stats
+
+        p = self._pitcher_with_full_season("Half", ros_k=80, full_season_k=130)
+        scaled = _scale_stats(p, 0.5)
+        # ROS * 0.5 = 40 (NOT 50 YTD + 40 ROS*0.5 = 90).
+        assert scaled["k"] == 40
+
+    def test_factor_zero_default_arg(self):
+        """Same as test_factor_zero_returns_zero_not_ytd_floor; pins that
+        the signature is (p, factor) -- no projection_source parameter."""
+        from fantasy_baseball.scoring import _scale_stats
+
+        p = self._pitcher_with_full_season("Webb", ros_k=60, full_season_k=138)
+        scaled = _scale_stats(p, 0.0)
+        assert scaled["k"] == 0
+
+    def test_no_full_season_projection_still_ros_only(self):
+        """Preseason rosters lack full_season_projection; result is ROS * factor,
+        same as the populated case (since full_season is ignored)."""
         from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
         from fantasy_baseball.scoring import _scale_stats
 
@@ -2870,8 +2904,8 @@ class TestScaleStatsYTDFloor:
         p = Player(
             name="Preseason", player_type=PlayerType.PITCHER, rest_of_season=ros
         )  # no full_season_projection
-        scaled = _scale_stats(p, 0.5, "full_season_projection")
-        # No YTD known -> floor = 0 -> ROS * 0.5 = 100
+        scaled = _scale_stats(p, 0.5)
+        # ROS * 0.5 = 100.
         assert scaled["k"] == 100
 
 
@@ -3017,7 +3051,6 @@ class TestPitcherPoolRateSwap:
             all_active=active,
             all_il=il,
             league_context=ctx,
-            projection_source="rest_of_season",
         )
 
         assert "Webb" not in factors, "Webb should be active (sf=1.0 implicit), not in factors"
@@ -3062,7 +3095,6 @@ class TestPitcherPoolRateSwap:
         scaled_roster = _apply_displacement(
             [webb, sp_worst, sp_strong],
             league_context=ctx,
-            projection_source="rest_of_season",
         )
 
         # Find the scaled SP_Worst entry (it's a dict, not a Player).
@@ -3166,7 +3198,6 @@ class TestPitcherPoolRateSwap:
             all_active=active,
             all_il=[webb],
             league_context=ctx,
-            projection_source="rest_of_season",
         )
 
         # Webb stays active.
@@ -3238,7 +3269,6 @@ class TestPitcherPoolRateSwap:
             all_active=active,
             all_il=il,
             league_context=ctx,
-            projection_source="rest_of_season",
         )
 
         # Neither IL pitcher is benched (both should activate -- their rates
@@ -3303,7 +3333,6 @@ class TestPitcherPoolRateSwap:
             all_active=active,
             all_il=[weak_il],
             league_context=ctx,
-            projection_source="rest_of_season",
         )
 
         # Weak_IL should be benched (sf=0): no positive swap exists.
@@ -3317,16 +3346,17 @@ class TestPitcherPoolRateSwap:
         assert "Elite_C" not in factors
 
 
-class TestComputeRosterBreakdownFullSeasonInvariant:
+class TestComputeRosterBreakdownContributionInvariant:
     """The breakdown modal's per-row totals must sum to the standings
-    widget's headline total in full_season_projection mode. The aggregate
-    over ``contribution_stats[cat]`` per category must equal
-    ``project_team_stats(roster, displacement=True, projection_source="full_season_projection")``.
+    widget's headline total. The aggregate over ``contribution_stats[cat]``
+    per category must equal :func:`project_team_stats` with
+    ``displacement=True`` in matching mode.
 
-    Pre-fix: the modal computed raw_stats * scale_factor, which gave
-    ``full_season * factor`` instead of ``YTD + ROS * factor``, causing a
-    per-pitcher discrepancy of ``YTD * (1 - factor)``. Webb scenario: 80 YTD K,
-    120 ROS K, factor 0.5 -> modal showed 100, widget showed 140, 40 K gap.
+    Post-team-YTD refactor: ``contribution_stats`` is always
+    ``ROS * scale_factor`` (per-player YTD floor removed). Team YTD is
+    surfaced at the team level via :func:`team_end_of_season`, not
+    per-player; the breakdown rows reflect only the forward-looking
+    ROS-scaled contribution.
     """
 
     def _pitcher(self, name, *, ros_k, full_season_k, ros_ip=60, full_season_ip=120):
@@ -3376,9 +3406,9 @@ class TestComputeRosterBreakdownFullSeasonInvariant:
         )
 
     def test_breakdown_contribution_stats_match_standings_in_full_season_mode(self):
-        """For a displaced pitcher with non-zero YTD, contribution_stats[k]
-        must equal _scale_stats output, which equals what project_team_stats
-        sums into the widget total.
+        """For a displaced pitcher, contribution_stats[k] must equal what
+        project_team_stats sums into the widget total. Post-team-YTD
+        refactor: both sides are ROS-only (no YTD floor in either path).
         """
         from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
         from fantasy_baseball.models.positions import Position
@@ -3483,13 +3513,15 @@ class TestComputeRosterBreakdownFullSeasonInvariant:
             team_name="Me",
         )
 
-        breakdown = compute_roster_breakdown(
-            "Me", roster, league_context=ctx, projection_source="full_season_projection"
-        )
+        # Production breakdown payload (build_standings_breakdown_payload) is
+        # ROS-only; team totals come from project_ros_components +
+        # team_end_of_season. The contribution-stats invariant must hold
+        # against the matching ROS project_team_stats call (both sum
+        # ROS * factor for displaced players).
+        breakdown = compute_roster_breakdown("Me", roster, league_context=ctx)
         team_stats = project_team_stats(
             roster,
             displacement=True,
-            projection_source="full_season_projection",
             league_context=ctx,
         )
 
@@ -3501,39 +3533,43 @@ class TestComputeRosterBreakdownFullSeasonInvariant:
         )
 
         # Specifically: SP_Worst is the discount target (factor ~0.538), and
-        # its contribution_stats[k] must be YTD + ROS * factor, not full_season * factor.
-        ytd_k_sp_worst = sp_worst.full_season_projection.k - sp_worst.rest_of_season.k
+        # its contribution_stats[k] must be ROS * factor (no per-player YTD
+        # floor -- team YTD is captured at the team level via team_end_of_season).
         ros_k_sp_worst = sp_worst.rest_of_season.k
         # SP_Worst must be among the contributions (status DISPLACED or ACTIVE).
         sp_worst_contrib = next((c for c in breakdown.pitchers if c.name == "SP_Worst"), None)
         assert sp_worst_contrib is not None
         if sp_worst_contrib.status == "displaced":
             f = sp_worst_contrib.scale_factor
-            expected = ytd_k_sp_worst + ros_k_sp_worst * f
+            expected = ros_k_sp_worst * f
             assert abs(sp_worst_contrib.contribution_stats["k"] - expected) < 1e-6, (
                 f"SP_Worst contribution_stats[k]={sp_worst_contrib.contribution_stats['k']}, "
-                f"expected YTD+ROS*factor = {ytd_k_sp_worst} + {ros_k_sp_worst}*{f} = {expected}"
+                f"expected ROS*factor = {ros_k_sp_worst}*{f} = {expected}"
             )
 
-    def test_breakdown_contribution_stats_match_ros_mode(self):
-        """In rest_of_season mode, contribution_stats[k] = ROS * factor (no YTD floor)."""
+    def test_breakdown_contribution_stats_are_ros_only(self):
+        """contribution_stats[k] = ROS * factor (no YTD floor; team YTD lives
+        on the team via team_end_of_season).
+        """
         from fantasy_baseball.scoring import compute_roster_breakdown
 
         # No LeagueContext -> hitter substitution model for pitchers; but with
         # only active pitchers and no IL, no displacement is applied.
         roster = [self._pitcher("P1", ros_k=60, full_season_k=140)]
-        breakdown = compute_roster_breakdown("Me", roster, projection_source="rest_of_season")
+        breakdown = compute_roster_breakdown("Me", roster)
         p1 = breakdown.pitchers[0]
         # Active, factor=1.0 -> contribution_stats[k] = ROS = 60 (NOT full_season 140).
         assert p1.scale_factor == 1.0
         assert abs(p1.contribution_stats["k"] - 60.0) < 1e-6, (
-            f"ROS-mode active player should contribute ROS K=60, got {p1.contribution_stats['k']}"
+            f"ROS-only active player should contribute ROS K=60, got {p1.contribution_stats['k']}"
         )
 
-    def test_breakdown_benched_il_pitcher_contributes_ytd_in_full_season_mode(self):
-        """An IL pitcher benched at sf=0 by the pool model still contributes
-        YTD in full_season mode (locked-in stats survive). The modal must
-        show this YTD, not 0.
+    def test_breakdown_benched_il_pitcher_contributes_zero(self):
+        """An IL pitcher benched at sf=0 by the pool model contributes 0:
+        per-player YTD floor is removed. Team YTD is captured at the team
+        level via team_end_of_season, so the modal must show 0 for the
+        player's contribution row (the team's already-recorded K's live on
+        the team total, not on this row).
         """
         from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
         from fantasy_baseball.models.positions import Position
@@ -3614,16 +3650,16 @@ class TestComputeRosterBreakdownFullSeasonInvariant:
             team_name="Me",
         )
 
-        breakdown = compute_roster_breakdown(
-            "Me", roster, league_context=ctx, projection_source="full_season_projection"
-        )
+        breakdown = compute_roster_breakdown("Me", roster, league_context=ctx)
         weak_contrib = next((c for c in breakdown.pitchers if c.name == "Weak_IL"), None)
         assert weak_contrib is not None
         assert weak_contrib.scale_factor == 0.0, "Weak IL pitcher should be benched at sf=0"
-        # YTD = full_season - ROS = 60 - 15 = 45 K. Modal must show this.
-        ytd_k = weak_full.k - weak_ros.k
-        assert abs(weak_contrib.contribution_stats["k"] - ytd_k) < 1e-6, (
-            f"Benched IL pitcher should contribute YTD={ytd_k} K, got {weak_contrib.contribution_stats['k']}"
+        # ROS * 0 = 0 (no per-player YTD floor; team YTD lives at the team
+        # level via team_end_of_season, not on this row). Pre-fix this
+        # asserted weak_contrib.contribution_stats["k"] == weak_full.k - weak_ros.k
+        # = 45; post-fix it's pure ROS * factor.
+        assert abs(weak_contrib.contribution_stats["k"]) < 1e-6, (
+            f"Benched IL pitcher should contribute 0 K, got {weak_contrib.contribution_stats['k']}"
         )
 
 
@@ -3667,3 +3703,282 @@ class TestPlayerContributionFromDictNullGuards:
         pc = PlayerContribution.from_dict(d)
         assert pc.raw_stats == {}
         assert pc.contribution_stats == {}
+
+
+class TestProjectRosComponents:
+    """``project_ros_components`` returns the same component shape as
+    ``StandingsEntry.ytd_components`` but sourced from displacement-scaled
+    ROS projections on a roster. The result is the ROS contribution that
+    gets added to team YTD to produce end-of-season totals.
+    """
+
+    @staticmethod
+    def _hitter(name, *, r, hr, rbi, sb, h, ab):
+        from fantasy_baseball.models.player import HitterStats, Player, PlayerType
+        from fantasy_baseball.models.positions import Position
+
+        ros = HitterStats(
+            r=r,
+            hr=hr,
+            rbi=rbi,
+            sb=sb,
+            h=h,
+            ab=ab,
+            avg=h / ab if ab else 0.0,
+        )
+        return Player(
+            name=name,
+            player_type=PlayerType.HITTER,
+            rest_of_season=ros,
+            selected_position=Position.OF,
+        )
+
+    @staticmethod
+    def _pitcher(name, *, w, k, sv, ip, er, bb, h_allowed):
+        from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
+        from fantasy_baseball.models.positions import Position
+
+        ros = PitcherStats(
+            w=w,
+            k=k,
+            sv=sv,
+            ip=ip,
+            er=er,
+            bb=bb,
+            h_allowed=h_allowed,
+            era=er * 9.0 / ip if ip else 0.0,
+            whip=(bb + h_allowed) / ip if ip else 0.0,
+        )
+        return Player(
+            name=name,
+            player_type=PlayerType.PITCHER,
+            rest_of_season=ros,
+            selected_position=Position.P,
+        )
+
+    def test_components_sum_counting_stats_across_roster(self):
+        """R/HR/RBI/SB/W/K/SV are summed across all rostered players (no
+        displacement to keep the math obvious)."""
+        from fantasy_baseball.scoring import project_ros_components
+
+        roster = [
+            self._hitter("A", r=30, hr=10, rbi=25, sb=5, h=60, ab=200),
+            self._hitter("B", r=40, hr=15, rbi=35, sb=2, h=70, ab=250),
+            self._pitcher("P1", w=5, k=80, sv=0, ip=50, er=18, bb=15, h_allowed=40),
+        ]
+        c = project_ros_components(roster, displacement=False)
+        assert c.r == pytest.approx(70.0)
+        assert c.hr == pytest.approx(25.0)
+        assert c.rbi == pytest.approx(60.0)
+        assert c.sb == pytest.approx(7.0)
+        assert c.w == pytest.approx(5.0)
+        assert c.k == pytest.approx(80.0)
+        assert c.sv == pytest.approx(0.0)
+
+    def test_components_expose_rate_stat_ingredients(self):
+        """H, AB sum across hitters; ER, IP, BB+H_allowed sum across pitchers.
+
+        The team_end_of_season helper uses these to recompute team AVG /
+        ERA / WHIP after adding YTD components.
+        """
+        from fantasy_baseball.scoring import project_ros_components
+
+        roster = [
+            self._hitter("A", r=30, hr=10, rbi=25, sb=5, h=60, ab=200),
+            self._hitter("B", r=40, hr=15, rbi=35, sb=2, h=70, ab=250),
+            self._pitcher("P1", w=5, k=80, sv=0, ip=50, er=18, bb=15, h_allowed=40),
+            self._pitcher("P2", w=8, k=100, sv=0, ip=70, er=25, bb=20, h_allowed=60),
+        ]
+        c = project_ros_components(roster, displacement=False)
+        assert c.h == pytest.approx(130.0)
+        assert c.ab == pytest.approx(450.0)
+        assert c.ip == pytest.approx(120.0)
+        assert c.er == pytest.approx(43.0)
+        assert c.bb_plus_h_allowed == pytest.approx((15 + 40) + (20 + 60))
+
+    def test_empty_roster_returns_zero_components(self):
+        """Sanity: no players -> all-zero components, no NaN."""
+        from fantasy_baseball.scoring import project_ros_components
+
+        c = project_ros_components([], displacement=False)
+        assert c.r == 0.0
+        assert c.ab == 0.0
+        assert c.ip == 0.0
+
+    def test_components_apply_displacement_scaling(self):
+        """When displacement=True (default), displaced players have their
+        ROS counting stats scaled by the displacement factor. The simplest
+        verifiable case: a roster with one IL pitcher who displaces no one
+        is no-op."""
+        from fantasy_baseball.scoring import project_ros_components
+
+        # Single hitter, no IL, no displacement opportunities.
+        roster = [self._hitter("A", r=30, hr=10, rbi=25, sb=5, h=60, ab=200)]
+        c = project_ros_components(roster, displacement=True)
+        assert c.r == pytest.approx(30.0)
+        assert c.ab == pytest.approx(200.0)
+
+
+class TestTeamEndOfSeason:
+    """``team_end_of_season(ytd, ros)`` produces a :class:`CategoryStats`
+    representing projected end-of-season totals = YTD + ROS, with AVG/ERA/WHIP
+    recomputed from summed components.
+    """
+
+    def test_counting_stats_sum(self):
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        ytd = TeamYtdComponents(
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            w=10,
+            k=180,
+            sv=5,
+            h=100,
+            ab=400,
+            ip=200,
+            er=78,
+            bb_plus_h_allowed=240,
+        )
+        ros = TeamRosComponents(
+            r=50,
+            hr=15,
+            rbi=45,
+            sb=8,
+            w=8,
+            k=120,
+            sv=3,
+            h=70,
+            ab=280,
+            ip=150,
+            er=55,
+            bb_plus_h_allowed=180,
+        )
+        out = team_end_of_season(ytd, ros)
+        assert out.r == pytest.approx(130)
+        assert out.hr == pytest.approx(35)
+        assert out.rbi == pytest.approx(115)
+        assert out.sb == pytest.approx(18)
+        assert out.w == pytest.approx(18)
+        assert out.k == pytest.approx(300)
+        assert out.sv == pytest.approx(8)
+
+    def test_avg_recombined_from_components_equal_rates(self):
+        """YTD and ROS have the same AVG (0.250); combined AVG is 0.250."""
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        ytd = TeamYtdComponents(h=100, ab=400)
+        ros = TeamRosComponents(h=70, ab=280)
+        out = team_end_of_season(ytd, ros)
+        assert out.avg == pytest.approx(170 / 680)
+
+    def test_avg_correctly_weights_when_rates_differ(self):
+        """YTD AVG is .300; ROS AVG is .200. Combined is weighted by AB."""
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        ytd = TeamYtdComponents(h=120, ab=400)
+        ros = TeamRosComponents(h=40, ab=200)
+        out = team_end_of_season(ytd, ros)
+        assert out.avg == pytest.approx(160 / 600)
+
+    def test_era_recombined_from_components(self):
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        ytd = TeamYtdComponents(er=78, ip=200)
+        ros = TeamRosComponents(er=55, ip=150)
+        out = team_end_of_season(ytd, ros)
+        assert out.era == pytest.approx(9 * 133 / 350)
+
+    def test_whip_recombined_from_components(self):
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        ytd = TeamYtdComponents(ip=200, bb_plus_h_allowed=240)
+        ros = TeamRosComponents(ip=150, bb_plus_h_allowed=180)
+        out = team_end_of_season(ytd, ros)
+        assert out.whip == pytest.approx(420 / 350)
+
+    def test_zero_ip_yields_99_era_whip_not_zero(self):
+        """No IP/AB anywhere -> AVG = 0.0 but ERA/WHIP = 99.0.
+
+        ERA/WHIP are inverse stats (lower is better), so 0.0 would silently win
+        those categories for a team with no pitching projection. CategoryStats
+        defaults to 99.0 (matching utils.rate_stats.calculate_era / calculate_whip),
+        and team_end_of_season must agree -- otherwise the Pass-1 baseline
+        (project_team_stats with zero IP -> 99.0) and Pass-2 path
+        (team_end_of_season with zero IP) disagree by ~99 on the same input.
+
+        AVG stays at 0.0: it is NOT inverse, so 0.0 = batting nothing = worst.
+        """
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        ytd = TeamYtdComponents()
+        ros = TeamRosComponents()
+        out = team_end_of_season(ytd, ros)
+        assert out.avg == 0.0
+        assert out.era == 99.0
+        assert out.whip == 99.0
+
+    def test_zero_input_matches_category_stats_defaults(self):
+        """A zero-input team_end_of_season equals CategoryStats() on the rate
+        fields, pinning the consistency invariant. If CategoryStats ever
+        changes its inverse-stat default, this test forces a corresponding
+        update to team_end_of_season's empty case.
+        """
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        out = team_end_of_season(TeamYtdComponents(), TeamRosComponents())
+        defaults = CategoryStats()
+        assert out.era == defaults.era
+        assert out.whip == defaults.whip
+        # AVG is non-inverse and shares the 0.0 default.
+        assert out.avg == defaults.avg
+
+    def test_pass1_pass2_agree_on_zero_ip_team(self):
+        """Pass-1 (project_team_stats) and Pass-2 (team_end_of_season) produce
+        the same ERA/WHIP for a zero-IP team. The standings widget combines
+        both and would silently produce a 0/99 split if these diverged.
+        """
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        pass1 = project_team_stats([], displacement=True)
+        pass2 = team_end_of_season(TeamYtdComponents(), TeamRosComponents())
+        assert pass1.era == pass2.era == 99.0
+        assert pass1.whip == pass2.whip == 99.0
+        # AVG agreement too: empty roster -> 0.0; zero components -> 0.0.
+        assert pass1.avg == pass2.avg == 0.0
+
+    def test_preseason_ytd_zero_collapses_to_ros_only(self):
+        """Pre-season has YTD=zero; result must equal ROS-only projection."""
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        ytd = TeamYtdComponents()
+        ros = TeamRosComponents(
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            w=10,
+            k=180,
+            sv=5,
+            h=120,
+            ab=480,
+            ip=200,
+            er=70,
+            bb_plus_h_allowed=240,
+        )
+        out = team_end_of_season(ytd, ros)
+        assert out.r == pytest.approx(80)
+        assert out.avg == pytest.approx(120 / 480)
+        assert out.era == pytest.approx(9 * 70 / 200)
+        assert out.whip == pytest.approx(240 / 200)

@@ -19,7 +19,11 @@ from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
-from fantasy_baseball.trades.evaluate import apply_swap_delta, player_rest_of_season_stats
+from fantasy_baseball.trades.evaluate import (
+    apply_swap_delta,
+    player_rest_of_season_stats,
+    team_baseline_volumes,
+)
 from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.utils.positions import can_cover_slots
 
@@ -289,6 +293,11 @@ def audit_roster(
     all_before = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
     roto_before = score_roto_dict(all_before, team_sds=team_sds)
     user_before_stats = all_before[team_name]
+    # Pull AB/IP off the projected standings entry so apply_swap_delta
+    # uses the same end-of-season denominators that produced the AVG/ERA
+    # the user sees in standings. team_baseline_volumes returns None on
+    # legacy/zero entries to trigger the constant-fallback.
+    user_ab, user_ip = team_baseline_volumes(projected_standings.by_team()[team_name])
 
     # Field stats for the analytic confidence band: all OTHER teams' CategoryStats,
     # held fixed while computing the closed-form band for the user's before/after roster.
@@ -334,7 +343,13 @@ def audit_roster(
             try:
                 gains_ros = player_rest_of_season_stats(fa)
                 all_after = dict(all_before)
-                all_after[team_name] = apply_swap_delta(user_before_stats, loses_ros, gains_ros)
+                all_after[team_name] = apply_swap_delta(
+                    user_before_stats,
+                    loses_ros,
+                    gains_ros,
+                    team_ab=user_ab,
+                    team_ip=user_ip,
+                )
                 roto_after = score_roto_dict(all_after, team_sds=team_sds)
                 dr = score_swap(roto_before, roto_after, team_name)
             except KeyError as exc:

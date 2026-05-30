@@ -132,6 +132,70 @@ class TestRefreshShape:
         assert {"last_refresh", "start_date", "end_date", "team_name"} <= data.keys()
         assert data["team_name"] == "Team 01"
 
+    def test_build_projected_standings_passes_actual_standings(
+        self, configured_test_env, fake_redis, monkeypatch
+    ):
+        """The refresh pipeline must thread ``self.standings`` (Yahoo team
+        YTD) into ``ProjectedStandings.from_rosters`` so end-of-season
+        projections use team_YTD + ROS arithmetic instead of per-player
+        full-season totals. Without this, mid-season acquisitions get
+        double-counted (their old team's YTD plus their new team's ROS
+        both flow into the new team's projection).
+
+        The preseason fallback call (inside ``if self.has_rest_of_season``)
+        must NOT receive actual_standings -- preseason rosters paired with
+        preseason projections should project ROS-only, which collapses to
+        full-season at season start.
+        """
+        from fantasy_baseball.models.standings import ProjectedStandings, Standings
+
+        captured: list[dict] = []
+        orig = ProjectedStandings.from_rosters.__func__
+
+        def spy(cls, team_rosters, effective_date, **kwargs):
+            captured.append(
+                {
+                    "actual_standings": kwargs.get("actual_standings"),
+                    "fraction_remaining": kwargs.get("fraction_remaining", 1.0),
+                }
+            )
+            return orig(cls, team_rosters, effective_date, **kwargs)
+
+        monkeypatch.setattr(ProjectedStandings, "from_rosters", classmethod(spy))
+
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
+
+        # _build_projected_standings invokes from_rosters twice when
+        # has_rest_of_season=True (fixture default): once for the main
+        # projection (must receive Standings) and once for the preseason
+        # baseline (must NOT receive Standings -- by design, see step
+        # comment in refresh_pipeline._build_projected_standings).
+        assert len(captured) >= 2, f"Expected at least 2 from_rosters calls; got {len(captured)}"
+        main_call = captured[0]
+        preseason_call = captured[1]
+
+        assert isinstance(main_call["actual_standings"], Standings), (
+            "Main from_rosters call must receive self.standings (Yahoo "
+            "team YTD); got actual_standings="
+            f"{main_call['actual_standings']!r}"
+        )
+        # AB extras attached via team_ytd_attribution.compute_team_ytd_ab so
+        # ytd_components() can recombine AVG via Tier 1 of its AB sourcing.
+        # The value may be 0 (test fixture may not exercise game logs) but
+        # the key must be present on every entry.
+        from fantasy_baseball.utils.constants import OpportunityStat
+
+        assert all(OpportunityStat.AB in e.extras for e in main_call["actual_standings"].entries), (
+            "expected AB in extras for every standings entry"
+        )
+        assert preseason_call["actual_standings"] is None, (
+            "Preseason from_rosters call must NOT pass actual_standings "
+            "-- preseason rosters + preseason projections produce ROS-only "
+            "(which equals full-season pre-season); got "
+            f"actual_standings={preseason_call['actual_standings']!r}"
+        )
+
 
 class TestRefreshInvariants:
     """Cross-step contracts — these catch wiring regressions."""
@@ -373,6 +437,98 @@ def test_standings_breakdown_cache_written_by_refresh():
     # Round-trip through JSON (proves serialization shape)
     roundtripped = json.loads(json.dumps(payload))
     assert roundtripped == payload
+
+
+def test_breakdown_payload_includes_team_ytd_block_when_actual_standings_given():
+    """When actual_standings is passed, each team's breakdown payload carries
+    a team_ytd block with components from StandingsEntry.ytd_components()."""
+    from datetime import date
+
+    from fantasy_baseball.models.standings import (
+        CategoryStats,
+        Standings,
+        StandingsEntry,
+    )
+    from fantasy_baseball.utils.constants import OpportunityStat
+    from fantasy_baseball.web.refresh_pipeline import build_standings_breakdown_payload
+
+    actual = Standings(
+        effective_date=date(2026, 6, 2),
+        entries=[
+            StandingsEntry(
+                team_name="Test",
+                team_key="t",
+                rank=1,
+                stats=CategoryStats(
+                    r=120,
+                    hr=30,
+                    rbi=110,
+                    sb=15,
+                    avg=0.275,
+                    w=15,
+                    k=300,
+                    sv=8,
+                    era=3.50,
+                    whip=1.20,
+                ),
+                extras={
+                    OpportunityStat.IP: 300.0,
+                    OpportunityStat.AB: 800.0,
+                },
+            ),
+        ],
+    )
+
+    payload = build_standings_breakdown_payload(
+        team_rosters={"Test": []},  # empty roster -> ROS rows empty
+        effective_date=date(2026, 6, 2),
+        fraction_remaining=0.5,
+        actual_standings=actual,
+    )
+
+    team_ytd = payload["teams"]["Test"]["team_ytd"]
+    # Fix #6 (partial): team_ytd keys now mirror the per-player
+    # contribution_stats schema (lowercase) so the modal can read
+    # team_ytd via the same colSpec.field path. BB/H_allowed remain
+    # combined since YTD WHIP*IP only gives the sum.
+    assert team_ytd["r"] == 120
+    assert team_ytd["hr"] == 30
+    assert team_ytd["rbi"] == 110
+    assert team_ytd["sb"] == 15
+    assert team_ytd["ab"] == 800.0
+    assert team_ytd["ip"] == 300.0
+    assert team_ytd["w"] == 15
+    assert team_ytd["k"] == 300
+    assert team_ytd["sv"] == 8
+    # H derived as AVG * AB.
+    assert team_ytd["h"] == pytest.approx(0.275 * 800.0)
+    # ER derived as ERA * IP / 9.
+    assert team_ytd["er"] == pytest.approx(3.50 * 300.0 / 9.0)
+    # BB + H_allowed derived as WHIP * IP.
+    assert team_ytd["bb_plus_h_allowed"] == pytest.approx(1.20 * 300.0)
+
+
+def test_breakdown_payload_team_ytd_zero_when_no_actual_standings():
+    """When actual_standings is None (pre-season or omitted), the team_ytd
+    block is all zeros so consumers can still render the section without
+    branching on its presence."""
+    from datetime import date
+
+    from fantasy_baseball.web.refresh_pipeline import build_standings_breakdown_payload
+
+    payload = build_standings_breakdown_payload(
+        team_rosters={"Test": []},
+        effective_date=date(2026, 3, 27),
+        actual_standings=None,
+    )
+
+    team_ytd = payload["teams"]["Test"]["team_ytd"]
+    assert team_ytd["r"] == 0
+    assert team_ytd["k"] == 0
+    assert team_ytd["ab"] == 0
+    assert team_ytd["h"] == 0
+    assert team_ytd["ip"] == 0
+    assert team_ytd["er"] == 0
 
 
 class TestPreseasonBaseline:
@@ -991,6 +1147,143 @@ class TestStashBoardDegradedMode:
             "Expected the stash failure to be logged via log.exception; "
             "got records: " + str([r.getMessage() for r in caplog.records])
         )
+
+
+def test_build_standings_breakdown_payload_warns_on_team_name_mismatch(caplog):
+    """Fix #7: when ``actual_standings`` carries entries whose team_name
+    does not match any team_rosters key, ``build_standings_breakdown_payload``
+    must log a warning naming the team rather than silently zeroing YTD.
+    """
+    from datetime import date
+
+    from fantasy_baseball.models.standings import (
+        CategoryStats,
+        Standings,
+        StandingsEntry,
+    )
+    from fantasy_baseball.web.refresh_pipeline import build_standings_breakdown_payload
+
+    # actual carries "Other", team_rosters carries "Test" -> miss.
+    actual = Standings(
+        effective_date=date(2026, 6, 2),
+        entries=[
+            StandingsEntry(
+                team_name="Other",
+                team_key="o",
+                rank=1,
+                stats=CategoryStats(),
+            ),
+        ],
+    )
+
+    with caplog.at_level(
+        "WARNING",
+        logger="fantasy_baseball.web.refresh_pipeline",
+    ):
+        build_standings_breakdown_payload(
+            team_rosters={"Test": []},
+            effective_date=date(2026, 6, 2),
+            actual_standings=actual,
+        )
+
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("Test" in m for m in msgs), f"Expected a warning naming 'Test'; got: {msgs}"
+
+
+class TestAuditAndOptimizerUseYtdStandings:
+    """Fix #3: ``_audit_roster`` and ``_optimize_lineup`` must pass the
+    augmented ``self.ytd_standings`` (with team-YTD AB stuffed onto
+    extras) to their consumers, not the un-augmented ``self.standings``.
+
+    Without the fix, the stash board and lineup optimizer user-rows
+    silently see no AB attribution -- yielding ROS-only AVG decisions
+    while the projected standings widget (and everyone else) sees the
+    YTD-augmented baseline. The two views disagree.
+    """
+
+    def test_audit_roster_passes_augmented_ytd_standings_to_score_stash(
+        self, configured_test_env, fake_redis, monkeypatch
+    ):
+        """Capture the actual_standings argument passed to
+        score_stash_candidates. It must carry the augmented AB on extras
+        (i.e., be ``self.ytd_standings``, not ``self.standings``).
+        """
+        from fantasy_baseball.utils.constants import OpportunityStat
+
+        captured: dict = {}
+
+        def _spy_score_stash(*args, **kwargs):
+            captured["actual_standings"] = kwargs.get("actual_standings")
+            from fantasy_baseball.lineup.stash_value import StashResult
+
+            return StashResult(open_il_slots=0, cutline_rank=0, candidates=[])
+
+        monkeypatch.setattr(
+            "fantasy_baseball.web.refresh_pipeline.score_stash_candidates",
+            _spy_score_stash,
+            raising=False,
+        )
+
+        # The score_stash_candidates symbol is imported inside _audit_roster,
+        # so we patch the source module instead.
+        import fantasy_baseball.lineup.stash_value as _stash_mod
+
+        monkeypatch.setattr(_stash_mod, "score_stash_candidates", _spy_score_stash)
+
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
+
+        actual = captured.get("actual_standings")
+        assert actual is not None, "score_stash_candidates not called"
+        # Augmented ytd_standings carries OpportunityStat.AB on at least
+        # one entry. Bare self.standings would not.
+        ab_present = any(OpportunityStat.AB in e.extras for e in actual.entries)
+        assert ab_present, (
+            "score_stash_candidates received un-augmented standings "
+            "(no team-YTD AB in extras); expected self.ytd_standings"
+        )
+
+    def test_optimize_lineup_passes_augmented_ytd_standings(
+        self, configured_test_env, fake_redis, monkeypatch
+    ):
+        """``optimize_hitter_lineup`` / ``optimize_pitcher_lineup`` must
+        receive the augmented ``self.ytd_standings`` (AB on extras),
+        not ``self.standings``.
+        """
+        from fantasy_baseball.utils.constants import OpportunityStat
+
+        captured: dict = {}
+
+        def _spy_hitter(*args, **kwargs):
+            captured.setdefault("hitter", kwargs.get("actual_standings"))
+            return []
+
+        def _spy_pitcher(*args, **kwargs):
+            captured.setdefault("pitcher", kwargs.get("actual_standings"))
+            return [], []
+
+        import fantasy_baseball.web.refresh_pipeline as _rp
+
+        monkeypatch.setattr(_rp, "optimize_hitter_lineup", _spy_hitter, raising=False)
+        monkeypatch.setattr(_rp, "optimize_pitcher_lineup", _spy_pitcher, raising=False)
+        # The symbols are imported inside _optimize_lineup; patch the source
+        # module so the late import picks up the spy.
+        import fantasy_baseball.lineup.optimizer as _opt_mod
+
+        monkeypatch.setattr(_opt_mod, "optimize_hitter_lineup", _spy_hitter)
+        monkeypatch.setattr(_opt_mod, "optimize_pitcher_lineup", _spy_pitcher)
+
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
+
+        for which in ("hitter", "pitcher"):
+            actual = captured.get(which)
+            assert actual is not None, f"optimize_{which}_lineup not called"
+            ab_present = any(OpportunityStat.AB in e.extras for e in actual.entries)
+            assert ab_present, (
+                f"optimize_{which}_lineup received un-augmented standings "
+                f"(no team-YTD AB in extras); expected self.ytd_standings"
+            )
 
 
 class _FakeConn:

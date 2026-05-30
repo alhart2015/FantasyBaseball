@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player
 from fantasy_baseball.models.standings import (
     CategoryStats,
@@ -327,3 +329,151 @@ def test_swap_delta_uses_ros_only_not_full_season():
     after = apply_swap_delta(current, loses_ros=cruz_ros_only, gains_ros=soto_ros_only)
     assert after["R"] == 900.0 - 68 + 87
     assert after["R"] - current["R"] == 19  # NOT 3 (which would be full-season diff)
+
+
+def test_swap_delta_avg_respects_caller_supplied_team_ab():
+    """Mid-season team_ab is much smaller than the legacy 5500 constant.
+
+    Pre-PR-110, the hardcoded _TEAM_AB=5500 was a reasonable proxy for the
+    user's full-season AB total. After the team-YTD refactor, the user_row's
+    AVG reflects team_YTD + ROS -- mid-season totals are ~3000-4500 AB.
+    Backing out current_hits with 5500 over-counts hits by 20-50%.
+
+    Setup: user's current AVG is .280 with a real team_ab of 4000 (a
+    mid-season number). Swap a 100 AB / .200 AVG bat OUT for a 100 AB /
+    .400 AVG bat IN. The marginal hit shift is +20 (40 in - 20 out) over
+    a denominator that stays at 4000 (loses_ab and gains_ab cancel).
+    Expected post-swap AVG is (.280 * 4000 + 20) / 4000 = .285.
+
+    With the bug (defaults to 5500): current_hits = .280 * 5500 = 1540,
+    new_hits = 1540 + 20 = 1560, new_ab = 5500, new AVG = .28364.
+    """
+    current = {
+        "R": 600.0,
+        "HR": 150.0,
+        "RBI": 600.0,
+        "SB": 80.0,
+        "AVG": 0.280,
+        "W": 60.0,
+        "K": 900.0,
+        "SV": 30.0,
+        "ERA": 3.80,
+        "WHIP": 1.20,
+    }
+    loses_ros = {
+        "R": 10,
+        "HR": 3,
+        "RBI": 10,
+        "SB": 2,
+        "AVG": 0.200,
+        "ab": 100,
+        "ip": 0,
+        "W": 0,
+        "K": 0,
+        "SV": 0,
+        "ERA": 0,
+        "WHIP": 0,
+    }
+    gains_ros = {
+        "R": 20,
+        "HR": 8,
+        "RBI": 20,
+        "SB": 4,
+        "AVG": 0.400,
+        "ab": 100,
+        "ip": 0,
+        "W": 0,
+        "K": 0,
+        "SV": 0,
+        "ERA": 0,
+        "WHIP": 0,
+    }
+
+    # Legacy path: defaults to hardcoded 5500 -- biased.
+    after_legacy = apply_swap_delta(current, loses_ros=loses_ros, gains_ros=gains_ros)
+
+    # Fixed path: caller passes the team's real AB (mid-season ~ 4000).
+    after_fixed = apply_swap_delta(
+        current,
+        loses_ros=loses_ros,
+        gains_ros=gains_ros,
+        team_ab=4000,
+        team_ip=1000,
+    )
+
+    # Mid-season truth: hits shifted by +20 (40 in - 20 out) over ~4000 AB.
+    expected_avg = (0.280 * 4000 + (0.400 * 100 - 0.200 * 100)) / 4000
+    assert after_fixed["AVG"] == pytest.approx(expected_avg, abs=1e-9)
+    # And: the fixed value differs from the legacy 5500-default value.
+    assert after_fixed["AVG"] != pytest.approx(after_legacy["AVG"], abs=1e-9)
+
+
+def test_swap_delta_era_respects_caller_supplied_team_ip():
+    """Mid-season team_ip is much smaller than the legacy 1450 constant.
+
+    Same logic as the AB test: hardcoded 1450 over-states the denominator
+    so swap deltas in ERA/WHIP are mis-weighted mid-season. With the
+    caller passing the real team_ip (e.g. ~900 mid-season), the rate
+    math reflects the actual team baseline.
+    """
+    current = {
+        "R": 600.0,
+        "HR": 150.0,
+        "RBI": 600.0,
+        "SB": 80.0,
+        "AVG": 0.265,
+        "W": 60.0,
+        "K": 900.0,
+        "SV": 30.0,
+        "ERA": 3.80,
+        "WHIP": 1.20,
+    }
+    loses_ros = {
+        "R": 0,
+        "HR": 0,
+        "RBI": 0,
+        "SB": 0,
+        "AVG": 0,
+        "ab": 0,
+        "ip": 50,
+        "W": 3,
+        "K": 50,
+        "SV": 0,
+        "ERA": 5.00,
+        "WHIP": 1.40,
+    }
+    gains_ros = {
+        "R": 0,
+        "HR": 0,
+        "RBI": 0,
+        "SB": 0,
+        "AVG": 0,
+        "ab": 0,
+        "ip": 50,
+        "W": 4,
+        "K": 60,
+        "SV": 0,
+        "ERA": 3.00,
+        "WHIP": 1.00,
+    }
+
+    after_legacy = apply_swap_delta(current, loses_ros=loses_ros, gains_ros=gains_ros)
+    after_fixed = apply_swap_delta(
+        current,
+        loses_ros=loses_ros,
+        gains_ros=gains_ros,
+        team_ab=4000,
+        team_ip=900,
+    )
+
+    # Truth with real team_ip=900: ER shifts by (3.00*50 - 5.00*50)/9 = -100/9.
+    # current_er = 3.80 * 900 / 9 = 380, new_er = 380 - 100/9, new_ip = 900.
+    # The 50 IP cancel because loses_ip == gains_ip.
+    expected_era = 9.0 * (3.80 * 900 / 9.0 + (3.00 * 50 - 5.00 * 50) / 9.0) / 900.0
+    assert after_fixed["ERA"] == pytest.approx(expected_era, abs=1e-9)
+    # WHIP similarly: bh shift = (1.00*50 - 1.40*50) over 900 IP.
+    expected_whip = (1.20 * 900 + (1.00 * 50 - 1.40 * 50)) / 900.0
+    assert after_fixed["WHIP"] == pytest.approx(expected_whip, abs=1e-9)
+    # The fixed values differ from the legacy-default values.
+    assert after_fixed["ERA"] != pytest.approx(after_legacy["ERA"], abs=1e-9)
+    assert after_fixed["WHIP"] != pytest.approx(after_legacy["WHIP"], abs=1e-9)

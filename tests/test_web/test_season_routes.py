@@ -1535,3 +1535,169 @@ def test_standings_route_migrates_stale_breakdown_lacking_contribution_stats(
     hitter = breakdown_json["teams"]["Hart of the Order"]["hitters"][0]
     assert "contribution_stats" in hitter
     assert abs(hitter["contribution_stats"]["hr"] - 25.0) < 1e-6  # 25 * 1.0
+
+
+def test_standings_route_preserves_team_ytd_block_through_round_trip(client):
+    """Regression test: build_standings_breakdown_payload writes a team_ytd
+    block per team into cache:standings_breakdown; the route reads it,
+    round-trips each team payload through ``RosterBreakdown.from_dict``/
+    ``to_dict``, and emits the JSON consumed by the template. The team_ytd
+    block MUST survive that round-trip -- before commit 29fa623 it was
+    silently stripped because ``RosterBreakdown`` had no ``team_ytd``
+    field, leaving the modal unable to render the team-YTD header row
+    and breaking the widget-vs-modal arithmetic invariant
+    (team_ytd + sum(player rows) == widget headline).
+
+    Exercises the actual route path so a future regression that drops
+    team_ytd from ``RosterBreakdown.to_dict``, the season_routes
+    round-trip, or the template serialization will fail this test.
+    """
+    import json
+    import re
+
+    from fantasy_baseball.web.season_data import CacheKey
+
+    payload_with_team_ytd = {
+        "effective_date": "2026-06-02",
+        "teams": {
+            "Hart of the Order": {
+                "team_name": "Hart of the Order",
+                "hitters": [
+                    {
+                        "name": "Hitter A",
+                        "player_type": "hitter",
+                        "status": "active",
+                        "scale_factor": 1.0,
+                        "raw_stats": {
+                            "r": 70.0,
+                            "hr": 20.0,
+                            "rbi": 65.0,
+                            "sb": 4.0,
+                            "h": 110.0,
+                            "ab": 420.0,
+                        },
+                        "contribution_stats": {
+                            "r": 70.0,
+                            "hr": 20.0,
+                            "rbi": 65.0,
+                            "sb": 4.0,
+                            "h": 110.0,
+                            "ab": 420.0,
+                        },
+                    }
+                ],
+                "pitchers": [],
+                # The actual block the refresh pipeline writes. Keys match
+                # _team_ytd_block in refresh_pipeline.py at this point in
+                # the branch (uppercase). The route round-trip MUST preserve
+                # the block as-is regardless of casing.
+                "team_ytd": {
+                    "R": 120.0,
+                    "HR": 30.0,
+                    "RBI": 110.0,
+                    "SB": 15.0,
+                    "W": 15.0,
+                    "K": 300.0,
+                    "SV": 8.0,
+                    "H": 220.0,
+                    "AB": 800.0,
+                    "IP": 300.0,
+                    "ER": 116.67,
+                    "BB_plus_H_allowed": 360.0,
+                },
+            }
+        },
+    }
+
+    def fake_read_cache_dict(key):
+        if key == CacheKey.STANDINGS_BREAKDOWN:
+            return payload_with_team_ytd
+        if key == CacheKey.STANDINGS:
+            return _mock_standings()
+        return None
+
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict") as m,
+        patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
+    ):
+        mock_cfg.return_value.team_name = "Hart of the Order"
+        m.side_effect = fake_read_cache_dict
+        response = client.get("/standings")
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+
+    match = re.search(
+        r'<script[^>]*id="breakdown-data"[^>]*>(.*?)</script>',
+        body,
+        re.DOTALL,
+    )
+    assert match, "Expected breakdown-data script tag in standings.html output"
+    breakdown_json = json.loads(match.group(1).strip())
+
+    team_payload = breakdown_json["teams"]["Hart of the Order"]
+    assert "team_ytd" in team_payload, (
+        "Route stripped team_ytd from the breakdown payload -- "
+        "RosterBreakdown.from_dict/to_dict round-trip regressed."
+    )
+    team_ytd = team_payload["team_ytd"]
+    assert team_ytd["R"] == 120.0
+    assert team_ytd["HR"] == 30.0
+    assert team_ytd["K"] == 300.0
+    assert team_ytd["AB"] == 800.0
+    assert team_ytd["BB_plus_H_allowed"] == 360.0
+
+
+def test_standings_route_team_ytd_absent_when_legacy_payload(client):
+    """Backwards-compat: legacy KV blobs written before the team_ytd
+    field landed lack the block. The route must still render (default
+    to an empty dict on read) instead of crashing the standings page.
+    """
+    import json
+    import re
+
+    from fantasy_baseball.web.season_data import CacheKey
+
+    legacy_payload = {
+        "effective_date": "2026-05-29",
+        "teams": {
+            "Hart of the Order": {
+                "team_name": "Hart of the Order",
+                "hitters": [],
+                "pitchers": [],
+                # No team_ytd key -- mimics a stale blob from before the
+                # team-YTD refactor.
+            }
+        },
+    }
+
+    def fake_read_cache_dict(key):
+        if key == CacheKey.STANDINGS_BREAKDOWN:
+            return legacy_payload
+        if key == CacheKey.STANDINGS:
+            return _mock_standings()
+        return None
+
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict") as m,
+        patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
+    ):
+        mock_cfg.return_value.team_name = "Hart of the Order"
+        m.side_effect = fake_read_cache_dict
+        response = client.get("/standings")
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+
+    match = re.search(
+        r'<script[^>]*id="breakdown-data"[^>]*>(.*?)</script>',
+        body,
+        re.DOTALL,
+    )
+    assert match, "Expected breakdown-data script tag in standings.html output"
+    breakdown_json = json.loads(match.group(1).strip())
+
+    team_payload = breakdown_json["teams"]["Hart of the Order"]
+    # from_dict defaults missing team_ytd to {} so the modal can still
+    # render the row (zero values) instead of crashing on undefined.
+    assert team_payload.get("team_ytd") == {}

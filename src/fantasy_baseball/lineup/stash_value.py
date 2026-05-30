@@ -23,6 +23,7 @@ names the distinct below-cutline owned stash it would bump when the IL is full.
 from __future__ import annotations
 
 import dataclasses
+import logging
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -40,9 +41,13 @@ from fantasy_baseball.models.standings import (
     CategoryStats,
     ProjectedStandings,
     ProjectedStandingsEntry,
+    Standings,
+    TeamYtdComponents,
 )
 from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
+
+log = logging.getLogger(__name__)
 
 __all__ = ["StashResult", "StashScore", "score_stash_candidates"]
 
@@ -271,6 +276,8 @@ def _active_lineup_standings(
     before_active: list[Player],
     projected_standings: ProjectedStandings,
     team_name: str,
+    *,
+    user_ytd_components: TeamYtdComponents | None = None,
 ) -> ProjectedStandings:
     """Standings whose USER row is the healthy active lineup only (ALL of the
     user's injured players excluded), opponents unchanged.
@@ -278,13 +285,30 @@ def _active_lineup_standings(
     This is the shared baseline every candidate is valued against. Because it
     excludes every IL player, an owned IL candidate is a clean addition just
     like a free agent -- no ownership-based double-count -- so owned and FA
-    candidates land on one comparable scale. Full-season source matches the
-    opponents' ``from_rosters`` rows so leverage (who's contesting which
-    category) is computed on the same basis.
-    """
-    from fantasy_baseball.scoring import project_team_stats
+    candidates land on one comparable scale.
 
-    user_row = project_team_stats(before_active, projection_source="full_season_projection")
+    The user row is built as ``team_end_of_season(user_ytd_components,
+    project_ros_components(before_active))`` -- the same team-YTD + ROS math
+    that :func:`ProjectedStandings.from_rosters` uses for opponents, so the
+    user's row and the opponents' rows live on the same end-of-season scale
+    that leverage (who's contesting which category) expects. Without this,
+    per-player ``full_season_projection`` attribution would double-count
+    pre-acquisition YTD for any mid-season pickup on the user roster (the
+    same bug ``from_rosters`` had).
+
+    ``user_ytd_components=None`` defaults to zero components (ROS-only,
+    pre-season behavior). Callers without an actual standings snapshot
+    (legacy tests, pre-season callers) get the ROS-only path.
+
+    ``displacement=False`` here is deliberate: ``before_active`` is the
+    already-optimized active pool (no IL surplus to displace), matching the
+    pre-refactor call which also did not invoke displacement.
+    """
+    from fantasy_baseball.scoring import project_ros_components, team_end_of_season
+
+    ytd = user_ytd_components if user_ytd_components is not None else TeamYtdComponents()
+    user_ros = project_ros_components(before_active, displacement=False)
+    user_row = team_end_of_season(ytd, user_ros)
     entries = [
         ProjectedStandingsEntry(team_name=e.team_name, stats=user_row)
         if e.team_name == team_name
@@ -302,6 +326,7 @@ def _marginal_band(
     team_name: str,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
     fraction_remaining: float,
+    user_ytd_components: TeamYtdComponents | None = None,
 ) -> dict[str, Any]:
     """deltaRoto band dict for ``candidate``'s stash Gain.
 
@@ -314,8 +339,18 @@ def _marginal_band(
     double-count, and the whole board is one comparable ranking. An injured
     player with little remaining VOLUME but a strong RATE still scores: a 100-AB
     bat is judged on the 100 ABs he'll play, not his season total.
+
+    ``user_ytd_components`` threads the team's YTD (from the live Yahoo
+    standings snapshot) into the user-row baseline so the projection is
+    team_YTD + ROS rather than per-player full_season -- see
+    :func:`_active_lineup_standings`. ``None`` collapses to ROS-only.
     """
-    baseline = _active_lineup_standings(before_active, projected_standings, team_name)
+    baseline = _active_lineup_standings(
+        before_active,
+        projected_standings,
+        team_name,
+        user_ytd_components=user_ytd_components,
+    )
     return _best_swap_band(
         candidate,
         before_active=before_active,
@@ -335,6 +370,7 @@ def _marginal_value(
     team_name: str,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
     fraction_remaining: float,
+    user_ytd_components: TeamYtdComponents | None = None,
 ) -> float:
     """Gain = band mean of the candidate's best rate-swap. Floored at ~0.
 
@@ -346,6 +382,7 @@ def _marginal_value(
         team_name=team_name,
         team_sds=team_sds,
         fraction_remaining=fraction_remaining,
+        user_ytd_components=user_ytd_components,
     )
     return float(band["mean"])
 
@@ -439,6 +476,7 @@ def score_stash_candidates(
     team_sds: Mapping[str, Mapping[Category, float]] | None,
     fraction_remaining: float,
     max_candidates: int = 25,
+    actual_standings: Standings | None = None,
 ) -> StashResult:
     """Rank injured players (owned IL + injured FAs) by P(helps).
 
@@ -449,6 +487,14 @@ def score_stash_candidates(
     distinct below-cutline owned stash it bumps when the IL is full
     (:func:`_assign_recommended_drops`). Slot scarcity is priced by the cutline,
     not by a per-row cost.
+
+    ``actual_standings`` is the live Yahoo standings snapshot at the same
+    effective_date as ``projected_standings``. When provided, the user's row
+    in the per-candidate baseline (see :func:`_active_lineup_standings`) is
+    built as ``team_YTD + project_ros_components(before_active)``, matching
+    :func:`ProjectedStandings.from_rosters`. When ``None``, the user-row
+    collapses to ROS-only -- preserves pre-team-YTD-refactor behavior for
+    pre-season callers and legacy tests.
     """
     il_capacity = roster_slots.get("IL", 0)
     owned_il = _owned_il_stashes(roster)
@@ -460,6 +506,23 @@ def score_stash_candidates(
             open_il_slots=_open_il_slots(roster, roster_slots),
             cutline_rank=il_capacity,
         )
+
+    # Derive the user's YTD components once -- it's the same constant added
+    # into every per-candidate user-row baseline, so per-candidate recompute
+    # would just burn cycles.
+    user_ytd_components: TeamYtdComponents | None = None
+    if actual_standings is not None:
+        for entry in actual_standings.entries:
+            if entry.team_name == team_name:
+                user_ytd_components = entry.ytd_components()
+                break
+        if user_ytd_components is None:
+            log.warning(
+                "Team %r not found in actual_standings.entries; stash baseline "
+                "will use zero YTD components (team_name mismatch -- apostrophe "
+                "/ whitespace / Unicode normalization drift?)",
+                team_name,
+            )
 
     # before_active is identical for every candidate: the optimized lineup over
     # the counted (non-IL-slot) bodies, with NO candidate activated.
@@ -480,6 +543,7 @@ def score_stash_candidates(
             team_name=team_name,
             team_sds=team_sds,
             fraction_remaining=fraction_remaining,
+            user_ytd_components=user_ytd_components,
         )
 
     scores: list[StashScore] = []

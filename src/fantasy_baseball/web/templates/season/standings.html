@@ -439,7 +439,7 @@ function buildBadgeSpan(status) {
 function buildBreakdownRow(contribution, cat, colSpec) {
     const tr = document.createElement('tr');
 
-    // Player name — textContent, defense against HTML in source data.
+    // Player name -- textContent, defense against HTML in source data.
     const nameTd = document.createElement('td');
     nameTd.textContent = contribution.name;
     tr.appendChild(nameTd);
@@ -450,22 +450,23 @@ function buildBreakdownRow(contribution, cat, colSpec) {
     tr.appendChild(statusTd);
 
     // contribution_stats holds the actual scaled contribution per stat
-    // (YTD + ROS * factor in full_season mode; ROS * factor in ros mode).
-    // The modal renders these directly so per-row sums match the standings
-    // widget headline -- multiplying raw_stats * scale_factor client-side
-    // loses the YTD floor and re-introduces the displaced-pitcher bug.
+    // (ROS * factor after the team-YTD refactor; team_YTD is rendered
+    // separately as a header row). The modal renders these directly so
+    // per-row sums + team_ytd row match the standings widget headline --
+    // multiplying raw_stats * scale_factor client-side loses any
+    // factor-aware scaling and re-introduces the displaced-pitcher bug.
     const contrib = contribution.contribution_stats || {};
     const factor = contribution.scale_factor || 0;
     const isMissing = contribution.status === 'no_projection';
 
     if (colSpec.kind === 'counting') {
         const td = document.createElement('td');
-        td.textContent = isMissing ? '—' : String(formatContribution(contrib[colSpec.field] || 0));
+        td.textContent = isMissing ? '-' : String(formatContribution(contrib[colSpec.field] || 0));
         tr.appendChild(td);
     } else {
         for (const component of colSpec.components) {
             const td = document.createElement('td');
-            td.textContent = isMissing ? '—' : String(formatContribution(contrib[component] || 0));
+            td.textContent = isMissing ? '-' : String(formatContribution(contrib[component] || 0));
             tr.appendChild(td);
         }
     }
@@ -473,8 +474,77 @@ function buildBreakdownRow(contribution, cat, colSpec) {
     // Scale %
     const scaleTd = document.createElement('td');
     scaleTd.textContent = isMissing
-        ? '—'
+        ? '-'
         : (Math.round(factor * 1000) / 10).toFixed(1) + '%';
+    tr.appendChild(scaleTd);
+
+    return tr;
+}
+
+/* Look up a value in a team_ytd block, tolerating both lowercase
+   (matching contribution_stats / BREAKDOWN_COLUMNS) and uppercase
+   (matching CategoryStats.to_dict()) keys. Returns 0 when missing.
+   Tolerating both casings keeps this resilient to which side of the
+   parallel refactor lands first. */
+function teamYtdValue(teamYtd, key) {
+    if (!teamYtd) return 0;
+    if (teamYtd[key] !== undefined && teamYtd[key] !== null) return teamYtd[key];
+    const upper = key.toUpperCase();
+    if (teamYtd[upper] !== undefined && teamYtd[upper] !== null) return teamYtd[upper];
+    return 0;
+}
+
+/* WHIP is the only column where per-player components ('bb', 'h_allowed',
+   'ip') don't all map 1:1 to team_ytd. The team_ytd block carries a
+   combined 'bb_plus_h_allowed' field (matching StandingsEntry.ytd_components),
+   so we split it back across the bb / h_allowed cells: put the combined
+   total in the first non-IP cell and zero in the other, so the column
+   sum (bb + h_allowed + ip across rows) still equals the widget headline. */
+function teamYtdComponentValue(teamYtd, component, colSpec) {
+    if (colSpec.kind === 'rate' && colSpec.components.includes('bb') && colSpec.components.includes('h_allowed')) {
+        if (component === 'bb') {
+            return teamYtdValue(teamYtd, 'bb_plus_h_allowed');
+        }
+        if (component === 'h_allowed') {
+            return 0;
+        }
+    }
+    return teamYtdValue(teamYtd, component);
+}
+
+function buildTeamYtdRow(teamYtd, colSpec) {
+    /* Render a header row pulling from the team_ytd block. Invariant:
+       team_ytd row + sum(per-player contribution_stats rows for this column)
+       == standings widget headline (data-stat). team_YTD is captured at
+       the team level (TeamYtdComponents from Yahoo standings) and is not
+       attributed per-player, so it gets its own row above the players. */
+    const tr = document.createElement('tr');
+    tr.className = 'breakdown-team-ytd-row';
+
+    const nameTd = document.createElement('td');
+    nameTd.textContent = 'Team YTD';
+    tr.appendChild(nameTd);
+
+    // Status column: empty for the team row.
+    const statusTd = document.createElement('td');
+    statusTd.textContent = '';
+    tr.appendChild(statusTd);
+
+    if (colSpec.kind === 'counting') {
+        const td = document.createElement('td');
+        td.textContent = String(formatContribution(teamYtdValue(teamYtd, colSpec.field)));
+        tr.appendChild(td);
+    } else {
+        for (const component of colSpec.components) {
+            const td = document.createElement('td');
+            td.textContent = String(formatContribution(teamYtdComponentValue(teamYtd, component, colSpec)));
+            tr.appendChild(td);
+        }
+    }
+
+    // Scale % column: not meaningful for a team-level row.
+    const scaleTd = document.createElement('td');
+    scaleTd.textContent = '';
     tr.appendChild(scaleTd);
 
     return tr;
@@ -513,9 +583,18 @@ function openBreakdownModal(teamName, cat) {
             `<th>Scale %</th>`;
     document.getElementById('breakdown-modal-thead').innerHTML = `<tr>${headCells}</tr>`;
 
-    // Body
+    // Body. Render the Team YTD header row first; the per-player rows
+    // below it are ROS-only contributions. Invariant the modal is
+    // guaranteeing for the user:
+    //   team_ytd row + sum(per-player rows for col) == widget headline
+    // The widget headline (data-stat on the clicked cell) is team_YTD +
+    // team_ROS, and per-player contribution_stats are ROS-only after
+    // the team-YTD refactor, so the team_ytd row supplies the missing
+    // YTD piece.
     const tbody = document.getElementById('breakdown-modal-tbody');
-    tbody.replaceChildren(...rows.map(c => buildBreakdownRow(c, cat, colSpec)));
+    const playerRows = rows.map(c => buildBreakdownRow(c, cat, colSpec));
+    const teamYtdRow = buildTeamYtdRow(team.team_ytd || {}, colSpec);
+    tbody.replaceChildren(teamYtdRow, ...playerRows);
 
     // Title + total subheader: pull the team total for this cat from the
     // corresponding rendered stat cell (the one the user clicked).
@@ -606,6 +685,18 @@ document.addEventListener('DOMContentLoaded', () => {
     padding: 2px 6px;
     border-radius: 3px;
     font-size: 0.7rem;
+}
+/* Team YTD row: distinguish the team-level YTD contribution from
+   per-player ROS rows visually so the user reads the modal as
+   "team_ytd (top) + per-player ROS rows = widget headline". */
+.breakdown-team-ytd-row {
+    font-style: italic;
+    background: rgba(0, 0, 0, 0.05);
+    border-bottom: 2px solid var(--border, rgba(0, 0, 0, 0.12));
+}
+.breakdown-team-ytd-row td:first-child {
+    font-weight: 600;
+    font-style: normal;
 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>

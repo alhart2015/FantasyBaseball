@@ -19,6 +19,7 @@ from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.trades.evaluate import (
     aggregate_player_stats,
     apply_swap_delta,
+    team_baseline_volumes,
 )
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
 
@@ -263,10 +264,23 @@ def evaluate_multi_trade(
         )
 
     before_stats = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
+    proj_by_team = projected_standings.by_team()
+    hart_ab, hart_ip = team_baseline_volumes(proj_by_team[hart_name])
+    opp_ab, opp_ip = team_baseline_volumes(proj_by_team[proposal.opponent])
     after_stats = dict(before_stats)
-    after_stats[hart_name] = apply_swap_delta(before_stats[hart_name], my_loses, my_gains)
+    after_stats[hart_name] = apply_swap_delta(
+        before_stats[hart_name],
+        my_loses,
+        my_gains,
+        team_ab=hart_ab,
+        team_ip=hart_ip,
+    )
     after_stats[proposal.opponent] = apply_swap_delta(
-        before_stats[proposal.opponent], opp_loses, opp_gains
+        before_stats[proposal.opponent],
+        opp_loses,
+        opp_gains,
+        team_ab=opp_ab,
+        team_ip=opp_ip,
     )
 
     # Roto Points (integer ranks)
