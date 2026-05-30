@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
-from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category, OpportunityStat
+from fantasy_baseball.utils.constants import AB_PER_PA, ALL_CATEGORIES, Category, OpportunityStat
 
 # Private: single source of truth for Category <-> attribute mapping.
 _CAT_TO_FIELD: dict[Category, str] = {
@@ -106,10 +106,10 @@ class TeamYtdComponents:
     """Rate-stat ingredients for a team's YTD totals.
 
     Derived from ``StandingsEntry.stats`` (rates) + ``extras`` (volumes).
-    The ``team_end_of_season`` helper (added in a later phase) sums
-    these with the analogous ROS components and recomputes AVG/ERA/WHIP
-    from the combined ingredients so the displayed standings reflect
-    true YTD + ROS arithmetic rather than averaging rates.
+    Designed to be summed with the analogous ROS components by a
+    ``team_end_of_season`` helper that recomputes AVG/ERA/WHIP from the
+    combined ingredients so the displayed standings reflect true YTD +
+    ROS arithmetic rather than averaging rates.
 
     BB and H_allowed are combined because Yahoo only exposes their sum
     via WHIP * IP; the projection math only needs the sum.
@@ -169,8 +169,6 @@ class StandingsEntry:
         ER/IP/BB+H_allowed come from IP + rate stats. When IP is zero
         (pre-season), they zero out cleanly (not NaN).
         """
-        from fantasy_baseball.utils.constants import AB_PER_PA
-
         ip = float(self.extras.get(OpportunityStat.IP, 0.0))
         ab = float(self.extras.get(OpportunityStat.AB, 0.0))
         if ab <= 0.0:

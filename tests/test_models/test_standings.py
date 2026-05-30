@@ -375,11 +375,11 @@ class TestTeamYtdComponents:
             whip=1.20,
         )
         c = e.ytd_components()
-        assert c.ab == 400.0
-        assert c.h == 0.275 * 400.0  # AVG * AB
+        assert c.ab == pytest.approx(400.0)
+        assert c.h == pytest.approx(0.275 * 400.0)  # AVG * AB
         assert c.ip == 200.0
-        assert c.er == 3.50 * 200.0 / 9.0
-        assert c.bb_plus_h_allowed == 1.20 * 200.0
+        assert c.er == pytest.approx(3.50 * 200.0 / 9.0)
+        assert c.bb_plus_h_allowed == pytest.approx(1.20 * 200.0)
 
     def test_components_fall_back_to_pa_when_ab_absent(self):
         """When only PA is exposed, derive AB via AB_PER_PA."""
@@ -400,8 +400,29 @@ class TestTeamYtdComponents:
             whip=1.30,
         )
         c = e.ytd_components()
-        assert c.ab == 500.0 * AB_PER_PA
-        assert c.h == 0.250 * (500.0 * AB_PER_PA)
+        assert c.ab == pytest.approx(500.0 * AB_PER_PA)
+        assert c.h == pytest.approx(0.250 * (500.0 * AB_PER_PA))
+
+    def test_components_prefer_explicit_ab_over_pa(self):
+        """When BOTH AB and PA are present in extras, AB takes precedence and PA is ignored."""
+        e = self._entry(
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            avg=0.275,
+            ab=400,
+            pa=500,
+            ip=200,
+            w=10,
+            k=180,
+            sv=5,
+            era=3.50,
+            whip=1.20,
+        )
+        c = e.ytd_components()
+        assert c.ab == pytest.approx(400.0)
+        assert c.h == pytest.approx(0.275 * 400.0)
 
     def test_components_are_zero_when_neither_ab_nor_pa_present(self):
         """No way to recover AB without it or PA -> components.ab/h are 0.
