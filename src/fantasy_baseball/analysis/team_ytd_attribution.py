@@ -15,15 +15,20 @@ source; it carries hitter games with ``date``, ``ab``, ``h``, ``pa``, etc.
 
 Active-slot filter
 ------------------
-Only games played while the player was in an ACTIVE slot (not BN/IL/IL+/DL/
-DL+) count toward team AB. Yahoo's team AVG is computed over active-slot
-ABs only; summing bench/IL games into the derived total would inflate
-``H = AVG * AB`` downstream of ``ytd_components``.
+Only games played while the player was in an ACTIVE HITTER slot (not BN/IL/
+IL+/DL/DL+ and not P/SP/RP) count toward team AB. Yahoo's team AVG is
+computed over active-slot ABs only; summing bench/IL games into the derived
+total would inflate ``H = AVG * AB`` downstream of ``ytd_components``.
+
+Pitcher slots are excluded too: name-normalized lookups against the
+hitter-only per-game dict would otherwise attribute Ohtani's hitter ABs to
+his pitcher slot (double count).
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
@@ -32,7 +37,10 @@ from typing import Any
 from fantasy_baseball.models.league import League
 from fantasy_baseball.models.positions import BENCH_SLOTS, IL_SLOTS, Position
 from fantasy_baseball.utils.name_utils import normalize_name
+from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 from fantasy_baseball.utils.time_utils import local_today
+
+log = logging.getLogger(__name__)
 
 # parents[0]=analysis/, [1]=fantasy_baseball/, [2]=src/, [3]=repo root
 _DEFAULT_GAME_LOGS_PATH = Path(__file__).resolve().parents[3] / "data" / "roster_game_logs.json"
@@ -46,39 +54,91 @@ def _load_per_game_hitter_ab(
 
     Pitcher entries and entries missing dates are skipped. AB values that
     fail to parse as int are skipped (defensive against malformed rows).
+
+    Defensive against on-disk corruption:
+    - missing file -> log warning, return {}
+    - corrupt JSON -> log warning, return {}
+    - non-dict top-level entry -> skip
+    - ``games: null`` -> treat as empty
+    - missing name -> skip
+
+    Logs a warning when two distinct source names normalize to the same
+    key (e.g. Will Smith C / Will Smith OF). There's no MLB-id to Yahoo-id
+    disambiguator available, so the lists are still merged -- the warning
+    just surfaces that per-team AB attribution may double-count for the
+    affected players.
     """
     if game_logs is None:
         if not path.exists():
+            log.warning(
+                "Game logs file not found at %s; team YTD AB will be zero",
+                path,
+            )
             return {}
-        with open(path, encoding="utf-8") as f:
-            game_logs = json.load(f)
+        try:
+            with open(path, encoding="utf-8") as f:
+                game_logs = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning("Failed to load game logs from %s: %s", path, exc)
+            return {}
 
     out: dict[str, list[tuple[date, int]]] = defaultdict(list)
-    for _mid, entry in game_logs.items():
+    seen_norm_names: dict[str, str] = {}  # norm -> first source name encountered
+    collisions: list[tuple[str, str]] = []
+
+    for _mid, entry in (game_logs or {}).items():
+        if not isinstance(entry, dict):
+            continue
         if entry.get("type") != "hitter":
             continue
         name = entry.get("name") or ""
         if not name:
             continue
         norm = normalize_name(name)
-        for game in entry.get("games", []):
+
+        # Track normalized-name collisions across distinct source names.
+        prior = seen_norm_names.get(norm)
+        if prior is not None and prior != name:
+            collisions.append((prior, name))
+        else:
+            seen_norm_names[norm] = name
+
+        for game in entry.get("games") or []:
+            if not isinstance(game, dict):
+                continue
             try:
                 game_date = date.fromisoformat(game.get("date", ""))
                 ab = int(game.get("ab", 0))
             except (TypeError, ValueError):
                 continue
             out[norm].append((game_date, ab))
+
+    if collisions:
+        log.warning(
+            "roster_game_logs.json has %d normalized-name collisions: %s. "
+            "Per-team AB attribution may double-count for affected players "
+            "(no MLB-id to Yahoo-id disambiguator available).",
+            len(collisions),
+            collisions[:5],
+        )
+
     return dict(out)
 
 
-def _is_active_slot(slot: Position) -> bool:
-    """A slot counts toward team AB only when it is neither bench nor IL.
+def _is_active_hitter_slot(slot: Position) -> bool:
+    """A slot counts toward team AB only when it is an active HITTER slot.
+
+    Excludes bench (BN), all IL flavors (IL/IL+/DL/DL+), and every pitcher
+    slot (P/SP/RP). The pitcher exclusion is load-bearing for Ohtani-like
+    cases: ``_load_per_game_hitter_ab`` returns a hitter-only dict; a
+    pitcher entry whose normalized name collides with a hitter would
+    otherwise silently inherit the hitter's ABs (double count).
 
     BENCH_SLOTS already includes IL_SLOTS in the canonical model, but the
     redundant IL check makes the intent explicit and survives any future
     refactor that splits the two sets.
     """
-    return slot not in BENCH_SLOTS and slot not in IL_SLOTS
+    return slot not in BENCH_SLOTS and slot not in IL_SLOTS and slot not in PITCHER_POSITIONS
 
 
 def compute_team_ytd_ab(
@@ -91,10 +151,21 @@ def compute_team_ytd_ab(
 ) -> dict[str, float]:
     """Sum each team's YTD AB attributed by ownership window.
 
-    For every team, every roster snapshot, every entry whose slot is active,
-    walks ``Team.ownership_periods`` to get the ``(period_start, period_end)``
-    window and sums ``ab`` from the player's per-game logs whose ``date``
-    falls in ``[period_start, period_end)`` (half-open).
+    For every team, every roster snapshot, every entry whose slot is an
+    active hitter slot, walks ``Team.ownership_periods`` to get the
+    ``(period_start, period_end)`` window and sums ``ab`` from the player's
+    per-game logs whose ``date`` falls in the window. Windows are
+    half-open ``[period_start, period_end)`` EXCEPT the last (current)
+    window, where ``period_end == today``; for that window the comparison
+    is closed-right ``[period_start, period_end]`` so today's completed
+    games are included (Yahoo's stats.avg already counts them, and an
+    underderived AB would inflate ``H = AVG * AB``).
+
+    Adjacent windows are ``[s1, e1)`` and ``[e1, e2)`` (the next snapshot's
+    effective_date is the previous window's end). Using ``<=`` only on the
+    last window therefore cannot double-count: every non-last window is
+    strictly half-open, so a game on the boundary date e1 attributes to
+    the next window (the one whose ``period_start == e1``).
 
     Returns a dict keyed by team name. Every team in ``league.teams`` appears
     in the output, even teams with zero attributed AB.
@@ -115,10 +186,22 @@ def compute_team_ytd_ab(
             season_end=season_end,
             today=today,
         ):
-            if not _is_active_slot(entry.selected_position):
+            if not _is_active_hitter_slot(entry.selected_position):
                 continue
             games = name_to_games.get(normalize_name(entry.name), [])
+            # Closed-right comparison ONLY on the last (current) window so
+            # today's completed games attribute to today's owner. Every
+            # other window stays half-open to prevent double-count on the
+            # adjacent boundary.
+            is_last_window = period_end == today
             for game_date, ab in games:
-                if period_start <= game_date < period_end:
-                    ab_by_team[team.name] += ab
+                if game_date < period_start:
+                    continue
+                if is_last_window:
+                    if game_date > period_end:
+                        continue
+                else:
+                    if game_date >= period_end:
+                        continue
+                ab_by_team[team.name] += ab
     return dict(ab_by_team)
