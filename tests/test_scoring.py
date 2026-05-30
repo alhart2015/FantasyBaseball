@@ -2771,18 +2771,29 @@ class TestComputeRosterBreakdown:
         assert c.scale_factor == 1.0
 
 
-class TestScaleStatsYTDFloor:
-    """`_scale_stats` adds a YTD floor ONLY in full_season_projection mode.
+class TestScaleStatsRosOnly:
+    """After the team-YTD projection refactor, ``_scale_stats`` returns
+    ``ROS * factor`` regardless of mode.
 
-    In rest_of_season mode (the optimizer/trade-evaluator path) the function
-    preserves the legacy ROS-only behavior so forward-looking decisions are
-    not biased by locked YTD totals. In full_season_projection mode (the
-    standings/breakdown path) YTD always counts so displaced players don't
-    silently lose their already-recorded stats.
+    PR #108 added a per-player YTD floor (``YTD + ROS * factor``) sourced
+    from ``Player.full_season_projection`` to keep already-recorded stats
+    visible in the standings view. That attribution is wrong: a mid-season
+    pickup's pre-acquisition production gets credited to the new owner.
+
+    Team YTD is now captured at the team level via
+    :class:`TeamYtdComponents` (from Yahoo standings) combined with
+    :class:`TeamRosComponents` via :func:`team_end_of_season`, so only
+    stats accrued while the player was actually on the team count.
+    ``_scale_stats`` is therefore ROS-only for every caller.
     """
 
-    def _pitcher_with_ytd(self, name, ros_k, full_season_k):
-        """Pitcher whose YTD K = full_season_k - ros_k."""
+    def _pitcher_with_full_season(self, name, ros_k, full_season_k):
+        """Pitcher whose implied YTD K = full_season_k - ros_k.
+
+        full_season_projection is set so legacy callers that would have
+        triggered the YTD floor are still exercised here -- but the new
+        contract is that _scale_stats ignores it.
+        """
         from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
 
         ros = PitcherStats(
@@ -2798,69 +2809,54 @@ class TestScaleStatsYTDFloor:
             full_season_projection=full,
         )
 
-    def test_full_season_mode_scale_zero_preserves_ytd(self):
-        """Webb with 78 YTD K + 60 ROS K, displaced (factor=0) in
-        full_season_projection mode: contributes 78 K, not 0. YTD is
-        locked-in and must not vanish from the standings view.
+    def test_factor_zero_returns_zero_not_ytd_floor(self):
+        """Displaced pitcher (factor=0) contributes 0 K -- not the implied
+        per-player YTD. Team YTD is now captured at the team level via
+        team_end_of_season; per-player YTD is no longer surfaced here.
+
+        Pre-team-YTD (PR #108) behavior: full_season K = 138; ROS K = 60;
+        implied per-player YTD = 78; _scale_stats(p, 0.0) -> 78.
+        Post-team-YTD behavior: _scale_stats(p, 0.0) -> 0.
         """
         from fantasy_baseball.scoring import _scale_stats
 
-        p = self._pitcher_with_ytd("Webb", ros_k=60, full_season_k=138)
-        scaled = _scale_stats(p, 0.0, "full_season_projection")
-        # YTD = 138 - 60 = 78; ROS * 0 = 0; total = 78
-        assert scaled["k"] == 78
-
-    def test_full_season_mode_scale_one_returns_full_season(self):
-        """factor=1.0 in full_season mode yields full_season K (= YTD + ROS),
-        matching an undiscounted player's projection-source full-season read."""
-        from fantasy_baseball.scoring import _scale_stats
-
-        p = self._pitcher_with_ytd("Healthy", ros_k=120, full_season_k=200)
-        scaled = _scale_stats(p, 1.0, "full_season_projection")
-        # YTD = 200 - 120 = 80; ROS * 1 = 120; total = 200
-        assert scaled["k"] == 200
-
-    def test_full_season_mode_scale_half_keeps_full_ytd(self):
-        """factor=0.5 in full_season mode: YTD untouched, ROS halved."""
-        from fantasy_baseball.scoring import _scale_stats
-
-        p = self._pitcher_with_ytd("Half", ros_k=80, full_season_k=130)
-        scaled = _scale_stats(p, 0.5, "full_season_projection")
-        # YTD = 130 - 80 = 50; ROS * 0.5 = 40; total = 90
-        assert scaled["k"] == 90
-
-    def test_ros_mode_unchanged_legacy_behavior(self):
-        """In rest_of_season mode, the function still returns ROS * factor
-        with NO YTD floor. The optimizer's forward-looking semantics are
-        unchanged: hot-YTD and cold-YTD players with the same ROS contribute
-        identically to forward decisions.
-        """
-        from fantasy_baseball.scoring import _scale_stats
-
-        p = self._pitcher_with_ytd("Webb", ros_k=60, full_season_k=138)
-        # ROS-mode displacement: contributes 0, NOT 78. The optimizer must not
-        # see YTD bleed into displaced-player scoring.
-        scaled_zero = _scale_stats(p, 0.0, "rest_of_season")
-        assert scaled_zero["k"] == 0
-
-        # factor=0.5 in ROS mode -> ROS * 0.5 = 30, no YTD.
-        scaled_half = _scale_stats(p, 0.5, "rest_of_season")
-        assert scaled_half["k"] == 30
-
-    def test_ros_mode_default_when_source_omitted(self):
-        """Backwards compatibility: callers that don't pass source get the
-        legacy ROS-only behavior. (Same as test_ros_mode_unchanged with
-        explicit source, just verifies the default.)
-        """
-        from fantasy_baseball.scoring import _scale_stats
-
-        p = self._pitcher_with_ytd("Webb", ros_k=60, full_season_k=138)
+        p = self._pitcher_with_full_season("Webb", ros_k=60, full_season_k=138)
         scaled = _scale_stats(p, 0.0)
         assert scaled["k"] == 0
 
-    def test_full_season_mode_falls_back_to_ros_when_no_full_season(self):
-        """Preseason rosters lack full_season_projection. Even in full_season
-        mode, scaling should behave like ROS-only (YTD = 0 by definition)."""
+    def test_factor_one_returns_full_ros(self):
+        """factor=1.0 returns ROS only -- NOT full_season. Per-player
+        full_season includes pre-acquisition stats; the team-level
+        team_end_of_season helper is the only path that surfaces YTD.
+        """
+        from fantasy_baseball.scoring import _scale_stats
+
+        p = self._pitcher_with_full_season("Healthy", ros_k=120, full_season_k=200)
+        scaled = _scale_stats(p, 1.0)
+        # ROS * 1.0 = 120 (NOT full_season = 200).
+        assert scaled["k"] == 120
+
+    def test_factor_half_returns_half_ros(self):
+        """factor=0.5 returns half ROS -- no YTD floor preserved."""
+        from fantasy_baseball.scoring import _scale_stats
+
+        p = self._pitcher_with_full_season("Half", ros_k=80, full_season_k=130)
+        scaled = _scale_stats(p, 0.5)
+        # ROS * 0.5 = 40 (NOT 50 YTD + 40 ROS*0.5 = 90).
+        assert scaled["k"] == 40
+
+    def test_factor_zero_default_arg(self):
+        """Same as test_factor_zero_returns_zero_not_ytd_floor; pins that
+        the signature is (p, factor) -- no projection_source parameter."""
+        from fantasy_baseball.scoring import _scale_stats
+
+        p = self._pitcher_with_full_season("Webb", ros_k=60, full_season_k=138)
+        scaled = _scale_stats(p, 0.0)
+        assert scaled["k"] == 0
+
+    def test_no_full_season_projection_still_ros_only(self):
+        """Preseason rosters lack full_season_projection; result is ROS * factor,
+        same as the populated case (since full_season is ignored)."""
         from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
         from fantasy_baseball.scoring import _scale_stats
 
@@ -2870,8 +2866,8 @@ class TestScaleStatsYTDFloor:
         p = Player(
             name="Preseason", player_type=PlayerType.PITCHER, rest_of_season=ros
         )  # no full_season_projection
-        scaled = _scale_stats(p, 0.5, "full_season_projection")
-        # No YTD known -> floor = 0 -> ROS * 0.5 = 100
+        scaled = _scale_stats(p, 0.5)
+        # ROS * 0.5 = 100.
         assert scaled["k"] == 100
 
 
@@ -3317,16 +3313,17 @@ class TestPitcherPoolRateSwap:
         assert "Elite_C" not in factors
 
 
-class TestComputeRosterBreakdownFullSeasonInvariant:
+class TestComputeRosterBreakdownContributionInvariant:
     """The breakdown modal's per-row totals must sum to the standings
-    widget's headline total in full_season_projection mode. The aggregate
-    over ``contribution_stats[cat]`` per category must equal
-    ``project_team_stats(roster, displacement=True, projection_source="full_season_projection")``.
+    widget's headline total. The aggregate over ``contribution_stats[cat]``
+    per category must equal :func:`project_team_stats` with
+    ``displacement=True`` in matching mode.
 
-    Pre-fix: the modal computed raw_stats * scale_factor, which gave
-    ``full_season * factor`` instead of ``YTD + ROS * factor``, causing a
-    per-pitcher discrepancy of ``YTD * (1 - factor)``. Webb scenario: 80 YTD K,
-    120 ROS K, factor 0.5 -> modal showed 100, widget showed 140, 40 K gap.
+    Post-team-YTD refactor: ``contribution_stats`` is always
+    ``ROS * scale_factor`` (per-player YTD floor removed). Team YTD is
+    surfaced at the team level via :func:`team_end_of_season`, not
+    per-player; the breakdown rows reflect only the forward-looking
+    ROS-scaled contribution.
     """
 
     def _pitcher(self, name, *, ros_k, full_season_k, ros_ip=60, full_season_ip=120):
@@ -3376,9 +3373,9 @@ class TestComputeRosterBreakdownFullSeasonInvariant:
         )
 
     def test_breakdown_contribution_stats_match_standings_in_full_season_mode(self):
-        """For a displaced pitcher with non-zero YTD, contribution_stats[k]
-        must equal _scale_stats output, which equals what project_team_stats
-        sums into the widget total.
+        """For a displaced pitcher, contribution_stats[k] must equal what
+        project_team_stats sums into the widget total. Post-team-YTD
+        refactor: both sides are ROS-only (no YTD floor in either path).
         """
         from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
         from fantasy_baseball.models.positions import Position
@@ -3483,13 +3480,18 @@ class TestComputeRosterBreakdownFullSeasonInvariant:
             team_name="Me",
         )
 
+        # Production breakdown payload (build_standings_breakdown_payload after
+        # Phase 4.4) always calls with projection_source="rest_of_season"; team
+        # totals come from project_ros_components + team_end_of_season. The
+        # contribution-stats invariant must hold against the matching ROS
+        # project_team_stats call (both sum ROS * factor for displaced players).
         breakdown = compute_roster_breakdown(
-            "Me", roster, league_context=ctx, projection_source="full_season_projection"
+            "Me", roster, league_context=ctx, projection_source="rest_of_season"
         )
         team_stats = project_team_stats(
             roster,
             displacement=True,
-            projection_source="full_season_projection",
+            projection_source="rest_of_season",
             league_context=ctx,
         )
 
@@ -3501,18 +3503,18 @@ class TestComputeRosterBreakdownFullSeasonInvariant:
         )
 
         # Specifically: SP_Worst is the discount target (factor ~0.538), and
-        # its contribution_stats[k] must be YTD + ROS * factor, not full_season * factor.
-        ytd_k_sp_worst = sp_worst.full_season_projection.k - sp_worst.rest_of_season.k
+        # its contribution_stats[k] must be ROS * factor (no per-player YTD
+        # floor -- team YTD is captured at the team level via team_end_of_season).
         ros_k_sp_worst = sp_worst.rest_of_season.k
         # SP_Worst must be among the contributions (status DISPLACED or ACTIVE).
         sp_worst_contrib = next((c for c in breakdown.pitchers if c.name == "SP_Worst"), None)
         assert sp_worst_contrib is not None
         if sp_worst_contrib.status == "displaced":
             f = sp_worst_contrib.scale_factor
-            expected = ytd_k_sp_worst + ros_k_sp_worst * f
+            expected = ros_k_sp_worst * f
             assert abs(sp_worst_contrib.contribution_stats["k"] - expected) < 1e-6, (
                 f"SP_Worst contribution_stats[k]={sp_worst_contrib.contribution_stats['k']}, "
-                f"expected YTD+ROS*factor = {ytd_k_sp_worst} + {ros_k_sp_worst}*{f} = {expected}"
+                f"expected ROS*factor = {ros_k_sp_worst}*{f} = {expected}"
             )
 
     def test_breakdown_contribution_stats_match_ros_mode(self):
@@ -3530,10 +3532,12 @@ class TestComputeRosterBreakdownFullSeasonInvariant:
             f"ROS-mode active player should contribute ROS K=60, got {p1.contribution_stats['k']}"
         )
 
-    def test_breakdown_benched_il_pitcher_contributes_ytd_in_full_season_mode(self):
-        """An IL pitcher benched at sf=0 by the pool model still contributes
-        YTD in full_season mode (locked-in stats survive). The modal must
-        show this YTD, not 0.
+    def test_breakdown_benched_il_pitcher_contributes_zero_in_full_season_mode(self):
+        """An IL pitcher benched at sf=0 by the pool model contributes 0 in
+        every mode: per-player YTD floor is removed. Team YTD is captured
+        at the team level via team_end_of_season, so the modal must show 0
+        for the player's contribution row (the team's already-recorded K's
+        live on the team total, not on this row).
         """
         from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
         from fantasy_baseball.models.positions import Position
@@ -3620,10 +3624,12 @@ class TestComputeRosterBreakdownFullSeasonInvariant:
         weak_contrib = next((c for c in breakdown.pitchers if c.name == "Weak_IL"), None)
         assert weak_contrib is not None
         assert weak_contrib.scale_factor == 0.0, "Weak IL pitcher should be benched at sf=0"
-        # YTD = full_season - ROS = 60 - 15 = 45 K. Modal must show this.
-        ytd_k = weak_full.k - weak_ros.k
-        assert abs(weak_contrib.contribution_stats["k"] - ytd_k) < 1e-6, (
-            f"Benched IL pitcher should contribute YTD={ytd_k} K, got {weak_contrib.contribution_stats['k']}"
+        # ROS * 0 = 0 (no per-player YTD floor; team YTD lives at the team
+        # level via team_end_of_season, not on this row). Pre-fix this
+        # asserted weak_contrib.contribution_stats["k"] == weak_full.k - weak_ros.k
+        # = 45; post-fix it's pure ROS * factor.
+        assert abs(weak_contrib.contribution_stats["k"]) < 1e-6, (
+            f"Benched IL pitcher should contribute 0 K, got {weak_contrib.contribution_stats['k']}"
         )
 
 

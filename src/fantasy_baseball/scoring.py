@@ -354,9 +354,7 @@ def _find_delta_roto_optimal(
             continue
         factor = max(0.0, active_pt - il_pt) / active_pt
         hyp_roster: list[Player | dict] = [
-            _scale_stats(cand, factor, projection_source)
-            if isinstance(p, Player) and p.name == cand.name
-            else p
+            _scale_stats(cand, factor) if isinstance(p, Player) and p.name == cand.name else p
             for p in current_roster
         ]
         team_stats = project_team_stats(
@@ -495,9 +493,7 @@ def _compute_substitution_factors(
         factors[target.name] = factor
         if league_context is not None:
             running_roster = [
-                _scale_stats(p, factor, projection_source)
-                if isinstance(p, Player) and p.name == target.name
-                else p
+                _scale_stats(p, factor) if isinstance(p, Player) and p.name == target.name else p
                 for p in running_roster
             ]
     return factors
@@ -568,7 +564,7 @@ def _compute_pitcher_pool_factors(
         out: list[Player | dict] = []
         for p in full_pool_roster:
             if isinstance(p, Player) and p.name in overrides:
-                out.append(_scale_stats(p, overrides[p.name], projection_source))
+                out.append(_scale_stats(p, overrides[p.name]))
             else:
                 out.append(p)
         return out
@@ -638,47 +634,28 @@ def _compute_pitcher_pool_factors(
 def _scale_stats(
     p: Player,
     factor: float,
-    projection_source: ProjectionSource = "rest_of_season",
 ) -> dict[str, float | PlayerType]:
-    """Return scaled counting stats.
+    """Return per-player scaled counting stats: ``ROS * factor``.
 
-    In ``rest_of_season`` mode (default, used by the optimizer and trade
-    evaluator), returns ``ROS * factor`` -- the legacy forward-looking
-    behavior. A hot-YTD and a cold-YTD player with the same ROS contribute
-    identically to forward decisions, so start/sit calls are not biased by
-    locked totals.
+    The YTD floor added by PR #108 is removed -- per-player YTD attribution
+    incorrectly credits whoever currently owns the player with stats accrued
+    before the acquisition (e.g., a mid-season pickup's pre-pickup K's would
+    bleed into the new owner's projected total).
 
-    In ``full_season_projection`` mode (used by the standings layer and
-    breakdown view), returns ``YTD + (ROS * factor)`` where YTD is
-    ``full_season_projection - rest_of_season``. YTD is the locked-in
-    already-played portion; it always contributes at full value regardless
-    of ``factor``. Only the forward-looking ROS portion is subject to
-    displacement scaling.
+    Team YTD is now captured at the team level via :func:`team_end_of_season`
+    and :class:`TeamYtdComponents` from Yahoo standings -- i.e., only stats
+    accrued while the player was on the team count.
 
-    When ``full_season_projection`` is unset (preseason rosters), YTD = 0
-    and the result is ``ROS * factor`` -- matching ROS-mode behavior, which
-    is correct because no YTD has been recorded yet.
-
-    ``factor=0.0`` zeroes the ROS contribution; YTD survives in full-season
-    mode. ``factor=1.0`` returns full-season in full-season mode and ROS in
-    ROS mode.
+    ``factor=0.0`` zeros the contribution entirely; ``factor=1.0`` returns
+    the full ROS projection.
     """
     result: dict[str, float | PlayerType] = {}
     if p.rest_of_season is None:
         return result
     keys = HITTING_COUNTING if p.player_type == PlayerType.HITTER else PITCHING_COUNTING
-    full_season = (
-        p.full_season_projection if projection_source == "full_season_projection" else None
-    )
     for key in keys:
         ros_val = _safe(getattr(p.rest_of_season, key, 0))
-        if full_season is not None:
-            ytd = _safe(getattr(full_season, key, 0)) - ros_val
-            if ytd < 0:
-                ytd = 0.0  # data hygiene: shouldn't happen but don't go negative
-        else:
-            ytd = 0.0
-        result[key] = ytd + ros_val * factor
+        result[key] = ros_val * factor
     result["player_type"] = p.player_type
     return result
 
@@ -831,30 +808,32 @@ def _apply_displacement(
     result: list[Player | dict] = list(pass_through)
     for p in [*il_players, *active]:
         if p.name in displacement_factors:
-            result.append(_scale_stats(p, displacement_factors[p.name], projection_source))
+            result.append(_scale_stats(p, displacement_factors[p.name]))
         else:
             result.append(p)
 
     return result
 
 
-def _contribution_stats_for(
-    p: Player, factor: float, projection_source: ProjectionSource
-) -> dict[str, float]:
+def _contribution_stats_for(p: Player, factor: float) -> dict[str, float]:
     """Per-player counting-stat contribution to the team total at this factor.
 
     Mirrors the math in :func:`_scale_stats` (which produces the dicts
     summed by :func:`project_team_stats`), but returns only the counting
     stats (no ``player_type`` key). Used by :func:`compute_roster_breakdown`
     so the modal can render the actual contribution directly instead of
-    multiplying raw_stats * scale_factor client-side -- the latter loses
-    the YTD floor in full_season_projection mode.
+    multiplying raw_stats * scale_factor client-side -- the latter would
+    lose any factor-aware scaling.
+
+    Returns ``ROS * factor`` per stat. Team YTD is now captured at the
+    team level via :func:`team_end_of_season` (not per-player), so this
+    helper is ROS-only regardless of caller mode.
 
     Returns ``{}`` when the player has no ROS projection.
     """
     if p.rest_of_season is None:
         return {}
-    scaled = _scale_stats(p, factor, projection_source)
+    scaled = _scale_stats(p, factor)
     # _scale_stats includes a "player_type" key for routing; strip it.
     return {k: float(v) for k, v in scaled.items() if k != "player_type"}
 
@@ -928,7 +907,7 @@ def compute_roster_breakdown(
                 status=status,
                 scale_factor=factor,
                 raw_stats=_raw_stats_for(p),
-                contribution_stats=_contribution_stats_for(p, factor, projection_source),
+                contribution_stats=_contribution_stats_for(p, factor),
             )
         )
 
@@ -954,7 +933,7 @@ def compute_roster_breakdown(
                 status=status,
                 scale_factor=factor,
                 raw_stats=_raw_stats_for(p),
-                contribution_stats=_contribution_stats_for(p, factor, projection_source),
+                contribution_stats=_contribution_stats_for(p, factor),
             )
         )
 
