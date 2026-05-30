@@ -1501,15 +1501,16 @@ class TestPitcherPoolModel:
             projection_source="rest_of_season",
         )
         sf = {c.name: c.scale_factor for c in bd.pitchers}
-        # Pool size 10, active P slots 9, excess 1. The weakest pitcher
-        # is the IL guy — they get benched, all 9 actives preserved.
+        # IL pitcher's projected contribution is below all active SP rates,
+        # so no positive-DeltaRoto swap exists -- the IL pitcher gets sf=0
+        # via the pair-swap model's "bench" fallback.
         assert sf["Weak IL"] == 0.0, "Pool model should bench the weak IL pitcher"
         for i in range(9):
             assert sf[f"Strong{i}"] == 1.0, f"Strong{i} should be preserved"
 
     def test_pool_no_op_when_all_pitchers_fit_in_slots(self):
-        """If pool size <= active P slot count, nothing gets benched.
-        Vacuously true since the team has exactly enough pitchers."""
+        """No IL pitchers to evaluate -- the pair-swap model returns {} when
+        il_candidates is empty, so no displacement is applied."""
         actives = [
             _pitcher(
                 f"P{i}",
@@ -3178,3 +3179,139 @@ class TestPitcherPoolRateSwap:
         )
         expected = discount_factor(target_ros_ip=25.0, window=65.0 * (60.0 / 200.0))
         assert abs(factors["Weak_RP"] - expected) < 1e-9
+
+    def test_two_il_pitchers_each_pick_own_target(self):
+        """Two IL pitchers returning -- each must pick its OWN discount
+        target. The already_discounted set must prevent double-targeting,
+        and the second IL pitcher's bench-vs-swap evaluation must account
+        for the first IL pitcher's committed discount.
+
+        Setup: Webb (200 preseason, 60 ROS, 67 K) and Glasnow (180
+        preseason, 45 ROS, 55 K) both return. Four active SPs of varying
+        quality are available. Higher-preseason-IP IL pitcher (Webb)
+        processes first and claims one target; Glasnow then picks a
+        DIFFERENT target (already_discounted prevents reuse).
+
+        Note on target identity: the delta-Roto-optimal picker maximizes
+        team roto pts, which is not the same as "discount the weakest."
+        Discounting a slightly-higher-volume target by the same IP window
+        can yield a better team roto outcome when the team's competitive
+        position with that stat is near a half-point boundary. The exact
+        targets (SP_A and SP_B in this setup) are a stable fixture of the
+        picker's math -- the important invariant is that the TWO targets
+        are distinct (already_discounted works) and neither IL pitcher is
+        benched.
+        """
+        from fantasy_baseball.models.standings import CategoryStats
+        from fantasy_baseball.scoring import LeagueContext, _compute_pitcher_pool_factors
+        from fantasy_baseball.utils.constants import Category
+
+        webb = self._il_starter("Webb", ros_ip=60, ros_k=67, preseason_ip=200)
+        glasnow = self._il_starter("Glasnow", ros_ip=45, ros_k=55, preseason_ip=180)
+
+        sp_a = self._active_starter("SP_A", ros_ip=140, k_per_9=10.0, preseason_ip=200)
+        sp_b = self._active_starter("SP_B", ros_ip=135, k_per_9=9.5, preseason_ip=200)
+        sp_worst_1 = self._active_starter("SP_Worst1", ros_ip=130, k_per_9=7.0, preseason_ip=200)
+        sp_worst_2 = self._active_starter("SP_Worst2", ros_ip=125, k_per_9=6.5, preseason_ip=200)
+
+        active = [sp_a, sp_b, sp_worst_1, sp_worst_2]
+        il = [webb, glasnow]
+
+        baseline = {
+            "Opp1": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=20, k=400, sv=0, era=4.0, whip=1.3
+            ),
+            "Opp2": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=22, k=420, sv=0, era=3.9, whip=1.28
+            ),
+        }
+        team_sds = {tn: {c: 1.0 for c in Category} for tn in ["Me", *baseline.keys()]}
+        ctx = LeagueContext(
+            baseline_other_team_stats=baseline,
+            team_sds=team_sds,
+            team_name="Me",
+        )
+
+        factors = _compute_pitcher_pool_factors(
+            active_pitchers=active,
+            il_pitchers=il,
+            all_active=active,
+            all_il=il,
+            league_context=ctx,
+            projection_source="rest_of_season",
+        )
+
+        # Neither IL pitcher is benched (both should activate -- their rates
+        # beat the weakest two actives' rates).
+        assert "Webb" not in factors, "Webb should be active (sf=1.0 implicit)"
+        assert "Glasnow" not in factors, "Glasnow should be active (sf=1.0 implicit)"
+
+        # Exactly TWO distinct active pitchers are discounted -- already_discounted
+        # prevents the second IL pitcher from re-targeting the first's chosen target.
+        all_active_names = {"SP_A", "SP_B", "SP_Worst1", "SP_Worst2"}
+        discounted_active_targets = [name for name in factors if name in all_active_names]
+        assert len(discounted_active_targets) == 2, (
+            f"Expected two distinct active targets discounted; got {list(factors)}"
+        )
+        assert len(set(discounted_active_targets)) == 2, (
+            f"already_discounted violated: same target chosen twice; got {list(factors)}"
+        )
+
+        # Both scale factors are in (0, 1) -- partial discounts, not full bench.
+        for tgt_name in discounted_active_targets:
+            assert 0.0 < factors[tgt_name] < 1.0, (
+                f"{tgt_name} should be partially discounted, got {factors[tgt_name]}"
+            )
+
+    def test_il_pitcher_benched_when_no_positive_swap_exists(self):
+        """If every active pitcher's rate beats the IL pitcher's rate by
+        enough that discounting any of them costs more than the IL pitcher
+        adds, the IL pitcher gets sf=0 (legacy bench fallback).
+        """
+        from fantasy_baseball.models.standings import CategoryStats
+        from fantasy_baseball.scoring import LeagueContext, _compute_pitcher_pool_factors
+        from fantasy_baseball.utils.constants import Category
+
+        # Weak IL pitcher: small ROS volume, low K rate.
+        weak_il = self._il_starter("Weak_IL", ros_ip=30, ros_k=20, preseason_ip=180)
+
+        # Elite active SPs -- discounting any of them loses more than Weak_IL adds.
+        sp_a = self._active_starter("Elite_A", ros_ip=160, k_per_9=11.0, preseason_ip=200)
+        sp_b = self._active_starter("Elite_B", ros_ip=155, k_per_9=10.8, preseason_ip=200)
+        sp_c = self._active_starter("Elite_C", ros_ip=150, k_per_9=10.5, preseason_ip=200)
+
+        active = [sp_a, sp_b, sp_c]
+
+        baseline = {
+            "Opp1": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=20, k=400, sv=0, era=4.0, whip=1.3
+            ),
+            "Opp2": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=22, k=420, sv=0, era=3.9, whip=1.28
+            ),
+        }
+        team_sds = {tn: {c: 1.0 for c in Category} for tn in ["Me", *baseline.keys()]}
+        ctx = LeagueContext(
+            baseline_other_team_stats=baseline,
+            team_sds=team_sds,
+            team_name="Me",
+        )
+
+        factors = _compute_pitcher_pool_factors(
+            active_pitchers=active,
+            il_pitchers=[weak_il],
+            all_active=active,
+            all_il=[weak_il],
+            league_context=ctx,
+            projection_source="rest_of_season",
+        )
+
+        # Weak_IL should be benched (sf=0): no positive swap exists.
+        assert factors.get("Weak_IL") == 0.0, (
+            f"Expected Weak_IL benched at sf=0; got factors={factors}"
+        )
+
+        # The elite SPs are NOT discounted -- no swap was applied.
+        assert "Elite_A" not in factors
+        assert "Elite_B" not in factors
+        assert "Elite_C" not in factors
