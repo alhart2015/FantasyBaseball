@@ -16,7 +16,7 @@ Provides core functions:
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from math import erf, sqrt
 from typing import Literal, Protocol
@@ -707,7 +707,14 @@ class PlayerContribution:
     player_type: PlayerType
     status: ContributionStatus
     scale_factor: float  # 0.0 to 1.0
-    raw_stats: dict[str, float]  # pre-scale ROS stats; empty when NO_PROJECTION
+    raw_stats: dict[str, float]  # pre-scale projection stats (for display)
+    contribution_stats: dict[str, float] = field(default_factory=dict)
+    """Actual scaled contribution per counting stat -- what flows into the
+    team total. In ``full_season_projection`` mode this is
+    ``YTD + (ROS * scale_factor)``; in ``rest_of_season`` mode it is
+    ``ROS * scale_factor``. The modal renders these values directly so the
+    per-row sum matches the standings widget headline.
+    """
 
     def to_dict(self) -> dict:
         return {
@@ -716,16 +723,27 @@ class PlayerContribution:
             "status": self.status.value,
             "scale_factor": self.scale_factor,
             "raw_stats": dict(self.raw_stats),
+            "contribution_stats": dict(self.contribution_stats),
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> PlayerContribution:
+        raw_stats = {k: float(v) for k, v in d.get("raw_stats", {}).items()}
+        # Backwards-compat: old persisted breakdowns lack contribution_stats.
+        # Fall back to the legacy raw * factor computation (which is the bug
+        # we're fixing, but it's the best we can do for stale persisted data
+        # until the next refresh writes the new field).
+        scale_factor = float(d["scale_factor"])
+        contribution_stats = {k: float(v) for k, v in d.get("contribution_stats", {}).items()}
+        if not contribution_stats and raw_stats:
+            contribution_stats = {k: v * scale_factor for k, v in raw_stats.items()}
         return cls(
             name=d["name"],
             player_type=PlayerType(d["player_type"]),
             status=ContributionStatus(d["status"]),
-            scale_factor=float(d["scale_factor"]),
-            raw_stats={k: float(v) for k, v in d.get("raw_stats", {}).items()},
+            scale_factor=scale_factor,
+            raw_stats=raw_stats,
+            contribution_stats=contribution_stats,
         )
 
 
@@ -816,6 +834,27 @@ def _apply_displacement(
     return result
 
 
+def _contribution_stats_for(
+    p: Player, factor: float, projection_source: ProjectionSource
+) -> dict[str, float]:
+    """Per-player counting-stat contribution to the team total at this factor.
+
+    Mirrors the math in :func:`_scale_stats` (which produces the dicts
+    summed by :func:`project_team_stats`), but returns only the counting
+    stats (no ``player_type`` key). Used by :func:`compute_roster_breakdown`
+    so the modal can render the actual contribution directly instead of
+    multiplying raw_stats * scale_factor client-side -- the latter loses
+    the YTD floor in full_season_projection mode.
+
+    Returns ``{}`` when the player has no ROS projection.
+    """
+    if p.rest_of_season is None:
+        return {}
+    scaled = _scale_stats(p, factor, projection_source)
+    # _scale_stats includes a "player_type" key for routing; strip it.
+    return {k: float(v) for k, v in scaled.items() if k != "player_type"}
+
+
 def _raw_stats_for(p: Player) -> dict[str, float]:
     """Extract the per-player raw stats for the standings breakdown drilldown.
 
@@ -843,11 +882,19 @@ def compute_roster_breakdown(
 
     Uses the same slot-first classification as :func:`_apply_displacement`,
     and the same displacement-factor math. The aggregate over
-    ``raw_stats[cat] * scale_factor`` per category equals
+    ``contribution_stats[cat]`` per category equals
     :func:`project_team_stats` with ``displacement=True``.
 
+    ``raw_stats`` is the unscaled projection (full_season in production
+    standings mode, ROS in preseason/rest_of_season mode) -- shown in the
+    modal for context. ``contribution_stats`` is the actual scaled
+    contribution per category -- what flows into the team total. The
+    modal must render ``contribution_stats[cat]`` directly to match the
+    standings widget; multiplying ``raw_stats * scale_factor`` loses the
+    YTD floor in full_season_projection mode.
+
     When ``league_context`` is provided, displacement targets are chosen
-    via ΔRoto-optimal selection (matches the standings layer); without
+    via DeltaRoto-optimal selection (matches the standings layer); without
     it, the legacy SGP picker is used.
     """
     active, il_players, bench = _classify_roster(roster)
@@ -877,6 +924,7 @@ def compute_roster_breakdown(
                 status=status,
                 scale_factor=factor,
                 raw_stats=_raw_stats_for(p),
+                contribution_stats=_contribution_stats_for(p, factor, projection_source),
             )
         )
 
@@ -902,6 +950,7 @@ def compute_roster_breakdown(
                 status=status,
                 scale_factor=factor,
                 raw_stats=_raw_stats_for(p),
+                contribution_stats=_contribution_stats_for(p, factor, projection_source),
             )
         )
 
@@ -913,6 +962,7 @@ def compute_roster_breakdown(
                 status=ContributionStatus.BENCH,
                 scale_factor=0.0,
                 raw_stats=_raw_stats_for(p),
+                contribution_stats={},  # bench players are excluded from team totals
             )
         )
 
