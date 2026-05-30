@@ -3667,3 +3667,117 @@ class TestPlayerContributionFromDictNullGuards:
         pc = PlayerContribution.from_dict(d)
         assert pc.raw_stats == {}
         assert pc.contribution_stats == {}
+
+
+class TestProjectRosComponents:
+    """``project_ros_components`` returns the same component shape as
+    ``StandingsEntry.ytd_components`` but sourced from displacement-scaled
+    ROS projections on a roster. The result is the ROS contribution that
+    gets added to team YTD to produce end-of-season totals.
+    """
+
+    @staticmethod
+    def _hitter(name, *, r, hr, rbi, sb, h, ab):
+        from fantasy_baseball.models.player import HitterStats, Player, PlayerType
+        from fantasy_baseball.models.positions import Position
+
+        ros = HitterStats(
+            r=r,
+            hr=hr,
+            rbi=rbi,
+            sb=sb,
+            h=h,
+            ab=ab,
+            avg=h / ab if ab else 0.0,
+        )
+        return Player(
+            name=name,
+            player_type=PlayerType.HITTER,
+            rest_of_season=ros,
+            selected_position=Position.OF,
+        )
+
+    @staticmethod
+    def _pitcher(name, *, w, k, sv, ip, er, bb, h_allowed):
+        from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
+        from fantasy_baseball.models.positions import Position
+
+        ros = PitcherStats(
+            w=w,
+            k=k,
+            sv=sv,
+            ip=ip,
+            er=er,
+            bb=bb,
+            h_allowed=h_allowed,
+            era=er * 9.0 / ip if ip else 0.0,
+            whip=(bb + h_allowed) / ip if ip else 0.0,
+        )
+        return Player(
+            name=name,
+            player_type=PlayerType.PITCHER,
+            rest_of_season=ros,
+            selected_position=Position.P,
+        )
+
+    def test_components_sum_counting_stats_across_roster(self):
+        """R/HR/RBI/SB/W/K/SV are summed across all rostered players (no
+        displacement to keep the math obvious)."""
+        from fantasy_baseball.scoring import project_ros_components
+
+        roster = [
+            self._hitter("A", r=30, hr=10, rbi=25, sb=5, h=60, ab=200),
+            self._hitter("B", r=40, hr=15, rbi=35, sb=2, h=70, ab=250),
+            self._pitcher("P1", w=5, k=80, sv=0, ip=50, er=18, bb=15, h_allowed=40),
+        ]
+        c = project_ros_components(roster, displacement=False)
+        assert c.r == pytest.approx(70.0)
+        assert c.hr == pytest.approx(25.0)
+        assert c.rbi == pytest.approx(60.0)
+        assert c.sb == pytest.approx(7.0)
+        assert c.w == pytest.approx(5.0)
+        assert c.k == pytest.approx(80.0)
+        assert c.sv == pytest.approx(0.0)
+
+    def test_components_expose_rate_stat_ingredients(self):
+        """H, AB sum across hitters; ER, IP, BB+H_allowed sum across pitchers.
+
+        The team_end_of_season helper uses these to recompute team AVG /
+        ERA / WHIP after adding YTD components.
+        """
+        from fantasy_baseball.scoring import project_ros_components
+
+        roster = [
+            self._hitter("A", r=30, hr=10, rbi=25, sb=5, h=60, ab=200),
+            self._hitter("B", r=40, hr=15, rbi=35, sb=2, h=70, ab=250),
+            self._pitcher("P1", w=5, k=80, sv=0, ip=50, er=18, bb=15, h_allowed=40),
+            self._pitcher("P2", w=8, k=100, sv=0, ip=70, er=25, bb=20, h_allowed=60),
+        ]
+        c = project_ros_components(roster, displacement=False)
+        assert c.h == pytest.approx(130.0)
+        assert c.ab == pytest.approx(450.0)
+        assert c.ip == pytest.approx(120.0)
+        assert c.er == pytest.approx(43.0)
+        assert c.bb_plus_h_allowed == pytest.approx((15 + 40) + (20 + 60))
+
+    def test_empty_roster_returns_zero_components(self):
+        """Sanity: no players -> all-zero components, no NaN."""
+        from fantasy_baseball.scoring import project_ros_components
+
+        c = project_ros_components([], displacement=False)
+        assert c.r == 0.0
+        assert c.ab == 0.0
+        assert c.ip == 0.0
+
+    def test_components_apply_displacement_scaling(self):
+        """When displacement=True (default), displaced players have their
+        ROS counting stats scaled by the displacement factor. The simplest
+        verifiable case: a roster with one IL pitcher who displaces no one
+        is no-op."""
+        from fantasy_baseball.scoring import project_ros_components
+
+        # Single hitter, no IL, no displacement opportunities.
+        roster = [self._hitter("A", r=30, hr=10, rbi=25, sb=5, h=60, ab=200)]
+        c = project_ros_components(roster, displacement=True)
+        assert c.r == pytest.approx(30.0)
+        assert c.ab == pytest.approx(200.0)

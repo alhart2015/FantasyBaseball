@@ -974,6 +974,97 @@ def compute_roster_breakdown(
     return RosterBreakdown(team_name=team_name, hitters=hitters, pitchers=pitchers)
 
 
+@dataclass(frozen=True)
+class TeamRosComponents:
+    """Rest-of-season counting + rate-stat ingredients for a roster,
+    matching the :class:`TeamYtdComponents` shape so the two can be summed
+    by ``team_end_of_season`` (added in a follow-up task).
+
+    Same field set as ``TeamYtdComponents``: counting stats (R, HR, RBI,
+    SB, W, K, SV) plus rate-stat ingredients (H, AB, IP, ER, BB+H_allowed).
+    """
+
+    r: float = 0.0
+    hr: float = 0.0
+    rbi: float = 0.0
+    sb: float = 0.0
+    w: float = 0.0
+    k: float = 0.0
+    sv: float = 0.0
+    h: float = 0.0
+    ab: float = 0.0
+    ip: float = 0.0
+    er: float = 0.0
+    bb_plus_h_allowed: float = 0.0
+
+
+def project_ros_components(
+    roster: list[Player],
+    *,
+    displacement: bool = True,
+    league_context: LeagueContext | None = None,
+) -> TeamRosComponents:
+    """Sum rest-of-season counting + rate-stat ingredients across a roster.
+
+    Mirrors :func:`project_team_stats` but returns a :class:`TeamRosComponents`
+    instead of :class:`CategoryStats`. Designed to be combined with
+    :class:`TeamYtdComponents` from Yahoo standings to produce projected
+    end-of-season totals via a ``team_end_of_season`` helper (added in a
+    follow-up task) that recomputes AVG / ERA / WHIP from the summed
+    ingredients rather than averaging the precomputed rates.
+
+    Displacement scaling (active pool overlap, IL pitcher pair-swap) is
+    applied via the standard :func:`_apply_displacement` path when
+    ``displacement=True``. Each displaced player's components are scaled
+    by their displacement factor.
+    """
+    players: list[Player | dict]
+    if displacement:
+        players = _apply_displacement(
+            roster,
+            league_context=league_context,
+            projection_source="rest_of_season",
+        )
+    else:
+        players = list(roster)
+
+    r = hr = rbi = sb = h_total = ab_total = 0.0
+    w = k = sv = ip_total = er_total = bb_total = ha_total = 0.0
+
+    for p in players:
+        ptype = _get(p, "player_type")
+        if ptype == PlayerType.HITTER:
+            r += _stat(p, "r", "rest_of_season")
+            hr += _stat(p, "hr", "rest_of_season")
+            rbi += _stat(p, "rbi", "rest_of_season")
+            sb += _stat(p, "sb", "rest_of_season")
+            h_total += _stat(p, "h", "rest_of_season")
+            ab_total += _stat(p, "ab", "rest_of_season")
+        elif ptype == PlayerType.PITCHER:
+            w += _stat(p, "w", "rest_of_season")
+            k += _stat(p, "k", "rest_of_season")
+            sv += _stat(p, "sv", "rest_of_season")
+            ip_total += _stat(p, "ip", "rest_of_season")
+            er_total += _stat(p, "er", "rest_of_season")
+            bb_total += _stat(p, "bb", "rest_of_season")
+            ha_total += _stat(p, "h_allowed", "rest_of_season")
+
+    return TeamRosComponents(
+        r=r,
+        hr=hr,
+        rbi=rbi,
+        sb=sb,
+        w=w,
+        k=k,
+        sv=sv,
+        h=h_total,
+        ab=ab_total,
+        ip=ip_total,
+        er=er_total,
+        bb_plus_h_allowed=bb_total + ha_total,
+    )
+
+
 def project_team_stats(
     roster,
     *,
