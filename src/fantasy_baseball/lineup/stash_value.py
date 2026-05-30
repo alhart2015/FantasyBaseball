@@ -29,11 +29,11 @@ from typing import Any
 
 from fantasy_baseball.lineup.band_format import band_class
 from fantasy_baseball.lineup.delta_roto import DeltaRotoBand, compute_delta_roto_band
-from fantasy_baseball.lineup.pitcher_swap import discount_factor, swap_window_ip
 from fantasy_baseball.lineup.optimizer import (
     optimize_hitter_lineup,
     optimize_pitcher_lineup,
 )
+from fantasy_baseball.lineup.pitcher_swap import discount_factor, swap_window_ip
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS
 from fantasy_baseball.models.standings import (

@@ -786,26 +786,62 @@ def test_synthetic_swap_starter_to_reliever_uses_preseason_proration():
     from fantasy_baseball.lineup.stash_value import _synthetic_swap_line
 
     incumbent_ros = PitcherStats(
-        ip=25, w=1, k=20, sv=2, er=12, bb=10, h_allowed=22, era=4.32, whip=1.28,
+        ip=25,
+        w=1,
+        k=20,
+        sv=2,
+        er=12,
+        bb=10,
+        h_allowed=22,
+        era=4.32,
+        whip=1.28,
     )
     incumbent_pre = PitcherStats(
-        ip=65, w=3, k=60, sv=7, er=30, bb=24, h_allowed=58, era=4.15, whip=1.26,
+        ip=65,
+        w=3,
+        k=60,
+        sv=7,
+        er=30,
+        bb=24,
+        h_allowed=58,
+        era=4.15,
+        whip=1.26,
     )
     incumbent = Player(
-        name="RP_Incumbent", player_type=PlayerType.PITCHER,
-        rest_of_season=incumbent_ros, preseason=incumbent_pre,
+        name="RP_Incumbent",
+        player_type=PlayerType.PITCHER,
+        rest_of_season=incumbent_ros,
+        preseason=incumbent_pre,
         selected_position=Position.P,
     )
 
     candidate_ros = PitcherStats(
-        ip=60, w=4, k=67, sv=0, er=22, bb=15, h_allowed=50, era=3.30, whip=1.08,
+        ip=60,
+        w=4,
+        k=67,
+        sv=0,
+        er=22,
+        bb=15,
+        h_allowed=50,
+        era=3.30,
+        whip=1.08,
     )
     candidate_pre = PitcherStats(
-        ip=200, w=14, k=220, sv=0, er=72, bb=50, h_allowed=170, era=3.24, whip=1.10,
+        ip=200,
+        w=14,
+        k=220,
+        sv=0,
+        er=72,
+        bb=50,
+        h_allowed=170,
+        era=3.24,
+        whip=1.10,
     )
     candidate = Player(
-        name="Webb", player_type=PlayerType.PITCHER,
-        rest_of_season=candidate_ros, preseason=candidate_pre,
+        name="Webb",
+        player_type=PlayerType.PITCHER,
+        rest_of_season=candidate_ros,
+        preseason=candidate_pre,
         selected_position=Position.IL,
     )
 
