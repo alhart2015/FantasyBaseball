@@ -530,3 +530,140 @@ class TestTeamYtdComponents:
         )
         c = e.ytd_components(fallback_ab=999.0)
         assert c.ab == pytest.approx(500.0 * AB_PER_PA)
+
+
+class TestFromRostersTeamYtdProjection:
+    """Regression tests for the team-YTD projection refactor.
+
+    The bug (introduced in PR #108): ``_scale_stats`` added a per-player
+    YTD floor sourced from ``Player.full_season_projection``. That
+    attributes pre-acquisition stats to the current owner. The fix:
+    pass team-level ``actual_standings`` to ``from_rosters`` so YTD is
+    sourced from Yahoo's team totals (i.e., production accrued while the
+    player was actually on the team).
+    """
+
+    def test_from_rosters_uses_team_ytd_not_player_full_season(self):
+        """REGRESSION: a player with full_season K = 130 and ROS K = 80
+        implies player YTD K = 50, but those K's may have been thrown for
+        someone ELSE's team. The team's Yahoo standings show team-YTD K
+        = 200 across actually-owned-while-played players. Result: team's
+        projected K = team_YTD_K (200) + sum(player.ros.k) (80) = 280,
+        NOT team_YTD_K (200) + player.full_season.k (130) = 330.
+        """
+        from datetime import date
+
+        from fantasy_baseball.models.player import (
+            PitcherStats,
+            Player,
+            PlayerType,
+        )
+        from fantasy_baseball.models.positions import Position
+        from fantasy_baseball.models.standings import (
+            CategoryStats,
+            ProjectedStandings,
+            Standings,
+            StandingsEntry,
+        )
+        from fantasy_baseball.utils.constants import OpportunityStat
+
+        ros = PitcherStats(
+            ip=80,
+            w=5,
+            k=80,
+            sv=0,
+            er=30,
+            bb=20,
+            h_allowed=70,
+            era=30 * 9.0 / 80,
+            whip=(20 + 70) / 80,
+        )
+        full_season = PitcherStats(
+            ip=130,
+            w=8,
+            k=130,
+            sv=0,
+            er=50,
+            bb=30,
+            h_allowed=110,
+            era=50 * 9.0 / 130,
+            whip=(30 + 110) / 130,
+        )
+        player = Player(
+            name="MidSeasonPickup",
+            player_type=PlayerType.PITCHER,
+            rest_of_season=ros,
+            full_season_projection=full_season,
+            selected_position=Position.P,
+        )
+
+        actual = Standings(
+            effective_date=date(2026, 6, 2),
+            entries=[
+                StandingsEntry(
+                    team_name="Test",
+                    team_key="t",
+                    rank=1,
+                    stats=CategoryStats(
+                        r=0,
+                        hr=0,
+                        rbi=0,
+                        sb=0,
+                        avg=0.0,
+                        w=10,
+                        k=200,
+                        sv=0,
+                        era=3.50,
+                        whip=1.20,
+                    ),
+                    extras={OpportunityStat.IP: 200.0},
+                ),
+            ],
+        )
+
+        ps = ProjectedStandings.from_rosters(
+            {"Test": [player]},
+            effective_date=date(2026, 6, 2),
+            actual_standings=actual,
+        )
+        test_stats = next(e.stats for e in ps.entries if e.team_name == "Test")
+        # Team YTD K (200) + ROS K (80) = 280. NOT team_YTD + full_season K (330).
+        assert test_stats.k == pytest.approx(280)
+
+    def test_from_rosters_without_actual_standings_collapses_to_ros_only(self):
+        """Pre-season path: actual_standings=None -> team total = ROS-only."""
+        from datetime import date
+
+        from fantasy_baseball.models.player import (
+            PitcherStats,
+            Player,
+            PlayerType,
+        )
+        from fantasy_baseball.models.positions import Position
+        from fantasy_baseball.models.standings import ProjectedStandings
+
+        ros = PitcherStats(
+            ip=200,
+            w=12,
+            k=180,
+            sv=0,
+            er=70,
+            bb=40,
+            h_allowed=160,
+            era=70 * 9.0 / 200,
+            whip=(40 + 160) / 200,
+        )
+        p = Player(
+            name="Pre",
+            player_type=PlayerType.PITCHER,
+            rest_of_season=ros,
+            selected_position=Position.P,
+        )
+
+        ps = ProjectedStandings.from_rosters(
+            {"Test": [p]},
+            effective_date=date(2026, 3, 27),
+            actual_standings=None,
+        )
+        team_k = next(e.stats.k for e in ps.entries if e.team_name == "Test")
+        assert team_k == pytest.approx(180)

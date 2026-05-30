@@ -337,92 +337,82 @@ class ProjectedStandings:
         team_rosters: Mapping[str, Any],
         effective_date: date,
         *,
+        actual_standings: Standings | None = None,
         fraction_remaining: float = 1.0,
     ) -> ProjectedStandings:
-        """Build from {team_name: roster_list} using project_team_stats.
+        """Build end-of-season projection from rosters and team YTD.
 
-        ``ProjectedStandings`` projects end-of-season totals — read
-        ``full_season_projection`` (= ROS + YTD per player). The optimizer
-        and other forward-looking decision paths use the default
-        ``rest_of_season`` (ROS-only) instead so a hot-YTD player's locked
-        accumulated value doesn't bias start/sit and trade decisions.
+        ``actual_standings`` is the league's Yahoo standings snapshot at the
+        same effective_date. Per team, the projected end-of-season totals
+        are computed as ``team_YTD + project_ros_components(roster)``, then
+        AVG/ERA/WHIP are recombined from summed components by
+        :func:`team_end_of_season`.
 
-        Two-pass build to enable ΔRoto-optimal displacement:
+        When ``actual_standings`` is ``None`` (pre-season), each team's YTD
+        components are empty and the projection collapses to ROS-only,
+        matching the pre-season behavior.
 
-        1. Pass 1 — SGP-based displacement (legacy heuristic). Produces
-           a baseline ``{team: stats}`` snapshot.
-        2. Pass 2 — for each team, re-run with a ``LeagueContext`` that
-           freezes the OTHER teams' pass-1 stats. Uses the pair-swap
-           displacement model: each IL pitcher activates at full ROS and
-           one active pitcher absorbs a rate-aware partial discount via
-           pitcher_swap.swap_window_ip + pitcher_swap.discount_factor. See
-           scoring._compute_pitcher_pool_factors for the algorithm.
-           Hitter displacement continues to use the delta-Roto-optimal
-           picker (lowest-SGP fallback when no league context is available).
+        Two-pass displacement (unchanged):
+        1. Pass 1 -- SGP-based displacement on ROS-only -> baseline
+           ``{team: ROS CategoryStats}``. Consumed by the DeltaRoto picker
+           via ``LeagueContext.baseline_other_team_stats`` in Pass 2. Team
+           YTD is not added to the Pass-1 baseline because it cancels in
+           the DeltaRoto comparisons (each team sees the same constant
+           shift in every alternative it evaluates).
+        2. Pass 2 -- each team re-displaces against the frozen Pass-1
+           baseline of the OTHER teams; the resulting ROS components are
+           summed with that team's YTD via ``team_end_of_season``.
 
-        Other callers of ``project_team_stats`` (optimizer, draft,
-        trade evaluator) keep the SGP picker — they don't have league
-        context handy in their hot paths and the ΔRoto upgrade was
-        scoped to standings-only.
-
-        TODO: Replace this approximation with current_standings + ROS
-        contribution when team-level YTD AB ingest lands. Yahoo standings
-        only surface AVG, not H/AB components, so the rate-stat
-        recombination can't be implemented correctly today. See
-        ``docs/feature_specs/ros_only_decision_projections.md`` Phase 3
-        scope reduction (deferred to follow-up).
+        Other callers of ``project_team_stats`` (optimizer, draft, trade
+        evaluator) keep their ROS-only forward-looking math -- they don't
+        need YTD because their question is "what does going forward look
+        like?", not "what's the end-of-season total?".
         """
         from fantasy_baseball.scoring import (
             LeagueContext,
             build_team_sds,
+            project_ros_components,
             project_team_stats,
+            team_end_of_season,
         )
 
-        # Pass 1: SGP-based displacement → baseline {team: stats}.
         baseline_stats: dict[str, CategoryStats] = {
             tname: project_team_stats(
                 roster,
                 displacement=True,
-                projection_source="full_season_projection",
+                projection_source="rest_of_season",
             )
             for tname, roster in team_rosters.items()
         }
 
-        # Variance estimates per team (used by the Gaussian pairwise scorer
-        # inside the ΔRoto picker). Built off the same rosters; SGP-based
-        # displacement is fine for the SD baseline — small re-displacement
-        # shifts don't materially change the per-cat SD.
-        # Cast to dict[str, list] for build_team_sds — from_rosters accepts
-        # any Mapping at the public API boundary, but the SDs builder uses
-        # the narrower invariant type.
         team_sds = build_team_sds(
             {tname: list(roster) for tname, roster in team_rosters.items()},
-            # Damp by sqrt(fraction_remaining) so picker SDs match the
-            # canonical team_sds used by the optimizer and deltaRoto.
-            # Default 1.0 is correct preseason (full season still ahead).
             sd_scale=fraction_remaining**0.5,
         )
 
-        # Pass 2: each team re-displaces against frozen baseline-of-others
-        # using the ΔRoto-optimal picker.
-        return cls(
-            effective_date=effective_date,
-            entries=[
+        ytd_by_team: dict[str, TeamYtdComponents] = {}
+        if actual_standings is not None:
+            for entry in actual_standings.entries:
+                ytd_by_team[entry.team_name] = entry.ytd_components()
+
+        entries: list[ProjectedStandingsEntry] = []
+        for tname, roster in team_rosters.items():
+            ros = project_ros_components(
+                list(roster),
+                displacement=True,
+                league_context=LeagueContext(
+                    baseline_other_team_stats={
+                        t: s for t, s in baseline_stats.items() if t != tname
+                    },
+                    team_sds=team_sds,
+                    team_name=tname,
+                ),
+            )
+            ytd = ytd_by_team.get(tname, TeamYtdComponents())
+            entries.append(
                 ProjectedStandingsEntry(
                     team_name=tname,
-                    stats=project_team_stats(
-                        roster,
-                        displacement=True,
-                        projection_source="full_season_projection",
-                        league_context=LeagueContext(
-                            baseline_other_team_stats={
-                                t: s for t, s in baseline_stats.items() if t != tname
-                            },
-                            team_sds=team_sds,
-                            team_name=tname,
-                        ),
-                    ),
+                    stats=team_end_of_season(ytd, ros),
                 )
-                for tname, roster in team_rosters.items()
-            ],
-        )
+            )
+        return cls(effective_date=effective_date, entries=entries)
