@@ -157,14 +157,16 @@ class StandingsEntry:
     yahoo_points_for: float | None = None
     extras: dict[OpportunityStat, float] = field(default_factory=dict)
 
-    def ytd_components(self) -> TeamYtdComponents:
+    def ytd_components(self, *, fallback_ab: float = 0.0) -> TeamYtdComponents:
         """Decompose this entry's stats + extras into rate-stat ingredients.
 
-        AB sourcing tier:
+        AB sourcing tier (first hit wins):
         1. ``extras[OpportunityStat.AB]`` -- Yahoo's direct AB stat.
-        2. ``extras[OpportunityStat.PA] * AB_PER_PA`` -- fallback when AB absent.
-        3. ``0`` -- when neither is available; callers detect this and fall
-           back to ROS-only AVG computation.
+        2. ``extras[OpportunityStat.PA] * AB_PER_PA`` -- derive from PA.
+        3. ``fallback_ab`` -- caller-provided hint (e.g., per-roster sum of
+           ``full_season.ab - ros.ab``, or games-played * league-avg AB/game).
+           Last resort before giving up on AVG recombination.
+        4. ``0`` -- no AB recoverable; callers see h=0/ab=0 and must skip AVG.
 
         ER/IP/BB+H_allowed come from IP + rate stats. When IP is zero
         (pre-season), they zero out cleanly (not NaN).
@@ -175,6 +177,8 @@ class StandingsEntry:
             pa = float(self.extras.get(OpportunityStat.PA, 0.0))
             if pa > 0.0:
                 ab = pa * AB_PER_PA
+            elif fallback_ab > 0.0:
+                ab = fallback_ab
         h = self.stats.avg * ab if ab > 0.0 else 0.0
         er = self.stats.era * ip / 9.0 if ip > 0.0 else 0.0
         bbha = self.stats.whip * ip if ip > 0.0 else 0.0

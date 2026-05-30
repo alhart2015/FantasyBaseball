@@ -478,3 +478,55 @@ class TestTeamYtdComponents:
         assert c.w == 10
         assert c.k == 200
         assert c.sv == 8
+
+    def test_components_fall_back_to_caller_hint_when_yahoo_lacks_ab_and_pa(self):
+        """When Yahoo gives neither AB nor PA, the caller can pass a
+        ``fallback_ab`` hint as a last resort. ``ytd_components(fallback_ab=X)``
+        returns a components row with ab=X and h=AVG*X.
+        """
+        e = self._entry(
+            r=80, hr=20, rbi=70, sb=10, avg=0.275, ip=200, w=10, k=180, sv=5, era=3.50, whip=1.20
+        )
+        c = e.ytd_components(fallback_ab=600.0)
+        assert c.ab == pytest.approx(600.0)
+        assert c.h == pytest.approx(0.275 * 600.0)
+
+    def test_components_ignore_fallback_when_explicit_ab_present(self):
+        """If Yahoo extras DO have AB, the fallback_ab hint is ignored."""
+        e = self._entry(
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            avg=0.275,
+            ip=200,
+            ab=500,
+            w=10,
+            k=180,
+            sv=5,
+            era=3.50,
+            whip=1.20,
+        )
+        c = e.ytd_components(fallback_ab=999.0)
+        assert c.ab == pytest.approx(500.0)
+
+    def test_components_ignore_fallback_when_pa_present(self):
+        """If Yahoo extras have PA (but not AB), PA-derived AB wins over fallback."""
+        from fantasy_baseball.utils.constants import AB_PER_PA
+
+        e = self._entry(
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            avg=0.250,
+            pa=500,
+            ip=100,
+            w=5,
+            k=80,
+            sv=2,
+            era=4.00,
+            whip=1.30,
+        )
+        c = e.ytd_components(fallback_ab=999.0)
+        assert c.ab == pytest.approx(500.0 * AB_PER_PA)
