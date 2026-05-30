@@ -655,6 +655,7 @@ class RefreshRun:
         self.projected_standings = ProjectedStandings.from_rosters(
             all_team_rosters,
             effective_date=self.effective_date,
+            actual_standings=self.standings,
             fraction_remaining=self.fraction_remaining,
         )
 

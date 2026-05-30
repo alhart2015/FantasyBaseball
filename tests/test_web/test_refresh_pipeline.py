@@ -132,6 +132,61 @@ class TestRefreshShape:
         assert {"last_refresh", "start_date", "end_date", "team_name"} <= data.keys()
         assert data["team_name"] == "Team 01"
 
+    def test_build_projected_standings_passes_actual_standings(
+        self, configured_test_env, fake_redis, monkeypatch
+    ):
+        """The refresh pipeline must thread ``self.standings`` (Yahoo team
+        YTD) into ``ProjectedStandings.from_rosters`` so end-of-season
+        projections use team_YTD + ROS arithmetic instead of per-player
+        full-season totals. Without this, mid-season acquisitions get
+        double-counted (their old team's YTD plus their new team's ROS
+        both flow into the new team's projection).
+
+        The preseason fallback call (inside ``if self.has_rest_of_season``)
+        must NOT receive actual_standings -- preseason rosters paired with
+        preseason projections should project ROS-only, which collapses to
+        full-season at season start.
+        """
+        from fantasy_baseball.models.standings import ProjectedStandings, Standings
+
+        captured: list[dict] = []
+        orig = ProjectedStandings.from_rosters.__func__
+
+        def spy(cls, team_rosters, effective_date, **kwargs):
+            captured.append(
+                {
+                    "actual_standings": kwargs.get("actual_standings"),
+                    "fraction_remaining": kwargs.get("fraction_remaining", 1.0),
+                }
+            )
+            return orig(cls, team_rosters, effective_date, **kwargs)
+
+        monkeypatch.setattr(ProjectedStandings, "from_rosters", classmethod(spy))
+
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
+
+        # _build_projected_standings invokes from_rosters twice when
+        # has_rest_of_season=True (fixture default): once for the main
+        # projection (must receive Standings) and once for the preseason
+        # baseline (must NOT receive Standings -- by design, see step
+        # comment in refresh_pipeline._build_projected_standings).
+        assert len(captured) >= 2, f"Expected at least 2 from_rosters calls; got {len(captured)}"
+        main_call = captured[0]
+        preseason_call = captured[1]
+
+        assert isinstance(main_call["actual_standings"], Standings), (
+            "Main from_rosters call must receive self.standings (Yahoo "
+            "team YTD); got actual_standings="
+            f"{main_call['actual_standings']!r}"
+        )
+        assert preseason_call["actual_standings"] is None, (
+            "Preseason from_rosters call must NOT pass actual_standings "
+            "-- preseason rosters + preseason projections produce ROS-only "
+            "(which equals full-season pre-season); got "
+            f"actual_standings={preseason_call['actual_standings']!r}"
+        )
+
 
 class TestRefreshInvariants:
     """Cross-step contracts — these catch wiring regressions."""
