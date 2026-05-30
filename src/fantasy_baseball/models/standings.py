@@ -101,6 +101,37 @@ class CategoryPoints:
         return self.values[cat]
 
 
+@dataclass(frozen=True)
+class TeamYtdComponents:
+    """Rate-stat ingredients for a team's YTD totals.
+
+    Derived from ``StandingsEntry.stats`` (rates) + ``extras`` (volumes).
+    The ``team_end_of_season`` helper (added in a later phase) sums
+    these with the analogous ROS components and recomputes AVG/ERA/WHIP
+    from the combined ingredients so the displayed standings reflect
+    true YTD + ROS arithmetic rather than averaging rates.
+
+    BB and H_allowed are combined because Yahoo only exposes their sum
+    via WHIP * IP; the projection math only needs the sum.
+    """
+
+    # Counting stats (passed through)
+    r: float = 0.0
+    hr: float = 0.0
+    rbi: float = 0.0
+    sb: float = 0.0
+    w: float = 0.0
+    k: float = 0.0
+    sv: float = 0.0
+
+    # Rate-stat components
+    h: float = 0.0
+    ab: float = 0.0
+    ip: float = 0.0
+    er: float = 0.0
+    bb_plus_h_allowed: float = 0.0
+
+
 @dataclass
 class StandingsEntry:
     """One team's standings row at a point in time.
@@ -125,6 +156,44 @@ class StandingsEntry:
     stats: CategoryStats
     yahoo_points_for: float | None = None
     extras: dict[OpportunityStat, float] = field(default_factory=dict)
+
+    def ytd_components(self) -> TeamYtdComponents:
+        """Decompose this entry's stats + extras into rate-stat ingredients.
+
+        AB sourcing tier:
+        1. ``extras[OpportunityStat.AB]`` -- Yahoo's direct AB stat.
+        2. ``extras[OpportunityStat.PA] * AB_PER_PA`` -- fallback when AB absent.
+        3. ``0`` -- when neither is available; callers detect this and fall
+           back to ROS-only AVG computation.
+
+        ER/IP/BB+H_allowed come from IP + rate stats. When IP is zero
+        (pre-season), they zero out cleanly (not NaN).
+        """
+        from fantasy_baseball.utils.constants import AB_PER_PA
+
+        ip = float(self.extras.get(OpportunityStat.IP, 0.0))
+        ab = float(self.extras.get(OpportunityStat.AB, 0.0))
+        if ab <= 0.0:
+            pa = float(self.extras.get(OpportunityStat.PA, 0.0))
+            if pa > 0.0:
+                ab = pa * AB_PER_PA
+        h = self.stats.avg * ab if ab > 0.0 else 0.0
+        er = self.stats.era * ip / 9.0 if ip > 0.0 else 0.0
+        bbha = self.stats.whip * ip if ip > 0.0 else 0.0
+        return TeamYtdComponents(
+            r=self.stats.r,
+            hr=self.stats.hr,
+            rbi=self.stats.rbi,
+            sb=self.stats.sb,
+            w=self.stats.w,
+            k=self.stats.k,
+            sv=self.stats.sv,
+            h=h,
+            ab=ab,
+            ip=ip,
+            er=er,
+            bb_plus_h_allowed=bbha,
+        )
 
 
 @dataclass

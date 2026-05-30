@@ -323,3 +323,137 @@ class TestCategoryPoints:
         cp = CategoryPoints(values={}, total=0.0)
         with pytest.raises(TypeError, match="Category"):
             _ = cp["R"]
+
+
+class TestTeamYtdComponents:
+    """Tests for the TeamYtdComponents derivation from Yahoo standings.
+
+    These components are the rate-stat ingredients (H, AB, ER, IP, BB+H_allowed)
+    recovered from CategoryStats + extras so the team-YTD + ROS projection in
+    ProjectedStandings.from_rosters can recombine team AVG/ERA/WHIP without
+    losing precision to pre-computed rates.
+    """
+
+    @staticmethod
+    def _entry(*, avg=0.0, era=0.0, whip=0.0, ip=0.0, ab=None, pa=None, **counts):
+        from fantasy_baseball.models.standings import CategoryStats, StandingsEntry
+        from fantasy_baseball.utils.constants import OpportunityStat
+
+        stats = CategoryStats(
+            r=counts.get("r", 0),
+            hr=counts.get("hr", 0),
+            rbi=counts.get("rbi", 0),
+            sb=counts.get("sb", 0),
+            avg=avg,
+            w=counts.get("w", 0),
+            k=counts.get("k", 0),
+            sv=counts.get("sv", 0),
+            era=era,
+            whip=whip,
+        )
+        extras: dict[OpportunityStat, float] = {OpportunityStat.IP: ip}
+        if ab is not None:
+            extras[OpportunityStat.AB] = ab
+        if pa is not None:
+            extras[OpportunityStat.PA] = pa
+        return StandingsEntry(team_name="T", team_key="t", rank=1, stats=stats, extras=extras)
+
+    def test_components_use_explicit_ab_when_present(self):
+        """When Yahoo standings expose AB directly, use it verbatim - no PA conversion."""
+        e = self._entry(
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            avg=0.275,
+            ab=400,
+            ip=200,
+            w=10,
+            k=180,
+            sv=5,
+            era=3.50,
+            whip=1.20,
+        )
+        c = e.ytd_components()
+        assert c.ab == 400.0
+        assert c.h == 0.275 * 400.0  # AVG * AB
+        assert c.ip == 200.0
+        assert c.er == 3.50 * 200.0 / 9.0
+        assert c.bb_plus_h_allowed == 1.20 * 200.0
+
+    def test_components_fall_back_to_pa_when_ab_absent(self):
+        """When only PA is exposed, derive AB via AB_PER_PA."""
+        from fantasy_baseball.utils.constants import AB_PER_PA
+
+        e = self._entry(
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            avg=0.250,
+            pa=500,
+            ip=100,
+            w=5,
+            k=80,
+            sv=2,
+            era=4.00,
+            whip=1.30,
+        )
+        c = e.ytd_components()
+        assert c.ab == 500.0 * AB_PER_PA
+        assert c.h == 0.250 * (500.0 * AB_PER_PA)
+
+    def test_components_are_zero_when_neither_ab_nor_pa_present(self):
+        """No way to recover AB without it or PA -> components.ab/h are 0.
+
+        Callers (ProjectedStandings.from_rosters) detect this and fall back to
+        summing ROS-only AVG from the roster (i.e. legacy ROS-only mode for AVG).
+        """
+        e = self._entry(
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            avg=0.250,
+            ip=100,
+            w=5,
+            k=80,
+            sv=2,
+            era=4.00,
+            whip=1.30,
+        )
+        c = e.ytd_components()
+        assert c.ab == 0.0
+        assert c.h == 0.0
+
+    def test_components_zero_when_no_ip_for_pitching_rates(self):
+        """Pre-season standings have IP=0; ERA/WHIP components must be 0, not NaN."""
+        e = self._entry(avg=0.0, era=0.0, whip=0.0, ip=0.0)
+        c = e.ytd_components()
+        assert c.ip == 0.0
+        assert c.er == 0.0
+        assert c.bb_plus_h_allowed == 0.0
+
+    def test_components_carry_counting_stats(self):
+        """Counting stats pass through unchanged."""
+        e = self._entry(
+            r=85,
+            hr=22,
+            rbi=78,
+            sb=15,
+            avg=0.0,
+            ip=0.0,
+            w=10,
+            k=200,
+            sv=8,
+            era=0.0,
+            whip=0.0,
+        )
+        c = e.ytd_components()
+        assert c.r == 85
+        assert c.hr == 22
+        assert c.rbi == 78
+        assert c.sb == 15
+        assert c.w == 10
+        assert c.k == 200
+        assert c.sv == 8
