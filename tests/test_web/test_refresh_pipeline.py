@@ -439,6 +439,94 @@ def test_standings_breakdown_cache_written_by_refresh():
     assert roundtripped == payload
 
 
+def test_breakdown_payload_includes_team_ytd_block_when_actual_standings_given():
+    """When actual_standings is passed, each team's breakdown payload carries
+    a team_ytd block with components from StandingsEntry.ytd_components()."""
+    from datetime import date
+
+    from fantasy_baseball.models.standings import (
+        CategoryStats,
+        Standings,
+        StandingsEntry,
+    )
+    from fantasy_baseball.utils.constants import OpportunityStat
+    from fantasy_baseball.web.refresh_pipeline import build_standings_breakdown_payload
+
+    actual = Standings(
+        effective_date=date(2026, 6, 2),
+        entries=[
+            StandingsEntry(
+                team_name="Test",
+                team_key="t",
+                rank=1,
+                stats=CategoryStats(
+                    r=120,
+                    hr=30,
+                    rbi=110,
+                    sb=15,
+                    avg=0.275,
+                    w=15,
+                    k=300,
+                    sv=8,
+                    era=3.50,
+                    whip=1.20,
+                ),
+                extras={
+                    OpportunityStat.IP: 300.0,
+                    OpportunityStat.AB: 800.0,
+                },
+            ),
+        ],
+    )
+
+    payload = build_standings_breakdown_payload(
+        team_rosters={"Test": []},  # empty roster -> ROS rows empty
+        effective_date=date(2026, 6, 2),
+        fraction_remaining=0.5,
+        actual_standings=actual,
+    )
+
+    team_ytd = payload["teams"]["Test"]["team_ytd"]
+    assert team_ytd["R"] == 120
+    assert team_ytd["HR"] == 30
+    assert team_ytd["RBI"] == 110
+    assert team_ytd["SB"] == 15
+    assert team_ytd["AB"] == 800.0
+    assert team_ytd["IP"] == 300.0
+    assert team_ytd["W"] == 15
+    assert team_ytd["K"] == 300
+    assert team_ytd["SV"] == 8
+    # H derived as AVG * AB.
+    assert team_ytd["H"] == pytest.approx(0.275 * 800.0)
+    # ER derived as ERA * IP / 9.
+    assert team_ytd["ER"] == pytest.approx(3.50 * 300.0 / 9.0)
+    # BB + H_allowed derived as WHIP * IP.
+    assert team_ytd["BB_plus_H_allowed"] == pytest.approx(1.20 * 300.0)
+
+
+def test_breakdown_payload_team_ytd_zero_when_no_actual_standings():
+    """When actual_standings is None (pre-season or omitted), the team_ytd
+    block is all zeros so consumers can still render the section without
+    branching on its presence."""
+    from datetime import date
+
+    from fantasy_baseball.web.refresh_pipeline import build_standings_breakdown_payload
+
+    payload = build_standings_breakdown_payload(
+        team_rosters={"Test": []},
+        effective_date=date(2026, 3, 27),
+        actual_standings=None,
+    )
+
+    team_ytd = payload["teams"]["Test"]["team_ytd"]
+    assert team_ytd["R"] == 0
+    assert team_ytd["K"] == 0
+    assert team_ytd["AB"] == 0
+    assert team_ytd["H"] == 0
+    assert team_ytd["IP"] == 0
+    assert team_ytd["ER"] == 0
+
+
 class TestPreseasonBaseline:
     """The refresh reads preseason_baseline:{year} from Redis; if
     missing, the base/with_management cache fields are None but the

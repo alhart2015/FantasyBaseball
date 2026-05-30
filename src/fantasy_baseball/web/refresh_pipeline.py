@@ -57,7 +57,11 @@ if TYPE_CHECKING:
     from fantasy_baseball.lineup.optimizer import HitterAssignment, PitcherStarter
     from fantasy_baseball.models.league import League
     from fantasy_baseball.models.player import Player
-    from fantasy_baseball.models.standings import ProjectedStandings, Standings
+    from fantasy_baseball.models.standings import (
+        ProjectedStandings,
+        Standings,
+        TeamYtdComponents,
+    )
     from fantasy_baseball.models.team import Team
 
 log = logging.getLogger(__name__)
@@ -144,11 +148,34 @@ def _write_spoe_snapshot(spoe_result: dict) -> None:
         log.warning(f"Failed to write spoe_snapshot:{snapshot_date}: {exc}")
 
 
+def _team_ytd_block(comps: "TeamYtdComponents") -> dict[str, float]:
+    """Flatten a TeamYtdComponents to the JSON shape consumed by the
+    breakdown modal. Uppercase category keys mirror CategoryStats.to_dict()
+    for the counting stats; the rate-stat ingredients (H, AB, IP, ER,
+    BB_plus_H_allowed) use the same casing for consistency.
+    """
+    return {
+        "R": comps.r,
+        "HR": comps.hr,
+        "RBI": comps.rbi,
+        "SB": comps.sb,
+        "W": comps.w,
+        "K": comps.k,
+        "SV": comps.sv,
+        "H": comps.h,
+        "AB": comps.ab,
+        "IP": comps.ip,
+        "ER": comps.er,
+        "BB_plus_H_allowed": comps.bb_plus_h_allowed,
+    }
+
+
 def build_standings_breakdown_payload(
     team_rosters: dict[str, list["Player"]],
     effective_date: date,
     *,
     fraction_remaining: float = 1.0,
+    actual_standings: "Standings | None" = None,
 ) -> dict:
     """Build the STANDINGS_BREAKDOWN cache payload for ``team_rosters``.
 
@@ -156,19 +183,31 @@ def build_standings_breakdown_payload(
     dict and keyed by team name. ``effective_date`` is included to
     match the :class:`ProjectedStandings` payload shape.
 
-    Uses the same two-pass ΔRoto-optimal displacement as
-    :meth:`ProjectedStandings.from_rosters`, so per-player ``contribution_stats[cat]``
-    aggregates here match the standings widget exactly:
+    Per-player rows are sourced with ``projection_source="rest_of_season"``
+    so the modal can render the arithmetic exposed by the standings
+    widget after the team-YTD refactor: ``team_YTD + sum(player ROS
+    contribution rows) == projected_standings`` for every team and
+    every category. The team's YTD totals are emitted as a separate
+    ``team_ytd`` block (derived from ``StandingsEntry.ytd_components()``)
+    so the legacy per-player YTD-floor path is no longer needed here.
+    When ``actual_standings`` is ``None`` (pre-season or omitted), the
+    block is all zeros so consumers don't need to branch on its presence.
 
-    1. Pass 1 — SGP-based displacement → baseline ``{team: stats}``.
-    2. Pass 2 — each team picks its displacement targets via ΔRoto,
+    Uses the same two-pass DeltaRoto-optimal displacement as
+    :meth:`ProjectedStandings.from_rosters`, on ROS components, so
+    per-player ``contribution_stats[cat]`` aggregates here match the
+    standings widget exactly:
+
+    1. Pass 1 -- SGP-based displacement on ROS -> baseline ``{team: stats}``.
+    2. Pass 2 -- each team picks its displacement targets via DeltaRoto,
        evaluating against frozen pass-1 baseline of other teams.
 
     Without the two-pass, the breakdown would show different scale
     factors than the standings (e.g., Mason Miller at sf=0.25 in the
-    breakdown but at sf≈1.0 in the projected standings), which would
+    breakdown but at sf~=1.0 in the projected standings), which would
     desync the modal drilldown from the headline numbers.
     """
+    from fantasy_baseball.models.standings import TeamYtdComponents
     from fantasy_baseball.scoring import (
         LeagueContext,
         build_team_sds,
@@ -176,13 +215,14 @@ def build_standings_breakdown_payload(
         project_team_stats,
     )
 
-    # Pass 1: SGP-based baseline {team: stats}. Same projection_source
-    # as ProjectedStandings.from_rosters so the contexts align.
+    # Pass 1: SGP-based baseline {team: stats}. Matches the
+    # projection_source used by ProjectedStandings.from_rosters Pass 1
+    # so the DeltaRoto picker's baseline agrees with the standings.
     baseline_stats = {
         tname: project_team_stats(
             roster,
             displacement=True,
-            projection_source="full_season_projection",
+            projection_source="rest_of_season",
         )
         for tname, roster in team_rosters.items()
     }
@@ -191,6 +231,11 @@ def build_standings_breakdown_payload(
     # agree with the standings widget and the canonical team_sds.
     team_sds = build_team_sds(team_rosters, sd_scale=fraction_remaining**0.5)
 
+    ytd_by_team: dict[str, TeamYtdComponents] = {}
+    if actual_standings is not None:
+        for entry in actual_standings.entries:
+            ytd_by_team[entry.team_name] = entry.ytd_components()
+
     teams_payload: dict[str, dict] = {}
     for team_name, roster in team_rosters.items():
         ctx = LeagueContext(
@@ -198,12 +243,16 @@ def build_standings_breakdown_payload(
             team_sds=team_sds,
             team_name=team_name,
         )
-        teams_payload[team_name] = compute_roster_breakdown(
+        breakdown_dict = compute_roster_breakdown(
             team_name,
             roster,
             league_context=ctx,
-            projection_source="full_season_projection",
+            projection_source="rest_of_season",
         ).to_dict()
+        breakdown_dict["team_ytd"] = _team_ytd_block(
+            ytd_by_team.get(team_name, TeamYtdComponents())
+        )
+        teams_payload[team_name] = breakdown_dict
     return {
         "effective_date": effective_date.isoformat(),
         "teams": teams_payload,
@@ -742,6 +791,7 @@ class RefreshRun:
                 all_team_rosters,
                 self.effective_date,
                 fraction_remaining=self.fraction_remaining,
+                actual_standings=ytd_standings,
             ),
         )
         self._progress(f"Projected standings for {len(self.projected_standings.entries)} teams")
