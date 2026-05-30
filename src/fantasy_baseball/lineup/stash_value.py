@@ -23,6 +23,7 @@ names the distinct below-cutline owned stash it would bump when the IL is full.
 from __future__ import annotations
 
 import dataclasses
+import logging
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -45,6 +46,8 @@ from fantasy_baseball.models.standings import (
 )
 from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
+
+log = logging.getLogger(__name__)
 
 __all__ = ["StashResult", "StashScore", "score_stash_candidates"]
 
@@ -513,6 +516,13 @@ def score_stash_candidates(
             if entry.team_name == team_name:
                 user_ytd_components = entry.ytd_components()
                 break
+        if user_ytd_components is None:
+            log.warning(
+                "Team %r not found in actual_standings.entries; stash baseline "
+                "will use zero YTD components (team_name mismatch -- apostrophe "
+                "/ whitespace / Unicode normalization drift?)",
+                team_name,
+            )
 
     # before_active is identical for every candidate: the optimized lineup over
     # the counted (non-IL-slot) bodies, with NO candidate activated.

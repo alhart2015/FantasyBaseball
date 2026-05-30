@@ -964,3 +964,69 @@ def test_score_stash_candidates_threads_actual_standings_into_user_row():
         actual_standings=None,
     )
     assert result.candidates == []
+
+
+def test_score_stash_candidates_warns_when_user_team_missing_from_actual_standings(
+    caplog,
+):
+    """Fix #7: when ``actual_standings`` is non-None but does not contain a
+    matching entry for ``team_name``, score_stash_candidates falls back to
+    zero YTD components AND emits a warning so the silent collapse to
+    ROS-only is observable.
+
+    Use the no-injured-player short-circuit to avoid the full optimizer
+    path -- the lookup happens unconditionally before the early return
+    once we plumb actual_standings through. We pass at least one injured
+    player so the lookup is actually exercised.
+    """
+    from fantasy_baseball.models.standings import (
+        CategoryStats,
+        Standings,
+        StandingsEntry,
+    )
+
+    # An owned IL hitter -- forces the lookup loop to run.
+    il_bat = _hitter(
+        "InjuredBat",
+        positions=["OF"],
+        slot="IL",
+        ab=200,
+        h=58,
+        r=30,
+        hr=8,
+        rbi=28,
+        sb=2,
+        avg=0.290,
+    )
+    roster = [*_full_hitters(), *_mediocre_staff(), il_bat]
+    standings = _coupled_standings(roster)
+
+    # Mismatched team-name -- "Test Team" is not in entries.
+    actual = Standings(
+        effective_date=EFFECTIVE_DATE,
+        entries=[
+            StandingsEntry(
+                team_name="DifferentNameEntirely",
+                team_key="x",
+                rank=1,
+                stats=CategoryStats(),
+            ),
+        ],
+    )
+
+    with caplog.at_level("WARNING", logger="fantasy_baseball.lineup.stash_value"):
+        score_stash_candidates(
+            roster=roster,
+            free_agents=[],
+            projected_standings=standings,
+            roster_slots=STASH_SLOTS,
+            team_name=TEAM_NAME,
+            team_sds=None,
+            fraction_remaining=0.5,
+            actual_standings=actual,
+        )
+
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any(TEAM_NAME in m for m in msgs), (
+        f"Expected a warning naming {TEAM_NAME!r}; got: {msgs}"
+    )

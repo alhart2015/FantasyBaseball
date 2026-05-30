@@ -15,12 +15,15 @@ ten roto categories.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
 from fantasy_baseball.utils.constants import AB_PER_PA, ALL_CATEGORIES, Category, OpportunityStat
+
+log = logging.getLogger(__name__)
 
 # Private: single source of truth for Category <-> attribute mapping.
 _CAT_TO_FIELD: dict[Category, str] = {
@@ -379,13 +382,14 @@ class ProjectedStandings:
         components are empty and the projection collapses to ROS-only,
         matching the pre-season behavior.
 
-        Two-pass displacement (unchanged):
-        1. Pass 1 -- SGP-based displacement on ROS-only -> baseline
-           ``{team: ROS CategoryStats}``. Consumed by the DeltaRoto picker
-           via ``LeagueContext.baseline_other_team_stats`` in Pass 2. Team
-           YTD is not added to the Pass-1 baseline because it cancels in
-           the DeltaRoto comparisons (each team sees the same constant
-           shift in every alternative it evaluates).
+        Two-pass displacement:
+        1. Pass 1 -- SGP-based displacement on each team's ROS, combined
+           with the team's YTD via :func:`team_end_of_season` to produce
+           the end-of-season baseline ``{team: CategoryStats}`` consumed by
+           the DeltaRoto picker via ``LeagueContext.baseline_other_team_stats``
+           in Pass 2. Pass-1 must include YTD because per-team YTD shifts
+           are not uniform across the picker's argmax -- they materially
+           change which alternative wins category swaps.
         2. Pass 2 -- each team re-displaces against the frozen Pass-1
            baseline of the OTHER teams; the resulting ROS components are
            summed with that team's YTD via ``team_end_of_season``.
@@ -399,24 +403,42 @@ class ProjectedStandings:
             LeagueContext,
             build_team_sds,
             project_ros_components,
-            project_team_stats,
             team_end_of_season,
         )
 
-        baseline_stats: dict[str, CategoryStats] = {
-            tname: project_team_stats(roster, displacement=True)
-            for tname, roster in team_rosters.items()
-        }
+        # Pass-1 needs the YTD-by-team map first, so build it before the
+        # baseline loop instead of after.
+        ytd_by_team: dict[str, TeamYtdComponents] = {}
+        if actual_standings is not None:
+            for entry in actual_standings.entries:
+                ytd_by_team[entry.team_name] = entry.ytd_components()
+
+        warned_names: set[str] = set()
+
+        def _ytd_for(tname: str) -> TeamYtdComponents:
+            ytd = ytd_by_team.get(tname)
+            if ytd is None:
+                if actual_standings is not None and tname not in warned_names:
+                    log.warning(
+                        "Team YTD lookup miss for %r in from_rosters; falling back "
+                        "to zero YTD components (team_rosters key not found in "
+                        "actual_standings.entries)",
+                        tname,
+                    )
+                    warned_names.add(tname)
+                return TeamYtdComponents()
+            return ytd
+
+        baseline_stats: dict[str, CategoryStats] = {}
+        for tname, roster in team_rosters.items():
+            ytd = _ytd_for(tname)
+            ros = project_ros_components(list(roster), displacement=True)
+            baseline_stats[tname] = team_end_of_season(ytd, ros)
 
         team_sds = build_team_sds(
             {tname: list(roster) for tname, roster in team_rosters.items()},
             sd_scale=fraction_remaining**0.5,
         )
-
-        ytd_by_team: dict[str, TeamYtdComponents] = {}
-        if actual_standings is not None:
-            for entry in actual_standings.entries:
-                ytd_by_team[entry.team_name] = entry.ytd_components()
 
         entries: list[ProjectedStandingsEntry] = []
         for tname, roster in team_rosters.items():
@@ -431,7 +453,7 @@ class ProjectedStandings:
                     team_name=tname,
                 ),
             )
-            ytd = ytd_by_team.get(tname, TeamYtdComponents())
+            ytd = _ytd_for(tname)
             entries.append(
                 ProjectedStandingsEntry(
                     team_name=tname,

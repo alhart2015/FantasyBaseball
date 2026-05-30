@@ -150,23 +150,30 @@ def _write_spoe_snapshot(spoe_result: dict) -> None:
 
 def _team_ytd_block(comps: "TeamYtdComponents") -> dict[str, float]:
     """Flatten a TeamYtdComponents to the JSON shape consumed by the
-    breakdown modal. Uppercase category keys mirror CategoryStats.to_dict()
-    for the counting stats; the rate-stat ingredients (H, AB, IP, ER,
-    BB_plus_H_allowed) use the same casing for consistency.
+    breakdown modal.
+
+    Keys are lowercase to mirror the per-player ``contribution_stats``
+    schema (``HITTING_COUNTING`` + ``PITCHING_COUNTING`` -- r, hr, rbi,
+    sb, h, ab, w, k, sv, ip, er, bb, h_allowed) so the modal can read
+    team_ytd via the same ``colSpec.field`` path as per-player rows.
+
+    ``bb_plus_h_allowed`` is exposed as the combined-sum key since YTD
+    only exposes ``WHIP * IP`` (the sum); we can't split it into bb /
+    h_allowed without per-game-log decomposition.
     """
     return {
-        "R": comps.r,
-        "HR": comps.hr,
-        "RBI": comps.rbi,
-        "SB": comps.sb,
-        "W": comps.w,
-        "K": comps.k,
-        "SV": comps.sv,
-        "H": comps.h,
-        "AB": comps.ab,
-        "IP": comps.ip,
-        "ER": comps.er,
-        "BB_plus_H_allowed": comps.bb_plus_h_allowed,
+        "r": comps.r,
+        "hr": comps.hr,
+        "rbi": comps.rbi,
+        "sb": comps.sb,
+        "h": comps.h,
+        "ab": comps.ab,
+        "w": comps.w,
+        "k": comps.k,
+        "sv": comps.sv,
+        "ip": comps.ip,
+        "er": comps.er,
+        "bb_plus_h_allowed": comps.bb_plus_h_allowed,
     }
 
 
@@ -246,11 +253,22 @@ def build_standings_breakdown_payload(
         # attribution is intentionally not done; only stats accrued while the
         # player was on the team count, and that bookkeeping lives at the team
         # level via TeamYtdComponents.
+        team_ytd_components = ytd_by_team.get(team_name)
+        if team_ytd_components is None:
+            if actual_standings is not None:
+                log.warning(
+                    "Team YTD lookup miss for %r in build_standings_breakdown_payload; "
+                    "falling back to zero YTD (team_rosters key not found in "
+                    "actual_standings.entries -- apostrophe / whitespace / Unicode "
+                    "normalization drift?)",
+                    team_name,
+                )
+            team_ytd_components = TeamYtdComponents()
         breakdown = compute_roster_breakdown(
             team_name,
             roster,
             league_context=ctx,
-            team_ytd=_team_ytd_block(ytd_by_team.get(team_name, TeamYtdComponents())),
+            team_ytd=_team_ytd_block(team_ytd_components),
         )
         teams_payload[team_name] = breakdown.to_dict()
     return {
@@ -306,6 +324,12 @@ class RefreshRun:
         self.league_model: League | None = None
         self.user_team_key: str | None = None
         self.standings: Standings | None = None
+        # ytd_standings is self.standings augmented with team-YTD AB on
+        # extras (computed in _build_projected_standings). Stored on
+        # self so _audit_roster and _optimize_lineup can pass it to the
+        # stash board and optimizer user-rows -- the same scale the
+        # projected standings widget consumes.
+        self.ytd_standings: Standings | None = None
         self.projected_standings: ProjectedStandings | None = None
         self.preseason_projected_standings: ProjectedStandings | None = None
         self.team_sds: dict[str, dict[Category, float]] | None = None
@@ -794,6 +818,10 @@ class RefreshRun:
                 actual_standings=ytd_standings,
             ),
         )
+        # Persist for _audit_roster (stash) and _optimize_lineup -- they
+        # need the YTD-augmented standings so the user-row sees the same
+        # AB attribution that the projected standings widget consumes.
+        self.ytd_standings = ytd_standings
         self._progress(f"Projected standings for {len(self.projected_standings.entries)} teams")
 
     # --- Step 5: Leverage weights ---
@@ -947,6 +975,12 @@ class RefreshRun:
         # team_YTD + ROS, putting the user in a low-mu region of the
         # score_roto S-curve and silently saturating counting-cat deltas --
         # the same bug PR #110 fixed for the stash board.
+        #
+        # Use the YTD-augmented standings (AB on extras) -- self.standings
+        # alone has no AB stat for this league, so AVG attribution would
+        # silently collapse to zero AB. Fall back to self.standings as a
+        # defensive net.
+        opt_actual_standings = self.ytd_standings or self.standings
         self.optimal_hitters = optimize_hitter_lineup(
             hitters=hitter_players,
             full_roster=self.roster_players,
@@ -955,7 +989,7 @@ class RefreshRun:
             roster_slots=self.config.roster_slots,
             team_sds=self.team_sds,
             fraction_remaining=self.fraction_remaining,
-            actual_standings=self.standings,
+            actual_standings=opt_actual_standings,
         )
         self.optimal_pitchers_starters, self.optimal_pitchers_bench = optimize_pitcher_lineup(
             pitchers=pitcher_players,
@@ -965,7 +999,7 @@ class RefreshRun:
             slots=self.config.roster_slots.get("P", 9),
             team_sds=self.team_sds,
             fraction_remaining=self.fraction_remaining,
-            actual_standings=self.standings,
+            actual_standings=opt_actual_standings,
         )
 
     # --- Step 8: Compare optimal to current, find moves ---
@@ -1082,6 +1116,11 @@ class RefreshRun:
         # abort the rest of the refresh (Monte Carlo, standings, meta), so we
         # degrade to an empty cached board and continue -- mirroring the
         # streak-computation step.
+        # Use the YTD-augmented standings (AB on extras) when available so
+        # the stash baseline's user row matches the projected standings
+        # scale. Fall back to self.standings defensively for code paths
+        # that may not have populated ytd_standings yet.
+        stash_actual_standings = self.ytd_standings or self.standings
         try:
             stash_result = score_stash_candidates(
                 self.roster_players,
@@ -1091,7 +1130,7 @@ class RefreshRun:
                 self.config.team_name,
                 team_sds=self.team_sds,
                 fraction_remaining=self.fraction_remaining,
-                actual_standings=self.standings,
+                actual_standings=stash_actual_standings,
             )
             write_cache(CacheKey.STASH, stash_result.to_dict())
             self._progress(f"Stash board: {len(stash_result.candidates)} injured candidate(s)")

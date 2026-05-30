@@ -487,21 +487,25 @@ def test_breakdown_payload_includes_team_ytd_block_when_actual_standings_given()
     )
 
     team_ytd = payload["teams"]["Test"]["team_ytd"]
-    assert team_ytd["R"] == 120
-    assert team_ytd["HR"] == 30
-    assert team_ytd["RBI"] == 110
-    assert team_ytd["SB"] == 15
-    assert team_ytd["AB"] == 800.0
-    assert team_ytd["IP"] == 300.0
-    assert team_ytd["W"] == 15
-    assert team_ytd["K"] == 300
-    assert team_ytd["SV"] == 8
+    # Fix #6 (partial): team_ytd keys now mirror the per-player
+    # contribution_stats schema (lowercase) so the modal can read
+    # team_ytd via the same colSpec.field path. BB/H_allowed remain
+    # combined since YTD WHIP*IP only gives the sum.
+    assert team_ytd["r"] == 120
+    assert team_ytd["hr"] == 30
+    assert team_ytd["rbi"] == 110
+    assert team_ytd["sb"] == 15
+    assert team_ytd["ab"] == 800.0
+    assert team_ytd["ip"] == 300.0
+    assert team_ytd["w"] == 15
+    assert team_ytd["k"] == 300
+    assert team_ytd["sv"] == 8
     # H derived as AVG * AB.
-    assert team_ytd["H"] == pytest.approx(0.275 * 800.0)
+    assert team_ytd["h"] == pytest.approx(0.275 * 800.0)
     # ER derived as ERA * IP / 9.
-    assert team_ytd["ER"] == pytest.approx(3.50 * 300.0 / 9.0)
+    assert team_ytd["er"] == pytest.approx(3.50 * 300.0 / 9.0)
     # BB + H_allowed derived as WHIP * IP.
-    assert team_ytd["BB_plus_H_allowed"] == pytest.approx(1.20 * 300.0)
+    assert team_ytd["bb_plus_h_allowed"] == pytest.approx(1.20 * 300.0)
 
 
 def test_breakdown_payload_team_ytd_zero_when_no_actual_standings():
@@ -519,12 +523,12 @@ def test_breakdown_payload_team_ytd_zero_when_no_actual_standings():
     )
 
     team_ytd = payload["teams"]["Test"]["team_ytd"]
-    assert team_ytd["R"] == 0
-    assert team_ytd["K"] == 0
-    assert team_ytd["AB"] == 0
-    assert team_ytd["H"] == 0
-    assert team_ytd["IP"] == 0
-    assert team_ytd["ER"] == 0
+    assert team_ytd["r"] == 0
+    assert team_ytd["k"] == 0
+    assert team_ytd["ab"] == 0
+    assert team_ytd["h"] == 0
+    assert team_ytd["ip"] == 0
+    assert team_ytd["er"] == 0
 
 
 class TestPreseasonBaseline:
@@ -1143,6 +1147,143 @@ class TestStashBoardDegradedMode:
             "Expected the stash failure to be logged via log.exception; "
             "got records: " + str([r.getMessage() for r in caplog.records])
         )
+
+
+def test_build_standings_breakdown_payload_warns_on_team_name_mismatch(caplog):
+    """Fix #7: when ``actual_standings`` carries entries whose team_name
+    does not match any team_rosters key, ``build_standings_breakdown_payload``
+    must log a warning naming the team rather than silently zeroing YTD.
+    """
+    from datetime import date
+
+    from fantasy_baseball.models.standings import (
+        CategoryStats,
+        Standings,
+        StandingsEntry,
+    )
+    from fantasy_baseball.web.refresh_pipeline import build_standings_breakdown_payload
+
+    # actual carries "Other", team_rosters carries "Test" -> miss.
+    actual = Standings(
+        effective_date=date(2026, 6, 2),
+        entries=[
+            StandingsEntry(
+                team_name="Other",
+                team_key="o",
+                rank=1,
+                stats=CategoryStats(),
+            ),
+        ],
+    )
+
+    with caplog.at_level(
+        "WARNING",
+        logger="fantasy_baseball.web.refresh_pipeline",
+    ):
+        build_standings_breakdown_payload(
+            team_rosters={"Test": []},
+            effective_date=date(2026, 6, 2),
+            actual_standings=actual,
+        )
+
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("Test" in m for m in msgs), f"Expected a warning naming 'Test'; got: {msgs}"
+
+
+class TestAuditAndOptimizerUseYtdStandings:
+    """Fix #3: ``_audit_roster`` and ``_optimize_lineup`` must pass the
+    augmented ``self.ytd_standings`` (with team-YTD AB stuffed onto
+    extras) to their consumers, not the un-augmented ``self.standings``.
+
+    Without the fix, the stash board and lineup optimizer user-rows
+    silently see no AB attribution -- yielding ROS-only AVG decisions
+    while the projected standings widget (and everyone else) sees the
+    YTD-augmented baseline. The two views disagree.
+    """
+
+    def test_audit_roster_passes_augmented_ytd_standings_to_score_stash(
+        self, configured_test_env, fake_redis, monkeypatch
+    ):
+        """Capture the actual_standings argument passed to
+        score_stash_candidates. It must carry the augmented AB on extras
+        (i.e., be ``self.ytd_standings``, not ``self.standings``).
+        """
+        from fantasy_baseball.utils.constants import OpportunityStat
+
+        captured: dict = {}
+
+        def _spy_score_stash(*args, **kwargs):
+            captured["actual_standings"] = kwargs.get("actual_standings")
+            from fantasy_baseball.lineup.stash_value import StashResult
+
+            return StashResult(open_il_slots=0, cutline_rank=0, candidates=[])
+
+        monkeypatch.setattr(
+            "fantasy_baseball.web.refresh_pipeline.score_stash_candidates",
+            _spy_score_stash,
+            raising=False,
+        )
+
+        # The score_stash_candidates symbol is imported inside _audit_roster,
+        # so we patch the source module instead.
+        import fantasy_baseball.lineup.stash_value as _stash_mod
+
+        monkeypatch.setattr(_stash_mod, "score_stash_candidates", _spy_score_stash)
+
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
+
+        actual = captured.get("actual_standings")
+        assert actual is not None, "score_stash_candidates not called"
+        # Augmented ytd_standings carries OpportunityStat.AB on at least
+        # one entry. Bare self.standings would not.
+        ab_present = any(OpportunityStat.AB in e.extras for e in actual.entries)
+        assert ab_present, (
+            "score_stash_candidates received un-augmented standings "
+            "(no team-YTD AB in extras); expected self.ytd_standings"
+        )
+
+    def test_optimize_lineup_passes_augmented_ytd_standings(
+        self, configured_test_env, fake_redis, monkeypatch
+    ):
+        """``optimize_hitter_lineup`` / ``optimize_pitcher_lineup`` must
+        receive the augmented ``self.ytd_standings`` (AB on extras),
+        not ``self.standings``.
+        """
+        from fantasy_baseball.utils.constants import OpportunityStat
+
+        captured: dict = {}
+
+        def _spy_hitter(*args, **kwargs):
+            captured.setdefault("hitter", kwargs.get("actual_standings"))
+            return []
+
+        def _spy_pitcher(*args, **kwargs):
+            captured.setdefault("pitcher", kwargs.get("actual_standings"))
+            return [], []
+
+        import fantasy_baseball.web.refresh_pipeline as _rp
+
+        monkeypatch.setattr(_rp, "optimize_hitter_lineup", _spy_hitter, raising=False)
+        monkeypatch.setattr(_rp, "optimize_pitcher_lineup", _spy_pitcher, raising=False)
+        # The symbols are imported inside _optimize_lineup; patch the source
+        # module so the late import picks up the spy.
+        import fantasy_baseball.lineup.optimizer as _opt_mod
+
+        monkeypatch.setattr(_opt_mod, "optimize_hitter_lineup", _spy_hitter)
+        monkeypatch.setattr(_opt_mod, "optimize_pitcher_lineup", _spy_pitcher)
+
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
+
+        for which in ("hitter", "pitcher"):
+            actual = captured.get(which)
+            assert actual is not None, f"optimize_{which}_lineup not called"
+            ab_present = any(OpportunityStat.AB in e.extras for e in actual.entries)
+            assert ab_present, (
+                f"optimize_{which}_lineup received un-augmented standings "
+                f"(no team-YTD AB in extras); expected self.ytd_standings"
+            )
 
 
 class _FakeConn:
