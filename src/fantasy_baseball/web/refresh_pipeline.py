@@ -935,6 +935,13 @@ class RefreshRun:
             else:
                 hitter_players.append(player)
 
+        # actual_standings threads team_YTD into the user-row baseline that
+        # team_roto_total builds (see optimizer._resolve_user_ytd_components
+        # and team_roto_total docstrings). Without this, the user row is
+        # ROS-only while opponents (from ProjectedStandings.from_rosters) are
+        # team_YTD + ROS, putting the user in a low-mu region of the
+        # score_roto S-curve and silently saturating counting-cat deltas --
+        # the same bug PR #110 fixed for the stash board.
         self.optimal_hitters = optimize_hitter_lineup(
             hitters=hitter_players,
             full_roster=self.roster_players,
@@ -943,6 +950,7 @@ class RefreshRun:
             roster_slots=self.config.roster_slots,
             team_sds=self.team_sds,
             fraction_remaining=self.fraction_remaining,
+            actual_standings=self.standings,
         )
         self.optimal_pitchers_starters, self.optimal_pitchers_bench = optimize_pitcher_lineup(
             pitchers=pitcher_players,
@@ -952,6 +960,7 @@ class RefreshRun:
             slots=self.config.roster_slots.get("P", 9),
             team_sds=self.team_sds,
             fraction_remaining=self.fraction_remaining,
+            actual_standings=self.standings,
         )
 
     # --- Step 8: Compare optimal to current, find moves ---

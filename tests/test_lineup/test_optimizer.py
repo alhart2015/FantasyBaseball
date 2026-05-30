@@ -1,10 +1,14 @@
 from datetime import date
 
+import pytest
+
 from fantasy_baseball.lineup.optimizer import (
     HitterAssignment,
     PitcherStarter,
+    _TeamContext,
     optimize_hitter_lineup,
     optimize_pitcher_lineup,
+    team_roto_total,
 )
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import Position
@@ -12,6 +16,9 @@ from fantasy_baseball.models.standings import (
     CategoryStats,
     ProjectedStandings,
     ProjectedStandingsEntry,
+    Standings,
+    StandingsEntry,
+    TeamYtdComponents,
 )
 from fantasy_baseball.scoring import project_team_stats
 
@@ -294,7 +301,7 @@ class TestERotoMaximization:
             roster_slots=slots,
         )
         assert len(lineup) == 1
-        # Without Only, no feasible full-size lineup exists → fallback scores
+        # Without Only, no feasible full-size lineup exists -> fallback scores
         # the team with the slot left empty. Delta = best_total - fallback.
         assert lineup[0].roto_delta > 0
 
@@ -488,3 +495,210 @@ class TestBandFullRosterOperatingPoint:
             f"band.mean {band_mean:.4f} strongly disagrees with roto_delta "
             f"{starter.roto_delta:.4f} -- likely wrong operating point"
         )
+
+
+def _ytd_standings_with_user_hr(hr: float, team_name: str = "Us") -> Standings:
+    """Build a minimal Standings whose user-row YTD HR equals ``hr``.
+
+    Only the user-row entry is meaningful here: the optimizer derives
+    ``user_ytd_components`` from that row alone. Two filler rows keep the
+    standings object well-formed.
+    """
+    return Standings(
+        effective_date=date(2026, 5, 1),
+        entries=[
+            StandingsEntry(
+                team_name=team_name,
+                team_key="t.1",
+                rank=1,
+                stats=CategoryStats(hr=hr),
+            ),
+            StandingsEntry(
+                team_name="Filler",
+                team_key="t.2",
+                rank=2,
+                stats=CategoryStats(),
+            ),
+        ],
+    )
+
+
+class TestTeamRotoTotalUsesUserYtdComponents:
+    """REGRESSION (team-YTD projection refactor): the user row that
+    ``team_roto_total`` builds must be team_YTD + ROS, matching the scale
+    of the opponent rows that :func:`ProjectedStandings.from_rosters`
+    produces. Before the fix, the optimizer's user row was ROS-only while
+    opponents in ``ctx.projected_standings`` were team_YTD + ROS, so the
+    user lived in a low-mu region of the score_roto S-curve and
+    counting-cat deltas were silently saturated.
+
+    Mirrors the stash board fix in
+    :func:`fantasy_baseball.lineup.stash_value._active_lineup_standings`
+    -- same plumbing pattern (Standings -> user_ytd_components ->
+    team_end_of_season).
+    """
+
+    def _hypothetical(self) -> tuple[list[Player], ProjectedStandings]:
+        """Single pitcher hypothetical with ROS K=100.
+
+        Three teams in the projected standings so K rank ordering can
+        flip when the user's team_YTD K is added:
+          - With YTD K=200: user K = 200+100=300, ranks ahead of Mid (250)
+            but behind Rival (400) -> 2nd of 3 in K.
+          - Without YTD:    user K = 100, last of 3 in K.
+        That rank flip is what the team-YTD + ROS fix exposes; the
+        pre-fix ROS-only path collapses both scenarios to last-place K
+        and the totals are identical.
+        """
+        arm = _pitcher("Mid-Season Arm", ["P"], ip=200, w=10, k=100, sv=0, era=3.00, whip=1.00)
+        rival = ProjectedStandingsEntry(team_name="Rival", stats=CategoryStats(k=400.0))
+        mid = ProjectedStandingsEntry(team_name="Mid", stats=CategoryStats(k=250.0))
+        # Seed the user row at zero -- team_roto_total overrides it from
+        # the hypothetical roster anyway, so its initial value is irrelevant.
+        us = ProjectedStandingsEntry(team_name="Us", stats=CategoryStats())
+        standings = ProjectedStandings(effective_date=date.min, entries=[us, mid, rival])
+        return [arm], standings
+
+    def test_team_roto_total_changes_when_user_ytd_components_provided(self):
+        """team_roto_total with team_YTD K=200 differs from team_roto_total
+        with no YTD (the pre-fix default).
+
+        Direction: more team_YTD K -> user row's K leapfrogs Mid (K=250) ->
+        user climbs the K rank -> higher roto total.
+        """
+        hypothetical, projected = self._hypothetical()
+        ctx_no_ytd = _TeamContext(
+            full_roster=hypothetical,
+            projected_standings=projected,
+            team_name="Us",
+        )
+        ctx_with_ytd = _TeamContext(
+            full_roster=hypothetical,
+            projected_standings=projected,
+            team_name="Us",
+            user_ytd_components=TeamYtdComponents(k=200.0),
+        )
+        total_no_ytd = team_roto_total(hypothetical, ctx_no_ytd)
+        total_with_ytd = team_roto_total(hypothetical, ctx_with_ytd)
+
+        assert total_with_ytd > total_no_ytd, (
+            f"team_roto_total with user_ytd_components K=200 "
+            f"({total_with_ytd:.4f}) must exceed total without "
+            f"({total_no_ytd:.4f}); the pre-fix ROS-only path would equal both"
+        )
+
+    def test_team_roto_total_default_is_zero_ytd(self):
+        """The default ``user_ytd_components`` (omitted from the
+        ``_TeamContext`` constructor) is zero components -- equivalent to
+        passing ``TeamYtdComponents()`` explicitly. This pins the preseason
+        fallback: callers without a live Standings snapshot get the
+        pre-team-YTD ROS-only behavior, so existing pre-season tests don't
+        break.
+        """
+        hypothetical, projected = self._hypothetical()
+        ctx_default = _TeamContext(
+            full_roster=hypothetical,
+            projected_standings=projected,
+            team_name="Us",
+        )
+        ctx_zero = _TeamContext(
+            full_roster=hypothetical,
+            projected_standings=projected,
+            team_name="Us",
+            user_ytd_components=TeamYtdComponents(),
+        )
+        assert team_roto_total(hypothetical, ctx_default) == pytest.approx(
+            team_roto_total(hypothetical, ctx_zero)
+        )
+
+    def test_optimize_hitter_lineup_accepts_actual_standings(self):
+        """optimize_hitter_lineup accepts ``actual_standings`` and runs
+        cleanly. End-to-end the marginal roto_delta stays non-negative
+        regardless of which YTD scale the user row is built on; the
+        deeper user-row-scale assertion lives in
+        :func:`test_team_roto_total_changes_when_user_ytd_components_provided`.
+        """
+        a = _hitter("A", ["OF"], r=80, hr=25, rbi=80, sb=5, h=120, ab=450)
+        b = _hitter("B", ["OF"], r=70, hr=10, rbi=70, sb=25, h=120, ab=450)
+        slots = {"OF": 1, "BN": 1, "P": 9, "IL": 0}
+        standings = _standings(
+            _standing("Us"),
+            _standing("Rival", R=0, HR=50, RBI=0, SB=30, AVG=0),
+            _standing("Third", R=0, HR=20, RBI=0, SB=15, AVG=0),
+        )
+        actual = _ytd_standings_with_user_hr(40.0)
+
+        lineup_no_ytd = optimize_hitter_lineup(
+            hitters=[a, b],
+            full_roster=[a, b],
+            projected_standings=standings,
+            team_name="Us",
+            roster_slots=slots,
+        )
+        lineup_with_ytd = optimize_hitter_lineup(
+            hitters=[a, b],
+            full_roster=[a, b],
+            projected_standings=standings,
+            team_name="Us",
+            roster_slots=slots,
+            actual_standings=actual,
+        )
+
+        assert len(lineup_no_ytd) == 1
+        assert len(lineup_with_ytd) == 1
+        # Threading actual_standings must not break the marginal computation.
+        assert lineup_with_ytd[0].roto_delta >= 0
+        assert lineup_no_ytd[0].roto_delta >= 0
+
+    def test_optimize_pitcher_lineup_accepts_actual_standings(self):
+        """optimize_pitcher_lineup accepts ``actual_standings`` and runs
+        cleanly with the team-YTD + ROS user-row baseline.
+        """
+        p1 = _pitcher("P1", ["SP"], ip=180, w=12, k=180, era=3.50, whip=1.20)
+        p2 = _pitcher("P2", ["SP"], ip=170, w=10, k=160, era=3.80, whip=1.25)
+        standings = _standings(
+            _standing("Us"),
+            _standing("Rival", W=15, K=200, ERA=3.00, WHIP=1.10),
+        )
+        actual = _ytd_standings_with_user_hr(0.0)
+
+        starters, _ = optimize_pitcher_lineup(
+            pitchers=[p1, p2],
+            full_roster=[p1, p2],
+            projected_standings=standings,
+            team_name="Us",
+            slots=1,
+            actual_standings=actual,
+        )
+        assert len(starters) == 1
+        assert starters[0].roto_delta >= 0
+
+    def test_actual_standings_none_matches_legacy_behavior(self):
+        """With ``actual_standings=None`` (the default), the optimizer is
+        byte-equivalent to omitting the keyword. Preserves every existing
+        pre-season test and legacy caller.
+        """
+        hitters = [
+            _hitter("A", ["OF"], r=80, hr=25),
+            _hitter("B", ["OF"], r=70, hr=20),
+        ]
+        slots = {"OF": 1, "BN": 1, "P": 9, "IL": 0}
+        standings = _standings(_standing("Us"), _standing("Rival", R=1, HR=1))
+
+        legacy = optimize_hitter_lineup(
+            hitters=hitters,
+            full_roster=hitters,
+            projected_standings=standings,
+            team_name="Us",
+            roster_slots=slots,
+        )
+        explicit_none = optimize_hitter_lineup(
+            hitters=hitters,
+            full_roster=hitters,
+            projected_standings=standings,
+            team_name="Us",
+            roster_slots=slots,
+            actual_standings=None,
+        )
+        assert [a.name for a in legacy] == [a.name for a in explicit_none]
+        assert legacy[0].roto_delta == pytest.approx(explicit_none[0].roto_delta)

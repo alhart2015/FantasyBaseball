@@ -1,6 +1,6 @@
 import dataclasses
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import combinations
 from typing import Any
 
@@ -9,8 +9,12 @@ from scipy.optimize import linear_sum_assignment
 
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.models.positions import HITTER_ELIGIBLE, PITCHER_ELIGIBLE, Position
-from fantasy_baseball.models.standings import ProjectedStandings
-from fantasy_baseball.scoring import project_team_stats, score_roto_dict
+from fantasy_baseball.models.standings import ProjectedStandings, Standings, TeamYtdComponents
+from fantasy_baseball.scoring import (
+    project_ros_components,
+    score_roto_dict,
+    team_end_of_season,
+)
 from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS, Category
 from fantasy_baseball.utils.positions import can_fill_slot
 
@@ -90,12 +94,25 @@ def _feasible_assignment(
 
 @dataclass
 class _TeamContext:
-    """Scoring-side inputs passed through every ERoto evaluation."""
+    """Scoring-side inputs passed through every ERoto evaluation.
+
+    ``user_ytd_components`` (Team-YTD ingredients pulled from the live Yahoo
+    standings snapshot) anchors the user's row at the same end-of-season
+    scale as :func:`ProjectedStandings.from_rosters` uses for opponents:
+    ``team_end_of_season(user_ytd, project_ros_components(hypothetical))``.
+
+    Without it the user row collapses to ROS-only while opponents are
+    team_YTD + ROS, so the user lives in a low-mu region of the
+    ``score_roto`` S-curve and counting-cat deltas saturate. The default
+    is zero components, matching pre-season behavior and every legacy
+    caller that doesn't have a live standings snapshot.
+    """
 
     full_roster: list[Player]
     projected_standings: ProjectedStandings
     team_name: str
     team_sds: Mapping[str, Mapping[Category, float]] | None = None
+    user_ytd_components: TeamYtdComponents = field(default_factory=TeamYtdComponents)
 
 
 def apply_lineup_to_roster(
@@ -121,7 +138,28 @@ def apply_lineup_to_roster(
 
 
 def team_roto_total(hypothetical: list[Player], ctx: _TeamContext) -> float:
-    my_stats = project_team_stats(hypothetical, displacement=True).to_dict()
+    """Score ``hypothetical`` as the user's row against ``ctx.projected_standings``.
+
+    The user row is built as
+    ``team_end_of_season(ctx.user_ytd_components, project_ros_components(hypothetical))``
+    -- the same team_YTD + ROS math :func:`ProjectedStandings.from_rosters`
+    uses for the opponent rows in ``ctx.projected_standings``. Without
+    matching scales the user lives in a low-mu region of the ``score_roto``
+    S-curve and marginal counting-cat deltas saturate (the bug PR #110
+    fixed for the stash board via ``_active_lineup_standings`` and missed
+    here; see the team-YTD refactor docstring on
+    :func:`fantasy_baseball.scoring.project_team_stats`).
+
+    ``displacement=True`` matches the pre-fix call (the original
+    ``project_team_stats(hypothetical, displacement=True)``):
+    ``hypothetical`` is the user's full roster with active/bench/IL slots
+    assigned, so the standard IL-displaces-worst-active scaling still
+    applies. (Contrast with the stash board's ``_active_lineup_standings``,
+    which receives a pre-filtered active pool and so uses
+    ``displacement=False``.)
+    """
+    user_ros = project_ros_components(hypothetical, displacement=True)
+    my_stats = team_end_of_season(ctx.user_ytd_components, user_ros).to_dict()
     all_stats = {e.team_name: e.stats.to_dict() for e in ctx.projected_standings.entries}
     all_stats[ctx.team_name] = my_stats
     return score_roto_dict(all_stats, team_sds=ctx.team_sds)[ctx.team_name]["total"]
@@ -161,6 +199,25 @@ def _score_pitcher_subset(
     return team_roto_total(hypothetical, ctx)
 
 
+def _resolve_user_ytd_components(
+    actual_standings: Standings | None, team_name: str
+) -> TeamYtdComponents:
+    """Extract the user's YTD components from the live standings snapshot.
+
+    Returns zero components when ``actual_standings`` is None (pre-season,
+    legacy callers) or when the user's team is missing from the snapshot --
+    ``team_end_of_season(zero, ros)`` collapses to ROS-only, matching the
+    pre-team-YTD-refactor behavior. Called ONCE per public-optimizer entry
+    so the constant doesn't get recomputed inside the combinatorial loops.
+    """
+    if actual_standings is None:
+        return TeamYtdComponents()
+    for entry in actual_standings.entries:
+        if entry.team_name == team_name:
+            return entry.ytd_components()
+    return TeamYtdComponents()
+
+
 def optimize_hitter_lineup(
     hitters: list[Player],
     full_roster: list[Player],
@@ -169,15 +226,33 @@ def optimize_hitter_lineup(
     roster_slots: dict[str, int] | None = None,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
     fraction_remaining: float | None = None,
+    actual_standings: Standings | None = None,
 ) -> list[HitterAssignment]:
-    """Return the ERoto-maximizing active hitter lineup."""
+    """Return the ERoto-maximizing active hitter lineup.
+
+    ``actual_standings`` is the live Yahoo standings snapshot at the same
+    effective_date as ``projected_standings``. When provided, the user's
+    row inside ``team_roto_total`` is built as
+    ``team_end_of_season(team_YTD, project_ros_components(hypothetical))``,
+    matching the opponent rows produced by
+    :func:`ProjectedStandings.from_rosters`. ``None`` collapses to ROS-only
+    -- preserves pre-team-YTD-refactor behavior for pre-season callers and
+    legacy tests.
+    """
     if not hitters:
         return []
     slot_positions = _build_hitter_slot_positions(
         roster_slots if roster_slots is not None else DEFAULT_ROSTER_SLOTS
     )
     n_slots = len(slot_positions)
-    ctx = _TeamContext(full_roster, projected_standings, team_name, team_sds)
+    user_ytd = _resolve_user_ytd_components(actual_standings, team_name)
+    ctx = _TeamContext(
+        full_roster,
+        projected_standings,
+        team_name,
+        team_sds,
+        user_ytd_components=user_ytd,
+    )
 
     field_stats = projected_standings.field_stats(team_name)
 
@@ -286,12 +361,25 @@ def optimize_pitcher_lineup(
     slots: int = 9,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
     fraction_remaining: float | None = None,
+    actual_standings: Standings | None = None,
 ) -> tuple[list[PitcherStarter], list[Player]]:
-    """Return (starters with roto_delta, bench) maximizing ERoto."""
+    """Return (starters with roto_delta, bench) maximizing ERoto.
+
+    ``actual_standings`` is threaded through to ``team_roto_total`` so the
+    user's row is built as team_YTD + ROS, matching the opponent rows in
+    ``projected_standings``. See :func:`optimize_hitter_lineup`.
+    """
     if not pitchers or slots <= 0:
         return [], list(pitchers)
     k = min(slots, len(pitchers))
-    ctx = _TeamContext(full_roster, projected_standings, team_name, team_sds)
+    user_ytd = _resolve_user_ytd_components(actual_standings, team_name)
+    ctx = _TeamContext(
+        full_roster,
+        projected_standings,
+        team_name,
+        team_sds,
+        user_ytd_components=user_ytd,
+    )
 
     field_stats = projected_standings.field_stats(team_name)
 
@@ -368,11 +456,16 @@ def combined_team_roto(
     projected_standings: ProjectedStandings,
     team_name: str,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
+    actual_standings: Standings | None = None,
 ) -> float:
     """Score a combined hitter + pitcher lineup as a single ERoto total.
 
     The per-side optimizers score independently; this recomputes once on the
     combined lineup so the reported total reflects both sides together.
+
+    ``actual_standings`` is threaded through so the user's row matches the
+    team_YTD + ROS scale of the opponent rows. See
+    :func:`optimize_hitter_lineup`.
     """
     active_slots: dict[str, Position] = {a.name: a.slot for a in hitter_lineup}
     active_slots.update(_pitcher_active_slots([s.player for s in pitcher_starters]))
@@ -380,5 +473,12 @@ def combined_team_roto(
         p.name for p in pitcher_bench
     }
     hypothetical = apply_lineup_to_roster(roster, active_slots, bench_names)
-    ctx = _TeamContext(roster, projected_standings, team_name, team_sds)
+    user_ytd = _resolve_user_ytd_components(actual_standings, team_name)
+    ctx = _TeamContext(
+        roster,
+        projected_standings,
+        team_name,
+        team_sds,
+        user_ytd_components=user_ytd,
+    )
     return team_roto_total(hypothetical, ctx)
