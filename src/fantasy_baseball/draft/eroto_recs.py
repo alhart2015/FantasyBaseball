@@ -19,7 +19,11 @@ from fantasy_baseball.models.player import Player
 from fantasy_baseball.models.positions import PITCHER_ELIGIBLE
 from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.scoring import score_roto_dict
-from fantasy_baseball.trades.evaluate import apply_swap_delta, player_rest_of_season_stats
+from fantasy_baseball.trades.evaluate import (
+    apply_swap_delta,
+    player_rest_of_season_stats,
+    team_baseline_volumes,
+)
 from fantasy_baseball.utils.constants import Category
 
 
@@ -85,6 +89,13 @@ def rank_candidates(
     roto_before = score_roto_dict(all_before, team_sds=team_sds)
     loses_ros_cache: dict[int, dict[str, Any]] = {}
     user_before_stats = all_before[team_name]
+    # Pull the team's end-of-season AB/IP off the projected entry.
+    # Draft is preseason -- ProjectedStandings.from_rosters with
+    # actual_standings=None produces total_ab/total_ip equal to the
+    # ROS-only roster sums. That's the right denominator for preseason
+    # rate math; team_baseline_volumes returns None on legacy/zero
+    # entries to trigger apply_swap_delta's constant fallback.
+    user_ab, user_ip = team_baseline_volumes(projected_standings.by_team()[team_name])
 
     immediate_rows: list[tuple[Player, DeltaBreakdown]] = []
     for candidate in candidates:
@@ -95,7 +106,13 @@ def rank_candidates(
             loses_ros_cache[id(replacement)] = loses_ros
         gains_ros = player_rest_of_season_stats(candidate)
         all_after = dict(all_before)
-        all_after[team_name] = apply_swap_delta(user_before_stats, loses_ros, gains_ros)
+        all_after[team_name] = apply_swap_delta(
+            user_before_stats,
+            loses_ros,
+            gains_ros,
+            team_ab=user_ab,
+            team_ip=user_ip,
+        )
         roto_after = score_roto_dict(all_after, team_sds=team_sds)
         result = score_swap(roto_before, roto_after, team_name)
         immediate_rows.append(

@@ -286,8 +286,22 @@ class Standings:
 
 @dataclass
 class ProjectedStandingsEntry:
+    """One team's projected end-of-season totals.
+
+    ``stats`` is the user-facing CategoryStats (rates already recombined
+    from YTD + ROS components). ``total_ab`` and ``total_ip`` are the
+    end-of-season volume denominators used to recombine those rates, so
+    downstream callers (``apply_swap_delta``) can back out current
+    hits/ER/BH using the same denominators that produced the rates.
+    Pre-PR-110 entries (loaded from older persisted JSON, or hand-built
+    in tests) leave them at 0.0; ``apply_swap_delta`` then falls back to
+    the legacy ``_TEAM_AB`` / ``_TEAM_IP`` heuristics.
+    """
+
     team_name: str
     stats: CategoryStats
+    total_ab: float = 0.0
+    total_ip: float = 0.0
 
 
 @dataclass
@@ -320,6 +334,11 @@ class ProjectedStandings:
                 ProjectedStandingsEntry(
                     team_name=row["name"],
                     stats=CategoryStats.from_dict(row["stats"]),
+                    # Older persisted payloads predate the AB/IP carry --
+                    # missing keys decay to 0.0, which apply_swap_delta
+                    # treats as the legacy-constant fallback.
+                    total_ab=float(row.get("total_ab", 0.0)),
+                    total_ip=float(row.get("total_ip", 0.0)),
                 )
                 for row in d["teams"]
             ],
@@ -328,7 +347,15 @@ class ProjectedStandings:
     def to_json(self) -> dict[str, Any]:
         return {
             "effective_date": self.effective_date.isoformat(),
-            "teams": [{"name": e.team_name, "stats": e.stats.to_dict()} for e in self.entries],
+            "teams": [
+                {
+                    "name": e.team_name,
+                    "stats": e.stats.to_dict(),
+                    "total_ab": float(e.total_ab),
+                    "total_ip": float(e.total_ip),
+                }
+                for e in self.entries
+            ],
         }
 
     @classmethod
@@ -409,6 +436,8 @@ class ProjectedStandings:
                 ProjectedStandingsEntry(
                     team_name=tname,
                     stats=team_end_of_season(ytd, ros),
+                    total_ab=ytd.ab + ros.ab,
+                    total_ip=ytd.ip + ros.ip,
                 )
             )
         return cls(effective_date=effective_date, entries=entries)

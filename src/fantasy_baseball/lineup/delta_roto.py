@@ -231,7 +231,11 @@ def _ev_delta_and_stats(
     recompute the split.
     """
     from fantasy_baseball.scoring import score_roto_dict
-    from fantasy_baseball.trades.evaluate import aggregate_player_stats, apply_swap_delta
+    from fantasy_baseball.trades.evaluate import (
+        aggregate_player_stats,
+        apply_swap_delta,
+        team_baseline_volumes,
+    )
 
     in_players, out_players = _swap_sets(before_players, after_players)
     loses_ros = aggregate_player_stats(out_players)
@@ -239,7 +243,17 @@ def _ev_delta_and_stats(
 
     all_before = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
     user_before_dict = all_before[team_name]
-    user_after_dict = apply_swap_delta(user_before_dict, loses_ros, gains_ros)
+    # Pull AB/IP off the projected standings entry; pre-PR-110 / legacy
+    # entries decay to None via team_baseline_volumes so apply_swap_delta
+    # falls back to the constant heuristic.
+    user_ab, user_ip = team_baseline_volumes(projected_standings.by_team()[team_name])
+    user_after_dict = apply_swap_delta(
+        user_before_dict,
+        loses_ros,
+        gains_ros,
+        team_ab=user_ab,
+        team_ip=user_ip,
+    )
 
     all_after = dict(all_before)
     all_after[team_name] = user_after_dict

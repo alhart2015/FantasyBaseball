@@ -23,7 +23,7 @@ from fantasy_baseball.models.roster import Roster
 from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
-from fantasy_baseball.trades.evaluate import apply_swap_delta
+from fantasy_baseball.trades.evaluate import apply_swap_delta, team_baseline_volumes
 from fantasy_baseball.utils.constants import (
     REPLACEMENT_HITTER,
     REPLACEMENT_RP,
@@ -344,11 +344,14 @@ def _delta_roto(
     if team_name not in all_before:
         return 0.0
 
+    team_ab, team_ip = team_baseline_volumes(projected_standings.by_team()[team_name])
     all_after = dict(all_before)
     all_after[team_name] = apply_swap_delta(
         all_before[team_name],
         loses_ros,
         gains_ros,
+        team_ab=team_ab,
+        team_ip=team_ip,
     )
 
     roto_before = score_roto_dict(all_before, team_sds=team_sds)
