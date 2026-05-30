@@ -1501,15 +1501,16 @@ class TestPitcherPoolModel:
             projection_source="rest_of_season",
         )
         sf = {c.name: c.scale_factor for c in bd.pitchers}
-        # Pool size 10, active P slots 9, excess 1. The weakest pitcher
-        # is the IL guy — they get benched, all 9 actives preserved.
+        # IL pitcher's projected contribution is below all active SP rates,
+        # so no positive-DeltaRoto swap exists -- the IL pitcher gets sf=0
+        # via the pair-swap model's "bench" fallback.
         assert sf["Weak IL"] == 0.0, "Pool model should bench the weak IL pitcher"
         for i in range(9):
             assert sf[f"Strong{i}"] == 1.0, f"Strong{i} should be preserved"
 
     def test_pool_no_op_when_all_pitchers_fit_in_slots(self):
-        """If pool size <= active P slot count, nothing gets benched.
-        Vacuously true since the team has exactly enough pitchers."""
+        """No IL pitchers to evaluate -- the pair-swap model returns {} when
+        il_candidates is empty, so no displacement is applied."""
         actives = [
             _pitcher(
                 f"P{i}",
@@ -2768,3 +2769,901 @@ class TestComputeRosterBreakdown:
         c = breakdown.hitters[0]
         assert c.status == ContributionStatus.ACTIVE
         assert c.scale_factor == 1.0
+
+
+class TestScaleStatsYTDFloor:
+    """`_scale_stats` adds a YTD floor ONLY in full_season_projection mode.
+
+    In rest_of_season mode (the optimizer/trade-evaluator path) the function
+    preserves the legacy ROS-only behavior so forward-looking decisions are
+    not biased by locked YTD totals. In full_season_projection mode (the
+    standings/breakdown path) YTD always counts so displaced players don't
+    silently lose their already-recorded stats.
+    """
+
+    def _pitcher_with_ytd(self, name, ros_k, full_season_k):
+        """Pitcher whose YTD K = full_season_k - ros_k."""
+        from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
+
+        ros = PitcherStats(
+            ip=60, w=2, k=ros_k, sv=0, er=20, bb=15, h_allowed=50, era=3.00, whip=1.08
+        )
+        full = PitcherStats(
+            ip=120, w=8, k=full_season_k, sv=0, er=40, bb=30, h_allowed=100, era=3.00, whip=1.08
+        )
+        return Player(
+            name=name,
+            player_type=PlayerType.PITCHER,
+            rest_of_season=ros,
+            full_season_projection=full,
+        )
+
+    def test_full_season_mode_scale_zero_preserves_ytd(self):
+        """Webb with 78 YTD K + 60 ROS K, displaced (factor=0) in
+        full_season_projection mode: contributes 78 K, not 0. YTD is
+        locked-in and must not vanish from the standings view.
+        """
+        from fantasy_baseball.scoring import _scale_stats
+
+        p = self._pitcher_with_ytd("Webb", ros_k=60, full_season_k=138)
+        scaled = _scale_stats(p, 0.0, "full_season_projection")
+        # YTD = 138 - 60 = 78; ROS * 0 = 0; total = 78
+        assert scaled["k"] == 78
+
+    def test_full_season_mode_scale_one_returns_full_season(self):
+        """factor=1.0 in full_season mode yields full_season K (= YTD + ROS),
+        matching an undiscounted player's projection-source full-season read."""
+        from fantasy_baseball.scoring import _scale_stats
+
+        p = self._pitcher_with_ytd("Healthy", ros_k=120, full_season_k=200)
+        scaled = _scale_stats(p, 1.0, "full_season_projection")
+        # YTD = 200 - 120 = 80; ROS * 1 = 120; total = 200
+        assert scaled["k"] == 200
+
+    def test_full_season_mode_scale_half_keeps_full_ytd(self):
+        """factor=0.5 in full_season mode: YTD untouched, ROS halved."""
+        from fantasy_baseball.scoring import _scale_stats
+
+        p = self._pitcher_with_ytd("Half", ros_k=80, full_season_k=130)
+        scaled = _scale_stats(p, 0.5, "full_season_projection")
+        # YTD = 130 - 80 = 50; ROS * 0.5 = 40; total = 90
+        assert scaled["k"] == 90
+
+    def test_ros_mode_unchanged_legacy_behavior(self):
+        """In rest_of_season mode, the function still returns ROS * factor
+        with NO YTD floor. The optimizer's forward-looking semantics are
+        unchanged: hot-YTD and cold-YTD players with the same ROS contribute
+        identically to forward decisions.
+        """
+        from fantasy_baseball.scoring import _scale_stats
+
+        p = self._pitcher_with_ytd("Webb", ros_k=60, full_season_k=138)
+        # ROS-mode displacement: contributes 0, NOT 78. The optimizer must not
+        # see YTD bleed into displaced-player scoring.
+        scaled_zero = _scale_stats(p, 0.0, "rest_of_season")
+        assert scaled_zero["k"] == 0
+
+        # factor=0.5 in ROS mode -> ROS * 0.5 = 30, no YTD.
+        scaled_half = _scale_stats(p, 0.5, "rest_of_season")
+        assert scaled_half["k"] == 30
+
+    def test_ros_mode_default_when_source_omitted(self):
+        """Backwards compatibility: callers that don't pass source get the
+        legacy ROS-only behavior. (Same as test_ros_mode_unchanged with
+        explicit source, just verifies the default.)
+        """
+        from fantasy_baseball.scoring import _scale_stats
+
+        p = self._pitcher_with_ytd("Webb", ros_k=60, full_season_k=138)
+        scaled = _scale_stats(p, 0.0)
+        assert scaled["k"] == 0
+
+    def test_full_season_mode_falls_back_to_ros_when_no_full_season(self):
+        """Preseason rosters lack full_season_projection. Even in full_season
+        mode, scaling should behave like ROS-only (YTD = 0 by definition)."""
+        from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
+        from fantasy_baseball.scoring import _scale_stats
+
+        ros = PitcherStats(
+            ip=200, w=12, k=200, sv=0, er=70, bb=40, h_allowed=160, era=3.15, whip=1.0
+        )
+        p = Player(
+            name="Preseason", player_type=PlayerType.PITCHER, rest_of_season=ros
+        )  # no full_season_projection
+        scaled = _scale_stats(p, 0.5, "full_season_projection")
+        # No YTD known -> floor = 0 -> ROS * 0.5 = 100
+        assert scaled["k"] == 100
+
+
+class TestPitcherPoolRateSwap:
+    """The pool model picks (candidate, target) pairs and discounts the target
+    via rate-swap, not zero-out. One pair per round; same target across all
+    categories (no per-stat cherry-pick).
+    """
+
+    def _il_starter(self, name, *, ros_ip, ros_k, preseason_ip):
+        from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
+        from fantasy_baseball.models.positions import Position
+
+        ros = PitcherStats(
+            ip=ros_ip,
+            w=ros_ip * 0.05,
+            k=ros_k,
+            sv=0,
+            er=ros_ip * 0.33,
+            bb=ros_ip * 0.25,
+            h_allowed=ros_ip * 0.83,
+            era=3.00,
+            whip=1.08,
+        )
+        full = PitcherStats(
+            ip=ros_ip + 30,
+            w=(ros_ip + 30) * 0.05,
+            k=ros_k + 30,
+            sv=0,
+            er=(ros_ip + 30) * 0.33,
+            bb=(ros_ip + 30) * 0.25,
+            h_allowed=(ros_ip + 30) * 0.83,
+            era=3.00,
+            whip=1.08,
+        )
+        pre = PitcherStats(
+            ip=preseason_ip,
+            w=preseason_ip * 0.05,
+            k=preseason_ip * 1.0,
+            sv=0,
+            er=preseason_ip * 0.33,
+            bb=preseason_ip * 0.25,
+            h_allowed=preseason_ip * 0.83,
+            era=3.00,
+            whip=1.08,
+        )
+        return Player(
+            name=name,
+            player_type=PlayerType.PITCHER,
+            rest_of_season=ros,
+            full_season_projection=full,
+            preseason=pre,
+            selected_position=Position.IL,
+        )
+
+    def _active_starter(self, name, *, ros_ip, k_per_9, preseason_ip):
+        from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
+        from fantasy_baseball.models.positions import Position
+
+        k = ros_ip * k_per_9 / 9.0
+        ros = PitcherStats(
+            ip=ros_ip,
+            w=ros_ip * 0.05,
+            k=k,
+            sv=0,
+            er=ros_ip * 0.40,
+            bb=ros_ip * 0.30,
+            h_allowed=ros_ip * 0.90,
+            era=3.60,
+            whip=1.20,
+        )
+        full = PitcherStats(
+            ip=ros_ip + 40,
+            w=(ros_ip + 40) * 0.05,
+            k=k + 40 * k_per_9 / 9.0,
+            sv=0,
+            er=(ros_ip + 40) * 0.40,
+            bb=(ros_ip + 40) * 0.30,
+            h_allowed=(ros_ip + 40) * 0.90,
+            era=3.60,
+            whip=1.20,
+        )
+        pre = PitcherStats(
+            ip=preseason_ip,
+            w=preseason_ip * 0.05,
+            k=preseason_ip * k_per_9 / 9.0,
+            sv=0,
+            er=preseason_ip * 0.40,
+            bb=preseason_ip * 0.30,
+            h_allowed=preseason_ip * 0.90,
+            era=3.60,
+            whip=1.20,
+        )
+        return Player(
+            name=name,
+            player_type=PlayerType.PITCHER,
+            rest_of_season=ros,
+            full_season_projection=full,
+            preseason=pre,
+            selected_position=Position.P,
+        )
+
+    def test_webb_rate_swap_discounts_worst_active_sp_not_webb(self):
+        """Webb (IL, 60 ROS IP, ~10 K/9) returns. Worst active SP has 130
+        ROS IP @ 7 K/9. The pair-swap model should:
+          - keep Webb at factor=1.0 (full contribution, NOT in factors dict)
+          - discount the worst SP by 60/130 of his ROS
+        It should NOT zero out Webb. It should NOT touch other active SPs.
+        """
+        from fantasy_baseball.models.standings import CategoryStats
+        from fantasy_baseball.scoring import (
+            LeagueContext,
+            _compute_pitcher_pool_factors,
+        )
+        from fantasy_baseball.utils.constants import Category
+
+        webb = self._il_starter("Webb", ros_ip=60, ros_k=67, preseason_ip=200)
+        sp_strong_a = self._active_starter("SP_A", ros_ip=140, k_per_9=10.0, preseason_ip=200)
+        sp_strong_b = self._active_starter("SP_B", ros_ip=135, k_per_9=9.5, preseason_ip=200)
+        sp_worst = self._active_starter("SP_Worst", ros_ip=130, k_per_9=7.0, preseason_ip=200)
+
+        active = [sp_strong_a, sp_strong_b, sp_worst]
+        il = [webb]
+
+        baseline = {
+            "Opp1": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=20, k=400, sv=0, era=4.0, whip=1.3
+            ),
+            "Opp2": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=22, k=420, sv=0, era=3.9, whip=1.28
+            ),
+        }
+        team_sds = {tn: {c: 1.0 for c in Category} for tn in ["Me", *baseline.keys()]}
+        ctx = LeagueContext(
+            baseline_other_team_stats=baseline,
+            team_sds=team_sds,
+            team_name="Me",
+        )
+
+        factors = _compute_pitcher_pool_factors(
+            active_pitchers=active,
+            il_pitchers=il,
+            all_active=active,
+            all_il=il,
+            league_context=ctx,
+            projection_source="rest_of_season",
+        )
+
+        assert "Webb" not in factors, "Webb should be active (sf=1.0 implicit), not in factors"
+        assert "SP_Worst" in factors, "Worst SP should be the discount target"
+        # Same-role direct-IP swap: cand_pre=200, tgt_pre=200, cand_ros=60.
+        # window = 200 * (60 / 200) = 60. target_ros_ip=130, scale=(130-60)/130.
+        expected = (130.0 - 60.0) / 130.0
+        assert abs(factors["SP_Worst"] - expected) < 1e-9
+        assert "SP_A" not in factors and "SP_B" not in factors, "Strong SPs untouched"
+
+    def test_same_target_discounted_identically_across_all_categories(self):
+        """When SP_Worst is the swap target, ALL his counting stats get the
+        same scale factor -- not a per-stat picker. This guards against
+        accidental per-category target selection in future refactors.
+        """
+        from fantasy_baseball.models.standings import CategoryStats
+        from fantasy_baseball.scoring import (
+            LeagueContext,
+            _apply_displacement,
+        )
+        from fantasy_baseball.utils.constants import Category
+
+        webb = self._il_starter("Webb", ros_ip=60, ros_k=67, preseason_ip=200)
+        sp_worst = self._active_starter("SP_Worst", ros_ip=130, k_per_9=7.0, preseason_ip=200)
+        sp_strong = self._active_starter("SP_Strong", ros_ip=140, k_per_9=10.0, preseason_ip=200)
+
+        baseline = {
+            "Opp1": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=20, k=400, sv=0, era=4.0, whip=1.3
+            ),
+            "Opp2": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=22, k=420, sv=0, era=3.9, whip=1.28
+            ),
+        }
+        team_sds = {tn: {c: 1.0 for c in Category} for tn in ["Me", *baseline.keys()]}
+        ctx = LeagueContext(
+            baseline_other_team_stats=baseline,
+            team_sds=team_sds,
+            team_name="Me",
+        )
+
+        scaled_roster = _apply_displacement(
+            [webb, sp_worst, sp_strong],
+            league_context=ctx,
+            projection_source="rest_of_season",
+        )
+
+        # Find the scaled SP_Worst entry (it's a dict, not a Player).
+        # SP_Worst should have been discounted; identify it by its k value
+        # being less than SP_Worst's full ROS k.
+        worst_scaled = None
+        for entry in scaled_roster:
+            if isinstance(entry, dict) and entry.get("k", 0) < sp_worst.rest_of_season.k:
+                worst_scaled = entry
+                break
+        assert worst_scaled is not None, "Expected one scaled dict for the swap target"
+
+        expected_factor = (130.0 - 60.0) / 130.0
+        # Every counting stat scaled by the same factor.
+        for key in ("k", "w", "sv", "ip", "er", "bb", "h_allowed"):
+            ros_val = getattr(sp_worst.rest_of_season, key)
+            assert abs(worst_scaled[key] - ros_val * expected_factor) < 1e-6, (
+                f"Stat {key} not scaled by the unified target factor"
+            )
+
+    def test_starter_returning_discounts_reliever_via_preseason_proration(self):
+        """Webb (SP, 60 ROS IP, 200 preseason IP) returns to a pool whose
+        weakest arm is a reliever (25 ROS IP, 65 preseason IP). The cross-role
+        swap should discount the reliever by 65 * (60/200) = 19.5 IP, NOT by
+        60 IP (which would zero the reliever).
+        """
+        from fantasy_baseball.lineup.pitcher_swap import discount_factor
+        from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
+        from fantasy_baseball.models.positions import Position
+        from fantasy_baseball.models.standings import CategoryStats
+        from fantasy_baseball.scoring import LeagueContext, _compute_pitcher_pool_factors
+        from fantasy_baseball.utils.constants import Category
+
+        webb = self._il_starter("Webb", ros_ip=60, ros_k=67, preseason_ip=200)
+
+        # Elite SPs (untouched), one weak RP (the cross-role target).
+        sp_a = self._active_starter("SP_A", ros_ip=140, k_per_9=10.5, preseason_ip=200)
+        sp_b = self._active_starter("SP_B", ros_ip=135, k_per_9=9.8, preseason_ip=200)
+
+        rp_ros = PitcherStats(
+            ip=25,
+            w=1,
+            k=20,
+            sv=2,
+            er=12,
+            bb=10,
+            h_allowed=22,
+            era=4.32,
+            whip=1.28,
+        )
+        rp_full = PitcherStats(
+            ip=45,
+            w=2,
+            k=40,
+            sv=5,
+            er=20,
+            bb=18,
+            h_allowed=42,
+            era=4.00,
+            whip=1.33,
+        )
+        rp_pre = PitcherStats(
+            ip=65,
+            w=3,
+            k=60,
+            sv=7,
+            er=30,
+            bb=24,
+            h_allowed=58,
+            era=4.15,
+            whip=1.26,
+        )
+        weak_rp = Player(
+            name="Weak_RP",
+            player_type=PlayerType.PITCHER,
+            rest_of_season=rp_ros,
+            full_season_projection=rp_full,
+            preseason=rp_pre,
+            selected_position=Position.P,
+        )
+        active = [sp_a, sp_b, weak_rp]
+
+        baseline = {
+            "Opp1": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=20, k=400, sv=18, era=4.0, whip=1.3
+            ),
+            "Opp2": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=22, k=420, sv=20, era=3.9, whip=1.28
+            ),
+        }
+        team_sds = {tn: {c: 1.0 for c in Category} for tn in ["Me", *baseline.keys()]}
+        ctx = LeagueContext(
+            baseline_other_team_stats=baseline,
+            team_sds=team_sds,
+            team_name="Me",
+        )
+
+        factors = _compute_pitcher_pool_factors(
+            active_pitchers=active,
+            il_pitchers=[webb],
+            all_active=active,
+            all_il=[webb],
+            league_context=ctx,
+            projection_source="rest_of_season",
+        )
+
+        # Webb stays active.
+        assert "Webb" not in factors
+
+        # Weak_RP should be the discount target (he's the weakest pitcher).
+        # Window = 65 * (60/200) = 19.5. Factor = (25 - 19.5) / 25.
+        assert "Weak_RP" in factors, (
+            f"Expected Weak_RP as cross-role target; picker chose {list(factors)}"
+        )
+        expected = discount_factor(target_ros_ip=25.0, window=65.0 * (60.0 / 200.0))
+        assert abs(factors["Weak_RP"] - expected) < 1e-9
+
+    def test_two_il_pitchers_each_pick_own_target(self):
+        """Two IL pitchers returning -- each must pick its OWN discount
+        target. The already_discounted set must prevent double-targeting,
+        and the second IL pitcher's bench-vs-swap evaluation must account
+        for the first IL pitcher's committed discount.
+
+        Setup: Webb (200 preseason, 60 ROS, 67 K) and Glasnow (180
+        preseason, 45 ROS, 55 K) both return. Four active SPs of varying
+        quality are available. Higher-preseason-IP IL pitcher (Webb)
+        processes first and claims one target; Glasnow then picks a
+        DIFFERENT target (already_discounted prevents reuse).
+
+        Note on target identity: the delta-Roto-optimal picker maximizes
+        team roto pts, which is not the same as "discount the weakest."
+        Discounting a slightly-higher-volume target by the same IP window
+        can yield a better team roto outcome when the team's competitive
+        position with that stat is near a half-point boundary. The exact
+        targets (SP_A and SP_B in this setup) are a stable fixture of the
+        picker's math -- the important invariant is that the TWO targets
+        are distinct (already_discounted works) and neither IL pitcher is
+        benched.
+        """
+        from fantasy_baseball.models.standings import CategoryStats
+        from fantasy_baseball.scoring import LeagueContext, _compute_pitcher_pool_factors
+        from fantasy_baseball.utils.constants import Category
+
+        webb = self._il_starter("Webb", ros_ip=60, ros_k=67, preseason_ip=200)
+        glasnow = self._il_starter("Glasnow", ros_ip=45, ros_k=55, preseason_ip=180)
+
+        sp_a = self._active_starter("SP_A", ros_ip=140, k_per_9=10.0, preseason_ip=200)
+        sp_b = self._active_starter("SP_B", ros_ip=135, k_per_9=9.5, preseason_ip=200)
+        sp_worst_1 = self._active_starter("SP_Worst1", ros_ip=130, k_per_9=7.0, preseason_ip=200)
+        sp_worst_2 = self._active_starter("SP_Worst2", ros_ip=125, k_per_9=6.5, preseason_ip=200)
+
+        active = [sp_a, sp_b, sp_worst_1, sp_worst_2]
+        il = [webb, glasnow]
+
+        baseline = {
+            "Opp1": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=20, k=400, sv=0, era=4.0, whip=1.3
+            ),
+            "Opp2": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=22, k=420, sv=0, era=3.9, whip=1.28
+            ),
+        }
+        team_sds = {tn: {c: 1.0 for c in Category} for tn in ["Me", *baseline.keys()]}
+        ctx = LeagueContext(
+            baseline_other_team_stats=baseline,
+            team_sds=team_sds,
+            team_name="Me",
+        )
+
+        factors = _compute_pitcher_pool_factors(
+            active_pitchers=active,
+            il_pitchers=il,
+            all_active=active,
+            all_il=il,
+            league_context=ctx,
+            projection_source="rest_of_season",
+        )
+
+        # Neither IL pitcher is benched (both should activate -- their rates
+        # beat the weakest two actives' rates).
+        assert "Webb" not in factors, "Webb should be active (sf=1.0 implicit)"
+        assert "Glasnow" not in factors, "Glasnow should be active (sf=1.0 implicit)"
+
+        # Exactly TWO distinct active pitchers are discounted -- already_discounted
+        # prevents the second IL pitcher from re-targeting the first's chosen target.
+        all_active_names = {"SP_A", "SP_B", "SP_Worst1", "SP_Worst2"}
+        discounted_active_targets = [name for name in factors if name in all_active_names]
+        assert len(discounted_active_targets) == 2, (
+            f"Expected two distinct active targets discounted; got {list(factors)}"
+        )
+        assert len(set(discounted_active_targets)) == 2, (
+            f"already_discounted violated: same target chosen twice; got {list(factors)}"
+        )
+
+        # Both scale factors are in (0, 1) -- partial discounts, not full bench.
+        for tgt_name in discounted_active_targets:
+            assert 0.0 < factors[tgt_name] < 1.0, (
+                f"{tgt_name} should be partially discounted, got {factors[tgt_name]}"
+            )
+
+    def test_il_pitcher_benched_when_no_positive_swap_exists(self):
+        """If every active pitcher's rate beats the IL pitcher's rate by
+        enough that discounting any of them costs more than the IL pitcher
+        adds, the IL pitcher gets sf=0 (legacy bench fallback).
+        """
+        from fantasy_baseball.models.standings import CategoryStats
+        from fantasy_baseball.scoring import LeagueContext, _compute_pitcher_pool_factors
+        from fantasy_baseball.utils.constants import Category
+
+        # Weak IL pitcher: small ROS volume, low K rate.
+        weak_il = self._il_starter("Weak_IL", ros_ip=30, ros_k=20, preseason_ip=180)
+
+        # Elite active SPs -- discounting any of them loses more than Weak_IL adds.
+        sp_a = self._active_starter("Elite_A", ros_ip=160, k_per_9=11.0, preseason_ip=200)
+        sp_b = self._active_starter("Elite_B", ros_ip=155, k_per_9=10.8, preseason_ip=200)
+        sp_c = self._active_starter("Elite_C", ros_ip=150, k_per_9=10.5, preseason_ip=200)
+
+        active = [sp_a, sp_b, sp_c]
+
+        baseline = {
+            "Opp1": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=20, k=400, sv=0, era=4.0, whip=1.3
+            ),
+            "Opp2": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=22, k=420, sv=0, era=3.9, whip=1.28
+            ),
+        }
+        team_sds = {tn: {c: 1.0 for c in Category} for tn in ["Me", *baseline.keys()]}
+        ctx = LeagueContext(
+            baseline_other_team_stats=baseline,
+            team_sds=team_sds,
+            team_name="Me",
+        )
+
+        factors = _compute_pitcher_pool_factors(
+            active_pitchers=active,
+            il_pitchers=[weak_il],
+            all_active=active,
+            all_il=[weak_il],
+            league_context=ctx,
+            projection_source="rest_of_season",
+        )
+
+        # Weak_IL should be benched (sf=0): no positive swap exists.
+        assert factors.get("Weak_IL") == 0.0, (
+            f"Expected Weak_IL benched at sf=0; got factors={factors}"
+        )
+
+        # The elite SPs are NOT discounted -- no swap was applied.
+        assert "Elite_A" not in factors
+        assert "Elite_B" not in factors
+        assert "Elite_C" not in factors
+
+
+class TestComputeRosterBreakdownFullSeasonInvariant:
+    """The breakdown modal's per-row totals must sum to the standings
+    widget's headline total in full_season_projection mode. The aggregate
+    over ``contribution_stats[cat]`` per category must equal
+    ``project_team_stats(roster, displacement=True, projection_source="full_season_projection")``.
+
+    Pre-fix: the modal computed raw_stats * scale_factor, which gave
+    ``full_season * factor`` instead of ``YTD + ROS * factor``, causing a
+    per-pitcher discrepancy of ``YTD * (1 - factor)``. Webb scenario: 80 YTD K,
+    120 ROS K, factor 0.5 -> modal showed 100, widget showed 140, 40 K gap.
+    """
+
+    def _pitcher(self, name, *, ros_k, full_season_k, ros_ip=60, full_season_ip=120):
+        from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
+        from fantasy_baseball.models.positions import Position
+
+        ros = PitcherStats(
+            ip=ros_ip,
+            w=2,
+            k=ros_k,
+            sv=0,
+            er=20,
+            bb=15,
+            h_allowed=50,
+            era=3.00,
+            whip=1.08,
+        )
+        full = PitcherStats(
+            ip=full_season_ip,
+            w=8,
+            k=full_season_k,
+            sv=0,
+            er=40,
+            bb=30,
+            h_allowed=100,
+            era=3.00,
+            whip=1.08,
+        )
+        pre = PitcherStats(
+            ip=200,
+            w=14,
+            k=full_season_k + 50,
+            sv=0,
+            er=72,
+            bb=50,
+            h_allowed=170,
+            era=3.24,
+            whip=1.10,
+        )
+        return Player(
+            name=name,
+            player_type=PlayerType.PITCHER,
+            rest_of_season=ros,
+            full_season_projection=full,
+            preseason=pre,
+            selected_position=Position.P,
+        )
+
+    def test_breakdown_contribution_stats_match_standings_in_full_season_mode(self):
+        """For a displaced pitcher with non-zero YTD, contribution_stats[k]
+        must equal _scale_stats output, which equals what project_team_stats
+        sums into the widget total.
+        """
+        from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
+        from fantasy_baseball.models.positions import Position
+        from fantasy_baseball.models.standings import CategoryStats
+        from fantasy_baseball.scoring import (
+            LeagueContext,
+            compute_roster_breakdown,
+            project_team_stats,
+        )
+        from fantasy_baseball.utils.constants import Category
+
+        # Webb: 80 YTD K, 60 ROS K, full_season=140. He's IL.
+        webb_ros = PitcherStats(
+            ip=60, w=4, k=60, sv=0, er=22, bb=15, h_allowed=50, era=3.30, whip=1.08
+        )
+        webb_full = PitcherStats(
+            ip=140, w=10, k=140, sv=0, er=50, bb=35, h_allowed=120, era=3.21, whip=1.10
+        )
+        webb_pre = PitcherStats(
+            ip=200, w=14, k=200, sv=0, er=72, bb=50, h_allowed=170, era=3.24, whip=1.10
+        )
+        webb = Player(
+            name="Webb",
+            player_type=PlayerType.PITCHER,
+            rest_of_season=webb_ros,
+            full_season_projection=webb_full,
+            preseason=webb_pre,
+            selected_position=Position.IL,
+        )
+
+        # Worst SP: low K rate, gets discounted.
+        sp_worst_ros = PitcherStats(
+            ip=130, w=6, k=100, sv=0, er=50, bb=30, h_allowed=120, era=3.46, whip=1.15
+        )
+        sp_worst_full = PitcherStats(
+            ip=170, w=8, k=130, sv=0, er=65, bb=40, h_allowed=155, era=3.44, whip=1.15
+        )
+        sp_worst_pre = PitcherStats(
+            ip=200, w=10, k=160, sv=0, er=80, bb=50, h_allowed=185, era=3.60, whip=1.18
+        )
+        sp_worst = Player(
+            name="SP_Worst",
+            player_type=PlayerType.PITCHER,
+            rest_of_season=sp_worst_ros,
+            full_season_projection=sp_worst_full,
+            preseason=sp_worst_pre,
+            selected_position=Position.P,
+        )
+
+        # Filler strong SPs (untouched by swap).
+        def strong_sp(name, ros_ip):
+            ros = PitcherStats(
+                ip=ros_ip,
+                w=10,
+                k=int(ros_ip * 10.5 / 9),
+                sv=0,
+                er=40,
+                bb=30,
+                h_allowed=110,
+                era=2.80,
+                whip=1.05,
+            )
+            full = PitcherStats(
+                ip=ros_ip + 40,
+                w=14,
+                k=int((ros_ip + 40) * 10.5 / 9),
+                sv=0,
+                er=50,
+                bb=40,
+                h_allowed=140,
+                era=2.80,
+                whip=1.05,
+            )
+            pre = PitcherStats(
+                ip=200, w=14, k=233, sv=0, er=62, bb=50, h_allowed=180, era=2.80, whip=1.05
+            )
+            return Player(
+                name=name,
+                player_type=PlayerType.PITCHER,
+                rest_of_season=ros,
+                full_season_projection=full,
+                preseason=pre,
+                selected_position=Position.P,
+            )
+
+        sp_a = strong_sp("SP_A", 140)
+        sp_b = strong_sp("SP_B", 135)
+        roster = [webb, sp_worst, sp_a, sp_b]
+
+        baseline = {
+            "Opp1": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=20, k=400, sv=0, era=4.0, whip=1.3
+            ),
+            "Opp2": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=22, k=420, sv=0, era=3.9, whip=1.28
+            ),
+        }
+        team_sds = {tn: {c: 1.0 for c in Category} for tn in ["Me", *baseline.keys()]}
+        ctx = LeagueContext(
+            baseline_other_team_stats=baseline,
+            team_sds=team_sds,
+            team_name="Me",
+        )
+
+        breakdown = compute_roster_breakdown(
+            "Me", roster, league_context=ctx, projection_source="full_season_projection"
+        )
+        team_stats = project_team_stats(
+            roster,
+            displacement=True,
+            projection_source="full_season_projection",
+            league_context=ctx,
+        )
+
+        # Sum contribution_stats[k] across all pitchers. Must equal team_stats.k.
+        total_k = sum(c.contribution_stats.get("k", 0.0) for c in breakdown.pitchers)
+        assert abs(total_k - team_stats.k) < 1e-6, (
+            f"Breakdown sum k={total_k} disagrees with standings k={team_stats.k}; "
+            f"contributions={[(c.name, c.contribution_stats.get('k')) for c in breakdown.pitchers]}"
+        )
+
+        # Specifically: SP_Worst is the discount target (factor ~0.538), and
+        # its contribution_stats[k] must be YTD + ROS * factor, not full_season * factor.
+        ytd_k_sp_worst = sp_worst.full_season_projection.k - sp_worst.rest_of_season.k
+        ros_k_sp_worst = sp_worst.rest_of_season.k
+        # SP_Worst must be among the contributions (status DISPLACED or ACTIVE).
+        sp_worst_contrib = next((c for c in breakdown.pitchers if c.name == "SP_Worst"), None)
+        assert sp_worst_contrib is not None
+        if sp_worst_contrib.status == "displaced":
+            f = sp_worst_contrib.scale_factor
+            expected = ytd_k_sp_worst + ros_k_sp_worst * f
+            assert abs(sp_worst_contrib.contribution_stats["k"] - expected) < 1e-6, (
+                f"SP_Worst contribution_stats[k]={sp_worst_contrib.contribution_stats['k']}, "
+                f"expected YTD+ROS*factor = {ytd_k_sp_worst} + {ros_k_sp_worst}*{f} = {expected}"
+            )
+
+    def test_breakdown_contribution_stats_match_ros_mode(self):
+        """In rest_of_season mode, contribution_stats[k] = ROS * factor (no YTD floor)."""
+        from fantasy_baseball.scoring import compute_roster_breakdown
+
+        # No LeagueContext -> hitter substitution model for pitchers; but with
+        # only active pitchers and no IL, no displacement is applied.
+        roster = [self._pitcher("P1", ros_k=60, full_season_k=140)]
+        breakdown = compute_roster_breakdown("Me", roster, projection_source="rest_of_season")
+        p1 = breakdown.pitchers[0]
+        # Active, factor=1.0 -> contribution_stats[k] = ROS = 60 (NOT full_season 140).
+        assert p1.scale_factor == 1.0
+        assert abs(p1.contribution_stats["k"] - 60.0) < 1e-6, (
+            f"ROS-mode active player should contribute ROS K=60, got {p1.contribution_stats['k']}"
+        )
+
+    def test_breakdown_benched_il_pitcher_contributes_ytd_in_full_season_mode(self):
+        """An IL pitcher benched at sf=0 by the pool model still contributes
+        YTD in full_season mode (locked-in stats survive). The modal must
+        show this YTD, not 0.
+        """
+        from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
+        from fantasy_baseball.models.positions import Position
+        from fantasy_baseball.models.standings import CategoryStats
+        from fantasy_baseball.scoring import LeagueContext, compute_roster_breakdown
+        from fantasy_baseball.utils.constants import Category
+
+        # Weak IL pitcher: no positive swap exists, gets sf=0.
+        weak_ros = PitcherStats(
+            ip=30, w=1, k=15, sv=0, er=15, bb=8, h_allowed=30, era=4.50, whip=1.27
+        )
+        weak_full = PitcherStats(
+            ip=90, w=4, k=60, sv=0, er=40, bb=25, h_allowed=85, era=4.00, whip=1.22
+        )
+        weak_pre = PitcherStats(
+            ip=180, w=10, k=140, sv=0, er=72, bb=50, h_allowed=170, era=3.60, whip=1.22
+        )
+        weak_il = Player(
+            name="Weak_IL",
+            player_type=PlayerType.PITCHER,
+            rest_of_season=weak_ros,
+            full_season_projection=weak_full,
+            preseason=weak_pre,
+            selected_position=Position.IL,
+        )
+
+        # Elite actives (no swap helps).
+        def elite_sp(name, ros_ip):
+            ros = PitcherStats(
+                ip=ros_ip,
+                w=10,
+                k=int(ros_ip * 11.0 / 9),
+                sv=0,
+                er=35,
+                bb=25,
+                h_allowed=100,
+                era=2.50,
+                whip=1.00,
+            )
+            full = PitcherStats(
+                ip=ros_ip + 40,
+                w=14,
+                k=int((ros_ip + 40) * 11.0 / 9),
+                sv=0,
+                er=45,
+                bb=33,
+                h_allowed=130,
+                era=2.50,
+                whip=1.00,
+            )
+            pre = PitcherStats(
+                ip=200, w=14, k=244, sv=0, er=55, bb=45, h_allowed=160, era=2.50, whip=1.00
+            )
+            return Player(
+                name=name,
+                player_type=PlayerType.PITCHER,
+                rest_of_season=ros,
+                full_season_projection=full,
+                preseason=pre,
+                selected_position=Position.P,
+            )
+
+        sp_a, sp_b, sp_c = elite_sp("SP_A", 160), elite_sp("SP_B", 155), elite_sp("SP_C", 150)
+        roster = [weak_il, sp_a, sp_b, sp_c]
+
+        baseline = {
+            "Opp1": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=20, k=400, sv=0, era=4.0, whip=1.3
+            ),
+            "Opp2": CategoryStats(
+                r=0, hr=0, rbi=0, sb=0, avg=0, w=22, k=420, sv=0, era=3.9, whip=1.28
+            ),
+        }
+        team_sds = {tn: {c: 1.0 for c in Category} for tn in ["Me", *baseline.keys()]}
+        ctx = LeagueContext(
+            baseline_other_team_stats=baseline,
+            team_sds=team_sds,
+            team_name="Me",
+        )
+
+        breakdown = compute_roster_breakdown(
+            "Me", roster, league_context=ctx, projection_source="full_season_projection"
+        )
+        weak_contrib = next((c for c in breakdown.pitchers if c.name == "Weak_IL"), None)
+        assert weak_contrib is not None
+        assert weak_contrib.scale_factor == 0.0, "Weak IL pitcher should be benched at sf=0"
+        # YTD = full_season - ROS = 60 - 15 = 45 K. Modal must show this.
+        ytd_k = weak_full.k - weak_ros.k
+        assert abs(weak_contrib.contribution_stats["k"] - ytd_k) < 1e-6, (
+            f"Benched IL pitcher should contribute YTD={ytd_k} K, got {weak_contrib.contribution_stats['k']}"
+        )
+
+
+class TestPlayerContributionFromDictNullGuards:
+    """from_dict must not crash when persisted JSON contains explicit null
+    values for raw_stats or contribution_stats (e.g., a hand-edit, an
+    alternate serializer, or a future error-recovery write path).
+    d.get(k, default) returns the explicit None when the key is present
+    but null, not the default -- so the dict comprehension must guard.
+    """
+
+    def test_from_dict_handles_null_contribution_stats(self):
+        from fantasy_baseball.scoring import PlayerContribution
+
+        d = {
+            "name": "X",
+            "player_type": "pitcher",
+            "status": "active",
+            "scale_factor": 1.0,
+            "raw_stats": {"k": 200.0, "ip": 180.0},
+            "contribution_stats": None,
+        }
+        # Must not raise AttributeError on None.items().
+        pc = PlayerContribution.from_dict(d)
+        # When contribution_stats is null AND raw_stats is non-empty, the
+        # back-compat fallback fires (same as when the key is absent).
+        assert pc.contribution_stats.get("k") == 200.0
+
+    def test_from_dict_handles_null_raw_stats(self):
+        from fantasy_baseball.scoring import PlayerContribution
+
+        d = {
+            "name": "X",
+            "player_type": "pitcher",
+            "status": "no_projection",
+            "scale_factor": 0.0,
+            "raw_stats": None,
+            "contribution_stats": {},
+        }
+        # Must not raise AttributeError on None.items().
+        pc = PlayerContribution.from_dict(d)
+        assert pc.raw_stats == {}
+        assert pc.contribution_stats == {}

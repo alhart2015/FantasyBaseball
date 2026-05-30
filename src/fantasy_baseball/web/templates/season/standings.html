@@ -449,18 +449,23 @@ function buildBreakdownRow(contribution, cat, colSpec) {
     statusTd.appendChild(buildBadgeSpan(contribution.status));
     tr.appendChild(statusTd);
 
-    const raw = contribution.raw_stats || {};
+    // contribution_stats holds the actual scaled contribution per stat
+    // (YTD + ROS * factor in full_season mode; ROS * factor in ros mode).
+    // The modal renders these directly so per-row sums match the standings
+    // widget headline -- multiplying raw_stats * scale_factor client-side
+    // loses the YTD floor and re-introduces the displaced-pitcher bug.
+    const contrib = contribution.contribution_stats || {};
     const factor = contribution.scale_factor || 0;
     const isMissing = contribution.status === 'no_projection';
 
     if (colSpec.kind === 'counting') {
         const td = document.createElement('td');
-        td.textContent = isMissing ? '—' : String(formatContribution((raw[colSpec.field] || 0) * factor));
+        td.textContent = isMissing ? '—' : String(formatContribution(contrib[colSpec.field] || 0));
         tr.appendChild(td);
     } else {
         for (const component of colSpec.components) {
             const td = document.createElement('td');
-            td.textContent = isMissing ? '—' : String(formatContribution((raw[component] || 0) * factor));
+            td.textContent = isMissing ? '—' : String(formatContribution(contrib[component] || 0));
             tr.appendChild(td);
         }
     }
@@ -477,12 +482,12 @@ function buildBreakdownRow(contribution, cat, colSpec) {
 
 function sortContributions(contributions, colSpec) {
     return contributions.slice().sort((a, b) => {
-        // Contributing rows first (non-zero factor AND has projection), sorted by the target stat desc
+        // Contributing rows first (non-zero contribution), sorted by target stat desc.
         const aValue = colSpec.kind === 'counting'
-            ? (a.raw_stats?.[colSpec.field] || 0) * (a.scale_factor || 0)
+            ? (a.contribution_stats?.[colSpec.field] || 0)
             : (a.scale_factor || 0);
         const bValue = colSpec.kind === 'counting'
-            ? (b.raw_stats?.[colSpec.field] || 0) * (b.scale_factor || 0)
+            ? (b.contribution_stats?.[colSpec.field] || 0)
             : (b.scale_factor || 0);
         if (aValue !== bValue) return bValue - aValue;
         return a.name.localeCompare(b.name);

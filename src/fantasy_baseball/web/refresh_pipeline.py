@@ -157,8 +157,8 @@ def build_standings_breakdown_payload(
     match the :class:`ProjectedStandings` payload shape.
 
     Uses the same two-pass ΔRoto-optimal displacement as
-    :meth:`ProjectedStandings.from_rosters`, so per-player ``raw_stats *
-    scale_factor`` aggregates here match the standings widget exactly:
+    :meth:`ProjectedStandings.from_rosters`, so per-player ``contribution_stats[cat]``
+    aggregates here match the standings widget exactly:
 
     1. Pass 1 — SGP-based displacement → baseline ``{team: stats}``.
     2. Pass 2 — each team picks its displacement targets via ΔRoto,

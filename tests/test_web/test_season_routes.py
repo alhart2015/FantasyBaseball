@@ -1408,3 +1408,130 @@ def test_stash_below_cutline_owned_flagged_droppable(client, kv_isolation):
     html = client.get("/stash").data.decode()
     assert "below-cutline" in html  # the weak owned stash is below the cutline
     assert "Weak Owned Stash" in html
+
+
+def test_standings_route_migrates_stale_breakdown_lacking_contribution_stats(
+    client,
+):
+    """Pre-fix persisted KV blobs lack contribution_stats per player. The
+    route must apply the back-compat fallback (raw_stats * scale_factor)
+    when reading these stale blobs, so the modal renders non-zero values
+    immediately after deploy instead of waiting for the next refresh.
+
+    This pins finding #1 from the post-fix code review: without route-layer
+    migration, every counting-stat cell in the modal would render as 0 for
+    stale data because the template path bypasses from_dict entirely.
+    """
+    import json
+    import re
+
+    from fantasy_baseball.web.season_data import CacheKey
+
+    stale_payload = {
+        "effective_date": "2026-05-29",
+        "teams": {
+            "Hart of the Order": {
+                "team_name": "Hart of the Order",
+                "hitters": [
+                    {
+                        "name": "Test Hitter",
+                        "player_type": "hitter",
+                        "status": "active",
+                        "scale_factor": 1.0,
+                        "raw_stats": {
+                            "r": 80.0,
+                            "hr": 25.0,
+                            "rbi": 70.0,
+                            "sb": 5.0,
+                            "h": 130.0,
+                            "ab": 500.0,
+                        },
+                        # contribution_stats intentionally absent (stale blob).
+                    }
+                ],
+                "pitchers": [
+                    {
+                        "name": "Test Displaced",
+                        "player_type": "pitcher",
+                        "status": "displaced",
+                        "scale_factor": 0.5,
+                        "raw_stats": {
+                            "w": 10.0,
+                            "k": 200.0,
+                            "sv": 0.0,
+                            "ip": 180.0,
+                            "er": 60.0,
+                            "bb": 50.0,
+                            "h_allowed": 160.0,
+                        },
+                        # contribution_stats intentionally absent.
+                    }
+                ],
+            }
+        },
+    }
+
+    def fake_read_cache_dict(key):
+        if key == CacheKey.STANDINGS_BREAKDOWN:
+            return stale_payload
+        if key == CacheKey.STANDINGS:
+            # Minimal valid standings blob so the `if raw_standings:` branch
+            # in the route is entered and raw_breakdown is actually read.
+            return {
+                "effective_date": "2026-05-29",
+                "teams": [
+                    {
+                        "name": "Hart of the Order",
+                        "team_key": "key_1",
+                        "rank": 1,
+                        "stats": {
+                            "R": 300,
+                            "HR": 90,
+                            "RBI": 290,
+                            "SB": 50,
+                            "AVG": 0.270,
+                            "W": 35,
+                            "K": 600,
+                            "SV": 25,
+                            "ERA": 3.50,
+                            "WHIP": 1.18,
+                        },
+                    }
+                ],
+            }
+        return None
+
+    # Patch the cache reader at the season_routes import site.
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict") as m,
+        patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
+    ):
+        mock_cfg.return_value.team_name = "Hart of the Order"
+        m.side_effect = fake_read_cache_dict
+        response = client.get("/standings")
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+
+    # The route should serialize a breakdown with contribution_stats populated
+    # via the back-compat fallback. Find the standings_breakdown JSON block.
+    match = re.search(
+        r'<script[^>]*id="breakdown-data"[^>]*>(.*?)</script>',
+        body,
+        re.DOTALL,
+    )
+    assert match, "Expected breakdown-data script tag in standings.html output"
+    breakdown_json = json.loads(match.group(1).strip())
+
+    pitcher = breakdown_json["teams"]["Hart of the Order"]["pitchers"][0]
+    assert "contribution_stats" in pitcher, (
+        "Route did not migrate stale blob: contribution_stats missing from pitcher payload"
+    )
+    # Fallback formula: raw_stats * scale_factor. For K: 200 * 0.5 = 100.
+    assert abs(pitcher["contribution_stats"]["k"] - 100.0) < 1e-6, (
+        f"Expected fallback K=100.0, got {pitcher['contribution_stats'].get('k')}"
+    )
+
+    hitter = breakdown_json["teams"]["Hart of the Order"]["hitters"][0]
+    assert "contribution_stats" in hitter
+    assert abs(hitter["contribution_stats"]["hr"] - 25.0) < 1e-6  # 25 * 1.0

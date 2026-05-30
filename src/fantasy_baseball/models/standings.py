@@ -281,10 +281,13 @@ class ProjectedStandings:
         1. Pass 1 — SGP-based displacement (legacy heuristic). Produces
            a baseline ``{team: stats}`` snapshot.
         2. Pass 2 — for each team, re-run with a ``LeagueContext`` that
-           freezes the OTHER teams' pass-1 stats; the displacement picker
-           now chooses the active player whose scaling preserves the
-           highest team roto pts (rather than the lowest-SGP candidate,
-           which systematically misvalues elite low-volume closers).
+           freezes the OTHER teams' pass-1 stats. Uses the pair-swap
+           displacement model: each IL pitcher activates at full ROS and
+           one active pitcher absorbs a rate-aware partial discount via
+           pitcher_swap.swap_window_ip + pitcher_swap.discount_factor. See
+           scoring._compute_pitcher_pool_factors for the algorithm.
+           Hitter displacement continues to use the delta-Roto-optimal
+           picker (lowest-SGP fallback when no league context is available).
 
         Other callers of ``project_team_stats`` (optimizer, draft,
         trade evaluator) keep the SGP picker — they don't have league

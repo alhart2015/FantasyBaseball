@@ -33,6 +33,7 @@ from fantasy_baseball.lineup.optimizer import (
     optimize_hitter_lineup,
     optimize_pitcher_lineup,
 )
+from fantasy_baseball.lineup.pitcher_swap import discount_factor, swap_window_ip
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS
 from fantasy_baseball.models.standings import (
@@ -168,8 +169,15 @@ def _synthetic_swap_line(incumbent: Player, candidate: Player, w: float) -> Play
     inc = incumbent.rest_of_season
     cand = candidate.rest_of_season
     if isinstance(inc, PitcherStats) and isinstance(cand, PitcherStats):
-        vol = float(inc.ip)
-        scale = max(0.0, vol - w) / vol if vol > 0 else 0.0
+        # Use the shared pitcher_swap helpers so the stash board and the
+        # displacement model in scoring.py agree on cross-role math. The ``w``
+        # argument is kept in the function signature for backwards
+        # compatibility but only used as a fallback when ``swap_window_ip``
+        # returns 0 (candidate has no ROS IP -- the legacy path).
+        window = swap_window_ip(candidate, incumbent)
+        if window <= 0.0:
+            window = float(w)
+        scale = discount_factor(float(inc.ip), window)
         ip = scale * inc.ip + cand.ip
         er = scale * inc.er + cand.er
         bb = scale * inc.bb + cand.bb
