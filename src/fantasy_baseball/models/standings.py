@@ -377,11 +377,7 @@ class ProjectedStandings:
         )
 
         baseline_stats: dict[str, CategoryStats] = {
-            tname: project_team_stats(
-                roster,
-                displacement=True,
-                projection_source="rest_of_season",
-            )
+            tname: project_team_stats(roster, displacement=True)
             for tname, roster in team_rosters.items()
         }
 

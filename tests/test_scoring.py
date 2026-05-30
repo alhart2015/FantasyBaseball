@@ -169,37 +169,6 @@ class TestProjectTeamStats:
         assert project_team_stats([hot])[Category.R] == 70
         assert project_team_stats([hot])[Category.R] == project_team_stats([cold])[Category.R]
 
-    def test_project_team_stats_full_season_source_for_standings(self):
-        """``project_team_stats`` with ``projection_source='full_season_projection'``
-        sums full-season (used by ``ProjectedStandings.from_rosters`` to preserve
-        end-of-season standings projection until proper standings + ROS combination
-        lands in a follow-up phase)."""
-        p = Player(
-            name="X",
-            player_type=PlayerType.HITTER,
-            rest_of_season=HitterStats(r=70, hr=20, rbi=60, sb=5, h=100, ab=400, pa=440),
-            full_season_projection=HitterStats(r=100, hr=28, rbi=85, sb=7, h=140, ab=520, pa=580),
-        )
-        stats = project_team_stats([p], projection_source="full_season_projection")
-        assert stats[Category.R] == 100
-        assert stats[Category.HR] == 28
-
-    def test_project_team_stats_falls_back_to_rest_of_season_when_full_missing(self):
-        """When a Player has only ``rest_of_season`` set (no
-        ``full_season_projection``), ``projection_source='full_season_projection'``
-        must fall back to ``rest_of_season``. Without this, preseason rosters —
-        whose matcher only writes to ``rest_of_season`` — produce a board of
-        zeros for the preseason-standings widget."""
-        p = Player(
-            name="Preseason Hitter",
-            player_type=PlayerType.HITTER,
-            rest_of_season=HitterStats(r=100, hr=30, rbi=90, sb=10, h=140, ab=520, pa=580),
-            full_season_projection=None,
-        )
-        stats = project_team_stats([p], projection_source="full_season_projection")
-        assert stats[Category.R] == 100
-        assert stats[Category.HR] == 30
-
 
 class TestProbBeats:
     """Unit tests for the pairwise Gaussian win-probability helper."""
@@ -1131,7 +1100,6 @@ class TestDeltaRotoDisplacement:
             "My Team",
             roster,
             league_context=ctx,
-            projection_source="rest_of_season",
         )
         elite_contrib = next(p for p in breakdown_with_ctx.pitchers if p.name == "Elite RP")
         assert elite_contrib.scale_factor == 1.0, (
@@ -1225,7 +1193,6 @@ class TestDeltaRotoDisplacement:
             "My Team",
             roster,
             league_context=ctx,
-            projection_source="rest_of_season",
         )
         elite_dr = next(p for p in breakdown_dr.pitchers if p.name == "Elite Closer")
         weak_dr = next(p for p in breakdown_dr.pitchers if p.name == "Replaceable SP")
@@ -1442,7 +1409,6 @@ class TestPitcherPoolModel:
             "My Team",
             roster,
             league_context=ctx,
-            projection_source="rest_of_season",
         )
         sf = {c.name: c.scale_factor for c in bd.pitchers}
         assert sf["Closer A"] == 1.0, "Pool model should preserve the elite closer"
@@ -1498,7 +1464,6 @@ class TestPitcherPoolModel:
             "My Team",
             roster,
             league_context=ctx,
-            projection_source="rest_of_season",
         )
         sf = {c.name: c.scale_factor for c in bd.pitchers}
         # IL pitcher's projected contribution is below all active SP rates,
@@ -1533,7 +1498,6 @@ class TestPitcherPoolModel:
             "My Team",
             roster,
             league_context=ctx,
-            projection_source="rest_of_season",
         )
         sf = {c.name: c.scale_factor for c in bd.pitchers}
         for i in range(7):
@@ -3013,7 +2977,6 @@ class TestPitcherPoolRateSwap:
             all_active=active,
             all_il=il,
             league_context=ctx,
-            projection_source="rest_of_season",
         )
 
         assert "Webb" not in factors, "Webb should be active (sf=1.0 implicit), not in factors"
@@ -3058,7 +3021,6 @@ class TestPitcherPoolRateSwap:
         scaled_roster = _apply_displacement(
             [webb, sp_worst, sp_strong],
             league_context=ctx,
-            projection_source="rest_of_season",
         )
 
         # Find the scaled SP_Worst entry (it's a dict, not a Player).
@@ -3162,7 +3124,6 @@ class TestPitcherPoolRateSwap:
             all_active=active,
             all_il=[webb],
             league_context=ctx,
-            projection_source="rest_of_season",
         )
 
         # Webb stays active.
@@ -3234,7 +3195,6 @@ class TestPitcherPoolRateSwap:
             all_active=active,
             all_il=il,
             league_context=ctx,
-            projection_source="rest_of_season",
         )
 
         # Neither IL pitcher is benched (both should activate -- their rates
@@ -3299,7 +3259,6 @@ class TestPitcherPoolRateSwap:
             all_active=active,
             all_il=[weak_il],
             league_context=ctx,
-            projection_source="rest_of_season",
         )
 
         # Weak_IL should be benched (sf=0): no positive swap exists.
@@ -3480,18 +3439,15 @@ class TestComputeRosterBreakdownContributionInvariant:
             team_name="Me",
         )
 
-        # Production breakdown payload (build_standings_breakdown_payload after
-        # Phase 4.4) always calls with projection_source="rest_of_season"; team
-        # totals come from project_ros_components + team_end_of_season. The
-        # contribution-stats invariant must hold against the matching ROS
-        # project_team_stats call (both sum ROS * factor for displaced players).
-        breakdown = compute_roster_breakdown(
-            "Me", roster, league_context=ctx, projection_source="rest_of_season"
-        )
+        # Production breakdown payload (build_standings_breakdown_payload) is
+        # ROS-only; team totals come from project_ros_components +
+        # team_end_of_season. The contribution-stats invariant must hold
+        # against the matching ROS project_team_stats call (both sum
+        # ROS * factor for displaced players).
+        breakdown = compute_roster_breakdown("Me", roster, league_context=ctx)
         team_stats = project_team_stats(
             roster,
             displacement=True,
-            projection_source="rest_of_season",
             league_context=ctx,
         )
 
@@ -3517,27 +3473,29 @@ class TestComputeRosterBreakdownContributionInvariant:
                 f"expected ROS*factor = {ros_k_sp_worst}*{f} = {expected}"
             )
 
-    def test_breakdown_contribution_stats_match_ros_mode(self):
-        """In rest_of_season mode, contribution_stats[k] = ROS * factor (no YTD floor)."""
+    def test_breakdown_contribution_stats_are_ros_only(self):
+        """contribution_stats[k] = ROS * factor (no YTD floor; team YTD lives
+        on the team via team_end_of_season).
+        """
         from fantasy_baseball.scoring import compute_roster_breakdown
 
         # No LeagueContext -> hitter substitution model for pitchers; but with
         # only active pitchers and no IL, no displacement is applied.
         roster = [self._pitcher("P1", ros_k=60, full_season_k=140)]
-        breakdown = compute_roster_breakdown("Me", roster, projection_source="rest_of_season")
+        breakdown = compute_roster_breakdown("Me", roster)
         p1 = breakdown.pitchers[0]
         # Active, factor=1.0 -> contribution_stats[k] = ROS = 60 (NOT full_season 140).
         assert p1.scale_factor == 1.0
         assert abs(p1.contribution_stats["k"] - 60.0) < 1e-6, (
-            f"ROS-mode active player should contribute ROS K=60, got {p1.contribution_stats['k']}"
+            f"ROS-only active player should contribute ROS K=60, got {p1.contribution_stats['k']}"
         )
 
-    def test_breakdown_benched_il_pitcher_contributes_zero_in_full_season_mode(self):
-        """An IL pitcher benched at sf=0 by the pool model contributes 0 in
-        every mode: per-player YTD floor is removed. Team YTD is captured
-        at the team level via team_end_of_season, so the modal must show 0
-        for the player's contribution row (the team's already-recorded K's
-        live on the team total, not on this row).
+    def test_breakdown_benched_il_pitcher_contributes_zero(self):
+        """An IL pitcher benched at sf=0 by the pool model contributes 0:
+        per-player YTD floor is removed. Team YTD is captured at the team
+        level via team_end_of_season, so the modal must show 0 for the
+        player's contribution row (the team's already-recorded K's live on
+        the team total, not on this row).
         """
         from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
         from fantasy_baseball.models.positions import Position
@@ -3618,9 +3576,7 @@ class TestComputeRosterBreakdownContributionInvariant:
             team_name="Me",
         )
 
-        breakdown = compute_roster_breakdown(
-            "Me", roster, league_context=ctx, projection_source="full_season_projection"
-        )
+        breakdown = compute_roster_breakdown("Me", roster, league_context=ctx)
         weak_contrib = next((c for c in breakdown.pitchers if c.name == "Weak_IL"), None)
         assert weak_contrib is not None
         assert weak_contrib.scale_factor == 0.0, "Weak IL pitcher should be benched at sf=0"

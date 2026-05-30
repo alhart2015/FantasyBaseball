@@ -183,15 +183,15 @@ def build_standings_breakdown_payload(
     dict and keyed by team name. ``effective_date`` is included to
     match the :class:`ProjectedStandings` payload shape.
 
-    Per-player rows are sourced with ``projection_source="rest_of_season"``
-    so the modal can render the arithmetic exposed by the standings
-    widget after the team-YTD refactor: ``team_YTD + sum(player ROS
-    contribution rows) == projected_standings`` for every team and
-    every category. The team's YTD totals are emitted as a separate
-    ``team_ytd`` block (derived from ``StandingsEntry.ytd_components()``)
-    so the legacy per-player YTD-floor path is no longer needed here.
-    When ``actual_standings`` is ``None`` (pre-season or omitted), the
-    block is all zeros so consumers don't need to branch on its presence.
+    Per-player rows are ROS-only (post-team-YTD refactor) so the modal
+    can render the arithmetic exposed by the standings widget:
+    ``team_YTD + sum(player ROS contribution rows) == projected_standings``
+    for every team and every category. The team's YTD totals are emitted
+    as a separate ``team_ytd`` block (derived from
+    ``StandingsEntry.ytd_components()``) so the legacy per-player
+    YTD-floor path is no longer needed here. When ``actual_standings``
+    is ``None`` (pre-season or omitted), the block is all zeros so
+    consumers don't need to branch on its presence.
 
     Uses the same two-pass DeltaRoto-optimal displacement as
     :meth:`ProjectedStandings.from_rosters`, on ROS components, so
@@ -215,15 +215,11 @@ def build_standings_breakdown_payload(
         project_team_stats,
     )
 
-    # Pass 1: SGP-based baseline {team: stats}. Matches the
-    # projection_source used by ProjectedStandings.from_rosters Pass 1
-    # so the DeltaRoto picker's baseline agrees with the standings.
+    # Pass 1: SGP-based baseline {team: stats}. Matches the ROS-only
+    # call used by ProjectedStandings.from_rosters Pass 1 so the
+    # DeltaRoto picker's baseline agrees with the standings.
     baseline_stats = {
-        tname: project_team_stats(
-            roster,
-            displacement=True,
-            projection_source="rest_of_season",
-        )
+        tname: project_team_stats(roster, displacement=True)
         for tname, roster in team_rosters.items()
     }
     # Match ProjectedStandings.from_rosters: damp the picker's SDs by
@@ -247,7 +243,6 @@ def build_standings_breakdown_payload(
             team_name,
             roster,
             league_context=ctx,
-            projection_source="rest_of_season",
         ).to_dict()
         breakdown_dict["team_ytd"] = _team_ytd_block(
             ytd_by_team.get(team_name, TeamYtdComponents())
