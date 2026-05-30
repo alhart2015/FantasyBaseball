@@ -98,6 +98,7 @@ body {
 .layout {
     display: flex;
     min-height: 100vh;
+    background: var(--bg);
 }
 
 /* === Sidebar (C-Dark) === */
@@ -274,6 +275,14 @@ body {
     flex: 1;
     padding: 24px 32px;
     overflow-y: auto;
+    /* Paint --bg here so the area beyond .page-standings's right edge
+       stays dark when the standings table forces horizontal overflow.
+       .content is the implicit horizontal scroll container (overflow-y:
+       auto promotes overflow-x: visible -> auto), and mobile Safari does
+       not reliably propagate body/html background through transparent
+       scroll-container ancestors. PR #107 painted <html> for document-
+       level scroll; this covers the in-container case. */
+    background: var(--bg);
 }
 
 .page-header {
