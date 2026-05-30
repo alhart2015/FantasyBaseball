@@ -627,8 +627,13 @@ class RefreshRun:
     # --- Step 4e: Build projected standings ---
     def _build_projected_standings(self):
         self._progress("Projecting end-of-season standings...")
+        from fantasy_baseball.analysis.team_ytd_attribution import compute_team_ytd_ab
         from fantasy_baseball.data.projections import hydrate_roster_entries
-        from fantasy_baseball.models.standings import ProjectedStandings
+        from fantasy_baseball.models.standings import (
+            ProjectedStandings,
+            Standings,
+            StandingsEntry,
+        )
         from fantasy_baseball.scoring import build_team_sds, team_sds_to_json
 
         assert self.config is not None
@@ -638,6 +643,7 @@ class RefreshRun:
         assert self.league_model is not None
         assert self.preseason_hitters is not None
         assert self.preseason_pitchers is not None
+        assert self.standings is not None
 
         all_team_rosters = {self.config.team_name: self.matched}
         all_team_rosters.update(self.opp_rosters)
@@ -652,10 +658,38 @@ class RefreshRun:
         )
         self.sd_scale = math.sqrt(self.fraction_remaining)
 
+        # Yahoo's team-standings response does not expose AB for this league,
+        # so derive team-YTD AB from Team.ownership_periods() intersected with
+        # per-game logs in data/roster_game_logs.json and stuff it onto
+        # extras[OpportunityStat.AB]. ytd_components() then reads AB via Tier
+        # 1 of its sourcing precedence and recombines AVG correctly downstream.
+        ab_by_team = compute_team_ytd_ab(
+            self.league_model,
+            season_start=date.fromisoformat(self.config.season_start),
+            season_end=date.fromisoformat(self.config.season_end),
+        )
+        ytd_standings = Standings(
+            effective_date=self.standings.effective_date,
+            entries=[
+                StandingsEntry(
+                    team_name=e.team_name,
+                    team_key=e.team_key,
+                    rank=e.rank,
+                    stats=e.stats,
+                    yahoo_points_for=e.yahoo_points_for,
+                    extras={
+                        **e.extras,
+                        OpportunityStat.AB: ab_by_team.get(e.team_name, 0.0),
+                    },
+                )
+                for e in self.standings.entries
+            ],
+        )
+
         self.projected_standings = ProjectedStandings.from_rosters(
             all_team_rosters,
             effective_date=self.effective_date,
-            actual_standings=self.standings,
+            actual_standings=ytd_standings,
             fraction_remaining=self.fraction_remaining,
         )
 

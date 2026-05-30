@@ -180,6 +180,15 @@ class TestRefreshShape:
             "team YTD); got actual_standings="
             f"{main_call['actual_standings']!r}"
         )
+        # AB extras attached via team_ytd_attribution.compute_team_ytd_ab so
+        # ytd_components() can recombine AVG via Tier 1 of its AB sourcing.
+        # The value may be 0 (test fixture may not exercise game logs) but
+        # the key must be present on every entry.
+        from fantasy_baseball.utils.constants import OpportunityStat
+
+        assert all(OpportunityStat.AB in e.extras for e in main_call["actual_standings"].entries), (
+            "expected AB in extras for every standings entry"
+        )
         assert preseason_call["actual_standings"] is None, (
             "Preseason from_rosters call must NOT pass actual_standings "
             "-- preseason rosters + preseason projections produce ROS-only "
