@@ -315,10 +315,11 @@ def _find_worst_match(
         )
 
     # Fallback: SGP-based (legacy behavior, used when no league context).
-    # Note for pitchers: this can incorrectly pick an elite low-volume
-    # closer (Mason Miller) over a struggling starter, because SGP is
-    # volume-weighted. Standings/breakdown call sites should pass
-    # league_context to enable the ΔRoto-optimal picker.
+    # Hitters only: pitchers with league_context use the pair-swap model
+    # (_compute_pitcher_pool_factors), which avoids the
+    # elite-low-volume-closer pathology this path was previously vulnerable to.
+    # Standings/breakdown call sites should pass league_context to enable
+    # the delta-Roto-optimal picker.
     return min(candidates, key=lambda a: _player_sgp(a))
 
 
@@ -352,7 +353,9 @@ def _find_delta_roto_optimal(
             continue
         factor = max(0.0, active_pt - il_pt) / active_pt
         hyp_roster: list[Player | dict] = [
-            _scale_stats(cand, factor) if isinstance(p, Player) and p.name == cand.name else p
+            _scale_stats(cand, factor, projection_source)
+            if isinstance(p, Player) and p.name == cand.name
+            else p
             for p in current_roster
         ]
         team_stats = project_team_stats(
