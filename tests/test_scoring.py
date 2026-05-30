@@ -3781,3 +3781,127 @@ class TestProjectRosComponents:
         c = project_ros_components(roster, displacement=True)
         assert c.r == pytest.approx(30.0)
         assert c.ab == pytest.approx(200.0)
+
+
+class TestTeamEndOfSeason:
+    """``team_end_of_season(ytd, ros)`` produces a :class:`CategoryStats`
+    representing projected end-of-season totals = YTD + ROS, with AVG/ERA/WHIP
+    recomputed from summed components.
+    """
+
+    def test_counting_stats_sum(self):
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        ytd = TeamYtdComponents(
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            w=10,
+            k=180,
+            sv=5,
+            h=100,
+            ab=400,
+            ip=200,
+            er=78,
+            bb_plus_h_allowed=240,
+        )
+        ros = TeamRosComponents(
+            r=50,
+            hr=15,
+            rbi=45,
+            sb=8,
+            w=8,
+            k=120,
+            sv=3,
+            h=70,
+            ab=280,
+            ip=150,
+            er=55,
+            bb_plus_h_allowed=180,
+        )
+        out = team_end_of_season(ytd, ros)
+        assert out.r == pytest.approx(130)
+        assert out.hr == pytest.approx(35)
+        assert out.rbi == pytest.approx(115)
+        assert out.sb == pytest.approx(18)
+        assert out.w == pytest.approx(18)
+        assert out.k == pytest.approx(300)
+        assert out.sv == pytest.approx(8)
+
+    def test_avg_recombined_from_components_equal_rates(self):
+        """YTD and ROS have the same AVG (0.250); combined AVG is 0.250."""
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        ytd = TeamYtdComponents(h=100, ab=400)
+        ros = TeamRosComponents(h=70, ab=280)
+        out = team_end_of_season(ytd, ros)
+        assert out.avg == pytest.approx(170 / 680)
+
+    def test_avg_correctly_weights_when_rates_differ(self):
+        """YTD AVG is .300; ROS AVG is .200. Combined is weighted by AB."""
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        ytd = TeamYtdComponents(h=120, ab=400)
+        ros = TeamRosComponents(h=40, ab=200)
+        out = team_end_of_season(ytd, ros)
+        assert out.avg == pytest.approx(160 / 600)
+
+    def test_era_recombined_from_components(self):
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        ytd = TeamYtdComponents(er=78, ip=200)
+        ros = TeamRosComponents(er=55, ip=150)
+        out = team_end_of_season(ytd, ros)
+        assert out.era == pytest.approx(9 * 133 / 350)
+
+    def test_whip_recombined_from_components(self):
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        ytd = TeamYtdComponents(ip=200, bb_plus_h_allowed=240)
+        ros = TeamRosComponents(ip=150, bb_plus_h_allowed=180)
+        out = team_end_of_season(ytd, ros)
+        assert out.whip == pytest.approx(420 / 350)
+
+    def test_zero_ab_yields_zero_avg_not_nan(self):
+        """No AB anywhere -> AVG = 0.0, not NaN."""
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        ytd = TeamYtdComponents()
+        ros = TeamRosComponents()
+        out = team_end_of_season(ytd, ros)
+        assert out.avg == 0.0
+        assert out.era == 0.0
+        assert out.whip == 0.0
+
+    def test_preseason_ytd_zero_collapses_to_ros_only(self):
+        """Pre-season has YTD=zero; result must equal ROS-only projection."""
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        ytd = TeamYtdComponents()
+        ros = TeamRosComponents(
+            r=80,
+            hr=20,
+            rbi=70,
+            sb=10,
+            w=10,
+            k=180,
+            sv=5,
+            h=120,
+            ab=480,
+            ip=200,
+            er=70,
+            bb_plus_h_allowed=240,
+        )
+        out = team_end_of_season(ytd, ros)
+        assert out.r == pytest.approx(80)
+        assert out.avg == pytest.approx(120 / 480)
+        assert out.era == pytest.approx(9 * 70 / 200)
+        assert out.whip == pytest.approx(240 / 200)

@@ -28,6 +28,7 @@ from fantasy_baseball.models.standings import (
     CategoryPoints,
     CategoryStats,
     ProjectedStandingsEntry,
+    TeamYtdComponents,
 )
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import (
@@ -1062,6 +1063,44 @@ def project_ros_components(
         ip=ip_total,
         er=er_total,
         bb_plus_h_allowed=bb_total + ha_total,
+    )
+
+
+def team_end_of_season(
+    ytd: TeamYtdComponents,
+    ros: TeamRosComponents,
+) -> CategoryStats:
+    """Combine team YTD components and ROS components into end-of-season totals.
+
+    Counting stats: simple sum (YTD + ROS).
+    Rate stats: recomputed from summed components --
+      - AVG = (YTD.h + ROS.h) / (YTD.ab + ROS.ab)
+      - ERA = 9 * (YTD.er + ROS.er) / (YTD.ip + ROS.ip)
+      - WHIP = (YTD.bb_plus_h_allowed + ROS.bb_plus_h_allowed) / (YTD.ip + ROS.ip)
+
+    Zero-AB and zero-IP cases default to 0.0 (not NaN), matching pre-season
+    and empty-roster states.
+
+    See :class:`TeamYtdComponents` for the YTD side (from
+    :meth:`StandingsEntry.ytd_components`) and :func:`project_ros_components`
+    for the ROS side.
+    """
+    total_ab = ytd.ab + ros.ab
+    total_ip = ytd.ip + ros.ip
+    avg = (ytd.h + ros.h) / total_ab if total_ab > 0 else 0.0
+    era = 9.0 * (ytd.er + ros.er) / total_ip if total_ip > 0 else 0.0
+    whip = (ytd.bb_plus_h_allowed + ros.bb_plus_h_allowed) / total_ip if total_ip > 0 else 0.0
+    return CategoryStats(
+        r=ytd.r + ros.r,
+        hr=ytd.hr + ros.hr,
+        rbi=ytd.rbi + ros.rbi,
+        sb=ytd.sb + ros.sb,
+        avg=avg,
+        w=ytd.w + ros.w,
+        k=ytd.k + ros.k,
+        sv=ytd.sv + ros.sv,
+        era=era,
+        whip=whip,
     )
 
 
