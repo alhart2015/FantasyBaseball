@@ -2735,6 +2735,80 @@ class TestComputeRosterBreakdown:
         assert c.scale_factor == 1.0
 
 
+class TestRosterBreakdownTeamYtdRoundTrip:
+    """``RosterBreakdown.to_dict`` / ``from_dict`` must preserve ``team_ytd``.
+
+    The standings route in season_routes round-trips each team's persisted
+    payload through ``RosterBreakdown.from_dict(...).to_dict()`` to backfill
+    the contribution_stats fallback on stale KV blobs. If ``team_ytd`` is
+    not a first-class field, the bolt-on key set by
+    ``build_standings_breakdown_payload`` gets silently stripped on the
+    round-trip and the team_ytd block never reaches the modal.
+    """
+
+    def test_team_ytd_round_trips_through_to_dict_from_dict(self):
+        from fantasy_baseball.scoring import RosterBreakdown
+
+        ytd_block = {
+            "R": 120.0,
+            "HR": 30.0,
+            "RBI": 110.0,
+            "SB": 15.0,
+            "W": 15.0,
+            "K": 300.0,
+            "SV": 8.0,
+            "H": 220.0,
+            "AB": 800.0,
+            "IP": 300.0,
+            "ER": 116.67,
+            "BB_plus_H_allowed": 360.0,
+        }
+        rb = RosterBreakdown(
+            team_name="Test",
+            hitters=[],
+            pitchers=[],
+            team_ytd=ytd_block,
+        )
+        round_tripped = RosterBreakdown.from_dict(rb.to_dict())
+        assert round_tripped.team_ytd == ytd_block
+        assert round_tripped.team_name == "Test"
+
+    def test_team_ytd_defaults_to_empty_when_absent(self):
+        """Backwards compat: dicts without ``team_ytd`` (legacy KV blobs)
+        deserialize to an empty dict, not a missing attribute."""
+        from fantasy_baseball.scoring import RosterBreakdown
+
+        d = {"team_name": "Test", "hitters": [], "pitchers": []}
+        rb = RosterBreakdown.from_dict(d)
+        assert rb.team_ytd == {}
+        # And it serializes back as an empty dict, not missing.
+        assert rb.to_dict()["team_ytd"] == {}
+
+    def test_compute_roster_breakdown_accepts_team_ytd_kwarg(self):
+        """``compute_roster_breakdown`` propagates a passed ``team_ytd``
+        block onto the returned breakdown, so callers (the refresh
+        pipeline) don't need to bolt it on after the fact.
+        """
+        from fantasy_baseball.scoring import compute_roster_breakdown
+
+        ytd_block = {"R": 50.0, "HR": 10.0}
+        rb = compute_roster_breakdown(
+            "Test",
+            roster=[],
+            team_ytd=ytd_block,
+        )
+        assert rb.team_ytd == ytd_block
+
+    def test_compute_roster_breakdown_team_ytd_defaults_empty(self):
+        """When ``team_ytd`` is not passed (legacy callers), the breakdown
+        carries an empty dict -- not None -- so consumers can iterate safely.
+        """
+        from fantasy_baseball.scoring import compute_roster_breakdown
+
+        rb = compute_roster_breakdown("Test", roster=[])
+        assert rb.team_ytd == {}
+
+
 class TestScaleStatsRosOnly:
     """After the team-YTD projection refactor, ``_scale_stats`` returns
     ``ROS * factor`` regardless of mode.
@@ -3830,8 +3904,18 @@ class TestTeamEndOfSeason:
         out = team_end_of_season(ytd, ros)
         assert out.whip == pytest.approx(420 / 350)
 
-    def test_zero_ab_yields_zero_avg_not_nan(self):
-        """No AB anywhere -> AVG = 0.0, not NaN."""
+    def test_zero_ip_yields_99_era_whip_not_zero(self):
+        """No IP/AB anywhere -> AVG = 0.0 but ERA/WHIP = 99.0.
+
+        ERA/WHIP are inverse stats (lower is better), so 0.0 would silently win
+        those categories for a team with no pitching projection. CategoryStats
+        defaults to 99.0 (matching utils.rate_stats.calculate_era / calculate_whip),
+        and team_end_of_season must agree -- otherwise the Pass-1 baseline
+        (project_team_stats with zero IP -> 99.0) and Pass-2 path
+        (team_end_of_season with zero IP) disagree by ~99 on the same input.
+
+        AVG stays at 0.0: it is NOT inverse, so 0.0 = batting nothing = worst.
+        """
         from fantasy_baseball.models.standings import TeamYtdComponents
         from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
 
@@ -3839,8 +3923,39 @@ class TestTeamEndOfSeason:
         ros = TeamRosComponents()
         out = team_end_of_season(ytd, ros)
         assert out.avg == 0.0
-        assert out.era == 0.0
-        assert out.whip == 0.0
+        assert out.era == 99.0
+        assert out.whip == 99.0
+
+    def test_zero_input_matches_category_stats_defaults(self):
+        """A zero-input team_end_of_season equals CategoryStats() on the rate
+        fields, pinning the consistency invariant. If CategoryStats ever
+        changes its inverse-stat default, this test forces a corresponding
+        update to team_end_of_season's empty case.
+        """
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        out = team_end_of_season(TeamYtdComponents(), TeamRosComponents())
+        defaults = CategoryStats()
+        assert out.era == defaults.era
+        assert out.whip == defaults.whip
+        # AVG is non-inverse and shares the 0.0 default.
+        assert out.avg == defaults.avg
+
+    def test_pass1_pass2_agree_on_zero_ip_team(self):
+        """Pass-1 (project_team_stats) and Pass-2 (team_end_of_season) produce
+        the same ERA/WHIP for a zero-IP team. The standings widget combines
+        both and would silently produce a 0/99 split if these diverged.
+        """
+        from fantasy_baseball.models.standings import TeamYtdComponents
+        from fantasy_baseball.scoring import TeamRosComponents, team_end_of_season
+
+        pass1 = project_team_stats([], displacement=True)
+        pass2 = team_end_of_season(TeamYtdComponents(), TeamRosComponents())
+        assert pass1.era == pass2.era == 99.0
+        assert pass1.whip == pass2.whip == 99.0
+        # AVG agreement too: empty roster -> 0.0; zero components -> 0.0.
+        assert pass1.avg == pass2.avg == 0.0
 
     def test_preseason_ytd_zero_collapses_to_ros_only(self):
         """Pre-season has YTD=zero; result must equal ROS-only projection."""

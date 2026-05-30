@@ -239,15 +239,20 @@ def build_standings_breakdown_payload(
             team_sds=team_sds,
             team_name=team_name,
         )
-        breakdown_dict = compute_roster_breakdown(
+        # team_ytd is a first-class field on RosterBreakdown so it survives the
+        # season_routes round-trip through from_dict/to_dict (used to backfill
+        # contribution_stats on stale KV blobs). Passing it through here keeps
+        # the team-YTD block out of the per-player rows -- per-player YTD
+        # attribution is intentionally not done; only stats accrued while the
+        # player was on the team count, and that bookkeeping lives at the team
+        # level via TeamYtdComponents.
+        breakdown = compute_roster_breakdown(
             team_name,
             roster,
             league_context=ctx,
-        ).to_dict()
-        breakdown_dict["team_ytd"] = _team_ytd_block(
-            ytd_by_team.get(team_name, TeamYtdComponents())
+            team_ytd=_team_ytd_block(ytd_by_team.get(team_name, TeamYtdComponents())),
         )
-        teams_payload[team_name] = breakdown_dict
+        teams_payload[team_name] = breakdown.to_dict()
     return {
         "effective_date": effective_date.isoformat(),
         "teams": teams_payload,

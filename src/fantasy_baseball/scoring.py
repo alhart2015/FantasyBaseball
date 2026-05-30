@@ -716,25 +716,41 @@ class PlayerContribution:
 
 @dataclass(frozen=True)
 class RosterBreakdown:
-    """Per-player contributions for one team, partitioned by player type."""
+    """Per-player contributions for one team, partitioned by player type.
+
+    ``team_ytd`` is the team's YTD totals block (uppercase-string-keyed,
+    matching :class:`CategoryStats`'s ``to_dict`` for counting stats plus
+    rate-stat ingredients H, AB, IP, ER, BB_plus_H_allowed). It is a
+    first-class field so it survives the
+    ``RosterBreakdown.from_dict(...).to_dict()`` round-trip that
+    ``season_routes`` does to backfill stale KV blobs. Defaults to an
+    empty dict for callers (and legacy persisted payloads) that don't
+    carry team-level YTD.
+    """
 
     team_name: str
     hitters: list[PlayerContribution]
     pitchers: list[PlayerContribution]
+    team_ytd: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
             "team_name": self.team_name,
             "hitters": [c.to_dict() for c in self.hitters],
             "pitchers": [c.to_dict() for c in self.pitchers],
+            "team_ytd": dict(self.team_ytd),
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> RosterBreakdown:
+        # `or {}` guards against explicit null values in persisted JSON --
+        # d.get("team_ytd", {}) would return None when the key exists but
+        # is null, breaking dict() construction below.
         return cls(
             team_name=d["team_name"],
             hitters=[PlayerContribution.from_dict(x) for x in d.get("hitters", [])],
             pitchers=[PlayerContribution.from_dict(x) for x in d.get("pitchers", [])],
+            team_ytd=dict(d.get("team_ytd") or {}),
         )
 
 
@@ -843,6 +859,7 @@ def compute_roster_breakdown(
     roster: list[Player],
     *,
     league_context: LeagueContext | None = None,
+    team_ytd: dict[str, float] | None = None,
 ) -> RosterBreakdown:
     """Return per-player contributions for ``roster``, tagged with status.
 
@@ -861,8 +878,11 @@ def compute_roster_breakdown(
 
     Per-player YTD is intentionally NOT included in ``contribution_stats``
     -- team YTD lives at the team level via :func:`team_end_of_season`
-    (from :class:`TeamYtdComponents`), so each player row reflects only
-    the forward-looking ROS-scaled contribution.
+    (from :class:`TeamYtdComponents`). Callers (the refresh pipeline) can
+    pass that block via ``team_ytd`` so it becomes a first-class field on
+    the returned :class:`RosterBreakdown` and survives the
+    season_routes ``from_dict().to_dict()`` round-trip. ``None`` defaults
+    to an empty dict (preseason / no actual standings).
 
     When ``league_context`` is provided, displacement targets are chosen
     via DeltaRoto-optimal selection (matches the standings layer); without
@@ -938,7 +958,12 @@ def compute_roster_breakdown(
 
     hitters = [c for c in contributions if c.player_type == PlayerType.HITTER]
     pitchers = [c for c in contributions if c.player_type == PlayerType.PITCHER]
-    return RosterBreakdown(team_name=team_name, hitters=hitters, pitchers=pitchers)
+    return RosterBreakdown(
+        team_name=team_name,
+        hitters=hitters,
+        pitchers=pitchers,
+        team_ytd=dict(team_ytd) if team_ytd else {},
+    )
 
 
 @dataclass(frozen=True)
@@ -1043,8 +1068,13 @@ def team_end_of_season(
       - ERA = 9 * (YTD.er + ROS.er) / (YTD.ip + ROS.ip)
       - WHIP = (YTD.bb_plus_h_allowed + ROS.bb_plus_h_allowed) / (YTD.ip + ROS.ip)
 
-    Zero-AB and zero-IP cases default to 0.0 (not NaN), matching pre-season
-    and empty-roster states.
+    Zero-AB defaults AVG to 0.0 (non-inverse: 0.0 = batting nothing = worst).
+    Zero-IP defaults ERA/WHIP to 99.0 -- matching :class:`CategoryStats`'s
+    inverse-stat defaults and :func:`utils.rate_stats.calculate_era` /
+    :func:`calculate_whip`. Returning 0.0 here would silently make a zero-IP
+    team WIN ERA/WHIP (lower is better), and Pass-1 (:func:`project_team_stats`,
+    which uses ``calculate_era``/``calculate_whip``) would disagree with
+    Pass-2 (this function) by ~99 on the same zero input.
 
     See :class:`TeamYtdComponents` for the YTD side (from
     :meth:`StandingsEntry.ytd_components`) and :func:`project_ros_components`
@@ -1053,8 +1083,8 @@ def team_end_of_season(
     total_ab = ytd.ab + ros.ab
     total_ip = ytd.ip + ros.ip
     avg = (ytd.h + ros.h) / total_ab if total_ab > 0 else 0.0
-    era = 9.0 * (ytd.er + ros.er) / total_ip if total_ip > 0 else 0.0
-    whip = (ytd.bb_plus_h_allowed + ros.bb_plus_h_allowed) / total_ip if total_ip > 0 else 0.0
+    era = 9.0 * (ytd.er + ros.er) / total_ip if total_ip > 0 else 99.0
+    whip = (ytd.bb_plus_h_allowed + ros.bb_plus_h_allowed) / total_ip if total_ip > 0 else 99.0
     return CategoryStats(
         r=ytd.r + ros.r,
         hr=ytd.hr + ros.hr,
