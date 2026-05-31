@@ -761,6 +761,58 @@ def test_write_cache_job_defaults_to_none():
     assert stored["_meta"]["_job"] is None
 
 
+def test_set_cache_job_token_restores_previous():
+    """set_cache_job returns a token; reset_cache_job restores the prior label
+    so an inner/ad-hoc job set cannot permanently clobber an outer one."""
+    season_data.set_cache_job("refresh")
+    try:
+        token = season_data.set_cache_job("ros_fetch")
+        season_data.reset_cache_job(token)
+        write_cache(CacheKey.STANDINGS, {"v": 1})
+        stored = json.loads(kv_store.get_kv().get(redis_key(CacheKey.STANDINGS)))
+        assert stored["_meta"]["_job"] == "refresh"
+    finally:
+        season_data.set_cache_job(None)
+
+
+def test_code_sha_does_not_memoize_failure(monkeypatch):
+    """A transient git failure must NOT be cached as 'unknown' forever -- a
+    later call (e.g. once RENDER_GIT_COMMIT appears) must still resolve."""
+    monkeypatch.setattr(season_data, "_code_sha_cache", None)
+    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+    monkeypatch.setattr(season_data, "is_remote", lambda: False)
+
+    class _FailingSub:
+        def run(self, *a, **k):
+            raise OSError("git not found")
+
+    monkeypatch.setattr(season_data, "subprocess", _FailingSub())
+    assert season_data._code_sha() == "unknown"
+    assert season_data._code_sha_cache is None  # failure not memoized
+
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "abc1234")
+    assert season_data._code_sha() == "abc1234"
+
+
+def test_code_sha_skips_git_on_remote(monkeypatch):
+    """On Render the deployed slug may not be a git checkout; with no
+    RENDER_GIT_COMMIT, _code_sha must NOT fork git -- just return 'unknown'."""
+    monkeypatch.setattr(season_data, "_code_sha_cache", None)
+    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+    monkeypatch.setattr(season_data, "is_remote", lambda: True)
+
+    calls = {"n": 0}
+
+    class _CountingSub:
+        def run(self, *a, **k):
+            calls["n"] += 1
+            raise AssertionError("git must not be invoked on remote")
+
+    monkeypatch.setattr(season_data, "subprocess", _CountingSub())
+    assert season_data._code_sha() == "unknown"
+    assert calls["n"] == 0
+
+
 def test_write_cache_swallows_kv_error(monkeypatch):
     """write_cache logs and continues if the KV write raises.
 

@@ -47,6 +47,7 @@ from fantasy_baseball.web.season_data import (
     _get_redis,
     _load_game_log_totals,
     read_cache,
+    reset_cache_job,
     set_cache_job,
     write_cache,
 )
@@ -377,8 +378,10 @@ class RefreshRun:
         ``_refresh_status['error']`` while still raising, and clears
         ``running`` in the ``finally`` block.
         """
-        # Stamp every cache:* blob this refresh writes with its writer.
-        set_cache_job("refresh")
+        # Stamp every cache:* blob this refresh writes with its writer; reset
+        # in finally so a synchronous/reused worker thread doesn't leak the
+        # label into the next job's writes.
+        job_token = set_cache_job("refresh")
         with _refresh_lock:
             _refresh_status["running"] = True
             _refresh_status["progress"] = "Starting..."
@@ -420,6 +423,7 @@ class RefreshRun:
             self.logger.finish("error", str(exc))
             raise
         finally:
+            reset_cache_job(job_token)
             with _refresh_lock:
                 _refresh_status["running"] = False
 

@@ -48,9 +48,9 @@ def blend_and_cache_ros(
       untouched).
     - ``cache:full_season_projections`` — ROS + YTD actuals.
 
-    Returns the ROS-only ``(hitters_df, pitchers_df)`` — full-season is
-    a derived view; callers that want it should read
-    :func:`fantasy_baseball.data.redis_store.get_full_season_projections`.
+    Returns the ROS-only ``(hitters_df, pitchers_df)``; full-season is a
+    derived view persisted to ``cache:full_season_projections`` and read via
+    ``season_data.read_cache(CacheKey.FULL_SEASON_PROJECTIONS)``.
 
     Args:
         projections_dir: Root ``data/projections`` path. Year and
@@ -128,9 +128,16 @@ def blend_and_cache_ros(
     # Consumers read back via the envelope-aware read_cache/read_cache_dict.
     # Imported at call time to avoid a web-layer import at data-layer import
     # time.
-    from fantasy_baseball.web.season_data import set_cache_job, write_cache
+    from fantasy_baseball.web.season_data import (
+        reset_cache_job,
+        set_cache_job,
+        write_cache,
+    )
 
-    set_cache_job("ros_fetch")
-    write_cache(CacheKey.ROS_PROJECTIONS, ros_payload)
-    write_cache(CacheKey.FULL_SEASON_PROJECTIONS, full_payload)
+    job_token = set_cache_job("ros_fetch")
+    try:
+        write_cache(CacheKey.ROS_PROJECTIONS, ros_payload)
+        write_cache(CacheKey.FULL_SEASON_PROJECTIONS, full_payload)
+    finally:
+        reset_cache_job(job_token)
     return hitters_ros, pitchers_ros

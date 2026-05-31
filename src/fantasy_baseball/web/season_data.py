@@ -5,8 +5,9 @@ import logging
 import os
 import subprocess
 from collections.abc import Mapping
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from fantasy_baseball.category_odds import category_finish_odds
@@ -76,14 +77,21 @@ _code_sha_cache: str | None = None
 _current_job: ContextVar[str | None] = ContextVar("fantasy_cache_job", default=None)
 
 
-def set_cache_job(job: str | None) -> None:
+def set_cache_job(job: str | None) -> Token[str | None]:
     """Set the job label stamped into subsequent cache provenance envelopes.
 
-    Entry points (the dashboard refresh, the ROS fetch) call this once so
-    every cache:* blob they write records its writer. ContextVar-scoped so
-    the ROS fetch thread cannot clobber the refresh's label.
+    Entry points (the dashboard refresh, the ROS fetch) call this so every
+    cache:* blob they write records its writer. Returns a token; pass it to
+    :func:`reset_cache_job` in a ``finally`` to restore the prior label so a
+    job set on a reused/synchronous worker thread cannot leak into the next
+    job's writes.
     """
-    _current_job.set(job)
+    return _current_job.set(job)
+
+
+def reset_cache_job(token: Token[str | None]) -> None:
+    """Restore the job label captured by a prior :func:`set_cache_job`."""
+    _current_job.reset(token)
 
 
 def _utc_now_iso() -> str:
@@ -92,27 +100,37 @@ def _utc_now_iso() -> str:
 
 
 def _code_sha() -> str:
-    """Short git SHA of the running code, cached for the process.
+    """Short git SHA of the running code; memoized once a real SHA resolves.
 
-    Prefers ``RENDER_GIT_COMMIT`` (set by Render); falls back to ``git
-    rev-parse`` locally, then ``"unknown"`` if neither is available.
+    Prefers ``RENDER_GIT_COMMIT`` (set it in ``render.yaml`` so prod blobs
+    carry a real SHA). Off Render it falls back to ``git rev-parse`` run in
+    the repo root. On Render the git fallback is skipped -- the deployed slug
+    may not be a git checkout, so forking git there is pure waste.
+
+    Returns ``"unknown"`` when neither source resolves, but does NOT memoize
+    that failure: a transient git error (missing binary, timeout under a
+    concurrent index lock, wrong cwd) would otherwise stamp every blob for the
+    rest of the process. A later call can still pick up a real SHA.
     """
     global _code_sha_cache
-    if _code_sha_cache is None:
-        sha = os.environ.get("RENDER_GIT_COMMIT", "")
-        if not sha:
-            try:
-                sha = subprocess.run(
-                    ["git", "rev-parse", "--short", "HEAD"],
-                    capture_output=True,
-                    text=True,
-                    timeout=2,
-                    check=True,
-                ).stdout.strip()
-            except Exception:
-                sha = ""
-        _code_sha_cache = sha or "unknown"
-    return _code_sha_cache
+    if _code_sha_cache is not None:
+        return _code_sha_cache
+    sha = os.environ.get("RENDER_GIT_COMMIT", "")
+    if not sha and not is_remote():
+        try:
+            sha = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=True,
+                cwd=Path(__file__).resolve().parents[3],
+            ).stdout.strip()
+        except Exception:
+            sha = ""
+    if sha:
+        _code_sha_cache = sha
+    return sha or "unknown"
 
 
 def _wrap_envelope(data: dict | list) -> dict:
