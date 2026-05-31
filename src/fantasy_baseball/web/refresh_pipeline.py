@@ -1099,10 +1099,6 @@ class RefreshRun:
         # Cache positions for all known players (roster + opponents + FAs)
         positions_map = build_positions_map(self.roster_players, self.opp_rosters, self.fa_players)
         write_cache(CacheKey.POSITIONS, positions_map)
-        from fantasy_baseball.data.kv_store import get_kv
-        from fantasy_baseball.data.redis_store import set_positions
-
-        set_positions(get_kv(), positions_map)
         self._progress(f"Cached positions for {len(positions_map)} players")
 
         audit_results = audit_roster(
