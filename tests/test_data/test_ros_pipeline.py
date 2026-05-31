@@ -113,6 +113,11 @@ def test_blend_and_cache_ros_blends_latest_snapshot_and_writes_cache(
 
     raw = fake_redis.get("cache:ros_projections")
     assert raw is not None
+    # NOTE: cache:ros_projections is NOT enveloped here. ros_pipeline
+    # double-writes this key -- write_cache (enveloped) then the bare
+    # redis_store.set_ros_projections (if not is_remote()), and the bare
+    # write lands last locally. On Render the bare write is skipped, so the
+    # envelope stands. Collapsing this double-write is a separate cleanup.
     cached_redis = json.loads(raw)
     assert len(cached_redis["hitters"]) == 4
     assert len(cached_redis["pitchers"]) == 3

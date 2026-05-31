@@ -2,7 +2,10 @@
 
 import json
 import logging
+import os
+import subprocess
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from fantasy_baseball.category_odds import category_finish_odds
@@ -57,12 +60,73 @@ def clear_opponent_cache() -> None:
     _opponent_cache.clear()
 
 
+# --- Cache provenance envelope ---------------------------------------------
+# Every cache:* payload is stored as ``{"_meta": {...}, "_data": <payload>}``:
+# write_cache wraps, read_cache unwraps. The envelope stamps the running code's
+# git SHA and the UTC write time so version/time skew between keys (e.g. an old
+# cache:projections vs a newer cache:standings_breakdown) is detectable by
+# inspecting the stored blob instead of being invisible. Reads of bare
+# (pre-envelope) payloads pass through unchanged for backward compatibility.
+_ENVELOPE_META = "_meta"
+_ENVELOPE_DATA = "_data"
+
+_code_sha_cache: str | None = None
+
+
+def _utc_now_iso() -> str:
+    """UTC write timestamp for the cache provenance envelope."""
+    return datetime.now(UTC).isoformat()
+
+
+def _code_sha() -> str:
+    """Short git SHA of the running code, cached for the process.
+
+    Prefers ``RENDER_GIT_COMMIT`` (set by Render); falls back to ``git
+    rev-parse`` locally, then ``"unknown"`` if neither is available.
+    """
+    global _code_sha_cache
+    if _code_sha_cache is None:
+        sha = os.environ.get("RENDER_GIT_COMMIT", "")
+        if not sha:
+            try:
+                sha = subprocess.run(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                    check=True,
+                ).stdout.strip()
+            except Exception:
+                sha = ""
+        _code_sha_cache = sha or "unknown"
+    return _code_sha_cache
+
+
+def _wrap_envelope(data: dict | list) -> dict:
+    """Wrap a cache payload with provenance metadata."""
+    return {
+        _ENVELOPE_META: {"_written_at": _utc_now_iso(), "_sha": _code_sha()},
+        _ENVELOPE_DATA: data,
+    }
+
+
+def _is_envelope(obj: object) -> bool:
+    """True when ``obj`` is a provenance envelope produced by write_cache."""
+    return (
+        isinstance(obj, dict)
+        and _ENVELOPE_META in obj
+        and _ENVELOPE_DATA in obj
+        and isinstance(obj[_ENVELOPE_META], dict)
+    )
+
+
 def read_cache(key: CacheKey) -> dict | list | None:
     """Read a cached payload from the KV store.
 
     Routes through ``kv_store.get_kv()``: Upstash on Render, SQLite
     locally. The ``RENDER`` gate in ``kv_store`` ensures off-Render
-    callers cannot reach Upstash even with creds present.
+    callers cannot reach Upstash even with creds present. Transparently
+    unwraps the provenance envelope; bare legacy payloads pass through.
     """
     kv = get_kv()
     try:
@@ -73,10 +137,13 @@ def read_cache(key: CacheKey) -> dict | list | None:
     if raw is None:
         return None
     try:
-        return cast("dict | list", json.loads(raw))
+        obj = json.loads(raw)
     except json.JSONDecodeError:
         log.warning(f"read_cache({key}) corrupt KV data, treating as miss")
         return None
+    if _is_envelope(obj):
+        return cast("dict | list", obj[_ENVELOPE_DATA])
+    return cast("dict | list", obj)
 
 
 def read_cache_dict(key: CacheKey) -> dict[str, Any] | None:
@@ -109,7 +176,7 @@ def write_cache(key: CacheKey, data: dict | list) -> None:
     """
     kv = get_kv()
     try:
-        kv.set(redis_key(key), json.dumps(data))
+        kv.set(redis_key(key), json.dumps(_wrap_envelope(data)))
     except Exception as e:
         log.warning(f"write_cache({key}) KV write failed: {e}")
 

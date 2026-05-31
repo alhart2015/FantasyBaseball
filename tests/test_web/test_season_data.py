@@ -695,7 +695,48 @@ def test_write_cache_uses_canonical_redis_key():
     write_cache(CacheKey.STANDINGS, data)
     raw = kv_store.get_kv().get(redis_key(CacheKey.STANDINGS))
     assert raw is not None
-    assert json.loads(raw) == data
+    # The stored payload is wrapped in a provenance envelope (see
+    # test_write_cache_stamps_provenance_envelope); the dashboard payload
+    # lives under "_data".
+    assert json.loads(raw)["_data"] == data
+
+
+def test_write_cache_stamps_provenance_envelope(monkeypatch):
+    """write_cache wraps the payload in a {_meta, _data} envelope so each
+    cache blob carries its code SHA + write time. This makes version/time
+    skew between keys (e.g. an old cache:projections vs a newer
+    cache:standings_breakdown) detectable instead of invisible."""
+    monkeypatch.setattr(season_data, "_utc_now_iso", lambda: "2026-05-31T12:00:00+00:00")
+    monkeypatch.setattr(season_data, "_code_sha", lambda: "abc1234")
+    write_cache(CacheKey.STANDINGS, {"v": 1})
+    stored = json.loads(kv_store.get_kv().get(redis_key(CacheKey.STANDINGS)))
+    assert stored["_data"] == {"v": 1}
+    assert stored["_meta"]["_written_at"] == "2026-05-31T12:00:00+00:00"
+    assert stored["_meta"]["_sha"] == "abc1234"
+
+
+def test_read_cache_unwraps_envelope_to_bare_payload():
+    """read_cache returns the bare payload, not the envelope, so every
+    existing caller is unaffected by the provenance wrapping."""
+    write_cache(CacheKey.STANDINGS, {"v": 1})
+    assert read_cache(CacheKey.STANDINGS) == {"v": 1}
+
+
+def test_read_cache_reads_legacy_unenveloped_payload():
+    """Blobs written before the envelope shipped are bare JSON. read_cache
+    must still return them as-is (backward compatibility), so a deploy does
+    not blank the dashboard until the next refresh rewrites every key."""
+    kv_store.get_kv().set(redis_key(CacheKey.STANDINGS), json.dumps({"v": 1}))
+    assert read_cache(CacheKey.STANDINGS) == {"v": 1}
+
+
+def test_write_cache_envelopes_list_payload():
+    """List payloads round-trip through the envelope too (read_cache_list
+    keys store JSON arrays, not objects)."""
+    write_cache(CacheKey.STANDINGS, [1, 2, 3])
+    stored = json.loads(kv_store.get_kv().get(redis_key(CacheKey.STANDINGS)))
+    assert stored["_data"] == [1, 2, 3]
+    assert read_cache(CacheKey.STANDINGS) == [1, 2, 3]
 
 
 def test_write_cache_swallows_kv_error(monkeypatch):
