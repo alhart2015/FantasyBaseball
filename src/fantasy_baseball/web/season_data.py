@@ -145,6 +145,18 @@ def _wrap_envelope(data: dict | list) -> dict:
     }
 
 
+def serialize_cache_payload(data: dict | list) -> str:
+    """Serialize a payload into the canonical enveloped cache string.
+
+    ``write_cache`` uses this for cache:* writes. Use it directly when writing
+    a cache:* value to an explicit KV client that bypasses ``write_cache`` --
+    e.g. mirroring STREAK_SCORES to remote Upstash from a local refresh -- so
+    the stored shape and provenance match ``write_cache`` exactly and read back
+    through the envelope-aware ``read_cache``.
+    """
+    return json.dumps(_wrap_envelope(data))
+
+
 def _is_envelope(obj: object) -> bool:
     """True when ``obj`` is a provenance envelope produced by write_cache."""
     return (
@@ -211,7 +223,7 @@ def write_cache(key: CacheKey, data: dict | list) -> None:
     """
     kv = get_kv()
     try:
-        kv.set(redis_key(key), json.dumps(_wrap_envelope(data)))
+        kv.set(redis_key(key), serialize_cache_payload(data))
     except Exception as e:
         log.warning(f"write_cache({key}) KV write failed: {e}")
 

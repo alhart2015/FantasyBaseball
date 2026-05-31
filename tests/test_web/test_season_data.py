@@ -722,6 +722,21 @@ def test_read_cache_unwraps_envelope_to_bare_payload():
     assert read_cache(CacheKey.STANDINGS) == {"v": 1}
 
 
+def test_serialize_cache_payload_matches_write_cache_envelope(monkeypatch):
+    """serialize_cache_payload produces the same enveloped string write_cache
+    stores, so a path writing to an explicit KV client (e.g. the remote streak
+    mirror) matches write_cache's shape and reads back through read_cache."""
+    monkeypatch.setattr(season_data, "_utc_now_iso", lambda: "2026-05-31T12:00:00+00:00")
+    monkeypatch.setattr(season_data, "_code_sha", lambda: "abc1234")
+    serialized = season_data.serialize_cache_payload({"v": 1})
+    stored = json.loads(serialized)
+    assert stored["_data"] == {"v": 1}
+    assert stored["_meta"]["_sha"] == "abc1234"
+    # Identical to what write_cache stores for the same payload.
+    write_cache(CacheKey.STANDINGS, {"v": 1})
+    assert kv_store.get_kv().get(redis_key(CacheKey.STANDINGS)) == serialized
+
+
 def test_read_cache_reads_legacy_unenveloped_payload():
     """Blobs written before the envelope shipped are bare JSON. read_cache
     must still return them as-is (backward compatibility), so a deploy does

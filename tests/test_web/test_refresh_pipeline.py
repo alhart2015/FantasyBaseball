@@ -1044,7 +1044,12 @@ def test_compute_streaks_mirrors_to_remote_upstash(monkeypatch, kv_isolation) ->
     assert len(fake_remote.calls) == 1, "remote.set must be invoked exactly once"
     key, value = fake_remote.calls[0]
     assert key == redis_key(CacheKey.STREAK_SCORES)
-    payload = json.loads(value)
+    stored = json.loads(value)
+    # The mirrored remote value carries the same provenance envelope as the
+    # local write_cache, so Render reads it through the envelope-aware
+    # read_cache rather than seeing a bare (shape-mismatched) blob.
+    assert "_meta" in stored
+    payload = stored["_data"]
     assert payload["team_name"] == "t"
     assert len(payload["roster_rows"]) == 1
 
