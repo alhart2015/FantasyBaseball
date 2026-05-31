@@ -167,6 +167,85 @@ def test_game_log_dates_dedup_and_sort(fake_redis):
     assert redis_store.get_game_log_dates(fake_redis, 2026) == ["2026-04-01", "2026-04-02"]
 
 
+def test_build_hitter_ytd_game_logs_assembles_payload(fake_redis):
+    """Assembles {mlbam: {name, type:'hitter', games}} from per-player logs."""
+    redis_store.set_game_log_totals(
+        fake_redis,
+        "hitters",
+        {"660271": {"name": "Shohei Ohtani", "ab": 3}, "545361": {"name": "Mike Trout", "ab": 2}},
+    )
+    redis_store.set_player_game_log(
+        fake_redis,
+        2026,
+        "660271",
+        "hitting",
+        {"name": "Shohei Ohtani", "games": [{"date": "2026-04-01", "ab": 4, "h": 2}]},
+    )
+    redis_store.set_player_game_log(
+        fake_redis,
+        2026,
+        "545361",
+        "hitting",
+        {"name": "Mike Trout", "games": [{"date": "2026-04-02", "ab": 3, "h": 1}]},
+    )
+    out = redis_store.build_hitter_ytd_game_logs(fake_redis, 2026)
+    assert out == {
+        "660271": {
+            "name": "Shohei Ohtani",
+            "type": "hitter",
+            "games": [{"date": "2026-04-01", "ab": 4, "h": 2}],
+        },
+        "545361": {
+            "name": "Mike Trout",
+            "type": "hitter",
+            "games": [{"date": "2026-04-02", "ab": 3, "h": 1}],
+        },
+    }
+
+
+def test_build_hitter_ytd_game_logs_skips_missing_and_corrupt(fake_redis):
+    """Rollup ids with no per-player log (or corrupt JSON) are skipped, not faked."""
+    redis_store.set_game_log_totals(
+        fake_redis,
+        "hitters",
+        {"1": {"name": "Has Log"}, "2": {"name": "No Log"}, "3": {"name": "Corrupt"}},
+    )
+    redis_store.set_player_game_log(
+        fake_redis,
+        2026,
+        "1",
+        "hitting",
+        {"name": "Has Log", "games": [{"date": "2026-04-01", "ab": 2}]},
+    )
+    fake_redis.set("game_logs:2026:3:hitting", "not json")
+    out = redis_store.build_hitter_ytd_game_logs(fake_redis, 2026)
+    assert set(out) == {"1"}
+
+
+def test_build_hitter_ytd_game_logs_handles_many_players_chunked(fake_redis):
+    """All players come back even when the id list exceeds one MGET chunk."""
+    n = 120
+    redis_store.set_game_log_totals(
+        fake_redis, "hitters", {str(i): {"name": f"P{i}"} for i in range(n)}
+    )
+    for i in range(n):
+        redis_store.set_player_game_log(
+            fake_redis,
+            2026,
+            str(i),
+            "hitting",
+            {"name": f"P{i}", "games": [{"date": "2026-04-01", "ab": i}]},
+        )
+    out = redis_store.build_hitter_ytd_game_logs(fake_redis, 2026)
+    assert len(out) == n
+    assert out["119"]["games"][0]["ab"] == 119
+
+
+def test_build_hitter_ytd_game_logs_empty_and_none(fake_redis):
+    assert redis_store.build_hitter_ytd_game_logs(fake_redis, 2026) == {}
+    assert redis_store.build_hitter_ytd_game_logs(None, 2026) == {}
+
+
 def test_game_log_helpers_noop_on_none_client():
     assert redis_store.get_player_game_log(None, 2026, "1", "hitting") is None
     assert redis_store.set_player_game_log(None, 2026, "1", "hitting", {}) is None

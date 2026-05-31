@@ -701,7 +701,9 @@ class RefreshRun:
     def _build_projected_standings(self):
         self._progress("Projecting end-of-season standings...")
         from fantasy_baseball.analysis.team_ytd_attribution import compute_team_ytd_ab
+        from fantasy_baseball.data.kv_store import get_kv
         from fantasy_baseball.data.projections import hydrate_roster_entries
+        from fantasy_baseball.data.redis_store import build_hitter_ytd_game_logs
         from fantasy_baseball.models.standings import (
             ProjectedStandings,
             Standings,
@@ -733,13 +735,21 @@ class RefreshRun:
 
         # Yahoo's team-standings response does not expose AB for this league,
         # so derive team-YTD AB from Team.ownership_periods() intersected with
-        # per-game logs in data/roster_game_logs.json and stuff it onto
-        # extras[OpportunityStat.AB]. ytd_components() then reads AB via Tier
-        # 1 of its sourcing precedence and recombines AVG correctly downstream.
+        # per-game hitter logs and stuff it onto extras[OpportunityStat.AB].
+        # ytd_components() then reads AB via Tier 1 of its sourcing precedence
+        # and recombines AVG correctly downstream.
+        #
+        # The game logs are assembled from Upstash (the incrementally-synced
+        # game_logs:{season}:* records) rather than read from
+        # data/roster_game_logs.json -- that file is built by nothing in the
+        # deployed pipeline and is absent on Render, which made the file
+        # fallback yield AB=0 and silently collapse team-YTD AVG to ROS-only.
+        game_logs = build_hitter_ytd_game_logs(get_kv(), self.config.season_year)
         ab_by_team = compute_team_ytd_ab(
             self.league_model,
             season_start=date.fromisoformat(self.config.season_start),
             season_end=date.fromisoformat(self.config.season_end),
+            game_logs=game_logs,
         )
         ytd_standings = Standings(
             effective_date=self.standings.effective_date,

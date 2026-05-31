@@ -196,6 +196,53 @@ class TestRefreshShape:
             f"actual_standings={preseason_call['actual_standings']!r}"
         )
 
+    def test_build_projected_standings_sources_game_logs_from_upstash(
+        self, configured_test_env, fake_redis, monkeypatch
+    ):
+        """compute_team_ytd_ab must receive game_logs assembled from Upstash
+        (build_hitter_ytd_game_logs), not fall back to the un-built
+        data/roster_game_logs.json file. That file is absent on Render, so the
+        fallback yields AB=0 and team-YTD AVG silently degrades to ROS-only.
+        """
+        from fantasy_baseball.analysis import team_ytd_attribution
+        from fantasy_baseball.data import redis_store
+
+        # The fixture seeds the hitter rollup (name-keyed: hitter000..) during
+        # the run but no per-player logs. Seed a per-player log for one of those
+        # rollup ids -- that key is not touched by the run, so the Upstash bridge
+        # has real data to return.
+        redis_store.set_player_game_log(
+            fake_redis,
+            2026,
+            "hitter000",
+            "hitting",
+            {"name": "hitter000", "games": [{"date": "2026-04-15", "ab": 4}]},
+        )
+
+        captured: dict = {}
+        orig = team_ytd_attribution.compute_team_ytd_ab
+
+        def spy(league, *args, **kwargs):
+            captured["game_logs"] = kwargs.get("game_logs")
+            return orig(league, *args, **kwargs)
+
+        monkeypatch.setattr(team_ytd_attribution, "compute_team_ytd_ab", spy)
+
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
+
+        assert captured.get("game_logs") is not None, (
+            "pipeline must pass game_logs= sourced from Upstash, not rely on "
+            "the absent data/roster_game_logs.json file"
+        )
+        # Exactly the bridge's output, and non-empty (proves it read per-player
+        # logs, not the file fallback).
+        expected = redis_store.build_hitter_ytd_game_logs(fake_redis, 2026)
+        assert captured["game_logs"] == expected
+        assert captured["game_logs"].get("hitter000", {}).get("games") == [
+            {"date": "2026-04-15", "ab": 4}
+        ]
+
 
 class TestRefreshInvariants:
     """Cross-step contracts — these catch wiring regressions."""

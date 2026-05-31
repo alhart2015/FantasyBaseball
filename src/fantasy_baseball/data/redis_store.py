@@ -543,6 +543,57 @@ def set_player_game_log(client, season: int, mlbam_id: str, group: str, payload:
     client.set(key, json.dumps(payload))
 
 
+# Upstash request-size cap is generous, but a 50-key MGET keeps each call well
+# under it while collapsing ~550 hitter reads into ~11 round-trips.
+_GAME_LOG_MGET_CHUNK = 50
+
+
+def build_hitter_ytd_game_logs(client, season: int) -> dict[str, dict]:
+    """Assemble the hitter per-game payload that ``compute_team_ytd_ab`` consumes.
+
+    Returns ``{mlbam_id: {"name", "type": "hitter", "games": [...]}}`` sourced
+    from the per-player ``game_logs:{season}:{id}:hitting`` records, enumerated
+    via the ``game_log_totals:hitters`` rollup (the canonical list of every
+    hitter we have logs for). Reads are batched with chunked MGET.
+
+    This is the production bridge between Upstash's incrementally-synced game
+    logs and the team-YTD AB attribution: the projection layer can pass the
+    result as ``compute_team_ytd_ab(..., game_logs=<this>)`` instead of reading
+    ``data/roster_game_logs.json`` -- a file nothing in the deployed pipeline
+    builds, so AB (and therefore team-YTD AVG) was silently zero in production.
+
+    Rollup ids whose per-player log is missing or corrupt are skipped (no
+    fabricated empty entries). Returns ``{}`` when *client* is ``None`` or the
+    rollup is empty. ``games`` rows are passed through verbatim;
+    ``_load_per_game_hitter_ab`` reads only ``date`` and ``ab``.
+    """
+    if client is None:
+        return {}
+    rollup = get_game_log_totals(client, "hitters")
+    if not rollup:
+        return {}
+    ids = list(rollup)
+    out: dict[str, dict] = {}
+    for start in range(0, len(ids), _GAME_LOG_MGET_CHUNK):
+        chunk = ids[start : start + _GAME_LOG_MGET_CHUNK]
+        keys = [_player_game_log_key(season, mid, "hitting") for mid in chunk]
+        for mid, raw in zip(chunk, client.mget(*keys), strict=True):
+            if not raw:
+                continue
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            out[mid] = {
+                "name": payload.get("name") or rollup[mid].get("name") or "",
+                "type": "hitter",
+                "games": payload.get("games") or [],
+            }
+    return out
+
+
 def _game_logs_watermark_key(season: int) -> str:
     return f"game_logs:{season}:fetched_through_utc"
 
