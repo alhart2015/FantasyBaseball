@@ -547,12 +547,14 @@ def _load_projections_for_date_redis(client):
     useful for the first refresh of a new season before any ROS
     snapshot has been written.
     """
-    from fantasy_baseball.data.redis_store import (
-        get_blended_projections,
-        get_ros_projections,
-    )
+    from fantasy_baseball.data.cache_keys import CacheKey
+    from fantasy_baseball.data.redis_store import get_blended_projections
+    from fantasy_baseball.web.season_data import read_cache_dict
 
-    ros = get_ros_projections(client) or {}
+    # Read through the envelope-aware cache layer: cache:ros_projections is
+    # written by write_cache (provenance-enveloped). A raw redis_store read
+    # would see {_meta, _data} and miss the payload.
+    ros = read_cache_dict(CacheKey.ROS_PROJECTIONS) or {}
     hitters_rows: list[dict[str, Any]] = list(ros.get("hitters") or [])
     pitchers_rows: list[dict[str, Any]] = list(ros.get("pitchers") or [])
 

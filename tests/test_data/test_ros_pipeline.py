@@ -113,12 +113,7 @@ def test_blend_and_cache_ros_blends_latest_snapshot_and_writes_cache(
 
     raw = fake_redis.get("cache:ros_projections")
     assert raw is not None
-    # NOTE: cache:ros_projections is NOT enveloped here. ros_pipeline
-    # double-writes this key -- write_cache (enveloped) then the bare
-    # redis_store.set_ros_projections (if not is_remote()), and the bare
-    # write lands last locally. On Render the bare write is skipped, so the
-    # envelope stands. Collapsing this double-write is a separate cleanup.
-    cached_redis = json.loads(raw)
+    cached_redis = json.loads(raw)["_data"]  # unwrap provenance envelope
     assert len(cached_redis["hitters"]) == 4
     assert len(cached_redis["pitchers"]) == 3
 
@@ -187,7 +182,7 @@ def test_blend_and_cache_ros_normalizes_using_redis_totals(
     # cache:full_season_projections holds the YTD-added view.
     full_raw = fake_redis.get("cache:full_season_projections")
     assert full_raw is not None
-    full = json.loads(full_raw)
+    full = json.loads(full_raw)["_data"]  # unwrap provenance envelope
     judge_full = next(p for p in full["hitters"] if p["name"] == "Aaron Judge")
     cole_full = next(p for p in full["pitchers"] if p["name"] == "Gerrit Cole")
     assert judge_full["hr"] == pytest.approx(55)  # 45 + 10
@@ -242,8 +237,11 @@ def test_blend_writes_both_ros_and_full_season(tmp_path, monkeypatch):
         season_year=2026,
     )
 
-    ros = rs.get_ros_projections(kv)
-    full = rs.get_full_season_projections(kv)
+    from fantasy_baseball.data.cache_keys import CacheKey
+    from fantasy_baseball.web.season_data import read_cache_dict
+
+    ros = read_cache_dict(CacheKey.ROS_PROJECTIONS)
+    full = read_cache_dict(CacheKey.FULL_SEASON_PROJECTIONS)
 
     assert ros is not None and full is not None
     ros_row = next(p for p in ros["hitters"] if p.get("mlbam_id") == 12345)
