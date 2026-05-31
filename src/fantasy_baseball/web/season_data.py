@@ -5,6 +5,7 @@ import logging
 import os
 import subprocess
 from collections.abc import Mapping
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
@@ -72,6 +73,18 @@ _ENVELOPE_DATA = "_data"
 
 _code_sha_cache: str | None = None
 
+_current_job: ContextVar[str | None] = ContextVar("fantasy_cache_job", default=None)
+
+
+def set_cache_job(job: str | None) -> None:
+    """Set the job label stamped into subsequent cache provenance envelopes.
+
+    Entry points (the dashboard refresh, the ROS fetch) call this once so
+    every cache:* blob they write records its writer. ContextVar-scoped so
+    the ROS fetch thread cannot clobber the refresh's label.
+    """
+    _current_job.set(job)
+
 
 def _utc_now_iso() -> str:
     """UTC write timestamp for the cache provenance envelope."""
@@ -105,7 +118,11 @@ def _code_sha() -> str:
 def _wrap_envelope(data: dict | list) -> dict:
     """Wrap a cache payload with provenance metadata."""
     return {
-        _ENVELOPE_META: {"_written_at": _utc_now_iso(), "_sha": _code_sha()},
+        _ENVELOPE_META: {
+            "_written_at": _utc_now_iso(),
+            "_sha": _code_sha(),
+            "_job": _current_job.get(),
+        },
         _ENVELOPE_DATA: data,
     }
 

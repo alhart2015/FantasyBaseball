@@ -47,6 +47,7 @@ from fantasy_baseball.web.season_data import (
     _get_redis,
     _load_game_log_totals,
     read_cache,
+    set_cache_job,
     write_cache,
 )
 
@@ -376,6 +377,8 @@ class RefreshRun:
         ``_refresh_status['error']`` while still raising, and clears
         ``running`` in the ``finally`` block.
         """
+        # Stamp every cache:* blob this refresh writes with its writer.
+        set_cache_job("refresh")
         with _refresh_lock:
             _refresh_status["running"] = True
             _refresh_status["progress"] = "Starting..."

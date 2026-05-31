@@ -739,6 +739,28 @@ def test_write_cache_envelopes_list_payload():
     assert read_cache(CacheKey.STANDINGS) == [1, 2, 3]
 
 
+def test_write_cache_stamps_job_in_envelope():
+    """The envelope records which job wrote the blob, so a stale key can be
+    traced to the writer that produced it (refresh vs ros_fetch)."""
+    season_data.set_cache_job("refresh")
+    try:
+        write_cache(CacheKey.STANDINGS, {"v": 1})
+    finally:
+        season_data.set_cache_job(None)
+    stored = json.loads(kv_store.get_kv().get(redis_key(CacheKey.STANDINGS)))
+    assert stored["_meta"]["_job"] == "refresh"
+
+
+def test_write_cache_job_defaults_to_none():
+    """With no job set, the envelope still carries a _job key (null), so the
+    field is always present for inspection."""
+    season_data.set_cache_job(None)
+    write_cache(CacheKey.STANDINGS, {"v": 1})
+    stored = json.loads(kv_store.get_kv().get(redis_key(CacheKey.STANDINGS)))
+    assert "_job" in stored["_meta"]
+    assert stored["_meta"]["_job"] is None
+
+
 def test_write_cache_swallows_kv_error(monkeypatch):
     """write_cache logs and continues if the KV write raises.
 
