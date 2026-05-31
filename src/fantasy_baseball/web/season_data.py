@@ -133,9 +133,16 @@ def _code_sha() -> str:
     return sha or "unknown"
 
 
-def _wrap_envelope(data: dict | list) -> dict:
-    """Wrap a cache payload with provenance metadata."""
-    return {
+def serialize_cache_payload(data: dict | list) -> str:
+    """Serialize a payload into the canonical enveloped cache string.
+
+    Wraps ``data`` as ``{_meta: {_written_at, _sha, _job}, _data: data}`` and
+    JSON-dumps it. ``write_cache`` writes this for cache:* keys; use
+    :func:`write_cache_to` to write the same shape to an explicit KV client
+    that bypasses ``write_cache`` (e.g. mirroring STREAK_SCORES to remote
+    Upstash from a local refresh), so it reads back through ``read_cache``.
+    """
+    envelope = {
         _ENVELOPE_META: {
             "_written_at": _utc_now_iso(),
             "_sha": _code_sha(),
@@ -143,18 +150,7 @@ def _wrap_envelope(data: dict | list) -> dict:
         },
         _ENVELOPE_DATA: data,
     }
-
-
-def serialize_cache_payload(data: dict | list) -> str:
-    """Serialize a payload into the canonical enveloped cache string.
-
-    ``write_cache`` uses this for cache:* writes. Use it directly when writing
-    a cache:* value to an explicit KV client that bypasses ``write_cache`` --
-    e.g. mirroring STREAK_SCORES to remote Upstash from a local refresh -- so
-    the stored shape and provenance match ``write_cache`` exactly and read back
-    through the envelope-aware ``read_cache``.
-    """
-    return json.dumps(_wrap_envelope(data))
+    return json.dumps(envelope)
 
 
 def _is_envelope(obj: object) -> bool:
@@ -215,15 +211,25 @@ def read_cache_list(key: CacheKey) -> list[Any] | None:
     return payload if isinstance(payload, list) else None
 
 
+def write_cache_to(client: KVStore, key: CacheKey, data: dict | list) -> None:
+    """Write an enveloped cache:* value to an explicit KV client.
+
+    Shared primitive behind :func:`write_cache` (which targets ``get_kv()``)
+    and any path mirroring a cache:* key to a second client (e.g. the local
+    refresh pushing STREAK_SCORES to remote Upstash), so both produce the
+    identical envelope shape. Does not swallow errors -- the caller decides.
+    """
+    client.set(redis_key(key), serialize_cache_payload(data))
+
+
 def write_cache(key: CacheKey, data: dict | list) -> None:
     """Write a cached payload to the KV store.
 
     Routes through ``kv_store.get_kv()``: Upstash on Render, SQLite
     locally.
     """
-    kv = get_kv()
     try:
-        kv.set(redis_key(key), serialize_cache_payload(data))
+        write_cache_to(get_kv(), key, data)
     except Exception as e:
         log.warning(f"write_cache({key}) KV write failed: {e}")
 

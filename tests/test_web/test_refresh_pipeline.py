@@ -11,6 +11,7 @@ import pytest
 
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 from fantasy_baseball.web import refresh_pipeline
+from tests._cache_helpers import unwrap_cache_value
 from tests.test_web._refresh_fixture import patched_refresh_environment
 
 
@@ -22,15 +23,7 @@ def _read(client, name: str):
     helper reflects that — it queries the same KV the dashboard reads from
     on Render and SQLite locally.
     """
-    raw = client.get(f"cache:{name}")
-    if not raw:
-        return None
-    obj = json.loads(raw)
-    # write_cache wraps payloads in a provenance envelope; unwrap to the
-    # dashboard payload so shape assertions see the data, not the envelope.
-    if isinstance(obj, dict) and "_meta" in obj and "_data" in obj:
-        return obj["_data"]
-    return obj
+    return unwrap_cache_value(client.get(f"cache:{name}"))
 
 
 @pytest.fixture
@@ -801,7 +794,6 @@ def _build_refresh_run_for_streak_test():
 
 def test_compute_streaks_writes_cache(monkeypatch, kv_isolation) -> None:
     """_compute_streaks wraps compute_streak_report + serializes + writes cache."""
-    import json
     from datetime import date
 
     from fantasy_baseball.data import kv_store
@@ -855,7 +847,7 @@ def test_compute_streaks_writes_cache(monkeypatch, kv_isolation) -> None:
 
     cached = kv_store.get_kv().get(redis_key(CacheKey.STREAK_SCORES))
     assert cached is not None
-    payload = json.loads(cached)["_data"]  # unwrap provenance envelope
+    payload = unwrap_cache_value(cached)
     assert payload["team_name"] == "t"
     assert len(payload["roster_rows"]) == 1
 
@@ -1186,9 +1178,8 @@ class TestStashBoardDegradedMode:
         # The stash cache must contain the empty-board sentinel.
         raw = fake_redis.get(redis_key(CacheKey.STASH))
         assert raw is not None, "CacheKey.STASH must be written even on failure"
-        import json
 
-        stash_data = json.loads(raw)["_data"]  # unwrap provenance envelope
+        stash_data = unwrap_cache_value(raw)
         assert stash_data["candidates"] == [], (
             f"Expected empty candidates list; got {stash_data['candidates']!r}"
         )

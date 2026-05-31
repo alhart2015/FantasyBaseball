@@ -21,7 +21,6 @@ from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fantasy_baseball.data.cache_keys import redis_key
 from fantasy_baseball.models.positions import BENCH_SLOTS
 
 # Streaks imports are deliberately deferred to inside ``_compute_streaks``:
@@ -48,9 +47,9 @@ from fantasy_baseball.web.season_data import (
     _load_game_log_totals,
     read_cache,
     reset_cache_job,
-    serialize_cache_payload,
     set_cache_job,
     write_cache,
+    write_cache_to,
 )
 
 if TYPE_CHECKING:
@@ -124,9 +123,9 @@ def _push_streak_scores_to_remote(payload: dict) -> None:
         from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
 
         remote = build_explicit_upstash_kv()
-        # Envelope the mirrored value exactly like write_cache so remote and
-        # local hold the same shape/provenance (Render reads via read_cache).
-        remote.set(redis_key(_CacheKey.STREAK_SCORES), serialize_cache_payload(payload))
+        # Mirror with the same envelope/provenance as the local write_cache so
+        # remote and local hold the identical shape (Render reads via read_cache).
+        write_cache_to(remote, _CacheKey.STREAK_SCORES, payload)
     except Exception as exc:
         log.warning(f"Failed to mirror streak_scores to remote Upstash: {exc}")
 

@@ -7,6 +7,7 @@ import pytest
 
 from fantasy_baseball.data import redis_store
 from fantasy_baseball.data.ros_pipeline import blend_and_cache_ros
+from tests._cache_helpers import unwrap_cache_value
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 
@@ -109,11 +110,10 @@ def test_blend_and_cache_ros_blends_latest_snapshot_and_writes_cache(
     assert (pitchers_df["player_type"] == "pitcher").all()
 
     # cache:ros_projections is populated in the KV.
-    import json
 
     raw = fake_redis.get("cache:ros_projections")
     assert raw is not None
-    cached_redis = json.loads(raw)["_data"]  # unwrap provenance envelope
+    cached_redis = unwrap_cache_value(raw)
     assert len(cached_redis["hitters"]) == 4
     assert len(cached_redis["pitchers"]) == 3
 
@@ -136,7 +136,6 @@ def test_blend_and_cache_ros_normalizes_using_redis_totals(
     pipeline keeps the returned DataFrame ROS-only and emits the
     YTD-added view through the typed full-season setter.
     """
-    import json
 
     _make_ros_tree(projections_dir, year=2026, date="2026-04-07")
 
@@ -182,7 +181,7 @@ def test_blend_and_cache_ros_normalizes_using_redis_totals(
     # cache:full_season_projections holds the YTD-added view.
     full_raw = fake_redis.get("cache:full_season_projections")
     assert full_raw is not None
-    full = json.loads(full_raw)["_data"]  # unwrap provenance envelope
+    full = unwrap_cache_value(full_raw)
     judge_full = next(p for p in full["hitters"] if p["name"] == "Aaron Judge")
     cole_full = next(p for p in full["pitchers"] if p["name"] == "Gerrit Cole")
     assert judge_full["hr"] == pytest.approx(55)  # 45 + 10
