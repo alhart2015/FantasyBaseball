@@ -67,6 +67,19 @@ def test_swap_window_slot_share_uses_remaining_season_not_full_season():
     assert discount_factor(115.0, window) == pytest.approx(1.0 - s)
 
 
+def test_swap_window_clamps_fraction_remaining_above_one():
+    """fraction_remaining can exceed 1.0 before opening day (compute_fraction_
+    remaining does not clamp its upper bound). The slot-share denominator must
+    treat that as a whole season remaining -- a >1.0 value must NOT inflate the
+    denominator and under-displace. fr=1.3 yields the same window as fr=1.0.
+    """
+    candidate = _pitcher("Cand", ros_ip=120, preseason_ip=200)
+    target = _pitcher("Target", ros_ip=130, preseason_ip=200)
+    assert swap_window_ip(candidate, target, fraction_remaining=1.3) == swap_window_ip(
+        candidate, target, fraction_remaining=1.0
+    )
+
+
 def test_swap_window_uses_target_ros_not_target_preseason():
     """The window is the TARGET's remaining (ROS) IP scaled by the candidate's
     slot-share; the target's preseason IP is irrelevant. Candidate at 60/200

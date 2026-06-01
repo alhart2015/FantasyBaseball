@@ -13,6 +13,9 @@ def fetch_and_match_free_agents(
     pitchers_proj: pd.DataFrame,
     fa_per_position: int = 100,
     on_position_loaded: Callable[[str, int], None] | None = None,
+    *,
+    preseason_hitters_proj: pd.DataFrame | None = None,
+    preseason_pitchers_proj: pd.DataFrame | None = None,
 ) -> tuple[list[Player], int]:
     """Fetch available players from Yahoo, match to projections.
 
@@ -29,10 +32,21 @@ def fetch_and_match_free_agents(
         pitchers_proj: Blended pitcher projections with _name_norm column.
         fa_per_position: Number of players to fetch per position.
         on_position_loaded: Optional callback(position, count) for progress.
+        preseason_hitters_proj: Optional blended preseason hitter frame. When
+            provided, ``Player.preseason`` is attached by the matched ROS row's
+            identity (mlbam_id / name), per type -- so FA stash candidates use
+            the same remaining-season slot-share displacement model as owned IL
+            arms instead of the legacy direct-IP fallback.
+        preseason_pitchers_proj: Optional blended preseason pitcher frame.
 
     Returns:
         Tuple of (matched_fa_players as list[Player], total_fetched_count).
     """
+    from fantasy_baseball.data.projections import _build_full_season_index, _lookup_stats
+
+    pre_hitters_index = _build_full_season_index(preseason_hitters_proj)
+    pre_pitchers_index = _build_full_season_index(preseason_pitchers_proj)
+
     fa_players: list[Player] = []
     fa_fetched = 0
     seen_names: set[str] = set()
@@ -71,11 +85,15 @@ def fetch_and_match_free_agents(
                     ros = HitterStats.from_dict(proj_row.to_dict())
                 else:
                     ros = PitcherStats.from_dict(proj_row.to_dict())
+                preseason = _lookup_stats(
+                    proj_row, fa_name_norm, ptype, pre_hitters_index, pre_pitchers_index
+                )
                 p = Player(
                     name=fa["name"],
                     player_type=ptype,
                     positions=fa["positions"],
                     rest_of_season=ros,
+                    preseason=preseason,
                     status=fa.get("status", ""),
                 )
                 fa_players.append(p)

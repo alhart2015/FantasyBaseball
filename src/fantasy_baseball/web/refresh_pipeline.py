@@ -236,25 +236,35 @@ def build_standings_breakdown_payload(
         LeagueContext,
         build_team_sds,
         compute_roster_breakdown,
-        project_team_stats,
+        project_ros_components,
+        team_end_of_season,
     )
 
-    # Pass 1: SGP-based baseline {team: stats}. Matches the ROS-only
-    # call used by ProjectedStandings.from_rosters Pass 1 so the
-    # DeltaRoto picker's baseline agrees with the standings.
+    ytd_by_team: dict[str, TeamYtdComponents] = {}
+    if actual_standings is not None:
+        for entry in actual_standings.entries:
+            ytd_by_team[entry.team_name] = entry.ytd_components()
+
+    # Pass 1: per-team END-OF-SEASON baseline (YTD + displaced ROS) consumed by
+    # the DeltaRoto picker via LeagueContext.baseline_other_team_stats in Pass 2.
+    # This MUST mirror ProjectedStandings.from_rosters Pass 1 (standings.py),
+    # which includes YTD: per-team YTD shifts are not uniform across the picker's
+    # argmax, so a ROS-only baseline here would make the picker choose different
+    # displacement targets than the standings widget and the per-player breakdown
+    # would no longer sum to the headline total. (from_rosters was changed to
+    # fold YTD into Pass 1; this path was not, which is why the two surfaces
+    # disagreed.)
     baseline_stats = {
-        tname: project_team_stats(roster, displacement=True)
+        tname: team_end_of_season(
+            ytd_by_team.get(tname) or TeamYtdComponents(),
+            project_ros_components(roster, displacement=True),
+        )
         for tname, roster in team_rosters.items()
     }
     # Match ProjectedStandings.from_rosters: damp the picker's SDs by
     # sqrt(fraction_remaining) so the breakdown's displacement decisions
     # agree with the standings widget and the canonical team_sds.
     team_sds = build_team_sds(team_rosters, sd_scale=fraction_remaining**0.5)
-
-    ytd_by_team: dict[str, TeamYtdComponents] = {}
-    if actual_standings is not None:
-        for entry in actual_standings.entries:
-            ytd_by_team[entry.team_name] = entry.ytd_components()
 
     teams_payload: dict[str, dict] = {}
     for team_name, roster in team_rosters.items():
@@ -896,7 +906,6 @@ class RefreshRun:
         self.roster_players = merge_matched_and_raw_roster(
             self.matched,
             self.roster_raw,
-            self.preseason_lookup,
         )
 
         self._progress(f"Matched {len(self.roster_players)} players to projections")
@@ -1115,7 +1124,11 @@ class RefreshRun:
 
         self._progress("Running roster audit...")
         self.fa_players, _ = fetch_and_match_free_agents(
-            self.league, self.hitters_proj, self.pitchers_proj
+            self.league,
+            self.hitters_proj,
+            self.pitchers_proj,
+            preseason_hitters_proj=self.preseason_hitters,
+            preseason_pitchers_proj=self.preseason_pitchers,
         )
 
         # Cache positions for all known players (roster + opponents + FAs)
