@@ -73,6 +73,7 @@ _ENVELOPE_META = "_meta"
 _ENVELOPE_DATA = "_data"
 
 _code_sha_cache: str | None = None
+_code_sha_git_attempted: bool = False
 
 _current_job: ContextVar[str | None] = ContextVar("fantasy_cache_job", default=None)
 
@@ -107,16 +108,18 @@ def _code_sha() -> str:
     the repo root. On Render the git fallback is skipped -- the deployed slug
     may not be a git checkout, so forking git there is pure waste.
 
-    Returns ``"unknown"`` when neither source resolves, but does NOT memoize
-    that failure: a transient git error (missing binary, timeout under a
-    concurrent index lock, wrong cwd) would otherwise stamp every blob for the
-    rest of the process. A later call can still pick up a real SHA.
+    Returns ``"unknown"`` when neither source resolves. The resolved SHA is
+    memoized; a failure is NOT memoized as ``"unknown"`` (so a later call can
+    still pick up RENDER_GIT_COMMIT), but git is forked at most ONCE per
+    process (``_code_sha_git_attempted``) so a persistently-failing git off
+    Render can't spawn a subprocess on every cache write.
     """
-    global _code_sha_cache
+    global _code_sha_cache, _code_sha_git_attempted
     if _code_sha_cache is not None:
         return _code_sha_cache
     sha = os.environ.get("RENDER_GIT_COMMIT", "")
-    if not sha and not is_remote():
+    if not sha and not is_remote() and not _code_sha_git_attempted:
+        _code_sha_git_attempted = True
         try:
             sha = subprocess.run(
                 ["git", "rev-parse", "--short", "HEAD"],

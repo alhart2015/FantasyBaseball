@@ -794,6 +794,7 @@ def test_code_sha_does_not_memoize_failure(monkeypatch):
     """A transient git failure must NOT be cached as 'unknown' forever -- a
     later call (e.g. once RENDER_GIT_COMMIT appears) must still resolve."""
     monkeypatch.setattr(season_data, "_code_sha_cache", None)
+    monkeypatch.setattr(season_data, "_code_sha_git_attempted", False)
     monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
     monkeypatch.setattr(season_data, "is_remote", lambda: False)
 
@@ -813,6 +814,7 @@ def test_code_sha_skips_git_on_remote(monkeypatch):
     """On Render the deployed slug may not be a git checkout; with no
     RENDER_GIT_COMMIT, _code_sha must NOT fork git -- just return 'unknown'."""
     monkeypatch.setattr(season_data, "_code_sha_cache", None)
+    monkeypatch.setattr(season_data, "_code_sha_git_attempted", False)
     monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
     monkeypatch.setattr(season_data, "is_remote", lambda: True)
 
@@ -826,6 +828,29 @@ def test_code_sha_skips_git_on_remote(monkeypatch):
     monkeypatch.setattr(season_data, "subprocess", _CountingSub())
     assert season_data._code_sha() == "unknown"
     assert calls["n"] == 0
+
+
+def test_code_sha_forks_git_at_most_once(monkeypatch):
+    """A persistent git failure off-Render must not re-fork on every cache
+    write -- git is forked at most once per process (then 'unknown' until a
+    real SHA source, e.g. RENDER_GIT_COMMIT, appears)."""
+    monkeypatch.setattr(season_data, "_code_sha_cache", None)
+    monkeypatch.setattr(season_data, "_code_sha_git_attempted", False)
+    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+    monkeypatch.setattr(season_data, "is_remote", lambda: False)
+
+    calls = {"n": 0}
+
+    class _FailingSub:
+        def run(self, *a, **k):
+            calls["n"] += 1
+            raise OSError("git not found")
+
+    monkeypatch.setattr(season_data, "subprocess", _FailingSub())
+    assert season_data._code_sha() == "unknown"
+    assert season_data._code_sha() == "unknown"
+    assert season_data._code_sha() == "unknown"
+    assert calls["n"] == 1  # forked once, not once per call
 
 
 def test_write_cache_swallows_kv_error(monkeypatch):
