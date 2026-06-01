@@ -64,8 +64,11 @@ def test_ros_cache_excludes_ytd(tmp_path, monkeypatch):
         season_year=2026,
     )
 
-    ros_cache = rs.get_ros_projections(kv)
-    full_cache = rs.get_full_season_projections(kv)
+    from fantasy_baseball.data.cache_keys import CacheKey
+    from fantasy_baseball.web.season_data import read_cache_dict
+
+    ros_cache = read_cache_dict(CacheKey.ROS_PROJECTIONS)
+    full_cache = read_cache_dict(CacheKey.FULL_SEASON_PROJECTIONS)
 
     assert ros_cache is not None and full_cache is not None
     ros_row = next(p for p in ros_cache["hitters"] if p.get("mlbam_id") == 12345)

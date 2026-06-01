@@ -2,7 +2,12 @@
 
 import json
 import logging
+import os
+import subprocess
 from collections.abc import Mapping
+from contextvars import ContextVar, Token
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from fantasy_baseball.category_odds import category_finish_odds
@@ -57,12 +62,117 @@ def clear_opponent_cache() -> None:
     _opponent_cache.clear()
 
 
+# --- Cache provenance envelope ---------------------------------------------
+# Every cache:* payload is stored as ``{"_meta": {...}, "_data": <payload>}``:
+# write_cache wraps, read_cache unwraps. The envelope stamps the running code's
+# git SHA and the UTC write time so version/time skew between keys (e.g. an old
+# cache:projections vs a newer cache:standings_breakdown) is detectable by
+# inspecting the stored blob instead of being invisible. Reads of bare
+# (pre-envelope) payloads pass through unchanged for backward compatibility.
+_ENVELOPE_META = "_meta"
+_ENVELOPE_DATA = "_data"
+
+_code_sha_cache: str | None = None
+_code_sha_git_attempted: bool = False
+
+_current_job: ContextVar[str | None] = ContextVar("fantasy_cache_job", default=None)
+
+
+def set_cache_job(job: str | None) -> Token[str | None]:
+    """Set the job label stamped into subsequent cache provenance envelopes.
+
+    Entry points (the dashboard refresh, the ROS fetch) call this so every
+    cache:* blob they write records its writer. Returns a token; pass it to
+    :func:`reset_cache_job` in a ``finally`` to restore the prior label so a
+    job set on a reused/synchronous worker thread cannot leak into the next
+    job's writes.
+    """
+    return _current_job.set(job)
+
+
+def reset_cache_job(token: Token[str | None]) -> None:
+    """Restore the job label captured by a prior :func:`set_cache_job`."""
+    _current_job.reset(token)
+
+
+def _utc_now_iso() -> str:
+    """UTC write timestamp for the cache provenance envelope."""
+    return datetime.now(UTC).isoformat()
+
+
+def _code_sha() -> str:
+    """Short git SHA of the running code; memoized once a real SHA resolves.
+
+    Prefers ``RENDER_GIT_COMMIT`` (set it in ``render.yaml`` so prod blobs
+    carry a real SHA). Off Render it falls back to ``git rev-parse`` run in
+    the repo root. On Render the git fallback is skipped -- the deployed slug
+    may not be a git checkout, so forking git there is pure waste.
+
+    Returns ``"unknown"`` when neither source resolves. The resolved SHA is
+    memoized; a failure is NOT memoized as ``"unknown"`` (so a later call can
+    still pick up RENDER_GIT_COMMIT), but git is forked at most ONCE per
+    process (``_code_sha_git_attempted``) so a persistently-failing git off
+    Render can't spawn a subprocess on every cache write.
+    """
+    global _code_sha_cache, _code_sha_git_attempted
+    if _code_sha_cache is not None:
+        return _code_sha_cache
+    sha = os.environ.get("RENDER_GIT_COMMIT", "")
+    if not sha and not is_remote() and not _code_sha_git_attempted:
+        _code_sha_git_attempted = True
+        try:
+            sha = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=True,
+                cwd=Path(__file__).resolve().parents[3],
+            ).stdout.strip()
+        except Exception:
+            sha = ""
+    if sha:
+        _code_sha_cache = sha
+    return sha or "unknown"
+
+
+def serialize_cache_payload(data: dict | list) -> str:
+    """Serialize a payload into the canonical enveloped cache string.
+
+    Wraps ``data`` as ``{_meta: {_written_at, _sha, _job}, _data: data}`` and
+    JSON-dumps it. ``write_cache`` writes this for cache:* keys; use
+    :func:`write_cache_to` to write the same shape to an explicit KV client
+    that bypasses ``write_cache`` (e.g. mirroring STREAK_SCORES to remote
+    Upstash from a local refresh), so it reads back through ``read_cache``.
+    """
+    envelope = {
+        _ENVELOPE_META: {
+            "_written_at": _utc_now_iso(),
+            "_sha": _code_sha(),
+            "_job": _current_job.get(),
+        },
+        _ENVELOPE_DATA: data,
+    }
+    return json.dumps(envelope)
+
+
+def _is_envelope(obj: object) -> bool:
+    """True when ``obj`` is a provenance envelope produced by write_cache."""
+    return (
+        isinstance(obj, dict)
+        and _ENVELOPE_META in obj
+        and _ENVELOPE_DATA in obj
+        and isinstance(obj[_ENVELOPE_META], dict)
+    )
+
+
 def read_cache(key: CacheKey) -> dict | list | None:
     """Read a cached payload from the KV store.
 
     Routes through ``kv_store.get_kv()``: Upstash on Render, SQLite
     locally. The ``RENDER`` gate in ``kv_store`` ensures off-Render
-    callers cannot reach Upstash even with creds present.
+    callers cannot reach Upstash even with creds present. Transparently
+    unwraps the provenance envelope; bare legacy payloads pass through.
     """
     kv = get_kv()
     try:
@@ -73,10 +183,13 @@ def read_cache(key: CacheKey) -> dict | list | None:
     if raw is None:
         return None
     try:
-        return cast("dict | list", json.loads(raw))
+        obj = json.loads(raw)
     except json.JSONDecodeError:
         log.warning(f"read_cache({key}) corrupt KV data, treating as miss")
         return None
+    if _is_envelope(obj):
+        return cast("dict | list", obj[_ENVELOPE_DATA])
+    return cast("dict | list", obj)
 
 
 def read_cache_dict(key: CacheKey) -> dict[str, Any] | None:
@@ -101,15 +214,25 @@ def read_cache_list(key: CacheKey) -> list[Any] | None:
     return payload if isinstance(payload, list) else None
 
 
+def write_cache_to(client: KVStore, key: CacheKey, data: dict | list) -> None:
+    """Write an enveloped cache:* value to an explicit KV client.
+
+    Shared primitive behind :func:`write_cache` (which targets ``get_kv()``)
+    and any path mirroring a cache:* key to a second client (e.g. the local
+    refresh pushing STREAK_SCORES to remote Upstash), so both produce the
+    identical envelope shape. Does not swallow errors -- the caller decides.
+    """
+    client.set(redis_key(key), serialize_cache_payload(data))
+
+
 def write_cache(key: CacheKey, data: dict | list) -> None:
     """Write a cached payload to the KV store.
 
     Routes through ``kv_store.get_kv()``: Upstash on Render, SQLite
     locally.
     """
-    kv = get_kv()
     try:
-        kv.set(redis_key(key), json.dumps(data))
+        write_cache_to(get_kv(), key, data)
     except Exception as e:
         log.warning(f"write_cache({key}) KV write failed: {e}")
 

@@ -18,7 +18,6 @@ import logging
 import re as _re
 from typing import TypedDict
 
-from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 from fantasy_baseball.models.standings import ProjectedStandings, Standings
 
 logger = logging.getLogger(__name__)
@@ -28,32 +27,6 @@ class SeasonProgress(TypedDict):
     games_elapsed: int
     total: int
     as_of: str | None
-
-
-POSITIONS_KEY = "positions"
-
-
-def get_positions(client) -> dict[str, list[str]]:
-    """Read the positions map. Returns empty dict when the client is None, the key is missing, or the value is corrupt."""
-    if client is None:
-        return {}
-    raw = client.get(POSITIONS_KEY)
-    if raw is None:
-        return {}
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return data
-
-
-def set_positions(client, positions: dict[str, list[str]]) -> None:
-    """Overwrite the positions map. No-op when the client is None."""
-    if client is None:
-        return
-    client.set(POSITIONS_KEY, json.dumps(positions))
 
 
 _BLENDED_PROJ_TYPES = ("hitters", "pitchers")
@@ -131,85 +104,6 @@ def set_preseason_baseline(client, season_year: int, payload: dict) -> None:
     if client is None:
         return
     client.set(_preseason_baseline_key(season_year), json.dumps(payload))
-
-
-ROS_PROJECTIONS_KEY = redis_key(CacheKey.ROS_PROJECTIONS)
-
-
-def get_ros_projections(client) -> dict | None:
-    """Read the latest rest-of-season projections snapshot from Redis.
-
-    Returns the parsed ``{"hitters": [...], "pitchers": [...]}`` payload
-    or ``None`` on missing key, corrupt JSON, or ``client is None``.
-
-    Reads the supplied KV directly so tests injecting a fake KV client
-    are not cross-contaminated by the global ``get_kv()`` singleton.
-    """
-    if client is None:
-        return None
-    raw = client.get(ROS_PROJECTIONS_KEY)
-    if raw is None:
-        return None
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("Corrupt JSON at Redis key %r; ignoring", ROS_PROJECTIONS_KEY)
-        return None
-    if not isinstance(data, dict):
-        return None
-    return data
-
-
-def set_ros_projections(client, payload: dict) -> None:
-    """Overwrite the ROS-only projections blob.
-
-    Symmetric counterpart to :func:`set_full_season_projections`.
-    Used by ``blend_and_cache_ros`` so the local KV store sees the
-    blob off-Render (where ``web.season_data.write_cache`` writes only
-    to disk). No-op when ``client is None``.
-    """
-    if client is None:
-        return
-    client.set(ROS_PROJECTIONS_KEY, json.dumps(payload))
-
-
-FULL_SEASON_PROJECTIONS_KEY = redis_key(CacheKey.FULL_SEASON_PROJECTIONS)
-
-
-def get_full_season_projections(client) -> dict | None:
-    """Read the latest full-season (ROS+YTD) projections from Redis.
-
-    Same shape as :func:`get_ros_projections` —
-    ``{"hitters": [...], "pitchers": [...]}`` — but each row's counting
-    stats include season-to-date actuals. Used by
-    ``ProjectedStandings.from_rosters`` and ``project_team_stats`` for
-    end-of-season standings projection. NOT used by forward-looking
-    decision paths (transactions, trades, waivers, lineup optimizer) —
-    those should call :func:`get_ros_projections`.
-    """
-    if client is None:
-        return None
-    raw = client.get(FULL_SEASON_PROJECTIONS_KEY)
-    if raw is None:
-        return None
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("Corrupt JSON at Redis key %r; ignoring", FULL_SEASON_PROJECTIONS_KEY)
-        return None
-    if not isinstance(data, dict):
-        return None
-    return data
-
-
-def set_full_season_projections(client, payload: dict) -> None:
-    """Overwrite the full-season projections blob.
-
-    No-op when ``client is None`` (unconfigured environments).
-    """
-    if client is None:
-        return
-    client.set(FULL_SEASON_PROJECTIONS_KEY, json.dumps(payload))
 
 
 def _game_log_totals_key(player_type: str) -> str:

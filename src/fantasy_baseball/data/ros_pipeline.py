@@ -19,16 +19,12 @@ from pathlib import Path
 import pandas as pd
 
 from fantasy_baseball.data.cache_keys import CacheKey
-from fantasy_baseball.data.kv_store import get_kv, is_remote
+from fantasy_baseball.data.kv_store import get_kv
 from fantasy_baseball.data.projections import (
     blend_projections,
     normalize_rest_of_season_to_full_season,
 )
-from fantasy_baseball.data.redis_store import (
-    get_game_log_totals,
-    set_full_season_projections,
-    set_ros_projections,
-)
+from fantasy_baseball.data.redis_store import get_game_log_totals
 from fantasy_baseball.models.player import PlayerType
 
 
@@ -52,9 +48,9 @@ def blend_and_cache_ros(
       untouched).
     - ``cache:full_season_projections`` — ROS + YTD actuals.
 
-    Returns the ROS-only ``(hitters_df, pitchers_df)`` — full-season is
-    a derived view; callers that want it should read
-    :func:`fantasy_baseball.data.redis_store.get_full_season_projections`.
+    Returns the ROS-only ``(hitters_df, pitchers_df)``; full-season is a
+    derived view persisted to ``cache:full_season_projections`` and read via
+    ``season_data.read_cache(CacheKey.FULL_SEASON_PROJECTIONS)``.
 
     Args:
         projections_dir: Root ``data/projections`` path. Year and
@@ -127,18 +123,21 @@ def blend_and_cache_ros(
         "hitters": hitters_full.to_dict(orient="records"),
         "pitchers": pitchers_full.to_dict(orient="records"),
     }
-    # ``write_cache`` writes to disk and (only on Render) through to
-    # Upstash. Off Render, the local KV (sqlite) needs the explicit
-    # ``set_*_projections`` writes so consumers reading via
-    # ``get_{ros,full_season}_projections(kv)`` find the data; the
-    # on-Render path would otherwise double-write the same blob to
-    # Upstash. Imported at call time to avoid a web-layer import at
-    # data-layer import time.
-    from fantasy_baseball.web.season_data import write_cache
+    # Single write path: write_cache routes to the KV (Upstash on Render,
+    # sqlite locally) and wraps each payload in a provenance envelope.
+    # Consumers read back via the envelope-aware read_cache/read_cache_dict.
+    # Imported at call time to avoid a web-layer import at data-layer import
+    # time.
+    from fantasy_baseball.web.season_data import (
+        reset_cache_job,
+        set_cache_job,
+        write_cache,
+    )
 
-    write_cache(CacheKey.ROS_PROJECTIONS, ros_payload)
-    write_cache(CacheKey.FULL_SEASON_PROJECTIONS, full_payload)
-    if not is_remote():
-        set_ros_projections(client, ros_payload)
-        set_full_season_projections(client, full_payload)
+    job_token = set_cache_job("ros_fetch")
+    try:
+        write_cache(CacheKey.ROS_PROJECTIONS, ros_payload)
+        write_cache(CacheKey.FULL_SEASON_PROJECTIONS, full_payload)
+    finally:
+        reset_cache_job(job_token)
     return hitters_ros, pitchers_ros

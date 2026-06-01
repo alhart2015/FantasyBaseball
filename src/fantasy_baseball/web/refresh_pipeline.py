@@ -21,7 +21,6 @@ from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fantasy_baseball.data.cache_keys import redis_key
 from fantasy_baseball.models.positions import BENCH_SLOTS
 
 # Streaks imports are deliberately deferred to inside ``_compute_streaks``:
@@ -47,7 +46,10 @@ from fantasy_baseball.web.season_data import (
     _get_redis,
     _load_game_log_totals,
     read_cache,
+    reset_cache_job,
+    set_cache_job,
     write_cache,
+    write_cache_to,
 )
 
 if TYPE_CHECKING:
@@ -121,7 +123,9 @@ def _push_streak_scores_to_remote(payload: dict) -> None:
         from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
 
         remote = build_explicit_upstash_kv()
-        remote.set(redis_key(_CacheKey.STREAK_SCORES), json.dumps(payload))
+        # Mirror with the same envelope/provenance as the local write_cache so
+        # remote and local hold the identical shape (Render reads via read_cache).
+        write_cache_to(remote, _CacheKey.STREAK_SCORES, payload)
     except Exception as exc:
         log.warning(f"Failed to mirror streak_scores to remote Upstash: {exc}")
 
@@ -376,6 +380,10 @@ class RefreshRun:
         ``_refresh_status['error']`` while still raising, and clears
         ``running`` in the ``finally`` block.
         """
+        # Stamp every cache:* blob this refresh writes with its writer; reset
+        # in finally so a synchronous/reused worker thread doesn't leak the
+        # label into the next job's writes.
+        job_token = set_cache_job("refresh")
         with _refresh_lock:
             _refresh_status["running"] = True
             _refresh_status["progress"] = "Starting..."
@@ -417,6 +425,7 @@ class RefreshRun:
             self.logger.finish("error", str(exc))
             raise
         finally:
+            reset_cache_job(job_token)
             with _refresh_lock:
                 _refresh_status["running"] = False
 
@@ -1099,10 +1108,6 @@ class RefreshRun:
         # Cache positions for all known players (roster + opponents + FAs)
         positions_map = build_positions_map(self.roster_players, self.opp_rosters, self.fa_players)
         write_cache(CacheKey.POSITIONS, positions_map)
-        from fantasy_baseball.data.kv_store import get_kv
-        from fantasy_baseball.data.redis_store import set_positions
-
-        set_positions(get_kv(), positions_map)
         self._progress(f"Cached positions for {len(positions_map)} players")
 
         audit_results = audit_roster(

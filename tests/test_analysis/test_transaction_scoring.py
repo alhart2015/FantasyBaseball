@@ -502,3 +502,33 @@ class TestProration:
         )
         # Both negative; late-season drop is less negative (closer to 0).
         assert late["delta_roto"] >= early["delta_roto"]
+
+
+def test_load_projections_for_date_redis_reads_enveloped_ros(monkeypatch, tmp_path):
+    """Regression: ROS consumers must read through the envelope-aware
+    read_cache, not a raw redis_store accessor.
+
+    On Render, cache:ros_projections is written only by write_cache (which
+    wraps payloads in a provenance envelope). A raw read sees {_meta, _data},
+    finds no "hitters" key, and silently falls back to blended projections --
+    producing wrong/empty transaction scoring. This pins the unwrap.
+    """
+    from fantasy_baseball.analysis.transactions import _load_projections_for_date_redis
+    from fantasy_baseball.data.cache_keys import CacheKey
+    from fantasy_baseball.data.kv_store import _reset_singleton, get_kv
+    from fantasy_baseball.web.season_data import write_cache
+
+    monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(tmp_path / "kv.db"))
+    _reset_singleton()
+    client = get_kv()
+    write_cache(
+        CacheKey.ROS_PROJECTIONS,
+        {"hitters": [{"name": "A", "player_type": "hitter", "r": 90}], "pitchers": []},
+    )
+
+    hitters_df, pitchers_df = _load_projections_for_date_redis(client)
+
+    assert len(hitters_df) == 1
+    assert hitters_df.iloc[0]["name"] == "A"
+    assert len(pitchers_df) == 0
+    _reset_singleton()

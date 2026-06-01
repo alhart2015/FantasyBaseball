@@ -695,7 +695,162 @@ def test_write_cache_uses_canonical_redis_key():
     write_cache(CacheKey.STANDINGS, data)
     raw = kv_store.get_kv().get(redis_key(CacheKey.STANDINGS))
     assert raw is not None
-    assert json.loads(raw) == data
+    # The stored payload is wrapped in a provenance envelope (see
+    # test_write_cache_stamps_provenance_envelope); the dashboard payload
+    # lives under "_data".
+    assert json.loads(raw)["_data"] == data
+
+
+def test_write_cache_stamps_provenance_envelope(monkeypatch):
+    """write_cache wraps the payload in a {_meta, _data} envelope so each
+    cache blob carries its code SHA + write time. This makes version/time
+    skew between keys (e.g. an old cache:projections vs a newer
+    cache:standings_breakdown) detectable instead of invisible."""
+    monkeypatch.setattr(season_data, "_utc_now_iso", lambda: "2026-05-31T12:00:00+00:00")
+    monkeypatch.setattr(season_data, "_code_sha", lambda: "abc1234")
+    write_cache(CacheKey.STANDINGS, {"v": 1})
+    stored = json.loads(kv_store.get_kv().get(redis_key(CacheKey.STANDINGS)))
+    assert stored["_data"] == {"v": 1}
+    assert stored["_meta"]["_written_at"] == "2026-05-31T12:00:00+00:00"
+    assert stored["_meta"]["_sha"] == "abc1234"
+
+
+def test_read_cache_unwraps_envelope_to_bare_payload():
+    """read_cache returns the bare payload, not the envelope, so every
+    existing caller is unaffected by the provenance wrapping."""
+    write_cache(CacheKey.STANDINGS, {"v": 1})
+    assert read_cache(CacheKey.STANDINGS) == {"v": 1}
+
+
+def test_serialize_cache_payload_matches_write_cache_envelope(monkeypatch):
+    """serialize_cache_payload produces the same enveloped string write_cache
+    stores, so a path writing to an explicit KV client (e.g. the remote streak
+    mirror) matches write_cache's shape and reads back through read_cache."""
+    monkeypatch.setattr(season_data, "_utc_now_iso", lambda: "2026-05-31T12:00:00+00:00")
+    monkeypatch.setattr(season_data, "_code_sha", lambda: "abc1234")
+    serialized = season_data.serialize_cache_payload({"v": 1})
+    stored = json.loads(serialized)
+    assert stored["_data"] == {"v": 1}
+    assert stored["_meta"]["_sha"] == "abc1234"
+    # Identical to what write_cache stores for the same payload.
+    write_cache(CacheKey.STANDINGS, {"v": 1})
+    assert kv_store.get_kv().get(redis_key(CacheKey.STANDINGS)) == serialized
+
+
+def test_read_cache_reads_legacy_unenveloped_payload():
+    """Blobs written before the envelope shipped are bare JSON. read_cache
+    must still return them as-is (backward compatibility), so a deploy does
+    not blank the dashboard until the next refresh rewrites every key."""
+    kv_store.get_kv().set(redis_key(CacheKey.STANDINGS), json.dumps({"v": 1}))
+    assert read_cache(CacheKey.STANDINGS) == {"v": 1}
+
+
+def test_write_cache_envelopes_list_payload():
+    """List payloads round-trip through the envelope too (read_cache_list
+    keys store JSON arrays, not objects)."""
+    write_cache(CacheKey.STANDINGS, [1, 2, 3])
+    stored = json.loads(kv_store.get_kv().get(redis_key(CacheKey.STANDINGS)))
+    assert stored["_data"] == [1, 2, 3]
+    assert read_cache(CacheKey.STANDINGS) == [1, 2, 3]
+
+
+def test_write_cache_stamps_job_in_envelope():
+    """The envelope records which job wrote the blob, so a stale key can be
+    traced to the writer that produced it (refresh vs ros_fetch)."""
+    season_data.set_cache_job("refresh")
+    try:
+        write_cache(CacheKey.STANDINGS, {"v": 1})
+    finally:
+        season_data.set_cache_job(None)
+    stored = json.loads(kv_store.get_kv().get(redis_key(CacheKey.STANDINGS)))
+    assert stored["_meta"]["_job"] == "refresh"
+
+
+def test_write_cache_job_defaults_to_none():
+    """With no job set, the envelope still carries a _job key (null), so the
+    field is always present for inspection."""
+    season_data.set_cache_job(None)
+    write_cache(CacheKey.STANDINGS, {"v": 1})
+    stored = json.loads(kv_store.get_kv().get(redis_key(CacheKey.STANDINGS)))
+    assert "_job" in stored["_meta"]
+    assert stored["_meta"]["_job"] is None
+
+
+def test_set_cache_job_token_restores_previous():
+    """set_cache_job returns a token; reset_cache_job restores the prior label
+    so an inner/ad-hoc job set cannot permanently clobber an outer one."""
+    season_data.set_cache_job("refresh")
+    try:
+        token = season_data.set_cache_job("ros_fetch")
+        season_data.reset_cache_job(token)
+        write_cache(CacheKey.STANDINGS, {"v": 1})
+        stored = json.loads(kv_store.get_kv().get(redis_key(CacheKey.STANDINGS)))
+        assert stored["_meta"]["_job"] == "refresh"
+    finally:
+        season_data.set_cache_job(None)
+
+
+def test_code_sha_does_not_memoize_failure(monkeypatch):
+    """A transient git failure must NOT be cached as 'unknown' forever -- a
+    later call (e.g. once RENDER_GIT_COMMIT appears) must still resolve."""
+    monkeypatch.setattr(season_data, "_code_sha_cache", None)
+    monkeypatch.setattr(season_data, "_code_sha_git_attempted", False)
+    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+    monkeypatch.setattr(season_data, "is_remote", lambda: False)
+
+    class _FailingSub:
+        def run(self, *a, **k):
+            raise OSError("git not found")
+
+    monkeypatch.setattr(season_data, "subprocess", _FailingSub())
+    assert season_data._code_sha() == "unknown"
+    assert season_data._code_sha_cache is None  # failure not memoized
+
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "abc1234")
+    assert season_data._code_sha() == "abc1234"
+
+
+def test_code_sha_skips_git_on_remote(monkeypatch):
+    """On Render the deployed slug may not be a git checkout; with no
+    RENDER_GIT_COMMIT, _code_sha must NOT fork git -- just return 'unknown'."""
+    monkeypatch.setattr(season_data, "_code_sha_cache", None)
+    monkeypatch.setattr(season_data, "_code_sha_git_attempted", False)
+    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+    monkeypatch.setattr(season_data, "is_remote", lambda: True)
+
+    calls = {"n": 0}
+
+    class _CountingSub:
+        def run(self, *a, **k):
+            calls["n"] += 1
+            raise AssertionError("git must not be invoked on remote")
+
+    monkeypatch.setattr(season_data, "subprocess", _CountingSub())
+    assert season_data._code_sha() == "unknown"
+    assert calls["n"] == 0
+
+
+def test_code_sha_forks_git_at_most_once(monkeypatch):
+    """A persistent git failure off-Render must not re-fork on every cache
+    write -- git is forked at most once per process (then 'unknown' until a
+    real SHA source, e.g. RENDER_GIT_COMMIT, appears)."""
+    monkeypatch.setattr(season_data, "_code_sha_cache", None)
+    monkeypatch.setattr(season_data, "_code_sha_git_attempted", False)
+    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+    monkeypatch.setattr(season_data, "is_remote", lambda: False)
+
+    calls = {"n": 0}
+
+    class _FailingSub:
+        def run(self, *a, **k):
+            calls["n"] += 1
+            raise OSError("git not found")
+
+    monkeypatch.setattr(season_data, "subprocess", _FailingSub())
+    assert season_data._code_sha() == "unknown"
+    assert season_data._code_sha() == "unknown"
+    assert season_data._code_sha() == "unknown"
+    assert calls["n"] == 1  # forked once, not once per call
 
 
 def test_write_cache_swallows_kv_error(monkeypatch):
