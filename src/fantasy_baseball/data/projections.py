@@ -412,6 +412,30 @@ def _lookup_full_season_record(
     return by_namenorm.get(name_norm)
 
 
+def _stats_for_type(data: dict, ptype: PlayerType) -> HitterStats | PitcherStats:
+    """Build the type-appropriate stats object from a record/row dict."""
+    if ptype == PlayerType.HITTER:
+        return HitterStats.from_dict(data)
+    return PitcherStats.from_dict(data)
+
+
+def _lookup_stats(
+    proj_row: pd.Series,
+    name_norm: str,
+    ptype: PlayerType,
+    hitters_index: tuple[dict[int, dict], dict[str, dict]],
+    pitchers_index: tuple[dict[int, dict], dict[str, dict]],
+) -> HitterStats | PitcherStats | None:
+    """Look up a player's record in the type-appropriate ``(by_id, by_name)``
+    index pair (keyed to ``proj_row``'s identity) and build stats, or ``None``
+    when no record matches. Shared by the full-season and preseason attaches so
+    both resolve to the SAME physical player as ``proj_row``'s ROS line.
+    """
+    by_id, by_name = hitters_index if ptype == PlayerType.HITTER else pitchers_index
+    record = _lookup_full_season_record(proj_row, name_norm, by_id, by_name)
+    return _stats_for_type(record, ptype) if record is not None else None
+
+
 def _pick_best_match(matches: pd.DataFrame, player_type: PlayerType) -> pd.Series:
     """Resolve a normalized-name collision to a single projection row.
 
@@ -429,11 +453,10 @@ def _pick_best_match(matches: pd.DataFrame, player_type: PlayerType) -> pd.Serie
     """
     if len(matches) == 1:
         return matches.iloc[0]
-    if player_type == PlayerType.PITCHER:
-        vol_col = "ip"
-    else:
-        vol_col = "pa" if "pa" in matches.columns else "ab"
-    if vol_col not in matches.columns:
+    # Playing-time column(s) in preference order; first one present wins.
+    candidate_cols = ["ip"] if player_type == PlayerType.PITCHER else ["pa", "ab"]
+    vol_col = next((c for c in candidate_cols if c in matches.columns), None)
+    if vol_col is None:
         return matches.iloc[0]
     vol = pd.to_numeric(matches[vol_col], errors="coerce").fillna(0.0).to_numpy()
     # argmax returns the first index on ties -> stable fallback to first row.
@@ -556,46 +579,25 @@ def match_roster_to_projections(
             )
             continue
 
-        ros: HitterStats | PitcherStats
-        if ptype == PlayerType.HITTER:
-            ros = HitterStats.from_dict(proj.to_dict())
-        else:
-            ros = PitcherStats.from_dict(proj.to_dict())
+        ros = _stats_for_type(proj.to_dict(), ptype)
 
-        # Look up matching full-season (ROS+YTD) record if indices were built.
-        if ptype == PlayerType.HITTER:
-            full_record = _lookup_full_season_record(
-                proj, name_norm, full_hitters_by_id, full_hitters_by_name
-            )
-        else:
-            full_record = _lookup_full_season_record(
-                proj, name_norm, full_pitchers_by_id, full_pitchers_by_name
-            )
-
-        full_season_stats: HitterStats | PitcherStats | None = None
-        if full_record is not None:
-            if ptype == PlayerType.HITTER:
-                full_season_stats = HitterStats.from_dict(full_record)
-            else:
-                full_season_stats = PitcherStats.from_dict(full_record)
-
-        # Attach preseason (blended healthy full-season) the same way: by the
-        # matched ROS row's identity, per type, so .preseason refers to the
-        # SAME physical player as .rest_of_season.
-        if ptype == PlayerType.HITTER:
-            pre_record = _lookup_full_season_record(
-                proj, name_norm, pre_hitters_by_id, pre_hitters_by_name
-            )
-        else:
-            pre_record = _lookup_full_season_record(
-                proj, name_norm, pre_pitchers_by_id, pre_pitchers_by_name
-            )
-        preseason_stats: HitterStats | PitcherStats | None = None
-        if pre_record is not None:
-            if ptype == PlayerType.HITTER:
-                preseason_stats = HitterStats.from_dict(pre_record)
-            else:
-                preseason_stats = PitcherStats.from_dict(pre_record)
+        # Full-season (ROS+YTD) and preseason (blended healthy full-season) are
+        # both attached by the matched ROS row's identity, per type, so each
+        # refers to the SAME physical player as .rest_of_season.
+        full_season_stats = _lookup_stats(
+            proj,
+            name_norm,
+            ptype,
+            (full_hitters_by_id, full_hitters_by_name),
+            (full_pitchers_by_id, full_pitchers_by_name),
+        )
+        preseason_stats = _lookup_stats(
+            proj,
+            name_norm,
+            ptype,
+            (pre_hitters_by_id, pre_hitters_by_name),
+            (pre_pitchers_by_id, pre_pitchers_by_name),
+        )
 
         # Parse positions and selected_position explicitly
         parsed_positions = [p if isinstance(p, Position) else Position.parse(p) for p in positions]
