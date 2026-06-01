@@ -249,6 +249,81 @@ def test_blend_writes_both_ros_and_full_season(tmp_path, monkeypatch):
     assert full_row["r"] == 130.0, "Full-season cache must be 100+30=130"
 
 
+def test_blend_warns_and_stamps_snapshot_date_when_stale(
+    projections_dir,
+    fake_redis,
+    monkeypatch,
+):
+    """A snapshot older than the staleness threshold must emit a loud
+    warning (full-season = YTD + ROS would double-count) AND stamp the
+    snapshot date into both cache envelopes for provenance. Both blobs are
+    still written -- warn-and-proceed, not abort."""
+    import datetime as _dt
+    import json
+
+    _make_ros_tree(projections_dir, year=2026, date="2026-04-07")
+    monkeypatch.setattr("fantasy_baseball.data.ros_pipeline.get_kv", lambda: fake_redis)
+    import fantasy_baseball.web.season_data as season_data
+
+    monkeypatch.setattr(season_data, "get_kv", lambda: fake_redis)
+    # Pin "today" so the 2026-04-07 snapshot is 13 days stale (> 7).
+    monkeypatch.setattr(
+        "fantasy_baseball.data.ros_pipeline.local_today",
+        lambda: _dt.date(2026, 4, 20),
+    )
+
+    msgs: list[str] = []
+    blend_and_cache_ros(
+        projections_dir,
+        ["steamer"],
+        {"steamer": 1.0},
+        None,
+        2026,
+        progress_cb=msgs.append,
+    )
+
+    assert any("stale" in m.lower() for m in msgs), msgs
+    for key in ("cache:ros_projections", "cache:full_season_projections"):
+        meta = json.loads(fake_redis.get(key))["_meta"]
+        assert meta["_ros_snapshot_date"] == "2026-04-07"
+
+
+def test_blend_no_stale_warning_when_snapshot_fresh(
+    projections_dir,
+    fake_redis,
+    monkeypatch,
+):
+    """A snapshot within the staleness threshold emits no warning, but the
+    snapshot date is still stamped into the envelope."""
+    import datetime as _dt
+    import json
+
+    _make_ros_tree(projections_dir, year=2026, date="2026-04-18")
+    monkeypatch.setattr("fantasy_baseball.data.ros_pipeline.get_kv", lambda: fake_redis)
+    import fantasy_baseball.web.season_data as season_data
+
+    monkeypatch.setattr(season_data, "get_kv", lambda: fake_redis)
+    # 2 days after the snapshot -> fresh.
+    monkeypatch.setattr(
+        "fantasy_baseball.data.ros_pipeline.local_today",
+        lambda: _dt.date(2026, 4, 20),
+    )
+
+    msgs: list[str] = []
+    blend_and_cache_ros(
+        projections_dir,
+        ["steamer"],
+        {"steamer": 1.0},
+        None,
+        2026,
+        progress_cb=msgs.append,
+    )
+
+    assert not any("stale" in m.lower() for m in msgs), msgs
+    meta = json.loads(fake_redis.get("cache:ros_projections"))["_meta"]
+    assert meta["_ros_snapshot_date"] == "2026-04-18"
+
+
 def test_blend_and_cache_ros_still_returns_dfs_when_redis_unconfigured(
     projections_dir,
     fake_redis,

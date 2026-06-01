@@ -43,7 +43,6 @@ from fantasy_baseball.utils.time_utils import (
 from fantasy_baseball.web.season_data import (
     CacheKey,
     _compute_pending_moves_diff,
-    _get_redis,
     _load_game_log_totals,
     read_cache,
     reset_cache_job,
@@ -95,6 +94,19 @@ def try_acquire_refresh_slot() -> bool:
         return True
 
 
+def release_refresh_slot() -> None:
+    """Release the slot claimed by :func:`try_acquire_refresh_slot`.
+
+    The full refresh and the ROS-projection fetch share this single slot
+    (both sync MLB game logs and write the same cache keys, so they must be
+    mutually exclusive in-process). Each worker must call this in a
+    ``finally`` so a crash can't wedge the slot and block every later job.
+    Idempotent -- safe to call when the slot is already free.
+    """
+    with _refresh_lock:
+        _refresh_status["running"] = False
+
+
 def _set_refresh_progress(msg: str) -> None:
     with _refresh_lock:
         _refresh_status["progress"] = msg
@@ -131,20 +143,21 @@ def _push_streak_scores_to_remote(payload: dict) -> None:
 
 
 def _write_spoe_snapshot(spoe_result: dict) -> None:
-    """Write a daily SPoE snapshot to Upstash under `spoe_snapshot:YYYY-MM-DD`.
+    """Write a daily SPoE snapshot under `spoe_snapshot:YYYY-MM-DD`.
 
     Separate from the main write_cache path because this key is not
     under the `cache:` prefix — it's a historical time series for the
     luck page to optionally render trend charts. No TTL; accumulates.
+    Routes through ``get_kv()`` so it persists in both environments
+    (Upstash on Render, SQLite locally).
     """
     snapshot_date = spoe_result.get("snapshot_date")
     if not snapshot_date:
         return
-    redis = _get_redis()
-    if redis is None:
-        return
+    from fantasy_baseball.data.kv_store import get_kv
+
     try:
-        redis.set(
+        get_kv().set(
             f"spoe_snapshot:{snapshot_date}",
             json.dumps(spoe_result),
         )
@@ -426,8 +439,7 @@ class RefreshRun:
             raise
         finally:
             reset_cache_job(job_token)
-            with _refresh_lock:
-                _refresh_status["running"] = False
+            release_refresh_slot()
 
     # --- Step 1: Auth + league ---
     def _authenticate(self):

@@ -35,19 +35,6 @@ from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 log = logging.getLogger(__name__)
 
 
-def _get_redis() -> KVStore | None:
-    """Return the remote KV client on Render, ``None`` off-Render.
-
-    Thin compatibility helper over ``kv_store.get_kv()``. The cache:*
-    semantics in this module and in ``refresh_pipeline`` / ``job_logger``
-    historically treated "Redis" as "remote or nothing" — off-Render,
-    cache:* keys have dedicated JSON files on disk, so they don't need
-    a local KV fallback. This helper preserves that semantic while
-    keeping the RENDER gate in a single place (``kv_store.is_remote``).
-    """
-    return get_kv() if is_remote() else None
-
-
 if TYPE_CHECKING:
     import pandas as pd
 
@@ -136,7 +123,7 @@ def _code_sha() -> str:
     return sha or "unknown"
 
 
-def serialize_cache_payload(data: dict | list) -> str:
+def serialize_cache_payload(data: dict | list, extra_meta: dict | None = None) -> str:
     """Serialize a payload into the canonical enveloped cache string.
 
     Wraps ``data`` as ``{_meta: {_written_at, _sha, _job}, _data: data}`` and
@@ -144,13 +131,20 @@ def serialize_cache_payload(data: dict | list) -> str:
     :func:`write_cache_to` to write the same shape to an explicit KV client
     that bypasses ``write_cache`` (e.g. mirroring STREAK_SCORES to remote
     Upstash from a local refresh), so it reads back through ``read_cache``.
+
+    ``extra_meta`` merges additional provenance fields into ``_meta`` (e.g.
+    the ROS snapshot date that produced a projections blob) without touching
+    ``_data``, so consumers are unaffected and the context is inspectable.
     """
+    meta = {
+        "_written_at": _utc_now_iso(),
+        "_sha": _code_sha(),
+        "_job": _current_job.get(),
+    }
+    if extra_meta:
+        meta.update(extra_meta)
     envelope = {
-        _ENVELOPE_META: {
-            "_written_at": _utc_now_iso(),
-            "_sha": _code_sha(),
-            "_job": _current_job.get(),
-        },
+        _ENVELOPE_META: meta,
         _ENVELOPE_DATA: data,
     }
     return json.dumps(envelope)
@@ -214,25 +208,29 @@ def read_cache_list(key: CacheKey) -> list[Any] | None:
     return payload if isinstance(payload, list) else None
 
 
-def write_cache_to(client: KVStore, key: CacheKey, data: dict | list) -> None:
+def write_cache_to(
+    client: KVStore, key: CacheKey, data: dict | list, extra_meta: dict | None = None
+) -> None:
     """Write an enveloped cache:* value to an explicit KV client.
 
     Shared primitive behind :func:`write_cache` (which targets ``get_kv()``)
     and any path mirroring a cache:* key to a second client (e.g. the local
     refresh pushing STREAK_SCORES to remote Upstash), so both produce the
-    identical envelope shape. Does not swallow errors -- the caller decides.
+    identical envelope shape. ``extra_meta`` is stamped into the envelope
+    ``_meta`` (see :func:`serialize_cache_payload`). Does not swallow errors
+    -- the caller decides.
     """
-    client.set(redis_key(key), serialize_cache_payload(data))
+    client.set(redis_key(key), serialize_cache_payload(data, extra_meta))
 
 
-def write_cache(key: CacheKey, data: dict | list) -> None:
+def write_cache(key: CacheKey, data: dict | list, extra_meta: dict | None = None) -> None:
     """Write a cached payload to the KV store.
 
     Routes through ``kv_store.get_kv()``: Upstash on Render, SQLite
-    locally.
+    locally. ``extra_meta`` is stamped into the envelope ``_meta``.
     """
     try:
-        write_cache_to(get_kv(), key, data)
+        write_cache_to(get_kv(), key, data, extra_meta)
     except Exception as e:
         log.warning(f"write_cache({key}) KV write failed: {e}")
 

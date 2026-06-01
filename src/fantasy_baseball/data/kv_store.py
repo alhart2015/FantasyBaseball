@@ -165,11 +165,23 @@ class SqliteKVStore:
             return cur.rowcount
 
     def keys(self, pattern: str) -> list[str]:
-        like = pattern.replace("*", "%").replace("?", "_")
+        # Escape SQL LIKE metacharacters that occur literally in the key
+        # namespace (keys are full of '_' and ':') BEFORE translating the
+        # glob wildcards, so '_'/'%' in a key match only themselves. Escape
+        # the backslash first so the escapes we introduce aren't re-escaped.
+        # Translation runs last, so its '%'/'_' stay live wildcards.
+        like = (
+            pattern.replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+            .replace("*", "%")
+            .replace("?", "_")
+        )
         now = time.time()
         with self._lock:
             rows = self._conn.execute(
-                "SELECT key FROM kv WHERE key LIKE ? AND (expires_at IS NULL OR expires_at >= ?)",
+                "SELECT key FROM kv WHERE key LIKE ? ESCAPE '\\' "
+                "AND (expires_at IS NULL OR expires_at >= ?)",
                 (like, now),
             ).fetchall()
         return [r[0] for r in rows]

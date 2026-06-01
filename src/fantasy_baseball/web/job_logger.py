@@ -1,4 +1,4 @@
-"""Persistent job logging to Upstash Redis."""
+"""Persistent job logging to the KV store (Upstash on Render, SQLite locally)."""
 
 import json
 import time
@@ -6,21 +6,14 @@ import time
 from fantasy_baseball.utils.time_utils import local_now, local_today
 
 
-def _get_redis():
-    """Lazy Redis client — reuses the season_data helper."""
-    from fantasy_baseball.web.season_data import _get_redis as get_redis
-
-    return get_redis()
-
-
 class JobLogger:
-    """Accumulates verbose log entries during a job run and writes to Redis.
+    """Accumulates verbose log entries during a job run and writes to the KV store.
 
     Usage:
         logger = JobLogger("refresh")
         logger.log("Authenticating...")
         logger.log("Fetching standings...")
-        logger.finish("ok")  # writes complete log to Redis
+        logger.finish("ok")  # writes complete log to the KV store
     """
 
     def __init__(self, job_name: str):
@@ -39,7 +32,7 @@ class JobLogger:
         )
 
     def finish(self, status: str, error: str | None = None) -> None:
-        """Write the complete log to Redis. Never raises."""
+        """Write the complete log to the KV store. Never raises."""
         try:
             finished_at = local_now().strftime("%Y-%m-%d %H:%M:%S")
             duration = round(time.time() - self._start)
@@ -59,29 +52,30 @@ class JobLogger:
                 }
             )
 
-            redis = _get_redis()
-            if redis is None:
-                return
-            redis.set(key, log_data, ex=30 * 86400)  # 30 day TTL
+            from fantasy_baseball.data.kv_store import get_kv
+
+            get_kv().set(key, log_data, ex=30 * 86400)  # 30 day TTL
         except Exception:
             pass  # never crash the job if logging fails
 
 
 def get_all_logs() -> list[dict]:
-    """Read all job logs from Redis, sorted by most recent first.
+    """Read all job logs from the KV store, sorted by most recent first.
 
-    Uses KEYS to find log entries (fine for small keyspaces; this Redis
-    instance only holds dashboard cache + job logs). Uses MGET to batch
-    all reads into a single round-trip.
+    Routes through ``kv_store.get_kv()`` (Upstash on Render, SQLite
+    locally), so logs persist and read back in both environments. Uses
+    KEYS to find log entries (fine for small keyspaces; this store only
+    holds dashboard cache + job logs) and MGET to batch reads into a
+    single round-trip.
     """
-    redis = _get_redis()
-    if redis is None:
-        return []
+    from fantasy_baseball.data.kv_store import get_kv
+
     try:
-        keys = redis.keys("job_log:*")
+        kv = get_kv()
+        keys = kv.keys("job_log:*")
         if not keys:
             return []
-        values = redis.mget(*keys)
+        values = kv.mget(*keys)
         logs = []
         for raw in values:
             if raw:

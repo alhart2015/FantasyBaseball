@@ -766,6 +766,30 @@ def test_write_cache_stamps_job_in_envelope():
     assert stored["_meta"]["_job"] == "refresh"
 
 
+def test_serialize_cache_payload_includes_extra_meta(monkeypatch):
+    """extra_meta merges into the envelope _meta alongside the standard
+    provenance fields, so a writer can stamp context (e.g. the ROS snapshot
+    date) without polluting the payload _data."""
+    monkeypatch.setattr(season_data, "_utc_now_iso", lambda: "2026-05-31T12:00:00+00:00")
+    monkeypatch.setattr(season_data, "_code_sha", lambda: "abc1234")
+    serialized = season_data.serialize_cache_payload(
+        {"v": 1}, extra_meta={"_ros_snapshot_date": "2026-03-30"}
+    )
+    stored = json.loads(serialized)
+    assert stored["_data"] == {"v": 1}
+    assert stored["_meta"]["_ros_snapshot_date"] == "2026-03-30"
+    # Standard provenance fields are still present.
+    assert stored["_meta"]["_sha"] == "abc1234"
+    assert stored["_meta"]["_written_at"] == "2026-05-31T12:00:00+00:00"
+
+
+def test_write_cache_passes_extra_meta():
+    """write_cache threads extra_meta into the stored envelope."""
+    write_cache(CacheKey.STANDINGS, {"v": 1}, extra_meta={"_ros_snapshot_date": "2026-03-30"})
+    stored = json.loads(kv_store.get_kv().get(redis_key(CacheKey.STANDINGS)))
+    assert stored["_meta"]["_ros_snapshot_date"] == "2026-03-30"
+
+
 def test_write_cache_job_defaults_to_none():
     """With no job set, the envelope still carries a _job key (null), so the
     field is always present for inspection."""

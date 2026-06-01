@@ -185,6 +185,23 @@ def test_sqlite_keys_glob(tmp_kv: SqliteKVStore):
     assert sorted(tmp_kv.keys("*")) == ["cache:bar", "cache:foo", "other"]
 
 
+def test_sqlite_keys_treats_underscore_literally(tmp_kv: SqliteKVStore):
+    # `_` is a SQL LIKE single-char wildcard. The key namespace is full of
+    # underscores (job_log:*, game_logs:*, full_season_*), so an unescaped
+    # `_` in keys() would over-match. job_log:* must not match jobXlog:*.
+    tmp_kv.set("job_log:refresh:1", "1")
+    tmp_kv.set("jobXlog:refresh:1", "2")
+    assert tmp_kv.keys("job_log:*") == ["job_log:refresh:1"]
+
+
+def test_sqlite_keys_treats_percent_literally(tmp_kv: SqliteKVStore):
+    # `%` is a SQL LIKE multi-char wildcard; a literal `%` in the pattern
+    # must match only itself, not any run of characters.
+    tmp_kv.set("a%b", "1")
+    tmp_kv.set("axyzb", "2")
+    assert tmp_kv.keys("a%b") == ["a%b"]
+
+
 def test_sqlite_keys_skips_expired(tmp_kv: SqliteKVStore):
     tmp_kv.set("live", "1")
     tmp_kv.set("dead", "2", ex=1)

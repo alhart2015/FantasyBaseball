@@ -77,6 +77,11 @@ function fetchRosProjections() {
             if (data.status === 'started') {
                 status.textContent = 'Running in background — reload in a few minutes to see results';
                 setTimeout(() => window.location.reload(), 5000);
+            } else if (data.status === 'already_running') {
+                status.textContent = 'A refresh or fetch is already running; try again once it finishes';
+                status.style.color = 'var(--accent)';
+                btn.disabled = false;
+                btn.textContent = 'Fetch ROS Projections';
             } else {
                 status.textContent = 'Error: ' + JSON.stringify(data);
                 status.style.color = 'var(--danger)';

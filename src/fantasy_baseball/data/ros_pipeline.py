@@ -14,6 +14,8 @@ full-season blob.
 
 from __future__ import annotations
 
+import logging
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -26,6 +28,40 @@ from fantasy_baseball.data.projections import (
 )
 from fantasy_baseball.data.redis_store import get_game_log_totals
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.utils.time_utils import local_today
+
+log = logging.getLogger(__name__)
+
+# A ROS snapshot older than this many days vs today means the daily
+# FanGraphs fetch has likely stalled. Its counting stats still carry
+# near-full-season magnitudes while YTD actuals have kept accumulating,
+# so deriving full-season as ``YTD + ROS`` double-counts. Warn loudly.
+ROS_SNAPSHOT_STALE_DAYS = 7
+
+
+def _warn_if_ros_snapshot_stale(snapshot_date: str, progress_cb) -> None:
+    """Emit a loud warning if the chosen ROS snapshot predates today by more
+    than ``ROS_SNAPSHOT_STALE_DAYS``.
+
+    Warn-and-proceed: the caller still writes both blobs. A non-ISO dir name
+    is treated as non-datable and skipped (no false alarm).
+    """
+    try:
+        snap = date.fromisoformat(snapshot_date)
+    except ValueError:
+        return
+    days_stale = (local_today() - snap).days
+    if days_stale > ROS_SNAPSHOT_STALE_DAYS:
+        msg = (
+            f"WARNING: ROS snapshot {snapshot_date} is {days_stale} days stale "
+            f"(> {ROS_SNAPSHOT_STALE_DAYS}). full_season = YTD + ROS may "
+            f"double-count: a stale snapshot still carries near-full-season "
+            f"magnitudes while YTD has accumulated. Re-run the FanGraphs ROS "
+            f"fetch to refresh the snapshot."
+        )
+        log.warning(msg)
+        if progress_cb:
+            progress_cb(msg)
 
 
 def blend_and_cache_ros(
@@ -76,6 +112,8 @@ def blend_and_cache_ros(
     if not date_dirs:
         raise FileNotFoundError(f"No ROS snapshot dirs under {ros_root}")
     latest = date_dirs[-1]
+    snapshot_date = latest.name
+    _warn_if_ros_snapshot_stale(snapshot_date, progress_cb)
 
     client = get_kv()
     # JSON round-trips coerce int keys to str;
@@ -134,10 +172,13 @@ def blend_and_cache_ros(
         write_cache,
     )
 
+    # Stamp the source snapshot date into the provenance envelope so a stale
+    # blend is visible to consumers (see _warn_if_ros_snapshot_stale).
+    snapshot_meta = {"_ros_snapshot_date": snapshot_date}
     job_token = set_cache_job("ros_fetch")
     try:
-        write_cache(CacheKey.ROS_PROJECTIONS, ros_payload)
-        write_cache(CacheKey.FULL_SEASON_PROJECTIONS, full_payload)
+        write_cache(CacheKey.ROS_PROJECTIONS, ros_payload, extra_meta=snapshot_meta)
+        write_cache(CacheKey.FULL_SEASON_PROJECTIONS, full_payload, extra_meta=snapshot_meta)
     finally:
         reset_cache_job(job_token)
     return hitters_ros, pitchers_ros
