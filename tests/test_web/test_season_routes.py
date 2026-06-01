@@ -237,9 +237,9 @@ def test_login_then_access_protected_route(unauth_client, monkeypatch):
     assert resp.status_code == 200
 
 
-def test_logs_page_renders(client):
-    with patch("fantasy_baseball.web.job_logger._get_redis", return_value=None):
-        resp = client.get("/logs")
+def test_logs_page_renders(client, kv_isolation):
+    # Isolated empty KV -> get_all_logs() returns [] -> page renders empty.
+    resp = client.get("/logs")
     assert resp.status_code == 200
     assert b"Job Logs" in resp.data
 

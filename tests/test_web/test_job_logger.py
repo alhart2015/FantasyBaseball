@@ -1,7 +1,25 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from fantasy_baseball.data import kv_store
 from fantasy_baseball.web.job_logger import JobLogger, get_all_logs
+
+
+@pytest.fixture(autouse=True)
+def _local_kv(tmp_path, monkeypatch):
+    """Per-test isolated SQLite KV.
+
+    After unifying on ``get_kv()`` (removing the old ``_get_redis()`` that
+    returned ``None`` off-Render), ``finish()`` and ``get_all_logs()``
+    persist to and read from the local backend, so each test needs its own
+    empty store.
+    """
+    monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(tmp_path / "kv.db"))
+    kv_store._reset_singleton()
+    yield
+    kv_store._reset_singleton()
 
 
 def test_job_logger_records_entries():
@@ -16,82 +34,84 @@ def test_job_logger_records_entries():
         assert "time" in entry
 
 
-def test_job_logger_finish_writes_to_redis():
-    mock_redis = MagicMock()
-    with patch("fantasy_baseball.web.job_logger._get_redis", return_value=mock_redis):
+def test_job_logger_finish_persists_to_local_kv():
+    """Off-Render, finish() persists to the local SQLite KV.
+
+    Previously a no-op: the old ``_get_redis()`` returned ``None`` off-Render
+    so local job logs were silently dropped. Unifying on ``get_kv()`` means
+    the local backend now holds them, readable back via ``get_all_logs()``.
+    """
+    logger = JobLogger("refresh")
+    logger.log("Step one")
+    logger.finish("ok")
+
+    logs = get_all_logs()
+    assert len(logs) == 1
+    assert logs[0]["job"] == "refresh"
+    assert logs[0]["status"] == "ok"
+    assert logs[0]["error"] is None
+    assert logs[0]["entries"][0]["msg"] == "Step one"
+
+
+def test_job_logger_finish_writes_key_and_ttl():
+    mock_kv = MagicMock()
+    with patch("fantasy_baseball.data.kv_store.get_kv", return_value=mock_kv):
         logger = JobLogger("refresh")
         logger.log("Step one")
         logger.finish("ok")
 
-    mock_redis.set.assert_called_once()
-    call_args = mock_redis.set.call_args
+    mock_kv.set.assert_called_once()
+    call_args = mock_kv.set.call_args
 
-    # Verify key pattern: job_log:refresh:<date>:<timestamp>
-    key = call_args[0][0]
-    assert key.startswith("job_log:refresh:")
+    # Key pattern: job_log:refresh:<date>:<timestamp>
+    assert call_args[0][0].startswith("job_log:refresh:")
 
-    # Verify JSON structure
-    raw = call_args[0][1]
-    data = json.loads(raw)
+    # Payload shape
+    data = json.loads(call_args[0][1])
     assert data["job"] == "refresh"
     assert data["status"] == "ok"
-    assert data["error"] is None
     assert len(data["entries"]) == 1
-    assert data["entries"][0]["msg"] == "Step one"
     assert "started_at" in data
     assert "finished_at" in data
     assert "duration_seconds" in data
 
-    # Verify 30-day TTL
+    # 30-day TTL
     assert call_args[1]["ex"] == 30 * 86400
 
 
-def test_job_logger_finish_error():
-    mock_redis = MagicMock()
-    with patch("fantasy_baseball.web.job_logger._get_redis", return_value=mock_redis):
-        logger = JobLogger("refresh")
-        logger.log("Something went wrong")
-        logger.finish("error", error="Connection refused")
+def test_job_logger_finish_records_error():
+    logger = JobLogger("refresh")
+    logger.log("Something went wrong")
+    logger.finish("error", error="Connection refused")
 
-    call_args = mock_redis.set.call_args
-    raw = call_args[0][1]
-    data = json.loads(raw)
-    assert data["status"] == "error"
-    assert data["error"] == "Connection refused"
+    logs = get_all_logs()
+    assert len(logs) == 1
+    assert logs[0]["status"] == "error"
+    assert logs[0]["error"] == "Connection refused"
 
 
-def test_job_logger_finish_no_redis():
-    with patch("fantasy_baseball.web.job_logger._get_redis", return_value=None):
+def test_job_logger_finish_swallows_kv_errors():
+    """finish() must never crash the job, even if the KV write raises."""
+    mock_kv = MagicMock()
+    mock_kv.set.side_effect = RuntimeError("kv down")
+    with patch("fantasy_baseball.data.kv_store.get_kv", return_value=mock_kv):
         logger = JobLogger("refresh")
         logger.log("Step one")
-        # Should not raise
-        logger.finish("ok")
+        logger.finish("ok")  # should not raise
 
 
 def test_get_all_logs_returns_sorted():
-    older_log = json.dumps(
-        {
-            "job": "refresh",
-            "started_at": "2026-03-29 10:00:00",
-            "status": "ok",
-        }
-    )
-    newer_log = json.dumps(
-        {
-            "job": "refresh",
-            "started_at": "2026-03-30 08:00:00",
-            "status": "ok",
-        }
-    )
+    older_log = json.dumps({"job": "refresh", "started_at": "2026-03-29 10:00:00", "status": "ok"})
+    newer_log = json.dumps({"job": "refresh", "started_at": "2026-03-30 08:00:00", "status": "ok"})
 
-    mock_redis = MagicMock()
-    mock_redis.keys.return_value = [
+    mock_kv = MagicMock()
+    mock_kv.keys.return_value = [
         "job_log:refresh:2026-03-29:111",
         "job_log:refresh:2026-03-30:222",
     ]
-    mock_redis.mget.return_value = [older_log, newer_log]
+    mock_kv.mget.return_value = [older_log, newer_log]
 
-    with patch("fantasy_baseball.web.job_logger._get_redis", return_value=mock_redis):
+    with patch("fantasy_baseball.data.kv_store.get_kv", return_value=mock_kv):
         logs = get_all_logs()
 
     assert len(logs) == 2
@@ -99,7 +119,5 @@ def test_get_all_logs_returns_sorted():
     assert logs[1]["started_at"] == "2026-03-29 10:00:00"
 
 
-def test_get_all_logs_no_redis():
-    with patch("fantasy_baseball.web.job_logger._get_redis", return_value=None):
-        logs = get_all_logs()
-    assert logs == []
+def test_get_all_logs_empty_store_returns_empty_list():
+    assert get_all_logs() == []

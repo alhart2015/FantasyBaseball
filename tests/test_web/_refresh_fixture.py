@@ -531,10 +531,6 @@ def patched_refresh_environment(
         # at import time, so we also patch each module-level alias.
         patch("fantasy_baseball.data.kv_store.get_kv", return_value=fake_redis),
         patch("fantasy_baseball.web.season_data.get_kv", return_value=fake_redis),
-        patch("fantasy_baseball.web.season_data._get_redis", return_value=fake_redis),
-        # refresh_pipeline imports _get_redis at module level, so we also
-        # have to patch the local name there (``_write_spoe_snapshot`` uses it).
-        patch("fantasy_baseball.web.refresh_pipeline._get_redis", return_value=fake_redis),
         # _compute_streaks connects to the real local streaks.duckdb (multi-GB
         # on dev boxes) and runs the full streak inference -- no place in a
         # mocked integration test, and it hung the whole suite once the DB grew
