@@ -78,3 +78,34 @@ def test_fa_players_no_preseason_when_frames_omitted(monkeypatch):
     )
     assert len(fa_players) == 1
     assert fa_players[0].preseason is None
+
+
+def test_fa_same_name_collision_resolves_by_volume(monkeypatch):
+    """FAs now route through match_roster_to_projections, so a same-name
+    collision resolves to the high-playing-time row (the real player) instead of
+    whichever row is first -- the same _pick_best_match guard the roster path
+    uses."""
+
+    def fake_fetch(league, pos, count):
+        if pos == "RP":
+            return [{"name": "Mason Miller", "positions": ["RP"], "status": ""}]
+        return []
+
+    monkeypatch.setattr(waivers, "fetch_free_agents", fake_fetch)
+    ros_p = _pitchers_df(
+        [
+            {"name": "Mason Miller", "_name_norm": "mason miller", "mlbam_id": 1, "ip": 2, "k": 3},
+            {
+                "name": "Mason Miller",
+                "_name_norm": "mason miller",
+                "mlbam_id": 2,
+                "ip": 60,
+                "k": 90,
+            },
+        ]
+    )
+    fa_players, _ = waivers.fetch_and_match_free_agents(
+        league=None, hitters_proj=_empty(), pitchers_proj=ros_p
+    )
+    assert len(fa_players) == 1
+    assert fa_players[0].rest_of_season.ip == 60  # high-volume real arm, not the 2-IP first row

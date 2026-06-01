@@ -472,6 +472,7 @@ def match_roster_to_projections(
     full_pitchers_proj: pd.DataFrame | None = None,
     preseason_hitters_proj: pd.DataFrame | None = None,
     preseason_pitchers_proj: pd.DataFrame | None = None,
+    warn_unmatched: bool = True,
     context: str = "",
 ) -> list[Player]:
     """Match roster players to blended projections by normalized name.
@@ -571,12 +572,13 @@ def match_roster_to_projections(
                     break
 
         if proj is None or ptype is None:
-            logger.warning(
-                "%sno projection match for %r (positions=%r)",
-                prefix,
-                name,
-                positions,
-            )
+            if warn_unmatched:
+                logger.warning(
+                    "%sno projection match for %r (positions=%r)",
+                    prefix,
+                    name,
+                    positions,
+                )
             continue
 
         ros = _stats_for_type(proj.to_dict(), ptype)

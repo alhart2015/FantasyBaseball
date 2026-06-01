@@ -27,7 +27,7 @@ def merge_matched_and_raw_roster(
     dual-type entry (Ohtani), re-introducing the bug that attach was meant to
     fix. Here we only append a Player built from each raw roster entry that
     wasn't matched, inferring ``player_type`` from positions (any pitcher
-    position → PITCHER, otherwise HITTER). Returns the combined list.
+    position -> PITCHER, otherwise HITTER). Returns the combined list.
     """
     matched_names: set[str] = {normalize_name(p.name) for p in matched}
     out: list[Player] = list(matched)

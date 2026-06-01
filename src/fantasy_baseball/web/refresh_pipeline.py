@@ -231,13 +231,11 @@ def build_standings_breakdown_payload(
     breakdown but at sf~=1.0 in the projected standings), which would
     desync the modal drilldown from the headline numbers.
     """
-    from fantasy_baseball.models.standings import TeamYtdComponents
+    from fantasy_baseball.models.standings import TeamYtdComponents, build_eos_baseline
     from fantasy_baseball.scoring import (
         LeagueContext,
         build_team_sds,
         compute_roster_breakdown,
-        project_ros_components,
-        team_end_of_season,
     )
 
     ytd_by_team: dict[str, TeamYtdComponents] = {}
@@ -245,22 +243,12 @@ def build_standings_breakdown_payload(
         for entry in actual_standings.entries:
             ytd_by_team[entry.team_name] = entry.ytd_components()
 
-    # Pass 1: per-team END-OF-SEASON baseline (YTD + displaced ROS) consumed by
-    # the DeltaRoto picker via LeagueContext.baseline_other_team_stats in Pass 2.
-    # This MUST mirror ProjectedStandings.from_rosters Pass 1 (standings.py),
-    # which includes YTD: per-team YTD shifts are not uniform across the picker's
-    # argmax, so a ROS-only baseline here would make the picker choose different
-    # displacement targets than the standings widget and the per-player breakdown
-    # would no longer sum to the headline total. (from_rosters was changed to
-    # fold YTD into Pass 1; this path was not, which is why the two surfaces
-    # disagreed.)
-    baseline_stats = {
-        tname: team_end_of_season(
-            ytd_by_team.get(tname) or TeamYtdComponents(),
-            project_ros_components(roster, displacement=True),
-        )
-        for tname, roster in team_rosters.items()
-    }
+    # Pass 1: per-team END-OF-SEASON baseline consumed by the DeltaRoto picker.
+    # Shared with ProjectedStandings.from_rosters so both pickers score against
+    # the same YTD-inclusive baseline -- a ROS-only baseline here made the
+    # per-player breakdown choose different displacement targets than the
+    # standings widget and stop summing to the headline.
+    baseline_stats = build_eos_baseline(team_rosters, ytd_by_team)
     # Match ProjectedStandings.from_rosters: damp the picker's SDs by
     # sqrt(fraction_remaining) so the breakdown's displacement decisions
     # agree with the standings widget and the canonical team_sds.
