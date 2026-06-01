@@ -1,7 +1,7 @@
 import json
 import re
 from typing import ClassVar
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -242,6 +242,87 @@ def test_logs_page_renders(client, kv_isolation):
     resp = client.get("/logs")
     assert resp.status_code == 200
     assert b"Job Logs" in resp.data
+
+
+# --- Refresh / ROS-fetch mutual exclusion -----------------------------------
+# The full refresh and the ROS-projection fetch both sync MLB game logs
+# (a read-modify-write of the shared rollup) and write the same cache keys.
+# They must be mutually exclusive in-process. Both routes gate on the single
+# refresh slot (try_acquire_refresh_slot); the ROS worker releases it when done.
+
+
+@pytest.fixture
+def free_refresh_slot():
+    """Guarantee the shared refresh slot is free before and after the test,
+    so a held slot never leaks into the rest of the suite."""
+    from fantasy_baseball.web import refresh_pipeline
+
+    refresh_pipeline.release_refresh_slot()
+    yield
+    refresh_pipeline.release_refresh_slot()
+
+
+def test_fetch_ros_route_rejected_when_slot_held(client, monkeypatch, free_refresh_slot):
+    """A ROS fetch must not start while another heavy job holds the slot."""
+    from fantasy_baseball.web import refresh_pipeline, season_routes
+
+    thread_ctor = MagicMock()
+    monkeypatch.setattr(season_routes.threading, "Thread", thread_ctor)
+    assert refresh_pipeline.try_acquire_refresh_slot() is True
+
+    resp = client.post("/api/fetch-ros-projections")
+
+    assert resp.get_json()["status"] == "already_running"
+    thread_ctor.assert_not_called()  # no worker spawned
+
+
+def test_fetch_ros_route_acquires_slot_when_free(client, monkeypatch, free_refresh_slot):
+    """When free, the ROS fetch starts AND claims the slot, so a concurrent
+    refresh (or second fetch) is locked out."""
+    from fantasy_baseball.web import refresh_pipeline, season_routes
+
+    fake_thread = MagicMock()
+    monkeypatch.setattr(season_routes.threading, "Thread", MagicMock(return_value=fake_thread))
+
+    resp = client.post("/api/fetch-ros-projections")
+
+    assert resp.get_json()["status"] == "started"
+    fake_thread.start.assert_called_once()
+    assert refresh_pipeline.get_refresh_status()["running"] is True
+
+
+def test_refresh_route_rejected_while_ros_fetch_holds_slot(client, monkeypatch, free_refresh_slot):
+    """The slot is shared: a refresh cannot start while a ROS fetch holds it."""
+    from fantasy_baseball.web import refresh_pipeline, season_routes
+
+    monkeypatch.setattr(season_routes.threading, "Thread", MagicMock())
+    # Simulate a ROS fetch in progress (it acquired the shared slot).
+    assert refresh_pipeline.try_acquire_refresh_slot() is True
+
+    resp = client.post("/api/refresh")
+
+    assert resp.get_json()["status"] == "already_running"
+
+
+def test_ros_fetch_worker_releases_slot(client, monkeypatch, tmp_path, free_refresh_slot):
+    """The ROS worker must release the slot when it finishes, even on error,
+    so a failed fetch doesn't wedge the slot and block all future jobs."""
+    from fantasy_baseball.web import refresh_pipeline, season_routes
+
+    monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(tmp_path / "kv.db"))
+    kv_store._reset_singleton()
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("game-log sync failed")
+
+    monkeypatch.setattr("fantasy_baseball.data.mlb_game_logs.fetch_game_log_totals", _boom)
+    assert refresh_pipeline.try_acquire_refresh_slot() is True
+
+    # Runs synchronously here; the inner error is logged, the slot released.
+    season_routes._run_rest_of_season_fetch()
+
+    assert refresh_pipeline.get_refresh_status()["running"] is False
+    kv_store._reset_singleton()
 
 
 def test_full_standings_page_with_cached_data(client, kv_isolation):

@@ -194,18 +194,26 @@ def load_projections():
 
 
 def _run_rest_of_season_fetch() -> None:
-    """Background worker for ROS projection fetch + quality checks."""
+    """Background worker for ROS projection fetch + quality checks.
+
+    Runs while holding the shared refresh slot (claimed by the route). The
+    outer ``try/finally`` releases it on every exit path -- success, handled
+    error, or an unexpected raise -- so a failed fetch can't wedge the slot
+    and lock out all future refreshes/fetches.
+    """
     from fantasy_baseball.config import load_config
     from fantasy_baseball.data.fangraphs_fetch import fetch_rest_of_season_projections
     from fantasy_baseball.data.mlb_game_logs import fetch_game_log_totals
     from fantasy_baseball.web.job_logger import JobLogger
+    from fantasy_baseball.web.refresh_pipeline import release_refresh_slot
 
-    logger = JobLogger("rest_of_season_fetch")
-    project_root = Path(__file__).resolve().parents[3]
-    config = load_config(project_root / "config" / "league.yaml")
-    projections_dir = project_root / "data" / "projections"
-
+    logger = None
     try:
+        logger = JobLogger("rest_of_season_fetch")
+        project_root = Path(__file__).resolve().parents[3]
+        config = load_config(project_root / "config" / "league.yaml")
+        projections_dir = project_root / "data" / "projections"
+
         # Refresh game_logs FIRST so that normalize_rest_of_season_to_full_season has
         # current accumulated actuals to add. On Render's ephemeral filesystem
         # Redis is the only persistent store — without this step, rest_of_season_fetch
@@ -272,7 +280,10 @@ def _run_rest_of_season_fetch() -> None:
             logger.finish("ok")
 
     except Exception as exc:
-        logger.finish("error", str(exc))
+        if logger is not None:
+            logger.finish("error", str(exc))
+    finally:
+        release_refresh_slot()
 
 
 def _coerce_id_list(value, field_name: str) -> set:
@@ -1902,7 +1913,15 @@ def register_routes(app: Flask) -> None:
         take 90-300 seconds on a fresh deploy. Pushes past gunicorn's
         120s timeout. Threaded to match the api_refresh pattern.
         Results written to job log (visible on /logs).
+
+        Gates on the shared refresh slot: this fetch and a full refresh both
+        sync game logs and write the same cache keys, so they must not run
+        concurrently. The worker releases the slot when it finishes.
         """
+        from fantasy_baseball.web.refresh_pipeline import try_acquire_refresh_slot
+
+        if not try_acquire_refresh_slot():
+            return jsonify({"status": "already_running"})
         thread = threading.Thread(target=_run_rest_of_season_fetch, daemon=True)
         thread.start()
         return jsonify({"status": "started"})

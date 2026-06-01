@@ -94,6 +94,19 @@ def try_acquire_refresh_slot() -> bool:
         return True
 
 
+def release_refresh_slot() -> None:
+    """Release the slot claimed by :func:`try_acquire_refresh_slot`.
+
+    The full refresh and the ROS-projection fetch share this single slot
+    (both sync MLB game logs and write the same cache keys, so they must be
+    mutually exclusive in-process). Each worker must call this in a
+    ``finally`` so a crash can't wedge the slot and block every later job.
+    Idempotent -- safe to call when the slot is already free.
+    """
+    with _refresh_lock:
+        _refresh_status["running"] = False
+
+
 def _set_refresh_progress(msg: str) -> None:
     with _refresh_lock:
         _refresh_status["progress"] = msg
