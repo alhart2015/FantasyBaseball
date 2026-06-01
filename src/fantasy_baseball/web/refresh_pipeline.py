@@ -691,6 +691,8 @@ class RefreshRun:
             self.pitchers_proj,
             full_hitters_proj=self.full_hitters_proj,
             full_pitchers_proj=self.full_pitchers_proj,
+            preseason_hitters_proj=self.preseason_hitters,
+            preseason_pitchers_proj=self.preseason_pitchers,
             context="user",
         )
 
@@ -707,6 +709,8 @@ class RefreshRun:
                 self.pitchers_proj,
                 full_hitters_proj=self.full_hitters_proj,
                 full_pitchers_proj=self.full_pitchers_proj,
+                preseason_hitters_proj=self.preseason_hitters,
+                preseason_pitchers_proj=self.preseason_pitchers,
                 context=f"opp:{team.name}",
             )
             if hydrated:

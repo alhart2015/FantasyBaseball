@@ -412,6 +412,34 @@ def _lookup_full_season_record(
     return by_namenorm.get(name_norm)
 
 
+def _pick_best_match(matches: pd.DataFrame, player_type: PlayerType) -> pd.Series:
+    """Resolve a normalized-name collision to a single projection row.
+
+    Multiple projection rows can share a normalized name -- the established MLB
+    regular and an obscure same-name namesake (the audit's two Mason Millers,
+    both pitchers, one a ~2 IP minor-leaguer). The rostered player a manager
+    actually owns is the high-volume one, so pick the row with the most
+    projected playing time: IP for pitchers, PA (or AB) for hitters. This
+    mirrors the "tie-break by VAR / more eligible positions" rule used
+    elsewhere for normalized-name collisions, and keeps a junk near-zero
+    preseason line from poisoning the displacement slot-share denominator.
+
+    Ties (equal or absent volume) keep the first row, so single-candidate and
+    genuinely-indistinguishable cases behave exactly as before.
+    """
+    if len(matches) == 1:
+        return matches.iloc[0]
+    if player_type == PlayerType.PITCHER:
+        vol_col = "ip"
+    else:
+        vol_col = "pa" if "pa" in matches.columns else "ab"
+    if vol_col not in matches.columns:
+        return matches.iloc[0]
+    vol = pd.to_numeric(matches[vol_col], errors="coerce").fillna(0.0).to_numpy()
+    # argmax returns the first index on ties -> stable fallback to first row.
+    return matches.iloc[int(vol.argmax())]
+
+
 def match_roster_to_projections(
     roster: list[dict],
     hitters_proj: pd.DataFrame,
@@ -470,24 +498,24 @@ def match_roster_to_projections(
             if not matches.empty:
                 if len(matches) > 1:
                     logger.warning(
-                        "%sambiguous hitter match for %r — %d candidates, picked first",
+                        "%sambiguous hitter match for %r -- %d candidates, kept highest playing-time",
                         prefix,
                         name,
                         len(matches),
                     )
-                proj = matches.iloc[0]
+                proj = _pick_best_match(matches, PlayerType.HITTER)
                 ptype = PlayerType.HITTER
         if proj is None and is_pitcher(positions) and not pitchers_proj.empty:
             matches = pitchers_proj[pitchers_proj["_name_norm"] == name_norm]
             if not matches.empty:
                 if len(matches) > 1:
                     logger.warning(
-                        "%sambiguous pitcher match for %r — %d candidates, picked first",
+                        "%sambiguous pitcher match for %r -- %d candidates, kept highest playing-time",
                         prefix,
                         name,
                         len(matches),
                     )
-                proj = matches.iloc[0]
+                proj = _pick_best_match(matches, PlayerType.PITCHER)
                 ptype = PlayerType.PITCHER
         if proj is None:
             for df, pt in [(hitters_proj, PlayerType.HITTER), (pitchers_proj, PlayerType.PITCHER)]:
@@ -495,10 +523,10 @@ def match_roster_to_projections(
                     continue
                 matches = df[df["_name_norm"] == name_norm]
                 if not matches.empty:
-                    proj = matches.iloc[0]
+                    proj = _pick_best_match(matches, pt)
                     ptype = pt
                     logger.warning(
-                        "%s%r matched via fallback branch — positions=%r did not disambiguate",
+                        "%s%r matched via fallback branch -- positions=%r did not disambiguate",
                         prefix,
                         name,
                         positions,
@@ -572,6 +600,8 @@ def hydrate_roster_entries(
     *,
     full_hitters_proj: pd.DataFrame | None = None,
     full_pitchers_proj: pd.DataFrame | None = None,
+    preseason_hitters_proj: pd.DataFrame | None = None,
+    preseason_pitchers_proj: pd.DataFrame | None = None,
     context: str = "",
 ) -> list[Player]:
     """Convert a :class:`Roster`'s entries into ``list[Player]`` with
@@ -591,6 +621,15 @@ def hydrate_roster_entries(
     :func:`match_roster_to_projections` so each Player's
     ``.full_season_projection`` is populated for display + standings.
 
+    The ``preseason_hitters_proj``/``preseason_pitchers_proj`` kwargs, when
+    provided, populate each Player's ``.preseason`` by matching the same roster
+    against the preseason (blended full-season) frames. This is the slot-share
+    denominator the pitcher displacement model needs (``preseason.ip *
+    fraction_remaining``); attaching it here means the projected-standings build
+    sees it on every roster -- user AND opponents -- instead of falling back to
+    a direct-IP swap. The same collision tie-break used for ROS applies, so a
+    same-name namesake can't poison the preseason line.
+
     The ``context`` kwarg is forwarded for log clarity.
     """
     roster_dicts = [
@@ -603,7 +642,7 @@ def hydrate_roster_entries(
         }
         for entry in roster.entries
     ]
-    return match_roster_to_projections(
+    players = match_roster_to_projections(
         roster_dicts,
         hitters_proj,
         pitchers_proj,
@@ -611,3 +650,16 @@ def hydrate_roster_entries(
         full_pitchers_proj=full_pitchers_proj,
         context=context,
     )
+    if preseason_hitters_proj is not None and preseason_pitchers_proj is not None:
+        preseason_matched = match_roster_to_projections(
+            roster_dicts,
+            preseason_hitters_proj,
+            preseason_pitchers_proj,
+            context=f"{context}:preseason" if context else "preseason",
+        )
+        pre_lookup = {normalize_name(p.name): p for p in preseason_matched}
+        for player in players:
+            pre = pre_lookup.get(normalize_name(player.name))
+            if pre is not None and pre.rest_of_season is not None:
+                player.preseason = pre.rest_of_season
+    return players

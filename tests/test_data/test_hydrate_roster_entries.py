@@ -115,6 +115,32 @@ class TestHydrateRosterEntries:
         assert player.player_type == PlayerType.PITCHER
         assert player.rest_of_season.k == 190
 
+    def test_attaches_preseason_when_frames_provided(self):
+        """When preseason frames are passed, each player's ``.preseason`` is set
+        from them -- distinct from ``.rest_of_season`` (ROS). The displacement
+        slot-share denominator (preseason IP) depends on this being populated at
+        hydration time, before projected standings are built.
+        """
+        from fantasy_baseball.data.projections import hydrate_roster_entries
+
+        roster = self._roster(
+            ("Bryan Woo", ["P", "SP"], "P", "", "60584"),
+        )
+        # Preseason projects a heavier full-season workload than ROS (180).
+        pre_pitchers = _pitchers_df()
+        pre_pitchers.loc[pre_pitchers["name"] == "Bryan Woo", "ip"] = 200
+        result = hydrate_roster_entries(
+            roster,
+            _hitters_df(),
+            _pitchers_df(),
+            preseason_hitters_proj=_hitters_df(),
+            preseason_pitchers_proj=pre_pitchers,
+        )
+        player = result[0]
+        assert player.rest_of_season.ip == 180  # ROS frame unchanged
+        assert player.preseason is not None
+        assert player.preseason.ip == 200  # from the preseason frame
+
     def test_drops_unmatched_player(self):
         """Players not in the projection DataFrames are omitted (same as
         match_roster_to_projections semantics)."""

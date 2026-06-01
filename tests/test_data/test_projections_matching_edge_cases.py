@@ -348,6 +348,44 @@ class TestMatchObservability:
         assert "pitcher" in msg
         assert "2 candidates" in msg
 
+    def test_ambiguous_pitcher_match_picks_highest_ip(self, caplog):
+        """Two pitchers share a normalized name (the audit's Mason Miller): the
+        real rostered arm (54 projected IP) and an obscure namesake (2 IP). The
+        matcher must pick the high-volume real player even when the junk row is
+        first -- otherwise displacement reads a ~2 IP preseason and the
+        slot-share denominator blows up.
+        """
+        pitchers = _pitchers_df(
+            [
+                {"name": "Mason Miller", "_name_norm": "mason miller", "ip": 2, "k": 3},
+                {"name": "Mason Miller", "_name_norm": "mason miller", "ip": 54, "k": 78},
+            ]
+        )
+        roster = [{"name": "Mason Miller", "positions": ["RP"]}]
+        with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.projections"):
+            result = match_roster_to_projections(roster, _empty_hitters(), pitchers)
+        assert len(result) == 1
+        # Highest IP wins -- the real arm, not the 2-IP namesake (which is first).
+        assert result[0].rest_of_season.ip == 54
+        assert result[0].rest_of_season.k == 78
+
+    def test_ambiguous_hitter_match_picks_highest_pa(self, caplog):
+        """Same collision rule for hitters: pick the row with the most plate
+        appearances (the established regular), not whichever row is first.
+        """
+        hitters = _hitters_df(
+            [
+                {"name": "Will Smith", "_name_norm": "will smith", "pa": 40, "hr": 1},
+                {"name": "Will Smith", "_name_norm": "will smith", "pa": 550, "hr": 24},
+            ]
+        )
+        roster = [{"name": "Will Smith", "positions": ["C"]}]
+        with caplog.at_level(logging.WARNING, logger="fantasy_baseball.data.projections"):
+            result = match_roster_to_projections(roster, hitters, _empty_pitchers())
+        assert len(result) == 1
+        # Highest PA wins -- the 550-PA regular, not the 40-PA namesake (first).
+        assert result[0].rest_of_season.hr == 24
+
     def test_fallback_match_logs_warning(self, caplog):
         # Position list doesn't qualify as hitter or pitcher (empty),
         # but name matches a hitter projection via fallback.
