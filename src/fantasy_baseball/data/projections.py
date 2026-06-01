@@ -447,6 +447,8 @@ def match_roster_to_projections(
     *,
     full_hitters_proj: pd.DataFrame | None = None,
     full_pitchers_proj: pd.DataFrame | None = None,
+    preseason_hitters_proj: pd.DataFrame | None = None,
+    preseason_pitchers_proj: pd.DataFrame | None = None,
     context: str = "",
 ) -> list[Player]:
     """Match roster players to blended projections by normalized name.
@@ -481,11 +483,23 @@ def match_roster_to_projections(
     ``Player.full_season_projection`` — used for display and end-of-season
     projected standings. Defaults to ``None``; legacy callers keep
     working with ROS-only frames.
+
+    ``preseason_hitters_proj``/``preseason_pitchers_proj`` are the optional
+    blended preseason (healthy full-season) frames. When provided,
+    ``Player.preseason`` is attached the SAME way as full-season: by the
+    matched ROS row's ``mlbam_id`` (preferred) or ``_name_norm``, per player
+    type. Keying on identity rather than bare name keeps ``.preseason``
+    consistent with ``.rest_of_season`` for the same physical player — a
+    same-name collision (two Mason Millers) or a dual-type entry (Ohtani as
+    both hitter and pitcher) cannot cross-assign lines. This is the slot-share
+    denominator the pitcher displacement model reads.
     """
     prefix = f"[{context}] " if context else ""
     matched: list[Player] = []
     full_hitters_by_id, full_hitters_by_name = _build_full_season_index(full_hitters_proj)
     full_pitchers_by_id, full_pitchers_by_name = _build_full_season_index(full_pitchers_proj)
+    pre_hitters_by_id, pre_hitters_by_name = _build_full_season_index(preseason_hitters_proj)
+    pre_pitchers_by_id, pre_pitchers_by_name = _build_full_season_index(preseason_pitchers_proj)
     for player in roster:
         name = player["name"].replace(" (Batter)", "").replace(" (Pitcher)", "")
         name_norm = normalize_name(name)
@@ -565,6 +579,24 @@ def match_roster_to_projections(
             else:
                 full_season_stats = PitcherStats.from_dict(full_record)
 
+        # Attach preseason (blended healthy full-season) the same way: by the
+        # matched ROS row's identity, per type, so .preseason refers to the
+        # SAME physical player as .rest_of_season.
+        if ptype == PlayerType.HITTER:
+            pre_record = _lookup_full_season_record(
+                proj, name_norm, pre_hitters_by_id, pre_hitters_by_name
+            )
+        else:
+            pre_record = _lookup_full_season_record(
+                proj, name_norm, pre_pitchers_by_id, pre_pitchers_by_name
+            )
+        preseason_stats: HitterStats | PitcherStats | None = None
+        if pre_record is not None:
+            if ptype == PlayerType.HITTER:
+                preseason_stats = HitterStats.from_dict(pre_record)
+            else:
+                preseason_stats = PitcherStats.from_dict(pre_record)
+
         # Parse positions and selected_position explicitly
         parsed_positions = [p if isinstance(p, Position) else Position.parse(p) for p in positions]
         raw_slot = player.get("selected_position", "")
@@ -587,6 +619,7 @@ def match_roster_to_projections(
             status=player.get("status", ""),
             rest_of_season=ros,
             full_season_projection=full_season_stats,
+            preseason=preseason_stats,
         )
         matched.append(p)
 
@@ -622,13 +655,12 @@ def hydrate_roster_entries(
     ``.full_season_projection`` is populated for display + standings.
 
     The ``preseason_hitters_proj``/``preseason_pitchers_proj`` kwargs, when
-    provided, populate each Player's ``.preseason`` by matching the same roster
-    against the preseason (blended full-season) frames. This is the slot-share
-    denominator the pitcher displacement model needs (``preseason.ip *
-    fraction_remaining``); attaching it here means the projected-standings build
-    sees it on every roster -- user AND opponents -- instead of falling back to
-    a direct-IP swap. The same collision tie-break used for ROS applies, so a
-    same-name namesake can't poison the preseason line.
+    provided, populate each Player's ``.preseason`` (the slot-share denominator
+    the pitcher displacement model needs). They forward straight into
+    :func:`match_roster_to_projections`, which attaches preseason by the matched
+    ROS row's identity (per type), so the projected-standings build sees it on
+    every roster -- user AND opponents -- and ``.preseason`` stays consistent
+    with ``.rest_of_season`` for the same physical player.
 
     The ``context`` kwarg is forwarded for log clarity.
     """
@@ -642,24 +674,13 @@ def hydrate_roster_entries(
         }
         for entry in roster.entries
     ]
-    players = match_roster_to_projections(
+    return match_roster_to_projections(
         roster_dicts,
         hitters_proj,
         pitchers_proj,
         full_hitters_proj=full_hitters_proj,
         full_pitchers_proj=full_pitchers_proj,
+        preseason_hitters_proj=preseason_hitters_proj,
+        preseason_pitchers_proj=preseason_pitchers_proj,
         context=context,
     )
-    if preseason_hitters_proj is not None and preseason_pitchers_proj is not None:
-        preseason_matched = match_roster_to_projections(
-            roster_dicts,
-            preseason_hitters_proj,
-            preseason_pitchers_proj,
-            context=f"{context}:preseason" if context else "preseason",
-        )
-        pre_lookup = {normalize_name(p.name): p for p in preseason_matched}
-        for player in players:
-            pre = pre_lookup.get(normalize_name(player.name))
-            if pre is not None and pre.rest_of_season is not None:
-                player.preseason = pre.rest_of_season
-    return players
