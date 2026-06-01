@@ -244,11 +244,19 @@ class LeagueContext:
             by the Gaussian-pairwise scorer for variance pricing.
         team_name: the team whose roster the picker is currently
             evaluating displacement candidates for.
+        fraction_remaining: fraction of the season still to play. Passed
+            to ``pitcher_swap.swap_window_ip`` so a returning IL pitcher's
+            slot-share is measured against a healthy *remaining-season*
+            workload (``preseason.ip * fraction_remaining``), not the full
+            season -- otherwise an arm back for the whole rest of the year
+            reads as a part-timer. Defaults to 1.0 (whole season remaining)
+            for callers that don't supply it.
     """
 
     baseline_other_team_stats: Mapping[str, CategoryStats]
     team_sds: Mapping[str, Mapping[Category, float]]
     team_name: str
+    fraction_remaining: float = 1.0
 
 
 def _find_worst_match(
@@ -588,7 +596,9 @@ def _compute_pitcher_pool_factors(
         for target in active_pool:
             if target.name in already_discounted:
                 continue
-            window = swap_window_ip(il_p, target)
+            window = swap_window_ip(
+                il_p, target, fraction_remaining=league_context.fraction_remaining
+            )
             tgt_ros_ip = _safe(getattr(target.rest_of_season, "ip", 0))
             f = discount_factor(tgt_ros_ip, window)
             # Swap state: IL pitcher at full ROS (not in overrides = sf=1.0),

@@ -262,6 +262,7 @@ def build_standings_breakdown_payload(
             baseline_other_team_stats={t: s for t, s in baseline_stats.items() if t != team_name},
             team_sds=team_sds,
             team_name=team_name,
+            fraction_remaining=fraction_remaining,
         )
         # team_ytd is a first-class field on RosterBreakdown so it survives the
         # season_routes round-trip through from_dict/to_dict (used to backfill

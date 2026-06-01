@@ -160,7 +160,9 @@ def _zero_band() -> dict[str, Any]:
     return {"mean": 0.0, "sd": 0.0, "p_positive": 0.5, "verdict": band_class(0.5)}
 
 
-def _synthetic_swap_line(incumbent: Player, candidate: Player, w: float) -> Player:
+def _synthetic_swap_line(
+    incumbent: Player, candidate: Player, w: float, *, fraction_remaining: float = 1.0
+) -> Player:
     """Synthetic replacement line for swapping ``candidate`` in for the W-window
     of ``incumbent``'s playing time.
 
@@ -179,7 +181,7 @@ def _synthetic_swap_line(incumbent: Player, candidate: Player, w: float) -> Play
         # argument is kept in the function signature for backwards
         # compatibility but only used as a fallback when ``swap_window_ip``
         # returns 0 (candidate has no ROS IP -- the legacy path).
-        window = swap_window_ip(candidate, incumbent)
+        window = swap_window_ip(candidate, incumbent, fraction_remaining=fraction_remaining)
         if window <= 0.0:
             window = float(w)
         scale = discount_factor(float(inc.ip), window)
@@ -252,7 +254,7 @@ def _best_swap_band(
             continue
         if _ros_volume(incumbent) <= 0.0:
             continue
-        synth = _synthetic_swap_line(incumbent, candidate, w)
+        synth = _synthetic_swap_line(incumbent, candidate, w, fraction_remaining=fraction_remaining)
         after = [p for p in before_active if p is not incumbent]
         after.append(synth)
         band = compute_delta_roto_band(

@@ -3055,9 +3055,11 @@ class TestPitcherPoolRateSwap:
 
         assert "Webb" not in factors, "Webb should be active (sf=1.0 implicit), not in factors"
         assert "SP_Worst" in factors, "Worst SP should be the discount target"
-        # Same-role direct-IP swap: cand_pre=200, tgt_pre=200, cand_ros=60.
-        # window = 200 * (60 / 200) = 60. target_ros_ip=130, scale=(130-60)/130.
-        expected = (130.0 - 60.0) / 130.0
+        # New model (fraction_remaining defaults to 1.0): slot_share =
+        # cand_ros / cand_pre = 60/200 = 0.30. The window is that share of the
+        # TARGET's ROS (130 * 0.30 = 39), so the factor is (130 - 39)/130 =
+        # 1 - 0.30. (The old formula multiplied the target's preseason IP.)
+        expected = 1.0 - (60.0 / 200.0)
         assert abs(factors["SP_Worst"] - expected) < 1e-9
         assert "SP_A" not in factors and "SP_B" not in factors, "Strong SPs untouched"
 
@@ -3097,29 +3099,39 @@ class TestPitcherPoolRateSwap:
             league_context=ctx,
         )
 
-        # Find the scaled SP_Worst entry (it's a dict, not a Player).
-        # SP_Worst should have been discounted; identify it by its k value
-        # being less than SP_Worst's full ROS k.
-        worst_scaled = None
-        for entry in scaled_roster:
-            if isinstance(entry, dict) and entry.get("k", 0) < sp_worst.rest_of_season.k:
-                worst_scaled = entry
-                break
-        assert worst_scaled is not None, "Expected one scaled dict for the swap target"
+        # Exactly one active starter is discounted (the swap target). This test
+        # asserts the SAME factor is applied across every counting category, not
+        # which starter is chosen -- here SP_Worst and SP_Strong yield identical
+        # team ΔRoto (the team loses K and W to both opponents regardless), so
+        # the picker's choice between them is a tie-break, not a guarantee.
+        scaled_dicts = [e for e in scaled_roster if isinstance(e, dict)]
+        assert len(scaled_dicts) == 1, f"Expected exactly one displaced target, got {scaled_dicts}"
+        target_dict = scaled_dicts[0]
 
-        expected_factor = (130.0 - 60.0) / 130.0
-        # Every counting stat scaled by the same factor.
-        for key in ("k", "w", "sv", "ip", "er", "bb", "h_allowed"):
-            ros_val = getattr(sp_worst.rest_of_season, key)
-            assert abs(worst_scaled[key] - ros_val * expected_factor) < 1e-6, (
-                f"Stat {key} not scaled by the unified target factor"
+        # factor = 1 - slot_share = 1 - cand_ros/cand_pre (fraction_remaining=1.0).
+        expected_factor = 1.0 - (60.0 / 200.0)
+        # Whichever active starter was picked, every counting stat is that
+        # starter's ROS scaled by the one shared factor (no per-category picker).
+        for source in (sp_worst, sp_strong):
+            ros = source.rest_of_season
+            if abs(target_dict["k"] - ros.k * expected_factor) < 1e-6:
+                for key in ("k", "w", "sv", "ip", "er", "bb", "h_allowed"):
+                    assert abs(target_dict[key] - getattr(ros, key) * expected_factor) < 1e-6, (
+                        f"Stat {key} not scaled by the unified target factor"
+                    )
+                break
+        else:
+            raise AssertionError(
+                f"Displaced dict {target_dict} is not a uniform scaling of any active starter"
             )
 
-    def test_starter_returning_discounts_reliever_via_preseason_proration(self):
+    def test_starter_returning_discounts_reliever_by_remaining_workload(self):
         """Webb (SP, 60 ROS IP, 200 preseason IP) returns to a pool whose
-        weakest arm is a reliever (25 ROS IP, 65 preseason IP). The cross-role
-        swap should discount the reliever by 65 * (60/200) = 19.5 IP, NOT by
-        60 IP (which would zero the reliever).
+        weakest arm is a reliever (25 ROS IP). The cross-role swap discounts
+        the reliever by slot_share * his REMAINING IP = 0.30 * 25 = 7.5 IP
+        (NOT 60 IP, which would zero him, and NOT his preseason IP). The
+        returning starter's slot-share, not the reliever's role, sets the
+        fraction displaced.
         """
         from fantasy_baseball.lineup.pitcher_swap import discount_factor
         from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
@@ -3204,11 +3216,12 @@ class TestPitcherPoolRateSwap:
         assert "Webb" not in factors
 
         # Weak_RP should be the discount target (he's the weakest pitcher).
-        # Window = 65 * (60/200) = 19.5. Factor = (25 - 19.5) / 25.
+        # slot_share = cand_ros/cand_pre = 60/200 = 0.30; window = that share of
+        # Weak_RP's ROS (25) = 7.5. Factor = (25 - 7.5)/25 = 1 - 0.30.
         assert "Weak_RP" in factors, (
             f"Expected Weak_RP as cross-role target; picker chose {list(factors)}"
         )
-        expected = discount_factor(target_ros_ip=25.0, window=65.0 * (60.0 / 200.0))
+        expected = discount_factor(target_ros_ip=25.0, window=25.0 * (60.0 / 200.0))
         assert abs(factors["Weak_RP"] - expected) < 1e-9
 
     def test_two_il_pitchers_each_pick_own_target(self):
@@ -3321,10 +3334,19 @@ class TestPitcherPoolRateSwap:
             ),
         }
         team_sds = {tn: {c: 1.0 for c in Category} for tn in ["Me", *baseline.keys()]}
+        # Mid-season fixture (ROS < preseason): pass a realistic remaining-
+        # season fraction so the IL pitcher's slot-share is measured correctly.
+        # Weak_IL's slot_share = 30 / (180 * 0.75) = 0.22 -- activating him would
+        # shave 22% off an elite arm's ROS for a worse-rate 30 IP, which loses
+        # more K than it adds. (At fraction_remaining=1.0 the elapsed season is
+        # double-counted, understating his share to 0.167 and making the bad
+        # swap look cheap enough to pass -- exactly the bug this denominator
+        # fixes.)
         ctx = LeagueContext(
             baseline_other_team_stats=baseline,
             team_sds=team_sds,
             team_name="Me",
+            fraction_remaining=0.75,
         )
 
         factors = _compute_pitcher_pool_factors(

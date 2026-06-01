@@ -2,20 +2,34 @@
 board (lineup/stash_value.py).
 
 The two surfaces ask the same question: when one pitcher takes another
-pitcher's slot share, how much of the target's ROS is consumed? The legacy
-answer was a direct IP swap, which is correct SP-to-SP (both share the same
-"IP-per-active-game" rate) but wrong cross-role (an SP returning at 60 IP
-does NOT consume 60 IP of an RP's ROS -- the RP throws 1 IP per appearance,
-not 6).
+pitcher's slot share, how much of the target's REMAINING (ROS) workload is
+displaced?
 
-The shared formula here uses each pitcher's preseason IP as a per-pitcher
-"rate denominator." The candidate's ``ros_ip / preseason_ip`` is the fraction
-of the season they'll spend in an active slot (their slot-share). Multiplied
-by the target's preseason IP, this gives the IP the target would have thrown
-during the same time window -- the right discount IP regardless of role.
+The model is a time-share, not an IP-for-IP trade. Rosters are set weekly and
+a slot cannot be platooned within a week, so the candidate's slot-share is the
+fraction of the REMAINING weeks it holds the slot:
 
-Falls back to a direct IP swap when either preseason field is missing, so
-preseason-naive data paths (older fixtures, draft scripts) still work.
+    slot_share = candidate.ros.ip / (candidate.preseason.ip * fraction_remaining)
+
+The denominator is the candidate's *remaining-season* healthy workload, not its
+full-season preseason IP -- the already-elapsed part of the season is gone for
+everyone, so dividing by the full season would mis-read a pitcher who is
+healthy for the whole rest of the year as a part-timer. An arm back now whose
+ROS already equals a healthy remainder (e.g. 33 of a ~35-IP healthy remainder)
+has slot-share ~1.0 and is active almost every remaining week; one who will
+miss half the rest of the season has slot-share ~0.5.
+
+That same fraction of the *target's ROS* is displaced: the worst pitcher keeps
+``1 - slot_share`` of what it had left to pitch. Role-agnostic by construction
+-- a returning reliever displacing a starter takes ``slot_share`` of the
+starter's remaining innings, no preseason-IP-of-the-target conversion required.
+
+Only the candidate's preseason IP is needed (to compute the slot-share); the
+target's preseason IP is irrelevant. Falls back to a direct IP swap when the
+candidate lacks preseason (preseason-naive data paths -- older fixtures,
+draft-script dicts). The slot-share is clamped to ``[0, 1]`` so a junk-tiny
+candidate preseason (e.g. a same-name-collision projection row) cannot amplify
+the displacement past a full swap-out.
 """
 
 from __future__ import annotations
@@ -38,25 +52,44 @@ def _preseason_ip(p: Player) -> float:
     return 0.0
 
 
-def swap_window_ip(candidate: Player, target: Player) -> float:
-    """IP window of ``target`` that ``candidate`` consumes when taking the
-    target's slot share.
+def swap_window_ip(candidate: Player, target: Player, *, fraction_remaining: float = 1.0) -> float:
+    """IP window of ``target``'s ROS that ``candidate`` displaces when taking
+    the target's slot share.
 
-    Uses preseason-IP proration when both pitchers have preseason data:
+        healthy_remainder = candidate.preseason.ip * fraction_remaining
+        slot_share        = min(1.0, candidate.ros.ip / healthy_remainder)
+        window            = target.ros.ip * slot_share
 
-        window = target.preseason.ip * (candidate.ros.ip / candidate.preseason.ip)
+    So ``discount_factor(target.ros.ip, window) == 1 - slot_share``: the worst
+    pitcher keeps ``1 - slot_share`` of its remaining workload.
 
-    Falls back to ``candidate.ros.ip`` (direct IP swap, legacy) when either
-    side lacks preseason. Returns 0.0 if the candidate has no ROS IP.
+    ``slot_share`` is the fraction of the REMAINING season the candidate is
+    active -- i.e. the share of remaining weeks it holds the slot, given that
+    rosters are set weekly and a slot cannot be platooned within a week. The
+    denominator is the candidate's *remaining-season* healthy workload
+    (``preseason.ip * fraction_remaining``), NOT its full-season preseason IP:
+    the already-elapsed part of the season is gone for everyone, so dividing by
+    the full season would mis-read a pitcher who is healthy for the whole rest
+    of the year as a part-timer. A returner whose ROS already equals a healthy
+    remainder (back now) gets slot_share ~= 1.0 and displaces ~all of the worst
+    pitcher's ROS; one who will miss half the rest of the year gets ~0.5.
+
+    Only the candidate's preseason IP is consulted (the slot-share
+    denominator); the target's preseason IP is not used. ``slot_share`` is
+    clamped to ``[0, 1]`` so a junk-tiny candidate preseason (e.g. a
+    same-name-collision projection row, or a Yahoo IL stash with a near-zero
+    preseason line) cannot push the window past the target's full ROS. Falls
+    back to ``candidate.ros.ip`` (legacy direct-IP swap) when the candidate
+    lacks usable preseason data. Returns 0.0 if the candidate has no ROS IP.
     """
     cand_ros = _ros_ip(candidate)
     if cand_ros <= 0.0:
         return 0.0
-    cand_pre = _preseason_ip(candidate)
-    tgt_pre = _preseason_ip(target)
-    if cand_pre <= 0.0 or tgt_pre <= 0.0:
+    healthy_remainder = _preseason_ip(candidate) * fraction_remaining
+    if healthy_remainder <= 0.0:
         return cand_ros
-    return tgt_pre * (cand_ros / cand_pre)
+    slot_share = min(1.0, cand_ros / healthy_remainder)
+    return _ros_ip(target) * slot_share
 
 
 def discount_factor(target_ros_ip: float, window: float) -> float:

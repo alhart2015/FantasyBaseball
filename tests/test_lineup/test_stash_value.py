@@ -781,14 +781,15 @@ def test_rank_key_breaks_ties_by_value():
     assert [s.name for s in ranked] == ["High Val", "Low Val"]
 
 
-def test_synthetic_swap_starter_to_reliever_uses_preseason_proration():
-    """SP candidate, RP incumbent: the synthetic line should subtract only
-    19.5 IP of the RP (65 preseason IP * 60/200 fraction-of-Webb's-season),
-    not 60 IP (which would zero the RP and overstate Webb's gain).
+def test_synthetic_swap_starter_to_reliever_by_remaining_workload():
+    """SP candidate, RP incumbent: the synthetic line subtracts the candidate's
+    slot-share of the RP's REMAINING IP, not 60 IP (which would zero the RP and
+    overstate the gain) and not the RP's preseason IP.
 
-    This is the cross-role bug from the displacement model fix: a starter
-    returning from IL with 60 ROS IP and 200 preseason IP consumes ~30% of
-    a reliever's preseason workload, NOT 60 IP of his ROS.
+    Webb returns with 60 ROS / 200 preseason IP, so at full season remaining his
+    slot-share is 60/200 = 0.30. The RP (25 ROS IP) loses 0.30 * 25 = 7.5 IP --
+    the returning starter's slot-share, applied to the reliever's own remaining
+    workload, sets the cross-role window.
     """
     from fantasy_baseball.lineup.stash_value import _synthetic_swap_line
 
@@ -858,8 +859,9 @@ def test_synthetic_swap_starter_to_reliever_uses_preseason_proration():
     # is missing.
     synth = _synthetic_swap_line(incumbent, candidate, w=60.0)
 
-    # Cross-role: window = 65 * (60/200) = 19.5 IP. Scale = (25 - 19.5)/25.
-    scale = (25.0 - 19.5) / 25.0
+    # Cross-role: slot_share = 60/200 = 0.30 (fraction_remaining defaults to
+    # 1.0); window = 0.30 * RP_ros(25) = 7.5 IP. Scale = (25 - 7.5)/25 = 0.70.
+    scale = (25.0 - 7.5) / 25.0
     expected_ip = scale * 25.0 + 60.0
     expected_k = scale * 20.0 + 67.0
     assert abs(synth.rest_of_season.ip - expected_ip) < 1e-6

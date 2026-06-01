@@ -451,6 +451,7 @@ class ProjectedStandings:
                     },
                     team_sds=team_sds,
                     team_name=tname,
+                    fraction_remaining=fraction_remaining,
                 ),
             )
             ytd = _ytd_for(tname)
