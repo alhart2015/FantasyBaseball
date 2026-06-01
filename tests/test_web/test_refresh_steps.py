@@ -48,9 +48,12 @@ def _player(
 
 
 class TestMergeMatchedAndRawRoster:
-    def test_matched_players_get_preseason_attached(self):
+    def test_matched_player_preseason_preserved(self):
+        # Preseason is attached upstream by identity (match_roster_to_projections);
+        # merge must pass the matched player through untouched, NOT re-attach by
+        # bare name (which could clobber a collision/dual-type line).
         soto = _player("Soto", ros=HitterStats(r=80))
-        soto_pre = _player("Soto", ros=HitterStats(r=100, hr=35))
+        soto.preseason = HitterStats(r=100, hr=35)
         result = merge_matched_and_raw_roster(
             matched=[soto],
             roster_raw=[
@@ -62,12 +65,11 @@ class TestMergeMatchedAndRawRoster:
                     "status": "",
                 }
             ],
-            preseason_lookup={"soto": soto_pre},
         )
         assert len(result) == 1
-        assert result[0].preseason is soto_pre.rest_of_season
+        assert result[0].preseason.hr == 35
 
-    def test_matched_player_without_preseason_entry(self):
+    def test_matched_player_without_preseason_stays_none(self):
         soto = _player("Soto", ros=HitterStats(r=80))
         result = merge_matched_and_raw_roster(
             matched=[soto],
@@ -80,10 +82,8 @@ class TestMergeMatchedAndRawRoster:
                     "status": "",
                 }
             ],
-            preseason_lookup={},  # no preseason match
         )
         assert len(result) == 1
-        # No preseason attached (attribute not set or stays as default)
         assert result[0].preseason is None
 
     def test_unmatched_raw_player_added_as_hitter(self):
@@ -100,7 +100,6 @@ class TestMergeMatchedAndRawRoster:
                     "status": "",
                 }
             ],
-            preseason_lookup={},
         )
         assert len(result) == 1
         assert result[0].name == "Newbie"
@@ -119,7 +118,6 @@ class TestMergeMatchedAndRawRoster:
                     "status": "",
                 }
             ],
-            preseason_lookup={},
         )
         assert len(result) == 1
         assert result[0].player_type == PlayerType.PITCHER
@@ -146,7 +144,6 @@ class TestMergeMatchedAndRawRoster:
                     "status": "",
                 },
             ],
-            preseason_lookup={},
         )
         assert len(result) == 2
         names = {p.name for p in result}

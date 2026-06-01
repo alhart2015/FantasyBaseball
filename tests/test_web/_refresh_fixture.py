@@ -364,7 +364,7 @@ def patched_refresh_environment(
     def _fetch_all_transactions(league):
         return transactions()
 
-    def _fetch_and_match_fa(league, hitters_proj, pitchers_proj):
+    def _fetch_and_match_fa(league, hitters_proj, pitchers_proj, **kwargs):
         return (fa_player_objs, None)
 
     def _fetch_game_logs(season_year, progress_cb=None):

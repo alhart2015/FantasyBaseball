@@ -85,7 +85,12 @@ def swap_window_ip(candidate: Player, target: Player, *, fraction_remaining: flo
     cand_ros = _ros_ip(candidate)
     if cand_ros <= 0.0:
         return 0.0
-    healthy_remainder = _preseason_ip(candidate) * fraction_remaining
+    # fraction_remaining is a [0, 1] season fraction, but compute_fraction_
+    # remaining does not clamp its upper bound (it can exceed 1.0 before opening
+    # day). Clamp here so a >1.0 value can't inflate the denominator and
+    # under-displace, and a negative can't flip its sign.
+    fr = min(1.0, max(0.0, fraction_remaining))
+    healthy_remainder = _preseason_ip(candidate) * fr
     if healthy_remainder <= 0.0:
         return cand_ros
     slot_share = min(1.0, cand_ros / healthy_remainder)

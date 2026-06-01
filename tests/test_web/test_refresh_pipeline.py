@@ -555,6 +555,107 @@ def test_breakdown_payload_includes_team_ytd_block_when_actual_standings_given()
     assert team_ytd["bb_plus_h_allowed"] == pytest.approx(1.20 * 300.0)
 
 
+def test_breakdown_displacement_responds_to_opponent_ytd():
+    """The breakdown's Pass-1 baseline must include YTD (mirroring
+    ProjectedStandings.from_rosters), so the DeltaRoto displacement picker reacts
+    to opponents' season totals. With a ROS-only Pass-1 baseline the picker is
+    blind to YTD and chooses different displacement targets than the standings
+    widget -- so the per-player breakdown stops summing to the headline total
+    (the surfaces-disagree bug).
+
+    Same rosters, two actual_standings differing ONLY in the opponent's YTD SV:
+    the user team's chosen displacement target must change. (A ROS-only baseline
+    ignores actual_standings entirely, so the two would be identical.)
+    """
+    from datetime import date
+
+    from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
+    from fantasy_baseball.models.positions import Position
+    from fantasy_baseball.models.standings import CategoryStats, Standings, StandingsEntry
+    from fantasy_baseball.utils.constants import OpportunityStat
+    from fantasy_baseball.web.refresh_pipeline import build_standings_breakdown_payload
+
+    def _p(name, slot, ros_ip, ros_k, ros_sv=0, pre_ip=None):
+        ros = PitcherStats(
+            ip=ros_ip,
+            w=ros_ip * 0.05,
+            k=ros_k,
+            sv=ros_sv,
+            er=ros_ip * 0.4,
+            bb=ros_ip * 0.3,
+            h_allowed=ros_ip * 0.9,
+            era=3.6,
+            whip=1.2,
+        )
+        full = PitcherStats(
+            ip=ros_ip + 40,
+            w=(ros_ip + 40) * 0.05,
+            k=ros_k + 40,
+            sv=ros_sv,
+            er=(ros_ip + 40) * 0.4,
+            bb=(ros_ip + 40) * 0.3,
+            h_allowed=(ros_ip + 40) * 0.9,
+            era=3.6,
+            whip=1.2,
+        )
+        pre = PitcherStats(
+            ip=pre_ip or ros_ip + 60, w=0, k=0, sv=0, er=0, bb=0, h_allowed=0, era=0, whip=0
+        )
+        return Player(
+            name=name,
+            player_type=PlayerType.PITCHER,
+            rest_of_season=ros,
+            full_season_projection=full,
+            preseason=pre,
+            selected_position=Position.parse(slot),
+        )
+
+    # A cheap-to-activate IL closer (high preseason -> small slot-share) whose SV
+    # makes its activation pivotal when the opponent's season SV is high.
+    me = [
+        _p("Returner", "IL", ros_ip=20, ros_k=18, ros_sv=10, pre_ip=200),
+        _p("SP1", "P", 150, 170),
+        _p("SP2", "P", 145, 165),
+        _p("RP1", "P", 30, 35, ros_sv=12, pre_ip=65),
+    ]
+    opp = [
+        _p("OppSP1", "P", 160, 180),
+        _p("OppSP2", "P", 150, 170),
+        _p("OppRP", "P", 40, 45, ros_sv=5, pre_ip=70),
+    ]
+    rosters = {"Me": me, "Opp": opp}
+
+    def _standings(opp_sv):
+        def entry(n, sv):
+            return StandingsEntry(
+                team_name=n,
+                team_key=n,
+                rank=1,
+                stats=CategoryStats(
+                    r=400, hr=100, rbi=400, sb=50, avg=0.26, w=10, k=300, sv=sv, era=3.5, whip=1.2
+                ),
+                extras={OpportunityStat.IP: 300.0, OpportunityStat.AB: 800.0},
+            )
+
+        return Standings(
+            effective_date=date(2026, 6, 2), entries=[entry("Me", 50), entry("Opp", opp_sv)]
+        )
+
+    def _factors(opp_sv):
+        payload = build_standings_breakdown_payload(
+            rosters, date(2026, 6, 2), fraction_remaining=0.6, actual_standings=_standings(opp_sv)
+        )
+        return {p["name"]: round(p["scale_factor"], 2) for p in payload["teams"]["Me"]["pitchers"]}
+
+    weak_opp = _factors(opp_sv=5)
+    strong_opp = _factors(opp_sv=75)
+    # The displacement target changes with the opponent's season SV. A ROS-only
+    # Pass-1 baseline would make these identical.
+    assert weak_opp != strong_opp, (
+        f"Displacement ignored opponent YTD (Pass-1 baseline missing YTD): {weak_opp}"
+    )
+
+
 def test_breakdown_payload_team_ytd_zero_when_no_actual_standings():
     """When actual_standings is None (pre-season or omitted), the team_ytd
     block is all zeros so consumers can still render the section without

@@ -16,27 +16,21 @@ from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 def merge_matched_and_raw_roster(
     matched: list[Player],
     roster_raw: list[dict],
-    preseason_lookup: dict[str, Player],
 ) -> list[Player]:
     """Combine projection-matched players with any unmatched raw entries.
 
-    For every matched player, attaches ``player.preseason`` from the
-    corresponding entry in ``preseason_lookup`` (keyed by normalized
-    name) if one exists. Then appends a Player built from each raw
-    roster entry that wasn't matched, inferring ``player_type`` from
-    positions (any pitcher position → PITCHER, otherwise HITTER).
-
-    Mutates each matched Player. Returns the combined list.
+    ``Player.preseason`` is already attached to each matched player by identity
+    (matched ROS row's ``mlbam_id`` / type) in
+    :func:`data.projections.match_roster_to_projections`. This function no longer
+    re-attaches it: the old bare-normalized-name re-attach could clobber the
+    identity-keyed line for a same-name collision (two Mason Millers) or a
+    dual-type entry (Ohtani), re-introducing the bug that attach was meant to
+    fix. Here we only append a Player built from each raw roster entry that
+    wasn't matched, inferring ``player_type`` from positions (any pitcher
+    position -> PITCHER, otherwise HITTER). Returns the combined list.
     """
-    matched_names: set[str] = set()
-    out: list[Player] = []
-    for player in matched:
-        norm = normalize_name(player.name)
-        matched_names.add(norm)
-        pre_entry = preseason_lookup.get(norm)
-        if pre_entry and pre_entry.rest_of_season:
-            player.preseason = pre_entry.rest_of_season
-        out.append(player)
+    matched_names: set[str] = {normalize_name(p.name) for p in matched}
+    out: list[Player] = list(matched)
 
     for raw_player in roster_raw:
         if normalize_name(raw_player["name"]) not in matched_names:

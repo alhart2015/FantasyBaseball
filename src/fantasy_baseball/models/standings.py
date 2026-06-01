@@ -287,6 +287,39 @@ class Standings:
         }
 
 
+def build_eos_baseline(
+    team_rosters: Mapping[str, Any],
+    ytd_by_team: Mapping[str, TeamYtdComponents],
+    *,
+    displacement: bool = True,
+) -> dict[str, CategoryStats]:
+    """Per-team END-OF-SEASON baseline (team YTD + displaced ROS) for the
+    DeltaRoto displacement picker (``LeagueContext.baseline_other_team_stats``).
+
+    Shared by :meth:`ProjectedStandings.from_rosters` Pass 1 and
+    ``web.refresh_pipeline.build_standings_breakdown_payload`` Pass 1 so the two
+    surfaces' pickers score against an IDENTICAL baseline -- a ROS-only baseline
+    in one and a YTD-inclusive one in the other made the per-player breakdown
+    stop summing to the standings headline. Per-team YTD shifts are not uniform
+    across the picker's argmax, so the baseline MUST include YTD.
+
+    A team absent from ``ytd_by_team`` (name-key drift) falls back to zero YTD
+    components; the caller owns warn-on-miss (the explicit ``is None`` check
+    avoids the ``x or default`` numeric-falsy trap).
+    """
+    from fantasy_baseball.scoring import project_ros_components, team_end_of_season
+
+    baseline: dict[str, CategoryStats] = {}
+    for tname, roster in team_rosters.items():
+        ytd = ytd_by_team.get(tname)
+        if ytd is None:
+            ytd = TeamYtdComponents()
+        baseline[tname] = team_end_of_season(
+            ytd, project_ros_components(list(roster), displacement=displacement)
+        )
+    return baseline
+
+
 @dataclass
 class ProjectedStandingsEntry:
     """One team's projected end-of-season totals.
@@ -429,11 +462,11 @@ class ProjectedStandings:
                 return TeamYtdComponents()
             return ytd
 
-        baseline_stats: dict[str, CategoryStats] = {}
-        for tname, roster in team_rosters.items():
-            ytd = _ytd_for(tname)
-            ros = project_ros_components(list(roster), displacement=True)
-            baseline_stats[tname] = team_end_of_season(ytd, ros)
+        # Pass-1 baseline shared with build_standings_breakdown_payload so both
+        # pickers score against the same YTD-inclusive baseline. _ytd_for (with
+        # warn-on-miss) is still used for the Pass-2 entries below; a missing
+        # team surfaces there.
+        baseline_stats = build_eos_baseline(team_rosters, ytd_by_team)
 
         team_sds = build_team_sds(
             {tname: list(roster) for tname, roster in team_rosters.items()},
