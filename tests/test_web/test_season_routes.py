@@ -325,6 +325,37 @@ def test_ros_fetch_worker_releases_slot(client, monkeypatch, tmp_path, free_refr
     kv_store._reset_singleton()
 
 
+def _thread_that_fails_to_start(*_a, **_k):
+    t = MagicMock()
+    t.start.side_effect = RuntimeError("can't start new thread")
+    return t
+
+
+def test_fetch_ros_route_releases_slot_when_spawn_fails(client, monkeypatch, free_refresh_slot):
+    """If the worker thread fails to spawn after the slot is acquired, the
+    slot must be released so the spawn failure can't wedge all future jobs."""
+    from fantasy_baseball.web import refresh_pipeline, season_routes
+
+    monkeypatch.setattr(season_routes.threading, "Thread", _thread_that_fails_to_start)
+
+    with pytest.raises(RuntimeError):
+        client.post("/api/fetch-ros-projections")
+
+    assert refresh_pipeline.get_refresh_status()["running"] is False
+
+
+def test_refresh_route_releases_slot_when_spawn_fails(client, monkeypatch, free_refresh_slot):
+    """Same spawn-failure guard for the full-refresh route."""
+    from fantasy_baseball.web import refresh_pipeline, season_routes
+
+    monkeypatch.setattr(season_routes.threading, "Thread", _thread_that_fails_to_start)
+
+    with pytest.raises(RuntimeError):
+        client.post("/api/refresh")
+
+    assert refresh_pipeline.get_refresh_status()["running"] is False
+
+
 def test_full_standings_page_with_cached_data(client, kv_isolation):
     """Integration test: standings page renders correctly with all cached data present."""
     from fantasy_baseball.web import season_data

@@ -288,6 +288,31 @@ def _run_rest_of_season_fetch() -> None:
         release_refresh_slot()
 
 
+def _spawn_guarded_refresh_job(target) -> bool:
+    """Acquire the shared refresh slot and start ``target`` in a daemon thread.
+
+    Returns True if the job was started, False if the slot was already held
+    (the caller should report ``already_running``). If the thread fails to
+    spawn after the slot is acquired (e.g. thread exhaustion), the slot is
+    released before re-raising, so a spawn failure can't wedge it permanently
+    and block every future refresh/fetch. Shared by both job routes so the
+    acquire/spawn/release-on-failure contract lives in one place.
+    """
+    from fantasy_baseball.web.refresh_pipeline import (
+        release_refresh_slot,
+        try_acquire_refresh_slot,
+    )
+
+    if not try_acquire_refresh_slot():
+        return False
+    try:
+        threading.Thread(target=target, daemon=True).start()
+    except BaseException:
+        release_refresh_slot()
+        raise
+    return True
+
+
 def _coerce_id_list(value, field_name: str) -> set:
     """Coerce a JSON payload value to a set of string keys.
 
@@ -1889,15 +1914,10 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/refresh", methods=["POST"])
     def api_refresh():
-        from fantasy_baseball.web.refresh_pipeline import (
-            run_full_refresh,
-            try_acquire_refresh_slot,
-        )
+        from fantasy_baseball.web.refresh_pipeline import run_full_refresh
 
-        if not try_acquire_refresh_slot():
+        if not _spawn_guarded_refresh_job(run_full_refresh):
             return jsonify({"status": "already_running"})
-        thread = threading.Thread(target=run_full_refresh, daemon=True)
-        thread.start()
         return jsonify({"status": "started"})
 
     @app.route("/api/refresh-status")
@@ -1920,10 +1940,6 @@ def register_routes(app: Flask) -> None:
         sync game logs and write the same cache keys, so they must not run
         concurrently. The worker releases the slot when it finishes.
         """
-        from fantasy_baseball.web.refresh_pipeline import try_acquire_refresh_slot
-
-        if not try_acquire_refresh_slot():
+        if not _spawn_guarded_refresh_job(_run_rest_of_season_fetch):
             return jsonify({"status": "already_running"})
-        thread = threading.Thread(target=_run_rest_of_season_fetch, daemon=True)
-        thread.start()
         return jsonify({"status": "started"})
