@@ -439,8 +439,7 @@ class RefreshRun:
             raise
         finally:
             reset_cache_job(job_token)
-            with _refresh_lock:
-                _refresh_status["running"] = False
+            release_refresh_slot()
 
     # --- Step 1: Auth + league ---
     def _authenticate(self):

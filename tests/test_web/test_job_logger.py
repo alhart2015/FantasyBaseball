@@ -54,6 +54,8 @@ def test_job_logger_finish_persists_to_local_kv():
 
 
 def test_job_logger_finish_writes_key_and_ttl():
+    # Mocks the KV specifically to inspect the `ex` (TTL) kwarg, which the
+    # SQLite backend's read API doesn't expose; the other tests use the real store.
     mock_kv = MagicMock()
     with patch("fantasy_baseball.data.kv_store.get_kv", return_value=mock_kv):
         logger = JobLogger("refresh")
@@ -101,18 +103,19 @@ def test_job_logger_finish_swallows_kv_errors():
 
 
 def test_get_all_logs_returns_sorted():
-    older_log = json.dumps({"job": "refresh", "started_at": "2026-03-29 10:00:00", "status": "ok"})
-    newer_log = json.dumps({"job": "refresh", "started_at": "2026-03-30 08:00:00", "status": "ok"})
-
-    mock_kv = MagicMock()
-    mock_kv.keys.return_value = [
+    # Seed the real KV directly so this exercises the production keys()/mget()
+    # path, then assert get_all_logs sorts most-recent-first.
+    kv = kv_store.get_kv()
+    kv.set(
         "job_log:refresh:2026-03-29:111",
+        json.dumps({"job": "refresh", "started_at": "2026-03-29 10:00:00", "status": "ok"}),
+    )
+    kv.set(
         "job_log:refresh:2026-03-30:222",
-    ]
-    mock_kv.mget.return_value = [older_log, newer_log]
+        json.dumps({"job": "refresh", "started_at": "2026-03-30 08:00:00", "status": "ok"}),
+    )
 
-    with patch("fantasy_baseball.data.kv_store.get_kv", return_value=mock_kv):
-        logs = get_all_logs()
+    logs = get_all_logs()
 
     assert len(logs) == 2
     assert logs[0]["started_at"] == "2026-03-30 08:00:00"

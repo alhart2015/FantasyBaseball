@@ -207,9 +207,12 @@ def _run_rest_of_season_fetch() -> None:
     from fantasy_baseball.web.job_logger import JobLogger
     from fantasy_baseball.web.refresh_pipeline import release_refresh_slot
 
-    logger = None
+    # JobLogger.__init__ only stores fields and cannot raise, so creating it
+    # before the try keeps `logger` bound for the except. Everything that can
+    # fail (load_config, the pipeline) lives inside the try, and the finally
+    # releases the slot on every exit path.
+    logger = JobLogger("rest_of_season_fetch")
     try:
-        logger = JobLogger("rest_of_season_fetch")
         project_root = Path(__file__).resolve().parents[3]
         config = load_config(project_root / "config" / "league.yaml")
         projections_dir = project_root / "data" / "projections"
@@ -280,8 +283,7 @@ def _run_rest_of_season_fetch() -> None:
             logger.finish("ok")
 
     except Exception as exc:
-        if logger is not None:
-            logger.finish("error", str(exc))
+        logger.finish("error", str(exc))
     finally:
         release_refresh_slot()
 
