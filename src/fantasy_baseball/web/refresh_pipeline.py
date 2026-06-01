@@ -262,6 +262,7 @@ def build_standings_breakdown_payload(
             baseline_other_team_stats={t: s for t, s in baseline_stats.items() if t != team_name},
             team_sds=team_sds,
             team_name=team_name,
+            fraction_remaining=fraction_remaining,
         )
         # team_ytd is a first-class field on RosterBreakdown so it survives the
         # season_routes round-trip through from_dict/to_dict (used to backfill
@@ -682,16 +683,24 @@ class RefreshRun:
         assert self.pitchers_proj is not None
 
         self._progress("Hydrating user and opponent rosters...")
+
+        def _hydrate(roster_model, context):
+            # One shared frame bundle (ROS + full-season + preseason) so user and
+            # opponents are hydrated identically -- in particular both get the
+            # preseason line the displacement slot-share needs.
+            return hydrate_roster_entries(
+                roster_model,
+                self.hitters_proj,
+                self.pitchers_proj,
+                full_hitters_proj=self.full_hitters_proj,
+                full_pitchers_proj=self.full_pitchers_proj,
+                preseason_hitters_proj=self.preseason_hitters,
+                preseason_pitchers_proj=self.preseason_pitchers,
+                context=context,
+            )
+
         user_team_model = self.league_model.team_by_name(self.config.team_name)
-        user_roster_model = user_team_model.latest_roster()
-        self.matched = hydrate_roster_entries(
-            user_roster_model,
-            self.hitters_proj,
-            self.pitchers_proj,
-            full_hitters_proj=self.full_hitters_proj,
-            full_pitchers_proj=self.full_pitchers_proj,
-            context="user",
-        )
+        self.matched = _hydrate(user_team_model.latest_roster(), "user")
 
         self.opp_rosters = {}
         for team in self.league_model.teams:
@@ -699,15 +708,7 @@ class RefreshRun:
                 continue
             if not team.rosters:
                 continue
-            latest = team.latest_roster()
-            hydrated = hydrate_roster_entries(
-                latest,
-                self.hitters_proj,
-                self.pitchers_proj,
-                full_hitters_proj=self.full_hitters_proj,
-                full_pitchers_proj=self.full_pitchers_proj,
-                context=f"opp:{team.name}",
-            )
+            hydrated = _hydrate(team.latest_roster(), f"opp:{team.name}")
             if hydrated:
                 self.opp_rosters[team.name] = hydrated
         self._progress(f"Hydrated {len(self.opp_rosters)} opponent rosters")

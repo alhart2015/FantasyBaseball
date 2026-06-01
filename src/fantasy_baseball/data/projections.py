@@ -412,6 +412,57 @@ def _lookup_full_season_record(
     return by_namenorm.get(name_norm)
 
 
+def _stats_for_type(data: dict, ptype: PlayerType) -> HitterStats | PitcherStats:
+    """Build the type-appropriate stats object from a record/row dict."""
+    if ptype == PlayerType.HITTER:
+        return HitterStats.from_dict(data)
+    return PitcherStats.from_dict(data)
+
+
+def _lookup_stats(
+    proj_row: pd.Series,
+    name_norm: str,
+    ptype: PlayerType,
+    hitters_index: tuple[dict[int, dict], dict[str, dict]],
+    pitchers_index: tuple[dict[int, dict], dict[str, dict]],
+) -> HitterStats | PitcherStats | None:
+    """Look up a player's record in the type-appropriate ``(by_id, by_name)``
+    index pair (keyed to ``proj_row``'s identity) and build stats, or ``None``
+    when no record matches. Shared by the full-season and preseason attaches so
+    both resolve to the SAME physical player as ``proj_row``'s ROS line.
+    """
+    by_id, by_name = hitters_index if ptype == PlayerType.HITTER else pitchers_index
+    record = _lookup_full_season_record(proj_row, name_norm, by_id, by_name)
+    return _stats_for_type(record, ptype) if record is not None else None
+
+
+def _pick_best_match(matches: pd.DataFrame, player_type: PlayerType) -> pd.Series:
+    """Resolve a normalized-name collision to a single projection row.
+
+    Multiple projection rows can share a normalized name -- the established MLB
+    regular and an obscure same-name namesake (the audit's two Mason Millers,
+    both pitchers, one a ~2 IP minor-leaguer). The rostered player a manager
+    actually owns is the high-volume one, so pick the row with the most
+    projected playing time: IP for pitchers, PA (or AB) for hitters. This
+    mirrors the "tie-break by VAR / more eligible positions" rule used
+    elsewhere for normalized-name collisions, and keeps a junk near-zero
+    preseason line from poisoning the displacement slot-share denominator.
+
+    Ties (equal or absent volume) keep the first row, so single-candidate and
+    genuinely-indistinguishable cases behave exactly as before.
+    """
+    if len(matches) == 1:
+        return matches.iloc[0]
+    # Playing-time column(s) in preference order; first one present wins.
+    candidate_cols = ["ip"] if player_type == PlayerType.PITCHER else ["pa", "ab"]
+    vol_col = next((c for c in candidate_cols if c in matches.columns), None)
+    if vol_col is None:
+        return matches.iloc[0]
+    vol = pd.to_numeric(matches[vol_col], errors="coerce").fillna(0.0).to_numpy()
+    # argmax returns the first index on ties -> stable fallback to first row.
+    return matches.iloc[int(vol.argmax())]
+
+
 def match_roster_to_projections(
     roster: list[dict],
     hitters_proj: pd.DataFrame,
@@ -419,6 +470,8 @@ def match_roster_to_projections(
     *,
     full_hitters_proj: pd.DataFrame | None = None,
     full_pitchers_proj: pd.DataFrame | None = None,
+    preseason_hitters_proj: pd.DataFrame | None = None,
+    preseason_pitchers_proj: pd.DataFrame | None = None,
     context: str = "",
 ) -> list[Player]:
     """Match roster players to blended projections by normalized name.
@@ -453,11 +506,23 @@ def match_roster_to_projections(
     ``Player.full_season_projection`` — used for display and end-of-season
     projected standings. Defaults to ``None``; legacy callers keep
     working with ROS-only frames.
+
+    ``preseason_hitters_proj``/``preseason_pitchers_proj`` are the optional
+    blended preseason (healthy full-season) frames. When provided,
+    ``Player.preseason`` is attached the SAME way as full-season: by the
+    matched ROS row's ``mlbam_id`` (preferred) or ``_name_norm``, per player
+    type. Keying on identity rather than bare name keeps ``.preseason``
+    consistent with ``.rest_of_season`` for the same physical player — a
+    same-name collision (two Mason Millers) or a dual-type entry (Ohtani as
+    both hitter and pitcher) cannot cross-assign lines. This is the slot-share
+    denominator the pitcher displacement model reads.
     """
     prefix = f"[{context}] " if context else ""
     matched: list[Player] = []
     full_hitters_by_id, full_hitters_by_name = _build_full_season_index(full_hitters_proj)
     full_pitchers_by_id, full_pitchers_by_name = _build_full_season_index(full_pitchers_proj)
+    pre_hitters_by_id, pre_hitters_by_name = _build_full_season_index(preseason_hitters_proj)
+    pre_pitchers_by_id, pre_pitchers_by_name = _build_full_season_index(preseason_pitchers_proj)
     for player in roster:
         name = player["name"].replace(" (Batter)", "").replace(" (Pitcher)", "")
         name_norm = normalize_name(name)
@@ -470,24 +535,24 @@ def match_roster_to_projections(
             if not matches.empty:
                 if len(matches) > 1:
                     logger.warning(
-                        "%sambiguous hitter match for %r — %d candidates, picked first",
+                        "%sambiguous hitter match for %r -- %d candidates, kept highest playing-time",
                         prefix,
                         name,
                         len(matches),
                     )
-                proj = matches.iloc[0]
+                proj = _pick_best_match(matches, PlayerType.HITTER)
                 ptype = PlayerType.HITTER
         if proj is None and is_pitcher(positions) and not pitchers_proj.empty:
             matches = pitchers_proj[pitchers_proj["_name_norm"] == name_norm]
             if not matches.empty:
                 if len(matches) > 1:
                     logger.warning(
-                        "%sambiguous pitcher match for %r — %d candidates, picked first",
+                        "%sambiguous pitcher match for %r -- %d candidates, kept highest playing-time",
                         prefix,
                         name,
                         len(matches),
                     )
-                proj = matches.iloc[0]
+                proj = _pick_best_match(matches, PlayerType.PITCHER)
                 ptype = PlayerType.PITCHER
         if proj is None:
             for df, pt in [(hitters_proj, PlayerType.HITTER), (pitchers_proj, PlayerType.PITCHER)]:
@@ -495,10 +560,10 @@ def match_roster_to_projections(
                     continue
                 matches = df[df["_name_norm"] == name_norm]
                 if not matches.empty:
-                    proj = matches.iloc[0]
+                    proj = _pick_best_match(matches, pt)
                     ptype = pt
                     logger.warning(
-                        "%s%r matched via fallback branch — positions=%r did not disambiguate",
+                        "%s%r matched via fallback branch -- positions=%r did not disambiguate",
                         prefix,
                         name,
                         positions,
@@ -514,28 +579,25 @@ def match_roster_to_projections(
             )
             continue
 
-        ros: HitterStats | PitcherStats
-        if ptype == PlayerType.HITTER:
-            ros = HitterStats.from_dict(proj.to_dict())
-        else:
-            ros = PitcherStats.from_dict(proj.to_dict())
+        ros = _stats_for_type(proj.to_dict(), ptype)
 
-        # Look up matching full-season (ROS+YTD) record if indices were built.
-        if ptype == PlayerType.HITTER:
-            full_record = _lookup_full_season_record(
-                proj, name_norm, full_hitters_by_id, full_hitters_by_name
-            )
-        else:
-            full_record = _lookup_full_season_record(
-                proj, name_norm, full_pitchers_by_id, full_pitchers_by_name
-            )
-
-        full_season_stats: HitterStats | PitcherStats | None = None
-        if full_record is not None:
-            if ptype == PlayerType.HITTER:
-                full_season_stats = HitterStats.from_dict(full_record)
-            else:
-                full_season_stats = PitcherStats.from_dict(full_record)
+        # Full-season (ROS+YTD) and preseason (blended healthy full-season) are
+        # both attached by the matched ROS row's identity, per type, so each
+        # refers to the SAME physical player as .rest_of_season.
+        full_season_stats = _lookup_stats(
+            proj,
+            name_norm,
+            ptype,
+            (full_hitters_by_id, full_hitters_by_name),
+            (full_pitchers_by_id, full_pitchers_by_name),
+        )
+        preseason_stats = _lookup_stats(
+            proj,
+            name_norm,
+            ptype,
+            (pre_hitters_by_id, pre_hitters_by_name),
+            (pre_pitchers_by_id, pre_pitchers_by_name),
+        )
 
         # Parse positions and selected_position explicitly
         parsed_positions = [p if isinstance(p, Position) else Position.parse(p) for p in positions]
@@ -559,6 +621,7 @@ def match_roster_to_projections(
             status=player.get("status", ""),
             rest_of_season=ros,
             full_season_projection=full_season_stats,
+            preseason=preseason_stats,
         )
         matched.append(p)
 
@@ -572,6 +635,8 @@ def hydrate_roster_entries(
     *,
     full_hitters_proj: pd.DataFrame | None = None,
     full_pitchers_proj: pd.DataFrame | None = None,
+    preseason_hitters_proj: pd.DataFrame | None = None,
+    preseason_pitchers_proj: pd.DataFrame | None = None,
     context: str = "",
 ) -> list[Player]:
     """Convert a :class:`Roster`'s entries into ``list[Player]`` with
@@ -591,6 +656,14 @@ def hydrate_roster_entries(
     :func:`match_roster_to_projections` so each Player's
     ``.full_season_projection`` is populated for display + standings.
 
+    The ``preseason_hitters_proj``/``preseason_pitchers_proj`` kwargs, when
+    provided, populate each Player's ``.preseason`` (the slot-share denominator
+    the pitcher displacement model needs). They forward straight into
+    :func:`match_roster_to_projections`, which attaches preseason by the matched
+    ROS row's identity (per type), so the projected-standings build sees it on
+    every roster -- user AND opponents -- and ``.preseason`` stays consistent
+    with ``.rest_of_season`` for the same physical player.
+
     The ``context`` kwarg is forwarded for log clarity.
     """
     roster_dicts = [
@@ -609,5 +682,7 @@ def hydrate_roster_entries(
         pitchers_proj,
         full_hitters_proj=full_hitters_proj,
         full_pitchers_proj=full_pitchers_proj,
+        preseason_hitters_proj=preseason_hitters_proj,
+        preseason_pitchers_proj=preseason_pitchers_proj,
         context=context,
     )

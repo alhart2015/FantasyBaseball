@@ -8,6 +8,8 @@ share, and the resulting scale factor on the target's ROS stats.
 
 from __future__ import annotations
 
+import pytest
+
 from fantasy_baseball.lineup.pitcher_swap import discount_factor, swap_window_ip
 from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
 
@@ -26,39 +28,90 @@ def _pitcher(name: str, *, ros_ip: float, preseason_ip: float | None = None) -> 
     return Player(name=name, player_type=PlayerType.PITCHER, rest_of_season=ros, preseason=pre)
 
 
-def test_swap_window_same_role_with_preseason_matches_direct_ip():
-    """SP-to-SP, IDENTICAL preseason IPs: proration reduces to the direct-IP
-    swap. This is the special case where the preseason-IP formula coincides
-    with the legacy direct-IP swap; for differing preseason IPs the two
-    diverge (see ``test_swap_window_same_role_differing_preseason_diverges``).
+def test_swap_window_at_full_season_scales_target_ros_by_workload_ratio():
+    """With ``fraction_remaining`` defaulting to 1.0 (season start: a healthy
+    remainder equals the full preseason), the slot-share is ``ros/preseason``
+    and the window is that fraction of the TARGET's ROS -- measured against the
+    target's remaining IP, not its preseason/full-season IP, so the discount is
+    exactly ``1 - s`` regardless of the target's role.
+
+    Mid-season the denominator shrinks to the remaining-season workload -- see
+    ``test_swap_window_slot_share_uses_remaining_season_not_full_season``.
+    """
+    candidate = _pitcher("Cand", ros_ip=120, preseason_ip=200)  # 60% of a full season
+    worst = _pitcher("Worst", ros_ip=115.0, preseason_ip=180.0)
+    s = 120.0 / 200.0
+    assert swap_window_ip(candidate, worst) == pytest.approx(115.0 * s)
+    # End-to-end: the target keeps 1 - s of its ROS.
+    assert discount_factor(115.0, swap_window_ip(candidate, worst)) == pytest.approx(1.0 - s)
+
+
+def test_swap_window_slot_share_uses_remaining_season_not_full_season():
+    """Slot-share is the candidate's share of the REMAINING season, not the
+    full season: ``s = ros / (preseason * fraction_remaining)``. The already-
+    elapsed part of the season is gone for everyone and must NOT count as the
+    returner 'missing' time -- otherwise a pitcher who is healthy for the whole
+    rest of the year looks like a part-timer.
+
+    Hader: 33.2 ROS IP, 54.6 preseason IP, ~35% of the season already elapsed
+    (fraction_remaining=0.649). Healthy remainder = 54.6 * 0.649 = 35.4 IP, so
+    his slot-share is 33.2/35.4 = ~0.94 -- active nearly every remaining week,
+    displacing ~94% of the worst pitcher's ROS (NOT the 60% that ros/preseason
+    alone would imply by double-counting the elapsed season).
+    """
+    hader = _pitcher("Hader", ros_ip=33.2, preseason_ip=54.6)
+    worst = _pitcher("Worst", ros_ip=115.0, preseason_ip=180.0)
+    s = 33.2 / (54.6 * 0.649)
+    window = swap_window_ip(hader, worst, fraction_remaining=0.649)
+    assert window == pytest.approx(115.0 * s)
+    assert discount_factor(115.0, window) == pytest.approx(1.0 - s)
+
+
+def test_swap_window_uses_target_ros_not_target_preseason():
+    """The window is the TARGET's remaining (ROS) IP scaled by the candidate's
+    slot-share; the target's preseason IP is irrelevant. Candidate at 60/200
+    preseason (slot-share 0.30) displaces 0.30 of the target's 130 ROS IP.
+    (Previously this multiplied the target's 200 preseason IP and returned 60.)
     """
     candidate = _pitcher("Cand", ros_ip=60, preseason_ip=200)
     target = _pitcher("Target", ros_ip=130, preseason_ip=200)
-    # 200 * (60 / 200) = 60 IP -- exactly the direct-IP swap.
-    assert swap_window_ip(candidate, target) == 60.0
+    assert swap_window_ip(candidate, target) == 130.0 * (60.0 / 200.0)  # 39.0
 
 
-def test_swap_window_cross_role_uses_preseason_proration():
-    """SP-to-RP: a starter returning at 60 IP (30% of his 200 IP preseason)
-    consumes 30% of the reliever's preseason IP, NOT 60 IP of his ROS.
-
-    Without proration the RP would be fully wiped (60 > RP's ROS); with
-    proration only the RP's slot-share over the candidate's window is taken.
+def test_swap_window_cross_role_sp_displacing_rp():
+    """SP returning at 60/200 preseason (slot-share 0.30) displaces 0.30 of the
+    reliever's 25 ROS IP = 7.5 IP -- the RP keeps 70% of its remaining work.
+    Role-agnostic: the discount is exactly ``1 - slot_share``.
     """
     starter = _pitcher("Webb", ros_ip=60, preseason_ip=200)
     reliever = _pitcher("Closer", ros_ip=25, preseason_ip=65)
-    # 65 * (60 / 200) = 19.5 IP
-    assert swap_window_ip(starter, reliever) == 19.5
+    assert swap_window_ip(starter, reliever) == 25.0 * (60.0 / 200.0)  # 7.5
+    assert discount_factor(25.0, swap_window_ip(starter, reliever)) == pytest.approx(1.0 - 0.30)
 
 
-def test_swap_window_rp_returning_displaces_sp_window():
-    """Symmetric case: an RP returning at 20 IP (~30% of his 65 IP preseason)
-    consumes 30% of a starter's preseason IP -- much MORE IP than the RP
-    himself will throw, but the right amount for the SP to lose."""
+def test_swap_window_cross_role_rp_displacing_sp():
+    """An RP returning at 20/65 preseason (slot-share ~0.31) displaces ~0.31 of
+    a starter's 130 ROS IP = 40 IP. The returning reliever's own low IP does
+    NOT cap how much of the starter's remaining workload it frees up -- the
+    slot is consumed by time, not by innings.
+    """
     reliever = _pitcher("Closer", ros_ip=20, preseason_ip=65)
     starter = _pitcher("SP", ros_ip=130, preseason_ip=200)
-    # 200 * (20 / 65) = 61.538...
-    assert swap_window_ip(reliever, starter) == 200.0 * (20.0 / 65.0)
+    assert swap_window_ip(reliever, starter) == pytest.approx(130.0 * (20.0 / 65.0))  # 40.0
+
+
+def test_swap_window_clamps_slot_share_when_candidate_preseason_is_junk():
+    """A same-name-collision projection row can hand a real returner a junk
+    preseason line (the audit's Mason Miller had preseason IP = 1.7). The
+    slot-share ``min(1.0, 33 / 1.7)`` clamps to 1.0, so the window is the
+    target's full ROS (a clean full swap-out) rather than an amplified
+    >ROS window. Defensive only -- the real fix is matching the correct
+    same-name projection (see ``match_roster_to_projections``).
+    """
+    junk = _pitcher("Mason Miller (wrong row)", ros_ip=33.0, preseason_ip=1.7)
+    target = _pitcher("Target", ros_ip=115.0, preseason_ip=180.0)
+    assert swap_window_ip(junk, target) == 115.0  # clamped to a full swap-out
+    assert discount_factor(115.0, swap_window_ip(junk, target)) == 0.0
 
 
 def test_swap_window_falls_back_to_direct_ip_when_candidate_lacks_preseason():
@@ -70,10 +123,13 @@ def test_swap_window_falls_back_to_direct_ip_when_candidate_lacks_preseason():
     assert swap_window_ip(candidate, target) == 60.0
 
 
-def test_swap_window_falls_back_to_direct_ip_when_target_lacks_preseason():
+def test_swap_window_ignores_missing_target_preseason():
+    """The new model never reads the target's preseason IP, so a target with no
+    preseason data still gets a correct ROS-based window -- no fallback. (This
+    case previously fell back to the candidate's 60 ROS IP.)"""
     candidate = _pitcher("Cand", ros_ip=60, preseason_ip=200)
     target = _pitcher("NoPre", ros_ip=130)  # preseason=None
-    assert swap_window_ip(candidate, target) == 60.0
+    assert swap_window_ip(candidate, target) == 130.0 * (60.0 / 200.0)  # 39.0
 
 
 def test_swap_window_zero_when_candidate_has_no_ros():
@@ -108,16 +164,12 @@ def test_discount_factor_negative_window_clamps_to_full():
     assert discount_factor(target_ros_ip=100.0, window=-10.0) == 1.0
 
 
-def test_swap_window_same_role_differing_preseason_diverges():
-    """SP-to-SP, DIFFERENT preseason IPs: proration does NOT match direct-IP.
-
-    Even within the same role, the candidate's slot-share is a fraction of
-    HIS preseason workload, applied to the target's preseason workload. A
-    candidate projected for 200 preseason IP returning at 60 ROS IP (=30%
-    of his season) takes 30% of the target's preseason IP -- so a target
-    projected for only 180 IP preseason loses 54 IP, not 60.
+def test_swap_window_same_role_scales_target_ros_by_candidate_slot_share():
+    """Same-role: the window depends only on the candidate's slot-share and the
+    TARGET's ROS IP. A candidate at 60/200 preseason (slot-share 0.30) on a
+    target with 120 ROS IP -> 36 IP, independent of the target's 180 preseason
+    IP. (The old proration multiplied the target's preseason IP and gave 54.)
     """
     candidate = _pitcher("Cand", ros_ip=60, preseason_ip=200)
     target = _pitcher("Target", ros_ip=120, preseason_ip=180)
-    # 180 * (60 / 200) = 54 IP (NOT 60 IP -- direct-IP would over-discount)
-    assert swap_window_ip(candidate, target) == 54.0
+    assert swap_window_ip(candidate, target) == 120.0 * (60.0 / 200.0)  # 36.0
