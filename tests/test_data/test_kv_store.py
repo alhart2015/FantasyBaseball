@@ -170,6 +170,32 @@ def test_sqlite_ttl_expires(tmp_kv: SqliteKVStore):
         time.time = original_time
 
 
+def test_upstash_set_nx_reports_skip_as_not_acquired():
+    """upstash-redis maps SET's raw response through ``res == "OK"`` (see
+    upstash_redis.format.format_set), so a skipped NX write returns ``False``
+    -- NOT ``None`` like redis-py/fakeredis. The wrapper must report that as
+    'not acquired'; an ``is not None`` check would treat False as success and
+    make the durable refresh lock always 'win' on Render (the one environment
+    with the cross-instance race). This stub mirrors the real contract.
+    """
+    from fantasy_baseball.data.kv_store import UpstashKVStore
+
+    class _StubUpstash:
+        def __init__(self):
+            self._held = False
+
+        def set(self, key, value, ex=None, nx=False):
+            # Mirror format_set: True on a write, False on an NX-skip.
+            if nx and self._held:
+                return False
+            self._held = True
+            return True
+
+    kv = UpstashKVStore(_StubUpstash())
+    assert kv.set("lock", "a", nx=True) is True
+    assert kv.set("lock", "b", nx=True) is False  # skipped -> not acquired
+
+
 def test_sqlite_set_nx_only_writes_when_absent(tmp_kv: SqliteKVStore):
     # nx=True is the SETNX primitive the durable refresh lock rests on.
     assert tmp_kv.set("lock", "owner-a", nx=True) is True

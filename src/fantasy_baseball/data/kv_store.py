@@ -65,10 +65,12 @@ class UpstashKVStore:
         return self._r.get(key)
 
     def set(self, key: str, value: str, *, ex: int | None = None, nx: bool = False) -> bool:
-        # upstash-redis returns "OK" on a write and None when an NX condition
-        # skips it; nx=False does not apply NX. The bool return is the SETNX
-        # signal the durable refresh lock relies on.
-        return self._r.set(key, value, ex=ex, nx=nx) is not None
+        # upstash-redis maps SET's raw response through ``res == "OK"``
+        # (upstash_redis.format.format_set), so a normal write returns True and
+        # an NX-skip returns False (NOT None like redis-py). Coerce to bool so
+        # the durable refresh lock reads a skip as "not acquired"; an
+        # ``is not None`` check would treat False as success and never block.
+        return bool(self._r.set(key, value, ex=ex, nx=nx))
 
     def delete(self, key: str) -> int:
         return self._r.delete(key)
