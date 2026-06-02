@@ -1061,18 +1061,27 @@ class RefreshRun:
         preseason_ranks = compute_sgp_rankings(self.preseason_hitters, self.preseason_pitchers)
         current_ranks = compute_rankings_from_game_logs(self.hitter_logs, self.pitcher_logs)
 
-        # Build combined lookup: {name::player_type: {ros, preseason, current}}
+        # Full-season (YTD + ROS) leaguewide ranking. The full-season pools are
+        # already derived earlier in the pipeline; if they are absent (e.g. no
+        # ROS projections), fall back to an empty ranking so rank.total is None.
+        if self.full_hitters_proj is not None and self.full_pitchers_proj is not None:
+            total_ranks = compute_sgp_rankings(self.full_hitters_proj, self.full_pitchers_proj)
+        else:
+            total_ranks = {}
+
         from fantasy_baseball.sgp.rankings import build_rankings_lookup
 
         self.rankings_lookup = build_rankings_lookup(
             rest_of_season_ranks,
             preseason_ranks,
             current_ranks,
+            total_ranks,
         )
 
         write_cache(CacheKey.RANKINGS, self.rankings_lookup)
         self._progress(
-            f"Ranked {len(rest_of_season_ranks)} ROS, {len(preseason_ranks)} preseason, {len(current_ranks)} current"
+            f"Ranked {len(rest_of_season_ranks)} ROS, {len(preseason_ranks)} preseason, "
+            f"{len(current_ranks)} current, {len(total_ranks)} total"
         )
 
         # Attach ranks to roster players
