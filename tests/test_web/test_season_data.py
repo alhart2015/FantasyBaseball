@@ -756,6 +756,54 @@ def test_ytd_zero_for_unplayed_player():
     assert ytd["sgp"] == 0.0
 
 
+def test_ytd_empty_when_full_season_missing():
+    entry = _hitter_entry()
+    del entry["full_season_projection"]
+    ytd = format_lineup_for_display([entry], None, basis="ytd")["hitters"][0]
+    assert ytd["display_stats"] == {}
+    assert ytd["sgp"] == 0.0
+
+
+def _pitcher_entry():
+    return {
+        "name": "Test Pitcher",
+        "player_type": "pitcher",
+        "positions": ["P"],
+        "selected_position": "P",
+        "player_id": "2002",
+        "status": "",
+        "rest_of_season": {"ip": 60, "w": 4, "k": 70, "sv": 0, "er": 24, "bb": 18, "h_allowed": 52},
+        "full_season_projection": {
+            "ip": 100,
+            "w": 7,
+            "k": 120,
+            "sv": 0,
+            "er": 38,
+            "bb": 30,
+            "h_allowed": 85,
+        },
+        "rank": {"rest_of_season": 40, "preseason": 45, "current": 33, "total": 36},
+        "pace": {},
+    }
+
+
+def test_basis_rebases_pitcher_cells_and_rates():
+    roster = [_pitcher_entry()]
+    ros = format_lineup_for_display(roster, None, basis="ros")["pitchers"][0]
+    ytd = format_lineup_for_display(roster, None, basis="ytd")["pitchers"][0]
+    tot = format_lineup_for_display(roster, None, basis="total")["pitchers"][0]
+    # K follows the basis (ros=70, ytd=120-70=50, total=120)
+    assert ros["display_stats"]["K"] == 70
+    assert ytd["display_stats"]["K"] == 50
+    assert tot["display_stats"]["K"] == 120
+    # rank follows the basis
+    assert ros["rank_display"] == 40
+    assert ytd["rank_display"] == 33
+    assert tot["rank_display"] == 36
+    # YTD ERA is recomputed from components: ER=14, IP=40 -> 9*14/40 = 3.15
+    assert ytd["display_stats"]["ERA"] == pytest.approx(3.15, abs=0.01)
+
+
 # After Phase 1 of the cache refactor, read_cache/write_cache route
 # through ``kv_store.get_kv()``. The leak-prevention invariant
 # (off-Render get_kv() never reaches Upstash) is enforced by kv_store

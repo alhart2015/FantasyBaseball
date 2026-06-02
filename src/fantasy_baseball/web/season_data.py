@@ -14,7 +14,7 @@ from fantasy_baseball.category_odds import category_finish_odds
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 from fantasy_baseball.data.kv_store import KVStore, get_kv, is_remote
 from fantasy_baseball.lineup.delta_roto import compute_one_for_one_band, score_swap
-from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.models.player import HitterStats, PitcherStats, PlayerType
 from fantasy_baseball.models.positions import BENCH_SLOTS
 from fantasy_baseball.models.standings import ProjectedStandings, Standings, StandingsEntry
 from fantasy_baseball.scoring import score_roto, score_roto_dict
@@ -856,9 +856,13 @@ def _derive_ytd_stats(full, ros, player_type):
     """YTD actuals = full_season - rest_of_season, per counting component,
     clamped at >= 0. Rate stats (avg/era/whip) are recomputed from the
     subtracted components by the stats from_dict constructors. Returns a
-    HitterStats/PitcherStats, or None when either input is missing."""
-    from fantasy_baseball.models.player import HitterStats, PitcherStats
+    HitterStats/PitcherStats, or None when either input is missing.
 
+    When ``full`` (full_season_projection) or ``ros`` (rest_of_season) is
+    absent -- i.e. the player is unmatched in the full-season projection
+    pool -- returns None, so the YTD view shows empty cells ('-') for that
+    player via _display_map returning {}.
+    """
     if full is None or ros is None:
         return None
     if player_type == PlayerType.HITTER:
@@ -906,6 +910,10 @@ def format_lineup_for_display(roster: list[dict], optimal: dict | None, basis: s
     """Format roster + optimizer output for the lineup template."""
     from fantasy_baseball.analysis.pace import compute_overall_pace
     from fantasy_baseball.models.player import Player
+
+    # Validate basis once before the loop; unknown values fall back to "ros".
+    if basis not in ("ros", "ytd", "total"):
+        basis = "ros"
 
     hitters = []
     pitchers = []
@@ -963,9 +971,6 @@ def format_lineup_for_display(roster: list[dict], optimal: dict | None, basis: s
             entry.update(player.rest_of_season.to_dict())
 
         # --- Per-basis selection (display-only): ROS / YTD / Total ---
-        if basis not in ("ros", "ytd", "total"):
-            basis = "ros"
-
         ros_stats = player.rest_of_season
         full_stats = player.full_season_projection or player.rest_of_season
         ytd_stats = _derive_ytd_stats(
