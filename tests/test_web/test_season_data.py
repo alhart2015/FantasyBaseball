@@ -901,6 +901,21 @@ def test_write_cache_raises_on_kv_error(monkeypatch):
         write_cache(CacheKey.STANDINGS, {"v": 1})
 
 
+def test_write_cache_required_false_swallows_kv_error(monkeypatch):
+    """A non-required (auxiliary) key swallows write failures so a transient
+    blip on a cosmetic panel can't abort -- and force a full re-run of -- the
+    whole refresh after the load-bearing keys already wrote successfully.
+    """
+
+    class _RaisingKV:
+        def set(self, key, value, **_):
+            raise ConnectionError("Upstash unreachable")
+
+    monkeypatch.setattr(season_data, "get_kv", lambda: _RaisingKV())
+    # Must NOT raise.
+    write_cache(CacheKey.LEVERAGE, {"v": 1}, required=False)
+
+
 def test_read_cache_swallows_kv_error(monkeypatch):
     """read_cache returns None on KV error rather than propagating."""
 

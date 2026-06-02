@@ -16,7 +16,9 @@ import logging
 import math
 import os
 import threading
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -150,6 +152,42 @@ def release_durable_refresh_lock(token: str | None) -> None:
         release_refresh_lock(get_kv(), token)
     except Exception as exc:
         log.warning(f"Failed to release durable refresh lock: {exc}")
+
+
+@contextmanager
+def durable_refresh_lock() -> Iterator[bool]:
+    """Hold the cross-instance refresh lock for the duration of the block.
+
+    Yields True if acquired (proceed) or False if another instance holds it
+    (the caller should skip -- a duplicate/overlapping run), and releases the
+    lock on exit. Both heavy job bodies wrap their work in this, so the
+    acquire/skip/release contract lives in one place; any new heavy job should
+    do the same. Held in the job BODY (not the route) so direct callers
+    (scripts/refresh_remote.py) are protected too, not just QStash triggers.
+    """
+    token = acquire_durable_refresh_lock()
+    try:
+        yield token is not None
+    finally:
+        release_durable_refresh_lock(token)
+
+
+def refresh_lock_held() -> bool:
+    """Best-effort read: is the durable refresh lock currently held?
+
+    The job routes call this to return HTTP 503 (so QStash redelivers later)
+    instead of silently dropping an overlapping run when another instance is
+    already working. Returns False on any KV error -- the body's
+    :func:`durable_refresh_lock` is the authoritative guard; this is only a
+    fast-path so a clearly-busy trigger gets retried rather than skipped.
+    """
+    try:
+        from fantasy_baseball.data.kv_store import get_kv
+        from fantasy_baseball.data.redis_store import REFRESH_LOCK_KEY
+
+        return get_kv().get(REFRESH_LOCK_KEY) is not None
+    except Exception:
+        return False
 
 
 def _set_refresh_progress(msg: str) -> None:
@@ -415,6 +453,11 @@ class RefreshRun:
         self.has_rest_of_season: bool = False
         self.hitter_logs: dict[str, dict[str, Any]] | None = None
         self.pitcher_logs: dict[str, dict[str, Any]] | None = None
+        # Raw game_log_totals rollups (string mlbam_id keys) captured in
+        # _fetch_game_logs and reused for full-season derivation in
+        # _load_projections without a second KV read.
+        self.raw_hitter_totals: dict[str, Any] | None = None
+        self.raw_pitcher_totals: dict[str, Any] | None = None
         self.leverage: dict[str, float] | None = None
         self.rankings_lookup: dict[str, dict[str, Any]] | None = None
         self.optimal_hitters: list[HitterAssignment] | None = None
@@ -446,56 +489,58 @@ class RefreshRun:
             _refresh_status["progress"] = "Starting..."
             _refresh_status["error"] = None
 
-        lock_token: str | None = None
         try:
-            # Skip when another instance already holds the durable lock: the
-            # in-process slot does not reach across Render instances / QStash
-            # redelivery, and two refreshes racing the game-log rollup RMW
-            # silently drop players from the totals.
-            lock_token = acquire_durable_refresh_lock()
-            if lock_token is None:
-                self._progress("Another instance holds the refresh lock; skipping this run.")
-                self.logger.finish("skipped", "another instance holds the refresh lock")
-                return
-
-            self._authenticate()
-            self._find_user_team()
-            self._fetch_standings_and_roster()
-            self._fetch_game_logs()
-            self._load_projections()
-            self._fetch_opponent_rosters()
-            self._write_snapshots_and_load_league()
-            self._hydrate_rosters()
-            self._build_projected_standings()
-            self._compute_leverage()
-            self._match_roster_to_projections()
-            self._compute_pace()
-            self._compute_rankings()
-            self._optimize_lineup()
-            self._compute_moves()
-            self._fetch_probable_starters()
-            self._audit_roster()
-            self._compute_per_team_leverage()
-            self._run_ros_monte_carlo()
-            self._compute_spoe()
-            self._analyze_transactions()
-            self._compute_streaks()
-            self._write_meta()
-
-            self.logger.finish("ok")
-            self._progress("Done")
-            from fantasy_baseball.web.season_data import clear_opponent_cache
-
-            clear_opponent_cache()
+            # The durable lock makes the two heavy jobs mutually exclusive
+            # across Render instances / QStash redelivery (the in-process slot
+            # only reaches within one process); two refreshes racing the
+            # game-log rollup RMW silently drop players from the totals. Skip
+            # this run when another instance already holds it.
+            with durable_refresh_lock() as got_lock:
+                if not got_lock:
+                    self._progress("Another instance holds the refresh lock; skipping this run.")
+                    self.logger.finish("skipped", "another instance holds the refresh lock")
+                    return
+                self._run_pipeline_steps()
         except Exception as exc:
             with _refresh_lock:
                 _refresh_status["error"] = str(exc)
             self.logger.finish("error", str(exc))
             raise
         finally:
-            release_durable_refresh_lock(lock_token)
             reset_cache_job(job_token)
             release_refresh_slot()
+
+    def _run_pipeline_steps(self) -> None:
+        """The ordered refresh steps, run while holding the durable lock."""
+        self._authenticate()
+        self._find_user_team()
+        self._fetch_standings_and_roster()
+        self._fetch_game_logs()
+        self._load_projections()
+        self._fetch_opponent_rosters()
+        self._write_snapshots_and_load_league()
+        self._hydrate_rosters()
+        self._build_projected_standings()
+        self._compute_leverage()
+        self._match_roster_to_projections()
+        self._compute_pace()
+        self._compute_rankings()
+        self._optimize_lineup()
+        self._compute_moves()
+        self._fetch_probable_starters()
+        self._audit_roster()
+        self._compute_per_team_leverage()
+        self._run_ros_monte_carlo()
+        self._compute_spoe()
+        self._analyze_transactions()
+        self._compute_streaks()
+        self._write_meta()
+
+        self.logger.finish("ok")
+        self._progress("Done")
+        from fantasy_baseball.web.season_data import clear_opponent_cache
+
+        clear_opponent_cache()
 
     # --- Step 1: Auth + league ---
     def _authenticate(self):
@@ -640,35 +685,17 @@ class RefreshRun:
         # regardless of when the ROS fetch last ran. (game logs were synced in
         # _fetch_game_logs, the prior step, so these totals are fresh.)
         if self.has_rest_of_season:
-            from fantasy_baseball.data.projections import (
-                normalize_rest_of_season_to_full_season,
-            )
-            from fantasy_baseball.data.redis_store import get_game_log_totals
-            from fantasy_baseball.models.player import PlayerType
+            from fantasy_baseball.data.ros_pipeline import derive_full_season
 
             self._progress("Deriving full-season projections (ROS + current YTD)...")
-            _client = get_kv()
-
-            def _numeric_keyed(raw: dict) -> dict[int, dict]:
-                # normalize_rest_of_season_to_full_season matches on int(mlbam_id);
-                # game-log keys are numeric MLBAM ids by writer invariant. Skip any
-                # non-numeric key (it can't match a numeric mlbam_id, so it adds
-                # nothing) rather than crash the whole refresh on one bad key.
-                out: dict[int, dict] = {}
-                for k, v in raw.items():
-                    try:
-                        out[int(k)] = v
-                    except (TypeError, ValueError):
-                        continue
-                return out
-
-            hitter_totals = _numeric_keyed(get_game_log_totals(_client, "hitters"))
-            pitcher_totals = _numeric_keyed(get_game_log_totals(_client, "pitchers"))
-            self.full_hitters_proj = normalize_rest_of_season_to_full_season(
-                ros_hitters, hitter_totals, PlayerType.HITTER
-            )
-            self.full_pitchers_proj = normalize_rest_of_season_to_full_season(
-                ros_pitchers, pitcher_totals, PlayerType.PITCHER
+            # Reuse the rollups _fetch_game_logs already read (no extra KV read);
+            # the shared helper int-keys them with the same policy the ROS job
+            # uses, so the two derivations can't drift.
+            self.full_hitters_proj, self.full_pitchers_proj = derive_full_season(
+                ros_hitters,
+                ros_pitchers,
+                self.raw_hitter_totals or {},
+                self.raw_pitcher_totals or {},
             )
             self._progress(
                 f"Derived {len(self.full_hitters_proj)} full-season hitters + "
@@ -1006,7 +1033,12 @@ class RefreshRun:
         assert self.config is not None
 
         self._progress("Fetching MLB game logs...")
-        fetch_game_log_totals(self.config.season_year, progress_cb=self._progress)
+        # Capture the rollups fetch_game_log_totals already reads back, so
+        # _load_projections can derive full-season without a second KV read of
+        # the same blobs.
+        self.raw_hitter_totals, self.raw_pitcher_totals, _ = fetch_game_log_totals(
+            self.config.season_year, progress_cb=self._progress
+        )
 
     # --- Step 6c: Compute season-to-date pace vs projections ---
     def _compute_pace(self):
@@ -1193,7 +1225,7 @@ class RefreshRun:
             schedule or {},
             team_stats=team_stats,
         )
-        write_cache(CacheKey.PROBABLE_STARTERS, probable_starters)
+        write_cache(CacheKey.PROBABLE_STARTERS, probable_starters, required=False)
 
     # --- Step 10: Roster audit ---
     def _audit_roster(self):
@@ -1292,7 +1324,7 @@ class RefreshRun:
                 entry.team_name,
                 projected_standings=self.projected_standings,
             )
-        write_cache(CacheKey.LEVERAGE, leverage_by_team)
+        write_cache(CacheKey.LEVERAGE, leverage_by_team, required=False)
 
     # --- ROS Monte Carlo simulation ---
     def _run_ros_monte_carlo(self):
@@ -1380,6 +1412,7 @@ class RefreshRun:
                 "rest_of_season": self.rest_of_season_mc,
                 "rest_of_season_with_management": self.rest_of_season_mgmt_mc,
             },
+            required=False,
         )
 
     # --- Step 14: Compute season-to-date SPoE (luck analysis) ---
@@ -1411,7 +1444,7 @@ class RefreshRun:
             self.config.season_end,
         )
 
-        write_cache(CacheKey.SPOE, spoe_result)
+        write_cache(CacheKey.SPOE, spoe_result, required=False)
         _write_spoe_snapshot(spoe_result)
         self._progress(f"SPoE computed for snapshot {spoe_result.get('snapshot_date')}")
 
@@ -1489,9 +1522,9 @@ class RefreshRun:
                 entry.update(scores)
 
         stored_txns.sort(key=lambda t: t.get("timestamp") or "")
-        write_cache(CacheKey.TRANSACTIONS, stored_txns)
+        write_cache(CacheKey.TRANSACTIONS, stored_txns, required=False)
         cache_data = build_cache_output(stored_txns)
-        write_cache(CacheKey.TRANSACTION_ANALYZER, cache_data)
+        write_cache(CacheKey.TRANSACTION_ANALYZER, cache_data, required=False)
         self._progress(f"Analyzed {len(stored_txns)} total transaction(s)")
 
     # --- Step 15b: Compute streak scores for /streaks + lineup chips ---

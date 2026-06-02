@@ -276,11 +276,16 @@ def test_fetch_ros_route_rejected_when_slot_held(client, monkeypatch, free_refre
     thread_ctor.assert_not_called()  # no worker spawned
 
 
-def test_fetch_ros_route_acquires_slot_when_free(client, monkeypatch, free_refresh_slot):
+def test_fetch_ros_route_acquires_slot_when_free(
+    client, monkeypatch, fake_redis, free_refresh_slot
+):
     """When free, the ROS fetch starts AND claims the slot, so a concurrent
     refresh (or second fetch) is locked out."""
     from fantasy_baseball.web import refresh_pipeline, season_routes
 
+    # The route reads the durable lock (refresh_lock_held) on the slot-free
+    # path; isolate get_kv so it reads an empty test KV, not the local DB.
+    monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", lambda: fake_redis)
     fake_thread = MagicMock()
     monkeypatch.setattr(season_routes.threading, "Thread", MagicMock(return_value=fake_thread))
 
@@ -331,11 +336,14 @@ def _thread_that_fails_to_start(*_a, **_k):
     return t
 
 
-def test_fetch_ros_route_releases_slot_when_spawn_fails(client, monkeypatch, free_refresh_slot):
+def test_fetch_ros_route_releases_slot_when_spawn_fails(
+    client, monkeypatch, fake_redis, free_refresh_slot
+):
     """If the worker thread fails to spawn after the slot is acquired, the
     slot must be released so the spawn failure can't wedge all future jobs."""
     from fantasy_baseball.web import refresh_pipeline, season_routes
 
+    monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", lambda: fake_redis)
     monkeypatch.setattr(season_routes.threading, "Thread", _thread_that_fails_to_start)
 
     with pytest.raises(RuntimeError):
@@ -344,16 +352,42 @@ def test_fetch_ros_route_releases_slot_when_spawn_fails(client, monkeypatch, fre
     assert refresh_pipeline.get_refresh_status()["running"] is False
 
 
-def test_refresh_route_releases_slot_when_spawn_fails(client, monkeypatch, free_refresh_slot):
+def test_refresh_route_releases_slot_when_spawn_fails(
+    client, monkeypatch, fake_redis, free_refresh_slot
+):
     """Same spawn-failure guard for the full-refresh route."""
     from fantasy_baseball.web import refresh_pipeline, season_routes
 
+    monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", lambda: fake_redis)
     monkeypatch.setattr(season_routes.threading, "Thread", _thread_that_fails_to_start)
 
     with pytest.raises(RuntimeError):
         client.post("/api/refresh")
 
     assert refresh_pipeline.get_refresh_status()["running"] is False
+
+
+def test_route_returns_503_when_lock_held_by_other_instance(
+    client, monkeypatch, fake_redis, free_refresh_slot
+):
+    """When another instance holds the durable lock (the in-process slot is
+    free here), the route returns 503 so QStash redelivers the overlapping run
+    later instead of silently dropping it. Fixes the skip-with-no-retry gap.
+    """
+    from fantasy_baseball.data import redis_store
+    from fantasy_baseball.web import season_routes
+
+    # Another instance holds the durable lock.
+    assert redis_store.acquire_refresh_lock(fake_redis, "other-instance", 1800) is True
+    monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", lambda: fake_redis)
+    thread_ctor = MagicMock()
+    monkeypatch.setattr(season_routes.threading, "Thread", thread_ctor)
+
+    resp = client.post("/api/refresh")
+
+    assert resp.status_code == 503
+    assert resp.get_json()["status"] == "locked_by_other_instance"
+    thread_ctor.assert_not_called()  # no worker spawned
 
 
 def test_ros_fetch_skips_when_durable_lock_held_by_other_instance(

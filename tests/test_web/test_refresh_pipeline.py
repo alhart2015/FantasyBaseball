@@ -293,6 +293,10 @@ class TestFullSeasonVintage:
         )
 
         run = refresh_pipeline.RefreshRun()
+        # _fetch_game_logs (prior step) captures the current rollups; simulate
+        # that here so _load_projections derives full-season from current YTD.
+        run.raw_hitter_totals = {"5": {"name": "Foo Bar", "hr": 20}}
+        run.raw_pitcher_totals = {"6": {"name": "Pitch Er", "k": 20}}
         run._load_projections()
 
         h_row = run.full_hitters_proj[run.full_hitters_proj["name"] == "Foo Bar"].iloc[0]
