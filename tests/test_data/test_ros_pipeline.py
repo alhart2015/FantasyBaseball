@@ -324,40 +324,35 @@ def test_blend_no_stale_warning_when_snapshot_fresh(
     assert meta["_ros_snapshot_date"] == "2026-04-18"
 
 
-def test_blend_and_cache_ros_still_returns_dfs_when_redis_unconfigured(
+def test_blend_and_cache_ros_propagates_cache_write_failure(
     projections_dir,
-    fake_redis,
     monkeypatch,
 ):
-    """None client: blending still succeeds; cache write is a no-op.
+    """A KV write failure during caching propagates (fail-loud), so the ROS
+    fetch job fails and QStash redelivers rather than silently producing
+    un-persisted projections.
 
-    Convention: readers return empty when client is None, writers no-op.
-    After Phase 1 of the cache refactor, write_cache routes through
-    ``season_data.get_kv()``; patching it to ``None`` exercises the
-    same no-op-on-failure path that Upstash outages would hit. The
-    assertion uses fake_redis (which is *not* the active KV here) to
-    confirm nothing was written to it — equivalent to asserting nothing
-    persisted anywhere observable.
+    Previously this asserted a None client was a no-op writer; get_kv never
+    returns None in the deployed app (it resolves to SQLite off-Render and
+    raises on Render without creds), so that dead path was removed -- a
+    configured backend that errors on write must surface, not be swallowed.
     """
+    import pytest
+
     _make_ros_tree(projections_dir, year=2026, date="2026-04-07")
 
-    monkeypatch.setattr(
-        "fantasy_baseball.data.ros_pipeline.get_kv",
-        lambda: None,
-    )
+    class _WriteFailsKV:
+        def get(self, key):
+            return None
+
+        def set(self, key, value, **_):
+            raise ConnectionError("Upstash unreachable")
+
+    kv = _WriteFailsKV()
+    monkeypatch.setattr("fantasy_baseball.data.ros_pipeline.get_kv", lambda: kv)
     import fantasy_baseball.web.season_data as season_data
 
-    monkeypatch.setattr(season_data, "get_kv", lambda: None)
+    monkeypatch.setattr(season_data, "get_kv", lambda: kv)
 
-    hitters_df, pitchers_df = blend_and_cache_ros(
-        projections_dir,
-        ["steamer"],
-        {"steamer": 1.0},
-        None,
-        2026,
-    )
-    assert len(hitters_df) == 4
-    assert len(pitchers_df) == 3
-    # Writer no-op: cache:ros_projections must NOT be written when the
-    # KV client is unconfigured.
-    assert fake_redis.get("cache:ros_projections") is None
+    with pytest.raises(ConnectionError):
+        blend_and_cache_ros(projections_dir, ["steamer"], {"steamer": 1.0}, None, 2026)

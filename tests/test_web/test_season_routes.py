@@ -276,11 +276,16 @@ def test_fetch_ros_route_rejected_when_slot_held(client, monkeypatch, free_refre
     thread_ctor.assert_not_called()  # no worker spawned
 
 
-def test_fetch_ros_route_acquires_slot_when_free(client, monkeypatch, free_refresh_slot):
+def test_fetch_ros_route_acquires_slot_when_free(
+    client, monkeypatch, fake_redis, free_refresh_slot
+):
     """When free, the ROS fetch starts AND claims the slot, so a concurrent
     refresh (or second fetch) is locked out."""
     from fantasy_baseball.web import refresh_pipeline, season_routes
 
+    # The route reads the durable lock (refresh_lock_held) on the slot-free
+    # path; isolate get_kv so it reads an empty test KV, not the local DB.
+    monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", lambda: fake_redis)
     fake_thread = MagicMock()
     monkeypatch.setattr(season_routes.threading, "Thread", MagicMock(return_value=fake_thread))
 
@@ -331,11 +336,14 @@ def _thread_that_fails_to_start(*_a, **_k):
     return t
 
 
-def test_fetch_ros_route_releases_slot_when_spawn_fails(client, monkeypatch, free_refresh_slot):
+def test_fetch_ros_route_releases_slot_when_spawn_fails(
+    client, monkeypatch, fake_redis, free_refresh_slot
+):
     """If the worker thread fails to spawn after the slot is acquired, the
     slot must be released so the spawn failure can't wedge all future jobs."""
     from fantasy_baseball.web import refresh_pipeline, season_routes
 
+    monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", lambda: fake_redis)
     monkeypatch.setattr(season_routes.threading, "Thread", _thread_that_fails_to_start)
 
     with pytest.raises(RuntimeError):
@@ -344,16 +352,91 @@ def test_fetch_ros_route_releases_slot_when_spawn_fails(client, monkeypatch, fre
     assert refresh_pipeline.get_refresh_status()["running"] is False
 
 
-def test_refresh_route_releases_slot_when_spawn_fails(client, monkeypatch, free_refresh_slot):
+def test_refresh_route_releases_slot_when_spawn_fails(
+    client, monkeypatch, fake_redis, free_refresh_slot
+):
     """Same spawn-failure guard for the full-refresh route."""
     from fantasy_baseball.web import refresh_pipeline, season_routes
 
+    monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", lambda: fake_redis)
     monkeypatch.setattr(season_routes.threading, "Thread", _thread_that_fails_to_start)
 
     with pytest.raises(RuntimeError):
         client.post("/api/refresh")
 
     assert refresh_pipeline.get_refresh_status()["running"] is False
+
+
+def test_route_returns_503_when_lock_held_by_other_instance(
+    client, monkeypatch, fake_redis, free_refresh_slot
+):
+    """When another instance holds the durable lock (the in-process slot is
+    free here), the route returns 503 so QStash redelivers the overlapping run
+    later instead of silently dropping it. Fixes the skip-with-no-retry gap.
+    """
+    from fantasy_baseball.data import redis_store
+    from fantasy_baseball.web import season_routes
+
+    # Another instance holds the durable lock.
+    assert redis_store.acquire_refresh_lock(fake_redis, "other-instance", 1800) is True
+    monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", lambda: fake_redis)
+    thread_ctor = MagicMock()
+    monkeypatch.setattr(season_routes.threading, "Thread", thread_ctor)
+
+    resp = client.post("/api/refresh")
+
+    assert resp.status_code == 503
+    assert resp.get_json()["status"] == "locked_by_other_instance"
+    thread_ctor.assert_not_called()  # no worker spawned
+
+
+def test_ros_fetch_skips_when_durable_lock_held_by_other_instance(
+    monkeypatch, fake_redis, free_refresh_slot
+):
+    """A second instance must not run the ROS fetch while another holds the
+    DURABLE lock. The in-process slot only mutexes within one process; across
+    Render instances / QStash redelivery the durable KV lock is the guard. If
+    it didn't hold, two jobs would race the game-log rollup read-modify-write
+    and silently drop players from the totals.
+    """
+    from fantasy_baseball.data import redis_store
+    from fantasy_baseball.web import season_routes
+
+    # Simulate another instance already holding the cross-instance lock.
+    assert redis_store.acquire_refresh_lock(fake_redis, "other-instance", 1800) is True
+    monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", lambda: fake_redis)
+
+    # If the job did NOT skip, this would be called as its first data step.
+    game_logs = MagicMock(side_effect=AssertionError("job should have skipped"))
+    monkeypatch.setattr("fantasy_baseball.data.mlb_game_logs.fetch_game_log_totals", game_logs)
+
+    season_routes._run_rest_of_season_fetch()
+
+    game_logs.assert_not_called()  # skipped before touching the shared rollup
+
+
+def test_ros_fetch_runs_and_releases_durable_lock_when_free(
+    monkeypatch, fake_redis, free_refresh_slot
+):
+    """When the durable lock is free the job claims it, runs, and releases it
+    so the next job can acquire -- the lock must not wedge after a clean run.
+    """
+    from fantasy_baseball.data import redis_store
+    from fantasy_baseball.web import season_routes
+
+    monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", lambda: fake_redis)
+
+    # Make the first data step a no-op-ish failure so we don't run the whole
+    # pipeline; the durable-lock acquire/release still wraps it.
+    monkeypatch.setattr(
+        "fantasy_baseball.data.mlb_game_logs.fetch_game_log_totals",
+        MagicMock(side_effect=RuntimeError("stop after lock acquired")),
+    )
+
+    season_routes._run_rest_of_season_fetch()
+
+    # Lock was released in finally, so a later instance can acquire it.
+    assert redis_store.acquire_refresh_lock(fake_redis, "next-instance", 1800) is True
 
 
 def test_full_standings_page_with_cached_data(client, kv_isolation):
@@ -1522,17 +1605,17 @@ def test_stash_below_cutline_owned_flagged_droppable(client, kv_isolation):
     assert "Weak Owned Stash" in html
 
 
-def test_standings_route_migrates_stale_breakdown_lacking_contribution_stats(
+def test_standings_route_does_not_fabricate_contribution_stats_for_stale_blob(
     client,
 ):
-    """Pre-fix persisted KV blobs lack contribution_stats per player. The
-    route must apply the back-compat fallback (raw_stats * scale_factor)
-    when reading these stale blobs, so the modal renders non-zero values
-    immediately after deploy instead of waiting for the next refresh.
-
-    This pins finding #1 from the post-fix code review: without route-layer
-    migration, every counting-stat cell in the modal would render as 0 for
-    stale data because the template path bypasses from_dict entirely.
+    """A stale KV blob lacking contribution_stats must NOT have it fabricated
+    by the route. raw_stats is the full-season projection, so the old
+    raw_stats * scale_factor fallback rendered full_season * factor -- the
+    pre-#110 YTD double-count (team YTD is added separately at the team
+    level). Per the repo rule "a wrong answer that looks plausible is worse
+    than no answer," a stale blob renders honest zeros (contribution_stats
+    absent/empty) rather than plausible-but-wrong numbers. This pins the
+    removal of the back-compat fabrication in PlayerContribution.from_dict.
     """
     import json
     import re
@@ -1625,8 +1708,8 @@ def test_standings_route_migrates_stale_breakdown_lacking_contribution_stats(
     assert response.status_code == 200
     body = response.get_data(as_text=True)
 
-    # The route should serialize a breakdown with contribution_stats populated
-    # via the back-compat fallback. Find the standings_breakdown JSON block.
+    # The route must NOT invent contribution_stats for a stale blob. Find the
+    # standings_breakdown JSON block.
     match = re.search(
         r'<script[^>]*id="breakdown-data"[^>]*>(.*?)</script>',
         body,
@@ -1635,18 +1718,17 @@ def test_standings_route_migrates_stale_breakdown_lacking_contribution_stats(
     assert match, "Expected breakdown-data script tag in standings.html output"
     breakdown_json = json.loads(match.group(1).strip())
 
+    # contribution_stats must be empty -- NOT the fabricated full_season * factor.
+    # The old bug produced K = 200 * 0.5 = 100.0 and HR = 25 * 1.0 = 25.0.
     pitcher = breakdown_json["teams"]["Hart of the Order"]["pitchers"][0]
-    assert "contribution_stats" in pitcher, (
-        "Route did not migrate stale blob: contribution_stats missing from pitcher payload"
+    assert pitcher.get("contribution_stats", {}) == {}, (
+        f"Route fabricated contribution_stats for a stale blob: {pitcher.get('contribution_stats')}"
     )
-    # Fallback formula: raw_stats * scale_factor. For K: 200 * 0.5 = 100.
-    assert abs(pitcher["contribution_stats"]["k"] - 100.0) < 1e-6, (
-        f"Expected fallback K=100.0, got {pitcher['contribution_stats'].get('k')}"
-    )
+    # raw_stats still round-trips for the display column.
+    assert abs(pitcher["raw_stats"]["k"] - 200.0) < 1e-6
 
     hitter = breakdown_json["teams"]["Hart of the Order"]["hitters"][0]
-    assert "contribution_stats" in hitter
-    assert abs(hitter["contribution_stats"]["hr"] - 25.0) < 1e-6  # 25 * 1.0
+    assert hitter.get("contribution_stats", {}) == {}
 
 
 def test_standings_route_preserves_team_ytd_block_through_round_trip(client):

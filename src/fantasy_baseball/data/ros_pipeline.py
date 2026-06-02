@@ -64,6 +64,57 @@ def _warn_if_ros_snapshot_stale(snapshot_date: str, progress_cb) -> None:
             progress_cb(msg)
 
 
+def _numeric_keyed(totals: dict) -> dict[int, dict]:
+    """Coerce a ``game_log_totals`` rollup (string mlbam_id keys) to int keys.
+
+    ``normalize_rest_of_season_to_full_season`` matches on ``int(mlbam_id)``.
+    Keys are numeric MLBAM ids by writer invariant (``mlb_game_logs`` writes
+    ``str(person["id"])``); a non-numeric key cannot match a numeric id, so it
+    is skipped with a loud warning -- surfacing a possible writer regression
+    without crashing the whole job over one bad row. This is the single shared
+    policy so the two call sites (ROS fetch + daily refresh) cannot diverge.
+    """
+    out: dict[int, dict] = {}
+    bad: list[str] = []
+    for k, v in (totals or {}).items():
+        try:
+            out[int(k)] = v
+        except (TypeError, ValueError):
+            bad.append(str(k))
+    if bad:
+        log.warning(
+            "game_log_totals has %d non-numeric key(s), skipped from full-season "
+            "derivation (possible writer regression): %s",
+            len(bad),
+            bad[:5],
+        )
+    return out
+
+
+def derive_full_season(
+    ros_hitters: pd.DataFrame,
+    ros_pitchers: pd.DataFrame,
+    hitter_totals: dict,
+    pitcher_totals: dict,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Add YTD actuals to ROS-remaining projections -> full-season totals.
+
+    ``hitter_totals`` / ``pitcher_totals`` are the raw ``game_log_totals``
+    rollups (string mlbam_id keys); :func:`_numeric_keyed` coerces them once.
+    Shared by the ROS-fetch job (which persists ``cache:full_season_projections``)
+    and the daily refresh (which re-derives full-season from the SAME current
+    game logs its team-YTD overlay uses, avoiding a stale-vintage mismatch), so
+    the derivation cannot drift between the two.
+    """
+    full_hitters = normalize_rest_of_season_to_full_season(
+        ros_hitters, _numeric_keyed(hitter_totals), PlayerType.HITTER
+    )
+    full_pitchers = normalize_rest_of_season_to_full_season(
+        ros_pitchers, _numeric_keyed(pitcher_totals), PlayerType.PITCHER
+    )
+    return full_hitters, full_pitchers
+
+
 def blend_and_cache_ros(
     projections_dir: Path,
     systems: list[str],
@@ -116,18 +167,8 @@ def blend_and_cache_ros(
     _warn_if_ros_snapshot_stale(snapshot_date, progress_cb)
 
     client = get_kv()
-    # JSON round-trips coerce int keys to str;
-    # normalize_rest_of_season_to_full_season looks up actuals with
-    # int(mlbam_id), so we reverse the coercion at the boundary.
-    # Writer invariant: keys are always numeric MLB AM IDs. See
-    # ``data/mlb_game_logs.py`` — the writer builds each key as
-    # ``str(player["mlbam_id"])`` where ``mlbam_id`` comes from the
-    # MLB Stats API's ``person["id"]``, which is always a numeric ID.
-    # We do NOT filter non-numeric keys here on purpose: a non-numeric
-    # key would indicate a writer regression and we want the
-    # ValueError to surface loudly rather than silently dropping data.
-    hitter_totals = {int(k): v for k, v in get_game_log_totals(client, "hitters").items()}
-    pitcher_totals = {int(k): v for k, v in get_game_log_totals(client, "pitchers").items()}
+    hitter_totals = get_game_log_totals(client, "hitters")
+    pitcher_totals = get_game_log_totals(client, "pitchers")
 
     # Blend in pure ROS-only mode — no normalizer. The blended output is
     # the FanGraphs ROS-remaining values, which is what
@@ -141,16 +182,10 @@ def blend_and_cache_ros(
         normalizer=None,
     )
 
-    # Derive full-season by adding YTD actuals to the ROS-only blend.
-    hitters_full = normalize_rest_of_season_to_full_season(
-        hitters_ros,
-        hitter_totals,
-        PlayerType.HITTER,
-    )
-    pitchers_full = normalize_rest_of_season_to_full_season(
-        pitchers_ros,
-        pitcher_totals,
-        PlayerType.PITCHER,
+    # Derive full-season by adding YTD actuals to the ROS-only blend, via the
+    # shared helper the daily refresh also uses (so the two can't drift).
+    hitters_full, pitchers_full = derive_full_season(
+        hitters_ros, pitchers_ros, hitter_totals, pitcher_totals
     )
 
     ros_payload = {

@@ -3706,9 +3706,10 @@ class TestPlayerContributionFromDictNullGuards:
         }
         # Must not raise AttributeError on None.items().
         pc = PlayerContribution.from_dict(d)
-        # When contribution_stats is null AND raw_stats is non-empty, the
-        # back-compat fallback fires (same as when the key is absent).
-        assert pc.contribution_stats.get("k") == 200.0
+        # A null contribution_stats is treated as absent: stays empty rather
+        # than being fabricated as raw_stats * scale_factor (the removed
+        # double-counting fallback). See TestPlayerContributionFromDictNoFabrication.
+        assert pc.contribution_stats == {}
 
     def test_from_dict_handles_null_raw_stats(self):
         from fantasy_baseball.scoring import PlayerContribution
@@ -3725,6 +3726,39 @@ class TestPlayerContributionFromDictNullGuards:
         pc = PlayerContribution.from_dict(d)
         assert pc.raw_stats == {}
         assert pc.contribution_stats == {}
+
+
+class TestPlayerContributionFromDictNoFabrication:
+    """from_dict must NOT fabricate contribution_stats from raw_stats.
+
+    ``raw_stats`` is the FULL-SEASON projection (``_raw_stats_for`` reads
+    ``full_season_projection``); ``contribution_stats`` is ``ROS * factor``.
+    The old back-compat fallback set ``contribution_stats = raw_stats *
+    scale_factor`` when the field was absent -- i.e. ``full_season *
+    factor``, the pre-#110 double-count (full-season already includes YTD,
+    which is added separately at the team level). Every refresh has written
+    ``contribution_stats`` for months, so the fallback can now only fire on
+    a corrupt/stale payload, where it silently renders plausible-but-wrong
+    math. Per the repo rule "a wrong answer that looks plausible is worse
+    than no answer," an absent/null contribution_stats stays empty.
+    """
+
+    def test_absent_contribution_stats_stays_empty(self):
+        from fantasy_baseball.scoring import PlayerContribution
+
+        d = {
+            "name": "X",
+            "player_type": "pitcher",
+            "status": "active",
+            "scale_factor": 0.5,
+            "raw_stats": {"k": 200.0, "ip": 180.0},
+            # contribution_stats absent entirely
+        }
+        pc = PlayerContribution.from_dict(d)
+        # Honest empty, NOT the fabricated {"k": 100.0, "ip": 90.0}.
+        assert pc.contribution_stats == {}
+        # raw_stats still round-trips for the display column.
+        assert pc.raw_stats == {"k": 200.0, "ip": 180.0}
 
 
 class TestProjectRosComponents:

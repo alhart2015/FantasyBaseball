@@ -244,6 +244,68 @@ class TestRefreshShape:
         ]
 
 
+class TestFullSeasonVintage:
+    """The refresh must re-derive full-season (ROS + YTD) from CURRENT game
+    logs, not consume the ROS-fetch job's frozen cache:full_season_projections.
+    The two jobs run on independent schedules, so the cached full-season blob
+    carries the YTD vintage from whenever the ROS fetch last ran, while the
+    refresh computes its team-YTD overlay from current game logs -- blending
+    the two mixes vintages in the headline projected standings.
+    """
+
+    def test_load_projections_derives_full_season_from_current_ytd(self, monkeypatch, fake_redis):
+        from fantasy_baseball.data import redis_store
+        from fantasy_baseball.web import season_data
+
+        monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", lambda: fake_redis)
+        monkeypatch.setattr(season_data, "get_kv", lambda: fake_redis)
+
+        # Preseason blended projections are required by _load_projections.
+        redis_store.set_blended_projections(
+            fake_redis, "hitters", [{"name": "Foo Bar", "mlbam_id": 5, "hr": 99}]
+        )
+        redis_store.set_blended_projections(
+            fake_redis, "pitchers", [{"name": "Pitch Er", "mlbam_id": 6, "k": 99}]
+        )
+
+        # ROS-remaining blob: 10 HR / 10 K left.
+        season_data.write_cache(
+            CacheKey.ROS_PROJECTIONS,
+            {
+                "hitters": [{"name": "Foo Bar", "mlbam_id": 5, "hr": 10.0}],
+                "pitchers": [{"name": "Pitch Er", "mlbam_id": 6, "k": 10.0}],
+            },
+        )
+        # CURRENT YTD from game logs: 20 HR / 20 K so far.
+        redis_store.set_game_log_totals(fake_redis, "hitters", {"5": {"name": "Foo Bar", "hr": 20}})
+        redis_store.set_game_log_totals(
+            fake_redis, "pitchers", {"6": {"name": "Pitch Er", "k": 20}}
+        )
+
+        # A STALE cached full-season the refresh must IGNORE (e.g. the ROS job
+        # ran days ago against a smaller YTD): 999 is unreachable from 10 + 20.
+        season_data.write_cache(
+            CacheKey.FULL_SEASON_PROJECTIONS,
+            {
+                "hitters": [{"name": "Foo Bar", "mlbam_id": 5, "hr": 999.0}],
+                "pitchers": [{"name": "Pitch Er", "mlbam_id": 6, "k": 999.0}],
+            },
+        )
+
+        run = refresh_pipeline.RefreshRun()
+        # _fetch_game_logs (prior step) captures the current rollups; simulate
+        # that here so _load_projections derives full-season from current YTD.
+        run.raw_hitter_totals = {"5": {"name": "Foo Bar", "hr": 20}}
+        run.raw_pitcher_totals = {"6": {"name": "Pitch Er", "k": 20}}
+        run._load_projections()
+
+        h_row = run.full_hitters_proj[run.full_hitters_proj["name"] == "Foo Bar"].iloc[0]
+        p_row = run.full_pitchers_proj[run.full_pitchers_proj["name"] == "Pitch Er"].iloc[0]
+        # ROS (10) + current YTD (20) = 30, NOT the stale cache's 999.
+        assert h_row["hr"] == 30.0
+        assert p_row["k"] == 30.0
+
+
 class TestRefreshInvariants:
     """Cross-step contracts — these catch wiring regressions."""
 
@@ -713,24 +775,24 @@ class TestPreseasonBaseline:
 
 
 class TestFullSeasonProjectionsLoad:
-    """``_load_projections`` must emit a clear warning when the
-    full-season blob is missing from the KV. Pre-Phase-1 there was a
-    second test for "reads disk when Redis missing" — the disk fallback
-    is gone now (single KV layer), so that test was removed.
+    """``_load_projections`` DERIVES full-season (ROS + current YTD) from the
+    ROS blob and the freshly-synced game logs, rather than reading the
+    separate ROS-fetch job's frozen ``cache:full_season_projections``. So when
+    ROS is present, deleting that cached blob has no effect on the standings
+    and the old missing-blob warning does not fire. (Previously the refresh
+    read the cached blob, which could blend a stale YTD vintage into the
+    per-player full-season lines -- see TestFullSeasonVintage.)
     """
 
-    def test_warns_when_full_season_blob_missing(
+    def test_full_season_derived_so_missing_cached_blob_is_irrelevant(
         self,
         configured_test_env,
         fake_redis,
         caplog,
     ):
-        """KV missing → refresh logs the warning and leaves
-        ``self.full_hitters_proj`` / ``self.full_pitchers_proj`` unset
-        (so ``hydrate_roster_entries`` skips populating
-        ``Player.full_season_projection``)."""
-        # Ensure the KV has no full-season blob. The fixture doesn't
-        # seed it, but be defensive in case that changes.
+        # The fixture seeds cache:ros_projections, so has_rest_of_season is
+        # True and full-season is derived. Delete the cached full-season blob
+        # to prove the refresh does not depend on it.
         fake_redis.delete(redis_key(CacheKey.FULL_SEASON_PROJECTIONS))
 
         with (
@@ -739,14 +801,13 @@ class TestFullSeasonProjectionsLoad:
         ):
             refresh_pipeline.run_full_refresh()
 
-        # The warning is emitted via _progress -> log.info, so it shows
-        # up at INFO level on the refresh_pipeline logger.
-        assert any(
-            "cache:full_season_projections missing" in record.getMessage()
-            for record in caplog.records
-        ), "Expected the missing-full-season warning; saw: " + ", ".join(
-            r.getMessage() for r in caplog.records
+        messages = [r.getMessage() for r in caplog.records]
+        # Full-season is derived from ROS + current YTD...
+        assert any("Deriving full-season projections" in m for m in messages), (
+            "Expected the derive step; saw: " + ", ".join(messages)
         )
+        # ...so the obsolete missing-cached-blob warning must NOT fire.
+        assert not any("cache:full_season_projections missing" in m for m in messages)
 
 
 class TestProbableStartersWiring:

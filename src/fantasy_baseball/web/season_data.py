@@ -223,16 +223,35 @@ def write_cache_to(
     client.set(redis_key(key), serialize_cache_payload(data, extra_meta))
 
 
-def write_cache(key: CacheKey, data: dict | list, extra_meta: dict | None = None) -> None:
+def write_cache(
+    key: CacheKey,
+    data: dict | list,
+    extra_meta: dict | None = None,
+    *,
+    required: bool = True,
+) -> None:
     """Write a cached payload to the KV store.
 
     Routes through ``kv_store.get_kv()``: Upstash on Render, SQLite
     locally. ``extra_meta`` is stamped into the envelope ``_meta``.
+
+    ``required`` (default True): a write error propagates, so a swallowed
+    write can't let a refresh report success after silently writing nothing
+    (a partial cache that reads as complete and is never retried). The job's
+    error handler then fails the run and QStash redelivers it.
+
+    ``required=False``: for genuinely non-load-bearing keys (auxiliary
+    dashboard panels -- e.g. leverage, SPoE, transactions, finish-odds). A
+    write error is logged and swallowed so a transient blip on a cosmetic key
+    doesn't abort -- and force a full re-run of -- the whole refresh after the
+    load-bearing standings/roster/lineup already wrote successfully.
     """
     try:
         write_cache_to(get_kv(), key, data, extra_meta)
-    except Exception as e:
-        log.warning(f"write_cache({key}) KV write failed: {e}")
+    except Exception:
+        if required:
+            raise
+        log.warning("write_cache(%s) failed (non-required key); skipping", key, exc_info=True)
 
 
 def read_meta() -> dict:

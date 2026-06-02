@@ -205,82 +205,91 @@ def _run_rest_of_season_fetch() -> None:
     from fantasy_baseball.data.fangraphs_fetch import fetch_rest_of_season_projections
     from fantasy_baseball.data.mlb_game_logs import fetch_game_log_totals
     from fantasy_baseball.web.job_logger import JobLogger
-    from fantasy_baseball.web.refresh_pipeline import release_refresh_slot
+    from fantasy_baseball.web.refresh_pipeline import durable_refresh_lock, release_refresh_slot
 
     # JobLogger.__init__ only stores fields and cannot raise, so creating it
-    # before the try keeps `logger` bound for the except. Everything that can
-    # fail (load_config, the pipeline) lives inside the try, and the finally
-    # releases the slot on every exit path.
+    # before the try keeps `logger` bound for the except. The durable lock
+    # (same context manager the full refresh uses) makes the two jobs mutually
+    # exclusive across instances; the finally releases the in-process slot on
+    # every exit path so a failed fetch can't wedge it.
     logger = JobLogger("rest_of_season_fetch")
     try:
-        project_root = Path(__file__).resolve().parents[3]
-        config = load_config(project_root / "config" / "league.yaml")
-        projections_dir = project_root / "data" / "projections"
+        with durable_refresh_lock() as got_lock:
+            # Skip when another instance already holds the lock: this job syncs
+            # the game-log rollup too (below), and racing the refresh's rollup
+            # RMW across instances silently drops players from the totals.
+            if not got_lock:
+                logger.finish("skipped", "another instance holds the refresh lock")
+                return
 
-        # Refresh game_logs FIRST so that normalize_rest_of_season_to_full_season has
-        # current accumulated actuals to add. On Render's ephemeral filesystem
-        # Redis is the only persistent store — without this step, rest_of_season_fetch
-        # could run against stale game_log_totals and normalize_rest_of_season_to_full_season
-        # would early-return via its `if not game_log_totals` guard, silently leaving
-        # the resulting snapshot un-normalized (matches preseason values).
-        logger.log("Refreshing MLB game logs (so normalization has actuals to add)")
-        fetch_game_log_totals(config.season_year, progress_cb=logger.log)
+            project_root = Path(__file__).resolve().parents[3]
+            config = load_config(project_root / "config" / "league.yaml")
+            projections_dir = project_root / "data" / "projections"
 
-        logger.log(f"Fetching ROS projections for {len(config.projection_systems)} systems")
-        results = fetch_rest_of_season_projections(
-            projections_dir,
-            config.projection_systems,
-            config.season_year,
-            progress_cb=logger.log,
-        )
+            # Refresh game_logs FIRST so that normalize_rest_of_season_to_full_season has
+            # current accumulated actuals to add. On Render's ephemeral filesystem
+            # Redis is the only persistent store — without this step, rest_of_season_fetch
+            # could run against stale game_log_totals and normalize_rest_of_season_to_full_season
+            # would early-return via its `if not game_log_totals` guard, silently leaving
+            # the resulting snapshot un-normalized (matches preseason values).
+            logger.log("Refreshing MLB game logs (so normalization has actuals to add)")
+            fetch_game_log_totals(config.season_year, progress_cb=logger.log)
 
-        for system, status in results.items():
-            logger.log(f"  {system}: {status}")
-
-        # Load roster names from Redis for quality checks
-        quality_warnings = []
-
-        def _quality_cb(msg):
-            logger.log(msg)
-            if msg.startswith("QUALITY:"):
-                quality_warnings.append(msg)
-
-        from fantasy_baseball.data.kv_store import get_kv
-        from fantasy_baseball.data.redis_store import get_latest_roster_names
-
-        roster_names = get_latest_roster_names(get_kv())
-        if roster_names:
-            logger.log(f"Loaded {len(roster_names)} rostered players for quality checks")
-
-        logger.log("Blending ROS projections → Redis...")
-        from fantasy_baseball.data.ros_pipeline import blend_and_cache_ros
-
-        ros_h, ros_p = blend_and_cache_ros(
-            projections_dir,
-            config.projection_systems,
-            config.projection_weights,
-            roster_names,
-            config.season_year,
-            progress_cb=_quality_cb,
-        )
-        logger.log(f"Persisted {len(ros_h)} ROS hitters + {len(ros_p)} ROS pitchers to Redis")
-
-        # Write standalone quality report
-        if quality_warnings:
-            q_logger = JobLogger("projection_quality")
-            for w in quality_warnings:
-                q_logger.log(w)
-            exclusions = [w for w in quality_warnings if "EXCLUDE" in w]
-            q_logger.finish(
-                "warning" if exclusions else "ok",
-                f"{len(quality_warnings)} warnings, {len(exclusions)} exclusions",
+            logger.log(f"Fetching ROS projections for {len(config.projection_systems)} systems")
+            results = fetch_rest_of_season_projections(
+                projections_dir,
+                config.projection_systems,
+                config.season_year,
+                progress_cb=logger.log,
             )
 
-        failed = [s for s, v in results.items() if v != "ok"]
-        if failed:
-            logger.finish("error", f"Failed systems: {', '.join(failed)}")
-        else:
-            logger.finish("ok")
+            for system, status in results.items():
+                logger.log(f"  {system}: {status}")
+
+            # Load roster names from Redis for quality checks
+            quality_warnings = []
+
+            def _quality_cb(msg):
+                logger.log(msg)
+                if msg.startswith("QUALITY:"):
+                    quality_warnings.append(msg)
+
+            from fantasy_baseball.data.kv_store import get_kv
+            from fantasy_baseball.data.redis_store import get_latest_roster_names
+
+            roster_names = get_latest_roster_names(get_kv())
+            if roster_names:
+                logger.log(f"Loaded {len(roster_names)} rostered players for quality checks")
+
+            logger.log("Blending ROS projections → Redis...")
+            from fantasy_baseball.data.ros_pipeline import blend_and_cache_ros
+
+            ros_h, ros_p = blend_and_cache_ros(
+                projections_dir,
+                config.projection_systems,
+                config.projection_weights,
+                roster_names,
+                config.season_year,
+                progress_cb=_quality_cb,
+            )
+            logger.log(f"Persisted {len(ros_h)} ROS hitters + {len(ros_p)} ROS pitchers to Redis")
+
+            # Write standalone quality report
+            if quality_warnings:
+                q_logger = JobLogger("projection_quality")
+                for w in quality_warnings:
+                    q_logger.log(w)
+                exclusions = [w for w in quality_warnings if "EXCLUDE" in w]
+                q_logger.finish(
+                    "warning" if exclusions else "ok",
+                    f"{len(quality_warnings)} warnings, {len(exclusions)} exclusions",
+                )
+
+            failed = [s for s, v in results.items() if v != "ok"]
+            if failed:
+                logger.finish("error", f"Failed systems: {', '.join(failed)}")
+            else:
+                logger.finish("ok")
 
     except Exception as exc:
         logger.finish("error", str(exc))
@@ -288,29 +297,54 @@ def _run_rest_of_season_fetch() -> None:
         release_refresh_slot()
 
 
-def _spawn_guarded_refresh_job(target) -> bool:
+def _spawn_guarded_refresh_job(target) -> str:
     """Acquire the shared refresh slot and start ``target`` in a daemon thread.
 
-    Returns True if the job was started, False if the slot was already held
-    (the caller should report ``already_running``). If the thread fails to
-    spawn after the slot is acquired (e.g. thread exhaustion), the slot is
-    released before re-raising, so a spawn failure can't wedge it permanently
-    and block every future refresh/fetch. Shared by both job routes so the
-    acquire/spawn/release-on-failure contract lives in one place.
+    Returns one of:
+      - ``"started"`` -- the job was launched.
+      - ``"already_running"`` -- this instance is already running a job (the
+        in-process slot is held); the route returns 200, no retry.
+      - ``"locked_remote"`` -- another instance holds the durable lock; the
+        route returns 503 so QStash redelivers later instead of silently
+        dropping this overlapping run. The worker still acquires the lock
+        authoritatively; this is a fast-path early-out.
+
+    If the thread fails to spawn after the slot is acquired (e.g. thread
+    exhaustion), the slot is released before re-raising, so a spawn failure
+    can't wedge it. Shared by both job routes so the contract lives in one
+    place.
     """
     from fantasy_baseball.web.refresh_pipeline import (
+        refresh_lock_held,
         release_refresh_slot,
         try_acquire_refresh_slot,
     )
 
     if not try_acquire_refresh_slot():
-        return False
+        return "already_running"
+    if refresh_lock_held():
+        # Another instance is mid-run. Don't start a duplicate; let QStash retry.
+        release_refresh_slot()
+        return "locked_remote"
     try:
         threading.Thread(target=target, daemon=True).start()
     except BaseException:
         release_refresh_slot()
         raise
-    return True
+    return "started"
+
+
+def _job_status_response(status: str):
+    """Map a :func:`_spawn_guarded_refresh_job` result to a Flask response.
+
+    ``locked_remote`` -> 503 so QStash redelivers the overlapping run later;
+    ``already_running`` -> 200 (this instance is busy; no retry needed).
+    """
+    if status == "locked_remote":
+        return jsonify({"status": "locked_by_other_instance"}), 503
+    if status == "already_running":
+        return jsonify({"status": "already_running"})
+    return jsonify({"status": "started"})
 
 
 def _coerce_id_list(value, field_name: str) -> set:
@@ -474,15 +508,16 @@ def register_routes(app: Flask) -> None:
                     )
 
             raw_breakdown = read_cache_dict(CacheKey.STANDINGS_BREAKDOWN)
-            # Stale KV blobs written before contribution_stats shipped lack that
-            # field per-player. The template serializes raw_breakdown directly via
-            # `{{ ... | tojson }}` -- no from_dict on this path -- so without
-            # round-tripping the back-compat fallback in PlayerContribution.from_dict
-            # never fires and the modal renders 0 for every cell until the next
-            # QStash refresh. Round-tripping each team's payload through
-            # RosterBreakdown.from_dict().to_dict() applies the fallback now.
-            # Idempotent: fresh data already has contribution_stats, so the
-            # round-trip is a no-op.
+            # Normalize each team payload through RosterBreakdown.from_dict()/
+            # to_dict() before the template serializes it via `{{ ... | tojson }}`.
+            # This coerces stat values to float and defaults a missing team_ytd
+            # block to {} so the modal's team-YTD row renders on legacy blobs
+            # instead of hitting `undefined`. It deliberately does NOT fabricate
+            # contribution_stats: raw_stats is full-season, so the old
+            # raw_stats * scale_factor fallback rendered the pre-#110 double-count
+            # -- a stale blob lacking contribution_stats now renders honest zeros
+            # rather than plausible-wrong math. Fresh data already carries
+            # contribution_stats, so the round-trip is a no-op for it.
             if raw_breakdown and isinstance(raw_breakdown.get("teams"), dict):
                 from fantasy_baseball.scoring import RosterBreakdown
 
@@ -1916,9 +1951,7 @@ def register_routes(app: Flask) -> None:
     def api_refresh():
         from fantasy_baseball.web.refresh_pipeline import run_full_refresh
 
-        if not _spawn_guarded_refresh_job(run_full_refresh):
-            return jsonify({"status": "already_running"})
-        return jsonify({"status": "started"})
+        return _job_status_response(_spawn_guarded_refresh_job(run_full_refresh))
 
     @app.route("/api/refresh-status")
     def api_refresh_status():
@@ -1940,6 +1973,4 @@ def register_routes(app: Flask) -> None:
         sync game logs and write the same cache keys, so they must not run
         concurrently. The worker releases the slot when it finishes.
         """
-        if not _spawn_guarded_refresh_job(_run_rest_of_season_fetch):
-            return jsonify({"status": "already_running"})
-        return jsonify({"status": "started"})
+        return _job_status_response(_spawn_guarded_refresh_job(_run_rest_of_season_fetch))

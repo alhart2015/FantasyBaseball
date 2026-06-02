@@ -372,8 +372,14 @@ def patched_refresh_environment(
         # set_game_log_totals signature: (client, player_type, totals)
         from fantasy_baseball.data.redis_store import set_game_log_totals
 
-        set_game_log_totals(fake_redis, "hitters", hitter_game_logs())
-        set_game_log_totals(fake_redis, "pitchers", pitcher_game_logs())
+        hitters = hitter_game_logs()
+        pitchers = pitcher_game_logs()
+        set_game_log_totals(fake_redis, "hitters", hitters)
+        set_game_log_totals(fake_redis, "pitchers", pitchers)
+        # Match the real fetch_game_log_totals contract:
+        # (hitters_totals, pitchers_totals, games_elapsed). The refresh
+        # captures the first two for full-season derivation.
+        return hitters, pitchers, 0
 
     # Refresh no longer calls blend_and_cache_ros — it only READS
     # cache:ros_projections from Redis (the admin fetch is the sole
