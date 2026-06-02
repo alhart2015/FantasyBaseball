@@ -228,11 +228,24 @@ def write_cache(key: CacheKey, data: dict | list, extra_meta: dict | None = None
 
     Routes through ``kv_store.get_kv()``: Upstash on Render, SQLite
     locally. ``extra_meta`` is stamped into the envelope ``_meta``.
+
+    A configured backend that *errors* on write now propagates rather than
+    swallowing: a swallowed write let a refresh report success after silently
+    writing nothing, leaving a partial cache (some keys fresh, some stale)
+    that reads as complete and is never retried. Propagating lets the job's
+    error handler fail the run so QStash redelivers it. Callers writing
+    genuinely non-load-bearing keys (e.g. ``_compute_streaks``) wrap their own
+    ``write_cache`` in try/except.
+
+    An *unconfigured* backend (``get_kv()`` is None) is a no-op, matching the
+    redis_store writer convention; this does not occur in the deployed app
+    (get_kv resolves to SQLite off-Render and raises if creds are missing on
+    Render) but keeps the abstraction consistent for unconfigured callers.
     """
-    try:
-        write_cache_to(get_kv(), key, data, extra_meta)
-    except Exception as e:
-        log.warning(f"write_cache({key}) KV write failed: {e}")
+    kv = get_kv()
+    if kv is None:
+        return
+    write_cache_to(kv, key, data, extra_meta)
 
 
 def read_meta() -> dict:

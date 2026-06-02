@@ -877,14 +877,16 @@ def test_code_sha_forks_git_at_most_once(monkeypatch):
     assert calls["n"] == 1  # forked once, not once per call
 
 
-def test_write_cache_swallows_kv_error(monkeypatch):
-    """write_cache logs and continues if the KV write raises.
+def test_write_cache_raises_on_kv_error(monkeypatch):
+    """write_cache propagates a KV write failure instead of swallowing it.
 
-    Mirrors the pre-refactor behavior of tolerating transient Upstash
-    blips during a refresh — failing the whole pipeline because one
-    cache write missed would be more disruptive than the staleness it
-    causes. read_cache will subsequently return None for this key,
-    which the dashboard already handles as a missing-cache state.
+    A swallowed write let a refresh report success after silently writing
+    nothing -- producing a partial/torn cache (some keys today's, some
+    yesterday's) indistinguishable from a complete refresh, and never
+    retried. Now the failure surfaces: the job's error handler marks the
+    run failed and QStash redelivers. Non-load-bearing callers that want
+    best-effort writes (e.g. _compute_streaks) wrap their own write in
+    try/except; this primitive does not hide the error for them.
     """
 
     class _RaisingKV:
@@ -895,8 +897,8 @@ def test_write_cache_swallows_kv_error(monkeypatch):
             raise ConnectionError("Upstash unreachable")
 
     monkeypatch.setattr(season_data, "get_kv", lambda: _RaisingKV())
-    # No exception escapes.
-    write_cache(CacheKey.STANDINGS, {"v": 1})
+    with pytest.raises(ConnectionError):
+        write_cache(CacheKey.STANDINGS, {"v": 1})
 
 
 def test_read_cache_swallows_kv_error(monkeypatch):
