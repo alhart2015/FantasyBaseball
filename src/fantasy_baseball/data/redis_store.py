@@ -135,6 +135,36 @@ def set_game_log_totals(client, player_type: str, totals: dict[str, dict]) -> No
     client.set(key, json.dumps(totals))
 
 
+REFRESH_LOCK_KEY = "refresh:lock"
+
+
+def acquire_refresh_lock(client, token: str, ttl_seconds: int) -> bool:
+    """Try to claim the cross-instance refresh lock (``SET ... NX EX``).
+
+    Returns True if this caller acquired it, False if another holder has it
+    (or ``client is None``). The token identifies this holder so
+    :func:`release_refresh_lock` only frees a lock it still owns. The TTL is
+    a self-heal: a holder that crashes without releasing leaves the lock to
+    expire rather than wedging every future job.
+    """
+    if client is None:
+        return False
+    return bool(client.set(REFRESH_LOCK_KEY, token, ex=ttl_seconds, nx=True))
+
+
+def release_refresh_lock(client, token: str) -> None:
+    """Release the refresh lock, but only if ``token`` still matches.
+
+    The match guard prevents a slow holder whose lock already expired (and
+    was re-acquired by another instance) from deleting the new holder's
+    lock. No-op when ``client is None`` or the lock is held by someone else.
+    """
+    if client is None:
+        return
+    if client.get(REFRESH_LOCK_KEY) == token:
+        client.delete(REFRESH_LOCK_KEY)
+
+
 SEASON_PROGRESS_KEY = "season_progress"
 
 

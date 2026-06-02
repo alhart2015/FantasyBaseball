@@ -205,14 +205,27 @@ def _run_rest_of_season_fetch() -> None:
     from fantasy_baseball.data.fangraphs_fetch import fetch_rest_of_season_projections
     from fantasy_baseball.data.mlb_game_logs import fetch_game_log_totals
     from fantasy_baseball.web.job_logger import JobLogger
-    from fantasy_baseball.web.refresh_pipeline import release_refresh_slot
+    from fantasy_baseball.web.refresh_pipeline import (
+        acquire_durable_refresh_lock,
+        release_durable_refresh_lock,
+        release_refresh_slot,
+    )
 
     # JobLogger.__init__ only stores fields and cannot raise, so creating it
     # before the try keeps `logger` bound for the except. Everything that can
     # fail (load_config, the pipeline) lives inside the try, and the finally
     # releases the slot on every exit path.
     logger = JobLogger("rest_of_season_fetch")
+    lock_token: str | None = None
     try:
+        # Skip when another instance already holds the durable lock: this job
+        # syncs the game-log rollup too (line below), and racing the refresh's
+        # rollup RMW across instances silently drops players from the totals.
+        lock_token = acquire_durable_refresh_lock()
+        if lock_token is None:
+            logger.finish("skipped", "another instance holds the refresh lock")
+            return
+
         project_root = Path(__file__).resolve().parents[3]
         config = load_config(project_root / "config" / "league.yaml")
         projections_dir = project_root / "data" / "projections"
@@ -285,6 +298,7 @@ def _run_rest_of_season_fetch() -> None:
     except Exception as exc:
         logger.finish("error", str(exc))
     finally:
+        release_durable_refresh_lock(lock_token)
         release_refresh_slot()
 
 

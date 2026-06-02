@@ -356,6 +356,55 @@ def test_refresh_route_releases_slot_when_spawn_fails(client, monkeypatch, free_
     assert refresh_pipeline.get_refresh_status()["running"] is False
 
 
+def test_ros_fetch_skips_when_durable_lock_held_by_other_instance(
+    monkeypatch, fake_redis, free_refresh_slot
+):
+    """A second instance must not run the ROS fetch while another holds the
+    DURABLE lock. The in-process slot only mutexes within one process; across
+    Render instances / QStash redelivery the durable KV lock is the guard. If
+    it didn't hold, two jobs would race the game-log rollup read-modify-write
+    and silently drop players from the totals.
+    """
+    from fantasy_baseball.data import redis_store
+    from fantasy_baseball.web import season_routes
+
+    # Simulate another instance already holding the cross-instance lock.
+    assert redis_store.acquire_refresh_lock(fake_redis, "other-instance", 1800) is True
+    monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", lambda: fake_redis)
+
+    # If the job did NOT skip, this would be called as its first data step.
+    game_logs = MagicMock(side_effect=AssertionError("job should have skipped"))
+    monkeypatch.setattr("fantasy_baseball.data.mlb_game_logs.fetch_game_log_totals", game_logs)
+
+    season_routes._run_rest_of_season_fetch()
+
+    game_logs.assert_not_called()  # skipped before touching the shared rollup
+
+
+def test_ros_fetch_runs_and_releases_durable_lock_when_free(
+    monkeypatch, fake_redis, free_refresh_slot
+):
+    """When the durable lock is free the job claims it, runs, and releases it
+    so the next job can acquire -- the lock must not wedge after a clean run.
+    """
+    from fantasy_baseball.data import redis_store
+    from fantasy_baseball.web import season_routes
+
+    monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", lambda: fake_redis)
+
+    # Make the first data step a no-op-ish failure so we don't run the whole
+    # pipeline; the durable-lock acquire/release still wraps it.
+    monkeypatch.setattr(
+        "fantasy_baseball.data.mlb_game_logs.fetch_game_log_totals",
+        MagicMock(side_effect=RuntimeError("stop after lock acquired")),
+    )
+
+    season_routes._run_rest_of_season_fetch()
+
+    # Lock was released in finally, so a later instance can acquire it.
+    assert redis_store.acquire_refresh_lock(fake_redis, "next-instance", 1800) is True
+
+
 def test_full_standings_page_with_cached_data(client, kv_isolation):
     """Integration test: standings page renders correctly with all cached data present."""
     from fantasy_baseball.web import season_data

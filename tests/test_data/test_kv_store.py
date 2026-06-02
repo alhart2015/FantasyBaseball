@@ -170,6 +170,36 @@ def test_sqlite_ttl_expires(tmp_kv: SqliteKVStore):
         time.time = original_time
 
 
+def test_sqlite_set_nx_only_writes_when_absent(tmp_kv: SqliteKVStore):
+    # nx=True is the SETNX primitive the durable refresh lock rests on.
+    assert tmp_kv.set("lock", "owner-a", nx=True) is True
+    # Second writer is rejected; the first owner's value is untouched.
+    assert tmp_kv.set("lock", "owner-b", nx=True) is False
+    assert tmp_kv.get("lock") == "owner-a"
+
+
+def test_sqlite_set_without_nx_overwrites_and_returns_true(tmp_kv: SqliteKVStore):
+    assert tmp_kv.set("k", "v") is True
+    assert tmp_kv.set("k", "v2") is True
+    assert tmp_kv.get("k") == "v2"
+
+
+def test_sqlite_set_nx_succeeds_again_after_expiry(tmp_kv: SqliteKVStore):
+    # An expired lock must be re-acquirable, so a crashed holder self-heals.
+    assert tmp_kv.set("lock", "owner-a", nx=True, ex=1) is True
+    assert tmp_kv.set("lock", "owner-b", nx=True) is False
+
+    future = time.time() + 10
+    original_time = time.time
+    try:
+        time.time = lambda: future
+        # Prior owner's lock has expired -> a new owner may claim it.
+        assert tmp_kv.set("lock", "owner-b", nx=True) is True
+    finally:
+        time.time = original_time
+    assert tmp_kv.get("lock") == "owner-b"
+
+
 def test_sqlite_delete(tmp_kv: SqliteKVStore):
     tmp_kv.set("k", "v")
     assert tmp_kv.delete("k") == 1

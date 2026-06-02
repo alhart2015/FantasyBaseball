@@ -107,6 +107,51 @@ def release_refresh_slot() -> None:
         _refresh_status["running"] = False
 
 
+# Cross-instance refresh lock. The in-process slot above only mutexes within
+# one Python process; on Render the daily QStash cron and the admin/QStash ROS
+# fetch can land on different instances, and QStash's at-least-once delivery can
+# redeliver a job. This durable KV lock makes the two heavy jobs mutually
+# exclusive across instances too, so their shared game-log rollup
+# read-modify-write cannot interleave and silently drop players from the totals.
+_REFRESH_LOCK_TTL_SECONDS = 1800  # 30 min: exceeds any real job; self-heals after a hard crash
+
+
+def acquire_durable_refresh_lock() -> str | None:
+    """Claim the cross-instance refresh lock via the KV.
+
+    Returns a release token on success, or None when another instance already
+    holds it -- in which case the caller should skip the job (it is a duplicate
+    or overlapping run). Targets Upstash on Render and the local SQLite KV off
+    it, via ``get_kv()``.
+    """
+    import uuid
+
+    from fantasy_baseball.data.kv_store import get_kv
+    from fantasy_baseball.data.redis_store import acquire_refresh_lock
+
+    token = uuid.uuid4().hex
+    if acquire_refresh_lock(get_kv(), token, _REFRESH_LOCK_TTL_SECONDS):
+        return token
+    return None
+
+
+def release_durable_refresh_lock(token: str | None) -> None:
+    """Release a lock claimed by :func:`acquire_durable_refresh_lock`.
+
+    No-op when ``token`` is None (nothing was acquired). Safe to call in a
+    ``finally`` -- it never raises into the caller's error path.
+    """
+    if not token:
+        return
+    from fantasy_baseball.data.kv_store import get_kv
+    from fantasy_baseball.data.redis_store import release_refresh_lock
+
+    try:
+        release_refresh_lock(get_kv(), token)
+    except Exception as exc:
+        log.warning(f"Failed to release durable refresh lock: {exc}")
+
+
 def _set_refresh_progress(msg: str) -> None:
     with _refresh_lock:
         _refresh_status["progress"] = msg
@@ -401,7 +446,18 @@ class RefreshRun:
             _refresh_status["progress"] = "Starting..."
             _refresh_status["error"] = None
 
+        lock_token: str | None = None
         try:
+            # Skip when another instance already holds the durable lock: the
+            # in-process slot does not reach across Render instances / QStash
+            # redelivery, and two refreshes racing the game-log rollup RMW
+            # silently drop players from the totals.
+            lock_token = acquire_durable_refresh_lock()
+            if lock_token is None:
+                self._progress("Another instance holds the refresh lock; skipping this run.")
+                self.logger.finish("skipped", "another instance holds the refresh lock")
+                return
+
             self._authenticate()
             self._find_user_team()
             self._fetch_standings_and_roster()
@@ -437,6 +493,7 @@ class RefreshRun:
             self.logger.finish("error", str(exc))
             raise
         finally:
+            release_durable_refresh_lock(lock_token)
             reset_cache_job(job_token)
             release_refresh_slot()
 

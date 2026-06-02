@@ -45,7 +45,7 @@ class KVStore(Protocol):
     """Minimal Redis subset the app actually uses. Both backends match."""
 
     def get(self, key: str) -> str | None: ...
-    def set(self, key: str, value: str, *, ex: int | None = None) -> None: ...
+    def set(self, key: str, value: str, *, ex: int | None = None, nx: bool = False) -> bool: ...
     def delete(self, key: str) -> int: ...
     def keys(self, pattern: str) -> list[str]: ...
     def mget(self, *keys: str) -> list[str | None]: ...
@@ -64,11 +64,11 @@ class UpstashKVStore:
     def get(self, key: str) -> str | None:
         return self._r.get(key)
 
-    def set(self, key: str, value: str, *, ex: int | None = None) -> None:
-        if ex is None:
-            self._r.set(key, value)
-        else:
-            self._r.set(key, value, ex=ex)
+    def set(self, key: str, value: str, *, ex: int | None = None, nx: bool = False) -> bool:
+        # upstash-redis returns "OK" on a write and None when an NX condition
+        # skips it; nx=False does not apply NX. The bool return is the SETNX
+        # signal the durable refresh lock relies on.
+        return self._r.set(key, value, ex=ex, nx=nx) is not None
 
     def delete(self, key: str) -> int:
         return self._r.delete(key)
@@ -149,15 +149,26 @@ class SqliteKVStore:
                 return None
             return value if value is None else str(value)
 
-    def set(self, key: str, value: str, *, ex: int | None = None) -> None:
+    def set(self, key: str, value: str, *, ex: int | None = None, nx: bool = False) -> bool:
         expires_at = (time.time() + ex) if ex is not None else None
         with self._lock:
+            if nx:
+                # SETNX with TTL awareness: an existing-but-expired row is
+                # treated as absent so a crashed lock holder self-heals.
+                row = self._conn.execute(
+                    "SELECT expires_at FROM kv WHERE key = ?", (key,)
+                ).fetchone()
+                if row is not None:
+                    existing_exp = row[0]
+                    if existing_exp is None or existing_exp >= time.time():
+                        return False
             self._conn.execute(
                 "INSERT INTO kv(key, value, expires_at) VALUES(?, ?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET "
                 "value = excluded.value, expires_at = excluded.expires_at",
                 (key, value, expires_at),
             )
+            return True
 
     def delete(self, key: str) -> int:
         with self._lock:
