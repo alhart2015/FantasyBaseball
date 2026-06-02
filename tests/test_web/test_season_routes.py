@@ -1522,17 +1522,17 @@ def test_stash_below_cutline_owned_flagged_droppable(client, kv_isolation):
     assert "Weak Owned Stash" in html
 
 
-def test_standings_route_migrates_stale_breakdown_lacking_contribution_stats(
+def test_standings_route_does_not_fabricate_contribution_stats_for_stale_blob(
     client,
 ):
-    """Pre-fix persisted KV blobs lack contribution_stats per player. The
-    route must apply the back-compat fallback (raw_stats * scale_factor)
-    when reading these stale blobs, so the modal renders non-zero values
-    immediately after deploy instead of waiting for the next refresh.
-
-    This pins finding #1 from the post-fix code review: without route-layer
-    migration, every counting-stat cell in the modal would render as 0 for
-    stale data because the template path bypasses from_dict entirely.
+    """A stale KV blob lacking contribution_stats must NOT have it fabricated
+    by the route. raw_stats is the full-season projection, so the old
+    raw_stats * scale_factor fallback rendered full_season * factor -- the
+    pre-#110 YTD double-count (team YTD is added separately at the team
+    level). Per the repo rule "a wrong answer that looks plausible is worse
+    than no answer," a stale blob renders honest zeros (contribution_stats
+    absent/empty) rather than plausible-but-wrong numbers. This pins the
+    removal of the back-compat fabrication in PlayerContribution.from_dict.
     """
     import json
     import re
@@ -1625,8 +1625,8 @@ def test_standings_route_migrates_stale_breakdown_lacking_contribution_stats(
     assert response.status_code == 200
     body = response.get_data(as_text=True)
 
-    # The route should serialize a breakdown with contribution_stats populated
-    # via the back-compat fallback. Find the standings_breakdown JSON block.
+    # The route must NOT invent contribution_stats for a stale blob. Find the
+    # standings_breakdown JSON block.
     match = re.search(
         r'<script[^>]*id="breakdown-data"[^>]*>(.*?)</script>',
         body,
@@ -1635,18 +1635,17 @@ def test_standings_route_migrates_stale_breakdown_lacking_contribution_stats(
     assert match, "Expected breakdown-data script tag in standings.html output"
     breakdown_json = json.loads(match.group(1).strip())
 
+    # contribution_stats must be empty -- NOT the fabricated full_season * factor.
+    # The old bug produced K = 200 * 0.5 = 100.0 and HR = 25 * 1.0 = 25.0.
     pitcher = breakdown_json["teams"]["Hart of the Order"]["pitchers"][0]
-    assert "contribution_stats" in pitcher, (
-        "Route did not migrate stale blob: contribution_stats missing from pitcher payload"
+    assert pitcher.get("contribution_stats", {}) == {}, (
+        f"Route fabricated contribution_stats for a stale blob: {pitcher.get('contribution_stats')}"
     )
-    # Fallback formula: raw_stats * scale_factor. For K: 200 * 0.5 = 100.
-    assert abs(pitcher["contribution_stats"]["k"] - 100.0) < 1e-6, (
-        f"Expected fallback K=100.0, got {pitcher['contribution_stats'].get('k')}"
-    )
+    # raw_stats still round-trips for the display column.
+    assert abs(pitcher["raw_stats"]["k"] - 200.0) < 1e-6
 
     hitter = breakdown_json["teams"]["Hart of the Order"]["hitters"][0]
-    assert "contribution_stats" in hitter
-    assert abs(hitter["contribution_stats"]["hr"] - 25.0) < 1e-6  # 25 * 1.0
+    assert hitter.get("contribution_stats", {}) == {}
 
 
 def test_standings_route_preserves_team_ytd_block_through_round_trip(client):

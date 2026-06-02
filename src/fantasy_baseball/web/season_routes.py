@@ -474,15 +474,16 @@ def register_routes(app: Flask) -> None:
                     )
 
             raw_breakdown = read_cache_dict(CacheKey.STANDINGS_BREAKDOWN)
-            # Stale KV blobs written before contribution_stats shipped lack that
-            # field per-player. The template serializes raw_breakdown directly via
-            # `{{ ... | tojson }}` -- no from_dict on this path -- so without
-            # round-tripping the back-compat fallback in PlayerContribution.from_dict
-            # never fires and the modal renders 0 for every cell until the next
-            # QStash refresh. Round-tripping each team's payload through
-            # RosterBreakdown.from_dict().to_dict() applies the fallback now.
-            # Idempotent: fresh data already has contribution_stats, so the
-            # round-trip is a no-op.
+            # Normalize each team payload through RosterBreakdown.from_dict()/
+            # to_dict() before the template serializes it via `{{ ... | tojson }}`.
+            # This coerces stat values to float and defaults a missing team_ytd
+            # block to {} so the modal's team-YTD row renders on legacy blobs
+            # instead of hitting `undefined`. It deliberately does NOT fabricate
+            # contribution_stats: raw_stats is full-season, so the old
+            # raw_stats * scale_factor fallback rendered the pre-#110 double-count
+            # -- a stale blob lacking contribution_stats now renders honest zeros
+            # rather than plausible-wrong math. Fresh data already carries
+            # contribution_stats, so the round-trip is a no-op for it.
             if raw_breakdown and isinstance(raw_breakdown.get("teams"), dict):
                 from fantasy_baseball.scoring import RosterBreakdown
 

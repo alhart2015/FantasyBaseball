@@ -706,14 +706,17 @@ class PlayerContribution:
         # d.get(k, {}) returns the stored None when the key exists but is
         # null, so the subsequent .items() would raise AttributeError.
         raw_stats = {k: float(v) for k, v in (d.get("raw_stats") or {}).items()}
-        # Backwards-compat: old persisted breakdowns lack contribution_stats.
-        # Fall back to the legacy raw * factor computation (which is the bug
-        # we're fixing, but it's the best we can do for stale persisted data
-        # until the next refresh writes the new field).
+        # No back-compat fabrication: contribution_stats is taken exactly as
+        # stored. raw_stats is FULL-SEASON (``_raw_stats_for`` reads
+        # ``full_season_projection``) while contribution_stats is ``ROS *
+        # factor``, so the old ``raw_stats * scale_factor`` fallback rendered
+        # ``full_season * factor`` -- the pre-#110 YTD double-count (team YTD
+        # is added separately at the team level). Every refresh writes
+        # contribution_stats, so an absent value now means a corrupt/stale
+        # payload; per the repo's "no plausible-wrong answer" rule we leave it
+        # empty (renders as visible zero) rather than fabricate wrong math.
         scale_factor = float(d["scale_factor"])
         contribution_stats = {k: float(v) for k, v in (d.get("contribution_stats") or {}).items()}
-        if not contribution_stats and raw_stats:
-            contribution_stats = {k: v * scale_factor for k, v in raw_stats.items()}
         return cls(
             name=d["name"],
             player_type=PlayerType(d["player_type"]),
