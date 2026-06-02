@@ -83,13 +83,16 @@ on timing — that's the real cross-job skew, not game logs.
    `get_/set_ros_projections` + `get_/set_full_season_projections` accessor
    pairs are gone.
 
-3. **OPEN. Projection state is fragmented across 5 keys + 2 jobs**, so the
-   standings table, the projected column, and the breakdown modal can
-   disagree: `cache:standings` (Yahoo YTD), `cache:projections.projected_standings`,
-   `projected_standings_history`, `cache:standings_breakdown`, all consuming
-   `cache:ros_projections` written by the *separate* ROS-fetch job. The
-   ROS-fetch lag against the refresh's fresh game logs is a real YTD-vintage
-   skew (see open follow-ups below).
+3. **PARTIALLY RESOLVED (this PR).** The headline YTD-vintage skew is fixed:
+   the refresh now re-derives full-season (ROS + YTD) from the ROS-remaining
+   blob + its own freshly-synced game logs (`_load_projections`), instead of
+   reading the ROS-fetch job's frozen `cache:full_season_projections`, so the
+   per-player full-season lines and the team-YTD overlay share one vintage.
+   Still loosely coupled: standings/projected-column/breakdown remain separate
+   `cache:*` keys consuming `cache:ros_projections` from the separate job, but
+   they no longer mix YTD vintages. `cache:full_season_projections` is now
+   effectively redundant (the refresh derives its own); removing the ROS job's
+   write of it is a small follow-up.
 
 4. **RESOLVED (this PR).** The breakdown modal's silent
    `contribution_stats = raw_stats * scale_factor` fallback (full_season x
@@ -116,11 +119,10 @@ on timing — that's the real cross-job skew, not game logs.
 
 ## Open follow-ups
 
-- **Projection fragmentation / ROS-vintage skew (#3):** have the refresh
-  re-derive `full_season` from the ROS-only blob + current game logs (it has
-  both), or hard-check the ROS blob's `_written_at` freshness and degrade
-  loudly, so the standings can't combine T0 player projections with current
-  team YTD.
+- **Remove the now-redundant `cache:full_season_projections` write.** The
+  refresh derives full-season itself (#3 above); the ROS job's write of this
+  key has no remaining reader. Left in place here only because 4 ros_pipeline
+  tests assert it; collapse both in a focused follow-up.
 - **Rollup as a hash:** move `game_log_totals:*` from one JSON blob to
   per-player hash fields so concurrent writers touch disjoint fields —
   defense-in-depth even if the durable lock's TTL is exceeded.
