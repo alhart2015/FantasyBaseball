@@ -26,6 +26,7 @@ from fantasy_baseball.scoring import team_sds_from_json
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, RATE_STATS, Category
 from fantasy_baseball.web.season_data import (
     CacheKey,
+    coerce_basis,
     format_category_bars_for_display,
     read_cache_dict,
     read_cache_list,
@@ -593,9 +594,7 @@ def register_routes(app: Flask) -> None:
         # have installed. The indicator module is intentionally duckdb-free.
         from fantasy_baseball.streaks.indicator import build_indicator
 
-        basis = request.args.get("basis", "ros")
-        if basis not in ("ros", "ytd", "total"):
-            basis = "ros"
+        basis = coerce_basis(request.args.get("basis"))
 
         meta = read_meta()
         roster_raw = read_cache_list(CacheKey.ROSTER)
@@ -647,9 +646,7 @@ def register_routes(app: Flask) -> None:
         from fantasy_baseball.streaks.indicator import build_indicator
         from fantasy_baseball.web.season_data import format_lineup_for_display
 
-        basis = request.args.get("basis", "ros")
-        if basis not in ("ros", "ytd", "total"):
-            basis = "ros"
+        basis = coerce_basis(request.args.get("basis"))
 
         roster_raw = read_cache_list(CacheKey.ROSTER)
         if not roster_raw:

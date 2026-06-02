@@ -585,7 +585,8 @@ def build_opponent_lineup(
             entry["rest_of_season"] = ros_dict
             entry.update(ros_dict)
             entry["display_stats"] = _display_map(ros_stats, player.player_type, "ros")
-        entry.setdefault("display_stats", {})
+        else:
+            entry["display_stats"] = {}
 
         # Pace data
         ptype = player.player_type
@@ -909,14 +910,22 @@ def _display_map(stats, player_type, basis):
     return m
 
 
+VALID_BASES: frozenset[str] = frozenset({"ros", "ytd", "total"})
+DEFAULT_BASIS = "ros"
+
+
+def coerce_basis(raw: str | None) -> str:
+    """Normalize a stat-basis string to a member of VALID_BASES (default ROS)."""
+    return raw if raw in VALID_BASES else DEFAULT_BASIS
+
+
 def format_lineup_for_display(roster: list[dict], optimal: dict | None, basis: str = "ros") -> dict:
     """Format roster + optimizer output for the lineup template."""
     from fantasy_baseball.analysis.pace import compute_overall_pace
     from fantasy_baseball.models.player import Player
 
-    # Validate basis once before the loop; unknown values fall back to "ros".
-    if basis not in ("ros", "ytd", "total"):
-        basis = "ros"
+    # Normalize basis once before the loop; unknown values fall back to ROS.
+    basis = coerce_basis(basis)
 
     hitters = []
     pitchers = []
