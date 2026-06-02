@@ -306,7 +306,7 @@ function onBasisChange(basis) {
     history.replaceState(null, '', url);
 
     fetch('/lineup/tbodies?basis=' + encodeURIComponent(basis))
-        .then(function(r) { return r.json(); })
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(function(data) {
             var h = document.getElementById('hitters-tbody');
             var p = document.getElementById('pitchers-tbody');
