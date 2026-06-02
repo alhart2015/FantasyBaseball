@@ -14,7 +14,7 @@ from fantasy_baseball.category_odds import category_finish_odds
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 from fantasy_baseball.data.kv_store import KVStore, get_kv, is_remote
 from fantasy_baseball.lineup.delta_roto import compute_one_for_one_band, score_swap
-from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.models.player import HitterStats, PitcherStats, PlayerType
 from fantasy_baseball.models.positions import BENCH_SLOTS
 from fantasy_baseball.models.standings import ProjectedStandings, Standings, StandingsEntry
 from fantasy_baseball.scoring import score_roto, score_roto_dict
@@ -584,6 +584,9 @@ def build_opponent_lineup(
             ros_dict = {k: getattr(ros_stats, k, 0) for k in ros_keys}
             entry["rest_of_season"] = ros_dict
             entry.update(ros_dict)
+            entry["display_stats"] = _display_map(ros_stats, player.player_type, "ros")
+        else:
+            entry["display_stats"] = {}
 
         # Pace data
         ptype = player.player_type
@@ -609,6 +612,7 @@ def build_opponent_lineup(
             entry["delta_roto"] = None
             entry["pace"] = {}
             entry["overall_pace"] = compute_overall_pace(entry["pace"])
+            entry["display_stats"] = {}
             enriched.append(entry)
 
     # Split into hitters and pitchers
@@ -852,10 +856,76 @@ def _normalize_moves(raw: object) -> dict:
     }
 
 
-def format_lineup_for_display(roster: list[dict], optimal: dict | None) -> dict:
+def _derive_ytd_stats(full, ros, player_type):
+    """YTD actuals = full_season - rest_of_season, per counting component,
+    clamped at >= 0. Rate stats (avg/era/whip) are recomputed from the
+    subtracted components by the stats from_dict constructors. Returns a
+    HitterStats/PitcherStats, or None when either input is missing.
+
+    When ``full`` (full_season_projection) or ``ros`` (rest_of_season) is
+    absent -- i.e. the player is unmatched in the full-season projection
+    pool -- returns None, so the YTD view shows empty cells ('-') for that
+    player via _display_map returning {}.
+    """
+    if full is None or ros is None:
+        return None
+    if player_type == PlayerType.HITTER:
+        cols = ["pa", "ab", "h", "r", "hr", "rbi", "sb"]
+        d = {k: max(0.0, getattr(full, k) - getattr(ros, k)) for k in cols}
+        return HitterStats.from_dict(d)
+    cols = ["ip", "w", "k", "sv", "er", "bb", "h_allowed"]
+    d = {k: max(0.0, getattr(full, k) - getattr(ros, k)) for k in cols}
+    return PitcherStats.from_dict(d)
+
+
+def _display_map(stats, player_type, basis):
+    """Per-category display values for the chosen basis, keyed by the same
+    uppercase category names the tbody templates loop over. For the YTD basis,
+    a player with zero volume (PA/IP) yields all-None values so the template
+    renders '--' (matching today's no-games appearance)."""
+    if stats is None:
+        return {}
+    if player_type == PlayerType.HITTER:
+        m = {
+            "PA": stats.pa,
+            "R": stats.r,
+            "HR": stats.hr,
+            "RBI": stats.rbi,
+            "SB": stats.sb,
+            "AVG": stats.avg,
+        }
+        volume = stats.pa
+    else:
+        m = {
+            "IP": stats.ip,
+            "W": stats.w,
+            "K": stats.k,
+            "SV": stats.sv,
+            "ERA": stats.era,
+            "WHIP": stats.whip,
+        }
+        volume = stats.ip
+    if basis == "ytd" and volume == 0:
+        return {k: None for k in m}
+    return m
+
+
+VALID_BASES: frozenset[str] = frozenset({"ros", "ytd", "total"})
+DEFAULT_BASIS = "ros"
+
+
+def coerce_basis(raw: str | None) -> str:
+    """Normalize a stat-basis string to a member of VALID_BASES (default ROS)."""
+    return raw if raw in VALID_BASES else DEFAULT_BASIS
+
+
+def format_lineup_for_display(roster: list[dict], optimal: dict | None, basis: str = "ros") -> dict:
     """Format roster + optimizer output for the lineup template."""
     from fantasy_baseball.analysis.pace import compute_overall_pace
     from fantasy_baseball.models.player import Player
+
+    # Normalize basis once before the loop; unknown values fall back to ROS.
+    basis = coerce_basis(basis)
 
     hitters = []
     pitchers = []
@@ -911,9 +981,27 @@ def format_lineup_for_display(roster: list[dict], optimal: dict | None) -> dict:
         # Flatten ROS stats for template tooltip (h[rest_of_season_key] access pattern)
         if player.rest_of_season is not None:
             entry.update(player.rest_of_season.to_dict())
-        # Preserve ros_sgp after the flatten (to_dict omits sgp if None, but
-        # may overwrite with its own computed value — keep ours for display).
-        entry["sgp"] = ros_sgp
+
+        # --- Per-basis selection (display-only): ROS / YTD / Total ---
+        ros_stats = player.rest_of_season
+        full_stats = player.full_season_projection or player.rest_of_season
+        ytd_stats = _derive_ytd_stats(
+            player.full_season_projection, player.rest_of_season, player.player_type
+        )
+
+        sgp_total = full_stats.compute_sgp() if full_stats is not None else None
+        sgp_ytd = ytd_stats.compute_sgp() if ytd_stats is not None else 0.0
+
+        basis_choice = {
+            "ros": (ros_stats, ros_sgp, player.rank.rest_of_season),
+            "ytd": (ytd_stats, sgp_ytd, player.rank.current),
+            "total": (full_stats, sgp_total, player.rank.total),
+        }
+        sel_stats, sel_sgp, sel_rank = basis_choice[basis]
+
+        entry["sgp"] = sel_sgp
+        entry["rank_display"] = sel_rank
+        entry["display_stats"] = _display_map(sel_stats, player.player_type, basis)
 
         if is_pitcher:
             pitchers.append(entry)

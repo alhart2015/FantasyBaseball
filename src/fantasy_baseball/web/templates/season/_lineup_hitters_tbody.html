@@ -46,7 +46,7 @@
             </div>
             {% endif %}
         </td>
-        <td style="text-align: left; font-weight: 500;">{{ p.name }} {{ rank_badge(p.rank) }}</td>
+        <td style="text-align: left; font-weight: 500;">{{ p.name }} {{ rank_badge(p.rank, p.get('rank_display')) }}</td>
         <td style="text-align: left; color: var(--text-secondary); font-size: 11px;">
             {{ p.positions | join(", ") }}
         </td>
@@ -56,8 +56,9 @@
         {% set dev_abs = dev if dev > 0 else -dev %}
         {% set dev_clamped = [dev_abs, 3]|min %}
         <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'PA' %} pa-col{% endif %}{% if dev > 0 %} stat-ros-up stat-ros-{{ dev_clamped }}{% elif dev < 0 %} stat-ros-down stat-ros-{{ dev_clamped }}{% endif %}">
-            {% if st and st.get('actual') is not none and (st.get('actual', 0) != 0 or s.get('PA', {}).get('actual', 0) > 0) %}
-                {% if cat == 'AVG' %}{{ "%.3f"|format(st.actual) }}{% else %}{{ st.actual }}{% endif %}
+            {% set dv = p.display_stats.get(cat) if p.display_stats else none %}
+            {% if dv is not none %}
+                {% if cat == 'AVG' %}{{ "%.3f"|format(dv) }}{% else %}{{ dv | round | int }}{% endif %}
             {% else %}—{% endif %}
             {% if st and st.get('z_score') is defined and cat != 'PA' %}
             <div class="tooltip">

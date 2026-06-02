@@ -121,20 +121,23 @@ def build_rankings_lookup(
     ros: dict[str, Any],
     preseason: dict[str, Any],
     current: dict[str, Any],
+    total: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Three-way merge of player ranking dicts keyed by ``name::player_type``.
+    """Four-way merge of player ranking dicts keyed by ``name::player_type``.
 
-    The output is a dict mapping each player key to a dict with three
-    keys (``rest_of_season``, ``preseason``, ``current``); missing
-    entries are ``None``. The union of keys from all three inputs is
-    represented.
+    The output maps each player key to a dict with four keys
+    (``rest_of_season``, ``preseason``, ``current``, ``total``); missing
+    entries are ``None``. ``total`` is optional so legacy 3-arg callers keep
+    working (they get ``total=None`` for every player).
     """
-    all_keys = set(ros) | set(preseason) | set(current)
+    total = total if total is not None else {}
+    all_keys = set(ros) | set(preseason) | set(current) | set(total)
     return {
         key: {
             "rest_of_season": ros.get(key),
             "preseason": preseason.get(key),
             "current": current.get(key),
+            "total": total.get(key),
         }
         for key in all_keys
     }

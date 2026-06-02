@@ -96,18 +96,33 @@ class TestRankInfo:
         assert r.rest_of_season == 5
         assert r.preseason is None
         assert r.current is None
+        assert r.total is None
 
     def test_to_dict(self):
         from fantasy_baseball.models.player import RankInfo
 
         r = RankInfo(rest_of_season=5, preseason=8, current=12)
-        assert r.to_dict() == {"rest_of_season": 5, "preseason": 8, "current": 12}
+        assert r.to_dict() == {"rest_of_season": 5, "preseason": 8, "current": 12, "total": None}
 
     def test_empty_rank(self):
         from fantasy_baseball.models.player import RankInfo
 
         r = RankInfo()
         assert r.rest_of_season is None
+
+    def test_rankinfo_total_roundtrips(self):
+        from fantasy_baseball.models.player import RankInfo
+
+        r = RankInfo.from_dict({"rest_of_season": 1, "preseason": 2, "current": 3, "total": 4})
+        assert r.total == 4
+        assert r.to_dict()["total"] == 4
+
+    def test_rankinfo_total_defaults_none(self):
+        from fantasy_baseball.models.player import RankInfo
+
+        r = RankInfo.from_dict({"rest_of_season": 1})
+        assert r.total is None
+        assert r.to_dict()["total"] is None
 
 
 class TestPlayer:

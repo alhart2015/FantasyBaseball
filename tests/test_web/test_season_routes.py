@@ -650,6 +650,40 @@ def test_compare_missing_params(client):
     assert resp2.status_code == 400
 
 
+def test_lineup_accepts_basis_param(client):
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=None),
+        patch("fantasy_baseball.web.season_routes.read_cache_list", return_value=None),
+    ):
+        resp = client.get("/lineup?basis=ytd")
+    assert resp.status_code == 200
+
+
+def test_lineup_tbodies_returns_html_for_basis(client, kv_isolation):
+    _seed_minimum_lineup_caches(["Adley Rutschman", "Corbin Burnes"])
+
+    resp = client.get("/lineup/tbodies?basis=total")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["basis"] == "total"
+    assert "hitters_html" in data
+    assert "pitchers_html" in data
+
+
+def test_lineup_tbodies_unknown_basis_falls_back(client, kv_isolation):
+    _seed_minimum_lineup_caches(["Adley Rutschman"])
+
+    resp = client.get("/lineup/tbodies?basis=bogus")
+    assert resp.status_code == 200
+    assert resp.get_json()["basis"] == "ros"
+
+
+def test_lineup_tbodies_404_without_roster(client, kv_isolation):
+    # Isolated empty KV (no roster seeded) -> route returns 404.
+    resp = client.get("/lineup/tbodies?basis=ros")
+    assert resp.status_code == 404
+
+
 def test_standings_page_includes_breakdown_json_when_cache_present(client, kv_isolation):
     """When STANDINGS_BREAKDOWN cache exists, its JSON is embedded in the page."""
     from fantasy_baseball.web import season_data

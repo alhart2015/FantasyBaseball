@@ -512,6 +512,87 @@ class TestBuildOpponentLineup:
         assert burnes["sgp"] == pytest.approx(expected_ros_sgp)  # ROS-based
         assert burnes["sgp"] < full_season_sgp  # not the inflated full-season number
 
+    def test_display_stats_populated_for_matched_hitter(self):
+        """Matched opponent hitter entries must carry display_stats keyed by
+        uppercase category names so the shared _lineup_hitters_tbody.html partial
+        (which reads p.display_stats.get(cat)) renders real values rather than '--'."""
+        from fantasy_baseball.utils.name_utils import normalize_name
+
+        roster = [
+            {
+                "name": "Salvador Perez",
+                "positions": ["C", "Util"],
+                "selected_position": "C",
+                "player_id": "100",
+                "status": "",
+            },
+        ]
+        hitters_proj, pitchers_proj = _sample_projections()
+
+        ros_hitters = pd.DataFrame(
+            [
+                {
+                    "name": "Salvador Perez",
+                    "fg_id": "1",
+                    "player_type": "hitter",
+                    "pa": 400,
+                    "ab": 360,
+                    "h": 95,
+                    "r": 42,
+                    "hr": 18,
+                    "rbi": 60,
+                    "sb": 2,
+                    "avg": 0.265,
+                }
+            ]
+        )
+        ros_hitters["_name_norm"] = ros_hitters["name"].apply(normalize_name)
+
+        result = build_opponent_lineup(
+            roster=roster,
+            opponent_name="Springfield Isotopes",
+            hitters_proj=hitters_proj,
+            pitchers_proj=pitchers_proj,
+            rest_of_season_hitters=ros_hitters,
+            rest_of_season_pitchers=pd.DataFrame(),
+        )
+
+        perez = result["hitters"][0]
+        assert "display_stats" in perez, "matched hitter missing display_stats"
+        ds = perez["display_stats"]
+        assert isinstance(ds, dict), "display_stats must be a dict"
+        # _display_map with basis='ros' populates the five counting cats + AVG.
+        assert ds.get("HR") == 18, f"display_stats['HR'] expected 18, got {ds.get('HR')}"
+        assert ds.get("R") == 42, f"display_stats['R'] expected 42, got {ds.get('R')}"
+        assert ds.get("RBI") == 60, f"display_stats['RBI'] expected 60, got {ds.get('RBI')}"
+
+    def test_display_stats_empty_for_unmatched_player(self):
+        """An unmatched opponent player (no projection found) must still carry
+        display_stats={} so the template renders '--' without a KeyError."""
+        roster = [
+            {
+                "name": "Nobody McUnknown",
+                "positions": ["OF"],
+                "selected_position": "OF",
+                "player_id": "999",
+                "status": "",
+            },
+        ]
+        hitters_proj, pitchers_proj = _sample_projections()
+
+        result = build_opponent_lineup(
+            roster=roster,
+            opponent_name="Springfield Isotopes",
+            hitters_proj=hitters_proj,
+            pitchers_proj=pitchers_proj,
+            rest_of_season_hitters=pd.DataFrame(),
+            rest_of_season_pitchers=pd.DataFrame(),
+        )
+
+        entry = result["hitters"][0]
+        assert "display_stats" in entry, "unmatched player missing display_stats"
+        assert entry["display_stats"] == {}, "unmatched player display_stats must be empty dict"
+
 
 class TestOpponentCache:
     def test_clear_opponent_cache(self):

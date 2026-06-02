@@ -119,6 +119,7 @@ class RankInfo:
     rest_of_season: int | None = None
     preseason: int | None = None
     current: int | None = None
+    total: int | None = None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> RankInfo:
@@ -126,6 +127,7 @@ class RankInfo:
             rest_of_season=d.get("rest_of_season"),
             preseason=d.get("preseason"),
             current=d.get("current"),
+            total=d.get("total"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -133,6 +135,7 @@ class RankInfo:
             "rest_of_season": self.rest_of_season,
             "preseason": self.preseason,
             "current": self.current,
+            "total": self.total,
         }
 
 
