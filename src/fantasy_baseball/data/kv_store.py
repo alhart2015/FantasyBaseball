@@ -40,6 +40,16 @@ def is_remote() -> bool:
     return os.environ.get("RENDER") == "true"
 
 
+def _is_live(expires_at: float | None) -> bool:
+    """True if a row with this ``expires_at`` is still valid (not expired).
+
+    Single definition of the TTL boundary (``expires_at == now`` counts as
+    live) shared by ``SqliteKVStore.get`` and ``set_if_absent`` so the two
+    can't drift on the comparison.
+    """
+    return expires_at is None or expires_at >= time.time()
+
+
 @runtime_checkable
 class KVStore(Protocol):
     """Minimal Redis subset the app actually uses. Both backends match."""
@@ -161,7 +171,7 @@ class SqliteKVStore:
             if row is None:
                 return None
             value, expires_at = row
-            if expires_at is not None and expires_at < time.time():
+            if not _is_live(expires_at):
                 self._conn.execute("DELETE FROM kv WHERE key = ?", (key,))
                 return None
             return value if value is None else str(value)
@@ -183,10 +193,8 @@ class SqliteKVStore:
         expires_at = (time.time() + ex) if ex is not None else None
         with self._lock:
             row = self._conn.execute("SELECT expires_at FROM kv WHERE key = ?", (key,)).fetchone()
-            if row is not None:
-                existing_exp = row[0]
-                if existing_exp is None or existing_exp >= time.time():
-                    return False
+            if row is not None and _is_live(row[0]):
+                return False
             self._conn.execute(
                 "INSERT INTO kv(key, value, expires_at) VALUES(?, ?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET "

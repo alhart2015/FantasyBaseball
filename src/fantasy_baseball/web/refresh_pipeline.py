@@ -118,58 +118,34 @@ def release_refresh_slot() -> None:
 _REFRESH_LOCK_TTL_SECONDS = 1800  # 30 min: exceeds any real job; self-heals after a hard crash
 
 
-def acquire_durable_refresh_lock() -> str | None:
-    """Claim the cross-instance refresh lock via the KV.
-
-    Returns a release token on success, or None when another instance already
-    holds it -- in which case the caller should skip the job (it is a duplicate
-    or overlapping run). Targets Upstash on Render and the local SQLite KV off
-    it, via ``get_kv()``.
-    """
-    import uuid
-
-    from fantasy_baseball.data.kv_store import get_kv
-    from fantasy_baseball.data.redis_store import acquire_refresh_lock
-
-    token = uuid.uuid4().hex
-    if acquire_refresh_lock(get_kv(), token, _REFRESH_LOCK_TTL_SECONDS):
-        return token
-    return None
-
-
-def release_durable_refresh_lock(token: str | None) -> None:
-    """Release a lock claimed by :func:`acquire_durable_refresh_lock`.
-
-    No-op when ``token`` is None (nothing was acquired). Safe to call in a
-    ``finally`` -- it never raises into the caller's error path.
-    """
-    if not token:
-        return
-    from fantasy_baseball.data.kv_store import get_kv
-    from fantasy_baseball.data.redis_store import release_refresh_lock
-
-    try:
-        release_refresh_lock(get_kv(), token)
-    except Exception as exc:
-        log.warning(f"Failed to release durable refresh lock: {exc}")
-
-
 @contextmanager
 def durable_refresh_lock() -> Iterator[bool]:
     """Hold the cross-instance refresh lock for the duration of the block.
 
-    Yields True if acquired (proceed) or False if another instance holds it
-    (the caller should skip -- a duplicate/overlapping run), and releases the
-    lock on exit. Both heavy job bodies wrap their work in this, so the
-    acquire/skip/release contract lives in one place; any new heavy job should
-    do the same. Held in the job BODY (not the route) so direct callers
+    Yields True if acquired (proceed) or False if another instance already
+    holds it (the caller should skip -- a duplicate/overlapping run), and
+    releases the lock on exit. Both heavy job bodies wrap their work in this,
+    so the acquire/skip/release contract lives in one place; any new heavy job
+    should do the same. Held in the job BODY (not the route) so direct callers
     (scripts/refresh_remote.py) are protected too, not just QStash triggers.
     """
-    token = acquire_durable_refresh_lock()
+    import uuid
+
+    from fantasy_baseball.data.kv_store import get_kv
+    from fantasy_baseball.data.redis_store import acquire_refresh_lock, release_refresh_lock
+
+    token = uuid.uuid4().hex
+    acquired = acquire_refresh_lock(get_kv(), token, _REFRESH_LOCK_TTL_SECONDS)
     try:
-        yield token is not None
+        yield acquired
     finally:
-        release_durable_refresh_lock(token)
+        if acquired:
+            # Never raise out of the finally -- releasing is best-effort; the
+            # TTL reclaims the lock if a release ever fails.
+            try:
+                release_refresh_lock(get_kv(), token)
+            except Exception as exc:
+                log.warning(f"Failed to release durable refresh lock: {exc}")
 
 
 def refresh_lock_held() -> bool:
