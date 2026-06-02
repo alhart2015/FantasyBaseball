@@ -119,6 +119,9 @@ on timing — that's the real cross-job skew, not game logs.
 
 ## Open follow-ups
 
+- **Lock release is now atomic** (`KVStore.compare_delete`: Lua CAS on
+  Upstash, locked `DELETE ... WHERE value=?` on SQLite) -- the get-then-delete
+  TOCTOU is closed. (Done.)
 - **Remove the now-redundant `cache:full_season_projections` write.** The
   refresh derives full-season itself (#3 above); the ROS job's write of this
   key has no remaining reader. Left in place here only because 4 ros_pipeline
