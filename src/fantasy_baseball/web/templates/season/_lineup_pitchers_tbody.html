@@ -40,15 +40,16 @@
             </div>
             {% endif %}
         </td>
-        <td style="text-align: left; font-weight: 500;">{{ p.name }} {{ rank_badge(p.rank) }}</td>
+        <td style="text-align: left; font-weight: 500;">{{ p.name }} {{ rank_badge(p.rank, p.get('rank_display')) }}</td>
         {% for cat in ["IP", "W", "K", "SV", "ERA", "WHIP"] %}
         {% set st = s.get(cat, {}) if s else {} %}
         {% set dev = st.get('rest_of_season_deviation_sgp', 0)|int %}
         {% set dev_abs = dev if dev > 0 else -dev %}
         {% set dev_clamped = [dev_abs, 3]|min %}
         <td class="stat-cell {{ st.get('color_class', 'stat-neutral') }}{% if cat == 'IP' %} pa-col{% endif %}{% if dev > 0 %} stat-ros-up stat-ros-{{ dev_clamped }}{% elif dev < 0 %} stat-ros-down stat-ros-{{ dev_clamped }}{% endif %}">
-            {% if st and st.get('actual') is not none and (st.get('actual', 0) != 0 or s.get('IP', {}).get('actual', 0) > 0) %}
-                {% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(st.actual) }}{% elif cat == 'IP' %}{{ st.actual | format_ip }}{% else %}{{ st.actual }}{% endif %}
+            {% set dv = p.display_stats.get(cat) if p.display_stats else none %}
+            {% if dv is not none %}
+                {% if cat in ['ERA', 'WHIP'] %}{{ "%.2f"|format(dv) }}{% elif cat == 'IP' %}{{ dv | format_ip }}{% else %}{{ dv | round | int }}{% endif %}
             {% else %}—{% endif %}
             {% if st and st.get('z_score') is defined and cat != 'IP' %}
             <div class="tooltip">

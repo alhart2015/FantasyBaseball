@@ -12,6 +12,10 @@
     margin: 20px 0 10px;
 }
 .pa-col { font-size: 12px; }
+.basis-toggle { display: inline-flex; border: 1px solid var(--panel-border); border-radius: 6px; overflow: hidden; }
+.basis-toggle button { background: var(--panel-bg); color: var(--text-secondary); border: none; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+.basis-toggle button + button { border-left: 1px solid var(--panel-border); }
+.basis-toggle button.active { background: var(--accent, #2d6cdf); color: #fff; }
 </style>
 
 <div class="page-lineup">
@@ -34,6 +38,11 @@
     {% if meta and meta.get('week') %}
     <div class="week-label">Week {{ meta['week'] }}</div>
     {% endif %}
+    <div class="basis-toggle" role="group" aria-label="Stat basis" style="margin-left: 12px;">
+        <button type="button" data-basis="ytd" class="{% if basis == 'ytd' %}active{% endif %}" onclick="onBasisChange('ytd')">YTD</button>
+        <button type="button" data-basis="ros" class="{% if basis == 'ros' %}active{% endif %}" onclick="onBasisChange('ros')">ROS</button>
+        <button type="button" data-basis="total" class="{% if basis == 'total' %}active{% endif %}" onclick="onBasisChange('total')">Total</button>
+    </div>
 </div>
 
 {% if not lineup %}
