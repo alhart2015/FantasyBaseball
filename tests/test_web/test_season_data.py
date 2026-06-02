@@ -679,6 +679,83 @@ def test_roster_cache_includes_stats():
     assert result["hitters"][0]["pace"]["HR"]["actual"] == 9
 
 
+def _hitter_entry():
+    # Cached-roster flat dict shape consumed by Player.from_dict. ROS is the
+    # remaining-season projection; full = ROS + YTD actuals; rank carries all
+    # four bases.
+    return {
+        "name": "Test Hitter",
+        "player_type": "hitter",
+        "positions": ["OF", "UTIL"],
+        "selected_position": "OF",
+        "player_id": "1001",
+        "status": "",
+        "rest_of_season": {"pa": 300, "ab": 270, "h": 75, "r": 40, "hr": 12, "rbi": 38, "sb": 8},
+        "full_season_projection": {
+            "pa": 500,
+            "ab": 450,
+            "h": 130,
+            "r": 70,
+            "hr": 22,
+            "rbi": 66,
+            "sb": 14,
+        },
+        "rank": {"rest_of_season": 25, "preseason": 30, "current": 18, "total": 21},
+        "pace": {
+            "HR": {
+                "actual": 10,
+                "expected": 9,
+                "z_score": 0.5,
+                "color_class": "stat-up",
+                "rest_of_season_deviation_sgp": 1,
+                "projection": 20,
+            },
+        },
+    }
+
+
+def test_basis_rebases_cells_sgp_and_rank():
+    roster = [_hitter_entry()]
+    ros = format_lineup_for_display(roster, None, basis="ros")["hitters"][0]
+    ytd = format_lineup_for_display(roster, None, basis="ytd")["hitters"][0]
+    tot = format_lineup_for_display(roster, None, basis="total")["hitters"][0]
+
+    # Cell values follow the basis (HR: ros=12, ytd=full-ros=22-12=10, total=22)
+    assert ros["display_stats"]["HR"] == 12
+    assert ytd["display_stats"]["HR"] == 10
+    assert tot["display_stats"]["HR"] == 22
+
+    # Rank badge follows the basis
+    assert ros["rank_display"] == 25
+    assert ytd["rank_display"] == 18
+    assert tot["rank_display"] == 21
+
+    # SGP differs across bases and ROS sgp is set
+    assert ros["sgp"] != ytd["sgp"]
+    assert ros["sgp"] is not None
+
+    # Pace payload is IDENTICAL across bases (tooltip/z-score/deviation unchanged)
+    assert ros["pace"] == ytd["pace"] == tot["pace"]
+
+
+def test_basis_unknown_falls_back_to_ros():
+    roster = [_hitter_entry()]
+    weird = format_lineup_for_display(roster, None, basis="bogus")["hitters"][0]
+    ros = format_lineup_for_display(roster, None, basis="ros")["hitters"][0]
+    assert weird["display_stats"] == ros["display_stats"]
+    assert weird["rank_display"] == ros["rank_display"]
+
+
+def test_ytd_zero_for_unplayed_player():
+    entry = _hitter_entry()
+    # full == ros  -> no YTD production
+    entry["full_season_projection"] = dict(entry["rest_of_season"])
+    ytd = format_lineup_for_display([entry], None, basis="ytd")["hitters"][0]
+    # No PA so cells render as None (template shows "--")
+    assert ytd["display_stats"]["HR"] is None
+    assert ytd["sgp"] == 0.0
+
+
 # After Phase 1 of the cache refactor, read_cache/write_cache route
 # through ``kv_store.get_kv()``. The leak-prevention invariant
 # (off-Render get_kv() never reaches Upstash) is enforced by kv_store
