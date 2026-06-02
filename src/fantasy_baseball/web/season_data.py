@@ -584,6 +584,8 @@ def build_opponent_lineup(
             ros_dict = {k: getattr(ros_stats, k, 0) for k in ros_keys}
             entry["rest_of_season"] = ros_dict
             entry.update(ros_dict)
+            entry["display_stats"] = _display_map(ros_stats, player.player_type, "ros")
+        entry.setdefault("display_stats", {})
 
         # Pace data
         ptype = player.player_type
@@ -609,6 +611,7 @@ def build_opponent_lineup(
             entry["delta_roto"] = None
             entry["pace"] = {}
             entry["overall_pace"] = compute_overall_pace(entry["pace"])
+            entry["display_stats"] = {}
             enriched.append(entry)
 
     # Split into hitters and pitchers
