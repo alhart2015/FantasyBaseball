@@ -660,56 +660,28 @@ def test_lineup_accepts_basis_param(client):
 
 
 def test_lineup_tbodies_returns_html_for_basis(client, kv_isolation):
-    from fantasy_baseball.web import season_data
-
-    roster = [
-        {
-            "name": "Adley Rutschman",
-            "positions": ["C"],
-            "selected_position": "C",
-            "player_id": "123",
-            "status": "",
-        },
-        {
-            "name": "Corbin Burnes",
-            "positions": ["SP"],
-            "selected_position": "P",
-            "player_id": "456",
-            "status": "",
-        },
-    ]
-    optimal = {"hitters": {}, "pitchers": {}, "moves": []}
-    season_data.write_cache(CacheKey.ROSTER, roster)
-    season_data.write_cache(CacheKey.LINEUP_OPTIMAL, optimal)
+    _seed_minimum_lineup_caches(["Adley Rutschman", "Corbin Burnes"])
 
     resp = client.get("/lineup/tbodies?basis=total")
-    assert resp.status_code in (200, 404)
-    if resp.status_code == 200:
-        data = resp.get_json()
-        assert data["basis"] == "total"
-        assert "hitters_html" in data
-        assert "pitchers_html" in data
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["basis"] == "total"
+    assert "hitters_html" in data
+    assert "pitchers_html" in data
 
 
 def test_lineup_tbodies_unknown_basis_falls_back(client, kv_isolation):
-    from fantasy_baseball.web import season_data
-
-    roster = [
-        {
-            "name": "Adley Rutschman",
-            "positions": ["C"],
-            "selected_position": "C",
-            "player_id": "123",
-            "status": "",
-        },
-    ]
-    optimal = {"hitters": {}, "pitchers": {}, "moves": []}
-    season_data.write_cache(CacheKey.ROSTER, roster)
-    season_data.write_cache(CacheKey.LINEUP_OPTIMAL, optimal)
+    _seed_minimum_lineup_caches(["Adley Rutschman"])
 
     resp = client.get("/lineup/tbodies?basis=bogus")
-    if resp.status_code == 200:
-        assert resp.get_json()["basis"] == "ros"
+    assert resp.status_code == 200
+    assert resp.get_json()["basis"] == "ros"
+
+
+def test_lineup_tbodies_404_without_roster(client, kv_isolation):
+    # Isolated empty KV (no roster seeded) -> route returns 404.
+    resp = client.get("/lineup/tbodies?basis=ros")
+    assert resp.status_code == 404
 
 
 def test_standings_page_includes_breakdown_json_when_cache_present(client, kv_isolation):
