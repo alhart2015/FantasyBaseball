@@ -297,6 +297,26 @@ function runOptimize(btn) {
         });
 }
 
+function onBasisChange(basis) {
+    document.querySelectorAll('.basis-toggle button').forEach(function(b) {
+        b.classList.toggle('active', b.dataset.basis === basis);
+    });
+    var url = new URL(window.location);
+    url.searchParams.set('basis', basis);
+    history.replaceState(null, '', url);
+
+    fetch('/lineup/tbodies?basis=' + encodeURIComponent(basis))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var h = document.getElementById('hitters-tbody');
+            var p = document.getElementById('pitchers-tbody');
+            if (h) h.innerHTML = data.hitters_html;
+            if (p) p.innerHTML = data.pitchers_html;
+            bindTooltips();
+        })
+        .catch(function(err) { console.error('basis change failed', err); });
+}
+
 function onTeamChange(teamKey) {
     if (teamKey === userTeamKey) {
         window.location.href = '/lineup';
@@ -354,6 +374,9 @@ function renderOpponentLineup(data) {
     // Hide user-only UI: moves banner, optimize button, probable starters table.
     var movesBanner = document.querySelector('.moves-banner');
     if (movesBanner) movesBanner.style.display = 'none';
+
+    var basisToggle = document.querySelector('.basis-toggle');
+    if (basisToggle) basisToggle.style.display = 'none';
 
     var sectionHeaders = document.querySelectorAll('.section-header');
     if (sectionHeaders[0]) {
