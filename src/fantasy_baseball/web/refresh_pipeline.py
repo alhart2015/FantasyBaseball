@@ -134,16 +134,18 @@ def durable_refresh_lock() -> Iterator[bool]:
     from fantasy_baseball.data.kv_store import get_kv
     from fantasy_baseball.data.redis_store import acquire_refresh_lock, release_refresh_lock
 
+    kv = get_kv()
     token = uuid.uuid4().hex
-    acquired = acquire_refresh_lock(get_kv(), token, _REFRESH_LOCK_TTL_SECONDS)
+    acquired = acquire_refresh_lock(kv, token, _REFRESH_LOCK_TTL_SECONDS)
     try:
         yield acquired
     finally:
         if acquired:
             # Never raise out of the finally -- releasing is best-effort; the
-            # TTL reclaims the lock if a release ever fails.
+            # TTL reclaims the lock if a release ever fails. Release against the
+            # same store the acquire used.
             try:
-                release_refresh_lock(get_kv(), token)
+                release_refresh_lock(kv, token)
             except Exception as exc:
                 log.warning(f"Failed to release durable refresh lock: {exc}")
 

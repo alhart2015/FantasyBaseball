@@ -44,8 +44,9 @@ def _is_live(expires_at: float | None) -> bool:
     """True if a row with this ``expires_at`` is still valid (not expired).
 
     Single definition of the TTL boundary (``expires_at == now`` counts as
-    live) shared by ``SqliteKVStore.get`` and ``set_if_absent`` so the two
-    can't drift on the comparison.
+    live) shared by ``SqliteKVStore.get``, ``set_if_absent``, and ``mget`` so
+    they can't drift on the comparison. ``keys()`` expresses the same boundary
+    in SQL (``expires_at >= ?``) because it filters in the query.
     """
     return expires_at is None or expires_at >= time.time()
 
@@ -240,14 +241,13 @@ class SqliteKVStore:
     def mget(self, *keys: str) -> list[str | None]:
         if not keys:
             return []
-        now = time.time()
         placeholders = ",".join("?" * len(keys))
         with self._lock:
             rows = self._conn.execute(
                 f"SELECT key, value, expires_at FROM kv WHERE key IN ({placeholders})",
                 keys,
             ).fetchall()
-        by_key = {k: v for (k, v, exp) in rows if exp is None or exp >= now}
+        by_key = {k: v for (k, v, exp) in rows if _is_live(exp)}
         return [by_key.get(k) for k in keys]
 
     def hget(self, hash_name: str, field: str) -> str | None:

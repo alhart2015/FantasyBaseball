@@ -644,3 +644,30 @@ def test_single_id_per_name_is_attributed_normally():
     }
     out = _load_per_game_hitter_ab(game_logs=game_logs)
     assert len(out[normalize_name("Solo Player")]) == 2
+
+
+def test_zero_game_phantom_id_does_not_exclude_the_real_player():
+    """A second mlbam_id that normalizes to the same name but has NO parseable
+    games (a phantom/stale entry) must not trigger collision-exclusion of the
+    real player who does have games. Only ids that actually contributed games
+    count toward the >1-id collision test.
+    """
+    from fantasy_baseball.utils.name_utils import normalize_name
+
+    game_logs = {
+        "400": {
+            "name": "Real Player",
+            "type": "hitter",
+            "games": [{"date": "2026-04-02", "ab": 4, "h": 2, "pa": 4}],
+        },
+        # Same normalized name, different id, but zero usable games.
+        "401": {
+            "name": "Real Player",
+            "type": "hitter",
+            "games": [],
+        },
+    }
+    out = _load_per_game_hitter_ab(game_logs=game_logs)
+    # The real player's games are attributed; the phantom id is ignored, not
+    # treated as a collision.
+    assert len(out[normalize_name("Real Player")]) == 1

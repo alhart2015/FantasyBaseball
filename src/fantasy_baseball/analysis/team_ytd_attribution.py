@@ -120,13 +120,17 @@ def _load_per_game_hitter_ab(
     out: dict[str, list[tuple[date, int]]] = {}
     collisions: list[tuple[str, list[str]]] = []
     for norm, by_id in games_by_norm_id.items():
-        if len(by_id) > 1:
+        # Only ids that actually contributed games count toward the collision
+        # test: a phantom/stale entry with no parseable games must not exclude
+        # the real player who does have games.
+        ids_with_games = {mid: games for mid, games in by_id.items() if games}
+        if len(ids_with_games) > 1:
             # Ambiguous: can't map the Yahoo name to one of these ids. Exclude
             # rather than merge (which would double-count). Record for warning.
-            collisions.append((norm, sorted(names_by_norm_id[norm].values())))
+            collisions.append((norm, sorted(names_by_norm_id[norm][mid] for mid in ids_with_games)))
             continue
-        (games,) = by_id.values()
-        if games:
+        if ids_with_games:
+            (games,) = ids_with_games.values()
             out[norm] = games
 
     if collisions:
