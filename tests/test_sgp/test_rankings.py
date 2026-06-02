@@ -298,3 +298,12 @@ class TestBuildRankingsLookup:
     def test_build_rankings_lookup_total_defaults_none(self):
         result = build_rankings_lookup({"a::hitter": 1}, {}, {})
         assert result["a::hitter"]["total"] is None
+
+    def test_build_rankings_lookup_player_only_in_total(self):
+        result = build_rankings_lookup({}, {}, {}, {"z::pitcher": 7})
+        assert result["z::pitcher"] == {
+            "rest_of_season": None,
+            "preseason": None,
+            "current": None,
+            "total": 7,
+        }

@@ -130,7 +130,7 @@ def build_rankings_lookup(
     entries are ``None``. ``total`` is optional so legacy 3-arg callers keep
     working (they get ``total=None`` for every player).
     """
-    total = total or {}
+    total = total if total is not None else {}
     all_keys = set(ros) | set(preseason) | set(current) | set(total)
     return {
         key: {
