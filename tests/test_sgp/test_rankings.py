@@ -229,6 +229,7 @@ class TestBuildRankingsLookup:
             "rest_of_season": {"overall": 5},
             "preseason": {"overall": 3},
             "current": {"overall": 7},
+            "total": None,
         }
 
     def test_player_only_in_ros_has_none_for_others(self):
@@ -241,6 +242,7 @@ class TestBuildRankingsLookup:
             "rest_of_season": {"overall": 100},
             "preseason": None,
             "current": None,
+            "total": None,
         }
 
     def test_player_only_in_preseason_has_none_for_others(self):
@@ -254,6 +256,7 @@ class TestBuildRankingsLookup:
             "rest_of_season": None,
             "preseason": {"overall": 50},
             "current": None,
+            "total": None,
         }
 
     def test_player_only_in_current_has_none_for_others(self):
@@ -267,6 +270,7 @@ class TestBuildRankingsLookup:
             "rest_of_season": None,
             "preseason": None,
             "current": {"overall": 25},
+            "total": None,
         }
 
     def test_union_includes_keys_from_all_three(self):
@@ -279,3 +283,18 @@ class TestBuildRankingsLookup:
 
     def test_empty_inputs_yield_empty_dict(self):
         assert build_rankings_lookup({}, {}, {}) == {}
+
+    def test_build_rankings_lookup_includes_total(self):
+        result = build_rankings_lookup(
+            {"a::hitter": 1}, {"a::hitter": 2}, {"a::hitter": 3}, {"a::hitter": 4}
+        )
+        assert result["a::hitter"] == {
+            "rest_of_season": 1,
+            "preseason": 2,
+            "current": 3,
+            "total": 4,
+        }
+
+    def test_build_rankings_lookup_total_defaults_none(self):
+        result = build_rankings_lookup({"a::hitter": 1}, {}, {})
+        assert result["a::hitter"]["total"] is None
