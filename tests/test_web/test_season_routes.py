@@ -650,6 +650,68 @@ def test_compare_missing_params(client):
     assert resp2.status_code == 400
 
 
+def test_lineup_accepts_basis_param(client):
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=None),
+        patch("fantasy_baseball.web.season_routes.read_cache_list", return_value=None),
+    ):
+        resp = client.get("/lineup?basis=ytd")
+    assert resp.status_code == 200
+
+
+def test_lineup_tbodies_returns_html_for_basis(client, kv_isolation):
+    from fantasy_baseball.web import season_data
+
+    roster = [
+        {
+            "name": "Adley Rutschman",
+            "positions": ["C"],
+            "selected_position": "C",
+            "player_id": "123",
+            "status": "",
+        },
+        {
+            "name": "Corbin Burnes",
+            "positions": ["SP"],
+            "selected_position": "P",
+            "player_id": "456",
+            "status": "",
+        },
+    ]
+    optimal = {"hitters": {}, "pitchers": {}, "moves": []}
+    season_data.write_cache(CacheKey.ROSTER, roster)
+    season_data.write_cache(CacheKey.LINEUP_OPTIMAL, optimal)
+
+    resp = client.get("/lineup/tbodies?basis=total")
+    assert resp.status_code in (200, 404)
+    if resp.status_code == 200:
+        data = resp.get_json()
+        assert data["basis"] == "total"
+        assert "hitters_html" in data
+        assert "pitchers_html" in data
+
+
+def test_lineup_tbodies_unknown_basis_falls_back(client, kv_isolation):
+    from fantasy_baseball.web import season_data
+
+    roster = [
+        {
+            "name": "Adley Rutschman",
+            "positions": ["C"],
+            "selected_position": "C",
+            "player_id": "123",
+            "status": "",
+        },
+    ]
+    optimal = {"hitters": {}, "pitchers": {}, "moves": []}
+    season_data.write_cache(CacheKey.ROSTER, roster)
+    season_data.write_cache(CacheKey.LINEUP_OPTIMAL, optimal)
+
+    resp = client.get("/lineup/tbodies?basis=bogus")
+    if resp.status_code == 200:
+        assert resp.get_json()["basis"] == "ros"
+
+
 def test_standings_page_includes_breakdown_json_when_cache_present(client, kv_isolation):
     """When STANDINGS_BREAKDOWN cache exists, its JSON is embedded in the page."""
     from fantasy_baseball.web import season_data

@@ -593,6 +593,10 @@ def register_routes(app: Flask) -> None:
         # have installed. The indicator module is intentionally duckdb-free.
         from fantasy_baseball.streaks.indicator import build_indicator
 
+        basis = request.args.get("basis", "ros")
+        if basis not in ("ros", "ytd", "total"):
+            basis = "ros"
+
         meta = read_meta()
         roster_raw = read_cache_list(CacheKey.ROSTER)
         optimal_raw = read_cache_dict(CacheKey.LINEUP_OPTIMAL)
@@ -604,7 +608,7 @@ def register_routes(app: Flask) -> None:
         if roster_raw:
             from fantasy_baseball.web.season_data import format_lineup_for_display
 
-            lineup_data = format_lineup_for_display(roster_raw, optimal_raw)
+            lineup_data = format_lineup_for_display(roster_raw, optimal_raw, basis=basis)
             # Attach per-hitter streak chip data so the tbody partial can
             # render a chip column without re-reading the cache itself.
             for hitter in lineup_data["hitters"]:
@@ -635,6 +639,40 @@ def register_routes(app: Flask) -> None:
             teams=teams_data["teams"],
             user_team_key=teams_data.get("user_team_key", ""),
             selected_team_key=selected_team_key,
+            basis=basis,
+        )
+
+    @app.route("/lineup/tbodies")
+    def lineup_tbodies():
+        from fantasy_baseball.streaks.indicator import build_indicator
+        from fantasy_baseball.web.season_data import format_lineup_for_display
+
+        basis = request.args.get("basis", "ros")
+        if basis not in ("ros", "ytd", "total"):
+            basis = "ros"
+
+        roster_raw = read_cache_list(CacheKey.ROSTER)
+        if not roster_raw:
+            return jsonify({"error": "No roster data. Run a refresh first."}), 404
+        optimal_raw = read_cache_dict(CacheKey.LINEUP_OPTIMAL)
+        streak_payload = read_cache_dict(CacheKey.STREAK_SCORES)
+
+        lineup_data = format_lineup_for_display(roster_raw, optimal_raw, basis=basis)
+        for hitter in lineup_data["hitters"]:
+            hitter["streak_indicator"] = build_indicator(hitter["name"], streak_payload)
+
+        hitters_html = render_template(
+            "season/_lineup_hitters_tbody.html",
+            players=lineup_data["hitters"],
+            totals=lineup_data["hitter_totals"],
+        )
+        pitchers_html = render_template(
+            "season/_lineup_pitchers_tbody.html",
+            players=lineup_data["pitchers"],
+            totals=lineup_data["pitcher_totals"],
+        )
+        return jsonify(
+            {"basis": basis, "hitters_html": hitters_html, "pitchers_html": pitchers_html}
         )
 
     @app.route("/api/optimize", methods=["POST"])
