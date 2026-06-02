@@ -627,24 +627,68 @@ class RefreshRun:
 
         # Full-season (ROS+YTD) projections populate Player.full_season_projection
         # for display + ProjectedStandings, while Player.rest_of_season stays
-        # ROS-only for forward-looking decision paths. Same Redis+disk fallback
-        # as the ROS load.
-        self._progress("Loading full-season projections...")
-        full_hitters, full_pitchers = _load_projection_pair(
-            read_cache(CacheKey.FULL_SEASON_PROJECTIONS)
-        )
-        if not full_hitters.empty or not full_pitchers.empty:
-            self.full_hitters_proj = full_hitters
-            self.full_pitchers_proj = full_pitchers
+        # ROS-only for forward-looking decision paths.
+        #
+        # Re-derive full-season HERE from the ROS blob + the CURRENT game-log
+        # totals (the same ones _build_projected_standings uses for the team-YTD
+        # overlay) rather than reading cache:full_season_projections. That cached
+        # blob is written by the SEPARATE _run_rest_of_season_fetch job and is
+        # frozen at whenever that job last ran; consuming it would blend a stale
+        # YTD vintage into the per-player full-season lines while the team-YTD
+        # overlay is current, so the projected standings would mix vintages.
+        # Deriving locally keeps the whole standings computation self-consistent
+        # regardless of when the ROS fetch last ran. (game logs were synced in
+        # _fetch_game_logs, the prior step, so these totals are fresh.)
+        if self.has_rest_of_season:
+            from fantasy_baseball.data.projections import (
+                normalize_rest_of_season_to_full_season,
+            )
+            from fantasy_baseball.data.redis_store import get_game_log_totals
+            from fantasy_baseball.models.player import PlayerType
+
+            self._progress("Deriving full-season projections (ROS + current YTD)...")
+            _client = get_kv()
+
+            def _numeric_keyed(raw: dict) -> dict[int, dict]:
+                # normalize_rest_of_season_to_full_season matches on int(mlbam_id);
+                # game-log keys are numeric MLBAM ids by writer invariant. Skip any
+                # non-numeric key (it can't match a numeric mlbam_id, so it adds
+                # nothing) rather than crash the whole refresh on one bad key.
+                out: dict[int, dict] = {}
+                for k, v in raw.items():
+                    try:
+                        out[int(k)] = v
+                    except (TypeError, ValueError):
+                        continue
+                return out
+
+            hitter_totals = _numeric_keyed(get_game_log_totals(_client, "hitters"))
+            pitcher_totals = _numeric_keyed(get_game_log_totals(_client, "pitchers"))
+            self.full_hitters_proj = normalize_rest_of_season_to_full_season(
+                ros_hitters, hitter_totals, PlayerType.HITTER
+            )
+            self.full_pitchers_proj = normalize_rest_of_season_to_full_season(
+                ros_pitchers, pitcher_totals, PlayerType.PITCHER
+            )
             self._progress(
-                f"Loaded {len(full_hitters)} full-season hitters + "
-                f"{len(full_pitchers)} full-season pitchers"
+                f"Derived {len(self.full_hitters_proj)} full-season hitters + "
+                f"{len(self.full_pitchers_proj)} full-season pitchers"
             )
         else:
-            self._progress(
-                "WARNING: cache:full_season_projections missing — "
-                "Player.full_season_projection will be unset"
+            # No ROS blob to add YTD onto; fall back to the cached full-season
+            # blob (best-effort) so display still has something.
+            self._progress("Loading full-season projections (no ROS; from cache)...")
+            full_hitters, full_pitchers = _load_projection_pair(
+                read_cache(CacheKey.FULL_SEASON_PROJECTIONS)
             )
+            if not full_hitters.empty or not full_pitchers.empty:
+                self.full_hitters_proj = full_hitters
+                self.full_pitchers_proj = full_pitchers
+            else:
+                self._progress(
+                    "WARNING: no ROS projections and cache:full_season_projections "
+                    "missing -- Player.full_season_projection will be unset"
+                )
 
     # --- Step 4b: Fetch opponent rosters (raw) ---
     def _fetch_opponent_rosters(self):
