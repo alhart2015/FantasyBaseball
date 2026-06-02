@@ -149,20 +149,20 @@ def acquire_refresh_lock(client, token: str, ttl_seconds: int) -> bool:
     """
     if client is None:
         return False
-    return bool(client.set(REFRESH_LOCK_KEY, token, ex=ttl_seconds, nx=True))
+    return bool(client.set_if_absent(REFRESH_LOCK_KEY, token, ex=ttl_seconds))
 
 
 def release_refresh_lock(client, token: str) -> None:
     """Release the refresh lock, but only if ``token`` still matches.
 
-    The match guard prevents a slow holder whose lock already expired (and
-    was re-acquired by another instance) from deleting the new holder's
-    lock. No-op when ``client is None`` or the lock is held by someone else.
+    Uses an atomic compare-and-delete so a slow holder whose lock already
+    expired (and was re-acquired by another instance) cannot delete the new
+    holder's lock -- a plain get-then-delete has a TOCTOU window between the
+    check and the delete. No-op when ``client is None``.
     """
     if client is None:
         return
-    if client.get(REFRESH_LOCK_KEY) == token:
-        client.delete(REFRESH_LOCK_KEY)
+    client.compare_delete(REFRESH_LOCK_KEY, token)
 
 
 SEASON_PROGRESS_KEY = "season_progress"

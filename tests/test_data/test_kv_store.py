@@ -170,10 +170,10 @@ def test_sqlite_ttl_expires(tmp_kv: SqliteKVStore):
         time.time = original_time
 
 
-def test_upstash_set_nx_reports_skip_as_not_acquired():
+def test_upstash_set_if_absent_reports_skip_as_not_acquired():
     """upstash-redis maps SET's raw response through ``res == "OK"`` (see
     upstash_redis.format.format_set), so a skipped NX write returns ``False``
-    -- NOT ``None`` like redis-py/fakeredis. The wrapper must report that as
+    -- NOT ``None`` like redis-py/fakeredis. set_if_absent must report that as
     'not acquired'; an ``is not None`` check would treat False as success and
     make the durable refresh lock always 'win' on Render (the one environment
     with the cross-instance race). This stub mirrors the real contract.
@@ -192,35 +192,72 @@ def test_upstash_set_nx_reports_skip_as_not_acquired():
             return True
 
     kv = UpstashKVStore(_StubUpstash())
-    assert kv.set("lock", "a", nx=True) is True
-    assert kv.set("lock", "b", nx=True) is False  # skipped -> not acquired
+    assert kv.set_if_absent("lock", "a") is True
+    assert kv.set_if_absent("lock", "b") is False  # skipped -> not acquired
 
 
-def test_sqlite_set_nx_only_writes_when_absent(tmp_kv: SqliteKVStore):
-    # nx=True is the SETNX primitive the durable refresh lock rests on.
-    assert tmp_kv.set("lock", "owner-a", nx=True) is True
+def test_upstash_compare_delete_is_atomic_cas():
+    """compare_delete must issue a single Lua CAS-delete (delete only if the
+    value still matches), not a get-then-delete, so it can't remove a
+    successor's lock. Verify the script is keyed/argued correctly and the
+    eval result is coerced to bool.
+    """
+    from fantasy_baseball.data.kv_store import UpstashKVStore
+
+    class _StubUpstash:
+        def __init__(self):
+            self.calls = []
+
+        def eval(self, script, keys=None, args=None):
+            self.calls.append((script, keys, args))
+            # Simulate: deleted 1 row when the token matches "good".
+            return 1 if args == ["good"] else 0
+
+    stub = _StubUpstash()
+    kv = UpstashKVStore(stub)
+    assert kv.compare_delete("refresh:lock", "good") is True
+    assert kv.compare_delete("refresh:lock", "stale") is False
+    # One eval per call (atomic), keyed on the lock key, arged on the token.
+    assert stub.calls[0][1] == ["refresh:lock"]
+    assert stub.calls[0][2] == ["good"]
+    assert "redis.call('del'" in stub.calls[0][0]
+
+
+def test_sqlite_set_if_absent_only_writes_when_absent(tmp_kv: SqliteKVStore):
+    # set_if_absent is the SETNX primitive the durable refresh lock rests on.
+    assert tmp_kv.set_if_absent("lock", "owner-a") is True
     # Second writer is rejected; the first owner's value is untouched.
-    assert tmp_kv.set("lock", "owner-b", nx=True) is False
+    assert tmp_kv.set_if_absent("lock", "owner-b") is False
     assert tmp_kv.get("lock") == "owner-a"
 
 
-def test_sqlite_set_without_nx_overwrites_and_returns_true(tmp_kv: SqliteKVStore):
-    assert tmp_kv.set("k", "v") is True
-    assert tmp_kv.set("k", "v2") is True
+def test_sqlite_set_returns_none_and_overwrites(tmp_kv: SqliteKVStore):
+    assert tmp_kv.set("k", "v") is None
+    assert tmp_kv.set("k", "v2") is None
     assert tmp_kv.get("k") == "v2"
 
 
-def test_sqlite_set_nx_succeeds_again_after_expiry(tmp_kv: SqliteKVStore):
+def test_sqlite_compare_delete_only_deletes_on_match(tmp_kv: SqliteKVStore):
+    tmp_kv.set("lock", "owner-a")
+    # Wrong token: must NOT delete (this is the successor-lock-protection case).
+    assert tmp_kv.compare_delete("lock", "owner-b") is False
+    assert tmp_kv.get("lock") == "owner-a"
+    # Right token: deletes.
+    assert tmp_kv.compare_delete("lock", "owner-a") is True
+    assert tmp_kv.get("lock") is None
+
+
+def test_sqlite_set_if_absent_succeeds_again_after_expiry(tmp_kv: SqliteKVStore):
     # An expired lock must be re-acquirable, so a crashed holder self-heals.
-    assert tmp_kv.set("lock", "owner-a", nx=True, ex=1) is True
-    assert tmp_kv.set("lock", "owner-b", nx=True) is False
+    assert tmp_kv.set_if_absent("lock", "owner-a", ex=1) is True
+    assert tmp_kv.set_if_absent("lock", "owner-b") is False
 
     future = time.time() + 10
     original_time = time.time
     try:
         time.time = lambda: future
         # Prior owner's lock has expired -> a new owner may claim it.
-        assert tmp_kv.set("lock", "owner-b", nx=True) is True
+        assert tmp_kv.set_if_absent("lock", "owner-b") is True
     finally:
         time.time = original_time
     assert tmp_kv.get("lock") == "owner-b"

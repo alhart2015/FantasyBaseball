@@ -45,7 +45,9 @@ class KVStore(Protocol):
     """Minimal Redis subset the app actually uses. Both backends match."""
 
     def get(self, key: str) -> str | None: ...
-    def set(self, key: str, value: str, *, ex: int | None = None, nx: bool = False) -> bool: ...
+    def set(self, key: str, value: str, *, ex: int | None = None) -> None: ...
+    def set_if_absent(self, key: str, value: str, *, ex: int | None = None) -> bool: ...
+    def compare_delete(self, key: str, expected: str) -> bool: ...
     def delete(self, key: str) -> int: ...
     def keys(self, pattern: str) -> list[str]: ...
     def mget(self, *keys: str) -> list[str | None]: ...
@@ -64,13 +66,26 @@ class UpstashKVStore:
     def get(self, key: str) -> str | None:
         return self._r.get(key)
 
-    def set(self, key: str, value: str, *, ex: int | None = None, nx: bool = False) -> bool:
-        # upstash-redis maps SET's raw response through ``res == "OK"``
-        # (upstash_redis.format.format_set), so a normal write returns True and
-        # an NX-skip returns False (NOT None like redis-py). Coerce to bool so
-        # the durable refresh lock reads a skip as "not acquired"; an
-        # ``is not None`` check would treat False as success and never block.
-        return bool(self._r.set(key, value, ex=ex, nx=nx))
+    def set(self, key: str, value: str, *, ex: int | None = None) -> None:
+        self._r.set(key, value, ex=ex)
+
+    def set_if_absent(self, key: str, value: str, *, ex: int | None = None) -> bool:
+        # SET key value NX EX. upstash-redis maps the SET response through
+        # ``res == "OK"`` (upstash_redis.format.format_set), so a write returns
+        # True and an NX-skip returns False (NOT None like redis-py); coerce to
+        # bool so the durable lock reads a skip as "not acquired".
+        return bool(self._r.set(key, value, ex=ex, nx=True))
+
+    def compare_delete(self, key: str, expected: str) -> bool:
+        # Atomic compare-and-delete via a Lua script: delete only if the value
+        # still matches, in one round-trip, so a holder whose lock already
+        # expired and was re-acquired by another instance can't delete the new
+        # holder's lock (the get-then-delete TOCTOU). Returns True iff deleted.
+        script = (
+            "if redis.call('get', KEYS[1]) == ARGV[1] "
+            "then return redis.call('del', KEYS[1]) else return 0 end"
+        )
+        return bool(self._r.eval(script, keys=[key], args=[expected]))
 
     def delete(self, key: str) -> int:
         return self._r.delete(key)
@@ -151,19 +166,27 @@ class SqliteKVStore:
                 return None
             return value if value is None else str(value)
 
-    def set(self, key: str, value: str, *, ex: int | None = None, nx: bool = False) -> bool:
+    def set(self, key: str, value: str, *, ex: int | None = None) -> None:
         expires_at = (time.time() + ex) if ex is not None else None
         with self._lock:
-            if nx:
-                # SETNX with TTL awareness: an existing-but-expired row is
-                # treated as absent so a crashed lock holder self-heals.
-                row = self._conn.execute(
-                    "SELECT expires_at FROM kv WHERE key = ?", (key,)
-                ).fetchone()
-                if row is not None:
-                    existing_exp = row[0]
-                    if existing_exp is None or existing_exp >= time.time():
-                        return False
+            self._conn.execute(
+                "INSERT INTO kv(key, value, expires_at) VALUES(?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET "
+                "value = excluded.value, expires_at = excluded.expires_at",
+                (key, value, expires_at),
+            )
+
+    def set_if_absent(self, key: str, value: str, *, ex: int | None = None) -> bool:
+        # SETNX with TTL awareness: an existing-but-expired row is treated as
+        # absent so a crashed lock holder self-heals. The SELECT + INSERT run
+        # under the write lock, so the check-and-set is atomic within process.
+        expires_at = (time.time() + ex) if ex is not None else None
+        with self._lock:
+            row = self._conn.execute("SELECT expires_at FROM kv WHERE key = ?", (key,)).fetchone()
+            if row is not None:
+                existing_exp = row[0]
+                if existing_exp is None or existing_exp >= time.time():
+                    return False
             self._conn.execute(
                 "INSERT INTO kv(key, value, expires_at) VALUES(?, ?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET "
@@ -171,6 +194,13 @@ class SqliteKVStore:
                 (key, value, expires_at),
             )
             return True
+
+    def compare_delete(self, key: str, expected: str) -> bool:
+        # Atomic compare-and-delete: one locked DELETE that only fires when the
+        # stored value still matches, so it can't remove a successor's lock.
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM kv WHERE key = ? AND value = ?", (key, expected))
+            return cur.rowcount > 0
 
     def delete(self, key: str) -> int:
         with self._lock:
