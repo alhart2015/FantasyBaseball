@@ -1044,6 +1044,7 @@ class RefreshRun:
     def _compute_rankings(self):
         self._progress("Computing SGP rankings...")
         from fantasy_baseball.sgp.rankings import (
+            build_rankings_lookup,
             compute_rankings_from_game_logs,
             compute_sgp_rankings,
             lookup_rank,
@@ -1068,8 +1069,6 @@ class RefreshRun:
             total_ranks = compute_sgp_rankings(self.full_hitters_proj, self.full_pitchers_proj)
         else:
             total_ranks = {}
-
-        from fantasy_baseball.sgp.rankings import build_rankings_lookup
 
         self.rankings_lookup = build_rankings_lookup(
             rest_of_season_ranks,
