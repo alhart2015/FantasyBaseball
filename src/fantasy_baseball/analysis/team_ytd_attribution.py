@@ -62,11 +62,17 @@ def _load_per_game_hitter_ab(
     - ``games: null`` -> treat as empty
     - missing name -> skip
 
-    Logs a warning when two distinct source names normalize to the same
-    key (e.g. Will Smith C / Will Smith OF). There's no MLB-id to Yahoo-id
-    disambiguator available, so the lists are still merged -- the warning
-    just surfaces that per-team AB attribution may double-count for the
-    affected players.
+    Normalized-name collisions (two distinct ``mlbam_id``s whose names
+    normalize to the same key -- e.g. the two MLB "Will Smith"s, or an
+    accented vs ASCII spelling) are EXCLUDED from attribution, not merged.
+    The Yahoo roster side has only a name, so a colliding name can't be
+    resolved to one player; merging both players' games would credit a team
+    owning "that name" with the union of two players' ABs (a silent
+    double-count). Excluding is a logged undercount instead -- preferable to
+    a silent inflation per the repo's "no plausible-wrong answer" rule.
+    Detection is by ``mlbam_id`` (the game-log key), so two players sharing
+    an identical name string are caught too -- the prior name-string compare
+    missed those.
     """
     if game_logs is None:
         if not path.exists():
@@ -82,11 +88,14 @@ def _load_per_game_hitter_ab(
             log.warning("Failed to load game logs from %s: %s", path, exc)
             return {}
 
-    out: dict[str, list[tuple[date, int]]] = defaultdict(list)
-    seen_norm_names: dict[str, str] = {}  # norm -> first source name encountered
-    collisions: list[tuple[str, str]] = []
+    # Accumulate games per (normalized name, mlbam_id) so a normalized name
+    # mapping to more than one distinct id can be detected and excluded rather
+    # than silently merged. ``ids_by_norm`` keeps the source names for the
+    # warning.
+    games_by_norm_id: dict[str, dict[str, list[tuple[date, int]]]] = defaultdict(dict)
+    names_by_norm_id: dict[str, dict[str, str]] = defaultdict(dict)
 
-    for _mid, entry in (game_logs or {}).items():
+    for mid, entry in (game_logs or {}).items():
         if not isinstance(entry, dict):
             continue
         if entry.get("type") != "hitter":
@@ -95,14 +104,9 @@ def _load_per_game_hitter_ab(
         if not name:
             continue
         norm = normalize_name(name)
+        names_by_norm_id[norm][mid] = name
 
-        # Track normalized-name collisions across distinct source names.
-        prior = seen_norm_names.get(norm)
-        if prior is not None and prior != name:
-            collisions.append((prior, name))
-        else:
-            seen_norm_names[norm] = name
-
+        games = games_by_norm_id[norm].setdefault(mid, [])
         for game in entry.get("games") or []:
             if not isinstance(game, dict):
                 continue
@@ -111,18 +115,30 @@ def _load_per_game_hitter_ab(
                 ab = int(game.get("ab", 0))
             except (TypeError, ValueError):
                 continue
-            out[norm].append((game_date, ab))
+            games.append((game_date, ab))
+
+    out: dict[str, list[tuple[date, int]]] = {}
+    collisions: list[tuple[str, list[str]]] = []
+    for norm, by_id in games_by_norm_id.items():
+        if len(by_id) > 1:
+            # Ambiguous: can't map the Yahoo name to one of these ids. Exclude
+            # rather than merge (which would double-count). Record for warning.
+            collisions.append((norm, sorted(names_by_norm_id[norm].values())))
+            continue
+        (games,) = by_id.values()
+        if games:
+            out[norm] = games
 
     if collisions:
         log.warning(
-            "roster_game_logs.json has %d normalized-name collisions: %s. "
-            "Per-team AB attribution may double-count for affected players "
-            "(no MLB-id to Yahoo-id disambiguator available).",
+            "Game logs have %d normalized-name collisions (multiple mlbam_ids "
+            "per name); these names are EXCLUDED from team AB attribution to "
+            "avoid double-counting (no MLB-id to Yahoo-id disambiguator): %s",
             len(collisions),
             collisions[:5],
         )
 
-    return dict(out)
+    return out
 
 
 def _is_active_hitter_slot(slot: Position) -> bool:

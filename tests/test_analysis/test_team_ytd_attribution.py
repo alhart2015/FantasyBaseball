@@ -562,14 +562,16 @@ def test_corrupt_json_on_disk_logs_warning(caplog, tmp_path: Path):
 # -----------------------------------------------------------------------------
 
 
-def test_normalized_name_collision_logs_warning(caplog):
-    """Two distinct source names that normalize to the same key trigger a
-    warning so the operator can see when attribution may double-count.
+def test_normalized_name_collision_is_excluded_not_merged(caplog):
+    """Two distinct mlbam_ids whose names normalize to the same key are NOT
+    merged: the name can't be disambiguated to one player, so attributing
+    either player's games to a team owning "that name" would double-count.
+    The colliding name is excluded from attribution (a logged undercount is
+    preferable to a silent inflation per the repo's no-plausible-wrong rule).
 
-    ASCII "Jose Ramirez" and the accented form (e + combining acute,
-    U+0301) both normalize to "jose ramirez" after NFKD + accent strip
-    + lowercase. The accented form is built via chr() to keep this
-    source file ASCII-only (per CLAUDE.md).
+    ASCII "Jose Ramirez" and the accented form (e + combining acute, U+0301)
+    both normalize to "jose ramirez". The accented form is built via chr()
+    to keep this source file ASCII-only (per CLAUDE.md).
     """
     from fantasy_baseball.utils.name_utils import normalize_name
 
@@ -592,11 +594,53 @@ def test_normalized_name_collision_logs_warning(caplog):
 
     # Sanity: both source names actually collide under normalize_name.
     assert normalize_name("Jose Ramirez") == normalize_name(accented)
-
     # Warning fired.
     assert any("collision" in rec.message.lower() for rec in caplog.records)
+    # Excluded, NOT merged into a 2-game bucket.
+    assert normalize_name("Jose Ramirez") not in out
 
-    # Merge still happens (no MLB-id to disambiguate) -- both games end up
-    # in the same normalized-name bucket.
-    merged = out[normalize_name("Jose Ramirez")]
-    assert len(merged) == 2
+
+def test_same_exact_name_collision_is_excluded(caplog):
+    """Two players with the IDENTICAL name string but different mlbam_ids
+    (e.g. the two MLB "Will Smith"s) must also be detected and excluded.
+    The old detector compared source name strings, so an exact-name
+    collision slipped through and silently merged both players' games.
+    """
+    from fantasy_baseball.utils.name_utils import normalize_name
+
+    game_logs = {
+        "200": {
+            "name": "Will Smith",
+            "type": "hitter",
+            "games": [{"date": "2026-04-02", "ab": 4, "h": 2, "pa": 4}],
+        },
+        "201": {
+            "name": "Will Smith",
+            "type": "hitter",
+            "games": [{"date": "2026-04-03", "ab": 3, "h": 1, "pa": 3}],
+        },
+    }
+    with caplog.at_level(logging.WARNING, logger="fantasy_baseball.analysis.team_ytd_attribution"):
+        out = _load_per_game_hitter_ab(game_logs=game_logs)
+
+    assert any("collision" in rec.message.lower() for rec in caplog.records)
+    assert normalize_name("Will Smith") not in out
+
+
+def test_single_id_per_name_is_attributed_normally():
+    """The common case (one mlbam_id per normalized name) is unaffected: the
+    player's games are attributed."""
+    from fantasy_baseball.utils.name_utils import normalize_name
+
+    game_logs = {
+        "300": {
+            "name": "Solo Player",
+            "type": "hitter",
+            "games": [
+                {"date": "2026-04-02", "ab": 4, "h": 2, "pa": 4},
+                {"date": "2026-04-03", "ab": 3, "h": 1, "pa": 3},
+            ],
+        },
+    }
+    out = _load_per_game_hitter_ab(game_logs=game_logs)
+    assert len(out[normalize_name("Solo Player")]) == 2
