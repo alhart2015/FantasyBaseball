@@ -40,6 +40,27 @@ def projections_dir(tmp_path):
     return tmp_path / "projections"
 
 
+@pytest.fixture
+def pin_today(monkeypatch):
+    """Return a helper that pins ``ros_pipeline.local_today`` to a fixed date.
+
+    The refuse-stale guard compares the snapshot date to ``local_today()``, so a
+    test using a fixed-date fixture snapshot must pin "today" just after it to read
+    as fresh (production always blends today's snapshot). Call ``pin_today(2026,
+    4, 15)`` -- avoids repeating the ``datetime`` import + ``monkeypatch.setattr``
+    in every write-path test.
+    """
+    import datetime as _dt
+
+    def _pin(year: int, month: int, day: int) -> None:
+        monkeypatch.setattr(
+            "fantasy_baseball.data.ros_pipeline.local_today",
+            lambda: _dt.date(year, month, day),
+        )
+
+    return _pin
+
+
 def test_blend_and_cache_ros_raises_when_ros_dir_missing(projections_dir, monkeypatch):
     """Root dir exists but no rest_of_season subdir → FileNotFoundError."""
     # Nothing created under projections_dir — the year dir is absent.
@@ -64,7 +85,7 @@ def test_blend_and_cache_ros_raises_when_no_date_dirs(projections_dir, monkeypat
         "fantasy_baseball.data.ros_pipeline.get_kv",
         lambda: None,
     )
-    with pytest.raises(FileNotFoundError, match="No ROS snapshot dirs"):
+    with pytest.raises(FileNotFoundError, match="No datable ROS snapshot dirs"):
         blend_and_cache_ros(
             projections_dir,
             ["steamer"],
@@ -78,12 +99,15 @@ def test_blend_and_cache_ros_blends_latest_snapshot_and_writes_cache(
     projections_dir,
     fake_redis,
     monkeypatch,
-    tmp_path,
+    pin_today,
 ):
     """Two date dirs present: the latest one gets blended; result cached."""
     _make_ros_tree(projections_dir, year=2026, date="2026-04-07")
     _make_ros_tree(projections_dir, year=2026, date="2026-04-14")
 
+    # Pin "today" just after the latest snapshot so it is fresh (the refuse-stale
+    # guard would otherwise abort the write); production always blends today's.
+    pin_today(2026, 4, 15)
     monkeypatch.setattr(
         "fantasy_baseball.data.ros_pipeline.get_kv",
         lambda: fake_redis,
@@ -122,6 +146,7 @@ def test_blend_and_cache_ros_normalizes_using_redis_totals(
     projections_dir,
     fake_redis,
     monkeypatch,
+    pin_today,
 ):
     """game_log_totals from Redis must be added to ROS counting stats — but
     only into the cache:full_season_projections blob; the returned
@@ -138,6 +163,9 @@ def test_blend_and_cache_ros_normalizes_using_redis_totals(
     """
 
     _make_ros_tree(projections_dir, year=2026, date="2026-04-07")
+
+    # Pin "today" so the snapshot is fresh (see refuse-stale guard).
+    pin_today(2026, 4, 8)
 
     # 10 HR already accumulated for Aaron Judge.
     redis_store.set_game_log_totals(
@@ -189,13 +217,16 @@ def test_blend_and_cache_ros_normalizes_using_redis_totals(
     assert cole_full["k"] == pytest.approx(300)  # 240 + 60
 
 
-def test_blend_writes_both_ros_and_full_season(tmp_path, monkeypatch):
+def test_blend_writes_both_ros_and_full_season(tmp_path, monkeypatch, pin_today):
     """blend_and_cache_ros() must write BOTH cache:ros_projections (ROS-only)
     AND cache:full_season_projections (with YTD added)."""
     from fantasy_baseball.data import redis_store as rs
     from fantasy_baseball.data.kv_store import SqliteKVStore, _reset_singleton
     from fantasy_baseball.data.ros_pipeline import blend_and_cache_ros
 
+    # Pin "today" just after the 2026-04-26 snapshot so it is fresh (the
+    # refuse-stale guard would otherwise abort the write).
+    pin_today(2026, 4, 27)
     monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(tmp_path / "kv.db"))
     _reset_singleton()
     kv = SqliteKVStore(tmp_path / "kv.db")
@@ -249,53 +280,59 @@ def test_blend_writes_both_ros_and_full_season(tmp_path, monkeypatch):
     assert full_row["r"] == 130.0, "Full-season cache must be 100+30=130"
 
 
-def test_blend_warns_and_stamps_snapshot_date_when_stale(
+def test_blend_aborts_and_keeps_last_good_when_snapshot_stale(
     projections_dir,
     fake_redis,
-    monkeypatch,
+    pin_today,
 ):
-    """A snapshot older than the staleness threshold must emit a loud
-    warning (full-season = YTD + ROS would double-count) AND stamp the
-    snapshot date into both cache envelopes for provenance. Both blobs are
-    still written -- warn-and-proceed, not abort."""
-    import datetime as _dt
-    import json
+    """Regression (2026-06-04 Cloudflare-403 incident): when the only ROS
+    snapshot on disk is staler than the threshold, blend_and_cache_ros MUST
+    refuse to write -- raise StaleROSSnapshotError and leave the last-good
+    cache:ros_projections / cache:full_season_projections untouched -- rather
+    than overwrite fresh Redis with near-preseason March magnitudes (which the
+    daily refresh would then double-count as YTD + ROS).
+
+    Previously this path warned-and-proceeded and wrote both blobs; that is
+    exactly how a failed FanGraphs fetch (all systems 403) overwrote prod's
+    good ROS with the stale committed March snapshot. Keeping the last-good
+    blob is the "use the most recent ROS" mitigation."""
+    from fantasy_baseball.data.ros_pipeline import StaleROSSnapshotError
 
     _make_ros_tree(projections_dir, year=2026, date="2026-04-07")
-    monkeypatch.setattr("fantasy_baseball.data.ros_pipeline.get_kv", lambda: fake_redis)
-    import fantasy_baseball.web.season_data as season_data
+    # Pin "today" so the 2026-04-07 snapshot is well past the staleness threshold.
+    # The guard raises before any get_kv() call, so no KV patch is needed -- the
+    # last-good blobs are touched only via the direct fake_redis calls below.
+    pin_today(2026, 4, 20)
 
-    monkeypatch.setattr(season_data, "get_kv", lambda: fake_redis)
-    # Pin "today" so the 2026-04-07 snapshot is 13 days stale (> 7).
-    monkeypatch.setattr(
-        "fantasy_baseball.data.ros_pipeline.local_today",
-        lambda: _dt.date(2026, 4, 20),
-    )
+    # Pre-seed a "last-good" blob in both keys; the abort must leave them as-is.
+    fake_redis.set("cache:ros_projections", "LAST_GOOD_ROS")
+    fake_redis.set("cache:full_season_projections", "LAST_GOOD_FULL")
 
     msgs: list[str] = []
-    blend_and_cache_ros(
-        projections_dir,
-        ["steamer"],
-        {"steamer": 1.0},
-        None,
-        2026,
-        progress_cb=msgs.append,
-    )
+    with pytest.raises(StaleROSSnapshotError, match="stale"):
+        blend_and_cache_ros(
+            projections_dir,
+            ["steamer"],
+            {"steamer": 1.0},
+            None,
+            2026,
+            progress_cb=msgs.append,
+        )
 
+    # Last-good blobs preserved (NOT overwritten with stale data).
+    assert fake_redis.get("cache:ros_projections") == "LAST_GOOD_ROS"
+    assert fake_redis.get("cache:full_season_projections") == "LAST_GOOD_FULL"
     assert any("stale" in m.lower() for m in msgs), msgs
-    for key in ("cache:ros_projections", "cache:full_season_projections"):
-        meta = json.loads(fake_redis.get(key))["_meta"]
-        assert meta["_ros_snapshot_date"] == "2026-04-07"
 
 
 def test_blend_no_stale_warning_when_snapshot_fresh(
     projections_dir,
     fake_redis,
     monkeypatch,
+    pin_today,
 ):
     """A snapshot within the staleness threshold emits no warning, but the
     snapshot date is still stamped into the envelope."""
-    import datetime as _dt
     import json
 
     _make_ros_tree(projections_dir, year=2026, date="2026-04-18")
@@ -304,10 +341,7 @@ def test_blend_no_stale_warning_when_snapshot_fresh(
 
     monkeypatch.setattr(season_data, "get_kv", lambda: fake_redis)
     # 2 days after the snapshot -> fresh.
-    monkeypatch.setattr(
-        "fantasy_baseball.data.ros_pipeline.local_today",
-        lambda: _dt.date(2026, 4, 20),
-    )
+    pin_today(2026, 4, 20)
 
     msgs: list[str] = []
     blend_and_cache_ros(
@@ -324,9 +358,51 @@ def test_blend_no_stale_warning_when_snapshot_fresh(
     assert meta["_ros_snapshot_date"] == "2026-04-18"
 
 
+def test_blend_refuses_when_only_undatable_dirs(projections_dir, fake_redis):
+    """A rest_of_season/ holding only dirs with no leading ISO date has no
+    datable snapshot to blend, so blend raises FileNotFoundError and leaves BOTH
+    last-good blobs untouched (never silently overwrites with un-verifiable data).
+
+    No KV patch needed: FileNotFoundError is raised before any get_kv() call; the
+    blobs are touched only via the direct fake_redis calls below."""
+    _make_ros_tree(projections_dir, year=2026, date="manual-latest")
+    fake_redis.set("cache:ros_projections", "LAST_GOOD_ROS")
+    fake_redis.set("cache:full_season_projections", "LAST_GOOD_FULL")
+
+    with pytest.raises(FileNotFoundError, match="No datable ROS snapshot dirs"):
+        blend_and_cache_ros(projections_dir, ["steamer"], {"steamer": 1.0}, None, 2026)
+
+    assert fake_redis.get("cache:ros_projections") == "LAST_GOOD_ROS"
+    assert fake_redis.get("cache:full_season_projections") == "LAST_GOOD_FULL"
+
+
+def test_blend_ignores_undatable_dir_and_uses_fresh_dated_snapshot(
+    projections_dir, fake_redis, monkeypatch, pin_today
+):
+    """An undatable dir name ('manual-latest') sorts lexically AFTER dated dirs,
+    but must NOT shadow a fresh dated snapshot: selection picks the latest by
+    PARSED date and ignores undatable names, so the blend proceeds on the dated
+    snapshot. Regression guard for the raw-string-sort shadowing hazard."""
+    import json
+
+    _make_ros_tree(projections_dir, year=2026, date="2026-04-18")
+    _make_ros_tree(projections_dir, year=2026, date="manual-latest")
+    pin_today(2026, 4, 19)
+    monkeypatch.setattr("fantasy_baseball.data.ros_pipeline.get_kv", lambda: fake_redis)
+    import fantasy_baseball.web.season_data as season_data
+
+    monkeypatch.setattr(season_data, "get_kv", lambda: fake_redis)
+
+    blend_and_cache_ros(projections_dir, ["steamer"], {"steamer": 1.0}, None, 2026)
+
+    meta = json.loads(fake_redis.get("cache:ros_projections"))["_meta"]
+    assert meta["_ros_snapshot_date"] == "2026-04-18"  # dated dir, not 'manual-latest'
+
+
 def test_blend_and_cache_ros_propagates_cache_write_failure(
     projections_dir,
     monkeypatch,
+    pin_today,
 ):
     """A KV write failure during caching propagates (fail-loud), so the ROS
     fetch job fails and QStash redelivers rather than silently producing
@@ -337,9 +413,11 @@ def test_blend_and_cache_ros_propagates_cache_write_failure(
     raises on Render without creds), so that dead path was removed -- a
     configured backend that errors on write must surface, not be swallowed.
     """
-    import pytest
-
     _make_ros_tree(projections_dir, year=2026, date="2026-04-07")
+
+    # Pin "today" so the snapshot is fresh; the guard must pass so the blend
+    # reaches the KV write where the ConnectionError under test is raised.
+    pin_today(2026, 4, 8)
 
     class _WriteFailsKV:
         def get(self, key):

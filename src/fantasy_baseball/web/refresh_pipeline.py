@@ -47,6 +47,7 @@ from fantasy_baseball.web.season_data import (
     _compute_pending_moves_diff,
     _load_game_log_totals,
     read_cache,
+    read_cache_with_meta,
     reset_cache_job,
     set_cache_job,
     write_cache,
@@ -637,7 +638,11 @@ class RefreshRun:
         self.preseason_pitchers = self.pitchers_proj
 
         self._progress("Loading ROS projections from Redis...")
-        ros_hitters, ros_pitchers = _load_projection_pair(read_cache(CacheKey.ROS_PROJECTIONS))
+        # Single read: pull the ROS data AND its provenance meta (snapshot date)
+        # in one round-trip, rather than re-fetching + re-parsing the same blob
+        # for the staleness warning below.
+        ros_payload, ros_meta = read_cache_with_meta(CacheKey.ROS_PROJECTIONS)
+        ros_hitters, ros_pitchers = _load_projection_pair(ros_payload)
         self.has_rest_of_season = not ros_hitters.empty or not ros_pitchers.empty
         if self.has_rest_of_season:
             self.hitters_proj = ros_hitters
@@ -645,6 +650,7 @@ class RefreshRun:
             self._progress(
                 f"Loaded {len(ros_hitters)} ROS hitters + {len(ros_pitchers)} ROS pitchers"
             )
+            self._warn_if_ros_blob_stale(ros_meta.get("_ros_snapshot_date"))
         else:
             self._progress("WARNING: No ROS projections available — falling back to preseason")
 
@@ -694,6 +700,35 @@ class RefreshRun:
                     "WARNING: no ROS projections and cache:full_season_projections "
                     "missing -- Player.full_season_projection will be unset"
                 )
+
+    def _warn_if_ros_blob_stale(self, snapshot_date: str | None) -> None:
+        """Surface the vintage of the ROS blob we just loaded.
+
+        ``snapshot_date`` is the blob's stamped ``_ros_snapshot_date`` (its dir
+        name), already in hand from the single read in ``_load_projections`` -- no
+        second KV round-trip. full-season is re-derived here as
+        ``ROS + CURRENT YTD``; the write-side guard keeps the last-good ROS blob
+        during a FanGraphs outage, but as that frozen blob ages behind today,
+        pairing its remaining-stats with today's YTD double-counts the games in
+        between. Warn so the drift is visible -- defense in depth on the read side,
+        mirroring the write-side refusal (same staleness arithmetic + threshold).
+        """
+        from fantasy_baseball.data.ros_pipeline import (
+            ROS_SNAPSHOT_STALE_DAYS,
+            parse_snapshot_date,
+            ros_snapshot_days_stale,
+        )
+
+        snap = parse_snapshot_date(str(snapshot_date)) if snapshot_date else None
+        if snap is None:
+            return
+        days = ros_snapshot_days_stale(snap)
+        if days > ROS_SNAPSHOT_STALE_DAYS:
+            self._progress(
+                f"WARNING: ROS blob snapshot {snapshot_date} is {days} days old "
+                f"(> {ROS_SNAPSHOT_STALE_DAYS}); full-season = YTD + ROS may double-count "
+                f"~{days} days of games. Re-pull fresh ROS CSVs (FanGraphs fetch may be down)."
+            )
 
     # --- Step 4b: Fetch opponent rosters (raw) ---
     def _fetch_opponent_rosters(self):

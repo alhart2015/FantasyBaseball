@@ -160,6 +160,34 @@ def _is_envelope(obj: object) -> bool:
     )
 
 
+def _read_enveloped(key: CacheKey) -> tuple[dict | list | None, dict]:
+    """Read a cache key ONCE, returning ``(data, meta)``.
+
+    ``data`` is the unwrapped payload (``None`` on miss or corrupt JSON); ``meta``
+    is the provenance ``_meta`` dict (``{}`` for a bare/legacy value or a miss).
+    Single KV read + parse shared by :func:`read_cache` and
+    :func:`read_cache_with_meta`, so a caller that needs both does not fetch and
+    re-parse the (potentially large) blob twice.
+    """
+    kv = get_kv()
+    try:
+        raw = kv.get(redis_key(key))
+    except Exception as e:
+        log.warning(f"read_cache({key}) KV read failed: {e}")
+        return None, {}
+    if raw is None:
+        return None, {}
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        log.warning(f"read_cache({key}) corrupt KV data, treating as miss")
+        return None, {}
+    if _is_envelope(obj):
+        meta = obj[_ENVELOPE_META]
+        return cast("dict | list", obj[_ENVELOPE_DATA]), (meta if isinstance(meta, dict) else {})
+    return cast("dict | list", obj), {}
+
+
 def read_cache(key: CacheKey) -> dict | list | None:
     """Read a cached payload from the KV store.
 
@@ -168,22 +196,18 @@ def read_cache(key: CacheKey) -> dict | list | None:
     callers cannot reach Upstash even with creds present. Transparently
     unwraps the provenance envelope; bare legacy payloads pass through.
     """
-    kv = get_kv()
-    try:
-        raw = kv.get(redis_key(key))
-    except Exception as e:
-        log.warning(f"read_cache({key}) KV read failed: {e}")
-        return None
-    if raw is None:
-        return None
-    try:
-        obj = json.loads(raw)
-    except json.JSONDecodeError:
-        log.warning(f"read_cache({key}) corrupt KV data, treating as miss")
-        return None
-    if _is_envelope(obj):
-        return cast("dict | list", obj[_ENVELOPE_DATA])
-    return cast("dict | list", obj)
+    return _read_enveloped(key)[0]
+
+
+def read_cache_with_meta(key: CacheKey) -> tuple[dict | list | None, dict]:
+    """Read a cached payload AND its provenance ``_meta`` in a SINGLE KV read.
+
+    Returns ``(data, meta)`` -- ``data`` as :func:`read_cache`, ``meta`` the
+    envelope ``_meta`` dict (``{}`` if absent). Use when a consumer needs a blob's
+    vintage (e.g. ``_ros_snapshot_date``) alongside its data without a second
+    round-trip + re-parse of the same payload.
+    """
+    return _read_enveloped(key)
 
 
 def read_cache_dict(key: CacheKey) -> dict[str, Any] | None:
