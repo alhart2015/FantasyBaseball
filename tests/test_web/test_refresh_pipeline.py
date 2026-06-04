@@ -1506,9 +1506,9 @@ class _FakeConn:
 
 
 def test_warn_if_ros_blob_stale_emits_on_old_snapshot(monkeypatch):
-    """Read-side defense: when the loaded ROS blob's _ros_snapshot_date is older
-    than the threshold, _load_projections surfaces a loud progress warning (the
-    frozen blob + current YTD would double-count), instead of proceeding silently."""
+    """Read-side defense: when the loaded ROS blob's snapshot date is older than
+    the threshold, the warning fires (the frozen blob + current YTD would
+    double-count), instead of proceeding silently."""
     import datetime as _dt
 
     from fantasy_baseball.web import refresh_pipeline
@@ -1516,19 +1516,18 @@ def test_warn_if_ros_blob_stale_emits_on_old_snapshot(monkeypatch):
     run = refresh_pipeline.RefreshRun.__new__(refresh_pipeline.RefreshRun)
     msgs: list[str] = []
     run._progress = msgs.append  # type: ignore[method-assign]
-
     monkeypatch.setattr(
-        refresh_pipeline, "read_cache_meta", lambda key: {"_ros_snapshot_date": "2026-06-01"}
+        "fantasy_baseball.data.ros_pipeline.local_today", lambda: _dt.date(2026, 6, 10)
     )
-    monkeypatch.setattr(refresh_pipeline, "local_today", lambda: _dt.date(2026, 6, 10))
 
-    run._warn_if_ros_blob_stale()
+    run._warn_if_ros_blob_stale("2026-06-01")  # 9 days old, past the threshold
 
     assert any("days old" in m and "double-count" in m for m in msgs), msgs
 
 
 def test_warn_if_ros_blob_stale_silent_when_fresh(monkeypatch):
-    """A ROS blob within the staleness threshold emits no warning."""
+    """A ROS blob within the staleness threshold (or with no snapshot date) emits
+    no warning."""
     import datetime as _dt
 
     from fantasy_baseball.web import refresh_pipeline
@@ -1536,12 +1535,11 @@ def test_warn_if_ros_blob_stale_silent_when_fresh(monkeypatch):
     run = refresh_pipeline.RefreshRun.__new__(refresh_pipeline.RefreshRun)
     msgs: list[str] = []
     run._progress = msgs.append  # type: ignore[method-assign]
-
     monkeypatch.setattr(
-        refresh_pipeline, "read_cache_meta", lambda key: {"_ros_snapshot_date": "2026-06-09"}
+        "fantasy_baseball.data.ros_pipeline.local_today", lambda: _dt.date(2026, 6, 10)
     )
-    monkeypatch.setattr(refresh_pipeline, "local_today", lambda: _dt.date(2026, 6, 10))
 
-    run._warn_if_ros_blob_stale()
+    run._warn_if_ros_blob_stale("2026-06-09")  # 1 day old, fresh
+    run._warn_if_ros_blob_stale(None)  # no snapshot date -> no-op
 
     assert not any("days old" in m for m in msgs), msgs

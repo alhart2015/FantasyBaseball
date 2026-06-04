@@ -56,19 +56,32 @@ class StaleROSSnapshotError(RuntimeError):
     """
 
 
-def _snapshot_date(dir_name: str) -> date | None:
-    """Parse the date a ``rest_of_season`` subdir name encodes.
+def parse_snapshot_date(dir_name: str) -> date | None:
+    """Parse the date a ``rest_of_season`` subdir name (or a stamped
+    ``_ros_snapshot_date``) encodes.
 
     The name is normally ``YYYY-MM-DD`` but may carry a suffix (e.g.
     ``2026-06-04-manual`` for a hand-staged snapshot); the leading 10 chars are
-    parsed as the ISO date. Returns ``None`` for a name with no leading ISO date.
-    This is the single source of truth for "this dir name means date X", shared
-    by snapshot selection and the freshness guard so they cannot disagree.
+    parsed as the ISO date. Returns ``None`` when there is no leading ISO date.
+    The single source of truth for "this name means date X", shared by snapshot
+    selection, the write-side guard, and the read-side warning so they can't
+    disagree.
     """
     try:
         return date.fromisoformat(dir_name[:10])
     except ValueError:
         return None
+
+
+def ros_snapshot_days_stale(snap: date) -> int:
+    """Days a ROS snapshot dated ``snap`` lags today (negative if in the future).
+
+    The single source of the staleness arithmetic shared by the write-side guard
+    (:func:`_require_fresh_ros_snapshot`) and the read-side warning
+    (``refresh_pipeline._warn_if_ros_blob_stale``), so the two enforcement points
+    can't drift. Both compare the result against :data:`ROS_SNAPSHOT_STALE_DAYS`.
+    """
+    return (local_today() - snap).days
 
 
 def _require_fresh_ros_snapshot(snap: date, label: str, progress_cb) -> None:
@@ -81,7 +94,7 @@ def _require_fresh_ros_snapshot(snap: date, label: str, progress_cb) -> None:
     Raises:
         StaleROSSnapshotError: the snapshot is too stale to blend.
     """
-    days_stale = (local_today() - snap).days
+    days_stale = ros_snapshot_days_stale(snap)
     if days_stale > ROS_SNAPSHOT_STALE_DAYS:
         msg = (
             f"Refusing to overwrite cache:ros_projections: latest ROS snapshot "
@@ -196,8 +209,11 @@ def blend_and_cache_ros(
     # leading ISO date (a stray/helper dir). A raw string sort would let an
     # undatable name like "manual-latest" sort after the dated dirs and shadow a
     # perfectly fresh snapshot, aborting every blend.
-    pairs = [(p, _snapshot_date(p.name)) for p in ros_root.iterdir() if p.is_dir()]
-    dated = [(p, d) for p, d in pairs if d is not None]
+    dated = [
+        (p, d)
+        for p in ros_root.iterdir()
+        if p.is_dir() and (d := parse_snapshot_date(p.name)) is not None
+    ]
     if not dated:
         raise FileNotFoundError(f"No datable ROS snapshot dirs under {ros_root}")
     latest, snap = max(dated, key=lambda pd: pd[1])
