@@ -20,10 +20,18 @@ def test_ros_cache_excludes_ytd(tmp_path, monkeypatch):
     with 30 R already accumulated YTD. The cached ROS blob should be 100,
     not 130. The cached full-season blob should be 130.
     """
+    import datetime as _dt
+
     from fantasy_baseball.data import redis_store as rs
     from fantasy_baseball.data.kv_store import SqliteKVStore, _reset_singleton
     from fantasy_baseball.data.ros_pipeline import blend_and_cache_ros
 
+    # Pin "today" just after the 2026-04-26 snapshot so it is fresh (the
+    # refuse-stale guard would otherwise abort the write).
+    monkeypatch.setattr(
+        "fantasy_baseball.data.ros_pipeline.local_today",
+        lambda: _dt.date(2026, 4, 27),
+    )
     monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(tmp_path / "kv.db"))
     _reset_singleton()
     kv = SqliteKVStore(tmp_path / "kv.db")

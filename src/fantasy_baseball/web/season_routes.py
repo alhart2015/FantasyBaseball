@@ -205,6 +205,7 @@ def _run_rest_of_season_fetch() -> None:
     from fantasy_baseball.config import load_config
     from fantasy_baseball.data.fangraphs_fetch import fetch_rest_of_season_projections
     from fantasy_baseball.data.mlb_game_logs import fetch_game_log_totals
+    from fantasy_baseball.data.ros_pipeline import StaleROSSnapshotError
     from fantasy_baseball.web.job_logger import JobLogger
     from fantasy_baseball.web.refresh_pipeline import durable_refresh_lock, release_refresh_slot
 
@@ -292,6 +293,12 @@ def _run_rest_of_season_fetch() -> None:
             else:
                 logger.finish("ok")
 
+    except StaleROSSnapshotError as exc:
+        # Deliberate safe-abort: the only on-disk snapshot was too stale to
+        # blend, so blend_and_cache_ros refused to overwrite the last-good
+        # cache:ros_projections (e.g. a Cloudflare-403'd fetch left only the
+        # committed March snapshot). The most recent good ROS is preserved.
+        logger.finish("error", f"Kept last-good ROS (snapshot too stale to blend): {exc}")
     except Exception as exc:
         logger.finish("error", str(exc))
     finally:
