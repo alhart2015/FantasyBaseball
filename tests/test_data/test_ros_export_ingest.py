@@ -5,6 +5,7 @@ from pathlib import Path
 from fantasy_baseball.data.ros_export_ingest import (
     export_steps,
     find_newest_csv,
+    run_guided_ingest,
     stage_export,
     validate_export_type,
 )
@@ -93,3 +94,96 @@ def test_stage_export_returns_none_when_no_new_file(tmp_path):
 
     os.utime(f, (1000.0, 1000.0))
     assert stage_export(source, 4000.0, "steamer", "hitters", tmp_path / "snap") is None
+
+
+def _seed(source: Path, name: str, fixture: str, ts: float) -> None:
+    import os
+
+    _copy_fixture(fixture, source / name)
+    os.utime(source / name, (ts, ts))
+
+
+def test_run_guided_ingest_stages_all_steps_and_reports_complete(tmp_path):
+    source = tmp_path / "dl"
+    source.mkdir()
+    dest = tmp_path / "snap"
+    systems = ["steamer"]
+    clock = {"t": 100.0}
+
+    def now_fn():
+        clock["t"] += 10.0
+        return clock["t"]
+
+    pending = iter(
+        [("steamer-h.csv", "steamer_hitters.csv"), ("steamer-p.csv", "steamer_pitchers.csv")]
+    )
+
+    def prompt_fn(_msg):
+        name, fixture = next(pending)
+        _seed(source, name, fixture, clock["t"] + 1.0)
+        return ""
+
+    outputs: list[str] = []
+    result = run_guided_ingest(
+        systems, source, dest, prompt_fn=prompt_fn, output_fn=outputs.append, now_fn=now_fn
+    )
+    assert result.aborted is False
+    assert result.complete_systems(systems) == ["steamer"]
+    assert (dest / "steamer-hitters.csv").exists()
+    assert (dest / "steamer-pitchers.csv").exists()
+
+
+def test_run_guided_ingest_skip_excludes_system(tmp_path):
+    source = tmp_path / "dl"
+    source.mkdir()
+    result = run_guided_ingest(
+        ["steamer"],
+        source,
+        tmp_path / "snap",
+        prompt_fn=lambda _m: "s",
+        output_fn=lambda _m: None,
+        now_fn=lambda: 1.0,
+    )
+    assert result.complete_systems(["steamer"]) == []
+    assert "steamer" in result.skipped_systems
+
+
+def test_run_guided_ingest_abort_stops_immediately(tmp_path):
+    result = run_guided_ingest(
+        ["steamer", "zips"],
+        tmp_path,
+        tmp_path / "snap",
+        prompt_fn=lambda _m: "q",
+        output_fn=lambda _m: None,
+        now_fn=lambda: 1.0,
+    )
+    assert result.aborted is True
+    assert result.staged == {}
+
+
+def test_run_guided_ingest_reprompts_on_missing_file(tmp_path):
+    source = tmp_path / "dl"
+    source.mkdir()
+    dest = tmp_path / "snap"
+    calls = {"n": 0}
+
+    def prompt_fn(_msg):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ""  # hitters: no file yet -> stage_export None -> re-prompt
+        if calls["n"] == 2:
+            _seed(source, "h.csv", "steamer_hitters.csv", 1000.0)
+            return ""  # hitters: now stages
+        return "q"  # pitchers step: abort to end the run (avoids an infinite re-prompt)
+
+    result = run_guided_ingest(
+        ["steamer"],
+        source,
+        dest,
+        prompt_fn=prompt_fn,
+        output_fn=lambda _m: None,
+        now_fn=lambda: 1.0,
+    )
+    assert calls["n"] >= 3  # 1 miss + 1 stage (hitters) + 1 abort (pitchers)
+    assert ("steamer", "hitters") in result.staged
+    assert result.aborted is True

@@ -11,6 +11,8 @@ which systems are complete so the caller can blend + push to prod.
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from fantasy_baseball.data.fangraphs import parse_hitting_csv, parse_pitching_csv
@@ -69,3 +71,69 @@ def stage_export(
     dest = dest_dir / f"{system}-{player_type}.csv"
     shutil.copy(src, dest)
     return dest
+
+
+@dataclass
+class IngestResult:
+    """Outcome of a guided ingest run."""
+
+    staged: dict[tuple[str, str], Path] = field(default_factory=dict)
+    skipped_systems: set[str] = field(default_factory=set)
+    aborted: bool = False
+
+    def complete_systems(self, systems: list[str]) -> list[str]:
+        """Systems with BOTH hitters and pitchers staged (push-eligible)."""
+        return [
+            s for s in systems if (s, "hitters") in self.staged and (s, "pitchers") in self.staged
+        ]
+
+
+def run_guided_ingest(
+    systems: list[str],
+    source_dir: Path,
+    dest_dir: Path,
+    *,
+    prompt_fn: Callable[[str], str],
+    output_fn: Callable[[str], None],
+    now_fn: Callable[[], float],
+) -> IngestResult:
+    """Walk the user through exporting each (system, player_type) and stage each.
+
+    ``prompt_fn(message) -> response`` returns the user's reply: ``""`` (Enter =
+    "I exported it"), ``"s"`` (skip this system), or ``"q"`` (abort). ``output_fn``
+    prints progress. ``now_fn`` supplies the timestamp captured just before each
+    prompt so :func:`stage_export` can pick the just-exported file. I/O is injected
+    so the loop is unit-testable without real stdin/clock.
+    """
+    result = IngestResult()
+    for system, ptype in export_steps(systems):
+        if system in result.skipped_systems:
+            continue
+        while True:
+            since = now_fn()
+            resp = (
+                prompt_fn(
+                    f"Export {system} {ptype} from FanGraphs, then press Enter "
+                    f"(s=skip system, q=abort): "
+                )
+                .strip()
+                .lower()
+            )
+            if resp == "q":
+                result.aborted = True
+                return result
+            if resp == "s":
+                result.skipped_systems.add(system)
+                output_fn(f"  skipped {system}")
+                break
+            staged = stage_export(source_dir, since, system, ptype, dest_dir)
+            if staged is None:
+                output_fn(
+                    f"  no new valid {ptype} export found in {source_dir} -- "
+                    f"export it and press Enter again"
+                )
+                continue
+            result.staged[(system, ptype)] = staged
+            output_fn(f"  staged {staged.name}")
+            break
+    return result
