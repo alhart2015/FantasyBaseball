@@ -389,6 +389,86 @@ class TestPitcherOptimizer:
             f"decisive closer C must have positive roto_delta, got {starters[0].roto_delta}"
         )
 
+    def test_elite_closer_not_benched_when_il_pitcher_present(self):
+        """REGRESSION: an elite low-volume closer must keep his saves in the
+        optimizer's objective even when an IL pitcher is on the roster.
+
+        ``team_roto_total`` formerly called ``project_ros_components`` with no
+        ``league_context``, so pitcher displacement fell back to the legacy
+        SGP picker. That picker selects the lowest-SGP active arm as the
+        returning IL pitcher's displacement target -- which is the elite
+        low-volume closer (few IP/K/W despite many saves) -- and scales him
+        toward zero, erasing his saves. The optimizer then benched the
+        closer for a strictly worse arm whenever any IL pitcher was rostered.
+
+        With ``league_context`` threaded through (matching
+        ``ProjectedStandings.from_rosters``), pitcher displacement uses the
+        pair-swap pool model, which is ROTO-optimal and refuses to displace
+        the closer when doing so loses saves. The closer stays started.
+
+        Setup mirrors ``test_picks_highest_impact_pitcher_not_just_highest_stats``
+        (closer decisive on SV) but adds an IL starter to the full roster --
+        the only trigger for the bug.
+        """
+        ace = _pitcher("Ace", ["SP"], ip=200, w=15, k=230, sv=0, era=3.00, whip=1.05)
+        closer = _pitcher("Closer", ["RP"], ip=65, w=3, k=80, sv=35, era=2.50, whip=1.00)
+        il_arm = _pitcher("ILArm", ["SP"], ip=180, w=12, k=180, sv=0, era=3.40, whip=1.15)
+        il_arm.selected_position = Position.IL
+
+        pitchers = [ace, closer]  # active pool (IL excluded upstream)
+        full_roster = [ace, closer, il_arm]
+        standings = _standings(
+            _standing("Us"),
+            _standing("Rival", W=0, K=0, SV=20, ERA=0, WHIP=0),
+        )
+        starters, _bench = optimize_pitcher_lineup(
+            pitchers=pitchers,
+            full_roster=full_roster,
+            projected_standings=standings,
+            team_name="Us",
+            slots=1,
+        )
+        assert len(starters) == 1
+        starter_names = {s.name for s in starters}
+        assert "Closer" in starter_names, (
+            f"elite closer must stay started with an IL pitcher rostered; "
+            f"optimizer benched him and started {starter_names} instead"
+        )
+
+    def test_compute_bands_false_suppresses_band_with_real_fraction(self):
+        """fraction_remaining must size the IL-displacement window (pool model)
+        WITHOUT forcing per-starter band computation.
+
+        Callers that need correct in-season displacement but not bands -- the
+        stash board (`stash_value`), the IL-return planner, and `roster_audit`
+        -- pass a real ``fraction_remaining`` (so swap_window_ip sizes the
+        returning arm against the remaining season, not the whole season) with
+        ``compute_bands=False`` (so the expensive per-starter band is skipped).
+        Before decoupling, those callers passed ``fraction_remaining=None`` to
+        skip bands, which silently mis-sized the displacement window.
+        """
+        a = _pitcher("A", ["SP"], ip=200, w=15, k=230, sv=0, era=3.00, whip=1.05)
+        c = _pitcher("C", ["RP"], ip=65, w=3, k=80, sv=35, era=2.50, whip=1.00)
+        standings = _standings(
+            _standing("Us"),
+            _standing("Rival", W=0, K=0, SV=20, ERA=0, WHIP=0),
+        )
+        starters, _ = optimize_pitcher_lineup(
+            pitchers=[a, c],
+            full_roster=[a, c],
+            projected_standings=standings,
+            team_name="Us",
+            slots=2,
+            fraction_remaining=0.5,
+            compute_bands=False,
+        )
+        assert len(starters) == 2
+        for s in starters:
+            assert s.band is None, (
+                f"compute_bands=False must skip bands even with a real "
+                f"fraction_remaining; {s.name} got band={s.band}"
+            )
+
     def test_pitcher_band_present_when_fraction_remaining_given(self):
         """Passing fraction_remaining attaches a band dict with expected keys."""
         a = _pitcher("A", ["SP"], ip=200, w=15, k=230, sv=0, era=3.00, whip=1.05)

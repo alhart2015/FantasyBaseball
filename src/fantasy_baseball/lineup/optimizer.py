@@ -11,6 +11,7 @@ from fantasy_baseball.models.player import Player
 from fantasy_baseball.models.positions import HITTER_ELIGIBLE, PITCHER_ELIGIBLE, Position
 from fantasy_baseball.models.standings import ProjectedStandings, Standings, TeamYtdComponents
 from fantasy_baseball.scoring import (
+    LeagueContext,
     project_ros_components,
     score_roto_dict,
     team_end_of_season,
@@ -113,6 +114,17 @@ class _TeamContext:
     team_name: str
     team_sds: Mapping[str, Mapping[Category, float]] | None = None
     user_ytd_components: TeamYtdComponents = field(default_factory=TeamYtdComponents)
+    league_context: LeagueContext | None = None
+    """ROS displacement context for the user row, threaded into
+    ``project_ros_components``. When provided, pitcher displacement uses the
+    ROTO-optimal pair-swap pool model -- the SAME model
+    :func:`ProjectedStandings.from_rosters` uses to build the opponent rows and
+    the standings the displayed deltaRoto band reads. Without it, displacement
+    falls back to the legacy SGP picker, which systematically zeroes elite
+    low-volume closers' saves when an IL pitcher is rostered (see
+    :class:`fantasy_baseball.scoring.LeagueContext`), so the optimizer's
+    selection silently disagrees with the band it displays. ``None`` preserves
+    the legacy SGP path for callers that build a ``_TeamContext`` directly."""
 
 
 def apply_lineup_to_roster(
@@ -158,7 +170,9 @@ def team_roto_total(hypothetical: list[Player], ctx: _TeamContext) -> float:
     which receives a pre-filtered active pool and so uses
     ``displacement=False``.)
     """
-    user_ros = project_ros_components(hypothetical, displacement=True)
+    user_ros = project_ros_components(
+        hypothetical, displacement=True, league_context=ctx.league_context
+    )
     my_stats = team_end_of_season(ctx.user_ytd_components, user_ros).to_dict()
     all_stats = {e.team_name: e.stats.to_dict() for e in ctx.projected_standings.entries}
     all_stats[ctx.team_name] = my_stats
@@ -218,6 +232,35 @@ def _resolve_user_ytd_components(
     return TeamYtdComponents()
 
 
+def _build_league_context(
+    projected_standings: ProjectedStandings,
+    team_name: str,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
+    fraction_remaining: float | None,
+) -> LeagueContext:
+    """Build the ROS-displacement context for the user row.
+
+    Mirrors the ``LeagueContext`` :func:`ProjectedStandings.from_rosters`
+    constructs per team, so the optimizer's ``team_roto_total`` displaces the
+    user's pitchers with the SAME ROTO-optimal pool model that built the
+    standings -- making the selector consistent with the displayed deltaRoto
+    band and fixing the elite-closer-saves-zeroing bug.
+
+    ``baseline_other_team_stats`` is the frozen field (opponent end-of-season
+    rows) from ``projected_standings``; the picker scores candidate
+    displacements against it. ``team_sds`` falls back to an empty mapping
+    (rank-based scoring, matching ``team_roto_total`` when no SDs are given).
+    ``fraction_remaining`` falls back to 1.0 (whole season) for callers that
+    omit it.
+    """
+    return LeagueContext(
+        baseline_other_team_stats=projected_standings.field_stats(team_name),
+        team_sds=team_sds or {},
+        team_name=team_name,
+        fraction_remaining=fraction_remaining if fraction_remaining is not None else 1.0,
+    )
+
+
 def optimize_hitter_lineup(
     hitters: list[Player],
     full_roster: list[Player],
@@ -227,6 +270,7 @@ def optimize_hitter_lineup(
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
     fraction_remaining: float | None = None,
     actual_standings: Standings | None = None,
+    compute_bands: bool = True,
 ) -> list[HitterAssignment]:
     """Return the ERoto-maximizing active hitter lineup.
 
@@ -238,6 +282,19 @@ def optimize_hitter_lineup(
     :func:`ProjectedStandings.from_rosters`. ``None`` collapses to ROS-only
     -- preserves pre-team-YTD-refactor behavior for pre-season callers and
     legacy tests.
+
+    ``compute_bands`` gates per-starter band computation independently of
+    ``fraction_remaining`` (a band still requires a non-None
+    ``fraction_remaining`` for its variance scale). Callers that want the
+    lineup but not the bands pass ``compute_bands=False``.
+
+    No ``league_context`` is threaded here: the hitter selection's pitcher
+    half is identical across every hitter subset, so the pitcher-displacement
+    model cancels in the marginal and cannot change the hitter pick. Only
+    :func:`optimize_pitcher_lineup` needs the ROTO-optimal pool model (where
+    the elite-closer-saves-zeroing bug lives); keeping it out of the hitter
+    combinatorial loop avoids running the per-subset pool picker thousands of
+    times for no effect.
     """
     if not hitters:
         return []
@@ -327,7 +384,7 @@ def optimize_hitter_lineup(
             alt_best_subset = no_rep_subset
         roto_deltas[starter.name] = best_total - alt_best
 
-        if fraction_remaining is not None:
+        if compute_bands and fraction_remaining is not None:
             from fantasy_baseball.lineup.delta_roto import compute_delta_roto_band
 
             band_result = compute_delta_roto_band(
@@ -362,12 +419,28 @@ def optimize_pitcher_lineup(
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
     fraction_remaining: float | None = None,
     actual_standings: Standings | None = None,
+    compute_bands: bool = True,
 ) -> tuple[list[PitcherStarter], list[Player]]:
     """Return (starters with roto_delta, bench) maximizing ERoto.
 
     ``actual_standings`` is threaded through to ``team_roto_total`` so the
     user's row is built as team_YTD + ROS, matching the opponent rows in
     ``projected_standings``. See :func:`optimize_hitter_lineup`.
+
+    A ``league_context`` IS built here (unlike the hitter optimizer) so
+    pitcher displacement uses the ROTO-optimal pair-swap pool model that the
+    standings/band use -- without it the legacy SGP picker zeroes an elite
+    low-volume closer's saves whenever an IL pitcher is rostered. The pool
+    model's slot-share sizing depends on ``fraction_remaining``: pass the REAL
+    remaining-season fraction (NOT None) so a returning IL arm is measured
+    against the remaining season, not the whole year. ``fraction_remaining``
+    falls back to 1.0 inside the context only for pre-season/unknown callers.
+
+    ``compute_bands`` gates per-starter band computation independently of
+    ``fraction_remaining``, so callers needing correct in-season displacement
+    but not the (expensive) per-starter bands -- the stash board, IL-return
+    planner, roster audit -- pass the real ``fraction_remaining`` with
+    ``compute_bands=False``.
     """
     if not pitchers or slots <= 0:
         return [], list(pitchers)
@@ -379,6 +452,9 @@ def optimize_pitcher_lineup(
         team_name,
         team_sds,
         user_ytd_components=user_ytd,
+        league_context=_build_league_context(
+            projected_standings, team_name, team_sds, fraction_remaining
+        ),
     )
 
     field_stats = projected_standings.field_stats(team_name)
@@ -421,7 +497,7 @@ def optimize_pitcher_lineup(
             alt_best_subset = no_rep_subset
         roto_deltas[starter.name] = best_total - alt_best
 
-        if fraction_remaining is not None:
+        if compute_bands and fraction_remaining is not None:
             from fantasy_baseball.lineup.delta_roto import compute_delta_roto_band
 
             band_result = compute_delta_roto_band(

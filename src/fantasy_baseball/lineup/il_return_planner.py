@@ -136,13 +136,19 @@ def _solve_lineup(
     projected_standings: ProjectedStandings,
     team_name: str,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
+    fraction_remaining: float,
 ):
     """Run both optimizers over ``pool``; return
     ``(hitter_assignments, pitcher_starters, pitcher_bench)``.
 
-    Both optimizer calls use ``fraction_remaining=None`` so they skip
-    per-starter band computation; the planner computes a plan-level band
-    separately.
+    Both optimizer calls skip per-starter band computation (the planner
+    computes a plan-level band separately): the hitter call passes
+    ``fraction_remaining=None`` (it needs no displacement context), and the
+    pitcher call passes the real ``fraction_remaining`` with
+    ``compute_bands=False`` so its pair-swap pool model sizes a returning IL
+    pitcher's slot-share against the remaining season -- this planner runs
+    mid-season specifically to evaluate IL returns, so that sizing is
+    load-bearing.
     """
     hitters = [p for p in pool if p.player_type != PlayerType.PITCHER]
     pitchers = [p for p in pool if p.player_type == PlayerType.PITCHER]
@@ -162,7 +168,8 @@ def _solve_lineup(
         team_name=team_name,
         slots=roster_slots.get("P", 9),
         team_sds=team_sds,
-        fraction_remaining=None,
+        fraction_remaining=fraction_remaining,
+        compute_bands=False,
     )
     return hitter_assignments, pitcher_starters, pitcher_bench
 
@@ -271,7 +278,8 @@ def _make_plan(
             team_name=team_name,
             slots=roster_slots.get("P", 9),
             team_sds=team_sds,
-            fraction_remaining=None,
+            fraction_remaining=fraction_remaining,
+            compute_bands=False,
         )
     else:
         ps = base_ps
@@ -335,7 +343,9 @@ def plan_il_returns(
     bn_slots = roster_slots.get("BN", 0)
 
     # Pre-drop ideal lineup -> the band baseline (returning players present here).
-    base_h, base_ps, _ = _solve_lineup(pool, roster_slots, projected_standings, team_name, team_sds)
+    base_h, base_ps, _ = _solve_lineup(
+        pool, roster_slots, projected_standings, team_name, team_sds, fraction_remaining
+    )
     before_active = [a.player for a in base_h] + [s.player for s in base_ps]
 
     if overflow <= 0:
