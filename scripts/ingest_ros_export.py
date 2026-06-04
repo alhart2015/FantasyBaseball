@@ -22,8 +22,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 
-def _push_to_prod(season_year: int) -> None:
+def _push_to_prod(season_year: int, systems: list[str]) -> None:
     """Blend today's staged snapshot and write it to prod Upstash, then verify.
+
+    Only ``systems`` (the fully-staged ones) are blended -- a skipped or
+    half-staged system is excluded entirely, so it can't leak one side (e.g.
+    hitters-only) into the blend. Weights are filtered to match; blend_projections
+    re-normalizes them.
 
     Mirrors scripts/refresh_remote.py: flip RENDER on BEFORE importing the
     pipeline so get_kv() resolves to Upstash.
@@ -42,12 +47,13 @@ def _push_to_prod(season_year: int) -> None:
     config = load_config(PROJECT_ROOT / "config" / "league.yaml")
     projections_dir = PROJECT_ROOT / "data" / "projections"
     roster_names = get_latest_roster_names(get_kv())
+    weights = {s: config.projection_weights[s] for s in systems}
 
-    print("Blending staged snapshot -> prod Upstash...")
+    print(f"Blending {len(systems)} complete system(s) -> prod Upstash...")
     ros_h, ros_p = blend_and_cache_ros(
         projections_dir,
-        config.projection_systems,
-        config.projection_weights,
+        systems,
+        weights,
         roster_names,
         season_year,
         progress_cb=lambda m: print(f"  {m}") if not m.startswith("QUALITY") else None,
@@ -113,7 +119,7 @@ def main() -> int:
         print("--no-push set; staged only, prod unchanged.")
         return 0
 
-    _push_to_prod(season)
+    _push_to_prod(season, complete)
     print("\nDone. (Run scripts/refresh_remote.py to propagate into dashboard standings.)")
     return 0
 
