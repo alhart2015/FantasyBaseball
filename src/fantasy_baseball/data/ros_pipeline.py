@@ -32,17 +32,20 @@ from fantasy_baseball.utils.time_utils import local_today
 
 log = logging.getLogger(__name__)
 
-# A ROS snapshot older than this many days vs today means the daily
-# FanGraphs fetch has likely stalled. Its counting stats still carry
-# near-full-season magnitudes while YTD actuals have kept accumulating,
-# so deriving full-season as ``YTD + ROS`` double-counts. Refuse to
-# overwrite the last-good Redis blob with a snapshot this stale.
-ROS_SNAPSHOT_STALE_DAYS = 7
+# A ROS snapshot older than this many days vs today means the FanGraphs fetch
+# has stalled. Its counting stats still carry near-full-season magnitudes while
+# YTD actuals keep accumulating, so deriving full-season as ``YTD + ROS``
+# double-counts. The fetch is a DAILY job, so a healthy run always produces a
+# same-day snapshot; anything older means a failed/skipped fetch. 1 day of grace
+# absorbs timezone slack and a hand-staged snapshot blended the next morning.
+# Refuse to overwrite the last-good Redis blob with a snapshot this stale, and
+# warn on the READ side when a frozen blob ages past this (see refresh_pipeline).
+ROS_SNAPSHOT_STALE_DAYS = 2
 
 
 class StaleROSSnapshotError(RuntimeError):
-    """Raised when the only available ROS snapshot is staler than
-    ``ROS_SNAPSHOT_STALE_DAYS`` (or has an un-datable dir name).
+    """Raised when the latest datable ROS snapshot is staler than
+    ``ROS_SNAPSHOT_STALE_DAYS``.
 
     Blending it would overwrite the last-good ``cache:ros_projections`` with
     near-preseason magnitudes that the daily refresh then double-counts as
@@ -53,35 +56,36 @@ class StaleROSSnapshotError(RuntimeError):
     """
 
 
-def _require_fresh_ros_snapshot(snapshot_date: str, progress_cb) -> None:
-    """Abort the blend unless the chosen snapshot is within
-    ``ROS_SNAPSHOT_STALE_DAYS`` of today.
+def _snapshot_date(dir_name: str) -> date | None:
+    """Parse the date a ``rest_of_season`` subdir name encodes.
 
-    The snapshot dir name is normally ``YYYY-MM-DD`` but may carry a suffix
-    (e.g. ``2026-06-04-manual``); the leading 10 chars are parsed as the ISO
-    date. A name with no leading ISO date can't be dated -- treat it as
-    un-verifiable and refuse, rather than silently overwrite good Redis.
-
-    Raises:
-        StaleROSSnapshotError: the snapshot is stale or has no leading ISO date.
+    The name is normally ``YYYY-MM-DD`` but may carry a suffix (e.g.
+    ``2026-06-04-manual`` for a hand-staged snapshot); the leading 10 chars are
+    parsed as the ISO date. Returns ``None`` for a name with no leading ISO date.
+    This is the single source of truth for "this dir name means date X", shared
+    by snapshot selection and the freshness guard so they cannot disagree.
     """
     try:
-        snap = date.fromisoformat(snapshot_date[:10])
+        return date.fromisoformat(dir_name[:10])
     except ValueError:
-        msg = (
-            f"Refusing to blend ROS snapshot '{snapshot_date}': name has no "
-            f"leading ISO date, so freshness can't be verified. Keeping the "
-            f"last-good cache:ros_projections."
-        )
-        log.warning(msg)
-        if progress_cb:
-            progress_cb(msg)
-        raise StaleROSSnapshotError(msg) from None
+        return None
+
+
+def _require_fresh_ros_snapshot(snap: date, label: str, progress_cb) -> None:
+    """Abort the blend unless ``snap`` is within ``ROS_SNAPSHOT_STALE_DAYS`` of
+    today. ``label`` is the dir name, for the message only.
+
+    Runs BEFORE any KV read/write so a stale blend touches nothing -- keeping the
+    last-good ``cache:ros_projections`` ("use the most recent ROS").
+
+    Raises:
+        StaleROSSnapshotError: the snapshot is too stale to blend.
+    """
     days_stale = (local_today() - snap).days
     if days_stale > ROS_SNAPSHOT_STALE_DAYS:
         msg = (
             f"Refusing to overwrite cache:ros_projections: latest ROS snapshot "
-            f"{snapshot_date} is {days_stale} days stale (> {ROS_SNAPSHOT_STALE_DAYS}). "
+            f"{label} is {days_stale} days stale (> {ROS_SNAPSHOT_STALE_DAYS}). "
             f"A failed FanGraphs fetch would otherwise regress fresh Redis to "
             f"near-preseason magnitudes that the refresh double-counts as YTD + "
             f"ROS. Keeping the most recent good ROS blob -- re-pull fresh ROS CSVs "
@@ -180,26 +184,28 @@ def blend_and_cache_ros(
     Raises:
         FileNotFoundError: if
             ``projections_dir/{season_year}/rest_of_season/`` is missing
-            or contains no date subdirectories.
-        StaleROSSnapshotError: if the latest snapshot dir is staler than
-            ``ROS_SNAPSHOT_STALE_DAYS`` (or un-datable). Nothing is written,
-            so the last-good ``cache:ros_projections`` is preserved.
+            or contains no date-named subdirectories.
+        StaleROSSnapshotError: if the latest dated snapshot is staler than
+            ``ROS_SNAPSHOT_STALE_DAYS``. Nothing is written, so the last-good
+            ``cache:ros_projections`` is preserved.
     """
     ros_root = projections_dir / str(season_year) / "rest_of_season"
     if not ros_root.is_dir():
         raise FileNotFoundError(f"ROS snapshot dir missing: {ros_root}")
-    date_dirs = sorted(
-        (p for p in ros_root.iterdir() if p.is_dir()),
-        key=lambda p: p.name,
-    )
-    if not date_dirs:
-        raise FileNotFoundError(f"No ROS snapshot dirs under {ros_root}")
-    latest = date_dirs[-1]
+    # Pick the latest snapshot BY PARSED DATE, ignoring any dir whose name has no
+    # leading ISO date (a stray/helper dir). A raw string sort would let an
+    # undatable name like "manual-latest" sort after the dated dirs and shadow a
+    # perfectly fresh snapshot, aborting every blend.
+    pairs = [(p, _snapshot_date(p.name)) for p in ros_root.iterdir() if p.is_dir()]
+    dated = [(p, d) for p, d in pairs if d is not None]
+    if not dated:
+        raise FileNotFoundError(f"No datable ROS snapshot dirs under {ros_root}")
+    latest, snap = max(dated, key=lambda pd: pd[1])
     snapshot_date = latest.name
     # Refuse to overwrite the last-good Redis blob with a stale snapshot
     # (raises StaleROSSnapshotError). Must run BEFORE any KV read/write below
     # so a stale blend touches nothing -- "use the most recent ROS" mitigation.
-    _require_fresh_ros_snapshot(snapshot_date, progress_cb)
+    _require_fresh_ros_snapshot(snap, snapshot_date, progress_cb)
 
     client = get_kv()
     hitter_totals = get_game_log_totals(client, "hitters")

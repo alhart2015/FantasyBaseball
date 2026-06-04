@@ -439,6 +439,34 @@ def test_ros_fetch_runs_and_releases_durable_lock_when_free(
     assert redis_store.acquire_refresh_lock(fake_redis, "next-instance", 1800) is True
 
 
+def test_ros_fetch_skips_blend_when_no_system_fetched(monkeypatch, fake_redis, free_refresh_slot):
+    """Fetch-success gate: when every system fails to fetch (e.g. FanGraphs
+    Cloudflare-403), the job must NOT call blend_and_cache_ros -- which would
+    pick the newest on-disk snapshot (a stale prior-run or committed dir) and
+    overwrite the last-good cache:ros_projections -- and must release the slot."""
+    from unittest.mock import MagicMock
+
+    from fantasy_baseball.web import refresh_pipeline, season_routes
+
+    monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", lambda: fake_redis)
+    monkeypatch.setattr(
+        "fantasy_baseball.data.mlb_game_logs.fetch_game_log_totals",
+        lambda *a, **k: None,
+    )
+    # Every system returns an error -> zero fresh CSVs produced this run.
+    monkeypatch.setattr(
+        "fantasy_baseball.data.fangraphs_fetch.fetch_rest_of_season_projections",
+        lambda *a, **k: {"steamer": "error: no data returned for hitters"},
+    )
+    blend = MagicMock()
+    monkeypatch.setattr("fantasy_baseball.data.ros_pipeline.blend_and_cache_ros", blend)
+
+    season_routes._run_rest_of_season_fetch()
+
+    blend.assert_not_called()  # gate skipped the blend; last-good ROS untouched
+    assert refresh_pipeline.get_refresh_status()["running"] is False
+
+
 def test_full_standings_page_with_cached_data(client, kv_isolation):
     """Integration test: standings page renders correctly with all cached data present."""
     from fantasy_baseball.web import season_data

@@ -248,6 +248,22 @@ def _run_rest_of_season_fetch() -> None:
             for system, status in results.items():
                 logger.log(f"  {system}: {status}")
 
+            # Fetch-success gate: if NO system fetched fresh data this run, do
+            # NOT blend. Otherwise blend_and_cache_ros would pick whatever
+            # snapshot is newest on disk -- a recent-but-not-today dir from a
+            # prior run, or the committed stale snapshot -- and overwrite the
+            # last-good cache:ros_projections (e.g. the 2026-06-04 Cloudflare-403
+            # incident). The staleness guard inside blend_and_cache_ros is the
+            # backstop for the catastrophic case; this gate stops the common
+            # intermittent-failure case at its root: zero fresh CSVs means there
+            # is nothing new to blend. "skipped" (not "error"): nothing is wrong,
+            # the last-good blob is intact, and no retry helps until FanGraphs is
+            # reachable again.
+            if not any(v == "ok" for v in results.values()):
+                detail = ", ".join(f"{s}: {v}" for s, v in results.items())
+                logger.finish("skipped", f"No systems fetched; kept last-good ROS ({detail})")
+                return
+
             # Load roster names from Redis for quality checks
             quality_warnings = []
 

@@ -186,6 +186,32 @@ def read_cache(key: CacheKey) -> dict | list | None:
     return cast("dict | list", obj)
 
 
+def read_cache_meta(key: CacheKey) -> dict:
+    """Read the provenance ``_meta`` envelope for a cached key (NOT its data).
+
+    Returns the ``_meta`` dict (``_written_at``, ``_sha``, ``_job``, plus any
+    ``extra_meta`` such as ``_ros_snapshot_date``), or ``{}`` for a
+    missing/corrupt/bare-legacy payload. Lets a consumer inspect a blob's
+    vintage (e.g. a stale ROS snapshot) without unwrapping the data.
+    """
+    kv = get_kv()
+    try:
+        raw = kv.get(redis_key(key))
+    except Exception as e:
+        log.warning(f"read_cache_meta({key}) KV read failed: {e}")
+        return {}
+    if raw is None:
+        return {}
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if _is_envelope(obj):
+        meta = obj[_ENVELOPE_META]
+        return meta if isinstance(meta, dict) else {}
+    return {}
+
+
 def read_cache_dict(key: CacheKey) -> dict[str, Any] | None:
     """Read a cached payload, narrowed to dict.
 

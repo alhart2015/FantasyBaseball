@@ -64,7 +64,7 @@ def test_blend_and_cache_ros_raises_when_no_date_dirs(projections_dir, monkeypat
         "fantasy_baseball.data.ros_pipeline.get_kv",
         lambda: None,
     )
-    with pytest.raises(FileNotFoundError, match="No ROS snapshot dirs"):
+    with pytest.raises(FileNotFoundError, match="No datable ROS snapshot dirs"):
         blend_and_cache_ros(
             projections_dir,
             ["steamer"],
@@ -362,23 +362,50 @@ def test_blend_no_stale_warning_when_snapshot_fresh(
     assert meta["_ros_snapshot_date"] == "2026-04-18"
 
 
-def test_blend_aborts_when_snapshot_name_undatable(projections_dir, fake_redis, monkeypatch):
-    """A snapshot dir whose name has no leading ISO date can't be freshness-
-    checked, so blend must refuse (StaleROSSnapshotError) and keep the last-good
-    blob rather than silently overwrite good Redis with un-verifiable data."""
-    from fantasy_baseball.data.ros_pipeline import StaleROSSnapshotError
-
+def test_blend_refuses_when_only_undatable_dirs(projections_dir, fake_redis, monkeypatch):
+    """A rest_of_season/ holding only dirs with no leading ISO date has no
+    datable snapshot to blend, so blend raises FileNotFoundError and leaves BOTH
+    last-good blobs untouched (never silently overwrites with un-verifiable data)."""
     _make_ros_tree(projections_dir, year=2026, date="manual-latest")
     monkeypatch.setattr("fantasy_baseball.data.ros_pipeline.get_kv", lambda: fake_redis)
     import fantasy_baseball.web.season_data as season_data
 
     monkeypatch.setattr(season_data, "get_kv", lambda: fake_redis)
-    fake_redis.set("cache:ros_projections", "LAST_GOOD")
+    fake_redis.set("cache:ros_projections", "LAST_GOOD_ROS")
+    fake_redis.set("cache:full_season_projections", "LAST_GOOD_FULL")
 
-    with pytest.raises(StaleROSSnapshotError, match="ISO date"):
+    with pytest.raises(FileNotFoundError, match="No datable ROS snapshot dirs"):
         blend_and_cache_ros(projections_dir, ["steamer"], {"steamer": 1.0}, None, 2026)
 
-    assert fake_redis.get("cache:ros_projections") == "LAST_GOOD"
+    assert fake_redis.get("cache:ros_projections") == "LAST_GOOD_ROS"
+    assert fake_redis.get("cache:full_season_projections") == "LAST_GOOD_FULL"
+
+
+def test_blend_ignores_undatable_dir_and_uses_fresh_dated_snapshot(
+    projections_dir, fake_redis, monkeypatch
+):
+    """An undatable dir name ('manual-latest') sorts lexically AFTER dated dirs,
+    but must NOT shadow a fresh dated snapshot: selection picks the latest by
+    PARSED date and ignores undatable names, so the blend proceeds on the dated
+    snapshot. Regression guard for the raw-string-sort shadowing hazard."""
+    import datetime as _dt
+    import json
+
+    _make_ros_tree(projections_dir, year=2026, date="2026-04-18")
+    _make_ros_tree(projections_dir, year=2026, date="manual-latest")
+    monkeypatch.setattr(
+        "fantasy_baseball.data.ros_pipeline.local_today",
+        lambda: _dt.date(2026, 4, 19),
+    )
+    monkeypatch.setattr("fantasy_baseball.data.ros_pipeline.get_kv", lambda: fake_redis)
+    import fantasy_baseball.web.season_data as season_data
+
+    monkeypatch.setattr(season_data, "get_kv", lambda: fake_redis)
+
+    blend_and_cache_ros(projections_dir, ["steamer"], {"steamer": 1.0}, None, 2026)
+
+    meta = json.loads(fake_redis.get("cache:ros_projections"))["_meta"]
+    assert meta["_ros_snapshot_date"] == "2026-04-18"  # dated dir, not 'manual-latest'
 
 
 def test_blend_and_cache_ros_propagates_cache_write_failure(

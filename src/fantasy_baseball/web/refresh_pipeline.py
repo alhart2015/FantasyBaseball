@@ -47,6 +47,7 @@ from fantasy_baseball.web.season_data import (
     _compute_pending_moves_diff,
     _load_game_log_totals,
     read_cache,
+    read_cache_meta,
     reset_cache_job,
     set_cache_job,
     write_cache,
@@ -645,6 +646,7 @@ class RefreshRun:
             self._progress(
                 f"Loaded {len(ros_hitters)} ROS hitters + {len(ros_pitchers)} ROS pitchers"
             )
+            self._warn_if_ros_blob_stale()
         else:
             self._progress("WARNING: No ROS projections available — falling back to preseason")
 
@@ -694,6 +696,32 @@ class RefreshRun:
                     "WARNING: no ROS projections and cache:full_season_projections "
                     "missing -- Player.full_season_projection will be unset"
                 )
+
+    def _warn_if_ros_blob_stale(self) -> None:
+        """Surface the vintage of the ROS blob we just loaded.
+
+        full-season is re-derived here as ``ROS + CURRENT YTD``. The write-side
+        guard (ros_pipeline.StaleROSSnapshotError) keeps the last-good ROS blob
+        during a FanGraphs outage, but as that frozen blob ages behind today,
+        pairing its remaining-stats with today's YTD double-counts the games in
+        between. Warn so the drift is visible instead of silent -- defense in
+        depth on the read side, mirroring the write-side refusal.
+        """
+        from fantasy_baseball.data.ros_pipeline import ROS_SNAPSHOT_STALE_DAYS, _snapshot_date
+
+        snap_str = read_cache_meta(CacheKey.ROS_PROJECTIONS).get("_ros_snapshot_date")
+        if not snap_str:
+            return
+        snap = _snapshot_date(str(snap_str))
+        if snap is None:
+            return
+        days = (local_today() - snap).days
+        if days > ROS_SNAPSHOT_STALE_DAYS:
+            self._progress(
+                f"WARNING: ROS blob snapshot {snap_str} is {days} days old "
+                f"(> {ROS_SNAPSHOT_STALE_DAYS}); full-season = YTD + ROS may double-count "
+                f"~{days} days of games. Re-pull fresh ROS CSVs (FanGraphs fetch may be down)."
+            )
 
     # --- Step 4b: Fetch opponent rosters (raw) ---
     def _fetch_opponent_rosters(self):

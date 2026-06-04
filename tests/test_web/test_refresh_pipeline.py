@@ -1503,3 +1503,45 @@ class _FakeConn:
 
     def close(self) -> None:
         return None
+
+
+def test_warn_if_ros_blob_stale_emits_on_old_snapshot(monkeypatch):
+    """Read-side defense: when the loaded ROS blob's _ros_snapshot_date is older
+    than the threshold, _load_projections surfaces a loud progress warning (the
+    frozen blob + current YTD would double-count), instead of proceeding silently."""
+    import datetime as _dt
+
+    from fantasy_baseball.web import refresh_pipeline
+
+    run = refresh_pipeline.RefreshRun.__new__(refresh_pipeline.RefreshRun)
+    msgs: list[str] = []
+    run._progress = msgs.append  # type: ignore[method-assign]
+
+    monkeypatch.setattr(
+        refresh_pipeline, "read_cache_meta", lambda key: {"_ros_snapshot_date": "2026-06-01"}
+    )
+    monkeypatch.setattr(refresh_pipeline, "local_today", lambda: _dt.date(2026, 6, 10))
+
+    run._warn_if_ros_blob_stale()
+
+    assert any("days old" in m and "double-count" in m for m in msgs), msgs
+
+
+def test_warn_if_ros_blob_stale_silent_when_fresh(monkeypatch):
+    """A ROS blob within the staleness threshold emits no warning."""
+    import datetime as _dt
+
+    from fantasy_baseball.web import refresh_pipeline
+
+    run = refresh_pipeline.RefreshRun.__new__(refresh_pipeline.RefreshRun)
+    msgs: list[str] = []
+    run._progress = msgs.append  # type: ignore[method-assign]
+
+    monkeypatch.setattr(
+        refresh_pipeline, "read_cache_meta", lambda key: {"_ros_snapshot_date": "2026-06-09"}
+    )
+    monkeypatch.setattr(refresh_pipeline, "local_today", lambda: _dt.date(2026, 6, 10))
+
+    run._warn_if_ros_blob_stale()
+
+    assert not any("days old" in m for m in msgs), msgs
