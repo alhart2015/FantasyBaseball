@@ -25,29 +25,46 @@ PITCHING_COUNTING_COLS: list[str] = ["w", "k", "sv", "ip", "er", "bb", "h_allowe
 
 def _recompute_rate_columns(result: pd.DataFrame, player_type: str) -> None:
     """Recompute rate stats (AVG / ERA / WHIP) in place from the current
-    counting components.
-
-    The single source of the rate formulas, shared by the blend
+    counting components -- the single source of the rate formulas for the blend
     (:func:`_blend_hitters` / :func:`_blend_pitchers`) and the full-season
-    derivation (:func:`normalize_rest_of_season_to_full_season`). Any path that
-    mutates counting stats must call this so the rate columns can't go stale --
-    the full-season Total view bug was a derivation that summed H/AB but left
-    the ROS ``avg`` untouched. No-op when the required components are absent or
-    the frame is empty. Zero AB/IP yields 0.0 (matching the blend default).
+    derivation (:func:`normalize_rest_of_season_to_full_season`). No-op on an
+    empty frame. If a rate's component columns are absent the rate is left
+    untouched and a warning is logged (likely a projection-CSV schema change).
+    Zero AB/IP yields 0.0, matching the blend default.
     """
     if result.empty:
         return
     cols = set(result.columns)
     if player_type == PlayerType.HITTER:
-        if {"h", "ab"} <= cols:
+        need = {"h", "ab"}
+        if need <= cols:
             result["avg"] = np.where(result["ab"] > 0, result["h"] / result["ab"], 0.0)
+        else:
+            _warn_missing_rate_components("AVG", need - cols)
         return
-    if {"er", "ip"} <= cols:
+    need = {"er", "ip"}
+    if need <= cols:
         result["era"] = np.where(result["ip"] > 0, result["er"] * 9 / result["ip"], 0.0)
-    if {"bb", "h_allowed", "ip"} <= cols:
+    else:
+        _warn_missing_rate_components("ERA", need - cols)
+    need = {"bb", "h_allowed", "ip"}
+    if need <= cols:
         result["whip"] = np.where(
             result["ip"] > 0, (result["bb"] + result["h_allowed"]) / result["ip"], 0.0
         )
+    else:
+        _warn_missing_rate_components("WHIP", need - cols)
+
+
+def _warn_missing_rate_components(rate: str, missing: set[str]) -> None:
+    """Log that ``rate`` was left absent because component columns are missing
+    -- the loud signal a projection-CSV schema likely changed."""
+    logger.warning(
+        "Cannot recompute %s: frame missing component column(s) %s -- rate left "
+        "absent (possible projection-CSV schema change).",
+        rate,
+        sorted(missing),
+    )
 
 
 def normalize_rest_of_season_to_full_season(
