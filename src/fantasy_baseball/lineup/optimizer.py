@@ -204,13 +204,35 @@ def _score_pitcher_subset(
     ctx: _TeamContext,
     subset: list[Player],
     bench: list[Player],
+    memo: dict[frozenset[str], float] | None = None,
 ) -> float:
+    """Score the team roto total with ``subset`` as the active pitchers.
+
+    Within a single :func:`optimize_pitcher_lineup` call ``ctx`` is fixed
+    (same hitters, IL pitchers, ``league_context``), so the total is a pure
+    function of *which* pitchers are active: benched pitchers contribute
+    nothing and the IL/hitter halves are constant. The optional ``memo``
+    caches results keyed on the active-pitcher name set, so the per-starter
+    ``roto_delta`` loop -- which re-scores subsets the selection loop already
+    scored, with heavy overlap across starters -- does not re-run the
+    expensive IL pair-swap pool model
+    (:func:`scoring._compute_pitcher_pool_factors`) for an active set it has
+    already priced.
+    """
+    key: frozenset[str] | None = None
+    if memo is not None:
+        key = frozenset(p.name for p in subset)
+        if key in memo:
+            return memo[key]
     hypothetical = apply_lineup_to_roster(
         ctx.full_roster,
         _pitcher_active_slots(subset),
         {p.name for p in bench},
     )
-    return team_roto_total(hypothetical, ctx)
+    total = team_roto_total(hypothetical, ctx)
+    if memo is not None and key is not None:
+        memo[key] = total
+    return total
 
 
 def _resolve_user_ytd_components(
@@ -459,10 +481,17 @@ def optimize_pitcher_lineup(
 
     field_stats = projected_standings.field_stats(team_name)
 
+    # Cache subset scores across the selection loop and the per-starter
+    # roto_delta loop. team_roto_total is a pure function of the active-pitcher
+    # set for this fixed ctx, and the delta loop re-scores subsets the
+    # selection loop already priced (with overlap across starters); without the
+    # memo each rescore re-runs the IL pair-swap pool model from scratch.
+    score_memo: dict[frozenset[str], float] = {}
+
     best = None
     for subset in combinations(pitchers, k):
         bench = [p for p in pitchers if p not in subset]
-        total = _score_pitcher_subset(ctx, list(subset), bench)
+        total = _score_pitcher_subset(ctx, list(subset), bench, score_memo)
         if best is None or total > best[0]:
             best = (total, list(subset), bench)
 
@@ -484,7 +513,7 @@ def optimize_pitcher_lineup(
         if len(remaining) >= k:
             for sub in combinations(remaining, k):
                 sub_bench = [p for p in remaining if p not in sub] + [starter]
-                t = _score_pitcher_subset(ctx, list(sub), sub_bench)
+                t = _score_pitcher_subset(ctx, list(sub), sub_bench, score_memo)
                 if alt_best is None or t > alt_best:
                     alt_best = t
                     alt_best_subset = list(sub)
@@ -493,7 +522,7 @@ def optimize_pitcher_lineup(
             # pitchers, no bench). Counterfactual is "starter benched,
             # their slot left empty" -- score the other k-1 starters alone.
             no_rep_subset = [p for p in active_subset if p is not starter]
-            alt_best = _score_pitcher_subset(ctx, no_rep_subset, [*bench, starter])
+            alt_best = _score_pitcher_subset(ctx, no_rep_subset, [*bench, starter], score_memo)
             alt_best_subset = no_rep_subset
         roto_deltas[starter.name] = best_total - alt_best
 
