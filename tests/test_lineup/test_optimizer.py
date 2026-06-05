@@ -478,8 +478,8 @@ class TestPitcherOptimizer:
 
         The returning IL arm's slot-share denominator in ``swap_window_ip`` is
         ``preseason.ip * fraction_remaining``, so a mid-season fraction (0.4)
-        gives the arm a larger slot share and displaces MORE of the worst
-        active arm than a whole-season 1.0 does. With an IL pitcher whose
+        gives the arm a larger slot share and removes MORE of the active arm
+        it displaces than a whole-season 1.0 does. With an IL pitcher whose
         preseason IP is set, the two fractions must therefore produce different
         ``roto_delta`` values -- proving ``optimize_pitcher_lineup`` threads the
         fraction into the displacement model (via
