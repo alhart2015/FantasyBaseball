@@ -252,7 +252,9 @@ class TestSolveLineup:
             _good_pitcher("Low", k=120, era=4.0, whip=1.3),
         ]
         slots = {"OF": 1, "P": 1, "BN": 1, "IL": 0}
-        h_assign, ps, pb = _solve_lineup(hitters + pitchers, slots, _standings(), TEAM_NAME, None)
+        h_assign, ps, pb = _solve_lineup(
+            hitters + pitchers, slots, _standings(), TEAM_NAME, None, 1.0
+        )
         assert len(h_assign) == 1
         assert h_assign[0].name == "OF1"
         assert len(ps) == 1  # one P slot

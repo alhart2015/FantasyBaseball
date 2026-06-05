@@ -13,6 +13,7 @@ from fantasy_baseball.lineup.optimizer import (
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.standings import (
+    Category,
     CategoryStats,
     ProjectedStandings,
     ProjectedStandingsEntry,
@@ -387,6 +388,152 @@ class TestPitcherOptimizer:
         assert starters[0].name == "C"
         assert starters[0].roto_delta > 0, (
             f"decisive closer C must have positive roto_delta, got {starters[0].roto_delta}"
+        )
+
+    def test_elite_closer_not_benched_when_il_pitcher_present(self):
+        """REGRESSION: an elite low-volume closer must keep his saves in the
+        optimizer's objective even when an IL pitcher is on the roster.
+
+        ``team_roto_total`` formerly called ``project_ros_components`` with no
+        ``league_context``, so pitcher displacement fell back to the legacy
+        SGP picker. That picker selects the lowest-SGP active arm as the
+        returning IL pitcher's displacement target -- which is the elite
+        low-volume closer (few IP/K/W despite many saves) -- and scales him
+        toward zero, erasing his saves. The optimizer then benched the
+        closer for a strictly worse arm whenever any IL pitcher was rostered.
+
+        With ``league_context`` threaded through (matching
+        ``ProjectedStandings.from_rosters``), pitcher displacement uses the
+        pair-swap pool model, which is ROTO-optimal and refuses to displace
+        the closer when doing so loses saves. The closer stays started.
+
+        Setup mirrors ``test_picks_highest_impact_pitcher_not_just_highest_stats``
+        (closer decisive on SV) but adds an IL starter to the full roster --
+        the only trigger for the bug.
+        """
+        ace = _pitcher("Ace", ["SP"], ip=200, w=15, k=230, sv=0, era=3.00, whip=1.05)
+        closer = _pitcher("Closer", ["RP"], ip=65, w=3, k=80, sv=35, era=2.50, whip=1.00)
+        il_arm = _pitcher("ILArm", ["SP"], ip=180, w=12, k=180, sv=0, era=3.40, whip=1.15)
+        il_arm.selected_position = Position.IL
+
+        pitchers = [ace, closer]  # active pool (IL excluded upstream)
+        full_roster = [ace, closer, il_arm]
+        standings = _standings(
+            _standing("Us"),
+            _standing("Rival", W=0, K=0, SV=20, ERA=0, WHIP=0),
+        )
+        starters, _bench = optimize_pitcher_lineup(
+            pitchers=pitchers,
+            full_roster=full_roster,
+            projected_standings=standings,
+            team_name="Us",
+            slots=1,
+        )
+        assert len(starters) == 1
+        starter_names = {s.name for s in starters}
+        assert "Closer" in starter_names, (
+            f"elite closer must stay started with an IL pitcher rostered; "
+            f"optimizer benched him and started {starter_names} instead"
+        )
+
+    def test_compute_bands_false_suppresses_band_with_real_fraction(self):
+        """``compute_bands=False`` skips per-starter bands even when a real
+        ``fraction_remaining`` is supplied.
+
+        Callers that need correct in-season displacement sizing but not the
+        expensive per-starter bands -- the stash board (`stash_value`), the
+        IL-return planner, and `roster_audit` -- pass a real
+        ``fraction_remaining`` with ``compute_bands=False``. Before the gate was
+        decoupled, those callers passed ``fraction_remaining=None`` to skip
+        bands, which silently mis-sized the displacement window. This test pins
+        only the band-gate half of that decoupling;
+        ``test_fraction_remaining_sizes_il_displacement_window`` pins the
+        sizing half (the fraction actually reaching the pool model).
+        """
+        a = _pitcher("A", ["SP"], ip=200, w=15, k=230, sv=0, era=3.00, whip=1.05)
+        c = _pitcher("C", ["RP"], ip=65, w=3, k=80, sv=35, era=2.50, whip=1.00)
+        standings = _standings(
+            _standing("Us"),
+            _standing("Rival", W=0, K=0, SV=20, ERA=0, WHIP=0),
+        )
+        starters, _ = optimize_pitcher_lineup(
+            pitchers=[a, c],
+            full_roster=[a, c],
+            projected_standings=standings,
+            team_name="Us",
+            slots=2,
+            fraction_remaining=0.5,
+            compute_bands=False,
+        )
+        assert len(starters) == 2
+        for s in starters:
+            assert s.band is None, (
+                f"compute_bands=False must skip bands even with a real "
+                f"fraction_remaining; {s.name} got band={s.band}"
+            )
+
+    def test_fraction_remaining_sizes_il_displacement_window(self):
+        """A real ``fraction_remaining`` must reach the pitcher pool model's
+        displacement-window sizing, not just the band.
+
+        The returning IL arm's slot-share denominator in ``swap_window_ip`` is
+        ``preseason.ip * fraction_remaining``, so a mid-season fraction (0.4)
+        gives the arm a larger slot share and displaces MORE of the worst
+        active arm than a whole-season 1.0 does. With an IL pitcher whose
+        preseason IP is set, the two fractions must therefore produce different
+        ``roto_delta`` values -- proving ``optimize_pitcher_lineup`` threads the
+        fraction into the displacement model (via
+        ``LeagueContext.fraction_remaining``) and does not silently drop it to
+        1.0 (the bug class behind the season_routes / stash / IL-planner /
+        audit callers).
+
+        ``team_sds`` is supplied (continuous Gaussian scoring) so the
+        ROTO-optimal picker actually activates the returning arm and exercises
+        the swap window; with rank-based scoring against a single rival the
+        swap rarely clears the gate and the fraction never reaches
+        ``swap_window_ip``. ``compute_bands=False`` so the fraction can affect
+        nothing except the displacement window, making the inequality a clean
+        witness.
+        """
+        ace = _pitcher("Ace", ["SP"], ip=200, w=15, k=230, sv=0, era=3.00, whip=1.05)
+        closer = _pitcher("Closer", ["RP"], ip=65, w=3, k=80, sv=35, era=2.50, whip=1.00)
+        scrub = _pitcher("Scrub", ["SP"], ip=120, w=4, k=90, sv=0, era=5.00, whip=1.55)
+        # Returning IL arm: 60 ROS IP against a 180-IP healthy preseason.
+        # fr=1.0 -> slot_share 60/180=0.33; fr=0.4 -> 60/72=0.83. The bigger
+        # share at 0.4 discounts more of the displaced arm's ROS.
+        il_arm = _pitcher("ILArm", ["SP"], ip=60, w=7, k=75, sv=0, era=2.60, whip=0.95)
+        il_arm.selected_position = Position.IL
+        il_arm.preseason = PitcherStats(
+            ip=180, w=12, k=180, sv=0, era=2.60, whip=0.95, er=52.0, bb=51, h_allowed=119
+        )
+
+        active = [ace, closer, scrub]
+        full_roster = [*active, il_arm]
+        standings = _standings(
+            _standing("Us", W=9, K=210, SV=20, ERA=3.6, WHIP=1.2),
+            _standing("Rival", W=9, K=210, SV=20, ERA=3.6, WHIP=1.2),
+        )
+        sds = {t: {c: (8.0 if c is Category.K else 3.0) for c in Category} for t in ("Us", "Rival")}
+
+        def _deltas(fr):
+            starters, _ = optimize_pitcher_lineup(
+                pitchers=active,
+                full_roster=full_roster,
+                projected_standings=standings,
+                team_name="Us",
+                slots=2,
+                team_sds=sds,
+                fraction_remaining=fr,
+                compute_bands=False,
+            )
+            return {s.name: round(s.roto_delta, 6) for s in starters}
+
+        deltas_mid = _deltas(0.4)
+        deltas_full = _deltas(1.0)
+        assert deltas_mid != deltas_full, (
+            "fraction_remaining must change the displacement window (and thus "
+            f"roto_delta); got identical {deltas_mid} for fr=0.4 and fr=1.0, "
+            "meaning the fraction never reached swap_window_ip"
         )
 
     def test_pitcher_band_present_when_fraction_remaining_given(self):

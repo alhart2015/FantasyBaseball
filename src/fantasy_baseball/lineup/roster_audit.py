@@ -256,6 +256,9 @@ def audit_roster(
         )
     if optimal_pitchers is None:
         active_pitchers = [p for p in active_roster if p.player_type == PlayerType.PITCHER]
+        # Pass the real fraction_remaining (with compute_bands=False) so the
+        # pitcher pool model sizes IL displacement against the remaining season;
+        # the audit runs mid-season and does not need per-starter bands.
         optimal_pitchers, _ = optimize_pitcher_lineup(
             pitchers=active_pitchers,
             full_roster=roster,
@@ -263,6 +266,8 @@ def audit_roster(
             team_name=team_name,
             slots=roster_slots.get("P", 9),
             team_sds=team_sds,
+            fraction_remaining=fraction_remaining,
+            compute_bands=False,
         )
 
     slot_lookup: dict[str, str] = {a.name: a.slot.value for a in optimal_hitters}

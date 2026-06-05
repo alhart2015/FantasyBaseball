@@ -347,3 +347,57 @@ def test_optimize_lineup_both_fail_returns_informative_reason(
     reason = data.get("reason") or ""
     assert "Both sides failed" in reason
     assert "forced failure" in reason
+
+
+# ---------------------------------------------------------------------------
+# C7: the real fraction_remaining must reach the pitcher optimizer
+# ---------------------------------------------------------------------------
+
+
+def test_optimize_one_side_threads_fraction_remaining_to_pitcher_optimizer():
+    """``_optimize_one_side`` must forward the real ``fraction_remaining`` (with
+    ``compute_bands=False``) into ``optimize_pitcher_lineup``.
+
+    The optimizer builds its IL-displacement pool model sized by
+    ``preseason.ip * fraction_remaining``; mid-season this caller must pass the
+    actual remaining-season fraction, not let it default to 1.0, or a returning
+    IL pitcher under-displaces the worst active arm and the trade-builder zones
+    disagree with the dashboard (which passes the real fraction). The fraction
+    is read from the projections cache in the route and threaded down here.
+    """
+    from fantasy_baseball.models.player import Player
+    from fantasy_baseball.models.positions import IL_SLOTS
+    from fantasy_baseball.web import season_routes as routes
+
+    captured: dict = {}
+
+    def _spy_pitcher(*_a, **k):
+        captured.update(k)
+        return [], []
+
+    def _spy_hitter(*_a, **_k):
+        return []
+
+    pitcher = Player(name="Arm", player_type="pitcher", positions=["SP"], selected_position="P")
+    roster = [pitcher]
+
+    routes._optimize_one_side(
+        roster,
+        None,  # projected_standings -- ignored by the spy
+        "Hart",
+        {"P": 1, "IL": 1},
+        None,  # team_sds
+        _spy_hitter,
+        _spy_pitcher,
+        IL_SLOTS,
+        fraction_remaining=0.37,
+    )
+
+    assert captured.get("fraction_remaining") == 0.37, (
+        "the real fraction_remaining must reach optimize_pitcher_lineup; "
+        f"got {captured.get('fraction_remaining')!r}"
+    )
+    assert captured.get("compute_bands") is False, (
+        "the trade-builder path does not use bands and must pass "
+        f"compute_bands=False; got {captured.get('compute_bands')!r}"
+    )

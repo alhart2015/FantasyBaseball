@@ -99,8 +99,18 @@ def _solve_active(
     projected_standings: ProjectedStandings,
     team_name: str,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
+    fraction_remaining: float,
 ) -> list[Player]:
-    """Optimized active lineup (hitters + pitcher starters) over ``pool``."""
+    """Optimized active lineup (hitters + pitcher starters) over ``pool``.
+
+    ``fraction_remaining`` is forwarded to the pitcher optimizer (with
+    ``compute_bands=False`` so no per-starter band is built) so its pair-swap
+    pool model sizes a returning IL pitcher's slot-share against the remaining
+    season -- the stash board operates mid-season, so passing it correctly
+    (instead of the old ``None`` -> 1.0 fallback) is load-bearing for which arm
+    the IL pitcher displaces. The hitter optimizer needs no displacement context
+    (its pitcher half cancels) and no band, so it keeps ``fraction_remaining=None``.
+    """
     hitters = [p for p in pool if p.player_type != PlayerType.PITCHER]
     pitchers = [p for p in pool if p.player_type == PlayerType.PITCHER]
     h_assign = optimize_hitter_lineup(
@@ -119,7 +129,8 @@ def _solve_active(
         team_name=team_name,
         slots=roster_slots.get("P", 9),
         team_sds=team_sds,
-        fraction_remaining=None,
+        fraction_remaining=fraction_remaining,
+        compute_bands=False,
     )
     return [a.player for a in h_assign] + [s.player for s in p_starters]
 
@@ -529,7 +540,12 @@ def score_stash_candidates(
     # before_active is identical for every candidate: the optimized lineup over
     # the counted (non-IL-slot) bodies, with NO candidate activated.
     before_active = _solve_active(
-        _counted_pool(roster), roster_slots, projected_standings, team_name, team_sds
+        _counted_pool(roster),
+        roster_slots,
+        projected_standings,
+        team_name,
+        team_sds,
+        fraction_remaining,
     )
 
     # Value + band for every candidate (owned + FA).

@@ -251,7 +251,7 @@ def stash_fixture_il_full():
 
 
 def _band_mean(roster, candidate, standings, team_name, slots, sds):
-    before = _solve_active(roster, slots, standings, team_name, sds)
+    before = _solve_active(roster, slots, standings, team_name, sds, 0.5)
     return _marginal_value(
         candidate,
         before_active=before,

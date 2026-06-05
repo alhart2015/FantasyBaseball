@@ -406,6 +406,8 @@ def _optimize_one_side(
     optimize_hitter_lineup,
     optimize_pitcher_lineup,
     il_slots,
+    *,
+    fraction_remaining: float,
 ):
     """Run hitter + pitcher optimizers; return ``{player_key: zone}`` dict.
 
@@ -415,6 +417,13 @@ def _optimize_one_side(
     is suffixed with a 1-based index (``"OF1".."OF4"``, ``"UTIL1"``,
     ``"P1".."P9"``). The frontend's ``slotList()`` follows the same
     convention, so the panel's ``pl.zone === slotId`` lookup matches.
+
+    ``fraction_remaining`` is required (no silent default) and threaded into
+    the pitcher optimizer with ``compute_bands=False`` so its IL-displacement
+    pool model sizes a returning IL arm's slot-share against the remaining
+    season -- matching the season dashboard's optimizer call. Letting it
+    default to 1.0 mid-season would under-displace the worst active arm and
+    make the trade-builder zones disagree with the dashboard.
     """
     from fantasy_baseball.trades.multi_trade import player_key
 
@@ -451,6 +460,8 @@ def _optimize_one_side(
         team_name,
         slots=roster_slots.get("P", 9),
         team_sds=team_sds,
+        fraction_remaining=fraction_remaining,
+        compute_bands=False,
     )
 
     slot_counters: dict[str, int] = {}
@@ -1216,6 +1227,7 @@ def register_routes(app: Flask) -> None:
                     optimize_hitter_lineup,
                     optimize_pitcher_lineup,
                     IL_SLOTS,
+                    fraction_remaining=fr_opt,
                 )
             except (ValueError, ZeroDivisionError, KeyError) as exc:
                 if side == "my":
@@ -1235,6 +1247,7 @@ def register_routes(app: Flask) -> None:
                     optimize_hitter_lineup,
                     optimize_pitcher_lineup,
                     IL_SLOTS,
+                    fraction_remaining=fr_opt,
                 )
             except (ValueError, ZeroDivisionError, KeyError) as exc:
                 if side == "opp":
