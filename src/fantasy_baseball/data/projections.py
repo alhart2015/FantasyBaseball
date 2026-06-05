@@ -23,6 +23,33 @@ HITTING_COUNTING_COLS: list[str] = ["r", "hr", "rbi", "sb", "h", "ab", "pa"]
 PITCHING_COUNTING_COLS: list[str] = ["w", "k", "sv", "ip", "er", "bb", "h_allowed", "gs"]
 
 
+def _recompute_rate_columns(result: pd.DataFrame, player_type: str) -> None:
+    """Recompute rate stats (AVG / ERA / WHIP) in place from the current
+    counting components.
+
+    The single source of the rate formulas, shared by the blend
+    (:func:`_blend_hitters` / :func:`_blend_pitchers`) and the full-season
+    derivation (:func:`normalize_rest_of_season_to_full_season`). Any path that
+    mutates counting stats must call this so the rate columns can't go stale --
+    the full-season Total view bug was a derivation that summed H/AB but left
+    the ROS ``avg`` untouched. No-op when the required components are absent or
+    the frame is empty. Zero AB/IP yields 0.0 (matching the blend default).
+    """
+    if result.empty:
+        return
+    cols = set(result.columns)
+    if player_type == PlayerType.HITTER:
+        if {"h", "ab"} <= cols:
+            result["avg"] = np.where(result["ab"] > 0, result["h"] / result["ab"], 0.0)
+        return
+    if {"er", "ip"} <= cols:
+        result["era"] = np.where(result["ip"] > 0, result["er"] * 9 / result["ip"], 0.0)
+    if {"bb", "h_allowed", "ip"} <= cols:
+        result["whip"] = np.where(
+            result["ip"] > 0, (result["bb"] + result["h_allowed"]) / result["ip"], 0.0
+        )
+
+
 def normalize_rest_of_season_to_full_season(
     df: pd.DataFrame,
     game_log_totals: dict[int, dict],
@@ -48,8 +75,11 @@ def normalize_rest_of_season_to_full_season(
     For each player with a matching mlbam_id in game_log_totals, adds the
     actual season-to-date counting stats to the ROS counting stats so the
     result represents a full-season projection. Rate stats (AVG, ERA, WHIP)
-    are NOT touched here — they get recomputed downstream from blended
-    counting components in _blend_hitters / _blend_pitchers.
+    are then recomputed in place from the summed components via
+    :func:`_recompute_rate_columns`. This recompute is essential: unlike the
+    blend path there is NO downstream re-blend for the full-season line, so a
+    carried-forward ROS rate would otherwise leave full-season AVG/ERA/WHIP
+    equal to the ROS values (the Total-view bug).
 
     Players without a matching mlbam_id are left unchanged. This affects
     prospects and recent callups whose mlbam_id wasn't in our roster
@@ -86,6 +116,9 @@ def normalize_rest_of_season_to_full_season(
             if col in result.columns and col in actuals:
                 result.at[idx, col] = row[col] + actuals[col]
 
+    # Rates must follow the summed components -- there is no downstream re-blend
+    # for the full-season line, so a stale ROS avg/era/whip would survive.
+    _recompute_rate_columns(result, player_type)
     return result
 
 
@@ -347,20 +380,14 @@ def _blend_players(
 def _blend_hitters(dfs: list[pd.DataFrame]) -> pd.DataFrame:
     """Blend hitter projections. Recomputes AVG from blended H and AB."""
     result = _blend_players(dfs, HITTING_COUNTING_COLS, PlayerType.HITTER)
-    if result.empty:
-        return result
-    result["avg"] = np.where(result["ab"] > 0, result["h"] / result["ab"], 0.0)
+    _recompute_rate_columns(result, PlayerType.HITTER)
     return result
 
 
 def _blend_pitchers(dfs: list[pd.DataFrame]) -> pd.DataFrame:
     """Blend pitcher projections. Recomputes ERA and WHIP from components."""
     result = _blend_players(dfs, PITCHING_COUNTING_COLS, PlayerType.PITCHER)
-    if result.empty:
-        return result
-    ip = result["ip"]
-    result["era"] = np.where(ip > 0, result["er"] * 9 / ip, 0.0)
-    result["whip"] = np.where(ip > 0, (result["bb"] + result["h_allowed"]) / ip, 0.0)
+    _recompute_rate_columns(result, PlayerType.PITCHER)
     return result
 
 
