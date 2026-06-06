@@ -10,14 +10,16 @@ from fantasy_baseball.simulation import (
     _apply_variance,
     _playing_time_scales,
     _projected_volume,
+    _replacement_line,
     run_ros_monte_carlo,
     simulate_remaining_season,
 )
+from fantasy_baseball.utils.constants import REPLACEMENT_BY_POSITION
 
 
-def _make_hitter(name, r=80, hr=25, rbi=80, sb=10, h=150, ab=550):
+def _make_hitter(name, r=80, hr=25, rbi=80, sb=10, h=150, ab=550, positions=None):
     """Create a minimal hitter dict for testing."""
-    return {
+    d = {
         "name": name,
         "player_type": "hitter",
         "r": r,
@@ -27,6 +29,9 @@ def _make_hitter(name, r=80, hr=25, rbi=80, sb=10, h=150, ab=550):
         "h": h,
         "ab": ab,
     }
+    if positions is not None:
+        d["positions"] = positions
+    return d
 
 
 def _make_pitcher(name, w=10, k=150, sv=0, ip=180, er=70, bb=50, h_allowed=150):
@@ -277,6 +282,57 @@ class TestPlayingTimeScales:
         assert scales.max() < 1.3  # was ~1.7 under the symmetric-Normal-clip model
         assert scales.min() >= 0.0
         assert (1.0 - scales.min()) > (scales.max() - 1.0)  # left-skew
+
+
+class TestReplacementLineRouting:
+    """Position-aware replacement: the injured slot is filled per the player's spot."""
+
+    def test_catcher_only_uses_catcher_line(self):
+        p = {"player_type": PlayerType.HITTER, "positions": ["C"]}
+        assert _replacement_line(p, is_hitter=True) == REPLACEMENT_BY_POSITION["C"]
+
+    def test_multi_position_uses_best_available_by_sgp(self):
+        # Eligible at weak C and strong OF -> the higher-SGP OF replacement.
+        p = {"player_type": PlayerType.HITTER, "positions": ["C", "OF"]}
+        assert _replacement_line(p, is_hitter=True) == REPLACEMENT_BY_POSITION["OF"]
+
+    def test_no_core_position_falls_back_to_a_hitter_line(self):
+        # UTIL/DH-only (no C/1B/2B/3B/SS/OF) must not crash; uses a hitter line.
+        p = {"player_type": PlayerType.HITTER, "positions": ["UTIL"]}
+        line = _replacement_line(p, is_hitter=True)
+        assert line in REPLACEMENT_BY_POSITION.values()
+        assert "ab" in line  # a hitter line, not a pitcher line
+
+    def test_missing_positions_falls_back(self):
+        p = {"player_type": PlayerType.HITTER}
+        assert "ab" in _replacement_line(p, is_hitter=True)
+
+    def test_starter_uses_sp_line(self):
+        p = {"player_type": PlayerType.PITCHER, "ip": 180}
+        assert _replacement_line(p, is_hitter=False) == REPLACEMENT_BY_POSITION["SP"]
+
+    def test_reliever_uses_rp_line(self):
+        p = {"player_type": PlayerType.PITCHER, "ip": 60}
+        assert _replacement_line(p, is_hitter=False) == REPLACEMENT_BY_POSITION["RP"]
+
+    def test_backfill_is_position_aware_for_speed(self):
+        # Same player + same scale: a hurt SS (15-SB line) backfills more SB than a
+        # hurt 1B (6-SB line) -- the position shape the flat line erased.
+        out: list = []
+        with patch("fantasy_baseball.simulation.playing_time_params", return_value=(0.5, 0.0)):
+            ss = _apply_variance(
+                [_make_hitter("S", positions=["SS"])],
+                PlayerType.HITTER,
+                np.random.default_rng(1),
+                out,
+            )
+            fb = _apply_variance(
+                [_make_hitter("F", positions=["1B"])],
+                PlayerType.HITTER,
+                np.random.default_rng(1),
+                out,
+            )
+        assert ss[0]["sb"] > fb[0]["sb"]
 
 
 class TestApplyVariancePlayingTime:

@@ -5,12 +5,14 @@ scripts/summary.py (in-season weekly projections), and
 the season dashboard (web/season_data.py).
 """
 
+from functools import cache
 from typing import Any, cast
 
 import numpy as np
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto_dict
+from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import (
     AB_PER_PA,
     CLOSER_SV_THRESHOLD,
@@ -22,9 +24,8 @@ from fantasy_baseball.utils.constants import (
     PITCHER_CORR_STATS,
     PITCHER_CORRELATION,
     PITCHING_COUNTING,
-    REPLACEMENT_HITTER,
-    REPLACEMENT_RP,
-    REPLACEMENT_SP,
+    REPLACEMENT_BY_POSITION,
+    STARTER_IP_THRESHOLD,
     STAT_VARIANCE,
     safe_float,
 )
@@ -398,6 +399,59 @@ def _playing_time_scales(
     return out
 
 
+_HITTER_REPL_POS = ("C", "1B", "2B", "3B", "SS", "OF")
+_SP_GS_THRESHOLD = 10
+
+
+@cache
+def _hitter_repl_sgp(pos: str) -> float:
+    """SGP of a position's replacement line; cached (used to pick best-available)."""
+    line = REPLACEMENT_BY_POSITION[pos]
+    ab = line.get("ab", 0) or 1
+    return calculate_player_sgp(
+        {
+            "player_type": PlayerType.HITTER,
+            "r": line["r"],
+            "hr": line["hr"],
+            "rbi": line["rbi"],
+            "sb": line["sb"],
+            "avg": line["h"] / ab,
+            "ab": ab,
+        }
+    )
+
+
+def _pos_label(pos: object) -> str:
+    """Uppercase position label from a Position enum or a string."""
+    return (pos.value if hasattr(pos, "value") else str(pos)).upper()
+
+
+def _replacement_line(p: dict, is_hitter: bool) -> dict:
+    """The replacement-level line that backfills an injured player's missed time.
+
+    Position-aware: a streamed catcher gives ~0 SB while a streamed middle
+    infielder gives ~15, so the floor depends on where the player plays.
+
+    - Hitters route to the highest-SGP replacement among their eligible Core-8
+      positions (flexibility lets you stream the best available fill). A player
+      with no Core-8 eligibility (e.g. UTIL/DH-only) or no positions at all falls
+      back to the best hitter line.
+    - Pitchers route to SP or RP by role: projected GS >= 10, else projected
+      IP >= ``STARTER_IP_THRESHOLD``.
+    """
+    if not is_hitter:
+        gs = float(p.get("gs", 0) or 0)
+        ip = float(p.get("ip", 0) or 0)
+        starter = gs >= _SP_GS_THRESHOLD if gs else ip >= STARTER_IP_THRESHOLD
+        return REPLACEMENT_BY_POSITION["SP" if starter else "RP"]
+    elig = [
+        lab for pos in (p.get("positions") or []) if (lab := _pos_label(pos)) in _HITTER_REPL_POS
+    ]
+    if not elig:
+        elig = list(_HITTER_REPL_POS)
+    return REPLACEMENT_BY_POSITION[max(elig, key=_hitter_repl_sgp)]
+
+
 def _apply_variance(
     players: list,
     player_type: str,
@@ -445,11 +499,7 @@ def _apply_variance(
         if frac_missed >= _NOTABLE_PT_LOSS:
             injuries_out.append((p.get("name", "?"), frac_missed))
 
-        if is_hitter:
-            repl = REPLACEMENT_HITTER
-        else:
-            is_closer = p.get("sv", 0) >= CLOSER_SV_THRESHOLD
-            repl = REPLACEMENT_RP if is_closer else REPLACEMENT_SP
+        repl = _replacement_line(p, is_hitter)
 
         draws = all_draws[i]
         row = {}
