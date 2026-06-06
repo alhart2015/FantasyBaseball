@@ -344,6 +344,102 @@ class TestNormalizeRosToFullSeason:
         assert cole["bb"] == 43
         assert cole["h_allowed"] == 139
 
+    def test_recomputes_hitter_avg_from_combined_components(self):
+        """AVG must reflect the combined (ROS + YTD) H/AB, not the stale ROS
+        avg. Regression for the Total-tab bug where full-season AVG equaled the
+        ROS AVG because the rate column was carried forward unrecomputed."""
+        from fantasy_baseball.data.projections import normalize_rest_of_season_to_full_season
+
+        df = pd.DataFrame(
+            [
+                {
+                    "name": "Aaron Judge",
+                    "mlbam_id": 592450,
+                    "player_type": "hitter",
+                    "pa": 400,
+                    "ab": 300,
+                    "h": 90,
+                    "r": 60,
+                    "hr": 25,
+                    "rbi": 65,
+                    "sb": 4,
+                    "avg": 90 / 300,  # stale ROS avg = .300
+                }
+            ]
+        )
+        # YTD: 25 H / 80 AB = .3125 (hotter than ROS) -> combined 115/380 = .30263
+        game_log_totals = {
+            592450: {"pa": 100, "ab": 80, "h": 25, "r": 15, "hr": 5, "rbi": 15, "sb": 1},
+        }
+        result = normalize_rest_of_season_to_full_season(df, game_log_totals, "hitter")
+        judge = result.iloc[0]
+        assert judge["avg"] == pytest.approx(115 / 380, abs=1e-6)
+        assert judge["avg"] != pytest.approx(90 / 300, abs=1e-6)
+
+    def test_recomputes_pitcher_era_whip_from_combined_components(self):
+        """ERA/WHIP must reflect the combined (ROS + YTD) components, not the
+        stale ROS rates carried forward unrecomputed."""
+        from fantasy_baseball.data.projections import normalize_rest_of_season_to_full_season
+
+        df = pd.DataFrame(
+            [
+                {
+                    "name": "Gerrit Cole",
+                    "mlbam_id": 543037,
+                    "player_type": "pitcher",
+                    "ip": 170,
+                    "k": 190,
+                    "w": 12,
+                    "sv": 0,
+                    "er": 60,
+                    "bb": 40,
+                    "h_allowed": 130,
+                    "era": 60 * 9 / 170,  # stale ROS era
+                    "whip": (40 + 130) / 170,  # stale ROS whip = 1.0
+                }
+            ]
+        )
+        game_log_totals = {
+            543037: {"ip": 13, "k": 16, "w": 1, "sv": 0, "er": 5, "bb": 3, "h_allowed": 9},
+        }
+        result = normalize_rest_of_season_to_full_season(df, game_log_totals, "pitcher")
+        cole = result.iloc[0]
+        # combined: 65 ER / 183 IP -> 3.197; (43 BB + 139 H) / 183 -> .9945
+        assert cole["era"] == pytest.approx(65 * 9 / 183, abs=1e-6)
+        assert cole["whip"] == pytest.approx((43 + 139) / 183, abs=1e-6)
+        assert cole["whip"] != pytest.approx((40 + 130) / 170, abs=1e-6)
+
+    def test_warns_when_hitter_rate_components_missing(self, caplog):
+        """A non-empty hitter frame missing H/AB cannot have AVG recomputed.
+        Rather than silently shipping a frame with no avg column (a possible
+        FanGraphs CSV schema change), the recompute must log a loud warning."""
+        import logging
+
+        from fantasy_baseball.data.projections import _recompute_rate_columns
+
+        df = pd.DataFrame([{"name": "No Components", "r": 10, "hr": 2}])
+        with caplog.at_level(logging.WARNING):
+            _recompute_rate_columns(df, "hitter")
+        assert "avg" not in df.columns
+        assert any("AVG" in r.message for r in caplog.records)
+
+    def test_warns_when_pitcher_rate_components_missing(self, caplog):
+        """A non-empty pitcher frame missing ER/IP (or BB/H_allowed/IP) cannot
+        have ERA/WHIP recomputed; the recompute must log a loud warning instead
+        of silently dropping the rate columns."""
+        import logging
+
+        from fantasy_baseball.data.projections import _recompute_rate_columns
+
+        df = pd.DataFrame([{"name": "No Components", "w": 5, "k": 50}])
+        with caplog.at_level(logging.WARNING):
+            _recompute_rate_columns(df, "pitcher")
+        assert "era" not in df.columns
+        assert "whip" not in df.columns
+        messages = " ".join(r.message for r in caplog.records)
+        assert "ERA" in messages
+        assert "WHIP" in messages
+
     def test_no_game_log_leaves_player_unchanged(self):
         from fantasy_baseball.data.projections import normalize_rest_of_season_to_full_season
 
