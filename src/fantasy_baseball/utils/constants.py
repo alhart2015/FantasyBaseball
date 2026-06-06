@@ -164,7 +164,8 @@ STAT_VARIANCE: dict[str, float] = {
 # lookup interpolates between band centers (see utils/playing_time.py); pitcher
 # role is SP if projected IP >= STARTER_IP_THRESHOLD else RP (PitcherStats has
 # no GS field, so IP is the only role signal available at deployment).
-PLAYING_TIME_MAX_SCALE: float = 2.0  # clip ceiling on the per-player scale draw
+# The realized-PT distribution SHAPE (skew + the volume-dependent ceiling that
+# replaced the old flat 2.0 clip) lives in PLAYING_TIME_SHAPE below.
 PLAYING_TIME_CURVES: dict[str, list[dict[str, float]]] = {
     "hitters": [
         {"vol": 382.5, "mean_scale": 0.7518, "cv_pt": 0.4181},
@@ -183,6 +184,77 @@ PLAYING_TIME_CURVES: dict[str, list[dict[str, float]]] = {
         {"vol": 48.3, "mean_scale": 0.7579, "cv_pt": 0.4758},
         {"vol": 58.4, "mean_scale": 0.7861, "cv_pt": 0.4172},
         {"vol": 71.5, "mean_scale": 0.7861, "cv_pt": 0.4172},
+    ],
+}
+
+# Empirical SHAPE of realized/projected playing time, as a standardized-z ladder
+# per (role, projected-volume band): z = (ratio - band_mean) / band_sd, so each
+# ladder has mean 0, sd 1 and carries only the DISTRIBUTION SHAPE (skew + bounded
+# tails). The MC sampler draws u ~ Uniform(0,1), interpolates z at u over
+# QUANTILE_LEVELS, then realizes scale = mean_scale + z * cv_pt (with the
+# fraction_remaining damping). This replaces the old symmetric-Normal-clipped-at-
+# 2.0 draw: hitters/SP are left-skewed with a realistic ceiling that SHRINKS with
+# projected volume (an everyday regular tops out near 1.1-1.2x; only low-IP
+# relievers reach 2x+ via role changes), which the flat clip could not express.
+# ERoto keeps using just mean_scale/cv_pt, so the two consumers stay moment-
+# consistent. Regenerate with scripts/calibrate_playing_time.py (2022-2025).
+# Band 'vol' values match PLAYING_TIME_CURVES so the curve and shape interpolate
+# on the same volume axis.
+QUANTILE_LEVELS: list[float] = [0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99]
+PLAYING_TIME_SHAPE: dict[str, list[dict[str, object]]] = {
+    "hitters": [
+        {
+            "vol": 382.5,
+            "z": [-1.798, -1.6923, -1.3884, -0.7808, 0.0398, 0.7343, 1.2931, 1.5539, 2.146],
+        },
+        {
+            "vol": 440.9,
+            "z": [-2.2293, -1.7231, -1.4946, -0.7521, 0.1821, 0.7456, 1.2049, 1.409, 1.6584],
+        },
+        {
+            "vol": 498.8,
+            "z": [-2.206, -1.8144, -1.5111, -0.7046, 0.153, 0.7413, 1.2512, 1.4049, 1.7774],
+        },
+        {
+            "vol": 563.9,
+            "z": [-2.9485, -2.1829, -1.429, -0.4398, 0.2868, 0.7146, 1.0014, 1.0865, 1.449],
+        },
+        {
+            "vol": 629.0,
+            "z": [-3.2184, -2.1493, -1.4167, -0.3563, 0.3609, 0.6864, 0.8931, 0.9819, 1.1377],
+        },
+    ],
+    "SP": [
+        {
+            "vol": 109.4,
+            "z": [-1.7314, -1.7314, -1.4046, -0.8592, 0.0478, 0.7935, 1.3232, 1.4729, 1.8569],
+        },
+        {
+            "vol": 126.6,
+            "z": [-1.8732, -1.8732, -1.5227, -0.775, 0.1575, 0.88, 1.1819, 1.3084, 1.4966],
+        },
+        {
+            "vol": 147.1,
+            "z": [-2.269, -1.816, -1.5314, -0.7766, 0.314, 0.819, 1.0567, 1.2197, 1.3896],
+        },
+        {
+            "vol": 169.9,
+            "z": [-2.823, -2.2242, -1.4742, -0.5106, 0.3478, 0.7546, 0.9465, 1.1039, 1.2447],
+        },
+    ],
+    "RP": [
+        {
+            "vol": 48.3,
+            "z": [-1.5004, -1.2803, -1.0941, -0.8487, -0.1491, 0.7231, 1.371, 1.7501, 2.5877],
+        },
+        {
+            "vol": 58.4,
+            "z": [-1.8528, -1.5227, -1.3245, -0.8019, 0.1014, 0.6512, 0.9827, 1.3176, 3.1141],
+        },
+        {
+            "vol": 71.5,
+            "z": [-1.6466, -1.4737, -1.354, -0.7861, 0.0459, 0.561, 1.2455, 1.9408, 2.5305],
+        },
     ],
 }
 

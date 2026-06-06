@@ -22,7 +22,6 @@ from fantasy_baseball.utils.constants import (
     PITCHER_CORR_STATS,
     PITCHER_CORRELATION,
     PITCHING_COUNTING,
-    PLAYING_TIME_MAX_SCALE,
     REPLACEMENT_HITTER,
     REPLACEMENT_RP,
     REPLACEMENT_SP,
@@ -32,7 +31,11 @@ from fantasy_baseball.utils.constants import (
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
 )
-from fantasy_baseball.utils.playing_time import playing_time_params
+from fantasy_baseball.utils.playing_time import (
+    playing_time_params,
+    playing_time_shape,
+    scale_from_uniform,
+)
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 # Minimum simulated playing-time loss worth logging as a notable absence (vs a
@@ -372,23 +375,27 @@ def _playing_time_scales(
     rng: np.random.Generator,
     fraction_remaining: float,
 ) -> np.ndarray:
-    """Per-player two-sided playing-time multiplier (1.0 == exactly as projected).
+    """Per-player playing-time multiplier (1.0 == exactly as projected).
 
-    Draws ``scale ~ Normal(mean_scale, cv_pt)`` from the calibrated curve
-    (``utils.playing_time``), clipped to ``[0, PLAYING_TIME_MAX_SCALE]``. Over a
-    partial season only the remaining playing time is at risk, so the haircut
-    and spread are damped: ``eff_mean = 1 - (1 - mean_scale) * fraction_remaining``
-    and ``eff_sd = cv_pt * sqrt(fraction_remaining)``.
+    Draws ``u ~ Uniform(0, 1)`` per player and maps it through the empirical
+    standardized-z ladder for the player's projected volume (``utils.playing_time``),
+    then locates/scales by the calibrated ``mean_scale``/``cv_pt``. This reproduces
+    the real, volume-dependent SHAPE of realized/projected PA-IP -- left-skewed for
+    hitters/SP with a ceiling near full health, role-change upside for relievers --
+    instead of a symmetric Normal clipped at a flat (and physically impossible) 2.0.
+    Over a partial season only the remaining playing time is at risk, so the haircut
+    and spread are damped inside ``scale_from_uniform``.
     """
     is_hitter = player_type == PlayerType.HITTER
     n = len(players)
-    means = np.empty(n)
-    sds = np.empty(n)
+    us = rng.random(n)
+    out = np.empty(n)
     for i, p in enumerate(players):
-        mean_scale, cv_pt = playing_time_params(player_type, _projected_volume(p, is_hitter))
-        means[i] = 1.0 - (1.0 - mean_scale) * fraction_remaining
-        sds[i] = cv_pt * (fraction_remaining**0.5)
-    return np.clip(rng.normal(means, sds), 0.0, PLAYING_TIME_MAX_SCALE)
+        vol = _projected_volume(p, is_hitter)
+        mean_scale, cv_pt = playing_time_params(player_type, vol)
+        ladder = playing_time_shape(player_type, vol)
+        out[i] = scale_from_uniform(mean_scale, cv_pt, ladder, float(us[i]), fraction_remaining)
+    return out
 
 
 def _apply_variance(

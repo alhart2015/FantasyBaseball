@@ -85,6 +85,15 @@ MERGE_MIN_IP = 40
 # Bins per group for the reviewable band table (balanced-n via qcut).
 N_BINS = {"hitters": 5, "SP": 4, "RP": 3}
 
+# Quantile levels for the empirical SHAPE ladder. The MC sampler draws
+# u ~ Uniform(0,1), clamps to [first, last], and interpolates a standardized
+# z = (ratio - band_mean) / band_sd at u. p99 is the realistic over-performance
+# ceiling (replaces the flat PLAYING_TIME_MAX_SCALE = 2.0 clip); p01 carries the
+# season-ending-injury tail. Stored as z (mean 0, sd 1) so the runtime can apply
+# the volume-curve's mean_scale/cv_pt as location/scale and stay moment-consistent
+# with ERoto, which keeps using just those two numbers.
+QUANTILE_LEVELS = [0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99]
+
 
 def _load(path: Path | None, cols: list[str]) -> pd.DataFrame:
     """Load a projection/actuals CSV, keep MLBAMID + requested columns.
@@ -190,15 +199,21 @@ def calibrate_group(df: pd.DataFrame, label: str, n_bins: int) -> list[dict]:
     rows = []
     for _b, g in df.groupby("bin"):
         r = g["ratio"]
+        mean = float(r.mean())
+        sd = float(r.std())
+        # Standardized SHAPE ladder: z = (ratio - mean) / sd, so mean 0, sd 1.
+        # The runtime re-applies the (monotone) mean_scale/cv_pt as location/scale.
+        z = (r - mean) / sd if sd > 0 else r * 0.0
         rows.append(
             {
                 "vol": float(g["pt_proj"].median()),
                 "n": len(g),
                 "played": float(g["matched"].mean()),
-                "raw_mean": float(r.mean()),
-                "raw_sd": float(r.std()),
+                "raw_mean": mean,
+                "raw_sd": sd,
                 "p10": float(r.quantile(0.10)),
                 "p90": float(r.quantile(0.90)),
+                "z_ladder": [float(z.quantile(q)) for q in QUANTILE_LEVELS],
             }
         )
     rows.sort(key=lambda d: d["vol"])
@@ -231,6 +246,7 @@ def calibrate_group(df: pd.DataFrame, label: str, n_bins: int) -> list[dict]:
                 "vol": round(d["vol"], 1),
                 "mean_scale": round(float(mean_mono[i]), 4),
                 "cv_pt": round(float(sd_mono[i]), 4),
+                "z_ladder": [round(z, 4) for z in d["z_ladder"]],
                 "n": d["n"],
             }
         )
@@ -282,6 +298,23 @@ def main() -> None:
     print(
         "\nNote: 'mean_scale' is the multiplicative haircut on projected PA/IP; "
         "'cv_pt' is\nthe SD of actual/projected at that volume. Both monotone-smoothed."
+    )
+
+    print("\n" + "=" * 72)
+    print("EMPIRICAL SHAPE LADDERS (standardized z = (ratio - mean) / sd per band)")
+    print(f"QUANTILE_LEVELS = {QUANTILE_LEVELS}")
+    print("=" * 72)
+    print("\nPLAYING_TIME_SHAPE = {")
+    for key, pts in curves.items():
+        print(f"    {key!r}: [")
+        for p in pts:
+            print(f"        {{'vol': {p['vol']}, 'z': {p['z_ladder']}}},  # n={p['n']}")
+        print("    ],")
+    print("}")
+    print(
+        "\nNote: at runtime draw u ~ Uniform(0,1), clamp to [first, last] level,\n"
+        "interpolate z at u over QUANTILE_LEVELS, then scale = mean_scale + z * cv_pt\n"
+        "(with the fraction_remaining damping applied to mean_scale/cv_pt)."
     )
 
 

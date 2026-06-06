@@ -268,6 +268,16 @@ class TestPlayingTimeScales:
         assert scales.max() <= 2.0
         assert scales.mean() == pytest.approx(1.0, abs=0.02)
 
+    def test_full_time_hitter_ceiling_is_realistic(self):
+        # New empirical model: a full-time hitter roster (real curve + shape, no
+        # patch) never spikes near the old flat 2.0 clip, and the realized
+        # distribution is left-skewed (injuries reach further than over-play).
+        players = [_make_hitter(f"H{i}") for i in range(3000)]  # ab=550 -> ~611 PA band
+        scales = _playing_time_scales(players, PlayerType.HITTER, np.random.default_rng(0), 1.0)
+        assert scales.max() < 1.3  # was ~1.7 under the symmetric-Normal-clip model
+        assert scales.min() >= 0.0
+        assert (1.0 - scales.min()) > (scales.max() - 1.0)  # left-skew
+
 
 class TestApplyVariancePlayingTime:
     """Injury-report logging and replacement backfill under the new model."""
