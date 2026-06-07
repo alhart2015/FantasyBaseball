@@ -224,7 +224,7 @@ def _empirical_floor_sgp(
             "rbi": line["rbi"],
             "sb": line["sb"],
             "ab": line["ab"],
-            "avg": line["h"] / line["ab"] if line["ab"] else 0.0,
+            "avg": calculate_avg(line["h"], line["ab"]),
         }
     )
     return calculate_player_sgp(row, denoms=denoms, replacement_avg=replacement_avg)
@@ -251,8 +251,8 @@ def _empirical_pitcher_floor(
             "k": line["k"],
             "sv": line["sv"],
             "ip": ip,
-            "era": 9 * line["er"] / ip if ip else 0.0,
-            "whip": (line["bb"] + line["h_allowed"]) / ip if ip else 0.0,
+            "era": calculate_era(line["er"], ip),
+            "whip": calculate_whip(line["bb"], line["h_allowed"], ip),
         }
     )
     return calculate_player_sgp(

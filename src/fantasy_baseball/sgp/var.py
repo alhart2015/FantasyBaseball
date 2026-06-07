@@ -2,22 +2,20 @@ from typing import Literal, overload
 
 import pandas as pd
 
-from fantasy_baseball.utils.constants import STARTER_IP_THRESHOLD
+from fantasy_baseball.utils.constants import role_from_ip
 
 
 def _pitcher_floor_key(player: pd.Series, replacement_levels: dict[str, float]) -> str:
     """Pick the SP/RP empirical floor key for a pitcher by projected IP.
 
-    Role is taken from ``IP >= STARTER_IP_THRESHOLD`` (matching
-    ``scoring.py`` / ``playing_time.py``). The position token is deliberately
-    ignored: the draft board carries no real SP/RP eligibility -- matched
-    pitchers are stored as bare ``"P"`` and unmatched ones default to ``"SP"``
-    (``board.py``), so a closer can be mislabeled ``"SP"``. Falls back to the
-    unified ``"P"`` floor when role floors are absent (demand-based dict).
+    Role comes from the shared ``role_from_ip`` classifier (NaN/None-safe).
+    The position token is deliberately ignored: the draft board carries no
+    real SP/RP eligibility -- matched pitchers are stored as bare ``"P"`` and
+    unmatched ones default to ``"SP"`` (``board.py``), so a closer can be
+    mislabeled ``"SP"``. Falls back to the unified ``"P"`` floor when role
+    floors are absent (demand-based dict).
     """
-    ip = player.get("ip", 0.0)
-    ip = float(ip) if ip is not None else 0.0
-    role = "SP" if ip >= STARTER_IP_THRESHOLD else "RP"
+    role = role_from_ip(player.get("ip", 0.0))
     return role if role in replacement_levels else "P"
 
 

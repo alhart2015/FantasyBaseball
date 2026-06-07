@@ -35,9 +35,9 @@ from fantasy_baseball.utils.constants import (
     AB_PER_PA,
     HITTING_COUNTING,
     PITCHING_COUNTING,
-    STARTER_IP_THRESHOLD,
     STAT_VARIANCE,
     Category,
+    role_from_ip,
 )
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
@@ -213,7 +213,7 @@ def _playing_time(p: Player) -> float:
 def _pitcher_role(p: Player) -> str:
     """Classify a pitcher as 'SP' or 'RP' based on projected IP."""
     ip = _safe(p.rest_of_season.ip) if isinstance(p.rest_of_season, PitcherStats) else 0.0
-    return "SP" if ip > STARTER_IP_THRESHOLD else "RP"
+    return role_from_ip(ip)
 
 
 def _real_positions(p: Player) -> frozenset[Position]:

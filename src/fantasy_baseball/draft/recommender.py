@@ -134,8 +134,13 @@ def get_recommendations(
 ) -> list[Recommendation]:
     """Get top draft pick recommendations.
 
-    Recalculates replacement levels from the undrafted pool so that
-    positional scarcity (e.g. a run on catchers) is reflected in VAR.
+    Replacement floors are position-aware empirical waiver lines
+    (:func:`position_aware_replacement_levels`) -- static per-position and
+    SP/RP constants, not the old per-pick demand floors. Only the rate
+    baselines (AVG/ERA/WHIP) are recomputed from the remaining pool, so
+    in-draft positional scarcity (e.g. a run on catchers) is no longer
+    reflected in the VAR floor itself; it is surfaced via the scarcity note
+    below and, in "vona" mode, by VONA.
 
     *scoring_mode*: "var" (default) uses Value Above Replacement for
     ranking; "vona" uses Value Over Next Available, which accounts for
@@ -145,8 +150,8 @@ def get_recommendations(
         roster_slots = DEFAULT_ROSTER_SLOTS
     available = board[~board["player_id"].isin(drafted)]
 
-    # Recalculate replacement levels from the full remaining pool so
-    # positional scarcity is properly reflected.
+    # Empirical waiver floors (static); only the AVG/ERA/WHIP rate baselines
+    # come from the remaining pool.
     starters = compute_starters_per_position(roster_slots, num_teams)
     denoms = get_sgp_denominators()
     repl_rates = calculate_replacement_rates(available, starters)
