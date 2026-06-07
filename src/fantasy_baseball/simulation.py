@@ -398,11 +398,9 @@ def _playing_time_scales(
     return out
 
 
-_PITCHER_REPL_ROLES = ("SP", "RP")
-
 # Hitter positions are every REPLACEMENT_BY_POSITION key that isn't a pitcher role,
 # derived so adding a position to the constant doesn't need a second edit here.
-_HITTER_REPL_POS = tuple(k for k in REPLACEMENT_BY_POSITION if k not in _PITCHER_REPL_ROLES)
+_HITTER_REPL_POS = tuple(k for k in REPLACEMENT_BY_POSITION if k not in ("SP", "RP"))
 
 # Neutral hitter replacement for position-less / UTIL / DH-only hitters: the
 # element-wise mean of the position lines. A power bat filling a UTIL slot floors
@@ -520,12 +518,9 @@ def _apply_variance(
         if frac_missed >= _NOTABLE_PT_LOSS:
             injuries_out.append((p.get("name", "?"), frac_missed))
 
-        # A player's replacement line is invariant across the 1000 sims, so memoize
-        # it on the (reused) flat dict rather than re-routing every iteration.
-        repl = p.get("_repl_line")
-        if repl is None:
-            repl = _replacement_line(p, is_hitter)
-            p["_repl_line"] = repl
+        # Routing is a cheap dict lookup (per-position SGP is precomputed), so
+        # compute it inline rather than memoizing onto the player dict.
+        repl = _replacement_line(p, is_hitter)
 
         draws = all_draws[i]
         row = {}
