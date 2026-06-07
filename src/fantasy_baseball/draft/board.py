@@ -9,8 +9,8 @@ from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.replacement import (
-    calculate_replacement_levels,
     calculate_replacement_rates,
+    position_aware_replacement_levels,
 )
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
@@ -72,7 +72,7 @@ def build_draft_board(
         axis=1,
     )
 
-    replacement_levels = calculate_replacement_levels(pool, starters)
+    replacement_levels = position_aware_replacement_levels(pool, starters, denoms, repl_rates)
     pool["var"] = 0.0
     pool["best_position"] = ""
     for idx, row in pool.iterrows():
