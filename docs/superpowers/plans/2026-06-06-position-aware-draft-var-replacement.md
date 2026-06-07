@@ -10,6 +10,27 @@
 
 ---
 
+## Revision (2026-06-06, after Task 2 diagnostic) — scope expanded to pitchers
+
+The real-data diagnostic showed empirical hitter floors are uniformly *lower*
+than demand-based (hitter VAR rises), so leaving pitchers on the old floor
+tilts the board. Per the spec Revision note, scope now includes **SP/RP-split
+empirical pitcher floors** (which also resolves TODO line 61). Concretely, on
+top of Tasks 1/3/4 below:
+
+- **Task 1a (done inline):** `position_aware_replacement_levels` also sets
+  `levels["SP"]` and `levels["RP"]` from the empirical pitcher lines via a
+  `_empirical_pitcher_floor` helper, using `repl_rates["era"]/["whip"]`. The
+  demand-based `"P"` key is kept as a fallback.
+- **Task 1b (new — `calculate_var`):** pitchers route to the `SP`/`RP` floor by
+  role (`SP`/`RP` tokens else `IP >= STARTER_IP_THRESHOLD`), falling back to
+  `"P"` when role floors are absent (backward compat). The VAR *value* uses the
+  role floor; reported `best_position` stays `"P"` for pitchers.
+- Board/recommender wiring (Tasks 3/4) is unchanged by this — they already call
+  `position_aware_replacement_levels`, which now carries the pitcher floors.
+
+---
+
 ## File Structure
 
 - **Modify** `src/fantasy_baseball/sgp/replacement.py` — add `position_aware_replacement_levels` + a private `_empirical_floor_sgp` helper. (`calculate_replacement_levels` is **not** modified — it is reused for the P floor and its tests stay green.)

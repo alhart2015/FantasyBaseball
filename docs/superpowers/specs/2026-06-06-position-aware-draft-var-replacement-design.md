@@ -1,7 +1,50 @@
 # Position-aware draft VAR replacement — design
 
 Date: 2026-06-06
-Status: draft (brainstorming) — awaiting user review
+Status: approved + revised during implementation (see Revision note at top)
+
+## Revision (2026-06-06, after the real-data diagnostic)
+
+The before/after diagnostic (`scripts/diag_draft_replacement.py`, Task 2)
+overturned two assumptions in the original design below and expanded the
+scope. Where this note conflicts with the sections below, this note wins.
+
+- **The demand-based floors are NOT flat** (the original premise). On the real
+  board they span demand C 9.07 .. SS 11.06. The spread has a concrete cause:
+  `calculate_replacement_levels` sets each position's floor from its
+  *dedicated* starter slots only (SS = 1 slot x 10 teams = 10th-best SS) and
+  skips the `IF` and `UTIL` flex slots — but a real draft rosters ~18-22
+  shortstops once flex/bench absorb them. So the demand-based floor picks too
+  shallow a marginal player; the floor reads artificially HIGH, worst at deep
+  positions (SS). The empirical waiver floor has no such blind spot (it is built
+  from who was actually un-rostered), so it is simply more correct. There is no
+  real "in-draft vs waiver" ambiguity.
+
+- **Empirical floors are uniformly lower than demand-based for hitters**
+  (C -1.70, 2B -0.84, SS -2.46, 1B -2.12, 3B -0.48, OF -0.76), so hitter VAR
+  rises. Hitters-only would therefore tilt the board toward pitchers-... no,
+  toward hitters (pitchers unchanged). The fix is to apply empirical floors to
+  pitchers too, putting both player types on one consistent basis.
+
+- **Scope expanded to pitchers, SP/RP split.** Empirical pitcher floors:
+  demand-based unified P 6.65; empirical SP line 7.61 (HIGHER -> docks
+  over-valued starters, which is exactly TODO line 61); empirical RP line 6.34
+  (slightly lower -> rewards scarce saves). The SP and RP floors differ by
+  ~1.3 SGP and *should* be separate: only relievers supply saves, so a closer's
+  SV must net against the RP line's ~8 free SV while a starter's K nets against
+  the SP line's deep strikeouts. A single unified-P floor cannot do both. This
+  folds the pitcher-VAR-overstatement TODO (line 61) into this change.
+
+- **Routing.** Board pitcher eligibility is stored as bare `"P"` for every
+  pitcher (SP/RP is not in the position data), so `calculate_var` classifies
+  role from stats: `SP`/`RP` position tokens if present, else
+  `IP >= STARTER_IP_THRESHOLD` (matching `simulation.py:465`). The VAR *value*
+  uses the role's empirical floor; the reported `best_position` stays `"P"` for
+  pitchers (surgical -- no change to recommender scarcity/need display, which
+  groups by `best_position`).
+
+- **Resolved open questions:** (1) pitcher scope -> in (SP/RP split);
+  (2) recommender denominators -> computed live to match the board.
 
 ## Context / problem
 
