@@ -399,7 +399,9 @@ def _playing_time_scales(
     return out
 
 
-_HITTER_REPL_POS = ("C", "1B", "2B", "3B", "SS", "OF")
+# Hitter positions are every REPLACEMENT_BY_POSITION key that isn't a pitcher role,
+# derived so adding a position to the constant doesn't need a second edit here.
+_HITTER_REPL_POS = tuple(k for k in REPLACEMENT_BY_POSITION if k not in ("SP", "RP"))
 
 # Neutral hitter replacement for position-less / UTIL / DH-only hitters: the
 # element-wise mean of the position lines. A power bat filling a UTIL slot floors

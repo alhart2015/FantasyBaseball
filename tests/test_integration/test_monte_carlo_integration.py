@@ -429,6 +429,14 @@ class TestInjuryEffects:
                 f"less than full-scale={full_totals[cat]:.1f}"
             )
 
+        # K is a wash (replacement K-rate ~= rostered), not a free-for-all. Guard
+        # that a future calibration pushing replacement K well above rostered would
+        # be caught: the haircut must stay within 5% of full-scale, not balloon.
+        assert hc_totals["K"] < full_totals["K"] * 1.05, (
+            f"K: haircut={hc_totals['K']:.1f} ballooned vs full-scale={full_totals['K']:.1f} "
+            "-- replacement K-rate may now exceed rostered; recheck the SP/RP lines"
+        )
+
     def test_replacement_players_contribute_during_injury(self, team_rosters):
         """A large playing-time loss should still leave stats positive because
         replacement-level production backfills the missed fraction.

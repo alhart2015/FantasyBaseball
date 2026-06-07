@@ -21,11 +21,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from fantasy_baseball.utils.constants import STARTER_IP_THRESHOLD
+
 SNAPSHOTS = [("post-draft", "2026-03-24", "preseason"), ("now", "2026-06-09", "current")]
 HITTER_POS = ["C", "1B", "2B", "3B", "SS", "OF"]
 PITCHER_TOKENS = {"SP", "RP", "P"}
-GS_SP_THRESHOLD = 10
-IP_SP_FALLBACK = 100.0
+GS_SP_THRESHOLD = 10  # generator-only: FanGraphs projections carry GS, the runtime dicts don't
+IP_SP_FALLBACK = STARTER_IP_THRESHOLD  # reuse the canonical runtime threshold
 TOP_N = 3
 
 
