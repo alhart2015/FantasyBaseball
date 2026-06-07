@@ -230,24 +230,58 @@ def _empirical_floor_sgp(
     return calculate_player_sgp(row, denoms=denoms, replacement_avg=replacement_avg)
 
 
+def _empirical_pitcher_floor(
+    position: str,
+    denoms: dict[Category, float],
+    replacement_era: float,
+    replacement_whip: float,
+) -> float:
+    """SGP of an empirical SP/RP waiver line (REPLACEMENT_BY_POSITION).
+
+    SP and RP are kept separate so a closer's saves net against the RP line's
+    free SV while a starter's strikeouts net against the SP line's deep K --
+    a single unified-"P" floor cannot do both correctly.
+    """
+    line = REPLACEMENT_BY_POSITION[position]
+    ip = line["ip"]
+    row = pd.Series(
+        {
+            "player_type": PlayerType.PITCHER,
+            "w": line["w"],
+            "k": line["k"],
+            "sv": line["sv"],
+            "ip": ip,
+            "era": 9 * line["er"] / ip if ip else 0.0,
+            "whip": (line["bb"] + line["h_allowed"]) / ip if ip else 0.0,
+        }
+    )
+    return calculate_player_sgp(
+        row, denoms=denoms, replacement_era=replacement_era, replacement_whip=replacement_whip
+    )
+
+
 def position_aware_replacement_levels(
     player_pool: pd.DataFrame,
     starters_per_position: dict[str, int] | None = None,
     denoms: dict[Category, float] | None = None,
     repl_rates: dict[str, float] | None = None,
 ) -> dict[str, float]:
-    """Replacement levels with empirical waiver floors for hitter positions.
+    """Replacement levels with empirical waiver floors per position.
 
-    Starts from the demand-based :func:`calculate_replacement_levels` (so the
-    pitcher "P" floor and all demand math are reused unchanged), then overrides
-    each hitter position -- and UTIL -- with the scalar SGP of its empirical
-    waiver line. :func:`calculate_var` consumes the result unchanged.
+    Starts from the demand-based :func:`calculate_replacement_levels` (whose
+    unified "P" floor is kept as a fallback), then overrides each hitter
+    position + UTIL with its empirical waiver-line SGP and adds separate
+    empirical "SP"/"RP" floors. :func:`calculate_var` routes pitchers to the
+    SP/RP floor by role and hitters to their position floor.
     """
     levels = calculate_replacement_levels(player_pool, starters_per_position)
 
     if denoms is None:
         denoms = get_sgp_denominators()
-    replacement_avg = repl_rates["avg"] if repl_rates and "avg" in repl_rates else REPLACEMENT_AVG
+    rates = repl_rates or {}
+    replacement_avg = rates.get("avg", REPLACEMENT_AVG)
+    replacement_era = rates.get("era", REPLACEMENT_ERA)
+    replacement_whip = rates.get("whip", REPLACEMENT_WHIP)
 
     empirical: dict[str, float] = {}
     for pos in _EMPIRICAL_HITTER_POSITIONS:
@@ -257,5 +291,8 @@ def position_aware_replacement_levels(
     levels.update(empirical)
     if "UTIL" in levels and empirical:
         levels["UTIL"] = max(empirical.values())
+
+    levels["SP"] = _empirical_pitcher_floor("SP", denoms, replacement_era, replacement_whip)
+    levels["RP"] = _empirical_pitcher_floor("RP", denoms, replacement_era, replacement_whip)
 
     return levels

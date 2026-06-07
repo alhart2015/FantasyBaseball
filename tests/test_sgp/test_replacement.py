@@ -389,3 +389,38 @@ class TestPositionAwareReplacementLevels:
         levels = position_aware_replacement_levels(pool, {"C": 1, "P": 1})
         assert "P" in levels
         assert "C" in levels
+
+    def test_pitcher_floors_from_constant(self):
+        """SP/RP floors equal the SGP of their empirical pitcher lines,
+        computed with the given denoms + replacement rates."""
+        pool = _make_player_pool()
+        denoms = get_sgp_denominators()
+        rates = {"avg": 0.250, "era": 4.50, "whip": 1.35}
+        levels = position_aware_replacement_levels(pool, self._HITTER_STARTERS, denoms, rates)
+        for pos in ("SP", "RP"):
+            line = REPLACEMENT_BY_POSITION[pos]
+            ip = line["ip"]
+            expected = calculate_player_sgp(
+                pd.Series(
+                    {
+                        "player_type": PlayerType.PITCHER,
+                        "w": line["w"],
+                        "k": line["k"],
+                        "sv": line["sv"],
+                        "ip": ip,
+                        "era": 9 * line["er"] / ip,
+                        "whip": (line["bb"] + line["h_allowed"]) / ip,
+                    }
+                ),
+                denoms=denoms,
+                replacement_era=4.50,
+                replacement_whip=1.35,
+            )
+            assert levels[pos] == pytest.approx(expected)
+
+    def test_sp_and_rp_floors_differ(self):
+        """Saves come only from relievers, so the role floors must differ --
+        a unified-P floor could not net SV and K correctly at once."""
+        pool = _make_player_pool()
+        levels = position_aware_replacement_levels(pool, self._HITTER_STARTERS)
+        assert levels["SP"] != pytest.approx(levels["RP"])
