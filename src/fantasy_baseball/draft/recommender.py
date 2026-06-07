@@ -14,7 +14,11 @@ from fantasy_baseball.draft.roster_state import (
 )
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import Position
-from fantasy_baseball.sgp.replacement import calculate_replacement_levels
+from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.replacement import (
+    calculate_replacement_rates,
+    position_aware_replacement_levels,
+)
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
     CLOSER_SV_THRESHOLD,
@@ -144,7 +148,9 @@ def get_recommendations(
     # Recalculate replacement levels from the full remaining pool so
     # positional scarcity is properly reflected.
     starters = compute_starters_per_position(roster_slots, num_teams)
-    repl_levels = calculate_replacement_levels(available, starters)
+    denoms = get_sgp_denominators()
+    repl_rates = calculate_replacement_rates(available, starters)
+    repl_levels = position_aware_replacement_levels(available, starters, denoms, repl_rates)
 
     # Only recompute VAR for top candidates (by pre-computed VAR).
     # The full pool sets replacement levels accurately, but iterating
