@@ -94,3 +94,21 @@ def test_var_pitcher_falls_back_to_p_without_role_floors():
     levels = {"P": 7.0, "C": 8.0}
     var = calculate_var(player, levels)
     assert var == pytest.approx(8.0)
+
+
+def test_var_pitcher_role_from_ip_not_position_token():
+    """The board defaults unmatched pitchers to ['SP'], so role must come from
+    IP, not the token -- a low-IP closer mislabeled 'SP' still nets against the
+    RP floor (regression for the Emmanuel Clase misclassification)."""
+    player = pd.Series(
+        {
+            "name": "Mislabeled Closer",
+            "positions": ["SP"],
+            "total_sgp": 12.0,
+            "player_type": "pitcher",
+            "ip": 21.0,
+        }
+    )
+    levels = {"SP": 7.6, "RP": 6.3, "P": 6.65}
+    var = calculate_var(player, levels)
+    assert var == pytest.approx(12.0 - 6.3)

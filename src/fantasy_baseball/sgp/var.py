@@ -6,20 +6,18 @@ from fantasy_baseball.utils.constants import STARTER_IP_THRESHOLD
 
 
 def _pitcher_floor_key(player: pd.Series, replacement_levels: dict[str, float]) -> str:
-    """Pick the SP/RP empirical floor key for a pitcher.
+    """Pick the SP/RP empirical floor key for a pitcher by projected IP.
 
-    Routes by ``SP``/``RP`` position tokens when present, else by
-    ``IP >= STARTER_IP_THRESHOLD`` (matching ``simulation.py``'s replacement
-    routing, since board pitchers are stored as bare ``"P"``). Falls back to
-    the unified ``"P"`` floor when role floors are absent (demand-based dict).
+    Role is taken from ``IP >= STARTER_IP_THRESHOLD`` (matching
+    ``scoring.py`` / ``playing_time.py``). The position token is deliberately
+    ignored: the draft board carries no real SP/RP eligibility -- matched
+    pitchers are stored as bare ``"P"`` and unmatched ones default to ``"SP"``
+    (``board.py``), so a closer can be mislabeled ``"SP"``. Falls back to the
+    unified ``"P"`` floor when role floors are absent (demand-based dict).
     """
-    pos_set = {str(p) for p in player["positions"]}
-    if "SP" in pos_set or "RP" in pos_set:
-        role = "SP" if "SP" in pos_set else "RP"
-    else:
-        ip = player.get("ip", 0.0)
-        ip = float(ip) if ip is not None else 0.0
-        role = "SP" if ip >= STARTER_IP_THRESHOLD else "RP"
+    ip = player.get("ip", 0.0)
+    ip = float(ip) if ip is not None else 0.0
+    role = "SP" if ip >= STARTER_IP_THRESHOLD else "RP"
     return role if role in replacement_levels else "P"
 
 
