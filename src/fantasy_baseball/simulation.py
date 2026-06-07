@@ -5,7 +5,6 @@ scripts/summary.py (in-season weekly projections), and
 the season dashboard (web/season_data.py).
 """
 
-from functools import cache
 from typing import Any, cast
 
 import numpy as np
@@ -399,9 +398,11 @@ def _playing_time_scales(
     return out
 
 
+_PITCHER_REPL_ROLES = ("SP", "RP")
+
 # Hitter positions are every REPLACEMENT_BY_POSITION key that isn't a pitcher role,
 # derived so adding a position to the constant doesn't need a second edit here.
-_HITTER_REPL_POS = tuple(k for k in REPLACEMENT_BY_POSITION if k not in ("SP", "RP"))
+_HITTER_REPL_POS = tuple(k for k in REPLACEMENT_BY_POSITION if k not in _PITCHER_REPL_ROLES)
 
 # Neutral hitter replacement for position-less / UTIL / DH-only hitters: the
 # element-wise mean of the position lines. A power bat filling a UTIL slot floors
@@ -410,14 +411,12 @@ _GENERIC_HITTER_REPL: dict[str, int] = {
     col: round(
         sum(REPLACEMENT_BY_POSITION[pos][col] for pos in _HITTER_REPL_POS) / len(_HITTER_REPL_POS)
     )
-    for col in ("r", "hr", "rbi", "sb", "h", "ab")
+    for col in HITTING_COUNTING
 }
 
 
-@cache
-def _hitter_repl_sgp(pos: str) -> float:
-    """SGP of a position's replacement line; cached (used to pick best-available)."""
-    line = REPLACEMENT_BY_POSITION[pos]
+def _line_sgp(line: dict[str, int]) -> float:
+    """SGP of a fixed replacement line (ranks a hitter's eligible positions)."""
     ab = line.get("ab", 0) or 1
     return calculate_player_sgp(
         {
@@ -430,6 +429,14 @@ def _hitter_repl_sgp(pos: str) -> float:
             "ab": ab,
         }
     )
+
+
+# Per-position replacement SGP, precomputed once: the lines and the SGP denominators
+# are all constants, so multi-position routing is a static dict lookup, not a cached
+# runtime SGP call.
+_HITTER_REPL_SGP: dict[str, float] = {
+    pos: _line_sgp(REPLACEMENT_BY_POSITION[pos]) for pos in _HITTER_REPL_POS
+}
 
 
 def _pos_label(pos: object) -> str:
@@ -463,7 +470,7 @@ def _replacement_line(p: dict, is_hitter: bool) -> dict:
     ]
     if not elig:
         return _GENERIC_HITTER_REPL
-    return REPLACEMENT_BY_POSITION[max(elig, key=_hitter_repl_sgp)]
+    return REPLACEMENT_BY_POSITION[max(elig, key=_HITTER_REPL_SGP.__getitem__)]
 
 
 def _apply_variance(

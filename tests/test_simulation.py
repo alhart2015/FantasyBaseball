@@ -15,7 +15,11 @@ from fantasy_baseball.simulation import (
     run_ros_monte_carlo,
     simulate_remaining_season,
 )
-from fantasy_baseball.utils.constants import REPLACEMENT_BY_POSITION
+from fantasy_baseball.utils.constants import (
+    HITTING_COUNTING,
+    PITCHING_COUNTING,
+    REPLACEMENT_BY_POSITION,
+)
 
 
 def _make_hitter(name, r=80, hr=25, rbi=80, sb=10, h=150, ab=550, positions=None):
@@ -283,6 +287,22 @@ class TestPlayingTimeScales:
         assert scales.max() < 1.3  # was ~1.7 under the symmetric-Normal-clip model
         assert scales.min() >= 0.0
         assert (1.0 - scales.min()) > (scales.max() - 1.0)  # left-skew
+
+
+class TestReplacementByPositionSchema:
+    """Pin the hand-pasted constant's shape so a regeneration typo fails here, not
+    inside a 1000-iteration MC with a bare KeyError."""
+
+    def test_keys_are_the_expected_positions(self):
+        assert set(REPLACEMENT_BY_POSITION) == {"C", "1B", "2B", "3B", "SS", "OF", "SP", "RP"}
+
+    def test_hitter_lines_carry_every_counting_column(self):
+        for pos in ("C", "1B", "2B", "3B", "SS", "OF"):
+            assert set(REPLACEMENT_BY_POSITION[pos]) == set(HITTING_COUNTING)
+
+    def test_pitcher_lines_carry_every_counting_column(self):
+        for pos in ("SP", "RP"):
+            assert set(REPLACEMENT_BY_POSITION[pos]) == set(PITCHING_COUNTING)
 
 
 class TestReplacementLineRouting:
