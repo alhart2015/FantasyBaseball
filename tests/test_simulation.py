@@ -7,6 +7,7 @@ import pytest
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.simulation import (
+    _GENERIC_HITTER_REPL,
     _apply_variance,
     _playing_time_scales,
     _projected_volume,
@@ -296,24 +297,44 @@ class TestReplacementLineRouting:
         p = {"player_type": PlayerType.HITTER, "positions": ["C", "OF"]}
         assert _replacement_line(p, is_hitter=True) == REPLACEMENT_BY_POSITION["OF"]
 
-    def test_no_core_position_falls_back_to_a_hitter_line(self):
-        # UTIL/DH-only (no C/1B/2B/3B/SS/OF) must not crash; uses a hitter line.
+    def test_util_only_uses_neutral_generic_line_not_speed_maxed(self):
+        # UTIL/DH-only (no C/1B/2B/3B/SS/OF) must not get the SB-rich best line --
+        # a power bat in a UTIL slot floors at the neutral mean, not 15 SB.
         p = {"player_type": PlayerType.HITTER, "positions": ["UTIL"]}
         line = _replacement_line(p, is_hitter=True)
-        assert line in REPLACEMENT_BY_POSITION.values()
-        assert "ab" in line  # a hitter line, not a pitcher line
+        assert line == _GENERIC_HITTER_REPL
+        assert line["sb"] < REPLACEMENT_BY_POSITION["OF"]["sb"]  # not speed-maximized
 
-    def test_missing_positions_falls_back(self):
+    def test_missing_positions_uses_generic_line(self):
         p = {"player_type": PlayerType.HITTER}
-        assert "ab" in _replacement_line(p, is_hitter=True)
+        assert _replacement_line(p, is_hitter=True) == _GENERIC_HITTER_REPL
 
-    def test_starter_uses_sp_line(self):
-        p = {"player_type": PlayerType.PITCHER, "ip": 180}
+    def test_sp_eligible_pitcher_routes_sp_despite_low_ip(self):
+        # An injured/returning starter projected <100 IP must still floor at the SP
+        # line (0 SV), NOT the RP line (8 SV) -- no phantom saves.
+        p = {"player_type": PlayerType.PITCHER, "positions": ["SP"], "ip": 70}
         assert _replacement_line(p, is_hitter=False) == REPLACEMENT_BY_POSITION["SP"]
 
-    def test_reliever_uses_rp_line(self):
-        p = {"player_type": PlayerType.PITCHER, "ip": 60}
+    def test_rp_eligible_pitcher_routes_rp(self):
+        p = {"player_type": PlayerType.PITCHER, "positions": ["RP"], "ip": 70}
         assert _replacement_line(p, is_hitter=False) == REPLACEMENT_BY_POSITION["RP"]
+
+    def test_swingman_prefers_sp_line(self):
+        p = {"player_type": PlayerType.PITCHER, "positions": ["SP", "RP"], "ip": 70}
+        assert _replacement_line(p, is_hitter=False) == REPLACEMENT_BY_POSITION["SP"]
+
+    def test_starter_without_sp_rp_eligibility_uses_ip(self):
+        # Bare dict / generic "P" eligibility -> classify by projected IP.
+        assert (
+            _replacement_line({"player_type": PlayerType.PITCHER, "ip": 180}, is_hitter=False)
+            == REPLACEMENT_BY_POSITION["SP"]
+        )
+        assert (
+            _replacement_line(
+                {"player_type": PlayerType.PITCHER, "positions": ["P"], "ip": 60}, is_hitter=False
+            )
+            == REPLACEMENT_BY_POSITION["RP"]
+        )
 
     def test_backfill_is_position_aware_for_speed(self):
         # Same player + same scale: a hurt SS (15-SB line) backfills more SB than a

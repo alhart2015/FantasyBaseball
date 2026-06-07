@@ -400,7 +400,16 @@ def _playing_time_scales(
 
 
 _HITTER_REPL_POS = ("C", "1B", "2B", "3B", "SS", "OF")
-_SP_GS_THRESHOLD = 10
+
+# Neutral hitter replacement for position-less / UTIL / DH-only hitters: the
+# element-wise mean of the position lines. A power bat filling a UTIL slot floors
+# here rather than at the speed-maximizing line, so it doesn't get a phantom ~15 SB.
+_GENERIC_HITTER_REPL: dict[str, int] = {
+    col: round(
+        sum(REPLACEMENT_BY_POSITION[pos][col] for pos in _HITTER_REPL_POS) / len(_HITTER_REPL_POS)
+    )
+    for col in ("r", "hr", "rbi", "sb", "h", "ab")
+}
 
 
 @cache
@@ -434,21 +443,24 @@ def _replacement_line(p: dict, is_hitter: bool) -> dict:
 
     - Hitters route to the highest-SGP replacement among their eligible Core-8
       positions (flexibility lets you stream the best available fill). A player
-      with no Core-8 eligibility (e.g. UTIL/DH-only) or no positions at all falls
-      back to the best hitter line.
-    - Pitchers route to SP or RP by role: projected GS >= 10, else projected
-      IP >= ``STARTER_IP_THRESHOLD``.
+      with no Core-8 eligibility (UTIL/DH-only) or no positions falls back to the
+      neutral ``_GENERIC_HITTER_REPL`` mean, not the speed-maximizing line.
+    - Pitchers route to SP or RP by their ``SP``/``RP`` position eligibility (the
+      authoritative signal, present on the flat dict and used by transactions.py),
+      falling back to projected IP >= ``STARTER_IP_THRESHOLD`` when neither is
+      listed. ``SP`` wins for swingmen eligible at both.
     """
     if not is_hitter:
-        gs = float(p.get("gs", 0) or 0)
+        pos_set = {_pos_label(pos) for pos in (p.get("positions") or [])}
+        if "SP" in pos_set or "RP" in pos_set:
+            return REPLACEMENT_BY_POSITION["SP" if "SP" in pos_set else "RP"]
         ip = float(p.get("ip", 0) or 0)
-        starter = gs >= _SP_GS_THRESHOLD if gs else ip >= STARTER_IP_THRESHOLD
-        return REPLACEMENT_BY_POSITION["SP" if starter else "RP"]
+        return REPLACEMENT_BY_POSITION["SP" if ip >= STARTER_IP_THRESHOLD else "RP"]
     elig = [
         lab for pos in (p.get("positions") or []) if (lab := _pos_label(pos)) in _HITTER_REPL_POS
     ]
     if not elig:
-        elig = list(_HITTER_REPL_POS)
+        return _GENERIC_HITTER_REPL
     return REPLACEMENT_BY_POSITION[max(elig, key=_hitter_repl_sgp)]
 
 
@@ -499,7 +511,12 @@ def _apply_variance(
         if frac_missed >= _NOTABLE_PT_LOSS:
             injuries_out.append((p.get("name", "?"), frac_missed))
 
-        repl = _replacement_line(p, is_hitter)
+        # A player's replacement line is invariant across the 1000 sims, so memoize
+        # it on the (reused) flat dict rather than re-routing every iteration.
+        repl = p.get("_repl_line")
+        if repl is None:
+            repl = _replacement_line(p, is_hitter)
+            p["_repl_line"] = repl
 
         draws = all_draws[i]
         row = {}
