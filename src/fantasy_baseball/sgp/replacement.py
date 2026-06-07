@@ -2,8 +2,19 @@ from typing import Any
 
 import pandas as pd
 
-from fantasy_baseball.sgp.player_value import REPLACEMENT_AVG, REPLACEMENT_ERA, REPLACEMENT_WHIP
-from fantasy_baseball.utils.constants import STARTERS_PER_POSITION
+from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.player_value import (
+    REPLACEMENT_AVG,
+    REPLACEMENT_ERA,
+    REPLACEMENT_WHIP,
+    calculate_player_sgp,
+)
+from fantasy_baseball.utils.constants import (
+    REPLACEMENT_BY_POSITION,
+    STARTERS_PER_POSITION,
+    Category,
+)
 from fantasy_baseball.utils.positions import is_hitter
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
@@ -188,3 +199,91 @@ def calculate_replacement_rates(
         rates["avg"] = REPLACEMENT_AVG
 
     return rates
+
+
+# Hitter positions for which REPLACEMENT_BY_POSITION carries a waiver line.
+_EMPIRICAL_HITTER_POSITIONS = ("C", "1B", "2B", "3B", "SS", "OF")
+
+
+def _empirical_floor_sgp(
+    position: str,
+    denoms: dict[Category, float],
+    replacement_avg: float,
+) -> float:
+    """SGP of a position's empirical waiver line (REPLACEMENT_BY_POSITION).
+
+    Built and scored through the same ``calculate_player_sgp`` path as real
+    players so the floor and player values land on one scale.
+    """
+    line = REPLACEMENT_BY_POSITION[position]
+    row = pd.Series(
+        {
+            "player_type": PlayerType.HITTER,
+            "r": line["r"],
+            "hr": line["hr"],
+            "rbi": line["rbi"],
+            "sb": line["sb"],
+            "ab": line["ab"],
+            "avg": calculate_avg(line["h"], line["ab"]),
+        }
+    )
+    return calculate_player_sgp(row, denoms=denoms, replacement_avg=replacement_avg)
+
+
+def _empirical_pitcher_floor(
+    position: str,
+    denoms: dict[Category, float],
+    replacement_era: float,
+    replacement_whip: float,
+) -> float:
+    """SGP of an empirical SP/RP waiver line (REPLACEMENT_BY_POSITION).
+
+    SP and RP are kept separate so a closer's saves net against the RP line's
+    free SV while a starter's strikeouts net against the SP line's deep K --
+    a single unified-"P" floor cannot do both correctly.
+    """
+    line = REPLACEMENT_BY_POSITION[position]
+    ip = line["ip"]
+    row = pd.Series(
+        {
+            "player_type": PlayerType.PITCHER,
+            "w": line["w"],
+            "k": line["k"],
+            "sv": line["sv"],
+            "ip": ip,
+            "era": calculate_era(line["er"], ip),
+            "whip": calculate_whip(line["bb"], line["h_allowed"], ip),
+        }
+    )
+    return calculate_player_sgp(
+        row, denoms=denoms, replacement_era=replacement_era, replacement_whip=replacement_whip
+    )
+
+
+def position_aware_replacement_levels(
+    denoms: dict[Category, float] | None = None,
+    repl_rates: dict[str, float] | None = None,
+) -> dict[str, float]:
+    """Empirical waiver replacement floors per position.
+
+    A pure function of ``denoms`` + the AVG/ERA/WHIP rate baselines: every
+    floor is the SGP of an empirical ``REPLACEMENT_BY_POSITION`` waiver line,
+    independent of the live draft pool. ``calculate_var`` routes pitchers to
+    the SP/RP floor by role and hitters to their position floor; ``UTIL`` is the
+    best (highest-SGP) hitter floor, used as the fallback for DH-only bats.
+    """
+    if denoms is None:
+        denoms = get_sgp_denominators()
+    rates = repl_rates or {}
+    replacement_avg = rates.get("avg", REPLACEMENT_AVG)
+    replacement_era = rates.get("era", REPLACEMENT_ERA)
+    replacement_whip = rates.get("whip", REPLACEMENT_WHIP)
+
+    levels: dict[str, float] = {
+        pos: _empirical_floor_sgp(pos, denoms, replacement_avg)
+        for pos in _EMPIRICAL_HITTER_POSITIONS
+    }
+    levels["UTIL"] = max(levels.values())
+    levels["SP"] = _empirical_pitcher_floor("SP", denoms, replacement_era, replacement_whip)
+    levels["RP"] = _empirical_pitcher_floor("RP", denoms, replacement_era, replacement_whip)
+    return levels

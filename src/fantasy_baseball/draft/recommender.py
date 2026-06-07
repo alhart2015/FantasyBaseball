@@ -14,7 +14,11 @@ from fantasy_baseball.draft.roster_state import (
 )
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import Position
-from fantasy_baseball.sgp.replacement import calculate_replacement_levels
+from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.replacement import (
+    calculate_replacement_rates,
+    position_aware_replacement_levels,
+)
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
     CLOSER_SV_THRESHOLD,
@@ -130,8 +134,13 @@ def get_recommendations(
 ) -> list[Recommendation]:
     """Get top draft pick recommendations.
 
-    Recalculates replacement levels from the undrafted pool so that
-    positional scarcity (e.g. a run on catchers) is reflected in VAR.
+    Replacement floors are position-aware empirical waiver lines
+    (:func:`position_aware_replacement_levels`) -- static per-position and
+    SP/RP constants, not the old per-pick demand floors. Only the rate
+    baselines (AVG/ERA/WHIP) are recomputed from the remaining pool, so
+    in-draft positional scarcity (e.g. a run on catchers) is no longer
+    reflected in the VAR floor itself; it is surfaced via the scarcity note
+    below and, in "vona" mode, by VONA.
 
     *scoring_mode*: "var" (default) uses Value Above Replacement for
     ranking; "vona" uses Value Over Next Available, which accounts for
@@ -141,10 +150,14 @@ def get_recommendations(
         roster_slots = DEFAULT_ROSTER_SLOTS
     available = board[~board["player_id"].isin(drafted)]
 
-    # Recalculate replacement levels from the full remaining pool so
-    # positional scarcity is properly reflected.
+    # Empirical waiver floors (a pure function of denoms + rate baselines). The
+    # AVG/ERA/WHIP baselines come from the FULL board, not the shrinking
+    # ``available`` pool, so they match the basis the board's frozen
+    # ``total_sgp`` was scored on and don't drift as the draft drains.
     starters = compute_starters_per_position(roster_slots, num_teams)
-    repl_levels = calculate_replacement_levels(available, starters)
+    denoms = get_sgp_denominators()
+    repl_rates = calculate_replacement_rates(board, starters)
+    repl_levels = position_aware_replacement_levels(denoms, repl_rates)
 
     # Only recompute VAR for top candidates (by pre-computed VAR).
     # The full pool sets replacement levels accurately, but iterating

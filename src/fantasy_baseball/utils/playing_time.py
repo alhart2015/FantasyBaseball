@@ -21,7 +21,7 @@ from fantasy_baseball.utils.constants import (
     PLAYING_TIME_CURVES,
     PLAYING_TIME_SHAPE,
     QUANTILE_LEVELS,
-    STARTER_IP_THRESHOLD,
+    role_from_ip,
 )
 
 
@@ -29,7 +29,7 @@ def _curve_key(player_type: PlayerType | str, volume: float) -> str:
     """Pick the curve. Pitcher role is IP-based (no GS field at deployment)."""
     if player_type == PlayerType.HITTER:
         return "hitters"
-    return "SP" if volume >= STARTER_IP_THRESHOLD else "RP"
+    return role_from_ip(volume)
 
 
 def _interp_xy(xs: list[float], ys: list[float], x: float) -> float:

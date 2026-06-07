@@ -1628,7 +1628,7 @@ def _refresh_run_source() -> str:
 
 
 class TestRefreshRunAttributeAccess:
-    """Catch typos like config.sgp_denominators (should be sgp_overrides).
+    """Catch typos like config.team (should be config.team_name).
 
     RefreshRun methods access attributes on LeagueConfig, Player, and other
     dataclasses. A typo compiles fine but crashes at runtime — often only

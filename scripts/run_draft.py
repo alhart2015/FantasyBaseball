@@ -293,7 +293,6 @@ def main():
     conn = get_connection()
     full_board = build_draft_board(
         conn=conn,
-        sgp_overrides=config.sgp_overrides or None,
         roster_slots=config.roster_slots or None,
         num_teams=num_teams,
     )

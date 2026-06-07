@@ -24,8 +24,8 @@ from fantasy_baseball.utils.constants import (
     PITCHER_CORRELATION,
     PITCHING_COUNTING,
     REPLACEMENT_BY_POSITION,
-    STARTER_IP_THRESHOLD,
     STAT_VARIANCE,
+    role_from_ip,
     safe_float,
 )
 from fantasy_baseball.utils.constants import (
@@ -462,7 +462,7 @@ def _replacement_line(p: dict, is_hitter: bool) -> dict:
         if "SP" in pos_set or "RP" in pos_set:
             return REPLACEMENT_BY_POSITION["SP" if "SP" in pos_set else "RP"]
         ip = float(p.get("ip", 0) or 0)
-        return REPLACEMENT_BY_POSITION["SP" if ip >= STARTER_IP_THRESHOLD else "RP"]
+        return REPLACEMENT_BY_POSITION[role_from_ip(ip)]
     elig = [
         lab for pos in (p.get("positions") or []) if (lab := _pos_label(pos)) in _HITTER_REPL_POS
     ]

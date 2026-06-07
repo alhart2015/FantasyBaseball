@@ -6,7 +6,7 @@ The draft assistant and simulator. Entry points: `scripts/run_draft.py` (interac
 
 FanGraphs CSVs (`data/projections/{season_year}/`) → `data.projections` blends systems → `sgp.player_value` calculates per-category SGP → `sgp.replacement` computes position-specific replacement levels → `sgp.var` assigns VAR per player → `draft.board` assembles the ranked board.
 
-**Replacement levels recalculate per pick** from the available pool, not the original board, to reflect live positional scarcity during the draft.
+**Replacement floors are empirical waiver lines** (`REPLACEMENT_BY_POSITION` per hitter position + SP/RP, via `position_aware_replacement_levels`) — static per draft, not per-pick. They reflect what's actually free on this league's waiver wire, so VAR measures value over the waiver alternative. The recommender recomputes only the AVG/ERA/WHIP rate baselines per pick; live positional scarcity (a run on catchers) is left to VONA and the recommender's scarcity note, not the VAR floor.
 
 ## Scoring modes
 

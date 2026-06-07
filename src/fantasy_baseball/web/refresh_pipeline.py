@@ -1066,7 +1066,7 @@ class RefreshRun:
         from fantasy_baseball.analysis.pace import attach_pace_to_roster
         from fantasy_baseball.sgp.denominators import get_sgp_denominators
 
-        sgp_denoms = get_sgp_denominators(self.config.sgp_overrides)
+        sgp_denoms = get_sgp_denominators()
         attach_pace_to_roster(
             self.roster_players,
             self.hitter_logs,

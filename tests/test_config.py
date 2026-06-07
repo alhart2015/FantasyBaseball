@@ -44,9 +44,6 @@ projections:
   weights:
     steamer: 0.6
     zips: 0.4
-
-sgp_denominators:
-  HR: 10
 """)
     return config_file
 
@@ -69,11 +66,6 @@ def test_load_config_projection_weights(sample_config):
     config = load_config(sample_config)
     assert config.projection_systems == ["steamer", "zips"]
     assert config.projection_weights == {"steamer": 0.6, "zips": 0.4}
-
-
-def test_load_config_sgp_overrides(sample_config):
-    config = load_config(sample_config)
-    assert config.sgp_overrides == {"HR": 10}
 
 
 def test_load_config_roster_slots(sample_config):

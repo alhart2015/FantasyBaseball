@@ -382,6 +382,16 @@ def safe_float(value) -> float:
     return 0.0 if f != f else f  # f != f is the NaN check
 
 
+def role_from_ip(ip: float) -> str:
+    """Classify a pitcher as 'SP' or 'RP' from projected innings.
+
+    Single source of truth for the IP -> role rule: ``ip >=
+    STARTER_IP_THRESHOLD`` is a starter. NaN/None coerce to 0 (RP) via
+    ``safe_float`` so callers don't each re-guard bad data.
+    """
+    return "SP" if safe_float(ip) >= STARTER_IP_THRESHOLD else "RP"
+
+
 # Yahoo player statuses that indicate a player is on the injured list.
 IL_STATUSES = frozenset({"IL", "IL+", "IL10", "IL15", "IL60", "DL", "DL+"})
 

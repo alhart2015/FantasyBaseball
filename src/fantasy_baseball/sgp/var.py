@@ -2,6 +2,22 @@ from typing import Literal, overload
 
 import pandas as pd
 
+from fantasy_baseball.utils.constants import role_from_ip
+
+
+def _pitcher_floor_key(player: pd.Series, replacement_levels: dict[str, float]) -> str:
+    """Pick the SP/RP empirical floor key for a pitcher by projected IP.
+
+    Role comes from the shared ``role_from_ip`` classifier (NaN/None-safe).
+    The position token is deliberately ignored: the draft board carries no
+    real SP/RP eligibility -- matched pitchers are stored as bare ``"P"`` and
+    unmatched ones default to ``"SP"`` (``board.py``), so a closer can be
+    mislabeled ``"SP"``. Falls back to the unified ``"P"`` floor when role
+    floors are absent (demand-based dict).
+    """
+    role = role_from_ip(player.get("ip", 0.0))
+    return role if role in replacement_levels else "P"
+
 
 @overload
 def calculate_var(
@@ -32,12 +48,20 @@ def calculate_var(
     best_pos = None
 
     for pos in positions:
-        lookup_pos = "P" if pos in ("P", "SP", "RP") else pos
-        if lookup_pos in replacement_levels:
-            var = total_sgp - replacement_levels[lookup_pos]
+        if pos in ("P", "SP", "RP"):
+            # Pitchers net against the role's empirical floor (SP vs RP), but
+            # report "P" -- the slot they fill -- so recommender display that
+            # groups by best_position is unaffected.
+            floor_key = _pitcher_floor_key(player, replacement_levels)
+            report_pos = "P"
+        else:
+            floor_key = pos
+            report_pos = pos
+        if floor_key in replacement_levels:
+            var = total_sgp - replacement_levels[floor_key]
             if var > best_var:
                 best_var = var
-                best_pos = lookup_pos
+                best_pos = report_pos
 
     if best_pos is None:
         # Fall back to UTIL replacement level (e.g. DH-only players).

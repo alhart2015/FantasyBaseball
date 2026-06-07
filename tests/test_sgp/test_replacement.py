@@ -1,11 +1,17 @@
 import pandas as pd
 import pytest
 
+from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.replacement import (
     calculate_replacement_levels,
     calculate_replacement_rates,
     find_replacement_players,
+    position_aware_replacement_levels,
 )
+from fantasy_baseball.sgp.var import calculate_var
+from fantasy_baseball.utils.constants import REPLACEMENT_BY_POSITION
 from fantasy_baseball.utils.positions import is_hitter
 
 
@@ -292,3 +298,96 @@ class TestFindReplacementPlayers:
         starters = {"C": 10}
         reps = find_replacement_players(pool, starters)
         assert reps["C"]["name"] == "C_2"  # worst eligible
+
+
+class TestPositionAwareReplacementLevels:
+    def test_returns_all_position_floors_no_unified_p(self):
+        """Pure empirical table: a floor for every hitter position + UTIL +
+        SP/RP, and no unified 'P' floor (pitchers route to SP/RP in
+        calculate_var, so the demand 'P' floor is gone)."""
+        levels = position_aware_replacement_levels()
+        assert set(levels) == {"C", "1B", "2B", "3B", "SS", "OF", "UTIL", "SP", "RP"}
+
+    def test_hitter_floor_equals_constant_sgp(self):
+        """Each hitter floor equals the SGP of that position's waiver line,
+        computed on the same scale (asserted against the directly-computed
+        scalar, never a magic number)."""
+        denoms = get_sgp_denominators()
+        levels = position_aware_replacement_levels(denoms, {"avg": 0.250})
+        for pos in ("C", "1B", "2B", "3B", "SS", "OF"):
+            line = REPLACEMENT_BY_POSITION[pos]
+            expected = calculate_player_sgp(
+                pd.Series(
+                    {
+                        "player_type": PlayerType.HITTER,
+                        "r": line["r"],
+                        "hr": line["hr"],
+                        "rbi": line["rbi"],
+                        "sb": line["sb"],
+                        "ab": line["ab"],
+                        "avg": line["h"] / line["ab"],
+                    }
+                ),
+                denoms=denoms,
+                replacement_avg=0.250,
+            )
+            assert levels[pos] == pytest.approx(expected)
+
+    def test_catcher_is_scarcest_outfield_is_deepest(self):
+        """The whole point: floors are NOT flat. Catcher (nothing free on
+        waivers) is the lowest hitter floor; OF (deepest pool) the highest.
+        Pins the spread so a future flat regression fails loudly."""
+        levels = position_aware_replacement_levels()
+        assert levels["C"] < levels["1B"]
+        assert levels["C"] < levels["OF"]
+        assert levels["OF"] > levels["3B"]
+
+    def test_util_floor_is_max_hitter_floor(self):
+        """A UTIL slot is streamed with the best free hitter -> the highest
+        hitter floor."""
+        levels = position_aware_replacement_levels()
+        hitter_floors = [levels[p] for p in ("C", "1B", "2B", "3B", "SS", "OF")]
+        assert levels["UTIL"] == pytest.approx(max(hitter_floors))
+
+    def test_corner_outranks_mi_at_equal_sgp(self):
+        """Downstream effect on VAR: with empirical floors, two players with
+        equal total_sgp -- one valued at SS (deep speed, high floor), one at
+        3B (scarcer, lower floor) -- the corner gets the higher VAR. This is
+        the behavior the fix exists to produce."""
+        levels = position_aware_replacement_levels()
+        ss_player = pd.Series({"total_sgp": 12.0, "positions": ["SS"]})
+        tb_player = pd.Series({"total_sgp": 12.0, "positions": ["3B"]})
+        assert calculate_var(tb_player, levels) > calculate_var(ss_player, levels)
+
+    def test_pitcher_floors_from_constant(self):
+        """SP/RP floors equal the SGP of their empirical pitcher lines,
+        computed with the given denoms + replacement rates."""
+        denoms = get_sgp_denominators()
+        rates = {"avg": 0.250, "era": 4.50, "whip": 1.35}
+        levels = position_aware_replacement_levels(denoms, rates)
+        for pos in ("SP", "RP"):
+            line = REPLACEMENT_BY_POSITION[pos]
+            ip = line["ip"]
+            expected = calculate_player_sgp(
+                pd.Series(
+                    {
+                        "player_type": PlayerType.PITCHER,
+                        "w": line["w"],
+                        "k": line["k"],
+                        "sv": line["sv"],
+                        "ip": ip,
+                        "era": 9 * line["er"] / ip,
+                        "whip": (line["bb"] + line["h_allowed"]) / ip,
+                    }
+                ),
+                denoms=denoms,
+                replacement_era=4.50,
+                replacement_whip=1.35,
+            )
+            assert levels[pos] == pytest.approx(expected)
+
+    def test_sp_and_rp_floors_differ(self):
+        """Saves come only from relievers, so the role floors must differ --
+        a unified-P floor could not net SV and K correctly at once."""
+        levels = position_aware_replacement_levels()
+        assert levels["SP"] != pytest.approx(levels["RP"])

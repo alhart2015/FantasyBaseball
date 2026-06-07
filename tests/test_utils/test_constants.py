@@ -1,3 +1,7 @@
+import math
+
+import pytest
+
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
     DEFAULT_SGP_DENOMINATORS,
@@ -8,9 +12,27 @@ from fantasy_baseball.utils.constants import (
     PITCHING_CATEGORIES,
     RATE_STATS,
     ROSTER_SLOTS,
+    STARTER_IP_THRESHOLD,
     STARTERS_PER_POSITION,
     Category,
+    role_from_ip,
 )
+
+
+@pytest.mark.parametrize(
+    "ip,expected",
+    [
+        (200.0, "SP"),
+        (50.0, "RP"),
+        (STARTER_IP_THRESHOLD, "SP"),  # boundary is inclusive (>=)
+        (STARTER_IP_THRESHOLD - 0.1, "RP"),
+        (0.0, "RP"),
+        (None, "RP"),  # safe_float coerces None -> 0
+        (math.nan, "RP"),  # ...and NaN -> 0
+    ],
+)
+def test_role_from_ip(ip, expected):
+    assert role_from_ip(ip) == expected
 
 
 def test_hitting_categories():
