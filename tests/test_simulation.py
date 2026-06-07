@@ -7,17 +7,24 @@ import pytest
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.simulation import (
+    _GENERIC_HITTER_REPL,
     _apply_variance,
     _playing_time_scales,
     _projected_volume,
+    _replacement_line,
     run_ros_monte_carlo,
     simulate_remaining_season,
 )
+from fantasy_baseball.utils.constants import (
+    HITTING_COUNTING,
+    PITCHING_COUNTING,
+    REPLACEMENT_BY_POSITION,
+)
 
 
-def _make_hitter(name, r=80, hr=25, rbi=80, sb=10, h=150, ab=550):
+def _make_hitter(name, r=80, hr=25, rbi=80, sb=10, h=150, ab=550, positions=None):
     """Create a minimal hitter dict for testing."""
-    return {
+    d = {
         "name": name,
         "player_type": "hitter",
         "r": r,
@@ -27,6 +34,9 @@ def _make_hitter(name, r=80, hr=25, rbi=80, sb=10, h=150, ab=550):
         "h": h,
         "ab": ab,
     }
+    if positions is not None:
+        d["positions"] = positions
+    return d
 
 
 def _make_pitcher(name, w=10, k=150, sv=0, ip=180, er=70, bb=50, h_allowed=150):
@@ -277,6 +287,93 @@ class TestPlayingTimeScales:
         assert scales.max() < 1.3  # was ~1.7 under the symmetric-Normal-clip model
         assert scales.min() >= 0.0
         assert (1.0 - scales.min()) > (scales.max() - 1.0)  # left-skew
+
+
+class TestReplacementByPositionSchema:
+    """Pin the hand-pasted constant's shape so a regeneration typo fails here, not
+    inside a 1000-iteration MC with a bare KeyError."""
+
+    def test_keys_are_the_expected_positions(self):
+        assert set(REPLACEMENT_BY_POSITION) == {"C", "1B", "2B", "3B", "SS", "OF", "SP", "RP"}
+
+    def test_hitter_lines_carry_every_counting_column(self):
+        for pos in ("C", "1B", "2B", "3B", "SS", "OF"):
+            assert set(REPLACEMENT_BY_POSITION[pos]) == set(HITTING_COUNTING)
+
+    def test_pitcher_lines_carry_every_counting_column(self):
+        for pos in ("SP", "RP"):
+            assert set(REPLACEMENT_BY_POSITION[pos]) == set(PITCHING_COUNTING)
+
+
+class TestReplacementLineRouting:
+    """Position-aware replacement: the injured slot is filled per the player's spot."""
+
+    def test_catcher_only_uses_catcher_line(self):
+        p = {"player_type": PlayerType.HITTER, "positions": ["C"]}
+        assert _replacement_line(p, is_hitter=True) == REPLACEMENT_BY_POSITION["C"]
+
+    def test_multi_position_uses_best_available_by_sgp(self):
+        # Eligible at weak C and strong OF -> the higher-SGP OF replacement.
+        p = {"player_type": PlayerType.HITTER, "positions": ["C", "OF"]}
+        assert _replacement_line(p, is_hitter=True) == REPLACEMENT_BY_POSITION["OF"]
+
+    def test_util_only_uses_neutral_generic_line_not_speed_maxed(self):
+        # UTIL/DH-only (no C/1B/2B/3B/SS/OF) must not get the SB-rich best line --
+        # a power bat in a UTIL slot floors at the neutral mean, not 15 SB.
+        p = {"player_type": PlayerType.HITTER, "positions": ["UTIL"]}
+        line = _replacement_line(p, is_hitter=True)
+        assert line == _GENERIC_HITTER_REPL
+        assert line["sb"] < REPLACEMENT_BY_POSITION["OF"]["sb"]  # not speed-maximized
+
+    def test_missing_positions_uses_generic_line(self):
+        p = {"player_type": PlayerType.HITTER}
+        assert _replacement_line(p, is_hitter=True) == _GENERIC_HITTER_REPL
+
+    def test_sp_eligible_pitcher_routes_sp_despite_low_ip(self):
+        # An injured/returning starter projected <100 IP must still floor at the SP
+        # line (0 SV), NOT the RP line (8 SV) -- no phantom saves.
+        p = {"player_type": PlayerType.PITCHER, "positions": ["SP"], "ip": 70}
+        assert _replacement_line(p, is_hitter=False) == REPLACEMENT_BY_POSITION["SP"]
+
+    def test_rp_eligible_pitcher_routes_rp(self):
+        p = {"player_type": PlayerType.PITCHER, "positions": ["RP"], "ip": 70}
+        assert _replacement_line(p, is_hitter=False) == REPLACEMENT_BY_POSITION["RP"]
+
+    def test_swingman_prefers_sp_line(self):
+        p = {"player_type": PlayerType.PITCHER, "positions": ["SP", "RP"], "ip": 70}
+        assert _replacement_line(p, is_hitter=False) == REPLACEMENT_BY_POSITION["SP"]
+
+    def test_starter_without_sp_rp_eligibility_uses_ip(self):
+        # Bare dict / generic "P" eligibility -> classify by projected IP.
+        assert (
+            _replacement_line({"player_type": PlayerType.PITCHER, "ip": 180}, is_hitter=False)
+            == REPLACEMENT_BY_POSITION["SP"]
+        )
+        assert (
+            _replacement_line(
+                {"player_type": PlayerType.PITCHER, "positions": ["P"], "ip": 60}, is_hitter=False
+            )
+            == REPLACEMENT_BY_POSITION["RP"]
+        )
+
+    def test_backfill_is_position_aware_for_speed(self):
+        # Same player + same scale: a hurt SS (15-SB line) backfills more SB than a
+        # hurt 1B (6-SB line) -- the position shape the flat line erased.
+        out: list = []
+        with patch("fantasy_baseball.simulation.playing_time_params", return_value=(0.5, 0.0)):
+            ss = _apply_variance(
+                [_make_hitter("S", positions=["SS"])],
+                PlayerType.HITTER,
+                np.random.default_rng(1),
+                out,
+            )
+            fb = _apply_variance(
+                [_make_hitter("F", positions=["1B"])],
+                PlayerType.HITTER,
+                np.random.default_rng(1),
+                out,
+            )
+        assert ss[0]["sb"] > fb[0]["sb"]
 
 
 class TestApplyVariancePlayingTime:

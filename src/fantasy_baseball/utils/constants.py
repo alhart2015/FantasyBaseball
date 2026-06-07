@@ -324,7 +324,25 @@ MANAGEMENT_ADJUSTMENT: dict[str, tuple[float, float]] = {
 # Default adjustment for teams not in the lookup (new managers, other leagues).
 MANAGEMENT_ADJUSTMENT_DEFAULT: tuple[float, float] = (0.0, 10.0)
 
-# Replacement-level full-season stats for waiver pickups
+# Replacement-level full-season stats for waiver pickups.
+# REPLACEMENT_HITTER/SP/RP are the legacy flat lines, still used by
+# analysis/transactions.py for drop-cost. The Monte Carlo injury backfill uses
+# REPLACEMENT_BY_POSITION instead: a position-aware floor calibrated from this
+# league's OWN free agents (top-3 un-rostered by SGP, averaged over the post-draft
+# and current snapshots; see scripts/analyze_replacement_levels.py). It captures
+# that a streamed catcher gives ~0 SB while a streamed middle infielder gives ~15,
+# which the flat line erased. Regenerate after a season for fresh calibration.
+REPLACEMENT_BY_POSITION: dict[str, dict[str, int]] = {
+    "C": {"r": 55, "hr": 14, "rbi": 56, "sb": 4, "h": 107, "ab": 423},
+    "1B": {"r": 65, "hr": 18, "rbi": 68, "sb": 6, "h": 121, "ab": 498},
+    "2B": {"r": 62, "hr": 13, "rbi": 60, "sb": 17, "h": 124, "ab": 508},
+    "3B": {"r": 65, "hr": 17, "rbi": 68, "sb": 7, "h": 122, "ab": 496},
+    "SS": {"r": 64, "hr": 14, "rbi": 62, "sb": 15, "h": 127, "ab": 520},
+    "OF": {"r": 65, "hr": 17, "rbi": 63, "sb": 15, "h": 110, "ab": 451},
+    "SP": {"w": 9, "k": 164, "sv": 0, "ip": 164, "er": 77, "bb": 58, "h_allowed": 153},
+    "RP": {"w": 6, "k": 96, "sv": 8, "ip": 75, "er": 27, "bb": 31, "h_allowed": 61},
+}
+
 REPLACEMENT_HITTER: dict[str, int] = {
     "r": 55,
     "hr": 12,

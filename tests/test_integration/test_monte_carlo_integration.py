@@ -21,8 +21,20 @@ from fantasy_baseball.utils.constants import (
 # ---------------------------------------------------------------------------
 
 
-def _hitter(name, r, hr, rbi, sb, avg, ab=550):
+def _hitter(name, r, hr, rbi, sb, avg, ab=550, positions=None):
     h = round(avg * ab)
+    if positions is None:
+        # Profile-based eligibility so the fixture exercises real position-aware
+        # replacement routing (speedsters play SS/OF, sluggers play the corners),
+        # rather than every hitter falling back to the best/SB-rich line.
+        if sb >= 25:
+            positions = ["SS"]
+        elif sb >= 12:
+            positions = ["OF"]
+        elif hr >= 28:
+            positions = ["1B"]
+        else:
+            positions = ["3B"]
     return {
         "name": name,
         "player_type": "hitter",
@@ -32,6 +44,7 @@ def _hitter(name, r, hr, rbi, sb, avg, ab=550):
         "sb": sb,
         "h": h,
         "ab": ab,
+        "positions": positions,
     }
 
 
@@ -366,11 +379,20 @@ class TestInjuryEffects:
         isolates the haircut from the separate (and opposing) effect where
         playing-time SPREAD inflates the selected-lineup total via top-N active
         roster selection. The full-scale run also logs no injuries.
+
+        K is excluded from the strict-decrease check: under position-aware
+        replacement a streamed pitcher whiffs batters at roughly the rostered rate
+        (the SP/RP replacement lines are ~9.0 / ~11.5 K-per-9), so the haircut is a
+        WASH for strikeouts -- unlike R/HR/RBI/W/SV, where the replacement is
+        clearly below the team's best rostered players. (SB is volume-scarce and
+        position-shaped, so with realistic positions -- speedsters at SS/OF -- it
+        still falls.)
         """
         rng_hc = np.random.default_rng(999)
         rng_full = np.random.default_rng(999)
 
         counting_cats = ["R", "HR", "RBI", "SB", "W", "K", "SV"]
+        decrease_cats = [c for c in counting_cats if c != "K"]
         hc_totals = {cat: 0.0 for cat in counting_cats}
         full_totals = {cat: 0.0 for cat in counting_cats}
 
@@ -401,11 +423,19 @@ class TestInjuryEffects:
                     f"Full scale -> no injuries, but {team} had {injuries_full[team]}"
                 )
 
-        for cat in counting_cats:
+        for cat in decrease_cats:
             assert hc_totals[cat] < full_totals[cat], (
                 f"Category {cat}: haircut={hc_totals[cat]:.1f} should be "
                 f"less than full-scale={full_totals[cat]:.1f}"
             )
+
+        # K is a wash (replacement K-rate ~= rostered), not a free-for-all. Guard
+        # that a future calibration pushing replacement K well above rostered would
+        # be caught: the haircut must stay within 5% of full-scale, not balloon.
+        assert hc_totals["K"] < full_totals["K"] * 1.05, (
+            f"K: haircut={hc_totals['K']:.1f} ballooned vs full-scale={full_totals['K']:.1f} "
+            "-- replacement K-rate may now exceed rostered; recheck the SP/RP lines"
+        )
 
     def test_replacement_players_contribute_during_injury(self, team_rosters):
         """A large playing-time loss should still leave stats positive because

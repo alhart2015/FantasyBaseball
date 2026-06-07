@@ -11,6 +11,7 @@ import numpy as np
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto_dict
+from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import (
     AB_PER_PA,
     CLOSER_SV_THRESHOLD,
@@ -22,9 +23,8 @@ from fantasy_baseball.utils.constants import (
     PITCHER_CORR_STATS,
     PITCHER_CORRELATION,
     PITCHING_COUNTING,
-    REPLACEMENT_HITTER,
-    REPLACEMENT_RP,
-    REPLACEMENT_SP,
+    REPLACEMENT_BY_POSITION,
+    STARTER_IP_THRESHOLD,
     STAT_VARIANCE,
     safe_float,
 )
@@ -398,6 +398,79 @@ def _playing_time_scales(
     return out
 
 
+# Hitter positions are every REPLACEMENT_BY_POSITION key that isn't a pitcher role,
+# derived so adding a position to the constant doesn't need a second edit here.
+_HITTER_REPL_POS = tuple(k for k in REPLACEMENT_BY_POSITION if k not in ("SP", "RP"))
+
+# Neutral hitter replacement for position-less / UTIL / DH-only hitters: the
+# element-wise mean of the position lines. A power bat filling a UTIL slot floors
+# here rather than at the speed-maximizing line, so it doesn't get a phantom ~15 SB.
+_GENERIC_HITTER_REPL: dict[str, int] = {
+    col: round(
+        sum(REPLACEMENT_BY_POSITION[pos][col] for pos in _HITTER_REPL_POS) / len(_HITTER_REPL_POS)
+    )
+    for col in HITTING_COUNTING
+}
+
+
+def _line_sgp(line: dict[str, int]) -> float:
+    """SGP of a fixed replacement line (ranks a hitter's eligible positions)."""
+    ab = line.get("ab", 0) or 1
+    return calculate_player_sgp(
+        {
+            "player_type": PlayerType.HITTER,
+            "r": line["r"],
+            "hr": line["hr"],
+            "rbi": line["rbi"],
+            "sb": line["sb"],
+            "avg": line["h"] / ab,
+            "ab": ab,
+        }
+    )
+
+
+# Per-position replacement SGP, precomputed once: the lines and the SGP denominators
+# are all constants, so multi-position routing is a static dict lookup, not a cached
+# runtime SGP call.
+_HITTER_REPL_SGP: dict[str, float] = {
+    pos: _line_sgp(REPLACEMENT_BY_POSITION[pos]) for pos in _HITTER_REPL_POS
+}
+
+
+def _pos_label(pos: object) -> str:
+    """Uppercase position label from a Position enum or a string."""
+    return (pos.value if hasattr(pos, "value") else str(pos)).upper()
+
+
+def _replacement_line(p: dict, is_hitter: bool) -> dict:
+    """The replacement-level line that backfills an injured player's missed time.
+
+    Position-aware: a streamed catcher gives ~0 SB while a streamed middle
+    infielder gives ~15, so the floor depends on where the player plays.
+
+    - Hitters route to the highest-SGP replacement among their eligible Core-8
+      positions (flexibility lets you stream the best available fill). A player
+      with no Core-8 eligibility (UTIL/DH-only) or no positions falls back to the
+      neutral ``_GENERIC_HITTER_REPL`` mean, not the speed-maximizing line.
+    - Pitchers route to SP or RP by their ``SP``/``RP`` position eligibility (the
+      authoritative signal, present on the flat dict and used by transactions.py),
+      falling back to projected IP >= ``STARTER_IP_THRESHOLD`` when neither is
+      listed. ``SP`` wins for swingmen eligible at both.
+    """
+    if not is_hitter:
+        pos_set = {_pos_label(pos) for pos in (p.get("positions") or [])}
+        if "SP" in pos_set or "RP" in pos_set:
+            return REPLACEMENT_BY_POSITION["SP" if "SP" in pos_set else "RP"]
+        ip = float(p.get("ip", 0) or 0)
+        return REPLACEMENT_BY_POSITION["SP" if ip >= STARTER_IP_THRESHOLD else "RP"]
+    elig = [
+        lab for pos in (p.get("positions") or []) if (lab := _pos_label(pos)) in _HITTER_REPL_POS
+    ]
+    if not elig:
+        return _GENERIC_HITTER_REPL
+    return REPLACEMENT_BY_POSITION[max(elig, key=_HITTER_REPL_SGP.__getitem__)]
+
+
 def _apply_variance(
     players: list,
     player_type: str,
@@ -445,11 +518,9 @@ def _apply_variance(
         if frac_missed >= _NOTABLE_PT_LOSS:
             injuries_out.append((p.get("name", "?"), frac_missed))
 
-        if is_hitter:
-            repl = REPLACEMENT_HITTER
-        else:
-            is_closer = p.get("sv", 0) >= CLOSER_SV_THRESHOLD
-            repl = REPLACEMENT_RP if is_closer else REPLACEMENT_SP
+        # Routing is a cheap dict lookup (per-position SGP is precomputed), so
+        # compute it inline rather than memoizing onto the player dict.
+        repl = _replacement_line(p, is_hitter)
 
         draws = all_draws[i]
         row = {}
