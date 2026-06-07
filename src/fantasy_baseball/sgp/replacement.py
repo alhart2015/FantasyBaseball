@@ -2,8 +2,19 @@ from typing import Any
 
 import pandas as pd
 
-from fantasy_baseball.sgp.player_value import REPLACEMENT_AVG, REPLACEMENT_ERA, REPLACEMENT_WHIP
-from fantasy_baseball.utils.constants import STARTERS_PER_POSITION
+from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.player_value import (
+    REPLACEMENT_AVG,
+    REPLACEMENT_ERA,
+    REPLACEMENT_WHIP,
+    calculate_player_sgp,
+)
+from fantasy_baseball.utils.constants import (
+    REPLACEMENT_BY_POSITION,
+    STARTERS_PER_POSITION,
+    Category,
+)
 from fantasy_baseball.utils.positions import is_hitter
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
@@ -188,3 +199,63 @@ def calculate_replacement_rates(
         rates["avg"] = REPLACEMENT_AVG
 
     return rates
+
+
+# Hitter positions for which REPLACEMENT_BY_POSITION carries a waiver line.
+_EMPIRICAL_HITTER_POSITIONS = ("C", "1B", "2B", "3B", "SS", "OF")
+
+
+def _empirical_floor_sgp(
+    position: str,
+    denoms: dict[Category, float],
+    replacement_avg: float,
+) -> float:
+    """SGP of a position's empirical waiver line (REPLACEMENT_BY_POSITION).
+
+    Built and scored through the same ``calculate_player_sgp`` path as real
+    players so the floor and player values land on one scale.
+    """
+    line = REPLACEMENT_BY_POSITION[position]
+    row = pd.Series(
+        {
+            "player_type": PlayerType.HITTER,
+            "r": line["r"],
+            "hr": line["hr"],
+            "rbi": line["rbi"],
+            "sb": line["sb"],
+            "ab": line["ab"],
+            "avg": line["h"] / line["ab"] if line["ab"] else 0.0,
+        }
+    )
+    return calculate_player_sgp(row, denoms=denoms, replacement_avg=replacement_avg)
+
+
+def position_aware_replacement_levels(
+    player_pool: pd.DataFrame,
+    starters_per_position: dict[str, int] | None = None,
+    denoms: dict[Category, float] | None = None,
+    repl_rates: dict[str, float] | None = None,
+) -> dict[str, float]:
+    """Replacement levels with empirical waiver floors for hitter positions.
+
+    Starts from the demand-based :func:`calculate_replacement_levels` (so the
+    pitcher "P" floor and all demand math are reused unchanged), then overrides
+    each hitter position -- and UTIL -- with the scalar SGP of its empirical
+    waiver line. :func:`calculate_var` consumes the result unchanged.
+    """
+    levels = calculate_replacement_levels(player_pool, starters_per_position)
+
+    if denoms is None:
+        denoms = get_sgp_denominators()
+    replacement_avg = repl_rates["avg"] if repl_rates and "avg" in repl_rates else REPLACEMENT_AVG
+
+    empirical: dict[str, float] = {}
+    for pos in _EMPIRICAL_HITTER_POSITIONS:
+        if pos in levels and pos in REPLACEMENT_BY_POSITION:
+            empirical[pos] = _empirical_floor_sgp(pos, denoms, replacement_avg)
+
+    levels.update(empirical)
+    if "UTIL" in levels and empirical:
+        levels["UTIL"] = max(empirical.values())
+
+    return levels
