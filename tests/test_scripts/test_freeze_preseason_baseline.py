@@ -35,7 +35,6 @@ def _mk_config():
         },
         projection_systems=["atc"],
         projection_weights={"atc": 1.0},
-        sgp_overrides={},
         teams={1: "Team 01", 2: "Team 02"},
         strategy="no_punt_opp",
         scoring_mode="var",

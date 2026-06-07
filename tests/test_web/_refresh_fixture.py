@@ -488,7 +488,6 @@ def patched_refresh_environment(
         },
         projection_systems=["atc"],
         projection_weights={"atc": 1.0},
-        sgp_overrides={},
         teams={i: name for i, name in enumerate(TEAM_NAMES, start=1)},
         strategy="no_punt_opp",
         scoring_mode="var",

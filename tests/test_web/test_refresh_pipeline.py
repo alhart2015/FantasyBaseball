@@ -940,7 +940,6 @@ def _build_refresh_run_for_streak_test():
         roster_slots={},
         projection_systems=["atc"],
         projection_weights={"atc": 1.0},
-        sgp_overrides={},
         teams={},
         strategy="no_punt_opp",
         scoring_mode="var",

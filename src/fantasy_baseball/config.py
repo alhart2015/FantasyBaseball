@@ -15,7 +15,6 @@ class LeagueConfig:
     roster_slots: dict[str, int]
     projection_systems: list[str]
     projection_weights: dict[str, float]
-    sgp_overrides: dict[str, float] = field(default_factory=dict)
     teams: dict[int, str] = field(default_factory=dict)
     strategy: str = "no_punt_opp"
     scoring_mode: str = "var"
@@ -64,7 +63,6 @@ def load_config(config_path: Path) -> LeagueConfig:
         roster_slots=raw.get("roster_slots", {}),
         projection_systems=projections.get("systems", []),
         projection_weights=projections.get("weights", {}),
-        sgp_overrides=raw.get("sgp_denominators", {}),
         teams={int(k): v for k, v in draft.get("teams", {}).items()},
         strategy=strategy,
         scoring_mode=scoring_mode,

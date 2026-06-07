@@ -122,33 +122,3 @@ projections:
     atc: 0.20
     the-bat-x: 0.20
     oopsy: 0.20
-
-# sgp_denominators -- UNTRUSTED PLACEHOLDER, intentionally NOT loaded.
-#
-# WARNING: DO NOT TRUST these league-specific values. Three seasons is far
-# too little data to estimate per-category denominators reliably -- the
-# season-to-season variance in the adjacent-rank gaps is enormous (e.g. W
-# ranged 1.67-3.33 across just 3 years), so these numbers are dominated by
-# noise, not signal. The whole block is COMMENTED OUT so the config loader
-# returns {} and every consumer -- the draft board + recommender, the
-# in-season refresh pipeline, and the scripts -- uses the trusted code
-# defaults (DEFAULT_SGP_DENOMINATORS in utils/constants.py). Uncomment to
-# re-enable, once there's enough history for the estimates to settle down.
-#
-# Provenance (for when this is revisited): empirically derived from this
-# league's 2023-2025 end-of-season standings via
-# `scripts/derive_sgp_denominators.py`. Value = mean adjacent-rank gap across
-# the 3 seasons. (W was rounded up, mean 2.44 -> 3, because the 3-year gap
-# range is 1.67-3.33 and W=2 pushes strategies toward all-SP early rounds.)
-#
-# sgp_denominators:
-#   R: 21
-#   HR: 7
-#   RBI: 21
-#   SB: 12
-#   AVG: 0.0025
-#   W: 3
-#   K: 33
-#   ERA: 0.121
-#   WHIP: 0.018
-#   SV: 8

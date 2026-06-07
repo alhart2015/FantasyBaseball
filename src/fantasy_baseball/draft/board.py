@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 def build_draft_board(
     conn,
-    sgp_overrides: dict[str, float] | None = None,
     roster_slots: dict[str, int] | None = None,
     num_teams: int | None = None,
 ) -> pd.DataFrame:
@@ -51,7 +50,7 @@ def build_draft_board(
     hitters = _attach_positions(hitters, norm_positions, default_type=PlayerType.HITTER)
     pitchers = _attach_positions(pitchers, norm_positions, default_type=PlayerType.PITCHER)
 
-    denoms = get_sgp_denominators(sgp_overrides)
+    denoms = get_sgp_denominators()
     pool = pd.concat([hitters, pitchers], ignore_index=True)
 
     # Two-pass SGP: first with defaults (for ordering), then with
@@ -112,7 +111,6 @@ def rebuild_board(config_path: Path, board_path: Path) -> int:
     try:
         board = build_draft_board(
             conn=conn,
-            sgp_overrides=config.sgp_overrides or None,
             roster_slots=config.roster_slots or None,
             num_teams=config.num_teams,
         )
