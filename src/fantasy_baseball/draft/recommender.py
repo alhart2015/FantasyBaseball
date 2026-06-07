@@ -150,12 +150,14 @@ def get_recommendations(
         roster_slots = DEFAULT_ROSTER_SLOTS
     available = board[~board["player_id"].isin(drafted)]
 
-    # Empirical waiver floors (static); only the AVG/ERA/WHIP rate baselines
-    # come from the remaining pool.
+    # Empirical waiver floors (a pure function of denoms + rate baselines). The
+    # AVG/ERA/WHIP baselines come from the FULL board, not the shrinking
+    # ``available`` pool, so they match the basis the board's frozen
+    # ``total_sgp`` was scored on and don't drift as the draft drains.
     starters = compute_starters_per_position(roster_slots, num_teams)
     denoms = get_sgp_denominators()
-    repl_rates = calculate_replacement_rates(available, starters)
-    repl_levels = position_aware_replacement_levels(available, starters, denoms, repl_rates)
+    repl_rates = calculate_replacement_rates(board, starters)
+    repl_levels = position_aware_replacement_levels(denoms, repl_rates)
 
     # Only recompute VAR for top candidates (by pre-computed VAR).
     # The full pool sets replacement levels accurately, but iterating

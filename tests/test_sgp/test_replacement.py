@@ -1,5 +1,3 @@
-from typing import ClassVar
-
 import pandas as pd
 import pytest
 
@@ -303,35 +301,19 @@ class TestFindReplacementPlayers:
 
 
 class TestPositionAwareReplacementLevels:
-    _HITTER_STARTERS: ClassVar[dict[str, int]] = {
-        "C": 1,
-        "1B": 1,
-        "2B": 1,
-        "3B": 1,
-        "SS": 1,
-        "OF": 1,
-        "UTIL": 1,
-        "P": 5,
-    }
-
-    def test_pitcher_floor_matches_demand_based(self):
-        """We only touch hitters -- the 'P' floor must be identical to the
-        existing demand-based calculation on the same pool."""
-        pool = _make_player_pool()
-        starters = {"P": 50}
-        base = calculate_replacement_levels(pool, starters)
-        pa = position_aware_replacement_levels(pool, starters)
-        assert pa["P"] == pytest.approx(base["P"])
+    def test_returns_all_position_floors_no_unified_p(self):
+        """Pure empirical table: a floor for every hitter position + UTIL +
+        SP/RP, and no unified 'P' floor (pitchers route to SP/RP in
+        calculate_var, so the demand 'P' floor is gone)."""
+        levels = position_aware_replacement_levels()
+        assert set(levels) == {"C", "1B", "2B", "3B", "SS", "OF", "UTIL", "SP", "RP"}
 
     def test_hitter_floor_equals_constant_sgp(self):
         """Each hitter floor equals the SGP of that position's waiver line,
         computed on the same scale (asserted against the directly-computed
         scalar, never a magic number)."""
-        pool = _make_player_pool()
         denoms = get_sgp_denominators()
-        levels = position_aware_replacement_levels(
-            pool, self._HITTER_STARTERS, denoms, {"avg": 0.250}
-        )
+        levels = position_aware_replacement_levels(denoms, {"avg": 0.250})
         for pos in ("C", "1B", "2B", "3B", "SS", "OF"):
             line = REPLACEMENT_BY_POSITION[pos]
             expected = calculate_player_sgp(
@@ -355,8 +337,7 @@ class TestPositionAwareReplacementLevels:
         """The whole point: floors are NOT flat. Catcher (nothing free on
         waivers) is the lowest hitter floor; OF (deepest pool) the highest.
         Pins the spread so a future flat regression fails loudly."""
-        pool = _make_player_pool()
-        levels = position_aware_replacement_levels(pool, self._HITTER_STARTERS)
+        levels = position_aware_replacement_levels()
         assert levels["C"] < levels["1B"]
         assert levels["C"] < levels["OF"]
         assert levels["OF"] > levels["3B"]
@@ -364,8 +345,7 @@ class TestPositionAwareReplacementLevels:
     def test_util_floor_is_max_hitter_floor(self):
         """A UTIL slot is streamed with the best free hitter -> the highest
         hitter floor."""
-        pool = _make_player_pool()
-        levels = position_aware_replacement_levels(pool, self._HITTER_STARTERS)
+        levels = position_aware_replacement_levels()
         hitter_floors = [levels[p] for p in ("C", "1B", "2B", "3B", "SS", "OF")]
         assert levels["UTIL"] == pytest.approx(max(hitter_floors))
 
@@ -374,29 +354,17 @@ class TestPositionAwareReplacementLevels:
         equal total_sgp -- one valued at SS (deep speed, high floor), one at
         3B (scarcer, lower floor) -- the corner gets the higher VAR. This is
         the behavior the fix exists to produce."""
-        pool = _make_player_pool()
-        levels = position_aware_replacement_levels(pool, self._HITTER_STARTERS)
+        levels = position_aware_replacement_levels()
         ss_player = pd.Series({"total_sgp": 12.0, "positions": ["SS"]})
         tb_player = pd.Series({"total_sgp": 12.0, "positions": ["3B"]})
         assert calculate_var(tb_player, levels) > calculate_var(ss_player, levels)
 
-    def test_tiny_pool_does_not_raise_and_keeps_pitcher_floor(self):
-        """Empirical hitter overrides do not depend on pool contents, so a
-        pool with no catchers still yields a 'C' floor and a 'P' floor."""
-        pool = pd.DataFrame(
-            [{"name": "P_0", "positions": ["SP"], "total_sgp": 5.0, "player_type": "pitcher"}]
-        )
-        levels = position_aware_replacement_levels(pool, {"C": 1, "P": 1})
-        assert "P" in levels
-        assert "C" in levels
-
     def test_pitcher_floors_from_constant(self):
         """SP/RP floors equal the SGP of their empirical pitcher lines,
         computed with the given denoms + replacement rates."""
-        pool = _make_player_pool()
         denoms = get_sgp_denominators()
         rates = {"avg": 0.250, "era": 4.50, "whip": 1.35}
-        levels = position_aware_replacement_levels(pool, self._HITTER_STARTERS, denoms, rates)
+        levels = position_aware_replacement_levels(denoms, rates)
         for pos in ("SP", "RP"):
             line = REPLACEMENT_BY_POSITION[pos]
             ip = line["ip"]
@@ -421,6 +389,5 @@ class TestPositionAwareReplacementLevels:
     def test_sp_and_rp_floors_differ(self):
         """Saves come only from relievers, so the role floors must differ --
         a unified-P floor could not net SV and K correctly at once."""
-        pool = _make_player_pool()
-        levels = position_aware_replacement_levels(pool, self._HITTER_STARTERS)
+        levels = position_aware_replacement_levels()
         assert levels["SP"] != pytest.approx(levels["RP"])

@@ -261,21 +261,17 @@ def _empirical_pitcher_floor(
 
 
 def position_aware_replacement_levels(
-    player_pool: pd.DataFrame,
-    starters_per_position: dict[str, int] | None = None,
     denoms: dict[Category, float] | None = None,
     repl_rates: dict[str, float] | None = None,
 ) -> dict[str, float]:
-    """Replacement levels with empirical waiver floors per position.
+    """Empirical waiver replacement floors per position.
 
-    Starts from the demand-based :func:`calculate_replacement_levels` (whose
-    unified "P" floor is kept as a fallback), then overrides each hitter
-    position + UTIL with its empirical waiver-line SGP and adds separate
-    empirical "SP"/"RP" floors. :func:`calculate_var` routes pitchers to the
-    SP/RP floor by role and hitters to their position floor.
+    A pure function of ``denoms`` + the AVG/ERA/WHIP rate baselines: every
+    floor is the SGP of an empirical ``REPLACEMENT_BY_POSITION`` waiver line,
+    independent of the live draft pool. ``calculate_var`` routes pitchers to
+    the SP/RP floor by role and hitters to their position floor; ``UTIL`` is the
+    best (highest-SGP) hitter floor, used as the fallback for DH-only bats.
     """
-    levels = calculate_replacement_levels(player_pool, starters_per_position)
-
     if denoms is None:
         denoms = get_sgp_denominators()
     rates = repl_rates or {}
@@ -283,16 +279,11 @@ def position_aware_replacement_levels(
     replacement_era = rates.get("era", REPLACEMENT_ERA)
     replacement_whip = rates.get("whip", REPLACEMENT_WHIP)
 
-    empirical: dict[str, float] = {}
-    for pos in _EMPIRICAL_HITTER_POSITIONS:
-        if pos in levels and pos in REPLACEMENT_BY_POSITION:
-            empirical[pos] = _empirical_floor_sgp(pos, denoms, replacement_avg)
-
-    levels.update(empirical)
-    if "UTIL" in levels and empirical:
-        levels["UTIL"] = max(empirical.values())
-
+    levels: dict[str, float] = {
+        pos: _empirical_floor_sgp(pos, denoms, replacement_avg)
+        for pos in _EMPIRICAL_HITTER_POSITIONS
+    }
+    levels["UTIL"] = max(levels.values())
     levels["SP"] = _empirical_pitcher_floor("SP", denoms, replacement_era, replacement_whip)
     levels["RP"] = _empirical_pitcher_floor("RP", denoms, replacement_era, replacement_whip)
-
     return levels
