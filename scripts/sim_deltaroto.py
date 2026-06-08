@@ -48,7 +48,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import numpy as np
 from compare_strategies import OPP_STRATEGIES
 
-from fantasy_baseball.draft.eroto_recs import rank_candidates
+from fantasy_baseball.draft.eroto_recs import pitcher_role, rank_candidates
 from fantasy_baseball.draft.recs_integration import (
     _build_replacements,
     build_adp_table,
@@ -59,7 +59,7 @@ from fantasy_baseball.draft.recs_integration import (
 from fantasy_baseball.draft.roster_state import RosterState, get_filled_positions
 from fantasy_baseball.draft.state import StateKey
 from fantasy_baseball.draft.strategy import STRATEGIES, build_player_lookup
-from fantasy_baseball.models.player import Player
+from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.scoring import build_team_sds
 from fantasy_baseball.utils.positions import can_fill_slot
 
@@ -169,6 +169,15 @@ def make_deltaroto_pick(sort_attr):
         if not candidates:
             return None, None
 
+        # Real relievers we already roster -> route a reliever's swap to the SP
+        # line once our RP slots are full (matches build_team_rosters padding).
+        user_rp_filled = sum(
+            1
+            for pid in tracker.user_roster_ids
+            if (pp := board_by_id.get(pid)) is not None
+            and pp.player_type == PlayerType.PITCHER
+            and pitcher_role(pp) == "RP"
+        )
         rows = rank_candidates(
             candidates=candidates,
             replacements=replacements,
@@ -177,6 +186,7 @@ def make_deltaroto_pick(sort_attr):
             team_sds=team_sds,
             picks_until_next_turn=tracker.picks_until_next_turn,
             adp_table=adp_table,
+            user_rp_filled=user_rp_filled,
         )
         if not rows:
             return None, None

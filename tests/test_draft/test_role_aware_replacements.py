@@ -10,7 +10,7 @@ sits at exactly 0 saves and any trace of saves is a huge tie-break windfall
 
 from __future__ import annotations
 
-from fantasy_baseball.draft.eroto_recs import _pick_replacement
+from fantasy_baseball.draft.eroto_recs import _pick_replacement, pitcher_role
 from fantasy_baseball.draft.recs_integration import (
     build_team_rosters,
     empirical_pitcher_replacements,
@@ -41,6 +41,25 @@ def test_replacements_sp_has_no_saves_rp_does():
     reps = empirical_pitcher_replacements()
     assert reps["SP"].rest_of_season.sv == 0
     assert reps["RP"].rest_of_season.sv == 8
+
+
+def test_reliever_displaces_rp_only_while_rp_slots_open():
+    # Bug #1: once a team rosters RP_SLOTS (2) real relievers, build_team_rosters
+    # pads with 0-SV SP lines, so a further reliever must displace an SP line too
+    # -- otherwise the swap subtracts a saves-carrying RP line not in the roster.
+    reps = empirical_pitcher_replacements()
+    closer = _pitcher("Closer", ip=65, sv=35)
+    assert _pick_replacement(closer, reps, user_rp_filled=0).name == "repl RP"
+    assert _pick_replacement(closer, reps, user_rp_filled=1).name == "repl RP"
+    assert _pick_replacement(closer, reps, user_rp_filled=2).name == "repl SP"  # overflow
+    assert _pick_replacement(closer, reps, user_rp_filled=3).name == "repl SP"
+
+
+def test_pitcher_role_missing_innings_is_sp():
+    # Bug #5: a pitcher with no ROS / 0 IP must not be treated as a saves reliever.
+    assert pitcher_role(_pitcher("NoProj", ip=0)) == "SP"
+    assert pitcher_role(_pitcher("Starter", ip=190)) == "SP"
+    assert pitcher_role(_pitcher("Closer", ip=65, sv=35)) == "RP"
 
 
 def test_role_aware_padding_gives_nonzero_saves_baseline():

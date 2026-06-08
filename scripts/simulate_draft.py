@@ -311,13 +311,16 @@ def run_simulation(
 ):
     """Run a single draft simulation and return results.
 
-    *position_aware*: when True, every team drafts "fill a starter slot, bench
-    last" (the gate in ``strategy._choose_rec`` / the deltaRoto adapter, and
-    active-slot-first for ADP opponents). *field_noise*: when True, each
-    algorithm-driven pick takes the k-th choice from its own ranking via a
+    *position_aware*: when True, the recommender-routed pick gates to "fill a
+    starter slot, bench last" (``strategy._choose_rec`` and the deltaRoto
+    adapter). ADP opponents always fill a starter slot first regardless. Only
+    strategies that defer to ``_choose_rec`` (pick_default and the closer
+    strategies that fall through to it) honor it; strategies that select their
+    top recommendation directly are unaffected. *field_noise*: when True, each
+    recommender-routed pick takes the k-th choice from its own ranking via a
     one-sided normal draw -- z<1 -> top (~84%), 1-2 -> 2nd, 2-3 -> 3rd, >=3 ->
-    4th -- so the strategic field varies across seeds. Forced-closer picks
-    ignore it (they return before deferring to the recommender).
+    4th -- so the strategic field varies across seeds. Same routing caveat as
+    above: forced-closer picks and direct-top-pick strategies ignore it.
 
     *ctx* is the dict returned by ``build_board_and_context()``.
 
@@ -520,23 +523,25 @@ def run_simulation(
             pick_name = None
             pid = ""
 
-            # Position-aware: fill an active slot first (bench last). Unaware:
-            # skip straight to pure best-ADP rosterable below.
-            if position_aware:
-                for _, row in adp_boards[team_num].iterrows():
-                    if row["player_id"] in drafted_set:
-                        continue
-                    positions = row["positions"]
-                    if _can_fill_active_slot(positions, team_filled[team_num], config.roster_slots):
-                        pick_name = row["name"]
-                        pid = row["player_id"]
-                        tracker.draft_player(pick_name, is_user=False, player_id=pid)
-                        _assign_slot(
-                            positions, team_filled[team_num], config.roster_slots, scarcity_order
-                        )
-                        drafted_set.add(pid)
-                        team_rosters[team_num].append(pid)
-                        break
+            # ADP opponents fill an active starter slot first, then fall back to
+            # any rosterable slot (bench) below. This is basic sane ADP drafting
+            # and is independent of position_aware (which gates only the
+            # strategy/recommender side); it matches pre-position-aware behavior
+            # so compare_strategies/CLI opponents are unchanged.
+            for _, row in adp_boards[team_num].iterrows():
+                if row["player_id"] in drafted_set:
+                    continue
+                positions = row["positions"]
+                if _can_fill_active_slot(positions, team_filled[team_num], config.roster_slots):
+                    pick_name = row["name"]
+                    pid = row["player_id"]
+                    tracker.draft_player(pick_name, is_user=False, player_id=pid)
+                    _assign_slot(
+                        positions, team_filled[team_num], config.roster_slots, scarcity_order
+                    )
+                    drafted_set.add(pid)
+                    team_rosters[team_num].append(pid)
+                    break
 
             if pick_name is None:
                 for _, row in adp_boards[team_num].iterrows():
