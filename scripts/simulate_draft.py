@@ -77,25 +77,44 @@ def _active_slot_counts(roster_slots):
     return hitter_slots, pitcher_slots
 
 
-def _select_active_players(hitters, pitchers, roster_slots):
+def _select_active_players(hitters, pitchers, roster_slots, scarcity_order=None):
     """Return only the active-roster hitters and pitchers.
 
-    Ranks hitters by (R + HR + RBI + SB) and pitchers by (W + K + SV),
-    then takes the top N to fill active slots. Bench players are excluded.
+    Pitchers share one fungible ``P`` pool, so the top ``P`` by value
+    (closers first) fill it. Hitters are slotted into their *position* slots
+    by eligibility: highest counting-stat value first, each taking the
+    scarcest open starting slot it can fill (via :func:`_assign_slot`), bench
+    last. A hitter that fits no remaining starting slot is benched, and a
+    position with no eligible player is left empty.
+
+    Position-awareness keeps an imbalanced roster honest: the sole catcher
+    always fills C rather than being benched behind better OF bats, and a
+    pile of surplus OF sits instead of inflating the active lineup. The old
+    top-N-by-counting-stats logic ignored slots, so it overstated
+    position-imbalanced rosters and (mis)rewarded stat-piling over the
+    positionally balanced rosters that VAR/VONA deliberately draft.
     """
-    h_slots, p_slots = _active_slot_counts(roster_slots)
+    _, p_slots = _active_slot_counts(roster_slots)
+
+    ranked_p = sorted(
+        pitchers,
+        key=lambda p: (p.get("sv", 0) >= 15, p.get("w", 0) + p.get("k", 0) + p.get("sv", 0)),
+        reverse=True,
+    )
+    active_p = ranked_p[:p_slots]
 
     ranked_h = sorted(
         hitters,
         key=lambda h: h.get("r", 0) + h.get("hr", 0) + h.get("rbi", 0) + h.get("sb", 0),
         reverse=True,
     )
-    ranked_p = sorted(
-        pitchers,
-        key=lambda p: (p.get("sv", 0) >= 15, p.get("w", 0) + p.get("k", 0) + p.get("sv", 0)),
-        reverse=True,
-    )
-    return ranked_h[:h_slots], ranked_p[:p_slots]
+    filled: dict[str, int] = {}
+    active_h = []
+    for h in ranked_h:
+        slot = _assign_slot(h["positions"], filled, roster_slots, scarcity_order)
+        if slot is not None and slot not in ("BN", "IL"):
+            active_h.append(h)
+    return active_h, active_p
 
 
 def _can_fill_active_slot(player_positions, filled, roster_slots):
@@ -139,7 +158,7 @@ def _assign_slot(player_positions, filled, roster_slots, scarcity_order=None):
     return None
 
 
-def _score_roto(team_players, config, full_board, board):
+def _score_roto(team_players, config, full_board, board, scarcity_order=None):
     """Project roto standings from team rosters. Returns (results, all_cats)."""
     # Build per-team stats using active roster selection + shared projection
     team_stats = {}
@@ -152,6 +171,7 @@ def _score_roto(team_players, config, full_board, board):
             all_hitters,
             all_pitchers,
             config.roster_slots,
+            scarcity_order=scarcity_order,
         )
         team_stats[tname] = project_team_stats(list(hitters) + list(pitchers)).to_dict()
         team_meta[tname] = {"nh": len(hitters), "np": len(pitchers)}
@@ -256,8 +276,18 @@ def run_simulation(
     strategy_noise=0.0,
     seed=None,
     opponent_strategies_str=None,
+    position_aware=False,
+    field_noise=False,
 ):
     """Run a single draft simulation and return results.
+
+    *position_aware*: when True, every team drafts "fill a starter slot, bench
+    last" (the gate in ``strategy._choose_rec`` / the deltaRoto adapter, and
+    active-slot-first for ADP opponents). *field_noise*: when True, each
+    algorithm-driven pick takes the k-th choice from its own ranking via a
+    one-sided normal draw -- z<1 -> top (~84%), 1-2 -> 2nd, 2-3 -> 3rd, >=3 ->
+    4th -- so the strategic field varies across seeds. Forced-closer picks
+    ignore it (they return before deferring to the recommender).
 
     *ctx* is the dict returned by ``build_board_and_context()``.
 
@@ -352,6 +382,14 @@ def run_simulation(
             team_num = tracker.picking_team
         is_user = team_num == user_team_num
 
+        # Field variance: the k-th choice from this pick's own ranking, drawn
+        # from a one-sided normal. Passed to every algorithm-driven pick so
+        # each seed yields a different draft.
+        pick_rank = 0
+        if field_noise:
+            z = rng.normal(0.0, 1.0)
+            pick_rank = 0 if z < 1.0 else min(3, int(z))
+
         if is_user:
             pick_name, pid = strategy_fn(
                 board,
@@ -364,6 +402,8 @@ def run_simulation(
                 scoring_mode=scoring_mode,
                 team_rosters=team_rosters,
                 player_lookup=player_lookup,
+                pick_rank=pick_rank,
+                position_aware=position_aware,
             )
 
             # Strategy noise: sometimes take the 2nd or 3rd rec instead.
@@ -429,6 +469,10 @@ def run_simulation(
                 config,
                 team_filled,
                 total_rounds=rounds,
+                scoring_mode=scoring_mode,
+                player_lookup=player_lookup,
+                pick_rank=pick_rank,
+                position_aware=position_aware,
             )
             if pick_name is None:
                 for _, row in adp_board.iterrows():
@@ -455,20 +499,23 @@ def run_simulation(
             pick_name = None
             pid = ""
 
-            for _, row in adp_board.iterrows():
-                if row["player_id"] in drafted_set:
-                    continue
-                positions = row["positions"]
-                if _can_fill_active_slot(positions, team_filled[team_num], config.roster_slots):
-                    pick_name = row["name"]
-                    pid = row["player_id"]
-                    tracker.draft_player(pick_name, is_user=False, player_id=pid)
-                    _assign_slot(
-                        positions, team_filled[team_num], config.roster_slots, scarcity_order
-                    )
-                    drafted_set.add(pid)
-                    team_rosters[team_num].append(pid)
-                    break
+            # Position-aware: fill an active slot first (bench last). Unaware:
+            # skip straight to pure best-ADP rosterable below.
+            if position_aware:
+                for _, row in adp_board.iterrows():
+                    if row["player_id"] in drafted_set:
+                        continue
+                    positions = row["positions"]
+                    if _can_fill_active_slot(positions, team_filled[team_num], config.roster_slots):
+                        pick_name = row["name"]
+                        pid = row["player_id"]
+                        tracker.draft_player(pick_name, is_user=False, player_id=pid)
+                        _assign_slot(
+                            positions, team_filled[team_num], config.roster_slots, scarcity_order
+                        )
+                        drafted_set.add(pid)
+                        team_rosters[team_num].append(pid)
+                        break
 
             if pick_name is None:
                 for _, row in adp_board.iterrows():
@@ -524,7 +571,9 @@ def run_simulation(
         if p is not None:
             team_players[team].append(p)
 
-    results, _all_cats = _score_roto(team_players, config, full_board, board)
+    results, _all_cats = _score_roto(
+        team_players, config, full_board, board, scarcity_order=scarcity_order
+    )
 
     hart = next(t for t in results if t["team"] == config.team_name)
     rank = next(i + 1 for i, t in enumerate(results) if t["team"] == config.team_name)

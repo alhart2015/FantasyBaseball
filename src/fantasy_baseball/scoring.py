@@ -107,9 +107,13 @@ def _stat(p, key, source: ProjectionSource = "rest_of_season"):
         stats = getattr(p, "rest_of_season", None)
     if stats is not None and hasattr(stats, key):
         return _safe(getattr(stats, key, 0))
-    # Flat dict (legacy callers, tests, draft scripts)
-    if isinstance(p, dict):
-        return _safe(p.get(key, 0))
+    # Flat dict or pandas Series (legacy callers, tests, draft scripts).
+    # Series is not a dict but exposes the same ``.get`` -- gating on
+    # ``isinstance(p, dict)`` silently zeroed Series rosters (the draft
+    # simulator feeds Series rows), tying every team's roto categories.
+    get = getattr(p, "get", None)
+    if callable(get):
+        return _safe(get(key, 0))
     return 0.0
 
 
