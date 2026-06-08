@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import cast
 
 import pandas as pd
 
@@ -121,6 +122,33 @@ def calculate_vona_scores(
     return dict(zip(available["player_id"], vona_series, strict=False))
 
 
+def _replacement_levels_for_board(
+    board: pd.DataFrame,
+    roster_slots: dict[str, int],
+    num_teams: int | None,
+) -> dict[str, float]:
+    """Position-aware empirical replacement floors for ``board``.
+
+    The floors are a pure function of the FULL board's rate baselines + the
+    slot config, so they are constant for the whole draft -- but
+    ``get_recommendations`` runs once per pick (and per strategy-opponent pick
+    in the simulator, ~250 picks x 100+ sims). Cache the result on
+    ``board.attrs`` keyed by the slot signature: the cache is per-board-object
+    (a freshly built board gets fresh floors) and recomputes if the slot config
+    changes, turning hundreds of redundant full-board pandas scans into one.
+    """
+    cache_key = (num_teams, tuple(sorted(roster_slots.items())))
+    cached = board.attrs.get("_repl_levels_cache")
+    if cached is not None and cached[0] == cache_key:
+        return cast(dict[str, float], cached[1])
+    starters = compute_starters_per_position(roster_slots, num_teams)
+    denoms = get_sgp_denominators()
+    repl_rates = calculate_replacement_rates(board, starters)
+    repl_levels = position_aware_replacement_levels(denoms, repl_rates)
+    board.attrs["_repl_levels_cache"] = (cache_key, repl_levels)
+    return repl_levels
+
+
 def get_recommendations(
     board: pd.DataFrame,
     drafted: list[str],
@@ -153,11 +181,9 @@ def get_recommendations(
     # Empirical waiver floors (a pure function of denoms + rate baselines). The
     # AVG/ERA/WHIP baselines come from the FULL board, not the shrinking
     # ``available`` pool, so they match the basis the board's frozen
-    # ``total_sgp`` was scored on and don't drift as the draft drains.
-    starters = compute_starters_per_position(roster_slots, num_teams)
-    denoms = get_sgp_denominators()
-    repl_rates = calculate_replacement_rates(board, starters)
-    repl_levels = position_aware_replacement_levels(denoms, repl_rates)
+    # ``total_sgp`` was scored on and don't drift as the draft drains. Cached
+    # on the board so the per-pick call doesn't re-scan the full board.
+    repl_levels = _replacement_levels_for_board(board, roster_slots, num_teams)
 
     # Only recompute VAR for top candidates (by pre-computed VAR).
     # The full pool sets replacement levels accurately, but iterating

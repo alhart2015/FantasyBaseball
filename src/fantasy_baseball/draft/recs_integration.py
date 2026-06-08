@@ -32,6 +32,7 @@ from fantasy_baseball.utils.constants import (
     REPLACEMENT_BY_POSITION,
     Category,
 )
+from fantasy_baseball.utils.rate_stats import calculate_era, calculate_whip
 
 
 def _var_key(row: dict[str, Any]) -> float:
@@ -145,8 +146,8 @@ def empirical_pitcher_replacements() -> dict[str, Player]:
             "er": ln["er"],
             "bb": ln["bb"],
             "h_allowed": ln["h_allowed"],
-            "era": 9 * ln["er"] / ip if ip else 0.0,
-            "whip": (ln["bb"] + ln["h_allowed"]) / ip if ip else 0.0,
+            "era": calculate_era(ln["er"], ip),
+            "whip": calculate_whip(ln["bb"], ln["h_allowed"], ip),
         }
         p = Player.from_dict(row)
         if p.rest_of_season is not None:
