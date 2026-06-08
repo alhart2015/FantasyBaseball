@@ -32,7 +32,7 @@ from fantasy_baseball.draft.recommender import (
 )
 from fantasy_baseball.draft.strategy import STRATEGIES, build_player_lookup
 from fantasy_baseball.draft.tracker import DraftTracker
-from fantasy_baseball.scoring import project_team_stats, score_roto_dict
+from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto_dict
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
@@ -163,6 +163,7 @@ def _score_roto(team_players, config, full_board, board, scarcity_order=None):
     # Build per-team stats using active roster selection + shared projection
     team_stats = {}
     team_meta = {}
+    active_rosters = {}
     for tn in range(1, config.num_teams + 1):
         tname = config.teams.get(tn, f"Team {tn}")
         all_hitters = [p for p in team_players[tn] if p["player_type"] == "hitter"]
@@ -173,10 +174,19 @@ def _score_roto(team_players, config, full_board, board, scarcity_order=None):
             config.roster_slots,
             scarcity_order=scarcity_order,
         )
-        team_stats[tname] = project_team_stats(list(hitters) + list(pitchers)).to_dict()
+        active = list(hitters) + list(pitchers)
+        team_stats[tname] = project_team_stats(active).to_dict()
         team_meta[tname] = {"nh": len(hitters), "np": len(pitchers)}
+        active_rosters[tname] = active
 
-    roto = score_roto_dict(team_stats)
+    # Score with the empirical per-category variance (team_sds), matching the
+    # deltaRoto recommender and the dashboard. Without it score_roto collapses
+    # to a hard-rank step function (a category leader gets exactly 10.0 instead
+    # of ~8), which makes standings -- and keeper/strategy edges -- look far more
+    # deterministic than the projections warrant. Preseason -> full-season
+    # variance, sd_scale=1.0.
+    team_sds = build_team_sds(active_rosters, sd_scale=1.0)
+    roto = score_roto_dict(team_stats, team_sds=team_sds)
 
     # Convert to legacy list-of-dicts format expected by callers
     results = []
