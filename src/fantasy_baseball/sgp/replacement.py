@@ -19,70 +19,24 @@ from fantasy_baseball.utils.positions import is_hitter
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 
-def calculate_replacement_levels(
-    player_pool: pd.DataFrame,
-    starters_per_position: dict[str, int] | None = None,
-) -> dict[str, float]:
-    """Calculate replacement-level SGP for each position."""
-    if starters_per_position is None:
-        starters_per_position = dict(STARTERS_PER_POSITION)
-
-    replacement_levels: dict[str, float] = {}
-
-    for position, num_starters in starters_per_position.items():
-        if position in ("IF", "UTIL"):
-            continue
-
-        eligible = _get_eligible_players(player_pool, position)
-        eligible = eligible.sort_values("total_sgp", ascending=False).reset_index(drop=True)
-
-        if len(eligible) > num_starters:
-            replacement_levels[position] = eligible.iloc[num_starters]["total_sgp"]
-        elif len(eligible) > 0:
-            replacement_levels[position] = eligible.iloc[-1]["total_sgp"]
-        else:
-            replacement_levels[position] = 0.0
-
-    # Calculate UTIL replacement level from the full hitter pool.
-    # UTIL slots are filled by the best remaining hitters after all
-    # positional starter slots are accounted for, so the replacement
-    # level is the SGP of the marginal hitter at that combined depth.
-    util_starters = starters_per_position.get("UTIL", 0)
-    if util_starters > 0:
-        all_hitters = (
-            player_pool[player_pool["positions"].apply(is_hitter)]
-            .sort_values("total_sgp", ascending=False)
-            .reset_index(drop=True)
-        )
-
-        # Total hitter starters across all positional + UTIL slots
-        positional_hitter_slots = sum(
-            n for pos, n in starters_per_position.items() if pos not in ("P", "IF", "UTIL")
-        )
-        total_hitter_starters = positional_hitter_slots + util_starters
-
-        if len(all_hitters) > total_hitter_starters:
-            replacement_levels["UTIL"] = all_hitters.iloc[total_hitter_starters]["total_sgp"]
-        elif len(all_hitters) > 0:
-            replacement_levels["UTIL"] = all_hitters.iloc[-1]["total_sgp"]
-        else:
-            replacement_levels["UTIL"] = 0.0
-
-    return replacement_levels
-
-
 def find_replacement_players(
     player_pool: pd.DataFrame,
     starters_per_position: dict[str, int] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Find the marginal replacement-level player at each position.
 
-    Mirrors :func:`calculate_replacement_levels` demand math but returns
-    the actual player row (as a dict) instead of just the SGP threshold.
-    Use this when downstream code needs to swap a candidate against the
-    replacement player's full stat line — e.g. the ERoto draft
-    recommender, which compares ``score_roto(team_with_candidate)`` to
-    ``score_roto(team_with_replacement)``.
+    The marginal player at a position is the (N+1)-th best by ``total_sgp``
+    when N starter slots exist there (or the worst eligible if the pool is
+    shallower than demand). Returns the actual player row (as a dict) so
+    downstream code can swap a candidate against the replacement player's
+    full stat line -- e.g. the ERoto draft recommender, which compares
+    ``score_roto(team_with_candidate)`` to ``score_roto(team_with_replacement)``.
+
+    Note: this demand-based floor is no longer the live VAR replacement
+    source -- the board and recommender use
+    :func:`position_aware_replacement_levels` (static empirical waiver
+    lines). This function survives as the row-returning primitive for the
+    recs swap path.
 
     Skips ``IF`` (handled via UTIL/positional fallback in ``calculate_var``).
     For ``UTIL``, uses the marginal hitter at depth

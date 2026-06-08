@@ -22,6 +22,7 @@ from fantasy_baseball.draft.roster_state import RosterState, get_filled_position
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.constants import safe_float as _safe
+from fantasy_baseball.utils.positions import can_fill_slot
 from fantasy_baseball.utils.rate_stats import calculate_avg
 
 # Draft a closer by this round if you have none
@@ -79,6 +80,47 @@ def build_player_lookup(
     return lookup
 
 
+def select_from_ranked(ranked, open_starters, pick_rank):
+    """Pick the ``pick_rank``-th item of ``ranked``, restricted to items that
+    fill an open starter slot when any such remain (else the full list).
+
+    Shared by :func:`_choose_rec` (VAR/VONA/closer strategies) and the deltaRoto
+    sim adapter so both arms gate the position-aware / k-th-choice selection
+    identically. Items need only a ``.positions`` attribute (a ``Recommendation``
+    or an ``eroto_recs.RecRow``).
+    """
+    pool = ranked
+    if open_starters:
+        fillers = [r for r in ranked if any(can_fill_slot(r.positions, s) for s in open_starters)]
+        if fillers:
+            pool = fillers
+    return pool[min(pick_rank, len(pool) - 1)] if pool else None
+
+
+def _choose_rec(recs, tracker, full_board, config, **kwargs):
+    """Select one recommendation honoring ``pick_rank`` and ``position_aware``.
+
+    ``pick_rank`` (default 0) indexes the ranked list, so a sim can take the
+    2nd/3rd choice for opponent/field variance. ``position_aware`` (default
+    False), when set and any starter slot is still open, restricts the pool to
+    recs that fill an open *starter* slot -- "draft players who fill an active
+    slot, bench last." Both default to current behavior (top rosterable pick).
+    """
+    if not recs:
+        return None
+    if kwargs.get("position_aware"):
+        filled = get_filled_positions(
+            tracker.user_roster_ids,
+            full_board,
+            roster_slots=config.roster_slots,
+            player_lookup=kwargs.get("player_lookup"),
+        )
+        open_starters = RosterState.from_dicts(filled, config.roster_slots).unfilled_starter_slots()
+    else:
+        open_starters = set()
+    return select_from_ranked(recs, open_starters, int(kwargs.get("pick_rank", 0) or 0))
+
+
 def pick_default(
     board,
     full_board,
@@ -88,10 +130,16 @@ def pick_default(
     team_filled,
     **kwargs,
 ):
-    """Default strategy: take the #1 leverage-weighted recommendation."""
-    recs = _get_recs(board, full_board, tracker, config, n=5, **kwargs)
-    if recs:
-        return recs[0].name, _lookup_pid(board, recs[0].name)
+    """Default strategy: take the #1 leverage-weighted recommendation.
+
+    With ``pick_rank``/``position_aware`` kwargs (sim field variance +
+    position-aware drafting), selection defers to :func:`_choose_rec`.
+    """
+    n = 15 if (kwargs.get("pick_rank") or kwargs.get("position_aware")) else 5
+    recs = _get_recs(board, full_board, tracker, config, n=n, **kwargs)
+    rec = _choose_rec(recs, tracker, full_board, config, **kwargs)
+    if rec is not None:
+        return rec.name, _lookup_pid(board, rec.name)
     return None, None
 
 

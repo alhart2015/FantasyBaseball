@@ -11,7 +11,7 @@ import pytest
 
 from fantasy_baseball.data.projections import blend_projections
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
-from fantasy_baseball.sgp.replacement import calculate_replacement_levels
+from fantasy_baseball.sgp.replacement import find_replacement_players
 from fantasy_baseball.sgp.var import calculate_var
 
 
@@ -58,7 +58,10 @@ def test_full_pipeline(fixtures_dir):
     # With only 7 players, replacement levels will use the last player
     # Use smaller starters_per_position for this test
     small_starters = {"C": 1, "OF": 2, "SS": 1, "2B": 1, "P": 2}
-    levels = calculate_replacement_levels(pool, small_starters)
+    levels = {
+        pos: row["total_sgp"]
+        for pos, row in find_replacement_players(pool, small_starters).items()
+    }
 
     # Step 4: Calculate VAR for each player
     vars_list = []

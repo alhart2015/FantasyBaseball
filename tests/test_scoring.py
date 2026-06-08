@@ -2,6 +2,7 @@ import math
 from datetime import date
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 
 from fantasy_baseball.models.player import (
@@ -143,6 +144,47 @@ class TestProjectTeamStats:
         assert stats[Category.R] == 80
         assert stats[Category.HR] == 25
         assert stats[Category.AVG] == pytest.approx(130 / 500)
+
+    def test_pandas_series_rows_are_read(self):
+        """Regression: the draft simulator feeds pandas ``Series`` rows (from
+        ``build_player_lookup``) with flat lowercase stat keys. ``_stat`` gated
+        its flat-value path on ``isinstance(p, dict)``, so a Series fell through
+        to ``0.0`` -- every team scored identically (all roto cats tied at the
+        EV midpoint) and every strategy looked equal. Series must read like the
+        equivalent dict.
+        """
+        hitter = {
+            "player_type": "hitter",
+            "r": 90,
+            "hr": 35,
+            "rbi": 100,
+            "sb": 15,
+            "h": 160,
+            "ab": 580,
+        }
+        pitcher = {
+            "player_type": "pitcher",
+            "w": 12,
+            "k": 180,
+            "sv": 30,
+            "ip": 200,
+            "er": 70,
+            "bb": 50,
+            "h_allowed": 170,
+        }
+        series_roster = [pd.Series(hitter), pd.Series(pitcher)]
+        dict_roster = [hitter, pitcher]
+
+        series_stats = project_team_stats(series_roster)
+        dict_stats = project_team_stats(dict_roster)
+
+        # The actual regression: Series counting stats are non-zero.
+        assert series_stats[Category.R] == 90
+        assert series_stats[Category.HR] == 35
+        assert series_stats[Category.SV] == 30
+        # Series and dict inputs must agree across every category.
+        for cat in ALL_CATS:
+            assert series_stats[cat] == pytest.approx(dict_stats[cat])
 
     def test_project_team_stats_sums_ros_only_by_default(self):
         """``project_team_stats`` sums ``Player.rest_of_season`` by default (ROS-only).

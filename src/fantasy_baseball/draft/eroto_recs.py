@@ -15,7 +15,7 @@ from typing import Any
 
 from fantasy_baseball.draft.adp import ADPTable
 from fantasy_baseball.lineup.delta_roto import DeltaRotoResult, compute_delta_roto, score_swap
-from fantasy_baseball.models.player import Player
+from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import PITCHER_ELIGIBLE
 from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.scoring import score_roto_dict
@@ -24,7 +24,33 @@ from fantasy_baseball.trades.evaluate import (
     player_rest_of_season_stats,
     team_baseline_volumes,
 )
-from fantasy_baseball.utils.constants import Category
+from fantasy_baseball.utils.constants import Category, role_from_ip
+
+# A team's pitcher slots are modeled as starters + this many relievers. The RP
+# replacement carries saves; a reliever candidate displaces it only while the
+# team still has an empty RP slot (fewer than RP_SLOTS real relievers).
+RP_SLOTS = 2
+
+
+def pitcher_role(player: Player) -> str:
+    """'SP' or 'RP' for a pitcher, from projected ROS innings (role_from_ip).
+
+    Single source of truth for pitcher role across the recommender and
+    build_team_rosters padding. Missing/zero innings -> 'SP': an unprojected
+    pitcher produces no saves, so it should displace the 0-save starter
+    replacement rather than be (de)credited against the saves-carrying RP line.
+    """
+    ros = player.rest_of_season
+    ip = float(getattr(ros, "ip", 0) or 0) if ros is not None else 0.0
+    return role_from_ip(ip) if ip > 0 else "SP"
+
+
+def is_reliever(player: Player) -> bool:
+    """True if a player is a real reliever (a pitcher with RP role). The single
+    'counts toward a team's RP slots' rule, shared by build_team_rosters padding,
+    compute_rec_inputs' rp_filled_by_team, and the sim adapter's user_rp_filled.
+    """
+    return player.player_type == PlayerType.PITCHER and pitcher_role(player) == "RP"
 
 
 @dataclass
@@ -79,8 +105,15 @@ def rank_candidates(
     team_sds: Mapping[str, Mapping[Category, float]] | None,
     picks_until_next_turn: int = 0,
     adp_table: ADPTable | None = None,
+    user_rp_filled: int = 0,
 ) -> list[RecRow]:
-    """Score every candidate's immediate ERoto delta + value-of-picking-now."""
+    """Score every candidate's immediate ERoto delta + value-of-picking-now.
+
+    ``user_rp_filled`` is the number of real relievers the team already rosters;
+    it routes a reliever candidate's swap to the SP replacement once the team's
+    RP slots are full (see :func:`_pick_replacement`), keeping the swap target
+    consistent with build_team_rosters' padding.
+    """
     # The baseline standings + roto scores don't depend on the candidate,
     # but compute_delta_roto recomputes them from scratch every call. With
     # ~200 candidates that's ~200 redundant score_roto runs over 10 teams x
@@ -99,7 +132,7 @@ def rank_candidates(
 
     immediate_rows: list[tuple[Player, DeltaBreakdown]] = []
     for candidate in candidates:
-        replacement = _pick_replacement(candidate, replacements)
+        replacement = _pick_replacement(candidate, replacements, user_rp_filled)
         loses_ros = loses_ros_cache.get(id(replacement))
         if loses_ros is None:
             loses_ros = player_rest_of_season_stats(replacement)
@@ -156,6 +189,12 @@ def rank_candidates(
     #   - Else: p isn't the recommended pick at his position. VOPN =
     #     delta(p) - delta(best_now at X) (negative).
     def _primary(p: Player) -> str:
+        # Bucket pitchers by the same SP/RP role used for the swap (role_from_ip),
+        # not the board's positions[0] label -- the board has no reliable SP/RP
+        # eligibility, and using the role keeps a candidate's positional-urgency
+        # bucket consistent with the replacement it was valued against.
+        if p.player_type == PlayerType.PITCHER:
+            return pitcher_role(p)
         return str(p.positions[0]) if p.positions else ""
 
     candidates_at_pos: dict[str, list[tuple[Player, float]]] = {}
@@ -204,15 +243,28 @@ def rank_candidates(
     return rows
 
 
-def _pick_replacement(candidate: Player, replacements: Mapping[str, Player]) -> Player:
+def _pick_replacement(
+    candidate: Player, replacements: Mapping[str, Player], user_rp_filled: int = 0
+) -> Player:
     """Choose the replacement-level player the candidate would displace.
 
-    Normalizes SP/RP/P to a single 'P' lookup so pitcher candidates
-    don't fall through to ``next(iter(replacements.values()))`` and end
-    up swapped against the first dict entry (typically a hitter).
-    Mirrors :func:`fantasy_baseball.sgp.var.calculate_var`.
+    With SP/RP replacements supplied, a pitcher displaces its same-role
+    replacement -- but a reliever displaces the saves-carrying RP line only while
+    the team still has an open RP slot (``user_rp_filled < RP_SLOTS``). Once a
+    team rosters RP_SLOTS real relievers, build_team_rosters pads the remaining
+    pitcher slots entirely with the 0-save SP line, so a further reliever must
+    displace an SP replacement too -- otherwise the swap would subtract a
+    saves-carrying RP line that isn't in the team's padded roster, mis-valuing
+    a 3rd+ closer. Otherwise normalizes SP/RP/P to the single 'P' lookup.
     """
     primary = str(candidate.positions[0]) if candidate.positions else ""
+    if (
+        candidate.player_type == PlayerType.PITCHER
+        and "SP" in replacements
+        and "RP" in replacements
+    ):
+        displaces_rp = pitcher_role(candidate) == "RP" and user_rp_filled < RP_SLOTS
+        return replacements["RP"] if displaces_rp else replacements["SP"]
     lookup = "P" if primary in PITCHER_ELIGIBLE else primary
     if lookup in replacements:
         return replacements[lookup]

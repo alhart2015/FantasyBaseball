@@ -32,7 +32,7 @@ from fantasy_baseball.draft.recommender import (
 )
 from fantasy_baseball.draft.strategy import STRATEGIES, build_player_lookup
 from fantasy_baseball.draft.tracker import DraftTracker
-from fantasy_baseball.scoring import project_team_stats, score_roto_dict
+from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto_dict
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
@@ -77,25 +77,44 @@ def _active_slot_counts(roster_slots):
     return hitter_slots, pitcher_slots
 
 
-def _select_active_players(hitters, pitchers, roster_slots):
+def _select_active_players(hitters, pitchers, roster_slots, scarcity_order=None):
     """Return only the active-roster hitters and pitchers.
 
-    Ranks hitters by (R + HR + RBI + SB) and pitchers by (W + K + SV),
-    then takes the top N to fill active slots. Bench players are excluded.
+    Pitchers share one fungible ``P`` pool, so the top ``P`` by value
+    (closers first) fill it. Hitters are slotted into their *position* slots
+    by eligibility: highest counting-stat value first, each taking the
+    scarcest open starting slot it can fill (via :func:`_assign_slot`), bench
+    last. A hitter that fits no remaining starting slot is benched, and a
+    position with no eligible player is left empty.
+
+    Position-awareness keeps an imbalanced roster honest: the sole catcher
+    always fills C rather than being benched behind better OF bats, and a
+    pile of surplus OF sits instead of inflating the active lineup. The old
+    top-N-by-counting-stats logic ignored slots, so it overstated
+    position-imbalanced rosters and (mis)rewarded stat-piling over the
+    positionally balanced rosters that VAR/VONA deliberately draft.
     """
-    h_slots, p_slots = _active_slot_counts(roster_slots)
+    _, p_slots = _active_slot_counts(roster_slots)
+
+    ranked_p = sorted(
+        pitchers,
+        key=lambda p: (p.get("sv", 0) >= 15, p.get("w", 0) + p.get("k", 0) + p.get("sv", 0)),
+        reverse=True,
+    )
+    active_p = ranked_p[:p_slots]
 
     ranked_h = sorted(
         hitters,
         key=lambda h: h.get("r", 0) + h.get("hr", 0) + h.get("rbi", 0) + h.get("sb", 0),
         reverse=True,
     )
-    ranked_p = sorted(
-        pitchers,
-        key=lambda p: (p.get("sv", 0) >= 15, p.get("w", 0) + p.get("k", 0) + p.get("sv", 0)),
-        reverse=True,
-    )
-    return ranked_h[:h_slots], ranked_p[:p_slots]
+    filled: dict[str, int] = {}
+    active_h = []
+    for h in ranked_h:
+        slot = _assign_slot(h["positions"], filled, roster_slots, scarcity_order)
+        if slot is not None and slot not in ("BN", "IL"):
+            active_h.append(h)
+    return active_h, active_p
 
 
 def _can_fill_active_slot(player_positions, filled, roster_slots):
@@ -139,11 +158,12 @@ def _assign_slot(player_positions, filled, roster_slots, scarcity_order=None):
     return None
 
 
-def _score_roto(team_players, config, full_board, board):
+def _score_roto(team_players, config, full_board, board, scarcity_order=None):
     """Project roto standings from team rosters. Returns (results, all_cats)."""
     # Build per-team stats using active roster selection + shared projection
     team_stats = {}
     team_meta = {}
+    active_rosters = {}
     for tn in range(1, config.num_teams + 1):
         tname = config.teams.get(tn, f"Team {tn}")
         all_hitters = [p for p in team_players[tn] if p["player_type"] == "hitter"]
@@ -152,11 +172,21 @@ def _score_roto(team_players, config, full_board, board):
             all_hitters,
             all_pitchers,
             config.roster_slots,
+            scarcity_order=scarcity_order,
         )
-        team_stats[tname] = project_team_stats(list(hitters) + list(pitchers)).to_dict()
+        active = list(hitters) + list(pitchers)
+        team_stats[tname] = project_team_stats(active).to_dict()
         team_meta[tname] = {"nh": len(hitters), "np": len(pitchers)}
+        active_rosters[tname] = active
 
-    roto = score_roto_dict(team_stats)
+    # Score with the empirical per-category variance (team_sds), matching the
+    # deltaRoto recommender and the dashboard. Without it score_roto collapses
+    # to a hard-rank step function (a category leader gets exactly 10.0 instead
+    # of ~8), which makes standings -- and keeper/strategy edges -- look far more
+    # deterministic than the projections warrant. Preseason -> full-season
+    # variance, sd_scale=1.0.
+    team_sds = build_team_sds(active_rosters, sd_scale=1.0)
+    roto = score_roto_dict(team_stats, team_sds=team_sds)
 
     # Convert to legacy list-of-dicts format expected by callers
     results = []
@@ -248,6 +278,36 @@ def build_board_and_context(config_path=None):
     }
 
 
+def _build_adp_boards(board, num_teams, adp_noise, rng):
+    """Per-team ADP draft boards. Each team gets its OWN noise draw -- a fixed
+    'opinion' of every player held for the whole draft -- so an elite player one
+    team undervalues is still grabbed near his true ADP by another team. A single
+    shared reshuffle (the old model) instead let one unlucky draw push a low-ADP
+    player down for ALL teams at once, so he'd fall league-wide. Returns
+    ``{team_num: board sorted by that team's noised adp}``.
+    """
+    base = board.copy()
+    if "adp" not in base.columns:
+        base["adp"] = range(len(base))
+    boards = {}
+    for tn in range(1, num_teams + 1):
+        bt = base.copy()
+        if adp_noise > 0:
+            bt["adp"] = bt["adp"].to_numpy() + rng.normal(0, adp_noise, size=len(bt))
+        boards[tn] = bt.sort_values("adp", ascending=True)
+    return boards
+
+
+def _first_undrafted(adp_board, drafted_set):
+    """Best-ADP player on the board not yet drafted, as (name, pid), or
+    (None, "") if exhausted. The plain best-available fallback shared by the
+    user and strategy-opponent pick paths."""
+    for _, row in adp_board.iterrows():
+        if row["player_id"] not in drafted_set:
+            return row["name"], row["player_id"]
+    return None, ""
+
+
 def run_simulation(
     ctx,
     strategy_name="default",
@@ -256,8 +316,21 @@ def run_simulation(
     strategy_noise=0.0,
     seed=None,
     opponent_strategies_str=None,
+    position_aware=False,
+    field_noise=False,
 ):
     """Run a single draft simulation and return results.
+
+    *position_aware*: when True, the recommender-routed pick gates to "fill a
+    starter slot, bench last" (``strategy._choose_rec`` and the deltaRoto
+    adapter). ADP opponents always fill a starter slot first regardless. Only
+    strategies that defer to ``_choose_rec`` (pick_default and the closer
+    strategies that fall through to it) honor it; strategies that select their
+    top recommendation directly are unaffected. *field_noise*: when True, each
+    recommender-routed pick takes the k-th choice from its own ranking via a
+    one-sided normal draw -- z<1 -> top (~84%), 1-2 -> 2nd, 2-3 -> 3rd, >=3 ->
+    4th -- so the strategic field varies across seeds. Same routing caveat as
+    above: forced-closer picks and direct-top-pick strategies ignore it.
 
     *ctx* is the dict returned by ``build_board_and_context()``.
 
@@ -271,19 +344,10 @@ def run_simulation(
 
     strategy_fn = STRATEGIES[strategy_name]
 
-    # Build ADP ranking with optional noise
-    adp_board = board.copy()
-    if "adp" not in adp_board.columns:
-        adp_board["adp"] = range(len(adp_board))
-
     rng = np.random.default_rng(seed)
-
-    if adp_noise > 0:
-        noise = rng.normal(0, adp_noise, size=len(adp_board))
-        adp_board = adp_board.copy()
-        adp_board["adp"] = adp_board["adp"] + noise
-
-    adp_board = adp_board.sort_values("adp", ascending=True)
+    # Per-team ADP boards: each team drafts off its OWN noised view of ADP, so
+    # elite players don't fall league-wide (see _build_adp_boards).
+    adp_boards = _build_adp_boards(board, config.num_teams, adp_noise, rng)
 
     # Initialize tracker — IL is not a draftable slot
     user_keepers = [k for k in config.keepers if k.get("team") == config.team_name]
@@ -352,6 +416,14 @@ def run_simulation(
             team_num = tracker.picking_team
         is_user = team_num == user_team_num
 
+        # Field variance: the k-th choice from this pick's own ranking, drawn
+        # from a one-sided normal. Passed to every algorithm-driven pick so
+        # each seed yields a different draft.
+        pick_rank = 0
+        if field_noise:
+            z = rng.normal(0.0, 1.0)
+            pick_rank = 0 if z < 1.0 else min(3, int(z))
+
         if is_user:
             pick_name, pid = strategy_fn(
                 board,
@@ -364,6 +436,8 @@ def run_simulation(
                 scoring_mode=scoring_mode,
                 team_rosters=team_rosters,
                 player_lookup=player_lookup,
+                pick_rank=pick_rank,
+                position_aware=position_aware,
             )
 
             # Strategy noise: sometimes take the 2nd or 3rd rec instead.
@@ -395,11 +469,7 @@ def run_simulation(
                             pid = rows.iloc[0]["player_id"]
 
             if pick_name is None:
-                for _, row in adp_board.iterrows():
-                    if row["player_id"] not in drafted_set:
-                        pick_name = row["name"]
-                        pid = row["player_id"]
-                        break
+                pick_name, pid = _first_undrafted(adp_boards[team_num], drafted_set)
 
             if pick_name:
                 tracker.draft_player(pick_name, is_user=True, player_id=pid)
@@ -429,13 +499,13 @@ def run_simulation(
                 config,
                 team_filled,
                 total_rounds=rounds,
+                scoring_mode=scoring_mode,
+                player_lookup=player_lookup,
+                pick_rank=pick_rank,
+                position_aware=position_aware,
             )
             if pick_name is None:
-                for _, row in adp_board.iterrows():
-                    if row["player_id"] not in drafted_set:
-                        pick_name = row["name"]
-                        pid = row["player_id"]
-                        break
+                pick_name, pid = _first_undrafted(adp_boards[team_num], drafted_set)
 
             if pick_name:
                 tracker.draft_player(pick_name, is_user=False, player_id=pid)
@@ -455,7 +525,12 @@ def run_simulation(
             pick_name = None
             pid = ""
 
-            for _, row in adp_board.iterrows():
+            # ADP opponents fill an active starter slot first, then fall back to
+            # any rosterable slot (bench) below. This is basic sane ADP drafting
+            # and is independent of position_aware (which gates only the
+            # strategy/recommender side); it matches pre-position-aware behavior
+            # so compare_strategies/CLI opponents are unchanged.
+            for _, row in adp_boards[team_num].iterrows():
                 if row["player_id"] in drafted_set:
                     continue
                 positions = row["positions"]
@@ -471,7 +546,7 @@ def run_simulation(
                     break
 
             if pick_name is None:
-                for _, row in adp_board.iterrows():
+                for _, row in adp_boards[team_num].iterrows():
                     if row["player_id"] in drafted_set:
                         continue
                     positions = row["positions"]
@@ -524,7 +599,9 @@ def run_simulation(
         if p is not None:
             team_players[team].append(p)
 
-    results, _all_cats = _score_roto(team_players, config, full_board, board)
+    results, _all_cats = _score_roto(
+        team_players, config, full_board, board, scarcity_order=scarcity_order
+    )
 
     hart = next(t for t in results if t["team"] == config.team_name)
     rank = next(i + 1 for i, t in enumerate(results) if t["team"] == config.team_name)

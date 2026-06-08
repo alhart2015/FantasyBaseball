@@ -121,6 +121,7 @@ def test_recs_returns_ranked_rows(client, monkeypatch):
         projected_standings=None,  # type: ignore[arg-type]
         team_sds={},
         adp_table=None,  # type: ignore[arg-type]
+        rp_filled_by_team={},
     )
     monkeypatch.setattr(web_app, "_build_rec_inputs", lambda *_a, **_kw: fake_inputs)
     monkeypatch.setattr(web_app, "_load_board_cached", lambda _app: None)

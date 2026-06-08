@@ -388,6 +388,7 @@ def _register_writer_routes(app):
             team_sds=inputs.team_sds,
             picks_until_next_turn=picks_until_next,
             adp_table=inputs.adp_table,
+            user_rp_filled=inputs.rp_filled_by_team.get(team, 0),
         )
         return jsonify([row.__dict__ for row in rows[:10]])
 

@@ -19,13 +19,20 @@ import pandas as pd
 from scipy.stats import rankdata
 
 from fantasy_baseball.draft.adp import ADPTable, blend_adp
+from fantasy_baseball.draft.eroto_recs import RP_SLOTS, is_reliever
 from fantasy_baseball.draft.state import StateKey, read_board
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import BENCH_SLOTS, PITCHER_ELIGIBLE
 from fantasy_baseball.models.standings import ProjectedStandings, ProjectedStandingsEntry
 from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto
 from fantasy_baseball.sgp.replacement import find_replacement_players
-from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS, Category
+from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES,
+    INVERSE_STATS,
+    REPLACEMENT_BY_POSITION,
+    Category,
+)
+from fantasy_baseball.utils.rate_stats import calculate_era, calculate_whip
 
 
 def _var_key(row: dict[str, Any]) -> float:
@@ -111,6 +118,44 @@ def _best_by_type(replacements: Mapping[str, Player], ptype: PlayerType) -> Play
     return max(candidates, key=_score)
 
 
+def empirical_pitcher_replacements() -> dict[str, Player]:
+    """SP and RP replacement-level Players from ``REPLACEMENT_BY_POSITION``.
+
+    The RP line carries saves (the SP line does not). Supplying these (keys
+    ``"SP"``/``"RP"``) opts :func:`build_team_rosters` and
+    :func:`eroto_recs._pick_replacement` into role-aware pitching: a team's 9
+    pitcher slots pad as 7 SP + 2 RP, and a candidate displaces its same-role
+    replacement. Without them the recs path pads with a single 0-save ``"P"``
+    replacement, leaving every undrafted team tied at exactly 0 saves -- so any
+    trace of saves yields a large tie-break windfall (a 0.01-SV starter
+    out-ranking real aces).
+    """
+    reps: dict[str, Player] = {}
+    for pos in ("SP", "RP"):
+        ln = REPLACEMENT_BY_POSITION[pos]
+        ip = ln["ip"]
+        row = {
+            "name": f"repl {pos}",
+            "player_id": f"repl::{pos}",
+            "player_type": "pitcher",
+            "positions": [pos],
+            "w": ln["w"],
+            "k": ln["k"],
+            "sv": ln["sv"],
+            "ip": ip,
+            "er": ln["er"],
+            "bb": ln["bb"],
+            "h_allowed": ln["h_allowed"],
+            "era": calculate_era(ln["er"], ip),
+            "whip": calculate_whip(ln["bb"], ln["h_allowed"], ip),
+        }
+        p = Player.from_dict(row)
+        if p.rest_of_season is not None:
+            p.rest_of_season.compute_sgp()
+        reps[pos] = p
+    return reps
+
+
 def build_team_rosters(
     state: dict[str, Any],
     board_by_id: Mapping[str, Player],
@@ -150,16 +195,29 @@ def build_team_rosters(
 
     hitter_rep = _best_by_type(replacements, PlayerType.HITTER)
     pitcher_rep = _best_by_type(replacements, PlayerType.PITCHER)
+    sp_rep = replacements.get("SP")
+    rp_rep = replacements.get("RP")
 
     for roster in team_picks.values():
         actual_hitters = sum(1 for p in roster if p.player_type == PlayerType.HITTER)
-        actual_pitchers = sum(1 for p in roster if p.player_type == PlayerType.PITCHER)
         while hitter_rep is not None and actual_hitters < hitter_slots:
             roster.append(hitter_rep)
             actual_hitters += 1
-        while pitcher_rep is not None and actual_pitchers < pitcher_slots:
-            roster.append(pitcher_rep)
-            actual_pitchers += 1
+
+        pitchers = [p for p in roster if p.player_type == PlayerType.PITCHER]
+        pad_total = pitcher_slots - len(pitchers)
+        if pad_total <= 0:
+            continue
+        if sp_rep is not None and rp_rep is not None:
+            # Role-aware: relievers fill the 2 RP slots first (their replacement
+            # carries saves), the rest pad as starters. Keeps the saves baseline
+            # realistic instead of every team tied at 0.
+            real_rp = sum(1 for p in pitchers if is_reliever(p))
+            pad_rp = min(pad_total, max(0, RP_SLOTS - real_rp))
+            roster.extend([rp_rep] * pad_rp)
+            roster.extend([sp_rep] * (pad_total - pad_rp))
+        elif pitcher_rep is not None:
+            roster.extend([pitcher_rep] * pad_total)
     return team_picks
 
 
@@ -208,6 +266,9 @@ class RecInputs:
     projected_standings: ProjectedStandings
     team_sds: dict[str, dict[Category, float]]
     adp_table: ADPTable
+    # Real relievers each team already rosters -> rank_candidates' user_rp_filled
+    # (routes a reliever's swap to the SP line once a team's RP slots are full).
+    rp_filled_by_team: dict[str, int]
 
 
 def compute_rec_inputs(
@@ -225,7 +286,14 @@ def compute_rec_inputs(
     teams = _league_teams(league_yaml)
 
     pool = pd.DataFrame(rows) if rows else pd.DataFrame()
-    replacements = _build_replacements(pool, roster_slots, len(teams))
+    # SP/RP empirical replacements opt into role-aware pitching (7 SP + 2 RP
+    # padding, role-matched swaps) so the live recommender's saves baseline
+    # isn't degenerately tied at 0 -- otherwise a trace-saves starter spikes
+    # early off a tie-break windfall. See empirical_pitcher_replacements.
+    replacements = {
+        **_build_replacements(pool, roster_slots, len(teams)),
+        **empirical_pitcher_replacements(),
+    }
 
     board_by_id: dict[str, Player] = {}
     for p in players:
@@ -237,12 +305,21 @@ def compute_rec_inputs(
     team_sds = build_team_sds(team_rosters, sd_scale=1.0)
     adp_table = build_adp_table(pool)
 
+    # Real relievers each team already rosters (from their picks/keepers, not the
+    # replacement padding), so a reliever candidate's swap routes correctly.
+    rp_filled_by_team: dict[str, int] = dict.fromkeys(teams, 0)
+    for entry in (state.get(StateKey.KEEPERS) or []) + (state.get(StateKey.PICKS) or []):
+        pl = board_by_id.get(entry["player_id"])
+        if pl is not None and is_reliever(pl):
+            rp_filled_by_team[entry["team"]] = rp_filled_by_team.get(entry["team"], 0) + 1
+
     return RecInputs(
         candidates=candidates,
         replacements=replacements,
         projected_standings=projected_standings,
         team_sds=team_sds,
         adp_table=adp_table,
+        rp_filled_by_team=rp_filled_by_team,
     )
 
 
