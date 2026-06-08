@@ -298,6 +298,16 @@ def _build_adp_boards(board, num_teams, adp_noise, rng):
     return boards
 
 
+def _first_undrafted(adp_board, drafted_set):
+    """Best-ADP player on the board not yet drafted, as (name, pid), or
+    (None, "") if exhausted. The plain best-available fallback shared by the
+    user and strategy-opponent pick paths."""
+    for _, row in adp_board.iterrows():
+        if row["player_id"] not in drafted_set:
+            return row["name"], row["player_id"]
+    return None, ""
+
+
 def run_simulation(
     ctx,
     strategy_name="default",
@@ -459,11 +469,7 @@ def run_simulation(
                             pid = rows.iloc[0]["player_id"]
 
             if pick_name is None:
-                for _, row in adp_boards[team_num].iterrows():
-                    if row["player_id"] not in drafted_set:
-                        pick_name = row["name"]
-                        pid = row["player_id"]
-                        break
+                pick_name, pid = _first_undrafted(adp_boards[team_num], drafted_set)
 
             if pick_name:
                 tracker.draft_player(pick_name, is_user=True, player_id=pid)
@@ -499,11 +505,7 @@ def run_simulation(
                 position_aware=position_aware,
             )
             if pick_name is None:
-                for _, row in adp_boards[team_num].iterrows():
-                    if row["player_id"] not in drafted_set:
-                        pick_name = row["name"]
-                        pid = row["player_id"]
-                        break
+                pick_name, pid = _first_undrafted(adp_boards[team_num], drafted_set)
 
             if pick_name:
                 tracker.draft_player(pick_name, is_user=False, player_id=pid)

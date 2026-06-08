@@ -45,6 +45,14 @@ def pitcher_role(player: Player) -> str:
     return role_from_ip(ip) if ip > 0 else "SP"
 
 
+def is_reliever(player: Player) -> bool:
+    """True if a player is a real reliever (a pitcher with RP role). The single
+    'counts toward a team's RP slots' rule, shared by build_team_rosters padding,
+    compute_rec_inputs' rp_filled_by_team, and the sim adapter's user_rp_filled.
+    """
+    return player.player_type == PlayerType.PITCHER and pitcher_role(player) == "RP"
+
+
 @dataclass
 class DeltaBreakdown:
     """Per-category + total ERoto delta for a single candidate pick."""

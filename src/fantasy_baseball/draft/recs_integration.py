@@ -19,7 +19,7 @@ import pandas as pd
 from scipy.stats import rankdata
 
 from fantasy_baseball.draft.adp import ADPTable, blend_adp
-from fantasy_baseball.draft.eroto_recs import RP_SLOTS, pitcher_role
+from fantasy_baseball.draft.eroto_recs import RP_SLOTS, is_reliever
 from fantasy_baseball.draft.state import StateKey, read_board
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import BENCH_SLOTS, PITCHER_ELIGIBLE
@@ -211,7 +211,7 @@ def build_team_rosters(
             # Role-aware: relievers fill the 2 RP slots first (their replacement
             # carries saves), the rest pad as starters. Keeps the saves baseline
             # realistic instead of every team tied at 0.
-            real_rp = sum(1 for p in pitchers if pitcher_role(p) == "RP")
+            real_rp = sum(1 for p in pitchers if is_reliever(p))
             pad_rp = min(pad_total, max(0, RP_SLOTS - real_rp))
             roster.extend([rp_rep] * pad_rp)
             roster.extend([sp_rep] * (pad_total - pad_rp))
@@ -309,7 +309,7 @@ def compute_rec_inputs(
     rp_filled_by_team: dict[str, int] = dict.fromkeys(teams, 0)
     for entry in (state.get(StateKey.KEEPERS) or []) + (state.get(StateKey.PICKS) or []):
         pl = board_by_id.get(entry["player_id"])
-        if pl is not None and pl.player_type == PlayerType.PITCHER and pitcher_role(pl) == "RP":
+        if pl is not None and is_reliever(pl):
             rp_filled_by_team[entry["team"]] = rp_filled_by_team.get(entry["team"], 0) + 1
 
     return RecInputs(

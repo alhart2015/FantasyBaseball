@@ -48,7 +48,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import numpy as np
 from compare_strategies import OPP_STRATEGIES
 
-from fantasy_baseball.draft.eroto_recs import pitcher_role, rank_candidates
+from fantasy_baseball.draft.eroto_recs import is_reliever, rank_candidates
 from fantasy_baseball.draft.recs_integration import (
     _build_replacements,
     build_adp_table,
@@ -58,10 +58,9 @@ from fantasy_baseball.draft.recs_integration import (
 )
 from fantasy_baseball.draft.roster_state import RosterState, get_filled_positions
 from fantasy_baseball.draft.state import StateKey
-from fantasy_baseball.draft.strategy import STRATEGIES, build_player_lookup
-from fantasy_baseball.models.player import Player, PlayerType
+from fantasy_baseball.draft.strategy import STRATEGIES, build_player_lookup, select_from_ranked
+from fantasy_baseball.models.player import Player
 from fantasy_baseball.scoring import build_team_sds
-from fantasy_baseball.utils.positions import can_fill_slot
 
 ITERATIONS = 100  # total per (candidate, position-arm)
 CHUNK_ITERS = 5  # iters per worker process; fresh process per chunk bounds the
@@ -174,9 +173,7 @@ def make_deltaroto_pick(sort_attr):
         user_rp_filled = sum(
             1
             for pid in tracker.user_roster_ids
-            if (pp := board_by_id.get(pid)) is not None
-            and pp.player_type == PlayerType.PITCHER
-            and pitcher_role(pp) == "RP"
+            if (pp := board_by_id.get(pid)) is not None and is_reliever(pp)
         )
         rows = rank_candidates(
             candidates=candidates,
@@ -191,20 +188,13 @@ def make_deltaroto_pick(sort_attr):
         if not rows:
             return None, None
         rows.sort(key=lambda r: getattr(r, sort_attr), reverse=True)
-
-        # Position-aware gate + k-th-choice noise, mirroring strategy._choose_rec.
-        pool = rows
-        if kwargs.get("position_aware"):
-            open_starters = roster_state.unfilled_starter_slots()
-            if open_starters:
-                starter_rows = [
-                    r for r in rows if any(can_fill_slot(r.positions, s) for s in open_starters)
-                ]
-                if starter_rows:
-                    pool = starter_rows
-        pick_rank = int(kwargs.get("pick_rank", 0) or 0)
-        best = pool[min(pick_rank, len(pool) - 1)]
-        return best.name, best.player_id
+        # Position-aware gate + k-th-choice selection via the SAME helper the
+        # VAR/VONA strategies use, so the bake-off arms gate identically.
+        open_starters = (
+            roster_state.unfilled_starter_slots() if kwargs.get("position_aware") else set()
+        )
+        best = select_from_ranked(rows, open_starters, int(kwargs.get("pick_rank", 0) or 0))
+        return (best.name, best.player_id) if best is not None else (None, None)
 
     return pick
 

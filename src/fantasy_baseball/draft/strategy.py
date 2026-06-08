@@ -80,6 +80,23 @@ def build_player_lookup(
     return lookup
 
 
+def select_from_ranked(ranked, open_starters, pick_rank):
+    """Pick the ``pick_rank``-th item of ``ranked``, restricted to items that
+    fill an open starter slot when any such remain (else the full list).
+
+    Shared by :func:`_choose_rec` (VAR/VONA/closer strategies) and the deltaRoto
+    sim adapter so both arms gate the position-aware / k-th-choice selection
+    identically. Items need only a ``.positions`` attribute (a ``Recommendation``
+    or an ``eroto_recs.RecRow``).
+    """
+    pool = ranked
+    if open_starters:
+        fillers = [r for r in ranked if any(can_fill_slot(r.positions, s) for s in open_starters)]
+        if fillers:
+            pool = fillers
+    return pool[min(pick_rank, len(pool) - 1)] if pool else None
+
+
 def _choose_rec(recs, tracker, full_board, config, **kwargs):
     """Select one recommendation honoring ``pick_rank`` and ``position_aware``.
 
@@ -91,8 +108,6 @@ def _choose_rec(recs, tracker, full_board, config, **kwargs):
     """
     if not recs:
         return None
-    pick_rank = int(kwargs.get("pick_rank", 0) or 0)
-    pool = recs
     if kwargs.get("position_aware"):
         filled = get_filled_positions(
             tracker.user_roster_ids,
@@ -101,13 +116,9 @@ def _choose_rec(recs, tracker, full_board, config, **kwargs):
             player_lookup=kwargs.get("player_lookup"),
         )
         open_starters = RosterState.from_dicts(filled, config.roster_slots).unfilled_starter_slots()
-        if open_starters:
-            starter_fillers = [
-                r for r in recs if any(can_fill_slot(r.positions, s) for s in open_starters)
-            ]
-            if starter_fillers:
-                pool = starter_fillers
-    return pool[min(pick_rank, len(pool) - 1)]
+    else:
+        open_starters = set()
+    return select_from_ranked(recs, open_starters, int(kwargs.get("pick_rank", 0) or 0))
 
 
 def pick_default(
