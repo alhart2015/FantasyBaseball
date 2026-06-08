@@ -15,7 +15,7 @@ from typing import Any
 
 from fantasy_baseball.draft.adp import ADPTable
 from fantasy_baseball.lineup.delta_roto import DeltaRotoResult, compute_delta_roto, score_swap
-from fantasy_baseball.models.player import Player
+from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import PITCHER_ELIGIBLE
 from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.scoring import score_roto_dict
@@ -24,7 +24,7 @@ from fantasy_baseball.trades.evaluate import (
     player_rest_of_season_stats,
     team_baseline_volumes,
 )
-from fantasy_baseball.utils.constants import Category
+from fantasy_baseball.utils.constants import Category, role_from_ip
 
 
 @dataclass
@@ -213,6 +213,17 @@ def _pick_replacement(candidate: Player, replacements: Mapping[str, Player]) -> 
     Mirrors :func:`fantasy_baseball.sgp.var.calculate_var`.
     """
     primary = str(candidate.positions[0]) if candidate.positions else ""
+    # Role-aware: when SP/RP replacements are supplied, a pitcher displaces its
+    # same-role replacement (closer -> the saves-carrying RP line, starter ->
+    # the 0-save SP line) so a starter gets no saves credit.
+    if (
+        candidate.player_type == PlayerType.PITCHER
+        and "SP" in replacements
+        and "RP" in replacements
+    ):
+        ros = candidate.rest_of_season
+        ip = float(getattr(ros, "ip", 0) or 0) if ros is not None else 0.0
+        return replacements["RP"] if role_from_ip(ip) == "RP" else replacements["SP"]
     lookup = "P" if primary in PITCHER_ELIGIBLE else primary
     if lookup in replacements:
         return replacements[lookup]

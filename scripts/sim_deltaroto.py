@@ -54,6 +54,7 @@ from fantasy_baseball.draft.recs_integration import (
     build_adp_table,
     build_projected_standings,
     build_team_rosters,
+    empirical_pitcher_replacements,
 )
 from fantasy_baseball.draft.roster_state import RosterState, get_filled_positions
 from fantasy_baseball.draft.state import StateKey
@@ -102,7 +103,10 @@ def _static_inputs(board, config):
         p = Player.from_dict(row)
         if p.yahoo_id:
             board_by_id[p.yahoo_id] = p
-    replacements = _build_replacements(board, config.roster_slots, config.num_teams)
+    replacements = {
+        **_build_replacements(board, config.roster_slots, config.num_teams),
+        **empirical_pitcher_replacements(),  # adds SP/RP -> role-aware pitching
+    }
     adp_table = build_adp_table(board)
     pool_sorted = board.sort_values("var", ascending=False) if "var" in board.columns else board
     ordered_pids = list(pool_sorted["player_id"])

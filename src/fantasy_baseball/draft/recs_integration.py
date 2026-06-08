@@ -25,7 +25,13 @@ from fantasy_baseball.models.positions import BENCH_SLOTS, PITCHER_ELIGIBLE
 from fantasy_baseball.models.standings import ProjectedStandings, ProjectedStandingsEntry
 from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto
 from fantasy_baseball.sgp.replacement import find_replacement_players
-from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS, Category
+from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES,
+    INVERSE_STATS,
+    REPLACEMENT_BY_POSITION,
+    Category,
+    role_from_ip,
+)
 
 
 def _var_key(row: dict[str, Any]) -> float:
@@ -111,6 +117,56 @@ def _best_by_type(replacements: Mapping[str, Player], ptype: PlayerType) -> Play
     return max(candidates, key=_score)
 
 
+# Each team's 9 pitcher slots split as 7 starters + 2 relievers (the RP baseline
+# carries saves, so the field isn't degenerately tied at 0 saves).
+_RP_SLOTS = 2
+
+
+def empirical_pitcher_replacements() -> dict[str, Player]:
+    """SP and RP replacement-level Players from ``REPLACEMENT_BY_POSITION``.
+
+    The RP line carries saves (the SP line does not). Supplying these (keys
+    ``"SP"``/``"RP"``) opts :func:`build_team_rosters` and
+    :func:`eroto_recs._pick_replacement` into role-aware pitching: a team's 9
+    pitcher slots pad as 7 SP + 2 RP, and a candidate displaces its same-role
+    replacement. Without them the recs path pads with a single 0-save ``"P"``
+    replacement, leaving every undrafted team tied at exactly 0 saves -- so any
+    trace of saves yields a large tie-break windfall (a 0.01-SV starter
+    out-ranking real aces).
+    """
+    reps: dict[str, Player] = {}
+    for pos in ("SP", "RP"):
+        ln = REPLACEMENT_BY_POSITION[pos]
+        ip = ln["ip"]
+        row = {
+            "name": f"repl {pos}",
+            "player_id": f"repl::{pos}",
+            "player_type": "pitcher",
+            "positions": [pos],
+            "w": ln["w"],
+            "k": ln["k"],
+            "sv": ln["sv"],
+            "ip": ip,
+            "er": ln["er"],
+            "bb": ln["bb"],
+            "h_allowed": ln["h_allowed"],
+            "era": 9 * ln["er"] / ip if ip else 0.0,
+            "whip": (ln["bb"] + ln["h_allowed"]) / ip if ip else 0.0,
+        }
+        p = Player.from_dict(row)
+        if p.rest_of_season is not None:
+            p.rest_of_season.compute_sgp()
+        reps[pos] = p
+    return reps
+
+
+def _pitcher_role(p: Player) -> str:
+    """'SP' or 'RP' for a rostered pitcher, from projected ROS innings."""
+    ros = p.rest_of_season
+    ip = float(getattr(ros, "ip", 0) or 0) if ros is not None else 0.0
+    return role_from_ip(ip)
+
+
 def build_team_rosters(
     state: dict[str, Any],
     board_by_id: Mapping[str, Player],
@@ -150,16 +206,29 @@ def build_team_rosters(
 
     hitter_rep = _best_by_type(replacements, PlayerType.HITTER)
     pitcher_rep = _best_by_type(replacements, PlayerType.PITCHER)
+    sp_rep = replacements.get("SP")
+    rp_rep = replacements.get("RP")
 
     for roster in team_picks.values():
         actual_hitters = sum(1 for p in roster if p.player_type == PlayerType.HITTER)
-        actual_pitchers = sum(1 for p in roster if p.player_type == PlayerType.PITCHER)
         while hitter_rep is not None and actual_hitters < hitter_slots:
             roster.append(hitter_rep)
             actual_hitters += 1
-        while pitcher_rep is not None and actual_pitchers < pitcher_slots:
-            roster.append(pitcher_rep)
-            actual_pitchers += 1
+
+        pitchers = [p for p in roster if p.player_type == PlayerType.PITCHER]
+        pad_total = pitcher_slots - len(pitchers)
+        if pad_total <= 0:
+            continue
+        if sp_rep is not None and rp_rep is not None:
+            # Role-aware: relievers fill the 2 RP slots first (their replacement
+            # carries saves), the rest pad as starters. Keeps the saves baseline
+            # realistic instead of every team tied at 0.
+            real_rp = sum(1 for p in pitchers if _pitcher_role(p) == "RP")
+            pad_rp = min(pad_total, max(0, _RP_SLOTS - real_rp))
+            roster.extend([rp_rep] * pad_rp)
+            roster.extend([sp_rep] * (pad_total - pad_rp))
+        elif pitcher_rep is not None:
+            roster.extend([pitcher_rep] * pad_total)
     return team_picks
 
 
@@ -225,7 +294,14 @@ def compute_rec_inputs(
     teams = _league_teams(league_yaml)
 
     pool = pd.DataFrame(rows) if rows else pd.DataFrame()
-    replacements = _build_replacements(pool, roster_slots, len(teams))
+    # SP/RP empirical replacements opt into role-aware pitching (7 SP + 2 RP
+    # padding, role-matched swaps) so the live recommender's saves baseline
+    # isn't degenerately tied at 0 -- otherwise a trace-saves starter spikes
+    # early off a tie-break windfall. See empirical_pitcher_replacements.
+    replacements = {
+        **_build_replacements(pool, roster_slots, len(teams)),
+        **empirical_pitcher_replacements(),
+    }
 
     board_by_id: dict[str, Player] = {}
     for p in players:
