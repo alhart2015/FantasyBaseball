@@ -268,6 +268,26 @@ def build_board_and_context(config_path=None):
     }
 
 
+def _build_adp_boards(board, num_teams, adp_noise, rng):
+    """Per-team ADP draft boards. Each team gets its OWN noise draw -- a fixed
+    'opinion' of every player held for the whole draft -- so an elite player one
+    team undervalues is still grabbed near his true ADP by another team. A single
+    shared reshuffle (the old model) instead let one unlucky draw push a low-ADP
+    player down for ALL teams at once, so he'd fall league-wide. Returns
+    ``{team_num: board sorted by that team's noised adp}``.
+    """
+    base = board.copy()
+    if "adp" not in base.columns:
+        base["adp"] = range(len(base))
+    boards = {}
+    for tn in range(1, num_teams + 1):
+        bt = base.copy()
+        if adp_noise > 0:
+            bt["adp"] = bt["adp"].to_numpy() + rng.normal(0, adp_noise, size=len(bt))
+        boards[tn] = bt.sort_values("adp", ascending=True)
+    return boards
+
+
 def run_simulation(
     ctx,
     strategy_name="default",
@@ -301,19 +321,10 @@ def run_simulation(
 
     strategy_fn = STRATEGIES[strategy_name]
 
-    # Build ADP ranking with optional noise
-    adp_board = board.copy()
-    if "adp" not in adp_board.columns:
-        adp_board["adp"] = range(len(adp_board))
-
     rng = np.random.default_rng(seed)
-
-    if adp_noise > 0:
-        noise = rng.normal(0, adp_noise, size=len(adp_board))
-        adp_board = adp_board.copy()
-        adp_board["adp"] = adp_board["adp"] + noise
-
-    adp_board = adp_board.sort_values("adp", ascending=True)
+    # Per-team ADP boards: each team drafts off its OWN noised view of ADP, so
+    # elite players don't fall league-wide (see _build_adp_boards).
+    adp_boards = _build_adp_boards(board, config.num_teams, adp_noise, rng)
 
     # Initialize tracker — IL is not a draftable slot
     user_keepers = [k for k in config.keepers if k.get("team") == config.team_name]
@@ -435,7 +446,7 @@ def run_simulation(
                             pid = rows.iloc[0]["player_id"]
 
             if pick_name is None:
-                for _, row in adp_board.iterrows():
+                for _, row in adp_boards[team_num].iterrows():
                     if row["player_id"] not in drafted_set:
                         pick_name = row["name"]
                         pid = row["player_id"]
@@ -475,7 +486,7 @@ def run_simulation(
                 position_aware=position_aware,
             )
             if pick_name is None:
-                for _, row in adp_board.iterrows():
+                for _, row in adp_boards[team_num].iterrows():
                     if row["player_id"] not in drafted_set:
                         pick_name = row["name"]
                         pid = row["player_id"]
@@ -502,7 +513,7 @@ def run_simulation(
             # Position-aware: fill an active slot first (bench last). Unaware:
             # skip straight to pure best-ADP rosterable below.
             if position_aware:
-                for _, row in adp_board.iterrows():
+                for _, row in adp_boards[team_num].iterrows():
                     if row["player_id"] in drafted_set:
                         continue
                     positions = row["positions"]
@@ -518,7 +529,7 @@ def run_simulation(
                         break
 
             if pick_name is None:
-                for _, row in adp_board.iterrows():
+                for _, row in adp_boards[team_num].iterrows():
                     if row["player_id"] in drafted_set:
                         continue
                     positions = row["positions"]
