@@ -80,3 +80,26 @@ def test_from_recrow_vopn_metric_is_score():
 def test_from_recrow_rejects_unknown_metric():
     with pytest.raises(ValueError):
         from_recrow(_recrow(), metric="bogus", player_type=PlayerType.PITCHER)
+
+
+def test_to_recs_json_preserves_dashboard_keys():
+    from fantasy_baseball.draft.recommend import to_recs_json
+
+    rp = RankedPick(
+        player_id="42",
+        name="Closer",
+        positions=[Position.RP],
+        player_type=PlayerType.PITCHER,
+        score=3.1,
+        metrics={"immediate_delta": 3.1, "value_of_picking_now": 2.4},
+        per_category={"SV": 1.5},
+    )
+    d = to_recs_json(rp)
+    assert d == {
+        "player_id": "42",
+        "name": "Closer",
+        "positions": ["RP"],
+        "immediate_delta": 3.1,
+        "value_of_picking_now": 2.4,
+        "per_category": {"SV": 1.5},
+    }

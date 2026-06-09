@@ -188,3 +188,16 @@ def rank_for_mode(ctx: RecommendContext) -> list[RankedPick]:
     if ctx.scoring_mode in _VARVONA_MODES:
         return _rank_var_vona(ctx)
     raise ValueError(f"unknown scoring_mode {ctx.scoring_mode!r}")
+
+
+def to_recs_json(pick: RankedPick) -> dict:
+    """Serialize a deltaRoto-mode RankedPick into the exact /api/recs shape
+    the dashboard JS expects (immediate_delta + value_of_picking_now top-level)."""
+    return {
+        "player_id": pick.player_id,
+        "name": pick.name,
+        "positions": pick.position_strings(),
+        "immediate_delta": pick.metrics["immediate_delta"],
+        "value_of_picking_now": pick.metrics["value_of_picking_now"],
+        "per_category": pick.per_category,
+    }
