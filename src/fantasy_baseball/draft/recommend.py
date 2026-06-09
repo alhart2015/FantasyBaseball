@@ -142,6 +142,19 @@ def _rank_deltaroto(ctx: RecommendContext) -> list[RankedPick]:
 def _rank_var_vona(ctx: RecommendContext) -> list[RankedPick]:
     if ctx.board is None:
         raise ValueError(f"scoring_mode {ctx.scoring_mode!r} requires board (DataFrame)")
+    if ctx.config is None:
+        raise ValueError(f"scoring_mode {ctx.scoring_mode!r} requires config (LeagueConfig)")
+    # Same-name players exist on the board; the recommender returns names only,
+    # so resolve to player_id by keeping the higher-VAR entry per name (the
+    # repo convention for name collisions). See CLAUDE.md cross-cutting rules.
+    id_by_name: dict[str, str] = {}
+    best_var: dict[str, float] = {}
+    for name, pid, var in zip(
+        ctx.board["name"], ctx.board["player_id"], ctx.board["var"], strict=False
+    ):
+        if name not in id_by_name or var > best_var[name]:
+            id_by_name[name] = pid
+            best_var[name] = var
     recs = get_recommendations(
         ctx.board,
         drafted=ctx.drafted,
@@ -149,14 +162,17 @@ def _rank_var_vona(ctx: RecommendContext) -> list[RankedPick]:
         n=15,
         filled_positions=ctx.filled_positions,
         picks_until_next=ctx.picks_until_next,
-        roster_slots=ctx.config.roster_slots if ctx.config is not None else None,
-        num_teams=ctx.config.num_teams if ctx.config is not None else None,
+        roster_slots=ctx.config.roster_slots,
+        num_teams=ctx.config.num_teams,
         scoring_mode=ctx.scoring_mode,
     )
-    id_by_name = dict(zip(ctx.board["name"], ctx.board["player_id"], strict=False))
     out: list[RankedPick] = []
     for rec in recs:
-        rp = from_recommendation(rec, player_id=str(id_by_name.get(rec.name, rec.name)))
+        pid = id_by_name.get(rec.name)
+        if pid is None:
+            # rec.name came from the same board, so a miss is a real logic error.
+            raise KeyError(f"recommendation {rec.name!r} has no player_id on the board")
+        rp = from_recommendation(rec, player_id=str(pid))
         if ctx.scoring_mode == "vona":
             vona = rec.score if rec.score is not None else rec.var
             rp.metrics = {"vona": vona}
