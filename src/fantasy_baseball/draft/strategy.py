@@ -884,6 +884,15 @@ def _lookup_pid(board, name, name_to_pid=None):
     return name + "::unknown"
 
 
+def overlay_default(ranked, *, roster_state=None, config=None, **kwargs):
+    """No-constraint overlay: defer to recommend()'s slot-gated selection."""
+    return None
+
+
+OVERLAYS = {
+    "default": overlay_default,
+}
+
 STRATEGIES = {
     "default": pick_default,
     "nonzero_sv": pick_nonzero_sv,
