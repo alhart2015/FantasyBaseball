@@ -7,6 +7,7 @@ from fantasy_baseball.draft.strategy import (
     NO_PUNT_STAGGER_DEADLINES,
     NO_PUNT_STAGGER_TARGET,
     OVERLAYS,
+    STRATEGIES,
     THREE_CLOSERS_DEADLINES,
     THREE_CLOSERS_TARGET,
     TWO_CLOSERS_DEADLINES,
@@ -593,3 +594,14 @@ def test_anti_fragile_overlay_always_defers():
     # IP is not a roto category and is absent from per_category.
     ranked = [_pitcher("Ace", 9.0), _pitcher("Workhorse", 7.0)]
     assert OVERLAYS["anti_fragile"](ranked, roster_state=None, config=None) is None
+
+
+# ---------------------------------------------------------------------------
+# key-alignment regression guard
+# ---------------------------------------------------------------------------
+
+
+def test_overlays_cover_every_strategy_name():
+    # Every legacy strategy name must have an overlay so config validation and
+    # the unified seam agree on the valid set.
+    assert set(OVERLAYS) == set(STRATEGIES)
