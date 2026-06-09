@@ -885,12 +885,91 @@ def _lookup_pid(board, name, name_to_pid=None):
 
 
 def overlay_default(ranked, *, roster_state=None, config=None, **kwargs):
-    """No-constraint overlay: defer to recommend()'s slot-gated selection."""
+    """No-constraint overlay; returns None to defer to recommend()'s slot-gate.
+
+    Overlay contract: return a RankedPick to override slot-gated selection,
+    or None to defer to it. This function always defers."""
     return None
 
 
+def _save_projection(pick) -> float:
+    """Extract save projection from a RankedPick.
+
+    Uses dict.get with 0.0 default -- never `x or 0` so that a genuine
+    SV=0.0 entry is not accidentally promoted.
+    """
+    return pick.per_category.get("SV", 0.0)
+
+
+def _best_closer_from_ranked(ranked):
+    """Return the highest-score RankedPick whose SV projection >= CLOSER_SV_THRESHOLD.
+
+    Ranked is already ordered by score descending (the overlay receives it
+    that way from recommend()), so the first qualifying entry is the best.
+    """
+    for pick in ranked:
+        if _save_projection(pick) >= CLOSER_SV_THRESHOLD:
+            return pick
+    return None
+
+
+def overlay_nonzero_sv(ranked, *, roster_state=None, config=None, **kwargs):
+    """Force a closer (SV >= CLOSER_SV_THRESHOLD) by CLOSER_DEADLINE_ROUND.
+
+    Overlay contract: return a RankedPick to override slot-gated selection,
+    or None to defer to it.
+
+    kwargs expected:
+        current_round (int): the round currently being drafted.
+        closer_count (int): closers already on the user's roster.
+    """
+    current_round = int(kwargs.get("current_round", 0))
+    closer_count = int(kwargs.get("closer_count", 0))
+
+    if closer_count == 0 and current_round >= CLOSER_DEADLINE_ROUND:
+        return _best_closer_from_ranked(ranked)
+    return None
+
+
+def _make_n_closers_overlay(target, deadlines):
+    """Factory: create a closer-count overlay for a target count and spaced deadlines.
+
+    Mirrors _make_n_closers_strategy: deadline_idx == closer_count, so the
+    Nth closer must arrive by deadlines[N-1].
+    """
+
+    def overlay(ranked, *, roster_state=None, config=None, **kwargs):
+        current_round = int(kwargs.get("current_round", 0))
+        closer_count = int(kwargs.get("closer_count", 0))
+
+        if closer_count < target:
+            deadline_idx = closer_count
+            if deadline_idx < len(deadlines):
+                deadline = deadlines[deadline_idx]
+                if current_round >= deadline:
+                    return _best_closer_from_ranked(ranked)
+        return None
+
+    overlay.__doc__ = (
+        f"Force exactly {target} closers at deadlines {deadlines}. "
+        "Returns the highest-score SV-positive RankedPick when a deadline "
+        "is reached, None otherwise."
+    )
+    return overlay
+
+
+overlay_two_closers = _make_n_closers_overlay(TWO_CLOSERS_TARGET, TWO_CLOSERS_DEADLINES)
+overlay_three_closers = _make_n_closers_overlay(THREE_CLOSERS_TARGET, THREE_CLOSERS_DEADLINES)
+overlay_four_closers = _make_n_closers_overlay(FOUR_CLOSERS_TARGET, FOUR_CLOSERS_DEADLINES)
+
+# Transitional: STRATEGIES (legacy pick_* registry) is aliased to OVERLAYS in a later
+# phase; keep the key sets aligned.
 OVERLAYS = {
     "default": overlay_default,
+    "nonzero_sv": overlay_nonzero_sv,
+    "two_closers": overlay_two_closers,
+    "three_closers": overlay_three_closers,
+    "four_closers": overlay_four_closers,
 }
 
 STRATEGIES = {
