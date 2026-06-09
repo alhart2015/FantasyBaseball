@@ -91,34 +91,50 @@ The single overlay read of `rec.var` (`strategy.py:833`) becomes `rec.score`.
 
 ### 2. The seam -- `recommend()`
 
-One entry point in `draft/recommend.py` that every caller uses:
+The two rankers need different inputs (deltaRoto wants a `RecInputs`; var/vona
+wants the pandas board + drafted + filled positions + config). A single
+`RecommendContext` carries whichever the active mode needs, so one signature
+serves all four modes:
 
 ```python
-def recommend(
-    *,
-    state,
-    candidates,
-    scoring_mode: str,
-    strategy: str,
-    config,
-    picks_until_next: int | None,
-    **kwargs,
-) -> list[RankedPick]:
-    ...
+@dataclass
+class RecommendContext:
+    scoring_mode: str
+    team_name: str
+    picks_until_next: int
+    inputs: RecInputs | None = None          # required for deltaroto_* modes
+    board: pd.DataFrame | None = None        # required for var/vona modes
+    drafted: list[str] = field(default_factory=list)
+    filled_positions: dict[str, int] | None = None
+    config: Any = None
+
+
+def rank_for_mode(ctx: RecommendContext) -> list[RankedPick]:
+    """Single dispatcher -> ranked list (var/vona via get_recommendations,
+    deltaroto_* via rank_candidates). Raises if the mode's required input is
+    absent or the mode is unknown."""
+
+
+def recommend(ctx: RecommendContext, *, strategy: str, open_starters: set,
+              roster_state=None, pick_rank: int = 0) -> RankedPick | None:
+    """rank_for_mode(ctx) -> apply strategy overlay -> slot-gate the result."""
 ```
 
 Responsibilities, in order:
 
-1. **Rank** by dispatching on `scoring_mode`:
+1. **Rank** -- `rank_for_mode(ctx)` dispatches on `ctx.scoring_mode`:
    - `var` / `vona` -> `recommender.get_recommendations(scoring_mode=...)`,
-     adapted via `RankedPick.from_recommendation`.
+     adapted via `from_recommendation`.
    - `deltaroto_immediate` / `deltaroto_vopn` -> `eroto_recs.rank_candidates`,
-     sorted by the matching metric, adapted via `RankedPick.from_recrow`.
+     sorted by the matching metric, adapted via `from_recrow`.
 2. **Apply the strategy overlay** (section 3).
-3. **Slot-gate** via the existing `select_from_ranked`.
+3. **Slot-gate** via the existing `select_from_ranked`, which returns the single
+   chosen `RankedPick` (hence `recommend()` returns one pick, not a list).
 
 The deltaRoto branch reuses the input-assembly already in
-`recs_integration.compute_rec_inputs` rather than duplicating it.
+`recs_integration.compute_rec_inputs` rather than duplicating it. The dashboard
+builds a `ctx` with `inputs`; the simulator builds a `ctx` per pick with
+whichever input its mode needs.
 
 ### 3. Strategies as orthogonal overlays
 
@@ -217,14 +233,17 @@ phases). Each phase ends green on the relevant test subset.
   wire `/api/recs` to it behind the `immediate_delta` alias. Golden-master on
   `/api/recs` must match. Files: `draft/recommend.py`, `recs_integration.py`,
   `web/app.py`, tests.
-- **P3 -- strategies as overlays.** Convert `pick_*` to overlay signature;
-  `STRATEGIES` becomes the overlay registry; the `rec.var` read becomes
-  `rec.score`. Files: `strategy.py` (+ helpers), tests.
-- **P4 -- consolidate simulators.** Merge into one `--scoring-mode` sim;
-  decompose the monolith; rewire `compare_strategies.py` and `replay_picks.py`;
-  delete `sim_deltaroto.py`. Files: `scripts/simulate_draft.py`,
-  `scripts/sim_deltaroto.py`, `scripts/compare_strategies.py`,
-  `scripts/replay_picks.py`, tests.
+- **P3 -- strategies as overlays.** Build the `pick_*` overlays on `RankedPick`
+  in `OVERLAYS` (additive; the legacy `pick_*` API stays callable so the
+  not-yet-rerouted sim keeps working). Files: `strategy.py` (+ helpers), tests.
+- **P4 -- consolidate simulators, then retire the legacy API.** Merge into one
+  `--scoring-mode` sim; decompose the monolith; rewire `compare_strategies.py`
+  and `replay_picks.py`; delete `sim_deltaroto.py`; THEN (once no caller uses
+  the old API) alias `STRATEGIES = OVERLAYS` and delete the legacy `pick_*` /
+  `_get_recs` / `_choose_rec` path (the `rec.var` read goes with it).
+  Because P4 spans >5 files, the Task -- not the Phase -- is the <=5-file
+  checkpoint unit. Files: `scripts/simulate_draft.py`, `scripts/sim_deltaroto.py`,
+  `scripts/compare_strategies.py`, `scripts/replay_picks.py`, `strategy.py`, tests.
 - **P5 -- config + docs.** `config.py` validation; `config/league.yaml` flip to
   `deltaroto_immediate` + `default`; refresh `draft/CLAUDE.md` to describe the
   single seam. Files: `config.py`, `config/league.yaml`,

@@ -397,7 +397,97 @@ git add tests/test_draft/test_parity_golden.py tests/test_draft/fixtures/
 git commit -m "test(draft): golden-master parity guard for /api/recs"
 ```
 
-### Task 5: `recommend()` dispatch -- deltaRoto modes first
+### Task 4b: Capture the simulator golden master (var + deltaRoto pick sequences)
+
+**Files:**
+- Create: `tests/test_draft/test_parity_sim_golden.py`
+- Create: `tests/test_draft/fixtures/sim_golden_var.json`, `tests/test_draft/fixtures/sim_golden_deltaroto.json`
+
+Spec sec 6 requires a fixed-seed simulator golden run WITH `team_sds`, so the
+var/vona path through `recommend()` can be proven to reproduce pre-refactor
+picks exactly. `/api/recs` only exercises `deltaroto_immediate`+`default`, so
+this is the ONLY guard for the strategy-overlay (P3) and sim-consolidation (P4)
+changes. The two modes currently live in two entry points (`simulate_draft.py`
+for var/vona, `sim_deltaroto.py` for deltaRoto); capture each from its current
+entry now, then re-point at the consolidated entry in Task 14.
+
+- [ ] **Step 1: Find the deterministic knob in each sim**
+
+Read `simulate_draft.py` and `sim_deltaroto.py` for a seed / `strategy_noise`
+control. Confirm `seed=7` + `strategy_noise=0.0` yields a deterministic draft
+(the user's own pick has no randomness; only the field uses noise). If a sim
+lacks a seed, thread one into its field RNG (small test-facing change) before
+capturing.
+
+- [ ] **Step 2: Provide a deterministic user-pick-sequence wrapper in each sim**
+
+If absent, add to each sim a thin function returning the user team's drafted
+`player_id`s in pick order (a list of strings -- JSON-stable) for one draft:
+
+```python
+# simulate_draft.py
+def run_user_pick_sequence(*, scoring_mode, strategy, seed, strategy_noise=0.0):
+    """Run one deterministic draft; return the user team's [player_id, ...]."""
+    result = simulate_one_draft(  # or the real entry found in Step 1
+        config=_default_config(), scoring_mode=scoring_mode, strategy=strategy,
+        seed=seed, strategy_noise=strategy_noise,
+    )
+    return [p["player_id"] for p in result.user_picks]
+```
+
+Add the analogous wrapper to `sim_deltaroto.py` (its deltaRoto entry). Both must
+run the PRE-refactor pick path -- this task lands before Task 5 changes anything.
+
+- [ ] **Step 3: Write the golden capture+assert test**
+
+```python
+# tests/test_draft/test_parity_sim_golden.py
+"""Pre-refactor simulator golden. Pins the user team's pick sequence for a
+fixed seed WITH team_sds so P3/P4 prove the seam reproduces pre-refactor picks.
+Generated against simulate_draft.py (var) + sim_deltaroto.py (deltaRoto) before
+Task 5; re-pointed at the consolidated sim in Task 14."""
+import json
+from pathlib import Path
+
+import pytest
+
+from scripts.simulate_draft import run_user_pick_sequence as varvona_seq
+
+FIX = Path(__file__).parent / "fixtures"
+
+
+def _assert_golden(seq, name):
+    g = FIX / name
+    if not g.exists():
+        g.write_text(json.dumps(seq, indent=2))
+    assert seq == json.loads(g.read_text())
+
+
+def test_sim_var_picks_match_golden():
+    _assert_golden(varvona_seq(scoring_mode="var", strategy="default", seed=7), "sim_golden_var.json")
+
+
+def test_sim_deltaroto_picks_match_golden():
+    from scripts.sim_deltaroto import run_user_pick_sequence as dr_seq
+    _assert_golden(dr_seq(scoring_mode="deltaroto_immediate", strategy="default", seed=7),
+                   "sim_golden_deltaroto.json")
+```
+
+- [ ] **Step 4: Generate + assert**
+
+Run: `pytest tests/test_draft/test_parity_sim_golden.py -v`
+Expected: PASS (first run writes both goldens). Inspect each JSON: a list of
+`player_id` strings of length = the user team's pick count. Confirm a second run
+is byte-identical (determinism holds).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tests/test_draft/test_parity_sim_golden.py tests/test_draft/fixtures/sim_golden_*.json scripts/simulate_draft.py scripts/sim_deltaroto.py
+git commit -m "test(draft): pre-refactor simulator golden (var + deltaRoto pick sequences)"
+```
+
+### Task 5: `RecommendContext` + deltaRoto ranking
 
 **Files:**
 - Modify: `src/fantasy_baseball/draft/recommend.py`
@@ -407,38 +497,35 @@ git commit -m "test(draft): golden-master parity guard for /api/recs"
 
 ```python
 # tests/test_draft/test_recommend.py
-from fantasy_baseball.draft.recommend import rank_for_mode
-from fantasy_baseball.draft.recs_integration import RecInputs
+import pytest
+
+from fantasy_baseball.draft.recommend import RecommendContext, rank_for_mode
 
 
-def test_rank_for_mode_deltaroto_immediate_returns_ranked_picks(deltaroto_inputs):
-    # deltaroto_inputs fixture builds a small RecInputs from a tiny board
-    picks = rank_for_mode(
-        scoring_mode="deltaroto_immediate",
-        inputs=deltaroto_inputs,
-        team_name="Hart of the Order",
-        picks_until_next=8,
-    )
+def test_rank_for_mode_deltaroto_immediate_returns_ranked_picks(deltaroto_ctx):
+    picks = rank_for_mode(deltaroto_ctx(scoring_mode="deltaroto_immediate"))
     assert picks, "expected at least one ranked pick"
     assert picks[0].score == picks[0].metrics["immediate_delta"]
-    # ranking is by immediate_delta descending
     scores = [p.metrics["immediate_delta"] for p in picks]
     assert scores == sorted(scores, reverse=True)
 
 
-def test_rank_for_mode_vopn_sorts_by_vopn(deltaroto_inputs):
-    picks = rank_for_mode(
-        scoring_mode="deltaroto_vopn",
-        inputs=deltaroto_inputs,
-        team_name="Hart of the Order",
-        picks_until_next=8,
-    )
+def test_rank_for_mode_vopn_sorts_by_vopn(deltaroto_ctx):
+    picks = rank_for_mode(deltaroto_ctx(scoring_mode="deltaroto_vopn"))
     assert picks[0].score == picks[0].metrics["value_of_picking_now"]
     vopn = [p.metrics["value_of_picking_now"] for p in picks]
     assert vopn == sorted(vopn, reverse=True)
+
+
+def test_rank_for_mode_deltaroto_requires_inputs():
+    ctx = RecommendContext(
+        scoring_mode="deltaroto_immediate", team_name="X", picks_until_next=8, inputs=None
+    )
+    with pytest.raises(ValueError, match="requires inputs"):
+        rank_for_mode(ctx)
 ```
 
-Add a `deltaroto_inputs` fixture to `tests/test_draft/conftest.py` that constructs a `RecInputs` from the golden fixture state via `recs_integration.compute_rec_inputs` (reuse `STATE`/board path from Task 4).
+Add a `deltaroto_ctx` fixture factory to `tests/test_draft/conftest.py` that builds a `RecommendContext` from the golden fixture state: `inputs = recs_integration.compute_rec_inputs(STATE_DICT, BOARD_PATH, LEAGUE_YAML)`, then returns `lambda *, scoring_mode: RecommendContext(scoring_mode=scoring_mode, team_name="Hart of the Order", picks_until_next=8, inputs=inputs)`. Reuse the `STATE`/board path from Task 4.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -449,10 +536,12 @@ Expected: FAIL with `ImportError: cannot import name 'rank_for_mode'`.
 
 ```python
 # add to src/fantasy_baseball/draft/recommend.py
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+import pandas as pd
 
 from fantasy_baseball.draft import eroto_recs
-from fantasy_baseball.models.player import infer_player_type  # see note in Step 4
 
 if TYPE_CHECKING:
     from fantasy_baseball.draft.recs_integration import RecInputs
@@ -461,154 +550,168 @@ _DELTAROTO_MODES = {
     "deltaroto_immediate": "immediate_delta",
     "deltaroto_vopn": "value_of_picking_now",
 }
+_VARVONA_MODES = ("var", "vona")
 
 
-def rank_for_mode(
-    *,
-    scoring_mode: str,
-    inputs: "RecInputs",
-    team_name: str,
-    picks_until_next: int,
-) -> list[RankedPick]:
-    """Rank the candidate pool for ``scoring_mode`` into ``RankedPick`` rows."""
-    if scoring_mode in _DELTAROTO_MODES:
-        metric = _DELTAROTO_MODES[scoring_mode]
-        rows = eroto_recs.rank_candidates(
-            candidates=inputs.candidates,
-            replacements=inputs.replacements,
-            team_name=team_name,
-            projected_standings=inputs.projected_standings,
-            team_sds=inputs.team_sds,
-            picks_until_next_turn=picks_until_next,
-            adp_table=inputs.adp_table,
-            user_rp_filled=inputs.rp_filled_by_team.get(team_name, 0),
-        )
-        type_by_id = {c.yahoo_id: c.player_type for c in inputs.candidates}
-        picks = [
-            from_recrow(r, metric=metric, player_type=type_by_id.get(r.player_id, PlayerType.HITTER))
-            for r in rows
-        ]
-        if metric == "value_of_picking_now":
-            picks.sort(key=lambda p: p.score, reverse=True)
-        return picks
-    raise ValueError(f"unknown scoring_mode {scoring_mode!r}")
+@dataclass
+class RecommendContext:
+    """Everything either ranker needs for one pick.
+
+    deltaRoto modes use ``inputs`` (a ``RecInputs``); var/vona modes use the
+    pandas ``board`` + ``drafted`` + ``filled_positions`` + ``config``. The
+    caller fills whichever the active mode requires; ``rank_for_mode`` validates.
+    """
+
+    scoring_mode: str
+    team_name: str
+    picks_until_next: int
+    inputs: "RecInputs | None" = None
+    board: pd.DataFrame | None = None
+    drafted: list[str] = field(default_factory=list)
+    filled_positions: dict[str, int] | None = None
+    config: Any = None
+
+
+def _rank_deltaroto(ctx: RecommendContext) -> list[RankedPick]:
+    if ctx.inputs is None:
+        raise ValueError(f"scoring_mode {ctx.scoring_mode!r} requires inputs (RecInputs)")
+    metric = _DELTAROTO_MODES[ctx.scoring_mode]
+    rows = eroto_recs.rank_candidates(
+        candidates=ctx.inputs.candidates,
+        replacements=ctx.inputs.replacements,
+        team_name=ctx.team_name,
+        projected_standings=ctx.inputs.projected_standings,
+        team_sds=ctx.inputs.team_sds,
+        picks_until_next_turn=ctx.picks_until_next,
+        adp_table=ctx.inputs.adp_table,
+        user_rp_filled=ctx.inputs.rp_filled_by_team.get(ctx.team_name, 0),
+    )
+    type_by_id = {c.yahoo_id: c.player_type for c in ctx.inputs.candidates}
+    picks: list[RankedPick] = []
+    for r in rows:
+        pt = type_by_id.get(r.player_id)
+        if pt is None:
+            # Fail loud rather than mislabel a pitcher as a hitter in overlays.
+            raise KeyError(f"candidate id {r.player_id!r} ({r.name}) absent from board candidates")
+        picks.append(from_recrow(r, metric=metric, player_type=pt))
+    if metric == "value_of_picking_now":
+        picks.sort(key=lambda p: p.score, reverse=True)
+    return picks
+
+
+def rank_for_mode(ctx: RecommendContext) -> list[RankedPick]:
+    """Single dispatcher: rank the candidate pool for ``ctx.scoring_mode``."""
+    if ctx.scoring_mode in _DELTAROTO_MODES:
+        return _rank_deltaroto(ctx)
+    raise ValueError(f"unknown scoring_mode {ctx.scoring_mode!r}")
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_draft/test_recommend.py -v`
-Expected: PASS. Note: confirm how to get a candidate's `player_type` -- `inputs.candidates` are `Player` objects; use `c.player_type` (read `models/player.py` to confirm the attribute name; if it is a method, adjust). Remove the unused `infer_player_type` import if `Player` already carries the type.
+Expected: PASS. Confirm `Player.yahoo_id` / `Player.player_type` are attributes (read `models/player.py`); if `player_type` is a method, call it.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/fantasy_baseball/draft/recommend.py tests/test_draft/test_recommend.py tests/test_draft/conftest.py
-git commit -m "feat(draft): rank_for_mode dispatch for deltaRoto modes"
+git commit -m "feat(draft): RecommendContext + deltaRoto ranking dispatch"
 ```
 
-### Task 6: Add var/vona to `rank_for_mode`
+### Task 6: Add var/vona to the `rank_for_mode` dispatcher
 
 **Files:**
 - Modify: `src/fantasy_baseball/draft/recommend.py`
-- Test: `tests/test_draft/test_recommend.py`
+- Test: `tests/test_draft/test_recommend.py`, `tests/test_draft/conftest.py`
+
+This makes `rank_for_mode` serve ALL FOUR modes through one signature -- the
+core of the spec's "one shared seam". var/vona use the same `RecommendContext`,
+just populating `board`/`drafted`/`filled_positions`/`config` instead of `inputs`.
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 # append to tests/test_draft/test_recommend.py
-import pytest
-
-
 @pytest.mark.parametrize("mode", ["var", "vona"])
-def test_rank_for_mode_var_vona_scores_are_present(varvona_inputs, mode):
-    picks = rank_for_mode_board(
-        scoring_mode=mode,
-        board=varvona_inputs.board,
-        drafted=varvona_inputs.drafted,
-        config=varvona_inputs.config,
-        filled_positions=varvona_inputs.filled,
-        picks_until_next=8,
-    )
+def test_rank_for_mode_var_vona_scores_present(varvona_ctx, mode):
+    picks = rank_for_mode(varvona_ctx(scoring_mode=mode))
     assert picks
     assert picks[0].metrics[mode] == picks[0].score
 
 
-def test_rank_for_mode_rejects_unknown_mode(varvona_inputs):
-    with pytest.raises(ValueError):
-        rank_for_mode_board(
-            scoring_mode="nope",
-            board=varvona_inputs.board,
-            drafted=varvona_inputs.drafted,
-            config=varvona_inputs.config,
-            filled_positions=varvona_inputs.filled,
-            picks_until_next=8,
-        )
+def test_rank_for_mode_var_vona_requires_board():
+    ctx = RecommendContext(scoring_mode="var", team_name="X", picks_until_next=8, board=None)
+    with pytest.raises(ValueError, match="requires board"):
+        rank_for_mode(ctx)
+
+
+def test_rank_for_mode_rejects_unknown_mode(varvona_ctx):
+    with pytest.raises(ValueError, match="unknown scoring_mode"):
+        rank_for_mode(varvona_ctx(scoring_mode="nope"))
 ```
 
-Add a `varvona_inputs` fixture to `conftest.py` exposing the board DataFrame, drafted ids, a `LeagueConfig`, and filled positions from the golden fixture (load the board via `recs_integration.load_board_rows` + `pd.DataFrame`).
+Add a `varvona_ctx` fixture factory to `conftest.py` returning `lambda *, scoring_mode: RecommendContext(scoring_mode=scoring_mode, team_name="Hart of the Order", picks_until_next=8, board=pd.DataFrame(recs_integration.load_board_rows(BOARD_PATH)), drafted=<drafted ids from golden state>, filled_positions=<filled for the team>, config=<real LeagueConfig>)`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pytest tests/test_draft/test_recommend.py -k var_vona -v`
-Expected: FAIL with `ImportError: cannot import name 'rank_for_mode_board'`.
+Run: `pytest tests/test_draft/test_recommend.py -k "var_vona or unknown or requires_board" -v`
+Expected: FAIL -- var/vona currently hits the `unknown scoring_mode` raise.
 
 - [ ] **Step 3: Write minimal implementation**
 
-The var/vona ranker needs the pandas board, not `RecInputs`, so it gets its own thin entry that adapts `get_recommendations`. Board rows carry `player_id`; map name->id for the adapter.
-
 ```python
 # add to src/fantasy_baseball/draft/recommend.py
-import pandas as pd  # noqa: E402  (kept local to module top with other imports)
-
 from fantasy_baseball.draft.recommender import get_recommendations
 
 
-def rank_for_mode_board(
-    *,
-    scoring_mode: str,
-    board: "pd.DataFrame",
-    drafted: list[str],
-    config,
-    filled_positions: dict[str, int] | None,
-    picks_until_next: int | None,
-    n: int = 15,
-) -> list[RankedPick]:
-    """VAR/VONA ranking entry: wraps get_recommendations -> RankedPick."""
-    if scoring_mode not in ("var", "vona"):
-        raise ValueError(f"rank_for_mode_board handles var/vona, got {scoring_mode!r}")
+def _rank_var_vona(ctx: RecommendContext) -> list[RankedPick]:
+    if ctx.board is None:
+        raise ValueError(f"scoring_mode {ctx.scoring_mode!r} requires board (DataFrame)")
     recs = get_recommendations(
-        board,
-        drafted=drafted,
+        ctx.board,
+        drafted=ctx.drafted,
         user_roster=[],
-        n=n,
-        filled_positions=filled_positions,
-        picks_until_next=picks_until_next,
-        roster_slots=config.roster_slots,
-        num_teams=config.num_teams,
-        scoring_mode=scoring_mode,
+        n=15,
+        filled_positions=ctx.filled_positions,
+        picks_until_next=ctx.picks_until_next,
+        roster_slots=ctx.config.roster_slots,
+        num_teams=ctx.config.num_teams,
+        scoring_mode=ctx.scoring_mode,
     )
-    id_by_name = dict(zip(board["name"], board["player_id"], strict=False))
-    out = []
+    id_by_name = dict(zip(ctx.board["name"], ctx.board["player_id"], strict=False))
+    out: list[RankedPick] = []
     for rec in recs:
         rp = from_recommendation(rec, player_id=str(id_by_name.get(rec.name, rec.name)))
-        if scoring_mode == "vona":
-            # score still tracks the active metric; relabel the metrics key
-            rp.metrics = {"vona": rec.score if rec.score is not None else rec.var}
-            rp.score = next(iter(rp.metrics.values()))
+        if ctx.scoring_mode == "vona":
+            vona = rec.score if rec.score is not None else rec.var
+            rp.metrics = {"vona": vona}
+            rp.score = vona
         out.append(rp)
     return out
 ```
 
+Then extend the dispatcher (replace the body of `rank_for_mode` from Task 5):
+
+```python
+def rank_for_mode(ctx: RecommendContext) -> list[RankedPick]:
+    """Single dispatcher: rank the candidate pool for ``ctx.scoring_mode``."""
+    if ctx.scoring_mode in _DELTAROTO_MODES:
+        return _rank_deltaroto(ctx)
+    if ctx.scoring_mode in _VARVONA_MODES:
+        return _rank_var_vona(ctx)
+    raise ValueError(f"unknown scoring_mode {ctx.scoring_mode!r}")
+```
+
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pytest tests/test_draft/test_recommend.py -k "var_vona or unknown_mode" -v`
-Expected: PASS. Confirm the board column name for the id is `player_id` (it is per `recs_integration`); if vona's metric lives on `Recommendation.score` vs `.var`, read `recommender.py:210-247` and map the correct field.
+Run: `pytest tests/test_draft/test_recommend.py -k "var_vona or unknown or requires" -v`
+Expected: PASS. If vona's metric lives on `Recommendation.score` vs `.var`, read `recommender.py:210-247` and map the correct field.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/fantasy_baseball/draft/recommend.py tests/test_draft/test_recommend.py tests/test_draft/conftest.py
-git commit -m "feat(draft): var/vona ranking through rank_for_mode_board"
+git commit -m "feat(draft): var/vona branch -- rank_for_mode serves all four modes"
 ```
 
 ### Task 7: Rewire `/api/recs` through the seam (golden must hold)
@@ -668,7 +771,9 @@ Replace the body of `recs()` in `web/app.py:369-393` so it builds picks via the 
 ```python
     @app.get("/api/recs")
     def recs():
-        from fantasy_baseball.draft.recommend import rank_for_mode, to_recs_json
+        from dataclasses import replace
+
+        from fantasy_baseball.draft.recommend import RecommendContext, rank_for_mode, to_recs_json
 
         team = request.args.get("team")
         if not team:
@@ -682,17 +787,21 @@ Replace the body of `recs()` in `web/app.py:369-393` so it builds picks via the 
         picks_until_next = _picks_until_next_turn(state, team, league_yaml)
         # The live draft always serves a deltaRoto mode (it owns both metrics
         # the dashboard toggles between); immediate is the verdict winner.
-        inputs.candidates = inputs.candidates[:RECS_CANDIDATE_POOL_SIZE]
-        picks = rank_for_mode(
+        # replace() makes a non-mutating shallow copy so the app-cached inputs
+        # are not clobbered by the candidate-pool slice.
+        ctx = RecommendContext(
             scoring_mode="deltaroto_immediate",
-            inputs=inputs,
             team_name=team,
             picks_until_next=picks_until_next,
+            inputs=replace(inputs, candidates=inputs.candidates[:RECS_CANDIDATE_POOL_SIZE]),
         )
+        picks = rank_for_mode(ctx)
         return jsonify([to_recs_json(p) for p in picks[:10]])
 ```
 
-Note: keep the candidate-pool slice (`RECS_CANDIDATE_POOL_SIZE`) -- but slice `inputs.candidates` BEFORE ranking. If mutating the cached `inputs` is unsafe (it is cached on `app`), slice into a local and pass a shallow-copied `RecInputs` instead of mutating. Implement the non-mutating version.
+Note: `RecInputs` must be a dataclass for `replace()` to work (it is). The slice
+must happen before ranking so the O(N*score_roto) pass stays bounded by
+`RECS_CANDIDATE_POOL_SIZE`.
 
 - [ ] **Step 4: Run the golden parity test**
 
@@ -738,14 +847,11 @@ def _pick(name, score, pos=Position.OF):
                       metrics={"immediate_delta": score})
 
 
-def test_default_overlay_returns_top_ranked():
+def test_default_overlay_defers_to_slot_gate():
+    # default applies NO constraint -- it returns None so recommend()'s
+    # select_from_ranked makes the position-aware greedy pick (verdict winner).
     ranked = [_pick("A", 5.0), _pick("B", 3.0)]
-    chosen = OVERLAYS["default"](ranked, roster_state=None, config=None)
-    assert chosen.name == "A"
-
-
-def test_default_overlay_empty_returns_none():
-    assert OVERLAYS["default"]([], roster_state=None, config=None) is None
+    assert OVERLAYS["default"](ranked, roster_state=None, config=None) is None
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -757,13 +863,17 @@ Expected: FAIL with `ImportError: cannot import name 'OVERLAYS'`.
 
 Add to `strategy.py` an `OVERLAYS` dict whose values have signature
 `overlay(ranked: list[RankedPick], *, roster_state, config, **kwargs) -> RankedPick | None`.
-`default` is the identity overlay (return the top-ranked rosterable pick):
+`default` applies no constraint and DEFERS (returns `None`), so `recommend()`
+falls through to `select_from_ranked` -- the position-aware greedy selection that
+reproduces the pre-refactor `pick_default` / `_choose_rec` behavior and is the
+verdict winner. (An overlay returns a `RankedPick` only when it actively
+overrides the slot-gated greedy choice.)
 
 ```python
 # strategy.py
 def overlay_default(ranked, *, roster_state=None, config=None, **kwargs):
-    """Identity overlay: top-ranked pick (plain greedy = verdict winner)."""
-    return ranked[0] if ranked else None
+    """No-constraint overlay: defer to recommend()'s slot-gated selection."""
+    return None
 
 
 OVERLAYS = {
@@ -780,7 +890,7 @@ Expected: PASS.
 
 ```bash
 git add src/fantasy_baseball/draft/strategy.py tests/test_draft/test_strategy_overlays.py
-git commit -m "feat(draft): overlay registry with default identity overlay"
+git commit -m "feat(draft): overlay registry with default defer overlay"
 ```
 
 ### Task 9: `recommend()` composes rank + overlay + slot-gate
@@ -796,17 +906,22 @@ git commit -m "feat(draft): overlay registry with default identity overlay"
 from fantasy_baseball.draft.recommend import recommend
 
 
-def test_recommend_deltaroto_default_picks_top_immediate(deltaroto_inputs):
+def test_recommend_deltaroto_default_picks_top_immediate(deltaroto_ctx):
     chosen = recommend(
-        scoring_mode="deltaroto_immediate",
+        deltaroto_ctx(scoring_mode="deltaroto_immediate"),
         strategy="default",
-        inputs=deltaroto_inputs,
-        team_name="Hart of the Order",
-        picks_until_next=8,
         open_starters=set(),
     )
     assert chosen is not None
     assert chosen.score == chosen.metrics["immediate_delta"]
+
+
+@pytest.mark.parametrize("mode", ["var", "vona"])
+def test_recommend_var_vona_runs_through_same_seam(varvona_ctx, mode):
+    # Proves recommend() serves all four modes through one entry (spec sec 2).
+    chosen = recommend(varvona_ctx(scoring_mode=mode), strategy="default", open_starters=set())
+    assert chosen is not None
+    assert chosen.score == chosen.metrics[mode]
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -822,27 +937,21 @@ from fantasy_baseball.draft.strategy import OVERLAYS, select_from_ranked
 
 
 def recommend(
+    ctx: RecommendContext,
     *,
-    scoring_mode: str,
     strategy: str,
-    inputs: "RecInputs",
-    team_name: str,
-    picks_until_next: int,
     open_starters: set,
     roster_state=None,
-    config=None,
     pick_rank: int = 0,
 ) -> RankedPick | None:
-    """Rank by scoring_mode, apply the strategy overlay, slot-gate the result."""
-    ranked = rank_for_mode(
-        scoring_mode=scoring_mode,
-        inputs=inputs,
-        team_name=team_name,
-        picks_until_next=picks_until_next,
-    )
+    """Rank for ctx.scoring_mode, apply the strategy overlay, slot-gate.
+
+    Serves all four modes because rank_for_mode(ctx) does the dispatch; the
+    overlay and slot-gate are mode-agnostic (they consume RankedPick)."""
+    ranked = rank_for_mode(ctx)
     if strategy not in OVERLAYS:
         raise ValueError(f"unknown strategy {strategy!r}; valid: {sorted(OVERLAYS)}")
-    chosen = OVERLAYS[strategy](ranked, roster_state=roster_state, config=config)
+    chosen = OVERLAYS[strategy](ranked, roster_state=roster_state, config=ctx.config)
     if chosen is not None:
         return chosen
     # Overlay deferred -> plain slot-gated selection.
@@ -923,7 +1032,21 @@ For each `pick_*` in `STRATEGIES` not yet ported, read its body and record which
 
 - [ ] **Step 2: Write one failing behavioral test per overlay**
 
-For each strategy, write a focused test on a synthetic `list[RankedPick]` pinning its one defining behavior (e.g. `avg_hedge` prefers the higher-AVG of two near-equal-score hitters once an AVG-risk threshold is crossed). Keep each test to the single constraint that distinguishes the strategy from `default`.
+Write one focused test per strategy on a synthetic `list[RankedPick]`, pinning the single constraint that distinguishes it from `default`. Confirm the exact threshold/round numbers against the source read in Step 1 (the table states the behavior, not the magic numbers):
+
+| Strategy | Defining behavior to pin |
+| --- | --- |
+| `no_punt` | Never lets any 5x5 category's projected team total fall below the punt floor: given a candidate that would zero a still-thin category vs one that doesn't, picks the protecting one even at lower score. |
+| `no_punt_opp` | Same protection but keyed off the largest *opponent-relative* category gap (leverage), not the absolute total. |
+| `no_punt_stagger` | Spreads category fills across rounds: will defer a second pick in an already-addressed category when another category is unprotected. |
+| `no_punt_cap3` | Like `no_punt` but stops protecting a category once 3 contributors are rostered (caps over-investment). |
+| `avg_hedge` | Once AVG-risk threshold is crossed, prefers the higher-AVG of two near-equal-score hitters. |
+| `avg_anchor` | Early (before the configured round) forces a high-AVG anchor bat over a higher-score low-AVG bat. |
+| `closers_avg` | Combines the closer-round gate (from Task 10) with the AVG floor: takes a closer on closer rounds, else applies the AVG hedge. |
+| `balanced` | Maximizes the minimum across category contributions (picks the candidate that lifts the weakest category) rather than raw score. |
+| `anti_fragile` | Down-weights candidates whose value concentrates in one category; prefers spread contributors at near-equal score. |
+
+Each test builds 2-3 `RankedPick`s with `per_category` values that make the constraint bite, asserts the overlay returns the protecting/preferred one, and asserts it falls back to top-score when the constraint is not triggered.
 
 - [ ] **Step 3: Run to verify red**
 
@@ -946,49 +1069,53 @@ git add src/fantasy_baseball/draft/strategy.py tests/test_draft/test_strategy_ov
 git commit -m "feat(draft): no-punt + AVG strategies as overlays"
 ```
 
-### Task 12: Make `STRATEGIES` an alias of `OVERLAYS`; drop the embedded ranker
+### Task 12: Keep OVERLAYS and STRATEGIES key-aligned (additive)
+
+The destructive cleanup -- deleting the legacy `pick_*` API and aliasing
+`STRATEGIES = OVERLAYS` -- is DEFERRED to Task 15b, because `simulate_draft.py`
+and `compare_strategies.py` still call the old `pick_*(board, full_board,
+tracker, ...)` signature until Tasks 13-15 reroute them. Aliasing now would
+break those callers mid-plan. This task only guarantees the two registries stay
+key-aligned so `config.py` validation (`strategy in STRATEGIES`) accepts exactly
+the overlay names.
 
 **Files:**
 - Modify: `src/fantasy_baseball/draft/strategy.py`
-- Modify: `src/fantasy_baseball/config.py` (validation references `STRATEGIES`)
-- Test: existing `tests/test_draft` strategy tests
+- Test: `tests/test_draft/test_strategy_overlays.py`
 
-- [ ] **Step 1: Grep every reference to STRATEGIES and the old pick_* API**
+- [ ] **Step 1: Write the failing test**
 
-Run:
-```bash
-grep -rn "STRATEGIES\|get_recommendations\|_choose_rec\|_get_recs\|pick_default\|pick_two_closers\|pick_no_punt" src scripts tests config
+```python
+# append to tests/test_draft/test_strategy_overlays.py
+from fantasy_baseball.draft.strategy import OVERLAYS, STRATEGIES
+
+
+def test_overlays_cover_every_strategy_name():
+    # Every legacy strategy name must have an overlay so config validation and
+    # the unified seam agree on the valid set.
+    assert set(OVERLAYS) == set(STRATEGIES)
 ```
-Record every call site. `config.py:46` validates `strategy in STRATEGIES`; `simulate_draft.py` and `compare_strategies.py` call the `pick_*` functions; tests call them directly.
 
-- [ ] **Step 2: Repoint `STRATEGIES`**
+- [ ] **Step 2: Run to verify red, then green**
 
-Set `STRATEGIES = OVERLAYS` (same keys) so `config.py` validation is unchanged. Remove the now-dead `_get_recs`/`_choose_rec`/`get_recommendations`-inside-strategy path and the `rec.var` read (now `rec.score` inside overlays). Keep `select_from_ranked` (still used by `recommend()`).
+Run: `pytest tests/test_draft/test_strategy_overlays.py::test_overlays_cover_every_strategy_name -v`
+Expected: FAIL if any of the 14 strategy keys (default, nonzero_sv, avg_hedge, two_closers, three_closers, four_closers, no_punt, no_punt_opp, no_punt_stagger, no_punt_cap3, avg_anchor, closers_avg, balanced, anti_fragile) is missing from OVERLAYS. Add any missing overlay from Tasks 8/10/11 until green.
 
-- [ ] **Step 3: Update tests that called pick_* directly**
-
-Migrate `tests/test_draft` strategy tests to call overlays via `OVERLAYS[name](ranked, ...)` or through `recommend()`. Do not delete coverage -- translate it. If a test asserted behavior now covered by Task 10/11 overlay tests, leave the new test and remove the redundant old one, noting why in the commit.
-
-- [ ] **Step 4: Run the draft suite**
-
-Run: `pytest tests/test_draft -q`
-Expected: PASS.
-
-- [ ] **Step 5: Verify no dangling references**
-
-Run: `vulture src/fantasy_baseball/draft/strategy.py` and `ruff check src/fantasy_baseball/draft/strategy.py`
-Expected: no NEW dead code, zero lint violations.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add src/fantasy_baseball/draft/strategy.py tests/test_draft
-git commit -m "refactor(draft): STRATEGIES is the overlay registry; drop embedded ranker"
+git add src/fantasy_baseball/draft/strategy.py tests/test_draft/test_strategy_overlays.py
+git commit -m "test(draft): OVERLAYS covers every STRATEGIES key"
 ```
 
 ---
 
 ## Phase 4: Consolidate the simulators
+
+> **File-budget note (CLAUDE.md <=5 files/phase):** Phase 4 as a whole touches
+> more than 5 files, so the *Task* (not the Phase) is the checkpoint unit here --
+> each of Tasks 13, 14, 15, 15b is a single commit touching <=5 files, with
+> tests green at each boundary. Execute and review one task at a time.
 
 ### Task 13: Route the simulator's user pick through `recommend()`
 
@@ -1017,6 +1144,8 @@ def test_simulate_accepts_deltaroto_mode_and_runs(tiny_league_config):
 
 (If the public sim entry has a different name, use the real one found in Step 1; the assertion is that a deltaRoto mode runs end-to-end.)
 
+Define `tiny_league_config` in `tests/test_draft/conftest.py`: a `LeagueConfig` for a small league (e.g. `num_teams=4`, the real `roster_slots`, two keepers) loaded via `config.load_config` from a fixture `league.yaml`, or constructed directly. Reuse `minimal_league_yaml` from Task 16 if it lands first; otherwise add the fixture here and have Task 16 reuse it.
+
 - [ ] **Step 3: Run to verify red**
 
 Run: `pytest tests/test_draft/test_simulate_draft.py -k deltaroto -v`
@@ -1024,7 +1153,11 @@ Expected: FAIL (mode not handled / function missing).
 
 - [ ] **Step 4: Implement seam routing for the user pick**
 
-Replace the user-pick selection with a `recommend()` call, building `RecInputs` per pick from the in-progress draft state (reuse `recs_integration.compute_rec_inputs` if the sim already holds a state dict; otherwise build the minimal inputs the seam needs). Keep var/vona working by routing those modes through `rank_for_mode_board` inside the same `recommend()` (extend `recommend()` to accept either `inputs` or a board, or add a board-based sibling -- pick one and keep it consistent with Task 9's signature).
+Replace the user-pick selection with a `recommend(ctx, strategy=..., open_starters=...)` call. `recommend()` already serves all four modes as of Task 9 -- this task only builds the `RecommendContext` per pick and calls it; no new ranker is added here. Build the context from the in-progress draft state:
+- deltaRoto modes: `inputs = recs_integration.compute_rec_inputs(state, board_path, league_yaml)` (the sim advances a state dict; reuse it), set `ctx.inputs`.
+- var/vona modes: set `ctx.board` (the sim's board DataFrame), `ctx.drafted`, `ctx.filled_positions`, `ctx.config`.
+
+Set only the input the mode needs; `rank_for_mode` raises a clear error if the required one is absent. Compute `open_starters` from the user roster as the sim already does.
 
 - [ ] **Step 5: Run to verify green + existing sim tests**
 
@@ -1062,10 +1195,12 @@ Expected: FAIL until the consolidated harness exists.
 
 Extract three units (free functions or a small `sim/` package): **harness** (draft loop + snake order), **field** (opponent strategy assignment + variance), **reporting** (standings/roto/keeper summary). Each opponent and the user pick call `recommend()`. Port any deltaRoto-only field behavior worth keeping. Keep functions small and individually testable.
 
-- [ ] **Step 5: Run green + full sim suite**
+Preserve `run_user_pick_sequence` (Task 4b) on the consolidated `simulate_draft`, now serving all four modes, so the var sim golden's import is unchanged.
 
-Run: `pytest tests/test_draft/test_simulate_draft.py -v`
-Expected: PASS.
+- [ ] **Step 5: Run green + the var sim golden**
+
+Run: `pytest tests/test_draft/test_simulate_draft.py tests/test_draft/test_parity_sim_golden.py::test_sim_var_picks_match_golden -v`
+Expected: PASS -- the var/vona path through the consolidated harness reproduces the pre-refactor pick sequence captured in Task 4b. If it diverges, fix the harness; do NOT regenerate the golden.
 
 - [ ] **Step 6: Commit**
 
@@ -1081,10 +1216,12 @@ git commit -m "refactor(sim): single scoring_mode-driven harness (field + report
 - Modify: `scripts/compare_strategies.py:88` (mode list), and its sim invocation
 - Modify: `scripts/replay_picks.py:98`
 
-- [ ] **Step 1: Confirm nothing imports sim_deltaroto**
+- [ ] **Step 1: Re-point the deltaRoto sim golden, then confirm nothing imports sim_deltaroto**
+
+In `tests/test_draft/test_parity_sim_golden.py`, change the deltaRoto import from `from scripts.sim_deltaroto import run_user_pick_sequence` to `from scripts.simulate_draft import run_user_pick_sequence` (the consolidated entry from Task 14 now serves deltaRoto modes). Run `pytest tests/test_draft/test_parity_sim_golden.py -v` -- BOTH goldens must still match (the consolidated sim reproduces sim_deltaroto's pre-refactor deltaRoto picks). Then:
 
 Run: `grep -rn "sim_deltaroto" src scripts tests docs config`
-Expected: only the file itself + docs. If a test imports it, migrate that test to the consolidated sim first.
+Expected: no remaining imports (only docs references). If anything else imports it, migrate first.
 
 - [ ] **Step 2: Extend the mode grid in compare_strategies**
 
@@ -1106,14 +1243,55 @@ Run:
 ```bash
 python scripts/simulate_draft.py -s default --scoring-mode deltaroto_immediate --iters 2
 python scripts/replay_picks.py --scoring-mode deltaroto_immediate
+pytest tests/test_draft/test_parity_sim_golden.py -v
 ```
-Expected: both run without error (use a small iter count).
+Expected: the scripts run without error (small iter count); both sim goldens PASS through the single consolidated entry.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add scripts/compare_strategies.py scripts/replay_picks.py
+git add scripts/compare_strategies.py scripts/replay_picks.py tests/test_draft/test_parity_sim_golden.py
 git commit -m "refactor(sim): delete sim_deltaroto; one sim drives all modes"
+```
+
+### Task 15b: Drop the legacy pick_* API; alias STRATEGIES = OVERLAYS
+
+PREREQUISITE: Tasks 13-15 complete -- no caller (the consolidated sim,
+`compare_strategies.py`, `replay_picks.py`, the dashboard) invokes the old
+`pick_*(board, full_board, tracker, ...)` API any more. This task removes that
+now-dead path (the cleanup deferred from Task 12).
+
+**Files:**
+- Modify: `src/fantasy_baseball/draft/strategy.py`
+- Test: existing `tests/test_draft` strategy tests
+
+- [ ] **Step 1: Confirm nothing calls the legacy API**
+
+Run:
+```bash
+grep -rn "get_recommendations\|_choose_rec\|_get_recs\|pick_default\|pick_two_closers\|pick_no_punt\|pick_avg\|pick_closers\|pick_balanced\|pick_anti_fragile\|pick_nonzero" src scripts tests
+```
+Expected: no production/script references to the legacy `pick_*`/`_get_recs`/`_choose_rec`/`get_recommendations`-inside-strategy remain (only `OVERLAYS` and the overlay functions). If a test still calls a legacy `pick_*`, migrate it to `OVERLAYS[name](ranked, ...)` first (translate the assertion, do not drop coverage).
+
+- [ ] **Step 2: Remove the dead path and alias the registry**
+
+Delete the legacy `pick_*` functions, `_get_recs`, `_choose_rec`, and the `get_recommendations` import from `strategy.py` (this also removes the lone `rec.var` read at the old `strategy.py:833` -- overlays read `rec.score`/`per_category` instead). Set `STRATEGIES = OVERLAYS`. Keep `select_from_ranked` (used by `recommend()`).
+
+- [ ] **Step 3: Run the draft + sim suites + both parity goldens**
+
+Run: `pytest tests/test_draft -q`
+Expected: PASS, including `test_parity_golden.py` and `test_parity_sim_golden.py` (the removal changes no picks).
+
+- [ ] **Step 4: Verify no dead code / lint**
+
+Run: `vulture src/fantasy_baseball/draft/strategy.py` and `ruff check src/fantasy_baseball/draft/strategy.py`
+Expected: no NEW dead code, zero lint violations.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/fantasy_baseball/draft/strategy.py tests/test_draft
+git commit -m "refactor(draft): drop legacy pick_* API; STRATEGIES = OVERLAYS"
 ```
 
 ---
@@ -1251,6 +1429,7 @@ Run: `python scripts/run_draft_dashboard.py --rebuild-board`, open `http://local
 
 ## Self-review notes (filled during writing)
 
-- **Spec coverage:** RankedPick+metrics (Tasks 1-3), recommend() seam (5-6,9), overlays orthogonal (8,10-12), one sim (13-15), config+yaml (16-17), docs (18), parity guard (4,7,17). All spec sections mapped.
-- **Type consistency:** `RankedPick.positions` is `list[Position]`; `position_strings()` is the only place enums become strings (used by `to_recs_json`). `score`/`metrics` populated by both adapters. `OVERLAYS` keys == `STRATEGIES` keys == `config.py` valid strategies.
+- **Spec coverage:** RankedPick+metrics (Tasks 1-3); unified seam serving ALL FOUR modes via `RecommendContext`+`rank_for_mode`+`recommend` (Tasks 5,6,9 -- closes review finding #1); overlays orthogonal (8,10-12,15b); one sim (13-15); config+yaml (16-17); docs (18); parity guard -- `/api/recs` golden (4,7,17) AND simulator golden for var+deltaRoto pick sequences (4b, asserted at 14/15/15b -- closes review finding #2).
+- **Type consistency:** `RankedPick.positions` is `list[Position]`; `position_strings()` is the only place enums become strings (used by `to_recs_json`). `score`/`metrics` populated by both adapters. `rank_for_mode(ctx)` and `recommend(ctx, ...)` share the single `RecommendContext`. `OVERLAYS` keys == `STRATEGIES` keys == `config.py` valid strategies (pinned by Task 12's test).
+- **Ordering guard:** the destructive `STRATEGIES=OVERLAYS` + legacy `pick_*` removal is Task 15b (after the sim/compare/replay callers reroute in 13-15), not Task 12 -- aliasing earlier would break the still-legacy sim.
 - **Known fallback:** Task 11 Step 4 is the single sanctioned place to invoke the spec's "overlay-where-cheap" path; it requires a logged note naming the strategy + missing signal, never silent.
