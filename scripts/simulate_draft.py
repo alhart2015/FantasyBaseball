@@ -25,19 +25,142 @@ from fantasy_baseball.config import load_config
 from fantasy_baseball.data.db import get_connection
 from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.board import apply_keepers, build_draft_board
+from fantasy_baseball.draft.eroto_recs import is_reliever
+from fantasy_baseball.draft.recommend import RecommendContext, recommend
 from fantasy_baseball.draft.recommender import (
     compute_slot_scarcity_order,
     get_filled_positions,
     get_recommendations,
 )
+from fantasy_baseball.draft.recs_integration import (
+    _build_replacements,
+    build_adp_table,
+    build_projected_standings,
+    build_team_rosters,
+    empirical_pitcher_replacements,
+)
+from fantasy_baseball.draft.roster_state import RosterState
 from fantasy_baseball.draft.strategy import STRATEGIES, build_player_lookup
 from fantasy_baseball.draft.tracker import DraftTracker
+from fantasy_baseball.models.player import Player
 from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto_dict
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
+
+# Candidate pool size for the deltaRoto user pick -- must match sim_deltaroto.POOL_CAP
+# so the rerouted user pick reproduces the pre-refactor deltaRoto pick sequence exactly.
+_DELTAROTO_POOL_CAP = 200
+
+# Set of scoring_mode strings that use the deltaRoto ranking engine.
+_DELTAROTO_STRATEGY_NAMES = frozenset({"deltaroto_immediate", "deltaroto_vopn"})
+
+# Static per-board inputs for the deltaRoto path: cache keyed on board id.
+# Mirrors sim_deltaroto._STATIC_CACHE to avoid rebuilding replacements/ADP per pick.
+_SIM_STATIC_CACHE: dict[int, tuple] = {}
+
+
+def _sim_static_inputs(board, config):
+    """Board-derived inputs constant across the draft for the deltaRoto sim path.
+
+    Mirrors sim_deltaroto._static_inputs: replacements, ADP table, pid->Player map,
+    VAR-ordered pids, and team names. Cached on board id so they are built once per
+    simulation run (not per pick). Keyed separately from sim_deltaroto._STATIC_CACHE
+    so the two scripts can coexist in the same process without aliasing.
+    """
+    key = id(board)
+    cached = _SIM_STATIC_CACHE.get(key)
+    if cached is not None:
+        return cached
+    board_by_id: dict[str, Player] = {}
+    for row in board.to_dict("records"):
+        p = Player.from_dict(row)
+        if p.yahoo_id:
+            board_by_id[p.yahoo_id] = p
+    replacements = {
+        **_build_replacements(board, config.roster_slots, config.num_teams),
+        **empirical_pitcher_replacements(),
+    }
+    adp_table = build_adp_table(board)
+    pool_sorted = board.sort_values("var", ascending=False) if "var" in board.columns else board
+    ordered_pids = list(pool_sorted["player_id"])
+    team_names = list(config.teams.values())
+    cached = (board_by_id, replacements, adp_table, ordered_pids, team_names)
+    _SIM_STATIC_CACHE[key] = cached
+    return cached
+
+
+def _build_deltaroto_rec_inputs(board, full_board, tracker, config, team_rosters, player_lookup):
+    """Build a RecInputs object for the deltaRoto user pick.
+
+    Mirrors make_deltaroto_pick from sim_deltaroto.py exactly so the rerouted
+    recommend() call produces the same candidate pool, standings, and team_sds as
+    the pre-refactor pick function -- a prerequisite for the golden tests to hold.
+
+    The candidate list is: top _DELTAROTO_POOL_CAP undrafted, roster-legal players
+    by VAR order (matching POOL_CAP=200 in sim_deltaroto).
+    """
+    from fantasy_baseball.draft.recs_integration import RecInputs
+    from fantasy_baseball.draft.state import StateKey
+
+    board_by_id, replacements, adp_table, ordered_pids, team_names = _sim_static_inputs(
+        board, config
+    )
+
+    # Synthetic draft-state from live sim rosters (keepers already folded in by
+    # run_simulation). Mirrors make_deltaroto_pick's state construction exactly.
+    picks = [
+        {"player_id": pid, "team": config.teams[num], "position": ""}
+        for num, pids in team_rosters.items()
+        for pid in pids
+    ]
+    state = {StateKey.KEEPERS.value: [], StateKey.PICKS.value: picks}
+    rosters = build_team_rosters(state, board_by_id, team_names, config.roster_slots, replacements)
+    standings = build_projected_standings(rosters)
+    team_sds = build_team_sds(rosters, sd_scale=1.0)
+
+    # Candidate pool: undrafted, roster-legal for the user team, top-N by VAR.
+    # Mirrors make_deltaroto_pick candidate filtering so the candidate list is identical.
+    drafted = set(tracker.drafted_ids)
+    filled = get_filled_positions(
+        tracker.user_roster_ids,
+        full_board,
+        roster_slots=config.roster_slots,
+        player_lookup=player_lookup,
+    )
+    roster_state = RosterState.from_dicts(filled, config.roster_slots)
+    candidates: list[Player] = []
+    for pid in ordered_pids:
+        if pid in drafted:
+            continue
+        p = board_by_id.get(pid)
+        if p is None:
+            continue
+        row = player_lookup.get(pid)
+        positions = row["positions"] if row is not None else p.positions
+        if not roster_state.any_slot_open_for(positions):
+            continue
+        candidates.append(p)
+        if len(candidates) >= _DELTAROTO_POOL_CAP:
+            break
+
+    user_rp_filled = sum(
+        1
+        for pid in tracker.user_roster_ids
+        if (pp := board_by_id.get(pid)) is not None and is_reliever(pp)
+    )
+    rp_filled_by_team = {config.team_name: user_rp_filled}
+
+    return RecInputs(
+        candidates=candidates,
+        replacements=replacements,
+        projected_standings=standings,
+        team_sds=team_sds,
+        adp_table=adp_table,
+        rp_filled_by_team=rp_filled_by_team,
+    )
 
 
 class TeamTrackerProxy:
@@ -342,8 +465,6 @@ def run_simulation(
     scarcity_order = ctx["scarcity_order"]
     pick_order = ctx.get("pick_order")  # custom draft order (or None)
 
-    strategy_fn = STRATEGIES[strategy_name]
-
     rng = np.random.default_rng(seed)
     # Per-team ADP boards: each team drafts off its OWN noised view of ADP, so
     # elite players don't fall league-wide (see _build_adp_boards).
@@ -425,20 +546,79 @@ def run_simulation(
             pick_rank = 0 if z < 1.0 else min(3, int(z))
 
         if is_user:
-            pick_name, pid = strategy_fn(
-                board,
-                full_board,
-                tracker,
-                balance,
-                config,
-                team_filled,
-                total_rounds=rounds,
-                scoring_mode=scoring_mode,
-                team_rosters=team_rosters,
-                player_lookup=player_lookup,
-                pick_rank=pick_rank,
-                position_aware=position_aware,
+            # Route the user pick through the unified recommend() seam.
+            # Determine effective scoring mode for the RecommendContext: deltaRoto
+            # strategies are identified by strategy_name regardless of the scoring_mode
+            # arg (sim_deltaroto passes scoring_mode="var" but strategy_name="deltaroto_*").
+            _eff_scoring = (
+                strategy_name if strategy_name in _DELTAROTO_STRATEGY_NAMES else scoring_mode
             )
+
+            if _eff_scoring in _DELTAROTO_STRATEGY_NAMES:
+                # deltaRoto path: build RecInputs per-pick from live sim state,
+                # mirroring make_deltaroto_pick in sim_deltaroto.py exactly.
+                _rec_inputs = _build_deltaroto_rec_inputs(
+                    board, full_board, tracker, config, team_rosters, player_lookup
+                )
+                _ctx = RecommendContext(
+                    scoring_mode=_eff_scoring,
+                    team_name=config.team_name,
+                    picks_until_next=tracker.picks_until_next_turn,
+                    inputs=_rec_inputs,
+                )
+            else:
+                # var/vona path: build RecommendContext from board + tracker state.
+                _filled = get_filled_positions(
+                    tracker.user_roster_ids,
+                    full_board,
+                    roster_slots=config.roster_slots,
+                    player_lookup=player_lookup,
+                )
+                _ctx = RecommendContext(
+                    scoring_mode=_eff_scoring,
+                    team_name=config.team_name,
+                    picks_until_next=tracker.picks_until_next_turn,
+                    board=board,
+                    drafted=list(tracker.drafted_ids),
+                    filled_positions=_filled,
+                    config=config,
+                )
+
+            # Compute open_starters for position-aware gating (matches _choose_rec).
+            if position_aware:
+                _filled_pa = get_filled_positions(
+                    tracker.user_roster_ids,
+                    full_board,
+                    roster_slots=config.roster_slots,
+                    player_lookup=player_lookup,
+                )
+                _open_starters = RosterState.from_dicts(
+                    _filled_pa, config.roster_slots
+                ).unfilled_starter_slots()
+            else:
+                _open_starters = set()
+
+            # Closer count for the closer-family overlays.
+            _closer_count = sum(
+                1
+                for _pid in tracker.user_roster_ids
+                if ((_row := player_lookup.get(_pid)) is not None and (_row.get("sv") or 0) >= 15)
+            )
+
+            _pick = recommend(
+                _ctx,
+                strategy=strategy_name,
+                open_starters=_open_starters,
+                pick_rank=pick_rank,
+                current_round=tracker.current_round,
+                closer_count=_closer_count,
+            )
+            if _pick is not None:
+                pick_name = _pick.name
+                pid = _pick.player_id
+            else:
+                pick_name = None
+                pid = ""
 
             # Strategy noise: sometimes take the 2nd or 3rd rec instead.
             # Normal distribution: ~68% take #1, ~27% take #2, ~4% take #3.

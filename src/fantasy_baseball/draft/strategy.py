@@ -1215,6 +1215,9 @@ OVERLAYS = {
     "closers_avg": overlay_closers_avg,
     "balanced": overlay_balanced,
     "anti_fragile": overlay_anti_fragile,
+    # deltaRoto modes: ranking is the strategy; no extra overlay constraint.
+    "deltaroto_immediate": overlay_default,
+    "deltaroto_vopn": overlay_default,
 }
 
 STRATEGIES = {
