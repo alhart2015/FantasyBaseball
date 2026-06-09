@@ -1,10 +1,12 @@
 """Replay a mock draft pick-by-pick, showing what was available at each user pick.
 
 Usage:
-    python scripts/replay_picks.py                          # latest draft
-    python scripts/replay_picks.py data/drafts/mock_*.json  # specific file
+    python scripts/replay_picks.py                                        # latest draft
+    python scripts/replay_picks.py data/drafts/mock_*.json               # specific file
+    python scripts/replay_picks.py --scoring-mode deltaroto_immediate    # deltaRoto recs
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -28,7 +30,24 @@ HART = None  # set from draft metadata
 
 
 def main():
-    if len(sys.argv) < 2:
+    parser = argparse.ArgumentParser(
+        description="Replay a mock draft pick-by-pick, showing recommendations at each user pick."
+    )
+    parser.add_argument(
+        "draft_file",
+        nargs="?",
+        default=None,
+        help="Path to draft JSON file (default: latest file in data/drafts/)",
+    )
+    parser.add_argument(
+        "--scoring-mode",
+        choices=["var", "vona", "deltaroto_immediate", "deltaroto_vopn"],
+        default="deltaroto_immediate",
+        help="Scoring mode for get_recommendations (default: deltaroto_immediate)",
+    )
+    args = parser.parse_args()
+
+    if args.draft_file is None:
         drafts_dir = PROJECT_ROOT / "data" / "drafts"
         mocks = sorted(drafts_dir.glob("*.json"))
         if not mocks:
@@ -36,7 +55,9 @@ def main():
             sys.exit(1)
         draft_path = mocks[-1]
     else:
-        draft_path = Path(sys.argv[1])
+        draft_path = Path(args.draft_file)
+
+    scoring_mode = args.scoring_mode
 
     with open(draft_path) as f:
         draft_data = json.load(f)
@@ -95,7 +116,7 @@ def main():
                 filled_positions=filled,
                 roster_slots=config.roster_slots,
                 num_teams=config.num_teams,
-                scoring_mode="vona",
+                scoring_mode=scoring_mode,
             )
 
             picked = entry["player"]

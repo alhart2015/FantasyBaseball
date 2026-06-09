@@ -1039,9 +1039,12 @@ def main():
     )
     parser.add_argument(
         "--scoring",
-        choices=["var", "vona"],
+        choices=["var", "vona", "deltaroto_immediate", "deltaroto_vopn"],
         default="vona",
-        help="Scoring mode: 'var' (Value Above Replacement) or 'vona' (Value Over Next Available)",
+        help=(
+            "Scoring mode: 'var' (Value Above Replacement), 'vona' (Value Over Next Available), "
+            "'deltaroto_immediate', or 'deltaroto_vopn'"
+        ),
     )
     parser.add_argument(
         "--monte-carlo",

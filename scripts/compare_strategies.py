@@ -85,7 +85,7 @@ def _print_ranking(results):
 
 def main():
     strategy_names = sorted(STRATEGIES.keys())
-    scoring_modes = ["vona", "var"]
+    scoring_modes = ["var", "vona", "deltaroto_immediate", "deltaroto_vopn"]
     n_combos = len(strategy_names) * len(scoring_modes)
 
     print(f"Strategies: {len(strategy_names)}, modes: {len(scoring_modes)}, workers: {MAX_WORKERS}")
