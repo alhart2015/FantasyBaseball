@@ -740,6 +740,44 @@ def save_simulation_output(
     return str(out_path)
 
 
+def run_user_pick_sequence(*, scoring_mode, strategy, seed, strategy_noise=0.0):
+    """Return the user team's drafted player_ids in pick order for one deterministic draft.
+
+    Calls the real pre-refactor pick path with adp_noise=0.0, strategy_noise as given,
+    and field_noise=False so opponents draft off clean ADP (fully deterministic when
+    strategy_noise=0.0 too).  Used by the golden-master test to pin picks before the
+    Phase 3/4 seam refactor.
+
+    Parameters
+    ----------
+    scoring_mode : str
+        "var" or "vona"
+    strategy : str
+        Key from STRATEGIES (e.g. "default", "two_closers").
+    seed : int
+        RNG seed (passed to run_simulation; determinism is guaranteed by noise=0 but
+        the seed is threaded through for traceability).
+    strategy_noise : float
+        Fraction of picks that deviate from top rec.  0.0 = fully deterministic.
+
+    Returns
+    -------
+    list[str]
+        player_id strings in the order the user team drafted them.
+    """
+    ctx = build_board_and_context()
+    result = run_simulation(
+        ctx,
+        strategy_name=strategy,
+        scoring_mode=scoring_mode,
+        adp_noise=0.0,
+        strategy_noise=strategy_noise,
+        seed=seed,
+        field_noise=False,
+    )
+    return list(result["user_roster_ids"])
+
+
 def main():
     parser = argparse.ArgumentParser(description="Simulate a fantasy baseball draft")
     parser.add_argument(

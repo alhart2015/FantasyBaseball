@@ -257,6 +257,53 @@ def _print_ranking(rows):
         )
 
 
+def run_user_pick_sequence(*, scoring_mode, strategy, seed, strategy_noise=0.0):
+    """Return the user team's drafted player_ids in pick order for one deterministic deltaRoto draft.
+
+    Registers the two deltaRoto strategies into STRATEGIES then delegates to
+    simulate_draft.run_simulation with adp_noise=0.0 and field_noise=False so the
+    draft is fully deterministic (same picks every call).  Used by the golden-master
+    test to pin the pre-refactor deltaRoto pick path before Phase 3/4 consolidation.
+
+    Parameters
+    ----------
+    scoring_mode : str
+        "deltaroto_immediate" or "deltaroto_vopn" (or "var" -- treated as var strategy).
+    strategy : str
+        Key in STRATEGIES after deltaRoto injection.  Use "deltaroto_immediate" or
+        "deltaroto_vopn" for pure deltaRoto; "default" falls through to VAR picks.
+    seed : int
+        RNG seed (passed through for traceability; determinism is guaranteed by noise=0).
+    strategy_noise : float
+        0.0 = fully deterministic.
+
+    Returns
+    -------
+    list[str]
+        player_id strings in the order the user team drafted them.
+    """
+    from simulate_draft import build_board_and_context, run_simulation
+
+    # Inject deltaRoto strategies so STRATEGIES recognises them.
+    for name, attr in DELTAROTO.items():
+        STRATEGIES[name] = make_deltaroto_pick(attr)
+
+    ctx = build_board_and_context()
+    # deltaRoto picks internally under scoring_mode "var" (it overrides the pick fn
+    # entirely), but we accept the caller's scoring_mode label for documentation.
+    run_scoring = "var"
+    result = run_simulation(
+        ctx,
+        strategy_name=strategy,
+        scoring_mode=run_scoring,
+        adp_noise=0.0,
+        strategy_noise=strategy_noise,
+        seed=seed,
+        field_noise=False,
+    )
+    return list(result["user_roster_ids"])
+
+
 def main():
     n_chunks = ITERATIONS // CHUNK_ITERS
     jobs = []  # (label, strat, scoring, position_aware, iters, seed_base)
