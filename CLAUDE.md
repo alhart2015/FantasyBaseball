@@ -28,7 +28,7 @@ pytest -n auto                   # Run the whole suite in parallel (~4x faster; 
 pytest tests/test_sgp/ -v        # Run one test directory
 pytest tests/test_draft/test_board.py::test_apply_keepers -v  # Single test
 python scripts/run_draft_dashboard.py  # Web-only draft dashboard (default port 5050)
-python scripts/run_draft.py      # Legacy interactive CLI + dashboard (kept until Phase 5.2 lands)
+python scripts/run_draft.py      # Legacy interactive CLI + dashboard (web dashboard is the primary path)
 python scripts/run_draft.py --mock --position 8 --teams 10
 python scripts/run_lineup.py     # In-season lineup optimizer (requires Yahoo auth)
 python scripts/simulate_draft.py -s two_closers --scoring-mode vona
