@@ -194,6 +194,10 @@ def rank_for_mode(ctx: RecommendContext) -> list[RankedPick]:
 def to_recs_json(pick: RankedPick) -> dict:
     """Serialize a deltaRoto-mode RankedPick into the exact /api/recs shape
     the dashboard JS expects (immediate_delta + value_of_picking_now top-level)."""
+    if "immediate_delta" not in pick.metrics:
+        raise ValueError(
+            f"to_recs_json requires a deltaRoto-mode pick; got metrics keys {list(pick.metrics)}"
+        )
     return {
         "player_id": pick.player_id,
         "name": pick.name,
