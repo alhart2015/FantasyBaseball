@@ -3,15 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-import pandas as pd
-
 from fantasy_baseball.draft import eroto_recs
 from fantasy_baseball.draft.eroto_recs import RecRow
 from fantasy_baseball.draft.recommender import Recommendation
-from fantasy_baseball.models.player import Player, PlayerType
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import Position
 
 if TYPE_CHECKING:
+    import pandas as pd
+
     from fantasy_baseball.draft.recs_integration import RecInputs
 
 
@@ -88,13 +88,6 @@ def from_recrow(row: RecRow, *, metric: str, player_type: PlayerType) -> RankedP
     )
 
 
-def _candidate_stable_id(player: Player) -> str:
-    """Mirror ``eroto_recs._candidate_id``: yahoo_id when present, else name::type."""
-    if player.yahoo_id:
-        return player.yahoo_id
-    return f"{player.name}::{player.player_type.value}"
-
-
 @dataclass
 class RecommendContext:
     """Everything either ranker needs for one pick.
@@ -128,7 +121,7 @@ def _rank_deltaroto(ctx: RecommendContext) -> list[RankedPick]:
         adp_table=ctx.inputs.adp_table,
         user_rp_filled=ctx.inputs.rp_filled_by_team.get(ctx.team_name, 0),
     )
-    type_by_id = {_candidate_stable_id(c): c.player_type for c in ctx.inputs.candidates}
+    type_by_id = {eroto_recs._candidate_id(c): c.player_type for c in ctx.inputs.candidates}
     picks: list[RankedPick] = []
     for r in rows:
         pt = type_by_id.get(r.player_id)
@@ -136,8 +129,11 @@ def _rank_deltaroto(ctx: RecommendContext) -> list[RankedPick]:
             # Fail loud rather than mislabel a pitcher as a hitter in overlays.
             raise KeyError(f"candidate id {r.player_id!r} ({r.name}) absent from board candidates")
         picks.append(from_recrow(r, metric=metric, player_type=pt))
-    if metric == "value_of_picking_now":
-        picks.sort(key=lambda p: p.score, reverse=True)
+    # Sort by the active metric's score unconditionally. rank_candidates returns
+    # immediate_delta order, but relying on that for immediate mode is a hidden
+    # coupling (the kind of sort assumption that caused pre-PR #127 bugs); score
+    # already mirrors the active metric, so sorting here is correct for all modes.
+    picks.sort(key=lambda p: p.score, reverse=True)
     return picks
 
 
