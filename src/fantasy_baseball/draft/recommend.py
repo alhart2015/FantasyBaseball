@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -167,6 +168,15 @@ def _rank_var_vona(ctx: RecommendContext) -> list[RankedPick]:
         num_teams=ctx.config.num_teams,
         scoring_mode=ctx.scoring_mode,
     )
+    # Build a pid -> sv lookup so closer-family overlays can inspect SV
+    # projections in var/vona mode (per_category["SV"] is empty without this).
+    sv_by_pid: dict[str, float] = {}
+    if "sv" in ctx.board.columns:
+        for pid_col, sv_val in zip(ctx.board["player_id"], ctx.board["sv"], strict=False):
+            if sv_val is not None:
+                with contextlib.suppress(TypeError, ValueError):
+                    sv_by_pid[str(pid_col)] = float(sv_val)
+
     out: list[RankedPick] = []
     for rec in recs:
         pid = id_by_name.get(rec.name)
@@ -174,6 +184,11 @@ def _rank_var_vona(ctx: RecommendContext) -> list[RankedPick]:
             # rec.name came from the same board, so a miss is a real logic error.
             raise KeyError(f"recommendation {rec.name!r} has no player_id on the board")
         rp = from_recommendation(rec, player_id=str(pid))
+        # Populate per_category["SV"] from board so closer-family overlays fire
+        # correctly in var/vona mode (same signal as deltaroto per_category).
+        sv = sv_by_pid.get(str(pid))
+        if sv is not None:
+            rp.per_category = {"SV": sv}
         if ctx.scoring_mode == "vona":
             vona = rec.score if rec.score is not None else rec.var
             rp.metrics = {"vona": vona}

@@ -20,11 +20,9 @@ from fantasy_baseball.data.db import (
 from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.board import apply_keepers, build_draft_board
-from fantasy_baseball.draft.recommender import get_recommendations
-from fantasy_baseball.draft.strategy import (
-    STRATEGIES,
-    build_player_lookup,
-)
+from fantasy_baseball.draft.recommend import RecommendContext, recommend
+from fantasy_baseball.draft.recommender import get_filled_positions, get_recommendations
+from fantasy_baseball.draft.strategy import STRATEGIES
 from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.constants import safe_float as _safe_float
@@ -94,6 +92,8 @@ def _simulate_n_picks(
     """Simulate n user picks using a given strategy, returning picked players.
 
     Opponents draft by ADP between user picks (simple simulation).
+    Routes picks through recommend() so the overlay (STRATEGIES = OVERLAYS) is
+    called with the correct signature.
     """
     tracker = DraftTracker(
         num_teams=config.num_teams,
@@ -101,7 +101,6 @@ def _simulate_n_picks(
         rounds=22,
     )
     balance = CategoryBalance()
-    strategy_fn = STRATEGIES[strategy_name]
     picks = []
 
     # Pre-draft keepers: mark all keeper players as drafted by their teams
@@ -131,19 +130,38 @@ def _simulate_n_picks(
             break
 
         if tracker.is_user_pick:
-            # Build player lookup for strategy
-            player_lookup = build_player_lookup(board, board)
-            name, pid = strategy_fn(
-                board=board,
-                full_board=board,
-                tracker=tracker,
-                balance=balance,
-                config=config,
-                team_filled={},
-                player_lookup=player_lookup,
-                scoring_mode=scoring_mode,
-                total_rounds=22,
+            # Route through recommend() with the strategy overlay.
+            filled = get_filled_positions(
+                tracker.user_roster_ids,
+                board,
+                roster_slots=config.roster_slots,
             )
+            closer_count = sum(
+                1
+                for pid in tracker.user_roster_ids
+                if (row := board[board["player_id"] == pid]).empty is False
+                and row.iloc[0].get("sv", 0) >= CLOSER_SV_THRESHOLD
+            )
+            ctx = RecommendContext(
+                scoring_mode=scoring_mode,
+                team_name=config.team_name,
+                picks_until_next=tracker.picks_until_next_turn,
+                board=board,
+                drafted=list(tracker.drafted_ids),
+                filled_positions=filled,
+                config=config,
+            )
+            _pick = recommend(
+                ctx,
+                strategy=strategy_name,
+                open_starters=set(),
+                pick_rank=0,
+                current_round=tracker.current_round,
+                closer_count=closer_count,
+            )
+            if _pick is None:
+                break
+            name, pid = _pick.name, _pick.player_id
             if name is None:
                 break
 

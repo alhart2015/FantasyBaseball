@@ -349,7 +349,12 @@ def _score_roto(team_players, config, full_board, board, scarcity_order=None):
 
 
 def _parse_opponent_strategies(opp_str):
-    """Parse '1:default,2:three_closers' into {team_num: strategy_fn}."""
+    """Parse '1:default,2:three_closers' into {team_num: strategy_name}.
+
+    Returns a dict mapping team_num (int) to strategy name (str).  The
+    caller routes each opponent pick through recommend() with the named
+    strategy overlay -- the old pick_* direct-call path is gone.
+    """
     opp_strategies = {}
     if not opp_str:
         return opp_strategies
@@ -357,7 +362,7 @@ def _parse_opponent_strategies(opp_str):
         tn_str, strat_name = pair.strip().split(":")
         tn = int(tn_str)
         if strat_name in STRATEGIES:
-            opp_strategies[tn] = STRATEGIES[strat_name]
+            opp_strategies[tn] = strat_name
     return opp_strategies
 
 
@@ -469,15 +474,13 @@ def run_simulation(
     """Run a single draft simulation and return results.
 
     *position_aware*: when True, the recommender-routed pick gates to "fill a
-    starter slot, bench last" (``strategy._choose_rec`` and the deltaRoto
-    adapter). ADP opponents always fill a starter slot first regardless. Only
-    strategies that defer to ``_choose_rec`` (pick_default and the closer
-    strategies that fall through to it) honor it; strategies that select their
-    top recommendation directly are unaffected. *field_noise*: when True, each
-    recommender-routed pick takes the k-th choice from its own ranking via a
-    one-sided normal draw -- z<1 -> top (~84%), 1-2 -> 2nd, 2-3 -> 3rd, >=3 ->
-    4th -- so the strategic field varies across seeds. Same routing caveat as
-    above: forced-closer picks and direct-top-pick strategies ignore it.
+    starter slot, bench last" via recommend()'s select_from_ranked. ADP
+    opponents always fill a starter slot first regardless. Strategy-opponent
+    picks are also routed through recommend() with position_aware gating.
+    *field_noise*: when True, each recommender-routed pick takes the k-th
+    choice from its own ranking via a one-sided normal draw -- z<1 -> top
+    (~84%), 1-2 -> 2nd, 2-3 -> 3rd, >=3 -> 4th. Same routing applies to
+    strategy opponents.
 
     *ctx* is the dict returned by ``build_board_and_context()``.
 
@@ -608,7 +611,7 @@ def run_simulation(
                     config=config,
                 )
 
-            # Compute open_starters for position-aware gating (matches _choose_rec).
+            # Compute open_starters for position-aware gating via select_from_ranked.
             if position_aware:
                 _filled_pa = get_filled_positions(
                     tracker.user_roster_ids,
@@ -697,25 +700,57 @@ def run_simulation(
                 pick_name = "(no pick)"
 
         elif team_num in opp_strategies:
-            opp_fn = opp_strategies[team_num]
+            # Route opponent strategy picks through the unified recommend() seam,
+            # mirroring the user-pick path.  opp_strategies[team_num] is a
+            # strategy NAME (str) after the STRATEGIES = OVERLAYS alias.
+            opp_strat_name = opp_strategies[team_num]
             proxy = TeamTrackerProxy(
                 tracker,
                 opp_roster_names[team_num],
                 opp_rosters[team_num],
             )
-            pick_name, pid = opp_fn(
-                board,
-                full_board,
-                proxy,
-                opp_balances[team_num],
-                config,
-                team_filled,
-                total_rounds=rounds,
-                scoring_mode=scoring_mode,
-                player_lookup=player_lookup,
-                pick_rank=pick_rank,
-                position_aware=position_aware,
+            # Closer count for this opponent team.
+            _opp_closer_count = sum(
+                1
+                for _pid in proxy.user_roster_ids
+                if (
+                    (_orow := player_lookup.get(_pid)) is not None
+                    and _orow.get("sv", 0.0) >= CLOSER_SV_THRESHOLD
+                )
             )
+            _opp_filled = get_filled_positions(
+                proxy.user_roster_ids,
+                full_board,
+                roster_slots=config.roster_slots,
+                player_lookup=player_lookup,
+            )
+            _opp_open_starters = (
+                RosterState.from_dicts(_opp_filled, config.roster_slots).unfilled_starter_slots()
+                if position_aware
+                else set()
+            )
+            _opp_ctx = RecommendContext(
+                scoring_mode=scoring_mode,
+                team_name=f"opp_{team_num}",
+                picks_until_next=proxy.picks_until_next_turn,
+                board=board,
+                drafted=list(drafted_set),
+                filled_positions=_opp_filled,
+                config=config,
+            )
+            _opp_pick = recommend(
+                _opp_ctx,
+                strategy=opp_strat_name,
+                open_starters=_opp_open_starters,
+                pick_rank=pick_rank,
+                current_round=tracker.current_round,
+                closer_count=_opp_closer_count,
+            )
+            if _opp_pick is not None:
+                pick_name = _opp_pick.name
+                pid = _opp_pick.player_id
+            else:
+                pick_name, pid = _first_undrafted(adp_boards[team_num], drafted_set)
             if pick_name is None:
                 pick_name, pid = _first_undrafted(adp_boards[team_num], drafted_set)
 
