@@ -46,7 +46,6 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.db import get_connection
-from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.board import apply_keepers, build_draft_board
 from fantasy_baseball.draft.eroto_recs import is_reliever
 from fantasy_baseball.draft.recommend import RecommendContext, recommend
@@ -534,7 +533,6 @@ def run_simulation(
         user_position=config.draft_position,
         rounds=rounds,
     )
-    balance = CategoryBalance()
     team_filled = {i: {} for i in range(1, config.num_teams + 1)}
     # Track player IDs per team so strategies can monitor league-wide stats
     team_rosters = {i: [] for i in range(1, config.num_teams + 1)}
@@ -548,8 +546,6 @@ def run_simulation(
                 if not matches.empty:
                     best = matches.loc[matches["var"].idxmax()]
                     is_user = keeper.get("team") == config.team_name
-                    if is_user:
-                        balance.add_player(best)
                     tracker.draft_player(best["name"], is_user=is_user, player_id=best["player_id"])
                     _assign_slot(
                         best["positions"], team_filled[num], config.roster_slots, scarcity_order
@@ -559,23 +555,20 @@ def run_simulation(
 
     # Parse opponent strategies
     opp_strategies = _parse_opponent_strategies(opponent_strategies_str)
-    opp_balances = {}
     opp_rosters = {}
     opp_roster_names = {}
     for tn in opp_strategies:
-        opp_balances[tn] = CategoryBalance()
         opp_rosters[tn] = []
         opp_roster_names[tn] = []
 
-    # Add keeper projections to opponent balance trackers
+    # Add keeper projections to opponent strategy trackers
     for keeper in config.keepers:
         for num, name in config.teams.items():
-            if name == keeper["team"] and num in opp_balances:
+            if name == keeper["team"] and num in opp_strategies:
                 norm = normalize_name(keeper["name"])
                 matches = full_board[full_board["name_normalized"] == norm]
                 if not matches.empty:
                     best = matches.loc[matches["var"].idxmax()]
-                    opp_balances[num].add_player(best)
                     opp_rosters[num].append(best["player_id"])
                     opp_roster_names[num].append(best["name"])
                 break
@@ -717,7 +710,6 @@ def run_simulation(
                 drafted_set.add(pid)
                 p = player_lookup.get(pid)
                 if p is not None:
-                    balance.add_player(p)
                     _assign_slot(
                         p["positions"], team_filled[team_num], config.roster_slots, scarcity_order
                     )
@@ -812,7 +804,6 @@ def run_simulation(
                 drafted_set.add(pid)
                 p = player_lookup.get(pid)
                 if p is not None:
-                    opp_balances[team_num].add_player(p)
                     opp_rosters[team_num].append(pid)
                     opp_roster_names[team_num].append(pick_name)
                     _assign_slot(
