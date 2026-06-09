@@ -1,0 +1,359 @@
+{
+  "version": 35,
+  "keepers": [],
+  "picks": [
+    {
+      "pick_number": 1,
+      "round": 1,
+      "team": "Send in the Cavalli",
+      "player_id": "25764::hitter",
+      "player_name": "Bobby Witt Jr.",
+      "position": "SS",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 2,
+      "round": 1,
+      "team": "SkeleThor",
+      "player_id": "22267::pitcher",
+      "player_name": "Tarik Skubal",
+      "position": "P",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 3,
+      "round": 1,
+      "team": "Work in Progress",
+      "player_id": "15640::hitter",
+      "player_name": "Aaron Judge",
+      "position": "OF",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 4,
+      "round": 1,
+      "team": "Jon's Underdogs",
+      "player_id": "20123::hitter",
+      "player_name": "Juan Soto",
+      "position": "OF",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 5,
+      "round": 1,
+      "team": "Boston Estrellas",
+      "player_id": "26668::hitter",
+      "player_name": "Elly De La Cruz",
+      "position": "SS",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 6,
+      "round": 1,
+      "team": "Spacemen",
+      "player_id": "13510::hitter",
+      "player_name": "José Ramírez",
+      "position": "3B",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 7,
+      "round": 1,
+      "team": "Springfield Isotopes",
+      "player_id": "27463::pitcher",
+      "player_name": "Garrett Crochet",
+      "position": "P",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 8,
+      "round": 1,
+      "team": "Hart of the Order",
+      "player_id": "21534::hitter",
+      "player_name": "Cal Raleigh",
+      "position": "C",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 9,
+      "round": 1,
+      "team": "Tortured Baseball Department",
+      "player_id": "33677::pitcher",
+      "player_name": "Paul Skenes",
+      "position": "P",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 10,
+      "round": 1,
+      "team": "Hello Peanuts!",
+      "player_id": "25878::hitter",
+      "player_name": "Corbin Carroll",
+      "position": "OF",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 11,
+      "round": 2,
+      "team": "Hello Peanuts!",
+      "player_id": "23697::hitter",
+      "player_name": "Julio Rodríguez",
+      "position": "OF",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 12,
+      "round": 2,
+      "team": "Tortured Baseball Department",
+      "player_id": "18401::hitter",
+      "player_name": "Ronald Acuña Jr.",
+      "position": "OF",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 13,
+      "round": 2,
+      "team": "Hart of the Order",
+      "player_id": "26289::hitter",
+      "player_name": "Gunnar Henderson",
+      "position": "SS",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 14,
+      "round": 2,
+      "team": "Springfield Isotopes",
+      "player_id": "19709::hitter",
+      "player_name": "Fernando Tatis Jr.",
+      "position": "OF",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 15,
+      "round": 2,
+      "team": "Spacemen",
+      "player_id": "19611::hitter",
+      "player_name": "Vladimir Guerrero Jr.",
+      "position": "1B",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 16,
+      "round": 2,
+      "team": "Boston Estrellas",
+      "player_id": "18345::hitter",
+      "player_name": "Kyle Tucker",
+      "position": "OF",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 17,
+      "round": 2,
+      "team": "Jon's Underdogs",
+      "player_id": "28163::hitter",
+      "player_name": "Junior Caminero",
+      "position": "3B",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 18,
+      "round": 2,
+      "team": "Work in Progress",
+      "player_id": "27769::hitter",
+      "player_name": "Pete Crow-Armstrong",
+      "position": "OF",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 19,
+      "round": 2,
+      "team": "SkeleThor",
+      "player_id": "20454::hitter",
+      "player_name": "Jazz Chisholm Jr.",
+      "position": "2B",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 20,
+      "round": 2,
+      "team": "Send in the Cavalli",
+      "player_id": "16478::hitter",
+      "player_name": "Kyle Schwarber",
+      "position": "OF",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 21,
+      "round": 3,
+      "team": "Send in the Cavalli",
+      "player_id": "12916::hitter",
+      "player_name": "Francisco Lindor",
+      "position": "SS",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 22,
+      "round": 3,
+      "team": "SkeleThor",
+      "player_id": "31347::hitter",
+      "player_name": "Zach Neto",
+      "position": "SS",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 23,
+      "round": 3,
+      "team": "Work in Progress",
+      "player_id": "19251::hitter",
+      "player_name": "Pete Alonso",
+      "position": "1B",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 24,
+      "round": 3,
+      "team": "Jon's Underdogs",
+      "player_id": "30279::pitcher",
+      "player_name": "Bryan Woo",
+      "position": "P",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 25,
+      "round": 3,
+      "team": "Boston Estrellas",
+      "player_id": "35110::hitter",
+      "player_name": "Nick Kurtz",
+      "position": "1B",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 26,
+      "round": 3,
+      "team": "Spacemen",
+      "player_id": "17995::pitcher",
+      "player_name": "Logan Webb",
+      "position": "P",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 27,
+      "round": 3,
+      "team": "Springfield Isotopes",
+      "player_id": "28806::hitter",
+      "player_name": "Jackson Chourio",
+      "position": "OF",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 28,
+      "round": 3,
+      "team": "Hart of the Order",
+      "player_id": "20778::pitcher",
+      "player_name": "Cristopher Sánchez",
+      "position": "P",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 29,
+      "round": 3,
+      "team": "Tortured Baseball Department",
+      "player_id": "16252::hitter",
+      "player_name": "Trea Turner",
+      "position": "SS",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 30,
+      "round": 3,
+      "team": "Hello Peanuts!",
+      "player_id": "19627::hitter",
+      "player_name": "Brent Rooker",
+      "position": "OF",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 31,
+      "round": 4,
+      "team": "Hello Peanuts!",
+      "player_id": "31757::pitcher",
+      "player_name": "Mason Miller",
+      "position": "P",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 32,
+      "round": 4,
+      "team": "Tortured Baseball Department",
+      "player_id": "11579::hitter",
+      "player_name": "Bryce Harper",
+      "position": "1B",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 33,
+      "round": 4,
+      "team": "Hart of the Order",
+      "player_id": "14710::pitcher",
+      "player_name": "Edwin Díaz",
+      "position": "P",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 34,
+      "round": 4,
+      "team": "Springfield Isotopes",
+      "player_id": "22250::pitcher",
+      "player_name": "Logan Gilbert",
+      "position": "P",
+      "timestamp": 1717977600.0,
+      "undone": false
+    },
+    {
+      "pick_number": 35,
+      "round": 4,
+      "team": "Spacemen",
+      "player_id": "10603::pitcher",
+      "player_name": "Chris Sale",
+      "position": "P",
+      "timestamp": 1717977600.0,
+      "undone": false
+    }
+  ],
+  "undo_stack": [],
+  "on_the_clock": "Boston Estrellas",
+  "projected_standings_cache": {}
+}
