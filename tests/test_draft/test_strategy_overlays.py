@@ -602,15 +602,11 @@ def test_anti_fragile_overlay_always_defers():
 
 
 def test_overlays_cover_every_strategy_name():
-    # Every legacy strategy name must have an overlay so config validation and
-    # the unified seam agree on the valid set.
-    #
-    # Task 13 adds deltaroto_immediate and deltaroto_vopn to OVERLAYS so
-    # recommend() can route deltaRoto picks through the unified seam. These
-    # entries do not have legacy pick_* functions in STRATEGIES (they were
-    # dynamically injected by sim_deltaroto.py). The correct constraint is:
-    # every STRATEGIES entry has a matching OVERLAYS entry, but OVERLAYS may
-    # also carry entries for the new unified seam without legacy equivalents.
-    assert set(STRATEGIES).issubset(set(OVERLAYS)), (
-        f"STRATEGIES keys missing from OVERLAYS: {set(STRATEGIES) - set(OVERLAYS)}"
+    # Every strategy name must have a matching overlay and vice-versa.
+    # scoring_mode names (deltaroto_immediate, deltaroto_vopn) are NOT strategies
+    # and must NOT appear in OVERLAYS -- they are dispatched via ctx.scoring_mode.
+    assert set(OVERLAYS) == set(STRATEGIES), (
+        f"OVERLAYS vs STRATEGIES mismatch: "
+        f"extra in OVERLAYS={set(OVERLAYS) - set(STRATEGIES)}, "
+        f"missing from OVERLAYS={set(STRATEGIES) - set(OVERLAYS)}"
     )

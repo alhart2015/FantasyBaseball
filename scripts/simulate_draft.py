@@ -605,9 +605,14 @@ def run_simulation(
                 if ((_row := player_lookup.get(_pid)) is not None and (_row.get("sv") or 0) >= 15)
             )
 
+            # deltaRoto runs use the deltaRoto RANKER (ctx.scoring_mode) with the
+            # default OVERLAY -- scoring mode and strategy are orthogonal axes.
+            _overlay_strategy = (
+                "default" if strategy_name in _DELTAROTO_STRATEGY_NAMES else strategy_name
+            )
             _pick = recommend(
                 _ctx,
-                strategy=strategy_name,
+                strategy=_overlay_strategy,
                 open_starters=_open_starters,
                 pick_rank=pick_rank,
                 current_round=tracker.current_round,
