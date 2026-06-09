@@ -1,8 +1,68 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from fantasy_baseball.config import load_config
+
+
+@pytest.fixture
+def minimal_league_yaml(tmp_path):
+    """Factory that writes a minimal valid league.yaml and returns the Path.
+
+    Usage: path = minimal_league_yaml(scoring_mode="var", strategy="default")
+    """
+
+    def _make(*, scoring_mode: str, strategy: str) -> Path:
+        cfg = {
+            "league": {
+                "id": 1,
+                "num_teams": 10,
+                "game_code": "mlb",
+                "team_name": "Test Team",
+            },
+            "draft": {
+                "strategy": strategy,
+                "scoring_mode": scoring_mode,
+                "position": 1,
+            },
+            "keepers": [],
+            "roster_slots": {
+                "C": 1,
+                "1B": 1,
+                "2B": 1,
+                "3B": 1,
+                "SS": 1,
+                "IF": 1,
+                "OF": 4,
+                "UTIL": 2,
+                "P": 9,
+                "BN": 2,
+                "IL": 2,
+            },
+            "projections": {
+                "systems": ["steamer"],
+                "weights": {"steamer": 1.0},
+            },
+        }
+        path = tmp_path / f"league_{scoring_mode}_{strategy}.yaml"
+        path.write_text(yaml.dump(cfg))
+        return path
+
+    return _make
+
+
+@pytest.mark.parametrize("mode", ["var", "vona", "deltaroto_immediate", "deltaroto_vopn"])
+def test_valid_scoring_modes_accepted(mode, minimal_league_yaml):
+    path = minimal_league_yaml(scoring_mode=mode, strategy="default")
+    cfg = load_config(path)
+    assert cfg.scoring_mode == mode
+
+
+def test_invalid_scoring_mode_rejected(minimal_league_yaml):
+    path = minimal_league_yaml(scoring_mode="bogus", strategy="default")
+    with pytest.raises(ValueError, match="Unknown scoring_mode"):
+        load_config(path)
 
 
 @pytest.fixture
