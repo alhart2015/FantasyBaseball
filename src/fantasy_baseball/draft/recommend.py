@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from fantasy_baseball.draft.eroto_recs import RecRow
 from fantasy_baseball.draft.recommender import Recommendation
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import Position
@@ -46,4 +47,30 @@ def from_recommendation(rec: Recommendation, *, player_id: str) -> RankedPick:
         metrics={"var": rec.var},
         note=rec.note,
         need_flag=rec.need_flag,
+    )
+
+
+_DELTAROTO_METRICS = ("immediate_delta", "value_of_picking_now")
+
+
+def from_recrow(row: RecRow, *, metric: str, player_type: PlayerType) -> RankedPick:
+    """Adapt a deltaRoto ``RecRow`` into a ``RankedPick``.
+
+    ``metric`` selects which native metric becomes ``score``; both are kept
+    in ``metrics`` so the dashboard can display/toggle both.
+    """
+    if metric not in _DELTAROTO_METRICS:
+        raise ValueError(f"metric must be one of {_DELTAROTO_METRICS}, got {metric!r}")
+    metrics = {
+        "immediate_delta": row.immediate_delta,
+        "value_of_picking_now": row.value_of_picking_now,
+    }
+    return RankedPick(
+        player_id=row.player_id,
+        name=row.name,
+        positions=[Position.parse(p) for p in row.positions],
+        player_type=player_type,
+        score=metrics[metric],
+        metrics=metrics,
+        per_category=dict(row.per_category),
     )
