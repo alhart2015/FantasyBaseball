@@ -17,8 +17,6 @@ Four scoring modes, selected via `draft.scoring_mode` in `config/league.yaml`:
 - **deltaroto_immediate** -- ERoto marginal delta, scored as the roto-point gain from drafting the player right now. The PR #127 verdict winner; the validated default (`config/league.yaml` uses this + `default` strategy).
 - **deltaroto_vopn** -- ERoto delta discounted by picks until next turn (Value of Picking Now). Penalizes players whose scarcity window is short relative to queue length.
 
-`deltaroto_immediate` + `default` is the validated default (PR #127 verdict winner) and is what `league.yaml` currently uses.
-
 ## Unified recommend() seam
 
 **All pick sources route through `recommend(ctx, strategy=...)` in `draft/recommend.py`.**
@@ -44,32 +42,7 @@ def overlay_foo(ranked: list[RankedPick], *, roster_state=None, config=None, **k
 
 It returns a `RankedPick` to force that pick, or `None` to defer to the slot-gated greedy selection from the ranked list. The key is a plain string in `OVERLAYS` -- if you rename a strategy, grep for the string literal in config files, simulation scripts, and tests (not just the function name).
 
-Selected via `draft.strategy` in `league.yaml`. Strategies are orthogonal to scoring mode: any strategy can be combined with any scoring mode.
-
-### Strategy port status
-
-**Fully ported (faithful behavior):**
-- `default` -- no override; always defers. Slot-gated greedy on the ranked list.
-- `nonzero_sv`, `two_closers`, `three_closers`, `four_closers` -- closer scheduling by deadline/count.
-- `balanced` -- forces hitter or pitcher when positional skew exceeds `BALANCED_MAX_SKEW` (2).
-- `no_punt_opp` -- available as a valid strategy key but is a documented fallback (see below).
-
-**Partial ports (deadline/cap logic ported; AVG floor deferred):**
-- `no_punt_stagger` -- staggered closer deadlines `[13, 17, 20]` ported faithfully. Missing: team H/AB for AVG floor filter and full dynamic SV-danger check (needs all-team rosters).
-- `no_punt_cap3` -- same staggered deadlines + hard cap at 3 closers ported. Missing: AVG floor filter and post-cap closer exclusion from recs (requires raw board IP/SV stats not on `RankedPick`).
-- `closers_avg` -- three_closers closer gate ported faithfully. Missing: avg_anchor fallback (needs candidate's absolute projected AVG, not available in `per_category` which carries marginal roto-point deltas).
-
-**Documented fallbacks (FIVE strategies defer entirely to default behavior in the unified engine):**
-
-The following five strategies always return `None` and are equivalent to `default` in the current unified engine. They are listed here so future readers know they are NOT faithfully simulated -- the legacy faithful logic was removed when the pick_* registry was replaced by overlays.
-
-1. `no_punt` -- missing: team H/AB totals for AVG floor filter; team_rosters for dynamic SV danger.
-2. `no_punt_opp` -- missing: team_rosters for opponent-relative SV check; absolute AVG stats; ADP context for opportunistic grabs.
-3. `avg_hedge` -- missing: team accumulated H/AB from `balance.get_avg_components()` for AVG floor.
-4. `avg_anchor` -- missing: candidate's absolute projected AVG (`.285+`); `per_category` carries marginal roto-delta, not batting average.
-5. `anti_fragile` -- missing: candidate's absolute projected IP; per_category has no IP (not a roto category).
-
-Threading these signals (team H/AB totals, all-team rosters, absolute AVG/IP projections) into the overlay contract requires changes to every overlay call-site and the sim loop. That work was scoped out; these strategies are placeholders until someone threads those signals.
+Selected via `draft.strategy` in `league.yaml`. Strategies are orthogonal to scoring mode: any strategy can be combined with any scoring mode. Each overlay's docstring states what it does and, if it currently defers, what signal it still needs.
 
 ## Draft dashboard (web-only)
 

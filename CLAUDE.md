@@ -2,6 +2,8 @@
 
 Guidance for Claude Code working in this repository. Subsystem-specific rules live in the nearest `CLAUDE.md` in the tree — Claude Code auto-loads them when you touch files in that directory.
 
+**These `CLAUDE.md` files are for durable instructions, not documentation.** Conventions, how-to, where-to-work, do/don't rules — yes. Point-in-time status, catalogs, port-status tables, architecture write-ups, "currently X" state — no. This file is auto-loaded every session with no timestamp, so status written here rots silently and misleads future sessions (a wrong answer that looks current is worse than none). Put status in code/docstrings, tests, git history, or `TODO.md` instead. If you feel the urge to document something here, that urge is the signal it belongs somewhere else.
+
 ## Correctness over speed
 
 This project makes real decisions (draft picks, lineup choices, trade evaluations) based on the numbers it produces. A wrong answer that looks plausible is worse than no answer — it propagates into strategy recommendations, simulations, and memory files that mislead future sessions. Verify claims against the actual code and config before stating them. When summarizing simulation results or strategy conclusions, check that what you're saying matches what the code actually does and what the config actually says. If you're unsure, read the source — don't guess from memory.
