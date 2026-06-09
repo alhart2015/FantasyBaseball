@@ -43,7 +43,6 @@
 
 # TODO — Draft (post-rework)
 
-- [ ] **Populate `projected_standings_cache` in `apply_pick`** — state key exists and is round-tripped through JSON but no one writes to it yet. Needed for `/api/standings` to return non-empty rows.
 - [ ] **Mock-draft mode** — `?mock=1` query param routing to `draft_state_mock.json` with heuristic AI opponents.
 - [ ] **Post-draft ERoto review** — MC on the completed draft with projected standings + CI. Complement to in-season MC.
 - [ ] **Replace `scripts/analyze_mock.py`** — old script reads the legacy state shape. Rebuild for the new shape (or delete once mock mode lands).

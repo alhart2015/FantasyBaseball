@@ -28,8 +28,7 @@ All pick entry happens in `src/fantasy_baseball/web/app.py`. Launch with
 for auto-reload during development). Before a fresh draft — or any time
 the projection CSVs have changed — pass `--rebuild-board` once to
 regenerate `data/draft_state_board.json` from the SQLite projections
-pipeline. The legacy CLI (`scripts/run_draft.py`) is still available as
-a fallback.
+pipeline. A legacy CLI fallback lives at `scripts/run_draft.py`.
 
 - `draft_state.json` — snapshot written atomically by the Flask writer
   endpoints on every pick. Reader (the browser JS) polls
@@ -38,7 +37,7 @@ a fallback.
   on `/api/new-draft`).
 - `draft_state_delta.json` — per-version deltas.
 
-State shape (new in 2026-04-24): `keepers`, `picks`, `on_the_clock`,
+State shape: `keepers`, `picks`, `on_the_clock`,
 `undo_stack`, `projected_standings_cache`. The legacy `recommendations`
 and `balance` fields are still tolerated by readers so the simulator
 (unchanged) keeps working.
@@ -51,9 +50,10 @@ Writer endpoints in `web/app.py`:
 - `GET /api/recs?team=<name>` — top 10 ERoto-delta candidates (returns
   503 if the cached board is missing — run `--rebuild-board` once).
 - `GET /api/roster?team=<name>` — slots + replacement placeholders.
-- `GET /api/standings` — fractional ERoto per team with uncertainty SDs
-  (currently empty until `projected_standings_cache` is populated by
-  `apply_pick` — see the post-rework TODOs).
+- `GET /api/standings` — fractional ERoto per team with uncertainty SDs,
+  read from `projected_standings_cache`. The cache is refreshed on every
+  writer endpoint via `_attach_standings_cache` (best-effort: swallows
+  errors so a pick can never fail on standings wiring).
 
 If you change the state shape, both the writer
 (`draft/draft_controller.py` + `draft/state.py`) and the reader
