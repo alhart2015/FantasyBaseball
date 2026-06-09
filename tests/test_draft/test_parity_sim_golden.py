@@ -1,27 +1,28 @@
-"""Pre-refactor simulator golden. Pins the user team's pick sequence for a
-fixed seed WITH team_sds so P3/P4 prove the seam reproduces pre-refactor picks.
+"""Simulator golden tests. Pins the user team's pick sequence for a fixed seed
+WITH team_sds so P3/P4 prove the seam reproduces pre-refactor picks.
 Generated against simulate_draft.py (var) + sim_deltaroto.py (deltaRoto) before
-Phase 3; re-pointed at the consolidated sim in Task 14.
+Phase 3; re-pointed at the consolidated simulate_draft.run_user_pick_sequence
+in Task 14 so both goldens run through a single entry point.
 
 Determinism guarantee
 ---------------------
-Both wrappers set adp_noise=0.0, strategy_noise=0.0, field_noise=False.
-All randomness is disabled -- opponent teams draft in clean-ADP order and the
-user always picks the top recommendation.  The seed parameter is threaded
-through for traceability but has no effect when all noise is zero.
+Both tests set adp_noise=0.0, strategy_noise=0.0, field_noise=False (all noise
+off).  Opponent teams draft in clean-ADP order and the user always picks the top
+recommendation.  The seed parameter is threaded through for traceability but has
+no effect when all noise is zero.
 
 Golden capture
 --------------
 First run writes fixtures/sim_golden_var.json and
-fixtures/sim_golden_deltaroto.json from the pre-refactor pick path; every
-subsequent run compares byte-for-byte.  Delete the JSON files to re-capture
-(only do this intentionally, after verifying the new output is correct).
+fixtures/sim_golden_deltaroto.json; every subsequent run compares byte-for-byte.
+Delete the JSON files to re-capture (only do this intentionally, after verifying
+the new output is correct).
 """
 
 import json
 from pathlib import Path
 
-from scripts.simulate_draft import run_user_pick_sequence as varvona_seq
+from scripts.simulate_draft import run_user_pick_sequence
 
 FIX = Path(__file__).parent / "fixtures"
 
@@ -50,13 +51,18 @@ def _assert_golden(seq, name):
 
 def test_sim_var_picks_match_golden():
     """Pin the VAR-mode user pick sequence."""
-    seq = varvona_seq(scoring_mode="var", strategy="default", seed=SEED)
+    seq = run_user_pick_sequence(scoring_mode="var", strategy="default", seed=SEED)
     _assert_golden(seq, "sim_golden_var.json")
 
 
 def test_sim_deltaroto_picks_match_golden():
-    """Pin the deltaRoto-immediate user pick sequence."""
-    from scripts.sim_deltaroto import run_user_pick_sequence as dr_seq
+    """Pin the deltaRoto-immediate user pick sequence via the consolidated harness.
 
-    seq = dr_seq(scoring_mode="deltaroto_immediate", strategy="deltaroto_immediate", seed=SEED)
+    Task 14: simulate_draft.run_user_pick_sequence now serves all four scoring
+    modes natively.  sim_deltaroto.py is no longer needed for golden verification
+    (it will be deleted in Task 15).
+    """
+    seq = run_user_pick_sequence(
+        scoring_mode="deltaroto_immediate", strategy="deltaroto_immediate", seed=SEED
+    )
     _assert_golden(seq, "sim_golden_deltaroto.json")

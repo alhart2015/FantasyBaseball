@@ -8,6 +8,29 @@ Usage:
 - Roster limits are enforced for all teams.
 
 Outputs projected roto standings at the end.
+
+Module organisation
+-------------------
+Three concerns are separated as named free functions:
+
+1. **Draft harness** -- ``run_simulation()`` orchestrates the pick loop for all
+   four scoring modes (var, vona, deltaroto_immediate, deltaroto_vopn).  The
+   user pick is routed through the unified ``recommend()`` seam.
+   ``run_user_pick_sequence()`` is the thin deterministic wrapper used by the
+   golden tests.
+
+2. **Field / opponent selection** -- ADP opponents are handled inside
+   ``run_simulation`` via ``_build_adp_boards()``, ``_first_undrafted()``,
+   ``_can_fill_active_slot()``, and ``_can_roster()``.  Opponents draft in
+   clean ADP order (no recommend() call) so the golden pick sequences are
+   stable.  Optional strategy opponents use ``_parse_opponent_strategies()``
+   and ``TeamTrackerProxy``.
+
+3. **Reporting / standings** -- ``_score_roto()`` projects roto standings from
+   drafted rosters using position-aware active-roster selection
+   (``_select_active_players()``, ``_assign_slot()``) and
+   ``score_roto_dict()``.  ``save_simulation_output()`` persists full output
+   for post-analysis.
 """
 
 import argparse
@@ -932,20 +955,22 @@ def save_simulation_output(
 def run_user_pick_sequence(*, scoring_mode, strategy, seed, strategy_noise=0.0):
     """Return the user team's drafted player_ids in pick order for one deterministic draft.
 
-    Calls the real pre-refactor pick path with adp_noise=0.0, strategy_noise as given,
-    and field_noise=False so opponents draft off clean ADP (fully deterministic when
-    strategy_noise=0.0 too).  Used by the golden-master test to pin picks before the
-    Phase 3/4 seam refactor.
+    Serves all four scoring modes natively (var, vona, deltaroto_immediate,
+    deltaroto_vopn).  Sets adp_noise=0.0 and field_noise=False so opponents draft
+    in clean ADP order; with strategy_noise=0.0 (the default) the draft is fully
+    deterministic -- the seed is threaded through for traceability but has no effect
+    when all noise is zero.
 
     Parameters
     ----------
     scoring_mode : str
-        "var" or "vona"
+        One of "var", "vona", "deltaroto_immediate", "deltaroto_vopn".
+        For deltaRoto modes, pass the same value for both scoring_mode and strategy.
     strategy : str
-        Key from STRATEGIES (e.g. "default", "two_closers").
+        Key from STRATEGIES (e.g. "default", "two_closers") for var/vona modes, or
+        "deltaroto_immediate" / "deltaroto_vopn" for the deltaRoto engine.
     seed : int
-        RNG seed (passed to run_simulation; determinism is guaranteed by noise=0 but
-        the seed is threaded through for traceability).
+        RNG seed (passed to run_simulation; has no effect when all noise is zero).
     strategy_noise : float
         Fraction of picks that deviate from top rec.  0.0 = fully deterministic.
 

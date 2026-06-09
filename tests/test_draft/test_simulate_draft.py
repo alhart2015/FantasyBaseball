@@ -2,43 +2,40 @@
 
 These tests exercise run_simulation end-to-end to verify that the unified
 recommend() seam works for all scoring modes. Goldens (test_parity_sim_golden.py)
-pin exact pick sequences; these tests verify that a full draft completes.
+pin exact pick sequences; these tests verify that a full draft completes and that
+the variance model behaves correctly.
+
+Variance model
+--------------
+With all noise off (adp_noise=0.0, strategy_noise=0.0, field_noise=False) the
+draft is fully deterministic -- the seed has no effect and every call with any
+seed produces identical picks.  Enabling adp_noise jitters each team's per-player
+ADP draw independently, so different seeds yield different opponent selections and
+therefore different available pools for the user, producing different user rosters.
 """
 
-from fantasy_baseball.draft.strategy import STRATEGIES
-from scripts.sim_deltaroto import DELTAROTO
-from scripts.simulate_draft import build_board_and_context, run_simulation
+from scripts.simulate_draft import build_board_and_context, run_simulation, run_user_pick_sequence
 
 
 def test_deltaroto_immediate_draft_completes():
     """A deltaroto_immediate draft runs end-to-end and populates all rosters.
 
-    Regression guard: the recommend() seam must handle the deltaRoto path
-    (RecInputs per pick, scoring_mode="deltaroto_immediate") without crashing
-    and must return a complete roster for every team.
+    Task 14: uses the consolidated harness directly -- no sim_deltaroto strategy
+    injection needed.  The recommend() seam handles the deltaRoto path natively
+    (RecInputs per pick, scoring_mode="deltaroto_immediate").
     """
-    saved = dict(STRATEGIES)
-    try:
-        for name, attr in DELTAROTO.items():
-            from scripts.sim_deltaroto import make_deltaroto_pick
+    ctx = build_board_and_context()
+    config = ctx["config"]
 
-            STRATEGIES[name] = make_deltaroto_pick(attr)
-
-        ctx = build_board_and_context()
-        config = ctx["config"]
-
-        result = run_simulation(
-            ctx,
-            strategy_name="deltaroto_immediate",
-            scoring_mode="var",  # sim_deltaroto runs under "var" scoring_mode
-            adp_noise=0.0,
-            strategy_noise=0.0,
-            seed=42,
-            field_noise=False,
-        )
-    finally:
-        STRATEGIES.clear()
-        STRATEGIES.update(saved)
+    result = run_simulation(
+        ctx,
+        strategy_name="deltaroto_immediate",
+        scoring_mode="deltaroto_immediate",
+        adp_noise=0.0,
+        strategy_noise=0.0,
+        seed=42,
+        field_noise=False,
+    )
 
     # Every team must have drafted at least one player
     team_players = result["team_players"]
@@ -82,3 +79,67 @@ def test_var_draft_completes():
     assert result["user_roster_ids"], "User roster_ids is empty"
     assert len(result["results"]) == config.num_teams
     assert result["pts"] > 0
+
+
+def test_noise_off_is_fully_deterministic():
+    """With all noise off, different seeds produce identical pick sequences.
+
+    This pins the variance model: adp_noise=0.0, strategy_noise=0.0,
+    field_noise=False means the RNG is never consulted.  The seed argument is
+    accepted for traceability but has zero effect on the output.  Tested for
+    both var and deltaroto_immediate modes.
+    """
+    seq_var_42 = run_user_pick_sequence(scoring_mode="var", strategy="default", seed=42)
+    seq_var_99 = run_user_pick_sequence(scoring_mode="var", strategy="default", seed=99)
+    assert seq_var_42 == seq_var_99, (
+        "var mode: noise-off draft must be identical across seeds; "
+        "seed 42 and seed 99 diverged at first differing position"
+    )
+
+    seq_dr_42 = run_user_pick_sequence(
+        scoring_mode="deltaroto_immediate", strategy="deltaroto_immediate", seed=42
+    )
+    seq_dr_99 = run_user_pick_sequence(
+        scoring_mode="deltaroto_immediate", strategy="deltaroto_immediate", seed=99
+    )
+    assert seq_dr_42 == seq_dr_99, (
+        "deltaroto_immediate mode: noise-off draft must be identical across seeds; "
+        "seed 42 and seed 99 diverged at first differing position"
+    )
+
+
+def test_adp_noise_on_different_seeds_diverge():
+    """With adp_noise enabled, different seeds produce different user rosters.
+
+    Each team draws its own per-player ADP jitter from the seeded RNG, so
+    opponent draft order varies across seeds.  The user's available pool changes
+    accordingly, producing a different pick sequence.  This pins the variance
+    model: noise ON + different seeds -> different outcomes.
+    """
+    ctx = build_board_and_context()
+
+    r42 = run_simulation(
+        ctx,
+        strategy_name="default",
+        scoring_mode="var",
+        adp_noise=20.0,
+        strategy_noise=0.0,
+        seed=42,
+        field_noise=False,
+    )
+    r99 = run_simulation(
+        ctx,
+        strategy_name="default",
+        scoring_mode="var",
+        adp_noise=20.0,
+        strategy_noise=0.0,
+        seed=99,
+        field_noise=False,
+    )
+
+    ids42 = list(r42["user_roster_ids"])
+    ids99 = list(r99["user_roster_ids"])
+    assert ids42 != ids99, (
+        "adp_noise=20.0 with different seeds must produce different user rosters; "
+        "seeds 42 and 99 produced identical picks -- noise may not be seeded correctly"
+    )
