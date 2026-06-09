@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
+import pandas as pd
+
+from fantasy_baseball.draft import eroto_recs
 from fantasy_baseball.draft.eroto_recs import RecRow
 from fantasy_baseball.draft.recommender import Recommendation
-from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import Position
+
+if TYPE_CHECKING:
+    from fantasy_baseball.draft.recs_integration import RecInputs
 
 
 @dataclass
@@ -52,6 +59,11 @@ def from_recommendation(rec: Recommendation, *, player_id: str) -> RankedPick:
 
 _DELTAROTO_METRICS = ("immediate_delta", "value_of_picking_now")
 
+_DELTAROTO_MODES = {
+    "deltaroto_immediate": "immediate_delta",
+    "deltaroto_vopn": "value_of_picking_now",
+}
+
 
 def from_recrow(row: RecRow, *, metric: str, player_type: PlayerType) -> RankedPick:
     """Adapt a deltaRoto ``RecRow`` into a ``RankedPick``.
@@ -74,3 +86,63 @@ def from_recrow(row: RecRow, *, metric: str, player_type: PlayerType) -> RankedP
         metrics=metrics,
         per_category=dict(row.per_category),
     )
+
+
+def _candidate_stable_id(player: Player) -> str:
+    """Mirror ``eroto_recs._candidate_id``: yahoo_id when present, else name::type."""
+    if player.yahoo_id:
+        return player.yahoo_id
+    return f"{player.name}::{player.player_type.value}"
+
+
+@dataclass
+class RecommendContext:
+    """Everything either ranker needs for one pick.
+
+    deltaRoto modes use ``inputs`` (a ``RecInputs``); var/vona modes use the
+    pandas ``board`` + ``drafted`` + ``filled_positions`` + ``config``. The
+    caller fills whichever the active mode requires; ``rank_for_mode`` validates.
+    """
+
+    scoring_mode: str
+    team_name: str
+    picks_until_next: int
+    inputs: RecInputs | None = None
+    board: pd.DataFrame | None = None
+    drafted: list[str] = field(default_factory=list)
+    filled_positions: dict[str, int] | None = None
+    config: Any = None
+
+
+def _rank_deltaroto(ctx: RecommendContext) -> list[RankedPick]:
+    if ctx.inputs is None:
+        raise ValueError(f"scoring_mode {ctx.scoring_mode!r} requires inputs (RecInputs)")
+    metric = _DELTAROTO_MODES[ctx.scoring_mode]
+    rows = eroto_recs.rank_candidates(
+        candidates=ctx.inputs.candidates,
+        replacements=ctx.inputs.replacements,
+        team_name=ctx.team_name,
+        projected_standings=ctx.inputs.projected_standings,
+        team_sds=ctx.inputs.team_sds,
+        picks_until_next_turn=ctx.picks_until_next,
+        adp_table=ctx.inputs.adp_table,
+        user_rp_filled=ctx.inputs.rp_filled_by_team.get(ctx.team_name, 0),
+    )
+    type_by_id = {_candidate_stable_id(c): c.player_type for c in ctx.inputs.candidates}
+    picks: list[RankedPick] = []
+    for r in rows:
+        pt = type_by_id.get(r.player_id)
+        if pt is None:
+            # Fail loud rather than mislabel a pitcher as a hitter in overlays.
+            raise KeyError(f"candidate id {r.player_id!r} ({r.name}) absent from board candidates")
+        picks.append(from_recrow(r, metric=metric, player_type=pt))
+    if metric == "value_of_picking_now":
+        picks.sort(key=lambda p: p.score, reverse=True)
+    return picks
+
+
+def rank_for_mode(ctx: RecommendContext) -> list[RankedPick]:
+    """Single dispatcher: rank the candidate pool for ``ctx.scoring_mode``."""
+    if ctx.scoring_mode in _DELTAROTO_MODES:
+        return _rank_deltaroto(ctx)
+    raise ValueError(f"unknown scoring_mode {ctx.scoring_mode!r}")
