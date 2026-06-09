@@ -12,12 +12,10 @@ See src/fantasy_baseball/draft/CLAUDE.md for full strategy port status.
 
 import pandas as pd
 
-from fantasy_baseball.draft.roster_state import RosterState, get_filled_positions
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.constants import safe_float as _safe
 from fantasy_baseball.utils.positions import can_fill_slot
-from fantasy_baseball.utils.rate_stats import calculate_avg
 
 # Draft a closer by this round if you have none
 CLOSER_DEADLINE_ROUND = 10
@@ -101,154 +99,6 @@ def _count_closers(tracker, board, full_board, player_lookup=None):
         if row is not None and _safe(row.get("sv")) >= CLOSER_SV_THRESHOLD:
             count += 1
     return count
-
-
-def _count_hitters(tracker, board, full_board, player_lookup=None):
-    """Count hitters on the user's roster."""
-    if player_lookup is None:
-        player_lookup = build_player_lookup(board, full_board)
-    count = 0
-    for pid in tracker.user_roster_ids:
-        row = player_lookup.get(pid)
-        if row is not None and row.get("player_type") == PlayerType.HITTER:
-            count += 1
-    return count
-
-
-def _count_pitchers(tracker, board, full_board, player_lookup=None):
-    """Count pitchers on the user's roster."""
-    return len(tracker.user_roster) - _count_hitters(tracker, board, full_board, player_lookup)
-
-
-def _sv_in_danger(tracker, board, full_board, team_rosters, num_teams, player_lookup=None):
-    """Check if our projected SV would finish in the danger zone.
-
-    Returns True if:
-    - At least NO_PUNT_SV_MIN_TEAMS_WITH_CLOSERS teams have drafted closers, AND
-    - Our team would finish in the bottom NO_PUNT_SV_DANGER_ZONE in SV.
-
-    This avoids panic-triggering early when nobody has closers yet.
-    """
-    if not team_rosters:
-        return False
-
-    if player_lookup is None:
-        player_lookup = build_player_lookup(board, full_board)
-
-    # Project SV for each team from their current roster
-    team_sv = {}
-    teams_with_closers = 0
-    user_team = None
-    for tn, pids in team_rosters.items():
-        sv_total = 0
-        for pid in pids:
-            row = player_lookup.get(pid)
-            if row is not None:
-                sv_total += row.get("sv", 0)
-        team_sv[tn] = sv_total
-        if sv_total >= CLOSER_SV_THRESHOLD:
-            teams_with_closers += 1
-
-    # Identify user team via set intersection
-    for tn, pids in team_rosters.items():
-        if set(pids) & set(tracker.user_roster_ids):
-            user_team = tn
-            break
-
-    if user_team is None or teams_with_closers < NO_PUNT_SV_MIN_TEAMS_WITH_CLOSERS:
-        return False
-
-    # Count how many teams have more SV than us
-    our_sv = team_sv.get(user_team, 0)
-    teams_above = sum(1 for tn, sv in team_sv.items() if sv > our_sv and tn != user_team)
-    our_rank = teams_above + 1  # 1 = most SV, num_teams = least
-
-    return our_rank > num_teams - NO_PUNT_SV_DANGER_ZONE
-
-
-def _force_closer(board, tracker, full_board, config, player_lookup=None):
-    """Pick the best available closer by VAR. Returns (name, pid) or None."""
-    available = board[~board["player_id"].isin(tracker.drafted_ids)]
-    closers = available[available["sv"].fillna(0) >= CLOSER_SV_THRESHOLD]
-    if closers.empty:
-        return None
-    closers = closers.sort_values("var", ascending=False)
-    filled = get_filled_positions(
-        tracker.user_roster_ids,
-        full_board,
-        roster_slots=config.roster_slots,
-        player_lookup=player_lookup,
-    )
-    roster_state = RosterState.from_dicts(filled, config.roster_slots)
-    for _, best in closers.iterrows():
-        if roster_state.any_slot_open_for(best["positions"]):
-            return best["name"], best["player_id"]
-    return None
-
-
-def _fallback_non_closer(board, tracker, full_board, config):
-    """Pick the best available non-closer by VAR. Returns (name, pid) or (None, None).
-
-    Searches the full board (not just top recs) for a non-closer who can
-    fill an open roster slot.  This ensures the closer cap is respected
-    even when the recommendation engine returns empty.
-    """
-    available = board[~board["player_id"].isin(tracker.drafted_ids)]
-    non_closers = available[available["sv"].fillna(0) < CLOSER_SV_THRESHOLD]
-    filled = get_filled_positions(
-        tracker.user_roster_ids,
-        full_board,
-        roster_slots=config.roster_slots,
-    )
-    roster_state = RosterState.from_dicts(filled, config.roster_slots)
-    if not non_closers.empty:
-        for _, best in non_closers.sort_values("var", ascending=False).head(50).iterrows():
-            if roster_state.any_slot_open_for(best["positions"]):
-                return best["name"], best["player_id"]
-    # Also check full_board for players not on the draft board
-    # (e.g. low-projection players filtered during board construction)
-    avail_full = full_board[~full_board["player_id"].isin(tracker.drafted_ids)]
-    non_closers_full = avail_full[avail_full["sv"].fillna(0) < CLOSER_SV_THRESHOLD]
-    if not non_closers_full.empty:
-        for _, best in non_closers_full.sort_values("var", ascending=False).head(50).iterrows():
-            if roster_state.any_slot_open_for(best["positions"]):
-                return best["name"], best["player_id"]
-    return None, None
-
-
-def _pick_with_avg_floor(recs, board, balance, avg_floor, player_lookup=None):
-    """Select the first rec that keeps team AVG above the floor.
-
-    Pitchers are always acceptable (they don't affect AVG).
-    Returns (name, player_id).
-    """
-    current_h, current_ab = balance.get_avg_components()
-
-    for rec in recs:
-        if rec.player_type != PlayerType.HITTER:
-            return rec.name, _lookup_pid(board, rec.name, player_lookup)
-
-        rows = board[board["name"] == rec.name]
-        if rows.empty:
-            continue
-        player = rows.iloc[0]
-        new_h = current_h + player.get("h", 0)
-        new_ab = current_ab + player.get("ab", 0)
-        projected_avg = calculate_avg(new_h, new_ab)
-
-        if projected_avg >= avg_floor or current_ab == 0:
-            return rec.name, _lookup_pid(board, rec.name, player_lookup)
-
-    return recs[0].name, _lookup_pid(board, recs[0].name, player_lookup)
-
-
-def _lookup_pid(board, name, name_to_pid=None):
-    if name_to_pid is not None and name in name_to_pid:
-        return name_to_pid[name]
-    rows = board[board["name"] == name]
-    if not rows.empty:
-        return rows.iloc[0]["player_id"]
-    return name + "::unknown"
 
 
 def overlay_default(ranked, *, roster_state=None, config=None, **kwargs):

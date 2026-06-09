@@ -143,3 +143,36 @@ def test_adp_noise_on_different_seeds_diverge():
         "adp_noise=20.0 with different seeds must produce different user rosters; "
         "seeds 42 and 99 produced identical picks -- noise may not be seeded correctly"
     )
+
+
+def test_deltaroto_immediate_with_strategic_opponents_completes():
+    """A deltaroto_immediate draft with strategic opponents runs without raising.
+
+    Regression test for the opponent reroute crash: when scoring_mode is a
+    deltaRoto mode and opponent_strategies_str is non-empty, the opponent pick
+    path must build RecInputs (not fall through to the board-only ctx, which
+    raises ValueError: requires inputs).  Uses a minimal opponent string that
+    assigns two_closers strategy to one opponent team (team 1).
+    """
+    ctx = build_board_and_context()
+    config = ctx["config"]
+
+    # Route one opponent team through the strategy path so the deltaRoto
+    # opponent reroute fires at least once.
+    user_pos = config.draft_position
+    opp_team = 1 if user_pos != 1 else 2
+    opp_str = f"{opp_team}:two_closers"
+
+    result = run_simulation(
+        ctx,
+        strategy_name="deltaroto_immediate",
+        scoring_mode="deltaroto_immediate",
+        adp_noise=0.0,
+        strategy_noise=0.0,
+        seed=42,
+        field_noise=False,
+        opponent_strategies_str=opp_str,
+    )
+
+    assert len(result["results"]) == config.num_teams
+    assert result["pts"] > 0

@@ -34,10 +34,7 @@ from fantasy_baseball.draft.state import serialize_board, serialize_state, write
 from fantasy_baseball.draft.strategy import (
     NO_PUNT_AVG_FLOOR,
     OPP_CLOSER_ADP_BUFFER,
-    STRATEGIES,
     _count_closers,
-    _force_closer,
-    _sv_in_danger,
 )
 from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.models.player import PlayerType

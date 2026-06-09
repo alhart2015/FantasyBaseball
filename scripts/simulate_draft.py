@@ -116,8 +116,18 @@ def _sim_static_inputs(board, config):
     return cached
 
 
-def _build_deltaroto_rec_inputs(board, full_board, tracker, config, team_rosters, player_lookup):
-    """Build a RecInputs object for the deltaRoto user pick.
+def _build_deltaroto_rec_inputs(
+    board,
+    full_board,
+    tracker,
+    config,
+    team_rosters,
+    player_lookup,
+    *,
+    team_name=None,
+    roster_ids=None,
+):
+    """Build a RecInputs object for a deltaRoto pick (user or opponent).
 
     Mirrors make_deltaroto_pick from sim_deltaroto.py exactly so the rerouted
     recommend() call produces the same candidate pool, standings, and team_sds as
@@ -125,9 +135,25 @@ def _build_deltaroto_rec_inputs(board, full_board, tracker, config, team_rosters
 
     The candidate list is: top _DELTAROTO_POOL_CAP undrafted, roster-legal players
     by VAR order (matching POOL_CAP=200 in sim_deltaroto).
+
+    Parameters
+    ----------
+    team_name:
+        Name of the team picking now. Defaults to config.team_name (the user's
+        team). Pass the opponent's display name (e.g. ``f"opp_{team_num}"``) to
+        build inputs for an opponent pick.
+    roster_ids:
+        Player IDs already on the picking team's roster. Defaults to
+        tracker.user_roster_ids. Pass the opponent's roster ID list for opponent
+        picks so candidate legality is evaluated against the correct roster.
     """
     from fantasy_baseball.draft.recs_integration import RecInputs
     from fantasy_baseball.draft.state import StateKey
+
+    if team_name is None:
+        team_name = config.team_name
+    if roster_ids is None:
+        roster_ids = tracker.user_roster_ids
 
     board_by_id, replacements, adp_table, ordered_pids, team_names = _sim_static_inputs(
         board, config
@@ -145,11 +171,11 @@ def _build_deltaroto_rec_inputs(board, full_board, tracker, config, team_rosters
     standings = build_projected_standings(rosters)
     team_sds = build_team_sds(rosters, sd_scale=1.0)
 
-    # Candidate pool: undrafted, roster-legal for the user team, top-N by VAR.
+    # Candidate pool: undrafted, roster-legal for the picking team, top-N by VAR.
     # Mirrors make_deltaroto_pick candidate filtering so the candidate list is identical.
     drafted = set(tracker.drafted_ids)
     filled = get_filled_positions(
-        tracker.user_roster_ids,
+        roster_ids,
         full_board,
         roster_slots=config.roster_slots,
         player_lookup=player_lookup,
@@ -170,12 +196,10 @@ def _build_deltaroto_rec_inputs(board, full_board, tracker, config, team_rosters
         if len(candidates) >= _DELTAROTO_POOL_CAP:
             break
 
-    user_rp_filled = sum(
-        1
-        for pid in tracker.user_roster_ids
-        if (pp := board_by_id.get(pid)) is not None and is_reliever(pp)
+    rp_filled = sum(
+        1 for pid in roster_ids if (pp := board_by_id.get(pid)) is not None and is_reliever(pp)
     )
-    rp_filled_by_team = {config.team_name: user_rp_filled}
+    rp_filled_by_team = {team_name: rp_filled}
 
     return RecInputs(
         candidates=candidates,
@@ -215,6 +239,10 @@ class TeamTrackerProxy:
     @property
     def total_picks(self):
         return self._real.total_picks
+
+    @property
+    def picks_until_next_turn(self):
+        return self._real.picks_until_next_turn
 
 
 def _active_slot_counts(roster_slots):
@@ -572,15 +600,13 @@ def run_simulation(
             z = rng.normal(0.0, 1.0)
             pick_rank = 0 if z < 1.0 else min(3, int(z))
 
-        if is_user:
-            # Route the user pick through the unified recommend() seam.
-            # Determine effective scoring mode for the RecommendContext: deltaRoto
-            # strategies are identified by strategy_name regardless of the scoring_mode
-            # arg (sim_deltaroto passes scoring_mode="var" but strategy_name="deltaroto_*").
-            _eff_scoring = (
-                strategy_name if strategy_name in _DELTAROTO_STRATEGY_NAMES else scoring_mode
-            )
+        # Determine effective scoring mode once per pick -- shared by both the user
+        # and any strategy-opponent pick below.  deltaRoto strategies are identified
+        # by strategy_name regardless of the scoring_mode arg (sim_deltaroto passes
+        # scoring_mode="var" but strategy_name="deltaroto_*").
+        _eff_scoring = strategy_name if strategy_name in _DELTAROTO_STRATEGY_NAMES else scoring_mode
 
+        if is_user:
             if _eff_scoring in _DELTAROTO_STRATEGY_NAMES:
                 # deltaRoto path: build RecInputs per-pick from live sim state,
                 # mirroring make_deltaroto_pick in sim_deltaroto.py exactly.
@@ -704,6 +730,9 @@ def run_simulation(
             # mirroring the user-pick path.  opp_strategies[team_num] is a
             # strategy NAME (str) after the STRATEGIES = OVERLAYS alias.
             opp_strat_name = opp_strategies[team_num]
+            # Use the real team name from config so deltaRoto inputs can look
+            # the team up in projected_standings (keyed by config.teams values).
+            opp_team_name = config.teams.get(team_num, f"opp_{team_num}")
             proxy = TeamTrackerProxy(
                 tracker,
                 opp_roster_names[team_num],
@@ -729,15 +758,39 @@ def run_simulation(
                 if position_aware
                 else set()
             )
-            _opp_ctx = RecommendContext(
-                scoring_mode=scoring_mode,
-                team_name=f"opp_{team_num}",
-                picks_until_next=proxy.picks_until_next_turn,
-                board=board,
-                drafted=list(drafted_set),
-                filled_positions=_opp_filled,
-                config=config,
-            )
+            # Mirror the user pick's scoring-mode dispatch: when the effective
+            # scoring mode is a deltaRoto mode, the opponent also needs RecInputs.
+            # deltaRoto strategies always use the "default" overlay (scoring mode
+            # and strategy are orthogonal); non-deltaRoto strategies keep their
+            # assigned overlay name.
+            if _eff_scoring in _DELTAROTO_STRATEGY_NAMES:
+                _opp_rec_inputs = _build_deltaroto_rec_inputs(
+                    board,
+                    full_board,
+                    tracker,
+                    config,
+                    team_rosters,
+                    player_lookup,
+                    team_name=opp_team_name,
+                    roster_ids=opp_rosters[team_num],
+                )
+                _opp_ctx = RecommendContext(
+                    scoring_mode=_eff_scoring,
+                    team_name=opp_team_name,
+                    picks_until_next=proxy.picks_until_next_turn,
+                    inputs=_opp_rec_inputs,
+                )
+                opp_strat_name = "default"
+            else:
+                _opp_ctx = RecommendContext(
+                    scoring_mode=_eff_scoring,
+                    team_name=opp_team_name,
+                    picks_until_next=proxy.picks_until_next_turn,
+                    board=board,
+                    drafted=list(drafted_set),
+                    filled_positions=_opp_filled,
+                    config=config,
+                )
             _opp_pick = recommend(
                 _opp_ctx,
                 strategy=opp_strat_name,

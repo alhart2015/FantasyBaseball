@@ -2,8 +2,7 @@
 
 The legacy pick_* functions were removed when STRATEGIES was aliased to OVERLAYS.
 This file covers the board-level helpers that the overlays depend on:
-_count_closers, _count_hitters, _count_pitchers, _sv_in_danger,
-_force_closer, _fallback_non_closer, _lookup_pid, and select_from_ranked.
+_count_closers and select_from_ranked.
 
 Overlay behavior is tested in test_strategy_overlays.py.
 """
@@ -12,39 +11,15 @@ from typing import ClassVar
 
 import pandas as pd
 
-from fantasy_baseball.config import LeagueConfig
 from fantasy_baseball.draft.strategy import (
     STRATEGIES,
     _count_closers,
-    _count_hitters,
-    _count_pitchers,
-    _fallback_non_closer,
-    _force_closer,
-    _sv_in_danger,
 )
 from fantasy_baseball.draft.tracker import DraftTracker
-from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD, DEFAULT_ROSTER_SLOTS
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_config(roster_slots=None, num_teams=10):
-    """Create a minimal LeagueConfig for testing."""
-    if roster_slots is None:
-        roster_slots = DEFAULT_ROSTER_SLOTS.copy()
-    return LeagueConfig(
-        league_id=1,
-        num_teams=num_teams,
-        game_code="mlb",
-        team_name="Test Team",
-        draft_position=1,
-        keepers=[],
-        roster_slots=roster_slots,
-        projection_systems=["steamer"],
-        projection_weights={"steamer": 1.0},
-    )
 
 
 def _make_hitter(name, var, adp, avg, ab, positions=None, **extra):
@@ -309,193 +284,6 @@ class TestCountClosers:
         assert count == 1
 
 
-class TestCountHittersAndPitchers:
-    def test_hitter_count(self):
-        board = _make_standard_board()
-        tracker = _make_tracker()
-        _draft_user_player(tracker, "Hitter A", "Hitter A::hitter")
-        _draft_user_player(tracker, "Hitter B", "Hitter B::hitter")
-        assert _count_hitters(tracker, board, board) == 2
-
-    def test_pitcher_count(self):
-        board = _make_standard_board()
-        tracker = _make_tracker()
-        _draft_user_player(tracker, "SP A", "SP A::pitcher")
-        _draft_user_player(tracker, "Closer A", "Closer A::pitcher")
-        _draft_user_player(tracker, "Hitter A", "Hitter A::hitter")
-        assert _count_pitchers(tracker, board, board) == 2
-
-    def test_empty_roster(self):
-        board = _make_standard_board()
-        tracker = _make_tracker()
-        assert _count_hitters(tracker, board, board) == 0
-        assert _count_pitchers(tracker, board, board) == 0
-
-
-class TestSvInDanger:
-    def test_no_team_rosters(self):
-        board = _make_standard_board()
-        tracker = _make_tracker()
-        assert _sv_in_danger(tracker, board, board, {}, 10) is False
-
-    def test_not_enough_teams_with_closers(self):
-        """Should return False when fewer than MIN_TEAMS_WITH_CLOSERS have closers."""
-        board = _make_standard_board()
-        tracker = _make_tracker()
-        _draft_user_player(tracker, "Hitter A", "Hitter A::hitter")
-        # Only 1 team has a closer (need MIN_TEAMS_WITH_CLOSERS=3)
-        team_rosters = {
-            1: ["Hitter A::hitter"],
-            2: ["Closer A::pitcher"],
-            3: [],
-            4: [],
-        }
-        assert _sv_in_danger(tracker, board, board, team_rosters, 4) is False
-
-    def test_user_in_danger_zone(self):
-        """User team has 0 SV while 3+ teams have closers -> danger."""
-        board = _make_standard_board()
-        tracker = _make_tracker()
-        _draft_user_player(tracker, "Hitter A", "Hitter A::hitter")
-
-        # 4 teams, 3 have closers, user has none
-        team_rosters = {
-            1: ["Hitter A::hitter"],  # user team (0 SV)
-            2: ["Closer A::pitcher"],  # 35 SV
-            3: ["Closer B::pitcher"],  # 30 SV
-            4: ["Closer C::pitcher"],  # 25 SV
-        }
-        result = _sv_in_danger(tracker, board, board, team_rosters, 4)
-        assert result is True
-
-    def test_user_not_in_danger_zone(self):
-        """User has a closer, not in danger."""
-        board = _make_standard_board()
-        tracker = _make_tracker()
-        _draft_user_player(tracker, "Closer A", "Closer A::pitcher")
-
-        team_rosters = {
-            1: ["Closer A::pitcher"],  # user team (35 SV)
-            2: ["Closer B::pitcher"],  # 30 SV
-            3: ["Closer C::pitcher"],  # 25 SV
-            4: ["Hitter A::hitter"],  # 0 SV
-        }
-        result = _sv_in_danger(tracker, board, board, team_rosters, 4)
-        assert result is False
-
-    def test_user_team_detection_via_set_intersection(self):
-        """User team is identified by overlap of roster IDs."""
-        board = _make_standard_board()
-        tracker = _make_tracker()
-        _draft_user_player(tracker, "Hitter A", "Hitter A::hitter")
-        _draft_user_player(tracker, "Hitter B", "Hitter B::hitter")
-
-        team_rosters = {
-            1: ["Hitter A::hitter", "Hitter B::hitter"],  # user team
-            2: ["Closer A::pitcher"],
-            3: ["Closer B::pitcher"],
-            4: ["Closer C::pitcher"],
-        }
-        # User has no SV, 3 teams have closers -> danger
-        result = _sv_in_danger(tracker, board, board, team_rosters, 4)
-        assert result is True
-
-    def test_empty_team_rosters_dict(self):
-        """Empty dict -> False."""
-        board = _make_standard_board()
-        tracker = _make_tracker()
-        assert _sv_in_danger(tracker, board, board, {}, 10) is False
-
-
-class TestForceCloser:
-    def test_returns_best_closer_by_var(self):
-        board = _make_standard_board()
-        config = _make_config()
-        tracker = _make_tracker()
-        result = _force_closer(board, tracker, board, config)
-        assert result is not None
-        name, pid = result
-        # Closer A has highest var (9.0)
-        assert name == "Closer A"
-        assert pid == "Closer A::pitcher"
-
-    def test_no_closers_available(self):
-        """All closers already drafted -> returns None."""
-        board = _make_standard_board()
-        config = _make_config()
-        tracker = _make_tracker()
-        # Draft all closers for other teams
-        _draft_other_player(tracker, "Closer A", "Closer A::pitcher")
-        _draft_other_player(tracker, "Closer B", "Closer B::pitcher")
-        _draft_other_player(tracker, "Closer C", "Closer C::pitcher")
-        _draft_other_player(tracker, "Closer D", "Closer D::pitcher")
-        result = _force_closer(board, tracker, board, config)
-        assert result is None
-
-    def test_skips_closer_that_cant_be_rostered(self):
-        """When all P slots are full, closers can't be rostered."""
-        board = _make_standard_board()
-        # Config with only 1 P slot and no BN
-        config = _make_config(
-            roster_slots={
-                "P": 1,
-                "C": 1,
-                "1B": 1,
-                "2B": 1,
-                "3B": 1,
-                "SS": 1,
-                "OF": 4,
-                "UTIL": 2,
-                "IF": 1,
-            }
-        )
-        tracker = _make_tracker()
-        # Fill the P slot
-        _draft_user_player(tracker, "SP A", "SP A::pitcher")
-        result = _force_closer(board, tracker, board, config)
-        assert result is None
-
-
-class TestFallbackNonCloser:
-    def test_returns_best_non_closer(self):
-        board = _make_standard_board()
-        config = _make_config()
-        tracker = _make_tracker()
-        name, pid = _fallback_non_closer(board, tracker, board, config)
-        assert name is not None
-        # Should return the best VAR non-closer player
-        assert "Closer" not in name or pid is None
-
-    def test_skips_closers(self):
-        """Even if closers have high VAR, they should be skipped."""
-        board = _make_standard_board()
-        config = _make_config()
-        tracker = _make_tracker()
-        name, _pid = _fallback_non_closer(board, tracker, board, config)
-        # Should not return a closer
-        if name:
-            row = board[board["name"] == name]
-            if not row.empty:
-                assert row.iloc[0]["sv"] < CLOSER_SV_THRESHOLD
-
-    def test_all_players_drafted(self):
-        """When all players are already drafted, returns (None, None)."""
-        board = _make_standard_board()
-        config = _make_config()
-        tracker = _make_tracker()
-        # Draft all non-closers
-        for _, row in board.iterrows():
-            if row["sv"] < CLOSER_SV_THRESHOLD:
-                _draft_other_player(tracker, row["name"], row["player_id"])
-        # Draft all closers too
-        for _, row in board.iterrows():
-            if row["sv"] >= CLOSER_SV_THRESHOLD:
-                _draft_other_player(tracker, row["name"], row["player_id"])
-        name, pid = _fallback_non_closer(board, tracker, board, config)
-        assert name is None
-        assert pid is None
-
-
 # ---------------------------------------------------------------------------
 # STRATEGIES registry test (STRATEGIES = OVERLAYS alias)
 # ---------------------------------------------------------------------------
@@ -532,87 +320,7 @@ class TestStrategiesRegistry:
 
 
 class TestEdgeCases:
-    def test_force_closer_skips_drafted_closers(self):
-        """_force_closer should not pick a closer that's already drafted."""
-        board = _make_standard_board()
-        config = _make_config()
-        tracker = _make_tracker()
-        _draft_other_player(tracker, "Closer A", "Closer A::pitcher")
-        result = _force_closer(board, tracker, board, config)
-        assert result is not None
-        name, _pid = result
-        assert name != "Closer A"
-
     def test_count_closers_empty_roster(self):
         board = _make_standard_board()
         tracker = _make_tracker()
         assert _count_closers(tracker, board, board) == 0
-
-    def test_sv_in_danger_boundary_rank(self):
-        """User exactly at the boundary of danger zone."""
-        board = _make_standard_board()
-        tracker = _make_tracker()
-        _draft_user_player(tracker, "Hitter A", "Hitter A::hitter")
-
-        # 5 teams, user has 0 SV, 3 have closers
-        # With DANGER_ZONE=2, our_rank must be > 5 - 2 = 3
-        # 3 teams have more SV, so our_rank = 4 > 3 -> danger
-        team_rosters = {
-            1: ["Hitter A::hitter"],  # user: 0 SV
-            2: ["Closer A::pitcher"],  # 35 SV
-            3: ["Closer B::pitcher"],  # 30 SV
-            4: ["Closer C::pitcher"],  # 25 SV
-            5: ["Hitter B::hitter"],  # 0 SV
-        }
-        result = _sv_in_danger(tracker, board, board, team_rosters, 5)
-        assert result is True
-
-    def test_sv_in_danger_just_outside_boundary(self):
-        """User exactly at the safe boundary."""
-        board = _make_standard_board()
-        tracker = _make_tracker()
-        _draft_user_player(tracker, "Closer D", "Closer D::pitcher")  # 22 SV
-
-        # 5 teams, user has 22 SV, 3 have higher SV
-        # our_rank = 4 > 5 - 2 = 3 -> still danger
-        team_rosters = {
-            1: ["Closer D::pitcher"],  # user: 22 SV
-            2: ["Closer A::pitcher"],  # 35 SV
-            3: ["Closer B::pitcher"],  # 30 SV
-            4: ["Closer C::pitcher"],  # 25 SV
-            5: ["Hitter A::hitter"],  # 0 SV
-        }
-        result = _sv_in_danger(tracker, board, board, team_rosters, 5)
-        # 3 teams above us, rank=4, 4 > 3 -> True (still in danger)
-        assert result is True
-
-    def test_sv_in_danger_user_safe(self):
-        """User has highest SV -- should not be in danger."""
-        board = _make_standard_board()
-        tracker = _make_tracker()
-        _draft_user_player(tracker, "Closer A", "Closer A::pitcher")  # 35 SV
-
-        # 5 teams, user has 35 SV (highest)
-        team_rosters = {
-            1: ["Closer A::pitcher"],  # user: 35 SV
-            2: ["Closer B::pitcher"],  # 30 SV
-            3: ["Closer C::pitcher"],  # 25 SV
-            4: ["Closer D::pitcher"],  # 22 SV
-            5: ["Hitter A::hitter"],  # 0 SV
-        }
-        result = _sv_in_danger(tracker, board, board, team_rosters, 5)
-        # rank=1, 1 > 3? no -> False
-        assert result is False
-
-    def test_lookup_pid_returns_unknown_for_missing(self):
-        """_lookup_pid returns name::unknown when player not found."""
-        from fantasy_baseball.draft.strategy import _lookup_pid
-
-        # Use a board with at least one player so DataFrame has columns
-        board = _make_board(
-            [
-                _make_hitter("Real Player", var=10.0, adp=1, avg=0.280, ab=500),
-            ]
-        )
-        result = _lookup_pid(board, "Ghost Player")
-        assert result == "Ghost Player::unknown"
