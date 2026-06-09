@@ -45,6 +45,7 @@ from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto_dict
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
+from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 
@@ -602,7 +603,10 @@ def run_simulation(
             _closer_count = sum(
                 1
                 for _pid in tracker.user_roster_ids
-                if ((_row := player_lookup.get(_pid)) is not None and (_row.get("sv") or 0) >= 15)
+                if (
+                    (_row := player_lookup.get(_pid)) is not None
+                    and _row.get("sv", 0.0) >= CLOSER_SV_THRESHOLD
+                )
             )
 
             # deltaRoto runs use the deltaRoto RANKER (ctx.scoring_mode) with the
