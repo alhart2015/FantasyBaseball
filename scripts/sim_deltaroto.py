@@ -284,23 +284,28 @@ def run_user_pick_sequence(*, scoring_mode, strategy, seed, strategy_noise=0.0):
     """
     from simulate_draft import build_board_and_context, run_simulation
 
-    # Inject deltaRoto strategies so STRATEGIES recognises them.
-    for name, attr in DELTAROTO.items():
-        STRATEGIES[name] = make_deltaroto_pick(attr)
+    saved = dict(STRATEGIES)
+    try:
+        # Inject deltaRoto strategies so STRATEGIES recognises them.
+        for name, attr in DELTAROTO.items():
+            STRATEGIES[name] = make_deltaroto_pick(attr)
 
-    ctx = build_board_and_context()
-    # deltaRoto picks internally under scoring_mode "var" (it overrides the pick fn
-    # entirely), but we accept the caller's scoring_mode label for documentation.
-    run_scoring = "var"
-    result = run_simulation(
-        ctx,
-        strategy_name=strategy,
-        scoring_mode=run_scoring,
-        adp_noise=0.0,
-        strategy_noise=strategy_noise,
-        seed=seed,
-        field_noise=False,
-    )
+        ctx = build_board_and_context()
+        # deltaRoto picks internally under scoring_mode "var" (it overrides the pick fn
+        # entirely), but we accept the caller's scoring_mode label for documentation.
+        run_scoring = "var"
+        result = run_simulation(
+            ctx,
+            strategy_name=strategy,
+            scoring_mode=run_scoring,
+            adp_noise=0.0,
+            strategy_noise=strategy_noise,
+            seed=seed,
+            field_noise=False,
+        )
+    finally:
+        STRATEGIES.clear()
+        STRATEGIES.update(saved)
     return list(result["user_roster_ids"])
 
 
