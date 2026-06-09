@@ -1,13 +1,18 @@
 from fantasy_baseball.draft.recommend import RankedPick
 from fantasy_baseball.draft.strategy import OVERLAYS
-from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.models.positions import Position
 
 
 def _pick(name, score, pos=Position.OF):
-    return RankedPick(player_id=name, name=name, positions=[pos],
-                      player_type=PlayerType.HITTER, score=score,
-                      metrics={"immediate_delta": score})
+    return RankedPick(
+        player_id=name,
+        name=name,
+        positions=[pos],
+        player_type=PlayerType.HITTER,
+        score=score,
+        metrics={"immediate_delta": score},
+    )
 
 
 def test_default_overlay_defers_to_slot_gate():
