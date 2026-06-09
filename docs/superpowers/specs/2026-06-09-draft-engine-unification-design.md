@@ -70,15 +70,22 @@ class RankedPick:
     positions: list[Position]
     player_type: PlayerType
     score: float                       # active mode's primary metric
+    metrics: dict[str, float] = field(default_factory=dict)
     per_category: dict[str, float] = field(default_factory=dict)
     note: str = ""
     need_flag: bool = False
 ```
 
 `score` carries the active mode's primary metric: `var`, `vona`,
-`immediate_delta`, or `value_of_picking_now`. Two adapters:
-`RankedPick.from_recommendation(rec)` and `RankedPick.from_recrow(row, *,
-metric)` where `metric` selects `immediate_delta` vs `value_of_picking_now`.
+`immediate_delta`, or `value_of_picking_now`. `metrics` carries every
+mode-native metric the row computed -- for the deltaRoto modes that is
+`{"immediate_delta": ..., "value_of_picking_now": ...}`; for var/vona it is
+`{"var": ...}` / `{"vona": ...}`. `metrics` exists because the dashboard
+displays BOTH deltaRoto metrics and toggles between them client-side
+(`draft.js:222`), so the `/api/recs` payload must preserve both regardless of
+which one `score` mirrors. Two adapters: `RankedPick.from_recommendation(rec)`
+and `RankedPick.from_recrow(row, *, metric)` where `metric` selects which of
+`immediate_delta` / `value_of_picking_now` becomes `score`.
 
 The single overlay read of `rec.var` (`strategy.py:833`) becomes `rec.score`.
 
@@ -168,10 +175,14 @@ its selection gate (already `select_from_ranked`) is covered.
 - `config.py:38`: `VALID_SCORING_MODES = {"var", "vona", "deltaroto_immediate",
   "deltaroto_vopn"}`.
 - `web/app.py` `/api/recs`: call `recommend()` instead of reaching into
-  `recs_integration` directly. **Keep `immediate_delta` as a JSON field alias**
-  (populated from `RankedPick.score` when the mode is a deltaRoto mode) so
-  `web/static/draft.js` is untouched in this change. Decision: alias over
-  rename, to keep the frontend out of the blast radius.
+  `recs_integration` directly. The serializer emits `{player_id, name,
+  positions, per_category, **metrics}`, so `immediate_delta` and
+  `value_of_picking_now` stay top-level fields exactly as today and
+  `web/static/draft.js` is untouched (it reads both for its client-side sort
+  toggle, `draft.js:222-234`). Decision: preserve the existing JSON keys over
+  renaming, to keep the frontend out of the blast radius. The endpoint stays
+  pinned to a deltaRoto mode (it serves the live draft), so both metrics are
+  always present.
 - `config/league.yaml`: `scoring_mode: deltaroto_immediate`, `strategy:
   default`. This is the **final** commit -- the YAML cannot legally name
   `deltaroto_immediate` until the seam and config validation support it, so the
