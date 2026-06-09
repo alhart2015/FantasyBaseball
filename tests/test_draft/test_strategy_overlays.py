@@ -1,9 +1,14 @@
 from fantasy_baseball.draft.recommend import RankedPick
 from fantasy_baseball.draft.strategy import (
+    BALANCED_MAX_SKEW,
     CLOSER_DEADLINE_ROUND,
     FOUR_CLOSERS_DEADLINES,
+    NO_PUNT_CAP3_TARGET,
+    NO_PUNT_STAGGER_DEADLINES,
+    NO_PUNT_STAGGER_TARGET,
     OVERLAYS,
     THREE_CLOSERS_DEADLINES,
+    THREE_CLOSERS_TARGET,
     TWO_CLOSERS_DEADLINES,
 )
 from fantasy_baseball.models.player import PlayerType
@@ -241,3 +246,355 @@ def test_four_closers_defers_when_target_met():
         closer_count=4,
     )
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# no_punt overlay -- documented FALLBACK
+# ---------------------------------------------------------------------------
+
+
+def test_no_punt_overlay_always_defers():
+    # Documented FALLBACK: missing team H/AB totals and team_rosters.
+    # The overlay must always return None regardless of round or closer count.
+    ranked = [_pick("A", 5.0), _closer("C", 3.0, 30.0)]
+    assert OVERLAYS["no_punt"](ranked, roster_state=None, config=None) is None
+    assert (
+        OVERLAYS["no_punt"](
+            ranked,
+            roster_state=None,
+            config=None,
+            current_round=15,
+            closer_count=0,
+        )
+        is None
+    )
+
+
+# ---------------------------------------------------------------------------
+# no_punt_opp overlay -- documented FALLBACK
+# ---------------------------------------------------------------------------
+
+
+def test_no_punt_opp_overlay_always_defers():
+    # Documented FALLBACK: missing team_rosters for opponent-relative SV check
+    # and team H/AB for AVG floor filtering.
+    ranked = [_pick("A", 5.0), _closer("C", 3.0, 30.0)]
+    assert OVERLAYS["no_punt_opp"](ranked, roster_state=None, config=None) is None
+    assert (
+        OVERLAYS["no_punt_opp"](
+            ranked,
+            roster_state=None,
+            config=None,
+            current_round=20,
+            closer_count=0,
+        )
+        is None
+    )
+
+
+# ---------------------------------------------------------------------------
+# no_punt_stagger overlay -- PARTIAL PORT (stagger deadlines; AVG floor deferred)
+# ---------------------------------------------------------------------------
+
+
+def test_no_punt_stagger_forces_first_closer_at_first_deadline():
+    # Defining behavior: at deadline[0] (round 13) with 0 closers, must force a closer.
+    deadline = NO_PUNT_STAGGER_DEADLINES[0]  # 13
+    ranked = [_closer("C1", 5.0, 35.0), _closer("MR", 9.0, 0.0)]
+    chosen = OVERLAYS["no_punt_stagger"](
+        ranked,
+        roster_state=None,
+        config=None,
+        current_round=deadline,
+        closer_count=0,
+    )
+    # MR has higher score but SV=0 -- must pick C1
+    assert chosen is not None
+    assert chosen.name == "C1"
+
+
+def test_no_punt_stagger_forces_second_closer_at_second_deadline():
+    deadline = NO_PUNT_STAGGER_DEADLINES[1]  # 17
+    ranked = [_closer("C2", 4.0, 22.0)]
+    chosen = OVERLAYS["no_punt_stagger"](
+        ranked,
+        roster_state=None,
+        config=None,
+        current_round=deadline,
+        closer_count=1,
+    )
+    assert chosen is not None and chosen.name == "C2"
+
+
+def test_no_punt_stagger_defers_before_first_deadline():
+    deadline = NO_PUNT_STAGGER_DEADLINES[0]  # 13
+    ranked = [_closer("C1", 5.0, 35.0)]
+    result = OVERLAYS["no_punt_stagger"](
+        ranked,
+        roster_state=None,
+        config=None,
+        current_round=deadline - 1,
+        closer_count=0,
+    )
+    assert result is None
+
+
+def test_no_punt_stagger_defers_when_target_met():
+    ranked = [_closer("C4", 6.0, 30.0)]
+    result = OVERLAYS["no_punt_stagger"](
+        ranked,
+        roster_state=None,
+        config=None,
+        current_round=25,
+        closer_count=NO_PUNT_STAGGER_TARGET,
+    )
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# no_punt_cap3 overlay -- PARTIAL PORT (stagger + cap; AVG floor deferred)
+# ---------------------------------------------------------------------------
+
+
+def test_no_punt_cap3_forces_first_closer_at_first_deadline():
+    # Same staggered deadlines as no_punt_stagger.
+    deadline = NO_PUNT_STAGGER_DEADLINES[0]  # 13
+    ranked = [_closer("C1", 5.0, 35.0)]
+    chosen = OVERLAYS["no_punt_cap3"](
+        ranked,
+        roster_state=None,
+        config=None,
+        current_round=deadline,
+        closer_count=0,
+    )
+    assert chosen is not None and chosen.name == "C1"
+
+
+def test_no_punt_cap3_defers_when_cap_reached():
+    # Hard cap: at NO_PUNT_CAP3_TARGET closers, defer regardless of round.
+    ranked = [_closer("C4", 8.0, 40.0)]
+    result = OVERLAYS["no_punt_cap3"](
+        ranked,
+        roster_state=None,
+        config=None,
+        current_round=20,
+        closer_count=NO_PUNT_CAP3_TARGET,
+    )
+    assert result is None
+
+
+def test_no_punt_cap3_defers_before_deadline():
+    deadline = NO_PUNT_STAGGER_DEADLINES[0]  # 13
+    ranked = [_closer("C1", 5.0, 35.0)]
+    result = OVERLAYS["no_punt_cap3"](
+        ranked,
+        roster_state=None,
+        config=None,
+        current_round=deadline - 1,
+        closer_count=0,
+    )
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# avg_hedge overlay -- documented FALLBACK
+# ---------------------------------------------------------------------------
+
+
+def test_avg_hedge_overlay_always_defers():
+    # Documented FALLBACK: needs team accumulated H/AB (balance.get_avg_components()).
+    ranked = [_pick("A", 5.0), _pick("B", 3.0)]
+    assert OVERLAYS["avg_hedge"](ranked, roster_state=None, config=None) is None
+
+
+# ---------------------------------------------------------------------------
+# avg_anchor overlay -- documented FALLBACK
+# ---------------------------------------------------------------------------
+
+
+def test_avg_anchor_overlay_always_defers():
+    # Documented FALLBACK: needs candidate's absolute AVG (board['avg']),
+    # not available via per_category (which carries marginal roto deltas).
+    ranked = [_pick("HighAVG", 5.0), _pick("LowAVG", 3.0)]
+    assert OVERLAYS["avg_anchor"](ranked, roster_state=None, config=None) is None
+    assert (
+        OVERLAYS["avg_anchor"](
+            ranked,
+            roster_state=None,
+            config=None,
+            hitter_count=0,
+        )
+        is None
+    )
+
+
+# ---------------------------------------------------------------------------
+# closers_avg overlay -- COMPOSED (closer gate ported; AVG anchor deferred)
+# ---------------------------------------------------------------------------
+
+
+def test_closers_avg_forces_closer_at_deadline():
+    # Defining behavior: closer deadline fires at THREE_CLOSERS_DEADLINES[0] (round 5).
+    deadline = THREE_CLOSERS_DEADLINES[0]  # 5
+    ranked = [_closer("MR", 9.0, 0.0), _closer("C1", 5.0, 35.0)]
+    chosen = OVERLAYS["closers_avg"](
+        ranked,
+        roster_state=None,
+        config=None,
+        current_round=deadline,
+        closer_count=0,
+    )
+    # MR has higher score but SV=0; must pick C1
+    assert chosen is not None
+    assert chosen.name == "C1"
+
+
+def test_closers_avg_defers_before_deadline():
+    # Before closer deadline and target not met -- defer.
+    deadline = THREE_CLOSERS_DEADLINES[0]  # 5
+    ranked = [_closer("C1", 5.0, 35.0)]
+    result = OVERLAYS["closers_avg"](
+        ranked,
+        roster_state=None,
+        config=None,
+        current_round=deadline - 1,
+        closer_count=0,
+    )
+    assert result is None
+
+
+def test_closers_avg_defers_when_target_met():
+    # Once THREE_CLOSERS_TARGET closers are drafted, no closer forcing.
+    ranked = [_closer("C4", 6.0, 30.0)]
+    result = OVERLAYS["closers_avg"](
+        ranked,
+        roster_state=None,
+        config=None,
+        current_round=20,
+        closer_count=THREE_CLOSERS_TARGET,
+    )
+    assert result is None
+
+
+def test_closers_avg_defers_between_deadlines_no_avg_anchor():
+    # Between deadlines with target not yet met but no deadline firing -- defer.
+    # (AVG anchor is omitted; this confirms we don't spuriously pick based on missing signal.)
+    ranked = [_pick("Hitter", 8.0), _closer("C1", 5.0, 35.0)]
+    result = OVERLAYS["closers_avg"](
+        ranked,
+        roster_state=None,
+        config=None,
+        current_round=THREE_CLOSERS_DEADLINES[0] - 1,
+        closer_count=0,
+    )
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# balanced overlay -- PORTED
+# ---------------------------------------------------------------------------
+
+
+def _pitcher(name, score):
+    return RankedPick(
+        player_id=name,
+        name=name,
+        positions=[Position.SP],
+        player_type=PlayerType.PITCHER,
+        score=score,
+        metrics={"immediate_delta": score},
+    )
+
+
+def test_balanced_forces_hitter_when_pitchers_dominate():
+    # n_pitchers - n_hitters > BALANCED_MAX_SKEW (2) -> force a hitter.
+    ranked = [_pitcher("SP1", 9.0), _pitcher("SP2", 7.0), _pick("H1", 5.0)]
+    chosen = OVERLAYS["balanced"](
+        ranked,
+        roster_state=None,
+        config=None,
+        n_hitters=1,
+        n_pitchers=1 + BALANCED_MAX_SKEW + 1,
+    )
+    assert chosen is not None
+    assert chosen.name == "H1"
+    assert chosen.player_type == PlayerType.HITTER
+
+
+def test_balanced_forces_pitcher_when_hitters_dominate():
+    # n_hitters - n_pitchers > BALANCED_MAX_SKEW (2) -> force a pitcher.
+    ranked = [_pick("H1", 9.0), _pick("H2", 7.0), _pitcher("SP1", 5.0)]
+    chosen = OVERLAYS["balanced"](
+        ranked,
+        roster_state=None,
+        config=None,
+        n_hitters=1 + BALANCED_MAX_SKEW + 1,
+        n_pitchers=1,
+    )
+    assert chosen is not None
+    assert chosen.name == "SP1"
+    assert chosen.player_type == PlayerType.PITCHER
+
+
+def test_balanced_defers_when_no_skew():
+    # Exactly at balance limit -- no skew beyond BALANCED_MAX_SKEW, so defer.
+    ranked = [_pick("H1", 9.0), _pitcher("SP1", 5.0)]
+    result = OVERLAYS["balanced"](
+        ranked,
+        roster_state=None,
+        config=None,
+        n_hitters=5,
+        n_pitchers=5,
+    )
+    assert result is None
+
+
+def test_balanced_defers_when_counts_equal():
+    ranked = [_pick("H1", 9.0), _pitcher("SP1", 5.0)]
+    result = OVERLAYS["balanced"](
+        ranked,
+        roster_state=None,
+        config=None,
+        n_hitters=0,
+        n_pitchers=0,
+    )
+    assert result is None
+
+
+def test_balanced_picks_highest_score_of_forced_type():
+    # When forcing a hitter, must pick the highest-score hitter, not just any hitter.
+    ranked = [
+        _pitcher("SP1", 10.0),
+        _pick("H_Low", 4.0),
+        _pick("H_High", 6.0),
+    ]
+    # Re-order so H_High is first hitter in the ranked list for clarity.
+    ranked = [
+        _pitcher("SP1", 10.0),
+        _pick("H_High", 6.0),
+        _pick("H_Low", 4.0),
+    ]
+    chosen = OVERLAYS["balanced"](
+        ranked,
+        roster_state=None,
+        config=None,
+        n_hitters=0,
+        n_pitchers=BALANCED_MAX_SKEW + 1,
+    )
+    # The overlay iterates ranked in order and picks the FIRST matching type.
+    # H_High appears before H_Low in ranked, so it must be chosen.
+    assert chosen is not None
+    assert chosen.name == "H_High"
+
+
+# ---------------------------------------------------------------------------
+# anti_fragile overlay -- documented FALLBACK
+# ---------------------------------------------------------------------------
+
+
+def test_anti_fragile_overlay_always_defers():
+    # Documented FALLBACK: needs candidate's absolute IP projection to apply
+    # the high-IP penalty (ANTI_FRAGILE_IP_THRESHOLD=170, discount=25%/30IP).
+    # IP is not a roto category and is absent from per_category.
+    ranked = [_pitcher("Ace", 9.0), _pitcher("Workhorse", 7.0)]
+    assert OVERLAYS["anti_fragile"](ranked, roster_state=None, config=None) is None

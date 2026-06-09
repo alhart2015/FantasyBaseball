@@ -962,6 +962,258 @@ overlay_two_closers = _make_n_closers_overlay(TWO_CLOSERS_TARGET, TWO_CLOSERS_DE
 overlay_three_closers = _make_n_closers_overlay(THREE_CLOSERS_TARGET, THREE_CLOSERS_DEADLINES)
 overlay_four_closers = _make_n_closers_overlay(FOUR_CLOSERS_TARGET, FOUR_CLOSERS_DEADLINES)
 
+
+# ---------------------------------------------------------------------------
+# no_punt family -- FALLBACK / PARTIAL PORT
+# ---------------------------------------------------------------------------
+
+
+def overlay_no_punt(ranked, *, roster_state=None, config=None, **kwargs):
+    """Documented FALLBACK -- defers to recommend()'s slot-gated selection.
+
+    Missing signal: team's current AVG components (balance.get_avg_components()
+    returns the team's accumulated H and AB totals, not available on RankedPick)
+    and team_rosters for dynamic SV danger monitoring (_sv_in_danger requires
+    the full roster dict for all teams, which is not passed through the overlay
+    kwargs by the current recommend() caller).  Threading both signals would
+    require changes to the recommend() call-site and the sim loop that exceed
+    a small additive change, so this overlay defers until those are available.
+
+    Original pick_no_punt behavior (src line ~481-529):
+    - If team SV rank is in bottom NO_PUNT_SV_DANGER_ZONE (needs team_rosters) or
+      no closer by round NO_PUNT_SV_DEADLINE (needs closer_count kwarg),
+      force the best available closer.
+    - Then filter hitters whose H+team_H / AB+team_AB < NO_PUNT_AVG_FLOOR (0.250)
+      (needs team's accumulated H/AB not on RankedPick).
+    """
+    return None
+
+
+def overlay_no_punt_opp(ranked, *, roster_state=None, config=None, **kwargs):
+    """Documented FALLBACK -- defers to recommend()'s slot-gated selection.
+
+    Missing signal: team_rosters (all-team roster dict for _sv_in_danger),
+    effective_pick / ADP context for opportunistic grab logic, and team's
+    accumulated H/AB for AVG floor filtering.  Opponent-relative SV standings
+    (_sv_in_danger projection across all rosters) cannot be reconstructed from
+    a single RankedPick's per_category or simple kwargs without threading the
+    full team_rosters dict through recommend().
+
+    Original pick_no_punt_opp behavior (src line ~206-279):
+    - Dynamic SV danger check via _sv_in_danger (needs team_rosters).
+    - Opportunistic closer grab when effective_pick >= ADP (needs current_pick
+      and keeper count, not in overlay contract).
+    - AVG floor filter via _pick_with_avg_floor (needs team H/AB totals).
+    """
+    return None
+
+
+def overlay_no_punt_stagger(ranked, *, roster_state=None, config=None, **kwargs):
+    """PARTIAL PORT -- staggered closer deadlines ported; AVG floor deferred.
+
+    The staggered closer scheduling (NO_PUNT_STAGGER_DEADLINES = [13, 17, 20],
+    target = 3) is faithfully ported via closer_count + current_round kwargs,
+    identical to the n-closers overlay factory pattern.
+
+    Missing signal: team's accumulated H/AB for AVG floor filtering
+    (NO_PUNT_AVG_FLOOR = 0.250) and team_rosters for dynamic SV danger
+    monitoring.  The dynamic SV check is omitted; only the deadline-based
+    trigger fires.  The AVG floor pass that filters low-AVG hitters from recs
+    is not applied because balance.get_avg_components() (team totals) is not
+    threaded through the overlay contract.
+
+    Original pick_no_punt_stagger behavior (src line ~532-584):
+    - Staggered deadlines: force Nth closer by NO_PUNT_STAGGER_DEADLINES[N-1].
+    - Dynamic SV danger check (needs team_rosters -- OMITTED here).
+    - AVG floor filter (needs team H/AB -- OMITTED here).
+
+    kwargs expected:
+        current_round (int): the round currently being drafted.
+        closer_count (int): closers already on the user's roster.
+    """
+    current_round = int(kwargs.get("current_round", 0))
+    closer_count = int(kwargs.get("closer_count", 0))
+
+    if closer_count < NO_PUNT_STAGGER_TARGET:
+        deadline_idx = closer_count
+        if deadline_idx < len(NO_PUNT_STAGGER_DEADLINES):
+            deadline = NO_PUNT_STAGGER_DEADLINES[deadline_idx]
+            if current_round >= deadline:
+                return _best_closer_from_ranked(ranked)
+    return None
+
+
+def overlay_no_punt_cap3(ranked, *, roster_state=None, config=None, **kwargs):
+    """PARTIAL PORT -- staggered deadlines + cap-3 logic ported; AVG floor deferred.
+
+    The staggered closer scheduling (NO_PUNT_STAGGER_DEADLINES = [13, 17, 20],
+    cap = NO_PUNT_CAP3_TARGET = 3) is faithfully ported.  When the cap is
+    reached the overlay defers (no closer forced, no AVG filter applied) so
+    that recommend()'s slot-gate picks the best non-closer.
+
+    Missing signal: team's accumulated H/AB for AVG floor filtering and
+    balance.get_avg_components() for the _pick_with_avg_floor call.  The cap
+    also originally filtered closers out of the rec pool once 3 were drafted
+    (source line ~653-655); that filter requires reading player SV from the
+    board, not from per_category, so it is omitted here.
+
+    Original pick_no_punt_cap3 behavior (src line ~587-675):
+    - Same staggered deadlines + dynamic SV danger as no_punt_stagger.
+    - After force, walks rec list skipping closers once cap reached.
+    - AVG floor filter on each hitter (needs team H/AB -- OMITTED here).
+
+    kwargs expected:
+        current_round (int): the round currently being drafted.
+        closer_count (int): closers already on the user's roster.
+    """
+    current_round = int(kwargs.get("current_round", 0))
+    closer_count = int(kwargs.get("closer_count", 0))
+
+    # Hard cap: if already at target, defer (let slot-gate pick non-closer).
+    if closer_count >= NO_PUNT_CAP3_TARGET:
+        return None
+
+    deadline_idx = closer_count
+    if deadline_idx < len(NO_PUNT_STAGGER_DEADLINES):
+        deadline = NO_PUNT_STAGGER_DEADLINES[deadline_idx]
+        if current_round >= deadline:
+            return _best_closer_from_ranked(ranked)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# AVG family -- FALLBACK
+# ---------------------------------------------------------------------------
+
+
+def overlay_avg_hedge(ranked, *, roster_state=None, config=None, **kwargs):
+    """Documented FALLBACK -- defers to recommend()'s slot-gated selection.
+
+    Missing signal: the team's accumulated hit (H) and at-bat (AB) totals from
+    balance.get_avg_components().  pick_avg_hedge calls _pick_with_avg_floor
+    which computes projected_avg = (team_H + player_H) / (team_AB + player_AB)
+    and filters out hitters that would push the team below AVG_FLOOR (0.255).
+    The player's raw H and AB values come from board rows; per_category carries
+    only marginal roto deltas (not absolute counting stats).
+
+    Neither team_H/team_AB nor player_H/player_AB are available in the overlay
+    contract without threading balance or raw projections through recommend().
+    Threading balance would require adding it to every overlay call-site and
+    the sim loop, which exceeds a small additive change.
+    """
+    return None
+
+
+def overlay_avg_anchor(ranked, *, roster_state=None, config=None, **kwargs):
+    """Documented FALLBACK -- defers to recommend()'s slot-gated selection.
+
+    Missing signal: the candidate's absolute projected AVG (e.g. .285+).
+    pick_avg_anchor checks board['avg'] >= AVG_ANCHOR_MIN (0.285) for each rec.
+    RankedPick.per_category carries the marginal roto-delta for AVG (a float in
+    roto-point units), not the player's season batting average projection.  These
+    are dimensionally incompatible: an absolute AVG of .285 cannot be compared
+    to a delta-roto contribution of e.g. +0.04 roto points.
+
+    Additionally, hitter_count (how many hitters are already on the team) is not
+    part of the overlay contract without threading it as a kwarg.
+
+    Original pick_avg_anchor behavior (src line ~678-737):
+    - While hitter_count < AVG_ANCHOR_DEADLINE_HITTER (3) and no anchor yet,
+      scan recs for a hitter with board['avg'] >= AVG_ANCHOR_MIN (0.285).
+    """
+    return None
+
+
+# ---------------------------------------------------------------------------
+# closers_avg -- COMPOSED (closer scheduling ported; AVG anchor deferred)
+# ---------------------------------------------------------------------------
+
+
+def overlay_closers_avg(ranked, *, roster_state=None, config=None, **kwargs):
+    """COMPOSED: three_closers closer gate applied; AVG anchor portion deferred.
+
+    Mirrors pick_closers_avg (src line ~740-770): closer deadlines have highest
+    priority, then fall through to avg_anchor.  The closer gate is faithfully
+    ported (identical to overlay_three_closers).  The avg_anchor fallback is
+    omitted because overlay_avg_anchor is a documented FALLBACK -- avg_anchor
+    needs the candidate's absolute AVG projection (not available in per_category)
+    so that tier simply defers.
+
+    kwargs expected:
+        current_round (int): the round currently being drafted.
+        closer_count (int): closers already on the user's roster.
+    """
+    # Priority 1: closer scheduling (identical to overlay_three_closers).
+    current_round = int(kwargs.get("current_round", 0))
+    closer_count = int(kwargs.get("closer_count", 0))
+
+    if closer_count < THREE_CLOSERS_TARGET:
+        deadline_idx = closer_count
+        if deadline_idx < len(THREE_CLOSERS_DEADLINES):
+            deadline = THREE_CLOSERS_DEADLINES[deadline_idx]
+            if current_round >= deadline:
+                return _best_closer_from_ranked(ranked)
+
+    # Priority 2: avg_anchor -- deferred (missing absolute AVG signal).
+    return None
+
+
+# ---------------------------------------------------------------------------
+# balanced -- PORTED
+# ---------------------------------------------------------------------------
+
+
+def overlay_balanced(ranked, *, roster_state=None, config=None, **kwargs):
+    """PORTED: force hitter or pitcher to cap positional skew.
+
+    Mirrors pick_balanced (src line ~773-807): if pitchers outnumber hitters by
+    more than BALANCED_MAX_SKEW (2), force the highest-score hitter from the
+    ranked list.  If hitters outnumber pitchers by more than BALANCED_MAX_SKEW,
+    force the highest-score pitcher.  Otherwise, defer.
+
+    player_type is available on RankedPick directly; n_hitters/n_pitchers are
+    passed by the caller as kwargs (cheap, identical to closer_count pattern).
+
+    kwargs expected:
+        n_hitters (int): hitters already on the user's roster.
+        n_pitchers (int): pitchers already on the user's roster.
+    """
+    n_hitters = int(kwargs.get("n_hitters", 0))
+    n_pitchers = int(kwargs.get("n_pitchers", 0))
+
+    force_type = None
+    if n_pitchers - n_hitters > BALANCED_MAX_SKEW:
+        force_type = PlayerType.HITTER
+    elif n_hitters - n_pitchers > BALANCED_MAX_SKEW:
+        force_type = PlayerType.PITCHER
+
+    if force_type is not None:
+        for pick in ranked:
+            if pick.player_type == force_type:
+                return pick
+    return None
+
+
+# ---------------------------------------------------------------------------
+# anti_fragile -- FALLBACK
+# ---------------------------------------------------------------------------
+
+
+def overlay_anti_fragile(ranked, *, roster_state=None, config=None, **kwargs):
+    """Documented FALLBACK -- defers to recommend()'s slot-gated selection.
+
+    Missing signal: the candidate's absolute innings-pitched (IP) projection.
+    pick_anti_fragile (src line ~810-849) penalizes pitchers whose board['ip']
+    exceeds ANTI_FRAGILE_IP_THRESHOLD (170), applying a 25% VAR penalty per
+    30 IP above the threshold.  IP is a counting stat, not a roto category, so
+    it is absent from per_category (which holds marginal roto-point deltas for
+    the five pitching categories: W, K, ERA, WHIP, SV).  Re-scoring candidates
+    by durability-adjusted VAR would require threading raw IP projections into
+    the overlay, which is beyond a small additive change.
+    """
+    return None
+
+
 # Transitional: STRATEGIES (legacy pick_* registry) is aliased to OVERLAYS in a later
 # phase; keep the key sets aligned.
 OVERLAYS = {
@@ -970,6 +1222,15 @@ OVERLAYS = {
     "two_closers": overlay_two_closers,
     "three_closers": overlay_three_closers,
     "four_closers": overlay_four_closers,
+    "no_punt": overlay_no_punt,
+    "no_punt_opp": overlay_no_punt_opp,
+    "no_punt_stagger": overlay_no_punt_stagger,
+    "no_punt_cap3": overlay_no_punt_cap3,
+    "avg_hedge": overlay_avg_hedge,
+    "avg_anchor": overlay_avg_anchor,
+    "closers_avg": overlay_closers_avg,
+    "balanced": overlay_balanced,
+    "anti_fragile": overlay_anti_fragile,
 }
 
 STRATEGIES = {
