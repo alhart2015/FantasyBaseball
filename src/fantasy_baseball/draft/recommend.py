@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from fantasy_baseball.draft import eroto_recs
 from fantasy_baseball.draft.eroto_recs import RecRow
 from fantasy_baseball.draft.recommender import Recommendation, get_recommendations
+from fantasy_baseball.draft.strategy import OVERLAYS, select_from_ranked
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import Position
 
@@ -201,3 +202,25 @@ def to_recs_json(pick: RankedPick) -> dict:
         "value_of_picking_now": pick.metrics["value_of_picking_now"],
         "per_category": pick.per_category,
     }
+
+
+def recommend(
+    ctx: RecommendContext,
+    *,
+    strategy: str,
+    open_starters: set,
+    roster_state=None,
+    pick_rank: int = 0,
+) -> RankedPick | None:
+    """Rank for ctx.scoring_mode, apply the strategy overlay, slot-gate.
+
+    Serves all four modes because rank_for_mode(ctx) does the dispatch; the
+    overlay and slot-gate are mode-agnostic (they consume RankedPick)."""
+    ranked = rank_for_mode(ctx)
+    if strategy not in OVERLAYS:
+        raise ValueError(f"unknown strategy {strategy!r}; valid: {sorted(OVERLAYS)}")
+    chosen = OVERLAYS[strategy](ranked, roster_state=roster_state, config=ctx.config)
+    if chosen is not None:
+        return chosen
+    # Overlay deferred -> plain slot-gated selection.
+    return select_from_ranked(ranked, open_starters, pick_rank)

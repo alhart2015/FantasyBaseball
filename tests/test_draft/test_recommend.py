@@ -1,6 +1,6 @@
 import pytest
 
-from fantasy_baseball.draft.recommend import RecommendContext, rank_for_mode
+from fantasy_baseball.draft.recommend import RecommendContext, rank_for_mode, recommend
 
 
 def test_rank_for_mode_deltaroto_immediate_returns_ranked_picks(deltaroto_ctx):
@@ -42,3 +42,21 @@ def test_rank_for_mode_var_vona_requires_board():
 def test_rank_for_mode_rejects_unknown_mode(varvona_ctx):
     with pytest.raises(ValueError, match="unknown scoring_mode"):
         rank_for_mode(varvona_ctx(scoring_mode="nope"))
+
+
+def test_recommend_deltaroto_default_picks_top_immediate(deltaroto_ctx):
+    chosen = recommend(
+        deltaroto_ctx(scoring_mode="deltaroto_immediate"),
+        strategy="default",
+        open_starters=set(),
+    )
+    assert chosen is not None
+    assert chosen.score == chosen.metrics["immediate_delta"]
+
+
+@pytest.mark.parametrize("mode", ["var", "vona"])
+def test_recommend_var_vona_runs_through_same_seam(varvona_ctx, mode):
+    # Proves recommend() serves all four modes through one entry (spec sec 2).
+    chosen = recommend(varvona_ctx(scoring_mode=mode), strategy="default", open_starters=set())
+    assert chosen is not None
+    assert chosen.score == chosen.metrics[mode]
