@@ -115,7 +115,7 @@ def _save_projection(pick) -> float:
     Uses dict.get with 0.0 default -- never `x or 0` so that a genuine
     SV=0.0 entry is not accidentally promoted.
     """
-    return pick.per_category.get("SV", 0.0)
+    return float(pick.per_category.get("SV", 0.0))
 
 
 def _best_closer_from_ranked(ranked):
