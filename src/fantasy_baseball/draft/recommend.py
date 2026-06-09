@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from fantasy_baseball.draft import eroto_recs
 from fantasy_baseball.draft.eroto_recs import RecRow
-from fantasy_baseball.draft.recommender import Recommendation
+from fantasy_baseball.draft.recommender import Recommendation, get_recommendations
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import Position
 
@@ -63,6 +63,8 @@ _DELTAROTO_MODES = {
     "deltaroto_immediate": "immediate_delta",
     "deltaroto_vopn": "value_of_picking_now",
 }
+
+_VARVONA_MODES = ("var", "vona")
 
 
 def from_recrow(row: RecRow, *, metric: str, player_type: PlayerType) -> RankedPick:
@@ -137,8 +139,36 @@ def _rank_deltaroto(ctx: RecommendContext) -> list[RankedPick]:
     return picks
 
 
+def _rank_var_vona(ctx: RecommendContext) -> list[RankedPick]:
+    if ctx.board is None:
+        raise ValueError(f"scoring_mode {ctx.scoring_mode!r} requires board (DataFrame)")
+    recs = get_recommendations(
+        ctx.board,
+        drafted=ctx.drafted,
+        user_roster=[],
+        n=15,
+        filled_positions=ctx.filled_positions,
+        picks_until_next=ctx.picks_until_next,
+        roster_slots=ctx.config.roster_slots if ctx.config is not None else None,
+        num_teams=ctx.config.num_teams if ctx.config is not None else None,
+        scoring_mode=ctx.scoring_mode,
+    )
+    id_by_name = dict(zip(ctx.board["name"], ctx.board["player_id"], strict=False))
+    out: list[RankedPick] = []
+    for rec in recs:
+        rp = from_recommendation(rec, player_id=str(id_by_name.get(rec.name, rec.name)))
+        if ctx.scoring_mode == "vona":
+            vona = rec.score if rec.score is not None else rec.var
+            rp.metrics = {"vona": vona}
+            rp.score = vona
+        out.append(rp)
+    return out
+
+
 def rank_for_mode(ctx: RecommendContext) -> list[RankedPick]:
     """Single dispatcher: rank the candidate pool for ``ctx.scoring_mode``."""
     if ctx.scoring_mode in _DELTAROTO_MODES:
         return _rank_deltaroto(ctx)
+    if ctx.scoring_mode in _VARVONA_MODES:
+        return _rank_var_vona(ctx)
     raise ValueError(f"unknown scoring_mode {ctx.scoring_mode!r}")
