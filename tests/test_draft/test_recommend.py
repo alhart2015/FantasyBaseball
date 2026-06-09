@@ -60,3 +60,30 @@ def test_recommend_var_vona_runs_through_same_seam(varvona_ctx, mode):
     chosen = recommend(varvona_ctx(scoring_mode=mode), strategy="default", open_starters=set())
     assert chosen is not None
     assert chosen.score == chosen.metrics[mode]
+
+
+def test_recommend_forwards_overlay_kwargs(deltaroto_ctx, monkeypatch):
+    """recommend() must forward **overlay_kwargs to the overlay.
+
+    Closer-family overlays read current_round and closer_count from kwargs.
+    Without forwarding, kwargs.get("current_round", 0) always returns 0 and
+    the overlay is permanently inert (the bug this test guards against).
+    """
+    from fantasy_baseball.draft import strategy as strat
+
+    seen = {}
+
+    def spy(ranked, *, roster_state=None, config=None, **kwargs):
+        seen.update(kwargs)
+        return None  # defer, so recommend() still returns a real pick
+
+    monkeypatch.setitem(strat.OVERLAYS, "spy", spy)
+    chosen = recommend(
+        deltaroto_ctx(scoring_mode="deltaroto_immediate"),
+        strategy="spy",
+        open_starters=set(),
+        current_round=14,
+        closer_count=0,
+    )
+    assert seen == {"current_round": 14, "closer_count": 0}
+    assert chosen is not None  # defer path still produced a pick

@@ -215,15 +215,24 @@ def recommend(
     open_starters: set,
     roster_state=None,
     pick_rank: int = 0,
+    **overlay_kwargs,
 ) -> RankedPick | None:
     """Rank for ctx.scoring_mode, apply the strategy overlay, slot-gate.
 
     Serves all four modes because rank_for_mode(ctx) does the dispatch; the
-    overlay and slot-gate are mode-agnostic (they consume RankedPick)."""
+    overlay and slot-gate are mode-agnostic (they consume RankedPick).
+
+    Overlay-specific context (e.g. current_round, closer_count for the closer
+    overlays) is passed via **overlay_kwargs by the caller.  The sim and
+    dashboard supply these from draft state; recommend() forwards them
+    unchanged to the overlay so closer-family overlays fire correctly.
+    """
     ranked = rank_for_mode(ctx)
     if strategy not in OVERLAYS:
         raise ValueError(f"unknown strategy {strategy!r}; valid: {sorted(OVERLAYS)}")
-    chosen = OVERLAYS[strategy](ranked, roster_state=roster_state, config=ctx.config)
+    chosen = OVERLAYS[strategy](
+        ranked, roster_state=roster_state, config=ctx.config, **overlay_kwargs
+    )
     if chosen is not None:
         return chosen
     # Overlay deferred -> plain slot-gated selection.
