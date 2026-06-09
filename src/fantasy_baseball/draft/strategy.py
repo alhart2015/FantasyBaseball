@@ -1008,8 +1008,8 @@ def overlay_no_punt_opp(ranked, *, roster_state=None, config=None, **kwargs):
     return None
 
 
-def overlay_no_punt_stagger(ranked, *, roster_state=None, config=None, **kwargs):
-    """PARTIAL PORT -- staggered closer deadlines ported; AVG floor deferred.
+overlay_no_punt_stagger = _make_n_closers_overlay(NO_PUNT_STAGGER_TARGET, NO_PUNT_STAGGER_DEADLINES)
+overlay_no_punt_stagger.__doc__ = """PARTIAL PORT -- staggered closer deadlines ported; AVG floor deferred.
 
     The staggered closer scheduling (NO_PUNT_STAGGER_DEADLINES = [13, 17, 20],
     target = 3) is faithfully ported via closer_count + current_round kwargs,
@@ -1031,16 +1031,6 @@ def overlay_no_punt_stagger(ranked, *, roster_state=None, config=None, **kwargs)
         current_round (int): the round currently being drafted.
         closer_count (int): closers already on the user's roster.
     """
-    current_round = int(kwargs.get("current_round", 0))
-    closer_count = int(kwargs.get("closer_count", 0))
-
-    if closer_count < NO_PUNT_STAGGER_TARGET:
-        deadline_idx = closer_count
-        if deadline_idx < len(NO_PUNT_STAGGER_DEADLINES):
-            deadline = NO_PUNT_STAGGER_DEADLINES[deadline_idx]
-            if current_round >= deadline:
-                return _best_closer_from_ranked(ranked)
-    return None
 
 
 def overlay_no_punt_cap3(ranked, *, roster_state=None, config=None, **kwargs):
@@ -1143,16 +1133,10 @@ def overlay_closers_avg(ranked, *, roster_state=None, config=None, **kwargs):
         current_round (int): the round currently being drafted.
         closer_count (int): closers already on the user's roster.
     """
-    # Priority 1: closer scheduling (identical to overlay_three_closers).
-    current_round = int(kwargs.get("current_round", 0))
-    closer_count = int(kwargs.get("closer_count", 0))
-
-    if closer_count < THREE_CLOSERS_TARGET:
-        deadline_idx = closer_count
-        if deadline_idx < len(THREE_CLOSERS_DEADLINES):
-            deadline = THREE_CLOSERS_DEADLINES[deadline_idx]
-            if current_round >= deadline:
-                return _best_closer_from_ranked(ranked)
+    # Priority 1: closer scheduling -- delegate to overlay_three_closers.
+    result = overlay_three_closers(ranked, roster_state=roster_state, config=config, **kwargs)
+    if result is not None:
+        return result
 
     # Priority 2: avg_anchor -- deferred (missing absolute AVG signal).
     return None

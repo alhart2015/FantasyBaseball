@@ -563,12 +563,7 @@ def test_balanced_defers_when_counts_equal():
 
 def test_balanced_picks_highest_score_of_forced_type():
     # When forcing a hitter, must pick the highest-score hitter, not just any hitter.
-    ranked = [
-        _pitcher("SP1", 10.0),
-        _pick("H_Low", 4.0),
-        _pick("H_High", 6.0),
-    ]
-    # Re-order so H_High is first hitter in the ranked list for clarity.
+    # H_High appears before H_Low in ranked so the overlay's first-match scan picks it.
     ranked = [
         _pitcher("SP1", 10.0),
         _pick("H_High", 6.0),
