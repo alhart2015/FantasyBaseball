@@ -4,7 +4,7 @@
 Normal flow: Render runs ``run_full_refresh`` on its schedule and writes
 to Upstash. Sometimes we want to trigger a refresh out-of-band (before
 a cron fires, while iterating on pipeline code, or because Render is
-asleep). This script does exactly that — and then pulls the fresh
+asleep). This script does exactly that -- and then pulls the fresh
 state back down so local dashboards see it too.
 
 Steps:
@@ -12,10 +12,10 @@ Steps:
      Upstash (the env gate is the whole point of the redesign; don't
      subvert it, set it).
   2. Run ``run_full_refresh`` exactly as Render would.
-  3. Sync Upstash → local SQLite so ``run_season_dashboard.py``
+  3. Sync Upstash -> local SQLite so ``run_season_dashboard.py``
      reflects the new data without a second round trip.
 
-Upstash credentials must be in the environment or ``.env`` — the
+Upstash credentials must be in the environment or ``.env`` -- the
 dotenv loader in ``kv_store`` picks them up automatically.
 """
 
@@ -75,13 +75,13 @@ def main() -> int:
 
     # Sync back down. We need a handle to remote Upstash explicitly
     # (since get_kv() is now returning Upstash in this process, but
-    # the sync's local target must be SQLite — so we flip RENDER off
+    # the sync's local target must be SQLite -- so we flip RENDER off
     # and re-resolve).
     remote = build_explicit_upstash_kv()
     os.environ["RENDER"] = "false"
     kv_store._reset_singleton()
 
-    print("Syncing remote → local SQLite...")
+    print("Syncing remote -> local SQLite...")
     stats = sync_remote_to_local(remote=remote)
     print(f"  synced: {stats.summary()}")
     return 0
