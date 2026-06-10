@@ -19,6 +19,7 @@ import re as _re
 from typing import TypedDict
 
 from fantasy_baseball.models.standings import ProjectedStandings, Standings
+from fantasy_baseball.utils.constants import safe_float
 
 logger = logging.getLogger(__name__)
 
@@ -456,11 +457,7 @@ def _trim_ros_snapshot(ros_blob: dict) -> dict[str, list[dict]]:
     def _trim(rows, cols, vol_key, vol_min):
         out = []
         for p in rows or []:
-            try:
-                vol = float(p.get(vol_key) or 0)
-            except (TypeError, ValueError):
-                vol = 0.0
-            if vol != vol or vol < vol_min:  # vol != vol drops NaN (NaN < x is False)
+            if safe_float(p.get(vol_key)) < vol_min:  # safe_float coerces None/NaN -> 0
                 continue
             out.append({c: p[c] for c in cols if c in p})
         return out

@@ -71,7 +71,6 @@ def main() -> int:
         else:
             print("No ROS projection snapshot archived (missing blob or snapshot date).")
     except Exception as exc:
-        # Non-critical archive must not abort the remote->local sync below.
         print(f"WARNING: ROS snapshot archive failed ({type(exc).__name__}: {exc}); continuing.")
 
     # Sync back down. We need a handle to remote Upstash explicitly
