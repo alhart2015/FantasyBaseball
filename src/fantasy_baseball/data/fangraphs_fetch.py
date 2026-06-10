@@ -19,7 +19,11 @@ _USER_AGENT = (
 # Maps config system names to FanGraphs type= query parameter values
 REST_OF_SEASON_TYPE_CODES: dict[str, str] = {
     "steamer": "steamerr",
-    "zips": "rzips",
+    # ZiPS DC ("rzipsdc") = ZiPS rates on FanGraphs Depth Charts playing time,
+    # matching the PT basis the other four systems use. Plain "rzips" uses ZiPS's
+    # own PT model, which is injury-blind (e.g. it gave an injured Judge a full
+    # ROS slate) and systematically over-allocates PA (~+27% vs the DC consensus).
+    "zips": "rzipsdc",
     "atc": "ratcdc",
     "the-bat-x": "rthebatx",
     "oopsy": "roopsydc",
