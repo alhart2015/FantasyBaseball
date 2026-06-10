@@ -46,6 +46,33 @@ def main() -> int:
     run_full_refresh()
     print("Refresh complete.")
 
+    # Archive a trimmed snapshot of the ROS projection vintage this refresh
+    # used, so the in-season playing-time residual can be calibrated later
+    # (projected-vs-realized). Lives here rather than in the deployed pipeline
+    # because ROS is fetched manually -- only a manual refresh should add a
+    # snapshot; Render's cron would otherwise re-archive stale ROS. RENDER is
+    # still "true" here, so get_kv() / read_cache resolve to Upstash.
+    from fantasy_baseball.data.cache_keys import CacheKey
+    from fantasy_baseball.data.kv_store import get_kv
+    from fantasy_baseball.data.redis_store import write_ros_projection_snapshot
+    from fantasy_baseball.data.ros_pipeline import parse_snapshot_date
+    from fantasy_baseball.web.season_data import read_cache_with_meta
+
+    # Best-effort side-car: a failure here must NOT abort the remote->local
+    # sync below (the dashboard's whole point), so swallow-and-log.
+    try:
+        ros_blob, ros_meta = read_cache_with_meta(CacheKey.ROS_PROJECTIONS)
+        # Normalize to a clean ISO key so it matches the other weekly histories;
+        # a hand-staged vintage may be "YYYY-MM-DD-manual" (see parse_snapshot_date).
+        vintage = parse_snapshot_date(ros_meta.get("_ros_snapshot_date") or "")
+        if ros_blob and vintage:
+            write_ros_projection_snapshot(get_kv(), ros_blob, vintage.isoformat())
+            print(f"Archived ROS projection snapshot for {vintage.isoformat()}.")
+        else:
+            print("No ROS projection snapshot archived (missing blob or snapshot date).")
+    except Exception as exc:
+        print(f"WARNING: ROS snapshot archive failed ({type(exc).__name__}: {exc}); continuing.")
+
     # Sync back down. We need a handle to remote Upstash explicitly
     # (since get_kv() is now returning Upstash in this process, but
     # the sync's local target must be SQLite — so we flip RENDER off

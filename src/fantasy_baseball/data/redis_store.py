@@ -19,6 +19,7 @@ import re as _re
 from typing import TypedDict
 
 from fantasy_baseball.models.standings import ProjectedStandings, Standings
+from fantasy_baseball.utils.constants import safe_float
 
 logger = logging.getLogger(__name__)
 
@@ -430,6 +431,87 @@ def get_projected_standings_history(client) -> dict[str, ProjectedStandings]:
             continue
         if isinstance(data, dict):
             out[d] = ProjectedStandings.from_json(data)
+    return out
+
+
+# --- ROS projection history (weekly snapshots for PT-residual calibration) ---
+
+ROS_PROJECTION_HISTORY_KEY = "ros_projection_history"
+
+# Columns retained per player: the playing-time signal (PA / IP) plus the
+# counting stats needed to score projected-vs-realized residuals. FanGraphs'
+# rates, percentile bands, and ~9k sub-replacement prospect lines are dropped
+# so a weekly snapshot stays ~160 KB (free-tier Upstash budget) instead of the
+# full ~2.9 MB ROS blob.
+_ROS_SNAPSHOT_HITTER_COLS = ("name", "mlbam_id", "pa", "r", "hr", "rbi", "sb", "h", "ab")
+_ROS_SNAPSHOT_PITCHER_COLS = ("name", "mlbam_id", "ip", "w", "k", "sv", "er", "bb", "h_allowed")
+# Keep anyone rosterable (covers part-time bats and middle relievers); excludes
+# the AAA/prospect phantom lines that bloat the blob but never get rostered.
+_ROS_SNAPSHOT_MIN_PA = 100.0
+_ROS_SNAPSHOT_MIN_IP = 20.0
+
+
+def _trim_ros_snapshot(ros_blob: dict) -> dict[str, list[dict]]:
+    """Reduce a full ROS projection blob to the snapshot's columns and players."""
+
+    def _trim(rows, cols, vol_key, vol_min):
+        out = []
+        for p in rows or []:
+            if safe_float(p.get(vol_key)) < vol_min:  # safe_float coerces None/NaN -> 0
+                continue
+            out.append({c: p[c] for c in cols if c in p})
+        return out
+
+    return {
+        "hitters": _trim(
+            ros_blob.get("hitters"), _ROS_SNAPSHOT_HITTER_COLS, "pa", _ROS_SNAPSHOT_MIN_PA
+        ),
+        "pitchers": _trim(
+            ros_blob.get("pitchers"), _ROS_SNAPSHOT_PITCHER_COLS, "ip", _ROS_SNAPSHOT_MIN_IP
+        ),
+    }
+
+
+def write_ros_projection_snapshot(client, ros_blob: dict | None, snapshot_date: str) -> None:
+    """Archive a trimmed ROS projection snapshot keyed by ``snapshot_date``.
+
+    ``snapshot_date`` is the ROS projection vintage (its ``_ros_snapshot_date``),
+    so exactly one entry exists per distinct fetch even if the refresh runs
+    several times against it. Idempotent overwrite. No-op when ``client`` is
+    None, the date is missing/blank, the blob is not a dict, or the trim yields
+    no rosterable players (a bad/empty blob -- e.g. a refuse-stale fallback --
+    must not overwrite a previously-good snapshot for this date with nothing).
+    """
+    if client is None or not snapshot_date or not isinstance(ros_blob, dict):
+        return
+    trimmed = _trim_ros_snapshot(ros_blob)
+    if not trimmed["hitters"] and not trimmed["pitchers"]:
+        return
+    client.hset(
+        ROS_PROJECTION_HISTORY_KEY,
+        snapshot_date,
+        json.dumps(trimmed, separators=(",", ":")),
+    )
+
+
+def get_ros_projection_history(client) -> dict[str, dict]:
+    """Return the entire ROS-projection history as ``{snapshot_date: trimmed_blob}``.
+
+    Corrupt JSON entries are silently skipped. ``{}`` when client is None/empty.
+    """
+    if client is None:
+        return {}
+    raw_map = client.hgetall(ROS_PROJECTION_HISTORY_KEY)
+    if not raw_map:
+        return {}
+    out: dict[str, dict] = {}
+    for d, raw in raw_map.items():
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            out[d] = data
     return out
 
 

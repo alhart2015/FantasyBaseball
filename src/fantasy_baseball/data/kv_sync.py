@@ -7,13 +7,12 @@ and it only does so in the safe direction: remote → local.
 
 Design:
 
-- The schema has three hash-typed keys
-  (``weekly_rosters_history``, ``standings_history``,
-  ``projected_standings_history``); everything else is a string.
-  String keys are enumerated via ``keys("*")``; hash names are
-  iterated explicitly from the known constants. (The two backends
-  don't agree on whether ``keys("*")`` returns hash names — Upstash
-  does, our SQLite backend doesn't — so we sidestep the question.)
+- The hash-typed keys are enumerated in ``_HASH_KEYS`` below;
+  everything else is a string. String keys are enumerated via
+  ``keys("*")``; hash names are iterated explicitly from that set.
+  (The two backends don't agree on whether ``keys("*")`` returns hash
+  names — Upstash does, our SQLite backend doesn't — so we sidestep
+  the question.)
 - The local DB is wiped first (both tables) so the sync leaves no
   stale rows behind. Acceptable because local SQLite is derived state
   — if a script needed uncommitted local writes they'd live in Redis
@@ -34,6 +33,7 @@ from fantasy_baseball.data.kv_store import (
 )
 from fantasy_baseball.data.redis_store import (
     PROJECTED_STANDINGS_HISTORY_KEY,
+    ROS_PROJECTION_HISTORY_KEY,
     STANDINGS_HISTORY_KEY,
     WEEKLY_ROSTERS_HISTORY_KEY,
 )
@@ -41,7 +41,12 @@ from fantasy_baseball.data.redis_store import (
 logger = logging.getLogger(__name__)
 
 _HASH_KEYS: frozenset[str] = frozenset(
-    {WEEKLY_ROSTERS_HISTORY_KEY, STANDINGS_HISTORY_KEY, PROJECTED_STANDINGS_HISTORY_KEY}
+    {
+        WEEKLY_ROSTERS_HISTORY_KEY,
+        STANDINGS_HISTORY_KEY,
+        PROJECTED_STANDINGS_HISTORY_KEY,
+        ROS_PROJECTION_HISTORY_KEY,
+    }
 )
 
 # Read string values in batches via MGET rather than one GET per key.
