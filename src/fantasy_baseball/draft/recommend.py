@@ -234,6 +234,7 @@ def recommend(
     open_starters: set,
     roster_state=None,
     pick_rank: int = 0,
+    ranked: list[RankedPick] | None = None,
     **overlay_kwargs,
 ) -> RankedPick | None:
     """Rank for ctx.scoring_mode, apply the strategy overlay, slot-gate.
@@ -245,8 +246,13 @@ def recommend(
     overlays) is passed via **overlay_kwargs by the caller.  The sim and
     dashboard supply these from draft state; recommend() forwards them
     unchanged to the overlay so closer-family overlays fire correctly.
+
+    ``ranked`` may be supplied by the caller to skip re-ranking (avoids a
+    redundant rank_for_mode call when the caller already ranked for the same
+    ctx, e.g. the noise-alternate path in simulate_draft).
     """
-    ranked = rank_for_mode(ctx)
+    if ranked is None:
+        ranked = rank_for_mode(ctx)
     if strategy not in OVERLAYS:
         raise ValueError(f"unknown strategy {strategy!r}; valid: {sorted(OVERLAYS)}")
     chosen = OVERLAYS[strategy](

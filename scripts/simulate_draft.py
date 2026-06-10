@@ -91,6 +91,13 @@ _DELTAROTO_POOL_CAP = 200
 # from recommend._DELTAROTO_MODES so the two never drift.
 _DELTAROTO_STRATEGY_NAMES = frozenset(_DELTAROTO_MODES)
 
+
+def _to_overlay(strategy_name: str) -> str:
+    """deltaRoto mode names map to the default overlay (scoring mode and strategy
+    are orthogonal axes); real strategy names pass through unchanged."""
+    return "default" if strategy_name in _DELTAROTO_STRATEGY_NAMES else strategy_name
+
+
 # Static per-board inputs for the deltaRoto path: cache keyed on board id.
 # Mirrors sim_deltaroto._STATIC_CACHE to avoid rebuilding replacements/ADP per pick.
 _SIM_STATIC_CACHE: dict[int, tuple] = {}
@@ -691,9 +698,8 @@ def run_simulation(
 
             # deltaRoto runs use the deltaRoto RANKER (ctx.scoring_mode) with the
             # default OVERLAY -- scoring mode and strategy are orthogonal axes.
-            _overlay_strategy = (
-                "default" if strategy_name in _DELTAROTO_STRATEGY_NAMES else strategy_name
-            )
+            _overlay_strategy = _to_overlay(strategy_name)
+            _ranked = rank_for_mode(_ctx)
             _pick = recommend(
                 _ctx,
                 strategy=_overlay_strategy,
@@ -701,6 +707,7 @@ def run_simulation(
                 pick_rank=pick_rank,
                 current_round=tracker.current_round,
                 closer_count=_closer_count,
+                ranked=_ranked,
             )
             if _pick is not None:
                 pick_name = _pick.name
@@ -714,11 +721,8 @@ def run_simulation(
             if strategy_noise > 0 and pick_name is not None:
                 skip = min(abs(round(rng.normal(0, strategy_noise))), 4)  # cap at 5th-best
                 if skip > 0:
-                    # Use the same ranker as the primary pick so the alternate is
-                    # mode-consistent (Fix 3: get_recommendations gives VAR for
-                    # deltaRoto modes, but rank_for_mode gives the correct ranked list).
-                    _ranked_noise = rank_for_mode(_ctx)
-                    _alt = select_from_ranked(_ranked_noise, _open_starters, skip)
+                    # Reuse the already-computed _ranked (same ctx, roster not yet updated).
+                    _alt = select_from_ranked(_ranked, _open_starters, skip)
                     if _alt is not None:
                         pick_name = _alt.name
                         pid = _alt.player_id
@@ -792,9 +796,7 @@ def run_simulation(
                 # overlay, but keep real strategy names (e.g. two_closers) intact.
                 # Opponents are assigned overlay names, not scoring-mode aliases, so
                 # opp_strat_name is typically "default"/"two_closers"/etc already.
-                opp_strat_name = (
-                    "default" if opp_strat_name in _DELTAROTO_STRATEGY_NAMES else opp_strat_name
-                )
+                opp_strat_name = _to_overlay(opp_strat_name)
             else:
                 _opp_ctx = RecommendContext(
                     scoring_mode=_eff_scoring,

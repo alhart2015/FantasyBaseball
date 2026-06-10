@@ -9,6 +9,7 @@ Usage:
 import argparse
 import json
 import sys
+import types
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +20,7 @@ from simulate_draft import _build_deltaroto_rec_inputs, build_board_and_context
 from simulate_draft import build_player_lookup as _build_player_lookup
 
 from fantasy_baseball.draft.balance import CategoryBalance
-from fantasy_baseball.draft.recommend import RecommendContext, rank_for_mode
+from fantasy_baseball.draft.recommend import _DELTAROTO_MODES, RecommendContext, rank_for_mode
 from fantasy_baseball.draft.recommender import (
     calculate_vona_scores,
     get_filled_positions,
@@ -114,26 +115,19 @@ def main():
             available_v["vona"] = available_v["player_id"].map(vona_scores).fillna(0)
             by_vona = available_v.sort_values("vona", ascending=False).head(5)
 
-            # Get the actual recommendation -- route through the unified seam.
-            filled = get_filled_positions(
-                user_roster_ids, full_board, roster_slots=config.roster_slots
-            )
-
             # Fix 1: deltaRoto modes route through rank_for_mode (RecommendContext +
             # RecInputs) so they get the actual deltaRoto score, not silently VAR.
             # var/vona keep the existing get_recommendations path (correct there).
-            _is_deltaroto = scoring_mode in ("deltaroto_immediate", "deltaroto_vopn")
+            _is_deltaroto = scoring_mode in _DELTAROTO_MODES
             if _is_deltaroto:
                 # Build a minimal tracker-like namespace for _build_deltaroto_rec_inputs.
                 # It only reads .drafted_ids, .user_roster_ids, and .user_roster from
                 # the tracker; replay has all three in local state.
-                class _FakeTracker:
-                    pass
-
-                _ft = _FakeTracker()
-                _ft.drafted_ids = drafted_ids  # type: ignore[attr-defined]
-                _ft.user_roster_ids = user_roster_ids  # type: ignore[attr-defined]
-                _ft.user_roster = user_roster  # type: ignore[attr-defined]
+                _ft = types.SimpleNamespace(
+                    drafted_ids=drafted_ids,
+                    user_roster_ids=user_roster_ids,
+                    user_roster=user_roster,
+                )
                 # picks_until_next: use round-trip estimate (num_teams - 1) as a
                 # reasonable approximation when exact pick position is not tracked.
                 _picks_until_next = config.num_teams - 1
@@ -153,9 +147,11 @@ def main():
                     picks_until_next=_picks_until_next,
                     inputs=_rec_inputs,
                 )
-                ranked = rank_for_mode(_ctx)
-                recs = ranked  # ranked list of RankedPick (same .name interface)
+                recs = rank_for_mode(_ctx)
             else:
+                filled = get_filled_positions(
+                    user_roster_ids, full_board, roster_slots=config.roster_slots
+                )
                 recs = get_recommendations(
                     board,
                     drafted=drafted_ids,
