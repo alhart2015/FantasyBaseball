@@ -1,29 +1,21 @@
-"""Draft strategies for the simulation engine.
+"""Draft strategy overlays for the unified recommend() seam.
 
-Each strategy is a function that receives the current draft state and
-returns the name + player_id of the player to pick.
+Strategies are orthogonal overlays in the OVERLAYS registry. An overlay
+receives a ranked list[RankedPick] and returns a RankedPick to force that
+pick, or None to defer to recommend()'s slot-gated greedy selection.
 
-Strategies:
-    default          — Pure leverage-weighted recommendation (current behavior).
-    nonzero_sv       — Forces a closer (SV >= 20) by a configurable round.
-    avg_hedge        — Penalizes hitters whose AVG would drag team below floor.
-    three_closers    — Drafts exactly 3 closers at configurable deadline rounds.
-    no_punt          — Ensures no category finishes last (SV + AVG floors).
-    avg_anchor       — Targets a high-AVG hitter (.285+) in first 3 hitter picks.
-    closers_avg      — Combines three_closers + avg_anchor.
-    balanced         — Alternates hitter/pitcher picks to diversify risk.
-    anti_fragile     — Discounts high-IP pitchers, prefers durable mid-tier arms.
+STRATEGIES is an alias for OVERLAYS (backward-compatible name used by
+scripts and config validation).
+
+See src/fantasy_baseball/draft/CLAUDE.md for full strategy port status.
 """
 
 import pandas as pd
 
-from fantasy_baseball.draft.recommender import get_recommendations
-from fantasy_baseball.draft.roster_state import RosterState, get_filled_positions
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.constants import safe_float as _safe
 from fantasy_baseball.utils.positions import can_fill_slot
-from fantasy_baseball.utils.rate_stats import calculate_avg
 
 # Draft a closer by this round if you have none
 CLOSER_DEADLINE_ROUND = 10
@@ -84,10 +76,10 @@ def select_from_ranked(ranked, open_starters, pick_rank):
     """Pick the ``pick_rank``-th item of ``ranked``, restricted to items that
     fill an open starter slot when any such remain (else the full list).
 
-    Shared by :func:`_choose_rec` (VAR/VONA/closer strategies) and the deltaRoto
-    sim adapter so both arms gate the position-aware / k-th-choice selection
-    identically. Items need only a ``.positions`` attribute (a ``Recommendation``
-    or an ``eroto_recs.RecRow``).
+    Used by recommend() (var/vona arm) and the deltaRoto sim adapter so both
+    arms gate the position-aware / k-th-choice selection identically. Items
+    need only a ``.positions`` attribute (a ``Recommendation`` or a
+    ``eroto_recs.RecRow``).
     """
     pool = ranked
     if open_starters:
@@ -95,240 +87,6 @@ def select_from_ranked(ranked, open_starters, pick_rank):
         if fillers:
             pool = fillers
     return pool[min(pick_rank, len(pool) - 1)] if pool else None
-
-
-def _choose_rec(recs, tracker, full_board, config, **kwargs):
-    """Select one recommendation honoring ``pick_rank`` and ``position_aware``.
-
-    ``pick_rank`` (default 0) indexes the ranked list, so a sim can take the
-    2nd/3rd choice for opponent/field variance. ``position_aware`` (default
-    False), when set and any starter slot is still open, restricts the pool to
-    recs that fill an open *starter* slot -- "draft players who fill an active
-    slot, bench last." Both default to current behavior (top rosterable pick).
-    """
-    if not recs:
-        return None
-    if kwargs.get("position_aware"):
-        filled = get_filled_positions(
-            tracker.user_roster_ids,
-            full_board,
-            roster_slots=config.roster_slots,
-            player_lookup=kwargs.get("player_lookup"),
-        )
-        open_starters = RosterState.from_dicts(filled, config.roster_slots).unfilled_starter_slots()
-    else:
-        open_starters = set()
-    return select_from_ranked(recs, open_starters, int(kwargs.get("pick_rank", 0) or 0))
-
-
-def pick_default(
-    board,
-    full_board,
-    tracker,
-    balance,
-    config,
-    team_filled,
-    **kwargs,
-):
-    """Default strategy: take the #1 leverage-weighted recommendation.
-
-    With ``pick_rank``/``position_aware`` kwargs (sim field variance +
-    position-aware drafting), selection defers to :func:`_choose_rec`.
-    """
-    n = 15 if (kwargs.get("pick_rank") or kwargs.get("position_aware")) else 5
-    recs = _get_recs(board, full_board, tracker, config, n=n, **kwargs)
-    rec = _choose_rec(recs, tracker, full_board, config, **kwargs)
-    if rec is not None:
-        return rec.name, _lookup_pid(board, rec.name)
-    return None, None
-
-
-def pick_nonzero_sv(
-    board,
-    full_board,
-    tracker,
-    balance,
-    config,
-    team_filled,
-    **kwargs,
-):
-    """Force a closer by CLOSER_DEADLINE_ROUND if none has been drafted."""
-    player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
-    # Check if we already have a closer
-    has_closer = False
-    for pid in tracker.user_roster_ids:
-        row = player_lookup.get(pid)
-        if row is not None and _safe(row.get("sv")) >= CLOSER_SV_THRESHOLD:
-            has_closer = True
-            break
-
-    current_round = tracker.current_round
-
-    # If no closer and we're at or past the deadline, force one
-    if not has_closer and current_round >= CLOSER_DEADLINE_ROUND:
-        available = board[~board["player_id"].isin(tracker.drafted_ids)]
-        closers = available[available["sv"].fillna(0) >= CLOSER_SV_THRESHOLD]
-        if not closers.empty:
-            # Pick the closer with the best ADP (most drafted consensus)
-            closers = closers.sort_values("adp", ascending=True)
-            best = closers.iloc[0]
-            # Verify they can be rostered
-            filled = get_filled_positions(
-                tracker.user_roster_ids,
-                full_board,
-                roster_slots=config.roster_slots,
-                player_lookup=player_lookup,
-            )
-            roster_state = RosterState.from_dicts(filled, config.roster_slots)
-            if roster_state.any_slot_open_for(best["positions"]):
-                return best["name"], best["player_id"]
-
-    # Otherwise, fall back to default
-    return pick_default(board, full_board, tracker, balance, config, team_filled, **kwargs)
-
-
-def pick_avg_hedge(
-    board,
-    full_board,
-    tracker,
-    balance,
-    config,
-    team_filled,
-    **kwargs,
-):
-    """Penalize hitters that would drag team AVG below the floor."""
-    recs = _get_recs(board, full_board, tracker, config, n=10, **kwargs)
-    if not recs:
-        return None, None
-    return _pick_with_avg_floor(recs, board, balance, AVG_FLOOR)
-
-
-def pick_no_punt_opp(
-    board,
-    full_board,
-    tracker,
-    balance,
-    config,
-    team_filled,
-    **kwargs,
-):
-    """No-punt with dynamic SV monitoring and opportunistic closer grabs.
-
-    Watches projected SV standings across all teams.  When our team
-    would finish in the bottom NO_PUNT_SV_DANGER_ZONE (default: last
-    or second-to-last), forces a closer pick.  Also grabs closers
-    opportunistically if they've fallen past their ADP.
-
-    Requires ``team_rosters`` in kwargs (dict of team_num -> [player_ids]).
-    Falls back to the legacy round-based deadline if not provided.
-    """
-    player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
-    current_round = tracker.current_round
-    current_pick = tracker.current_pick
-    team_rosters = kwargs.get("team_rosters")
-
-    # Dynamic SV check: are we in danger of finishing last in saves?
-    need_closer = False
-    if team_rosters:
-        need_closer = _sv_in_danger(
-            tracker,
-            board,
-            full_board,
-            team_rosters,
-            config.num_teams,
-            player_lookup=player_lookup,
-        )
-    else:
-        # Legacy fallback: force at least 1 closer by deadline
-        closer_count = _count_closers(tracker, board, full_board, player_lookup)
-        if closer_count == 0 and current_round >= NO_PUNT_SV_DEADLINE:
-            need_closer = True
-
-    if need_closer:
-        result = _force_closer(board, tracker, full_board, config, player_lookup)
-        if result:
-            return result
-
-    # Opportunistic: grab a closer falling past ADP, but only if we're
-    # still in SV danger or haven't drafted any closers yet.
-    closer_count = _count_closers(tracker, board, full_board, player_lookup)
-    if need_closer or closer_count == 0:
-        available = board[~board["player_id"].isin(tracker.drafted_ids)]
-        closers = available[available["sv"].fillna(0) >= CLOSER_SV_THRESHOLD]
-        if not closers.empty:
-            num_keepers = len(tracker.drafted_players) - (current_pick - 1)
-            effective_pick = current_pick + num_keepers
-            falling = closers[effective_pick >= closers["adp"] - OPP_CLOSER_ADP_BUFFER]
-            if not falling.empty:
-                falling = falling.sort_values("var", ascending=False)
-                filled = get_filled_positions(
-                    tracker.user_roster_ids,
-                    full_board,
-                    roster_slots=config.roster_slots,
-                    player_lookup=player_lookup,
-                )
-                roster_state = RosterState.from_dicts(filled, config.roster_slots)
-                for _, best in falling.iterrows():
-                    if roster_state.any_slot_open_for(best["positions"]):
-                        return best["name"], best["player_id"]
-
-    # Default with AVG floor
-    recs = _get_recs(board, full_board, tracker, config, n=10, **kwargs)
-    if not recs:
-        return None, None
-    return _pick_with_avg_floor(recs, board, balance, NO_PUNT_AVG_FLOOR)
-
-
-def _make_n_closers_strategy(target, deadlines):
-    """Factory: create a strategy that drafts exactly N closers at spaced deadlines."""
-
-    def pick_n_closers(
-        board,
-        full_board,
-        tracker,
-        balance,
-        config,
-        team_filled,
-        **kwargs,
-    ):
-        player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
-        kwargs["player_lookup"] = player_lookup
-        closer_count = _count_closers(tracker, board, full_board, player_lookup)
-        current_round = tracker.current_round
-
-        need_closer = False
-        if closer_count < target:
-            deadline_idx = closer_count
-            if deadline_idx < len(deadlines):
-                deadline = deadlines[deadline_idx]
-                if current_round >= deadline:
-                    need_closer = True
-
-        if need_closer:
-            available = board[~board["player_id"].isin(tracker.drafted_ids)]
-            closers = available[available["sv"].fillna(0) >= CLOSER_SV_THRESHOLD]
-            if not closers.empty:
-                closers = closers.sort_values("var", ascending=False)
-                filled = get_filled_positions(
-                    tracker.user_roster_ids,
-                    full_board,
-                    roster_slots=config.roster_slots,
-                    player_lookup=player_lookup,
-                )
-                roster_state = RosterState.from_dicts(filled, config.roster_slots)
-                for _, best in closers.iterrows():
-                    if roster_state.any_slot_open_for(best["positions"]):
-                        return best["name"], best["player_id"]
-
-        return pick_default(board, full_board, tracker, balance, config, team_filled, **kwargs)
-
-    pick_n_closers.__doc__ = f"Draft exactly {target} closers at deadlines {deadlines}."
-    return pick_n_closers
-
-
-pick_two_closers = _make_n_closers_strategy(TWO_CLOSERS_TARGET, TWO_CLOSERS_DEADLINES)
-pick_three_closers = _make_n_closers_strategy(THREE_CLOSERS_TARGET, THREE_CLOSERS_DEADLINES)
-pick_four_closers = _make_n_closers_strategy(FOUR_CLOSERS_TARGET, FOUR_CLOSERS_DEADLINES)
 
 
 def _count_closers(tracker, board, full_board, player_lookup=None):
@@ -343,454 +101,286 @@ def _count_closers(tracker, board, full_board, player_lookup=None):
     return count
 
 
-def _count_hitters(tracker, board, full_board, player_lookup=None):
-    """Count hitters on the user's roster."""
-    if player_lookup is None:
-        player_lookup = build_player_lookup(board, full_board)
-    count = 0
-    for pid in tracker.user_roster_ids:
-        row = player_lookup.get(pid)
-        if row is not None and row.get("player_type") == PlayerType.HITTER:
-            count += 1
-    return count
+def overlay_default(ranked, *, roster_state=None, config=None, **kwargs):
+    """No-constraint overlay; returns None to defer to recommend()'s slot-gate.
 
-
-def _count_pitchers(tracker, board, full_board, player_lookup=None):
-    """Count pitchers on the user's roster."""
-    return len(tracker.user_roster) - _count_hitters(tracker, board, full_board, player_lookup)
-
-
-def _sv_in_danger(tracker, board, full_board, team_rosters, num_teams, player_lookup=None):
-    """Check if our projected SV would finish in the danger zone.
-
-    Returns True if:
-    - At least NO_PUNT_SV_MIN_TEAMS_WITH_CLOSERS teams have drafted closers, AND
-    - Our team would finish in the bottom NO_PUNT_SV_DANGER_ZONE in SV.
-
-    This avoids panic-triggering early when nobody has closers yet.
-    """
-    if not team_rosters:
-        return False
-
-    if player_lookup is None:
-        player_lookup = build_player_lookup(board, full_board)
-
-    # Project SV for each team from their current roster
-    team_sv = {}
-    teams_with_closers = 0
-    user_team = None
-    for tn, pids in team_rosters.items():
-        sv_total = 0
-        for pid in pids:
-            row = player_lookup.get(pid)
-            if row is not None:
-                sv_total += row.get("sv", 0)
-        team_sv[tn] = sv_total
-        if sv_total >= CLOSER_SV_THRESHOLD:
-            teams_with_closers += 1
-
-    # Identify user team via set intersection
-    for tn, pids in team_rosters.items():
-        if set(pids) & set(tracker.user_roster_ids):
-            user_team = tn
-            break
-
-    if user_team is None or teams_with_closers < NO_PUNT_SV_MIN_TEAMS_WITH_CLOSERS:
-        return False
-
-    # Count how many teams have more SV than us
-    our_sv = team_sv.get(user_team, 0)
-    teams_above = sum(1 for tn, sv in team_sv.items() if sv > our_sv and tn != user_team)
-    our_rank = teams_above + 1  # 1 = most SV, num_teams = least
-
-    return our_rank > num_teams - NO_PUNT_SV_DANGER_ZONE
-
-
-def _force_closer(board, tracker, full_board, config, player_lookup=None):
-    """Pick the best available closer by VAR. Returns (name, pid) or None."""
-    available = board[~board["player_id"].isin(tracker.drafted_ids)]
-    closers = available[available["sv"].fillna(0) >= CLOSER_SV_THRESHOLD]
-    if closers.empty:
-        return None
-    closers = closers.sort_values("var", ascending=False)
-    filled = get_filled_positions(
-        tracker.user_roster_ids,
-        full_board,
-        roster_slots=config.roster_slots,
-        player_lookup=player_lookup,
-    )
-    roster_state = RosterState.from_dicts(filled, config.roster_slots)
-    for _, best in closers.iterrows():
-        if roster_state.any_slot_open_for(best["positions"]):
-            return best["name"], best["player_id"]
+    Overlay contract: return a RankedPick to override slot-gated selection,
+    or None to defer to it. This function always defers."""
     return None
 
 
-def _fallback_non_closer(board, tracker, full_board, config):
-    """Pick the best available non-closer by VAR. Returns (name, pid) or (None, None).
+def _save_projection(pick) -> float:
+    """Extract save projection from a RankedPick.
 
-    Searches the full board (not just top recs) for a non-closer who can
-    fill an open roster slot.  This ensures the closer cap is respected
-    even when the recommendation engine returns empty.
+    Uses dict.get with 0.0 default -- never `x or 0` so that a genuine
+    SV=0.0 entry is not accidentally promoted.
     """
-    available = board[~board["player_id"].isin(tracker.drafted_ids)]
-    non_closers = available[available["sv"].fillna(0) < CLOSER_SV_THRESHOLD]
-    filled = get_filled_positions(
-        tracker.user_roster_ids,
-        full_board,
-        roster_slots=config.roster_slots,
+    return float(pick.per_category.get("SV", 0.0))
+
+
+def _best_closer_from_ranked(ranked):
+    """Return the highest-score RankedPick whose SV projection >= CLOSER_SV_THRESHOLD.
+
+    Ranked is already ordered by score descending (the overlay receives it
+    that way from recommend()), so the first qualifying entry is the best.
+    """
+    for pick in ranked:
+        if _save_projection(pick) >= CLOSER_SV_THRESHOLD:
+            return pick
+    return None
+
+
+def overlay_nonzero_sv(ranked, *, roster_state=None, config=None, **kwargs):
+    """Force a closer (SV >= CLOSER_SV_THRESHOLD) by CLOSER_DEADLINE_ROUND.
+
+    Overlay contract: return a RankedPick to override slot-gated selection,
+    or None to defer to it.
+
+    kwargs expected:
+        current_round (int): the round currently being drafted.
+        closer_count (int): closers already on the user's roster.
+    """
+    current_round = int(kwargs.get("current_round", 0))
+    closer_count = int(kwargs.get("closer_count", 0))
+
+    if closer_count == 0 and current_round >= CLOSER_DEADLINE_ROUND:
+        return _best_closer_from_ranked(ranked)
+    return None
+
+
+def _make_n_closers_overlay(target, deadlines):
+    """Factory: create a closer-count overlay for a target count and spaced deadlines.
+
+    Mirrors _make_n_closers_strategy: deadline_idx == closer_count, so the
+    Nth closer must arrive by deadlines[N-1].
+    """
+
+    def overlay(ranked, *, roster_state=None, config=None, **kwargs):
+        current_round = int(kwargs.get("current_round", 0))
+        closer_count = int(kwargs.get("closer_count", 0))
+
+        if closer_count < target:
+            deadline_idx = closer_count
+            if deadline_idx < len(deadlines):
+                deadline = deadlines[deadline_idx]
+                if current_round >= deadline:
+                    return _best_closer_from_ranked(ranked)
+        return None
+
+    overlay.__doc__ = (
+        f"Force exactly {target} closers at deadlines {deadlines}. "
+        "Returns the highest-score SV-positive RankedPick when a deadline "
+        "is reached, None otherwise."
     )
-    roster_state = RosterState.from_dicts(filled, config.roster_slots)
-    if not non_closers.empty:
-        for _, best in non_closers.sort_values("var", ascending=False).head(50).iterrows():
-            if roster_state.any_slot_open_for(best["positions"]):
-                return best["name"], best["player_id"]
-    # Also check full_board for players not on the draft board
-    # (e.g. low-projection players filtered during board construction)
-    avail_full = full_board[~full_board["player_id"].isin(tracker.drafted_ids)]
-    non_closers_full = avail_full[avail_full["sv"].fillna(0) < CLOSER_SV_THRESHOLD]
-    if not non_closers_full.empty:
-        for _, best in non_closers_full.sort_values("var", ascending=False).head(50).iterrows():
-            if roster_state.any_slot_open_for(best["positions"]):
-                return best["name"], best["player_id"]
-    return None, None
+    return overlay
 
 
-def _get_recs(board, full_board, tracker, config, n=10, **kwargs):
-    """Get recommendations (shared helper)."""
-    filled = get_filled_positions(
-        tracker.user_roster_ids,
-        full_board,
-        roster_slots=config.roster_slots,
-        player_lookup=kwargs.get("player_lookup"),
-    )
-    picks_until_next = getattr(tracker, "picks_until_next_turn", None)
-    return get_recommendations(
-        board,
-        drafted=tracker.drafted_ids,
-        user_roster=tracker.user_roster,
-        n=n,
-        filled_positions=filled,
-        picks_until_next=picks_until_next,
-        roster_slots=config.roster_slots,
-        num_teams=config.num_teams,
-        scoring_mode=kwargs.get("scoring_mode", "var"),
-    )
+overlay_two_closers = _make_n_closers_overlay(TWO_CLOSERS_TARGET, TWO_CLOSERS_DEADLINES)
+overlay_three_closers = _make_n_closers_overlay(THREE_CLOSERS_TARGET, THREE_CLOSERS_DEADLINES)
+overlay_four_closers = _make_n_closers_overlay(FOUR_CLOSERS_TARGET, FOUR_CLOSERS_DEADLINES)
 
 
-def pick_no_punt(
-    board,
-    full_board,
-    tracker,
-    balance,
-    config,
-    team_filled,
-    **kwargs,
-):
-    """Ensure no category finishes dead last.
+# ---------------------------------------------------------------------------
+# no_punt family -- FALLBACK / PARTIAL PORT
+# ---------------------------------------------------------------------------
 
-    Watches projected SV standings — forces a closer when our team
-    would finish in the danger zone.  Skips low-AVG hitters if team
-    AVG is below the floor.
 
-    Requires ``team_rosters`` in kwargs for dynamic SV monitoring.
-    Falls back to the legacy round-based deadline if not provided.
+def overlay_no_punt(ranked, *, roster_state=None, config=None, **kwargs):
+    """Documented FALLBACK -- defers to recommend()'s slot-gated selection.
+
+    Missing signal: team's current AVG components (balance.get_avg_components()
+    returns the team's accumulated H and AB totals, not available on RankedPick)
+    and team_rosters for dynamic SV danger monitoring (_sv_in_danger requires
+    the full roster dict for all teams, which is not passed through the overlay
+    kwargs by the current recommend() caller).  Threading both signals would
+    require changes to the recommend() call-site and the sim loop that exceed
+    a small additive change, so this overlay defers until those are available.
+
+    Original pick_no_punt behavior (src line ~481-529):
+    - If team SV rank is in bottom NO_PUNT_SV_DANGER_ZONE (needs team_rosters) or
+      no closer by round NO_PUNT_SV_DEADLINE (needs closer_count kwarg),
+      force the best available closer.
+    - Then filter hitters whose H+team_H / AB+team_AB < NO_PUNT_AVG_FLOOR (0.250)
+      (needs team's accumulated H/AB not on RankedPick).
     """
-    player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
-    team_rosters = kwargs.get("team_rosters")
-
-    need_closer = False
-    if team_rosters:
-        need_closer = _sv_in_danger(
-            tracker,
-            board,
-            full_board,
-            team_rosters,
-            config.num_teams,
-            player_lookup=player_lookup,
-        )
-    else:
-        closer_count = _count_closers(tracker, board, full_board, player_lookup)
-        if (
-            closer_count == 0
-            and kwargs.get("current_round", tracker.current_round) >= NO_PUNT_SV_DEADLINE
-        ):
-            need_closer = True
-
-    if need_closer:
-        result = _force_closer(board, tracker, full_board, config, player_lookup)
-        if result:
-            return result
-
-    # Get recommendations with AVG floor
-    recs = _get_recs(board, full_board, tracker, config, n=10, **kwargs)
-    if not recs:
-        return None, None
-    return _pick_with_avg_floor(recs, board, balance, NO_PUNT_AVG_FLOOR)
+    return None
 
 
-def pick_no_punt_stagger(
-    board,
-    full_board,
-    tracker,
-    balance,
-    config,
-    team_filled,
-    **kwargs,
-):
-    """No-punt with staggered closer deadlines.
+def overlay_no_punt_opp(ranked, *, roster_state=None, config=None, **kwargs):
+    """Documented FALLBACK -- defers to recommend()'s slot-gated selection.
 
-    Combines no_punt's category protection (AVG floor, dynamic SV monitoring)
-    with staggered closer deadlines to ensure adequate SV investment.
-    Fixes no_punt's "one and done" closer bug by requiring multiple closers
-    on a schedule, while also triggering early via SV danger monitoring.
+    Missing signal: team_rosters (all-team roster dict for _sv_in_danger),
+    effective_pick / ADP context for opportunistic grab logic, and team's
+    accumulated H/AB for AVG floor filtering.  Opponent-relative SV standings
+    (_sv_in_danger projection across all rosters) cannot be reconstructed from
+    a single RankedPick's per_category or simple kwargs without threading the
+    full team_rosters dict through recommend().
+
+    Original pick_no_punt_opp behavior (src line ~206-279):
+    - Dynamic SV danger check via _sv_in_danger (needs team_rosters).
+    - Opportunistic closer grab when effective_pick >= ADP (needs current_pick
+      and keeper count, not in overlay contract).
+    - AVG floor filter via _pick_with_avg_floor (needs team H/AB totals).
     """
-    player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
-    current_round = tracker.current_round
-    team_rosters = kwargs.get("team_rosters")
-
-    # Count current closers
-    closer_count = _count_closers(tracker, board, full_board, player_lookup)
-
-    # Check staggered deadlines: force a closer if we're behind schedule
-    need_closer = False
-    if closer_count < NO_PUNT_STAGGER_TARGET:
-        deadline_idx = closer_count  # 0th closer -> deadline[0], etc.
-        if deadline_idx < len(NO_PUNT_STAGGER_DEADLINES):
-            deadline = NO_PUNT_STAGGER_DEADLINES[deadline_idx]
-            if current_round >= deadline:
-                need_closer = True
-
-    # Also check dynamic SV danger (if team_rosters available)
-    if not need_closer and team_rosters and closer_count < NO_PUNT_STAGGER_TARGET:
-        need_closer = _sv_in_danger(
-            tracker,
-            board,
-            full_board,
-            team_rosters,
-            config.num_teams,
-            player_lookup=player_lookup,
-        )
-
-    if need_closer:
-        result = _force_closer(board, tracker, full_board, config, player_lookup)
-        if result:
-            return result
-
-    # Get recommendations with AVG floor protection
-    recs = _get_recs(board, full_board, tracker, config, n=10, **kwargs)
-    if not recs:
-        return None, None
-    return _pick_with_avg_floor(recs, board, balance, NO_PUNT_AVG_FLOOR)
+    return None
 
 
-def pick_no_punt_cap3(
-    board,
-    full_board,
-    tracker,
-    balance,
-    config,
-    team_filled,
-    **kwargs,
-):
-    """No-punt with staggered closer deadlines and a hard 3-closer cap.
+overlay_no_punt_stagger = _make_n_closers_overlay(NO_PUNT_STAGGER_TARGET, NO_PUNT_STAGGER_DEADLINES)
+overlay_no_punt_stagger.__doc__ = """PARTIAL PORT -- staggered closer deadlines ported; AVG floor deferred.
 
-    Uses staggered deadlines to ensure we draft up to 3 closers, then
-    filters closers from recommendations so the VONA engine can't
-    over-draft them.  Keeps AVG floor and dynamic SV monitoring.
+    The staggered closer scheduling (NO_PUNT_STAGGER_DEADLINES = [13, 17, 20],
+    target = 3) is faithfully ported via closer_count + current_round kwargs,
+    identical to the n-closers overlay factory pattern.
+
+    Missing signal: team's accumulated H/AB for AVG floor filtering
+    (NO_PUNT_AVG_FLOOR = 0.250) and team_rosters for dynamic SV danger
+    monitoring.  The dynamic SV check is omitted; only the deadline-based
+    trigger fires.  The AVG floor pass that filters low-AVG hitters from recs
+    is not applied because balance.get_avg_components() (team totals) is not
+    threaded through the overlay contract.
+
+    Original pick_no_punt_stagger behavior (src line ~532-584):
+    - Staggered deadlines: force Nth closer by NO_PUNT_STAGGER_DEADLINES[N-1].
+    - Dynamic SV danger check (needs team_rosters -- OMITTED here).
+    - AVG floor filter (needs team H/AB -- OMITTED here).
+
+    kwargs expected:
+        current_round (int): the round currently being drafted.
+        closer_count (int): closers already on the user's roster.
     """
-    player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
-    closer_count = _count_closers(tracker, board, full_board, player_lookup)
-    current_round = tracker.current_round
-    team_rosters = kwargs.get("team_rosters")
 
-    # Force closers via staggered deadlines, up to the cap
-    need_closer = False
-    if closer_count < NO_PUNT_CAP3_TARGET:
-        deadline_idx = closer_count
-        if deadline_idx < len(NO_PUNT_STAGGER_DEADLINES):
-            deadline = NO_PUNT_STAGGER_DEADLINES[deadline_idx]
-            if current_round >= deadline:
-                need_closer = True
 
-        # Dynamic SV danger check
-        if not need_closer and team_rosters:
-            need_closer = _sv_in_danger(
-                tracker,
-                board,
-                full_board,
-                team_rosters,
-                config.num_teams,
-                player_lookup=player_lookup,
-            )
+def overlay_no_punt_cap3(ranked, *, roster_state=None, config=None, **kwargs):
+    """PARTIAL PORT -- staggered deadlines + cap-3 logic ported; AVG floor deferred.
 
-    if need_closer:
-        result = _force_closer(board, tracker, full_board, config, player_lookup)
-        if result:
-            return result
+    The staggered closer scheduling (NO_PUNT_STAGGER_DEADLINES = [13, 17, 20],
+    cap = NO_PUNT_CAP3_TARGET = 3) is faithfully ported.  When the cap is
+    reached the overlay defers (no closer forced, no AVG filter applied) so
+    that recommend()'s slot-gate picks the best non-closer.
 
-    # Get recommendations
-    recs = _get_recs(board, full_board, tracker, config, n=15, **kwargs)
+    Missing signal: team's accumulated H/AB for AVG floor filtering and
+    balance.get_avg_components() for the _pick_with_avg_floor call.  The cap
+    also originally filtered closers out of the rec pool once 3 were drafted
+    (source line ~653-655); that filter requires reading player SV from the
+    board, not from per_category, so it is omitted here.
 
-    # If recs is empty (late-draft roster nearly full), fall back to
-    # board search that respects the closer cap.
-    if not recs:
-        return (
-            _fallback_non_closer(
-                board,
-                tracker,
-                full_board,
-                config,
-            )
-            if closer_count >= NO_PUNT_CAP3_TARGET
-            else (None, None)
-        )
+    Original pick_no_punt_cap3 behavior (src line ~587-675):
+    - Same staggered deadlines + dynamic SV danger as no_punt_stagger.
+    - After force, walks rec list skipping closers once cap reached.
+    - AVG floor filter on each hitter (needs team H/AB -- OMITTED here).
 
-    current_h, current_ab = balance.get_avg_components()
+    kwargs expected:
+        current_round (int): the round currently being drafted.
+        closer_count (int): closers already on the user's roster.
+    """
+    current_round = int(kwargs.get("current_round", 0))
+    closer_count = int(kwargs.get("closer_count", 0))
 
-    for rec in recs:
-        # Hard cap: skip closers once we have enough
-        if closer_count >= NO_PUNT_CAP3_TARGET:
-            rows = board[board["name"] == rec.name]
-            if not rows.empty and rows.iloc[0].get("sv", 0) >= CLOSER_SV_THRESHOLD:
-                continue
-
-        if rec.player_type != PlayerType.HITTER:
-            return rec.name, _lookup_pid(board, rec.name)
-
-        rows = board[board["name"] == rec.name]
-        if rows.empty:
-            continue
-        player = rows.iloc[0]
-        new_h = current_h + player.get("h", 0)
-        new_ab = current_ab + player.get("ab", 0)
-        projected_avg = calculate_avg(new_h, new_ab)
-
-        if projected_avg >= NO_PUNT_AVG_FLOOR or current_ab == 0:
-            return rec.name, _lookup_pid(board, rec.name)
-
-    # All recs filtered — respect closer cap in fallback
+    # Hard cap: if already at target, defer (let slot-gate pick non-closer).
     if closer_count >= NO_PUNT_CAP3_TARGET:
-        return _fallback_non_closer(board, tracker, full_board, config)
-    return recs[0].name, _lookup_pid(board, recs[0].name)
+        return None
+
+    deadline_idx = closer_count
+    if deadline_idx < len(NO_PUNT_STAGGER_DEADLINES):
+        deadline = NO_PUNT_STAGGER_DEADLINES[deadline_idx]
+        if current_round >= deadline:
+            return _best_closer_from_ranked(ranked)
+    return None
 
 
-def pick_avg_anchor(
-    board,
-    full_board,
-    tracker,
-    balance,
-    config,
-    team_filled,
-    **kwargs,
-):
-    """Target a high-AVG hitter (.285+) in the first 3 hitter picks.
+# ---------------------------------------------------------------------------
+# AVG family -- FALLBACK
+# ---------------------------------------------------------------------------
 
-    Once the anchor is secured, falls back to default.
+
+def overlay_avg_hedge(ranked, *, roster_state=None, config=None, **kwargs):
+    """Documented FALLBACK -- defers to recommend()'s slot-gated selection.
+
+    Missing signal: the team's accumulated hit (H) and at-bat (AB) totals from
+    balance.get_avg_components().  pick_avg_hedge calls _pick_with_avg_floor
+    which computes projected_avg = (team_H + player_H) / (team_AB + player_AB)
+    and filters out hitters that would push the team below AVG_FLOOR (0.255).
+    The player's raw H and AB values come from board rows; per_category carries
+    only marginal roto deltas (not absolute counting stats).
+
+    Neither team_H/team_AB nor player_H/player_AB are available in the overlay
+    contract without threading balance or raw projections through recommend().
+    Threading balance would require adding it to every overlay call-site and
+    the sim loop, which exceeds a small additive change.
     """
-    player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
-    hitter_count = _count_hitters(tracker, board, full_board, player_lookup)
-
-    # Check if we already have an AVG anchor
-    has_anchor = False
-    for pid in tracker.user_roster_ids:
-        row = player_lookup.get(pid)
-        if (
-            row is not None
-            and row.get("player_type") == PlayerType.HITTER
-            and row.get("avg", 0) >= AVG_ANCHOR_MIN
-        ):
-            has_anchor = True
-            break
-
-    # If no anchor and we're within the hitter deadline, prefer high-AVG hitters
-    if not has_anchor and hitter_count < AVG_ANCHOR_DEADLINE_HITTER:
-        recs = _get_recs(board, full_board, tracker, config, n=15, **kwargs)
-        if recs:
-            # Try to find a high-AVG hitter in the recommendations
-            for rec in recs:
-                if rec.player_type != PlayerType.HITTER:
-                    continue
-                rows = board[board["name"] == rec.name]
-                if rows.empty:
-                    continue
-                if rows.iloc[0].get("avg", 0) >= AVG_ANCHOR_MIN:
-                    return rec.name, _lookup_pid(board, rec.name)
-
-            # If none in recs, search the board for the best high-AVG hitter
-            available = board[~board["player_id"].isin(tracker.drafted_ids)]
-            anchors = available[
-                (available["player_type"] == PlayerType.HITTER)
-                & (available["avg"] >= AVG_ANCHOR_MIN)
-            ].sort_values("var", ascending=False)
-            filled = get_filled_positions(
-                tracker.user_roster_ids,
-                full_board,
-                roster_slots=config.roster_slots,
-            )
-            roster_state = RosterState.from_dicts(filled, config.roster_slots)
-            for _, best in anchors.head(5).iterrows():
-                if roster_state.any_slot_open_for(best["positions"]):
-                    return best["name"], best["player_id"]
-
-    # Fall back to default
-    return pick_default(board, full_board, tracker, balance, config, team_filled, **kwargs)
+    return None
 
 
-def pick_closers_avg(
-    board,
-    full_board,
-    tracker,
-    balance,
-    config,
-    team_filled,
-    **kwargs,
-):
-    """Combine three_closers + avg_anchor.
+def overlay_avg_anchor(ranked, *, roster_state=None, config=None, **kwargs):
+    """Documented FALLBACK -- defers to recommend()'s slot-gated selection.
 
-    Closer deadlines take priority. Between deadlines, try to land an
-    AVG anchor in the first 3 hitter picks. Otherwise, default.
+    Missing signal: the candidate's absolute projected AVG (e.g. .285+).
+    pick_avg_anchor checks board['avg'] >= AVG_ANCHOR_MIN (0.285) for each rec.
+    RankedPick.per_category carries the marginal roto-delta for AVG (a float in
+    roto-point units), not the player's season batting average projection.  These
+    are dimensionally incompatible: an absolute AVG of .285 cannot be compared
+    to a delta-roto contribution of e.g. +0.04 roto points.
+
+    Additionally, hitter_count (how many hitters are already on the team) is not
+    part of the overlay contract without threading it as a kwarg.
+
+    Original pick_avg_anchor behavior (src line ~678-737):
+    - While hitter_count < AVG_ANCHOR_DEADLINE_HITTER (3) and no anchor yet,
+      scan recs for a hitter with board['avg'] >= AVG_ANCHOR_MIN (0.285).
     """
-    # Check closer deadlines first (highest priority)
-    player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
-    kwargs["player_lookup"] = player_lookup
-    closer_count = _count_closers(tracker, board, full_board, player_lookup)
-    current_round = tracker.current_round
-
-    if closer_count < THREE_CLOSERS_TARGET:
-        deadline_idx = closer_count
-        if deadline_idx < len(THREE_CLOSERS_DEADLINES):
-            deadline = THREE_CLOSERS_DEADLINES[deadline_idx]
-            if current_round >= deadline:
-                result = _force_closer(board, tracker, full_board, config, player_lookup)
-                if result:
-                    return result
-
-    # Then try AVG anchor (player_lookup already in kwargs)
-    return pick_avg_anchor(board, full_board, tracker, balance, config, team_filled, **kwargs)
+    return None
 
 
-def pick_balanced(
-    board,
-    full_board,
-    tracker,
-    balance,
-    config,
-    team_filled,
-    **kwargs,
-):
-    """Alternate hitter/pitcher picks to diversify risk.
+# ---------------------------------------------------------------------------
+# closers_avg -- COMPOSED (closer scheduling ported; AVG anchor deferred)
+# ---------------------------------------------------------------------------
 
-    If pitchers lead hitters by more than BALANCED_MAX_SKEW, force a hitter.
-    If hitters lead pitchers by more than BALANCED_MAX_SKEW, force a pitcher.
+
+def overlay_closers_avg(ranked, *, roster_state=None, config=None, **kwargs):
+    """COMPOSED: three_closers closer gate applied; AVG anchor portion deferred.
+
+    Mirrors pick_closers_avg (src line ~740-770): closer deadlines have highest
+    priority, then fall through to avg_anchor.  The closer gate is faithfully
+    ported (identical to overlay_three_closers).  The avg_anchor fallback is
+    omitted because overlay_avg_anchor is a documented FALLBACK -- avg_anchor
+    needs the candidate's absolute AVG projection (not available in per_category)
+    so that tier simply defers.
+
+    kwargs expected:
+        current_round (int): the round currently being drafted.
+        closer_count (int): closers already on the user's roster.
     """
-    player_lookup = kwargs.get("player_lookup") or build_player_lookup(board, full_board)
-    n_hitters = _count_hitters(tracker, board, full_board, player_lookup)
-    n_pitchers = _count_pitchers(tracker, board, full_board, player_lookup)
+    # Priority 1: closer scheduling -- delegate to overlay_three_closers.
+    result = overlay_three_closers(ranked, roster_state=roster_state, config=config, **kwargs)
+    if result is not None:
+        return result
 
-    recs = _get_recs(board, full_board, tracker, config, n=15, **kwargs)
-    if not recs:
-        return None, None
+    # Priority 2: avg_anchor -- deferred (missing absolute AVG signal).
+    return None
+
+
+# ---------------------------------------------------------------------------
+# balanced -- PORTED
+# ---------------------------------------------------------------------------
+
+
+def overlay_balanced(ranked, *, roster_state=None, config=None, **kwargs):
+    """PORTED: force hitter or pitcher to cap positional skew.
+
+    Mirrors pick_balanced (src line ~773-807): if pitchers outnumber hitters by
+    more than BALANCED_MAX_SKEW (2), force the highest-score hitter from the
+    ranked list.  If hitters outnumber pitchers by more than BALANCED_MAX_SKEW,
+    force the highest-score pitcher.  Otherwise, defer.
+
+    player_type is available on RankedPick directly; n_hitters/n_pitchers are
+    passed by the caller as kwargs (cheap, identical to closer_count pattern).
+
+    kwargs expected:
+        n_hitters (int): hitters already on the user's roster.
+        n_pitchers (int): pitchers already on the user's roster.
+    """
+    n_hitters = int(kwargs.get("n_hitters", 0))
+    n_pitchers = int(kwargs.get("n_pitchers", 0))
 
     force_type = None
     if n_pitchers - n_hitters > BALANCED_MAX_SKEW:
@@ -798,105 +388,51 @@ def pick_balanced(
     elif n_hitters - n_pitchers > BALANCED_MAX_SKEW:
         force_type = PlayerType.PITCHER
 
-    if force_type:
-        for rec in recs:
-            if rec.player_type == force_type:
-                return rec.name, _lookup_pid(board, rec.name)
-
-    # No imbalance — take the best recommendation
-    return recs[0].name, _lookup_pid(board, recs[0].name)
+    if force_type is not None:
+        for pick in ranked:
+            if pick.player_type == force_type:
+                return pick
+    return None
 
 
-def pick_anti_fragile(
-    board,
-    full_board,
-    tracker,
-    balance,
-    config,
-    team_filled,
-    **kwargs,
-):
-    """Prefer durable mid-tier pitchers over fragile aces.
+# ---------------------------------------------------------------------------
+# anti_fragile -- FALLBACK
+# ---------------------------------------------------------------------------
 
-    Applies a VAR discount to pitchers with high IP projections,
-    then re-ranks recommendations.
+
+def overlay_anti_fragile(ranked, *, roster_state=None, config=None, **kwargs):
+    """Documented FALLBACK -- defers to recommend()'s slot-gated selection.
+
+    Missing signal: the candidate's absolute innings-pitched (IP) projection.
+    pick_anti_fragile (src line ~810-849) penalizes pitchers whose board['ip']
+    exceeds ANTI_FRAGILE_IP_THRESHOLD (170), applying a 25% VAR penalty per
+    30 IP above the threshold.  IP is a counting stat, not a roto category, so
+    it is absent from per_category (which holds marginal roto-point deltas for
+    the five pitching categories: W, K, ERA, WHIP, SV).  Re-scoring candidates
+    by durability-adjusted VAR would require threading raw IP projections into
+    the overlay, which is beyond a small additive change.
     """
-    recs = _get_recs(board, full_board, tracker, config, n=15, **kwargs)
-    if not recs:
-        return None, None
-
-    # Re-score recommendations with durability discount
-    scored = []
-    for rec in recs:
-        rows = board[board["name"] == rec.name]
-        if rows.empty:
-            scored.append((rec, rec.var))
-            continue
-        player = rows.iloc[0]
-        var = player.get("var", 0)
-
-        if player.get("player_type") == PlayerType.PITCHER:
-            ip = player.get("ip", 0)
-            if ip > ANTI_FRAGILE_IP_THRESHOLD:
-                excess_ip = ip - ANTI_FRAGILE_IP_THRESHOLD
-                penalty = (excess_ip / 30.0) * ANTI_FRAGILE_DISCOUNT
-                var = var * (1.0 - penalty)
-
-        scored.append((rec, var))
-
-    scored.sort(key=lambda x: x[1], reverse=True)
-    best = scored[0][0]
-    return best.name, _lookup_pid(board, best.name)
+    return None
 
 
-def _pick_with_avg_floor(recs, board, balance, avg_floor, player_lookup=None):
-    """Select the first rec that keeps team AVG above the floor.
-
-    Pitchers are always acceptable (they don't affect AVG).
-    Returns (name, player_id).
-    """
-    current_h, current_ab = balance.get_avg_components()
-
-    for rec in recs:
-        if rec.player_type != PlayerType.HITTER:
-            return rec.name, _lookup_pid(board, rec.name, player_lookup)
-
-        rows = board[board["name"] == rec.name]
-        if rows.empty:
-            continue
-        player = rows.iloc[0]
-        new_h = current_h + player.get("h", 0)
-        new_ab = current_ab + player.get("ab", 0)
-        projected_avg = calculate_avg(new_h, new_ab)
-
-        if projected_avg >= avg_floor or current_ab == 0:
-            return rec.name, _lookup_pid(board, rec.name, player_lookup)
-
-    return recs[0].name, _lookup_pid(board, recs[0].name, player_lookup)
-
-
-def _lookup_pid(board, name, name_to_pid=None):
-    if name_to_pid is not None and name in name_to_pid:
-        return name_to_pid[name]
-    rows = board[board["name"] == name]
-    if not rows.empty:
-        return rows.iloc[0]["player_id"]
-    return name + "::unknown"
-
-
-STRATEGIES = {
-    "default": pick_default,
-    "nonzero_sv": pick_nonzero_sv,
-    "avg_hedge": pick_avg_hedge,
-    "two_closers": pick_two_closers,
-    "three_closers": pick_three_closers,
-    "four_closers": pick_four_closers,
-    "no_punt": pick_no_punt,
-    "no_punt_opp": pick_no_punt_opp,
-    "no_punt_stagger": pick_no_punt_stagger,
-    "no_punt_cap3": pick_no_punt_cap3,
-    "avg_anchor": pick_avg_anchor,
-    "closers_avg": pick_closers_avg,
-    "balanced": pick_balanced,
-    "anti_fragile": pick_anti_fragile,
+OVERLAYS = {
+    "default": overlay_default,
+    "nonzero_sv": overlay_nonzero_sv,
+    "two_closers": overlay_two_closers,
+    "three_closers": overlay_three_closers,
+    "four_closers": overlay_four_closers,
+    "no_punt": overlay_no_punt,
+    "no_punt_opp": overlay_no_punt_opp,
+    "no_punt_stagger": overlay_no_punt_stagger,
+    "no_punt_cap3": overlay_no_punt_cap3,
+    "avg_hedge": overlay_avg_hedge,
+    "avg_anchor": overlay_avg_anchor,
+    "closers_avg": overlay_closers_avg,
+    "balanced": overlay_balanced,
+    "anti_fragile": overlay_anti_fragile,
 }
+
+# STRATEGIES is a backward-compatible alias for OVERLAYS.
+# All callers (scripts, config validation, tests) that reference STRATEGIES
+# now get the overlay functions.
+STRATEGIES = OVERLAYS

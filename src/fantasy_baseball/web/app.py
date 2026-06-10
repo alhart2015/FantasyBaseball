@@ -368,7 +368,9 @@ def _register_writer_routes(app):
 
     @app.get("/api/recs")
     def recs():
-        from fantasy_baseball.draft import eroto_recs
+        from dataclasses import replace
+
+        from fantasy_baseball.draft.recommend import RecommendContext, rank_for_mode, to_recs_json
 
         team = request.args.get("team")
         if not team:
@@ -380,17 +382,18 @@ def _register_writer_routes(app):
         except RuntimeError as e:
             return jsonify({"error": str(e)}), 503
         picks_until_next = _picks_until_next_turn(state, team, league_yaml)
-        rows = eroto_recs.rank_candidates(
-            candidates=inputs.candidates[:RECS_CANDIDATE_POOL_SIZE],
-            replacements=inputs.replacements,
+        # The live draft always serves a deltaRoto mode (it owns both metrics
+        # the dashboard toggles between); immediate is the verdict winner.
+        # replace() makes a non-mutating shallow copy so the app-cached inputs
+        # are not clobbered by the candidate-pool slice.
+        ctx = RecommendContext(
+            scoring_mode="deltaroto_immediate",
             team_name=team,
-            projected_standings=inputs.projected_standings,
-            team_sds=inputs.team_sds,
-            picks_until_next_turn=picks_until_next,
-            adp_table=inputs.adp_table,
-            user_rp_filled=inputs.rp_filled_by_team.get(team, 0),
+            picks_until_next=picks_until_next,
+            inputs=replace(inputs, candidates=inputs.candidates[:RECS_CANDIDATE_POOL_SIZE]),
         )
-        return jsonify([row.__dict__ for row in rows[:10]])
+        picks = rank_for_mode(ctx)
+        return jsonify([to_recs_json(p) for p in picks[:10]])
 
     @app.get("/api/meta")
     def meta():

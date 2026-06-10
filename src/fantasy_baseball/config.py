@@ -35,7 +35,7 @@ def load_config(config_path: Path) -> LeagueConfig:
     draft = raw.get("draft", {})
     projections = raw.get("projections", {})
 
-    VALID_SCORING_MODES = {"var", "vona"}
+    VALID_SCORING_MODES = {"var", "vona", "deltaroto_immediate", "deltaroto_vopn"}
 
     strategy = draft.get("strategy", "no_punt_opp")
     scoring_mode = draft.get("scoring_mode", "var")

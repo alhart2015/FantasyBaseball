@@ -8,6 +8,29 @@ Usage:
 - Roster limits are enforced for all teams.
 
 Outputs projected roto standings at the end.
+
+Module organisation
+-------------------
+Three concerns are separated as named free functions:
+
+1. **Draft harness** -- ``run_simulation()`` orchestrates the pick loop for all
+   four scoring modes (var, vona, deltaroto_immediate, deltaroto_vopn).  The
+   user pick is routed through the unified ``recommend()`` seam.
+   ``run_user_pick_sequence()`` is the thin deterministic wrapper used by the
+   golden tests.
+
+2. **Field / opponent selection** -- ADP opponents are handled inside
+   ``run_simulation`` via ``_build_adp_boards()``, ``_first_undrafted()``,
+   ``_can_fill_active_slot()``, and ``_can_roster()``.  Opponents draft in
+   clean ADP order (no recommend() call) so the golden pick sequences are
+   stable.  Optional strategy opponents use ``_parse_opponent_strategies()``
+   and ``TeamTrackerProxy``.
+
+3. **Reporting / standings** -- ``_score_roto()`` projects roto standings from
+   drafted rosters using position-aware active-roster selection
+   (``_select_active_players()``, ``_assign_slot()``) and
+   ``score_roto_dict()``.  ``save_simulation_output()`` persists full output
+   for post-analysis.
 """
 
 import argparse
@@ -23,21 +46,184 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.db import get_connection
-from fantasy_baseball.draft.balance import CategoryBalance
 from fantasy_baseball.draft.board import apply_keepers, build_draft_board
+from fantasy_baseball.draft.eroto_recs import is_reliever
+from fantasy_baseball.draft.recommend import (
+    _DELTAROTO_MODES,
+    RecommendContext,
+    rank_for_mode,
+    recommend,
+)
 from fantasy_baseball.draft.recommender import (
     compute_slot_scarcity_order,
     get_filled_positions,
     get_recommendations,
 )
-from fantasy_baseball.draft.strategy import STRATEGIES, build_player_lookup
+from fantasy_baseball.draft.recs_integration import (
+    _build_replacements,
+    build_adp_table,
+    build_projected_standings,
+    build_team_rosters,
+    empirical_pitcher_replacements,
+    rows_to_players,
+)
+from fantasy_baseball.draft.roster_state import RosterState
+from fantasy_baseball.draft.strategy import (
+    STRATEGIES,
+    _count_closers,
+    build_player_lookup,
+    select_from_ranked,
+)
 from fantasy_baseball.draft.tracker import DraftTracker
+from fantasy_baseball.models.player import Player
 from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto_dict
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
+
+# Candidate pool size for the deltaRoto user pick -- must match sim_deltaroto.POOL_CAP
+# so the rerouted user pick reproduces the pre-refactor deltaRoto pick sequence exactly.
+_DELTAROTO_POOL_CAP = 200
+
+# Set of scoring_mode strings that use the deltaRoto ranking engine. Single-sourced
+# from recommend._DELTAROTO_MODES so the two never drift.
+_DELTAROTO_STRATEGY_NAMES = frozenset(_DELTAROTO_MODES)
+
+
+def _to_overlay(strategy_name: str) -> str:
+    """deltaRoto mode names map to the default overlay (scoring mode and strategy
+    are orthogonal axes); real strategy names pass through unchanged."""
+    return "default" if strategy_name in _DELTAROTO_STRATEGY_NAMES else strategy_name
+
+
+# Static per-board inputs for the deltaRoto path: cache keyed on board id.
+# Mirrors sim_deltaroto._STATIC_CACHE to avoid rebuilding replacements/ADP per pick.
+_SIM_STATIC_CACHE: dict[int, tuple] = {}
+
+
+def _sim_static_inputs(board, config):
+    """Board-derived inputs constant across the draft for the deltaRoto sim path.
+
+    Mirrors sim_deltaroto._static_inputs: replacements, ADP table, pid->Player map,
+    VAR-ordered pids, and team names. Cached on board id so they are built once per
+    simulation run (not per pick). Keyed separately from sim_deltaroto._STATIC_CACHE
+    so the two scripts can coexist in the same process without aliasing.
+    """
+    key = id(board)
+    cached = _SIM_STATIC_CACHE.get(key)
+    if cached is not None:
+        return cached
+    board_by_id: dict[str, Player] = {
+        p.yahoo_id: p for p in rows_to_players(board.to_dict("records")) if p.yahoo_id
+    }
+    replacements = {
+        **_build_replacements(board, config.roster_slots, config.num_teams),
+        **empirical_pitcher_replacements(),
+    }
+    adp_table = build_adp_table(board)
+    pool_sorted = board.sort_values("var", ascending=False) if "var" in board.columns else board
+    ordered_pids = list(pool_sorted["player_id"])
+    team_names = list(config.teams.values())
+    cached = (board_by_id, replacements, adp_table, ordered_pids, team_names)
+    _SIM_STATIC_CACHE[key] = cached
+    return cached
+
+
+def _build_deltaroto_rec_inputs(
+    board,
+    full_board,
+    tracker,
+    config,
+    team_rosters,
+    player_lookup,
+    *,
+    team_name=None,
+    roster_ids=None,
+):
+    """Build a RecInputs object for a deltaRoto pick (user or opponent).
+
+    Mirrors make_deltaroto_pick from sim_deltaroto.py exactly so the rerouted
+    recommend() call produces the same candidate pool, standings, and team_sds as
+    the pre-refactor pick function -- a prerequisite for the golden tests to hold.
+
+    The candidate list is: top _DELTAROTO_POOL_CAP undrafted, roster-legal players
+    by VAR order (matching POOL_CAP=200 in sim_deltaroto).
+
+    Parameters
+    ----------
+    team_name:
+        Name of the team picking now. Defaults to config.team_name (the user's
+        team). Pass the opponent's display name (e.g. ``f"opp_{team_num}"``) to
+        build inputs for an opponent pick.
+    roster_ids:
+        Player IDs already on the picking team's roster. Defaults to
+        tracker.user_roster_ids. Pass the opponent's roster ID list for opponent
+        picks so candidate legality is evaluated against the correct roster.
+    """
+    from fantasy_baseball.draft.recs_integration import RecInputs
+    from fantasy_baseball.draft.state import StateKey
+
+    if team_name is None:
+        team_name = config.team_name
+    if roster_ids is None:
+        roster_ids = tracker.user_roster_ids
+
+    board_by_id, replacements, adp_table, ordered_pids, team_names = _sim_static_inputs(
+        board, config
+    )
+
+    # Synthetic draft-state from live sim rosters (keepers already folded in by
+    # run_simulation). Mirrors make_deltaroto_pick's state construction exactly.
+    picks = [
+        {"player_id": pid, "team": config.teams[num], "position": ""}
+        for num, pids in team_rosters.items()
+        for pid in pids
+    ]
+    state = {StateKey.KEEPERS.value: [], StateKey.PICKS.value: picks}
+    rosters = build_team_rosters(state, board_by_id, team_names, config.roster_slots, replacements)
+    standings = build_projected_standings(rosters)
+    team_sds = build_team_sds(rosters, sd_scale=1.0)
+
+    # Candidate pool: undrafted, roster-legal for the picking team, top-N by VAR.
+    # Mirrors make_deltaroto_pick candidate filtering so the candidate list is identical.
+    drafted = set(tracker.drafted_ids)
+    filled = get_filled_positions(
+        roster_ids,
+        full_board,
+        roster_slots=config.roster_slots,
+        player_lookup=player_lookup,
+    )
+    roster_state = RosterState.from_dicts(filled, config.roster_slots)
+    candidates: list[Player] = []
+    for pid in ordered_pids:
+        if pid in drafted:
+            continue
+        p = board_by_id.get(pid)
+        if p is None:
+            continue
+        row = player_lookup.get(pid)
+        positions = row["positions"] if row is not None else p.positions
+        if not roster_state.any_slot_open_for(positions):
+            continue
+        candidates.append(p)
+        if len(candidates) >= _DELTAROTO_POOL_CAP:
+            break
+
+    rp_filled = sum(
+        1 for pid in roster_ids if (pp := board_by_id.get(pid)) is not None and is_reliever(pp)
+    )
+    rp_filled_by_team = {team_name: rp_filled}
+
+    return RecInputs(
+        candidates=candidates,
+        replacements=replacements,
+        projected_standings=standings,
+        team_sds=team_sds,
+        adp_table=adp_table,
+        rp_filled_by_team=rp_filled_by_team,
+    )
 
 
 class TeamTrackerProxy:
@@ -46,10 +232,16 @@ class TeamTrackerProxy:
     Strategy functions access tracker.user_roster_ids, tracker.user_roster,
     tracker.drafted_ids, tracker.current_pick, tracker.current_round, etc.
     This proxy redirects "user" fields to the specified team's roster.
+
+    team_position: the 1-indexed draft slot for this team (e.g. 3 = picks 3rd
+    in round 1). When provided, picks_until_next_turn is computed for THIS
+    team's next pick in the snake order, not the user's (Fix 7). Falls back to
+    the user's countdown when team_position is not supplied.
     """
 
-    def __init__(self, real_tracker, team_roster, team_roster_ids):
+    def __init__(self, real_tracker, team_roster, team_roster_ids, team_position=None):
         self._real = real_tracker
+        self._team_position = team_position
         self.user_roster = team_roster
         self.user_roster_ids = team_roster_ids
         self.drafted_players = real_tracker.drafted_players
@@ -68,6 +260,31 @@ class TeamTrackerProxy:
     @property
     def total_picks(self):
         return self._real.total_picks
+
+    @property
+    def picks_until_next_turn(self):
+        """Countdown to THIS team's next pick in the snake draft.
+
+        When team_position is set, walks the snake forward from current_pick+1
+        until we find a pick belonging to this team -- the same algorithm
+        DraftTracker uses for the user. Falls back to the real tracker's
+        user countdown if team_position is not set.
+        """
+        if self._team_position is None:
+            return self._real.picks_until_next_turn
+        num_teams = self._real.num_teams
+        total = self._real.total_picks
+        count = 0
+        temp_pick = self._real.current_pick + 1
+        while temp_pick <= total:
+            temp_round = (temp_pick - 1) // num_teams + 1
+            temp_pos = (temp_pick - 1) % num_teams + 1
+            team = temp_pos if temp_round % 2 == 1 else num_teams - temp_pos + 1
+            if team == self._team_position:
+                return count
+            count += 1
+            temp_pick += 1
+        return count
 
 
 def _active_slot_counts(roster_slots):
@@ -202,7 +419,12 @@ def _score_roto(team_players, config, full_board, board, scarcity_order=None):
 
 
 def _parse_opponent_strategies(opp_str):
-    """Parse '1:default,2:three_closers' into {team_num: strategy_fn}."""
+    """Parse '1:default,2:three_closers' into {team_num: strategy_name}.
+
+    Returns a dict mapping team_num (int) to strategy name (str).  The
+    caller routes each opponent pick through recommend() with the named
+    strategy overlay -- the old pick_* direct-call path is gone.
+    """
     opp_strategies = {}
     if not opp_str:
         return opp_strategies
@@ -210,7 +432,7 @@ def _parse_opponent_strategies(opp_str):
         tn_str, strat_name = pair.strip().split(":")
         tn = int(tn_str)
         if strat_name in STRATEGIES:
-            opp_strategies[tn] = STRATEGIES[strat_name]
+            opp_strategies[tn] = strat_name
     return opp_strategies
 
 
@@ -322,15 +544,13 @@ def run_simulation(
     """Run a single draft simulation and return results.
 
     *position_aware*: when True, the recommender-routed pick gates to "fill a
-    starter slot, bench last" (``strategy._choose_rec`` and the deltaRoto
-    adapter). ADP opponents always fill a starter slot first regardless. Only
-    strategies that defer to ``_choose_rec`` (pick_default and the closer
-    strategies that fall through to it) honor it; strategies that select their
-    top recommendation directly are unaffected. *field_noise*: when True, each
-    recommender-routed pick takes the k-th choice from its own ranking via a
-    one-sided normal draw -- z<1 -> top (~84%), 1-2 -> 2nd, 2-3 -> 3rd, >=3 ->
-    4th -- so the strategic field varies across seeds. Same routing caveat as
-    above: forced-closer picks and direct-top-pick strategies ignore it.
+    starter slot, bench last" via recommend()'s select_from_ranked. ADP
+    opponents always fill a starter slot first regardless. Strategy-opponent
+    picks are also routed through recommend() with position_aware gating.
+    *field_noise*: when True, each recommender-routed pick takes the k-th
+    choice from its own ranking via a one-sided normal draw -- z<1 -> top
+    (~84%), 1-2 -> 2nd, 2-3 -> 3rd, >=3 -> 4th. Same routing applies to
+    strategy opponents.
 
     *ctx* is the dict returned by ``build_board_and_context()``.
 
@@ -341,8 +561,6 @@ def run_simulation(
     board = ctx["board"]
     scarcity_order = ctx["scarcity_order"]
     pick_order = ctx.get("pick_order")  # custom draft order (or None)
-
-    strategy_fn = STRATEGIES[strategy_name]
 
     rng = np.random.default_rng(seed)
     # Per-team ADP boards: each team drafts off its OWN noised view of ADP, so
@@ -358,7 +576,6 @@ def run_simulation(
         user_position=config.draft_position,
         rounds=rounds,
     )
-    balance = CategoryBalance()
     team_filled = {i: {} for i in range(1, config.num_teams + 1)}
     # Track player IDs per team so strategies can monitor league-wide stats
     team_rosters = {i: [] for i in range(1, config.num_teams + 1)}
@@ -372,8 +589,6 @@ def run_simulation(
                 if not matches.empty:
                     best = matches.loc[matches["var"].idxmax()]
                     is_user = keeper.get("team") == config.team_name
-                    if is_user:
-                        balance.add_player(best)
                     tracker.draft_player(best["name"], is_user=is_user, player_id=best["player_id"])
                     _assign_slot(
                         best["positions"], team_filled[num], config.roster_slots, scarcity_order
@@ -383,23 +598,20 @@ def run_simulation(
 
     # Parse opponent strategies
     opp_strategies = _parse_opponent_strategies(opponent_strategies_str)
-    opp_balances = {}
     opp_rosters = {}
     opp_roster_names = {}
     for tn in opp_strategies:
-        opp_balances[tn] = CategoryBalance()
         opp_rosters[tn] = []
         opp_roster_names[tn] = []
 
-    # Add keeper projections to opponent balance trackers
+    # Add keeper projections to opponent strategy trackers
     for keeper in config.keepers:
         for num, name in config.teams.items():
-            if name == keeper["team"] and num in opp_balances:
+            if name == keeper["team"] and num in opp_strategies:
                 norm = normalize_name(keeper["name"])
                 matches = full_board[full_board["name_normalized"] == norm]
                 if not matches.empty:
                     best = matches.loc[matches["var"].idxmax()]
-                    opp_balances[num].add_player(best)
                     opp_rosters[num].append(best["player_id"])
                     opp_roster_names[num].append(best["name"])
                 break
@@ -424,49 +636,96 @@ def run_simulation(
             z = rng.normal(0.0, 1.0)
             pick_rank = 0 if z < 1.0 else min(3, int(z))
 
+        # Determine effective scoring mode once per pick -- shared by both the user
+        # and any strategy-opponent pick below.  deltaRoto strategies are identified
+        # by strategy_name regardless of the scoring_mode arg (sim_deltaroto passes
+        # scoring_mode="var" but strategy_name="deltaroto_*").
+        _eff_scoring = strategy_name if strategy_name in _DELTAROTO_STRATEGY_NAMES else scoring_mode
+
         if is_user:
-            pick_name, pid = strategy_fn(
-                board,
-                full_board,
-                tracker,
-                balance,
-                config,
-                team_filled,
-                total_rounds=rounds,
-                scoring_mode=scoring_mode,
-                team_rosters=team_rosters,
-                player_lookup=player_lookup,
+            if _eff_scoring in _DELTAROTO_STRATEGY_NAMES:
+                # deltaRoto path: build RecInputs per-pick from live sim state,
+                # mirroring make_deltaroto_pick in sim_deltaroto.py exactly.
+                _rec_inputs = _build_deltaroto_rec_inputs(
+                    board, full_board, tracker, config, team_rosters, player_lookup
+                )
+                _ctx = RecommendContext(
+                    scoring_mode=_eff_scoring,
+                    team_name=config.team_name,
+                    picks_until_next=tracker.picks_until_next_turn,
+                    inputs=_rec_inputs,
+                )
+            else:
+                # var/vona path: build RecommendContext from board + tracker state.
+                _filled = get_filled_positions(
+                    tracker.user_roster_ids,
+                    full_board,
+                    roster_slots=config.roster_slots,
+                    player_lookup=player_lookup,
+                )
+                _ctx = RecommendContext(
+                    scoring_mode=_eff_scoring,
+                    team_name=config.team_name,
+                    picks_until_next=tracker.picks_until_next_turn,
+                    board=board,
+                    drafted=list(tracker.drafted_ids),
+                    filled_positions=_filled,
+                    config=config,
+                )
+
+            # Compute open_starters for position-aware gating via select_from_ranked.
+            # The var/vona branch already computed _filled above; the deltaRoto branch
+            # didn't, so compute it here only when needed.
+            if position_aware:
+                _filled_pa = (
+                    _filled
+                    if _eff_scoring not in _DELTAROTO_STRATEGY_NAMES
+                    else get_filled_positions(
+                        tracker.user_roster_ids,
+                        full_board,
+                        roster_slots=config.roster_slots,
+                        player_lookup=player_lookup,
+                    )
+                )
+                _open_starters = RosterState.from_dicts(
+                    _filled_pa, config.roster_slots
+                ).unfilled_starter_slots()
+            else:
+                _open_starters = set()
+
+            # Closer count for the closer-family overlays.
+            _closer_count = _count_closers(tracker, board, full_board, player_lookup)
+
+            # deltaRoto runs use the deltaRoto RANKER (ctx.scoring_mode) with the
+            # default OVERLAY -- scoring mode and strategy are orthogonal axes.
+            _overlay_strategy = _to_overlay(strategy_name)
+            _ranked = rank_for_mode(_ctx)
+            _pick = recommend(
+                _ctx,
+                strategy=_overlay_strategy,
+                open_starters=_open_starters,
                 pick_rank=pick_rank,
-                position_aware=position_aware,
+                current_round=tracker.current_round,
+                closer_count=_closer_count,
+                ranked=_ranked,
             )
+            if _pick is not None:
+                pick_name = _pick.name
+                pid = _pick.player_id
+            else:
+                pick_name = None
+                pid = ""
 
             # Strategy noise: sometimes take the 2nd or 3rd rec instead.
             # Normal distribution: ~68% take #1, ~27% take #2, ~4% take #3.
             if strategy_noise > 0 and pick_name is not None:
                 skip = min(abs(round(rng.normal(0, strategy_noise))), 4)  # cap at 5th-best
                 if skip > 0:
-                    filled = get_filled_positions(
-                        tracker.user_roster_ids,
-                        full_board,
-                        roster_slots=config.roster_slots,
-                    )
-                    recs = get_recommendations(
-                        board,
-                        drafted=tracker.drafted_ids,
-                        user_roster=tracker.user_roster,
-                        n=skip + 3,
-                        filled_positions=filled,
-                        picks_until_next=getattr(tracker, "picks_until_next_turn", None),
-                        roster_slots=config.roster_slots,
-                        num_teams=config.num_teams,
-                        scoring_mode=scoring_mode,
-                    )
-                    if len(recs) > skip:
-                        alt = recs[skip]
-                        rows = board[board["name"] == alt.name]
-                        if not rows.empty:
-                            pick_name = alt.name
-                            pid = rows.iloc[0]["player_id"]
+                    # Reuse the already-computed _ranked (same ctx, roster not yet updated).
+                    _alt = select_from_ranked(_ranked, _open_starters, skip)
+                    if _alt is not None:
+                        pick_name = _alt.name
+                        pid = _alt.player_id
 
             if pick_name is None:
                 pick_name, pid = _first_undrafted(adp_boards[team_num], drafted_set)
@@ -476,7 +735,6 @@ def run_simulation(
                 drafted_set.add(pid)
                 p = player_lookup.get(pid)
                 if p is not None:
-                    balance.add_player(p)
                     _assign_slot(
                         p["positions"], team_filled[team_num], config.roster_slots, scarcity_order
                     )
@@ -485,26 +743,82 @@ def run_simulation(
                 pick_name = "(no pick)"
 
         elif team_num in opp_strategies:
-            opp_fn = opp_strategies[team_num]
+            # Route opponent strategy picks through the unified recommend() seam,
+            # mirroring the user-pick path.  opp_strategies[team_num] is a
+            # strategy NAME (str) after the STRATEGIES = OVERLAYS alias.
+            opp_strat_name = opp_strategies[team_num]
+            # Use the real team name from config so deltaRoto inputs can look
+            # the team up in projected_standings (keyed by config.teams values).
+            opp_team_name = config.teams.get(team_num, f"opp_{team_num}")
             proxy = TeamTrackerProxy(
                 tracker,
                 opp_roster_names[team_num],
                 opp_rosters[team_num],
+                team_position=team_num,
             )
-            pick_name, pid = opp_fn(
-                board,
+            # Closer count for this opponent team (proxy exposes the opp roster as
+            # user_roster_ids, so _count_closers counts the right team).
+            _opp_closer_count = _count_closers(proxy, board, full_board, player_lookup)
+            _opp_filled = get_filled_positions(
+                proxy.user_roster_ids,
                 full_board,
-                proxy,
-                opp_balances[team_num],
-                config,
-                team_filled,
-                total_rounds=rounds,
-                scoring_mode=scoring_mode,
+                roster_slots=config.roster_slots,
                 player_lookup=player_lookup,
-                pick_rank=pick_rank,
-                position_aware=position_aware,
             )
-            if pick_name is None:
+            _opp_open_starters = (
+                RosterState.from_dicts(_opp_filled, config.roster_slots).unfilled_starter_slots()
+                if position_aware
+                else set()
+            )
+            # Mirror the user pick's scoring-mode dispatch: when the effective
+            # scoring mode is a deltaRoto mode, the opponent also needs RecInputs.
+            # deltaRoto strategies always use the "default" overlay (scoring mode
+            # and strategy are orthogonal); non-deltaRoto strategies keep their
+            # assigned overlay name.
+            if _eff_scoring in _DELTAROTO_STRATEGY_NAMES:
+                _opp_rec_inputs = _build_deltaroto_rec_inputs(
+                    board,
+                    full_board,
+                    tracker,
+                    config,
+                    team_rosters,
+                    player_lookup,
+                    team_name=opp_team_name,
+                    roster_ids=opp_rosters[team_num],
+                )
+                _opp_ctx = RecommendContext(
+                    scoring_mode=_eff_scoring,
+                    team_name=opp_team_name,
+                    picks_until_next=proxy.picks_until_next_turn,
+                    inputs=_opp_rec_inputs,
+                )
+                # Mirror the user path: map deltaRoto STRATEGY aliases to "default"
+                # overlay, but keep real strategy names (e.g. two_closers) intact.
+                # Opponents are assigned overlay names, not scoring-mode aliases, so
+                # opp_strat_name is typically "default"/"two_closers"/etc already.
+                opp_strat_name = _to_overlay(opp_strat_name)
+            else:
+                _opp_ctx = RecommendContext(
+                    scoring_mode=_eff_scoring,
+                    team_name=opp_team_name,
+                    picks_until_next=proxy.picks_until_next_turn,
+                    board=board,
+                    drafted=list(drafted_set),
+                    filled_positions=_opp_filled,
+                    config=config,
+                )
+            _opp_pick = recommend(
+                _opp_ctx,
+                strategy=opp_strat_name,
+                open_starters=_opp_open_starters,
+                pick_rank=pick_rank,
+                current_round=tracker.current_round,
+                closer_count=_opp_closer_count,
+            )
+            if _opp_pick is not None:
+                pick_name = _opp_pick.name
+                pid = _opp_pick.player_id
+            else:
                 pick_name, pid = _first_undrafted(adp_boards[team_num], drafted_set)
 
             if pick_name:
@@ -512,7 +826,6 @@ def run_simulation(
                 drafted_set.add(pid)
                 p = player_lookup.get(pid)
                 if p is not None:
-                    opp_balances[team_num].add_player(p)
                     opp_rosters[team_num].append(pid)
                     opp_roster_names[team_num].append(pick_name)
                     _assign_slot(
@@ -740,6 +1053,46 @@ def save_simulation_output(
     return str(out_path)
 
 
+def run_user_pick_sequence(*, scoring_mode, strategy, seed, strategy_noise=0.0):
+    """Return the user team's drafted player_ids in pick order for one deterministic draft.
+
+    Serves all four scoring modes natively (var, vona, deltaroto_immediate,
+    deltaroto_vopn).  Sets adp_noise=0.0 and field_noise=False so opponents draft
+    in clean ADP order; with strategy_noise=0.0 (the default) the draft is fully
+    deterministic -- the seed is threaded through for traceability but has no effect
+    when all noise is zero.
+
+    Parameters
+    ----------
+    scoring_mode : str
+        One of "var", "vona", "deltaroto_immediate", "deltaroto_vopn".
+        For deltaRoto modes, pass the same value for both scoring_mode and strategy.
+    strategy : str
+        Key from STRATEGIES (e.g. "default", "two_closers") for var/vona modes, or
+        "deltaroto_immediate" / "deltaroto_vopn" for the deltaRoto engine.
+    seed : int
+        RNG seed (passed to run_simulation; has no effect when all noise is zero).
+    strategy_noise : float
+        Fraction of picks that deviate from top rec.  0.0 = fully deterministic.
+
+    Returns
+    -------
+    list[str]
+        player_id strings in the order the user team drafted them.
+    """
+    ctx = build_board_and_context()
+    result = run_simulation(
+        ctx,
+        strategy_name=strategy,
+        scoring_mode=scoring_mode,
+        adp_noise=0.0,
+        strategy_noise=strategy_noise,
+        seed=seed,
+        field_noise=False,
+    )
+    return list(result["user_roster_ids"])
+
+
 def main():
     parser = argparse.ArgumentParser(description="Simulate a fantasy baseball draft")
     parser.add_argument(
@@ -787,9 +1140,12 @@ def main():
     )
     parser.add_argument(
         "--scoring",
-        choices=["var", "vona"],
+        choices=["var", "vona", "deltaroto_immediate", "deltaroto_vopn"],
         default="vona",
-        help="Scoring mode: 'var' (Value Above Replacement) or 'vona' (Value Over Next Available)",
+        help=(
+            "Scoring mode: 'var' (Value Above Replacement), 'vona' (Value Over Next Available), "
+            "'deltaroto_immediate', or 'deltaroto_vopn'"
+        ),
     )
     parser.add_argument(
         "--monte-carlo",

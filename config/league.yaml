@@ -8,8 +8,8 @@ league:
   season_end: "2026-09-28"
 
 draft:
-  strategy: three_closers
-  scoring_mode: var
+  strategy: default
+  scoring_mode: deltaroto_immediate
   position: 8  # Snake draft pick position (1-indexed)
   teams:
     1: "Send in the Cavalli"

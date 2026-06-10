@@ -43,7 +43,7 @@
 
 # TODO — Draft (post-rework)
 
-- [ ] **Mock-draft mode** — `?mock=1` query param routing to `draft_state_mock.json` with heuristic AI opponents.
+- [ ] **Faithfully port the 5 fallback strategy overlays** — `no_punt`, `no_punt_opp`, `avg_hedge`, `avg_anchor`, `anti_fragile` currently `return None` (behave as `default`) in the unified engine, so `compare_strategies` can't distinguish them. They were NOT blocked by missing data — the signals exist in the pipeline, they just aren't threaded to the overlay layer. The overlay receives `(ranked, roster_state, config, **kwargs)` only. To port faithfully, pass the missing context into the overlay signature: the team's current projected category totals (already computed in `RecInputs.projected_standings` for deltaRoto modes — note var/vona doesn't compute standings, so it'd need building there) for the no-punt "which categories are thin" logic, and the candidate's absolute AVG/IP off the board for `avg_anchor`/`anti_fragile`. `per_category` only carries marginal roto-deltas, not absolute stats or team totals. Each overlay's docstring names the specific signal it needs.
 - [ ] **Post-draft ERoto review** — MC on the completed draft with projected standings + CI. Complement to in-season MC.
 - [ ] **Replace `scripts/analyze_mock.py`** — old script reads the legacy state shape. Rebuild for the new shape (or delete once mock mode lands).
 - [ ] **Delete `scripts/run_draft.py`** — the dashboard's real-data path has now landed (`/api/recs` is wired via `recs_integration.compute_rec_inputs`, no longer a 501 stub), so the legacy interactive CLI is unblocked for removal once you confirm nothing else depends on it.

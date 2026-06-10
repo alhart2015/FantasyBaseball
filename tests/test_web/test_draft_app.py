@@ -101,16 +101,34 @@ def test_on_the_clock_missing_team_returns_400(client):
 
 def test_recs_returns_ranked_rows(client, monkeypatch):
     """/api/recs returns a list of rec rows sorted by immediate_delta desc."""
-    from fantasy_baseball.draft import eroto_recs
-    from fantasy_baseball.draft.eroto_recs import RecRow
+    from fantasy_baseball.draft import recommend as recommend_mod
+    from fantasy_baseball.draft.recommend import RankedPick
+    from fantasy_baseball.models.player import PlayerType
+    from fantasy_baseball.models.positions import Position
 
-    def fake_rank(**_kwargs):
+    def fake_rank_for_mode(_ctx):
         return [
-            RecRow("p1::hitter", "Player One", ["OF"], 3.2, 1.1, {"HR": 1.2}),
-            RecRow("p2::hitter", "Player Two", ["SS"], 2.1, 0.4, {"SB": 0.9}),
+            RankedPick(
+                player_id="p1::hitter",
+                name="Player One",
+                positions=[Position.OF],
+                player_type=PlayerType.HITTER,
+                score=3.2,
+                metrics={"immediate_delta": 3.2, "value_of_picking_now": 1.1},
+                per_category={"HR": 1.2},
+            ),
+            RankedPick(
+                player_id="p2::hitter",
+                name="Player Two",
+                positions=[Position.SS],
+                player_type=PlayerType.HITTER,
+                score=2.1,
+                metrics={"immediate_delta": 2.1, "value_of_picking_now": 0.4},
+                per_category={"SB": 0.9},
+            ),
         ]
 
-    monkeypatch.setattr(eroto_recs, "rank_candidates", fake_rank)
+    monkeypatch.setattr(recommend_mod, "rank_for_mode", fake_rank_for_mode)
 
     from fantasy_baseball.draft.recs_integration import RecInputs
     from fantasy_baseball.web import app as web_app
