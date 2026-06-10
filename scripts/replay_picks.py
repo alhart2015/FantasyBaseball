@@ -120,9 +120,9 @@ def main():
             # var/vona keep the existing get_recommendations path (correct there).
             _is_deltaroto = scoring_mode in _DELTAROTO_MODES
             if _is_deltaroto:
-                # Build a minimal tracker-like namespace for _build_deltaroto_rec_inputs.
-                # It only reads .drafted_ids, .user_roster_ids, and .user_roster from
-                # the tracker; replay has all three in local state.
+                # Minimal tracker-shaped namespace for _build_deltaroto_rec_inputs,
+                # which reads .drafted_ids and .user_roster_ids. user_roster is
+                # included to mirror the DraftTracker shape (cheap forward-compat).
                 _ft = types.SimpleNamespace(
                     drafted_ids=drafted_ids,
                     user_roster_ids=user_roster_ids,
