@@ -3,13 +3,16 @@
 
 FanGraphs supports only one-click member exports (no scraping/API/web query).
 This walks you through exporting the 5 systems x {hitters, pitchers} in your
-browser, stages each freshly-downloaded CSV into today's snapshot dir, then
-blends and pushes to prod (the same RENDER-flip tail as the manual restore).
+browser, stages each freshly-downloaded CSV into today's snapshot dir, blends
+and pushes to prod (the same RENDER-flip tail as the manual restore), then runs
+the full dashboard refresh -- which propagates the new ROS into standings AND
+archives the trimmed ROS snapshot for PT-residual calibration.
 
 Usage:
-    python scripts/ingest_ros_export.py                 # ~/Downloads, push to prod
+    python scripts/ingest_ros_export.py                 # ~/Downloads, push + refresh
     python scripts/ingest_ros_export.py --source D:/dl  # custom download dir
     python scripts/ingest_ros_export.py --no-push       # stage only (dry run)
+    python scripts/ingest_ros_export.py --no-refresh    # push ROS, skip the refresh
 """
 
 import argparse
@@ -80,6 +83,11 @@ def main() -> int:
     parser.add_argument("--source", default=str(Path.home() / "Downloads"), help="download dir")
     parser.add_argument("--season", type=int, default=None, help="season year (default: config)")
     parser.add_argument("--no-push", action="store_true", help="stage only; do not push to prod")
+    parser.add_argument(
+        "--no-refresh",
+        action="store_true",
+        help="push ROS but skip the full dashboard refresh + snapshot archive",
+    )
     args = parser.parse_args()
 
     config = load_config(PROJECT_ROOT / "config" / "league.yaml")
@@ -120,8 +128,17 @@ def main() -> int:
         return 0
 
     _push_to_prod(season, complete)
-    print("\nDone. (Run scripts/refresh_remote.py to propagate into dashboard standings.)")
-    return 0
+    if args.no_refresh:
+        print("\nROS pushed. --no-refresh set; run scripts/refresh_remote.py to propagate.")
+        return 0
+
+    # Propagate the fresh ROS into dashboard standings AND archive the ROS
+    # snapshot (refresh_remote does both) so one command does it all. _push_to_prod
+    # left RENDER=true; refresh_remote.main() manages its own gate from there.
+    print("\nROS pushed. Running full refresh to propagate + archive the snapshot...")
+    from refresh_remote import main as run_refresh_remote
+
+    return run_refresh_remote()
 
 
 if __name__ == "__main__":
