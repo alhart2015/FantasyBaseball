@@ -48,7 +48,7 @@ from fantasy_baseball.config import load_config
 from fantasy_baseball.data.db import get_connection
 from fantasy_baseball.draft.board import apply_keepers, build_draft_board
 from fantasy_baseball.draft.eroto_recs import is_reliever
-from fantasy_baseball.draft.recommend import RecommendContext, recommend
+from fantasy_baseball.draft.recommend import _DELTAROTO_MODES, RecommendContext, recommend
 from fantasy_baseball.draft.recommender import (
     compute_slot_scarcity_order,
     get_filled_positions,
@@ -60,14 +60,14 @@ from fantasy_baseball.draft.recs_integration import (
     build_projected_standings,
     build_team_rosters,
     empirical_pitcher_replacements,
+    rows_to_players,
 )
 from fantasy_baseball.draft.roster_state import RosterState
-from fantasy_baseball.draft.strategy import STRATEGIES, build_player_lookup
+from fantasy_baseball.draft.strategy import STRATEGIES, _count_closers, build_player_lookup
 from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto_dict
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
-from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import can_fill_slot
 
@@ -77,8 +77,9 @@ CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 # so the rerouted user pick reproduces the pre-refactor deltaRoto pick sequence exactly.
 _DELTAROTO_POOL_CAP = 200
 
-# Set of scoring_mode strings that use the deltaRoto ranking engine.
-_DELTAROTO_STRATEGY_NAMES = frozenset({"deltaroto_immediate", "deltaroto_vopn"})
+# Set of scoring_mode strings that use the deltaRoto ranking engine. Single-sourced
+# from recommend._DELTAROTO_MODES so the two never drift.
+_DELTAROTO_STRATEGY_NAMES = frozenset(_DELTAROTO_MODES)
 
 # Static per-board inputs for the deltaRoto path: cache keyed on board id.
 # Mirrors sim_deltaroto._STATIC_CACHE to avoid rebuilding replacements/ADP per pick.
@@ -97,11 +98,9 @@ def _sim_static_inputs(board, config):
     cached = _SIM_STATIC_CACHE.get(key)
     if cached is not None:
         return cached
-    board_by_id: dict[str, Player] = {}
-    for row in board.to_dict("records"):
-        p = Player.from_dict(row)
-        if p.yahoo_id:
-            board_by_id[p.yahoo_id] = p
+    board_by_id: dict[str, Player] = {
+        p.yahoo_id: p for p in rows_to_players(board.to_dict("records")) if p.yahoo_id
+    }
     replacements = {
         **_build_replacements(board, config.roster_slots, config.num_teams),
         **empirical_pitcher_replacements(),
@@ -631,12 +630,18 @@ def run_simulation(
                 )
 
             # Compute open_starters for position-aware gating via select_from_ranked.
+            # The var/vona branch already computed _filled above; the deltaRoto branch
+            # didn't, so compute it here only when needed.
             if position_aware:
-                _filled_pa = get_filled_positions(
-                    tracker.user_roster_ids,
-                    full_board,
-                    roster_slots=config.roster_slots,
-                    player_lookup=player_lookup,
+                _filled_pa = (
+                    _filled
+                    if _eff_scoring not in _DELTAROTO_STRATEGY_NAMES
+                    else get_filled_positions(
+                        tracker.user_roster_ids,
+                        full_board,
+                        roster_slots=config.roster_slots,
+                        player_lookup=player_lookup,
+                    )
                 )
                 _open_starters = RosterState.from_dicts(
                     _filled_pa, config.roster_slots
@@ -645,14 +650,7 @@ def run_simulation(
                 _open_starters = set()
 
             # Closer count for the closer-family overlays.
-            _closer_count = sum(
-                1
-                for _pid in tracker.user_roster_ids
-                if (
-                    (_row := player_lookup.get(_pid)) is not None
-                    and _row.get("sv", 0.0) >= CLOSER_SV_THRESHOLD
-                )
-            )
+            _closer_count = _count_closers(tracker, board, full_board, player_lookup)
 
             # deltaRoto runs use the deltaRoto RANKER (ctx.scoring_mode) with the
             # default OVERLAY -- scoring mode and strategy are orthogonal axes.
@@ -730,15 +728,9 @@ def run_simulation(
                 opp_roster_names[team_num],
                 opp_rosters[team_num],
             )
-            # Closer count for this opponent team.
-            _opp_closer_count = sum(
-                1
-                for _pid in proxy.user_roster_ids
-                if (
-                    (_orow := player_lookup.get(_pid)) is not None
-                    and _orow.get("sv", 0.0) >= CLOSER_SV_THRESHOLD
-                )
-            )
+            # Closer count for this opponent team (proxy exposes the opp roster as
+            # user_roster_ids, so _count_closers counts the right team).
+            _opp_closer_count = _count_closers(proxy, board, full_board, player_lookup)
             _opp_filled = get_filled_positions(
                 proxy.user_roster_ids,
                 full_board,
@@ -795,8 +787,6 @@ def run_simulation(
                 pick_name = _opp_pick.name
                 pid = _opp_pick.player_id
             else:
-                pick_name, pid = _first_undrafted(adp_boards[team_num], drafted_set)
-            if pick_name is None:
                 pick_name, pid = _first_undrafted(adp_boards[team_num], drafted_set)
 
             if pick_name:
