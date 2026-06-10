@@ -34,6 +34,7 @@ from fantasy_baseball.data.kv_store import (
 )
 from fantasy_baseball.data.redis_store import (
     PROJECTED_STANDINGS_HISTORY_KEY,
+    ROS_PROJECTION_HISTORY_KEY,
     STANDINGS_HISTORY_KEY,
     WEEKLY_ROSTERS_HISTORY_KEY,
 )
@@ -41,7 +42,12 @@ from fantasy_baseball.data.redis_store import (
 logger = logging.getLogger(__name__)
 
 _HASH_KEYS: frozenset[str] = frozenset(
-    {WEEKLY_ROSTERS_HISTORY_KEY, STANDINGS_HISTORY_KEY, PROJECTED_STANDINGS_HISTORY_KEY}
+    {
+        WEEKLY_ROSTERS_HISTORY_KEY,
+        STANDINGS_HISTORY_KEY,
+        PROJECTED_STANDINGS_HISTORY_KEY,
+        ROS_PROJECTION_HISTORY_KEY,
+    }
 )
 
 # Read string values in batches via MGET rather than one GET per key.

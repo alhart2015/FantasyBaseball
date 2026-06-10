@@ -433,6 +433,87 @@ def get_projected_standings_history(client) -> dict[str, ProjectedStandings]:
     return out
 
 
+# --- ROS projection history (weekly snapshots for PT-residual calibration) ---
+
+ROS_PROJECTION_HISTORY_KEY = "ros_projection_history"
+
+# Columns retained per player: the playing-time signal (PA / IP) plus the
+# counting stats needed to score projected-vs-realized residuals. FanGraphs'
+# rates, percentile bands, and ~9k sub-replacement prospect lines are dropped
+# so a weekly snapshot stays ~160 KB (free-tier Upstash budget) instead of the
+# full ~2.9 MB ROS blob.
+_ROS_SNAPSHOT_HITTER_COLS = ("name", "mlbam_id", "pa", "r", "hr", "rbi", "sb", "h", "ab")
+_ROS_SNAPSHOT_PITCHER_COLS = ("name", "mlbam_id", "ip", "w", "k", "sv", "er", "bb", "h_allowed")
+# Keep anyone rosterable (covers part-time bats and middle relievers); excludes
+# the AAA/prospect phantom lines that bloat the blob but never get rostered.
+_ROS_SNAPSHOT_MIN_PA = 100.0
+_ROS_SNAPSHOT_MIN_IP = 20.0
+
+
+def _trim_ros_snapshot(ros_blob: dict) -> dict[str, list[dict]]:
+    """Reduce a full ROS projection blob to the snapshot's columns and players."""
+
+    def _trim(rows, cols, vol_key, vol_min):
+        out = []
+        for p in rows or []:
+            try:
+                vol = float(p.get(vol_key) or 0)
+            except (TypeError, ValueError):
+                vol = 0.0
+            if vol < vol_min:
+                continue
+            out.append({c: p[c] for c in cols if c in p})
+        return out
+
+    return {
+        "hitters": _trim(
+            ros_blob.get("hitters"), _ROS_SNAPSHOT_HITTER_COLS, "pa", _ROS_SNAPSHOT_MIN_PA
+        ),
+        "pitchers": _trim(
+            ros_blob.get("pitchers"), _ROS_SNAPSHOT_PITCHER_COLS, "ip", _ROS_SNAPSHOT_MIN_IP
+        ),
+    }
+
+
+def write_ros_projection_snapshot(client, ros_blob: dict | None, snapshot_date: str) -> None:
+    """Archive a trimmed ROS projection snapshot keyed by ``snapshot_date``.
+
+    ``snapshot_date`` is the ROS projection vintage (its ``_ros_snapshot_date``),
+    so exactly one entry exists per distinct fetch even if the refresh runs
+    several times against it. Idempotent overwrite. No-op when ``client`` is
+    None, the blob is empty, or the date is missing/blank.
+    """
+    if client is None or not ros_blob or not snapshot_date:
+        return
+    trimmed = _trim_ros_snapshot(ros_blob)
+    client.hset(
+        ROS_PROJECTION_HISTORY_KEY,
+        snapshot_date,
+        json.dumps(trimmed, separators=(",", ":")),
+    )
+
+
+def get_ros_projection_history(client) -> dict[str, dict]:
+    """Return the entire ROS-projection history as ``{snapshot_date: trimmed_blob}``.
+
+    Corrupt JSON entries are silently skipped. ``{}`` when client is None/empty.
+    """
+    if client is None:
+        return {}
+    raw_map = client.hgetall(ROS_PROJECTION_HISTORY_KEY)
+    if not raw_map:
+        return {}
+    out: dict[str, dict] = {}
+    for d, raw in raw_map.items():
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            out[d] = data
+    return out
+
+
 # --- Per-player raw game logs (incremental, box-score driven) ---
 
 _GAME_LOG_GROUPS = ("hitting", "pitching")
