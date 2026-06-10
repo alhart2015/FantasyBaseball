@@ -7,13 +7,12 @@ and it only does so in the safe direction: remote → local.
 
 Design:
 
-- The schema has three hash-typed keys
-  (``weekly_rosters_history``, ``standings_history``,
-  ``projected_standings_history``); everything else is a string.
-  String keys are enumerated via ``keys("*")``; hash names are
-  iterated explicitly from the known constants. (The two backends
-  don't agree on whether ``keys("*")`` returns hash names — Upstash
-  does, our SQLite backend doesn't — so we sidestep the question.)
+- The hash-typed keys are enumerated in ``_HASH_KEYS`` below;
+  everything else is a string. String keys are enumerated via
+  ``keys("*")``; hash names are iterated explicitly from that set.
+  (The two backends don't agree on whether ``keys("*")`` returns hash
+  names — Upstash does, our SQLite backend doesn't — so we sidestep
+  the question.)
 - The local DB is wiped first (both tables) so the sync leaves no
   stale rows behind. Acceptable because local SQLite is derived state
   — if a script needed uncommitted local writes they'd live in Redis

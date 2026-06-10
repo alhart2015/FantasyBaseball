@@ -116,3 +116,33 @@ def test_write_noops(fake_redis):
 
 def test_get_history_none_client_returns_empty():
     assert redis_store.get_ros_projection_history(None) == {}
+
+
+def test_empty_content_blob_does_not_overwrite(fake_redis):
+    """A structurally-present but content-empty blob (refuse-stale fallback)
+    must not clobber a previously-good snapshot for the same date."""
+    redis_store.write_ros_projection_snapshot(fake_redis, ROS_BLOB, "2026-06-10")
+    redis_store.write_ros_projection_snapshot(
+        fake_redis, {"hitters": [], "pitchers": []}, "2026-06-10"
+    )
+    hist = redis_store.get_ros_projection_history(fake_redis)
+    # Original snapshot preserved, not replaced with an empty one.
+    assert [h["name"] for h in hist["2026-06-10"]["hitters"]] == ["Star Bat"]
+
+
+def test_non_dict_blob_noop(fake_redis):
+    redis_store.write_ros_projection_snapshot(fake_redis, [1, 2, 3], "2026-06-10")  # type: ignore[arg-type]
+    assert redis_store.get_ros_projection_history(fake_redis) == {}
+
+
+def test_nan_volume_dropped(fake_redis):
+    blob = {
+        "hitters": [
+            {"name": "Healthy", "mlbam_id": 1, "pa": 600, "r": 90},
+            {"name": "NaN PA", "mlbam_id": 2, "pa": float("nan"), "r": 50},
+        ],
+        "pitchers": [],
+    }
+    redis_store.write_ros_projection_snapshot(fake_redis, blob, "2026-06-10")
+    snap = redis_store.get_ros_projection_history(fake_redis)["2026-06-10"]
+    assert [h["name"] for h in snap["hitters"]] == ["Healthy"]

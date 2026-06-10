@@ -460,7 +460,7 @@ def _trim_ros_snapshot(ros_blob: dict) -> dict[str, list[dict]]:
                 vol = float(p.get(vol_key) or 0)
             except (TypeError, ValueError):
                 vol = 0.0
-            if vol < vol_min:
+            if vol != vol or vol < vol_min:  # vol != vol drops NaN (NaN < x is False)
                 continue
             out.append({c: p[c] for c in cols if c in p})
         return out
@@ -481,11 +481,15 @@ def write_ros_projection_snapshot(client, ros_blob: dict | None, snapshot_date: 
     ``snapshot_date`` is the ROS projection vintage (its ``_ros_snapshot_date``),
     so exactly one entry exists per distinct fetch even if the refresh runs
     several times against it. Idempotent overwrite. No-op when ``client`` is
-    None, the blob is empty, or the date is missing/blank.
+    None, the date is missing/blank, the blob is not a dict, or the trim yields
+    no rosterable players (a bad/empty blob -- e.g. a refuse-stale fallback --
+    must not overwrite a previously-good snapshot for this date with nothing).
     """
-    if client is None or not ros_blob or not snapshot_date:
+    if client is None or not snapshot_date or not isinstance(ros_blob, dict):
         return
     trimmed = _trim_ros_snapshot(ros_blob)
+    if not trimmed["hitters"] and not trimmed["pitchers"]:
+        return
     client.hset(
         ROS_PROJECTION_HISTORY_KEY,
         snapshot_date,
