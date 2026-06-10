@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -154,14 +155,16 @@ def _rank_var_vona(ctx: RecommendContext) -> list[RankedPick]:
     for name, pid, var in zip(
         ctx.board["name"], ctx.board["player_id"], ctx.board["var"], strict=False
     ):
-        if name not in id_by_name or var > best_var[name]:
+        # Coerce NaN/None to -inf so a real var always wins the tie-break (Fix 5).
+        v = float("-inf") if var is None or (isinstance(var, float) and math.isnan(var)) else var
+        if name not in id_by_name or v > best_var[name]:
             id_by_name[name] = pid
-            best_var[name] = var
+            best_var[name] = v
     recs = get_recommendations(
         ctx.board,
         drafted=ctx.drafted,
         user_roster=[],
-        n=15,
+        n=40,
         filled_positions=ctx.filled_positions,
         picks_until_next=ctx.picks_until_next,
         roster_slots=ctx.config.roster_slots,
@@ -173,9 +176,10 @@ def _rank_var_vona(ctx: RecommendContext) -> list[RankedPick]:
     sv_by_pid: dict[str, float] = {}
     if "sv" in ctx.board.columns:
         for pid_col, sv_val in zip(ctx.board["player_id"], ctx.board["sv"], strict=False):
-            if sv_val is not None:
-                with contextlib.suppress(TypeError, ValueError):
-                    sv_by_pid[str(pid_col)] = float(sv_val)
+            with contextlib.suppress(TypeError, ValueError):
+                sv_float = float(sv_val)
+                if not math.isnan(sv_float):
+                    sv_by_pid[str(pid_col)] = sv_float
 
     out: list[RankedPick] = []
     for rec in recs:

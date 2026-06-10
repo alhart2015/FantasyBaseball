@@ -15,14 +15,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
-from simulate_draft import build_board_and_context
+from simulate_draft import _build_deltaroto_rec_inputs, build_board_and_context
+from simulate_draft import build_player_lookup as _build_player_lookup
 
 from fantasy_baseball.draft.balance import CategoryBalance
+from fantasy_baseball.draft.recommend import RecommendContext, rank_for_mode
 from fantasy_baseball.draft.recommender import (
     calculate_vona_scores,
+    get_filled_positions,
     get_recommendations,
 )
-from fantasy_baseball.draft.roster_state import get_filled_positions
 from fantasy_baseball.draft.strategy import CLOSER_SV_THRESHOLD
 from fantasy_baseball.utils.constants import Category
 
@@ -77,11 +79,19 @@ def main():
         HART = config.teams.get(pos, f"Team {pos}")
     print(f"User team: {HART} (position {meta.get('draft_position', '?')})")
 
+    # Build reverse map: team_name -> team_num (for deltaRoto team_rosters).
+    name_to_num = {v: k for k, v in config.teams.items()}
+
+    # Lazy-build player_lookup once (board + full_board).
+    player_lookup = _build_player_lookup(board, full_board)
+
     # Replay state
     balance = CategoryBalance()
     drafted_ids = []
     user_roster_ids = []
     user_roster = []
+    # Per-team roster tracking needed for deltaRoto RecInputs (team_num -> [pids]).
+    team_rosters: dict[int, list] = {n: [] for n in config.teams}
 
     hart_pick_num = 0
 
@@ -104,20 +114,58 @@ def main():
             available_v["vona"] = available_v["player_id"].map(vona_scores).fillna(0)
             by_vona = available_v.sort_values("vona", ascending=False).head(5)
 
-            # Get the actual recommendation
+            # Get the actual recommendation -- route through the unified seam.
             filled = get_filled_positions(
                 user_roster_ids, full_board, roster_slots=config.roster_slots
             )
-            recs = get_recommendations(
-                board,
-                drafted=drafted_ids,
-                user_roster=user_roster,
-                n=5,
-                filled_positions=filled,
-                roster_slots=config.roster_slots,
-                num_teams=config.num_teams,
-                scoring_mode=scoring_mode,
-            )
+
+            # Fix 1: deltaRoto modes route through rank_for_mode (RecommendContext +
+            # RecInputs) so they get the actual deltaRoto score, not silently VAR.
+            # var/vona keep the existing get_recommendations path (correct there).
+            _is_deltaroto = scoring_mode in ("deltaroto_immediate", "deltaroto_vopn")
+            if _is_deltaroto:
+                # Build a minimal tracker-like namespace for _build_deltaroto_rec_inputs.
+                # It only reads .drafted_ids, .user_roster_ids, and .user_roster from
+                # the tracker; replay has all three in local state.
+                class _FakeTracker:
+                    pass
+
+                _ft = _FakeTracker()
+                _ft.drafted_ids = drafted_ids  # type: ignore[attr-defined]
+                _ft.user_roster_ids = user_roster_ids  # type: ignore[attr-defined]
+                _ft.user_roster = user_roster  # type: ignore[attr-defined]
+                # picks_until_next: use round-trip estimate (num_teams - 1) as a
+                # reasonable approximation when exact pick position is not tracked.
+                _picks_until_next = config.num_teams - 1
+                _rec_inputs = _build_deltaroto_rec_inputs(
+                    board,
+                    full_board,
+                    _ft,
+                    config,
+                    team_rosters,
+                    player_lookup,
+                    team_name=HART,
+                    roster_ids=user_roster_ids,
+                )
+                _ctx = RecommendContext(
+                    scoring_mode=scoring_mode,
+                    team_name=HART,
+                    picks_until_next=_picks_until_next,
+                    inputs=_rec_inputs,
+                )
+                ranked = rank_for_mode(_ctx)
+                recs = ranked  # ranked list of RankedPick (same .name interface)
+            else:
+                recs = get_recommendations(
+                    board,
+                    drafted=drafted_ids,
+                    user_roster=user_roster,
+                    n=5,
+                    filled_positions=filled,
+                    roster_slots=config.roster_slots,
+                    num_teams=config.num_teams,
+                    scoring_mode=scoring_mode,
+                )
 
             picked = entry["player"]
             picked_rows = board[board["player_id"] == entry["player_id"]]
@@ -218,6 +266,10 @@ def main():
         # Record pick
         pid = entry["player_id"]
         drafted_ids.append(pid)
+        # Maintain per-team rosters for deltaRoto RecInputs reconstruction.
+        entry_team_num = name_to_num.get(entry["team"])
+        if entry_team_num is not None:
+            team_rosters[entry_team_num].append(pid)
         if is_hart:
             user_roster.append(entry["player"])
             user_roster_ids.append(pid)

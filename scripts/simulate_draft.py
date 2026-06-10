@@ -48,7 +48,12 @@ from fantasy_baseball.config import load_config
 from fantasy_baseball.data.db import get_connection
 from fantasy_baseball.draft.board import apply_keepers, build_draft_board
 from fantasy_baseball.draft.eroto_recs import is_reliever
-from fantasy_baseball.draft.recommend import _DELTAROTO_MODES, RecommendContext, recommend
+from fantasy_baseball.draft.recommend import (
+    _DELTAROTO_MODES,
+    RecommendContext,
+    rank_for_mode,
+    recommend,
+)
 from fantasy_baseball.draft.recommender import (
     compute_slot_scarcity_order,
     get_filled_positions,
@@ -63,7 +68,12 @@ from fantasy_baseball.draft.recs_integration import (
     rows_to_players,
 )
 from fantasy_baseball.draft.roster_state import RosterState
-from fantasy_baseball.draft.strategy import STRATEGIES, _count_closers, build_player_lookup
+from fantasy_baseball.draft.strategy import (
+    STRATEGIES,
+    _count_closers,
+    build_player_lookup,
+    select_from_ranked,
+)
 from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto_dict
@@ -215,10 +225,16 @@ class TeamTrackerProxy:
     Strategy functions access tracker.user_roster_ids, tracker.user_roster,
     tracker.drafted_ids, tracker.current_pick, tracker.current_round, etc.
     This proxy redirects "user" fields to the specified team's roster.
+
+    team_position: the 1-indexed draft slot for this team (e.g. 3 = picks 3rd
+    in round 1). When provided, picks_until_next_turn is computed for THIS
+    team's next pick in the snake order, not the user's (Fix 7). Falls back to
+    the user's countdown when team_position is not supplied.
     """
 
-    def __init__(self, real_tracker, team_roster, team_roster_ids):
+    def __init__(self, real_tracker, team_roster, team_roster_ids, team_position=None):
         self._real = real_tracker
+        self._team_position = team_position
         self.user_roster = team_roster
         self.user_roster_ids = team_roster_ids
         self.drafted_players = real_tracker.drafted_players
@@ -240,7 +256,28 @@ class TeamTrackerProxy:
 
     @property
     def picks_until_next_turn(self):
-        return self._real.picks_until_next_turn
+        """Countdown to THIS team's next pick in the snake draft.
+
+        When team_position is set, walks the snake forward from current_pick+1
+        until we find a pick belonging to this team -- the same algorithm
+        DraftTracker uses for the user. Falls back to the real tracker's
+        user countdown if team_position is not set.
+        """
+        if self._team_position is None:
+            return self._real.picks_until_next_turn
+        num_teams = self._real.num_teams
+        total = self._real.total_picks
+        count = 0
+        temp_pick = self._real.current_pick + 1
+        while temp_pick <= total:
+            temp_round = (temp_pick - 1) // num_teams + 1
+            temp_pos = (temp_pick - 1) % num_teams + 1
+            team = temp_pos if temp_round % 2 == 1 else num_teams - temp_pos + 1
+            if team == self._team_position:
+                return count
+            count += 1
+            temp_pick += 1
+        return count
 
 
 def _active_slot_counts(roster_slots):
@@ -677,28 +714,14 @@ def run_simulation(
             if strategy_noise > 0 and pick_name is not None:
                 skip = min(abs(round(rng.normal(0, strategy_noise))), 4)  # cap at 5th-best
                 if skip > 0:
-                    filled = get_filled_positions(
-                        tracker.user_roster_ids,
-                        full_board,
-                        roster_slots=config.roster_slots,
-                    )
-                    recs = get_recommendations(
-                        board,
-                        drafted=tracker.drafted_ids,
-                        user_roster=tracker.user_roster,
-                        n=skip + 3,
-                        filled_positions=filled,
-                        picks_until_next=getattr(tracker, "picks_until_next_turn", None),
-                        roster_slots=config.roster_slots,
-                        num_teams=config.num_teams,
-                        scoring_mode=scoring_mode,
-                    )
-                    if len(recs) > skip:
-                        alt = recs[skip]
-                        rows = board[board["name"] == alt.name]
-                        if not rows.empty:
-                            pick_name = alt.name
-                            pid = rows.iloc[0]["player_id"]
+                    # Use the same ranker as the primary pick so the alternate is
+                    # mode-consistent (Fix 3: get_recommendations gives VAR for
+                    # deltaRoto modes, but rank_for_mode gives the correct ranked list).
+                    _ranked_noise = rank_for_mode(_ctx)
+                    _alt = select_from_ranked(_ranked_noise, _open_starters, skip)
+                    if _alt is not None:
+                        pick_name = _alt.name
+                        pid = _alt.player_id
 
             if pick_name is None:
                 pick_name, pid = _first_undrafted(adp_boards[team_num], drafted_set)
@@ -727,6 +750,7 @@ def run_simulation(
                 tracker,
                 opp_roster_names[team_num],
                 opp_rosters[team_num],
+                team_position=team_num,
             )
             # Closer count for this opponent team (proxy exposes the opp roster as
             # user_roster_ids, so _count_closers counts the right team).
@@ -764,7 +788,13 @@ def run_simulation(
                     picks_until_next=proxy.picks_until_next_turn,
                     inputs=_opp_rec_inputs,
                 )
-                opp_strat_name = "default"
+                # Mirror the user path: map deltaRoto STRATEGY aliases to "default"
+                # overlay, but keep real strategy names (e.g. two_closers) intact.
+                # Opponents are assigned overlay names, not scoring-mode aliases, so
+                # opp_strat_name is typically "default"/"two_closers"/etc already.
+                opp_strat_name = (
+                    "default" if opp_strat_name in _DELTAROTO_STRATEGY_NAMES else opp_strat_name
+                )
             else:
                 _opp_ctx = RecommendContext(
                     scoring_mode=_eff_scoring,
