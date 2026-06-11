@@ -530,6 +530,11 @@ def test_standings_endpoint_returns_real_rows_after_pick(tmp_path, monkeypatch):
     assert len(rows) == 2  # two teams
     assert all(isinstance(row["total"], int | float) for row in rows)
     assert rows[0]["total"] >= rows[1]["total"]  # sorted desc
+    # Per-category points feed the dashboard's roto grid: all 10 roto
+    # categories present, each a number.
+    cats = rows[0]["categories"]
+    assert set(cats) == {"R", "HR", "RBI", "SB", "AVG", "W", "SV", "K", "ERA", "WHIP"}
+    assert all(isinstance(v, int | float) for v in cats.values())
 
 
 def test_roster_endpoint_organizes_by_slot_with_replacements(tmp_path, monkeypatch):

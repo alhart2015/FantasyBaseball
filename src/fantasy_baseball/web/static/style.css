@@ -1,12 +1,49 @@
+/* === Draft Dashboard -- C-Dark stadium theme ===
+ * Shares the in-season dashboard's design language (season.css):
+ * deep stadium surfaces, chalk ink, sodium-amber spotlight accent,
+ * outfield-grass / clay-rust semantics, and the Outfit / Newsreader /
+ * Big Shoulders Display / JetBrains Mono type system. Fonts are loaded
+ * via the <link> in dashboard.html. */
+
 :root {
-  --bg: #0f1419;
-  --panel-bg: #1a2028;
-  --border: #2a3340;
-  --text: #e4e7eb;
-  --accent: #4db8ff;
-  --positive: #5fb75f;
-  --negative: #d86868;
-  --muted: #7a8699;
+  /* Surfaces */
+  --bg:           #0E1218;
+  --surface:      #161B23;
+  --surface-soft: #1D232E;
+
+  /* Lines */
+  --line:         #262E3B;
+  --line-strong:  #3A4252;
+
+  /* Ink */
+  --ink:          #ECE7DA;
+  --ink-soft:     #B8BFCA;
+  --ink-faint:    #5A6271;
+
+  /* Sodium amber -- single spotlight accent (user team + primary CTA) */
+  --amber:        #F4B41A;
+  --amber-deep:   #C8910C;
+  --amber-soft:   rgba(244, 180, 26, 0.14);
+
+  /* Outfield grass (leading / positive) + clay rust (trailing / negative) */
+  --field:        #4FB358;
+  --field-deep:   #2E7D32;
+  --clay:         #E06A55;
+  --clay-deep:    #B85240;
+
+  /* Semantic aliases -- existing draft selectors reference these names. */
+  --panel-bg:  var(--surface-soft);
+  --border:    var(--line);
+  --text:      var(--ink);
+  --accent:    var(--amber);
+  --positive:  var(--field);
+  --negative:  var(--clay);
+  --muted:     var(--ink-faint);
+
+  --font-body:    'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: 'Newsreader', 'Times New Roman', serif;
+  --font-label:   'Big Shoulders Display', sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, monospace;
 }
 
 * { box-sizing: border-box; }
@@ -14,65 +51,185 @@
 body {
   margin: 0;
   background: var(--bg);
-  color: var(--text);
-  font-family: system-ui, -apple-system, sans-serif;
+  color: var(--ink);
+  font-family: var(--font-body);
+  letter-spacing: -0.005em;
   display: flex;
   flex-direction: column;
   /* Lock body to the viewport so dashboard-grid's flex:1 + min-height:0
-   * has an actual max to grow into. With min-height:100vh, the long
-   * available-players list pushes the body taller and the section's
-   * overflow-y:auto never kicks in. */
+   * has a real max to grow into -- otherwise the long player list pushes
+   * the body taller and the per-column overflow-y never engages. */
   height: 100vh;
   overflow: hidden;
 }
 
+/* Thin dark scrollbars that read as part of the surfaces. */
+* { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+*::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 6px; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* ===================================================================
+ * Topbar scoreboard
+ * =================================================================== */
 .topbar {
   display: flex;
-  gap: 2rem;
   align-items: center;
-  padding: 0.75rem 1rem;
-  background: var(--panel-bg);
-  border-bottom: 1px solid var(--border);
+  gap: 28px;
+  padding: 13px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  position: relative;
+  flex-shrink: 0;
+}
+/* Stitched-seam under the bar -- the season sidebar's signature motif. */
+.topbar::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 6px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 6' preserveAspectRatio='none'><path d='M0 2 Q 7.5 0 15 2 T 30 2 T 45 2 T 60 2 T 75 2 T 90 2 T 105 2 T 120 2 T 135 2 T 150 2 T 165 2 T 180 2 T 195 2 T 210 2 T 225 2 T 240 2' fill='none' stroke='%23E06A55' stroke-width='1.2' opacity='0.65'/><path d='M0 4 Q 7.5 6 15 4 T 30 4 T 45 4 T 60 4 T 75 4 T 90 4 T 105 4 T 120 4 T 135 4 T 150 4 T 165 4 T 180 4 T 195 4 T 210 4 T 225 4 T 240 4' fill='none' stroke='%23E06A55' stroke-width='1.2' opacity='0.65'/></svg>");
+  background-size: 240px 6px;
+  background-repeat: repeat-x;
+  pointer-events: none;
 }
 
-.topbar .round-pick { font-size: 1.5rem; font-weight: 600; }
-.topbar .on-the-clock button { font: inherit; background: none; border: 1px dashed var(--border); color: var(--accent); padding: 0.25rem 0.5rem; cursor: pointer; }
-.topbar .lifecycle-buttons { margin-left: auto; }
+.topbar .brand { display: flex; flex-direction: column; gap: 5px; }
+.brand-mark {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 19px;
+  line-height: 1;
+  letter-spacing: -0.018em;
+  color: var(--ink);
+}
+.brand-mark em { font-style: italic; font-weight: 400; color: var(--clay); }
+.brand-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-label);
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.brand-sub::before {
+  content: '';
+  width: 6px; height: 6px;
+  transform: rotate(45deg);
+  background: var(--amber);
+  box-shadow: 0 0 8px rgba(244, 180, 26, 0.45);
+}
 
-/* Lifecycle + recent-picks buttons: explicit styling so the dark-theme
- * background doesn't make them disappear into the panel.
- */
-.lifecycle-buttons button,
-.recent-picks button {
-  font: inherit;
-  background: var(--accent);
-  color: #0f1419;
-  border: none;
-  padding: 0.4rem 0.9rem;
-  border-radius: 4px;
+.scoreboard { display: flex; align-items: stretch; gap: 22px; }
+.score-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+.score-cell.otc { padding-left: 22px; border-left: 1px solid var(--line); }
+.score-label {
+  font-family: var(--font-label);
+  font-weight: 700;
+  font-size: 9.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.score-num {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.score-num.small { font-size: 17px; color: var(--amber); }
+
+.team-override {
+  font-family: var(--font-body);
+  font-size: 15px;
+  font-weight: 600;
+  background: var(--amber-soft);
+  border: 1px solid var(--amber);
+  color: var(--amber);
+  padding: 4px 12px;
+  border-radius: 5px;
   cursor: pointer;
+  transition: background 0.15s;
+}
+.team-override:hover { background: rgba(244, 180, 26, 0.22); }
+
+.lifecycle-buttons { margin-left: auto; }
+
+/* Primary CTAs: amber fill, Big Shoulders caps -- the season .btn-refresh look. */
+.lifecycle-buttons button,
+.recent-picks #undo-btn {
+  font-family: var(--font-label);
+  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  background: var(--amber);
+  color: var(--bg);
+  border: none;
+  padding: 10px 18px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
 }
 .lifecycle-buttons button:hover:not(:disabled),
-.recent-picks button:hover:not(:disabled) { filter: brightness(1.1); }
+.recent-picks #undo-btn:hover:not(:disabled) { background: var(--amber-deep); }
 .lifecycle-buttons button:disabled,
-.recent-picks button:disabled { opacity: 0.4; cursor: not-allowed; }
+.recent-picks #undo-btn:disabled {
+  background: var(--surface-soft);
+  color: var(--ink-faint);
+  cursor: not-allowed;
+}
 
+/* ===================================================================
+ * Main 3-column grid
+ * =================================================================== */
 .dashboard-grid {
   flex: 1;
   display: grid;
   grid-template-columns: 30% 45% 25%;
-  gap: 0;
   min-height: 0;
 }
-
 .dashboard-grid > section {
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--line);
   overflow-y: auto;
-  padding: 1rem;
+  padding: 18px 18px 24px;
+  background: var(--surface);
+  animation: panel-rise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
-
+/* Center column is the darker "field" so its rec cards pop forward. */
+.dashboard-grid > section:nth-child(1) { animation-delay: 0.02s; }
+.dashboard-grid > section:nth-child(2) { animation-delay: 0.08s; background: var(--bg); }
+.dashboard-grid > section:nth-child(3) { animation-delay: 0.14s; }
 .dashboard-grid > section:last-child { border-right: none; }
 
+@keyframes panel-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Shared section titles -- Newsreader serif, like the season cards. */
+.recommendations > header h2,
+.roto-grid-panel > header h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.recommendations > header h2 { font-size: 19px; }
+.roto-grid-panel > header h3 { font-size: 15px; }
+
+/* Shared list reset. */
 .available-players ul,
 .recommendations ol,
 .recent-picks ol {
@@ -81,126 +238,386 @@ body {
   margin: 0;
 }
 
-.available-players li,
-.recommendations li {
-  padding: 0.5rem;
-  border-bottom: 1px solid var(--border);
-  cursor: pointer;
+/* Form controls (search, position filter, team picker). */
+.available-players > header input[type="search"],
+.available-players > header select,
+#team-picker {
+  font-family: var(--font-body);
+  font-size: 13px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  padding: 7px 10px;
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 0.15s;
 }
+.available-players > header input[type="search"]:focus,
+.available-players > header select:focus,
+#team-picker:focus { border-color: var(--amber); }
+::placeholder { color: var(--ink-faint); }
 
-.available-players li:hover,
-.recommendations li:hover {
-  background: #222a36;
+/* ===================================================================
+ * Available players
+ * =================================================================== */
+.available-players > header {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
 }
+.available-players > header > input[type="search"] { flex: 1; min-width: 0; }
+.available-players > header > select { flex: 0 0 auto; }
 
-/* 4-column grid for the available-players list: name, pos, ADP, SGP.
- * Header row uses the same template so columns line up. */
+/* Name / Pos / ADP / SGP grid -- header and rows share the template. */
 .available-players .player-list-header,
 .available-players li {
   display: grid;
   grid-template-columns: 1fr 4rem 3.5rem 3.5rem;
-  gap: 0.5rem;
+  gap: 8px;
   align-items: baseline;
 }
 .available-players .player-list-header {
-  padding: 0.4rem 0.5rem;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.8rem;
-  color: var(--muted);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line-strong);
+  font-family: var(--font-label);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  color: var(--ink-faint);
 }
+.available-players li {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.available-players li:hover { background: var(--amber-soft); }
+.available-players li .name { font-weight: 500; color: var(--ink); }
 .available-players .pos,
 .available-players .adp,
 .available-players .sgp {
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-soft);
   text-align: right;
 }
-.available-players li .pos { text-align: left; }
-.available-players .player-list-header .pos { text-align: left; }
+.available-players li .pos,
+.available-players .player-list-header .pos { text-align: left; color: var(--ink-faint); }
+.available-players li .sgp { color: var(--ink); }
 
-/* Sortable column headers: same look as the static <span>, just clickable.
- * Active sort column gets a direction arrow appended via ::after. */
+/* Sortable column headers: same look as the labels, clickable. */
 .available-players .player-list-header button {
   font: inherit;
   background: none;
   border: none;
   color: inherit;
-  text-transform: inherit;
   letter-spacing: inherit;
+  text-transform: inherit;
   padding: 0;
   cursor: pointer;
+  transition: color 0.12s;
 }
 .available-players .player-list-header button.adp,
 .available-players .player-list-header button.sgp { text-align: right; }
 .available-players .player-list-header button.name { text-align: left; }
-.available-players .player-list-header button:hover { color: var(--text); }
-.available-players .player-list-header button.sort-active { color: var(--accent); }
-.available-players .player-list-header button.sort-asc::after { content: " ↑"; }
-.available-players .player-list-header button.sort-desc::after { content: " ↓"; }
+.available-players .player-list-header button:hover { color: var(--ink-soft); }
+.available-players .player-list-header button.sort-active { color: var(--amber); }
+.available-players .player-list-header button.sort-asc::after { content: " \2191"; }
+.available-players .player-list-header button.sort-desc::after { content: " \2193"; }
 
-/* Header row: name filter + position select side-by-side. */
-.available-players > header {
+/* ===================================================================
+ * Recommendations
+ * =================================================================== */
+.recommendations > header {
   display: flex;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
 }
-.available-players > header > input[type="search"] { flex: 1; min-width: 0; }
-.available-players > header > select { flex: 0 0 auto; }
-
-.recommendations .delta.positive { color: var(--positive); }
-.recommendations .delta.negative { color: var(--negative); }
-.recommendations .detail { display: none; color: var(--muted); font-size: 0.85rem; padding-top: 0.5rem; }
-.recommendations li.expanded .detail { display: block; }
-
-/* Loading / freshness indicator next to the panel title. */
 .recommendations .recs-status {
-  font-size: 0.75rem;
-  color: var(--muted);
-  font-weight: normal;
-  margin-left: 0.5rem;
+  font-family: var(--font-label);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-left: 8px;
 }
-/* Dim the rec list while a fetch is in-flight so it's clear the
- * displayed rows are about to be replaced. */
+
+.sort-toggle { display: flex; gap: 6px; }
+.sort-toggle button {
+  font-family: var(--font-body);
+  font-size: 12px;
+  padding: 6px 13px;
+  border-radius: 16px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-soft);
+  color: var(--ink-soft);
+  cursor: pointer;
+  opacity: 0.75;
+  transition: all 0.15s;
+}
+.sort-toggle button:hover { opacity: 1; }
+.sort-toggle button.active {
+  opacity: 1;
+  border-color: var(--amber);
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+
+#rec-list { display: flex; flex-direction: column; gap: 7px; }
+/* Dim the list while a fetch is in-flight -- rows are about to be replaced. */
 #rec-list.loading { opacity: 0.4; transition: opacity 150ms; }
 
-.team-inspector .tabs button { font: inherit; background: none; border: none; color: var(--muted); padding: 0.5rem 1rem; cursor: pointer; }
-.team-inspector .tabs button.active { color: var(--text); border-bottom: 2px solid var(--accent); }
-.team-inspector .panel.hidden { display: none; }
-.team-inspector .replacement-slot { color: var(--muted); font-style: italic; }
+.recommendations li {
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-left: 3px solid transparent;
+  border-radius: 7px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: border-color 0.12s, transform 0.12s, background 0.12s;
+}
+.recommendations li:hover {
+  border-color: var(--line-strong);
+  border-left-color: var(--amber);
+  background: var(--surface);
+  transform: translateX(2px);
+}
+.recommendations .row {
+  display: grid;
+  grid-template-columns: 1.8rem 1fr auto auto auto 1.4rem;
+  gap: 10px;
+  align-items: center;
+}
+.recommendations .rank {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 16px;
+  color: var(--ink-faint);
+}
+.recommendations .row .name { font-weight: 600; font-size: 14px; color: var(--ink); }
+.recommendations .row .pos {
+  font-family: var(--font-label);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.recommendations .delta,
+.recommendations .vopn {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.recommendations .delta.positive { color: var(--field); }
+.recommendations .delta.negative { color: var(--clay); }
+.recommendations .vopn { color: var(--ink-soft); }
+.recommendations .detail-toggle {
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  font-size: 12px;
+  padding: 0;
+  cursor: pointer;
+  transition: color 0.12s, transform 0.12s;
+}
+.recommendations .detail-toggle:hover { color: var(--amber); }
+.recommendations li.expanded .detail-toggle { transform: rotate(180deg); color: var(--amber); }
 
-/* Roster list: slot column + player column. Slots left-aligned in a
- * fixed-width column so position labels stack cleanly. */
+.recommendations .detail {
+  display: none;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-soft);
+}
+.recommendations li.expanded .detail { display: block; }
+.recommendations .detail table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.recommendations .detail th {
+  text-align: left;
+  padding: 2px 6px;
+  font-family: var(--font-label);
+  font-weight: 700;
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.recommendations .detail td { padding: 2px 6px; font-variant-numeric: tabular-nums; }
+.recommendations .detail td.positive { color: var(--field); }
+.recommendations .detail td.negative { color: var(--clay); }
+
+/* ===================================================================
+ * Roto grid (5x2 projected category points, below the recs)
+ * =================================================================== */
+.roto-grid-panel {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.roto-grid-panel > header { margin-bottom: 12px; }
+.roto-grid-panel .grid-team {
+  margin-left: 6px;
+  font-family: var(--font-label);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+.roto-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+.roto-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 12px 4px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-soft);
+}
+.roto-cell .cat {
+  font-family: var(--font-label);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+.roto-cell .pts {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+/* ===================================================================
+ * Team inspector (roster / standings tabs)
+ * =================================================================== */
+.team-inspector > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.team-inspector .tabs { display: flex; gap: 2px; }
+.team-inspector .tabs button {
+  font-family: var(--font-label);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  padding: 7px 12px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.12s, border-color 0.12s;
+}
+.team-inspector .tabs button:hover { color: var(--ink-soft); }
+.team-inspector .tabs button.active { color: var(--ink); border-bottom-color: var(--amber); }
+#team-picker { max-width: 55%; }
+.team-inspector .panel.hidden { display: none; }
+
 .team-inspector .roster-list { list-style: none; padding: 0; margin: 0; }
 .team-inspector .roster-list li {
   display: grid;
   grid-template-columns: 3rem 1fr;
-  gap: 0.75rem;
-  padding: 0.25rem 0;
-  border-bottom: 1px solid var(--border);
+  gap: 12px;
+  align-items: baseline;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
 }
 .team-inspector .roster-list .slot {
-  color: var(--muted);
-  font-weight: 600;
+  font-family: var(--font-label);
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-size: 0.85rem;
+  color: var(--ink-faint);
 }
+.team-inspector .roster-list .name { color: var(--ink); font-size: 13px; }
+.team-inspector .replacement-slot .name,
+.team-inspector .replacement-slot { color: var(--ink-faint); font-style: italic; }
+
+/* Standings table -- mirrors the season .data-table. */
+.team-inspector .standings { width: 100%; border-collapse: collapse; }
+.team-inspector .standings th {
+  font-family: var(--font-label);
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  text-align: right;
+  padding: 6px;
+  border-bottom: 2px solid var(--line-strong);
+}
+.team-inspector .standings th:first-child { text-align: left; }
+.team-inspector .standings td {
+  padding: 7px 6px;
+  text-align: right;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.team-inspector .standings td:first-child {
+  text-align: left;
+  font-family: var(--font-body);
+  color: var(--ink-soft);
+}
+.team-inspector .standings tr:last-child td { border-bottom: none; }
 .team-inspector .uncertainty-bar {
   display: inline-block;
   height: 4px;
-  background: var(--accent);
+  border-radius: 2px;
+  background: var(--amber);
   opacity: 0.5;
   vertical-align: middle;
+  margin-left: 6px;
 }
 
+/* ===================================================================
+ * Recent picks footer
+ * =================================================================== */
 .recent-picks {
   display: flex;
-  padding: 0.5rem 1rem;
-  background: var(--panel-bg);
-  border-top: 1px solid var(--border);
   align-items: center;
+  gap: 16px;
+  padding: 10px 24px;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  flex-shrink: 0;
 }
-.recent-picks ol { display: flex; gap: 1rem; flex: 1; }
-.recent-picks #undo-btn { margin-left: auto; }
+.recent-picks ol { display: flex; gap: 10px; flex: 1; overflow-x: auto; }
+.recent-picks li {
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--ink-soft);
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 4px 12px;
+}
+.recent-picks #undo-btn { margin-left: auto; flex-shrink: 0; }

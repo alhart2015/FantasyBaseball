@@ -3,7 +3,6 @@
 
 const POLL_INTERVAL_MS = 500;
 let lastVersion = 0;
-let lastOnTheClock = null;
 let lastState = null;  // cached so filter/sort UI changes re-render without refetching
 let fullBoard = [];  // cached once from /api/board
 let recsPrimarySort = "immediate"; // or "vopn"
@@ -12,6 +11,12 @@ let recsPrimarySort = "immediate"; // or "vopn"
 // response so the sort toggle can re-render without re-fetching.
 let recsRequestId = 0;
 let lastRecsRows = [];
+
+// Roto grid (5x2, below the recs panel). Categories laid out hitting row
+// then pitching row. lastStandingsRows caches the most recent /api/standings
+// response so the grid can re-render on a team-picker change without refetching.
+const ROTO_CATEGORIES = ["R", "HR", "RBI", "SB", "AVG", "W", "SV", "K", "ERA", "WHIP"];
+let lastStandingsRows = [];
 
 // Available-players panel sort + filter state.
 // playerSort=null means "use board order" (var-desc as written by build_draft_board).
@@ -56,12 +61,11 @@ function renderState(state) {
   document.getElementById("picks-to-next").textContent = picksUntilNext(state);
   renderAvailablePlayers(state);
   renderRecentPicks(state);
-  // /api/recs is the slow endpoint (~200ms even capped). Only refetch when
-  // the team on the clock changes — otherwise the cached rows still apply.
-  if (state.on_the_clock && state.on_the_clock !== lastOnTheClock) {
-    lastOnTheClock = state.on_the_clock;
-    loadAndRenderRecs(state.on_the_clock);
-  }
+  // Recs are for the inspector-selected team (not whoever's on the clock).
+  // The candidate pool shrinks every pick, so refetch on each state change
+  // rather than only when the selected team changes. renderState only runs
+  // on an actual version change, so this is one fetch per pick, not per poll.
+  loadAndRenderRecs(selectedTeam());
   // Roster/standings panels need to refresh on every pick — otherwise
   // the user sees stale data until they manually flip tabs.
   refreshInspectorPanel();
@@ -254,11 +258,25 @@ function renderRecs(rows) {
     }
     const li = e.target.closest("li");
     if (li) {
+      // Recs are shown for the inspector-selected team, but the pick is
+      // recorded for whoever's on the clock. Warn when those differ so a
+      // planning click doesn't silently draft to the wrong team.
+      const onClock = document.getElementById("otc-btn").textContent;
+      const recsFor = selectedTeam();
+      if (
+        onClock !== recsFor &&
+        !confirm(
+          `These recommendations are for ${recsFor}, but ${onClock} is on the clock.\n\n` +
+            `Draft ${li.dataset.pname} for ${onClock}?`
+        )
+      ) {
+        return;
+      }
       recordPick({
         player_id: li.dataset.pid,
         player_name: li.dataset.pname,
         position: li.dataset.pos,
-        team: document.getElementById("otc-btn").textContent,
+        team: onClock,
       });
     }
   };
@@ -309,6 +327,40 @@ function renderStandings(rows) {
   `;
 }
 
+// Render the 5x2 projected-category-points grid for one team. Cells are
+// tinted on the dashboard's grass/clay scale: above the middle rank reads
+// outfield-grass, below reads clay-rust, the midpoint stays neutral --
+// matching the season dashboard's stat-distance coloring.
+function rotoCellTint(pts, maxPts) {
+  if (pts == null) return "var(--surface-soft)";
+  // 0 = worst (1 pt), 0.5 = middle rank, 1 = sole leader.
+  const t = Math.min(1, Math.max(0, (pts - 1) / (maxPts - 1)));
+  if (t >= 0.5) {
+    const i = (t - 0.5) * 2; // grass intensity
+    return `rgba(79, 179, 88, ${(i * 0.3).toFixed(3)})`;
+  }
+  const i = (0.5 - t) * 2; // clay intensity
+  return `rgba(224, 106, 85, ${(i * 0.28).toFixed(3)})`;
+}
+
+function renderRotoGrid(team, rows) {
+  const grid = document.getElementById("roto-grid");
+  if (!grid) return;
+  const label = document.getElementById("roto-grid-team");
+  if (label) label.textContent = team ? `— ${team}` : "";
+  const cats = (rows || []).find((r) => r.team === team)?.categories || {};
+  const maxPts = Math.max(2, leagueMeta.teams?.length || 10);
+  grid.innerHTML = ROTO_CATEGORIES.map((cat) => {
+    const pts = cats[cat];
+    const has = pts != null;
+    return `
+      <div class="roto-cell" style="background:${rotoCellTint(pts, maxPts)}">
+        <span class="cat">${cat}</span>
+        <span class="pts">${has ? pts.toFixed(1) : "—"}</span>
+      </div>`;
+  }).join("");
+}
+
 async function recordPick(payload) {
   const r = await fetch("/api/pick", {
     method: "POST",
@@ -357,11 +409,21 @@ async function poll() {
   setTimeout(poll, POLL_INTERVAL_MS);
 }
 
+// The team the inspector + recs + roto grid are scoped to: the picker
+// selection, falling back to whoever's on the clock before the picker loads.
+function selectedTeam() {
+  return document.getElementById("team-picker").value || document.getElementById("otc-btn").textContent;
+}
+
 async function refreshInspectorPanel() {
-  const team = document.getElementById("team-picker").value || document.getElementById("otc-btn").textContent;
+  const team = selectedTeam();
   const activeTab = document.querySelector(".team-inspector .tabs button.active")?.dataset.tab;
+  // The roto grid (below the recs panel) always needs standings data, so
+  // fetch it once here and feed both the grid and the standings tab.
+  lastStandingsRows = await fetchStandings();
+  renderRotoGrid(team, lastStandingsRows);
   if (activeTab === "standings") {
-    renderStandings(await fetchStandings());
+    renderStandings(lastStandingsRows);
   } else {
     renderRoster(await fetchRoster(team));
   }
@@ -377,7 +439,11 @@ async function refreshInspectorPanel() {
   refreshInspectorPanel();
   document.getElementById("undo-btn").onclick = undo;
   document.getElementById("new-draft-btn").onclick = newDraft;
-  document.getElementById("team-picker").addEventListener("change", refreshInspectorPanel);
+  // Changing the team retargets the inspector panels AND the recs/grid.
+  document.getElementById("team-picker").addEventListener("change", () => {
+    loadAndRenderRecs(selectedTeam());
+    refreshInspectorPanel();
+  });
 
   document.querySelectorAll(".sort-toggle button").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -424,7 +490,7 @@ async function refreshInspectorPanel() {
       const tab = btn.dataset.tab;
       document.getElementById("roster-panel").classList.toggle("hidden", tab !== "roster");
       document.getElementById("standings-panel").classList.toggle("hidden", tab !== "standings");
-      const team = document.getElementById("team-picker").value || document.getElementById("otc-btn").textContent;
+      const team = selectedTeam();
       if (tab === "roster") {
         renderRoster(await fetchRoster(team));
       } else {

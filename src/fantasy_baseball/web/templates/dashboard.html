@@ -2,20 +2,39 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Draft Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Draft Room</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9918;</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800;900&family=Newsreader:ital,opsz,wght@0,6..72,400..700;1,6..72,400..700&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" />
   <link rel="stylesheet" href="/static/style.css" />
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
 </head>
 <body>
   <header class="topbar">
-    <div class="round-pick">
-      R<span id="round">–</span> P<span id="pick">–</span>
+    <div class="brand">
+      <span class="brand-mark">Hart of <em>the</em> Order</span>
+      <span class="brand-sub">Draft Room</span>
     </div>
-    <div class="on-the-clock">
-      On the clock:
-      <button id="otc-btn" class="team-override">—</button>
+    <div class="scoreboard">
+      <div class="score-cell">
+        <span class="score-label">Round</span>
+        <span class="score-num" id="round">--</span>
+      </div>
+      <div class="score-cell">
+        <span class="score-label">Pick</span>
+        <span class="score-num" id="pick">--</span>
+      </div>
+      <div class="score-cell otc">
+        <span class="score-label">On the clock</span>
+        <button id="otc-btn" class="team-override">--</button>
+      </div>
+      <div class="score-cell">
+        <span class="score-label">Your next</span>
+        <span class="score-num small" id="picks-to-next">--</span>
+      </div>
     </div>
-    <div class="next-pick">Your next: <span id="picks-to-next">—</span></div>
     <div class="lifecycle-buttons">
       <button id="new-draft-btn">New Draft</button>
     </div>
@@ -58,6 +77,13 @@
         </div>
       </header>
       <ol id="rec-list"></ol>
+
+      <section class="roto-grid-panel">
+        <header>
+          <h3>Projected category points <span id="roto-grid-team" class="grid-team"></span></h3>
+        </header>
+        <div id="roto-grid" class="roto-grid"></div>
+      </section>
     </section>
 
     <section class="team-inspector">
