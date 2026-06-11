@@ -50,6 +50,7 @@ from fantasy_baseball.draft.board import apply_keepers, build_draft_board
 from fantasy_baseball.draft.eroto_recs import is_reliever
 from fantasy_baseball.draft.recommend import (
     _DELTAROTO_MODES,
+    ADAPTIVE_MODE,
     RecommendContext,
     rank_for_mode,
     recommend,
@@ -89,7 +90,7 @@ _DELTAROTO_POOL_CAP = 200
 
 # Set of scoring_mode strings that use the deltaRoto ranking engine. Single-sourced
 # from recommend._DELTAROTO_MODES so the two never drift.
-_DELTAROTO_STRATEGY_NAMES = frozenset(_DELTAROTO_MODES)
+_DELTAROTO_STRATEGY_NAMES = frozenset(_DELTAROTO_MODES) | {ADAPTIVE_MODE}
 
 
 def _to_overlay(strategy_name: str) -> str:
@@ -671,6 +672,7 @@ def run_simulation(
                     team_name=config.team_name,
                     picks_until_next=tracker.picks_until_next_turn,
                     inputs=_rec_inputs,
+                    current_round=tracker.current_round,
                 )
             else:
                 # var/vona path: build RecommendContext from board + tracker state.
@@ -812,6 +814,7 @@ def run_simulation(
                     team_name=opp_team_name,
                     picks_until_next=proxy.picks_until_next_turn,
                     inputs=_opp_rec_inputs,
+                    current_round=tracker.current_round,
                 )
                 # Mirror the user path: map deltaRoto STRATEGY aliases to "default"
                 # overlay, but keep real strategy names (e.g. two_closers) intact.

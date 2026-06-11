@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import math
+import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -67,7 +68,19 @@ _DELTAROTO_MODES = {
     "deltaroto_vopn": "value_of_picking_now",
 }
 
+# Experimental adaptive mode: VOPN ("value of picking now") while building, then
+# immediate marginal roto once the roster is loaded. Round-based trigger for now
+# (a roster-strength-relative-to-field trigger is the planned v2). Flip round is
+# overridable via the ADAPTIVE_K env var for sweeps.
+ADAPTIVE_MODE = "deltaroto_adaptive"
+ADAPTIVE_DEFAULT_K = 8
+
 _VARVONA_MODES = ("var", "vona")
+
+
+def _adaptive_metric(current_round: int) -> str:
+    k = int(os.environ.get("ADAPTIVE_K", str(ADAPTIVE_DEFAULT_K)))
+    return "immediate_delta" if current_round >= k else "value_of_picking_now"
 
 
 def from_recrow(row: RecRow, *, metric: str, player_type: PlayerType) -> RankedPick:
@@ -110,12 +123,18 @@ class RecommendContext:
     drafted: list[str] = field(default_factory=list)
     filled_positions: dict[str, int] | None = None
     config: Any = None
+    # 1-indexed draft round, used only by the experimental "deltaroto_adaptive"
+    # mode to switch metric (VOPN while building -> immediate once loaded).
+    current_round: int = 0
 
 
 def _rank_deltaroto(ctx: RecommendContext) -> list[RankedPick]:
     if ctx.inputs is None:
         raise ValueError(f"scoring_mode {ctx.scoring_mode!r} requires inputs (RecInputs)")
-    metric = _DELTAROTO_MODES[ctx.scoring_mode]
+    if ctx.scoring_mode == ADAPTIVE_MODE:
+        metric = _adaptive_metric(ctx.current_round)
+    else:
+        metric = _DELTAROTO_MODES[ctx.scoring_mode]
     rows = eroto_recs.rank_candidates(
         candidates=ctx.inputs.candidates,
         replacements=ctx.inputs.replacements,
@@ -203,7 +222,7 @@ def _rank_var_vona(ctx: RecommendContext) -> list[RankedPick]:
 
 def rank_for_mode(ctx: RecommendContext) -> list[RankedPick]:
     """Single dispatcher: rank the candidate pool for ``ctx.scoring_mode``."""
-    if ctx.scoring_mode in _DELTAROTO_MODES:
+    if ctx.scoring_mode in _DELTAROTO_MODES or ctx.scoring_mode == ADAPTIVE_MODE:
         return _rank_deltaroto(ctx)
     if ctx.scoring_mode in _VARVONA_MODES:
         return _rank_var_vona(ctx)
