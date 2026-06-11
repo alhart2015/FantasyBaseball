@@ -75,6 +75,13 @@ _DELTAROTO_MODES = {
 ADAPTIVE_MODE = "deltaroto_adaptive"
 ADAPTIVE_DEFAULT_K = 8
 
+# Experimental: score the candidate's marginal roto against an ADP-projected
+# *final* field (every team filled to a realistic full roster) instead of the
+# replacement-padded, mid-draft-shifting field the other deltaRoto modes use.
+# The picking team displaces its marginal ADP filler. Inputs are built by
+# finalslate.build_finalslate_field and carried on RecInputs.
+FINALSLATE_MODE = "deltaroto_finalslate"
+
 _VARVONA_MODES = ("var", "vona")
 
 
@@ -161,6 +168,36 @@ def _rank_deltaroto(ctx: RecommendContext) -> list[RankedPick]:
     return picks
 
 
+def _rank_finalslate(ctx: RecommendContext) -> list[RankedPick]:
+    if ctx.inputs is None:
+        raise ValueError(f"scoring_mode {ctx.scoring_mode!r} requires inputs (RecInputs)")
+    inp = ctx.inputs
+    if inp.finalslate_standings is None or inp.finalslate_fillers is None:
+        raise ValueError(
+            "deltaroto_finalslate requires finalslate_standings + finalslate_fillers on "
+            "RecInputs (build them with finalslate.build_finalslate_field)"
+        )
+    rows = eroto_recs.rank_candidates_finalslate(
+        candidates=inp.candidates,
+        field_standings=inp.finalslate_standings,
+        fillers=inp.finalslate_fillers,
+        replacements=inp.replacements,
+        team_name=ctx.team_name,
+        team_sds=inp.finalslate_team_sds,
+        user_rp_filled=inp.rp_filled_by_team.get(ctx.team_name, 0),
+        holders=inp.finalslate_holders,
+    )
+    type_by_id = {eroto_recs._candidate_id(c): c.player_type for c in inp.candidates}
+    picks: list[RankedPick] = []
+    for r in rows:
+        pt = type_by_id.get(r.player_id)
+        if pt is None:
+            raise KeyError(f"candidate id {r.player_id!r} ({r.name}) absent from board candidates")
+        picks.append(from_recrow(r, metric="immediate_delta", player_type=pt))
+    picks.sort(key=lambda p: p.score, reverse=True)
+    return picks
+
+
 def _rank_var_vona(ctx: RecommendContext) -> list[RankedPick]:
     if ctx.board is None:
         raise ValueError(f"scoring_mode {ctx.scoring_mode!r} requires board (DataFrame)")
@@ -222,6 +259,8 @@ def _rank_var_vona(ctx: RecommendContext) -> list[RankedPick]:
 
 def rank_for_mode(ctx: RecommendContext) -> list[RankedPick]:
     """Single dispatcher: rank the candidate pool for ``ctx.scoring_mode``."""
+    if ctx.scoring_mode == FINALSLATE_MODE:
+        return _rank_finalslate(ctx)
     if ctx.scoring_mode in _DELTAROTO_MODES or ctx.scoring_mode == ADAPTIVE_MODE:
         return _rank_deltaroto(ctx)
     if ctx.scoring_mode in _VARVONA_MODES:

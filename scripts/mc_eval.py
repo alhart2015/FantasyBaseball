@@ -28,7 +28,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS
 
-MODES = ["var", "vona", "deltaroto_immediate", "deltaroto_vopn"]
+MODES = ["var", "vona", "deltaroto_immediate", "deltaroto_vopn", "deltaroto_finalslate"]
 POSITIONS = list(range(1, 11))
 ITERS = 10
 N_MC = 1000
