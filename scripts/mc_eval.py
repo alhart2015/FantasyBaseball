@@ -38,9 +38,11 @@ TMP_CONFIG = PROJECT_ROOT / "config" / "_cleanroom_nokeepers.yaml"
 
 
 def _write_clean_config():
-    raw = yaml.safe_load(open(REAL_CONFIG))
+    with open(REAL_CONFIG) as f:
+        raw = yaml.safe_load(f)
     raw["keepers"] = []
-    yaml.safe_dump(raw, open(TMP_CONFIG, "w"))
+    with open(TMP_CONFIG, "w") as f:
+        yaml.safe_dump(raw, f)
 
 
 def _mc_win_rank(team_stats, team_sds, hart, n, rng):

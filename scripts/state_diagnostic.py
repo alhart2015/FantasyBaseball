@@ -37,9 +37,11 @@ TMP_CONFIG = PROJECT_ROOT / "config" / "_cleanroom_nokeepers.yaml"
 
 
 def _write_clean_config():
-    raw = yaml.safe_load(open(REAL_CONFIG))
+    with open(REAL_CONFIG) as f:
+        raw = yaml.safe_load(f)
     raw["keepers"] = []
-    yaml.safe_dump(raw, open(TMP_CONFIG, "w"))
+    with open(TMP_CONFIG, "w") as f:
+        yaml.safe_dump(raw, f)
 
 
 def _roto_state(ps, hart):
@@ -91,7 +93,9 @@ def _cell(position, seed_base, config_path, num_teams):
     cfg = ctx["config"]
     sgp = {
         str(p): float(s)
-        for p, s in zip(ctx["full_board"]["player_id"], ctx["full_board"]["total_sgp"])
+        for p, s in zip(
+            ctx["full_board"]["player_id"], ctx["full_board"]["total_sgp"], strict=False
+        )
     }
     hart_num = next(k for k, v in cfg.teams.items() if v == cfg.team_name)
     teams = dict(cfg.teams)
@@ -137,7 +141,8 @@ def main():
     config_path = REAL_CONFIG if keep else TMP_CONFIG
     if not keep:
         _write_clean_config()
-    raw = yaml.safe_load(open(REAL_CONFIG))
+    with open(REAL_CONFIG) as f:
+        raw = yaml.safe_load(f)
     num_teams = raw.get("num_teams", raw.get("league", {}).get("num_teams", 10))
     t0 = time.perf_counter()
     print(
