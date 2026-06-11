@@ -1,0 +1,25 @@
+ Rd   Pk  YOUR PICK               IMMEDIATE             VOPN                  FINALSLATE          
+--------------------------------------------------------------------------------------------------
+  1    8  Bryan Woo                Wyatt Langford        Josh Naylor          *Bryan Woo          
+  2   13  Mason Miller             Jarren Duran          Josh Naylor           Chris Sale         
+  3   28  CJ Abrams                Oneil Cruz           *CJ Abrams             Freddie Freeman    
+  4   33  Jesús Luzardo            George Springer       Freddie Freeman       Freddie Freeman    
+  5   48  Randy Arozarena          Oneil Cruz            Nico Hoerner          Michael Harris II  
+  6   53  Oneil Cruz               Michael Harris II     Shea Langeliers       Teoscar Hernández  
+  7   68  Sonny Gray               Zack Wheeler          Yandy Díaz            Zack Wheeler       
+  8   73  Byron Buxton            *Byron Buxton          Hunter Goodman        Yandy Díaz         
+  9   88  Josh Hader               Zack Wheeler          Matt Chapman          Zack Wheeler       
+ 10   93  Willy Adames             Zack Wheeler          Matt Chapman          Zack Wheeler       
+ 11  108  Zack Wheeler            *Zack Wheeler          Matt Chapman         *Zack Wheeler       
+ 12  113  Andy Pages              *Andy Pages            Matt Chapman         *Andy Pages         
+ 13  128  Ryan Walker              Spencer Strider       Gleyber Torres        Luis Arraez        
+ 14  133  Munetaka Murakami        Spencer Strider       Iván Herrera          Spencer Strider    
+ 15  148  Willson Contreras        Spencer Strider       Gleyber Torres        Gleyber Torres     
+ 16  153  Spencer Strider         *Spencer Strider       Iván Herrera         *Spencer Strider    
+ 17  168  Marcus Semien            Aaron Nola            Iván Herrera          Luis Arraez        
+ 18  173  Iván Herrera             Aaron Nola           *Iván Herrera          Aaron Nola         
+ 19  188  Adolis García            Aaron Nola            Aaron Nola            Aaron Nola         
+ 20  193  Aaron Nola              *Aaron Nola           *Aaron Nola           *Aaron Nola         
+--------------------------------------------------------------------------------------------------
+Agreement with your actual pick:  IMMEDIATE 5/20   VOPN 3/20   FINALSLATE 5/20
+(* = mode's recommendation == your actual pick)

@@ -1,0 +1,45 @@
+COUNTERFACTUAL: immediate drafting Hart's real seat vs the actual three_closers/var draft
+(real opponents; 23 opponent picks were sniped by immediate -> ADP fallback)
+
+ACTUAL (three_closers/var)        IMMEDIATE (counterfactual)        
+--------------------------------------------------------------------
+Juan Soto                         Juan Soto                         
+Julio Rodríguez                   Julio Rodríguez                   
+Junior Caminero                   Junior Caminero                   
+Bryan Woo                         Wyatt Langford                    
+Mason Miller                      Edwin Díaz                        
+CJ Abrams                         Jarren Duran                      
+Jesús Luzardo                     Riley Greene                      
+Randy Arozarena                   George Springer                   
+Oneil Cruz                        Jesús Luzardo                     
+Sonny Gray                        Zack Wheeler                      
+Byron Buxton                      Sonny Gray                        
+Josh Hader                        Matt Chapman                      
+Willy Adames                      Salvador Perez                    
+Zack Wheeler                      MacKenzie Gore                    
+Andy Pages                        Josh Hader                        
+Ryan Walker                       Spencer Strider                   
+Munetaka Murakami                 Jack Flaherty                     
+Willson Contreras                 Gleyber Torres                    
+Spencer Strider                   Aaron Nola                        
+Marcus Semien                     Munetaka Murakami                 
+Iván Herrera                      Otto Lopez                        
+Adolis García                     Adolis García                     
+Aaron Nola                        Iván Herrera                      
+
+metric          ACTUAL   IMMEDIATE
+----------------------------------
+R               959.91      970.25
+HR              305.66      304.16
+RBI             948.35      970.10
+SB              198.31      154.31
+AVG               0.25        0.26
+W                78.67       83.14
+K              1293.31     1377.36
+ERA               3.58        3.74
+WHIP              1.15        1.19
+SV               88.75       62.59
+roto tot          66.8        68.0
+rank                 1           1
+MC win%          43.0%       50.3%
+MC rank           2.40        2.17
