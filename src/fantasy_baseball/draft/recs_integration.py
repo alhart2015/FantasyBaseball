@@ -274,6 +274,15 @@ class RecInputs:
     # restricts recommendations to slots the team can still start, so a full
     # pitching staff stops surfacing more pitchers. Empty set = no gating.
     open_starters_by_team: dict[str, frozenset[Position]]
+    # deltaroto_finalslate only: the ADP-projected end-state field (all teams
+    # filled to a realistic full roster), the per-team SDs over that field, and
+    # the picking team's marginal ADP fillers bucketed HITTER/SP/RP. Built by
+    # finalslate.build_finalslate_field; None for every other scoring mode.
+    finalslate_standings: ProjectedStandings | None = None
+    finalslate_team_sds: dict[str, dict[Category, float]] | None = None
+    finalslate_fillers: dict[str, Player] | None = None
+    # Player id -> projected holding team in the final field (snipe-aware v2).
+    finalslate_holders: dict[str, str] | None = None
 
 
 def compute_rec_inputs(
