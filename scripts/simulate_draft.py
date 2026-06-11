@@ -75,7 +75,7 @@ from fantasy_baseball.draft.strategy import (
     select_from_ranked,
 )
 from fantasy_baseball.draft.tracker import DraftTracker
-from fantasy_baseball.models.player import Player
+from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto_dict
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATS
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -288,6 +288,20 @@ class TeamTrackerProxy:
             count += 1
             temp_pick += 1
         return count
+
+
+def _roster_type_counts(roster_ids):
+    """(n_hitters, n_pitchers) from player ids (``name::player_type``).
+
+    overlay_balanced needs these to cap positional skew; the sim was never
+    threading them, so the balanced overlay silently no-opped (defaulted both
+    to 0 -> skew never exceeded -> always deferred to the slot-gate).
+    """
+    h = f"::{PlayerType.HITTER.value}"
+    p = f"::{PlayerType.PITCHER.value}"
+    n_h = sum(1 for pid in roster_ids if str(pid).endswith(h))
+    n_p = sum(1 for pid in roster_ids if str(pid).endswith(p))
+    return n_h, n_p
 
 
 def _active_slot_counts(roster_slots):
@@ -698,6 +712,8 @@ def run_simulation(
 
             # Closer count for the closer-family overlays.
             _closer_count = _count_closers(tracker, board, full_board, player_lookup)
+            # Hitter/pitcher counts for overlay_balanced (was never threaded).
+            _n_hitters, _n_pitchers = _roster_type_counts(tracker.user_roster_ids)
 
             # deltaRoto runs use the deltaRoto RANKER (ctx.scoring_mode) with the
             # default OVERLAY -- scoring mode and strategy are orthogonal axes.
@@ -710,6 +726,8 @@ def run_simulation(
                 pick_rank=pick_rank,
                 current_round=tracker.current_round,
                 closer_count=_closer_count,
+                n_hitters=_n_hitters,
+                n_pitchers=_n_pitchers,
                 ranked=_ranked,
             )
             if _pick is not None:
@@ -810,6 +828,7 @@ def run_simulation(
                     filled_positions=_opp_filled,
                     config=config,
                 )
+            _opp_n_hitters, _opp_n_pitchers = _roster_type_counts(proxy.user_roster_ids)
             _opp_pick = recommend(
                 _opp_ctx,
                 strategy=opp_strat_name,
@@ -817,6 +836,8 @@ def run_simulation(
                 pick_rank=pick_rank,
                 current_round=tracker.current_round,
                 closer_count=_opp_closer_count,
+                n_hitters=_opp_n_hitters,
+                n_pitchers=_opp_n_pitchers,
             )
             if _opp_pick is not None:
                 pick_name = _opp_pick.name

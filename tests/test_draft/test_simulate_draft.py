@@ -176,3 +176,16 @@ def test_deltaroto_immediate_with_strategic_opponents_completes():
 
     assert len(result["results"]) == config.num_teams
     assert result["pts"] > 0
+
+
+def test_roster_type_counts_from_ids():
+    """_roster_type_counts derives (n_hitters, n_pitchers) from name::type ids,
+    so the sim can feed overlay_balanced the counts it needs (the bug: those
+    kwargs were never threaded, silently disabling the balanced overlay).
+    """
+    from scripts.simulate_draft import _roster_type_counts
+
+    ids = ["Juan Soto::hitter", "Aaron Judge::hitter", "Gerrit Cole::pitcher"]
+    assert _roster_type_counts(ids) == (2, 1)
+    assert _roster_type_counts([]) == (0, 0)
+    assert _roster_type_counts(["X::pitcher", "Y::pitcher"]) == (0, 2)
