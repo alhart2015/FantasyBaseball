@@ -345,6 +345,48 @@ def test_compute_delta_picks_up_dashboard_schema_changes():
     assert delta["projected_standings_cache"] == new["projected_standings_cache"]
 
 
+def test_compute_delta_is_partial_so_client_must_merge():
+    """Regression: deltas omit unchanged keys; the polling client MUST merge.
+
+    At draft start, seeding keepers + refreshing the standings cache bumps
+    the version WITHOUT changing ``on_the_clock``. The resulting delta is a
+    true partial diff that does not carry ``on_the_clock``. A client that
+    REPLACES its cached state with the delta loses who is on the clock
+    (header shows "-", and picks are sent for an empty team); a client that
+    MERGES the delta onto prior state keeps it. ``web/static/draft.js``
+    poll() merges for exactly this reason -- do not regress it to a replace.
+    """
+    from fantasy_baseball.draft.state import compute_delta
+
+    old = {
+        "version": 1,
+        "keepers": [],
+        "picks": [],
+        "on_the_clock": "Send in the Cavalli",
+        "undo_stack": [],
+        "projected_standings_cache": {},
+    }
+    new = {
+        "version": 2,
+        "keepers": [{"player_id": "k1", "team": "A"}],
+        "picks": [],
+        "on_the_clock": "Send in the Cavalli",  # unchanged
+        "undo_stack": [],
+        "projected_standings_cache": {"A": {"total": 48.9, "total_sd": 8.4, "categories": {}}},
+    }
+    delta = compute_delta(old, new)
+
+    # The delta is a genuine partial diff: unchanged on_the_clock is absent.
+    assert "on_the_clock" not in delta
+    assert delta["keepers"] == new["keepers"]
+
+    # A replacing client would drop the status field (the reported bug)...
+    assert delta.get("on_the_clock") is None
+    # ...but merging the delta onto prior client state recovers it (the fix).
+    merged = {**old, **delta}
+    assert merged["on_the_clock"] == "Send in the Cavalli"
+
+
 def test_serialize_board_emits_total_sgp_and_adp():
     """The available-players panel renders ADP + SGP columns from these
     fields — make sure they survive serialization."""
