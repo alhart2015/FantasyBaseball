@@ -72,6 +72,23 @@ def build_player_lookup(
     return lookup
 
 
+def fillers_or_all(ranked, open_starters):
+    """Items that fill an open STARTER slot, or all of ``ranked`` when none can
+    (or no starter slots are open).
+
+    Shared by ``select_from_ranked`` (the auto-pick / sim slot-gate) and the
+    dashboard ``/api/recs`` list gate so both restrict to slots the team can
+    still start -- a full pitching staff stops surfacing more pitchers, which
+    immediate-delta otherwise ranks high (it values every arm vs a replacement
+    line, blind to roster fullness). Items need only a ``.positions`` attribute
+    (a ``Recommendation``, ``eroto_recs.RecRow``, or ``RankedPick``).
+    """
+    if not open_starters:
+        return list(ranked)
+    fillers = [r for r in ranked if any(can_fill_slot(r.positions, s) for s in open_starters)]
+    return fillers or list(ranked)
+
+
 def select_from_ranked(ranked, open_starters, pick_rank):
     """Pick the ``pick_rank``-th item of ``ranked``, restricted to items that
     fill an open starter slot when any such remain (else the full list).
@@ -81,11 +98,7 @@ def select_from_ranked(ranked, open_starters, pick_rank):
     need only a ``.positions`` attribute (a ``Recommendation`` or a
     ``eroto_recs.RecRow``).
     """
-    pool = ranked
-    if open_starters:
-        fillers = [r for r in ranked if any(can_fill_slot(r.positions, s) for s in open_starters)]
-        if fillers:
-            pool = fillers
+    pool = fillers_or_all(ranked, open_starters)
     return pool[min(pick_rank, len(pool) - 1)] if pool else None
 
 

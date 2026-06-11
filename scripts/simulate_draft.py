@@ -223,6 +223,9 @@ def _build_deltaroto_rec_inputs(
         team_sds=team_sds,
         adp_table=adp_table,
         rp_filled_by_team=rp_filled_by_team,
+        # The sim computes its own open_starters for select_from_ranked (below),
+        # so the list-gate field is unused here.
+        open_starters_by_team={},
     )
 
 

@@ -140,6 +140,7 @@ def test_recs_returns_ranked_rows(client, monkeypatch):
         team_sds={},
         adp_table=None,  # type: ignore[arg-type]
         rp_filled_by_team={},
+        open_starters_by_team={},  # empty -> no slot-gating in this test
     )
     monkeypatch.setattr(web_app, "_build_rec_inputs", lambda *_a, **_kw: fake_inputs)
     monkeypatch.setattr(web_app, "_load_board_cached", lambda _app: None)
@@ -152,6 +153,64 @@ def test_recs_returns_ranked_rows(client, monkeypatch):
     assert body[0]["name"] == "Player One"
     assert body[0]["immediate_delta"] == 3.2
     assert body[0]["per_category"]["HR"] == 1.2
+
+
+def test_recs_gates_out_positions_with_no_open_starter(client, monkeypatch):
+    """/api/recs drops candidates that can't fill an open STARTER slot, so a
+    full pitching staff stops surfacing more pitchers even when they out-rank
+    the available hitters on immediate-delta.
+    """
+    from fantasy_baseball.draft import recommend as recommend_mod
+    from fantasy_baseball.draft.recommend import RankedPick
+    from fantasy_baseball.draft.recs_integration import RecInputs
+    from fantasy_baseball.models.player import PlayerType
+    from fantasy_baseball.models.positions import Position
+    from fantasy_baseball.web import app as web_app
+
+    def fake_rank_for_mode(_ctx):
+        return [
+            RankedPick(
+                player_id="ace::pitcher",
+                name="Top Pitcher",
+                positions=[Position.P],
+                player_type=PlayerType.PITCHER,
+                score=5.0,  # out-ranks the hitter on immediate-delta
+                metrics={"immediate_delta": 5.0, "value_of_picking_now": -0.2},
+                per_category={"K": 2.0},
+            ),
+            RankedPick(
+                player_id="ss::hitter",
+                name="Shortstop",
+                positions=[Position.SS],
+                player_type=PlayerType.HITTER,
+                score=1.0,
+                metrics={"immediate_delta": 1.0, "value_of_picking_now": 0.8},
+                per_category={"SB": 0.5},
+            ),
+        ]
+
+    monkeypatch.setattr(recommend_mod, "rank_for_mode", fake_rank_for_mode)
+
+    # P slots full (P not in open starters); only SS is startable.
+    fake_inputs = RecInputs(
+        candidates=[],
+        replacements={},
+        projected_standings=None,  # type: ignore[arg-type]
+        team_sds={},
+        adp_table=None,  # type: ignore[arg-type]
+        rp_filled_by_team={},
+        open_starters_by_team={"Hart of the Order": frozenset({Position.SS})},
+    )
+    monkeypatch.setattr(web_app, "_build_rec_inputs", lambda *_a, **_kw: fake_inputs)
+    monkeypatch.setattr(web_app, "_load_board_cached", lambda _app: None)
+    monkeypatch.setattr(web_app, "_picks_until_next_turn", lambda state, team, league_yaml: 3)
+
+    client.post("/api/new-draft")
+    r = client.get("/api/recs?team=Hart of the Order")
+    assert r.status_code == 200
+    body = r.get_json()
+    names = [row["name"] for row in body]
+    assert names == ["Shortstop"]  # the higher-ranked pitcher is gated out
 
 
 def test_roster_endpoint_returns_empty_for_fresh_draft(client):

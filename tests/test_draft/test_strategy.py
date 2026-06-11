@@ -324,3 +324,30 @@ class TestEdgeCases:
         board = _make_standard_board()
         tracker = _make_tracker()
         assert _count_closers(tracker, board, board) == 0
+
+
+def test_fillers_or_all_gates_recs_to_open_starters():
+    """fillers_or_all restricts a ranked list to candidates that fill an open
+    STARTER slot, so the dashboard /api/recs gate stops recommending pitchers
+    once a team's pitching slots are full. Falls back to the full list when no
+    starter slots are open (or none of the ranked items can fill one).
+    """
+    from types import SimpleNamespace
+
+    from fantasy_baseball.draft.strategy import fillers_or_all
+    from fantasy_baseball.models.positions import Position
+
+    pitcher = SimpleNamespace(positions=[Position.P])
+    outfielder = SimpleNamespace(positions=[Position.OF])
+    catcher = SimpleNamespace(positions=[Position.C])
+    ranked = [pitcher, outfielder, catcher]
+
+    # P full; C/OF/UTIL open -> the pitcher is gated out (can't start a 10th arm).
+    open_starters = {Position.C, Position.OF, Position.UTIL}
+    assert fillers_or_all(ranked, open_starters) == [outfielder, catcher]
+
+    # No open starter slots -> don't hide anything (return the full list).
+    assert fillers_or_all(ranked, set()) == ranked
+
+    # Open slot exists but nothing in the list fills it -> fall back to all.
+    assert fillers_or_all([pitcher], {Position.C}) == [pitcher]

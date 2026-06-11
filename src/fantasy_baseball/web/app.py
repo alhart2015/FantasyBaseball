@@ -393,7 +393,15 @@ def _register_writer_routes(app):
             inputs=replace(inputs, candidates=inputs.candidates[:RECS_CANDIDATE_POOL_SIZE]),
         )
         picks = rank_for_mode(ctx)
-        return jsonify([to_recs_json(p) for p in picks[:10]])
+        # Gate to slots the team can still START, so a full pitching staff
+        # stops surfacing more pitchers (immediate-delta values every arm vs a
+        # replacement line, blind to roster fullness). Same gate the auto-pick
+        # uses; falls back to the full list when no starter slots are open.
+        from fantasy_baseball.draft.strategy import fillers_or_all
+
+        open_starters = inputs.open_starters_by_team.get(team, frozenset())
+        gated = fillers_or_all(picks, open_starters)
+        return jsonify([to_recs_json(p) for p in gated[:10]])
 
     @app.get("/api/meta")
     def meta():
