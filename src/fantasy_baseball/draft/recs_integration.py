@@ -20,9 +20,10 @@ from scipy.stats import rankdata
 
 from fantasy_baseball.draft.adp import ADPTable, blend_adp
 from fantasy_baseball.draft.eroto_recs import RP_SLOTS, is_reliever
+from fantasy_baseball.draft.roster_state import RosterState, get_filled_positions
 from fantasy_baseball.draft.state import StateKey, read_board
 from fantasy_baseball.models.player import Player, PlayerType
-from fantasy_baseball.models.positions import BENCH_SLOTS, PITCHER_ELIGIBLE
+from fantasy_baseball.models.positions import BENCH_SLOTS, PITCHER_ELIGIBLE, Position
 from fantasy_baseball.models.standings import ProjectedStandings, ProjectedStandingsEntry
 from fantasy_baseball.scoring import build_team_sds, project_team_stats, score_roto
 from fantasy_baseball.sgp.replacement import find_replacement_players
@@ -269,6 +270,10 @@ class RecInputs:
     # Real relievers each team already rosters -> rank_candidates' user_rp_filled
     # (routes a reliever's swap to the SP line once a team's RP slots are full).
     rp_filled_by_team: dict[str, int]
+    # Open STARTER slots per team -> the /api/recs list gate (fillers_or_all)
+    # restricts recommendations to slots the team can still start, so a full
+    # pitching staff stops surfacing more pitchers. Empty set = no gating.
+    open_starters_by_team: dict[str, frozenset[Position]]
 
 
 def compute_rec_inputs(
@@ -313,6 +318,19 @@ def compute_rec_inputs(
         if pl is not None and is_reliever(pl):
             rp_filled_by_team[entry["team"]] = rp_filled_by_team.get(entry["team"], 0) + 1
 
+    # Open starter slots per team, from each team's REAL drafted players (not
+    # the replacement padding). Mirrors the sim/auto-pick slot-gate so the
+    # dashboard list and the engine's pick agree on which slots remain.
+    roster_ids_by_team: dict[str, list[str]] = {t: [] for t in teams}
+    for entry in (state.get(StateKey.KEEPERS) or []) + (state.get(StateKey.PICKS) or []):
+        roster_ids_by_team.setdefault(entry["team"], []).append(entry["player_id"])
+    open_starters_by_team: dict[str, frozenset[Position]] = {}
+    for team in teams:
+        filled = get_filled_positions(roster_ids_by_team.get(team, []), pool, dict(roster_slots))
+        open_starters_by_team[team] = frozenset(
+            RosterState.from_dicts(filled, roster_slots).unfilled_starter_slots()
+        )
+
     return RecInputs(
         candidates=candidates,
         replacements=replacements,
@@ -320,6 +338,7 @@ def compute_rec_inputs(
         team_sds=team_sds,
         adp_table=adp_table,
         rp_filled_by_team=rp_filled_by_team,
+        open_starters_by_team=open_starters_by_team,
     )
 
 

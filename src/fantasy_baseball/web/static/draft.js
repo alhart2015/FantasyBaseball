@@ -343,12 +343,16 @@ async function newDraft() {
 }
 
 async function poll() {
-  const state = await fetchState(lastVersion || null);
-  if (state) {
-    if (state.full_state || state.version !== lastVersion) {
-      lastVersion = state.version ?? lastVersion;
-      renderState(state);
-    }
+  const update = await fetchState(lastVersion || null);
+  if (update && !update.no_change && (update.full_state || update.version !== lastVersion)) {
+    lastVersion = update.version ?? lastVersion;
+    // /api/state returns a PARTIAL delta (only the changed keys) when the
+    // client is one version behind -- merge it onto the cached state so
+    // unchanged status fields (on_the_clock, picks, undo_stack) survive.
+    // Rendering a delta directly drops them (on_the_clock -> "-", picks
+    // reappear as available). A full_state reset replaces wholesale.
+    // See test_compute_delta_is_partial_so_client_must_merge.
+    renderState(update.full_state ? update : { ...(lastState ?? {}), ...update });
   }
   setTimeout(poll, POLL_INTERVAL_MS);
 }

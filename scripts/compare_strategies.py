@@ -36,7 +36,9 @@ STRATEGY_ITERATIONS = 20
 MAX_WORKERS = 16  # use half of 32 cores — each worker is memory-heavy
 
 
-def _run_strategy_batch(strat, scoring, iterations, opp_str, adp_noise, strategy_noise, seed_base):
+def _run_strategy_batch(
+    strat, scoring, iterations, opp_str, adp_noise, strategy_noise, seed_base, position_aware
+):
     """Run one strategy+mode for N iterations. Called in worker process."""
     # Each worker builds its own context (not picklable)
     from simulate_draft import build_board_and_context, run_simulation
@@ -56,6 +58,7 @@ def _run_strategy_batch(strat, scoring, iterations, opp_str, adp_noise, strategy
             adp_noise=adp_noise,
             seed=seed_base + i,
             opponent_strategies_str=opp_str,
+            position_aware=position_aware,
         )
         hart = next(t for t in r["results"] if t["team"] == config.team_name)
         pts_list.append(hart["tot"])
@@ -65,6 +68,8 @@ def _run_strategy_batch(strat, scoring, iterations, opp_str, adp_noise, strategy
 
     return {
         "label": f"{strat}+{scoring}",
+        "strat": strat,
+        "mode": scoring,
         "avg_pts": float(np.mean(pts_list)),
         "avg_rank": float(np.mean(rank_list)),
         "win_pct": wins / len(pts_list) * 100,
@@ -73,22 +78,59 @@ def _run_strategy_batch(strat, scoring, iterations, opp_str, adp_noise, strategy
     }
 
 
-def _print_ranking(results):
-    print(f"{'#':>3} {'Strategy':<30} {'Avg':>5} {'AvgRk':>6} {'Win%':>5} {'Floor':>5} {'Ceil':>5}")
-    print("-" * 65)
-    for i, r in enumerate(sorted(results, key=lambda x: -x["avg_pts"]), 1):
-        print(
-            f"{i:>3} {r['label']:<30} {r['avg_pts']:>5.1f} {r['avg_rank']:>6.2f} "
-            f"{r['win_pct']:>5.1f} {r['floor']:>5.0f} {r['ceil']:>5.0f}"
+def _flag_inert(results):
+    """Mark strategies whose aggregate result is identical to ``default`` for the
+    same scoring mode. An overlay that never fires defers to the slot-gated
+    default pick, producing a byte-identical draft -- so exact equality across
+    all iterations means the overlay added nothing. Mutates ``results`` in place,
+    adding an ``inert`` bool. (Honest-analysis guard: never again present a
+    no-op overlay as a distinct strategy.)
+    """
+    default_by_mode = {
+        r["mode"]: (r["avg_pts"], r["avg_rank"], r["win_pct"])
+        for r in results
+        if r.get("strat") == "default"
+    }
+    for r in results:
+        base = default_by_mode.get(r["mode"])
+        r["inert"] = (
+            r.get("strat") != "default"
+            and base is not None
+            and (r["avg_pts"], r["avg_rank"], r["win_pct"]) == base
         )
 
 
+def _print_ranking(results):
+    _flag_inert(results)
+    n_inert = sum(1 for r in results if r.get("inert"))
+    distinct = [r for r in results if not r.get("inert")]
+    print(f"{'#':>3} {'Strategy':<30} {'Avg':>5} {'AvgRk':>6} {'Win%':>5} {'Floor':>5} {'Ceil':>5}")
+    print("-" * 72)
+    for i, r in enumerate(sorted(results, key=lambda x: -x["avg_pts"]), 1):
+        tag = "  INERT(==default)" if r.get("inert") else ""
+        print(
+            f"{i:>3} {r['label']:<30} {r['avg_pts']:>5.1f} {r['avg_rank']:>6.2f} "
+            f"{r['win_pct']:>5.1f} {r['floor']:>5.0f} {r['ceil']:>5.0f}{tag}"
+        )
+    print(
+        f"\n  {n_inert}/{len(results)} combos are INERT (overlay never fired -- identical to "
+        f"default). {len(distinct)} combos represent genuinely distinct behavior."
+    )
+
+
 def main():
+    # Gate: "gated" (position_aware=True, the correct roster discipline -- the
+    # dashboard drafts gated) is the default; "ungated" reproduces the old
+    # verdict's methodology. See the slot-gate discussion in the draft CLAUDE.md.
+    gate_arg = sys.argv[1] if len(sys.argv) > 1 else "gated"
+    position_aware = gate_arg != "ungated"
+
     strategy_names = sorted(STRATEGIES.keys())
     scoring_modes = ["var", "vona", "deltaroto_immediate", "deltaroto_vopn"]
     n_combos = len(strategy_names) * len(scoring_modes)
 
     print(f"Strategies: {len(strategy_names)}, modes: {len(scoring_modes)}, workers: {MAX_WORKERS}")
+    print(f"Gate: {gate_arg} (position_aware={position_aware})")
     print("Each worker builds its own board (~10s startup)\n")
 
     # ---------------------------------------------------------------
@@ -117,6 +159,7 @@ def main():
                     0.0,
                     STRATEGY_NOISE,
                     4000,
+                    position_aware,
                 )
                 futures[f] = f"{strat}+{scoring}"
         for f in as_completed(futures):
@@ -164,6 +207,7 @@ def main():
                     ADP_NOISE,
                     0.0,
                     3000,
+                    position_aware,
                 )
                 futures[f] = f"{strat}+{scoring}"
         for f in as_completed(futures):
