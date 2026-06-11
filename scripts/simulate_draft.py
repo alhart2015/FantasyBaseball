@@ -48,9 +48,11 @@ from fantasy_baseball.config import load_config
 from fantasy_baseball.data.db import get_connection
 from fantasy_baseball.draft.board import apply_keepers, build_draft_board
 from fantasy_baseball.draft.eroto_recs import is_reliever
+from fantasy_baseball.draft.finalslate import build_finalslate_field, marginal_fillers
 from fantasy_baseball.draft.recommend import (
     _DELTAROTO_MODES,
     ADAPTIVE_MODE,
+    FINALSLATE_MODE,
     RecommendContext,
     rank_for_mode,
     recommend,
@@ -90,7 +92,7 @@ _DELTAROTO_POOL_CAP = 200
 
 # Set of scoring_mode strings that use the deltaRoto ranking engine. Single-sourced
 # from recommend._DELTAROTO_MODES so the two never drift.
-_DELTAROTO_STRATEGY_NAMES = frozenset(_DELTAROTO_MODES) | {ADAPTIVE_MODE}
+_DELTAROTO_STRATEGY_NAMES = frozenset(_DELTAROTO_MODES) | {ADAPTIVE_MODE, FINALSLATE_MODE}
 
 
 def _to_overlay(strategy_name: str) -> str:
@@ -142,6 +144,8 @@ def _build_deltaroto_rec_inputs(
     *,
     team_name=None,
     roster_ids=None,
+    scoring_mode=None,
+    scarcity_order=None,
 ):
     """Build a RecInputs object for a deltaRoto pick (user or opponent).
 
@@ -217,6 +221,39 @@ def _build_deltaroto_rec_inputs(
     )
     rp_filled_by_team = {team_name: rp_filled}
 
+    # deltaroto_finalslate: project the realistic end-state field (ADP-fill every
+    # team to a full roster) and extract this team's marginal ADP fillers, so the
+    # candidate is scored against a stable target instead of the replacement-padded
+    # standings above. Skipped for every other mode (no forward-sim cost).
+    fs_standings = None
+    fs_team_sds = None
+    fs_fillers = None
+    fs_holders = None
+    if scoring_mode == FINALSLATE_MODE:
+        team_name_by_num = dict(config.teams)
+        picking_num = next((n for n, nm in config.teams.items() if nm == team_name), None)
+        if picking_num is None:
+            raise KeyError(f"finalslate: team_name {team_name!r} not found in config.teams")
+        fs_standings, fs_team_sds, final_by_num, fs_holders = build_finalslate_field(
+            team_rosters=team_rosters,
+            team_name_by_num=team_name_by_num,
+            board_by_id=board_by_id,
+            player_lookup=player_lookup,
+            adp_table=adp_table,
+            roster_slots=config.roster_slots,
+            scarcity_order=scarcity_order or [],
+            num_teams=config.num_teams,
+            current_pick=tracker.current_pick,
+            total_picks=tracker.total_picks,
+            drafted=drafted,
+        )
+        fs_fillers = marginal_fillers(
+            current_roster=team_rosters[picking_num],
+            final_roster=final_by_num[picking_num],
+            board_by_id=board_by_id,
+            player_lookup=player_lookup,
+        )
+
     return RecInputs(
         candidates=candidates,
         replacements=replacements,
@@ -227,6 +264,10 @@ def _build_deltaroto_rec_inputs(
         # The sim computes its own open_starters for select_from_ranked (below),
         # so the list-gate field is unused here.
         open_starters_by_team={},
+        finalslate_standings=fs_standings,
+        finalslate_team_sds=fs_team_sds,
+        finalslate_fillers=fs_fillers,
+        finalslate_holders=fs_holders,
     )
 
 
@@ -665,7 +706,14 @@ def run_simulation(
                 # deltaRoto path: build RecInputs per-pick from live sim state,
                 # mirroring make_deltaroto_pick in sim_deltaroto.py exactly.
                 _rec_inputs = _build_deltaroto_rec_inputs(
-                    board, full_board, tracker, config, team_rosters, player_lookup
+                    board,
+                    full_board,
+                    tracker,
+                    config,
+                    team_rosters,
+                    player_lookup,
+                    scoring_mode=_eff_scoring,
+                    scarcity_order=scarcity_order,
                 )
                 _ctx = RecommendContext(
                     scoring_mode=_eff_scoring,
@@ -808,6 +856,8 @@ def run_simulation(
                     player_lookup,
                     team_name=opp_team_name,
                     roster_ids=opp_rosters[team_num],
+                    scoring_mode=_eff_scoring,
+                    scarcity_order=scarcity_order,
                 )
                 _opp_ctx = RecommendContext(
                     scoring_mode=_eff_scoring,

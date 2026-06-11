@@ -243,6 +243,150 @@ def rank_candidates(
     return rows
 
 
+def _pick_finalslate_filler(
+    candidate: Player,
+    fillers: Mapping[str, Player],
+    replacements: Mapping[str, Player],
+    user_rp_filled: int,
+) -> Player:
+    """The realistic player a candidate displaces in deltaroto_finalslate.
+
+    ``fillers`` are the picking team's *projected* marginal players, bucketed
+    HITTER / SP / RP (see :func:`finalslate.marginal_fillers`). A candidate
+    displaces the marginal filler in its bucket -- the player the team would
+    otherwise roster at that slot if the draft proceeded by ADP. RP routing
+    mirrors :func:`_pick_replacement` (a reliever displaces the saves-carrying
+    RP line only while RP slots remain open). Falls back to the replacement
+    line when the team has no projected filler in the bucket (its real picks
+    already fill those slots) -- a candidate that fits no open slot would not be
+    in the candidate pool, so this is a defensive edge case.
+    """
+    if candidate.player_type == PlayerType.PITCHER:
+        displaces_rp = pitcher_role(candidate) == "RP" and user_rp_filled < RP_SLOTS
+        primary = "RP" if displaces_rp else "SP"
+        filler = fillers.get(primary) or fillers.get("SP") or fillers.get("RP")
+        if filler is not None:
+            return filler
+        return _pick_replacement(candidate, replacements, user_rp_filled)
+    filler = fillers.get("HITTER")
+    if filler is not None:
+        return filler
+    return _pick_replacement(candidate, replacements, user_rp_filled)
+
+
+def rank_candidates_finalslate(
+    *,
+    candidates: list[Player],
+    field_standings: ProjectedStandings,
+    fillers: Mapping[str, Player],
+    replacements: Mapping[str, Player],
+    team_name: str,
+    team_sds: Mapping[str, Mapping[Category, float]] | None,
+    user_rp_filled: int = 0,
+    holders: Mapping[str, str] | None = None,
+) -> list[RecRow]:
+    """Score each candidate's marginal roto against a realistic final field.
+
+    Same swap math as :func:`rank_candidates`' immediate path, with two
+    substitutions: the field is the ADP-projected end state (``field_standings``)
+    instead of the replacement-padded current standings, and a candidate
+    displaces the picking team's marginal ADP filler (``fillers``) instead of a
+    replacement line. Both ``immediate_delta`` and ``value_of_picking_now`` on
+    the returned rows carry this single final-slate delta (there is no timing
+    term -- final-slate is "immediate against a stable target").
+
+    ``holders`` maps each player id to the team projected to roster it in the
+    final field (from the forward-fill). When supplied, scoring is **snipe-aware
+    (v2)**:
+
+    * If the candidate is already in the *picking team's* projected haul, it ends
+      up on the team's final roster whether drafted now or later -- the snake
+      cascade resolves to the same roster -- so its marginal value is ``0``.
+    * If an *opponent* is projected to roster the candidate, drafting it removes
+      it from that opponent (who backfills with a replacement-level player), so
+      the roto delta captures the actual leapfrog -- the value of the snipe.
+    * If no team is projected to roster it, it is a genuine free agent: add it to
+      the picking team with no opponent removal.
+
+    When ``holders`` is ``None`` the function falls back to the v1 model (add the
+    candidate to the picking team, no holder removal, no haul zeroing).
+    """
+    all_before = {e.team_name: e.stats.to_dict() for e in field_standings.entries}
+    roto_before = score_roto_dict(all_before, team_sds=team_sds)
+    by_team = field_standings.by_team()
+    user_before_stats = all_before[team_name]
+    user_ab, user_ip = team_baseline_volumes(by_team[team_name])
+
+    loses_ros_cache: dict[int, dict[str, Any]] = {}
+    # Per-opponent end-of-season AB/IP, looked up once per holder.
+    holder_vol_cache: dict[str, tuple[float | None, float | None]] = {}
+    rows: list[RecRow] = []
+    for candidate in candidates:
+        cid = _candidate_id(candidate)
+        holder = holders.get(cid) if holders is not None else None
+
+        # v2: a player already in the picking team's projected haul lands on the
+        # final roster regardless of when it is drafted -> zero marginal value.
+        if holder == team_name:
+            rows.append(
+                RecRow(
+                    player_id=cid,
+                    name=candidate.name,
+                    positions=[str(p) for p in candidate.positions],
+                    immediate_delta=0.0,
+                    value_of_picking_now=0.0,
+                    per_category={},
+                )
+            )
+            continue
+
+        filler = _pick_finalslate_filler(candidate, fillers, replacements, user_rp_filled)
+        loses_ros = loses_ros_cache.get(id(filler))
+        if loses_ros is None:
+            loses_ros = player_rest_of_season_stats(filler)
+            loses_ros_cache[id(filler)] = loses_ros
+        gains_ros = player_rest_of_season_stats(candidate)
+        all_after = dict(all_before)
+        all_after[team_name] = apply_swap_delta(
+            user_before_stats,
+            loses_ros,
+            gains_ros,
+            team_ab=user_ab,
+            team_ip=user_ip,
+        )
+
+        # v2: remove the candidate from the opponent projected to roster it; the
+        # opponent backfills with a replacement-level player of the same type.
+        if holder is not None and holder in all_before:
+            backfill = _pick_replacement(candidate, replacements, 0)
+            if holder not in holder_vol_cache:
+                holder_vol_cache[holder] = team_baseline_volumes(by_team[holder])
+            h_ab, h_ip = holder_vol_cache[holder]
+            all_after[holder] = apply_swap_delta(
+                all_before[holder],
+                gains_ros,  # opponent loses the candidate
+                player_rest_of_season_stats(backfill),  # gains a replacement
+                team_ab=h_ab,
+                team_ip=h_ip,
+            )
+
+        roto_after = score_roto_dict(all_after, team_sds=team_sds)
+        result = score_swap(roto_before, roto_after, team_name)
+        per_category = {cat: cd.roto_delta for cat, cd in result.categories.items()}
+        rows.append(
+            RecRow(
+                player_id=cid,
+                name=candidate.name,
+                positions=[str(p) for p in candidate.positions],
+                immediate_delta=result.total,
+                value_of_picking_now=result.total,
+                per_category=per_category,
+            )
+        )
+    rows.sort(key=lambda r: r.immediate_delta, reverse=True)
+    return rows
+
+
 def _pick_replacement(
     candidate: Player, replacements: Mapping[str, Player], user_rp_filled: int = 0
 ) -> Player:

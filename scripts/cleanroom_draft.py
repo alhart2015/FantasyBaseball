@@ -27,7 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
-MODES = ["var", "vona", "deltaroto_immediate", "deltaroto_vopn"]
+MODES = ["var", "vona", "deltaroto_immediate", "deltaroto_vopn", "deltaroto_finalslate"]
 POSITIONS = list(range(1, 11))
 ITERS = 20
 MAX_WORKERS = 8
