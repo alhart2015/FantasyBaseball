@@ -28,6 +28,29 @@ class _KVFakeRedis(fakeredis.FakeRedis):
         return False
 
 
+@pytest.fixture(autouse=True)
+def _strip_ambient_upstash_creds(monkeypatch):
+    """Fail-closed default: no test reaches PROD Upstash via ambient creds.
+
+    The repo ``.env`` holds REAL prod Upstash creds. The first time any
+    test builds an Upstash client, ``kv_store._load_dotenv_if_present``
+    ``setdefault``s those creds into ``os.environ`` for the rest of the
+    process. After that, any later test whose code path reaches
+    ``_push_streak_scores_to_remote`` (whose guard reads ``os.environ``
+    directly) or otherwise builds an Upstash client would write to PROD
+    -- the documented "streak flake" that clobbered remote STREAK_SCORES
+    with a fixture payload (team_name="t").
+
+    Stripping the two creds at the start of EVERY test makes those guards
+    short-circuit by default. This runs before any explicitly-requested
+    fixture of the same scope, so tests that legitimately build an
+    Upstash client set their own FAKE creds via ``monkeypatch.setenv``
+    and are unaffected (their setenv lands after this delenv).
+    """
+    monkeypatch.delenv("UPSTASH_REDIS_REST_URL", raising=False)
+    monkeypatch.delenv("UPSTASH_REDIS_REST_TOKEN", raising=False)
+
+
 @pytest.fixture
 def fixtures_dir():
     return Path(__file__).parent / "fixtures"

@@ -1003,6 +1003,23 @@ def test_compute_streaks_writes_cache(monkeypatch, kv_isolation) -> None:
         lambda *a, **kw: _FakeConn(),
     )
 
+    # This test only asserts the LOCAL cache write. ``_compute_streaks``
+    # also calls ``_push_streak_scores_to_remote``, whose guard reads the
+    # ambient Upstash creds -- if the repo's real .env creds are present
+    # (setdefault'd by an earlier test) it would push the fixture payload
+    # (team_name="t") to PROD Upstash. Neutralize that path: clear creds
+    # and make any build_explicit_upstash_kv call fail loudly.
+    monkeypatch.delenv("UPSTASH_REDIS_REST_URL", raising=False)
+    monkeypatch.delenv("UPSTASH_REDIS_REST_TOKEN", raising=False)
+
+    def _no_remote() -> None:
+        raise AssertionError("must not touch remote Upstash in a local-write test")
+
+    monkeypatch.setattr(
+        "fantasy_baseball.data.kv_store.build_explicit_upstash_kv",
+        _no_remote,
+    )
+
     run = _build_refresh_run_for_streak_test()
     run._compute_streaks()
 
