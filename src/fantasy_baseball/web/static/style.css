@@ -493,6 +493,11 @@ body {
   border-radius: 7px;
   background: var(--surface-soft);
 }
+/* Heat tint -- draft.js sets a --pos / --neg scalar in [0,1]; the grass/clay
+ * colors live here (matching season.css's stat-cell convention) so the grid
+ * tracks any future retune of --field / --clay rather than hardcoded RGBs. */
+.roto-cell[style*="--pos"] { background: rgba(79, 179, 88, calc(var(--pos) * 0.30)); }
+.roto-cell[style*="--neg"] { background: rgba(224, 106, 85, calc(var(--neg) * 0.28)); }
 .roto-cell .cat {
   font-family: var(--font-label);
   font-size: 10px;

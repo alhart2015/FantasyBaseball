@@ -12,11 +12,8 @@ let recsPrimarySort = "immediate"; // or "vopn"
 let recsRequestId = 0;
 let lastRecsRows = [];
 
-// Roto grid (5x2, below the recs panel). Categories laid out hitting row
-// then pitching row. lastStandingsRows caches the most recent /api/standings
-// response so the grid can re-render on a team-picker change without refetching.
+// Roto grid (5x2, below the recs panel): hitting row then pitching row.
 const ROTO_CATEGORIES = ["R", "HR", "RBI", "SB", "AVG", "W", "SV", "K", "ERA", "WHIP"];
-let lastStandingsRows = [];
 
 // Available-players panel sort + filter state.
 // playerSort=null means "use board order" (var-desc as written by build_draft_board).
@@ -157,11 +154,16 @@ function renderAvailablePlayers(state) {
   ul.onclick = (e) => {
     const li = e.target.closest("li");
     if (!li) return;
+    const team = teamOnClock();
+    if (!team) {
+      alert("No team is on the clock -- start a draft first.");
+      return;
+    }
     recordPick({
       player_id: li.dataset.pid,
       player_name: li.dataset.pname,
       position: li.dataset.pos,
-      team: document.getElementById("otc-btn").textContent,
+      team,
     });
   };
   updateSortIndicators();
@@ -261,7 +263,11 @@ function renderRecs(rows) {
       // Recs are shown for the inspector-selected team, but the pick is
       // recorded for whoever's on the clock. Warn when those differ so a
       // planning click doesn't silently draft to the wrong team.
-      const onClock = document.getElementById("otc-btn").textContent;
+      const onClock = teamOnClock();
+      if (!onClock) {
+        alert("No team is on the clock -- start a draft first.");
+        return;
+      }
       const recsFor = selectedTeam();
       if (
         onClock !== recsFor &&
@@ -317,9 +323,9 @@ function renderStandings(rows) {
             <td>${r.team}</td>
             <td>
               ${r.total.toFixed(1)}
-              <span class="uncertainty-bar" style="width:${Math.max(4, r.sd * 2)}px"></span>
+              <span class="uncertainty-bar" style="width:${Math.max(4, r.total_sd * 2)}px"></span>
             </td>
-            <td>±${r.sd.toFixed(1)}</td>
+            <td>±${r.total_sd.toFixed(1)}</td>
           </tr>
         `).join("")}
       </tbody>
@@ -327,20 +333,17 @@ function renderStandings(rows) {
   `;
 }
 
-// Render the 5x2 projected-category-points grid for one team. Cells are
-// tinted on the dashboard's grass/clay scale: above the middle rank reads
-// outfield-grass, below reads clay-rust, the midpoint stays neutral --
-// matching the season dashboard's stat-distance coloring.
-function rotoCellTint(pts, maxPts) {
-  if (pts == null) return "var(--surface-soft)";
+// Roto-cell heat scale. JS emits only a scalar intensity as a --pos / --neg
+// custom property; style.css owns the actual grass/clay colors (keyed off the
+// --field / --clay tokens), the same way the season dashboard tints its stat
+// cells. Above the middle rank reads grass, below reads clay, midpoint neutral.
+function rotoCellVar(pts, maxPts) {
+  if (pts == null) return "";
   // 0 = worst (1 pt), 0.5 = middle rank, 1 = sole leader.
   const t = Math.min(1, Math.max(0, (pts - 1) / (maxPts - 1)));
-  if (t >= 0.5) {
-    const i = (t - 0.5) * 2; // grass intensity
-    return `rgba(79, 179, 88, ${(i * 0.3).toFixed(3)})`;
-  }
-  const i = (0.5 - t) * 2; // clay intensity
-  return `rgba(224, 106, 85, ${(i * 0.28).toFixed(3)})`;
+  return t >= 0.5
+    ? `--pos:${((t - 0.5) * 2).toFixed(3)}`
+    : `--neg:${((0.5 - t) * 2).toFixed(3)}`;
 }
 
 function renderRotoGrid(team, rows) {
@@ -354,7 +357,7 @@ function renderRotoGrid(team, rows) {
     const pts = cats[cat];
     const has = pts != null;
     return `
-      <div class="roto-cell" style="background:${rotoCellTint(pts, maxPts)}">
+      <div class="roto-cell" style="${rotoCellVar(pts, maxPts)}">
         <span class="cat">${cat}</span>
         <span class="pts">${has ? pts.toFixed(1) : "—"}</span>
       </div>`;
@@ -409,10 +412,17 @@ async function poll() {
   setTimeout(poll, POLL_INTERVAL_MS);
 }
 
+// The team currently on the clock, read from polled state -- NOT the rendered
+// button text, which is the "--"/em-dash placeholder when the draft is done or
+// before the first state loads. Returns null when no team is on the clock.
+function teamOnClock() {
+  return lastState?.on_the_clock || null;
+}
+
 // The team the inspector + recs + roto grid are scoped to: the picker
 // selection, falling back to whoever's on the clock before the picker loads.
 function selectedTeam() {
-  return document.getElementById("team-picker").value || document.getElementById("otc-btn").textContent;
+  return document.getElementById("team-picker").value || teamOnClock() || "";
 }
 
 async function refreshInspectorPanel() {
@@ -420,10 +430,10 @@ async function refreshInspectorPanel() {
   const activeTab = document.querySelector(".team-inspector .tabs button.active")?.dataset.tab;
   // The roto grid (below the recs panel) always needs standings data, so
   // fetch it once here and feed both the grid and the standings tab.
-  lastStandingsRows = await fetchStandings();
-  renderRotoGrid(team, lastStandingsRows);
+  const standingsRows = await fetchStandings();
+  renderRotoGrid(team, standingsRows);
   if (activeTab === "standings") {
-    renderStandings(lastStandingsRows);
+    renderStandings(standingsRows);
   } else {
     renderRoster(await fetchRoster(team));
   }
@@ -434,9 +444,10 @@ async function refreshInspectorPanel() {
   leagueMeta = await fetchMeta();
   populateTeamPicker(leagueMeta);
   const initial = await fetchState();
+  // renderState already fills the inspector + grid; only do it standalone when
+  // there's no state yet (nothing to render but the default Roster tab).
   if (initial) renderState(initial);
-  // Initial Roster-tab fill (the tab is .active by default in dashboard.html).
-  refreshInspectorPanel();
+  else refreshInspectorPanel();
   document.getElementById("undo-btn").onclick = undo;
   document.getElementById("new-draft-btn").onclick = newDraft;
   // Changing the team retargets the inspector panels AND the recs/grid.
@@ -484,18 +495,14 @@ async function refreshInspectorPanel() {
   });
 
   document.querySelectorAll(".team-inspector .tabs button").forEach((btn) => {
-    btn.addEventListener("click", async () => {
+    btn.addEventListener("click", () => {
       document.querySelectorAll(".team-inspector .tabs button").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       const tab = btn.dataset.tab;
       document.getElementById("roster-panel").classList.toggle("hidden", tab !== "roster");
       document.getElementById("standings-panel").classList.toggle("hidden", tab !== "standings");
-      const team = selectedTeam();
-      if (tab === "roster") {
-        renderRoster(await fetchRoster(team));
-      } else {
-        renderStandings(await fetchStandings());
-      }
+      // refreshInspectorPanel reads the now-active tab and fills it (plus the grid).
+      refreshInspectorPanel();
     });
   });
 

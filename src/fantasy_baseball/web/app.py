@@ -446,18 +446,9 @@ def _register_writer_routes(app):
         )
         # Sort on the typed dataclass so mypy sees float, not object.
         sorted_items = sorted(cache.items(), key=lambda kv: kv[1].total, reverse=True)
-        return jsonify(
-            [
-                {
-                    "team": team,
-                    "total": row.total,
-                    "sd": row.total_sd,
-                    # Per-category fractional ERoto points for the roto grid.
-                    "categories": {cat.value: pts for cat, pts in row.categories.items()},
-                }
-                for team, row in sorted_items
-            ]
-        )
+        # row.to_json() is the single source of truth for the standings shape
+        # (total / total_sd / per-category points); just stamp the team name on.
+        return jsonify([{"team": team, **row.to_json()} for team, row in sorted_items])
 
 
 def create_app(state_path: Path | None = None) -> Flask:
