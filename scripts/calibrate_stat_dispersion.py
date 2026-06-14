@@ -25,6 +25,8 @@ from scipy.stats import nbinom, poisson
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
+
 PROJ_DIR = PROJECT_ROOT / "data" / "projections"
 STATS_DIR = PROJECT_ROOT / "data" / "stats"
 YEARS = [2022, 2023, 2024]
@@ -71,6 +73,31 @@ def fit_dispersion(x: np.ndarray, mu: np.ndarray) -> float:
     if r_hat >= 200.0:
         return POISSON_SENTINEL
     return r_hat
+
+
+def role_stable_sv(df: pd.DataFrame, threshold: float = CLOSER_SV_THRESHOLD) -> pd.DataFrame:
+    """Keep only pitcher-seasons that were closers in BOTH projection and reality.
+
+    Restricting the SV dispersion fit to role-stable closers keeps the single
+    NegBin r from being inflated by job-loss events it cannot shape-model (the
+    role-mixture tail is a documented, deferred limitation).
+    """
+    stable = (df["proj_sv"] >= threshold) & (df["actual_sv"] >= threshold)
+    return df[stable].reset_index(drop=True)
+
+
+def fit_banded_dispersion(df: pd.DataFrame, n_bands: int = 4) -> list[tuple[float, float]]:
+    """Fit a separate r per qcut(mu) band; return [(mu_upper, r), ...] last=inf."""
+    d = df.copy()
+    d["bin"] = pd.qcut(d["mu"], q=n_bands, labels=False, duplicates="drop")
+    bins = sorted(d["bin"].unique())
+    bands: list[tuple[float, float]] = []
+    for i, b in enumerate(bins):
+        g = d[d["bin"] == b]
+        r = fit_dispersion(g["actual"].to_numpy(), g["mu"].to_numpy())
+        upper = float("inf") if i == len(bins) - 1 else float(g["mu"].max())
+        bands.append((upper, r))
+    return bands
 
 
 def interval_coverage(x: np.ndarray, mu: np.ndarray, r: float, level: float) -> float:
@@ -163,13 +190,17 @@ def build_residuals(kind: str) -> dict[str, pd.DataFrame]:
                 continue
             proj_rate = m[f"{col}_proj"] / m[f"{pt}_proj"]
             mu = proj_rate * m[f"{pt}_act"]
-            df = pd.DataFrame(
-                {
-                    "year": year,
-                    "actual": m[f"{col}_act"].astype(float),
-                    "mu": mu.astype(float),
-                }
-            )
+            data = {
+                "year": year,
+                "actual": m[f"{col}_act"].astype(float),
+                "mu": mu.astype(float),
+            }
+            if key == "sv":
+                # carry the projected/actual SV COUNTS so role_stable_sv can
+                # restrict to established closers (rate*PT mu loses the count).
+                data["proj_sv"] = m[f"{col}_proj"].astype(float)
+                data["actual_sv"] = m[f"{col}_act"].astype(float)
+            df = pd.DataFrame(data)
             df = df[df["mu"] > 0]
             per_stat[key].append(df)
     return {
@@ -177,7 +208,7 @@ def build_residuals(kind: str) -> dict[str, pd.DataFrame]:
     }
 
 
-def loso_coverage(data: pd.DataFrame, levels=(0.50, 0.80)) -> pd.DataFrame:
+def loso_coverage(data: pd.DataFrame, levels: tuple[float, ...] = (0.50, 0.80)) -> pd.DataFrame:
     """Leave-one-season-out coverage: fit r on the other years, test on the held-out."""
     rows = []
     years = sorted(data["year"].unique())
@@ -196,22 +227,22 @@ def loso_coverage(data: pd.DataFrame, levels=(0.50, 0.80)) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def bucket_diagnostic(df: pd.DataFrame, r: float, n_bins: int = 4) -> pd.DataFrame:
+def bucket_diagnostic(df: pd.DataFrame, r, n_bins: int = 4) -> pd.DataFrame:
     """Per projected-count bucket: Pearson dispersion of standardized residuals.
 
-    For each row the implied conditional variance is mu + mu^2/r (mu for Poisson).
-    The Pearson statistic mean((actual - mu)^2 / implied_var) is ~1.0 when the
-    dispersion fits that bucket's mean range. It uses PER-OBSERVATION mu, so it is
-    immune to the spread of mu WITHIN a bucket (a raw observed-vs-implied variance
-    comparison would be inflated by that spread and falsely fail at low mu). A
-    statistic systematically >1 at low mu and <1 at high mu (or vice versa) means
-    a single scalar r does not fit and a mean-dependent dispersion is warranted.
+    r may be a scalar (broadcast) or a per-element array aligned to df rows.
+    Implied conditional variance per row is mu + mu^2/r (mu when r is the Poisson
+    sentinel inf). The Pearson statistic mean((actual-mu)^2 / implied) is ~1.0
+    when the dispersion fits that bucket's mean range; it uses PER-OBSERVATION mu
+    so it is immune to within-bucket mu spread. Systematic departure from 1.0
+    across buckets means a single scalar r does not fit (escalate to banded).
     """
     d = df.copy()
+    d["r_elem"] = r  # scalar broadcasts; array aligns positionally
     d["bin"] = pd.qcut(d["mu"], q=n_bins, labels=False, duplicates="drop")
     out = []
     for b, g in d.groupby("bin"):
-        implied = g["mu"] if r == POISSON_SENTINEL else g["mu"] + g["mu"] ** 2 / r
+        implied = np.where(np.isinf(g["r_elem"]), g["mu"], g["mu"] + g["mu"] ** 2 / g["r_elem"])
         pearson = float((((g["actual"] - g["mu"]) ** 2) / implied).mean())
         out.append(
             {"bin": int(b), "n": len(g), "mu_med": float(g["mu"].median()), "pearson": pearson}
@@ -219,15 +250,32 @@ def bucket_diagnostic(df: pd.DataFrame, r: float, n_bins: int = 4) -> pd.DataFra
     return pd.DataFrame(out)
 
 
+def _emit_dispersion(dispersion: dict) -> None:
+    print("\nSTAT_DISPERSION = {")
+    for k, v in dispersion.items():
+        if isinstance(v, list):
+            parts = ", ".join(
+                f'(float("inf"), {r:.3f})' if b == float("inf") else f"({b:.1f}, {r:.3f})"
+                for b, r in v
+            )
+            print(f'    "{k}": [{parts}],')
+        elif v == POISSON_SENTINEL:
+            print(f'    "{k}": float("inf"),')
+        else:
+            print(f'    "{k}": {v:.3f},')
+    print("}")
+
+
 def main() -> None:
     from fantasy_baseball.utils.constants import (
         HITTER_CORR_STATS,
         PITCHER_CORR_STATS,
     )
+    from fantasy_baseball.utils.dispersion import resolve_dispersion_r
 
     print("=" * 72)
     print("STAT DISPERSION CALIBRATION (NegBin r), years:", YEARS)
-    dispersion: dict[str, float] = {}
+    dispersion: dict[str, float | list[tuple[float, float]]] = {}
     for kind, keys in (("hitters", HITTER_CORR_STATS), ("pitchers", PITCHER_CORR_STATS)):
         res = build_residuals(kind)
         for key in keys:
@@ -235,21 +283,47 @@ def main() -> None:
             if df.empty:
                 print(f"  {key}: no data, skipping")
                 continue
-            r = fit_dispersion(df["actual"].to_numpy(), df["mu"].to_numpy())
-            dispersion[key] = r
-            cov = loso_coverage(df)
-            diag = bucket_diagnostic(df, r)
-            r_disp = "Poisson" if r == POISSON_SENTINEL else f"{r:.3f}"
-            print(f"\n  {key}: r={r_disp}  n={len(df)}")
-            print(cov.to_string(index=False))
-            print("  bucket diagnostic (observed vs implied variance):")
+            if key == "sv":
+                df = role_stable_sv(df)
+                if df.empty:
+                    print("  sv: no role-stable closers, skipping")
+                    continue
+
+            actual = df["actual"].to_numpy()
+            mu = df["mu"].to_numpy()
+            r_scalar = fit_dispersion(actual, mu)
+            scalar_diag = bucket_diagnostic(df, r_scalar)
+
+            if scalar_diag["pearson"].between(0.75, 1.35).all():
+                value: float | list[tuple[float, float]] = r_scalar
+                diag = scalar_diag
+                kind_label = "scalar"
+            else:
+                value = fit_banded_dispersion(df)
+                r_elem = resolve_dispersion_r(value, mu)
+                diag = bucket_diagnostic(df, r_elem)
+                kind_label = "banded"
+            dispersion[key] = value
+
+            print(f"\n  {key}: {kind_label}  n={len(df)}")
+            if isinstance(value, list):
+                print(f"  bands (mu_upper, r): {value}")
+            else:
+                print(f"  r: {'Poisson' if value == POISSON_SENTINEL else round(value, 3)}")
+            # LOSO only for scalar, non-sv stats; banded and role-stable-sv pools
+            # are too thin to split by fold, so the in-sample bucket diagnostic
+            # (Pearson ~1.0) is the acceptance signal there.
+            if kind_label == "scalar" and key != "sv":
+                print("  LOSO coverage:")
+                print(loso_coverage(df).to_string(index=False))
+            else:
+                print(
+                    "  (in-sample bucket diagnostic is the acceptance; LOSO skipped -- thin/banded)"
+                )
+            print("  bucket diagnostic (Pearson dispersion of standardized residuals):")
             print(diag.to_string(index=False))
 
-    print("\nSTAT_DISPERSION = {")
-    for k, v in dispersion.items():
-        rv = 'float("inf")' if v == POISSON_SENTINEL else f"{v:.3f}"
-        print(f'    "{k}": {rv},')
-    print("}")
+    _emit_dispersion(dispersion)
 
 
 if __name__ == "__main__":

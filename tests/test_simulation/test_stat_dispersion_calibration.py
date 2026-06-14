@@ -10,10 +10,14 @@ from calibrate_stat_dispersion import (
     POISSON_SENTINEL,
     bucket_diagnostic,
     build_residuals,
+    fit_banded_dispersion,
     fit_dispersion,
     interval_coverage,
     loso_coverage,
+    role_stable_sv,
 )
+
+from fantasy_baseball.utils.dispersion import resolve_dispersion_r
 
 
 def test_fit_dispersion_recovers_known_r():
@@ -114,3 +118,40 @@ def test_bucket_diagnostic_flags_scalar_r_as_adequate_when_true():
     x = rng.negative_binomial(r, r / (r + mu))
     diag = bucket_diagnostic(pd.DataFrame({"actual": x.astype(float), "mu": mu}), r, n_bins=4)
     assert diag["pearson"].between(0.85, 1.15).all()
+
+
+def test_role_stable_sv_keeps_only_stable_closers():
+    df = pd.DataFrame(
+        {
+            "year": [2022, 2022, 2022],
+            "actual": [30.0, 2.0, 28.0],
+            "mu": [29.0, 25.0, 27.0],
+            "proj_sv": [30.0, 28.0, 26.0],
+            "actual_sv": [30.0, 2.0, 28.0],
+        }
+    )
+    out = role_stable_sv(df)
+    # row1 (proj 30/act 30) and row3 (proj 26/act 28) are stable closers;
+    # row2 (proj 28/act 2) lost the job -> excluded (CLOSER_SV_THRESHOLD=20).
+    assert out["actual"].tolist() == [30.0, 28.0]
+
+
+def test_fit_banded_dispersion_fits_per_band_and_lowers_pearson():
+    # Mean-dependent overdispersion: low mu -> small r (heavy spread), high mu ->
+    # large r (tight). A single scalar r cannot fit both; bands can.
+    rng = np.random.default_rng(9)
+    lo_mu = rng.uniform(1, 5, 8000)
+    hi_mu = rng.uniform(20, 40, 8000)
+    lo = rng.negative_binomial(0.5, 0.5 / (0.5 + lo_mu))
+    hi = rng.negative_binomial(8.0, 8.0 / (8.0 + hi_mu))
+    df = pd.DataFrame(
+        {
+            "actual": np.concatenate([lo, hi]).astype(float),
+            "mu": np.concatenate([lo_mu, hi_mu]),
+        }
+    )
+    bands = fit_banded_dispersion(df, n_bands=4)
+    assert bands[-1][0] == float("inf")
+    r_elem = resolve_dispersion_r(bands, df["mu"].to_numpy())
+    diag = bucket_diagnostic(df, r_elem, n_bins=4)
+    assert diag["pearson"].between(0.6, 1.6).all()
