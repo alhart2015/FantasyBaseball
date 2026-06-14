@@ -1,6 +1,11 @@
 import numpy as np
 
-from fantasy_baseball.simulation import PITCHER_CORR_MATRIX, _negbin_copula_counts
+from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.simulation import (
+    PITCHER_CORR_MATRIX,
+    _negbin_copula_counts,
+    simulate_remaining_season,
+)
 from fantasy_baseball.utils.constants import PITCHER_CORR_STATS
 
 
@@ -68,3 +73,89 @@ def test_finite_r_reproduces_full_variance_at_fraction_one():
     expected_var = 25.0 + 25.0**2 / 3.0  # mu + mu^2/r at fraction=1 (r_eff==r)
     assert abs(x.var() / expected_var - 1.0) < 0.03
     assert abs(x.mean() - 25.0) < 0.1
+
+
+def test_simulate_remaining_preserves_actuals_floor_and_finite_rates():
+    rng = np.random.default_rng(11)
+    roster = {
+        "T1": [
+            {
+                "player_type": PlayerType.HITTER,
+                "name": "H1",
+                "pa": 600,
+                "ab": 540,
+                "r": 90,
+                "hr": 25,
+                "rbi": 85,
+                "sb": 15,
+                "h": 150,
+            },
+            {
+                "player_type": PlayerType.PITCHER,
+                "name": "P1",
+                "ip": 180,
+                "w": 12,
+                "k": 200,
+                "sv": 0,
+                "er": 65,
+                "bb": 45,
+                "h_allowed": 150,
+                "positions": ["SP"],
+            },
+        ]
+    }
+    actuals = {
+        "T1": {
+            "R": 40,
+            "HR": 12,
+            "RBI": 38,
+            "SB": 7,
+            "AVG": 0.270,
+            "W": 6,
+            "K": 95,
+            "SV": 1,
+            "ERA": 3.50,
+            "WHIP": 1.15,
+            "AB": 250,
+            "IP": 85,
+        }
+    }
+    stats, _ = simulate_remaining_season(actuals, roster, 0.5, rng)
+    s = stats["T1"]
+    for cat in ("R", "HR", "RBI", "SB", "W", "K", "SV"):
+        assert s[cat] >= actuals["T1"][cat]
+    assert 0 < s["AVG"] < 1 and 0 < s["ERA"] < 30 and 0 < s["WHIP"] < 5
+
+
+def test_apply_variance_wires_banded_sb_dispersion(monkeypatch):
+    import fantasy_baseball.simulation as sim
+    from fantasy_baseball.utils.constants import STAT_DISPERSION
+    from fantasy_baseball.utils.dispersion import resolve_dispersion_r
+
+    rng = np.random.default_rng(3)
+    n = 100_000
+    players = [
+        {
+            "player_type": PlayerType.HITTER,
+            "name": "x",
+            "pa": 600,
+            "ab": 540,
+            "r": 70,
+            "hr": 15,
+            "rbi": 65,
+            "h": 150,
+            "sb": 2.0,
+        }
+        for _ in range(n)
+    ]
+    # Stub PT scale to 1.0 so mu == projection (frac_missed=0, no repl backfill).
+    monkeypatch.setattr(
+        sim, "_playing_time_scales", lambda players, ptype, rng, fr: np.ones(len(players))
+    )
+    adj = sim._apply_variance(players, PlayerType.HITTER, rng, [], 1.0)
+    sb = np.array([a["sb"] for a in adj])
+    r_at_2 = float(resolve_dispersion_r(STAT_DISPERSION["sb"], np.array([2.0]))[0])
+    expected_var = 2.0 + 2.0**2 / r_at_2  # banded r at mu=2 (heavy low-count overdispersion)
+    assert abs(sb.mean() - 2.0) < 0.05  # unbiased (no +2.6% inflation)
+    assert abs(sb.var() / expected_var - 1.0) < 0.12
+    assert np.all(sb >= 0)

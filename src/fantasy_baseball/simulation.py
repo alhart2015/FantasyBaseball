@@ -25,13 +25,14 @@ from fantasy_baseball.utils.constants import (
     PITCHER_CORRELATION,
     PITCHING_COUNTING,
     REPLACEMENT_BY_POSITION,
-    STAT_VARIANCE,
+    STAT_DISPERSION,
     role_from_ip,
     safe_float,
 )
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
 )
+from fantasy_baseball.utils.dispersion import resolve_dispersion_r
 from fantasy_baseball.utils.playing_time import (
     playing_time_params,
     playing_time_shape,
@@ -44,35 +45,12 @@ from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calc
 _NOTABLE_PT_LOSS = 0.15
 
 
-def _build_cov_matrix(
-    stats: list[str],
-    correlation: list[list[float]],
-) -> np.ndarray:
-    """Build a covariance matrix from per-stat sigmas and a correlation matrix.
-
-    cov[i][j] = corr[i][j] * sigma_i * sigma_j
-    """
-    n = len(stats)
-    cov = np.zeros((n, n))
-    for i in range(n):
-        for j in range(n):
-            si = STAT_VARIANCE.get(stats[i], 0.0)
-            sj = STAT_VARIANCE.get(stats[j], 0.0)
-            cov[i, j] = correlation[i][j] * si * sj
-    return cov
-
-
-# Pre-compute covariance matrices at import time (they never change).
-HITTER_COV = _build_cov_matrix(HITTER_CORR_STATS, HITTER_CORRELATION)
-PITCHER_COV = _build_cov_matrix(PITCHER_CORR_STATS, PITCHER_CORRELATION)
-
 # Map stat name -> index in the correlated draw vector.
 HITTER_IDX = {s: i for i, s in enumerate(HITTER_CORR_STATS)}
 PITCHER_IDX = {s: i for i, s in enumerate(PITCHER_CORR_STATS)}
 
 # Unit-variance correlated latents for the Gaussian copula (the NegBin sampler's
-# Gaussian layer). Distinct from the sigma-scaled HITTER_COV/PITCHER_COV used by
-# the legacy multiplier (removed when _apply_variance is rewritten).
+# Gaussian layer).
 HITTER_CORR_MATRIX = np.array(HITTER_CORRELATION)
 PITCHER_CORR_MATRIX = np.array(PITCHER_CORRELATION)
 
@@ -540,29 +518,48 @@ def _apply_variance(
       (a player beats his projected PA/IP) or fall below it; the missed
       fraction ``max(0, 1 - scale)`` is backfilled with replacement-level
       production and logged on the injuries report when notable.
-    - Performance: correlated multivariate-normal draws so related stats
-      (e.g. HR and RBI) move together. Per-stat sigmas and correlations are
-      calibrated from projection-vs-actual rate residuals (2022-2024); the
-      covariance is scaled by ``fraction_remaining`` for partial seasons.
+    - Performance: correlated NegBin counts via a Gaussian copula. Correlated
+      unit-variance normal latents (per-type correlation matrix) map through the
+      normal CDF to uniforms, then each stat's NegBin (or Poisson-floor) inverse
+      CDF; dispersion r (scalar or mu-banded, from STAT_DISPERSION) is
+      variance-scaled by fraction_remaining. Replaces the clipped-Gaussian
+      multiplier, which biased counts upward and spiked at zero.
 
     Mutates ``injuries_out`` by appending ``(name, frac_missed)`` for players
     whose simulated playing-time loss is at least ``_NOTABLE_PT_LOSS``.
     """
     is_hitter = player_type == PlayerType.HITTER
     counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
-    base_cov = HITTER_COV if is_hitter else PITCHER_COV
-    cov = base_cov * fraction_remaining
+    corr_matrix = HITTER_CORR_MATRIX if is_hitter else PITCHER_CORR_MATRIX
     idx_map = HITTER_IDX if is_hitter else PITCHER_IDX
     n_corr = len(idx_map)
-    mean = np.zeros(n_corr)
 
     n = len(players)
     if n == 0:
         return []
 
-    # Batch all random draws for the entire player list at once
     scales = _playing_time_scales(players, player_type, rng, fraction_remaining)
-    all_draws = rng.multivariate_normal(mean, cov, size=n)
+    # Correlated unit-variance latents (the Gaussian copula's Gaussian layer).
+    all_z = rng.multivariate_normal(np.zeros(n_corr), corr_matrix, size=n)
+
+    # Per-(player, correlated-stat) NegBin mean (projection * playing-time scale)
+    # and dispersion r (scalar or mu-banded, resolved from the projected mean).
+    corr_keys = [c for c in counting_cols if c in idx_map]
+    mu_mat = np.zeros((n, n_corr))
+    for i, p in enumerate(players):
+        scale = float(scales[i])
+        for col in corr_keys:
+            mu_mat[i, idx_map[col]] = safe_float(p.get(col)) * scale
+    r_mat = np.full((n, n_corr), np.inf)
+    for col in corr_keys:
+        j = idx_map[col]
+        r_mat[:, j] = resolve_dispersion_r(STAT_DISPERSION[col], mu_mat[:, j])
+
+    counts = np.empty((n, n_corr))
+    for j in range(n_corr):
+        counts[:, j] = _negbin_copula_counts(
+            mu_mat[:, j], r_mat[:, j], all_z[:, j], fraction_remaining
+        )
 
     adjusted = []
     for i, p in enumerate(players):
@@ -570,23 +567,14 @@ def _apply_variance(
         frac_missed = max(0.0, 1.0 - scale)
         if frac_missed >= _NOTABLE_PT_LOSS:
             injuries_out.append((p.get("name", "?"), frac_missed))
-
-        # Routing is a cheap dict lookup (per-position SGP is precomputed), so
-        # compute it inline rather than memoizing onto the player dict.
         repl = _replacement_line(p, is_hitter)
-
-        draws = all_draws[i]
-        row = {}
+        row: dict[str, Any] = {}
         for col in counting_cols:
-            base = float(p.get(col, 0) or 0)
             repl_contrib = repl.get(col, 0) * frac_missed
-
             if col in idx_map:
-                perf = max(0, 1.0 + draws[idx_map[col]])
-                row[col] = base * perf * scale + repl_contrib
+                row[col] = counts[i, idx_map[col]] + repl_contrib
             else:
-                row[col] = base * scale + repl_contrib
-
+                row[col] = safe_float(p.get(col)) * scale + repl_contrib
         row["name"] = p.get("name", "?")
         row["player_type"] = player_type
         adjusted.append(row)
