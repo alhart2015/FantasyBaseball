@@ -50,7 +50,9 @@ cannot know whether the saves variance is right without comparing to actuals.
   shape.
 - Calibrate the spread (dispersion) per stat against real season-to-season
   outcomes, so "is the variance right" (esp. saves) is answered from data, not
-  ported from a constant fit for a different distribution.
+  ported from a constant fit for a different distribution. **Success is
+  measured by the out-of-sample interval-coverage test in Testing** (nominal vs
+  empirical 50%/80% coverage within +/- 10 pp per stat), not by the fit alone.
 - Preserve the existing inter-stat correlation structure.
 
 ## Non-goals
@@ -58,9 +60,10 @@ cannot know whether the saves variance is right without comparing to actuals.
 - **Closer role-switch mixture for saves.** Decided out of scope: in-season
   projections update with role, so a NegBin centered on the updated mean tracks
   it adequately. Documented consequence: historical save dispersion includes
-  job-loss events, so the save `r` fit either conditions on role being stable or
-  accepts a mildly inflated `r` (still better than today's too-low variance).
-  Flagged for a future spec, not this one.
+  job-loss events, so the save `r` is fit on the role-stable population (see
+  Calibration) rather than absorbing the job-loss tail into a single inflated
+  `r`. That tail is a flagged, accepted limitation for a future role-mixture
+  spec, not this one.
 - Changing the playing-time model (it already owns PT variance; see below).
 - Changing the correlation matrices (they are rate-residual correlations and a
   copula consumes them directly).
@@ -130,12 +133,23 @@ Offline, version-controlled output -- mirrors `scripts/calibrate_playing_time.py
   **diagnostic across projected-count buckets** (does a single `r` reproduce the
   observed per-bucket variance?). Default to a single `r` per stat (YAGNI);
   escalate to a mean-dependent dispersion only if the diagnostic clearly
-  requires it.
+  requires it. **The emitted dispersion is consumed as a lookup keyed by stat
+  (and optionally by projected-count band), so the scalar-vs-mean-dependent
+  outcome of the diagnostic does not change the sampler's interface** -- a scalar
+  `r` is just a one-entry band. The sampler is written against this lookup from
+  the start.
 - Enforce the **Poisson floor**: where the data is under-dispersed at low means
   (target var <= mean), clamp to Poisson (`r -> inf`). NegBin cannot represent
   var < mean.
-- Saves caveat (from Non-goals): fit `sv` dispersion conditional on role being
-  stable, or accept a mildly inflated `r`; document which.
+- **Saves (decided, given the role-mixture non-goal):** fit `sv` dispersion
+  **conditional on role being stable** -- i.e. restrict the `sv` fit to
+  pitcher-seasons whose projected and realized role agree (a closer who stayed a
+  closer), so the single-NegBin `r` is not inflated to absorb job-loss events it
+  cannot shape-model. Acceptance bar for `sv`: the role-stable population's
+  predictive interval coverage (see Testing) meets the same tolerance as the
+  other stats; the job-loss tail is a **documented, accepted limitation** owned
+  by the future role-mixture spec, not by this one. State the role-agreement
+  rule used (e.g. projected-IP/SV bucket vs realized) in the script.
 - Output: a `STAT_DISPERSION` dict (`r` per stat, with Poisson sentinels) plus a
   reviewable band table, printed for paste into `constants.py`. Fail loud on
   missing year files.
@@ -145,22 +159,34 @@ Offline, version-controlled output -- mirrors `scripts/calibrate_playing_time.py
 - Draw the correlated Gaussian latent from the **correlation matrix**
   (unit-variance), not the sigma-baked covariance. The correlation matrices
   (`HITTER_CORRELATION`, `PITCHER_CORRELATION`) are reused unchanged.
-- For each correlated stat: `u = Phi(z)`, then
+- For each correlated stat: `u = Phi(z)`, **clamped to `[eps, 1 - eps]`** (see
+  Math appendix), then
   `count = scipy.stats.nbinom.ppf(u, n_param, p_param)` with the NegBin
-  parameterized to `mean = mu`, `dispersion = r` (see Math appendix), where
-  `mu = base * scale` (full-season path) or the remaining-horizon mean (in-season
-  path, below).
+  parameterized to `mean = mu`, `dispersion = r` (looked up per stat/band; see
+  Math appendix), where `mu = base * scale` (full-season path) or the
+  remaining-horizon mean (in-season path, below).
 - Delete the `max(0, 1.0 + draw)` mapping.
 - `ab`/`ip` and any non-correlated stat keep the existing `base * scale` path.
-- Replacement backfill (`repl_contrib`) for missed playing time is unchanged in
-  intent; confirm it composes with integer NegBin counts.
+- **Replacement backfill composition (explicit).** Keep today's decomposition:
+  the NegBin mean is the *played-fraction* expectation `mu = base * scale`, the
+  integer NegBin draw is the player's own production, and the unchanged
+  fractional `repl_contrib = repl[col] * frac_missed` (with
+  `frac_missed = max(0, 1 - scale)`) is added on top for the missed fraction:
+  `row[col] = nbinom_draw(mu, r) + repl_contrib`. Only the player term changes
+  shape (clipped-Gaussian multiplier -> NegBin); the replacement term is
+  identical to today. The resulting total is fractional (as it is today), which
+  is fine -- integer-ness of the player draw is not a requirement of downstream
+  scoring.
 
 ### 3. Constants: `simulation.py` / `constants.py`
 
-- Replace `STAT_VARIANCE` (per-stat Gaussian sigmas) with `STAT_DISPERSION`
-  (per-stat NegBin `r`, with Poisson sentinels). Update `_build_cov_matrix`
-  usage: the copula latent needs only the correlation matrix, so the
-  sigma-scaled covariance precompute is removed or repurposed.
+- Add `STAT_DISPERSION` (per-stat NegBin `r`, with Poisson sentinels) in the
+  calibration phase **without removing `STAT_VARIANCE`** (the old sampler still
+  reads it until the rewrite lands). `STAT_VARIANCE` is removed in the same phase
+  that rewrites `_apply_variance`, so the tree never references a deleted
+  constant. The correlation matrices stay. `_build_cov_matrix`'s sigma-scaled
+  covariance precompute is removed/repurposed in the rewrite phase too (the
+  copula latent needs only the correlation matrix).
 
 ## fraction_remaining handling (the subtle part)
 
@@ -211,8 +237,16 @@ CV < 1/sqrt(mu), NegBin cannot represent it; clamp to Poisson (`r -> inf`).
 Gaussian copula step per stat:
 
     z  ~ correlated standard normal (from the correlation matrix)
-    u  = Phi(z)                     # standard normal CDF -> Uniform(0,1)
+    u  = clip(Phi(z), eps, 1 - eps) # std normal CDF -> Uniform, clamped
     x  = nbinom.ppf(u; n=r, p=r/(r+mu))
+
+**Tail clamp (required).** `nbinom.ppf(1.0, ...)` returns `inf`, and `Phi(z)`
+reaches ~0 or ~1 for extreme latent draws; an unclamped extreme draw injects
+`inf`/degenerate-0 into a team stat sum and silently corrupts a simulation.
+Clamp `u` to `[eps, 1 - eps]` with `eps = 1e-9` (caps the realized stat near the
+NegBin's ~1-in-1e9 quantile -- far beyond any plausible season, so the clamp
+never bites realistic outcomes but guarantees finite output). A test must assert
+finite, non-negative output under deliberately extreme latent draws.
 
 Note: a Gaussian copula preserves rank correlation exactly; Pearson correlation
 on the NegBin scale shifts slightly from the input matrix. Acceptable; flag in
@@ -224,7 +258,8 @@ the calibration diagnostic if it matters.
   Poisson floor; fail loud on missing inputs; guard divide-by-zero in
   `proj_count / proj_PT`.
 - Sampler: `mu = 0` -> 0 count (no draw); `r` Poisson-sentinel -> draw Poisson
-  via the same copula `u`; ensure integer, non-negative outputs.
+  via the same copula `u`; player draw is a non-negative integer (the added
+  fractional `repl_contrib` makes the stored total fractional, as today).
 
 ## Testing
 
@@ -232,7 +267,8 @@ the calibration diagnostic if it matters.
   - mean of draws ~= projection (no bias) across low/mid/high means;
   - no probability spike at 0 (mass at 0 ~= NegBin P(X=0), not ~10%);
   - realized correlation matches the input matrix within tolerance;
-  - outputs are integer and non-negative.
+  - player draws are non-negative integers; finite under extreme latent draws
+    (tail-clamp test).
 - Golden regression: the Caminero/Soto/Cruz SB table above -- assert bias ~0 and
   zero-spike gone.
 - fraction_remaining: remaining-horizon variance grows in relative terms as
@@ -240,32 +276,79 @@ the calibration diagnostic if it matters.
   distributional shape from the new model.
 - Calibration script: a small synthetic fixture with known dispersion recovers
   `r`; Poisson-floor clamp triggers on under-dispersed input.
-- Existing MC/standings/deltaRoto tests must still pass (rerun the draft and
-  dashboard suites).
+- **Out-of-sample calibration validation (acceptance test for "variance is
+  right").** Leave-one-season-out over 2022-2025: fit dispersion on three
+  seasons, then on the held-out season check per-stat **predictive-interval
+  coverage** -- the fraction of held-out actual season totals (conditional on
+  realized PT) that fall inside the model's central interval. Target: empirical
+  coverage of the nominal 50% and 80% intervals within +/- 10 percentage points
+  per stat, averaged over the four held-out folds. `sv` is evaluated on the
+  role-stable population only (per the saves decision); record its coverage but
+  do not block on the job-loss tail it deliberately excludes. This test gates the
+  shipped `STAT_DISPERSION`; record the coverage table in the calibration output.
+- Regression policy (the model intentionally changes MC output, so split this):
+  - **Structural/contract tests must pass unchanged** -- roster selection,
+    scoring wiring, rate recombination, no-crash on the draft and dashboard
+    suites.
+  - **Value-pinned MC golden tests are EXPECTED to change** -- re-bless them
+    against the new model, citing this spec's model change as the justification
+    (per CLAUDE.md's don't-edit-tests-without-justification rule). Do NOT loosen
+    a test to hide an unexpected shift; only re-pin values whose change is
+    explained by the NegBin/copula switch.
 
 ## Performance
 
 `nbinom.ppf` per stat/player/sim is heavier than the current vectorized numpy
-op. Keep it vectorized over the player axis; benchmark the dashboard refresh and
-the draft MC before/after and confirm no material regression (the free-tier
-refresh budget is a known constraint).
+op. Keep it vectorized over the player axis. Concrete budgets (benchmark
+before/after on the same machine, same iteration count):
+- **Dashboard MC refresh** (the free-tier-constrained path): post-change
+  wall-clock stays within **1.25x** the current baseline AND under the existing
+  free-tier refresh time budget the pipeline already targets. If either is
+  exceeded, reduce per-draw cost (e.g. precompute NegBin params per player once,
+  reuse the `ppf` across the vectorized player axis) before merging.
+- **Draft MC** (offline, latency-tolerant): within **1.5x** the current
+  baseline; a regression beyond that is a finding to record, not necessarily a
+  blocker.
+Record the before/after numbers in the PR.
 
 ## Internal phasing within this spec
 
-1. Calibration script + `STAT_DISPERSION` constants (+ diagnostic).
-2. Sampler rewrite for the full-season path (copula + NegBin marginals) with
-   property/golden tests.
-3. In-season fraction_remaining reframe + rate recombination + dashboard/
-   deltaRoto regression.
+Each phase must leave the tree green (the repo's phased-execution rule). Because
+`_apply_variance` is a single function shared by both callers, the sampler
+rewrite and both caller adaptations land together -- they cannot be split by
+caller.
 
-Each phase touches <= 5 files per the repo's phased-execution rule; verify
-(pytest/ruff/format/vulture/mypy) between phases.
+1. **Calibration (additive).** `scripts/calibrate_stat_dispersion.py` +
+   diagnostic + out-of-sample interval-coverage validation; emit and commit
+   `STAT_DISPERSION` ALONGSIDE the still-present `STAT_VARIANCE`. No sampler
+   change yet, so the tree stays green.
+2. **Sampler + callers (atomic).** Rewrite `_apply_variance` to the copula+NegBin
+   marginals; adapt the draft caller (fraction=1.0, trivial) and the in-season
+   caller (the fraction_remaining reframe: simulate-remaining + rate
+   recombination) in the same change; remove `STAT_VARIANCE` and the sigma-scaled
+   covariance precompute. Land with the property/golden tests, the re-blessed
+   value-pinned goldens, the dashboard/deltaRoto regression, and the perf
+   benchmark.
+
+Phase 2 is the larger change; keep it within the <= 5-files-per-step rule by
+sequencing edits (sampler core, then each caller, then test re-bless) and verify
+(pytest/ruff/format/vulture/mypy) at each step, but it ships as one coherent
+milestone since partial states break the in-season path.
 
 ## Open items to resolve in planning
 
 - Exact `mu_rem` definition: confirm how `base` is built in the in-season caller
-  (YTD+ROS vs ROS-only) before implementing the remaining-horizon mean.
-- Single `r` vs mean-dependent dispersion: decided by the calibration
-  diagnostic.
-- Saves `r`: role-stable conditioning vs accept inflated `r` -- decide from the
-  fit.
+  (YTD+ROS updated full-season projection vs ROS-only) before implementing the
+  remaining-horizon mean. **Default decision rule** (apply unless the caller
+  contradicts it): `mu_rem = max(0, base * scale - actual_YTD)` when `base` is an
+  updated full-season projection, else `mu_rem = base * scale` when `base` is
+  already ROS-only. The dispersion scaling (`CV_rem^2 = 1/mu_rem +
+  fraction_remaining / r`) is unchanged either way. This is a code-reading
+  confirmation, not a product decision.
+- Single `r` vs mean-dependent dispersion: decided by the calibration diagnostic.
+  Resolved structurally -- the sampler consumes a stat/band dispersion lookup
+  either way (scalar = one band), so the diagnostic's outcome cannot force a
+  sampler redesign.
+- Saves `r`: **resolved** -- fit on the role-stable population (see Calibration
+  and Non-goals); job-loss tail is an accepted limitation deferred to a future
+  role-mixture spec.
