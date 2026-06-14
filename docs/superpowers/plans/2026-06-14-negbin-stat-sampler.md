@@ -259,11 +259,14 @@ def test_build_residuals_conditions_on_realized_pt(tmp_path, monkeypatch):
     proj_dir.mkdir(parents=True)
     stats_dir = tmp_path / "stats"
     stats_dir.mkdir()
+    # Proj CSVs must carry ALL counting columns -- pandas merge only suffixes
+    # overlapping columns, so a partial proj would leave R/HR/RBI/H unsuffixed
+    # and build_residuals' m["R_proj"] lookup would KeyError.
+    proj_header = "PA,R,HR,RBI,SB,H,MLBAMID"
+    proj_row = "600,90,25,85,30,150,111"
+    _write_csv(proj_dir / "steamer-hitters.csv", [proj_row], proj_header)
+    _write_csv(proj_dir / "zips-hitters.csv", [proj_row], proj_header)
     h_header = "Name,Team,G,PA,AB,H,HR,R,RBI,SB,AVG,MLBAMID"
-    _write_csv(proj_dir / "steamer-hitters.csv",
-               ["A,X,150,600,540,150,25,90,85,30,.278,111"], "PA,SB,MLBAMID")
-    _write_csv(proj_dir / "zips-hitters.csv",
-               ["600,30,111"], "PA,SB,MLBAMID")
     _write_csv(stats_dir / "hitters-2022.csv",
                ["A,X,75,300,270,80,12,45,40,18,.296,111"], h_header)
 
@@ -272,6 +275,9 @@ def test_build_residuals_conditions_on_realized_pt(tmp_path, monkeypatch):
     monkeypatch.setattr("calibrate_stat_dispersion.YEARS", [2022])
 
     res = build_residuals("hitters")
+    # All five correlated hitter keys must be produced (proves the loop covers
+    # every key, not just sb).
+    assert set(res) == {"r", "hr", "rbi", "sb", "h"}
     sb = res["sb"]
     assert sb["year"].tolist() == [2022]
     assert sb["actual"].tolist() == [18.0]
@@ -361,6 +367,11 @@ def build_residuals(kind: str) -> dict[str, pd.DataFrame]:
         m = proj.merge(actual, on="MLBAMID", suffixes=("_proj", "_act"))
         m = m[m[f"{pt}_act"] > 0]
         for key, col in colmap.items():
+            # Guard: a projection system may lack a column; merge only suffixes
+            # overlapping names, so f"{col}_proj" can be absent. Skip rather than
+            # KeyError (and real data has all columns, so this rarely triggers).
+            if f"{col}_proj" not in m.columns or f"{col}_act" not in m.columns:
+                continue
             proj_rate = m[f"{col}_proj"] / m[f"{pt}_proj"]
             mu = proj_rate * m[f"{pt}_act"]
             df = pd.DataFrame({"year": year, "actual": m[f"{col}_act"].astype(float),
@@ -393,7 +404,7 @@ git commit -m "feat(sim): build conditional-on-PT residual table for dispersion 
 
 ```python
 # append to tests/test_simulation/test_stat_dispersion_calibration.py
-from calibrate_stat_dispersion import loso_coverage
+from calibrate_stat_dispersion import bucket_diagnostic, loso_coverage
 
 
 def test_loso_coverage_returns_per_fold_table():
@@ -408,6 +419,17 @@ def test_loso_coverage_returns_per_fold_table():
     table = loso_coverage(data, levels=(0.50, 0.80))
     assert set(table["held_out"]) == {2022, 2023, 2024}
     assert abs(table["cov_0.80"].mean() - 0.80) < 0.05
+
+
+def test_bucket_diagnostic_flags_scalar_r_as_adequate_when_true():
+    # Data generated with a single r across all mu buckets -> the per-observation
+    # Pearson statistic is ~1.0 in every bucket (immune to within-bucket mu spread).
+    rng = np.random.default_rng(5)
+    mu = rng.uniform(2, 40, 30_000)
+    r = 3.0
+    x = rng.negative_binomial(r, r / (r + mu))
+    diag = bucket_diagnostic(pd.DataFrame({"actual": x.astype(float), "mu": mu}), r, n_bins=4)
+    assert diag["pearson"].between(0.85, 1.15).all()
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -438,6 +460,28 @@ def loso_coverage(data: pd.DataFrame, levels=(0.50, 0.80)) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def bucket_diagnostic(df: pd.DataFrame, r: float, n_bins: int = 4) -> pd.DataFrame:
+    """Per projected-count bucket: Pearson dispersion of standardized residuals.
+
+    For each row the implied conditional variance is mu + mu^2/r (mu for Poisson).
+    The Pearson statistic mean((actual - mu)^2 / implied_var) is ~1.0 when the
+    dispersion fits that bucket's mean range. It uses PER-OBSERVATION mu, so it is
+    immune to the spread of mu WITHIN a bucket (a raw observed-vs-implied variance
+    comparison would be inflated by that spread and falsely fail at low mu). A
+    statistic systematically >1 at low mu and <1 at high mu (or vice versa) means
+    a single scalar r does not fit and a mean-dependent dispersion is warranted.
+    """
+    d = df.copy()
+    d["bin"] = pd.qcut(d["mu"], q=n_bins, labels=False, duplicates="drop")
+    out = []
+    for b, g in d.groupby("bin"):
+        implied = g["mu"] if r == POISSON_SENTINEL else g["mu"] + g["mu"] ** 2 / r
+        pearson = float((((g["actual"] - g["mu"]) ** 2) / implied).mean())
+        out.append({"bin": int(b), "n": len(g), "mu_med": float(g["mu"].median()),
+                    "pearson": pearson})
+    return pd.DataFrame(out)
+
+
 def main() -> None:
     from fantasy_baseball.utils.constants import (
         HITTER_CORR_STATS,
@@ -457,9 +501,12 @@ def main() -> None:
             r = fit_dispersion(df["actual"].to_numpy(), df["mu"].to_numpy())
             dispersion[key] = r
             cov = loso_coverage(df)
+            diag = bucket_diagnostic(df, r)
             r_disp = "Poisson" if r == POISSON_SENTINEL else f"{r:.3f}"
             print(f"\n  {key}: r={r_disp}  n={len(df)}")
             print(cov.to_string(index=False))
+            print("  bucket diagnostic (observed vs implied variance):")
+            print(diag.to_string(index=False))
 
     print("\nSTAT_DISPERSION = {")
     for k, v in dispersion.items():
@@ -472,16 +519,16 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_simulation/test_stat_dispersion_calibration.py -k loso -v`
-Expected: PASS
+Run: `python -m pytest tests/test_simulation/test_stat_dispersion_calibration.py -k "loso or bucket" -v`
+Expected: PASS (both `loso` and `bucket_diagnostic` tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add scripts/calibrate_stat_dispersion.py tests/test_simulation/test_stat_dispersion_calibration.py
-git commit -m "feat(sim): LOSO coverage + calibration main emitting STAT_DISPERSION"
+git commit -m "feat(sim): LOSO coverage + bucket diagnostic + calibration main"
 ```
 
 ### Task 1.5: Saves role-stable conditioning
@@ -581,11 +628,19 @@ git commit -m "feat(sim): role-stable saves conditioning for dispersion fit"
 - [ ] **Step 1: Run the calibration script and capture output**
 
 Run: `python scripts/calibrate_stat_dispersion.py`
-Expected: a printed `STAT_DISPERSION = {...}` block and per-stat LOSO coverage
-tables. **Acceptance gate:** for every stat except `sv`, the averaged held-out
-50% and 80% coverage are within +/- 10 pp of nominal. If a stat fails, do NOT
-hand-tune r -- record the failure and STOP for human review (the model may be
-wrong for that stat).
+Expected: a printed `STAT_DISPERSION = {...}` block, per-stat LOSO coverage
+tables, and per-stat bucket-diagnostic tables. **Acceptance gates:**
+1. Coverage: for every stat except `sv`, the averaged held-out 50% and 80%
+   coverage are within +/- 10 pp of nominal.
+2. Bucket diagnostic: each stat's per-bucket Pearson statistic is roughly within
+   [0.8, 1.2] across buckets. If a stat's statistic trends systematically (e.g.
+   >1.2 at low mu, <0.8 at high mu), a single scalar r is inadequate -- escalate
+   THAT stat to a mean-keyed dispersion (extend
+   `STAT_DISPERSION[stat]` to a list of `{mu_threshold, r}` bands and have the
+   sampler's `r_mat` fill look up the band by `mu`; the `_negbin_copula_counts`
+   interface is unchanged since `r` is already per-element).
+If either gate fails for a stat, do NOT hand-tune r -- record the failure and
+STOP for human review (the model may be wrong for that stat).
 
 - [ ] **Step 2: Add the emitted constant to `constants.py`**
 
@@ -881,14 +936,52 @@ in Task 2.4). Structural tests (no-crash, keys present) PASS.
 - [ ] **Step 4: Remove STAT_VARIANCE from constants**
 
 Delete `STAT_VARIANCE` (`constants.py:135-151`) now that nothing reads it.
-Run: `python -m pytest -q -k "not test_simulate_draft" tests/ 2>&1 | tail -5`
+Run: `python -m pytest -q --ignore=tests/test_draft/test_simulate_draft.py tests/ 2>&1 | tail -5`
 and `python -c "import fantasy_baseball.simulation"` (Expected: imports clean,
 no `STAT_VARIANCE` reference errors).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Add a caller-unchanged guard test**
+
+This proves the in-season caller's team-level subtraction/recombination still
+holds after the sampler rewrite (the spec's "callers unchanged" obligation).
+
+```python
+# append to tests/test_simulation/test_negbin_sampler.py
+# (np already imported at the top of this file)
+from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.simulation import simulate_remaining_season
+
+
+def test_simulate_remaining_preserves_actuals_floor_and_finite_rates():
+    rng = np.random.default_rng(11)
+    roster = {
+        "T1": [
+            {"player_type": PlayerType.HITTER, "name": "H1", "pa": 600, "ab": 540,
+             "r": 90, "hr": 25, "rbi": 85, "sb": 15, "h": 150},
+            {"player_type": PlayerType.PITCHER, "name": "P1", "ip": 180, "w": 12,
+             "k": 200, "sv": 0, "er": 65, "bb": 45, "h_allowed": 150,
+             "positions": ["SP"]},
+        ]
+    }
+    actuals = {"T1": {"R": 40, "HR": 12, "RBI": 38, "SB": 7, "AVG": .270,
+                      "W": 6, "K": 95, "SV": 1, "ERA": 3.50, "WHIP": 1.15,
+                      "AB": 250, "IP": 85}}
+    stats, _ = simulate_remaining_season(actuals, roster, 0.5, rng)
+    s = stats["T1"]
+    # final counting totals never drop below banked actuals; rates finite/sane.
+    for cat in ("R", "HR", "RBI", "SB", "W", "K", "SV"):
+        assert s[cat] >= actuals["T1"][cat]
+    assert 0 < s["AVG"] < 1 and 0 < s["ERA"] < 30 and 0 < s["WHIP"] < 5
+```
+
+Run: `python -m pytest tests/test_simulation/test_negbin_sampler.py -k remaining -v`
+Expected: PASS (the caller logic is untouched, so this guards against an
+accidental regression to its subtraction/recombination).
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/fantasy_baseball/simulation.py src/fantasy_baseball/utils/constants.py
+git add src/fantasy_baseball/simulation.py src/fantasy_baseball/utils/constants.py tests/test_simulation/test_negbin_sampler.py
 git commit -m "feat(sim): rewrite _apply_variance to copula NegBin; drop STAT_VARIANCE"
 ```
 
