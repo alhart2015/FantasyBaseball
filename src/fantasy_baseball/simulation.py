@@ -9,8 +9,7 @@ from typing import Any, cast
 
 import numpy as np
 from scipy.special import _ufuncs as _scu  # Boost-backed nbinom ppf (see _nbinom_ppf_fast)
-from scipy.special import pdtr, pdtrik
-from scipy.stats import norm
+from scipy.special import ndtr, pdtr, pdtrik
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto_dict
@@ -505,7 +504,7 @@ def _negbin_copula_counts(
     """
     mu = np.asarray(mu, dtype=float)
     r = np.asarray(r, dtype=float)
-    u = np.clip(norm.cdf(z), _U_EPS, 1.0 - _U_EPS)
+    u = np.clip(ndtr(z), _U_EPS, 1.0 - _U_EPS)
 
     out = np.zeros_like(mu)
     pos = mu > 0
