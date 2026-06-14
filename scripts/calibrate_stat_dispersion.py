@@ -14,9 +14,24 @@ Usage:
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
 from scipy.optimize import minimize_scalar
 from scipy.stats import nbinom, poisson
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+PROJ_DIR = PROJECT_ROOT / "data" / "projections"
+STATS_DIR = PROJECT_ROOT / "data" / "stats"
+YEARS = [2022, 2023, 2024]
+
+# model stat key -> CSV column name (verified). k=SO, h_allowed=H.
+HITTER_COLS = {"r": "R", "hr": "HR", "rbi": "RBI", "sb": "SB", "h": "H"}
+PITCHER_COLS = {"w": "W", "k": "SO", "sv": "SV", "er": "ER", "bb": "BB", "h_allowed": "H"}
 
 # Sentinel for "no overdispersion -> use Poisson" (NegBin r -> inf).
 POISSON_SENTINEL = float("inf")
@@ -74,3 +89,81 @@ def interval_coverage(x: np.ndarray, mu: np.ndarray, r: float, level: float) -> 
         lo = nbinom.ppf(lo_q, r, p)
         hi = nbinom.ppf(hi_q, r, p)
     return float(np.mean((x >= lo) & (x <= hi)))
+
+
+def _read(path: Path, cols: list[str]) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(path, encoding="utf-8-sig")
+    if "MLBAMID" not in df.columns:
+        return pd.DataFrame()
+    df = df.dropna(subset=["MLBAMID"]).copy()
+    df["MLBAMID"] = df["MLBAMID"].astype(int)
+    keep = ["MLBAMID", *[c for c in cols if c in df.columns]]
+    return df[keep]
+
+
+def _find_proj(year: int, system: str, kind: str) -> Path | None:
+    d = PROJ_DIR / str(year)
+    cand = d / f"{system}-{kind}.csv"
+    if cand.exists():
+        return cand
+    matches = sorted(d.glob(f"{system}-{kind}*.csv"))
+    return matches[0] if matches else None
+
+
+def _blend_proj(year: int, kind: str, cols: list[str]) -> pd.DataFrame:
+    s = _read(_find_proj(year, "steamer", kind) or Path("x"), cols)
+    z = _read(_find_proj(year, "zips", kind) or Path("x"), cols)
+    if s.empty or z.empty:
+        return pd.DataFrame()
+    m = s.merge(z, on="MLBAMID", suffixes=("_s", "_z"))
+    out = pd.DataFrame({"MLBAMID": m["MLBAMID"]})
+    for c in cols:
+        cs, cz = f"{c}_s", f"{c}_z"
+        if cs in m.columns and cz in m.columns:
+            out[c] = (m[cs] + m[cz]) / 2.0
+    return out
+
+
+def build_residuals(kind: str) -> dict[str, pd.DataFrame]:
+    """Per-stat DataFrame of {year, actual, mu} conditioned on realized PT.
+
+    mu = (proj_count / proj_PT) * actual_PT. Rows with actual_PT <= 0 (the
+    PT-loss tail owned by the playing-time model) are excluded.
+    """
+    is_hitter = kind == "hitters"
+    pt = "PA" if is_hitter else "IP"
+    colmap = HITTER_COLS if is_hitter else PITCHER_COLS
+    proj_cols = [pt, *colmap.values()]
+    actual_cols = [pt, *colmap.values()]
+
+    per_stat: dict[str, list[pd.DataFrame]] = {k: [] for k in colmap}
+    for year in YEARS:
+        proj = _blend_proj(year, kind, proj_cols)
+        actual = _read(STATS_DIR / f"{kind}-{year}.csv", actual_cols)
+        if proj.empty or actual.empty:
+            print(f"  {kind} {year}: projection or actuals missing, skipping")
+            continue
+        m = proj.merge(actual, on="MLBAMID", suffixes=("_proj", "_act"))
+        m = m[m[f"{pt}_act"] > 0]
+        for key, col in colmap.items():
+            # Guard: a projection system may lack a column; merge only suffixes
+            # overlapping names, so f"{col}_proj" can be absent. Skip rather than
+            # KeyError (and real data has all columns, so this rarely triggers).
+            if f"{col}_proj" not in m.columns or f"{col}_act" not in m.columns:
+                continue
+            proj_rate = m[f"{col}_proj"] / m[f"{pt}_proj"]
+            mu = proj_rate * m[f"{pt}_act"]
+            df = pd.DataFrame(
+                {
+                    "year": year,
+                    "actual": m[f"{col}_act"].astype(float),
+                    "mu": mu.astype(float),
+                }
+            )
+            df = df[df["mu"] > 0]
+            per_stat[key].append(df)
+    return {
+        k: pd.concat(v, ignore_index=True) if v else pd.DataFrame() for k, v in per_stat.items()
+    }
