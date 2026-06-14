@@ -546,20 +546,20 @@ def _apply_variance(
     # and dispersion r (scalar or mu-banded, resolved from the projected mean).
     corr_keys = [c for c in counting_cols if c in idx_map]
     mu_mat = np.zeros((n, n_corr))
-    for i, p in enumerate(players):
-        scale = float(scales[i])
-        for col in corr_keys:
-            mu_mat[i, idx_map[col]] = safe_float(p.get(col)) * scale
+    for col in corr_keys:
+        col_vals = np.array([safe_float(p.get(col)) for p in players])
+        mu_mat[:, idx_map[col]] = col_vals * scales
     r_mat = np.full((n, n_corr), np.inf)
     for col in corr_keys:
         j = idx_map[col]
         r_mat[:, j] = resolve_dispersion_r(STAT_DISPERSION[col], mu_mat[:, j])
 
-    counts = np.empty((n, n_corr))
-    for j in range(n_corr):
-        counts[:, j] = _negbin_copula_counts(
-            mu_mat[:, j], r_mat[:, j], all_z[:, j], fraction_remaining
-        )
+    # One flattened copula draw over all (player, stat) cells -- collapses the
+    # per-stat scipy ppf calls (heavy fixed overhead) into a single nbinom +
+    # single poisson call. C-order ravel keeps mu/r/z cells aligned.
+    counts = _negbin_copula_counts(
+        mu_mat.ravel(), r_mat.ravel(), all_z.ravel(), fraction_remaining
+    ).reshape(n, n_corr)
 
     adjusted = []
     for i, p in enumerate(players):
