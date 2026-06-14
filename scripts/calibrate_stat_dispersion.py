@@ -97,6 +97,7 @@ def _read(path: Path, cols: list[str]) -> pd.DataFrame:
     df = pd.read_csv(path, encoding="utf-8-sig")
     if "MLBAMID" not in df.columns:
         return pd.DataFrame()
+    # dropna MUST precede astype(int): a NaN MLBAMID would crash the int cast.
     df = df.dropna(subset=["MLBAMID"]).copy()
     df["MLBAMID"] = df["MLBAMID"].astype(int)
     keep = ["MLBAMID", *[c for c in cols if c in df.columns]]
@@ -105,9 +106,10 @@ def _read(path: Path, cols: list[str]) -> pd.DataFrame:
 
 def _find_proj(year: int, system: str, kind: str) -> Path | None:
     d = PROJ_DIR / str(year)
-    cand = d / f"{system}-{kind}.csv"
-    if cand.exists():
-        return cand
+    # Match calibrate_playing_time.py: try both separator forms before globbing.
+    for name in (f"{system}-{kind}.csv", f"{system}_{kind}.csv"):
+        if (d / name).exists():
+            return d / name
     matches = sorted(d.glob(f"{system}-{kind}*.csv"))
     return matches[0] if matches else None
 
@@ -147,6 +149,12 @@ def build_residuals(kind: str) -> dict[str, pd.DataFrame]:
             continue
         m = proj.merge(actual, on="MLBAMID", suffixes=("_proj", "_act"))
         m = m[m[f"{pt}_act"] > 0]
+        # proj_rate = proj_count / proj_PT would be inf/NaN if a projection row
+        # has 0 PA/IP (FanGraphs can emit 0-PT prospect lines in some vintages);
+        # the NaN mu then fails the `mu > 0` filter and the row vanishes
+        # silently. This makes projection-side filtering explicit and symmetric
+        # with the actual-side filter above.
+        m = m[m[f"{pt}_proj"] > 0]
         for key, col in colmap.items():
             # Guard: a projection system may lack a column; merge only suffixes
             # overlapping names, so f"{col}_proj" can be absent. Skip rather than
