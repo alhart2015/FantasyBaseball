@@ -150,6 +150,27 @@ STAT_VARIANCE: dict[str, float] = {
     "h_allowed": 0.143,
 }
 
+# Per-stat Negative-Binomial dispersion r (var = mu + mu^2/r), calibrated from
+# 2022-2024 projection-vs-actual residuals conditional on realized playing time
+# (see scripts/calibrate_stat_dispersion.py). A value is either a scalar r or a
+# list of (mu_upper, r) bands for stats with mean-dependent overdispersion
+# (sb/hr/rbi/er, r grows with the projected count); float("inf") == Poisson floor
+# (no overdispersion beyond Poisson). sv is fit on the role-stable closer
+# population and collapses to a robust scalar given the thin (n=43) data.
+STAT_DISPERSION: dict[str, float | list[tuple[float, float]]] = {
+    "r": 84.725,
+    "hr": [(3.9, 8.580), (8.5, 7.754), (16.2, 12.455), (float("inf"), 23.868)],
+    "rbi": [(17.5, 7.207), (36.5, 27.104), (59.3, 34.039), (float("inf"), 45.005)],
+    "sb": [(1.1, 0.763), (2.8, 1.876), (6.9, 2.709), (float("inf"), 4.747)],
+    "h": float("inf"),
+    "w": float("inf"),
+    "k": 109.134,
+    "sv": 37.757,
+    "er": [(13.7, 7.545), (24.6, 14.701), (40.1, 13.263), (float("inf"), 27.425)],
+    "bb": 21.645,
+    "h_allowed": 81.291,
+}
+
 # Playing-time model: realized PA/IP relative to projection, calibrated from
 # 2022-2025 Steamer+ZiPS vs actuals on the rosterable population (volume floor
 # at the >=90%-MLB-appearance knee for hitters/SP; MLB-appearance required for
