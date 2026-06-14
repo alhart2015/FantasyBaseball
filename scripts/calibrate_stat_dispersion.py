@@ -175,3 +175,82 @@ def build_residuals(kind: str) -> dict[str, pd.DataFrame]:
     return {
         k: pd.concat(v, ignore_index=True) if v else pd.DataFrame() for k, v in per_stat.items()
     }
+
+
+def loso_coverage(data: pd.DataFrame, levels=(0.50, 0.80)) -> pd.DataFrame:
+    """Leave-one-season-out coverage: fit r on the other years, test on the held-out."""
+    rows = []
+    years = sorted(data["year"].unique())
+    for held in years:
+        train = data[data["year"] != held]
+        test = data[data["year"] == held]
+        if train.empty or test.empty:
+            continue
+        r = fit_dispersion(train["actual"].to_numpy(), train["mu"].to_numpy())
+        row = {"held_out": held, "r": r, "n": len(test)}
+        for lv in levels:
+            row[f"cov_{lv:.2f}"] = interval_coverage(
+                test["actual"].to_numpy(), test["mu"].to_numpy(), r, lv
+            )
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def bucket_diagnostic(df: pd.DataFrame, r: float, n_bins: int = 4) -> pd.DataFrame:
+    """Per projected-count bucket: Pearson dispersion of standardized residuals.
+
+    For each row the implied conditional variance is mu + mu^2/r (mu for Poisson).
+    The Pearson statistic mean((actual - mu)^2 / implied_var) is ~1.0 when the
+    dispersion fits that bucket's mean range. It uses PER-OBSERVATION mu, so it is
+    immune to the spread of mu WITHIN a bucket (a raw observed-vs-implied variance
+    comparison would be inflated by that spread and falsely fail at low mu). A
+    statistic systematically >1 at low mu and <1 at high mu (or vice versa) means
+    a single scalar r does not fit and a mean-dependent dispersion is warranted.
+    """
+    d = df.copy()
+    d["bin"] = pd.qcut(d["mu"], q=n_bins, labels=False, duplicates="drop")
+    out = []
+    for b, g in d.groupby("bin"):
+        implied = g["mu"] if r == POISSON_SENTINEL else g["mu"] + g["mu"] ** 2 / r
+        pearson = float((((g["actual"] - g["mu"]) ** 2) / implied).mean())
+        out.append(
+            {"bin": int(b), "n": len(g), "mu_med": float(g["mu"].median()), "pearson": pearson}
+        )
+    return pd.DataFrame(out)
+
+
+def main() -> None:
+    from fantasy_baseball.utils.constants import (
+        HITTER_CORR_STATS,
+        PITCHER_CORR_STATS,
+    )
+
+    print("=" * 72)
+    print("STAT DISPERSION CALIBRATION (NegBin r), years:", YEARS)
+    dispersion: dict[str, float] = {}
+    for kind, keys in (("hitters", HITTER_CORR_STATS), ("pitchers", PITCHER_CORR_STATS)):
+        res = build_residuals(kind)
+        for key in keys:
+            df = res.get(key, pd.DataFrame())
+            if df.empty:
+                print(f"  {key}: no data, skipping")
+                continue
+            r = fit_dispersion(df["actual"].to_numpy(), df["mu"].to_numpy())
+            dispersion[key] = r
+            cov = loso_coverage(df)
+            diag = bucket_diagnostic(df, r)
+            r_disp = "Poisson" if r == POISSON_SENTINEL else f"{r:.3f}"
+            print(f"\n  {key}: r={r_disp}  n={len(df)}")
+            print(cov.to_string(index=False))
+            print("  bucket diagnostic (observed vs implied variance):")
+            print(diag.to_string(index=False))
+
+    print("\nSTAT_DISPERSION = {")
+    for k, v in dispersion.items():
+        rv = 'float("inf")' if v == POISSON_SENTINEL else f"{v:.3f}"
+        print(f'    "{k}": {rv},')
+    print("}")
+
+
+if __name__ == "__main__":
+    main()

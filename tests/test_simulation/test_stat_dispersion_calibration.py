@@ -2,14 +2,17 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 from calibrate_stat_dispersion import (
     POISSON_SENTINEL,
+    bucket_diagnostic,
     build_residuals,
     fit_dispersion,
     interval_coverage,
+    loso_coverage,
 )
 
 
@@ -86,3 +89,28 @@ def test_build_residuals_conditions_on_realized_pt(tmp_path, monkeypatch):
     assert sb["year"].tolist() == [2022]
     assert sb["actual"].tolist() == [18.0]
     assert abs(sb["mu"].iloc[0] - 15.0) < 1e-6
+
+
+def test_loso_coverage_returns_per_fold_table():
+    rng = np.random.default_rng(4)
+    frames = []
+    for yr in (2022, 2023, 2024):
+        mu = rng.uniform(5, 25, 4000)
+        r = 3.0
+        x = rng.negative_binomial(r, r / (r + mu))
+        frames.append(pd.DataFrame({"year": yr, "actual": x.astype(float), "mu": mu}))
+    data = pd.concat(frames, ignore_index=True)
+    table = loso_coverage(data, levels=(0.50, 0.80))
+    assert set(table["held_out"]) == {2022, 2023, 2024}
+    assert abs(table["cov_0.80"].mean() - 0.80) < 0.05
+
+
+def test_bucket_diagnostic_flags_scalar_r_as_adequate_when_true():
+    # Data generated with a single r across all mu buckets -> the per-observation
+    # Pearson statistic is ~1.0 in every bucket (immune to within-bucket mu spread).
+    rng = np.random.default_rng(5)
+    mu = rng.uniform(2, 40, 30_000)
+    r = 3.0
+    x = rng.negative_binomial(r, r / (r + mu))
+    diag = bucket_diagnostic(pd.DataFrame({"actual": x.astype(float), "mu": mu}), r, n_bins=4)
+    assert diag["pearson"].between(0.85, 1.15).all()
