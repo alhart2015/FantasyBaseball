@@ -94,10 +94,18 @@ cannot know whether the saves variance is right without comparing to actuals.
    `ip` (sigma 0.0, not in the correlation set) stay on the existing
    `base * scale` path.
 
-4. **Calibrate dispersion up front from 2022-2025 actuals** (no interim
+4. **Calibrate dispersion up front from 2022-2024 actuals** (no interim
    ported-constant ship). The existing `STAT_VARIANCE` was fit for the clipped
    Gaussian and does not transfer cleanly; a constant CV is also mathematically
    incompatible with counts at low means (Poisson floor CV = 1/sqrt(mu)).
+   **Data-availability fact (verified):** usable projection->actual pairs exist
+   only for 2022, 2023, 2024 -- there is no 2025 steamer/zips projection dir, the
+   2025 actuals are a rate-style FanGraphs export with the counting columns
+   missing, and 2026 is the in-progress season (projections only, no full
+   actuals). So the fit and validation use three seasons (2022-2024), whose
+   actuals are the clean compact-schema files with all counting columns present.
+   Three seasons is adequate for the high-volume stats but THIN for saves (see
+   the saves note and the relaxed sv acceptance bar in Testing).
 
 5. **Both sim paths in this spec** (full-season draft/preseason AND in-season
    fractional ROS). Chosen over a full-season-first split to avoid leaving the
@@ -111,8 +119,14 @@ Three pieces (two new, one rewrite).
 
 Offline, version-controlled output -- mirrors `scripts/calibrate_playing_time.py`.
 
-- Inputs: historical projections `data/projections/{2022..2025}/` and actuals
-  `data/stats/{hitters,pitchers}-{year}.csv`.
+- Inputs: historical projections `data/projections/{2022,2023,2024}/` and actuals
+  `data/stats/{hitters,pitchers}-{2022,2023,2024}.csv` (compact-schema actuals
+  with all counting columns). Column mapping (verified): join on `MLBAMID`,
+  read with `encoding="utf-8-sig"`; hitter keys map to `R/HR/RBI/SB/H/AB/PA`;
+  pitcher keys map to `W/SO/SV/ER/BB/H/IP` where **`k` is the `SO` column** and
+  **`h_allowed` is the `H` column** (pitcher files have no `HA`). Reuse the
+  `_load`/`_find_proj`/`_blend` pattern from `calibrate_playing_time.py` (Steamer
+  +ZiPS 50/50 blend on players in both systems).
 - Reuse `calibrate_playing_time.py`'s population handling: volume floors,
   RP-requires-MLB-appearance, phantom-projection exclusion, and the NaN-or-0
   trap fix (a projected player with no actuals row played ~0, not dropped --
@@ -142,14 +156,19 @@ Offline, version-controlled output -- mirrors `scripts/calibrate_playing_time.py
   (target var <= mean), clamp to Poisson (`r -> inf`). NegBin cannot represent
   var < mean.
 - **Saves (decided, given the role-mixture non-goal):** fit `sv` dispersion
-  **conditional on role being stable** -- i.e. restrict the `sv` fit to
-  pitcher-seasons whose projected and realized role agree (a closer who stayed a
-  closer), so the single-NegBin `r` is not inflated to absorb job-loss events it
-  cannot shape-model. Acceptance bar for `sv`: the role-stable population's
-  predictive interval coverage (see Testing) meets the same tolerance as the
-  other stats; the job-loss tail is a **documented, accepted limitation** owned
-  by the future role-mixture spec, not by this one. State the role-agreement
-  rule used (e.g. projected-IP/SV bucket vs realized) in the script.
+  **conditional on role being stable** -- restrict the `sv` fit to pitcher-seasons
+  whose projected and realized role agree (a closer who stayed a closer), so the
+  single-NegBin `r` is not inflated to absorb job-loss events it cannot
+  shape-model. Role signal (verified availability): projections carry
+  `GS/G/SV/HLD`; actuals carry only `SV/G/GS` (no holds). Default role-agreement
+  rule: "closer" = projected `SV >= CLOSER_SV_THRESHOLD`; "role-stable" = realized
+  `SV` also `>= CLOSER_SV_THRESHOLD` (and realized `GS` ~ 0). State the exact rule
+  in the script. **Thin-data caveat:** with only three seasons the role-stable
+  closer population is small (order tens of player-seasons), so the `sv`
+  dispersion is fit on the POOLED three seasons and its coverage is reported
+  **in-sample / informational, NOT as a leave-one-season-out hard gate** (LOSO
+  per fold would be too few closers to be meaningful). The job-loss tail remains a
+  documented, accepted limitation owned by the future role-mixture spec.
 - Output: a `STAT_DISPERSION` dict (`r` per stat, with Poisson sentinels) plus a
   reviewable band table, printed for paste into `constants.py`. Fail loud on
   missing year files.
@@ -302,13 +321,15 @@ the calibration diagnostic if it matters.
 - Calibration script: a small synthetic fixture with known dispersion recovers
   `r`; Poisson-floor clamp triggers on under-dispersed input.
 - **Out-of-sample calibration validation (acceptance test for "variance is
-  right").** Leave-one-season-out over 2022-2025: fit dispersion on three
-  seasons, then on the held-out season check per-stat **predictive-interval
-  coverage** -- the fraction of held-out actual season totals (conditional on
-  realized PT) that fall inside the model's central interval. Target: empirical
-  coverage of the nominal 50% and 80% intervals within +/- 10 percentage points
-  per stat, averaged over the four held-out folds. `sv` is evaluated on the
-  role-stable population only (per the saves decision); record its coverage but
+  right").** Leave-one-season-out over 2022-2024: fit dispersion on two seasons,
+  then on the held-out season check per-stat **predictive-interval coverage** --
+  the fraction of held-out actual season totals (conditional on realized PT) that
+  fall inside the model's central interval. Target: empirical coverage of the
+  nominal 50% and 80% intervals within +/- 10 percentage points per stat,
+  averaged over the three held-out folds. (Three folds is fewer than ideal; the
+  +/- 10 pp tolerance accounts for the sampling noise.) `sv` is the exception --
+  it is fit on the pooled role-stable population and its coverage is reported
+  in-sample/informational, NOT as a per-fold gate (per the saves decision); also
   do not block on the job-loss tail it deliberately excludes. This test gates the
   shipped `STAT_DISPERSION`; record the coverage table in the calibration output.
 - Regression policy (the model intentionally changes MC output, so split this):
