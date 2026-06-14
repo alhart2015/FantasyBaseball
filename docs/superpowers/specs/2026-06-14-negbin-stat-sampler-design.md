@@ -363,18 +363,43 @@ the calibration diagnostic if it matters.
 
 ## Performance
 
-`nbinom.ppf` per stat/player/sim is heavier than the current vectorized numpy
-op. Keep it vectorized over the player axis. Concrete budgets (benchmark
-before/after on the same machine, same iteration count):
-- **Dashboard MC refresh** (the free-tier-constrained path): post-change
-  wall-clock stays within **1.25x** the current baseline AND under the existing
-  free-tier refresh time budget the pipeline already targets. If either is
-  exceeded, reduce per-draw cost (e.g. precompute NegBin params per player once,
-  reuse the `ppf` across the vectorized player axis) before merging.
-- **Draft MC** (offline, latency-tolerant): within **1.5x** the current
-  baseline; a regression beyond that is a finding to record, not necessarily a
-  blocker.
-Record the before/after numbers in the PR.
+Original budgets (a spec-review guardrail, not a hard user requirement):
+dashboard MC refresh within **1.25x** baseline, draft MC within **1.5x**.
+
+**OUTCOME (measured, decided 2026-06-14): budget superseded; accepted ~2.7x
+exact.** A NegBin inverse-CDF is intrinsically ~2.5-2.9x the cost of the old
+`max(0, 1+draw)` clipped-Gaussian, and that gap is the ppf kernel itself, not
+fixed overhead. We optimized as far as exact methods allow:
+1. **Batch the copula draw** across stats -- one flattened `_negbin_copula_counts`
+   call per `_apply_variance` instead of a per-stat loop (collapses ~10-12 scipy
+   ppf invocations to 2). Bit-identical (proven `np.array_equal` vs the per-stat
+   loop). 5.35x -> ~3.2x (big-call) / 3.72x (realistic per-team).
+2. **Direct scipy.special inverse-CDF** -- bypass scipy.stats' generic
+   `rv_discrete.ppf` dispatch wrapper. NegBin uses `scipy.special._ufuncs.
+   _nbinom_ppf` (the same Boost kernel `nbinom._ppf` delegates to; private, but
+   guarded by a bit-equality gate test against `scipy.stats.nbinom.ppf`); Poisson
+   uses `pdtrik`/`pdtr`. Bit-identical. ~3.72x -> ~2.86x realistic.
+3. **`scipy.special.ndtr`** for the copula uniform instead of `norm.cdf`
+   (bit-identical, ~27x on that line).
+
+Final realistic per-call ratio ~2.7x. The remaining cost is the Boost ppf kernel
+(intrinsic to NegBin) plus the shared `_playing_time_scales` loop (not a
+regression). Reaching 1.25x/1.5x would require an APPROXIMATE ppf (e.g. a
+discretized `(mu, r, u)` grid cache) -- a correctness tradeoff explicitly
+declined, since the whole point of this work is sampler correctness.
+
+**Why ~2.7x is acceptable:** the MC runs only in the **scheduled background
+refresh** (`web/refresh_pipeline.py::_run_ros_monte_carlo` -> `run_ros_monte_carlo`,
+`n_iterations=1000`, base + management = 2 runs), cached to `CacheKey.MONTE_CARLO`
+and read separately by `season_routes` for display. It is NOT on the per-request
+page-load path. Absolute impact: the MC portion of the cron refresh goes from
+~12s to ~32s -- background time, not user-facing latency. The exact-correctness
+win (no +2.6% upward bias, no zero-spike, mean-dependent SB/SV dispersion)
+outweighs background cron seconds.
+
+**Future option (not done):** an approximate grid-cached ppf could reach the
+original budget if the refresh time ever becomes constrained; it would need its
+own approximation-error validation and review.
 
 ## Internal phasing within this spec
 
