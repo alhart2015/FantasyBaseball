@@ -8,7 +8,9 @@ the season dashboard (web/season_data.py).
 from typing import Any, cast
 
 import numpy as np
-from scipy.stats import nbinom, norm, poisson
+from scipy.special import _ufuncs as _scu  # Boost-backed nbinom ppf (see _nbinom_ppf_fast)
+from scipy.special import pdtr, pdtrik
+from scipy.stats import norm
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto_dict
@@ -458,6 +460,35 @@ def _replacement_line(p: dict, is_hitter: bool) -> dict:
     return REPLACEMENT_BY_POSITION[max(elig, key=_HITTER_REPL_SGP.__getitem__)]
 
 
+def _nbinom_ppf_fast(u: np.ndarray, r: np.ndarray, p: np.ndarray) -> np.ndarray:
+    """Vectorized NegBin inverse-CDF, bit-identical to scipy.stats.nbinom.ppf but
+    without the generic rv_discrete dispatch wrapper (argsreduce/broadcast/cdf
+    round-trip -- the perf bottleneck).
+
+    Modern scipy (>=1.11) overrides nbinom._ppf with a Boost-backed compiled
+    kernel, scipy.special._ufuncs._nbinom_ppf, rather than the historical
+    ceil(nbdtrik)+correction recipe. The Cephes nbdtr/nbdtrik path is NOT
+    bit-identical to that Boost kernel for non-integer r (nbdtr's betainc loses
+    ~1-3% accuracy at small k), so it cannot reproduce nbinom.ppf exactly. We
+    therefore call the same raw Boost ufunc scipy itself dispatches to, which is
+    exact by construction and skips only the wrapper -- verified bit-identical in
+    test_fast_nbinom_ppf_bit_matches_scipy."""
+    return cast(np.ndarray, _scu._nbinom_ppf(u, r, p))
+
+
+def _poisson_ppf_fast(u: np.ndarray, mu: np.ndarray) -> np.ndarray:
+    """Vectorized Poisson inverse-CDF matching scipy.stats.poisson.ppf via raw
+    scipy.special pdtrik/pdtr (no generic dispatch wrapper)."""
+    k = np.ceil(pdtrik(u, mu))
+    k = np.maximum(k, 0.0)
+    k1 = k - 1.0
+    cdf_k1 = np.where(k1 >= 0.0, pdtr(np.maximum(k1, 0.0), mu), 0.0)
+    k = np.where(cdf_k1 >= u, k1, k)
+    under = pdtr(k, mu) < u
+    k = np.where(under, k + 1.0, k)
+    return cast(np.ndarray, k)
+
+
 def _negbin_copula_counts(
     mu: np.ndarray,
     r: np.ndarray,
@@ -494,9 +525,9 @@ def _negbin_copula_counts(
     if np.any(supra):
         r_eff = mu_p[supra] ** 2 / (var_target[supra] - mu_p[supra])
         p_eff = r_eff / (r_eff + mu_p[supra])
-        res[supra] = nbinom.ppf(u_p[supra], r_eff, p_eff)
+        res[supra] = _nbinom_ppf_fast(u_p[supra], r_eff, p_eff)
     if np.any(~supra):
-        res[~supra] = poisson.ppf(u_p[~supra], mu_p[~supra])
+        res[~supra] = _poisson_ppf_fast(u_p[~supra], mu_p[~supra])
 
     out[pos] = res
     return out

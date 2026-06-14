@@ -127,6 +127,34 @@ def test_simulate_remaining_preserves_actuals_floor_and_finite_rates():
     assert 0 < s["AVG"] < 1 and 0 < s["ERA"] < 30 and 0 < s["WHIP"] < 5
 
 
+def test_fast_nbinom_ppf_bit_matches_scipy():
+    from scipy.stats import nbinom
+
+    from fantasy_baseball.simulation import _nbinom_ppf_fast
+
+    rng = np.random.default_rng(0)
+    u = rng.uniform(1e-9, 1 - 1e-9, 8000)
+    for r in (0.5, 0.763, 2.2, 4.747, 10.0, 88.6, 200.0):
+        for mu in (0.5, 1.0, 2.0, 8.0, 19.0, 50.0, 200.0):
+            p = r / (r + mu)
+            fast = _nbinom_ppf_fast(u, np.full_like(u, r), np.full_like(u, p))
+            ref = nbinom.ppf(u, r, p)
+            assert np.array_equal(fast, ref), f"nbinom mismatch r={r} mu={mu}"
+
+
+def test_fast_poisson_ppf_bit_matches_scipy():
+    from scipy.stats import poisson
+
+    from fantasy_baseball.simulation import _poisson_ppf_fast
+
+    rng = np.random.default_rng(1)
+    u = rng.uniform(1e-9, 1 - 1e-9, 8000)
+    for mu in (0.5, 1.0, 4.0, 8.0, 30.0, 100.0, 300.0):
+        fast = _poisson_ppf_fast(u, np.full_like(u, mu))
+        ref = poisson.ppf(u, mu)
+        assert np.array_equal(fast, ref), f"poisson mismatch mu={mu}"
+
+
 def test_apply_variance_wires_banded_sb_dispersion(monkeypatch):
     import fantasy_baseball.simulation as sim
     from fantasy_baseball.utils.constants import STAT_DISPERSION
