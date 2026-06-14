@@ -162,9 +162,10 @@ Offline, version-controlled output -- mirrors `scripts/calibrate_playing_time.py
 - For each correlated stat: `u = Phi(z)`, **clamped to `[eps, 1 - eps]`** (see
   Math appendix), then
   `count = scipy.stats.nbinom.ppf(u, n_param, p_param)` with the NegBin
-  parameterized to `mean = mu`, `dispersion = r` (looked up per stat/band; see
-  Math appendix), where `mu = base * scale` (full-season path) or the
-  remaining-horizon mean (in-season path, below).
+  parameterized to `mean = mu`, `dispersion = r_eff` (looked up per stat/band,
+  then variance-scaled by `fraction_remaining`; see Math appendix and the
+  fraction_remaining section), where `mu = base * scale` (the full-season mean,
+  for BOTH callers -- see below).
 - Delete the `max(0, 1.0 + draw)` mapping.
 - `ab`/`ip` and any non-correlated stat keep the existing `base * scale` path.
 - **Replacement backfill composition (explicit).** Keep today's decomposition:
@@ -188,34 +189,44 @@ Offline, version-controlled output -- mirrors `scripts/calibrate_playing_time.py
   covariance precompute is removed/repurposed in the rewrite phase too (the
   copula latent needs only the correlation matrix).
 
-## fraction_remaining handling (the subtle part)
+## fraction_remaining handling (internal to _apply_variance; no caller change)
 
-The full-season path (`fraction_remaining = 1.0`, draft/preseason) maps directly:
-`NegBin(mu = base * scale, r)`.
+Both callers are left UNCHANGED. `_apply_variance` keeps producing per-player
+*full-season* simulated counts; the in-season caller
+(`simulate_remaining_season`) keeps its team-level "subtract YTD actuals, floor
+at zero, re-derive rates" logic (`simulation.py:308-349`) verbatim.
 
-The in-season path currently simulates a full season with covariance scaled by
-`fraction_remaining`, then subtracts YTD actuals to get the remainder
-(`simulation.py:300-329`). This does not port to NegBin: a NegBin's variance is
-tied to its mean via `r`, so it cannot be independently shrunk to
-`fraction_remaining * full_variance` at a fixed full-season mean -- by late
-season that target falls below the Poisson floor (var < mean).
+Why this works (the key code fact): the actuals subtraction is at the
+**team-aggregate** level (`:308-315`), and the per-team actual is a **constant**
+across MC draws. Subtracting a constant does not change variance, so ALL of the
+remaining-season variance comes from one line inside `_apply_variance`:
+`cov = base_cov * fraction_remaining` (`:501`). The model reduces to
+`final_total = max(team_actual, simulated_full_season)` per category. A
+per-player "simulate the remainder directly" reframe was rejected: the team
+actual is not the sum of the current roster's YTD (rosters change), so it cannot
+be reproduced per player, and the reframe would silently alter the
+`max(actual, sim_full)` behavior on the dashboard path.
 
-Reframe: **simulate the remaining horizon directly**, then add YTD actuals back
-(the existing rate-recombination at lines 317-329 is retained -- it still
-combines YTD component totals with simulated remaining components to re-derive
-AVG/ERA/WHIP). For the remaining horizon:
+So the ONLY change is how `_apply_variance` realizes the full-season count
+variance. Today: scale the Gaussian covariance by `fraction_remaining`. New:
+scale the NegBin **variance** by `fraction_remaining` at the fixed full-season
+mean `mu = base * scale`, by solving for an effective dispersion `r_eff`:
 
-- Mean: the remaining expectation `mu_rem` (the same quantity the current
-  `sim_full - actual_YTD` targets in expectation). EXACT definition depends on
-  how `base` is constructed in the in-season caller (YTD+ROS updated full-season
-  projection vs ROS-only); this is the one item to pin during planning -- read
-  the caller and confirm before coding.
-- Dispersion: scale the talent term by `fraction_remaining` so
-  `CV_rem^2 = 1/mu_rem + fraction_remaining / r`. This is a correctness
-  improvement over the current `sqrt(fraction_remaining)` SD scaling: the
-  irreducible Poisson term `1/mu_rem` naturally grows as the remaining sample
-  shrinks (more relative noise over a short window), while the talent-uncertainty
-  term shrinks as the season is increasingly observed.
+    var_full   = mu + mu^2 / r                      # r from STAT_DISPERSION
+    var_target = fraction_remaining * var_full      # mirrors today's cov scaling
+    r_eff      = mu^2 / (var_target - mu)           # if var_target > mu
+               = Poisson (r_eff -> inf)             # if var_target <= mu (floor)
+
+This is the count-native analog of `cov *= fraction_remaining` (variance scales
+linearly with the season fraction), with a Poisson-floor clamp for the rare
+late-season case where the target variance drops below `mu`. That clamp only
+bites in roughly the final two weeks (e.g. a 30-SB full-season player with
+`r ~= 2.2` stays above the floor until `fraction_remaining ~= 0.07`), where a
+slightly-too-wide Poisson is harmless and conservative; `run_monte_carlo`
+already short-circuits to pure actuals at `fraction_remaining <= 0`.
+
+The full-season path (`fraction_remaining = 1.0`) is the special case
+`r_eff = r` (no scaling), so both callers share one code path.
 
 ## Math appendix
 
@@ -234,11 +245,21 @@ diagnostics, not for the shipped values:
 Poisson floor: a count's minimum achievable CV is `1/sqrt(mu)`. If a target
 CV < 1/sqrt(mu), NegBin cannot represent it; clamp to Poisson (`r -> inf`).
 
-Gaussian copula step per stat:
+fraction_remaining variance scaling (effective dispersion). At fixed full-season
+mean `mu` and calibrated dispersion `r`:
+
+    var_full   = mu + mu^2 / r
+    var_target = fraction_remaining * var_full
+    r_eff      = mu^2 / (var_target - mu)   if var_target > mu   (NegBin)
+               = Poisson(mu)                if var_target <= mu  (floor clamp)
+
+`fraction_remaining = 1.0` gives `var_target = var_full` and `r_eff = r`.
+
+Gaussian copula step per stat (using `r_eff`):
 
     z  ~ correlated standard normal (from the correlation matrix)
     u  = clip(Phi(z), eps, 1 - eps) # std normal CDF -> Uniform, clamped
-    x  = nbinom.ppf(u; n=r, p=r/(r+mu))
+    x  = nbinom.ppf(u; n=r_eff, p=r_eff/(r_eff+mu))   # or poisson.ppf(u, mu) at the floor
 
 **Tail clamp (required).** `nbinom.ppf(1.0, ...)` returns `inf`, and `Phi(z)`
 reaches ~0 or ~1 for extreme latent draws; an unclamped extreme draw injects
@@ -271,9 +292,13 @@ the calibration diagnostic if it matters.
     (tail-clamp test).
 - Golden regression: the Caminero/Soto/Cruz SB table above -- assert bias ~0 and
   zero-spike gone.
-- fraction_remaining: remaining-horizon variance grows in relative terms as
-  `fraction_remaining -> 0`; full-season path (`= 1.0`) unchanged in
-  distributional shape from the new model.
+- fraction_remaining: the realized full-season-count variance scales ~linearly
+  with `fraction_remaining` (assert `var(sim) ~= fraction_remaining * var_full`
+  in the supra-floor regime); the Poisson-floor clamp engages and stays finite
+  at very small `fraction_remaining`; `r_eff = r` exactly at `= 1.0`. Both
+  callers (`simulate_season`, `simulate_remaining_season`) are otherwise
+  unchanged -- assert the in-season team-level subtraction/recombination code is
+  untouched (it is not part of this change).
 - Calibration script: a small synthetic fixture with known dispersion recovers
   `r`; Poisson-floor clamp triggers on under-dispersed input.
 - **Out-of-sample calibration validation (acceptance test for "variance is
@@ -322,29 +347,28 @@ caller.
    diagnostic + out-of-sample interval-coverage validation; emit and commit
    `STAT_DISPERSION` ALONGSIDE the still-present `STAT_VARIANCE`. No sampler
    change yet, so the tree stays green.
-2. **Sampler + callers (atomic).** Rewrite `_apply_variance` to the copula+NegBin
-   marginals; adapt the draft caller (fraction=1.0, trivial) and the in-season
-   caller (the fraction_remaining reframe: simulate-remaining + rate
-   recombination) in the same change; remove `STAT_VARIANCE` and the sigma-scaled
-   covariance precompute. Land with the property/golden tests, the re-blessed
-   value-pinned goldens, the dashboard/deltaRoto regression, and the perf
-   benchmark.
+2. **Sampler (internal to `_apply_variance`).** Rewrite `_apply_variance` to the
+   copula+NegBin marginals with the `fraction_remaining` -> `r_eff` variance
+   scaling and Poisson-floor clamp; remove `STAT_VARIANCE` and the sigma-scaled
+   covariance precompute. **No caller changes** -- both `simulate_season` and
+   `simulate_remaining_season` keep their existing aggregation/subtraction/
+   recombination logic verbatim. Land with the property/golden tests, the
+   re-blessed value-pinned goldens, the dashboard/deltaRoto regression, and the
+   perf benchmark.
 
-Phase 2 is the larger change; keep it within the <= 5-files-per-step rule by
-sequencing edits (sampler core, then each caller, then test re-bless) and verify
+Phase 2 is now contained to `_apply_variance` plus its constants; keep edits
+within the <= 5-files-per-step rule (sampler core, then test re-bless) and verify
 (pytest/ruff/format/vulture/mypy) at each step, but it ships as one coherent
 milestone since partial states break the in-season path.
 
 ## Open items to resolve in planning
 
-- Exact `mu_rem` definition: confirm how `base` is built in the in-season caller
-  (YTD+ROS updated full-season projection vs ROS-only) before implementing the
-  remaining-horizon mean. **Default decision rule** (apply unless the caller
-  contradicts it): `mu_rem = max(0, base * scale - actual_YTD)` when `base` is an
-  updated full-season projection, else `mu_rem = base * scale` when `base` is
-  already ROS-only. The dispersion scaling (`CV_rem^2 = 1/mu_rem +
-  fraction_remaining / r`) is unchanged either way. This is a code-reading
-  confirmation, not a product decision.
+- In-season horizon: **resolved** -- no caller reframe. `_apply_variance` keeps
+  producing full-season counts; variance is scaled by `fraction_remaining` via
+  `r_eff` (see the fraction_remaining section). The team-level subtraction in
+  `simulate_remaining_season` is left verbatim. (Earlier drafts proposed a
+  per-player `mu_rem` reframe; dropped after reading `simulation.py:308-349`
+  showed the subtraction is team-level and constant-valued.)
 - Single `r` vs mean-dependent dispersion: decided by the calibration diagnostic.
   Resolved structurally -- the sampler consumes a stat/band dispersion lookup
   either way (scalar = one band), so the diagnostic's outcome cannot force a
