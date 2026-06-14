@@ -99,6 +99,49 @@ def test_on_the_clock_missing_team_returns_400(client):
     assert r.status_code == 400
 
 
+def test_dashboard_uses_custom_draft_order_with_traded_picks(tmp_path, monkeypatch):
+    """When config/draft_order.json sits next to league.yaml, the dashboard
+    honors it over a pure snake -- including a team picking back-to-back from a
+    traded pick, which a snake can never produce."""
+    import json
+
+    from fantasy_baseball.web import app as web_app
+    from fantasy_baseball.web.app import create_app
+
+    league_path = tmp_path / "league.yaml"
+    league_path.write_text(
+        "league:\n  team_name: Hart\n"
+        "draft:\n  position: 1\n  teams:\n    1: A\n    2: B\n    3: Hart\n"
+        "keepers: []\n"
+    )
+    # Pure snake for these teams would be [A, B, Hart]. The custom order puts
+    # Hart on the clock first and lets Hart pick back-to-back.
+    (tmp_path / "draft_order.json").write_text(json.dumps({"rounds": [["Hart", "Hart", "B"]]}))
+    monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+    monkeypatch.setattr(web_app, "rebuild_board", lambda *a, **kw: 0)
+    app = create_app(state_path=tmp_path / "draft_state.json")
+    app.config["TESTING"] = True
+    client = app.test_client()
+
+    r = client.post("/api/new-draft")
+    assert r.get_json()["on_the_clock"] == "Hart"  # not "A" (the snake leader)
+
+    r = client.post(
+        "/api/pick",
+        json={
+            "player_id": "p1::hitter",
+            "player_name": "P1",
+            "position": "OF",
+            "team": "Hart",
+        },
+    )
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()["on_the_clock"] == "Hart"  # back-to-back traded pick
+
+    meta = client.get("/api/meta").get_json()
+    assert meta["pick_order"] == ["Hart", "Hart", "B"]
+
+
 def test_recs_returns_ranked_rows(client, monkeypatch):
     """/api/recs returns a list of rec rows sorted by immediate_delta desc."""
     from fantasy_baseball.draft import recommend as recommend_mod

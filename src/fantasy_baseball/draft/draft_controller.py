@@ -49,17 +49,26 @@ def start_new_draft(
     league_yaml: dict[str, Any],
     *,
     resolve_keeper,
+    pick_order: list[str] | None = None,
 ) -> dict[str, Any]:
     """Seed keepers from league.yaml and return the initial state dict.
 
     ``resolve_keeper`` is injected (not imported) so tests can stub it.
     Production wiring in web/app.py will pass a function backed by
     draft.search.find_player_by_name.
+
+    ``pick_order`` is the league's real post-keeper pick order (team names, one
+    per live pick, trades baked in). When supplied, the first live pick is its
+    first entry; when ``None`` (mock drafts, no custom order file) the initial
+    pick falls back to the pure-snake first slot.
     """
     teams_by_position = league_yaml["draft"]["teams"]
-    first_picker = (
-        teams_by_position[1] if isinstance(teams_by_position, dict) else teams_by_position[0]
-    )
+    if pick_order:
+        first_picker: str | None = pick_order[0]
+    else:
+        first_picker = (
+            teams_by_position[1] if isinstance(teams_by_position, dict) else teams_by_position[0]
+        )
 
     keepers: list[dict[str, Any]] = []
     unresolved: list[str] = []
@@ -115,9 +124,15 @@ def snake_order(teams_by_position: dict[int, str], num_rounds: int) -> list[str]
 def _compute_on_the_clock(
     teams_by_position: dict[int, str],
     picks_so_far: int,
+    pick_order: list[str] | None = None,
 ) -> str | None:
-    """Return the team name for the next live pick, or None if the draft is done."""
-    order = snake_order(teams_by_position, num_rounds=30)
+    """Return the team name for the next live pick, or None if the draft is done.
+
+    ``pick_order`` is the league's real post-keeper order (traded picks + keeper
+    rounds resolved). When ``None`` (no custom order file -- mock drafts, tests)
+    it falls back to a pure 30-round snake.
+    """
+    order = pick_order if pick_order is not None else snake_order(teams_by_position, num_rounds=30)
     if picks_so_far >= len(order):
         return None
     return order[picks_so_far]
@@ -131,8 +146,13 @@ def apply_pick(
     position: str,
     team: str,
     teams_by_position: dict[int, str],
+    pick_order: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Record a live pick, advance the snake order, return the new state."""
+    """Record a live pick, advance to the next picker, return the new state.
+
+    ``pick_order`` is the league's real post-keeper order; when ``None`` the next
+    picker is computed from a pure snake (see :func:`_compute_on_the_clock`).
+    """
     if state[StateKey.ON_THE_CLOCK] != team:
         raise WrongTeamError(f"{team} is not on the clock — {state[StateKey.ON_THE_CLOCK]} is.")
     all_ids = {p["player_id"] for p in state[StateKey.KEEPERS]} | {
@@ -158,7 +178,7 @@ def apply_pick(
     new_state = {**state}
     new_state[StateKey.PICKS] = state[StateKey.PICKS] + [new_pick]
     new_state[StateKey.ON_THE_CLOCK] = _compute_on_the_clock(
-        teams_by_position, len(new_state[StateKey.PICKS])
+        teams_by_position, len(new_state[StateKey.PICKS]), pick_order
     )
     new_state[StateKey.UNDO_STACK] = []
     return new_state
@@ -171,6 +191,7 @@ def undo_pick(
     state: dict[str, Any],
     *,
     teams_by_position: dict[int, str],
+    pick_order: list[str] | None = None,
 ) -> dict[str, Any]:
     """Pop the most recent live pick, advance the undo stack, roll on_the_clock back."""
     if not state[StateKey.PICKS]:
@@ -184,6 +205,6 @@ def undo_pick(
         undo_stack = undo_stack[-UNDO_CAP:]
     new_state[StateKey.UNDO_STACK] = undo_stack
     new_state[StateKey.ON_THE_CLOCK] = _compute_on_the_clock(
-        teams_by_position, len(new_state[StateKey.PICKS])
+        teams_by_position, len(new_state[StateKey.PICKS]), pick_order
     )
     return new_state
