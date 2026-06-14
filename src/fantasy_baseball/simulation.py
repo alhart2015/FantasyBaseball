@@ -8,6 +8,7 @@ the season dashboard (web/season_data.py).
 from typing import Any, cast
 
 import numpy as np
+from scipy.stats import nbinom, norm, poisson
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto_dict
@@ -68,6 +69,14 @@ PITCHER_COV = _build_cov_matrix(PITCHER_CORR_STATS, PITCHER_CORRELATION)
 # Map stat name -> index in the correlated draw vector.
 HITTER_IDX = {s: i for i, s in enumerate(HITTER_CORR_STATS)}
 PITCHER_IDX = {s: i for i, s in enumerate(PITCHER_CORR_STATS)}
+
+# Unit-variance correlated latents for the Gaussian copula (the NegBin sampler's
+# Gaussian layer). Distinct from the sigma-scaled HITTER_COV/PITCHER_COV used by
+# the legacy multiplier (removed when _apply_variance is rewritten).
+HITTER_CORR_MATRIX = np.array(HITTER_CORRELATION)
+PITCHER_CORR_MATRIX = np.array(PITCHER_CORRELATION)
+
+_U_EPS = 1e-9
 
 
 def _flatten_full_season(p: Any) -> dict[str, Any]:
@@ -469,6 +478,50 @@ def _replacement_line(p: dict, is_hitter: bool) -> dict:
     if not elig:
         return _GENERIC_HITTER_REPL
     return REPLACEMENT_BY_POSITION[max(elig, key=_HITTER_REPL_SGP.__getitem__)]
+
+
+def _negbin_copula_counts(
+    mu: np.ndarray,
+    r: np.ndarray,
+    z: np.ndarray,
+    fraction_remaining: float,
+) -> np.ndarray:
+    """Map correlated standard-normal latents z to NegBin counts via a copula.
+
+    mu: per-element mean (base * scale). r: per-element calibrated dispersion
+    (np.inf == Poisson floor). Variance is scaled by fraction_remaining through
+    an effective dispersion r_eff; an element whose target variance falls to/below
+    its mean (the Poisson floor) is drawn Poisson. u is clamped to [eps, 1-eps] so
+    nbinom/poisson ppf never returns inf.
+    """
+    mu = np.asarray(mu, dtype=float)
+    r = np.asarray(r, dtype=float)
+    u = np.clip(norm.cdf(z), _U_EPS, 1.0 - _U_EPS)
+
+    out = np.zeros_like(mu)
+    pos = mu > 0
+    if not np.any(pos):
+        return out
+
+    mu_p = mu[pos]
+    r_p = r[pos]
+    u_p = u[pos]
+
+    with np.errstate(divide="ignore"):
+        var_full = mu_p + np.where(np.isinf(r_p), 0.0, mu_p**2 / r_p)
+    var_target = fraction_remaining * var_full
+
+    supra = var_target > mu_p
+    res = np.empty_like(mu_p)
+    if np.any(supra):
+        r_eff = mu_p[supra] ** 2 / (var_target[supra] - mu_p[supra])
+        p_eff = r_eff / (r_eff + mu_p[supra])
+        res[supra] = nbinom.ppf(u_p[supra], r_eff, p_eff)
+    if np.any(~supra):
+        res[~supra] = poisson.ppf(u_p[~supra], mu_p[~supra])
+
+    out[pos] = res
+    return out
 
 
 def _apply_variance(
