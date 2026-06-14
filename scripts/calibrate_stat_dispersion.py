@@ -86,10 +86,18 @@ def role_stable_sv(df: pd.DataFrame, threshold: float = CLOSER_SV_THRESHOLD) -> 
     return df[stable].reset_index(drop=True)
 
 
-def fit_banded_dispersion(df: pd.DataFrame, n_bands: int = 4) -> list[tuple[float, float]]:
-    """Fit a separate r per qcut(mu) band; return [(mu_upper, r), ...] last=inf."""
+def fit_banded_dispersion(
+    df: pd.DataFrame, n_bands: int = 4, min_per_band: int = 150
+) -> list[tuple[float, float]]:
+    """Fit a separate r per qcut(mu) band; return [(mu_upper, r), ...] last=inf.
+
+    The number of bands is capped so each holds at least ``min_per_band`` rows;
+    a thin stat (e.g. role-stable saves, n~43) collapses to a single band -- a
+    robust scalar -- rather than overfitting noisy per-band r's.
+    """
+    n_eff = max(1, min(n_bands, len(df) // min_per_band))
     d = df.copy()
-    d["bin"] = pd.qcut(d["mu"], q=n_bands, labels=False, duplicates="drop")
+    d["bin"] = pd.qcut(d["mu"], q=n_eff, labels=False, duplicates="drop")
     bins = sorted(d["bin"].unique())
     bands: list[tuple[float, float]] = []
     for i, b in enumerate(bins):
@@ -300,9 +308,11 @@ def main() -> None:
                 kind_label = "scalar"
             else:
                 value = fit_banded_dispersion(df)
+                if len(value) == 1:
+                    value = value[0][1]  # thin data -> single robust scalar
                 r_elem = resolve_dispersion_r(value, mu)
                 diag = bucket_diagnostic(df, r_elem)
-                kind_label = "banded"
+                kind_label = "banded" if isinstance(value, list) else "scalar (thin)"
             dispersion[key] = value
 
             print(f"\n  {key}: {kind_label}  n={len(df)}")

@@ -155,3 +155,13 @@ def test_fit_banded_dispersion_fits_per_band_and_lowers_pearson():
     r_elem = resolve_dispersion_r(bands, df["mu"].to_numpy())
     diag = bucket_diagnostic(df, r_elem, n_bins=4)
     assert diag["pearson"].between(0.6, 1.6).all()
+
+
+def test_fit_banded_dispersion_collapses_thin_data_to_single_band():
+    rng = np.random.default_rng(13)
+    mu = rng.uniform(20, 35, 40)  # only 40 rows -> < min_per_band -> 1 band
+    r = 5.0
+    x = rng.negative_binomial(r, r / (r + mu))
+    bands = fit_banded_dispersion(pd.DataFrame({"actual": x.astype(float), "mu": mu}))
+    assert len(bands) == 1
+    assert bands[0][0] == float("inf")
