@@ -1071,3 +1071,198 @@ Note the before/after wall-clock in the final PR description.
 - **Known caveat carried from spec:** `test_simulate_draft.py` pre-existing
   segfault is out of scope; do not let it block the suite (it is `--ignore`d in
   the runner above and tracked separately).
+
+---
+
+## Phase 1b addendum: Banded (mean-dependent) dispersion for SB/SV
+
+**Why (measured, not hypothetical):** Running `main()` (Task 1.4) on real
+2022-2024 data, the bucket diagnostic returned Pearson ~1.0 for R/HR/RBI/H/W/K/
+BB/H-allowed (scalar `r` fits) but **~6-9 at low projected counts for SB and SV**
+(strong low-`mu` under-dispersion). SV's is largely the closer job-change tail
+(addressed by Task 1.5 role-stable conditioning -- re-check after); SB's is
+genuine. Decision (user-approved): ship **banded** dispersion for SB (and SV if
+still flagged after role-stable conditioning); all other stats stay scalar.
+
+Representation: a `STAT_DISPERSION` value is EITHER a scalar `float` OR a list of
+`(mu_upper, r)` bands sorted ascending, last `mu_upper == float("inf")`. One
+shared resolver maps a value + projected means to a per-element `r`; BOTH the
+calibration coverage/diagnostic and the runtime sampler call it.
+
+### Task 1.5b: shared dispersion resolver
+
+**Files:**
+- Create: `src/fantasy_baseball/utils/dispersion.py`
+- Test: `tests/test_simulation/test_dispersion_resolver.py`
+
+- [ ] **Step 1: Write failing test**
+
+```python
+import numpy as np
+
+from fantasy_baseball.utils.dispersion import resolve_dispersion_r
+
+
+def test_scalar_broadcasts():
+    out = resolve_dispersion_r(3.0, np.array([1.0, 50.0, 200.0]))
+    assert np.allclose(out, [3.0, 3.0, 3.0])
+
+
+def test_inf_scalar_passes_through():
+    out = resolve_dispersion_r(float("inf"), np.array([5.0, 20.0]))
+    assert np.all(np.isinf(out))
+
+
+def test_banded_lookup_picks_first_band_with_upper_ge_mu():
+    bands = [(5.0, 0.6), (12.0, 1.5), (float("inf"), 3.5)]
+    out = resolve_dispersion_r(bands, np.array([3.0, 5.0, 5.1, 12.0, 100.0]))
+    # mu<=5 -> 0.6; 5<mu<=12 -> 1.5; mu>12 -> 3.5
+    assert np.allclose(out, [0.6, 0.6, 1.5, 1.5, 3.5])
+```
+
+- [ ] **Step 2: Run, confirm ImportError fail.**
+Run: `python -m pytest tests/test_simulation/test_dispersion_resolver.py -v`
+
+- [ ] **Step 3: Implement**
+
+```python
+"""Resolve a STAT_DISPERSION value (scalar r or (mu_upper, r) bands) to per-element r."""
+
+from __future__ import annotations
+
+import numpy as np
+
+
+def resolve_dispersion_r(value: float | list[tuple[float, float]], mu) -> np.ndarray:
+    """Per-element NegBin dispersion r for projected means mu.
+
+    value is a scalar float (one r for all mu) or a list of (mu_upper, r) bands
+    sorted ascending with the final mu_upper == inf. Each element takes the r of
+    the first band whose mu_upper >= its mu (np.searchsorted, side="left").
+    float("inf") as an r marks the Poisson floor and passes through unchanged.
+    """
+    mu = np.asarray(mu, dtype=float)
+    if isinstance(value, (int, float)):
+        return np.full(mu.shape, float(value))
+    bounds = np.array([b for b, _ in value], dtype=float)
+    rs = np.array([r for _, r in value], dtype=float)
+    idx = np.clip(np.searchsorted(bounds, mu, side="left"), 0, len(rs) - 1)
+    return rs[idx]
+```
+
+- [ ] **Step 4: Run, confirm 3 passed.**
+- [ ] **Step 5: Commit** `src/fantasy_baseball/utils/dispersion.py` + the test:
+"feat(sim): shared scalar/banded dispersion resolver"
+
+### Task 1.5c: banded fit + per-element bucket diagnostic + main integration
+
+**Files:**
+- Modify: `scripts/calibrate_stat_dispersion.py`
+- Test: `tests/test_simulation/test_stat_dispersion_calibration.py`
+
+- [ ] **Step 1: Write failing tests** (append)
+
+```python
+from calibrate_stat_dispersion import fit_banded_dispersion
+
+
+def test_fit_banded_dispersion_lowers_pearson_for_mean_dependent_stat():
+    # Construct mean-dependent overdispersion: low mu -> small r (heavy spread),
+    # high mu -> large r (tight). A single scalar r cannot fit both; bands can.
+    rng = np.random.default_rng(9)
+    lo_mu = rng.uniform(1, 5, 8000)
+    hi_mu = rng.uniform(20, 40, 8000)
+    lo = rng.negative_binomial(0.5, 0.5 / (0.5 + lo_mu))
+    hi = rng.negative_binomial(8.0, 8.0 / (8.0 + hi_mu))
+    df = pd.DataFrame({
+        "actual": np.concatenate([lo, hi]).astype(float),
+        "mu": np.concatenate([lo_mu, hi_mu]),
+    })
+    bands = fit_banded_dispersion(df, n_bands=4)
+    assert bands[-1][0] == float("inf")
+    # banded Pearson within tolerance across buckets; scalar would not be
+    from calibrate_stat_dispersion import bucket_diagnostic
+    from fantasy_baseball.utils.dispersion import resolve_dispersion_r
+    r_elem = resolve_dispersion_r(bands, df["mu"].to_numpy())
+    diag = bucket_diagnostic(df, r_elem, n_bins=4)
+    assert diag["pearson"].between(0.6, 1.6).all()
+```
+
+- [ ] **Step 2: Run, confirm fail.**
+
+- [ ] **Step 3: Implement** -- add `fit_banded_dispersion`, generalize
+`bucket_diagnostic` to accept a per-element `r` array (scalar still broadcasts),
+and make `main()` choose scalar-vs-banded per stat by the diagnostic gate.
+
+```python
+def fit_banded_dispersion(df, n_bands: int = 4):
+    """Fit a separate r per qcut(mu) band; return [(mu_upper, r), ...] last=inf."""
+    d = df.copy()
+    d["bin"] = pd.qcut(d["mu"], q=n_bands, labels=False, duplicates="drop")
+    bins = sorted(d["bin"].unique())
+    bands = []
+    for i, b in enumerate(bins):
+        g = d[d["bin"] == b]
+        r = fit_dispersion(g["actual"].to_numpy(), g["mu"].to_numpy())
+        upper = float("inf") if i == len(bins) - 1 else float(g["mu"].max())
+        bands.append((upper, r))
+    return bands
+```
+
+Generalize `bucket_diagnostic` so `r` may be a scalar OR a per-element array
+(aligned to df rows); compute implied variance per row, treating inf as Poisson:
+
+```python
+def bucket_diagnostic(df, r, n_bins: int = 4):
+    d = df.copy()
+    d["r_elem"] = r  # scalar broadcasts; array aligns positionally
+    d["bin"] = pd.qcut(d["mu"], q=n_bins, labels=False, duplicates="drop")
+    out = []
+    for b, g in d.groupby("bin"):
+        implied = np.where(
+            np.isinf(g["r_elem"]), g["mu"], g["mu"] + g["mu"] ** 2 / g["r_elem"]
+        )
+        pearson = float((((g["actual"] - g["mu"]) ** 2) / implied).mean())
+        out.append({"bin": int(b), "n": len(g), "mu_med": float(g["mu"].median()),
+                    "pearson": pearson})
+    return pd.DataFrame(out)
+```
+
+In `main()`, for each stat: fit scalar `r`, compute scalar bucket diagnostic; if
+any bucket Pearson is outside [0.75, 1.35] (systematic misfit), refit banded via
+`fit_banded_dispersion`, recompute the diagnostic with the resolved per-element
+`r` (import `resolve_dispersion_r`), and emit the band list instead of the
+scalar. Print both the chosen kind and the post-fix diagnostic.
+
+- [ ] **Step 4: Run** the new + existing calibration tests (scalar
+bucket_diagnostic test still passes because scalar broadcasts).
+- [ ] **Step 5: Commit** the two files:
+"feat(sim): banded dispersion fit + per-element bucket diagnostic"
+
+### Adjustment to Task 1.6 (emit mixed STAT_DISPERSION)
+
+`STAT_DISPERSION` now has type `dict[str, float | list[tuple[float, float]]]`.
+Paste the emitted block verbatim (scalar stats as floats, SB/SV as band lists,
+e.g. `"sb": [(4.0, 0.6), (10.0, 1.4), (float("inf"), 3.1)]`). The acceptance gate
+adds: each banded stat's post-fix per-bucket Pearson is within ~[0.7, 1.3]. Keep
+the gate's spirit one-sided on UNDER-coverage (Pearson >> 1 is the dangerous
+direction); benign over-coverage (Pearson < 1 from discreteness) does not block.
+
+### Adjustment to Task 2.3 (sampler r-fill uses the resolver)
+
+In the rewritten `_apply_variance`, fill `r_mat` per correlated stat via the
+shared resolver instead of a scalar dict lookup:
+
+```python
+from fantasy_baseball.utils.dispersion import resolve_dispersion_r
+...
+    for col in corr_keys:
+        j = idx_map[col]
+        mu_col = mu_mat[:, j]
+        r_mat[:, j] = resolve_dispersion_r(STAT_DISPERSION[col], mu_col)
+```
+(`mu_mat[:, j]` is `base*scale` per player for that stat -- the projected mean
+used both as the NegBin mean and as the band key.) `_negbin_copula_counts` is
+unchanged (it already takes a per-element `r` array). Add a property test that a
+banded `r` restores per-bucket Pearson ~1.0 through the full sampler (i.e. the
+escalation actually fixes the low-`mu` under-dispersion end to end).

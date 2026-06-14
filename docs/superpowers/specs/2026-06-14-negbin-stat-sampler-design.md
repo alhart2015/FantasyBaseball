@@ -144,14 +144,31 @@ Offline, version-controlled output -- mirrors `scripts/calibrate_playing_time.py
   value. Players with `actual_PT = 0` are excluded from the performance fit
   (that tail belongs to the PT model).
 - Fit one `r` per stat by maximum likelihood (`scipy.stats.nbinom`). Then run a
-  **diagnostic across projected-count buckets** (does a single `r` reproduce the
-  observed per-bucket variance?). Default to a single `r` per stat (YAGNI);
-  escalate to a mean-dependent dispersion only if the diagnostic clearly
-  requires it. **The emitted dispersion is consumed as a lookup keyed by stat
-  (and optionally by projected-count band), so the scalar-vs-mean-dependent
-  outcome of the diagnostic does not change the sampler's interface** -- a scalar
-  `r` is just a one-entry band. The sampler is written against this lookup from
-  the start.
+  **diagnostic across projected-count buckets** (per-bucket Pearson statistic
+  `mean((actual-mu)^2 / implied_var)` ~ 1.0 means a single `r` fits). Default to
+  a single `r` per stat (YAGNI); escalate to a mean-dependent (banded) dispersion
+  when the diagnostic flags a stat (Pearson systematically off 1.0 across
+  buckets).
+- **Diagnostic outcome (measured on real 2022-2024 data):** R, HR, RBI, H, W, K,
+  BB, H-allowed are well-fit by a scalar `r` (per-bucket Pearson ~ 1.0). **SB and
+  SV are NOT** -- both show strong low-`mu` under-dispersion (Pearson ~6-9 at low
+  projected counts, < 1 at high). SV's inflation is largely the closer job-change
+  tail, which the role-stable conditioning removes (re-check after that); SB's is
+  genuine and persists. So **SB (and SV if still flagged after role-stable
+  conditioning) ship as banded dispersion.**
+- **Banded representation + resolver.** A stat's `STAT_DISPERSION` value is EITHER
+  a scalar `float` (one `r`) OR a list of `(mu_upper, r)` bands sorted ascending
+  with the final `mu_upper = float("inf")`. A single shared resolver
+  `resolve_dispersion_r(value, mu_array) -> r_array` (in
+  `src/fantasy_baseball/utils/`) maps a stat's value + per-player projected means
+  to a per-element `r` array (scalar -> constant array; banded ->
+  `np.searchsorted` over the band bounds). BOTH the calibration script (coverage
+  /diagnostic) and the runtime sampler (`_apply_variance`'s `r_mat` fill) call
+  this one resolver, so the scalar-vs-banded outcome never changes the sampler's
+  per-element `r` interface. Bands are fit by `fit_banded_dispersion` (qcut `mu`
+  into N bands, `fit_dispersion` per band). Acceptance for a banded stat: its
+  per-bucket Pearson with the BANDED `r` returns to ~ 1.0 (in-sample;
+  per-fold LOSO is too thin once split by band, same rationale as saves).
 - Enforce the **Poisson floor**: where the data is under-dispersed at low means
   (target var <= mean), clamp to Poisson (`r -> inf`). NegBin cannot represent
   var < mean.
@@ -200,7 +217,9 @@ Offline, version-controlled output -- mirrors `scripts/calibrate_playing_time.py
 
 ### 3. Constants: `simulation.py` / `constants.py`
 
-- Add `STAT_DISPERSION` (per-stat NegBin `r`, with Poisson sentinels) in the
+- Add `STAT_DISPERSION` (type `dict[str, float | list[tuple[float, float]]]` --
+  scalar `r` per stat, or `(mu_upper, r)` bands for banded stats; Poisson
+  sentinel `float("inf")` allowed as a scalar or within a band) in the
   calibration phase **without removing `STAT_VARIANCE`** (the old sampler still
   reads it until the rewrite lands). `STAT_VARIANCE` is removed in the same phase
   that rewrites `_apply_variance`, so the tree never references a deleted
@@ -390,10 +409,13 @@ milestone since partial states break the in-season path.
   `simulate_remaining_season` is left verbatim. (Earlier drafts proposed a
   per-player `mu_rem` reframe; dropped after reading `simulation.py:308-349`
   showed the subtraction is team-level and constant-valued.)
-- Single `r` vs mean-dependent dispersion: decided by the calibration diagnostic.
-  Resolved structurally -- the sampler consumes a stat/band dispersion lookup
-  either way (scalar = one band), so the diagnostic's outcome cannot force a
-  sampler redesign.
+- Single `r` vs mean-dependent dispersion: **decided -- banded for SB and SV.**
+  The diagnostic on real 2022-2024 data flagged SB and SV (strong low-`mu`
+  under-dispersion); all other counting stats are well-fit by a scalar `r`. SB
+  ships banded; SV ships banded if still flagged after role-stable conditioning,
+  else scalar. Implemented via the shared `resolve_dispersion_r` resolver and
+  `fit_banded_dispersion` (see the Calibration section); the per-element `r`
+  sampler interface is unchanged.
 - Saves `r`: **resolved** -- fit on the role-stable population (see Calibration
   and Non-goals); job-loss tail is an accepted limitation deferred to a future
   role-mixture spec.
