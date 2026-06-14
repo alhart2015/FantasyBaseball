@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 from scipy.optimize import minimize_scalar
-from scipy.stats import nbinom
+from scipy.stats import nbinom, poisson
 
 # Sentinel for "no overdispersion -> use Poisson" (NegBin r -> inf).
 POISSON_SENTINEL = float("inf")
@@ -56,3 +56,21 @@ def fit_dispersion(x: np.ndarray, mu: np.ndarray) -> float:
     if r_hat >= 200.0:
         return POISSON_SENTINEL
     return r_hat
+
+
+def interval_coverage(x: np.ndarray, mu: np.ndarray, r: float, level: float) -> float:
+    """Fraction of x inside the central `level` predictive interval of the model.
+
+    r == POISSON_SENTINEL uses Poisson(mu); otherwise NegBin(mean=mu, disp=r).
+    """
+    x = np.asarray(x, dtype=float)
+    mu = np.asarray(mu, dtype=float)
+    lo_q, hi_q = (1.0 - level) / 2.0, (1.0 + level) / 2.0
+    if r == POISSON_SENTINEL:
+        lo = poisson.ppf(lo_q, mu)
+        hi = poisson.ppf(hi_q, mu)
+    else:
+        p = r / (r + mu)
+        lo = nbinom.ppf(lo_q, r, p)
+        hi = nbinom.ppf(hi_q, r, p)
+    return float(np.mean((x >= lo) & (x <= hi)))
