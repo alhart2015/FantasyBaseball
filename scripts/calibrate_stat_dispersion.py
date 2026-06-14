@@ -32,8 +32,9 @@ def fit_dispersion(x: np.ndarray, mu: np.ndarray) -> float:
 
     Each observation is x_i ~ NegBin(mean=mu_i, dispersion=r) with a shared r
     (heteroscedastic means, one dispersion). Returns POISSON_SENTINEL when the
-    data is not overdispersed (sample variance <= sample mean, or the optimizer
-    pins r at the upper bound where NegBin is indistinguishable from Poisson).
+    optimizer yields r_hat >= 200: for genuinely Poisson data the MLE drifts
+    toward large r rather than pinning to a specific value, so a large r_hat is
+    the Poisson signature. The threshold is then applied as a clamp.
     """
     x = np.asarray(x, dtype=float)
     mu = np.asarray(mu, dtype=float)
@@ -47,9 +48,11 @@ def fit_dispersion(x: np.ndarray, mu: np.ndarray) -> float:
 
     res = minimize_scalar(nll, bounds=(_LOG_R_LO, _LOG_R_HI), method="bounded")
     r_hat = float(np.exp(res.x))
-    # r >= 200 means NegBin is indistinguishable from Poisson at any mu<100.
-    # For Poisson data the MLE drifts to large r rather than pinning to the
-    # search bound, so we use a generous threshold rather than checking the bound.
+    # r >= 200: for genuinely Poisson data the MLE drifts toward the upper
+    # search bound rather than pinning, so r_hat >> 200 is the Poisson
+    # signature. 200 is a conservative cutoff -- at typical stat volumes
+    # (mu < 20) the excess variance over Poisson is under 10%, and real
+    # baseball dispersions are r ~ 1-20, well below it.
     if r_hat >= 200.0:
         return POISSON_SENTINEL
     return r_hat
