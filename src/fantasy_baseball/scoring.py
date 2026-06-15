@@ -35,7 +35,6 @@ from fantasy_baseball.utils.constants import (
     AB_PER_PA,
     HITTING_COUNTING,
     PITCHING_COUNTING,
-    STAT_VARIANCE,
     Category,
     role_from_ip,
 )
@@ -48,6 +47,7 @@ from fantasy_baseball.utils.constants import (
 from fantasy_baseball.utils.constants import (
     safe_float as _safe,
 )
+from fantasy_baseball.utils.dispersion import negbin_perf_variance
 from fantasy_baseball.utils.playing_time import playing_time_params
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
@@ -1218,25 +1218,31 @@ def player_category_variance(player) -> dict[Category | str, float]:
     needs to fold into team-level rate SDs.
 
     **Counting categories** (R, HR, RBI, SB for hitters; W, K, SV for pitchers):
-    Combines performance (``STAT_VARIANCE`` CV) and playing-time (``cv_pt``)
-    variance in quadrature for a single player::
+    Combines performance (NegBin dispersion via ``negbin_perf_variance``) and
+    playing-time (``cv_pt``) variance for a single player::
 
-        var_cat = stat^2 * (CV_cat^2 + cv_pt^2)
+        var_cat = negbin_perf_variance(stat, mu) + mu^2 * cv_pt^2
+
+    where ``mu`` is the projected stat. The performance term is the same
+    ``mu + mu^2/r`` quantity the MC uses (single source of truth for per-stat
+    dispersion); it is conditional on realized playing time, so the PT variance
+    is added separately.
 
     **Rate categories** (AVG, ERA, WHIP) are NOT representable as simple
     per-player variances because the rate denominator (total AB / total IP) is a
-    team-level quantity.  Instead, this function returns the raw squared numerator
-    components so the caller can assemble the team-level rate SD:
+    team-level quantity.  Instead, this function returns the per-component
+    PERFORMANCE variance (NegBin, playing-time-invariant) so the caller can
+    assemble the team-level rate SD:
 
     Hitters expose:
-      - ``"h_sq"`` (float): projected-hits squared (``h^2``)
-      - ``"ab"``   (float): projected at-bats
+      - ``"h_var"`` (float): NegBin performance variance of projected hits
+      - ``"ab"``    (float): projected at-bats
 
     Pitchers expose:
-      - ``"er_sq"`` (float): projected-ER squared
-      - ``"bb_sq"`` (float): projected-BB squared
-      - ``"ha_sq"`` (float): projected-hits-allowed squared
-      - ``"ip"``    (float): projected innings pitched
+      - ``"er_var"`` (float): NegBin performance variance of projected ER
+      - ``"bb_var"`` (float): NegBin performance variance of projected BB
+      - ``"ha_var"`` (float): NegBin performance variance of projected hits allowed
+      - ``"ip"``     (float): projected innings pitched
 
     Playing time does NOT contribute to rate-component sums (missed time cancels
     in numerator/denominator; see ``project_team_sds`` docstring).
@@ -1255,10 +1261,9 @@ def player_category_variance(player) -> dict[Category | str, float]:
             ("sb", Category.SB),
         ]:
             v = _stat(player, stat_key)
-            result[cat] = v * v * (STAT_VARIANCE[stat_key] ** 2 + cv_pt_sq)
-        # Rate-assembly components (playing-time-invariant; cv_pt NOT added).
-        h = _stat(player, "h")
-        result["h_sq"] = h * h
+            result[cat] = float(negbin_perf_variance(stat_key, v)) + v * v * cv_pt_sq
+        # Rate-assembly: per-component PERFORMANCE variance (cv_pt cancels in a rate).
+        result["h_var"] = float(negbin_perf_variance("h", _stat(player, "h")))
         result["ab"] = _stat(player, "ab")
 
     elif ptype == PlayerType.PITCHER:
@@ -1271,14 +1276,10 @@ def player_category_variance(player) -> dict[Category | str, float]:
             ("sv", Category.SV),
         ]:
             v = _stat(player, stat_key)
-            result[cat] = v * v * (STAT_VARIANCE[stat_key] ** 2 + cv_pt_sq)
-        # Rate-assembly components (playing-time-invariant).
-        er = _stat(player, "er")
-        bb = _stat(player, "bb")
-        ha = _stat(player, "h_allowed")
-        result["er_sq"] = er * er
-        result["bb_sq"] = bb * bb
-        result["ha_sq"] = ha * ha
+            result[cat] = float(negbin_perf_variance(stat_key, v)) + v * v * cv_pt_sq
+        result["er_var"] = float(negbin_perf_variance("er", _stat(player, "er")))
+        result["bb_var"] = float(negbin_perf_variance("bb", _stat(player, "bb")))
+        result["ha_var"] = float(negbin_perf_variance("h_allowed", _stat(player, "h_allowed")))
         result["ip"] = _stat(player, "ip")
 
     return result
@@ -1291,21 +1292,24 @@ def project_team_sds(
 ) -> dict[Category, float]:
     """Aggregate per-player projection variance into team-level SDs.
 
-    Combines two independent per-player variance sources in quadrature for the
-    counting categories: performance (``STAT_VARIANCE`` per-stat CV, calibrated
-    2022-2024 Steamer+ZiPS vs actuals) and playing time (``cv_pt`` from the
-    calibrated playing-time model, ``utils.playing_time``):
+    Combines two independent per-player variance sources for the counting
+    categories: performance (NegBin dispersion ``mu + mu^2/r`` via
+    ``negbin_perf_variance`` -- the single source of truth shared with the MC)
+    and playing time (``cv_pt`` from the calibrated playing-time model,
+    ``utils.playing_time``):
 
-        SD_cat_team = sqrt(sum_i stat_i^2 * (CV_cat^2 + cv_pt_i^2))
+        SD_cat_team = sqrt(sum_i [negbin_perf_variance(stat, mu_i) + mu_i^2 * cv_pt_i^2])
 
     Under a player-independence assumption. Playing-time variance is NOT added
     to the rate categories (AVG/ERA/WHIP): a player's missed time scales his
     numerator and denominator together, so it cancels out of a rate. Those keep
-    the performance-only propagation:
+    the performance-only propagation, with the per-component NegBin variance
+    summed across players:
 
-        SD_AVG  = CV_h * sqrt(sum h_i^2) / sum_AB
-        SD_ERA  = 9 * CV_er * sqrt(sum er_i^2) / sum_IP
-        SD_WHIP = sqrt(CV_bb^2 * sum bb_i^2 + CV_ha^2 * sum ha_i^2) / sum_IP
+        SD_AVG  = sqrt(sum negbin_perf_variance(h, h_i)) / sum_AB
+        SD_ERA  = 9 * sqrt(sum negbin_perf_variance(er, er_i)) / sum_IP
+        SD_WHIP = sqrt(sum negbin_perf_variance(bb, bb_i)
+                       + sum negbin_perf_variance(h_allowed, ha_i)) / sum_IP
 
     ``displacement`` matches :func:`project_team_stats` — bench excluded,
     IL players displace their worst active positional match.
@@ -1322,10 +1326,9 @@ def project_team_sds(
         c: 0.0 for c in (Category.R, Category.HR, Category.RBI, Category.SB)
     }
     p_var: dict[Category, float] = {c: 0.0 for c in (Category.W, Category.K, Category.SV)}
-    # Rate-assembly sums (playing-time-invariant; keyed by raw stat string).
-    # Only the keys that are actually read below are initialized here.
-    h_sum_sq: dict[str, float] = {"h": 0.0}
-    p_sum_sq: dict[str, float] = {k: 0.0 for k in ("er", "bb", "h_allowed")}
+    # Rate-assembly PERFORMANCE-variance sums (playing-time-invariant).
+    h_sum_var = 0.0
+    p_sum_var: dict[str, float] = {k: 0.0 for k in ("er", "bb", "h_allowed")}
     total_ab = 0.0
     total_ip = 0.0
 
@@ -1336,16 +1339,16 @@ def project_team_sds(
             for cat in (Category.R, Category.HR, Category.RBI, Category.SB):
                 h_var[cat] += contrib.get(cat, 0.0)
             # Rate components
-            h_sum_sq["h"] += contrib.get("h_sq", 0.0)
+            h_sum_var += contrib.get("h_var", 0.0)
             total_ab += contrib.get("ab", 0.0)
         elif ptype == PlayerType.PITCHER:
             contrib = player_category_variance(p)
             for cat in (Category.W, Category.K, Category.SV):
                 p_var[cat] += contrib.get(cat, 0.0)
             # Rate components
-            p_sum_sq["er"] += contrib.get("er_sq", 0.0)
-            p_sum_sq["bb"] += contrib.get("bb_sq", 0.0)
-            p_sum_sq["h_allowed"] += contrib.get("ha_sq", 0.0)
+            p_sum_var["er"] += contrib.get("er_var", 0.0)
+            p_sum_var["bb"] += contrib.get("bb_var", 0.0)
+            p_sum_var["h_allowed"] += contrib.get("ha_var", 0.0)
             total_ip += contrib.get("ip", 0.0)
 
     sds: dict[Category, float] = dict.fromkeys(ALL_CATS, 0.0)
@@ -1354,12 +1357,10 @@ def project_team_sds(
     for cat in (Category.W, Category.K, Category.SV):
         sds[cat] = sqrt(p_var[cat])
     if total_ab > 0:
-        sds[Category.AVG] = STAT_VARIANCE["h"] * sqrt(h_sum_sq["h"]) / total_ab
+        sds[Category.AVG] = sqrt(h_sum_var) / total_ab
     if total_ip > 0:
-        sds[Category.ERA] = 9.0 * STAT_VARIANCE["er"] * sqrt(p_sum_sq["er"]) / total_ip
-        whip_var = (STAT_VARIANCE["bb"] ** 2) * p_sum_sq["bb"] + (
-            STAT_VARIANCE["h_allowed"] ** 2
-        ) * p_sum_sq["h_allowed"]
+        sds[Category.ERA] = 9.0 * sqrt(p_sum_var["er"]) / total_ip
+        whip_var = p_sum_var["bb"] + p_sum_var["h_allowed"]
         sds[Category.WHIP] = sqrt(whip_var) / total_ip
     return sds
 
