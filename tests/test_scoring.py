@@ -28,7 +28,8 @@ from fantasy_baseball.scoring import (
     project_team_stats,
     score_roto,
 )
-from fantasy_baseball.utils.constants import STAT_VARIANCE, Category
+from fantasy_baseball.utils.constants import Category
+from fantasy_baseball.utils.dispersion import negbin_perf_variance
 
 
 def _stats_table(stats_by_team):
@@ -300,36 +301,48 @@ class TestProjectTeamSDs:
     def test_single_hitter_counting_stat(self):
         p = _make_hitter("A", r=80, hr=20, rbi=70, sb=10, h=150, ab=500)
         sds = project_team_sds([p])
-        # SD_R = CV_r * sqrt(r^2) = CV_r * r  (single player case)
-        assert sds[Category.R] == pytest.approx(STAT_VARIANCE["r"] * 80)
-        assert sds[Category.HR] == pytest.approx(STAT_VARIANCE["hr"] * 20)
+        # cv_pt=0 (fixture), so SD_cat = sqrt(negbin_perf_variance(stat, mu)).
+        assert sds[Category.R] == pytest.approx(float(negbin_perf_variance("r", 80)) ** 0.5)
+        assert sds[Category.HR] == pytest.approx(float(negbin_perf_variance("hr", 20)) ** 0.5)
 
     def test_independence_aggregates_in_quadrature(self):
         a = _make_hitter("A", r=100, hr=0, rbi=0, sb=0, h=0, ab=0)
         b = _make_hitter("B", r=60, hr=0, rbi=0, sb=0, h=0, ab=0)
         sds = project_team_sds([a, b])
-        expected = STAT_VARIANCE["r"] * math.sqrt(100**2 + 60**2)
+        expected = math.sqrt(
+            float(negbin_perf_variance("r", 100)) + float(negbin_perf_variance("r", 60))
+        )
         assert sds[Category.R] == pytest.approx(expected)
 
     def test_avg_uses_hits_variance_over_total_ab(self):
         a = _make_hitter("A", r=0, hr=0, rbi=0, sb=0, h=150, ab=500)
         b = _make_hitter("B", r=0, hr=0, rbi=0, sb=0, h=100, ab=400)
         sds = project_team_sds([a, b])
-        expected = STAT_VARIANCE["h"] * math.sqrt(150**2 + 100**2) / (500 + 400)
+        expected = math.sqrt(
+            float(negbin_perf_variance("h", 150)) + float(negbin_perf_variance("h", 100))
+        ) / (500 + 400)
         assert sds[Category.AVG] == pytest.approx(expected)
 
     def test_era_scales_by_nine_over_ip(self):
         a = _make_pitcher("A", w=10, k=180, sv=0, ip=180, er=60, bb=40, h_allowed=140)
         b = _make_pitcher("B", w=8, k=140, sv=0, ip=150, er=55, bb=35, h_allowed=130)
         sds = project_team_sds([a, b])
-        expected = 9.0 * STAT_VARIANCE["er"] * math.sqrt(60**2 + 55**2) / (180 + 150)
+        expected = (
+            9.0
+            * math.sqrt(
+                float(negbin_perf_variance("er", 60)) + float(negbin_perf_variance("er", 55))
+            )
+            / (180 + 150)
+        )
         assert sds[Category.ERA] == pytest.approx(expected)
 
     def test_whip_combines_bb_and_h_allowed_variance(self):
         a = _make_pitcher("A", w=0, k=0, sv=0, ip=100, er=0, bb=30, h_allowed=90)
         sds = project_team_sds([a])
         expected = (
-            math.sqrt(STAT_VARIANCE["bb"] ** 2 * 30**2 + STAT_VARIANCE["h_allowed"] ** 2 * 90**2)
+            math.sqrt(
+                float(negbin_perf_variance("bb", 30)) + float(negbin_perf_variance("h_allowed", 90))
+            )
             / 100
         )
         assert sds[Category.WHIP] == pytest.approx(expected)
@@ -350,9 +363,13 @@ class TestProjectTeamSDsPlayingTime:
             return_value=(0.85, 0.30),
         ):
             sds = project_team_sds([p])
-        # SD_R = sqrt(CV_r^2 + cv_pt^2) * r  (single player)
-        assert sds[Category.R] == pytest.approx(80 * math.sqrt(STAT_VARIANCE["r"] ** 2 + 0.30**2))
-        assert sds[Category.HR] == pytest.approx(20 * math.sqrt(STAT_VARIANCE["hr"] ** 2 + 0.30**2))
+        # SD_cat = sqrt(negbin_perf_variance(stat, mu) + mu^2 * cv_pt^2)  (single player)
+        assert sds[Category.R] == pytest.approx(
+            math.sqrt(float(negbin_perf_variance("r", 80)) + 80**2 * 0.30**2)
+        )
+        assert sds[Category.HR] == pytest.approx(
+            math.sqrt(float(negbin_perf_variance("hr", 20)) + 20**2 * 0.30**2)
+        )
 
     def test_cv_pt_widens_counting_sd(self):
         p = _make_hitter("A", r=80, hr=20, rbi=70, sb=10, h=150, ab=500)
@@ -378,7 +395,8 @@ class TestProjectTeamSDsPlayingTime:
         p = _make_hitter("A", r=80, hr=20, rbi=70, sb=10, h=150, ab=500)
         with patch("fantasy_baseball.scoring.playing_time_params", return_value=(1.0, 0.0)):
             sds = project_team_sds([p])
-        assert sds[Category.R] == pytest.approx(STAT_VARIANCE["r"] * 80)
+        # cv_pt=0 -> SD_R is the NegBin performance term alone.
+        assert sds[Category.R] == pytest.approx(float(negbin_perf_variance("r", 80)) ** 0.5)
 
     def test_displacement_kwarg_defaults_true(self):
         # Bench players excluded by default. A bench-slot hitter should
@@ -427,12 +445,12 @@ class TestPlayerCategoryVariance:
             assert cat in var
             assert var[cat] >= 0
 
-    def test_hitter_variance_matches_cv_formula(self):
-        """Single hitter counting variance == (CV_stat * stat)^2."""
+    def test_hitter_variance_matches_negbin_formula(self):
+        """Single hitter counting variance == negbin_perf_variance (cv_pt=0)."""
         p = _make_hitter("H", r=80, hr=20, rbi=70, sb=10, h=150, ab=500)
         var = player_category_variance(p)
-        assert var[Category.R] == pytest.approx((STAT_VARIANCE["r"] * 80) ** 2)
-        assert var[Category.HR] == pytest.approx((STAT_VARIANCE["hr"] * 20) ** 2)
+        assert var[Category.R] == pytest.approx(float(negbin_perf_variance("r", 80)))
+        assert var[Category.HR] == pytest.approx(float(negbin_perf_variance("hr", 20)))
 
     def test_pitcher_variance_sums_to_team_sd(self):
         """Two identical pitchers: team variance == 2 * single-player variance."""
@@ -467,21 +485,21 @@ class TestPlayerCategoryVariance:
         assert var_wide > var_tight
 
     def test_rate_component_sums_present_for_hitter(self):
-        """player_category_variance exposes h_sq and ab for rate assembly."""
+        """player_category_variance exposes h_var and ab for rate assembly."""
         p = _make_hitter("H", r=80, hr=20, rbi=70, sb=10, h=150, ab=550)
         var = player_category_variance(p)
-        assert "h_sq" in var
+        assert "h_var" in var
         assert "ab" in var
-        assert var["h_sq"] == pytest.approx(150**2)
+        assert var["h_var"] == pytest.approx(float(negbin_perf_variance("h", 150)))
         assert var["ab"] == pytest.approx(550)
 
     def test_rate_component_sums_present_for_pitcher(self):
-        """player_category_variance exposes er_sq, bb_sq, ha_sq, ip for rate assembly."""
+        """player_category_variance exposes er_var, bb_var, ha_var, ip for rate assembly."""
         p = _make_pitcher("P", w=12, k=180, sv=5, ip=180, er=60, bb=40, h_allowed=150)
         var = player_category_variance(p)
-        for key in ("er_sq", "bb_sq", "ha_sq", "ip"):
+        for key in ("er_var", "bb_var", "ha_var", "ip"):
             assert key in var
-        assert var["er_sq"] == pytest.approx(60**2)
+        assert var["er_var"] == pytest.approx(float(negbin_perf_variance("er", 60)))
         assert var["ip"] == pytest.approx(180)
 
     def test_unknown_player_type_returns_empty_dict(self):
@@ -4080,3 +4098,47 @@ class TestTeamEndOfSeason:
         assert out.avg == pytest.approx(120 / 480)
         assert out.era == pytest.approx(9 * 70 / 200)
         assert out.whip == pytest.approx(240 / 200)
+
+
+def test_project_team_sds_counting_variance_equals_negbin_helper_sum():
+    # IMPORTANT: reconstruct cv_pt via the SAME volume function the impl uses
+    # (_full_season_volume), not p["pa"] directly -- otherwise a divergence in
+    # how the volume is derived would make this a false failure.
+    from fantasy_baseball.models.player import PlayerType
+    from fantasy_baseball.scoring import _full_season_volume, project_team_sds
+    from fantasy_baseball.utils.constants import Category
+    from fantasy_baseball.utils.dispersion import negbin_perf_variance
+    from fantasy_baseball.utils.playing_time import playing_time_params
+
+    roster = [
+        {
+            "player_type": PlayerType.HITTER,
+            "name": "H",
+            "pa": 600,
+            "ab": 540,
+            "r": 90,
+            "hr": 25,
+            "rbi": 85,
+            "sb": 15,
+            "h": 150,
+        },
+        {
+            "player_type": PlayerType.HITTER,
+            "name": "H2",
+            "pa": 500,
+            "ab": 450,
+            "r": 70,
+            "hr": 12,
+            "rbi": 60,
+            "sb": 30,
+            "h": 130,
+        },
+    ]
+    sds = project_team_sds(roster, displacement=False)
+    # Rebuild SB variance from the shared helper + PT term; SD must match.
+    exp_var = 0.0
+    for p in roster:
+        v = float(p["sb"])
+        cv_pt = playing_time_params(PlayerType.HITTER, _full_season_volume(p, True))[1]
+        exp_var += float(negbin_perf_variance("sb", v)) + v * v * cv_pt**2
+    assert abs(sds[Category.SB] - exp_var**0.5) < 1e-9

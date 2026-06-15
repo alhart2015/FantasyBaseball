@@ -92,6 +92,49 @@ def _teams_by_position(league_yaml: dict[str, Any]) -> dict[int, str]:
     return {i + 1: v for i, v in enumerate(teams)}
 
 
+def _pick_order(league_yaml: dict[str, Any]) -> list[str] | None:
+    """The league's real post-keeper pick order (team names), or None to snake.
+
+    Reads ``draft_order.json`` next to league.yaml, dropping the keeper rounds
+    (``len(keepers) // num_teams``). Returns ``None`` -- so callers fall back to
+    a pure snake -- when the file is absent (mock drafts, tests) or when its team
+    names don't all match league.yaml's teams (a misconfigured order file must
+    not silently put an unknown team on the clock).
+    """
+    from fantasy_baseball.draft.draft_order import load_post_keeper_pick_order
+
+    teams_by_position = _teams_by_position(league_yaml)
+    num_teams = len(teams_by_position)
+    if num_teams == 0:
+        return None
+    keepers = league_yaml.get("keepers", [])
+    if len(keepers) % num_teams != 0:
+        # keeper_rounds is derived as len(keepers)//num_teams, which only equals
+        # the league's keeper-round count when every team keeps the full
+        # allotment. An uneven keeper count drops the wrong number of rounds and
+        # misaligns the entire post-keeper order -- surface it loudly.
+        logging.getLogger(__name__).warning(
+            "keeper count %d is not a multiple of %d teams; derived keeper_rounds"
+            " (%d) may misalign the post-keeper draft order -- verify draft_order.json",
+            len(keepers),
+            num_teams,
+            len(keepers) // num_teams,
+        )
+    keeper_rounds = len(keepers) // num_teams
+    path = _league_yaml_path().parent / "draft_order.json"
+    order = load_post_keeper_pick_order(path, keeper_rounds=keeper_rounds)
+    if order is None:
+        return None
+    unknown = set(order) - set(teams_by_position.values())
+    if unknown:
+        logging.getLogger(__name__).warning(
+            "draft_order.json names not in league.yaml teams: %s; using snake order",
+            sorted(unknown),
+        )
+        return None
+    return order
+
+
 def _resolve_keeper_factory(app: Flask):
     """Return a keeper-resolver callable backed by the on-disk board JSON."""
     from fantasy_baseball.draft.draft_controller import KeeperNotFound
@@ -252,7 +295,9 @@ def _picks_until_next_turn(state: dict[str, Any], team: str, league_yaml: dict[s
     progressed past the modeled rounds.
     """
     teams_by_position = _teams_by_position(league_yaml)
-    order = draft_controller.snake_order(teams_by_position, num_rounds=30)
+    order = _pick_order(league_yaml) or draft_controller.snake_order(
+        teams_by_position, num_rounds=30
+    )
     picks_so_far = len(state.get(StateKey.PICKS, []))
     upcoming_idx = next((i for i in range(picks_so_far, len(order)) if order[i] == team), None)
     if upcoming_idx is None:
@@ -309,6 +354,7 @@ def _register_writer_routes(app):
             state = draft_controller.start_new_draft(
                 league_yaml,
                 resolve_keeper=_resolve_keeper_factory(app),
+                pick_order=_pick_order(league_yaml),
             )
         except draft_controller.UnresolvedKeeperError as e:
             return jsonify({"error": str(e)}), 400
@@ -333,6 +379,7 @@ def _register_writer_routes(app):
                 position=body["position"],
                 team=body["team"],
                 teams_by_position=_teams_by_position(league_yaml),
+                pick_order=_pick_order(league_yaml),
             )
         except draft_controller.WrongTeamError as e:
             return jsonify({"error": str(e)}), 409
@@ -349,6 +396,7 @@ def _register_writer_routes(app):
         new_state = draft_controller.undo_pick(
             state,
             teams_by_position=_teams_by_position(league_yaml),
+            pick_order=_pick_order(league_yaml),
         )
         new_state = _attach_standings_cache(app, new_state, league_yaml)
         write_state(new_state, app.config[CFG_STATE_PATH])
@@ -417,7 +465,8 @@ def _register_writer_routes(app):
             {
                 "teams": [teams_by_position[i] for i in sorted(teams_by_position)],
                 "user_team": (league_yaml.get("league") or {}).get("team_name"),
-                "pick_order": draft_controller.snake_order(teams_by_position, num_rounds=30),
+                "pick_order": _pick_order(league_yaml)
+                or draft_controller.snake_order(teams_by_position, num_rounds=30),
             }
         )
 
@@ -446,9 +495,9 @@ def _register_writer_routes(app):
         )
         # Sort on the typed dataclass so mypy sees float, not object.
         sorted_items = sorted(cache.items(), key=lambda kv: kv[1].total, reverse=True)
-        return jsonify(
-            [{"team": team, "total": row.total, "sd": row.total_sd} for team, row in sorted_items]
-        )
+        # row.to_json() is the single source of truth for the standings shape
+        # (total / total_sd / per-category points); just stamp the team name on.
+        return jsonify([{"team": team, **row.to_json()} for team, row in sorted_items])
 
 
 def create_app(state_path: Path | None = None) -> Flask:

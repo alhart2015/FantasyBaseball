@@ -28,7 +28,11 @@ def test_hitter_counting_on_pace():
 
 
 def test_hitter_counting_above_pace():
-    """A hitter well above pace on HR gets hot color."""
+    """A hitter well above pace on HR gets hot color.
+
+    NegBin CV at mu=3.0: sqrt(1/3 + 1/8.58) = 0.671 (vs old flat 0.343).
+    HR actual=6, expected=3.0, ratio=2.0, z = 1.0/0.671 = 1.49 -> stat-hot-1.
+    """
     projected = {
         "pa": 600,
         "r": 90,
@@ -41,25 +45,30 @@ def test_hitter_counting_above_pace():
     }
     actual = {"pa": 60, "r": 9, "hr": 6, "rbi": 9, "sb": 1, "h": 15, "ab": 54}
     result = compute_player_pace(actual, projected, "hitter")
-    assert result["HR"]["color_class"] == "stat-hot-2"
+    assert result["HR"]["color_class"] == "stat-hot-1"
     assert result["HR"]["z_score"] > 1.0
 
 
 def test_hitter_counting_below_pace():
-    """A hitter well below pace on SB gets cold color (1-2 SD = light cold)."""
+    """A hitter below pace on SB gets cold color (1-2 SD = light cold).
+
+    Use a larger SB sample so the NegBin CV (which is dominated by the Poisson
+    1/mu term at small mu) still resolves a clear cold signal. Expected SB =
+    30 * (180/600) = 9.0; CV(sb, 9.0) = sqrt(1/9 + 1/4.747) = 0.567.
+    actual=3, ratio=0.333, z = -0.667/0.567 = -1.18 -> stat-cold-1.
+    """
     projected = {
         "pa": 600,
         "r": 90,
         "hr": 30,
         "rbi": 90,
-        "sb": 10,
+        "sb": 30,
         "h": 150,
         "ab": 540,
         "avg": 0.278,
     }
-    actual = {"pa": 60, "r": 9, "hr": 3, "rbi": 9, "sb": 0, "h": 15, "ab": 54}
+    actual = {"pa": 180, "r": 27, "hr": 9, "rbi": 27, "sb": 3, "h": 45, "ab": 162}
     result = compute_player_pace(actual, projected, "hitter")
-    # z = -1.4 -> between -1 and -2 SD = stat-cold-1
     assert result["SB"]["color_class"] == "stat-cold-1"
     assert result["SB"]["z_score"] < -1.0
 
@@ -171,13 +180,17 @@ def test_pitcher_counting_and_rates():
         "era": 3.00,
         "whip": 1.11,
     }
-    actual = {"ip": 18.0, "k": 22, "w": 1, "sv": 0, "er": 10, "bb": 5, "h_allowed": 16}
+    actual = {"ip": 18.0, "k": 25, "w": 1, "sv": 0, "er": 10, "bb": 5, "h_allowed": 16}
     result = compute_player_pace(actual, projected, "pitcher")
 
     assert "IP" in result
     assert result["IP"]["color_class"] == "stat-neutral"
 
-    # K: expected = 190 * (18/180) = 19, actual 22, ratio 1.16, z = 0.16/0.139 = 1.13 -> hot-1 (1-2 SD)
+    # K: expected = 190 * (18/180) = 19, actual 25, ratio 1.316.
+    # NegBin CV(k, 19) = sqrt(1/19 + 1/109.134) = 0.249 (vs old flat 0.139),
+    # z = 0.316/0.249 = 1.27 -> hot-1 (1-2 SD). (actual=22 was hot-1 under the
+    # old flat CV but only z=0.64 -> neutral under the mu-dependent CV, so the
+    # K sample is raised to keep testing the intended hot signal.)
     assert result["K"]["color_class"] == "stat-hot-1"
 
     # ERA: actual = 10*9/18 = 5.00, proj 3.00, dev = +2.0
@@ -210,12 +223,17 @@ def test_pitcher_era_neutral_below_min_ip():
     result = compute_player_pace(actual, projected, "pitcher")
     assert result["ERA"]["color_class"] == "stat-neutral"
     assert result["WHIP"]["color_class"] == "stat-neutral"
-    # K: ratio = 15/5.28 = 2.84, z = 1.84/0.139 = 13.2 -> stat-hot-2
+    # K: ratio = 15/5.28 = 2.84, NegBin CV(k, 5.28) = 0.446, z = 1.84/0.446 = 4.13 -> stat-hot-2
     assert result["K"]["color_class"] == "stat-hot-2"
 
 
 def test_intermediate_color_classes():
-    """z-scores between 1.0 and 2.0 should produce stat-hot-1 / stat-cold-1."""
+    """z-scores between 1.0 and 2.0 should produce stat-hot-1 / stat-cold-1.
+
+    NegBin CV at the HR sample mu drives these. With expected HR = 30*(120/600)
+    = 6.0, CV(hr, 6.0) = sqrt(1/6 + 1/7.754) = 0.544 (vs old flat 0.343), the
+    z-scores land cleanly across the neutral/hot-1/hot-2 boundaries.
+    """
     projected = {
         "pa": 600,
         "r": 90,
@@ -226,23 +244,24 @@ def test_intermediate_color_classes():
         "ab": 540,
         "avg": 0.278,
     }
-    # HR: actual=4, expected=3.0, ratio=1.33, z = 0.33/0.343 = 0.97 -> neutral (< 1.0 SD)
-    actual = {"pa": 60, "r": 9, "hr": 4, "rbi": 9, "sb": 1, "h": 15, "ab": 54}
+    # HR: actual=7, expected=6.0, ratio=1.167, z = 0.167/0.544 = 0.31 -> neutral (< 1.0 SD)
+    actual = {"pa": 120, "r": 18, "hr": 7, "rbi": 18, "sb": 2, "h": 30, "ab": 108}
     result = compute_player_pace(actual, projected, "hitter")
     assert result["HR"]["color_class"] == "stat-neutral"
     assert result["HR"]["z_score"] < 1.0
 
-    # With more extreme values: HR actual=6, expected=3.0, ratio=2.0, z = 1.0/0.343 = 2.92 -> hot-2
-    actual2 = {"pa": 60, "r": 9, "hr": 6, "rbi": 9, "sb": 1, "h": 15, "ab": 54}
+    # Extreme: HR actual=12, expected=6.0, ratio=2.0, z = 1.0/0.544 = 1.84 -> hot-1
+    # (mu-dependent NegBin CV; doubling the count no longer reaches 2 SD)
+    actual2 = {"pa": 120, "r": 18, "hr": 12, "rbi": 18, "sb": 2, "h": 30, "ab": 108}
     result2 = compute_player_pace(actual2, projected, "hitter")
-    assert result2["HR"]["color_class"] == "stat-hot-2"
-    assert result2["HR"]["z_score"] > 2.0
+    assert result2["HR"]["color_class"] == "stat-hot-1"
+    assert 1.0 < result2["HR"]["z_score"] < 2.0
 
-    # Moderate above: HR actual=5, expected=3.0, ratio=1.67, z = 0.67/0.343 = 1.94 -> hot-1 (1-2 SD)
-    actual3 = {"pa": 60, "r": 9, "hr": 5, "rbi": 9, "sb": 1, "h": 15, "ab": 54}
+    # Strong: HR actual=14, expected=6.0, ratio=2.33, z = 1.33/0.544 = 2.45 -> hot-2
+    actual3 = {"pa": 120, "r": 18, "hr": 14, "rbi": 18, "sb": 2, "h": 30, "ab": 108}
     result3 = compute_player_pace(actual3, projected, "hitter")
-    assert result3["HR"]["color_class"] == "stat-hot-1"
-    assert 1.0 < result3["HR"]["z_score"] < 2.0
+    assert result3["HR"]["color_class"] == "stat-hot-2"
+    assert result3["HR"]["z_score"] > 2.0
 
 
 def test_middle_sample_counting_colored_rates_neutral():
@@ -322,7 +341,8 @@ def test_hitter_avg_uses_binomial_sampling_sd():
     Expected z = (0.444 - 0.275) / 0.0859 = 1.97 → stat-hot-1 (not bright).
 
     Old buggy formula divided by STAT_VARIANCE["h"] * proj_avg = 0.103*.275
-    = 0.0283, yielding z = 5.97 and incorrectly flagging bright green.
+    (STAT_VARIANCE was a former constant, since removed) = 0.0283, yielding
+    z = 5.97 and incorrectly flagging bright green.
     """
     projected = {
         "pa": 600,

@@ -75,7 +75,10 @@ class TestDashboardRoute:
 
     def test_index_contains_dashboard_title(self, client):
         resp = client.get("/")
-        assert b"Draft Dashboard" in resp.data
+        # The dashboard was rebranded "Draft Room" in the stadium-theme
+        # restyle (commit dc8cfd2); assert the current branded title so
+        # this still verifies the real page rendered (not a blank/error).
+        assert b"Draft Room" in resp.data
 
     def test_index_contains_htmx_script(self, client):
         resp = client.get("/")

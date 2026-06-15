@@ -127,27 +127,27 @@ PITCHER_PROJ_KEYS: list[str] = ["ip", "w", "k", "sv", "er", "bb", "h_allowed", "
 # in the playing-time curve lookup when a dict carries ``ab`` but not ``pa``.
 AB_PER_PA: float = 0.90
 
-# Per-stat performance variance (SD of actual/projected ratio residuals).
-# Calibrated from Steamer+ZiPS projections vs MLB actuals, 2022-2024.
-# Per-PA rates for hitters, per-IP rates for pitchers (isolates performance
-# variance from playing time, which the playing-time model handles; see
-# PLAYING_TIME_CURVES). Stats with 0.0 variance (ab, ip) are playing-time-only.
-STAT_VARIANCE: dict[str, float] = {
-    # Hitter counting stats
-    "r": 0.156,
-    "hr": 0.343,
-    "rbi": 0.187,
-    "sb": 0.715,
-    "h": 0.103,
-    "ab": 0.0,
-    # Pitcher counting stats
-    "w": 0.416,
-    "k": 0.139,
-    "sv": 0.900,
-    "ip": 0.0,
-    "er": 0.252,
-    "bb": 0.257,
-    "h_allowed": 0.143,
+# Per-stat Negative-Binomial dispersion r (var = mu + mu^2/r), calibrated from
+# 2022-2024 projection-vs-actual residuals conditional on realized playing time
+# (see scripts/calibrate_stat_dispersion.py). A value is either a scalar r or a
+# list of (mu_upper, r) bands for stats with mean-dependent overdispersion
+# (sb/hr/rbi/er, r generally rises with the projected count -- the per-band MLE
+# can invert slightly in an adjacent band, e.g. er's 14.701 -> 13.263, which is
+# fit noise, not signal); float("inf") == Poisson floor (no overdispersion beyond
+# Poisson). sv is fit on the role-stable closer population and collapses to a
+# robust scalar given the thin (n=43) data.
+STAT_DISPERSION: dict[str, float | list[tuple[float, float]]] = {
+    "r": 84.725,
+    "hr": [(3.9, 8.580), (8.5, 7.754), (16.2, 12.455), (float("inf"), 23.868)],
+    "rbi": [(17.5, 7.207), (36.5, 27.104), (59.3, 34.039), (float("inf"), 45.005)],
+    "sb": [(1.1, 0.763), (2.8, 1.876), (6.9, 2.709), (float("inf"), 4.747)],
+    "h": float("inf"),
+    "w": float("inf"),
+    "k": 109.134,
+    "sv": 37.757,
+    "er": [(13.7, 7.545), (24.6, 14.701), (40.1, 13.263), (float("inf"), 27.425)],
+    "bb": 21.645,
+    "h_allowed": 81.291,
 }
 
 # Playing-time model: realized PA/IP relative to projection, calibrated from

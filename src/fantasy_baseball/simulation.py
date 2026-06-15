@@ -8,6 +8,8 @@ the season dashboard (web/season_data.py).
 from typing import Any, cast
 
 import numpy as np
+from scipy.special import _ufuncs as _scu  # Boost-backed nbinom ppf (see _nbinom_ppf_fast)
+from scipy.special import ndtr, pdtr, pdtrik
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto_dict
@@ -24,13 +26,14 @@ from fantasy_baseball.utils.constants import (
     PITCHER_CORRELATION,
     PITCHING_COUNTING,
     REPLACEMENT_BY_POSITION,
-    STAT_VARIANCE,
+    STAT_DISPERSION,
     role_from_ip,
     safe_float,
 )
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
 )
+from fantasy_baseball.utils.dispersion import negbin_variance_from_r, resolve_dispersion_r
 from fantasy_baseball.utils.playing_time import (
     playing_time_params,
     playing_time_shape,
@@ -43,31 +46,16 @@ from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calc
 _NOTABLE_PT_LOSS = 0.15
 
 
-def _build_cov_matrix(
-    stats: list[str],
-    correlation: list[list[float]],
-) -> np.ndarray:
-    """Build a covariance matrix from per-stat sigmas and a correlation matrix.
-
-    cov[i][j] = corr[i][j] * sigma_i * sigma_j
-    """
-    n = len(stats)
-    cov = np.zeros((n, n))
-    for i in range(n):
-        for j in range(n):
-            si = STAT_VARIANCE.get(stats[i], 0.0)
-            sj = STAT_VARIANCE.get(stats[j], 0.0)
-            cov[i, j] = correlation[i][j] * si * sj
-    return cov
-
-
-# Pre-compute covariance matrices at import time (they never change).
-HITTER_COV = _build_cov_matrix(HITTER_CORR_STATS, HITTER_CORRELATION)
-PITCHER_COV = _build_cov_matrix(PITCHER_CORR_STATS, PITCHER_CORRELATION)
-
 # Map stat name -> index in the correlated draw vector.
 HITTER_IDX = {s: i for i, s in enumerate(HITTER_CORR_STATS)}
 PITCHER_IDX = {s: i for i, s in enumerate(PITCHER_CORR_STATS)}
+
+# Unit-variance correlated latents for the Gaussian copula (the NegBin sampler's
+# Gaussian layer).
+HITTER_CORR_MATRIX = np.array(HITTER_CORRELATION)
+PITCHER_CORR_MATRIX = np.array(PITCHER_CORRELATION)
+
+_U_EPS = 1e-9
 
 
 def _flatten_full_season(p: Any) -> dict[str, Any]:
@@ -471,6 +459,80 @@ def _replacement_line(p: dict, is_hitter: bool) -> dict:
     return REPLACEMENT_BY_POSITION[max(elig, key=_HITTER_REPL_SGP.__getitem__)]
 
 
+def _nbinom_ppf_fast(u: np.ndarray, r: np.ndarray, p: np.ndarray) -> np.ndarray:
+    """Vectorized NegBin inverse-CDF, bit-identical to scipy.stats.nbinom.ppf but
+    without the generic rv_discrete dispatch wrapper (argsreduce/broadcast/cdf
+    round-trip -- the perf bottleneck).
+
+    Modern scipy (>=1.11) overrides nbinom._ppf with a Boost-backed compiled
+    kernel, scipy.special._ufuncs._nbinom_ppf, rather than the historical
+    ceil(nbdtrik)+correction recipe. The Cephes nbdtr/nbdtrik path is NOT
+    bit-identical to that Boost kernel for non-integer r (nbdtr's betainc loses
+    ~1-3% accuracy at small k), so it cannot reproduce nbinom.ppf exactly. We
+    therefore call the same raw Boost ufunc scipy itself dispatches to, which is
+    exact by construction and skips only the wrapper -- verified bit-identical in
+    test_fast_nbinom_ppf_bit_matches_scipy."""
+    return cast(np.ndarray, _scu._nbinom_ppf(u, r, p))
+
+
+def _poisson_ppf_fast(u: np.ndarray, mu: np.ndarray) -> np.ndarray:
+    """Vectorized Poisson inverse-CDF matching scipy.stats.poisson.ppf via raw
+    scipy.special pdtrik/pdtr (no generic dispatch wrapper)."""
+    k = np.ceil(pdtrik(u, mu))
+    k = np.maximum(k, 0.0)
+    k1 = k - 1.0
+    cdf_k1 = np.where(k1 >= 0.0, pdtr(np.maximum(k1, 0.0), mu), 0.0)
+    k = np.where(cdf_k1 >= u, k1, k)
+    under = pdtr(k, mu) < u
+    k = np.where(under, k + 1.0, k)
+    return cast(np.ndarray, k)
+
+
+def _negbin_copula_counts(
+    mu: np.ndarray,
+    r: np.ndarray,
+    z: np.ndarray,
+    fraction_remaining: float,
+) -> np.ndarray:
+    """Map correlated standard-normal latents z to NegBin counts via a copula.
+
+    mu: per-element mean (base * scale). r: per-element calibrated dispersion
+    (np.inf == Poisson floor). Variance is scaled by fraction_remaining through
+    an effective dispersion r_eff; an element whose target variance falls to/below
+    its mean (the Poisson floor) is drawn Poisson, so its variance bottoms out at
+    mu and does NOT shrink further with fraction_remaining (a count's variance
+    cannot go below its mean -- relevant for inf-r stats and very small
+    fraction_remaining). u is clamped to [eps, 1-eps] so the ppf never returns inf.
+    """
+    mu = np.asarray(mu, dtype=float)
+    r = np.asarray(r, dtype=float)
+    u = np.clip(ndtr(z), _U_EPS, 1.0 - _U_EPS)
+
+    out = np.zeros_like(mu)
+    pos = mu > 0
+    if not np.any(pos):
+        return out
+
+    mu_p = mu[pos]
+    r_p = r[pos]
+    u_p = u[pos]
+
+    var_full = negbin_variance_from_r(mu_p, r_p)
+    var_target = fraction_remaining * var_full
+
+    supra = var_target > mu_p
+    res = np.empty_like(mu_p)
+    if np.any(supra):
+        r_eff = mu_p[supra] ** 2 / (var_target[supra] - mu_p[supra])
+        p_eff = r_eff / (r_eff + mu_p[supra])
+        res[supra] = _nbinom_ppf_fast(u_p[supra], r_eff, p_eff)
+    if np.any(~supra):
+        res[~supra] = _poisson_ppf_fast(u_p[~supra], mu_p[~supra])
+
+    out[pos] = res
+    return out
+
+
 def _apply_variance(
     players: list,
     player_type: str,
@@ -487,29 +549,45 @@ def _apply_variance(
       (a player beats his projected PA/IP) or fall below it; the missed
       fraction ``max(0, 1 - scale)`` is backfilled with replacement-level
       production and logged on the injuries report when notable.
-    - Performance: correlated multivariate-normal draws so related stats
-      (e.g. HR and RBI) move together. Per-stat sigmas and correlations are
-      calibrated from projection-vs-actual rate residuals (2022-2024); the
-      covariance is scaled by ``fraction_remaining`` for partial seasons.
+    - Performance: correlated NegBin counts via a Gaussian copula. Correlated
+      unit-variance normal latents (per-type correlation matrix) map through the
+      normal CDF to uniforms, then each stat's NegBin (or Poisson-floor) inverse
+      CDF; dispersion r (scalar or mu-banded, from STAT_DISPERSION) is
+      variance-scaled by fraction_remaining. Replaces the clipped-Gaussian
+      multiplier, which biased counts upward and spiked at zero.
 
     Mutates ``injuries_out`` by appending ``(name, frac_missed)`` for players
     whose simulated playing-time loss is at least ``_NOTABLE_PT_LOSS``.
     """
     is_hitter = player_type == PlayerType.HITTER
     counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
-    base_cov = HITTER_COV if is_hitter else PITCHER_COV
-    cov = base_cov * fraction_remaining
+    corr_matrix = HITTER_CORR_MATRIX if is_hitter else PITCHER_CORR_MATRIX
     idx_map = HITTER_IDX if is_hitter else PITCHER_IDX
     n_corr = len(idx_map)
-    mean = np.zeros(n_corr)
 
     n = len(players)
     if n == 0:
         return []
 
-    # Batch all random draws for the entire player list at once
     scales = _playing_time_scales(players, player_type, rng, fraction_remaining)
-    all_draws = rng.multivariate_normal(mean, cov, size=n)
+    # Correlated unit-variance latents (the Gaussian copula's Gaussian layer).
+    all_z = rng.multivariate_normal(np.zeros(n_corr), corr_matrix, size=n)
+
+    # Per-(player, correlated-stat) NegBin mean (projection * playing-time scale)
+    # and dispersion r (scalar or mu-banded, resolved from that mean). idx_map's
+    # keys are exactly the correlated counting stats, so one pass fills both.
+    mu_mat = np.zeros((n, n_corr))
+    r_mat = np.full((n, n_corr), np.inf)
+    for col, j in idx_map.items():
+        mu_mat[:, j] = np.array([safe_float(p.get(col)) for p in players]) * scales
+        r_mat[:, j] = resolve_dispersion_r(STAT_DISPERSION[col], mu_mat[:, j])
+
+    # One flattened copula draw over all (player, stat) cells -- collapses the
+    # per-stat scipy ppf calls (heavy fixed overhead) into a single nbinom +
+    # single poisson call. C-order ravel keeps mu/r/z cells aligned.
+    counts = _negbin_copula_counts(
+        mu_mat.ravel(), r_mat.ravel(), all_z.ravel(), fraction_remaining
+    ).reshape(n, n_corr)
 
     adjusted = []
     for i, p in enumerate(players):
@@ -517,23 +595,14 @@ def _apply_variance(
         frac_missed = max(0.0, 1.0 - scale)
         if frac_missed >= _NOTABLE_PT_LOSS:
             injuries_out.append((p.get("name", "?"), frac_missed))
-
-        # Routing is a cheap dict lookup (per-position SGP is precomputed), so
-        # compute it inline rather than memoizing onto the player dict.
         repl = _replacement_line(p, is_hitter)
-
-        draws = all_draws[i]
-        row = {}
+        row: dict[str, Any] = {}
         for col in counting_cols:
-            base = float(p.get(col, 0) or 0)
             repl_contrib = repl.get(col, 0) * frac_missed
-
             if col in idx_map:
-                perf = max(0, 1.0 + draws[idx_map[col]])
-                row[col] = base * perf * scale + repl_contrib
+                row[col] = counts[i, idx_map[col]] + repl_contrib
             else:
-                row[col] = base * scale + repl_contrib
-
+                row[col] = safe_float(p.get(col)) * scale + repl_contrib
         row["name"] = p.get("name", "?")
         row["player_type"] = player_type
         adjusted.append(row)

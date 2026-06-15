@@ -124,4 +124,5 @@ class TestEndToEndSmoke:
             # 7. Dashboard HTML also works
             resp = client.get("/")
             assert resp.status_code == 200
-            assert b"Draft Dashboard" in resp.data
+            # Rebranded "Draft Room" in the stadium-theme restyle (dc8cfd2).
+            assert b"Draft Room" in resp.data

@@ -2051,6 +2051,121 @@ class TestComputeTeamTotalsPace:
         # Counting actuals still come through from CategoryStats.
         assert totals["R"]["actual"] == pytest.approx(146)
 
+    def test_counting_and_avg_z_use_negbin_cv(self, monkeypatch):
+        """Populated active roster exercises the migrated counting + AVG-rate
+        z-score branches (the ``players=[]`` tests above short-circuit before
+        them). The counting z must equal ``(ratio-1)/negbin_perf_cv(stat,
+        expected)`` and the AVG-rate z ``(actual-expected)/(cv*expected)`` -- a
+        regression in the NegBin-CV migration (wrong key, sign, or formula)
+        would break these construction-meaningful pins.
+        """
+        from fantasy_baseball.utils.dispersion import negbin_perf_cv
+
+        # Standings PA (611) is deliberately != the player opp-sum (300+280=580):
+        # the rate denominator must come from the player pace sum (total_opp), not
+        # the standings opp, so this gap lets the test discriminate the two.
+        payload = self._canonical_standings_json("Hart of the Order", pa=611.0)
+        self._patch_read_cache(monkeypatch, payload)
+        players = [
+            {
+                "pace": {
+                    "R": {"expected": 70.0},
+                    "HR": {"expected": 20.0},
+                    "RBI": {"expected": 65.0},
+                    "SB": {"expected": 8.0},
+                    "AVG": {"expected": 0.270},
+                    "PA": {"actual": 300.0},
+                }
+            },
+            {
+                "pace": {
+                    "R": {"expected": 60.0},
+                    "HR": {"expected": 15.0},
+                    "RBI": {"expected": 55.0},
+                    "SB": {"expected": 12.0},
+                    "AVG": {"expected": 0.250},
+                    "PA": {"actual": 280.0},
+                }
+            },
+        ]
+
+        totals = season_data._compute_team_totals_pace(
+            players=players, player_type="hitter", team_name="Hart of the Order"
+        )
+
+        # Counting (R): actual 146 from standings, expected 130 from the pace sum.
+        exp_r = 130.0
+        cv_r = float(negbin_perf_cv("r", exp_r))
+        z_r = (146.0 / exp_r - 1.0) / cv_r
+        assert totals["R"]["expected"] == pytest.approx(exp_r)
+        assert totals["R"]["z_score"] == pytest.approx(round(z_r, 2))
+
+        # AVG (rate, not inverse): weighted = sum(avg_i * PA_i); the h-count proxy
+        # fed to negbin_perf_cv is that same weighted total (documented approx).
+        weighted = 0.270 * 300.0 + 0.250 * 280.0
+        exp_avg = weighted / 580.0
+        cv_avg = float(negbin_perf_cv("h", weighted))
+        z_avg = (0.262 - exp_avg) / (cv_avg * exp_avg)
+        assert totals["AVG"]["expected"] == pytest.approx(round(exp_avg, 3))
+        assert totals["AVG"]["z_score"] == pytest.approx(round(z_avg, 2))
+
+    def test_era_whip_z_use_negbin_cv(self, monkeypatch):
+        """Pitcher rate branches: ERA recovers the ER count via ``weighted/9.0``
+        and WHIP uses the bb+ha numerator; both feed ``negbin_perf_cv`` and apply
+        the inverse-stat sign (lower is better). Covers the most error-prone new
+        recovery line in the migration.
+        """
+        from fantasy_baseball.utils.dispersion import negbin_perf_cv
+
+        # Standings IP (211) is deliberately != the player opp-sum (100+90=190):
+        # the rate denominator comes from total_opp (player pace sum), so the gap
+        # ensures a regression that divided by the standings IP would be caught.
+        payload = self._canonical_standings_json("Hart of the Order", ip=211.0)
+        self._patch_read_cache(monkeypatch, payload)
+        players = [
+            {
+                "pace": {
+                    "W": {"expected": 7.0},
+                    "K": {"expected": 110.0},
+                    "SV": {"expected": 5.0},
+                    "ERA": {"expected": 3.50},
+                    "WHIP": {"expected": 1.10},
+                    "IP": {"actual": 100.0},
+                }
+            },
+            {
+                "pace": {
+                    "W": {"expected": 5.0},
+                    "K": {"expected": 95.0},
+                    "SV": {"expected": 6.0},
+                    "ERA": {"expected": 4.00},
+                    "WHIP": {"expected": 1.25},
+                    "IP": {"actual": 90.0},
+                }
+            },
+        ]
+
+        totals = season_data._compute_team_totals_pace(
+            players=players, player_type="pitcher", team_name="Hart of the Order"
+        )
+
+        # ERA (inverse): weighted = sum(ERA_i * IP_i); component_count = weighted/9
+        # = total ER, the count fed to the banded "er" dispersion.
+        weighted_era = 3.50 * 100.0 + 4.00 * 90.0
+        exp_era = weighted_era / 190.0
+        cv_era = float(negbin_perf_cv("er", weighted_era / 9.0))
+        z_era = -((4.02 - exp_era) / (cv_era * exp_era))
+        assert totals["ERA"]["expected"] == pytest.approx(round(exp_era, 2))
+        assert totals["ERA"]["z_score"] == pytest.approx(round(z_era, 2))
+
+        # WHIP (inverse): weighted = sum(WHIP_i * IP_i) = bb+ha numerator total.
+        weighted_whip = 1.10 * 100.0 + 1.25 * 90.0
+        exp_whip = weighted_whip / 190.0
+        cv_whip = float(negbin_perf_cv("h_allowed", weighted_whip))
+        z_whip = -((1.18 - exp_whip) / (cv_whip * exp_whip))
+        assert totals["WHIP"]["expected"] == pytest.approx(round(exp_whip, 2))
+        assert totals["WHIP"]["z_score"] == pytest.approx(round(z_whip, 2))
+
 
 def test_build_trends_series_empty_history(fake_redis):
     """Empty history hashes → empty payload but valid shape."""

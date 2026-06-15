@@ -6,9 +6,10 @@ standardized residual
 
     z = (actual_team_total - projected_team_total) / eroto_SD
 
-where eroto_SD^2 = sum_players proj^2 * (STAT_VARIANCE^2 + cv_pt^2) -- exactly the
-per-player quadrature ProjectedStandings/score_roto uses (and the same per-player
-variance the MC samples). If SD(z) ~= 1, ERoto's SD matches realized variance. If
+where eroto_SD^2 = sum_players (negbin_perf_variance(stat, proj) + proj^2 * cv_pt^2)
+-- exactly the per-player quadrature ProjectedStandings/score_roto uses, fed by the
+unified NegBin dispersion (STAT_DISPERSION) that the MC also samples. If SD(z) ~= 1,
+ERoto's NegBin-based SD matches realized variance. If
 SD(z) ~= 2, ERoto is 2x too tight -> the leader's category sweeps are far less
 certain than ERoto thinks -> the MC's wider/lower picture is right. If SD(z) ~= 1,
 ERoto's SD is fine and the MC's roto deflation is an argmax artifact, not variance.
@@ -28,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from fantasy_baseball.models.player import PlayerType
-from fantasy_baseball.utils.constants import STAT_VARIANCE
+from fantasy_baseball.utils.dispersion import negbin_perf_variance
 from fantasy_baseball.utils.playing_time import playing_time_params
 
 YEARS = [2022, 2023, 2024, 2025]
@@ -40,7 +41,7 @@ N_H, N_P = 13, 9
 rng = np.random.default_rng(11)
 
 H_CATS = [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")]
-P_CATS = [("W", "w"), ("SO", "k"), ("SV", "sv")]  # actual col, STAT_VARIANCE key
+P_CATS = [("W", "w"), ("SO", "k"), ("SV", "sv")]  # actual col, STAT_DISPERSION key
 
 
 def _read(path):
@@ -113,7 +114,7 @@ def team_z(pool, cats, vol_col, is_hitter, dnp_zero):
         cvp = np.array([cv_pt(v, is_hitter) for v in t[vol_col].to_numpy(dtype=float)])
         if not dnp_zero:
             cvp = cvp[mask]
-        var = np.sum(proj**2 * (STAT_VARIANCE[key] ** 2 + cvp**2))
+        var = np.sum(negbin_perf_variance(key, proj) + proj**2 * cvp**2)
         sd = np.sqrt(var)
         out[acol] = (act.sum() - proj.sum()) / sd if sd > 0 else np.nan
     return out
