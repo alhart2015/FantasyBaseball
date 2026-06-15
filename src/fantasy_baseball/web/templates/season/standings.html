@@ -69,8 +69,8 @@
 {# ── Projected (Preseason / Current ERoto) ── #}
 <div id="view-projected" style="display: none;">
     <div class="pill-group" id="proj-tab-toggle">
-        <button class="pill active" data-ptab="preseason" onclick="toggleProjTab(this)">Preseason</button>
-        <button class="pill" data-ptab="current" onclick="toggleProjTab(this)">Current</button>
+        <button class="pill active" data-ptab="current" onclick="toggleProjTab(this)">Current</button>
+        <button class="pill" data-ptab="preseason" onclick="toggleProjTab(this)">Preseason</button>
     </div>
 
     {# Macro: ERoto table with optional ± error bounds on stat totals #}
@@ -112,7 +112,7 @@
     {% endmacro %}
 
     {# Preseason ERoto #}
-    <div id="proj-preseason">
+    <div id="proj-preseason" style="display: none;">
         {% if preseason %}
         <div class="pill-group" id="proj-preseason-sub">
             <button class="pill active" data-mode="points" onclick="toggleProjMode(this, '.proj-preseason-cell')">ERoto Points</button>
@@ -125,7 +125,7 @@
     </div>
 
     {# Current ERoto (ROS projections) #}
-    <div id="proj-current" style="display: none;">
+    <div id="proj-current">
         {% if current_projected %}
         <div class="pill-group" id="proj-current-sub">
             <button class="pill active" data-mode="points" onclick="toggleProjMode(this, '.proj-current-cell')">ERoto Points</button>
@@ -144,8 +144,8 @@
 {# ── Monte Carlo ── #}
 <div id="view-montecarlo" style="display: none;">
     <div class="pill-group" id="mc-tab-toggle">
-        <button class="pill active" data-mctab="preseason" onclick="toggleMcTab(this)">Opening Day</button>
-        <button class="pill" data-mctab="current" onclick="toggleMcTab(this)">Current</button>
+        <button class="pill active" data-mctab="current" onclick="toggleMcTab(this)">Current</button>
+        <button class="pill" data-mctab="preseason" onclick="toggleMcTab(this)">Opening Day</button>
     </div>
 
     {% macro mc_team_table(mc_data) %}
@@ -207,7 +207,7 @@
     {% endif %}
     {% endmacro %}
 
-    <div id="mc-preseason">
+    <div id="mc-preseason" style="display: none;">
         {% if mc %}
         {% if baseline_meta and baseline_meta.roster_date %}
         <p class="baseline-caption" style="opacity: 0.7; margin-bottom: 0.5em;">
@@ -221,7 +221,7 @@
         {% endif %}
     </div>
 
-    <div id="mc-current" style="display: none;">
+    <div id="mc-current">
         {% if rest_of_season_mc %}
         {{ mc_team_table(rest_of_season_mc) }}
         {{ cat_risk_table(rest_of_season_mc) }}
