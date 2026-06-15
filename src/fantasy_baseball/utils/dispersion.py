@@ -50,7 +50,6 @@ def negbin_perf_variance(stat_key: str, mu: Any) -> np.ndarray:
     MC's ``_negbin_copula_counts``. Conditional on realized playing time (callers
     add the playing-time variance separately for counting stats).
     """
-    mu = np.asarray(mu, dtype=float)
     r = resolve_dispersion_r(STAT_DISPERSION[stat_key], mu)
     return negbin_variance_from_r(mu, r)
 

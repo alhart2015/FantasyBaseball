@@ -70,3 +70,21 @@ def test_negbin_perf_cv_is_sqrt_var_over_mu():
     assert np.allclose(cv, np.sqrt(negbin_perf_variance("sv", mu)) / mu)
     # Poisson floor: cv == sqrt(1/mu)
     assert np.allclose(negbin_perf_cv("h", mu), np.sqrt(1.0 / mu))
+
+
+def test_negbin_variance_from_r_inf_and_finite_branches():
+    import numpy as np
+
+    from fantasy_baseball.utils.dispersion import negbin_variance_from_r
+
+    # Mixed inf (Poisson floor -> var == mu) and finite r (var == mu + mu^2/r) in
+    # one array -- the exact shape the MC passes directly (per-column r, some inf).
+    # This pins the primitive's inf branch at its own boundary; the analytic
+    # callers only reach it transitively on the finite-r path.
+    mu = np.array([10.0, 20.0])
+    r = np.array([np.inf, 5.0])
+    out = negbin_variance_from_r(mu, r)
+    assert np.allclose(out, [10.0, 20.0 + 20.0**2 / 5.0])
+    # Scalar edges: mu=0 -> 0 (no NaN from 0/inf); finite-r scalar formula holds.
+    assert np.isclose(float(negbin_variance_from_r(0.0, np.inf)), 0.0)
+    assert np.isclose(float(negbin_variance_from_r(30.0, 7.0)), 30.0 + 30.0**2 / 7.0)
