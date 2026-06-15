@@ -54,8 +54,8 @@ def test_hitter_counting_below_pace():
 
     Use a larger SB sample so the NegBin CV (which is dominated by the Poisson
     1/mu term at small mu) still resolves a clear cold signal. Expected SB =
-    30 * (180/600) = 9.0; CV(sb, 9.0) = sqrt(1/9 + 1/4.747) = 0.575.
-    actual=3, ratio=0.333, z = -0.667/0.575 = -1.16 -> stat-cold-1.
+    30 * (180/600) = 9.0; CV(sb, 9.0) = sqrt(1/9 + 1/4.747) = 0.567.
+    actual=3, ratio=0.333, z = -0.667/0.567 = -1.18 -> stat-cold-1.
     """
     projected = {
         "pa": 600,
@@ -223,7 +223,7 @@ def test_pitcher_era_neutral_below_min_ip():
     result = compute_player_pace(actual, projected, "pitcher")
     assert result["ERA"]["color_class"] == "stat-neutral"
     assert result["WHIP"]["color_class"] == "stat-neutral"
-    # K: ratio = 15/5.28 = 2.84, z = 1.84/0.139 = 13.2 -> stat-hot-2
+    # K: ratio = 15/5.28 = 2.84, NegBin CV(k, 5.28) = 0.446, z = 1.84/0.446 = 4.13 -> stat-hot-2
     assert result["K"]["color_class"] == "stat-hot-2"
 
 
