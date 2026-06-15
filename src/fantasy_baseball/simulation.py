@@ -499,8 +499,10 @@ def _negbin_copula_counts(
     mu: per-element mean (base * scale). r: per-element calibrated dispersion
     (np.inf == Poisson floor). Variance is scaled by fraction_remaining through
     an effective dispersion r_eff; an element whose target variance falls to/below
-    its mean (the Poisson floor) is drawn Poisson. u is clamped to [eps, 1-eps] so
-    nbinom/poisson ppf never returns inf.
+    its mean (the Poisson floor) is drawn Poisson, so its variance bottoms out at
+    mu and does NOT shrink further with fraction_remaining (a count's variance
+    cannot go below its mean -- relevant for inf-r stats and very small
+    fraction_remaining). u is clamped to [eps, 1-eps] so the ppf never returns inf.
     """
     mu = np.asarray(mu, dtype=float)
     r = np.asarray(r, dtype=float)

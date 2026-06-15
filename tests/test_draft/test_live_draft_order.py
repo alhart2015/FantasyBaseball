@@ -63,6 +63,19 @@ def test_load_post_keeper_order_missing_file_returns_none(tmp_path):
     assert load_post_keeper_pick_order(tmp_path / "nope.json", keeper_rounds=3) is None
 
 
+def test_load_post_keeper_order_empty_result_returns_none(tmp_path):
+    # keeper_rounds >= number of rounds -> empty post-keeper slice. Must return
+    # None (not []), so both consumers fall back to snake consistently rather than
+    # _compute_on_the_clock seating no one (on_the_clock None on pick 1).
+    import json
+
+    from fantasy_baseball.draft.draft_order import load_post_keeper_pick_order
+
+    p = tmp_path / "draft_order.json"
+    p.write_text(json.dumps({"rounds": [["A", "B"], ["B", "A"]]}))
+    assert load_post_keeper_pick_order(p, keeper_rounds=3) is None
+
+
 # --- controller -------------------------------------------------------------
 
 

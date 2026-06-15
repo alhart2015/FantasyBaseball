@@ -30,4 +30,9 @@ def load_post_keeper_pick_order(path: Path, *, keeper_rounds: int) -> list[str] 
         return None
     data = json.loads(path.read_text())
     rounds = data["rounds"]
-    return [team for round_teams in rounds[keeper_rounds:] for team in round_teams]
+    order = [team for round_teams in rounds[keeper_rounds:] for team in round_teams]
+    # Return None (not []) for an empty result so both consumers agree to snake.
+    # An empty list otherwise splits them: start_new_draft (`if pick_order:`)
+    # snakes, but _compute_on_the_clock (`is not None`) treats [] as an exhausted
+    # order and seats no one -> on_the_clock None on pick 1.
+    return order or None

@@ -154,9 +154,11 @@ STAT_VARIANCE: dict[str, float] = {
 # 2022-2024 projection-vs-actual residuals conditional on realized playing time
 # (see scripts/calibrate_stat_dispersion.py). A value is either a scalar r or a
 # list of (mu_upper, r) bands for stats with mean-dependent overdispersion
-# (sb/hr/rbi/er, r grows with the projected count); float("inf") == Poisson floor
-# (no overdispersion beyond Poisson). sv is fit on the role-stable closer
-# population and collapses to a robust scalar given the thin (n=43) data.
+# (sb/hr/rbi/er, r generally rises with the projected count -- the per-band MLE
+# can invert slightly in an adjacent band, e.g. er's 14.701 -> 13.263, which is
+# fit noise, not signal); float("inf") == Poisson floor (no overdispersion beyond
+# Poisson). sv is fit on the role-stable closer population and collapses to a
+# robust scalar given the thin (n=43) data.
 STAT_DISPERSION: dict[str, float | list[tuple[float, float]]] = {
     "r": 84.725,
     "hr": [(3.9, 8.580), (8.5, 7.754), (16.2, 12.455), (float("inf"), 23.868)],

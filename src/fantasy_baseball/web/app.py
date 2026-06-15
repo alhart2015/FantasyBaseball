@@ -107,7 +107,20 @@ def _pick_order(league_yaml: dict[str, Any]) -> list[str] | None:
     num_teams = len(teams_by_position)
     if num_teams == 0:
         return None
-    keeper_rounds = len(league_yaml.get("keepers", [])) // num_teams
+    keepers = league_yaml.get("keepers", [])
+    if len(keepers) % num_teams != 0:
+        # keeper_rounds is derived as len(keepers)//num_teams, which only equals
+        # the league's keeper-round count when every team keeps the full
+        # allotment. An uneven keeper count drops the wrong number of rounds and
+        # misaligns the entire post-keeper order -- surface it loudly.
+        logging.getLogger(__name__).warning(
+            "keeper count %d is not a multiple of %d teams; derived keeper_rounds"
+            " (%d) may misalign the post-keeper draft order -- verify draft_order.json",
+            len(keepers),
+            num_teams,
+            len(keepers) // num_teams,
+        )
+    keeper_rounds = len(keepers) // num_teams
     path = _league_yaml_path().parent / "draft_order.json"
     order = load_post_keeper_pick_order(path, keeper_rounds=keeper_rounds)
     if order is None:
