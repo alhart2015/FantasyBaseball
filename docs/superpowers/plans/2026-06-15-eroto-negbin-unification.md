@@ -146,8 +146,10 @@ git commit -m "feat(sim): negbin_perf_variance/negbin_perf_cv shared dispersion 
 
 ```python
 def test_project_team_sds_counting_variance_equals_negbin_helper_sum():
-    import numpy as np
-    from fantasy_baseball.scoring import project_team_sds
+    # IMPORTANT: reconstruct cv_pt via the SAME volume function the impl uses
+    # (_full_season_volume), not p["pa"] directly -- otherwise a divergence in
+    # how the volume is derived would make this a false failure.
+    from fantasy_baseball.scoring import _full_season_volume, project_team_sds
     from fantasy_baseball.models.player import PlayerType
     from fantasy_baseball.utils.dispersion import negbin_perf_variance
     from fantasy_baseball.utils.playing_time import playing_time_params
@@ -164,7 +166,7 @@ def test_project_team_sds_counting_variance_equals_negbin_helper_sum():
     exp_var = 0.0
     for p in roster:
         v = float(p["sb"])
-        cv_pt = playing_time_params(PlayerType.HITTER, p["pa"])[1]
+        cv_pt = playing_time_params(PlayerType.HITTER, _full_season_volume(p, True))[1]
         exp_var += float(negbin_perf_variance("sb", v)) + v * v * cv_pt**2
     assert abs(sds[Category.SB] - exp_var**0.5) < 1e-9
 ```
@@ -274,6 +276,21 @@ git commit -m "feat(sim): ERoto/standings variance uses NegBin dispersion (drop 
 - Modify: `src/fantasy_baseball/web/season_data.py` (~793-825, imports)
 - Test: `tests/test_analysis/test_pace.py` + season_data tests (re-bless)
 
+- [ ] **Step 0: Confirm the stat keys are valid STAT_DISPERSION keys** (the
+  migration changes `STAT_VARIANCE.get(key, 0.0)` (tolerant) to
+  `negbin_perf_cv(key, ...)` which does `STAT_DISPERSION[key]` (KeyError on an
+  unknown key). Before editing, read the loop variables and the `rate_cats`
+  definition in both files and list, for each call site, the exact key passed:
+  - `pace.py`: the `counting` stat keys.
+  - `season_data.py` counting: `cat.value.lower()` for the counting cats.
+  - `season_data.py` rate: the `component` value from `rate_cats` (the most
+    likely mismatch -- e.g. WHIP reduced to one component).
+  Valid keys are: `r, hr, rbi, sb, h, w, k, sv, er, bb, h_allowed`. For counting
+  keys (known-valid) no guard is needed, but confirm. For the rate `component`,
+  the rate branch is guarded with `component in STAT_DISPERSION` (Step 3) so an
+  unmapped component degrades to z=0 (old behavior) rather than crashing. Report
+  the key list so the reviewer can confirm.
+
 - [ ] **Step 1: pace.py** — replace the flat-CV with the NegBin CV.
 
 Imports: remove `from ...constants import ... STAT_VARIANCE` (or the specific import); add `from fantasy_baseball.utils.dispersion import negbin_perf_cv`.
@@ -293,7 +310,10 @@ with:
 
 - [ ] **Step 2: season_data.py counting branch** — same swap.
 
-Imports: add `from fantasy_baseball.utils.dispersion import negbin_perf_cv`; remove the `STAT_VARIANCE` import.
+Imports: add `from fantasy_baseball.utils.dispersion import negbin_perf_cv` AND
+`from fantasy_baseball.utils.constants import STAT_DISPERSION` (the rate branch in
+Step 3 needs `STAT_DISPERSION` for its `component in STAT_DISPERSION` guard);
+remove the `STAT_VARIANCE` import.
 
 Replace the counting branch:
 ```python
@@ -310,14 +330,18 @@ with:
 
 - [ ] **Step 3: season_data.py rate branch** — recover the component count, then NegBin CV.
 
-The rate branch has `weighted = sum(v * opp for v, opp in proj_vals)` (the projected numerator total) and `component` (the underlying stat key, e.g. "er"). Recover the component COUNT and use its NegBin CV:
+The rate branch has `weighted = sum(v * opp for v, opp in proj_vals)` (the projected numerator total) and `component` (the underlying stat key, e.g. "er"). Recover the component COUNT and use its NegBin CV. **Guard the key lookup**: the old code used `STAT_VARIANCE.get(component, 0.0)` (an unknown key -> 0 -> z=0, no coloring), but `negbin_perf_cv` does `STAT_DISPERSION[component]` (a hard index that KeyErrors on an unknown key). Preserve the old skip-on-unknown behavior with an `in STAT_DISPERSION` guard (import `STAT_DISPERSION` into season_data.py for it):
 ```python
         if expected_val > 0 and actual_val > 0:
             # weighted is the projected rate-numerator total: ERA*IP = 9*er,
             # WHIP*IP = bb+ha, AVG*PA ~ h. Recover the component count for the
-            # NegBin CV; guard against a degenerate zero.
+            # NegBin CV; guard unknown component / degenerate zero (preserves the
+            # old STAT_VARIANCE.get(component, 0.0) tolerance -> z=0).
             component_count = weighted / 9.0 if rate_cat == Category.ERA else weighted
-            cv = float(negbin_perf_cv(component, component_count)) if component_count > 0 else 0.0
+            if component in STAT_DISPERSION and component_count > 0:
+                cv = float(negbin_perf_cv(component, component_count))
+            else:
+                cv = 0.0
             z = (actual_val - expected_val) / (cv * expected_val) if cv > 0 else 0.0
             if is_inverse:
                 z = -z
