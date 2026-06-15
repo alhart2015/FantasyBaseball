@@ -33,7 +33,7 @@ from fantasy_baseball.utils.constants import (
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES as ALL_CATS,
 )
-from fantasy_baseball.utils.dispersion import resolve_dispersion_r
+from fantasy_baseball.utils.dispersion import negbin_variance_from_r, resolve_dispersion_r
 from fantasy_baseball.utils.playing_time import (
     playing_time_params,
     playing_time_shape,
@@ -517,8 +517,7 @@ def _negbin_copula_counts(
     r_p = r[pos]
     u_p = u[pos]
 
-    with np.errstate(divide="ignore"):
-        var_full = mu_p + np.where(np.isinf(r_p), 0.0, mu_p**2 / r_p)
+    var_full = negbin_variance_from_r(mu_p, r_p)
     var_target = fraction_remaining * var_full
 
     supra = var_target > mu_p

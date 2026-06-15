@@ -26,21 +26,33 @@ def resolve_dispersion_r(value: float | list[tuple[float, float]], mu: Any) -> n
     return np.asarray(rs[idx], dtype=float)
 
 
+def negbin_variance_from_r(mu: Any, r: Any) -> np.ndarray:
+    """Per-element NegBin performance variance ``mu + mu**2 / r`` from a resolved r.
+
+    The single formula for per-stat performance dispersion, shared by
+    :func:`negbin_perf_variance` (which resolves r from ``STAT_DISPERSION`` by
+    stat key) and the MC's ``_negbin_copula_counts`` (which already holds the
+    per-column r). An inf r (Poisson floor) yields ``var == mu``.
+    """
+    mu = np.asarray(mu, dtype=float)
+    r = np.asarray(r, dtype=float)
+    with np.errstate(divide="ignore"):
+        overdispersion = np.where(np.isinf(r), 0.0, mu**2 / r)
+    return np.asarray(mu + overdispersion, dtype=float)
+
+
 def negbin_perf_variance(stat_key: str, mu: Any) -> np.ndarray:
     """Per-element NegBin performance variance ``mu + mu**2 / r``.
 
     r comes from ``resolve_dispersion_r(STAT_DISPERSION[stat_key], mu)``; an
-    inf r (Poisson floor) yields ``var == mu``. This is the SAME quantity the
-    MC's ``_negbin_copula_counts`` calls ``var_full`` -- the single source of
-    truth for per-stat performance dispersion, shared by the MC and the
-    analytic ERoto/pace engines. Conditional on realized playing time (callers
+    inf r (Poisson floor) yields ``var == mu``. Delegates the formula to
+    :func:`negbin_variance_from_r` -- the single source of truth shared with the
+    MC's ``_negbin_copula_counts``. Conditional on realized playing time (callers
     add the playing-time variance separately for counting stats).
     """
     mu = np.asarray(mu, dtype=float)
     r = resolve_dispersion_r(STAT_DISPERSION[stat_key], mu)
-    with np.errstate(divide="ignore"):
-        overdispersion = np.where(np.isinf(r), 0.0, mu**2 / r)
-    return np.asarray(mu + overdispersion, dtype=float)
+    return negbin_variance_from_r(mu, r)
 
 
 def negbin_perf_cv(stat_key: str, mu: Any) -> np.ndarray:
