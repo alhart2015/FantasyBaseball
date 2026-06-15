@@ -40,6 +40,14 @@ same dispersion, not coincidentally-similar ones.
   independence sum, playing-time variance added in quadrature for counting stats,
   playing-time cancelling out of rate stats.
 
+**Intended downstream impact (not just the season dashboard band):** the team SDs
+from `project_team_sds`/`score_roto` also feed the **draft** deltaRoto scoring --
+the `recommend()` seam (`/api/recs`), `simulate_draft`, and `compare_strategies`.
+Changing the SDs will shift deltaRoto draft pick recommendations and simulator
+output. This is intended (the draft assistant should use the same, better
+dispersion), and the regression strategy (below) must cover the draft/recommend/
+simulate suites, not just the season-dashboard tests.
+
 ## Non-goals
 
 - **Closer role-switch mixture for SV.** ERoto adopts the SAME role-stable NegBin
@@ -99,6 +107,20 @@ rate residuals at realized PT). The playing-time variance is added separately by
 the consumers (below), exactly as `STAT_VARIANCE` + `cv_pt` were combined -- so
 there is no double-count of playing-time variance.
 
+**fraction_remaining scaling (interaction with `build_team_sds`).** ERoto already
+scales its full-season SDs by `sd_scale = sqrt(fraction_remaining)` in
+`build_team_sds` (variance *= `fraction_remaining`). That is RETAINED and is
+consistent with the MC mid-season: the MC uses `var_target = fraction_remaining *
+var_full`, so both engines damp the full-season variance by `fraction_remaining`.
+ONE accepted divergence: the MC additionally clamps at the Poisson floor (a
+count's variance cannot drop below its mean) at small `fraction_remaining`, while
+ERoto's continuous `sqrt(fraction_remaining)` scaling lets variance fall below
+`mu` late in the season. We **accept this as a documented late-season
+divergence** (the analytic band slightly under-states variance only when very
+little season remains, where the standings are nearly decided anyway) rather than
+adding a Poisson floor to the analytic path. The `build_team_sds` mechanism is
+otherwise unchanged.
+
 ### 2. ERoto / deltaRoto / standings (`scoring.py`)
 
 `player_category_variance` and `project_team_sds` swap the flat-CV variance for
@@ -131,10 +153,21 @@ Both compute `z = (ratio - 1) / variance` where `variance` was
   the player's expected count. A per-player CV for a per-player z-score --
   semantically clean and now mu-aware.
 - `season_data.py` (team totals z-score, counting): `cv = negbin_perf_cv(stat,
-  expected)` at the team's expected total. The rate-category branch
-  (`z = (actual - expected) / (cv * expected)`) uses `negbin_perf_cv(component,
-  expected_component)`. This preserves the current "per-stat CV on a team ratio"
-  structure, just sourced from the unified model.
+  expected)` at the team's expected total (`expected` is the summed pace count --
+  directly available in the counting branch).
+- `season_data.py` (rate-category z-score): the branch works in RATE space
+  (`expected_val` is the expected rate, e.g. ERA), so `negbin_perf_cv` needs the
+  underlying component COUNT, not the rate. Recover it from the numerator the
+  branch already sums: `weighted = sum(rate_i * opp_i)` equals the projected
+  scaled component total (for ERA, `rate*IP = 9*er`, so component count
+  `er_total = weighted / 9`; for WHIP, `(bb+ha)_total = weighted`; for AVG,
+  `h_total = weighted`). Use `cv = negbin_perf_cv(component, component_total)`
+  with that recovered count, then `z = (actual_val - expected_val) / (cv *
+  expected_val)` (inverse sign preserved). If a clean recovery is not available
+  for a given rate, fall back to `negbin_perf_cv(component, expected_val * <the
+  branch's opp denominator>)`; the planner picks per the actual variables in
+  scope. Either way the CV is sourced from the unified model, not `STAT_VARIANCE`.
+  This preserves the current "per-stat CV on a team ratio" structure.
   - **Known limitation (documented, not fixed here):** a team total's true
     relative SD is much tighter than a single-mu CV (it is the
     `project_team_sds`-style sum). Using `negbin_perf_cv` at the team total keeps
@@ -172,17 +205,24 @@ if a script's sole purpose was calibrating the old `STAT_VARIANCE`, note it
 - **Unit:** `negbin_perf_variance` == `mu + mu^2/r` and `== mu` at `r=inf`;
   `negbin_perf_cv` == `sqrt(1/mu + 1/r)` and `== sqrt(1/mu)` at `r=inf`; both
   vectorize over a `mu` array; `mu=0` variance is 0.
-- **Agree-by-construction (the load-bearing guarantee):** a test that, for a
-  representative roster, ERoto's `project_team_sds` counting-category variance
-  equals `sum_i (negbin_perf_variance(stat, mu_i) + mu_i^2 * cv_pt_i^2)`, AND
-  that `negbin_perf_variance(stat, mu)` equals the MC's `var_full` for the same
-  `(stat, mu)` (i.e. the analytic and MC dispersion are the same number). This is
-  what "one source of truth" must verify.
-- **Regression re-bless:** value-pinned SD/z-score tests in `test_scoring.py`,
-  `tests/test_analysis/test_pace.py`, and the season_data tests WILL change (the
-  SDs/CVs legitimately move). Re-pin them against the new model, citing this
-  spec, per CLAUDE.md's don't-edit-tests-without-justification rule. Split
-  structural assertions (must pass unchanged) from value-pins (re-blessed).
+- **Agree-by-construction (structural guard):** a test that, for a representative
+  roster, ERoto's `project_team_sds` counting-category variance equals
+  `sum_i (negbin_perf_variance(stat, mu_i) + mu_i^2 * cv_pt_i^2)`. This guards
+  that scoring.py sums the shared helper correctly. NOTE this is partly
+  tautological (both sides use `mu + mu^2/r` from the same constant); its value is
+  catching a wiring/aggregation mistake, not validating the model. The REAL
+  cross-engine check is the empirical eye-test below (analytic team SD vs MC
+  sampled team SD on the same roster) -- that is what proves the two engines now
+  agree in practice. Include both.
+- **Regression re-bless:** value-pinned SD/z-score/score tests WILL change (the
+  SDs/CVs legitimately move) -- not only `test_scoring.py`,
+  `tests/test_analysis/test_pace.py`, and the season_data tests, but also the
+  **draft/recommend/simulate** suites whose deltaRoto scores depend on these SDs
+  (e.g. `tests/test_draft/*` recommend/score tests, simulate-draft goldens).
+  Re-pin against the new model, citing this spec, per CLAUDE.md's
+  don't-edit-tests-without-justification rule. Split structural assertions (must
+  pass unchanged) from value-pins (re-blessed); a value shift not explained by
+  the dispersion switch is a real bug -- stop and investigate, do not loosen.
 - **Eye-test:** re-run the ERoto-vs-MC per-category SD comparison on the user's
   prod roster (read-only, `build_explicit_upstash_kv`); confirm the analytic
   band now matches the MC (especially SV: the ~3x gap should close). Save the
