@@ -311,8 +311,10 @@ def test_band_class_coin_flip_when_p_positive_near_50() -> None:
     (user-requested change, replacing the old +/-1 SD crosses-zero rule).
     """
     before = [_hitter(f"H{i}") for i in range(13)]
-    # Add a player nearly identical to the dropped one, nudged in noisy SB.
-    add_player = _hitter("Marginal", sb=16)
+    # Add a player nearly identical to the dropped one (sb=10), nudged in noisy
+    # SB. +2 SB lands p_positive ~0.62 under the NegBin dispersion -- a real but
+    # marginal gain, comfortably inside the 25-75% coin-flip band.
+    add_player = _hitter("Marginal", sb=12)
     swap = _build_swap(before, "H12", add_player)
     band = compute_delta_roto_band(**swap.band_kwargs)
     assert 0.25 <= band.p_positive <= 0.75

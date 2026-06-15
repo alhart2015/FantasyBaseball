@@ -394,7 +394,14 @@ def test_multiple_above_cutline_fas_get_distinct_drops(stash_fixture_il_full):
 
     Regression: the old single shared drop named the one weakest owned stash for
     EVERY FA, implying both FAs could be added by freeing the same slot."""
-    roster, standings, sds, slots, team, _weak = stash_fixture_il_full
+    roster, standings, _sds, slots, team, _weak = stash_fixture_il_full
+    # Use real per-team SDs (not the fixture's None): under the NegBin dispersion
+    # the degenerate None-SD band saturates every >=100-K arm to P(helps)=1.0 at
+    # a shared discrete-ceiling value, collapsing the two elite FAs and the owned
+    # Strong Stash into one tied rank. Real SDs make the band reflect K magnitude,
+    # so the FAs (130/125 K) cleanly outrank the owned stashes (115/100 K) as the
+    # distinct-drops assertion intends.
+    team_sds = build_team_sds({team: roster}, sd_scale=0.5**0.5)
     elite1 = _arm("Elite One", ip=90.0, k=130.0, status="IL15", er=28.0, bb=22.0, h_allowed=58.0)
     elite2 = _arm("Elite Two", ip=90.0, k=125.0, status="IL15", er=28.0, bb=22.0, h_allowed=58.0)
     result = score_stash_candidates(
@@ -403,7 +410,7 @@ def test_multiple_above_cutline_fas_get_distinct_drops(stash_fixture_il_full):
         projected_standings=standings,
         roster_slots=slots,
         team_name=team,
-        team_sds=sds,
+        team_sds=team_sds,
         fraction_remaining=0.5,
     )
     above = result.candidates[: result.cutline_rank]
