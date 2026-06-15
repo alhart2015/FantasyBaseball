@@ -573,15 +573,12 @@ def _apply_variance(
     all_z = rng.multivariate_normal(np.zeros(n_corr), corr_matrix, size=n)
 
     # Per-(player, correlated-stat) NegBin mean (projection * playing-time scale)
-    # and dispersion r (scalar or mu-banded, resolved from the projected mean).
-    corr_keys = [c for c in counting_cols if c in idx_map]
+    # and dispersion r (scalar or mu-banded, resolved from that mean). idx_map's
+    # keys are exactly the correlated counting stats, so one pass fills both.
     mu_mat = np.zeros((n, n_corr))
-    for col in corr_keys:
-        col_vals = np.array([safe_float(p.get(col)) for p in players])
-        mu_mat[:, idx_map[col]] = col_vals * scales
     r_mat = np.full((n, n_corr), np.inf)
-    for col in corr_keys:
-        j = idx_map[col]
+    for col, j in idx_map.items():
+        mu_mat[:, j] = np.array([safe_float(p.get(col)) for p in players]) * scales
         r_mat[:, j] = resolve_dispersion_r(STAT_DISPERSION[col], mu_mat[:, j])
 
     # One flattened copula draw over all (player, stat) cells -- collapses the
