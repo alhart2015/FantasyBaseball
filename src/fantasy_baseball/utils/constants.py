@@ -127,29 +127,6 @@ PITCHER_PROJ_KEYS: list[str] = ["ip", "w", "k", "sv", "er", "bb", "h_allowed", "
 # in the playing-time curve lookup when a dict carries ``ab`` but not ``pa``.
 AB_PER_PA: float = 0.90
 
-# Per-stat performance variance (SD of actual/projected ratio residuals).
-# Calibrated from Steamer+ZiPS projections vs MLB actuals, 2022-2024.
-# Per-PA rates for hitters, per-IP rates for pitchers (isolates performance
-# variance from playing time, which the playing-time model handles; see
-# PLAYING_TIME_CURVES). Stats with 0.0 variance (ab, ip) are playing-time-only.
-STAT_VARIANCE: dict[str, float] = {
-    # Hitter counting stats
-    "r": 0.156,
-    "hr": 0.343,
-    "rbi": 0.187,
-    "sb": 0.715,
-    "h": 0.103,
-    "ab": 0.0,
-    # Pitcher counting stats
-    "w": 0.416,
-    "k": 0.139,
-    "sv": 0.900,
-    "ip": 0.0,
-    "er": 0.252,
-    "bb": 0.257,
-    "h_allowed": 0.143,
-}
-
 # Per-stat Negative-Binomial dispersion r (var = mu + mu^2/r), calibrated from
 # 2022-2024 projection-vs-actual residuals conditional on realized playing time
 # (see scripts/calibrate_stat_dispersion.py). A value is either a scalar r or a

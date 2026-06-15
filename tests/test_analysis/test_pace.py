@@ -341,7 +341,8 @@ def test_hitter_avg_uses_binomial_sampling_sd():
     Expected z = (0.444 - 0.275) / 0.0859 = 1.97 → stat-hot-1 (not bright).
 
     Old buggy formula divided by STAT_VARIANCE["h"] * proj_avg = 0.103*.275
-    = 0.0283, yielding z = 5.97 and incorrectly flagging bright green.
+    (STAT_VARIANCE was a former constant, since removed) = 0.0283, yielding
+    z = 5.97 and incorrectly flagging bright green.
     """
     projected = {
         "pa": 600,

@@ -4,6 +4,9 @@ Compares Steamer + ZiPS blended projections against actual MLB stats for
 2022-2024 to compute empirical variance per stat category. Also produces
 a correlation matrix for future covariance-based simulation.
 
+Superseded by scripts/calibrate_stat_dispersion.py, which calibrates the
+unified STAT_DISPERSION (NegBin) source of truth; kept for history.
+
 Usage:
     python scripts/calibrate_variance.py
 """
