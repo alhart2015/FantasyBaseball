@@ -22,9 +22,9 @@ from fantasy_baseball.utils.constants import (
     HITTER_PROJ_KEYS,
     INVERSE_STATS,
     PITCHER_PROJ_KEYS,
-    STAT_VARIANCE,
     Category,
 )
+from fantasy_baseball.utils.dispersion import negbin_perf_cv
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
@@ -144,8 +144,8 @@ def compute_player_pace(
 
         if expected > 0 and counting_colored:
             ratio = actual / expected
-            variance = STAT_VARIANCE.get(stat, 0.0)
-            z = (ratio - 1.0) / variance if variance > 0 else 0.0
+            cv = float(negbin_perf_cv(stat, expected))  # expected > 0 guaranteed above
+            z = (ratio - 1.0) / cv if cv > 0 else 0.0
         else:
             z = 0.0
 

@@ -753,7 +753,9 @@ def _compute_team_totals_pace(
     stat-code keys (``"R"``, ``"HR"``, ``"PA"``, ...) because the Jinja
     template iterates fixed string lists.
     """
-    from fantasy_baseball.analysis.pace import STAT_VARIANCE, _z_to_color
+    from fantasy_baseball.analysis.pace import _z_to_color
+    from fantasy_baseball.utils.constants import STAT_DISPERSION
+    from fantasy_baseball.utils.dispersion import negbin_perf_cv
 
     active = [p for p in players if not p.get("is_bench", False)]
 
@@ -792,8 +794,8 @@ def _compute_team_totals_pace(
         expected = sum(p.get("pace", {}).get(cat.value, {}).get("expected", 0) or 0 for p in active)
         if expected > 0:
             ratio = actual / expected
-            variance = STAT_VARIANCE.get(cat.value.lower(), 0.0)
-            z = (ratio - 1.0) / variance if variance > 0 else 0.0
+            cv = float(negbin_perf_cv(cat.value.lower(), expected))
+            z = (ratio - 1.0) / cv if cv > 0 else 0.0
         else:
             z = 0.0
         totals[cat.value] = {
@@ -820,8 +822,16 @@ def _compute_team_totals_pace(
         expected_val = weighted / total_opp if total_opp > 0 else 0.0
 
         if expected_val > 0 and actual_val > 0:
-            variance = STAT_VARIANCE.get(component, 0.0)
-            z = (actual_val - expected_val) / (variance * expected_val) if variance > 0 else 0.0
+            # weighted is the projected rate-numerator total: ERA*IP = 9*er,
+            # WHIP*IP = bb+ha, AVG*PA ~ h. Recover the component count for the
+            # NegBin CV; guard unknown component / degenerate zero (preserves the
+            # old STAT_VARIANCE.get(component, 0.0) tolerance -> z=0).
+            component_count = weighted / 9.0 if rate_cat == Category.ERA else weighted
+            if component in STAT_DISPERSION and component_count > 0:
+                cv = float(negbin_perf_cv(component, component_count))
+            else:
+                cv = 0.0
+            z = (actual_val - expected_val) / (cv * expected_val) if cv > 0 else 0.0
             if is_inverse:
                 z = -z
         else:
