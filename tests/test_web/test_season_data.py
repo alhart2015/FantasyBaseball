@@ -2061,7 +2061,10 @@ class TestComputeTeamTotalsPace:
         """
         from fantasy_baseball.utils.dispersion import negbin_perf_cv
 
-        payload = self._canonical_standings_json("Hart of the Order", pa=580.0)
+        # Standings PA (611) is deliberately != the player opp-sum (300+280=580):
+        # the rate denominator must come from the player pace sum (total_opp), not
+        # the standings opp, so this gap lets the test discriminate the two.
+        payload = self._canonical_standings_json("Hart of the Order", pa=611.0)
         self._patch_read_cache(monkeypatch, payload)
         players = [
             {
@@ -2114,7 +2117,10 @@ class TestComputeTeamTotalsPace:
         """
         from fantasy_baseball.utils.dispersion import negbin_perf_cv
 
-        payload = self._canonical_standings_json("Hart of the Order", ip=190.0)
+        # Standings IP (211) is deliberately != the player opp-sum (100+90=190):
+        # the rate denominator comes from total_opp (player pace sum), so the gap
+        # ensures a regression that divided by the standings IP would be caught.
+        payload = self._canonical_standings_json("Hart of the Order", ip=211.0)
         self._patch_read_cache(monkeypatch, payload)
         players = [
             {
