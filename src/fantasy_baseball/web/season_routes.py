@@ -28,6 +28,7 @@ from fantasy_baseball.web.season_data import (
     CacheKey,
     coerce_basis,
     format_category_bars_for_display,
+    format_distributions_for_display,
     read_cache_dict,
     read_cache_list,
     read_meta,
@@ -512,6 +513,7 @@ def register_routes(app: Flask) -> None:
         rest_of_season_mc_data = None
         baseline_meta = None
         raw_breakdown = None
+        distributions = format_distributions_for_display(None)
 
         if raw_standings:
             from fantasy_baseball.web.season_data import (
@@ -573,6 +575,11 @@ def register_routes(app: Flask) -> None:
                     rest_of_season_mc_data = format_monte_carlo_for_display(
                         raw_mc["rest_of_season"], config.team_name
                     )
+                    # rest_of_season may predate this feature; .get() yields None
+                    # and the formatter returns the empty-state shape.
+                    distributions = format_distributions_for_display(
+                        raw_mc["rest_of_season"].get("distributions")
+                    )
 
         category_bars = format_category_bars_for_display(preseason_data, current_projected_data)
 
@@ -587,6 +594,7 @@ def register_routes(app: Flask) -> None:
             mc=mc_data,
             baseline_meta=baseline_meta,
             rest_of_season_mc=rest_of_season_mc_data,
+            distributions=distributions,
             category_bars=category_bars,
             categories=[c.value for c in ALL_CATEGORIES],
             all_categories=ALL_CATEGORIES,

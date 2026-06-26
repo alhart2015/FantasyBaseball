@@ -791,6 +791,77 @@ def test_standings_passes_baseline_meta_to_template(client, kv_isolation):
         assert b"2026-03-27" in resp.data
 
 
+def test_standings_passes_distributions_to_template(client, kv_isolation):
+    """The standings route reshapes the cached rest_of_season distributions
+    block and passes it to the template as the `distributions` kwarg, marking
+    the user's team server-side and dropping the raw user_team string."""
+    from fantasy_baseball.web import season_data
+
+    season_data.write_cache(
+        CacheKey.MONTE_CARLO,
+        {
+            "base": None,
+            "baseline_meta": None,
+            "rest_of_season": {
+                "team_results": {},
+                "category_risk": {},
+                "distributions": {
+                    "user_team": "Team 01",
+                    "overall": {
+                        "x": [60.0, 70.0, 80.0],
+                        "teams": {
+                            "Team 01": {"y": [0.1, 0.2, 0.1], "median": 75.0},
+                            "Team 02": {"y": [0.2, 0.1, 0.1], "median": 65.0},
+                        },
+                    },
+                    "category_totals": {
+                        "HR": {
+                            "x": [200.0, 250.0, 300.0],
+                            "teams": {
+                                "Team 01": {"y": [0.1, 0.2, 0.1], "median": 270.0},
+                                "Team 02": {"y": [0.2, 0.1, 0.1], "median": 240.0},
+                            },
+                        },
+                    },
+                    "category_points": {},
+                },
+            },
+        },
+    )
+    season_data.write_cache(CacheKey.STANDINGS, _mock_standings())
+
+    with patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+        mock_cfg.return_value.team_name = "Team 01"
+        with patch(
+            "fantasy_baseball.web.season_routes.render_template", return_value=""
+        ) as rendered:
+            client.get("/standings")
+
+    dist = rendered.call_args.kwargs["distributions"]
+    assert "overall" in dist
+    assert dist["overall"]["rows"]
+    assert any(r["is_user"] for r in dist["overall"]["rows"])
+    assert "user_team" not in dist
+
+
+def test_standings_distributions_empty_without_mc(client, kv_isolation):
+    """With no MONTE_CARLO cache seeded, the module-scope empty-state default
+    reaches the template and the route does not crash."""
+    from fantasy_baseball.web import season_data
+
+    season_data.write_cache(CacheKey.STANDINGS, _mock_standings())
+
+    with patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+        mock_cfg.return_value.team_name = "Team 01"
+        with patch(
+            "fantasy_baseball.web.season_routes.render_template", return_value=""
+        ) as rendered:
+            client.get("/standings")
+
+    dist = rendered.call_args.kwargs["distributions"]
+    assert dist == {"overall": {"x": [], "rows": []}, "category_totals": {}, "category_points": {}}
+
+
 def _seed_browse_caches():
     """Seed ros_projections + positions + roster + opp_rosters + audit
     into the active KV store. Returns the seeded names so tests can assert
