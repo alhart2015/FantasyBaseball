@@ -920,7 +920,9 @@ def run_ros_monte_carlo(
 
     Returns:
         {"team_results": {team: {median_pts, p10, p90, first_pct, top3_pct}},
-         "category_risk": {cat: {median_pts, p10, p90, top3_pct, bot3_pct}}}
+         "category_risk": {cat: {median_pts, p10, p90, top3_pct, bot3_pct}},
+         "distributions": compact per-team outcome curves (see build_distributions)}
+        category_risk is {} when the user team is absent from the rosters.
     """
     # simulate_remaining_season derives ROS from full-season minus YTD; flatten
     # full-season here so that math is well-formed (see _flatten_full_season).
