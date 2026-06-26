@@ -163,7 +163,9 @@ plumbed.
      filling; this realistic case arises with OF4/UTIL2 flexibility, so it is not
      hypothetical.) Per-game value = the body's ROS roto value per ROS game.
      Compute it from `calculate_player_sgp` on the body's `rest_of_season` divided
-     by `g_ros`. Caveat (acknowledged, minor): SGP's rate terms normalize against
+     by `g_ros`, guarded as `value / g_ros if g_ros > 0 else 0` so a zero-game
+     body is never chosen as fill. Caveat (acknowledged, minor): SGP's rate terms
+     normalize against
      fixed full-season constants (`team_ab=5500`/`team_ip=1450`), so the AVG
      sub-term is slightly off-horizon; this affects 1 of 5 hitter categories and
      is far smaller than the volume bias of total SGP, so per-game value is the
@@ -211,10 +213,16 @@ plumbed.
    `team_total = team_YTD + summed_ROS` (rates recombined from `YTD + ROS`
    components, using the actual_ab/actual_ip already threaded from Yahoo). Two
    wins beyond fixing the games source: (a) horizon-consistent (games, stats, and
-   damping all ROS); (b) the banked-YTD floor becomes **structural** -- ROS
-   contributions are non-negative, so `team_total >= YTD` automatically and the
-   `max(actual, sim)` clamp is unnecessary, which also dissolves the earlier
-   "floor binds -> inconclusive" concern.
+   damping all ROS); (b) the banked-YTD floor becomes **structural** for the
+   hitter path -- ROS contributions are non-negative, so `team_total >= YTD`
+   automatically and the `max(actual, sim)` clamp is unnecessary *for hitters*,
+   which dissolves the earlier "floor binds -> inconclusive" concern. NOTE the
+   seam: pitchers stay on the existing full-season-minus-YTD blend (Component 5),
+   so the `max(actual, sim)` clamp is RETAINED for pitcher categories. Within the
+   one batch function this is a clean dual path -- hitting and pitching counting
+   stats are disjoint and already sampled by separate `_apply_variance_batch`
+   calls -- but the implementer must not drop the pitcher clamp when removing the
+   hitter one.
 
    Classification/attribution happens at **setup on Player objects** (in
    `run_ros_monte_carlo`, which receives Player lists), reusing the existing
@@ -361,4 +369,6 @@ Phase 0 is a GATE; Phases 1-6 each their own plan / PR.
   Phase 3; must be one constant, not two.
 - The exact reconciliation of the PT-scale `fraction_remaining` damping under the
   ROS-direct framing (avoid applying remaining-season risk twice) -- pinned in
-  Phase 2.
+  Phase 2. Likely resolution: pass `fraction_remaining=1.0` to
+  `playing_time_moments` for the ROS-direct draw, since the ROS projection already
+  encodes the remaining horizon; confirm against the SD backtest.
