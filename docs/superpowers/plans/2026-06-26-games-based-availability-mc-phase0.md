@@ -428,9 +428,7 @@ This is a drive-the-pipeline-and-observe step, not a unit test. It produces the 
 - [ ] **Step 1: Add the gated hook.** In `refresh_pipeline._run_ros_monte_carlo`, AFTER `actual_standings_dict` is fully built (after the `for e in self.standings.entries:` loop, ~line 1388) and `h_slots`/`p_slots` are computed, insert:
 
 ```python
-            import os
-
-            if os.environ.get("FB_SELECTION_ATTRIBUTION"):
+            if os.environ.get("FB_SELECTION_ATTRIBUTION"):  # os is imported at module top
                 from fantasy_baseball.mc_selection import (
                     format_attribution_table,
                     run_selection_attribution,
@@ -466,7 +464,7 @@ Expected: the refresh completes and writes `phase0_attribution.txt` with the hea
   - `gap = topk_per_iter - active_slot` (the re-measured gap; replaces the eyeballed 94)
   - `churn_share = (topk_per_iter - topk_fixed) / gap`
   - `seating_share = (topk_fixed - active_slot) / gap`
-Record all three SkeleThor RBI numbers and (from the same table) the Hart RBI value under each arm.
+Record all three SkeleThor RBI numbers and (from the same table) the Hart RBI value under each arm. If `gap` is within MC noise of zero (the over-credit did not reproduce on this snapshot), do NOT compute the shares -- record that the regression failed to reproduce and treat it as STOP (re-check the snapshot / fraction_remaining first).
 
 - [ ] **Step 4: Write the decision note** at `docs/superpowers/games-mc-phase0-attribution-2026-06-26.md`: run conditions; the full three-arm table; SkeleThor RBI `gap`/`churn_share`/`seating_share`; whether the Hart 1st->3rd re-rank reproduces and which arm resolves it; and the VERDICT:
   - `seating_share >= 0.50` -> **GO**: bench seating is a real driver; proceed to plan Phases 1-6 (the games-fill engine). Note the active_slot arm *over*-corrects (removes legitimate injury-insurance) -- exactly what the fill engine adds back.
