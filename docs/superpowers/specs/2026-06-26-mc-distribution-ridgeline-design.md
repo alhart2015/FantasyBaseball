@@ -85,13 +85,16 @@ exist today. (Transient cost: 12 teams x 10 cats x 1000 iters of point values,
 ~1-2 MB of floats held during the run -- modest. Only the compact curves below
 are cached.)
 
-Once per-category points are accumulated for all teams, the user's slice is a
-superset of the existing user-only `user_cat_pts` array. To avoid two parallel
-accumulations of the same data (per the repo's reuse / no-duplicate-state
-conventions), derive the existing `category_risk` aggregates from the user's slice
-of the new all-team structure and drop the separate `user_cat_pts` accumulation --
-or, if that entangles the change too much, keep `user_cat_pts` but call out the
-deliberate overlap. Prefer the former.
+Once per-category points are accumulated for all teams, the user's slice equals
+the existing user-only `user_cat_pts` array. To avoid two parallel accumulations
+of the same data (per the repo's reuse / no-duplicate-state conventions), derive
+the existing `category_risk` aggregates from the **raw per-iteration user slice**
+of the new all-team structure -- identical to today's computation, just a
+different source variable: `median`/`p10`/`p90` percentiles plus
+`top3_pct = P(pts >= 8)` and `bot3_pct = P(pts <= 3)` (the same hardcoded `>=8` /
+`<=3` thresholds the current code uses) -- and drop the separate `user_cat_pts`
+accumulation. If that derivation entangles the change too much, keep
+`user_cat_pts` but call out the deliberate overlap. Prefer the former.
 
 ### What we retain
 
