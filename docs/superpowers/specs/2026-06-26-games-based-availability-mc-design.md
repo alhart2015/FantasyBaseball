@@ -53,6 +53,44 @@ target model (below).
 These compose: ERoto-correct IL handling, plus a stochastic bench-fill layer ERoto
 lacks, on a churn-free fixed active set.
 
+## Missed playing-time accounting (single authority -- read before Components)
+
+Three things reduce an active body's ROS playing time. The engine assigns each to
+exactly ONE filler so no games are counted twice. This section is the contract the
+Components implement.
+
+1. **Deterministic displacement (setup).** A returning IL player takes part of an
+   active body's slot. The IL player is counted at full (injury-baked) ROS; the
+   displaced active body's BASELINE is scaled down by its displacement factor. The
+   games the displacement removes ARE the IL player's -- they are NOT re-filled by
+   the bench layer.
+2. **Stochastic injury (per-iteration).** On top of the displacement-adjusted
+   baseline, the PT-variance draw yields `frac_missed = max(0, 1 - scales)` (the
+   fraction of the body's already-adjusted expected playing time it misses this
+   iteration). This is the ONLY quantity the bench injury-fill acts on. There is no
+   separate "games count" emitted by the sampler -- `frac_missed` (a fraction of
+   the body's expected ROS games) IS the shortfall; "games missed" = `frac_missed *
+   expected_ROS_games`.
+3. **Existing built-in replacement backfill is REMOVED for this path.**
+   `_apply_variance_batch` today fills every body's `frac_missed` with
+   `_replacement_line` (`repl_contrib = repl_line * frac_missed`,
+   `simulation.py:701-710`). The new bench-first/replacement-last fill REPLACES this
+   -- same `frac_missed`, filled better. `frac_missed` (or `scales`) must be plumbed
+   OUT of `_apply_variance_batch` (currently computed and discarded), and the
+   built-in `repl_contrib` suppressed on this path.
+
+Order per body per iteration: apply displacement factor to the ROS baseline ->
+sample PT variance around the reduced baseline -> `frac_missed` is the stochastic
+shortfall -> fill from bench, then replacement. The displacement reduction and the
+stochastic shortfall are DISJOINT slices of the body's games, so no slice is
+filled twice.
+
+Conservation: the effective active set sums to `h_slots` worth of games because the
+displacement factor is `(active_pt - il_pt)/active_pt` -- the IL body SHARES the
+displaced target's slot, it does not add a new one. The MC inherits this from
+reusing `_compute_displacement_factors`; it must sum the displaced set (more bodies,
+conserved PT), NOT add IL bodies as extra slots.
+
 ## Data-path reality (read before the design)
 
 `run_ros_monte_carlo` flattens each Player via `_flatten_full_season` ->
@@ -78,20 +116,40 @@ in hand in `run_ros_monte_carlo` before the flatten). See Component 4.
    - Forward serialization round-trips stay stable.
    - BACKWARD compat: already-persisted JSON (`draft_state*.json`, dashboard
      state) lacks `G`, so a round-trip materializes `g=0`/`gs=0` via `from_dict`'s
-     `or 0` -- the classic falsy-zero footgun. Audit that no consumer trusts
-     pre-change `g`/`gs`, or gate use behind a presence check.
+     `or 0` -- the classic falsy-zero footgun. This is not hypothetical: the
+     per-game value rule (`value/g_ros if g_ros>0 else 0`) would treat a real
+     full-timer loaded from stale JSON (g=0) as zero-per-game and EXCLUDE it from
+     fill ordering. So a presence/derivation gate is MANDATORY: when `g_ros` is 0
+     or absent, derive it from ROS PA/IP via the shared per-game constant; never
+     trust a literal `g=0` as "plays zero games." (Since the in-season path sources
+     `g` from a fresh refresh's `rest_of_season`, not stale JSON, the gate is the
+     belt-and-suspenders backstop.)
 
 2. **Setup: classification + IL displacement (deterministic, reuse ERoto).** In
    `run_ros_monte_carlo`, on the Player rosters (before flatten), per team:
    - `_classify_roster` -> (active, il, healthy-bench).
-   - `_compute_displacement_factors(active, il, league_context)` -> per-active-body
-     displacement factor (IL players activate at full ROS; the worst eligible
-     active match is scaled by the IL player's expected ROS PT). These are the
-     SAME functions ERoto's projected standings use, so the MC's IL handling
-     agrees with ERoto by construction. Build the `LeagueContext` the same way
-     `ProjectedStandings.from_rosters` does (it already ran earlier in the
-     pipeline; reuse `build_eos_baseline` + `build_team_sds` or thread the context
-     through rather than recomputing).
+   - `_compute_displacement_factors(active, il, league_context)` -> a
+     `dict[str, float]` keyed by player NAME (`scoring.py`). The MC must re-key
+     these onto Player objects by `yahoo_id`/identity at the boundary, NOT by bare
+     name (same-name collisions on one roster would mis-scale -- the repo's
+     "use player IDs not names" rule). IL players activate at full ROS; the worst
+     eligible active match is scaled by the IL player's expected ROS PT. These are
+     the SAME functions ERoto's projected standings use, so the MC's IL handling
+     agrees with ERoto by construction.
+   - **LeagueContext is required (not optional) and is NOT free to obtain.**
+     `ProjectedStandings.from_rosters` builds the context INLINE per team and
+     discards it; the pipeline does not persist it. So this is real plumbing, not a
+     cheap reuse: in `_build_projected_standings`, retain the per-team
+     `LeagueContext` (or its inputs: the `build_eos_baseline` baseline +
+     `build_team_sds` SDs) on `self`, and thread them into `_run_ros_monte_carlo`.
+     The pipeline ordering supports this (`_build_projected_standings` runs before
+     `_run_ros_monte_carlo`). The context is REQUIRED because without it
+     `_compute_displacement_factors` falls back to the legacy SGP picker (the
+     elite-low-volume-closer pathology), which would DIVERGE from ERoto -- defeating
+     the agree-by-construction goal (and breaking the pitcher pool model, Component
+     5). Recomputing `build_eos_baseline` at MC setup (a full pass-1 standings
+     build) is the fallback if threading proves impractical, but it is not free --
+     pin the choice in Phase 2.
    - Output per team: the **effective active set** = active-slot bodies (each with
      its displacement factor, mostly 1.0) + IL bodies (at full ROS), and the
      **healthy-bench fill pool** (each with eligible positions, ROS games `g_ros`,
@@ -102,12 +160,20 @@ in hand in `run_ros_monte_carlo` before the flatten). See Component 4.
 
 3. **Per-iteration: availability draw + bench injury-fill (stochastic).** On the
    sampled ROS stats, per team, per iteration:
-   - Each effective-active body's stats are sampled with the existing playing-time
-     variance (`_apply_variance_batch`) -- this is the simulated injury. Apply the
-     body's displacement factor (from Component 2) to its contribution.
-   - The body's simulated shortfall = its expected ROS games minus its sampled
-     games (the missed games this iteration). For each shortfall, fill from the
-     eligible **healthy-bench** pool, at the bench body's own per-game rate.
+   - Each effective-active body's ROS baseline is FIRST scaled by its displacement
+     factor (Component 2), THEN sampled with the existing playing-time variance
+     (`_apply_variance_batch`). Per the accounting section, the displacement
+     reduction is the IL player's games (not re-filled); only the stochastic draw
+     is an injury.
+   - The body's stochastic shortfall this iteration is `frac_missed =
+     max(0, 1 - scales)` -- a fraction of the body's (displacement-adjusted)
+     expected ROS games; "games missed" = `frac_missed * expected_ROS_games`. The
+     sampler computes `frac_missed` internally and discards it; it must be plumbed
+     OUT of `_apply_variance_batch`, and the function's built-in replacement
+     backfill (`repl_contrib`, `simulation.py:701-710`) SUPPRESSED on this path --
+     the new fill REPLACES it (same `frac_missed`, filled better; see accounting
+     section #3). Fill each shortfall from the eligible **healthy-bench** pool at
+     the bench body's own per-game rate, then replacement.
    - **Value rule (per-game).** Order fill bodies by per-game ROS value =
      `calculate_player_sgp(rest_of_season) / g_ros`, guarded
      `value/g_ros if g_ros>0 else 0`. (Per-game, not total SGP: filling N games is
@@ -156,15 +222,29 @@ in hand in `run_ros_monte_carlo` before the flatten). See Component 4.
    The active set is fixed at setup -> no per-iteration re-selection (churn freeze).
 
    Reconcile the PT-scale `fraction_remaining` damping under ROS-direct so
-   remaining-season risk is applied ONCE (likely: pass `fraction_remaining=1.0` to
-   `playing_time_moments` for the ROS-direct draw; confirm via SD backtest).
+   remaining-season risk is applied ONCE. This is NOT just a mean shift: today
+   `fraction_remaining` feeds BOTH `playing_time_moments` (mean + SD of the PT
+   scale, `simulation.py:675`) AND `_negbin_copula_counts(..., fraction_remaining)`
+   (dispersion `r`, `simulation.py:698`). Sampling ROS-direct means the projection
+   IS the remaining mean, so the mean-haircut must not be re-applied -- but the SD
+   and dispersion must still reflect remaining-season risk, NOT be flattened. So
+   "pass `fraction_remaining=1.0`" is too blunt (it would also collapse the
+   dispersion). The Phase-4 design must separate the mean-horizon term (set to ROS)
+   from the variance/dispersion-horizon term (keep remaining-season risk), and the
+   SD backtest (Component 6) is the GATE: if ROS-direct cannot reproduce the
+   calibrated category SDs, the fallback is to keep full-season sampling and source
+   only games/displacement/fill from setup ROS quantities. Pin in Phase 4.
 
    Heavy NegBin sampling stays vectorized; the light per-team/per-iteration fill
    allocation may be a Python loop (cheap at this scale).
 
 5. **Pitchers.** Mirror ERoto's pitcher handling: classification + IL displacement
    via the pitcher pool model (`_compute_pitcher_pool_factors`), and exclude
-   healthy bench pitchers. This gives pitchers the SAME IL-correct, bench-excluded
+   healthy bench pitchers. `_compute_pitcher_pool_factors` takes a NON-OPTIONAL
+   `LeagueContext`, so this depends on the context plumbing from Component 2; with
+   no context the pitcher path silently falls back to the legacy substitution
+   picker and DIVERGES from ERoto. The context is therefore mandatory for both
+   hitters and pitchers, or the engine does not ship. This gives pitchers the SAME IL-correct, bench-excluded
    treatment as hitters (mechanisms 1 + churn-freeze), keeping 5x5 standings
    coherent (no tilt toward pitching-deep teams). DEFER the stochastic
    healthy-bench injury-fill for pitchers (mechanism 2) and closer-role SV
@@ -190,13 +270,19 @@ engine as a fourth arm:
   categories** + overall roto standings under: (1) OLD top-k, (2) bench-exclusion
   (active-slot), (3) **NEW engine** (IL displacement + bench injury-fill +
   churn-freeze), and ERoto, with run conditions in the header.
-- The NEW engine must land BETWEEN bench-exclusion (floor) and OLD top-k (ceiling):
-  above bench-exclusion (healthy bench earns nonnegative injury-fill credit) and
-  below OLD top-k (no full-time seating of healthy bench / no IL double-count). On
-  IL-driven cases (SkeleThor) it must track ERoto's displacement (e.g. Springer/
-  Bauers scaled, IL bats at full); on healthy-bench cases (Cavalli) the seated
-  bats (Perez/Ward/Arraez) contribute a small injury-fill share, not their full
-  ~99 RBI.
+- DIRECTIONAL acceptance (not a strict per-cell bound): in AGGREGATE (overall roto
+  total) and on the clear counting categories of the demonstrative teams, NEW
+  should sit between bench-exclusion (floor) and OLD top-k (ceiling) -- above the
+  floor (healthy bench earns nonnegative injury-fill credit) and below the ceiling
+  (no full-time seating of healthy bench / no IL double-count). It is NOT required
+  to fall inside that band in every category x team cell: the displacement target
+  is the DeltaRoto-optimal pick (not category-monotone), so it can sacrifice one
+  category to gain overall roto, legitimately pushing a single cell outside the
+  band. Judge by: (a) healthy-bench cases (Cavalli) -- seated bats
+  (Perez/Ward/Arraez) contribute a small injury-fill share, not their full ~99
+  RBI; (b) IL-driven cases (SkeleThor/Hart) -- NEW tracks ERoto's displacement
+  (Springer/Bauers/Okamoto scaled, IL bats at full ROS) per-player, which is the
+  by-construction check, not the aggregate band.
 - Report pitcher categories + overall standings so the hitter-fill/pitcher-no-fill
   asymmetry is bounded and visible.
 - Real cached data (Upstash/Render source of truth; never stale local cache).
@@ -231,6 +317,15 @@ makes same-day collisions rare.
 - Healthy-bench injury-fill: a healthy bench bat contributes ZERO when its
   position's starters draw full availability, but a NONZERO share when a starter
   draws a low-PT (injured) iteration -- capped at the bench body's own ROS games.
+- No double-fill (the accounting contract): a DISPLACED active body (scaled by an
+  IL return) is sampled around its reduced baseline; its injury-fill fires only on
+  the stochastic `frac_missed`, NOT on the displacement reduction (which the IL
+  body already covers). A constructed roster asserts total team games == h_slots
+  worth (conservation) and that the displaced slot is not filled by both the IL
+  body and a bench body.
+- Replacement backfill removed: with the new fill engine active, the built-in
+  `_apply_variance_batch` `repl_contrib` does NOT also fire (no team total reflects
+  double replacement on the same missed games).
 - One-body capacity: two starters draw low in the same iteration and one bench
   body is eligible for both -- its total contributed games do not exceed its ROS
   games.
@@ -262,13 +357,16 @@ by later phases and the acceptance artifact. Phases 1-6 each their own plan / PR
 
 1. Games data plumbing (`g`, `gs`) + serialization/SGP/backward-compat audit.
 2. Setup: classification + IL displacement -- reuse `_classify_roster` +
-   `_compute_displacement_factors` on the Player rosters in `run_ros_monte_carlo`;
-   produce the effective active set (+ factors) and the healthy-bench fill pool
-   (+ per-game value, `g_ros`, eligible positions). Build/thread the LeagueContext
-   like `ProjectedStandings.from_rosters`.
-3. Per-iteration bench injury-fill engine (hitters): shortfall = expected ROS
-   games - sampled games; per-game-value ordering; one-body capacity;
-   deterministic tie-break; rate-stat component fill; replacement per-game.
+   `_compute_displacement_factors`; RE-KEY the name-keyed factor dict onto Players
+   by `yahoo_id`; produce the effective active set (+ factors) and healthy-bench
+   pool (+ per-game value, `g_ros` with the mandatory presence/derivation gate,
+   eligible positions). Thread the LeagueContext from `_build_projected_standings`
+   (retain it on `self`) -- mandatory, not optional; pin thread-vs-recompute here.
+3. Per-iteration bench injury-fill engine (hitters): plumb `frac_missed`/`scales`
+   out of `_apply_variance_batch` and SUPPRESS its built-in `repl_contrib` on this
+   path; apply displacement factor to the baseline before sampling; fill
+   `frac_missed` bench-first (per-game-value ordering, one-body capacity,
+   deterministic tie-break) then replacement-per-game; rate-stat component fill.
 4. MC integration (ROS-direct blend; fixed active set + displacement factors +
    injury-fill; pitcher displacement/bench-exclusion), plus the before/after
    artifact (definition of done).
