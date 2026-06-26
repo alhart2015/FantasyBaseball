@@ -573,3 +573,30 @@ class TestPlayerPositionEnum:
         assert "OF" in p.positions
         assert "UTIL" in p.positions
         assert p.selected_position == "OF"
+
+
+def test_hitter_stats_carries_games():
+    from fantasy_baseball.models.player import HitterStats
+
+    h = HitterStats.from_dict({"r": 80, "hr": 25, "rbi": 80, "sb": 10, "h": 150, "ab": 550, "g": 150})
+    assert h.g == 150
+    assert h.to_dict()["g"] == 150
+
+
+def test_pitcher_stats_carries_games_and_starts():
+    from fantasy_baseball.models.player import PitcherStats
+
+    p = PitcherStats.from_dict(
+        {"w": 10, "k": 180, "ip": 190, "er": 70, "bb": 50, "h_allowed": 160, "g": 32, "gs": 32}
+    )
+    assert p.g == 32 and p.gs == 32
+    rt = PitcherStats.from_dict(p.to_dict())
+    assert rt.g == 32 and rt.gs == 32
+
+
+def test_missing_games_defaults_zero_not_error():
+    from fantasy_baseball.models.player import HitterStats, PitcherStats
+
+    assert HitterStats.from_dict({"r": 80, "hr": 25, "rbi": 80, "sb": 10, "h": 150, "ab": 550}).g == 0
+    p = PitcherStats.from_dict({"w": 10, "k": 180, "ip": 190, "er": 70, "bb": 50, "h_allowed": 160})
+    assert p.g == 0 and p.gs == 0
