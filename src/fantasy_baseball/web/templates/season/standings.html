@@ -21,7 +21,7 @@
     <button class="pill active" data-view="current" onclick="toggleTopView(this)">Current</button>
     <button class="pill" data-view="projected" onclick="toggleTopView(this)">Projected</button>
     <button class="pill" data-view="montecarlo" onclick="toggleTopView(this)">Monte Carlo</button>
-    <button class="pill" data-view="categorybars" onclick="toggleTopView(this)">Category Bars</button>
+    <button class="pill" data-view="distributions" onclick="toggleTopView(this)">Distributions</button>
 </div>
 
 {# ── Current (actual standings, unchanged) ── #}
@@ -231,33 +231,26 @@
     </div>
 </div>
 
-{# -- Category Bars (ranked dot-plot with +/-1 SD error bars) -- #}
-<div id="view-categorybars" style="display: none;">
-    <div class="pill-group" id="catbars-proj-toggle">
-        <button class="pill active" data-cbproj="current" onclick="catBarsSetProjection(this)">Current</button>
-        <button class="pill" data-cbproj="preseason" onclick="catBarsSetProjection(this)">Preseason</button>
-    </div>
-
-    <div class="pill-group" id="catbars-cat-toggle">
+{# -- Distributions (ridgeline of per-team MC outcome spreads) -- #}
+<div id="view-distributions" style="display: none;">
+    <div class="pill-group" id="dist-metric-toggle">
+        <button class="pill active" data-distmetric="overall" onclick="distSetMetric(this)">Overall</button>
         {% for cat in all_categories %}
-        <button class="pill {% if loop.first %}active{% endif %}"
-                data-cbcat="{{ cat.value }}" onclick="catBarsSetCategory(this)">{{ cat.value }}</button>
+        <button class="pill" data-distmetric="{{ cat.value }}" onclick="distSetMetric(this)">{{ cat.value }}</button>
         {% endfor %}
     </div>
 
-    <div id="catbars-odds" class="catbars-odds" style="display: none;">
-        <span><strong>1st:</strong> <span id="catbars-first">--</span></span>
-        <span><strong>top 3:</strong> <span id="catbars-top3">--</span></span>
-        <span><strong>wins:</strong> <span id="catbars-wins">--</span></span>
+    <div class="pill-group" id="dist-mode-toggle" style="display: none;">
+        <button class="pill active" data-distmode="totals" onclick="distSetMode(this)">Totals</button>
+        <button class="pill" data-distmode="points" onclick="distSetMode(this)">Points</button>
     </div>
 
-    <div class="catbars-wrapper"><canvas id="category-bars-canvas"></canvas></div>
-    <p id="catbars-hint" class="placeholder-text" style="display: none;">Lower is better.</p>
-    <p id="catbars-empty" class="placeholder-text" style="display: none;">
-        No projections available. Click "Refresh Data" first.
+    <div class="dist-wrapper"><canvas id="distributions-canvas"></canvas></div>
+    <p id="dist-empty" class="placeholder-text" style="display: none;">
+        No Monte Carlo distributions available. Click "Refresh Data" first.
     </p>
 
-    <script type="application/json" id="category-bars-data">{{ category_bars | tojson }}</script>
+    <script type="application/json" id="distributions-data">{{ distributions | tojson }}</script>
 </div>
 
 <dialog id="breakdown-modal">
@@ -350,8 +343,8 @@ function toggleTopView(el) {
     document.getElementById('view-current').style.display = v === 'current' ? '' : 'none';
     document.getElementById('view-projected').style.display = v === 'projected' ? '' : 'none';
     document.getElementById('view-montecarlo').style.display = v === 'montecarlo' ? '' : 'none';
-    document.getElementById('view-categorybars').style.display = v === 'categorybars' ? '' : 'none';
-    if (v === 'categorybars' && window.renderCategoryBars) window.renderCategoryBars();
+    document.getElementById('view-distributions').style.display = v === 'distributions' ? '' : 'none';
+    if (v === 'distributions' && window.renderDistributions) window.renderDistributions();
 }
 
 /* ── Current standings sub-toggle ── */
@@ -661,25 +654,6 @@ document.addEventListener('DOMContentLoaded', () => {
     width: 100%;
     font-size: 0.9rem;
 }
-.catbars-wrapper { position: relative; height: 460px; margin-top: 0.75rem; }
-/* Category selector: 5 columns so the 10 cats fall on two rows (hitting on
-   top, pitching below) instead of one horizontally-scrolling strip. */
-#catbars-cat-toggle {
-    display: grid;
-    grid-template-columns: repeat(5, max-content);
-    column-gap: 6px;
-    row-gap: 4px;
-    border-bottom: none;
-}
-#catbars-cat-toggle .pill:first-child { padding-left: 18px; }
-.catbars-odds {
-    display: flex;
-    gap: 1.5rem;
-    margin: 0.25rem 0 0;
-    font-size: 0.95rem;
-    color: var(--ink);
-}
-.catbars-odds strong { color: var(--ink-soft); font-weight: 600; }
 .breakdown-status-badge {
     display: inline-block;
     padding: 2px 6px;
@@ -698,10 +672,20 @@ document.addEventListener('DOMContentLoaded', () => {
     font-weight: 600;
     font-style: normal;
 }
+.dist-wrapper { position: relative; width: 100%; height: 520px; margin-top: 0.75rem; }
+/* Canvas fills the wrapper so its layout size is the responsive container width
+   x fixed height; the backing store is sized from the wrapper in JS. */
+.dist-wrapper canvas { display: block; width: 100%; height: 100%; }
+#dist-metric-toggle {
+    display: grid;
+    grid-template-columns: repeat(6, max-content);
+    column-gap: 6px;
+    row-gap: 4px;
+    border-bottom: none;
+}
 </style>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-error-bars@4.4.1/build/index.umd.min.js"></script>
-<script src="{{ url_for('static', filename='season_category_bars.js') }}"></script>
+
+<script src="{{ url_for('static', filename='season_distributions.js') }}"></script>
 
 {% endif %}
 </div>

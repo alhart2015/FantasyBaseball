@@ -791,6 +791,125 @@ def test_standings_passes_baseline_meta_to_template(client, kv_isolation):
         assert b"2026-03-27" in resp.data
 
 
+def test_standings_passes_distributions_to_template(client, kv_isolation):
+    """The standings route reshapes the cached rest_of_season distributions
+    block and passes it to the template as the `distributions` kwarg, marking
+    the user's team server-side and dropping the raw user_team string."""
+    from fantasy_baseball.web import season_data
+
+    season_data.write_cache(
+        CacheKey.MONTE_CARLO,
+        {
+            "base": None,
+            "baseline_meta": None,
+            "rest_of_season": {
+                "team_results": {},
+                "category_risk": {},
+                "distributions": {
+                    "user_team": "Team 01",
+                    "overall": {
+                        "x": [60.0, 70.0, 80.0],
+                        "teams": {
+                            "Team 01": {"y": [0.1, 0.2, 0.1], "median": 75.0},
+                            "Team 02": {"y": [0.2, 0.1, 0.1], "median": 65.0},
+                        },
+                    },
+                    "category_totals": {
+                        "HR": {
+                            "x": [200.0, 250.0, 300.0],
+                            "teams": {
+                                "Team 01": {"y": [0.1, 0.2, 0.1], "median": 270.0},
+                                "Team 02": {"y": [0.2, 0.1, 0.1], "median": 240.0},
+                            },
+                        },
+                    },
+                    "category_points": {},
+                },
+            },
+        },
+    )
+    season_data.write_cache(CacheKey.STANDINGS, _mock_standings())
+
+    with patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+        mock_cfg.return_value.team_name = "Team 01"
+        with patch(
+            "fantasy_baseball.web.season_routes.render_template", return_value=""
+        ) as rendered:
+            client.get("/standings")
+
+    dist = rendered.call_args.kwargs["distributions"]
+    assert "overall" in dist
+    assert dist["overall"]["rows"]
+    assert any(r["is_user"] for r in dist["overall"]["rows"])
+    assert "user_team" not in dist
+
+
+def test_standings_distributions_empty_without_mc(client, kv_isolation):
+    """With no MONTE_CARLO cache seeded, the module-scope empty-state default
+    reaches the template and the route does not crash."""
+    from fantasy_baseball.web import season_data
+
+    season_data.write_cache(CacheKey.STANDINGS, _mock_standings())
+
+    with patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+        mock_cfg.return_value.team_name = "Team 01"
+        with patch(
+            "fantasy_baseball.web.season_routes.render_template", return_value=""
+        ) as rendered:
+            client.get("/standings")
+
+    dist = rendered.call_args.kwargs["distributions"]
+    assert dist == {"overall": {"x": [], "rows": []}, "category_totals": {}, "category_points": {}}
+
+
+def test_standings_embeds_distributions_node(client, kv_isolation):
+    """The Distributions view embeds the reshaped distributions block as a
+    JSON <script> node (#distributions-data) the canvas renderer reads. The
+    embedded payload carries the server-marked is_user flag and drops the raw
+    user_team string."""
+    from fantasy_baseball.web import season_data
+
+    season_data.write_cache(
+        CacheKey.MONTE_CARLO,
+        {
+            "base": None,
+            "baseline_meta": None,
+            "rest_of_season": {
+                "team_results": {},
+                "category_risk": {},
+                "distributions": {
+                    "user_team": "Team 01",
+                    "overall": {
+                        "x": [60.0, 70.0, 80.0],
+                        "teams": {
+                            "Team 01": {"y": [0.1, 0.2, 0.1], "median": 75.0},
+                            "Team 02": {"y": [0.2, 0.1, 0.1], "median": 65.0},
+                        },
+                    },
+                    "category_totals": {},
+                    "category_points": {},
+                },
+            },
+        },
+    )
+    season_data.write_cache(CacheKey.STANDINGS, _mock_standings())
+
+    with patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+        mock_cfg.return_value.team_name = "Team 01"
+        body = client.get("/standings").get_data(as_text=True)
+
+    match = re.search(
+        r'<script type="application/json" id="distributions-data">(.*?)</script>',
+        body,
+        re.DOTALL,
+    )
+    assert match is not None, "distributions-data script tag not found"
+    dist = json.loads(match.group(1))
+    assert dist["overall"]["rows"]
+    assert any(r["is_user"] for r in dist["overall"]["rows"])
+    assert "user_team" not in dist
+
+
 def _seed_browse_caches():
     """Seed ros_projections + positions + roster + opp_rosters + audit
     into the active KV store. Returns the seeded names so tests can assert
@@ -1361,127 +1480,6 @@ def test_lineup_renders_dash_chip_when_no_streak_cache(client, kv_isolation) -> 
     assert "streak-chip streak-neutral" in body
 
 
-def test_standings_category_bars_empty_without_projections(client, kv_isolation):
-    """When PROJECTIONS are absent, /standings renders (200) and category-bars JSON is empty."""
-    from fantasy_baseball.web import season_data
-
-    standings = _mock_standings()
-    season_data.write_cache(CacheKey.STANDINGS, standings)
-    season_data.write_cache(CacheKey.META, {"last_refresh": "8:32 AM", "week": "3"})
-    # PROJECTIONS deliberately NOT seeded.
-
-    with patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
-        mock_cfg.return_value.team_name = "Hart of the Order"
-        resp = client.get("/standings")
-
-    assert resp.status_code == 200
-    body = resp.get_data(as_text=True)
-
-    match = re.search(
-        r'<script type="application/json" id="category-bars-data">(.*?)</script>',
-        body,
-        re.DOTALL,
-    )
-    assert match is not None, "category-bars-data script tag not found"
-    bars = json.loads(match.group(1))
-
-    assert bars == {"preseason": {}, "current": {}}
-
-
-def test_standings_embeds_category_bars_data(client, kv_isolation):
-    """When projections are cached, /standings embeds non-empty category-bars JSON."""
-    from fantasy_baseball.web import season_data
-
-    proj_standings_payload = {
-        "effective_date": "2026-04-01",
-        "teams": [
-            {
-                "name": "Hart of the Order",
-                "stats": {
-                    "R": 320,
-                    "HR": 90,
-                    "RBI": 290,
-                    "SB": 50,
-                    "AVG": 0.270,
-                    "W": 35,
-                    "K": 600,
-                    "SV": 25,
-                    "ERA": 3.50,
-                    "WHIP": 1.18,
-                },
-            },
-            {
-                "name": "SkeleThor",
-                "stats": {
-                    "R": 300,
-                    "HR": 85,
-                    "RBI": 295,
-                    "SB": 40,
-                    "AVG": 0.265,
-                    "W": 38,
-                    "K": 580,
-                    "SV": 30,
-                    "ERA": 3.40,
-                    "WHIP": 1.15,
-                },
-            },
-        ],
-    }
-    proj = {
-        "preseason_standings": proj_standings_payload,
-        "projected_standings": proj_standings_payload,
-        "preseason_team_sds": {
-            "Hart of the Order": {"R": 25.0, "ERA": 0.18},
-            "SkeleThor": {"R": 30.0, "ERA": 0.15},
-        },
-        "team_sds": {
-            "Hart of the Order": {"R": 25.0, "ERA": 0.18},
-            "SkeleThor": {"R": 30.0, "ERA": 0.15},
-        },
-        "fraction_remaining": 0.8,
-    }
-
-    standings = _mock_standings()
-    season_data.write_cache(CacheKey.STANDINGS, standings)
-    season_data.write_cache(CacheKey.PROJECTIONS, proj)
-    season_data.write_cache(CacheKey.META, {"last_refresh": "8:32 AM", "week": "3"})
-
-    with patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
-        mock_cfg.return_value.team_name = "Hart of the Order"
-        resp = client.get("/standings")
-
-    assert resp.status_code == 200
-    body = resp.get_data(as_text=True)
-
-    match = re.search(
-        r'<script type="application/json" id="category-bars-data">(.*?)</script>',
-        body,
-        re.DOTALL,
-    )
-    assert match is not None, "category-bars-data script tag not found"
-    bars = json.loads(match.group(1))
-
-    # Each category entry is now {"rows": [...], "odds": {...}}.
-    assert bars["current"]["R"]["rows"], "current/R rows should be non-empty"
-    assert bars["preseason"]["R"]["rows"], "preseason/R rows should be non-empty"
-
-    # Best-on-top for a normal category: Hart (320 R) ranks first, inside the
-    # category-bars JSON specifically (not just elsewhere on the page).
-    top_runs = bars["current"]["R"]["rows"][0]
-    assert top_runs["team"] == "Hart of the Order"
-    assert top_runs["value"] == 320.0
-    assert top_runs["sd"] == 25.0
-    assert top_runs["is_user"] is True
-
-    # Best-on-top for an inverse category: lowest ERA ranks first.
-    assert bars["current"]["ERA"]["rows"][0]["team"] == "SkeleThor"
-
-    # The user team's per-category odds ride along.
-    odds = bars["current"]["R"]["odds"]
-    assert set(odds.keys()) == {"first_pct", "top3_pct", "wins", "opponents"}
-    assert odds["opponents"] == 1  # 2 teams seeded -> 1 opponent
-
-
 # --- /api/il-return-plan ---------------------------------------------------------------
 
 
@@ -1677,9 +1675,6 @@ def test_standings_route_does_not_fabricate_contribution_stats_for_stale_blob(
     absent/empty) rather than plausible-but-wrong numbers. This pins the
     removal of the back-compat fabrication in PlayerContribution.from_dict.
     """
-    import json
-    import re
-
     from fantasy_baseball.web.season_data import CacheKey
 
     stale_payload = {
@@ -1806,9 +1801,6 @@ def test_standings_route_preserves_team_ytd_block_through_round_trip(client):
     team_ytd from ``RosterBreakdown.to_dict``, the season_routes
     round-trip, or the template serialization will fail this test.
     """
-    import json
-    import re
-
     from fantasy_baseball.web.season_data import CacheKey
 
     payload_with_team_ytd = {
@@ -1907,9 +1899,6 @@ def test_standings_route_team_ytd_absent_when_legacy_payload(client):
     field landed lack the block. The route must still render (default
     to an empty dict on read) instead of crashing the standings page.
     """
-    import json
-    import re
-
     from fantasy_baseball.web.season_data import CacheKey
 
     legacy_payload = {

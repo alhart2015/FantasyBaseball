@@ -11,6 +11,7 @@ import numpy as np
 from scipy.special import _ufuncs as _scu  # Boost-backed nbinom ppf (see _nbinom_ppf_fast)
 from scipy.special import ndtr, pdtr, pdtrik
 
+from fantasy_baseball.distributions import build_distributions
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
@@ -26,6 +27,7 @@ from fantasy_baseball.utils.constants import (
     QUANTILE_LEVELS,
     REPLACEMENT_BY_POSITION,
     STAT_DISPERSION,
+    ZERO_IP_RATE_SENTINEL,
     role_from_ip,
     safe_float,
 )
@@ -784,8 +786,8 @@ def simulate_remaining_season_batch(
 
         with np.errstate(divide="ignore", invalid="ignore"):
             avg = np.where(total_ab > 0, total_h / total_ab, 0.0)
-            era = np.where(total_ip > 0, total_er * 9 / total_ip, 99.0)
-            whip = np.where(total_ip > 0, total_h_plus_bb / total_ip, 99.0)
+            era = np.where(total_ip > 0, total_er * 9 / total_ip, ZERO_IP_RATE_SENTINEL)
+            whip = np.where(total_ip > 0, total_h_plus_bb / total_ip, ZERO_IP_RATE_SENTINEL)
 
         # Final counting total = actual + clamped simulated remainder, which is
         # exactly max(actual, simulated) -- never below what's already banked.
@@ -918,7 +920,9 @@ def run_ros_monte_carlo(
 
     Returns:
         {"team_results": {team: {median_pts, p10, p90, first_pct, top3_pct}},
-         "category_risk": {cat: {median_pts, p10, p90, top3_pct, bot3_pct}}}
+         "category_risk": {cat: {median_pts, p10, p90, top3_pct, bot3_pct}},
+         "distributions": compact per-team outcome curves (see build_distributions)}
+        category_risk is {} when the user team is absent from the rosters.
     """
     # simulate_remaining_season derives ROS from full-season minus YTD; flatten
     # full-season here so that math is well-formed (see _flatten_full_season).
@@ -932,8 +936,13 @@ def run_ros_monte_carlo(
     all_totals: dict[str, list[float]] = {name: [] for name in team_names}
     mc_wins = {name: 0 for name in team_names}
     mc_top3 = {name: 0 for name in team_names}
-    user_cat_pts: dict[str, list[float]] = {c.value: [] for c in ALL_CATS}
+    all_cat_pts: dict[str, dict[str, list[float]]] = {
+        name: {c.value: [] for c in ALL_CATS} for name in team_names
+    }
     cats = [c.value for c in ALL_CATS]
+    # (category value, scoring "{cat}_pts" key) pairs, hoisted out of the
+    # per-iteration loop so the f-string is built once, not n_iter * n_teams times.
+    cat_pts_keys = [(c.value, f"{c.value}_pts") for c in ALL_CATS]
 
     # Vectorized: one batched simulation of all iterations replaces the former
     # per-iteration simulate_remaining_season call. Roto scoring stays per
@@ -958,9 +967,9 @@ def run_ros_monte_carlo(
                 mc_wins[name] += 1
             if rank <= 3:
                 mc_top3[name] += 1
-            if name == user_team_name:
-                for c in ALL_CATS:
-                    user_cat_pts[c.value].append(pts.get(f"{c.value}_pts", 0))
+            team_cat_pts = all_cat_pts[name]
+            for val, pts_key in cat_pts_keys:
+                team_cat_pts[val].append(pts.get(pts_key, 0))
 
     n = n_iterations
     team_results = {}
@@ -975,14 +984,29 @@ def run_ros_monte_carlo(
         }
 
     category_risk = {}
-    for c in ALL_CATS:
-        arr = np.array(user_cat_pts[c.value])
-        category_risk[c.value] = {
-            "median_pts": round(float(np.median(arr)), 1),
-            "p10": round(float(np.percentile(arr, 10)), 1),
-            "p90": round(float(np.percentile(arr, 90)), 1),
-            "top3_pct": round(float((arr >= 8).sum()) / n * 100, 1),
-            "bot3_pct": round(float((arr <= 3).sum()) / n * 100, 1),
-        }
+    # category_risk summarizes the user team's per-category point spread. If the
+    # user team is absent from the rosters (e.g. a misconfigured team name), there
+    # is nothing to summarize -- leave category_risk empty so the dashboard hides
+    # the table, rather than computing percentiles on empty arrays (np.percentile
+    # raises IndexError on an empty input). The user team's slice is the same
+    # per-iteration sequence the old user-only accumulator produced, so the
+    # computed values are unchanged when the team is present.
+    user_cat_pts = all_cat_pts.get(user_team_name)
+    if user_cat_pts is not None:
+        for c in ALL_CATS:
+            arr = np.array(user_cat_pts[c.value])
+            category_risk[c.value] = {
+                "median_pts": round(float(np.median(arr)), 1),
+                "p10": round(float(np.percentile(arr, 10)), 1),
+                "p90": round(float(np.percentile(arr, 90)), 1),
+                "top3_pct": round(float((arr >= 8).sum()) / n * 100, 1),
+                "bot3_pct": round(float((arr <= 3).sum()) / n * 100, 1),
+            }
 
-    return {"team_results": team_results, "category_risk": category_risk}
+    distributions = build_distributions(all_totals, batch, all_cat_pts, cats, user_team_name)
+
+    return {
+        "team_results": team_results,
+        "category_risk": category_risk,
+        "distributions": distributions,
+    }
