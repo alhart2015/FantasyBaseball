@@ -155,9 +155,9 @@ def build_distributions(
       (``all_cat_pts``).
     ``user_team`` is carried through for the formatter to mark ``is_user``.
     """
-    overall = build_continuous_metric(
-        {name: np.asarray(v, dtype=float) for name, v in all_totals.items()}
-    )
+    # all_totals values are plain lists; _clean_samples does the np.asarray
+    # conversion, so pass them straight through like the category metrics below.
+    overall = build_continuous_metric(all_totals)
 
     category_totals = {}
     category_points = {}
