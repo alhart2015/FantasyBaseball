@@ -11,6 +11,7 @@ import numpy as np
 from scipy.special import _ufuncs as _scu  # Boost-backed nbinom ppf (see _nbinom_ppf_fast)
 from scipy.special import ndtr, pdtr, pdtrik
 
+from fantasy_baseball.distributions import build_distributions
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
@@ -932,7 +933,9 @@ def run_ros_monte_carlo(
     all_totals: dict[str, list[float]] = {name: [] for name in team_names}
     mc_wins = {name: 0 for name in team_names}
     mc_top3 = {name: 0 for name in team_names}
-    user_cat_pts: dict[str, list[float]] = {c.value: [] for c in ALL_CATS}
+    all_cat_pts: dict[str, dict[str, list[float]]] = {
+        name: {c.value: [] for c in ALL_CATS} for name in team_names
+    }
     cats = [c.value for c in ALL_CATS]
 
     # Vectorized: one batched simulation of all iterations replaces the former
@@ -958,9 +961,9 @@ def run_ros_monte_carlo(
                 mc_wins[name] += 1
             if rank <= 3:
                 mc_top3[name] += 1
-            if name == user_team_name:
-                for c in ALL_CATS:
-                    user_cat_pts[c.value].append(pts.get(f"{c.value}_pts", 0))
+            team_cat_pts = all_cat_pts[name]
+            for c in ALL_CATS:
+                team_cat_pts[c.value].append(pts.get(f"{c.value}_pts", 0))
 
     n = n_iterations
     team_results = {}
@@ -975,6 +978,10 @@ def run_ros_monte_carlo(
         }
 
     category_risk = {}
+    # The user's slice of the all-team accumulator. .get fallback preserves the
+    # prior soft-degrade (empty arrays -> nan) if the user team is absent from the
+    # rosters, rather than a hard KeyError.
+    user_cat_pts = all_cat_pts.get(user_team_name, {c.value: [] for c in ALL_CATS})
     for c in ALL_CATS:
         arr = np.array(user_cat_pts[c.value])
         category_risk[c.value] = {
@@ -985,4 +992,10 @@ def run_ros_monte_carlo(
             "bot3_pct": round(float((arr <= 3).sum()) / n * 100, 1),
         }
 
-    return {"team_results": team_results, "category_risk": category_risk}
+    distributions = build_distributions(all_totals, batch, all_cat_pts, cats, user_team_name)
+
+    return {
+        "team_results": team_results,
+        "category_risk": category_risk,
+        "distributions": distributions,
+    }

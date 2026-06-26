@@ -662,3 +662,51 @@ class TestRosMonteCarloUsesFullSeason:
         flat = _flatten_full_season(p)
         assert flat["r"] == 80
         assert flat["hr"] == 25
+
+
+def test_run_ros_monte_carlo_returns_distributions():
+    # Reuse the same fixtures as test_returns_expected_format.
+    result = run_ros_monte_carlo(
+        team_rosters=_build_two_team_rosters(),
+        actual_standings=_build_actual_standings(),
+        fraction_remaining=0.5,
+        h_slots=3,
+        p_slots=2,
+        user_team_name="Team A",
+        n_iterations=50,
+        seed=1,
+    )
+    dist = result["distributions"]
+    team_names = set(result["team_results"])
+    assert team_names == {"Team A", "Team B"}
+
+    # Documented top-level shape.
+    assert set(dist) == {"overall", "category_totals", "category_points", "user_team"}
+    assert dist["user_team"] == "Team A"
+
+    # overall + every category cover all teams (category_points populated for ALL
+    # teams, not just the user -- guards the all-team accumulation change).
+    assert set(dist["overall"]["teams"]) == team_names
+    for cat in ("R", "HR", "RBI", "SB", "AVG", "W", "K", "ERA", "WHIP", "SV"):
+        assert set(dist["category_points"][cat]["teams"]) == team_names
+        assert set(dist["category_totals"][cat]["teams"]) == team_names
+
+    # Whole payload survives the cache round-trip (no numpy types).
+    import json
+
+    json.dumps(result)
+
+    # category_risk preserved (same keys, same fields as before this change).
+    assert set(result["category_risk"]) == {
+        "R",
+        "HR",
+        "RBI",
+        "SB",
+        "AVG",
+        "W",
+        "K",
+        "ERA",
+        "WHIP",
+        "SV",
+    }
+    assert "top3_pct" in result["category_risk"]["R"]
