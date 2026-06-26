@@ -155,7 +155,9 @@ in hand in `run_ros_monte_carlo` before the flatten). See Component 4.
      per-game value rule (`value/g_ros if g_ros>0 else 0`) would treat a real
      full-timer loaded from stale JSON (g=0) as zero-per-game and EXCLUDE it from
      fill ordering. So a presence/derivation gate is MANDATORY: when `g_ros` is 0
-     or absent, derive it from ROS PA/IP via the shared per-game constant; never
+     or absent, derive it from ROS PA/IP via the shared per-game constant (the
+     SAME one used for the replacement per-game conversion and missing-`g_ros`
+     derivation -- one constant, pinned in Phase 3; do not introduce a second); never
      trust a literal `g=0` as "plays zero games." (Since the in-season path sources
      `g` from a fresh refresh's `rest_of_season`, not stale JSON, the gate is the
      belt-and-suspenders backstop.)
@@ -197,11 +199,14 @@ in hand in `run_ros_monte_carlo` before the flatten). See Component 4.
      refactor in Phase 2.
    - Output per team: the **effective active set** = active-slot bodies (each with
      its displacement factor, mostly 1.0) + IL bodies (at full ROS), and the
-     **healthy-bench fill pool** (each with eligible positions, ROS games `g_ros`,
-     per-game value, ROS stat means). `g_ros` is `rest_of_season.g` (the ROS CSVs
-     carry a ROS-scaled `G`; a full-timer reads ~75 G mid-season); where a body
-     has ROS PA/IP but no `G`, derive games via the shared per-game constant
-     (Open questions).
+     **healthy-bench fill pool** (each with eligible positions, ROS games
+     `g_ros_full`, per-game value, ROS stat means). Bench bodies are undisplaced
+     (factor=1), so for them `g_ros_full == g_ros_adj` -- their full ROS games are
+     both their value denominator and their one-body capacity. `g_ros_full` is
+     `rest_of_season.g` (the ROS CSVs carry a ROS-scaled `G`; a full-timer reads
+     ~75 G mid-season); where a body has ROS PA/IP but no `G`, derive games via the
+     shared per-game constant (Open questions; SAME constant as the Component 1
+     gate and the replacement per-game conversion -- one constant, pinned Phase 3).
 
 3. **Per-iteration: availability draw + bench injury-fill (stochastic).** On the
    sampled ROS stats, per team, per iteration:
