@@ -83,10 +83,16 @@
     if (!data) { showEmpty(canvas, empty, true); return; }
     showEmpty(canvas, empty, false);
 
-    // Size the backing store to the CSS box * devicePixelRatio for crisp lines.
+    // Size the backing store from the WRAPPER box (responsive width x fixed
+    // height) times devicePixelRatio for crisp lines. Do NOT read the canvas's
+    // own clientWidth/Height: the canvas is sized to 100% of the wrapper via CSS
+    // and has no intrinsic size, so reading its layout size and writing it back
+    // into the backing store compounds on every render -- that is why the chart
+    // started tiny and grew on each tab click. The wrapper is the stable box.
     var dpr = window.devicePixelRatio || 1;
-    var cssW = canvas.clientWidth || canvas.parentNode.clientWidth || 800;
-    var cssH = canvas.clientHeight || canvas.parentNode.clientHeight || 520;
+    var wrap = canvas.parentNode;
+    var cssW = wrap.clientWidth || 800;
+    var cssH = wrap.clientHeight || 520;
     canvas.width = Math.round(cssW * dpr);
     canvas.height = Math.round(cssH * dpr);
     var ctx = canvas.getContext("2d");
