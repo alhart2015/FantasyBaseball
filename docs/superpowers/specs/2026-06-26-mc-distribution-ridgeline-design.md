@@ -85,6 +85,14 @@ exist today. (Transient cost: 12 teams x 10 cats x 1000 iters of point values,
 ~1-2 MB of floats held during the run -- modest. Only the compact curves below
 are cached.)
 
+Once per-category points are accumulated for all teams, the user's slice is a
+superset of the existing user-only `user_cat_pts` array. To avoid two parallel
+accumulations of the same data (per the repo's reuse / no-duplicate-state
+conventions), derive the existing `category_risk` aggregates from the user's slice
+of the new all-team structure and drop the separate `user_cat_pts` accumulation --
+or, if that entangles the change too much, keep `user_cat_pts` but call out the
+deliberate overlap. Prefer the former.
+
 ### What we retain
 
 Before discarding the per-iteration arrays, build compact **density curves** and
@@ -134,15 +142,21 @@ all teams/categories -- heavy to serialize and ship to the browser). Instead:
   achievable values, smoothing would invent mass between them. Ties occur only on
   integer counting stats (R, HR, ...) and are occasional, not the common case;
   rate stats (AVG/ERA/WHIP) tie essentially never and are effectively integer.
-  Build the PMF over the **distinct point values actually observed** across
-  iterations (the `1..N` half-integer grid is a safe, possibly sparse, superset).
-  Result per category:
-  `{ "x": [...point values...], "teams": { team: {"p": [...], "mean": float} } }`
-  where each team's `p` sums to 1 and `mean = sum(x*p)` is the expected points
-  (used for row sorting and the row marker).
+  Like the continuous case, the `x` support is **shared across all teams** in a
+  category (a ridgeline needs one common axis): `x` is the sorted union of the
+  distinct point values observed across **all** teams that category (equivalently,
+  the `1..N` half-integer grid trimmed to values that actually occur for at least
+  one team -- the full grid is a safe, possibly sparse, superset). Each team's `p`
+  is aligned to that shared `x`, with `0` at values it never realized, so every
+  team's `p` has the same length as `x`. Result per category:
+  `{ "x": [...shared point values...], "teams": { team: {"p": [...], "mean": float} } }`
+  where each team's `p` sums to 1, `len(p) == len(x)`, and `mean = sum(x*p)` is the
+  expected points (used for row sorting and the row marker).
 
-Approximate cache cost: ~5k numbers for continuous curves + ~1.4k for discrete
-PMFs ~= under 7k numbers total. JSON-serializable, no numpy in the payload.
+Approximate cache cost (12 teams, 10 cats, 60-pt grid): 11 continuous metrics
+(overall + 10 totals) at 60 + 12*(60+1) ~= 792 each ~= ~8.7k, plus 10 discrete
+PMFs at ~23 + 12*(23+1) ~= 311 each ~= ~3.1k -> **~12k numbers total**. Still
+trivial to serialize; JSON-serializable, no numpy in the payload.
 
 ### KDE detail
 
@@ -283,7 +297,8 @@ category-bars view.
     view; only the `season_data.py`-local `_category_odds` goes.)
   - `season_routes.py`: the `format_category_bars_for_display` import, its call,
     and the `category_bars=` template kwarg on the standings render.
-  - `templates/season/standings.html`: the `#view-categorybars` block, the
+  - `src/fantasy_baseball/web/templates/season/standings.html`: the
+    `#view-categorybars` block, the
     nav/toggle button, the `toggleTopView` branch for it, the
     `id="category-bars-data"` embedded-JSON node, the
     `<script src="...season_category_bars.js">` include, the now-dead
@@ -293,7 +308,8 @@ category-bars view.
     `.catbars-odds`, ...).
   - `static/season_category_bars.js`: delete the file.
   - `tests/`: the category-bars tests in `tests/test_web/test_season_data.py`
-    (the block importing/exercising `format_category_bars_for_display`) and the
+    (the block importing/exercising `format_category_bars_for_display`, **plus**
+    the category-bars-only helper `_bars_display_dict` it uses) and the
     category-bars assertions in `tests/test_web/test_season_routes.py`. A dangling
     import of the deleted function fails the whole test module, so these must be
     removed or rewritten as part of the deletion, not left for later.
@@ -327,7 +343,9 @@ category-bars view.
   - per-team summary present: continuous entries carry `median`, discrete entries
     carry `mean = sum(x*p)`; values match the raw samples.
   - discrete PMF: sums to 1 per team; half-integer support handled (a constructed
-    tie produces a 0.5-step point value in the support); support bounded `1..N`.
+    tie produces a 0.5-step point value in the support); support bounded `1..N`;
+    **all teams in a category share one `x`** and every team's `p` aligns to it
+    (`len(p) == len(x)`, zeros at unobserved values).
 - A test asserting `run_ros_monte_carlo()` returns the `distributions` key with
   the documented shape, that `category_points` is populated for **all** teams
   (not just the user -- guards the C2 accumulation change), and that the whole
