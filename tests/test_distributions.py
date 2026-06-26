@@ -8,6 +8,8 @@ from fantasy_baseball.distributions import (
     GRID_POINTS,
     _silverman_bandwidth,
     build_continuous_metric,
+    build_discrete_metric,
+    build_distributions,
 )
 
 
@@ -76,9 +78,6 @@ def test_silverman_bandwidth_zero_for_constant_input():
     assert _silverman_bandwidth(np.full(10, 5.0)) == 0.0
 
 
-from fantasy_baseball.distributions import build_discrete_metric
-
-
 def test_discrete_metric_shared_support_and_pmf():
     team_samples = {
         "A": [11, 11, 12, 12, 12],
@@ -110,3 +109,44 @@ def test_discrete_metric_json_serializable():
     assert isinstance(out["x"][0], float)
     assert isinstance(out["teams"]["A"]["p"][0], float)
     assert isinstance(out["teams"]["A"]["mean"], float)
+
+
+def test_build_distributions_shape_and_serializable():
+    rng = np.random.default_rng(7)
+    cats = ["R", "ERA"]
+    teams = ["A", "B"]
+    all_totals = {t: list(rng.normal(80.0, 6.0, 100)) for t in teams}
+    batch = {
+        "A": {"R": rng.normal(800.0, 30.0, 100), "ERA": rng.normal(3.5, 0.2, 100)},
+        "B": {"R": rng.normal(750.0, 30.0, 100), "ERA": rng.normal(3.8, 0.2, 100)},
+    }
+    all_cat_pts = {
+        "A": {"R": [10] * 100, "ERA": [9] * 100},
+        "B": {"R": [2] * 100, "ERA": [3] * 100},
+    }
+    out = build_distributions(all_totals, batch, all_cat_pts, cats, user_team="A")
+
+    assert set(out) == {"overall", "category_totals", "category_points", "user_team"}
+    assert out["user_team"] == "A"
+    # Overall covers all teams.
+    assert set(out["overall"]["teams"]) == {"A", "B"}
+    # One entry per category, all teams present.
+    assert set(out["category_totals"]) == {"R", "ERA"}
+    assert set(out["category_points"]) == {"R", "ERA"}
+    assert set(out["category_totals"]["R"]["teams"]) == {"A", "B"}
+    assert set(out["category_points"]["ERA"]["teams"]) == {"A", "B"}
+    # No numpy types anywhere.
+    json.dumps(out)
+
+
+def test_build_distributions_drops_era_sentinel():
+    cats = ["ERA"]
+    batch = {"A": {"ERA": np.array([3.1, 3.2, 99.0, 3.0, 99.0, 3.3])}}
+    out = build_distributions(
+        all_totals={"A": [50.0, 51.0, 52.0]},
+        batch=batch,
+        all_cat_pts={"A": {"ERA": [8, 8, 9]}},
+        cats=cats,
+        user_team="A",
+    )
+    assert max(out["category_totals"]["ERA"]["x"]) < 10.0

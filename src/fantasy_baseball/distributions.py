@@ -127,3 +127,47 @@ def build_discrete_metric(team_samples: dict[str, Any]) -> dict:
             "mean": float(np.sum(support * p)),
         }
     return {"x": [float(v) for v in support], "teams": teams}
+
+
+# ERA/WHIP carry a 99.0 zero-IP sentinel from simulate_remaining_season_batch.
+_SENTINEL_CATS = {"ERA", "WHIP"}
+_SENTINEL_VALUE = 99.0
+
+
+def build_distributions(
+    all_totals: dict[str, list[float]],
+    batch: dict[str, dict[str, np.ndarray]],
+    all_cat_pts: dict[str, dict[str, list[float]]],
+    cats: list[str],
+    user_team: str,
+) -> dict:
+    """Assemble the full ``distributions`` payload from the MC's transient arrays.
+
+    - ``overall``: KDE of each team's total roto points (``all_totals``).
+    - ``category_totals``: KDE of each team's raw stat total per category
+      (``batch``); ERA/WHIP drop the 99.0 sentinel.
+    - ``category_points``: exact PMF of each team's roto points per category
+      (``all_cat_pts``).
+    ``user_team`` is carried through for the formatter to mark ``is_user``.
+    """
+    overall = build_continuous_metric(
+        {name: np.asarray(v, dtype=float) for name, v in all_totals.items()}
+    )
+
+    category_totals = {}
+    category_points = {}
+    for cat in cats:
+        sentinel = _SENTINEL_VALUE if cat in _SENTINEL_CATS else None
+        category_totals[cat] = build_continuous_metric(
+            {name: batch[name][cat] for name in batch}, sentinel=sentinel
+        )
+        category_points[cat] = build_discrete_metric(
+            {name: all_cat_pts[name][cat] for name in all_cat_pts}
+        )
+
+    return {
+        "overall": overall,
+        "category_totals": category_totals,
+        "category_points": category_points,
+        "user_team": user_team,
+    }
