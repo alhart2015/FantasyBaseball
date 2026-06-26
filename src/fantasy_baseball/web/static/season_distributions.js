@@ -18,6 +18,14 @@
   // Decimal precision for the rate categories' tick labels (not a direction set).
   var RATE_PREC = { AVG: 3, ERA: 2, WHIP: 2 };
 
+  // Ridgeline layout: fixed vertical spacing per team row so the chart height
+  // grows with the league size (no clipping), plus headroom for the top row's
+  // peak and the x-axis label. Curves overlap upward by OVERLAP rows.
+  var ROW_H = 48;
+  var PAD_TOP = 44;
+  var PAD_BOTTOM = 40;
+  var OVERLAP = 1.6;
+
   var state = { metric: "overall", mode: "totals" };
   var payload = null;
 
@@ -92,7 +100,11 @@
     var dpr = window.devicePixelRatio || 1;
     var wrap = canvas.parentNode;
     var cssW = wrap.clientWidth || 800;
-    var cssH = wrap.clientHeight || 520;
+    // Height grows with the team count (fixed per-row spacing) so no row or the
+    // x-axis label is clipped, whatever the league size. The wrapper height is
+    // driven from here; the canvas fills it via CSS.
+    var cssH = data.rows.length * ROW_H + PAD_TOP + PAD_BOTTOM;
+    wrap.style.height = cssH + "px";
     canvas.width = Math.round(cssW * dpr);
     canvas.height = Math.round(cssH * dpr);
     var ctx = canvas.getContext("2d");
@@ -103,22 +115,33 @@
   }
 
   function drawRidgeline(ctx, W, H, data) {
-    var padL = 110, padR = 24, padT = 16, padB = 34;
-    var plotW = W - padL - padR;
-    var plotH = H - padT - padB;
     var rows = data.rows;
     var n = rows.length;
+
+    // Left gutter fits the longest team name (measured) so labels never clip;
+    // clamped so a very long name can't eat the whole plot.
+    ctx.font = "bold 12px system-ui, sans-serif";
+    var maxLabelW = 0;
+    for (var li = 0; li < n; li++) {
+      var lw = ctx.measureText(rows[li].team).width;
+      if (lw > maxLabelW) maxLabelW = lw;
+    }
+    var padL = Math.min(220, Math.max(90, Math.ceil(maxLabelW) + 16));
+    var padR = 24, padT = PAD_TOP, padB = PAD_BOTTOM;
+    var plotW = W - padL - padR;
+    var plotH = H - padT - padB;
 
     var xs = data.x;
     var xMin = xs[0], xMax = xs[xs.length - 1];
     var xSpan = xMax - xMin || 1;
     function sx(v) { return padL + ((v - xMin) / xSpan) * plotW; }
 
-    // Per-row vertical band; curves overlap upward by ~1.7 bands for the
-    // classic ridgeline look. Peak height is normalized per row (each row's own
-    // max), so a tight row reads as tall-and-narrow, a wide row as low-and-broad.
+    // Per-row vertical band (== ROW_H, since H was sized from it); curves overlap
+    // upward by OVERLAP bands for the classic ridgeline look. Peak height is
+    // normalized per row (each row's own max), so a tight row reads as
+    // tall-and-narrow, a wide row as low-and-broad.
     var band = plotH / n;
-    var overlap = 1.7;
+    var overlap = OVERLAP;
 
     ctx.font = "12px system-ui, sans-serif";
     ctx.textBaseline = "middle";
