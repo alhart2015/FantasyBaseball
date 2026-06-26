@@ -718,6 +718,60 @@ def format_monte_carlo_for_display(mc_data: dict, user_team_name: str) -> dict:
     return {"teams": teams, "category_risk": risk}
 
 
+# Payload category keys are strings (c.value); INVERSE_CATS holds enum members.
+_INVERSE_CAT_VALUES = {c.value for c in INVERSE_CATS}
+
+
+def _distribution_rows(
+    metric: dict, user_team: str, value_key: str, sort_key: str, ascending: bool
+) -> dict:
+    """Reshape one metric's ``teams`` map into sorted, is_user-marked rows."""
+    rows = [
+        {
+            "team": name,
+            "is_user": name == user_team,
+            value_key: entry[value_key],
+            sort_key: entry[sort_key],
+        }
+        for name, entry in metric.get("teams", {}).items()
+    ]
+    rows.sort(key=lambda r: r[sort_key], reverse=not ascending)
+    return {"x": metric.get("x", []), "rows": rows}
+
+
+def format_distributions_for_display(distributions: dict | None) -> dict:
+    """Reshape the MC ``distributions`` payload into a template-ready ridgeline dict.
+
+    Marks each row ``is_user`` server-side (dropping the raw ``user_team`` string)
+    and sorts rows best-on-top: by ``median``/``mean`` descending, except ERA/WHIP
+    raw totals ascending (lower is better). Mirrors ``format_*_for_display``.
+    """
+    empty: dict = {"overall": {"x": [], "rows": []}, "category_totals": {}, "category_points": {}}
+    if not distributions or "overall" not in distributions:
+        return empty
+
+    user_team = distributions.get("user_team", "")
+    overall = _distribution_rows(
+        distributions["overall"], user_team, "y", "median", ascending=False
+    )
+
+    category_totals = {}
+    for cat, metric in distributions.get("category_totals", {}).items():
+        category_totals[cat] = _distribution_rows(
+            metric, user_team, "y", "median", ascending=cat in _INVERSE_CAT_VALUES
+        )
+
+    category_points = {}
+    for cat, metric in distributions.get("category_points", {}).items():
+        category_points[cat] = _distribution_rows(metric, user_team, "p", "mean", ascending=False)
+
+    return {
+        "overall": overall,
+        "category_totals": category_totals,
+        "category_points": category_points,
+    }
+
+
 HITTER_SLOTS_ORDER = [
     "C",
     "1B",

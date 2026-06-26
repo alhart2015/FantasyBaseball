@@ -17,6 +17,7 @@ from fantasy_baseball.web import season_data
 from fantasy_baseball.web.season_data import (
     CacheKey,
     format_category_bars_for_display,
+    format_distributions_for_display,
     format_lineup_for_display,
     format_monte_carlo_for_display,
     format_standings_for_display,
@@ -2606,3 +2607,75 @@ def test_category_bars_odds_none_without_user_row():
     }
     out = format_category_bars_for_display(data, data)
     assert out["current"]["R"]["odds"] is None
+
+
+def _distributions_payload():
+    return {
+        "overall": {
+            "x": [10.0, 20.0],
+            "teams": {
+                "Me": {"y": [0.1, 0.2], "median": 90.0},
+                "Rival": {"y": [0.2, 0.1], "median": 95.0},
+            },
+        },
+        "category_totals": {
+            "R": {
+                "x": [1.0, 2.0],
+                "teams": {
+                    "Me": {"y": [0.3, 0.1], "median": 800.0},
+                    "Rival": {"y": [0.1, 0.3], "median": 760.0},
+                },
+            },
+            "ERA": {
+                "x": [3.0, 4.0],
+                "teams": {
+                    "Me": {"y": [0.2, 0.2], "median": 3.50},
+                    "Rival": {"y": [0.2, 0.2], "median": 3.20},
+                },
+            },
+        },
+        "category_points": {
+            "R": {
+                "x": [1.0, 2.0],
+                "teams": {
+                    "Me": {"p": [0.0, 1.0], "mean": 2.0},
+                    "Rival": {"p": [1.0, 0.0], "mean": 1.0},
+                },
+            },
+        },
+        "user_team": "Me",
+    }
+
+
+def test_format_distributions_marks_is_user_and_drops_user_team():
+    out = format_distributions_for_display(_distributions_payload())
+    assert "user_team" not in out
+    me = next(r for r in out["overall"]["rows"] if r["team"] == "Me")
+    assert me["is_user"] is True
+    rival = next(r for r in out["overall"]["rows"] if r["team"] == "Rival")
+    assert rival["is_user"] is False
+
+
+def test_format_distributions_sorts_overall_by_median_desc():
+    out = format_distributions_for_display(_distributions_payload())
+    teams = [r["team"] for r in out["overall"]["rows"]]
+    assert teams == ["Rival", "Me"]  # 95 before 90
+
+
+def test_format_distributions_era_sorts_ascending_best_on_top():
+    out = format_distributions_for_display(_distributions_payload())
+    # ERA lower is better -> Rival (3.20) on top of Me (3.50).
+    teams = [r["team"] for r in out["category_totals"]["ERA"]["rows"]]
+    assert teams == ["Rival", "Me"]
+
+
+def test_format_distributions_points_sorts_by_mean_desc():
+    out = format_distributions_for_display(_distributions_payload())
+    teams = [r["team"] for r in out["category_points"]["R"]["rows"]]
+    assert teams == ["Me", "Rival"]  # mean 2.0 before 1.0
+    assert out["category_points"]["R"]["rows"][0]["mean"] == 2.0
+
+
+def test_format_distributions_handles_none():
+    out = format_distributions_for_display(None)
+    assert out == {"overall": {"x": [], "rows": []}, "category_totals": {}, "category_points": {}}
