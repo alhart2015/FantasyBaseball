@@ -719,6 +719,7 @@ def simulate_remaining_season_batch(
     h_slots: int,
     p_slots: int,
     n_iter: int,
+    active_cols: dict | None = None,
 ) -> dict[str, dict[str, np.ndarray]]:
     """Vectorized ``simulate_remaining_season`` over ``n_iter`` iterations.
 
@@ -727,6 +728,14 @@ def simulate_remaining_season_batch(
     stacked along a leading iteration axis. Same blend: simulated full season
     minus YTD (clamped >= 0), re-added to actuals; rate stats via recovered YTD
     components. Drives ``run_ros_monte_carlo`` without the Python per-iteration loop.
+
+    ``active_cols`` optionally pins a fixed active roster instead of the
+    per-iteration top-k pick. When ``None`` (default) every team uses top-k.
+    When ``active_cols[team] = {"h": ndarray[int], "p": ndarray[int]}`` is
+    present, that team's hitter/pitcher contributions are summed over exactly
+    those fixed column indices (into the hitter/pitcher sublists in roster
+    order) for every iteration. A team absent from ``active_cols`` falls back to
+    top-k; an empty index array yields a zero contribution.
     """
     cats = [c.value for c in ALL_CATS]
     out: dict[str, dict[str, np.ndarray]] = {}
@@ -746,8 +755,14 @@ def simulate_remaining_season_batch(
         hb = _apply_variance_batch(hitters, PlayerType.HITTER, rng, fraction_remaining, n_iter)
         pb = _apply_variance_batch(pitchers, PlayerType.PITCHER, rng, fraction_remaining, n_iter)
 
+        team_cols = active_cols.get(team) if active_cols is not None else None
+
         if hitters:
-            h_idx = _topk_indices(hb["r"] + hb["hr"] + hb["rbi"] + hb["sb"], h_slots)
+            if team_cols is not None:
+                cols = team_cols["h"]
+                h_idx = np.broadcast_to(cols, (n_iter, cols.shape[0]))
+            else:
+                h_idx = _topk_indices(hb["r"] + hb["hr"] + hb["rbi"] + hb["sb"], h_slots)
             sim_r = _gather_sum(hb["r"], h_idx)
             sim_hr = _gather_sum(hb["hr"], h_idx)
             sim_rbi = _gather_sum(hb["rbi"], h_idx)
@@ -758,11 +773,15 @@ def simulate_remaining_season_batch(
             sim_r = sim_hr = sim_rbi = sim_sb = sim_h = sim_ab = zeros
 
         if pitchers:
-            # Closers (sv >= threshold) first, then by w+k+sv -- the scalar tuple key.
-            pkey = (pb["sv"] >= CLOSER_SV_THRESHOLD).astype(float) * _CLOSER_RANK_BONUS + (
-                pb["w"] + pb["k"] + pb["sv"]
-            )
-            p_idx = _topk_indices(pkey, p_slots)
+            if team_cols is not None:
+                cols = team_cols["p"]
+                p_idx = np.broadcast_to(cols, (n_iter, cols.shape[0]))
+            else:
+                # Closers (sv >= threshold) first, then by w+k+sv -- the scalar tuple key.
+                pkey = (pb["sv"] >= CLOSER_SV_THRESHOLD).astype(float) * _CLOSER_RANK_BONUS + (
+                    pb["w"] + pb["k"] + pb["sv"]
+                )
+                p_idx = _topk_indices(pkey, p_slots)
             sim_w = _gather_sum(pb["w"], p_idx)
             sim_k = _gather_sum(pb["k"], p_idx)
             sim_sv = _gather_sum(pb["sv"], p_idx)
