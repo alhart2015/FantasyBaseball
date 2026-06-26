@@ -89,7 +89,7 @@ def test_continuous_metric_density_integrates_to_one():
     out = build_continuous_metric({"A": rng.normal(50.0, 5.0, 800)})
     x = np.array(out["x"])
     y = np.array(out["teams"]["A"]["y"])
-    assert abs(float(np.trapz(y, x)) - 1.0) < 0.05
+    assert abs(float(np.trapezoid(y, x)) - 1.0) < 0.05
 
 
 def test_continuous_metric_is_json_serializable_plain_floats():
@@ -114,7 +114,7 @@ def test_near_constant_input_is_finite_and_normalized():
     y = np.array(out["teams"]["tight"]["y"])
     assert np.all(np.isfinite(y))
     x = np.array(out["x"])
-    assert abs(float(np.trapz(y, x)) - 1.0) < 0.1
+    assert abs(float(np.trapezoid(y, x)) - 1.0) < 0.1
     # Peak sits at the constant value.
     assert abs(float(x[int(np.argmax(y))]) - 50.0) < 2.0
 
@@ -149,7 +149,7 @@ category roto-points) that are cheap to cache and ship to the browser. Every
 output is plain Python floats -- JSON-serializable, no numpy types in the payload.
 """
 
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 
@@ -159,7 +159,7 @@ GRID_POINTS = 60
 BW_FLOOR_FRACTION = 0.01  # floor = 1% of a metric's pooled (post-sentinel) range
 
 
-def _clean_samples(samples, sentinel: float | None) -> np.ndarray:
+def _clean_samples(samples: Any, sentinel: float | None) -> np.ndarray:
     """Drop non-finite values (and an optional sentinel) from a sample array.
 
     ERA/WHIP carry a ``99.0`` zero-IP sentinel from the batch simulation; left in,
@@ -188,7 +188,9 @@ def _gaussian_kde_curve(samples: np.ndarray, grid: np.ndarray, bw: float) -> np.
     """Gaussian KDE of ``samples`` sampled on ``grid``, normalized to integrate ~1.
 
     ``bw <= 0`` (a degenerate, zero-variance team) collapses to a single spike at
-    the median rather than dividing by zero.
+    the median rather than dividing by zero. Defensive: ``build_continuous_metric``
+    always applies a positive metric-relative floor, so the real callers never pass
+    ``bw <= 0`` -- this guard only protects direct/standalone use of the helper.
     """
     if bw <= 0.0:
         y = np.zeros_like(grid)
@@ -196,13 +198,13 @@ def _gaussian_kde_curve(samples: np.ndarray, grid: np.ndarray, bw: float) -> np.
         return cast(np.ndarray, y)
     z = (grid[:, None] - samples[None, :]) / bw
     dens = np.exp(-0.5 * z * z).sum(axis=1) / (samples.size * bw * np.sqrt(2.0 * np.pi))
-    area = float(np.trapz(dens, grid))
+    area = float(np.trapezoid(dens, grid))  # np.trapz removed in numpy 2.0+
     if area > 0.0:
         dens = dens / area
     return cast(np.ndarray, dens)
 
 
-def build_continuous_metric(team_samples, sentinel: float | None = None) -> dict:
+def build_continuous_metric(team_samples: dict[str, Any], sentinel: float | None = None) -> dict:
     """Build a shared-grid KDE ridgeline payload for one continuous metric.
 
     ``team_samples`` is ``{team: sample_array}``. Returns
@@ -314,7 +316,7 @@ Expected: FAIL with `ImportError: cannot import name 'build_discrete_metric'`
 Append to `src/fantasy_baseball/distributions.py`:
 
 ```python
-def build_discrete_metric(team_samples) -> dict:
+def build_discrete_metric(team_samples: dict[str, Any]) -> dict:
     """Build a shared-support PMF ridgeline payload for one discrete metric.
 
     ``team_samples`` is ``{team: point_value_array}`` (category roto points, which
@@ -501,51 +503,53 @@ git commit -m "feat(distributions): build_distributions orchestrator"
 
 **Notes:** `run_ros_monte_carlo` is at `simulation.py:891-988`. The per-iteration loop is 949-963; `all_totals` (all teams) is built at 956; `user_cat_pts` (user only) at 961-963; `category_risk` at 977-986. `batch` (from `simulate_remaining_season_batch`, `{team: {cat_str: ndarray}}`) is in scope from line 945. `cats = [c.value for c in ALL_CATS]` exists at 936.
 
+**CRITICAL -- non-unique edit anchors.** `run_monte_carlo` (lines 807-888) contains **byte-identical** copies of the `user_cat_pts` init, the accumulation loop, the `category_risk` block, and the `return {...}` line that this task edits. A bare `old_string` for any of them matches **twice** and the Edit tool will refuse (or worse, edit the wrong function). Every edit below is anchored on content that is **unique to `run_ros_monte_carlo`**: Step 4 includes the unique "Vectorized: one batched simulation" comment; Step 5 is one contiguous replacement starting at the unique `sim_stats = {... batch[name][cat][i] ...}` line. Before each edit, `git grep -n` the first line of your `old_string` to confirm it appears exactly once.
+
 - [ ] **Step 1: Write the failing test**
 
-First read the existing `run_ros_monte_carlo` test in `tests/test_simulation.py` (search for `run_ros_monte_carlo`) to reuse its roster/standings fixture and call convention. Then append a new test that reuses that exact fixture (do not fabricate a new roster shape -- reuse the existing helper/fixture the file already provides):
+First read the existing `run_ros_monte_carlo` test in `tests/test_simulation.py` (`test_returns_expected_format`, ~lines 495-509) to confirm the exact fixture helpers and call convention. They are: helper functions `_build_two_team_rosters()` and `_build_actual_standings()` (call them inline), with literals `fraction_remaining=0.5, h_slots=3, p_slots=2, user_team_name="Team A"`, and exactly **two** teams ("Team A", "Team B"). Reuse those (do not fabricate a new roster shape). Append:
 
 ```python
 def test_run_ros_monte_carlo_returns_distributions():
-    # Reuse the existing run_ros_monte_carlo fixture/setup in this file (rosters,
-    # actual_standings, slots, user_team_name). Call with a small iteration count.
+    # Reuse the same fixtures as test_returns_expected_format.
     result = run_ros_monte_carlo(
-        team_rosters=ROS_TEAM_ROSTERS,        # <- existing fixture in this file
-        actual_standings=ROS_ACTUAL_STANDINGS,  # <- existing fixture in this file
+        team_rosters=_build_two_team_rosters(),
+        actual_standings=_build_actual_standings(),
         fraction_remaining=0.5,
-        h_slots=H_SLOTS,                       # <- existing fixture/constant
-        p_slots=P_SLOTS,                       # <- existing fixture/constant
-        user_team_name=ROS_USER_TEAM,          # <- existing fixture in this file
+        h_slots=3,
+        p_slots=2,
+        user_team_name="Team A",
         n_iterations=50,
         seed=1,
     )
     dist = result["distributions"]
     team_names = set(result["team_results"])
+    assert team_names == {"Team A", "Team B"}
 
     # Documented top-level shape.
     assert set(dist) == {"overall", "category_totals", "category_points", "user_team"}
-    assert dist["user_team"] == ROS_USER_TEAM
+    assert dist["user_team"] == "Team A"
 
-    # overall + every category cover all teams.
+    # overall + every category cover all teams (category_points populated for ALL
+    # teams, not just the user -- guards the all-team accumulation change).
     assert set(dist["overall"]["teams"]) == team_names
     for cat in ("R", "HR", "RBI", "SB", "AVG", "W", "K", "ERA", "WHIP", "SV"):
-        # category_points populated for ALL teams, not just the user (guards the
-        # all-team accumulation change).
         assert set(dist["category_points"][cat]["teams"]) == team_names
         assert set(dist["category_totals"][cat]["teams"]) == team_names
 
     # Whole payload survives the cache round-trip (no numpy types).
     import json
+
     json.dumps(result)
 
-    # category_risk preserved (still keyed by category, with the same fields).
+    # category_risk preserved (same keys, same fields as before this change).
     assert set(result["category_risk"]) == {
         "R", "HR", "RBI", "SB", "AVG", "W", "K", "ERA", "WHIP", "SV"
     }
     assert "top3_pct" in result["category_risk"]["R"]
 ```
 
-(If the existing fixture uses different names than `ROS_TEAM_ROSTERS` etc., substitute the real names you find when reading the file.)
+(If the helper names differ from `_build_two_team_rosters` / `_build_actual_standings` when you read the file, substitute the real names -- but they are functions called inline, not module constants.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -554,18 +558,28 @@ Expected: FAIL with `KeyError: 'distributions'`
 
 - [ ] **Step 3: Add the import**
 
-At the top of `simulation.py`, after the existing `from fantasy_baseball.scoring import score_roto_dict` (line 15), add:
+At the top of `simulation.py`, add the import in isort order. First-party `fantasy_baseball.*` imports are alphabetical: `distributions` sorts **before** `models.player` (line 14), so insert it immediately **before** the `from fantasy_baseball.models.player import PlayerType` line:
 
 ```python
 from fantasy_baseball.distributions import build_distributions
+from fantasy_baseball.models.player import PlayerType
 ```
+
+(Placing it after `scoring` on line 15 would be out of order and `ruff check` will flag the `I` rule.)
 
 - [ ] **Step 4: Replace the user-only accumulator with an all-team one**
 
-In `run_ros_monte_carlo`, replace line 935:
+In `run_ros_monte_carlo`, replace the `user_cat_pts` init. To disambiguate from the identical line in `run_monte_carlo`, the `old_string` includes the following `cats` line and the unique "Vectorized" comment block. Replace:
 
 ```python
     user_cat_pts: dict[str, list[float]] = {c.value: [] for c in ALL_CATS}
+    cats = [c.value for c in ALL_CATS]
+
+    # Vectorized: one batched simulation of all iterations replaces the former
+    # per-iteration simulate_remaining_season call. Roto scoring stays per
+    # iteration (it ranks teams within each draw), reading column i from the batch.
+    # The batch below is the heavy step (the scoring loop is cheap), so signal the
+    # MC phase before it rather than letting the prior step's message linger.
 ```
 
 with:
@@ -574,13 +588,23 @@ with:
     all_cat_pts: dict[str, dict[str, list[float]]] = {
         name: {c.value: [] for c in ALL_CATS} for name in team_names
     }
+    cats = [c.value for c in ALL_CATS]
+
+    # Vectorized: one batched simulation of all iterations replaces the former
+    # per-iteration simulate_remaining_season call. Roto scoring stays per
+    # iteration (it ranks teams within each draw), reading column i from the batch.
+    # The batch below is the heavy step (the scoring loop is cheap), so signal the
+    # MC phase before it rather than letting the prior step's message linger.
 ```
 
-- [ ] **Step 5: Accumulate per-category points for every team**
+- [ ] **Step 5: One contiguous edit -- all-team accumulation, derived category_risk, distributions, return**
 
-Replace the loop body at lines 955-963:
+This single replacement starts at the `sim_stats = {... batch[name][cat][i] ...}` line, which is **unique to `run_ros_monte_carlo`** (it reads `batch`; `run_monte_carlo` does not), so the whole span is unambiguous. The middle `team_results` block is unchanged but included verbatim so the `old_string` matches. Replace:
 
 ```python
+        sim_stats = {name: {cat: float(batch[name][cat][i]) for cat in cats} for name in team_names}
+        sim_roto = score_roto_dict(sim_stats)
+        ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
         for rank, (name, pts) in enumerate(ranked, 1):
             all_totals[name].append(pts["total"])
             if rank == 1:
@@ -590,27 +614,19 @@ Replace the loop body at lines 955-963:
             if name == user_team_name:
                 for c in ALL_CATS:
                     user_cat_pts[c.value].append(pts.get(f"{c.value}_pts", 0))
-```
 
-with:
+    n = n_iterations
+    team_results = {}
+    for name in team_names:
+        arr = np.array(all_totals[name])
+        team_results[name] = {
+            "median_pts": round(float(np.median(arr)), 1),
+            "p10": round(float(np.percentile(arr, 10))),
+            "p90": round(float(np.percentile(arr, 90))),
+            "first_pct": round(mc_wins[name] / n * 100, 1),
+            "top3_pct": round(mc_top3[name] / n * 100, 1),
+        }
 
-```python
-        for rank, (name, pts) in enumerate(ranked, 1):
-            all_totals[name].append(pts["total"])
-            if rank == 1:
-                mc_wins[name] += 1
-            if rank <= 3:
-                mc_top3[name] += 1
-            team_cat_pts = all_cat_pts[name]
-            for c in ALL_CATS:
-                team_cat_pts[c.value].append(pts.get(f"{c.value}_pts", 0))
-```
-
-- [ ] **Step 6: Derive `category_risk` from the user's slice, build distributions, extend the return**
-
-Replace the `category_risk` block + return at lines 977-988:
-
-```python
     category_risk = {}
     for c in ALL_CATS:
         arr = np.array(user_cat_pts[c.value])
@@ -628,8 +644,36 @@ Replace the `category_risk` block + return at lines 977-988:
 with:
 
 ```python
+        sim_stats = {name: {cat: float(batch[name][cat][i]) for cat in cats} for name in team_names}
+        sim_roto = score_roto_dict(sim_stats)
+        ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
+        for rank, (name, pts) in enumerate(ranked, 1):
+            all_totals[name].append(pts["total"])
+            if rank == 1:
+                mc_wins[name] += 1
+            if rank <= 3:
+                mc_top3[name] += 1
+            team_cat_pts = all_cat_pts[name]
+            for c in ALL_CATS:
+                team_cat_pts[c.value].append(pts.get(f"{c.value}_pts", 0))
+
+    n = n_iterations
+    team_results = {}
+    for name in team_names:
+        arr = np.array(all_totals[name])
+        team_results[name] = {
+            "median_pts": round(float(np.median(arr)), 1),
+            "p10": round(float(np.percentile(arr, 10))),
+            "p90": round(float(np.percentile(arr, 90))),
+            "first_pct": round(mc_wins[name] / n * 100, 1),
+            "top3_pct": round(mc_top3[name] / n * 100, 1),
+        }
+
     category_risk = {}
-    user_cat_pts = all_cat_pts[user_team_name]
+    # The user's slice of the all-team accumulator. .get fallback preserves the
+    # prior soft-degrade (empty arrays -> nan) if the user team is absent from the
+    # rosters, rather than a hard KeyError.
+    user_cat_pts = all_cat_pts.get(user_team_name, {c.value: [] for c in ALL_CATS})
     for c in ALL_CATS:
         arr = np.array(user_cat_pts[c.value])
         category_risk[c.value] = {
@@ -651,17 +695,17 @@ with:
     }
 ```
 
-- [ ] **Step 7: Run the new test + the existing simulation suite**
+- [ ] **Step 6: Run the new test + the existing simulation suite**
 
 Run: `pytest tests/test_simulation.py -v`
 Expected: PASS, including the new test and all pre-existing `run_ros_monte_carlo` tests (category_risk values unchanged).
 
-- [ ] **Step 8: Lint/format/types**
+- [ ] **Step 7: Lint/format/types**
 
 Run: `ruff check src/fantasy_baseball/simulation.py && ruff format --check src/fantasy_baseball/simulation.py`
-Expected: no violations. If `simulation.py` is under `[tool.mypy].files`, run `mypy src/fantasy_baseball/simulation.py` and fix findings.
+Expected: no violations. `simulation.py` **is** under `[tool.mypy].files` -- run `mypy src/fantasy_baseball/simulation.py` and fix findings (the `build_distributions` import is followed; the typed helper signatures from Tasks 1-3 keep this clean, but verify, do not assume).
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add src/fantasy_baseball/simulation.py tests/test_simulation.py
@@ -775,9 +819,15 @@ Expected: FAIL with `ImportError: cannot import name 'format_distributions_for_d
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add to `src/fantasy_baseball/web/season_data.py` (near `format_monte_carlo_for_display`; `INVERSE_CATS` is already imported at the top of the file):
+Add to `src/fantasy_baseball/web/season_data.py` (near `format_monte_carlo_for_display`; `INVERSE_CATS` is already imported at the top of the file).
+
+IMPORTANT: `INVERSE_CATS` is a `frozenset` of `Category` **enum members** (`{Category.ERA, Category.WHIP}`), but the distributions payload keys categories by their **string** code (`"ERA"`). `"ERA" in INVERSE_CATS` is always `False`. Compare against a string set built once:
 
 ```python
+# Payload category keys are strings (c.value); INVERSE_CATS holds enum members.
+_INVERSE_CAT_VALUES = {c.value for c in INVERSE_CATS}
+
+
 def _distribution_rows(metric: dict, user_team: str, value_key: str, sort_key: str, ascending: bool) -> dict:
     """Reshape one metric's ``teams`` map into sorted, is_user-marked rows."""
     rows = [
@@ -810,7 +860,7 @@ def format_distributions_for_display(distributions: dict | None) -> dict:
     category_totals = {}
     for cat, metric in distributions.get("category_totals", {}).items():
         category_totals[cat] = _distribution_rows(
-            metric, user_team, "y", "median", ascending=cat in INVERSE_CATS
+            metric, user_team, "y", "median", ascending=cat in _INVERSE_CAT_VALUES
         )
 
     category_points = {}
@@ -848,60 +898,74 @@ git commit -m "feat(season-data): format_distributions_for_display ridgeline for
 
 **Interfaces:**
 - Consumes: `format_distributions_for_display` (Task 5).
-- Produces: the standings route passes `distributions=` to the template. Read happens inside the existing `if raw_mc.get("rest_of_season"):` guard (line 572); guards the inner `distributions` absence.
+- Produces: the standings route passes `distributions=` to the template. The read happens inside the existing `if raw_mc.get("rest_of_season"):` guard; the module-scope default covers the no-MC path.
+
+**Notes:** The route renders the full-page embed node only after Task 8 adds it to the template. So Task 6's test asserts the `distributions` **kwarg** reaches `render_template` (by patching it), which fails-first and passes after this task -- independent of Task 8. The full-page `#distributions-data` embed-content assertion lives in Task 8.
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `tests/test_web/test_season_routes.py` (model the cache setup on the existing `test_standings_embeds_category_bars_data`, but seed `MONTE_CARLO` with a `rest_of_season` that includes a minimal `distributions` block):
+Model the cache seeding + config patching on the existing `test_standings_passes_baseline_meta_to_template` (~lines 767-791), which seeds `CacheKey.MONTE_CARLO` with a `rest_of_season` blob and GETs `/standings` under a patched `_load_config().team_name`. (Do NOT model on the category-bars tests -- those seed `PROJECTIONS`, the wrong cache key.) Append:
 
 ```python
-def test_standings_embeds_distributions_data(...):  # mirror an existing route test's fixture/signature
-    # Seed CacheKey.MONTE_CARLO with a rest_of_season blob carrying team_results,
-    # category_risk, AND distributions (overall + one category), then GET /standings.
-    # ... (reuse the existing route-test harness to build `body`) ...
-    match = re.search(
-        r'<script type="application/json" id="distributions-data">(.*?)</script>',
-        body,
-        re.DOTALL,
-    )
-    assert match is not None, "distributions-data script tag not found"
-    dist = json.loads(match.group(1))
+from unittest.mock import patch
+
+
+def test_standings_passes_distributions_to_template(...):  # reuse the harness's client + cache fixtures
+    # Seed CacheKey.MONTE_CARLO with rest_of_season carrying team_results,
+    # category_risk, AND a distributions block (overall + one category) whose
+    # user_team matches the patched config team name. Then:
+    with patch("fantasy_baseball.web.season_routes.render_template", return_value="") as rendered:
+        client.get("/standings")
+    dist = rendered.call_args.kwargs["distributions"]
     assert "overall" in dist
-    assert dist["overall"]["rows"]  # rows present, sorted, is_user-marked
-    assert any(r["is_user"] for r in dist["overall"]["rows"])
-    assert "user_team" not in dist  # dropped server-side
+    assert dist["overall"]["rows"]
+    assert any(r["is_user"] for r in dist["overall"]["rows"])  # is_user marked server-side
+    assert "user_team" not in dist  # raw string dropped
 
 
 def test_standings_distributions_empty_without_mc(...):
-    # With no MONTE_CARLO cache (or rest_of_season=None), the page still renders
-    # and the embedded node is the empty-state shape.
-    # ... GET /standings, extract the node as above ...
-    dist = json.loads(match.group(1))
+    # No MONTE_CARLO cache seeded -> the module-scope default empty-state reaches
+    # the template; the route must not crash.
+    with patch("fantasy_baseball.web.season_routes.render_template", return_value="") as rendered:
+        client.get("/standings")
+    dist = rendered.call_args.kwargs["distributions"]
     assert dist == {"overall": {"x": [], "rows": []}, "category_totals": {}, "category_points": {}}
 ```
 
-(Fill the harness/fixture wiring from the existing route tests in this file -- reuse their app/client setup and cache-seeding helpers.)
+(Fill the client/cache-seeding/config-patch wiring from `test_standings_passes_baseline_meta_to_template`. `render_template` is imported into `season_routes` from flask, so patch it at `fantasy_baseball.web.season_routes.render_template`.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_web/test_season_routes.py -k distributions -v`
 Expected: FAIL (no `distributions-data` node in the rendered page).
 
-- [ ] **Step 3: Add the import**
+- [ ] **Step 3: Add the import at module scope**
 
-In `season_routes.py`, the route already lazily imports from `season_data` inside the `if raw_standings:` block (lines 517-520). Add `format_distributions_for_display` there:
+The module-scope default in Step 4 calls `format_distributions_for_display` **outside** the lazy `if raw_standings:` import block, so it must be imported at module top -- NOT lazily (a lazy-only import would `NameError`). `season_data` is already imported at module top (lines 27-34); add the new name to that block in isort order (after `format_category_bars_for_display`):
 
 ```python
-            from fantasy_baseball.web.season_data import (
-                format_distributions_for_display,
-                format_monte_carlo_for_display,
-                format_standings_for_display,
-            )
+from fantasy_baseball.web.season_data import (
+    CacheKey,
+    coerce_basis,
+    format_category_bars_for_display,
+    format_distributions_for_display,
+    read_cache_dict,
+    read_cache_list,
+    read_meta,
+)
 ```
 
-- [ ] **Step 4: Read distributions inside the ROS guard**
+(`format_category_bars_for_display` is removed from this block in Task 7; `format_distributions_for_display` stays.)
 
-Add a `distributions` local initialized to the empty-state near the other `None` inits (after line 514), then populate it inside the existing ROS guard. Change lines 567-575 from:
+- [ ] **Step 4: Default the local, then read distributions inside the ROS guard**
+
+Add the module-scope default near the other `None` inits (after line 514 `raw_breakdown = None`) -- now resolvable because of Step 3's module-top import:
+
+```python
+        distributions = format_distributions_for_display(None)
+```
+
+Then populate it inside the existing ROS guard. Change lines 567-575 from:
 
 ```python
             raw_mc = read_cache_dict(CacheKey.MONTE_CARLO)
@@ -934,11 +998,7 @@ to:
                     )
 ```
 
-And initialize the default near the other locals (after line 514 `raw_breakdown = None`):
-
-```python
-        distributions = format_distributions_for_display(None)
-```
+(The read is safely inside `if raw_mc.get("rest_of_season"):`, so `raw_mc["rest_of_season"]` is never `None` at the `.get("distributions")` call.)
 
 - [ ] **Step 5: Pass it to the template**
 
@@ -951,7 +1011,7 @@ In the `render_template("season/standings.html", ...)` call, add a kwarg alongsi
 - [ ] **Step 6: Run test to verify it passes**
 
 Run: `pytest tests/test_web/test_season_routes.py -k distributions -v`
-Expected: PASS (note: the template node from Task 8 must exist for the embed test to find it -- if running Task 6 before Task 8, the embed test will fail at the regex; in that case verify the route passes `distributions` by asserting on `render_template` kwargs via the test harness, and defer the full-page embed assertion until Task 8. Prefer ordering Task 8 before re-running this test.)
+Expected: PASS (both tests). These patch `render_template` and assert on the `distributions` kwarg, so they do NOT depend on Task 8's template node. The full-page `#distributions-data` embed-content assertion is added in Task 8.
 
 - [ ] **Step 7: Commit**
 
@@ -962,15 +1022,18 @@ git commit -m "feat(season-routes): pass distributions to the standings template
 
 ---
 
-## Task 7: Delete the Category Bars backend
+## Task 7: Delete Category Bars (backend + frontend + tests, atomic)
+
+**Why atomic:** the route's `category_bars` kwarg and the template's `{{ category_bars }}` reference must disappear together, and the `format_category_bars_for_display` function and its route call must disappear together -- otherwise `/standings` 500s in the intermediate state. So all Category Bars surface (backend, frontend, tests) is removed in this one task. This runs **before** the additive Distributions view (Task 8); in between, the standings page simply has three tabs (Current/Projected/Monte Carlo) and renders cleanly. The route already passes `distributions=` (Task 6); with no template node yet, that kwarg is harmlessly unused.
 
 **Files:**
-- Modify: `src/fantasy_baseball/web/season_data.py` (delete lines 13, 416-485)
+- Modify: `src/fantasy_baseball/web/season_data.py` (delete line 13, lines 416-485)
 - Modify: `src/fantasy_baseball/web/season_routes.py` (delete lines 30, 577, 590)
-- Modify: `tests/test_web/test_season_data.py` (delete `_bars_display_dict` + 7 category-bars tests + the import)
-- Modify: `tests/test_web/test_season_routes.py` (delete 2 category-bars route tests)
+- Modify: `src/fantasy_baseball/web/templates/season/standings.html` (delete the nav button, view block, toggle branch, CSS, error-bars CDN)
+- Delete: `src/fantasy_baseball/web/static/season_category_bars.js`
+- Modify: `tests/test_web/test_season_data.py`, `tests/test_web/test_season_routes.py` (delete category-bars tests)
 
-**Interfaces:** none produced; this removes dead surface. `INVERSE_CATS` import in `season_data.py` STAYS (used at line 1183). All `format_monte_carlo_for_display` references STAY.
+**Interfaces:** none produced; removes dead surface. `INVERSE_CATS` import in `season_data.py` STAYS (used at line 1183). All `format_monte_carlo_for_display` and `format_distributions_for_display` references STAY.
 
 - [ ] **Step 1: Delete the season_data.py functions and orphaned import**
 
@@ -978,36 +1041,53 @@ Delete the `category_finish_odds` import line 13 (`from fantasy_baseball.categor
 
 - [ ] **Step 2: Delete the season_routes.py plumbing**
 
-Remove `format_category_bars_for_display,` from the import block (line 30), the `category_bars = format_category_bars_for_display(...)` line (577), and the `category_bars=category_bars,` render kwarg (590).
+Remove `format_category_bars_for_display,` from the module-top import block (line 30 -- leave `format_distributions_for_display` added in Task 6), the `category_bars = format_category_bars_for_display(...)` line (577), and the `category_bars=category_bars,` render kwarg (590).
 
-- [ ] **Step 3: Delete the tests**
+- [ ] **Step 3: Delete the template Category Bars surface**
 
-In `tests/test_web/test_season_data.py`: remove the `format_category_bars_for_display,` import (line 19), the `_bars_display_dict` helper (2497-2519), and the 7 category-bars test functions (2522-2608). In `tests/test_web/test_season_routes.py`: remove `test_standings_category_bars_empty_without_projections` (1364-1388) and `test_standings_embeds_category_bars_data` (1391-1483). (If those route tests seed cache/fixtures the new Task-6 tests can reuse, lift the reusable parts rather than duplicating.)
+In `src/fantasy_baseball/web/templates/season/standings.html`, delete: the Category Bars nav button (line 24, `data-view="categorybars"`); the entire `#view-categorybars` block (234-261, including its `category-bars-data` JSON node and `catbars-*` sub-toggles); the `categorybars` line(s) in `toggleTopView` (353-354, the `style.display` line and the `if (v === 'categorybars' && window.renderCategoryBars)` line); the category-bars CSS rules (664-682: `.catbars-wrapper`, `#catbars-cat-toggle`, `#catbars-cat-toggle .pill:first-child`, `.catbars-odds`, `.catbars-odds strong`); the `chartjs-chart-error-bars` CDN include (703); and the `season_category_bars.js` include (704).
 
-- [ ] **Step 4: Grep to confirm nothing dangles**
+- [ ] **Step 4: Decide the Chart.js CDN line**
 
-Run: `git grep -n -e category_bars -e _category_odds -e category_finish_odds -- src/ tests/`
-Expected: zero hits in `src/fantasy_baseball/web/` and the two test files. (`category_odds` the standalone module and `test_category_odds.py` may still appear -- those are independent and stay.) Then `git grep -n catbars -- src/` should only hit the template (handled in Task 9), not the Python.
+The `chart.js` CDN (line 702) was used on this page only by Category Bars (`scatterWithErrorBars`); the Task-8 renderer uses raw canvas. Grep for remaining Chart.js usage in the template:
 
-- [ ] **Step 5: Run the affected suites + vulture**
+Run: `git grep -n -e "new Chart" -e "Chart(" -e "chart.js" -- src/fantasy_baseball/web/templates/season/standings.html`
+Expected: zero hits. If zero, delete the Chart.js CDN line (702) too (no dead includes, per repo convention). If any hit remains, keep it.
 
-Run: `pytest tests/test_web/test_season_data.py tests/test_web/test_season_routes.py -v && vulture src/fantasy_baseball/web/season_data.py`
-Expected: PASS (no import errors), and no NEW vulture findings for the deleted symbols.
+- [ ] **Step 5: Delete the JS file**
 
-- [ ] **Step 6: Commit**
+`git rm src/fantasy_baseball/web/static/season_category_bars.js`
+
+- [ ] **Step 6: Delete the tests**
+
+In `tests/test_web/test_season_data.py`: remove the `format_category_bars_for_display,` import (line 19), the `_bars_display_dict` helper (2497-2519), and the 7 category-bars test functions (2522-2608). In `tests/test_web/test_season_routes.py`: remove `test_standings_category_bars_empty_without_projections` (1364-1388) and `test_standings_embeds_category_bars_data` (1391-1483). (Lift any reusable cache-seeding helper into the Task-6 tests rather than duplicating.)
+
+- [ ] **Step 7: Grep to confirm nothing dangles**
+
+Run: `git grep -n -e category_bars -e catbars -e _category_odds -e category_finish_odds -e season_category_bars -e renderCategoryBars -- src/ tests/`
+Expected: zero hits except the independent standalone `category_odds` module and `tests/test_category_odds.py` (which stay). No hits in `season_data.py`, `season_routes.py`, the template, or the JS static dir.
+
+- [ ] **Step 8: Run the affected suites + vulture, then commit**
+
+Run: `pytest tests/test_web/ -v && vulture src/fantasy_baseball/web/season_data.py`
+Expected: PASS (no import errors; `/standings` still renders -- the page now has three tabs), no NEW vulture findings.
 
 ```bash
-git add src/fantasy_baseball/web/season_data.py src/fantasy_baseball/web/season_routes.py tests/test_web/test_season_data.py tests/test_web/test_season_routes.py
-git commit -m "refactor(season): delete Category Bars backend (replaced by Distributions)"
+git add -A src/fantasy_baseball/web/ tests/test_web/
+git rm src/fantasy_baseball/web/static/season_category_bars.js
+git commit -m "refactor(web): delete Category Bars (replaced by Distributions)"
 ```
 
 ---
 
-## Task 8: Distributions view -- template + canvas renderer
+## Task 8: Distributions view -- template + canvas renderer (additive)
+
+Category Bars was fully removed in Task 7, so every step here is purely additive -- there is nothing to "replace."
 
 **Files:**
 - Modify: `src/fantasy_baseball/web/templates/season/standings.html` (nav button, new `#view-distributions` block, `toggleTopView` hook, script include)
 - Create: `src/fantasy_baseball/web/static/season_distributions.js`
+- Modify: `tests/test_web/test_season_routes.py` (full-page embed test, Step 7)
 
 **Interfaces:**
 - Consumes: the `distributions` template var (Task 6) and the `all_categories` template var (already passed by the route).
@@ -1015,13 +1095,11 @@ git commit -m "refactor(season): delete Category Bars backend (replaced by Distr
 
 - [ ] **Step 1: Add the nav button**
 
-In `standings.html`, change the toggle group (lines 20-25) -- replace the Category Bars button (line 24) with a Distributions button:
+In `standings.html`, add a Distributions button to the `#standings-top-toggle` group (the group now ends at the Monte Carlo button, since the Category Bars button was removed in Task 7). Add it as the last button before the closing `</div>`:
 
 ```html
     <button class="pill" data-view="distributions" onclick="toggleTopView(this)">Distributions</button>
 ```
-
-(The Category Bars button is removed in Task 9; for now both can coexist, but since we replace it, swap it here.)
 
 - [ ] **Step 2: Add the view block + embedded JSON**
 
@@ -1053,7 +1131,7 @@ Insert a new `#view-distributions` block (model placement/markup on `#view-monte
 
 - [ ] **Step 3: Add the CSS**
 
-In the `<style>` block (around the old catbars CSS at 664-682), add:
+In the page's `<style>` block (the one that ran ~638-701 before the catbars rules were removed in Task 7), add:
 
 ```css
 .dist-wrapper { position: relative; height: 520px; margin-top: 0.75rem; }
@@ -1068,7 +1146,7 @@ In the `<style>` block (around the old catbars CSS at 664-682), add:
 
 - [ ] **Step 4: Hook the render-on-show in `toggleTopView`**
 
-In `toggleTopView` (345-355), replace the `categorybars` line (353-354) with the distributions equivalent:
+In `toggleTopView` (the `categorybars` branch was removed in Task 7), add a distributions branch before the closing `}`:
 
 ```javascript
     document.getElementById('view-distributions').style.display = v === 'distributions' ? '' : 'none';
@@ -1077,7 +1155,7 @@ In `toggleTopView` (345-355), replace the `categorybars` line (353-354) with the
 
 - [ ] **Step 5: Add the script include**
 
-Replace the Category Bars include (line 704) with the new renderer (the `chartjs-chart-error-bars` CDN line 703 is removed in Task 9; the Chart.js CDN line 702 handling is decided in Task 9):
+Add the renderer include at the bottom of the content block where the page's other `<script src=...>` includes live (the Category Bars include and error-bars CDN were removed in Task 7):
 
 ```html
 <script src="{{ url_for('static', filename='season_distributions.js') }}"></script>
@@ -1302,60 +1380,42 @@ Create `src/fantasy_baseball/web/static/season_distributions.js`:
 })();
 ```
 
-- [ ] **Step 7: Manual smoke check (no unit test for canvas draw)**
+- [ ] **Step 7: Add the full-page embed-content test (now that the node exists)**
 
-The ridgeline draw is not unit-tested (consistent with existing chart JS). Verify visually in Task 10's local refresh. For now, confirm the template renders without a Jinja error:
+The `#distributions-data` node exists only now, so add the full-page embed assertion here (deferred from Task 6). Append to `tests/test_web/test_season_routes.py`, modeling cache seeding on `test_standings_passes_baseline_meta_to_template` (seed `MONTE_CARLO` with a `rest_of_season` carrying a `distributions` block whose `user_team` matches the patched config team name):
 
-Run: `python -c "from fantasy_baseball.web.season_app import create_app" 2>NUL || echo "check import path"`
-Then rely on Task 10 for the live render. Confirm there are no obvious JS syntax errors by loading the file in a linter if available; otherwise proceed.
+```python
+def test_standings_embeds_distributions_node(...):  # reuse the harness's client + cache fixtures
+    body = client.get("/standings").get_data(as_text=True)
+    match = re.search(
+        r'<script type="application/json" id="distributions-data">(.*?)</script>',
+        body,
+        re.DOTALL,
+    )
+    assert match is not None, "distributions-data script tag not found"
+    dist = json.loads(match.group(1))
+    assert dist["overall"]["rows"]
+    assert any(r["is_user"] for r in dist["overall"]["rows"])
+    assert "user_team" not in dist
+```
 
-- [ ] **Step 8: Commit**
+Run: `pytest tests/test_web/test_season_routes.py -k distributions -v`
+Expected: PASS (this test plus the two from Task 6).
+
+- [ ] **Step 8: Manual smoke check (no unit test for canvas draw)**
+
+The ridgeline draw is not unit-tested (consistent with existing chart JS) -- it is verified visually in Task 9's local refresh. For now, confirm the template renders without a Jinja error by exercising the route once (the Step 7 test already does this) and confirm the JS file has no syntax error (e.g. `node --check src/fantasy_baseball/web/static/season_distributions.js` if node is available; otherwise eyeball the braces).
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/fantasy_baseball/web/templates/season/standings.html src/fantasy_baseball/web/static/season_distributions.js
+git add src/fantasy_baseball/web/templates/season/standings.html src/fantasy_baseball/web/static/season_distributions.js tests/test_web/test_season_routes.py
 git commit -m "feat(web): Distributions ridgeline view (template + canvas renderer)"
 ```
 
 ---
 
-## Task 9: Delete the Category Bars frontend
-
-**Files:**
-- Modify: `src/fantasy_baseball/web/templates/season/standings.html`
-- Delete: `src/fantasy_baseball/web/static/season_category_bars.js`
-
-- [ ] **Step 1: Delete the view block + CSS + JS file**
-
-In `standings.html`: delete the `#view-categorybars` block (234-261, including its `category-bars-data` JSON node and the `catbars-*` sub-toggles), the category-bars CSS rules (664-682: `.catbars-wrapper`, `#catbars-cat-toggle`, `#catbars-cat-toggle .pill:first-child`, `.catbars-odds`, `.catbars-odds strong`), and the `chartjs-chart-error-bars` CDN include (703). If the old Category Bars nav button (line 24) or `toggleTopView` branch still exist (Task 8 swapped them), confirm they are gone. Delete the file `src/fantasy_baseball/web/static/season_category_bars.js`.
-
-- [ ] **Step 2: Decide the Chart.js CDN line**
-
-The `chart.js` CDN (line 702) was used on this page only by Category Bars (`scatterWithErrorBars`); the new renderer uses raw canvas. Grep the template for remaining Chart.js usage:
-
-Run: `git grep -n -e "new Chart" -e "Chart(" -e "chart.js" -- src/fantasy_baseball/web/templates/season/standings.html`
-Expected: zero hits. If zero, delete the Chart.js CDN line (702) too (no dead includes, per repo convention). If any hit remains, keep line 702.
-
-- [ ] **Step 3: Grep the whole template for stragglers**
-
-Run: `git grep -n -e catbars -e category-bars -e categorybars -e renderCategoryBars -- src/fantasy_baseball/web/templates/season/standings.html`
-Expected: zero hits.
-
-- [ ] **Step 4: Confirm the file is gone and nothing references it**
-
-Run: `git grep -n season_category_bars -- src/ && echo FOUND || echo CLEAN`
-Expected: `CLEAN` (no references to the deleted JS file anywhere).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add -A src/fantasy_baseball/web/templates/season/standings.html
-git rm src/fantasy_baseball/web/static/season_category_bars.js
-git commit -m "refactor(web): remove Category Bars frontend (replaced by Distributions)"
-```
-
----
-
-## Task 10: Full verification + local refresh
+## Task 9: Full verification + local refresh
 
 **Files:** none (verification only).
 
@@ -1371,7 +1431,7 @@ Expected: zero ruff violations, no formatting drift, no NEW vulture findings (pr
 
 - [ ] **Step 3: Types**
 
-Check `[tool.mypy].files` in `pyproject.toml`. For every touched file in that list (likely candidates: `simulation.py`, `distributions.py`, `season_data.py`), run `mypy <files>` and fix findings.
+`[tool.mypy].files` is an explicit file list (not globs). `simulation.py`, `season_data.py`, and `season_routes.py` ARE in it (mypy mandatory); `distributions.py` is NOT in the list -- but `simulation.py` imports it, so mypy follows it. Run `mypy` over the configured set (or at least `mypy src/fantasy_baseball/simulation.py src/fantasy_baseball/web/season_data.py src/fantasy_baseball/web/season_routes.py`) and fix findings. Do not assume clean -- verify.
 
 - [ ] **Step 4: Local refresh -- the real data populates the cache**
 
@@ -1393,14 +1453,18 @@ Paste the outputs of Steps 1-3 (or concise summaries) and a one-line confirmatio
 - Per-team bandwidth, shared grid padded by 3*bw_max, metric-relative floor, sentinel drop -> Task 1 + Task 3.
 - Discrete shared-support PMF, half-integer ties -> Task 2.
 - All-team category-points accumulation + derive category_risk, drop user_cat_pts -> Task 4.
-- `format_distributions_for_display` (is_user server-side, drop user_team, sort incl. ERA/WHIP ascending) -> Task 5.
-- Route plumbing inside the rest_of_season guard, absence empty-state -> Task 6.
+- `format_distributions_for_display` (is_user server-side, drop user_team, sort incl. ERA/WHIP ascending via value-string set) -> Task 5.
+- Route plumbing inside the rest_of_season guard, absence empty-state, module-top import -> Task 6.
+- Delete Category Bars (backend + frontend + tests + CDN + CSS + JS file), atomic -> Task 7.
 - Ridgeline view + selector + Totals|Points + canvas render -> Task 8.
-- Delete Category Bars (backend, frontend, tests, CDN, CSS, JS file) -> Tasks 7 + 9.
-- Tests for KDE/builder/discrete/integration/formatter/route -> Tasks 1-6.
-- Verification gates + local refresh -> Task 10.
+- Tests for KDE/builder/discrete/integration/formatter/route -> Tasks 1-6, 8.
+- Verification gates + local refresh -> Task 9.
 - Deferred (preseason toggle, p10-p90 band, points-swing annotations) -> intentionally absent. Confirmed.
 
-**Type consistency:** `build_distributions` (Task 3) is called in Task 4 with `(all_totals, batch, all_cat_pts, cats, user_team_name)` -- matches its signature. `format_distributions_for_display` returns the `{overall, category_totals, category_points}` shape consumed by the JS `adapt()` (`y`/`median` for continuous, `p`/`mean` for discrete) in Task 8 -- consistent. Embedded node id `distributions-data` matches between Task 8 (template) and Task 6 (route test) and the JS `loadPayload()`.
+**Ordering:** Task 7 (atomic Category Bars deletion) runs before Task 8 (additive Distributions add); between them the page renders three tabs cleanly. No task removes a route kwarg whose template reference still exists, or a function whose call site still exists -- those pairs are deleted together in Task 7.
 
-**Placeholder scan:** Task 4's test references existing fixtures by placeholder names (`ROS_TEAM_ROSTERS`, etc.) with an explicit instruction to substitute the real fixture found in the file -- this is a deliberate DRY reuse of an existing fixture, not an unfilled placeholder. Task 6's route test reuses the existing route-test harness for the same reason. All code steps contain complete code.
+**Type consistency:** `build_distributions` (Task 3) is called in Task 4 with `(all_totals, batch, all_cat_pts, cats, user_team_name)` -- matches its signature. `format_distributions_for_display` returns the `{overall, category_totals, category_points}` shape consumed by the JS `adapt()` (`y`/`median` for continuous, `p`/`mean` for discrete) in Task 8 -- consistent. Embedded node id `distributions-data` matches between Task 8 (template), the Task 6/Task 8 route tests, and the JS `loadPayload()`.
+
+**Environment-specific:** numpy 2.4.4 -- use `np.trapezoid` (not the removed `np.trapz`). `INVERSE_CATS` holds `Category` enum members, so the formatter compares against `{c.value for c in INVERSE_CATS}` (string keys). `run_monte_carlo` (807-888) duplicates the blocks Task 4 edits, so Task 4 anchors on the unique `batch`/`sim_stats`/comment lines. `simulation.py`/`season_data.py`/`season_routes.py` are under mypy; `distributions.py` is not (but is imported by `simulation.py`, so its typed signatures matter).
+
+**Placeholder scan:** Task 4's test uses the real fixture **functions** `_build_two_team_rosters()` / `_build_actual_standings()` (called inline, 2 teams, user "Team A"); Task 6's route test reuses `test_standings_passes_baseline_meta_to_template`'s MONTE_CARLO-seeding harness. Both name a concrete reuse target, not an unfilled placeholder. All code steps contain complete code.
