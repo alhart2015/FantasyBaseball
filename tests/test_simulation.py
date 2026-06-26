@@ -181,6 +181,90 @@ class TestSimulateRemainingSeason:
             assert injuries[team] == []
 
 
+def _build_batch_equiv_scenario():
+    """A realistic single-team scenario for the batch-vs-scalar equivalence test.
+
+    Actuals sit BELOW the projected top-k totals (and carry real AB/IP), so the
+    simulated remainder is positive and every category is non-degenerate -- the
+    blend's max(0, sim - actual) clamp never collapses a stat to a constant.
+    Five hitters / four pitchers against h_slots=3 / p_slots=2 exercises the
+    per-iteration active-roster selection (including the closer-first pitcher key)."""
+    roster = [
+        _make_hitter("H1", r=95, hr=32, rbi=100, sb=18, h=165, ab=560, positions=["OF"]),
+        _make_hitter("H2", r=82, hr=25, rbi=85, sb=12, h=150, ab=540, positions=["2B"]),
+        _make_hitter("H3", r=70, hr=20, rbi=72, sb=8, h=140, ab=520, positions=["3B"]),
+        _make_hitter("H4", r=60, hr=15, rbi=58, sb=24, h=130, ab=500, positions=["SS"]),
+        _make_hitter("H5", r=55, hr=22, rbi=66, sb=4, h=125, ab=480, positions=["1B"]),
+        _make_pitcher("P1", w=14, k=200, sv=0, ip=195, er=68, bb=46, h_allowed=165),
+        _make_pitcher("P2", w=9, k=140, sv=0, ip=150, er=62, bb=44, h_allowed=140),
+        _make_closer("C1", w=4, k=75, sv=35, ip=68, er=20, bb=18, h_allowed=52),
+        _make_closer("C2", w=2, k=55, sv=22, ip=58, er=24, bb=22, h_allowed=55),
+    ]
+    # Actuals ~45% of full-season top-k projections, with real AB/IP playing time.
+    actuals = {
+        "R": 120,
+        "HR": 38,
+        "RBI": 125,
+        "SB": 22,
+        "AVG": 0.270,
+        "W": 8,
+        "K": 130,
+        "SV": 16,
+        "ERA": 3.15,
+        "WHIP": 1.20,
+        "AB": 820,
+        "IP": 120,
+    }
+    return {"Team A": roster}, {"Team A": actuals}
+
+
+class TestSimulateRemainingSeasonBatch:
+    """The vectorized batch sim must sample from the SAME distribution as the
+    scalar per-iteration simulate_remaining_season. Statistical equivalence:
+    per-category means and SDs match within Monte Carlo sampling error. Exercised
+    under active-roster selection (h_slots < hitters, p_slots < pitchers) so the
+    per-iteration top-k pick is part of the contract."""
+
+    def test_distribution_matches_scalar_reference(self):
+        from fantasy_baseball.simulation import simulate_remaining_season_batch
+
+        cats = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
+        rate = {"AVG", "ERA", "WHIP"}
+        rosters, actuals = _build_batch_equiv_scenario()
+        team = "Team A"
+        frac, h_slots, p_slots, n = 0.45, 3, 2, 5000
+
+        # Scalar reference: n independent single-iteration draws.
+        rng_ref = np.random.default_rng(7)
+        ref: dict[str, list[float]] = {c: [] for c in cats}
+        for _ in range(n):
+            stats, _ = simulate_remaining_season(actuals, rosters, frac, rng_ref, h_slots, p_slots)
+            for c in cats:
+                ref[c].append(stats[team][c])
+
+        # Batched: one call producing a length-n array per category.
+        rng_batch = np.random.default_rng(7)
+        batch = simulate_remaining_season_batch(
+            actuals, rosters, frac, rng_batch, h_slots, p_slots, n_iter=n
+        )
+
+        for c in cats:
+            ref_arr = np.asarray(ref[c], dtype=float)
+            bat_arr = np.asarray(batch[team][c], dtype=float)
+            assert bat_arr.shape == (n,), f"{c}: batch shape {bat_arr.shape} != ({n},)"
+            rmean, bmean = ref_arr.mean(), bat_arr.mean()
+            rstd, bstd = ref_arr.std(), bat_arr.std()
+            # Non-degenerate sanity: the blend must leave real spread to compare.
+            assert rstd > 1e-6, f"{c}: reference SD collapsed ({rstd}); fixture is degenerate"
+            mtol = 0.02 * abs(rmean) if c in rate else 0.03 * abs(rmean) + 0.5
+            assert abs(bmean - rmean) <= mtol, (
+                f"{c} mean: scalar {rmean:.4f} vs batch {bmean:.4f} (tol {mtol:.4f})"
+            )
+            assert abs(bstd - rstd) <= 0.12 * rstd, (
+                f"{c} sd: scalar {rstd:.4f} vs batch {bstd:.4f} (tol {0.12 * rstd:.4f})"
+            )
+
+
 class TestYtdPlayingTime:
     """The YTD blend weight must use real accumulated AB/IP when available,
     not a league-typical full-season constant scaled by elapsed fraction.

@@ -23,6 +23,7 @@ from fantasy_baseball.utils.constants import (
     PITCHER_CORR_STATS,
     PITCHER_CORRELATION,
     PITCHING_COUNTING,
+    QUANTILE_LEVELS,
     REPLACEMENT_BY_POSITION,
     STAT_DISPERSION,
     role_from_ip,
@@ -608,6 +609,197 @@ def _apply_variance(
     return adjusted
 
 
+# Lexicographic pick bonus: larger than any plausible per-pitcher w+k+sv, so a
+# closer (sv >= threshold) always outranks a non-closer regardless of secondary
+# score -- the scalar tuple key (is_closer, w+k+sv) expressed as one sortable float.
+_CLOSER_RANK_BONUS = 1e9
+
+
+def _gather_sum(stat: np.ndarray, idx: np.ndarray) -> np.ndarray:
+    """Sum the columns picked by ``idx`` (n_iter, k) out of ``stat`` (n_iter, n)."""
+    return np.asarray(np.take_along_axis(stat, idx, axis=1).sum(axis=1), dtype=float)
+
+
+def _topk_indices(key: np.ndarray, k: int) -> np.ndarray:
+    """Per-row indices of the ``k`` largest entries of ``key`` (n_iter, n_players).
+
+    Mirrors the scalar active-roster pick (sort by ``key`` descending, take the
+    top ``k``); returns shape (n_iter, k), or every column when k >= n_players.
+    Tie order is unspecified, but the keys are continuous sums so ties are
+    measure-zero and do not change the simulated distribution.
+    """
+    n_players = key.shape[1]
+    if k >= n_players:
+        return np.broadcast_to(np.arange(n_players), key.shape)
+    return np.argpartition(-key, k - 1, axis=1)[:, :k]
+
+
+def _apply_variance_batch(
+    players: list,
+    player_type: str,
+    rng: np.random.Generator,
+    fraction_remaining: float,
+    n_iter: int,
+) -> dict[str, np.ndarray]:
+    """Vectorized ``_apply_variance`` over ``n_iter`` iterations at once.
+
+    Returns ``{counting_col: ndarray(n_iter, n_players)}`` -- the same per-player,
+    per-stat values the scalar path yields, but with a leading iteration axis.
+    Identical model: per-player playing-time scale (calibrated z-ladder), a
+    correlated NegBin/Poisson copula draw, and replacement-level injury backfill.
+    Injuries are not reported (the ROS MC discards them); only the stat values
+    are needed downstream.
+    """
+    is_hitter = player_type == PlayerType.HITTER
+    counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
+    corr_matrix = HITTER_CORR_MATRIX if is_hitter else PITCHER_CORR_MATRIX
+    idx_map = HITTER_IDX if is_hitter else PITCHER_IDX
+    n_corr = len(idx_map)
+    n_players = len(players)
+    if n_players == 0:
+        return {col: np.zeros((n_iter, 0)) for col in counting_cols}
+
+    # Static per-player playing-time moments and z-ladders (iteration-independent),
+    # so the only per-iteration playing-time work is the uniform->z interpolation.
+    eff_mean = np.empty(n_players)
+    eff_sd = np.empty(n_players)
+    ladders: list[np.ndarray] = []
+    for j, p in enumerate(players):
+        vol = _projected_volume(p, is_hitter)
+        mean_scale, cv_pt = playing_time_params(player_type, vol)
+        eff_mean[j] = 1.0 - (1.0 - mean_scale) * fraction_remaining
+        eff_sd[j] = cv_pt * (fraction_remaining**0.5)
+        ladders.append(np.asarray(playing_time_shape(player_type, vol), dtype=float))
+
+    # Playing-time scale per (iteration, player): the vectorized scale_from_uniform.
+    us = rng.random((n_iter, n_players))
+    z_pt = np.empty((n_iter, n_players))
+    for j in range(n_players):
+        z_pt[:, j] = np.interp(us[:, j], QUANTILE_LEVELS, ladders[j])
+    scales = np.maximum(0.0, eff_mean[None, :] + z_pt * eff_sd[None, :])
+
+    base = {col: np.array([safe_float(p.get(col)) for p in players]) for col in counting_cols}
+
+    # Per-(iter, player, corr-stat) NegBin mean and dispersion r.
+    mu_mat = np.zeros((n_iter, n_players, n_corr))
+    r_mat = np.full((n_iter, n_players, n_corr), np.inf)
+    for col, j in idx_map.items():
+        mu_mat[:, :, j] = base[col][None, :] * scales
+        r_mat[:, :, j] = resolve_dispersion_r(STAT_DISPERSION[col], mu_mat[:, :, j])
+
+    # One flattened copula draw over every (iter, player, stat) cell. C-order
+    # ravel keeps mu/r/z aligned, same as the scalar path's per-team draw.
+    all_z = rng.multivariate_normal(np.zeros(n_corr), corr_matrix, size=(n_iter, n_players))
+    counts = _negbin_copula_counts(
+        mu_mat.ravel(), r_mat.ravel(), all_z.ravel(), fraction_remaining
+    ).reshape(n_iter, n_players, n_corr)
+
+    frac_missed = np.maximum(0.0, 1.0 - scales)
+    repl_lines = [_replacement_line(p, is_hitter) for p in players]
+    out: dict[str, np.ndarray] = {}
+    for col in counting_cols:
+        repl_line = np.array([rl.get(col, 0) for rl in repl_lines], dtype=float)
+        repl_contrib = repl_line[None, :] * frac_missed
+        if col in idx_map:
+            out[col] = counts[:, :, idx_map[col]] + repl_contrib
+        else:
+            out[col] = base[col][None, :] * scales + repl_contrib
+    return out
+
+
+def simulate_remaining_season_batch(
+    actual_standings: dict[str, dict[str, float]],
+    team_rosters: dict,
+    fraction_remaining: float,
+    rng: np.random.Generator,
+    h_slots: int,
+    p_slots: int,
+    n_iter: int,
+) -> dict[str, dict[str, np.ndarray]]:
+    """Vectorized ``simulate_remaining_season`` over ``n_iter`` iterations.
+
+    Returns ``{team: {category: ndarray(n_iter)}}`` for the 10 roto categories --
+    the per-iteration team totals the scalar path emits one call at a time,
+    stacked along a leading iteration axis. Same blend: simulated full season
+    minus YTD (clamped >= 0), re-added to actuals; rate stats via recovered YTD
+    components. Drives ``run_ros_monte_carlo`` without the Python per-iteration loop.
+    """
+    cats = [c.value for c in ALL_CATS]
+    out: dict[str, dict[str, np.ndarray]] = {}
+    if fraction_remaining <= 0:
+        for team in team_rosters:
+            a = actual_standings.get(team, {})
+            out[team] = {c: np.full(n_iter, a.get(c, 0), dtype=float) for c in cats}
+        return out
+
+    fraction_elapsed = 1.0 - fraction_remaining
+    zeros = np.zeros(n_iter)
+    for team, players in team_rosters.items():
+        actuals = actual_standings.get(team, {})
+        hitters = [p for p in players if p.get("player_type") == PlayerType.HITTER]
+        pitchers = [p for p in players if p.get("player_type") == PlayerType.PITCHER]
+
+        hb = _apply_variance_batch(hitters, PlayerType.HITTER, rng, fraction_remaining, n_iter)
+        pb = _apply_variance_batch(pitchers, PlayerType.PITCHER, rng, fraction_remaining, n_iter)
+
+        if hitters:
+            h_idx = _topk_indices(hb["r"] + hb["hr"] + hb["rbi"] + hb["sb"], h_slots)
+            sim_r = _gather_sum(hb["r"], h_idx)
+            sim_hr = _gather_sum(hb["hr"], h_idx)
+            sim_rbi = _gather_sum(hb["rbi"], h_idx)
+            sim_sb = _gather_sum(hb["sb"], h_idx)
+            sim_h = _gather_sum(hb["h"], h_idx)
+            sim_ab = _gather_sum(hb["ab"], h_idx)
+        else:
+            sim_r = sim_hr = sim_rbi = sim_sb = sim_h = sim_ab = zeros
+
+        if pitchers:
+            # Closers (sv >= threshold) first, then by w+k+sv -- the scalar tuple key.
+            pkey = (pb["sv"] >= CLOSER_SV_THRESHOLD).astype(float) * _CLOSER_RANK_BONUS + (
+                pb["w"] + pb["k"] + pb["sv"]
+            )
+            p_idx = _topk_indices(pkey, p_slots)
+            sim_w = _gather_sum(pb["w"], p_idx)
+            sim_k = _gather_sum(pb["k"], p_idx)
+            sim_sv = _gather_sum(pb["sv"], p_idx)
+            sim_ip = _gather_sum(pb["ip"], p_idx)
+            sim_er = _gather_sum(pb["er"], p_idx)
+            sim_bb = _gather_sum(pb["bb"], p_idx)
+            sim_ha = _gather_sum(pb["h_allowed"], p_idx)
+        else:
+            sim_w = sim_k = sim_sv = sim_ip = sim_er = sim_bb = sim_ha = zeros
+
+        actual_ab, actual_ip = _ytd_playing_time(actuals, fraction_elapsed)
+        actual_h = actuals.get("AVG", 0) * actual_ab
+        actual_er = actuals.get("ERA", 0) * actual_ip / 9
+        actual_h_plus_bb = actuals.get("WHIP", 0) * actual_ip
+
+        total_ab = actual_ab + np.maximum(0.0, sim_ab - actual_ab)
+        total_h = actual_h + np.maximum(0.0, sim_h - actual_h)
+        total_ip = actual_ip + np.maximum(0.0, sim_ip - actual_ip)
+        total_er = actual_er + np.maximum(0.0, sim_er - actual_er)
+        total_h_plus_bb = actual_h_plus_bb + np.maximum(0.0, (sim_bb + sim_ha) - actual_h_plus_bb)
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            avg = np.where(total_ab > 0, total_h / total_ab, 0.0)
+            era = np.where(total_ip > 0, total_er * 9 / total_ip, 99.0)
+            whip = np.where(total_ip > 0, total_h_plus_bb / total_ip, 99.0)
+
+        out[team] = {
+            "R": actuals.get("R", 0) + np.maximum(0.0, sim_r - actuals.get("R", 0)),
+            "HR": actuals.get("HR", 0) + np.maximum(0.0, sim_hr - actuals.get("HR", 0)),
+            "RBI": actuals.get("RBI", 0) + np.maximum(0.0, sim_rbi - actuals.get("RBI", 0)),
+            "SB": actuals.get("SB", 0) + np.maximum(0.0, sim_sb - actuals.get("SB", 0)),
+            "AVG": avg,
+            "W": actuals.get("W", 0) + np.maximum(0.0, sim_w - actuals.get("W", 0)),
+            "K": actuals.get("K", 0) + np.maximum(0.0, sim_k - actuals.get("K", 0)),
+            "SV": actuals.get("SV", 0) + np.maximum(0.0, sim_sv - actuals.get("SV", 0)),
+            "ERA": era,
+            "WHIP": whip,
+        }
+    return out
+
+
 def run_monte_carlo(
     team_rosters: dict,
     h_slots: int,
@@ -705,7 +897,7 @@ def run_ros_monte_carlo(
 ) -> dict:
     """Run a Monte Carlo simulation over the remaining season.
 
-    Like run_monte_carlo but uses simulate_remaining_season to blend
+    Like run_monte_carlo but uses simulate_remaining_season_batch to blend
     actual YTD stats with simulated ROS projections.
 
     Args:
@@ -737,18 +929,19 @@ def run_ros_monte_carlo(
     mc_wins = {name: 0 for name in team_names}
     mc_top3 = {name: 0 for name in team_names}
     user_cat_pts: dict[str, list[float]] = {c.value: [] for c in ALL_CATS}
+    cats = [c.value for c in ALL_CATS]
+
+    # Vectorized: one batched simulation of all iterations replaces the former
+    # per-iteration simulate_remaining_season call. Roto scoring stays per
+    # iteration (it ranks teams within each draw), reading column i from the batch.
+    batch = simulate_remaining_season_batch(
+        actual_standings, flat_rosters, fraction_remaining, rng, h_slots, p_slots, n_iterations
+    )
 
     for i in range(n_iterations):
         if progress_cb and i % 200 == 0:
             progress_cb(i)
-        sim_stats, _ = simulate_remaining_season(
-            actual_standings,
-            flat_rosters,
-            fraction_remaining,
-            rng,
-            h_slots,
-            p_slots,
-        )
+        sim_stats = {name: {cat: float(batch[name][cat][i]) for cat in cats} for name in team_names}
         sim_roto = score_roto_dict(sim_stats)
         ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
         for rank, (name, pts) in enumerate(ranked, 1):
