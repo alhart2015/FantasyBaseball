@@ -862,6 +862,54 @@ def test_standings_distributions_empty_without_mc(client, kv_isolation):
     assert dist == {"overall": {"x": [], "rows": []}, "category_totals": {}, "category_points": {}}
 
 
+def test_standings_embeds_distributions_node(client, kv_isolation):
+    """The Distributions view embeds the reshaped distributions block as a
+    JSON <script> node (#distributions-data) the canvas renderer reads. The
+    embedded payload carries the server-marked is_user flag and drops the raw
+    user_team string."""
+    from fantasy_baseball.web import season_data
+
+    season_data.write_cache(
+        CacheKey.MONTE_CARLO,
+        {
+            "base": None,
+            "baseline_meta": None,
+            "rest_of_season": {
+                "team_results": {},
+                "category_risk": {},
+                "distributions": {
+                    "user_team": "Team 01",
+                    "overall": {
+                        "x": [60.0, 70.0, 80.0],
+                        "teams": {
+                            "Team 01": {"y": [0.1, 0.2, 0.1], "median": 75.0},
+                            "Team 02": {"y": [0.2, 0.1, 0.1], "median": 65.0},
+                        },
+                    },
+                    "category_totals": {},
+                    "category_points": {},
+                },
+            },
+        },
+    )
+    season_data.write_cache(CacheKey.STANDINGS, _mock_standings())
+
+    with patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg:
+        mock_cfg.return_value.team_name = "Team 01"
+        body = client.get("/standings").get_data(as_text=True)
+
+    match = re.search(
+        r'<script type="application/json" id="distributions-data">(.*?)</script>',
+        body,
+        re.DOTALL,
+    )
+    assert match is not None, "distributions-data script tag not found"
+    dist = json.loads(match.group(1))
+    assert dist["overall"]["rows"]
+    assert any(r["is_user"] for r in dist["overall"]["rows"])
+    assert "user_team" not in dist
+
+
 def _seed_browse_caches():
     """Seed ros_projections + positions + roster + opp_rosters + audit
     into the active KV store. Returns the seeded names so tests can assert

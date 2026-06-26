@@ -21,6 +21,7 @@
     <button class="pill active" data-view="current" onclick="toggleTopView(this)">Current</button>
     <button class="pill" data-view="projected" onclick="toggleTopView(this)">Projected</button>
     <button class="pill" data-view="montecarlo" onclick="toggleTopView(this)">Monte Carlo</button>
+    <button class="pill" data-view="distributions" onclick="toggleTopView(this)">Distributions</button>
 </div>
 
 {# ── Current (actual standings, unchanged) ── #}
@@ -230,6 +231,28 @@
     </div>
 </div>
 
+{# -- Distributions (ridgeline of per-team MC outcome spreads) -- #}
+<div id="view-distributions" style="display: none;">
+    <div class="pill-group" id="dist-metric-toggle">
+        <button class="pill active" data-distmetric="overall" onclick="distSetMetric(this)">Overall</button>
+        {% for cat in all_categories %}
+        <button class="pill" data-distmetric="{{ cat.value }}" onclick="distSetMetric(this)">{{ cat.value }}</button>
+        {% endfor %}
+    </div>
+
+    <div class="pill-group" id="dist-mode-toggle" style="display: none;">
+        <button class="pill active" data-distmode="totals" onclick="distSetMode(this)">Totals</button>
+        <button class="pill" data-distmode="points" onclick="distSetMode(this)">Points</button>
+    </div>
+
+    <div class="dist-wrapper"><canvas id="distributions-canvas"></canvas></div>
+    <p id="dist-empty" class="placeholder-text" style="display: none;">
+        No Monte Carlo distributions available. Click "Refresh Data" first.
+    </p>
+
+    <script type="application/json" id="distributions-data">{{ distributions | tojson }}</script>
+</div>
+
 <dialog id="breakdown-modal">
     <div class="breakdown-modal-head">
         <h3 id="breakdown-modal-title"></h3>
@@ -320,6 +343,8 @@ function toggleTopView(el) {
     document.getElementById('view-current').style.display = v === 'current' ? '' : 'none';
     document.getElementById('view-projected').style.display = v === 'projected' ? '' : 'none';
     document.getElementById('view-montecarlo').style.display = v === 'montecarlo' ? '' : 'none';
+    document.getElementById('view-distributions').style.display = v === 'distributions' ? '' : 'none';
+    if (v === 'distributions' && window.renderDistributions) window.renderDistributions();
 }
 
 /* ── Current standings sub-toggle ── */
@@ -647,7 +672,17 @@ document.addEventListener('DOMContentLoaded', () => {
     font-weight: 600;
     font-style: normal;
 }
+.dist-wrapper { position: relative; height: 520px; margin-top: 0.75rem; }
+#dist-metric-toggle {
+    display: grid;
+    grid-template-columns: repeat(6, max-content);
+    column-gap: 6px;
+    row-gap: 4px;
+    border-bottom: none;
+}
 </style>
+
+<script src="{{ url_for('static', filename='season_distributions.js') }}"></script>
 
 {% endif %}
 </div>

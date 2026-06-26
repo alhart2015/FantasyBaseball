@@ -1,0 +1,212 @@
+/* Distributions: ridgeline of per-team Monte Carlo outcome distributions for the
+ * standings "Distributions" view. Reads the JSON embedded by standings.html
+ * (#distributions-data) and draws into #distributions-canvas with the raw 2D
+ * canvas API -- one density row per team on a shared x-axis, user row highlighted,
+ * a central-tendency tick per row. Re-renders on metric/mode change and when the
+ * tab is shown (the canvas has zero size while its view is display:none).
+ *
+ * Formatted data shape (from format_distributions_for_display):
+ *   { overall: {x:[...], rows:[{team,is_user,y:[...],median}]},
+ *     category_totals: {CAT: {x:[...], rows:[{team,is_user,y:[...],median}]}},
+ *     category_points: {CAT: {x:[...], rows:[{team,is_user,p:[...],mean}]}} }
+ */
+(function () {
+  "use strict";
+
+  var USER_COLOR = "#e15759";
+  var OTHER_COLOR = "#4e79a7";
+  var RATE_CATS = { AVG: 3, ERA: 2, WHIP: 2 };
+
+  var state = { metric: "overall", mode: "totals" };
+  var payload = null;
+
+  function loadPayload() {
+    var node = document.getElementById("distributions-data");
+    if (!node) return null;
+    try { return JSON.parse(node.textContent); } catch (e) { return null; }
+  }
+
+  function fmtTick(value) {
+    var cat = state.metric;
+    if (state.metric !== "overall" && state.mode === "totals" && RATE_CATS[cat] != null) {
+      return value.toFixed(RATE_CATS[cat]);
+    }
+    return String(Math.round(value * 10) / 10);
+  }
+
+  // Resolve the active metric into a uniform shape:
+  // {x:[...], rows:[{team,is_user,curve:[...],center:float}], discrete:bool, label}
+  function currentMetric() {
+    if (!payload) return null;
+    if (state.metric === "overall") {
+      return adapt(payload.overall, "y", "median", false, "Total roto points");
+    }
+    var cat = state.metric;
+    if (state.mode === "points") {
+      var cp = (payload.category_points || {})[cat];
+      return adapt(cp, "p", "mean", true, cat + " roto points");
+    }
+    var ct = (payload.category_totals || {})[cat];
+    return adapt(ct, "y", "median", false, cat + " total");
+  }
+
+  function adapt(metric, curveKey, centerKey, discrete, label) {
+    if (!metric || !metric.rows || !metric.rows.length) return null;
+    return {
+      x: metric.x,
+      discrete: discrete,
+      label: label,
+      rows: metric.rows.map(function (r) {
+        return { team: r.team, is_user: r.is_user, curve: r[curveKey], center: r[centerKey] };
+      })
+    };
+  }
+
+  function showEmpty(canvas, empty, isEmpty) {
+    if (canvas) canvas.style.display = isEmpty ? "none" : "";
+    if (empty) empty.style.display = isEmpty ? "" : "none";
+  }
+
+  function render() {
+    if (payload == null) payload = loadPayload();
+    var canvas = document.getElementById("distributions-canvas");
+    var empty = document.getElementById("dist-empty");
+    if (!canvas) return;
+
+    var data = currentMetric();
+    if (!data) { showEmpty(canvas, empty, true); return; }
+    showEmpty(canvas, empty, false);
+
+    // Size the backing store to the CSS box * devicePixelRatio for crisp lines.
+    var dpr = window.devicePixelRatio || 1;
+    var cssW = canvas.clientWidth || canvas.parentNode.clientWidth || 800;
+    var cssH = canvas.clientHeight || canvas.parentNode.clientHeight || 520;
+    canvas.width = Math.round(cssW * dpr);
+    canvas.height = Math.round(cssH * dpr);
+    var ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+
+    drawRidgeline(ctx, cssW, cssH, data);
+  }
+
+  function drawRidgeline(ctx, W, H, data) {
+    var padL = 110, padR = 24, padT = 16, padB = 34;
+    var plotW = W - padL - padR;
+    var plotH = H - padT - padB;
+    var rows = data.rows;
+    var n = rows.length;
+
+    var xs = data.x;
+    var xMin = xs[0], xMax = xs[xs.length - 1];
+    var xSpan = xMax - xMin || 1;
+    function sx(v) { return padL + ((v - xMin) / xSpan) * plotW; }
+
+    // Per-row vertical band; curves overlap upward by ~1.7 bands for the
+    // classic ridgeline look. Peak height is normalized per row (each row's own
+    // max), so a tight row reads as tall-and-narrow, a wide row as low-and-broad.
+    var band = plotH / n;
+    var overlap = 1.7;
+
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.textBaseline = "middle";
+
+    // x-axis label.
+    ctx.fillStyle = "#888";
+    ctx.textAlign = "center";
+    ctx.fillText(data.label, padL + plotW / 2, H - 12);
+
+    // Draw back-to-front (bottom rows first) so upper rows overlap correctly.
+    for (var i = n - 1; i >= 0; i--) {
+      var row = rows[i];
+      var baseY = padT + (i + 1) * band;
+      var curve = row.curve;
+      var cMax = 0;
+      for (var k = 0; k < curve.length; k++) if (curve[k] > cMax) cMax = curve[k];
+      if (cMax <= 0) cMax = 1;
+      var amp = band * overlap;
+
+      function cy(idx) { return baseY - (curve[idx] / cMax) * amp; }
+
+      var stroke = row.is_user ? USER_COLOR : OTHER_COLOR;
+      var fill = row.is_user ? "rgba(225,87,89,0.35)" : "rgba(78,121,167,0.22)";
+
+      if (data.discrete) {
+        // Stems at each support value.
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = row.is_user ? 2.5 : 1.5;
+        for (var s = 0; s < xs.length; s++) {
+          if (curve[s] <= 0) continue;
+          var px = sx(xs[s]);
+          ctx.beginPath();
+          ctx.moveTo(px, baseY);
+          ctx.lineTo(px, cy(s));
+          ctx.stroke();
+        }
+      } else {
+        // Filled density path.
+        ctx.beginPath();
+        ctx.moveTo(sx(xs[0]), baseY);
+        for (var j = 0; j < xs.length; j++) ctx.lineTo(sx(xs[j]), cy(j));
+        ctx.lineTo(sx(xs[xs.length - 1]), baseY);
+        ctx.closePath();
+        ctx.fillStyle = fill;
+        ctx.fill();
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = row.is_user ? 2.5 : 1.5;
+        ctx.stroke();
+      }
+
+      // Central-tendency tick (median for continuous, mean for discrete).
+      var tx = sx(row.center);
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(tx, baseY);
+      ctx.lineTo(tx, baseY - amp);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Row label (team name, bold for user) + center value.
+      ctx.fillStyle = row.is_user ? USER_COLOR : "#ccc";
+      ctx.font = (row.is_user ? "bold " : "") + "12px system-ui, sans-serif";
+      ctx.textAlign = "right";
+      ctx.fillText(row.team, padL - 8, baseY - band * 0.35);
+      ctx.fillStyle = "#888";
+      ctx.font = "11px system-ui, sans-serif";
+      ctx.fillText(fmtTick(row.center), padL - 8, baseY - band * 0.35 + 14);
+    }
+  }
+
+  window.renderDistributions = render;
+
+  function setActivePill(groupSelector, stateKey, dataAttr, el) {
+    document.querySelectorAll(groupSelector + " .pill").forEach(function (p) {
+      p.classList.remove("active");
+    });
+    el.classList.add("active");
+    state[stateKey] = el.dataset[dataAttr];
+  }
+
+  window.distSetMetric = function (el) {
+    setActivePill("#dist-metric-toggle", "metric", "distmetric", el);
+    // Totals|Points only applies to a specific category, not Overall.
+    var modeToggle = document.getElementById("dist-mode-toggle");
+    if (modeToggle) modeToggle.style.display = state.metric === "overall" ? "none" : "";
+    render();
+  };
+
+  window.distSetMode = function (el) {
+    setActivePill("#dist-mode-toggle", "mode", "distmode", el);
+    render();
+  };
+
+  // Re-render on resize so the canvas stays crisp and correctly sized.
+  window.addEventListener("resize", function () {
+    if (document.getElementById("view-distributions") &&
+        document.getElementById("view-distributions").style.display !== "none") {
+      render();
+    }
+  });
+})();
