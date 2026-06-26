@@ -1387,6 +1387,28 @@ class RefreshRun:
                     row["AB"] = float(pa) * AB_PER_PA
                 actual_standings_dict[e.team_name] = row
 
+            if os.environ.get("FB_SELECTION_ATTRIBUTION"):  # gated Phase 0 diagnostic
+                from fantasy_baseball.mc_selection import (
+                    format_attribution_table,
+                    run_selection_attribution,
+                )
+
+                assert self.fraction_remaining is not None
+                attr = run_selection_attribution(
+                    rest_of_season_mc_rosters,
+                    actual_standings_dict,
+                    self.fraction_remaining,
+                    h_slots,
+                    p_slots,
+                    n_iter=1000,
+                    seed=42,
+                )
+                header = f"seed=42 n_iter=1000 fraction_remaining={self.fraction_remaining:.4f}\n"
+                with open("phase0_attribution.txt", "w", encoding="ascii", errors="replace") as fh:
+                    fh.write(header)
+                    fh.write(format_attribution_table(attr))
+                self._progress("Selection-attribution diagnostic written")
+
             if rest_of_season_mc_rosters:
                 self.rest_of_season_mc = run_ros_monte_carlo(
                     team_rosters=rest_of_season_mc_rosters,
