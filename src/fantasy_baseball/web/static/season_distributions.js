@@ -25,6 +25,11 @@
   var PAD_TOP = 44;
   var PAD_BOTTOM = 40;
   var OVERLAP = 1.6;
+  // Left label gutter: fit the longest team name (+LABEL_PAD), clamped so a very
+  // long name can't eat the plot and a short one still leaves a readable margin.
+  var GUTTER_MIN = 90;
+  var GUTTER_MAX = 220;
+  var LABEL_PAD = 16;
 
   var state = { metric: "overall", mode: "totals" };
   var payload = null;
@@ -126,7 +131,7 @@
       var lw = ctx.measureText(rows[li].team).width;
       if (lw > maxLabelW) maxLabelW = lw;
     }
-    var padL = Math.min(220, Math.max(90, Math.ceil(maxLabelW) + 16));
+    var padL = Math.min(GUTTER_MAX, Math.max(GUTTER_MIN, Math.ceil(maxLabelW) + LABEL_PAD));
     var padR = 24, padT = PAD_TOP, padB = PAD_BOTTOM;
     var plotW = W - padL - padR;
     var plotH = H - padT - padB;
@@ -141,7 +146,6 @@
     // normalized per row (each row's own max), so a tight row reads as
     // tall-and-narrow, a wide row as low-and-broad.
     var band = plotH / n;
-    var overlap = OVERLAP;
 
     ctx.font = "12px system-ui, sans-serif";
     ctx.textBaseline = "middle";
@@ -159,7 +163,7 @@
       var cMax = 0;
       for (var k = 0; k < curve.length; k++) if (curve[k] > cMax) cMax = curve[k];
       if (cMax <= 0) cMax = 1;
-      var amp = band * overlap;
+      var amp = band * OVERLAP;
 
       var stroke = row.is_user ? USER_COLOR : OTHER_COLOR;
       var fill = row.is_user ? "rgba(225,87,89,0.35)" : "rgba(78,121,167,0.22)";
