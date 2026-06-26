@@ -507,7 +507,7 @@ git commit -m "feat(distributions): build_distributions orchestrator"
 
 - [ ] **Step 1: Write the failing test**
 
-First read the existing `run_ros_monte_carlo` test in `tests/test_simulation.py` (`test_returns_expected_format`, ~lines 495-509) to confirm the exact fixture helpers and call convention. They are: helper functions `_build_two_team_rosters()` and `_build_actual_standings()` (call them inline), with literals `fraction_remaining=0.5, h_slots=3, p_slots=2, user_team_name="Team A"`, and exactly **two** teams ("Team A", "Team B"). Reuse those (do not fabricate a new roster shape). Append:
+First read the existing `run_ros_monte_carlo` test in `tests/test_simulation.py` (`test_returns_expected_format`, ~lines 495-509) to confirm the exact fixture helpers and call convention. They are: helper functions `_build_two_team_rosters()` and `_build_actual_standings()` (call them inline), with literals `fraction_remaining=0.5, h_slots=3, p_slots=2, user_team_name="Team A"`, and exactly **two** teams ("Team A", "Team B"). Reuse those (do not fabricate a new roster shape). Append at **module scope** (the new test is a top-level `def`, not a method inside a class -- the fixture helpers are module-level functions, not `self.`-bound):
 
 ```python
 def test_run_ros_monte_carlo_returns_distributions():
@@ -1045,14 +1045,14 @@ Remove `format_category_bars_for_display,` from the module-top import block (lin
 
 - [ ] **Step 3: Delete the template Category Bars surface**
 
-In `src/fantasy_baseball/web/templates/season/standings.html`, delete: the Category Bars nav button (line 24, `data-view="categorybars"`); the entire `#view-categorybars` block (234-261, including its `category-bars-data` JSON node and `catbars-*` sub-toggles); the `categorybars` line(s) in `toggleTopView` (353-354, the `style.display` line and the `if (v === 'categorybars' && window.renderCategoryBars)` line); the category-bars CSS rules (664-682: `.catbars-wrapper`, `#catbars-cat-toggle`, `#catbars-cat-toggle .pill:first-child`, `.catbars-odds`, `.catbars-odds strong`); the `chartjs-chart-error-bars` CDN include (703); and the `season_category_bars.js` include (704).
+In `src/fantasy_baseball/web/templates/season/standings.html`, delete: the Category Bars nav button (line 24, `data-view="categorybars"`); the entire `#view-categorybars` block (234-261, including its `category-bars-data` JSON node and `catbars-*` sub-toggles); the `categorybars` line(s) in `toggleTopView` (353-354, the `style.display` line and the `if (v === 'categorybars' && window.renderCategoryBars)` line); the category-bars CSS rules -- delete the **whole** 664-682 range (the rules `.catbars-wrapper`, `#catbars-cat-toggle`, `#catbars-cat-toggle .pill:first-child`, `.catbars-odds`, `.catbars-odds strong` **plus** the explanatory comment on lines 665-666, which belongs to `#catbars-cat-toggle`); the `chartjs-chart-error-bars` CDN include (703); and the `season_category_bars.js` include (704).
 
-- [ ] **Step 4: Decide the Chart.js CDN line**
+- [ ] **Step 4: Delete the now-dead Chart.js CDN line**
 
-The `chart.js` CDN (line 702) was used on this page only by Category Bars (`scatterWithErrorBars`); the Task-8 renderer uses raw canvas. Grep for remaining Chart.js usage in the template:
+The `chart.js` CDN (line 702) was used on this page only by Category Bars (`scatterWithErrorBars`); the Task-8 renderer uses raw canvas. Grep for remaining Chart.js **usage** (NOT the literal `chart.js` -- that string is inside the CDN URL on line 702 itself and would self-match, misleading you into keeping a dead include):
 
-Run: `git grep -n -e "new Chart" -e "Chart(" -e "chart.js" -- src/fantasy_baseball/web/templates/season/standings.html`
-Expected: zero hits. If zero, delete the Chart.js CDN line (702) too (no dead includes, per repo convention). If any hit remains, keep it.
+Run: `git grep -n -e "new Chart" -e "scatterWithErrorBars" -e "Chart(" -- src/fantasy_baseball/web/templates/season/standings.html`
+Expected: zero hits (Category Bars was the only consumer, and it is gone). Then delete the Chart.js CDN line (702) unconditionally -- no dead includes, per repo convention. (If, contrary to expectation, a real `new Chart(...)` usage shows up, keep line 702 and investigate.)
 
 - [ ] **Step 5: Delete the JS file**
 
