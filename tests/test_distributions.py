@@ -74,3 +74,39 @@ def test_sentinel_values_are_dropped_before_grid():
 
 def test_silverman_bandwidth_zero_for_constant_input():
     assert _silverman_bandwidth(np.full(10, 5.0)) == 0.0
+
+
+from fantasy_baseball.distributions import build_discrete_metric
+
+
+def test_discrete_metric_shared_support_and_pmf():
+    team_samples = {
+        "A": [11, 11, 12, 12, 12],
+        "B": [1, 2, 2, 3],
+    }
+    out = build_discrete_metric(team_samples)
+    # Shared x = sorted union of observed values across BOTH teams.
+    assert out["x"] == [1.0, 2.0, 3.0, 11.0, 12.0]
+    for name in ("A", "B"):
+        p = out["teams"][name]["p"]
+        assert len(p) == len(out["x"])
+        assert abs(sum(p) - 1.0) < 1e-9
+    # A never realized 1/2/3 -> zeros there.
+    assert out["teams"]["A"]["p"][:3] == [0.0, 0.0, 0.0]
+    # mean = sum(x * p): A is (11*2 + 12*3)/5 = 11.6
+    assert abs(out["teams"]["A"]["mean"] - 11.6) < 1e-9
+
+
+def test_discrete_metric_half_integer_support_from_ties():
+    # A tie produces a 0.5-step point value; it must appear in the shared support.
+    out = build_discrete_metric({"A": [11.5, 11.5, 12.0], "B": [1.0, 1.0, 1.0]})
+    assert 11.5 in out["x"]
+    assert out["x"] == sorted(out["x"])
+
+
+def test_discrete_metric_json_serializable():
+    out = build_discrete_metric({"A": [1, 2, 3], "B": [3, 3, 3]})
+    json.dumps(out)
+    assert isinstance(out["x"][0], float)
+    assert isinstance(out["teams"]["A"]["p"][0], float)
+    assert isinstance(out["teams"]["A"]["mean"], float)

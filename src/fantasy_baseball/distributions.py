@@ -96,3 +96,34 @@ def build_continuous_metric(team_samples: dict[str, Any], sentinel: float | None
             "median": float(np.median(arr)),
         }
     return {"x": [float(v) for v in grid], "teams": teams}
+
+
+def build_discrete_metric(team_samples: dict[str, Any]) -> dict:
+    """Build a shared-support PMF ridgeline payload for one discrete metric.
+
+    ``team_samples`` is ``{team: point_value_array}`` (category roto points, which
+    are half-integers under tie-splitting). Returns
+    ``{"x": [...], "teams": {team: {"p": [...], "mean": float}}}`` where ``x`` is
+    the sorted union of distinct point values observed across ALL teams and each
+    team's ``p`` is aligned to that shared ``x`` (0 at unobserved values), so a
+    ridgeline can stack the rows on one axis. Teams with no samples are omitted.
+    """
+    cleaned = {}
+    for name, raw in team_samples.items():
+        arr = _clean_samples(raw, None)
+        if arr.size > 0:
+            # Snap to the nearest 0.5 so tie-split values compare exactly.
+            cleaned[name] = np.round(arr * 2.0) / 2.0
+    if not cleaned:
+        return {"x": [], "teams": {}}
+
+    support = np.unique(np.concatenate(list(cleaned.values())))
+    teams = {}
+    for name, arr in cleaned.items():
+        counts = np.array([np.count_nonzero(arr == v) for v in support], dtype=float)
+        p = counts / counts.sum()
+        teams[name] = {
+            "p": [float(v) for v in p],
+            "mean": float(np.sum(support * p)),
+        }
+    return {"x": [float(v) for v in support], "teams": teams}
