@@ -34,6 +34,7 @@ from fantasy_baseball.utils.constants import (
 )
 from fantasy_baseball.utils.dispersion import negbin_variance_from_r, resolve_dispersion_r
 from fantasy_baseball.utils.playing_time import (
+    playing_time_moments,
     playing_time_params,
     playing_time_shape,
     scale_from_uniform,
@@ -617,7 +618,9 @@ _CLOSER_RANK_BONUS = 1e9
 
 def _gather_sum(stat: np.ndarray, idx: np.ndarray) -> np.ndarray:
     """Sum the columns picked by ``idx`` (n_iter, k) out of ``stat`` (n_iter, n)."""
-    return np.asarray(np.take_along_axis(stat, idx, axis=1).sum(axis=1), dtype=float)
+    # cast (not np.asarray): stat is already float, so this is a type-only assert
+    # to satisfy warn_return_any, with no runtime coercion -- as in _nbinom_ppf_fast.
+    return cast(np.ndarray, np.take_along_axis(stat, idx, axis=1).sum(axis=1))
 
 
 def _topk_indices(key: np.ndarray, k: int) -> np.ndarray:
@@ -667,8 +670,7 @@ def _apply_variance_batch(
     for j, p in enumerate(players):
         vol = _projected_volume(p, is_hitter)
         mean_scale, cv_pt = playing_time_params(player_type, vol)
-        eff_mean[j] = 1.0 - (1.0 - mean_scale) * fraction_remaining
-        eff_sd[j] = cv_pt * (fraction_remaining**0.5)
+        eff_mean[j], eff_sd[j] = playing_time_moments(mean_scale, cv_pt, fraction_remaining)
         ladders.append(np.asarray(playing_time_shape(player_type, vol), dtype=float))
 
     # Playing-time scale per (iteration, player): the vectorized scale_from_uniform.
@@ -785,15 +787,17 @@ def simulate_remaining_season_batch(
             era = np.where(total_ip > 0, total_er * 9 / total_ip, 99.0)
             whip = np.where(total_ip > 0, total_h_plus_bb / total_ip, 99.0)
 
+        # Final counting total = actual + clamped simulated remainder, which is
+        # exactly max(actual, simulated) -- never below what's already banked.
         out[team] = {
-            "R": actuals.get("R", 0) + np.maximum(0.0, sim_r - actuals.get("R", 0)),
-            "HR": actuals.get("HR", 0) + np.maximum(0.0, sim_hr - actuals.get("HR", 0)),
-            "RBI": actuals.get("RBI", 0) + np.maximum(0.0, sim_rbi - actuals.get("RBI", 0)),
-            "SB": actuals.get("SB", 0) + np.maximum(0.0, sim_sb - actuals.get("SB", 0)),
+            "R": np.maximum(actuals.get("R", 0), sim_r),
+            "HR": np.maximum(actuals.get("HR", 0), sim_hr),
+            "RBI": np.maximum(actuals.get("RBI", 0), sim_rbi),
+            "SB": np.maximum(actuals.get("SB", 0), sim_sb),
             "AVG": avg,
-            "W": actuals.get("W", 0) + np.maximum(0.0, sim_w - actuals.get("W", 0)),
-            "K": actuals.get("K", 0) + np.maximum(0.0, sim_k - actuals.get("K", 0)),
-            "SV": actuals.get("SV", 0) + np.maximum(0.0, sim_sv - actuals.get("SV", 0)),
+            "W": np.maximum(actuals.get("W", 0), sim_w),
+            "K": np.maximum(actuals.get("K", 0), sim_k),
+            "SV": np.maximum(actuals.get("SV", 0), sim_sv),
             "ERA": era,
             "WHIP": whip,
         }
@@ -934,12 +938,16 @@ def run_ros_monte_carlo(
     # Vectorized: one batched simulation of all iterations replaces the former
     # per-iteration simulate_remaining_season call. Roto scoring stays per
     # iteration (it ranks teams within each draw), reading column i from the batch.
+    # The batch below is the heavy step (the scoring loop is cheap), so signal the
+    # MC phase before it rather than letting the prior step's message linger.
+    if progress_cb:
+        progress_cb(0)
     batch = simulate_remaining_season_batch(
         actual_standings, flat_rosters, fraction_remaining, rng, h_slots, p_slots, n_iterations
     )
 
     for i in range(n_iterations):
-        if progress_cb and i % 200 == 0:
+        if progress_cb and i % 200 == 0 and i != 0:
             progress_cb(i)
         sim_stats = {name: {cat: float(batch[name][cat][i]) for cat in cats} for name in team_names}
         sim_roto = score_roto_dict(sim_stats)

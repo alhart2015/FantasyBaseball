@@ -83,6 +83,28 @@ def playing_time_shape(player_type: PlayerType | str, volume: float) -> list[flo
     return [_interp_xy(vols, [lad[j] for lad in ladders], volume) for j in range(len(ladders[0]))]
 
 
+def playing_time_moments(
+    mean_scale: float,
+    cv_pt: float,
+    fraction_remaining: float,
+) -> tuple[float, float]:
+    """The fraction_remaining-damped (eff_mean, eff_sd) of the realized-PT scale.
+
+    Single source of truth for the location-scale mapping shared by the scalar
+    ``scale_from_uniform`` and the batched MC (``_apply_variance_batch``):
+
+        eff_mean = 1 - (1 - mean_scale) * fraction_remaining
+        eff_sd   = cv_pt * sqrt(fraction_remaining)
+
+    Over a partial season only the remaining playing time is at risk, so both the
+    haircut and the spread shrink with ``fraction_remaining`` (at 0, eff_mean == 1
+    and eff_sd == 0, pinning every draw to projected).
+    """
+    eff_mean = 1.0 - (1.0 - mean_scale) * fraction_remaining
+    eff_sd = cv_pt * (fraction_remaining**0.5)
+    return eff_mean, eff_sd
+
+
 def scale_from_uniform(
     mean_scale: float,
     cv_pt: float,
@@ -104,7 +126,6 @@ def scale_from_uniform(
     ``fraction_remaining == 0`` nothing is left to play, so the result is exactly
     ``1.0`` (projected) for every draw.
     """
-    eff_mean = 1.0 - (1.0 - mean_scale) * fraction_remaining
-    eff_sd = cv_pt * (fraction_remaining**0.5)
+    eff_mean, eff_sd = playing_time_moments(mean_scale, cv_pt, fraction_remaining)
     z = float(np.interp(u, QUANTILE_LEVELS, z_ladder))
     return float(max(0.0, eff_mean + z * eff_sd))
