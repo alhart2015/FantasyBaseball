@@ -87,17 +87,40 @@ follow-up (the `active_slot`/`topk_fixed` arms already exist; add an
 3. **Healthy-bench-as-injury-insurance (the remainder):** the full games-based
    availability engine (Phases 1-6 of the spec).
 
-## Recommendation
+## Decision: GO (full games engine), churn-freeze folded in
 
-Do NOT mechanically STOP on the SkeleThor-only criterion (it was an
-unrepresentative example), and do NOT mechanically GO into the full 6-phase build
-either. Instead:
-1. Ship the **churn freeze** -- unambiguous, cheap, ~85 RBI of spurious inflation
-   removed.
-2. Run the **cheap IL-vs-healthy-bench split** before committing to the full
-   engine, so we build the fix the data actually calls for (mirror-ERoto-IL vs
-   full games-engine).
-3. Re-frame the project's motivation away from the (refuted) SkeleThor 94-RBI
-   story toward the real league-wide seating effect.
+A per-player ROS-RBI dig (Hart, SkeleThor, Send in the Cavalli; from the cached
+`standings_breakdown`) resolved the IL-vs-healthy-bench question by inspection and
+corrected the model:
 
-This is the user's decision (the gate is theirs to call).
+- **IL players** (Hart's Cruz; SkeleThor's Hicks, Acuna): their ROS projection
+  already bakes in the injury, so they are counted at FULL ROS and displace ONE
+  eligible active body by the IL player's expected ROS playing time -- a
+  one-for-one, slot-PT-conserving swap. ERoto already does this correctly (Cruz
+  ~200 ROS AB displaces Springer, who drops ~186 AB; Riley is untouched in ERoto
+  -- Riley's 0 was the today's-MC raw-top-k column, not ERoto). The current MC
+  does NOT do this (it seats IL at full AND keeps the displaced body).
+- **Healthy bench** (Cavalli's Perez/Ward/Arraez): must NOT be zeroed. The MC's
+  playing-time sampling IS the injury simulation; when an active starter draws a
+  low-PT stretch, an eligible bench bat fills those simulated missed player-games
+  at a nonnegative rate, capped at one body, replacement-level only when no bench
+  body is free. This is the injury-insurance value the engine exists for --
+  neither today's MC (full, no injury needed) nor ERoto/active-slot (zero) models
+  it. Bench-exclusion was therefore the WRONG "cheap fix": it under-credits depth
+  exactly as much as top-k over-credits it.
+
+Corrected target model the engine must build:
+1. IL = full (injury-baked) ROS + one eligible active body displaced by the IL
+   player's expected ROS playing time (mirror ERoto; the MC lacks this today).
+2. Healthy bench = fill the per-iteration SIMULATED missed games of eligible
+   active starters; nonnegative, one-body cap, replacement-level last.
+3. Churn = freeze the per-iteration re-selection (a real ~85-RBI league-wide
+   artifact). Folded INTO the engine work, not shipped separately (user: "we
+   don't need the cheap win on its own").
+
+What the gate accomplished: it killed the WRONG framing (SkeleThor's gap is
+IL-displacement, not bench-seating) and the per-player dig pinned the RIGHT model
+(above). Motivation is re-framed away from the refuted SkeleThor 94-RBI story
+toward league-wide bench-injury-insurance + correct IL displacement.
+
+Raw three-arm table: `games-mc-phase0-attribution-2026-06-26-raw.txt`.
