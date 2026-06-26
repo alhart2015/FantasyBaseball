@@ -95,19 +95,29 @@ all teams/categories -- heavy to serialize and ship to the browser). Instead:
   a Gaussian kernel density estimate (KDE), sampled at a fixed number of points
   (~60) on a **shared x-grid** per metric. Shared grid is required so ridgeline
   rows are horizontally comparable. Result per metric:
-  `{ "x": [...], "teams": { team: [y...] } }`.
+  `{ "x": [...], "teams": { team: {"y": [...], "median": float} } }`, where
+  `median` is that team's sample median (computed from the raw samples before
+  KDE) and is used for row sorting and the row marker -- the density array alone
+  carries no median, so it must be threaded into the payload here.
   - *Why `overall` (total points) is treated as continuous even though it is
     discrete:* a team's total is a sum of 10 per-category point values, so its
     support spans 10..120 in 0.5 steps (~220 possible values) and, over 1000
     iterations, clusters into a smooth-looking spread. KDE-smoothing it produces
     the intended bell curve. Category *points* (next bullet), by contrast, have
     only ~12-23 possible values and are kept as an exact discrete PMF.
-  - *Shared x-grid construction:* for each metric, gather the samples for **all**
-    teams, take `lo = min(samples)`, `hi = max(samples)`, and use the grid
-    `linspace(lo - 3*bw, hi + 3*bw, 60)` where `bw` is the bandwidth used for that
-    metric (the same grid and bandwidth for every team in that metric, so rows are
-    comparable and KDE tails are not clipped). Each team's KDE is sampled on this
-    shared grid.
+  - *Bandwidth is per-team* (see KDE detail): each team's curve uses its own
+    Silverman bandwidth (with the metric-relative floor below). This is
+    deliberate -- a near-deterministic team *should* render as a narrow peak and
+    an uncertain team as a wide spread; that per-team width difference IS the
+    uncertainty signal the view exists to show, so we do not force one shared
+    bandwidth across teams.
+  - *Shared x-grid construction:* for each metric, pool the samples for **all**
+    teams; take `lo = min(pooled)`, `hi = max(pooled)`; let `bw_max` be the
+    largest per-team bandwidth among the teams for that metric; and use the grid
+    `linspace(lo - 3*bw_max, hi + 3*bw_max, 60)`. Every team's KDE is sampled on
+    this one shared grid (so rows are horizontally comparable), and padding by
+    `3*bw_max` guarantees no team's tails are clipped (each team's own `bw <=
+    bw_max`). The grid is shared; the bandwidth is per-team.
   - *Sentinel guard:* the `batch` arrays use a `99.0` sentinel for ERA/WHIP in
     degenerate zero-IP iterations (`simulate_remaining_season_batch`). Over a full
     rest-of-season a real team accumulates IP so this is rare, but the
@@ -115,17 +125,21 @@ all teams/categories -- heavy to serialize and ship to the browser). Instead:
     `lo`/`hi` and the KDE so a stray `99.0` cannot create a phantom tail. If a team
     has zero usable samples for a metric, omit its row for that metric.
 - **Discrete metric** (category roto-points): the exact probability mass over the
-  discrete support of roto points. No smoothing -- with only ~12-23 achievable
-  values, smoothing would invent mass between achievable outcomes. The points are
-  an expected-value sum (`1 + sum P(me > opp)`, `team_sds=None` so an exact tie
-  contributes 0.5), so ties on integer counting stats (R, HR, ...) can yield
-  half-integer points (e.g. a top tie -> 11.5); rate stats (AVG/ERA/WHIP) tie
-  essentially never and are effectively integer. Ties are occasional, not the
-  common case. Build the PMF over the **distinct point values actually observed**
-  across iterations (a fixed half-integer grid from 1 to N is a safe, possibly
-  sparse, superset). Result per category:
-  `{ "x": [...point values...], "teams": { team: [p...] } }` where each team's
-  `p` sums to 1.
+  discrete support of roto points. Let `N` = team count (read from the data). A
+  team's per-category points are an expected-value sum `1 + sum P(me > opp)` over
+  the other `N-1` teams (`scoring.py`), so the value is bounded `1 <= pts <= N`
+  (all losses -> 1; a clean win over everyone -> N). With `team_sds=None` an exact
+  tie contributes 0.5, so the support is the half-integer grid `1, 1.5, ..., N`
+  (at most `2N-1` distinct values; 23 for N=12). No smoothing -- with so few
+  achievable values, smoothing would invent mass between them. Ties occur only on
+  integer counting stats (R, HR, ...) and are occasional, not the common case;
+  rate stats (AVG/ERA/WHIP) tie essentially never and are effectively integer.
+  Build the PMF over the **distinct point values actually observed** across
+  iterations (the `1..N` half-integer grid is a safe, possibly sparse, superset).
+  Result per category:
+  `{ "x": [...point values...], "teams": { team: {"p": [...], "mean": float} } }`
+  where each team's `p` sums to 1 and `mean = sum(x*p)` is the expected points
+  (used for row sorting and the row marker).
 
 Approximate cache cost: ~5k numbers for continuous curves + ~1.4k for discrete
 PMFs ~= under 7k numbers total. JSON-serializable, no numpy in the payload.
@@ -133,18 +147,24 @@ PMFs ~= under 7k numbers total. JSON-serializable, no numpy in the payload.
 ### KDE detail
 
 Implement a small Gaussian KDE helper (a few lines: for each grid point, sum
-Gaussian kernels centered on the samples; normalize). Bandwidth via Silverman's
-rule (`bw = 0.9 * min(std, IQR/1.349) * n**(-1/5)`) with an **absolute floor**
-(in the metric's data units) to avoid a delta-spike when a team's variance is
-near zero (e.g. a runaway category). The helper lives next to the simulation
-code (or a small util module) and is unit-tested independently.
+Gaussian kernels centered on the samples; normalize). Bandwidth per team via
+Silverman's rule (`bw = 0.9 * min(std, IQR/1.349) * n**(-1/5)`) with a
+**metric-relative floor** to avoid a delta-spike when a team's variance is near
+zero (e.g. a runaway category). The floor must scale with the metric's units --
+an absolute floor good for R (counts in the hundreds) is nonsense for ERA
+(~3.50). Define it relative to the metric's pooled spread, e.g.
+`bw_floor = max(eps, f * (hi - lo))` with `f` a small fraction (~0.5-1% of the
+pooled range, tuned at implementation), where `lo`/`hi` are the pooled
+post-sentinel-drop min/max for that metric. The helper lives next to the
+simulation code (or a small util module) and is unit-tested independently.
 
 *Why hand-rolled rather than `scipy.stats.gaussian_kde`:* scipy is already a
 hard dependency (`pyproject.toml`, imported in `simulation.py`), so availability
 is not the issue. The hand-rolled helper is preferred for three concrete reasons:
-(1) it lets us impose an **absolute** bandwidth floor in data units, which
-`gaussian_kde` does not expose cleanly (its `bw_method` scales by the sample
-std, so a near-constant team still collapses to a spike); (2) it raises no
+(1) it lets us impose a metric-relative bandwidth floor (in the metric's data
+units), which `gaussian_kde` does not expose cleanly (its `bw_method` scales by
+the sample std, so a near-constant team still collapses to a spike); (2) it
+raises no
 `LinAlgError` on degenerate (zero-variance) input, which `gaussian_kde` does; and
 (3) it emits plain Python floats directly, keeping the cached payload numpy-free
 (see cache round-trip test). Retaining the real MC shape rather than a single
@@ -160,25 +180,31 @@ shape is the whole point of the visualization.
 "distributions": {
     "overall": {                 # continuous: total roto points
         "x": [float, ...],       # shared grid (~60 points)
-        "teams": {team_name: [float, ...]}  # density at each x
+        # per team: KDE density on the grid + sample median (for sort + marker)
+        "teams": {team_name: {"y": [float, ...], "median": float}}
     },
     "category_totals": {         # continuous: raw stat totals
-        "R": {"x": [...], "teams": {team: [...]}},
+        "R": {"x": [...], "teams": {team: {"y": [...], "median": float}}},
         ...  # one per category
     },
     "category_points": {         # discrete: roto points (half-integer grid, ties split)
-        "R": {"x": [1, 1.5, ..., N], "teams": {team: [p, ...]}},  # each p-list sums to 1
-        ...
+        # per team: PMF over x + mean expected points (for sort + marker)
+        "R": {"x": [1, 1.5, ..., N], "teams": {team: {"p": [...], "mean": float}}},
+        ...                      # each p-list sums to 1
     },
-    "user_team": str,            # team name used by the formatter to mark is_user
+    "user_team": str,            # team name; consumed by the formatter, see below
 }
 ```
 
 The raw simulation result keys teams by name (that is the team identifier at this
-layer). `format_distributions_for_display()` resolves the highlight **server-side**:
-it marks each team row with an `is_user` boolean rather than shipping a bare
-`user_team` string for the JS to re-match by name. The frontend keys off `is_user`,
-never off a name comparison.
+layer). `format_distributions_for_display()` resolves the highlight
+**server-side**: it reads `user_team`, marks each team row with an `is_user`
+boolean, and **drops** the raw `user_team` string -- it is not forwarded to the
+template. The frontend keys off `is_user`, never off a name comparison.
+
+Every per-team entry carries its own sort key (`median` for continuous, `mean`
+for discrete), so the formatter can sort rows into standings order without
+needing `team_results` or any separate median source.
 
 ## Caching and data flow
 
@@ -186,23 +212,30 @@ Follows existing patterns exactly:
 
 1. `run_ros_monte_carlo()` returns the new `distributions` key
    (`src/fantasy_baseball/simulation.py`).
-2. `refresh_pipeline.py` folds it into the existing `cache:monte_carlo` payload
-   (currently writes `{base, baseline_meta, rest_of_season}`); since
+2. `src/fantasy_baseball/web/refresh_pipeline.py` folds it into the existing
+   `cache:monte_carlo` payload (currently writes
+   `{base, baseline_meta, rest_of_season}`); since
    `rest_of_season` **is** the `run_ros_monte_carlo()` return value, the new
    `distributions` key rides inside `rest_of_season` automatically -- no new
    cache key and no pipeline change.
 3. A new `format_distributions_for_display()` in
    `src/fantasy_baseball/web/season_data.py` reshapes the distributions into a
-   template-ready structure (sort teams by median, mark each row `is_user`,
-   attach labels). Mirrors the existing `format_*_for_display` functions.
+   template-ready structure: sort each metric's team rows by the per-team sort key
+   already in the payload (`median` for continuous, `mean` for discrete -- no
+   separate median source needed), mark each row `is_user` (dropping the raw
+   `user_team` string), attach labels. Mirrors the existing `format_*_for_display`
+   functions.
 4. **Route plumbing is required** (this does not happen for free). The existing
-   path calls `format_monte_carlo_for_display(raw_mc["rest_of_season"], ...)`,
-   which extracts only `team_results` / `category_risk` and ignores
-   `distributions`. The standings route
-   (`src/fantasy_baseball/web/season_routes.py`) must additionally read
-   `raw_mc["rest_of_season"].get("distributions")`, pass it through the new
-   `format_distributions_for_display()`, and hand the result to the template as
-   `distributions`. Guard for absence (`distributions` missing -> view renders an
+   path calls `format_monte_carlo_for_display(raw_mc["rest_of_season"], ...)`
+   inside an `if raw_mc.get("rest_of_season"):` guard
+   (`src/fantasy_baseball/web/season_routes.py`), because `rest_of_season` is
+   `None` in early season (no ROS data). That formatter extracts only
+   `team_results` / `category_risk` and ignores `distributions`. **Inside the same
+   guard** (never read `.get(...)` on a possibly-`None` `rest_of_season`), the
+   route must additionally read `raw_mc["rest_of_season"].get("distributions")`,
+   pass it through the new `format_distributions_for_display()`, and hand the
+   result to the template as `distributions`. Guard for the inner absence too
+   (`rest_of_season` present but `distributions` key missing -> view renders an
    empty/"no data" state), since the MC cache is written with `required=False`
    and an older cache blob predating this change will not contain the key.
 5. `standings.html` embeds it as `<script type="application/json"
@@ -217,12 +250,13 @@ Chart.js 4.4.4 is already loaded but has no native ridgeline. Render a
 **custom ridgeline**: either a small Chart.js plugin or a direct canvas draw,
 following the existing custom-plugin precedent (`userBounds` in
 `season_category_bars.js`). For each team row: a filled density path with a
-constant vertical offset (baseline per row), the user row highlighted, a median
-tick. Shared x-axis across rows. For the discrete Points metric the row is drawn
-as stems/bars at the support values (not a filled curve), and the "median tick"
-becomes a marker at the team's mean expected points (a true median of a 0.5-step
-PMF lands between bins and is less useful); use the same marker convention for the
-continuous metrics' median for visual consistency.
+constant vertical offset (baseline per row), the user row highlighted, and a
+central-tendency tick. The tick position comes straight from the payload -- the
+per-team `median` for continuous metrics, the per-team `mean` for the discrete
+Points metric -- so the renderer never has to integrate the grid or guess a
+between-bins median. For the discrete Points metric the row is drawn as
+stems/bars at the support values (not a filled curve), with the tick at `mean`.
+Shared x-axis across rows.
 
 The selector (Overall + 10 category pills, plus the Totals|Points sub-toggle)
 reuses the proven pill-toggle + destroy-and-rerender pattern already used by the
@@ -241,14 +275,22 @@ category-bars view.
   convention. The deletion is exhaustive; grep `category_bars` / `catbars` /
   `category-bars` and remove every site. Known inventory (verify with grep, do
   not trust this list as complete):
-  - `season_data.py`: `format_category_bars_for_display` **and** its helper
-    `_category_bars_one_flavor`.
+  - `season_data.py`: `format_category_bars_for_display`, its helper
+    `_category_bars_one_flavor`, **and** the now-orphaned `_category_odds` helper
+    (called only by `_category_bars_one_flavor`) plus its now-unused
+    `category_finish_odds` import. (Keep the standalone `category_odds` module and
+    `tests/test_category_odds.py` -- they are independent of the category-bars
+    view; only the `season_data.py`-local `_category_odds` goes.)
   - `season_routes.py`: the `format_category_bars_for_display` import, its call,
     and the `category_bars=` template kwarg on the standings render.
   - `templates/season/standings.html`: the `#view-categorybars` block, the
     nav/toggle button, the `toggleTopView` branch for it, the
-    `id="category-bars-data"` embedded-JSON node, and the
-    `<script src="...season_category_bars.js">` include.
+    `id="category-bars-data"` embedded-JSON node, the
+    `<script src="...season_category_bars.js">` include, the now-dead
+    `chartjs-chart-error-bars` CDN `<script>` (used only by the deleted JS; the
+    new ridgeline draws on raw canvas and does not need it), and the
+    category-bars-specific CSS rules (`.catbars-wrapper`, `#catbars-cat-toggle`,
+    `.catbars-odds`, ...).
   - `static/season_category_bars.js`: delete the file.
   - `tests/`: the category-bars tests in `tests/test_web/test_season_data.py`
     (the block importing/exercising `format_category_bars_for_display`) and the
@@ -271,24 +313,33 @@ category-bars view.
 ## Testing
 
 - Unit tests for the KDE / distribution-builder helper:
-  - shared-grid construction: grid is `linspace(lo - 3*bw, hi + 3*bw, 60)` over
-    all teams' pooled samples; every team sampled on the identical grid.
-  - density integrates to ~1 over the grid (trapezoid), for a known input.
-  - bandwidth floor: a near-constant input does not collapse to a single-bin
-    spike (assert the curve has non-trivial width >= the floor).
+  - shared-grid construction: grid is `linspace(lo - 3*bw_max, hi + 3*bw_max, 60)`
+    over all teams' pooled samples (`bw_max` = largest per-team bandwidth); every
+    team sampled on the identical grid.
+  - each team's density integrates to ~1 over the grid (trapezoid), for a known
+    input -- valid because padding by `3*bw_max` keeps every team's tails on-grid.
+  - bandwidth floor is metric-relative: a near-constant input does not collapse to
+    a single-bin spike, and the floor scales with the metric (a tight-spread rate
+    metric like ERA and a wide counting metric like R both produce sane,
+    non-spike, non-oversmoothed curves -- covers the rate-stat case).
   - sentinel guard: `99.0`/`inf`/`nan` samples are dropped before `lo`/`hi`/KDE;
     a team with no usable samples is omitted for that metric.
+  - per-team summary present: continuous entries carry `median`, discrete entries
+    carry `mean = sum(x*p)`; values match the raw samples.
   - discrete PMF: sums to 1 per team; half-integer support handled (a constructed
-    tie produces a 0.5-step point value in the support).
+    tie produces a 0.5-step point value in the support); support bounded `1..N`.
 - A test asserting `run_ros_monte_carlo()` returns the `distributions` key with
   the documented shape, that `category_points` is populated for **all** teams
   (not just the user -- guards the C2 accumulation change), and that the whole
   payload is JSON-serializable (no numpy types) so it survives the cache
   round-trip.
-- A route/formatter test: `format_distributions_for_display()` marks exactly one
-  row `is_user`; the standings route reads `rest_of_season["distributions"]` and
-  embeds it; and a cache blob **lacking** `distributions` (older payload) renders
-  the empty-state without error.
+- A route/formatter test: `format_distributions_for_display()` sorts rows by the
+  per-team sort key and marks exactly one row `is_user` (and does not forward the
+  raw `user_team` string); the standings route reads
+  `rest_of_season["distributions"]` and embeds it; a cache blob with
+  `rest_of_season=None` (early season) does not crash; and a blob whose
+  `rest_of_season` **lacks** `distributions` (older payload) renders the
+  empty-state without error.
 - Frontend ridgeline draw is not unit-tested (consistent with existing chart JS);
   it is covered by the data-contract tests above plus the local refresh
   verification.
