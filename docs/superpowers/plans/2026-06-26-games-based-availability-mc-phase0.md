@@ -4,18 +4,19 @@
 
 **Goal:** Build a cheap, reproducible diagnostic that determines whether the in-season MC's over-credit of deep rosters comes from bench-seating (build the games-fill engine) or from per-iteration top-k re-selection churn (just freeze selection) -- and gate the rest of the project on the answer.
 
-**Architecture:** Add a fixed-column override to `simulate_remaining_season_batch` so a caller can replace the per-iteration top-k active-roster pick with a fixed active set. Build two helpers that compute those fixed columns -- one from the manager's actual active slots (via the existing Player-typed `_classify_roster`), one from a once-on-the-mean top-k. An orchestrator runs three selection "arms" (per-iteration top-k = today; fixed top-k = churn removed; active-slot = churn AND bench removed) and reports per-team category medians. A driver runs it on a real cached league snapshot and writes the decision note.
+**Architecture:** Add a fixed-column override to `simulate_remaining_season_batch` so a caller can replace the per-iteration top-k active-roster pick with a fixed active set. A new `mc_selection.py` module builds those fixed columns (one set from the manager's actual active slots via the existing Player-typed `_classify_roster`, one from a once-on-the-mean top-k), runs three selection "arms," and formats the comparison. An env-gated hook inside the refresh pipeline's `_run_ros_monte_carlo` runs it on the real, correctly-built league snapshot and writes the decision note.
 
-**Tech Stack:** Python, NumPy, pytest. Reuses `fantasy_baseball.simulation`, `fantasy_baseball.scoring._classify_roster`, `fantasy_baseball.models.player`.
+**Tech Stack:** Python, NumPy, pytest. Reuses `fantasy_baseball.simulation`, `fantasy_baseball.scoring._classify_roster`, `fantasy_baseball.models.player`, `fantasy_baseball.web.refresh_pipeline`.
 
 ## Global Constraints
 
 - ASCII-only in all source, log, and report strings (Windows cp1252 stdout). No non-ASCII glyphs.
 - Player identity keys on `yahoo_id` / object identity, never bare names (collision risk).
 - Numeric defaults use `is not None`, never `x or default` (0/0.0 falsy footgun).
-- This is the spec's Phase 0 (`docs/superpowers/specs/2026-06-26-games-based-availability-mc-design.md`). It adds NO games-data plumbing, NO dataclass changes, NO fill engine. Only: the batch override + selection helpers + diagnostic.
-- PASS CRITERION for the gate: bench-exclusion (active-slot arm) alone closes >= 50% of the re-measured SkeleThor RBI gap vs the per-iteration top-k arm, measured under recorded seed/fraction_remaining/iterations. The eyeballed "1020 vs 926" is NOT the baseline -- re-measure it.
-- Real cached data only (Upstash/Render source of truth; never stale local cache). Use `--no-sync` so the local run does not get clobbered by an Upstash sync.
+- This is the spec's Phase 0 (`docs/superpowers/specs/2026-06-26-games-based-availability-mc-design.md`). It adds NO games-data plumbing, NO dataclass changes, NO fill engine. Only: the batch override + selection helpers + the gated diagnostic hook.
+- All imports go at the TOP of each module. `pyproject.toml` selects ruff `E` (incl. E402) and `I` (isort) with no E402/isort exemption for `src/**`; mid-file imports fail lint.
+- PASS CRITERION for the gate: bench-exclusion (active-slot arm) accounts for >= 50% of the re-measured SkeleThor RBI gap vs the per-iteration top-k arm, measured under recorded seed/fraction_remaining/iterations. The eyeballed "1020 vs 926" is NOT the baseline -- re-measure it.
+- Real cached data only (Upstash/Render source of truth). Drive the real refresh pipeline (`run_full_refresh`), do not fabricate rosters.
 
 ---
 
@@ -27,37 +28,46 @@
 
 **Interfaces:**
 - Consumes: nothing new.
-- Produces: `simulate_remaining_season_batch(..., active_cols: dict[str, dict[str, np.ndarray]] | None = None)`. When `active_cols` is `None` (default), behavior is unchanged (per-iteration top-k). When `active_cols[team] = {"h": ndarray[int], "p": ndarray[int]}` is present, the team's hitter/pitcher contributions are summed over exactly those fixed column indices (into the team's hitter and pitcher sublists, in roster order) for every iteration, instead of the per-iteration top-k pick.
+- Produces: `simulate_remaining_season_batch(..., active_cols: dict[str, dict[str, np.ndarray]] | None = None)`. When `active_cols` is `None` (default), behavior is unchanged (per-iteration top-k). When `active_cols[team] = {"h": ndarray[int], "p": ndarray[int]}` is present, the team's hitter/pitcher contributions are summed over exactly those fixed column indices (into the team's hitter and pitcher sublists, in roster order) for every iteration, instead of the per-iteration top-k pick. A team absent from `active_cols` falls back to top-k. Empty index arrays yield a zero contribution for that stat group.
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 # tests/test_simulation.py
 def test_active_cols_override_sums_fixed_columns():
-    """With active_cols pinning a subset, the batch sums exactly those players
-    every iteration -- equivalent to making them the whole roster under top-k."""
+    """With active_cols pinning a subset of hitters, the batch sums exactly those
+    every iteration. Statistically equivalent to a roster whose only hitters ARE
+    those columns under a top-k that selects all of them -- the two runs use the
+    same seed but different roster shapes, so per-iteration draws are NOT aligned;
+    the assertion is therefore on medians within a 2.0 tolerance, not exact."""
     import numpy as np
     from fantasy_baseball.simulation import simulate_remaining_season_batch
 
-    rosters, actuals = _build_batch_equiv_scenario()
-    team = "Team A"  # 3 hitters, 2 pitchers in this fixture
+    rosters, actuals = _build_batch_equiv_scenario()  # "Team A": 5 hitters, 4 pitchers
+    team = "Team A"
     frac, h_slots, p_slots, n = 0.45, 3, 2, 2000
 
-    # Pin hitter cols {0, 2} (drop hitter index 1) and both pitchers.
-    active = {team: {"h": np.array([0, 2]), "p": np.array([0, 1])}}
+    # Build per-team col sets: pin Team A hitters {0,2} (drop hitter 1) and ALL of
+    # its pitchers (so the pitcher arm matches the reference's all-pitchers run).
+    def _counts(t):
+        nh = sum(1 for p in rosters[t] if p["player_type"] == "hitter")
+        npc = sum(1 for p in rosters[t] if p["player_type"] == "pitcher")
+        return nh, npc
+
+    nh_a, np_a = _counts(team)
+    active = {team: {"h": np.array([0, 2]), "p": np.arange(np_a)}}
     for t in rosters:
         if t != team:
-            n_h = sum(1 for p in rosters[t] if p["player_type"] == "hitter")
-            n_p = sum(1 for p in rosters[t] if p["player_type"] == "pitcher")
-            active[t] = {"h": np.arange(n_h), "p": np.arange(n_p)}
+            nh, npc = _counts(t)
+            active[t] = {"h": np.arange(nh), "p": np.arange(npc)}
 
     rng = np.random.default_rng(7)
     pinned = simulate_remaining_season_batch(
         actuals, rosters, frac, rng, h_slots, p_slots, n_iter=n, active_cols=active
     )
 
-    # Reference: same RNG, but a roster whose only hitters ARE cols 0 and 2,
-    # with h_slots large enough that top-k selects all of them (no churn).
+    # Reference: a roster whose only Team A hitters are cols 0 and 2 (all pitchers
+    # kept), with h_slots/p_slots large enough that top-k selects everyone.
     ref_rosters = dict(rosters)
     hitters = [p for p in rosters[team] if p["player_type"] == "hitter"]
     pitchers = [p for p in rosters[team] if p["player_type"] == "pitcher"]
@@ -67,7 +77,6 @@ def test_active_cols_override_sums_fixed_columns():
         actuals, ref_rosters, frac, rng2, 99, 99, n_iter=n
     )
 
-    # Counting medians for the pinned team must match the reference within noise.
     for c in ("R", "HR", "RBI", "SB"):
         assert abs(np.median(pinned[team][c]) - np.median(ref[team][c])) <= 2.0, c
 ```
@@ -79,17 +88,9 @@ Expected: FAIL -- `simulate_remaining_season_batch() got an unexpected keyword a
 
 - [ ] **Step 3: Add the parameter and override the selection**
 
-In `simulate_remaining_season_batch`, add `active_cols: dict | None = None` to the signature (after `n_iter`). Replace the hitter and pitcher selection blocks so a provided fixed-column set bypasses top-k:
+In `simulate_remaining_season_batch`, add `active_cols: dict | None = None` to the signature (after `n_iter`). Replace the hitter and pitcher selection blocks (currently `simulation.py:749-774`) so a provided fixed-column set bypasses top-k:
 
 ```python
-    for team, players in team_rosters.items():
-        actuals = actual_standings.get(team, {})
-        hitters = [p for p in players if p.get("player_type") == PlayerType.HITTER]
-        pitchers = [p for p in players if p.get("player_type") == PlayerType.PITCHER]
-
-        hb = _apply_variance_batch(hitters, PlayerType.HITTER, rng, fraction_remaining, n_iter)
-        pb = _apply_variance_batch(pitchers, PlayerType.PITCHER, rng, fraction_remaining, n_iter)
-
         team_cols = active_cols.get(team) if active_cols is not None else None
 
         if hitters:
@@ -127,18 +128,20 @@ In `simulate_remaining_season_batch`, add `active_cols: dict | None = None` to t
             sim_w = sim_k = sim_sv = sim_ip = sim_er = sim_bb = sim_ha = zeros
 ```
 
-(The rest of the per-team body -- the YTD blend and the `out[team]` assignment -- is unchanged.)
+Notes for the implementer:
+- The line just above this block (`hb = ...`, `pb = ...`) and everything below it (the YTD blend and `out[team]` assignment) are UNCHANGED. Read the current 749-774 block first and confirm the variable names (`hb`, `pb`, `zeros`, `sim_*`, `_gather_sum`, `_topk_indices`, `pkey`, `_CLOSER_RANK_BONUS`, `CLOSER_SV_THRESHOLD`) match what you are replacing.
+- `cols` must be int dtype (the helpers in Task 2 build `dtype=int`); `np.broadcast_to(cols, (n_iter, cols.shape[0]))` then yields a valid index for `np.take_along_axis`. An empty `cols` (shape `(n_iter, 0)`) sums to zeros -- verified safe, no error.
 
-Update the docstring to document `active_cols` and note that an empty column array yields a zero contribution for that stat group.
+Update the docstring to document `active_cols`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_simulation.py::test_active_cols_override_sums_fixed_columns -v`
 Expected: PASS.
 
-- [ ] **Step 5: Run the existing batch test to confirm no regression**
+- [ ] **Step 5: Confirm no regression on the default path**
 
-Run: `pytest tests/test_simulation.py -k batch -v`
+Run: `pytest tests/test_simulation.py -q`
 Expected: PASS (default `active_cols=None` path is byte-unchanged).
 
 - [ ] **Step 6: Commit**
@@ -153,17 +156,21 @@ Phase 0 selection-attribution diagnostic. Default None preserves behavior."
 
 ---
 
-### Task 2: Active-set column helpers
+### Task 2: Selection module -- helpers, orchestrator, and report formatter
 
 **Files:**
 - Create: `src/fantasy_baseball/mc_selection.py`
 - Test: `tests/test_mc_selection.py`
 
+This is one task (not three) so that every import lands at the module top in a single commit -- avoiding E402/I001/F811 from appending imports mid-file.
+
 **Interfaces:**
-- Consumes: `simulate_remaining_season_batch`'s expectation that `active_cols[team]["h"]/["p"]` are int ndarrays indexing the hitter/pitcher sublists in roster order; `scoring._classify_roster(list[Player]) -> (active, il, bench)`.
+- Consumes: `simulation.simulate_remaining_season_batch(active_cols=...)`, `simulation._flatten_full_season`, `simulation._CLOSER_RANK_BONUS`, `scoring._classify_roster(list[Player]) -> (active, il, bench)`, `utils.constants.CLOSER_SV_THRESHOLD`, `utils.constants.ALL_CATEGORIES`.
 - Produces:
-  - `compute_active_slot_cols(players: list) -> dict[str, np.ndarray]` -- columns of the active-slot players (healthy bench AND IL excluded), via `_classify_roster`, keyed by object identity. Operates on Player objects.
-  - `compute_fixed_topk_cols(flat_players: list[dict], h_slots: int, p_slots: int) -> dict[str, np.ndarray]` -- columns of the top-`h_slots` hitters by mean `r+hr+rbi+sb` and top-`p_slots` pitchers by `closer-bonus + w+k+sv`, computed once on the projected means (no per-iteration churn). Operates on the flattened dicts so its stat basis matches the batch's top-k.
+  - `compute_active_slot_cols(players: list) -> dict[str, np.ndarray]`
+  - `compute_fixed_topk_cols(flat_players: list[dict], h_slots: int, p_slots: int) -> dict[str, np.ndarray]`
+  - `run_selection_attribution(team_rosters, actual_standings, fraction_remaining, h_slots, p_slots, n_iter, seed) -> dict[str, dict[str, dict[str, float]]]` returning `{arm: {team: {category: median}}}` for arms `"topk_per_iter"`, `"topk_fixed"`, `"active_slot"`. `team_rosters` is `dict[str, list[Player]]` (Player objects, pre-flatten).
+  - `format_attribution_table(res: dict, teams: list[str] | None = None) -> str` -- ASCII table of the three arms per team/category.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -172,20 +179,27 @@ Phase 0 selection-attribution diagnostic. Default None preserves behavior."
 import numpy as np
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import Position
-from fantasy_baseball.mc_selection import compute_active_slot_cols, compute_fixed_topk_cols
+from fantasy_baseball.mc_selection import (
+    compute_active_slot_cols,
+    compute_fixed_topk_cols,
+    run_selection_attribution,
+    format_attribution_table,
+)
 
 
 def _hitter(name, slot, r=80):
     return Player(
         name=name, player_type=PlayerType.HITTER, positions=[Position.OF],
-        selected_position=slot, rest_of_season=HitterStats(r=r, hr=20, rbi=70, sb=5, h=150, ab=550),
+        selected_position=slot,
+        rest_of_season=HitterStats(r=r, hr=20, rbi=70, sb=5, h=150, ab=550),
     )
 
 
 def _pitcher(name, slot, k=150):
     return Player(
         name=name, player_type=PlayerType.PITCHER, positions=[Position.P],
-        selected_position=slot, rest_of_season=PitcherStats(w=10, k=k, ip=180, er=70, bb=50, h_allowed=150),
+        selected_position=slot,
+        rest_of_season=PitcherStats(w=10, k=k, ip=180, er=70, bb=50, h_allowed=150),
     )
 
 
@@ -210,8 +224,28 @@ def test_fixed_topk_cols_picks_highest_mean_stats():
         {"player_type": "pitcher", "w": 5, "k": 90, "sv": 0, "ip": 70},       # col 1
     ]
     cols = compute_fixed_topk_cols(flat, h_slots=2, p_slots=1)
-    assert sorted(cols["h"].tolist()) == [0, 2]   # top 2 hitters
-    assert cols["p"].tolist() == [0]              # top 1 pitcher
+    assert sorted(cols["h"].tolist()) == [0, 2]
+    assert cols["p"].tolist() == [0]
+
+
+def test_run_selection_attribution_three_arms_and_ordering():
+    """active_slot seats only the 2 active OF, so its R median is <= the
+    per-iteration top-k arm, which can seat the benched masher over a starter."""
+    deep = [
+        _hitter("Star", Position.OF, r=100),
+        _hitter("Reg", Position.OF, r=80),
+        _hitter("BenchMasher", Position.BN, r=95),  # benched but high-stat
+        _pitcher("Ace", Position.P),
+    ]
+    rosters = {"Deep": deep}
+    actuals = {"Deep": {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
+                        "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0}}
+    res = run_selection_attribution(rosters, actuals, 1.0, h_slots=2, p_slots=1,
+                                    n_iter=2000, seed=3)
+    assert set(res) == {"topk_per_iter", "topk_fixed", "active_slot"}
+    assert res["active_slot"]["Deep"]["R"] <= res["topk_per_iter"]["Deep"]["R"]
+    table = format_attribution_table(res)
+    assert "Deep" in table and "active_slot" in table
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -219,15 +253,16 @@ def test_fixed_topk_cols_picks_highest_mean_stats():
 Run: `pytest tests/test_mc_selection.py -v`
 Expected: FAIL -- `ModuleNotFoundError: No module named 'fantasy_baseball.mc_selection'`.
 
-- [ ] **Step 3: Implement the helpers**
+- [ ] **Step 3: Implement the module (all imports at top)**
 
 ```python
 # src/fantasy_baseball/mc_selection.py
-"""Active-set column helpers for the Phase 0 selection-attribution diagnostic.
+"""Active-set selection helpers for the Phase 0 selection-attribution diagnostic.
 
 Produce the fixed column indices consumed by
-``simulation.simulate_remaining_season_batch(active_cols=...)``: which hitter /
-pitcher sublist positions form the active set under a given selection rule.
+``simulation.simulate_remaining_season_batch(active_cols=...)``, run the MC under
+three selection arms (per-iteration top-k / fixed top-k / active-slot), and
+format the comparison. This is diagnostic-only: NO games plumbing, NO fill engine.
 """
 
 from __future__ import annotations
@@ -235,8 +270,15 @@ from __future__ import annotations
 import numpy as np
 
 from fantasy_baseball.models.player import Player, PlayerType
-from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
-from fantasy_baseball.simulation import _CLOSER_RANK_BONUS
+from fantasy_baseball.scoring import _classify_roster
+from fantasy_baseball.simulation import (
+    _CLOSER_RANK_BONUS,
+    _flatten_full_season,
+    simulate_remaining_season_batch,
+)
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, CLOSER_SV_THRESHOLD
+
+_CATS = [c.value for c in ALL_CATEGORIES]
 
 
 def _is_hitter(p) -> bool:
@@ -247,12 +289,10 @@ def _is_hitter(p) -> bool:
 def compute_active_slot_cols(players: list) -> dict[str, np.ndarray]:
     """Columns of the active-slot players (healthy bench AND IL excluded).
 
-    Classification is the canonical, Player-typed ``_classify_roster`` -- NOT a
-    flat-dict reimplementation -- so slot/IL semantics cannot drift. Identity is
-    by object, so same-name players never collide.
+    Uses the canonical, Player-typed ``_classify_roster`` -- NOT a flat-dict
+    reimplementation -- so slot/IL semantics cannot drift. Identity is by object,
+    so same-name players never collide.
     """
-    from fantasy_baseball.scoring import _classify_roster
-
     active, _il, _bench = _classify_roster([p for p in players if isinstance(p, Player)])
     active_ids = {id(p) for p in active}
 
@@ -277,8 +317,7 @@ def compute_fixed_topk_cols(
     """Top-k columns by projected mean stats, fixed once (no per-iteration churn).
 
     Mirrors the batch's per-iteration keys -- hitters by ``r+hr+rbi+sb``,
-    pitchers by ``closer-bonus + w+k+sv`` -- but evaluated on the projected
-    means so the selection is identical across iterations.
+    pitchers by ``closer-bonus + w+k+sv`` -- evaluated on the projected means.
     """
     h_keys: list[tuple[float, int]] = []
     p_keys: list[tuple[float, int]] = []
@@ -300,79 +339,6 @@ def compute_fixed_topk_cols(
         return np.array(sorted(chosen), dtype=int)
 
     return {"h": _top(h_keys, h_slots), "p": _top(p_keys, p_slots)}
-```
-
-(If `_CLOSER_RANK_BONUS` is not importable from `simulation`, read `simulation.py` to confirm its name/location and import accordingly; it is a module-level constant near the top-k pitcher key.)
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `pytest tests/test_mc_selection.py -v`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/fantasy_baseball/mc_selection.py tests/test_mc_selection.py
-git commit -m "feat(mc): active-slot and fixed-topk column helpers for Phase 0 diagnostic"
-```
-
----
-
-### Task 3: Three-arm attribution orchestrator
-
-**Files:**
-- Modify: `src/fantasy_baseball/mc_selection.py`
-- Test: `tests/test_mc_selection.py`
-
-**Interfaces:**
-- Consumes: `compute_active_slot_cols`, `compute_fixed_topk_cols`, `simulate_remaining_season_batch`, `simulation._flatten_full_season`.
-- Produces: `run_selection_attribution(team_rosters, actual_standings, fraction_remaining, h_slots, p_slots, n_iter, seed) -> dict[str, dict[str, dict[str, float]]]` returning `{arm: {team: {category: median}}}` for the three arms `"topk_per_iter"`, `"topk_fixed"`, `"active_slot"`. `team_rosters` is `dict[str, list[Player]]` (Player objects, pre-flatten).
-
-- [ ] **Step 1: Write the failing test**
-
-```python
-# tests/test_mc_selection.py  (add)
-from fantasy_baseball.mc_selection import run_selection_attribution
-
-
-def test_run_selection_attribution_three_arms_and_ordering():
-    """active_slot excludes the bench bat, so its counting totals are <=
-    topk_per_iter, which (best-ball) is >= topk_fixed for a deep roster."""
-    deep = [
-        _hitter("Star", Position.OF, r=100),
-        _hitter("Reg", Position.OF, r=80),
-        _hitter("BenchMasher", Position.BN, r=95),  # benched but high-stat
-        _pitcher("Ace", Position.P),
-    ]
-    rosters = {"Deep": deep}
-    actuals = {"Deep": {"R": 0, "HR": 0, "RBI": 0, "SB": 0, "AVG": 0,
-                        "W": 0, "K": 0, "SV": 0, "ERA": 0, "WHIP": 0}}
-    res = run_selection_attribution(rosters, actuals, 1.0, h_slots=2, p_slots=1,
-                                    n_iter=2000, seed=3)
-    assert set(res) == {"topk_per_iter", "topk_fixed", "active_slot"}
-    # active_slot seats only the 2 active OF (Star, Reg); top-k can seat the
-    # bench masher over a starter, so active_slot R median is the lowest.
-    assert res["active_slot"]["Deep"]["R"] <= res["topk_per_iter"]["Deep"]["R"]
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `pytest tests/test_mc_selection.py::test_run_selection_attribution_three_arms_and_ordering -v`
-Expected: FAIL -- `cannot import name 'run_selection_attribution'`.
-
-- [ ] **Step 3: Implement the orchestrator**
-
-```python
-# src/fantasy_baseball/mc_selection.py  (add)
-import numpy as np
-
-from fantasy_baseball.simulation import (
-    _flatten_full_season,
-    simulate_remaining_season_batch,
-)
-from fantasy_baseball.utils.constants import ALL_CATS
-
-_CATS = [c.value for c in ALL_CATS]
 
 
 def run_selection_attribution(
@@ -384,11 +350,12 @@ def run_selection_attribution(
     n_iter: int,
     seed: int,
 ) -> dict[str, dict[str, dict[str, float]]]:
-    """Run the MC under three selection arms and return per-team category medians.
+    """Run the MC under three selection arms; return per-team category medians.
 
-    Arms: ``topk_per_iter`` (today's behavior), ``topk_fixed`` (top-k fixed once
-    on the mean -> isolates re-selection churn), ``active_slot`` (manager's
-    active slots, bench+IL excluded -> isolates bench seating on top of churn).
+    Arms: ``topk_per_iter`` (today), ``topk_fixed`` (top-k fixed once on the mean
+    -> isolates re-selection churn), ``active_slot`` (manager's active slots,
+    bench+IL excluded -> isolates bench seating on top of churn). All arms share
+    one seed, so they differ only in which columns are summed.
     """
     flat = {t: [_flatten_full_season(p) for p in players] for t, players in team_rosters.items()}
     active = {t: compute_active_slot_cols(players) for t, players in team_rosters.items()}
@@ -408,79 +375,120 @@ def run_selection_attribution(
         )
         out[arm] = {t: {c: float(np.median(batch[t][c])) for c in _CATS} for t in flat}
     return out
+
+
+def format_attribution_table(res: dict, teams: list[str] | None = None) -> str:
+    """ASCII table: per team, per category, the three arms' median totals."""
+    arms = ["topk_per_iter", "topk_fixed", "active_slot"]
+    if teams is None:
+        teams = sorted(next(iter(res.values())).keys())
+    lines: list[str] = []
+    for team in teams:
+        lines.append(f"== {team} ==")
+        lines.append(f"{'cat':<6}" + "".join(f"{a:>16}" for a in arms))
+        for c in _CATS:
+            row = "".join(f"{res[a][team][c]:>16.2f}" for a in arms)
+            lines.append(f"{c:<6}{row}")
+        lines.append("")
+    return "\n".join(lines)
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_mc_selection.py -v`
-Expected: PASS.
+Expected: PASS (3 tests).
 
-- [ ] **Step 5: Full local checks**
+- [ ] **Step 5: Lint + format the new module**
 
-Run: `pytest tests/test_mc_selection.py tests/test_simulation.py -q && ruff check src/fantasy_baseball/mc_selection.py && ruff format --check src/fantasy_baseball/mc_selection.py`
-Expected: all green.
+Run: `ruff check src/fantasy_baseball/mc_selection.py tests/test_mc_selection.py && ruff format --check src/fantasy_baseball/mc_selection.py tests/test_mc_selection.py`
+Expected: all green (all imports are top-of-file, so no E402/I001).
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add src/fantasy_baseball/mc_selection.py tests/test_mc_selection.py
-git commit -m "feat(mc): three-arm selection-attribution orchestrator (Phase 0)"
+git commit -m "feat(mc): selection-attribution helpers, orchestrator, report (Phase 0)"
 ```
 
 ---
 
-### Task 4: Run on real cached data and write the gate decision
+### Task 3: Run on real cached data via a gated pipeline hook, and write the gate decision
 
 **Files:**
-- Create: `scripts/compare_mc_active_selection.py`
-- Create: `docs/superpowers/games-mc-phase0-attribution-2026-06-26.md` (the decision note + captured numbers)
+- Modify: `src/fantasy_baseball/web/refresh_pipeline.py` (`_run_ros_monte_carlo`, ~1350-1400)
+- Create: `docs/superpowers/games-mc-phase0-attribution-2026-06-26.md` (decision note + captured numbers)
+
+**Why a gated hook (not a standalone driver):** the inputs `run_selection_attribution` needs -- `rest_of_season_mc_rosters` (dict team -> list[Player]), `actual_standings_dict`, `self.fraction_remaining`, `h_slots`, `p_slots` -- are all built INSIDE `_run_ros_monte_carlo` (refresh_pipeline.py ~1359-1388). `self.fraction_remaining` and the AB/IP-enriched `actual_standings_dict` are NOT available after `_hydrate_rosters` alone (fraction_remaining is set later, in `_build_projected_standings`), so a partial-pipeline driver would pass `None`. Reusing this hook gives correct inputs for free.
 
 **Interfaces:**
-- Consumes: `run_selection_attribution`; the refresh pipeline's roster hydration (the only place real Player rosters + actual standings + `fraction_remaining` + slot counts exist together).
+- Consumes: `mc_selection.run_selection_attribution`, `mc_selection.format_attribution_table`.
 
-This task is a drive-the-pipeline-and-observe step, not a unit test. It produces the gate evidence.
+This is a drive-the-pipeline-and-observe step, not a unit test. It produces the gate evidence.
 
-- [ ] **Step 1: Identify the data source.** Read `src/fantasy_baseball/web/refresh_pipeline.py` around `_run_ros_monte_carlo` (~1350-1400) and `run()` (~490-520). Confirm the locals available there: `rest_of_season_mc_rosters` (dict team -> list[Player]), `actual_standings_dict`, `self.fraction_remaining`, `h_slots`, `p_slots`. These are exactly `run_selection_attribution`'s inputs.
-
-- [ ] **Step 2: Write the driver script.** `scripts/compare_mc_active_selection.py` injects `src/` into `sys.path` (mirror other scripts), constructs a `RefreshPipeline`, runs the pipeline steps up to and including `_hydrate_rosters` (and whatever earlier steps those depend on -- follow the ordered calls in `run()`), then builds `actual_standings_dict` and slot counts exactly as `_run_ros_monte_carlo` does, and calls:
+- [ ] **Step 1: Add the gated hook.** In `refresh_pipeline._run_ros_monte_carlo`, AFTER `actual_standings_dict` is fully built (after the `for e in self.standings.entries:` loop, ~line 1388) and `h_slots`/`p_slots` are computed, insert:
 
 ```python
-res = run_selection_attribution(
-    rest_of_season_mc_rosters, actual_standings_dict, fraction_remaining,
-    h_slots, p_slots, n_iter=1000, seed=42,
-)
+            import os
+
+            if os.environ.get("FB_SELECTION_ATTRIBUTION"):
+                from fantasy_baseball.mc_selection import (
+                    format_attribution_table,
+                    run_selection_attribution,
+                )
+
+                assert self.fraction_remaining is not None
+                attr = run_selection_attribution(
+                    rest_of_season_mc_rosters,
+                    actual_standings_dict,
+                    self.fraction_remaining,
+                    h_slots,
+                    p_slots,
+                    n_iter=1000,
+                    seed=42,
+                )
+                header = (
+                    f"seed=42 n_iter=1000 fraction_remaining={self.fraction_remaining:.4f}\n"
+                )
+                self._progress("Selection-attribution diagnostic written")
+                with open("phase0_attribution.txt", "w", encoding="ascii", errors="replace") as fh:
+                    fh.write(header)
+                    fh.write(format_attribution_table(attr))
 ```
 
-Then print, for every team and all ten categories, a 3-column table (`topk_per_iter`, `topk_fixed`, `active_slot`) plus the ERoto figure if readily available from `self.projected_standings`. Print the run header: `seed=42`, the actual `fraction_remaining`, `n_iter=1000`, and the effective date. ASCII only.
+(The `import os` is local to keep the diagnostic self-contained and removable; this is a temporary gated hook to be deleted if the gate says STOP, or folded into the real before/after artifact if GO.)
 
-Run it against real cache with sync disabled:
+- [ ] **Step 2: Run a local full refresh with the diagnostic enabled.** `run_full_refresh()` is driven by `scripts/refresh_remote.py` (refresh only) and `scripts/run_lineup.py` (refresh + lineup); both run the real pipeline locally and need Yahoo auth. Run, from the repo root, with the env var set (this is interactive/auth-bound -- if you cannot complete OAuth, ask the user to run it via the session `!` prefix):
 
-Run: `python scripts/compare_mc_active_selection.py --no-sync`
-(If the pipeline constructor/auth differs, follow `scripts/run_season_dashboard.py` for the exact construction + `--no-sync` wiring -- reuse its setup rather than inventing one.)
+Run: `FB_SELECTION_ATTRIBUTION=1 python scripts/refresh_remote.py`
+Expected: the refresh completes and writes `phase0_attribution.txt` with the header + the three-arm table for every team and all ten categories.
 
-- [ ] **Step 3: Compute the gate.** From the printed table, take SkeleThor RBI: `gap = topk_per_iter - active_slot` (the re-measured gap, replacing the eyeballed 94). Compute `churn_share = (topk_per_iter - topk_fixed) / gap` and `seating_share = (topk_fixed - active_slot) / gap`. Record all three SkeleThor RBI numbers and the Hart RBI rank under each arm.
+- [ ] **Step 3: Compute the gate.** From `phase0_attribution.txt`, read SkeleThor RBI under the three arms. Compute:
+  - `gap = topk_per_iter - active_slot` (the re-measured gap; replaces the eyeballed 94)
+  - `churn_share = (topk_per_iter - topk_fixed) / gap`
+  - `seating_share = (topk_fixed - active_slot) / gap`
+Record all three SkeleThor RBI numbers and (from the same table) the Hart RBI value under each arm.
 
-- [ ] **Step 4: Write the decision note.** In `docs/superpowers/games-mc-phase0-attribution-2026-06-26.md`, record: run conditions; the full 3-arm table; SkeleThor RBI `gap`, `churn_share`, `seating_share`; whether the Hart 1st->3rd re-rank reproduces and under which arm it resolves; and the VERDICT against the gate:
-  - `seating_share >= 0.50` (bench-exclusion closes >= 50% of the gap) -> **GO**: bench seating is a real driver; proceed to plan Phases 1-6 (the games-fill engine). Note that the active_slot arm *over*-corrects (removes legitimate injury-insurance), which is exactly what the fill engine adds back.
-  - `seating_share < 0.50` (churn dominates) -> **STOP**: the cheap fix is to freeze selection (ship `topk_fixed`, or its slot-aware equivalent) instead of building the engine. Surface this to the user.
+- [ ] **Step 4: Write the decision note** at `docs/superpowers/games-mc-phase0-attribution-2026-06-26.md`: run conditions; the full three-arm table; SkeleThor RBI `gap`/`churn_share`/`seating_share`; whether the Hart 1st->3rd re-rank reproduces and which arm resolves it; and the VERDICT:
+  - `seating_share >= 0.50` -> **GO**: bench seating is a real driver; proceed to plan Phases 1-6 (the games-fill engine). Note the active_slot arm *over*-corrects (removes legitimate injury-insurance) -- exactly what the fill engine adds back.
+  - `seating_share < 0.50` -> **STOP**: churn dominates; the cheap fix is to freeze selection (ship `topk_fixed` or a slot-aware equivalent) instead of building the engine.
 
 - [ ] **Step 5: Commit the evidence.**
 
 ```bash
-git add scripts/compare_mc_active_selection.py docs/superpowers/games-mc-phase0-attribution-2026-06-26.md
-git commit -m "feat(mc): Phase 0 selection-attribution run + gate decision note"
+git add src/fantasy_baseball/web/refresh_pipeline.py docs/superpowers/games-mc-phase0-attribution-2026-06-26.md
+git commit -m "feat(mc): Phase 0 selection-attribution hook + gate decision note"
 ```
 
-- [ ] **Step 6: Surface the verdict to the user.** Report the table, the shares, and the GO/STOP verdict. Do NOT auto-proceed to Phases 1-6 -- the gate decision is the user's to confirm, because STOP means the whole games-fill engine is unnecessary.
+- [ ] **Step 6: Surface the verdict to the user.** Report the table, the shares, and the GO/STOP verdict. Do NOT auto-proceed to Phases 1-6 -- the gate decision is the user's to confirm, because STOP means the games-fill engine is unnecessary.
 
 ---
 
 ## Self-Review
 
-**Spec coverage (Phase 0 only):** The spec's Phase 0 (gate) is fully covered -- reuse existing `_classify_roster` (Task 2), sum-vs-top-k toggle (Task 1), three arms to separate seating from churn (Task 3), real-cached-data run with recorded conditions and the >=50% criterion (Task 4). NO games plumbing / dataclass changes / fill engine appear, per the spec's Phase 0 scope. Phases 1-6 are intentionally out of scope until the gate returns GO.
+**Spec coverage (Phase 0 only):** The spec's Phase 0 gate is fully covered -- reuse existing `_classify_roster` (Task 2), sum-vs-top-k toggle (Task 1), three arms to separate seating from churn (Task 2), a real-cached-data run with recorded conditions and the >=50% criterion (Task 3). NO games plumbing / dataclass changes / fill engine, per the spec's Phase 0 scope. Phases 1-6 are intentionally out of scope until the gate returns GO.
 
-**Refinement vs spec:** The spec's Phase 0 named a two-arm comparison (top-k vs bench-exclusion); this plan uses THREE arms (adds `topk_fixed`) because two arms cannot separate bench-seating from re-selection churn -- and that separation is the entire point of the gate. This strictly strengthens Phase 0 within its stated intent; the spec's Phase 0 wording will be updated to match when Phases 1-6 are planned.
+**Refinement vs spec:** The spec's Phase 0 named a two-arm comparison; this plan uses THREE arms (adds `topk_fixed`) because two arms cannot separate bench-seating from re-selection churn -- the whole point of the gate (spec names churn as the competing explanation). Strictly stronger, within intent; the spec's Phase 0 wording will be reconciled when Phases 1-6 are planned.
 
-**Placeholder scan:** No TBD/TODO/"handle edge cases". Task 4 is an observe-and-decide task with concrete inputs, commands, computations, and a binary verdict rule -- appropriate detail for an integration/measurement step.
+**Placeholder scan:** No TBD/TODO/"handle edge cases". Task 3 is an observe-and-decide step with concrete inputs, the exact hook location, a concrete run command, the gate arithmetic, and a binary verdict rule.
 
-**Type consistency:** `active_cols[team] = {"h": ndarray, "p": ndarray}` is produced by `compute_active_slot_cols`/`compute_fixed_topk_cols` and consumed by `simulate_remaining_season_batch` (Task 1) and `run_selection_attribution` (Task 3) with identical shape/keys throughout. `run_selection_attribution` returns `{arm: {team: {cat: float}}}`, consumed by Task 4's table/gate.
+**Type consistency:** `active_cols[team] = {"h": ndarray, "p": ndarray}` (int dtype) is produced by `compute_active_slot_cols`/`compute_fixed_topk_cols`, consumed by `simulate_remaining_season_batch` (Task 1) and `run_selection_attribution` (Task 2). `run_selection_attribution` returns `{arm: {team: {cat: float}}}`, consumed by `format_attribution_table` and Task 3's gate math. Imports verified: `ALL_CATEGORIES` and `CLOSER_SV_THRESHOLD` live in `utils.constants`; `_CLOSER_RANK_BONUS` and `_flatten_full_season` in `simulation`; the pipeline class is `RefreshRun` driven by `run_full_refresh`.
