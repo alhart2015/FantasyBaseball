@@ -68,9 +68,23 @@ Components implement.
    baseline, the PT-variance draw yields `frac_missed = max(0, 1 - scales)` (the
    fraction of the body's already-adjusted expected playing time it misses this
    iteration). This is the ONLY quantity the bench injury-fill acts on. There is no
-   separate "games count" emitted by the sampler -- `frac_missed` (a fraction of
-   the body's expected ROS games) IS the shortfall; "games missed" = `frac_missed *
-   expected_ROS_games`.
+   separate "games count" emitted by the sampler.
+
+   TWO DISTINCT games quantities -- do not conflate (they share the symbol `g_ros`
+   loosely; name them apart in the plan):
+   - `g_ros_full = rest_of_season.g` -- the body's FULL ROS games. Used ONLY as the
+     per-game-VALUE denominator in the fill-ordering rule (`value / g_ros_full`),
+     because value-per-game is a property of the player, independent of how many
+     games a slot gives them.
+   - `g_ros_adj = displacement_factor * g_ros_full` -- the body's
+     displacement-ADJUSTED expected games (its reduced baseline). This is the body's
+     fill-baseline: `games_missed = frac_missed * g_ros_adj`, and the body's own
+     contribution is capped at `g_ros_adj`. For an undisplaced body `factor = 1` so
+     the two coincide.
+
+   Using `g_ros_full` (instead of `g_ros_adj`) for the games-missed multiplier would
+   fill a displaced body back above its reduced baseline and OVER-SEAT the shared
+   slot -- the conservation test pins against exactly this.
 3. **Existing built-in replacement backfill is REMOVED for this path.**
    `_apply_variance_batch` today fills every body's `frac_missed` with
    `_replacement_line` (`repl_contrib = repl_line * frac_missed`,
@@ -197,8 +211,11 @@ in hand in `run_ros_monte_carlo` before the flatten). See Component 4.
      reduction is the IL player's games (not re-filled); only the stochastic draw
      is an injury.
    - The body's stochastic shortfall this iteration is `frac_missed =
-     max(0, 1 - scales)` -- a fraction of the body's (displacement-adjusted)
-     expected ROS games; "games missed" = `frac_missed * expected_ROS_games`. The
+     max(0, 1 - scales)`; "games missed" = `frac_missed * g_ros_adj` where
+     `g_ros_adj = displacement_factor * g_ros_full` (the reduced baseline; see the
+     accounting section's two-quantities note). Both the bench-fill AND the
+     replacement-residual legs use `g_ros_adj` -- threading the full `g_ros_full`
+     into either leg over-charges a displaced body. The
      sampler computes `frac_missed` internally and discards it; it must be plumbed
      OUT of `_apply_variance_batch`, and the function's built-in replacement
      backfill (`repl_contrib`, `simulation.py:701-710`) SUPPRESSED on this path --
@@ -206,8 +223,9 @@ in hand in `run_ros_monte_carlo` before the flatten). See Component 4.
      section #3). Fill each shortfall from the eligible **healthy-bench** pool at
      the bench body's own per-game rate, then replacement.
    - **Value rule (per-game).** Order fill bodies by per-game ROS value =
-     `calculate_player_sgp(rest_of_season) / g_ros`, guarded
-     `value/g_ros if g_ros>0 else 0`. (Per-game, not total SGP: filling N games is
+     `calculate_player_sgp(rest_of_season) / g_ros_full`, guarded
+     `value/g_ros_full if g_ros_full>0 else 0` (full games -- value-per-game is a
+     player property, not slot-dependent; see the accounting two-quantities note). (Per-game, not total SGP: filling N games is
      a per-game-quality decision; total SGP would seat a full-time mediocre body
      over a part-time better one. Minor caveat: SGP's rate terms use fixed
      full-season `team_ab=5500`/`team_ip=1450`, so the AVG sub-term is slightly
@@ -352,8 +370,10 @@ makes same-day collisions rare.
   IL return) is sampled around its reduced baseline; its injury-fill fires only on
   the stochastic `frac_missed`, NOT on the displacement reduction (which the IL
   body already covers). A constructed roster asserts total team games == h_slots
-  worth (conservation) and that the displaced slot is not filled by both the IL
-  body and a bench body.
+  worth (conservation), that the displaced slot is not filled by both the IL
+  body and a bench body, AND that a displaced body's own contribution + injury-fill
+  never exceeds `g_ros_adj = factor * g_ros_full` -- the assertion that fails the
+  wrong `g_ros_full`-multiplier reading rather than silently over-seating.
 - Replacement backfill removed: with the new fill engine active, the built-in
   `_apply_variance_batch` `repl_contrib` does NOT also fire (no team total reflects
   double replacement on the same missed games).
@@ -405,6 +425,11 @@ by later phases and the acceptance artifact. Phases 1-6 each their own plan / PR
    path; apply displacement factor to the baseline before sampling; fill
    `frac_missed` bench-first (per-game-value ordering, one-body capacity,
    deterministic tie-break) then replacement-per-game; rate-stat component fill.
+   Use `g_ros_adj` (reduced baseline) as the games-missed multiplier and fill cap;
+   `g_ros_full` only for per-game value. NOTE the `frac_missed` MAGNITUDE is
+   provisional here -- Phase 4 changes its mid-season distribution via the
+   `fraction_remaining` horizon split -- so keep Phase 3 assertions mechanism-only
+   (nonzero fill on a low draw, zero on a full draw), not absolute magnitudes.
 4. MC integration (ROS-direct blend; fixed active set + displacement factors +
    injury-fill; pitcher displacement/bench-exclusion), plus the before/after
    artifact (definition of done).
