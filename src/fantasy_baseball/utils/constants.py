@@ -117,7 +117,10 @@ CLOSER_SV_THRESHOLD: int = 20
 # Sentinel ERA/WHIP assigned to a zero-IP team in a Monte Carlo draw so it ranks
 # dead-last in those categories. Load-bearing for roto scoring (must survive into
 # score_roto_dict); the distributions builder drops it before KDE so it cannot
-# paint a phantom tail. Single source of truth for both producer and consumer.
+# paint a phantom tail. Shared by the MC batch producer
+# (simulate_remaining_season_batch) and the distributions consumer so the drop
+# matches the fill. NOTE: other zero-IP 99.0 literals exist in scoring.py and
+# utils/rate_stats.py; they are not yet wired to this constant.
 ZERO_IP_RATE_SENTINEL: float = 99.0
 
 # Stat column lists for counting stats (used by Monte Carlo, stat aggregation)

@@ -710,3 +710,23 @@ def test_run_ros_monte_carlo_returns_distributions():
         "SV",
     }
     assert "top3_pct" in result["category_risk"]["R"]
+
+
+def test_run_ros_monte_carlo_absent_user_team_does_not_crash():
+    # A user_team_name not present in the rosters (e.g. a misconfigured team name)
+    # must not crash on empty per-category arrays. category_risk degrades to an
+    # empty dict (dashboard hides the table); team_results and distributions are
+    # still computed for the real teams.
+    result = run_ros_monte_carlo(
+        team_rosters=_build_two_team_rosters(),
+        actual_standings=_build_actual_standings(),
+        fraction_remaining=0.5,
+        h_slots=3,
+        p_slots=2,
+        user_team_name="Nonexistent Team",
+        n_iterations=20,
+        seed=1,
+    )
+    assert result["category_risk"] == {}
+    assert set(result["team_results"]) == {"Team A", "Team B"}
+    assert "distributions" in result

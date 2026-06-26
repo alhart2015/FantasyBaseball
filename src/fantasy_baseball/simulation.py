@@ -982,19 +982,24 @@ def run_ros_monte_carlo(
         }
 
     category_risk = {}
-    # The user's slice of the all-team accumulator. .get fallback preserves the
-    # prior soft-degrade (empty arrays -> nan) if the user team is absent from the
-    # rosters, rather than a hard KeyError.
-    user_cat_pts = all_cat_pts.get(user_team_name, {c.value: [] for c in ALL_CATS})
-    for c in ALL_CATS:
-        arr = np.array(user_cat_pts[c.value])
-        category_risk[c.value] = {
-            "median_pts": round(float(np.median(arr)), 1),
-            "p10": round(float(np.percentile(arr, 10)), 1),
-            "p90": round(float(np.percentile(arr, 90)), 1),
-            "top3_pct": round(float((arr >= 8).sum()) / n * 100, 1),
-            "bot3_pct": round(float((arr <= 3).sum()) / n * 100, 1),
-        }
+    # category_risk summarizes the user team's per-category point spread. If the
+    # user team is absent from the rosters (e.g. a misconfigured team name), there
+    # is nothing to summarize -- leave category_risk empty so the dashboard hides
+    # the table, rather than computing percentiles on empty arrays (np.percentile
+    # raises IndexError on an empty input). The user team's slice is the same
+    # per-iteration sequence the old user-only accumulator produced, so the
+    # computed values are unchanged when the team is present.
+    user_cat_pts = all_cat_pts.get(user_team_name)
+    if user_cat_pts is not None:
+        for c in ALL_CATS:
+            arr = np.array(user_cat_pts[c.value])
+            category_risk[c.value] = {
+                "median_pts": round(float(np.median(arr)), 1),
+                "p10": round(float(np.percentile(arr, 10)), 1),
+                "p90": round(float(np.percentile(arr, 90)), 1),
+                "top3_pct": round(float((arr >= 8).sum()) / n * 100, 1),
+                "bot3_pct": round(float((arr <= 3).sum()) / n * 100, 1),
+            }
 
     distributions = build_distributions(all_totals, batch, all_cat_pts, cats, user_team_name)
 
