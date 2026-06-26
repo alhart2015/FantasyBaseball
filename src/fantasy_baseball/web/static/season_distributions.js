@@ -15,7 +15,8 @@
 
   var USER_COLOR = "#e15759";
   var OTHER_COLOR = "#4e79a7";
-  var RATE_CATS = { AVG: 3, ERA: 2, WHIP: 2 };
+  // Decimal precision for the rate categories' tick labels (not a direction set).
+  var RATE_PREC = { AVG: 3, ERA: 2, WHIP: 2 };
 
   var state = { metric: "overall", mode: "totals" };
   var payload = null;
@@ -28,10 +29,15 @@
 
   function fmtTick(value) {
     var cat = state.metric;
-    if (state.metric !== "overall" && state.mode === "totals" && RATE_CATS[cat] != null) {
-      return value.toFixed(RATE_CATS[cat]);
+    if (cat !== "overall" && state.mode === "totals" && RATE_PREC[cat] != null) {
+      return value.toFixed(RATE_PREC[cat]);
     }
     return String(Math.round(value * 10) / 10);
+  }
+
+  // Pixel y of a curve sample within a row (baseline minus normalized height).
+  function curveY(curve, idx, cMax, amp, baseY) {
+    return baseY - (curve[idx] / cMax) * amp;
   }
 
   // Resolve the active metric into a uniform shape:
@@ -126,8 +132,6 @@
       if (cMax <= 0) cMax = 1;
       var amp = band * overlap;
 
-      function cy(idx) { return baseY - (curve[idx] / cMax) * amp; }
-
       var stroke = row.is_user ? USER_COLOR : OTHER_COLOR;
       var fill = row.is_user ? "rgba(225,87,89,0.35)" : "rgba(78,121,167,0.22)";
 
@@ -140,14 +144,14 @@
           var px = sx(xs[s]);
           ctx.beginPath();
           ctx.moveTo(px, baseY);
-          ctx.lineTo(px, cy(s));
+          ctx.lineTo(px, curveY(curve, s, cMax, amp, baseY));
           ctx.stroke();
         }
       } else {
         // Filled density path.
         ctx.beginPath();
         ctx.moveTo(sx(xs[0]), baseY);
-        for (var j = 0; j < xs.length; j++) ctx.lineTo(sx(xs[j]), cy(j));
+        for (var j = 0; j < xs.length; j++) ctx.lineTo(sx(xs[j]), curveY(curve, j, cMax, amp, baseY));
         ctx.lineTo(sx(xs[xs.length - 1]), baseY);
         ctx.closePath();
         ctx.fillStyle = fill;
@@ -204,9 +208,7 @@
 
   // Re-render on resize so the canvas stays crisp and correctly sized.
   window.addEventListener("resize", function () {
-    if (document.getElementById("view-distributions") &&
-        document.getElementById("view-distributions").style.display !== "none") {
-      render();
-    }
+    var view = document.getElementById("view-distributions");
+    if (view && view.style.display !== "none") render();
   });
 })();

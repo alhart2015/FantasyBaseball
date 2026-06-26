@@ -10,6 +10,8 @@ from typing import Any, cast
 
 import numpy as np
 
+from fantasy_baseball.utils.constants import ZERO_IP_RATE_SENTINEL
+
 # Grid resolution and the metric-relative bandwidth floor. Tunable; see the spec
 # "Open questions" -- these are visual knobs, not data-contract values.
 GRID_POINTS = 60
@@ -120,7 +122,11 @@ def build_discrete_metric(team_samples: dict[str, Any]) -> dict:
     support = np.unique(np.concatenate(list(cleaned.values())))
     teams = {}
     for name, arr in cleaned.items():
-        counts = np.array([np.count_nonzero(arr == v) for v in support], dtype=float)
+        # One pass per team: count distinct values and scatter onto the shared
+        # support, instead of O(support * n) full-array compares per support value.
+        vals, vc = np.unique(arr, return_counts=True)
+        counts = np.zeros(support.size, dtype=float)
+        counts[np.searchsorted(support, vals)] = vc
         p = counts / counts.sum()
         teams[name] = {
             "p": [float(v) for v in p],
@@ -129,9 +135,8 @@ def build_discrete_metric(team_samples: dict[str, Any]) -> dict:
     return {"x": [float(v) for v in support], "teams": teams}
 
 
-# ERA/WHIP carry a 99.0 zero-IP sentinel from simulate_remaining_season_batch.
+# ERA/WHIP carry the zero-IP sentinel from simulate_remaining_season_batch.
 _SENTINEL_CATS = {"ERA", "WHIP"}
-_SENTINEL_VALUE = 99.0
 
 
 def build_distributions(
@@ -157,7 +162,7 @@ def build_distributions(
     category_totals = {}
     category_points = {}
     for cat in cats:
-        sentinel = _SENTINEL_VALUE if cat in _SENTINEL_CATS else None
+        sentinel = ZERO_IP_RATE_SENTINEL if cat in _SENTINEL_CATS else None
         category_totals[cat] = build_continuous_metric(
             {name: batch[name][cat] for name in batch}, sentinel=sentinel
         )

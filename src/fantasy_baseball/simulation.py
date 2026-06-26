@@ -27,6 +27,7 @@ from fantasy_baseball.utils.constants import (
     QUANTILE_LEVELS,
     REPLACEMENT_BY_POSITION,
     STAT_DISPERSION,
+    ZERO_IP_RATE_SENTINEL,
     role_from_ip,
     safe_float,
 )
@@ -785,8 +786,8 @@ def simulate_remaining_season_batch(
 
         with np.errstate(divide="ignore", invalid="ignore"):
             avg = np.where(total_ab > 0, total_h / total_ab, 0.0)
-            era = np.where(total_ip > 0, total_er * 9 / total_ip, 99.0)
-            whip = np.where(total_ip > 0, total_h_plus_bb / total_ip, 99.0)
+            era = np.where(total_ip > 0, total_er * 9 / total_ip, ZERO_IP_RATE_SENTINEL)
+            whip = np.where(total_ip > 0, total_h_plus_bb / total_ip, ZERO_IP_RATE_SENTINEL)
 
         # Final counting total = actual + clamped simulated remainder, which is
         # exactly max(actual, simulated) -- never below what's already banked.
@@ -937,6 +938,9 @@ def run_ros_monte_carlo(
         name: {c.value: [] for c in ALL_CATS} for name in team_names
     }
     cats = [c.value for c in ALL_CATS]
+    # (category value, scoring "{cat}_pts" key) pairs, hoisted out of the
+    # per-iteration loop so the f-string is built once, not n_iter * n_teams times.
+    cat_pts_keys = [(c.value, f"{c.value}_pts") for c in ALL_CATS]
 
     # Vectorized: one batched simulation of all iterations replaces the former
     # per-iteration simulate_remaining_season call. Roto scoring stays per
@@ -962,8 +966,8 @@ def run_ros_monte_carlo(
             if rank <= 3:
                 mc_top3[name] += 1
             team_cat_pts = all_cat_pts[name]
-            for c in ALL_CATS:
-                team_cat_pts[c.value].append(pts.get(f"{c.value}_pts", 0))
+            for val, pts_key in cat_pts_keys:
+                team_cat_pts[val].append(pts.get(pts_key, 0))
 
     n = n_iterations
     team_results = {}
