@@ -117,11 +117,37 @@ between two needs on one eligible body -- acceptable, and far more tractable.
    ERA/WHIP/SV variance are their own open TODOs. Full pitcher fill is a
    follow-on.
 
-6. **Validation.** A backtest phase checking the new model's category means and
-   SDs against realized outcomes, tying into `scripts/backtest_sd_calibration.py`
-   and the ROS playing-time-haircut TODO. This phase confirms the fill model
-   does not drift category means; it does not attempt to re-settle the
-   haircut-vs-reality or SV-variance questions (separate TODOs).
+6. **Validation + before/after evidence.** A validation phase that produces
+   concrete evidence the bug is fixed (see "Acceptance evidence" below), plus a
+   backtest checking the new model's category means and SDs against realized
+   outcomes, tying into `scripts/backtest_sd_calibration.py` and the ROS
+   playing-time-haircut TODO. This phase confirms the fill model does not drift
+   category means; it does not attempt to re-settle the haircut-vs-reality or
+   SV-variance questions (separate TODOs).
+
+### Acceptance evidence (before/after) -- REQUIRED
+
+The change does not ship on green tests alone. It must produce a reproducible
+before/after artifact demonstrating the over-crediting is fixed:
+
+- A small, committed script (e.g. `scripts/compare_mc_active_selection.py`) that
+  runs the in-season ROS MC on the **same cached league snapshot** under the OLD
+  selection (top-k, position-blind) and the NEW games-based fill, and prints a
+  per-team, per-category table of median totals for both, side by side with the
+  ERoto projected-standings figures.
+- The artifact must reproduce the originally-measured regression and show it
+  closing: SkeleThor RBI median was **1020 (2nd)** under the old MC vs ERoto's
+  **926 (4th)**; the new model's SkeleThor RBI median must land materially below
+  1020 (between the slot-legal ~926 floor and 1020, reflecting only the
+  legitimate bench-fill insurance), and the Hart RBI re-ranking (1st -> 3rd
+  caused by an inflated opponent bench) must no longer occur. Capture the actual
+  numbers in the PR description and in a short note under `docs/superpowers/`.
+- The before/after must be driven from real cached data (Upstash/Render is the
+  source of truth; never stale local cache) so the evidence reflects production
+  inputs, per repo convention.
+
+This artifact is the definition of done for the integration phase, not an
+optional extra. "Tests pass" is necessary but not sufficient.
 
 ### Scope
 
@@ -168,7 +194,9 @@ Each phase is its own plan / PR:
 1. Games data plumbing (`g`, `gs` into the dataclasses + blend).
 2. Per-player availability draw in games units (reuse PT scale).
 3. Fill engine (hitters): greedy capacity-correct allocation.
-4. MC integration into `simulate_remaining_season_batch`.
+4. MC integration into `simulate_remaining_season_batch`, plus the before/after
+   comparison artifact (the "Acceptance evidence" deliverable -- definition of
+   done for this phase).
 5. Pitcher v1 (games-available scaling, no rich fill).
 6. Validation backtest.
 
