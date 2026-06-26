@@ -20,8 +20,6 @@ from fantasy_baseball.utils.constants import (
     HITTER_CORR_STATS,
     HITTER_CORRELATION,
     HITTING_COUNTING,
-    MANAGEMENT_ADJUSTMENT,
-    MANAGEMENT_ADJUSTMENT_DEFAULT,
     PITCHER_CORR_STATS,
     PITCHER_CORRELATION,
     PITCHING_COUNTING,
@@ -610,80 +608,12 @@ def _apply_variance(
     return adjusted
 
 
-def apply_management_adjustment(
-    team_stats: dict[str, dict[str, float]],
-    rng: np.random.Generator,
-) -> dict[str, dict[str, float]]:
-    """Scale team stats by in-season management quality before roto scoring.
-
-    NOTE (shelved 2026-05-21): not currently surfaced on the season
-    dashboard -- the 2023-2025 calibration is too noisy to display. See
-    MANAGEMENT_ADJUSTMENT in utils.constants for the SD-discount refinement
-    idea (weight each mean by its confidence). Kept intact for reactivation
-    once more seasons of data accumulate.
-
-    For each team, draws a management factor from a normal distribution
-    calibrated from historical draft-to-finish performance (2023-2025).
-    Good managers (positive adjustment) get a stat boost representing
-    waiver pickups, trades, and streaming. Bad managers get a decline.
-
-    Counting stats are scaled by the factor. Rate stats (AVG, ERA, WHIP)
-    are adjusted in the favorable direction for positive management.
-    The result feeds into score_roto(), which naturally preserves the
-    zero-sum roto point constraint.
-
-    Args:
-        team_stats: Output of simulate_season() —
-            {team: {R, HR, RBI, SB, AVG, W, K, SV, ERA, WHIP}}.
-        rng: NumPy random generator.
-
-    Returns:
-        New team_stats dict with management-adjusted stat values.
-    """
-    # Empirically derived: 1 roto point of management quality
-    # corresponds to ~0.24% change in counting stats.
-    ROTO_TO_STAT = 0.00236
-
-    adjusted = {}
-    for team, stats in team_stats.items():
-        mean, sd = MANAGEMENT_ADJUSTMENT.get(
-            team,
-            MANAGEMENT_ADJUSTMENT_DEFAULT,
-        )
-        draw = rng.normal(mean, sd)
-        factor = 1.0 + draw * ROTO_TO_STAT
-
-        # Back out rate stat components, adjust, and recompute.
-        # Management affects quality (hits per AB, runs per IP) with
-        # volume held constant, so only numerators are scaled.
-        h = stats["AVG"] * _TYPICAL_TEAM_AB
-        er = stats["ERA"] * _TYPICAL_TEAM_IP / 9
-        bh = stats["WHIP"] * _TYPICAL_TEAM_IP
-
-        adjusted[team] = {
-            # Counting stats: scale with management quality
-            "R": stats["R"] * factor,
-            "HR": stats["HR"] * factor,
-            "RBI": stats["RBI"] * factor,
-            "SB": stats["SB"] * factor,
-            "W": stats["W"] * factor,
-            "K": stats["K"] * factor,
-            "SV": stats["SV"] * factor,
-            # Rate stats: adjust through components
-            "AVG": calculate_avg(h * factor, _TYPICAL_TEAM_AB),
-            "ERA": calculate_era(er / factor, _TYPICAL_TEAM_IP),
-            "WHIP": calculate_whip(0, bh / factor, _TYPICAL_TEAM_IP),
-        }
-    return adjusted
-
-
 def run_monte_carlo(
     team_rosters: dict,
     h_slots: int,
     p_slots: int,
     user_team_name: str,
     n_iterations: int = 1000,
-    use_management: bool = False,
     seed: int = 42,
     progress_cb=None,
 ) -> dict:
@@ -695,7 +625,6 @@ def run_monte_carlo(
         p_slots: Number of active pitcher slots.
         user_team_name: Name of user's team (for category risk).
         n_iterations: Number of simulation iterations.
-        use_management: If True, apply management adjustment after each sim.
         seed: RNG seed for reproducibility.
         progress_cb: Optional callback(msg: str) called every 200 iterations.
 
@@ -725,8 +654,6 @@ def run_monte_carlo(
         if progress_cb and i % 200 == 0:
             progress_cb(i)
         sim_stats, _ = simulate_season(flat_rosters, rng, h_slots, p_slots)
-        if use_management:
-            sim_stats = apply_management_adjustment(sim_stats, rng)
         sim_roto = score_roto_dict(sim_stats)
         ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
         for rank, (name, pts) in enumerate(ranked, 1):
@@ -773,7 +700,6 @@ def run_ros_monte_carlo(
     p_slots: int,
     user_team_name: str,
     n_iterations: int = 1000,
-    use_management: bool = False,
     seed: int = 42,
     progress_cb=None,
 ) -> dict:
@@ -791,7 +717,6 @@ def run_ros_monte_carlo(
         p_slots: Number of active pitcher slots.
         user_team_name: Name of user's team (for category risk).
         n_iterations: Number of simulation iterations.
-        use_management: If True, apply management adjustment after each sim.
         seed: RNG seed for reproducibility.
         progress_cb: Optional callback(msg: str) called every 200 iterations.
 
@@ -824,8 +749,6 @@ def run_ros_monte_carlo(
             h_slots,
             p_slots,
         )
-        if use_management:
-            sim_stats = apply_management_adjustment(sim_stats, rng)
         sim_roto = score_roto_dict(sim_stats)
         ranked = sorted(sim_roto.items(), key=lambda x: x[1]["total"], reverse=True)
         for rank, (name, pts) in enumerate(ranked, 1):

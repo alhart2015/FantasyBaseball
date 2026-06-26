@@ -773,14 +773,12 @@ def test_standings_passes_baseline_meta_to_template(client, kv_isolation):
         CacheKey.MONTE_CARLO,
         {
             "base": {"team_results": {}, "category_risk": {}},
-            "with_management": {"team_results": {}, "category_risk": {}},
             "baseline_meta": {
                 "frozen_at": "2026-04-17T00:00:00Z",
                 "roster_date": "2026-03-27",
                 "season_year": 2026,
             },
             "rest_of_season": None,
-            "rest_of_season_with_management": None,
         },
     )
     season_data.write_cache(CacheKey.STANDINGS, _mock_standings())
