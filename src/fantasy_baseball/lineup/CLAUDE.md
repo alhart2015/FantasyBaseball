@@ -17,7 +17,7 @@ Yahoo API → pull roster + standings → `lineup.leverage` identifies which cat
 
 ## Monte Carlo
 
-Use `simulation.run_monte_carlo()` and `simulation.apply_management_adjustment()` — do not rewrite MC loops here. The season dashboard's projection refresh (`web/refresh_pipeline.py`) leans on the same module.
+Use `simulation.run_monte_carlo()` / `simulation.run_ros_monte_carlo()` — do not rewrite MC loops here. The season dashboard's projection refresh (`web/refresh_pipeline.py`) leans on the same module.
 
 ## Yahoo API quirks
 

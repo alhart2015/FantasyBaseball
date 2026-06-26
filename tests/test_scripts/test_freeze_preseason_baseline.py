@@ -129,13 +129,11 @@ def patched_script_env(fake_redis, monkeypatch):
         p_slots,
         user_team_name,
         n_iterations=1000,
-        use_management=False,
         progress_cb=None,
     ):
         return {
             "team_results": {t: {"median_pts": 70.0} for t in team_rosters},
             "category_risk": {},
-            "_used_management": use_management,
         }
 
     patches = [
@@ -162,9 +160,9 @@ def test_script_writes_baseline_to_redis(patched_script_env):
 
     baseline = redis_store.get_preseason_baseline(patched_script_env, 2026)
     assert baseline is not None
-    assert "base" in baseline and "with_management" in baseline
-    assert baseline["base"]["_used_management"] is False
-    assert baseline["with_management"]["_used_management"] is True
+    assert "base" in baseline
+    assert "with_management" not in baseline
+    assert "team_results" in baseline["base"]
     assert baseline["meta"]["season_year"] == 2026
     assert baseline["meta"]["roster_date"] == "2026-03-27"
     assert "frozen_at" in baseline["meta"]

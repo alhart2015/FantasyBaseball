@@ -444,7 +444,6 @@ class RefreshRun:
         self.optimal_pitchers_bench: list[Player] | None = None
         self.fa_players: list[Player] | None = None
         self.rest_of_season_mc: dict[str, Any] | None = None
-        self.rest_of_season_mgmt_mc: dict[str, Any] | None = None
 
     def _progress(self, msg: str) -> None:
         _set_refresh_progress(msg)
@@ -1397,24 +1396,9 @@ class RefreshRun:
                     p_slots=p_slots,
                     user_team_name=self.config.team_name,
                     n_iterations=1000,
-                    use_management=False,
                     progress_cb=lambda i: self._progress(f"Current MC: iteration {i}/1000..."),
                 )
                 self._progress("Current Monte Carlo complete")
-                self.rest_of_season_mgmt_mc = run_ros_monte_carlo(
-                    team_rosters=rest_of_season_mc_rosters,
-                    actual_standings=actual_standings_dict,
-                    fraction_remaining=self.fraction_remaining,
-                    h_slots=h_slots,
-                    p_slots=p_slots,
-                    user_team_name=self.config.team_name,
-                    n_iterations=1000,
-                    use_management=True,
-                    progress_cb=lambda i: self._progress(
-                        f"Current MC + Mgmt: iteration {i}/1000..."
-                    ),
-                )
-                self._progress("Current + Mgmt Monte Carlo complete")
 
         from fantasy_baseball.data.kv_store import get_kv
         from fantasy_baseball.data.redis_store import get_preseason_baseline
@@ -1428,10 +1412,8 @@ class RefreshRun:
             CacheKey.MONTE_CARLO,
             {
                 "base": baseline.get("base"),
-                "with_management": baseline.get("with_management"),
                 "baseline_meta": baseline.get("meta"),
                 "rest_of_season": self.rest_of_season_mc,
-                "rest_of_season_with_management": self.rest_of_season_mgmt_mc,
             },
             required=False,
         )

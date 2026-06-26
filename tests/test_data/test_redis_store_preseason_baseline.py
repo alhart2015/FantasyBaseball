@@ -4,7 +4,6 @@ from fantasy_baseball.data import redis_store
 
 BASELINE = {
     "base": {"team_results": {"Team 01": {"median_pts": 72.5}}, "category_risk": {}},
-    "with_management": {"team_results": {"Team 01": {"median_pts": 75.0}}, "category_risk": {}},
     "meta": {
         "frozen_at": "2026-04-18T12:00:00Z",
         "season_year": 2026,

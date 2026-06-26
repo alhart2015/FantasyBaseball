@@ -430,7 +430,6 @@ def patched_refresh_environment(
         2026,
         {
             "base": _canned_mc,
-            "with_management": _canned_mc,
             "meta": {
                 "frozen_at": "2026-04-17T00:00:00Z",
                 "season_year": 2026,
@@ -449,7 +448,6 @@ def patched_refresh_environment(
         p_slots,
         user_team_name,
         n_iterations=1000,
-        use_management=False,
         progress_cb=None,
     ):
         return _real_ros_mc(
@@ -460,7 +458,6 @@ def patched_refresh_environment(
             p_slots=p_slots,
             user_team_name=user_team_name,
             n_iterations=10,
-            use_management=use_management,
             progress_cb=progress_cb,
         )
 

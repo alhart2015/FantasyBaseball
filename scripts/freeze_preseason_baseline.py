@@ -1,9 +1,9 @@
 """Freeze the preseason Monte Carlo baseline for the current season.
 
 Fetches every team's Opening-Day roster from Yahoo, matches against
-preseason projections from Redis, runs run_monte_carlo twice
-(base + with_management) at 1000 iterations each, and writes the
-result to Redis under ``preseason_baseline:{season_year}``.
+preseason projections from Redis, runs run_monte_carlo at 1000
+iterations, and writes the result to Redis under
+``preseason_baseline:{season_year}``.
 
 Run this once per season, after the draft completes. The refresh
 pipeline reads this artifact on every refresh instead of re-running
@@ -112,21 +112,10 @@ def main(argv: list[str] | None = None) -> None:
         p_slots,
         config.team_name,
         n_iterations=1000,
-        use_management=False,
-    )
-    print("Running with-management Monte Carlo (1000 iterations)...")
-    with_mgmt = run_monte_carlo(
-        team_rosters,
-        h_slots,
-        p_slots,
-        config.team_name,
-        n_iterations=1000,
-        use_management=True,
     )
 
     payload = {
         "base": base,
-        "with_management": with_mgmt,
         "meta": {
             "frozen_at": _dt.datetime.now(_dt.UTC).isoformat(),
             "season_year": season_year,

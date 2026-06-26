@@ -122,7 +122,7 @@ class TestRefreshShape:
             refresh_pipeline.run_full_refresh()
         data = _read(fake_redis, "monte_carlo")
         assert "base" in data
-        assert "with_management" in data
+        assert "with_management" not in data
         # ROS keys may be None when has_rest_of_season=False (next task)
 
     def test_meta_shape(self, configured_test_env, fake_redis):
@@ -446,13 +446,12 @@ class TestMonteCarloROSBranch:
             refresh_pipeline.run_full_refresh()
         data = _read(fake_redis, "monte_carlo")
         assert data["base"] is not None
-        assert data["with_management"] is not None
+        assert "with_management" not in data
+        assert "rest_of_season_with_management" not in data
         if has_ros:
             assert data["rest_of_season"] is not None
-            assert data["rest_of_season_with_management"] is not None
         else:
             assert data["rest_of_season"] is None
-            assert data["rest_of_season_with_management"] is None
 
 
 class TestROSProjectionsRedisAuthoritative:
@@ -743,7 +742,7 @@ def test_breakdown_payload_team_ytd_zero_when_no_actual_standings():
 
 class TestPreseasonBaseline:
     """The refresh reads preseason_baseline:{year} from Redis; if
-    missing, the base/with_management cache fields are None but the
+    missing, the base cache field is None but the
     refresh still completes."""
 
     def test_baseline_present_populates_cache(
@@ -755,7 +754,6 @@ class TestPreseasonBaseline:
             refresh_pipeline.run_full_refresh()
         data = _read(fake_redis, "monte_carlo")
         assert data["base"] is not None
-        assert data["with_management"] is not None
         assert "team_results" in data["base"]
         assert data["baseline_meta"]["roster_date"] == "2026-03-27"
 
@@ -770,7 +768,6 @@ class TestPreseasonBaseline:
             refresh_pipeline.run_full_refresh()
         data = _read(fake_redis, "monte_carlo")
         assert data["base"] is None
-        assert data["with_management"] is None
         assert data["baseline_meta"] is None
 
 

@@ -71,11 +71,10 @@ def get_preseason_baseline(client, season_year: int) -> dict | None:
     Returns ``None`` on missing key, corrupt JSON, non-dict payload, or
     ``client is None``. Shape on success::
 
-        {"base": {...}, "with_management": {...}, "meta": {...}}
+        {"base": {...}, "meta": {...}}
 
-    where ``base`` / ``with_management`` are ``run_monte_carlo`` outputs
-    captured once per season against Opening-Day rosters + preseason
-    projections.
+    where ``base`` is a ``run_monte_carlo`` output captured once per season
+    against Opening-Day rosters + preseason projections.
     """
     if client is None:
         return None

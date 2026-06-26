@@ -291,39 +291,6 @@ PITCHER_CORRELATION: list[list[float]] = [
     [-0.057, -0.237, -0.341, +0.729, +0.729, +1.000],  # h_allowed
 ]
 
-# In-season management adjustment (roto points).
-# Calibrated from draft-day projected roto vs actual final standings, 2023-2025.
-# Represents the net effect of waiver moves, trades, and streaming over a
-# full season. Normalized to sum to zero (roto is zero-sum).
-# Each entry is (mean_adjustment, sd). Applied per-simulation as
-# N(mean, sd) added to a team's roto total after scoring.
-#
-# SHELVED 2026-05-21: no longer surfaced on the season dashboard. With only
-# three seasons (2023-2025) of draft-to-finish data, most per-team means are
-# noise -- e.g. Hart of the Order's +11.1 +/- 14.4 has a confidence interval
-# that straddles zero, while Hello Peanuts' +17.1 +/- 8.4 is more clearly
-# real signal. The code path (apply_management_adjustment, use_management=True)
-# is left intact for reactivation once more seasons accumulate.
-# FUTURE REFINEMENT: discount each mean by its SD -- shrink toward zero in
-# proportion to the uncertainty (e.g. weight by a t-stat like mean/sd) so
-# low-confidence estimates stop moving the standings as much as high-confidence
-# ones, instead of trusting every mean equally.
-MANAGEMENT_ADJUSTMENT: dict[str, tuple[float, float]] = {
-    "Hello Peanuts!": (+17.1, 8.4),
-    "Boston Estrellas": (+12.8, 7.8),
-    "Springfield Isotopes": (+12.1, 5.1),
-    "Hart of the Order": (+11.1, 14.4),
-    "Spacemen": (+5.6, 18.6),
-    "Send in the Cavalli": (+5.0, 10.0),
-    "Work in Progress": (-5.2, 9.9),
-    "Jon's Underdogs": (-11.9, 9.7),
-    "Tortured Baseball Department": (-13.7, 10.0),
-    "SkeleThor": (-33.0, 12.6),
-}
-
-# Default adjustment for teams not in the lookup (new managers, other leagues).
-MANAGEMENT_ADJUSTMENT_DEFAULT: tuple[float, float] = (0.0, 10.0)
-
 # Replacement-level full-season stats for waiver pickups.
 # REPLACEMENT_HITTER/SP/RP are the legacy flat lines, still used by
 # analysis/transactions.py for drop-cost. The Monte Carlo injury backfill uses
