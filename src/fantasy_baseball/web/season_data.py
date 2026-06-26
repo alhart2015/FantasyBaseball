@@ -10,7 +10,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from fantasy_baseball.category_odds import category_finish_odds
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 from fantasy_baseball.data.kv_store import KVStore, get_kv, is_remote
 from fantasy_baseball.lineup.delta_roto import compute_one_for_one_band, score_swap
@@ -411,78 +410,6 @@ def format_standings_for_display(
             t["rank"] = i + 1
 
     return {"teams": teams}
-
-
-def _category_odds(rows: list[dict], cat: Category) -> dict | None:
-    """User-team finish odds for one category's rows, or None if no user row.
-
-    Percentages are rounded to whole numbers (display spec). ``rows`` may be
-    in any order; ``category_finish_odds`` works over the team set.
-    """
-    user_index = next((i for i, r in enumerate(rows) if r["is_user"]), None)
-    if user_index is None:
-        return None
-    odds = category_finish_odds(
-        [r["value"] for r in rows],
-        [r["sd"] for r in rows],
-        user_index,
-        higher_is_better=cat not in INVERSE_CATS,
-    )
-    return {
-        "first_pct": round(odds.first_pct),
-        "top3_pct": round(odds.top3_pct),
-        "wins": odds.clear_wins,
-        "opponents": odds.opponents,
-    }
-
-
-def _category_bars_one_flavor(data: dict | None) -> dict[str, dict]:
-    """Reshape one standings display dict into per-category ranked rows + odds.
-
-    Each category maps to ``{"rows": [...], "odds": {...} | None}``. ``rows``
-    are ``{team, value, sd, is_user}`` sorted best-on-top: counting/AVG
-    descending, ERA/WHIP ascending (lower is better). ``sd`` defaults to 0.0
-    when a category is absent from a team's ``sds``. ``odds`` carries the user
-    team's whole-number 1st/top-3 percentages, clear-win count, and opponent
-    count (None when there is no user team in the data).
-    """
-    if not data or not data.get("teams"):
-        return {}
-    out: dict[str, dict] = {}
-    for cat in ALL_CATEGORIES:
-        rows = [
-            {
-                "team": team["name"],
-                "value": team["stats"][cat],
-                "sd": (team.get("sds") or {}).get(cat, 0.0),
-                "is_user": team["is_user"],
-            }
-            for team in data["teams"]
-        ]
-        # reverse=True for "higher is better"; ERA/WHIP (INVERSE_CATS) sort
-        # ascending so the lowest (best) team lands on top. Python's sort is
-        # stable, so ties keep the input order.
-        rows.sort(key=lambda r: r["value"], reverse=cat not in INVERSE_CATS)
-        out[cat.value] = {"rows": rows, "odds": _category_odds(rows, cat)}
-    return out
-
-
-def format_category_bars_for_display(
-    preseason_data: dict | None,
-    current_projected_data: dict | None,
-) -> dict[str, dict[str, dict]]:
-    """Build the Category Bars chart payload from the two standings display dicts.
-
-    Returns ``{"preseason": {CAT: {"rows": [...], "odds": {...}}}, "current": {...}}``
-    where each row is ``{team, value, sd, is_user}`` sorted best-on-top and
-    ``odds`` is the user team's per-category finish odds (see
-    ``_category_bars_one_flavor``). A missing flavor (``None``, pre-refresh)
-    yields an empty ``{}`` for that flavor.
-    """
-    return {
-        "preseason": _category_bars_one_flavor(preseason_data),
-        "current": _category_bars_one_flavor(current_projected_data),
-    }
 
 
 def get_teams_list(standings: Standings, user_team_name: str) -> dict:
