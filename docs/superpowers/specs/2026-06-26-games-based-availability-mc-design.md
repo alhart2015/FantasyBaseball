@@ -85,6 +85,27 @@ shortfall -> fill from bench, then replacement. The displacement reduction and t
 stochastic shortfall are DISJOINT slices of the body's games, so no slice is
 filled twice.
 
+PT-variance curve index under displacement (STATED, gated decision). The PT scale
+`scales` is looked up by `_projected_volume` (the player's FULL projected PA/IP,
+`simulation.py:673`). Displacement is a deterministic SLOT-SHARE reduction, not an
+injury -- a displaced body is a full-quality player who simply has fewer games
+because the IL returnee shares the slot. So the curve lookup uses the player's
+full projected volume (full-timer injury-proneness); displacement scales the MEAN
+baseline only and must NOT additionally narrow the PT variance via the factor. The
+SD backtest (Component 6) validates this; if displaced-body category SDs come out
+mis-calibrated, the gated alternative is to reduce the curve-lookup volume by the
+factor -- but the default is mean-only scaling, stated here so the implementer
+does not silently double-apply.
+
+IL bodies participate in sampling and bench-fill as NORMAL active bodies. Once an
+IL player is activated (at its full, injury-baked ROS), it is an ordinary member
+of the effective active set: it is sampled with PT variance and its own stochastic
+`frac_missed` is bench-filled like any active starter (a returning player can get
+re-hurt; you start a bench bat). Its ROS MEAN already bakes in the known injury;
+the stochastic layer is future uncertainty around that mean -- not a re-count. The
+conservation + one-body-capacity constraints keep the shared slot from being
+over-filled. Tested explicitly (Testing: IL-body self-fill).
+
 Conservation: the effective active set sums to `h_slots` worth of games because the
 displacement factor is `(active_pt - il_pt)/active_pt` -- the IL body SHARES the
 displaced target's slot, it does not add a new one. The MC inherits this from
@@ -136,20 +157,30 @@ in hand in `run_ros_monte_carlo` before the flatten). See Component 4.
      eligible active match is scaled by the IL player's expected ROS PT. These are
      the SAME functions ERoto's projected standings use, so the MC's IL handling
      agrees with ERoto by construction.
-   - **LeagueContext is required (not optional) and is NOT free to obtain.**
-     `ProjectedStandings.from_rosters` builds the context INLINE per team and
-     discards it; the pipeline does not persist it. So this is real plumbing, not a
-     cheap reuse: in `_build_projected_standings`, retain the per-team
-     `LeagueContext` (or its inputs: the `build_eos_baseline` baseline +
-     `build_team_sds` SDs) on `self`, and thread them into `_run_ros_monte_carlo`.
-     The pipeline ordering supports this (`_build_projected_standings` runs before
-     `_run_ros_monte_carlo`). The context is REQUIRED because without it
-     `_compute_displacement_factors` falls back to the legacy SGP picker (the
-     elite-low-volume-closer pathology), which would DIVERGE from ERoto -- defeating
-     the agree-by-construction goal (and breaking the pitcher pool model, Component
-     5). Recomputing `build_eos_baseline` at MC setup (a full pass-1 standings
-     build) is the fallback if threading proves impractical, but it is not free --
-     pin the choice in Phase 2.
+   - **LeagueContext is required (not optional), and retaining it needs precise
+     plumbing.** `ProjectedStandings.from_rosters` computes the pass-1 baseline
+     (`build_eos_baseline`) and constructs each team's `LeagueContext` INLINE, then
+     returns only `ProjectedStandings` -- the baseline is discarded. The pipeline
+     already retains `self.team_sds` and `self.fraction_remaining`
+     (`refresh_pipeline.py` `_build_projected_standings`) but NOT the baseline,
+     which is the one piece the MC's displacement picker needs
+     (`baseline_other_team_stats`). So the fix is specific: have
+     `_build_projected_standings` obtain the `build_eos_baseline` result ONCE and
+     store it on `self` -- either by refactoring `from_rosters` to accept/return the
+     baseline, or by computing `build_eos_baseline` in `_build_projected_standings`
+     and passing it into `from_rosters` so BOTH use the identical object. At MC
+     setup, build each team's `LeagueContext` from that stored baseline (minus the
+     team), the retained `self.team_sds`, and `fraction_remaining`. The SD scale is
+     `sqrt(fraction_remaining)`, the SAME as standings -- correct for the MC (the
+     picker's variance pricing must match standings; `fraction_remaining` there only
+     feeds `swap_window_ip`). DO NOT independently recompute a SECOND baseline at MC
+     setup from the rosters: the displaced-state running roster and ordering inside
+     `from_rosters` would make it differ subtly, silently breaking the
+     agree-by-construction guarantee. One baseline object, shared. The context is
+     REQUIRED because without it `_compute_displacement_factors` (and the pitcher
+     pool model, Component 5) fall back to the legacy SGP picker (the
+     elite-low-volume-closer pathology) and DIVERGE from ERoto. Pin the exact
+     refactor in Phase 2.
    - Output per team: the **effective active set** = active-slot bodies (each with
      its displacement factor, mostly 1.0) + IL bodies (at full ROS), and the
      **healthy-bench fill pool** (each with eligible positions, ROS games `g_ros`,
@@ -326,6 +357,13 @@ makes same-day collisions rare.
 - Replacement backfill removed: with the new fill engine active, the built-in
   `_apply_variance_batch` `repl_contrib` does NOT also fire (no team total reflects
   double replacement on the same missed games).
+- IL-body self-fill: an activated IL body is sampled with PT variance and its own
+  `frac_missed` is bench-filled like any active starter; the shared slot (IL body +
+  displaced target) total games stay within `h_slots` worth + the bench body's
+  capacity (no over-fill of the shared slot).
+- Displaced-body curve index: a displaced full-timer's PT variance is sampled from
+  the FULL-volume curve band (mean-only scaling), not narrowed by the displacement
+  factor -- a constructed case asserts the variance is not double-reduced.
 - One-body capacity: two starters draw low in the same iteration and one bench
   body is eligible for both -- its total contributed games do not exceed its ROS
   games.
