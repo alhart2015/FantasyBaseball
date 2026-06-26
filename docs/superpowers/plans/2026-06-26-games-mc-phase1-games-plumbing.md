@@ -58,8 +58,9 @@ def test_missing_games_defaults_zero_not_error():
 - [ ] **Step 3: Add the fields.** In `HitterStats`, add `g: float = 0` among the counting fields (e.g. after `ab`). In `PitcherStats`, add `g: float = 0` and `gs: float = 0` (e.g. after `ip`). Do NOT touch the `sgp` field handling. Read both dataclasses first to place the fields consistently with existing style.
 
 - [ ] **Step 4: Run, confirm PASS:** `pytest tests/test_models/test_player.py -k games -v`
-- [ ] **Step 5: Full model + projections tests, confirm no regression:** `pytest tests/test_models/ tests/test_projections -q` (adjust paths to the real test dirs).
-- [ ] **Step 6: Commit:**
+- [ ] **Step 5: Full model + projections tests, confirm no regression:** `pytest tests/test_models/ tests/test_data/ -q`.
+- [ ] **Step 6: mypy (models/ is under `[tool.mypy].files`):** `mypy src/fantasy_baseball/models/player.py` -- expected clean (trivial `float` field). (Full `mypy` may error on the pre-existing deleted `category_odds.py`; that is unrelated.)
+- [ ] **Step 7: Commit:**
 ```bash
 git add src/fantasy_baseball/models/player.py tests/test_models/test_player.py
 git commit -m "feat(models): add g to HitterStats; g/gs to PitcherStats (games plumbing)"
@@ -69,7 +70,7 @@ git commit -m "feat(models): add g to HitterStats; g/gs to PitcherStats (games p
 
 ### Task 2: Thread the CSV `G`/`GS` columns through the blend
 
-**Files:** Modify `src/fantasy_baseball/data/fangraphs.py` (column maps ~7-41); `src/fantasy_baseball/data/projections.py` (counting-col lists ~22-23); Test `tests/test_projections.py` (or the real projections test file).
+**Files:** Modify `src/fantasy_baseball/data/fangraphs.py` (column maps ~7-41); `src/fantasy_baseball/data/projections.py` (counting-col lists ~22-23). Tests: column-map assertions in `tests/test_data/test_fangraphs.py` (where the existing `GS->gs` map/parse tests live); counting-col assertions in `tests/test_data/test_projections.py`.
 
 **Interfaces:**
 - Consumes: Task 1's fields.
@@ -101,10 +102,11 @@ def test_blend_threads_games_columns():
 - [ ] **Step 2: Run, confirm FAIL.**
 - [ ] **Step 3: Implement.** In `fangraphs.py`: add `"G": "g"` to `HITTING_COLUMN_MAP` and add `"G": "g"` to `PITCHING_COLUMN_MAP` (leave the existing `"GS": "gs"`). In `projections.py`: append `"g"` to `HITTING_COUNTING_COLS` and append `"g"` to `PITCHING_COUNTING_COLS` (leave `"gs"`). Do NOT add `g`/`gs` to `REQUIRED_*_COLS` (a system that omits `G` must still load -- the blend should drop it from the `G`-average for that system, not error; confirm the blend tolerates a missing column for a stat in the COUNTING list -- if it does not, guard so a missing `G` is skipped, matching the spec's "drop it from the G blend rather than zeroing").
 - [ ] **Step 4: Run, confirm PASS.**
-- [ ] **Step 5: Run the full projections + blend suite, confirm no regression.** If any blend test asserts an exact column set, update it to include `g` (justify in the commit -- this is the intended new column, not a loosened assertion).
-- [ ] **Step 6: Commit:**
+- [ ] **Step 5: Run the full data suite, confirm no regression:** `pytest tests/test_data/ -q`. If any blend test asserts an exact column set, update it to include `g` (justify in the commit -- this is the intended new column, not a loosened assertion).
+- [ ] **Step 6: mypy (both files under `[tool.mypy].files`):** `mypy src/fantasy_baseball/data/fangraphs.py src/fantasy_baseball/data/projections.py` -- expected clean.
+- [ ] **Step 7: Commit:**
 ```bash
-git add src/fantasy_baseball/data/fangraphs.py src/fantasy_baseball/data/projections.py tests/<projections test file>
+git add src/fantasy_baseball/data/fangraphs.py src/fantasy_baseball/data/projections.py tests/test_data/test_fangraphs.py tests/test_data/test_projections.py
 git commit -m "feat(data): thread CSV G/GS into the blend as g/gs (games plumbing)"
 ```
 
