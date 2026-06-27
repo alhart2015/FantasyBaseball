@@ -85,6 +85,7 @@ files = [
     "src/fantasy_baseball/lineup/upcoming_starts.py",
     "src/fantasy_baseball/lineup/waivers.py",
     "src/fantasy_baseball/lineup/yahoo_roster.py",
+    "src/fantasy_baseball/mc_roster.py",
     "src/fantasy_baseball/models/",
     "src/fantasy_baseball/scoring.py",
     "src/fantasy_baseball/sgp/",
