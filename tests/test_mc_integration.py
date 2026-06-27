@@ -516,15 +516,16 @@ def _flat_rosters(rosters):
     return {t: [p.to_flat_dict_full_season() for p in players] for t, players in rosters.items()}
 
 
-def test_pitchers_unchanged_with_effective_rosters():
-    """Pitcher category DISTRIBUTION matches with vs without effective_rosters.
+def test_pitchers_ros_direct_track_eroto_projection():
+    """Phase 5: effective_rosters routes pitchers through the ROS-direct helper.
 
-    The hitter helper samples a different player count than the old flat-dict
-    hitter path, which shifts the single shared rng stream the pitcher draw
-    reads from -- so per-iteration pitcher values shift benignly. The pitcher
-    MODEL is untouched (same _apply_variance_batch call, same inputs), so the
-    DISTRIBUTION (mean + SD over n_iter) is identical within tolerance. This is
-    the correct "pitchers unchanged" invariant; NOT byte-identity.
+    (Pre-Phase-5 this test asserted the pitcher distribution was UNCHANGED with
+    vs without effective_rosters -- correct only while pitchers always used the
+    top-k full-season path. Phase 5 deliberately switches the effective_rosters
+    pitcher path to ROS-direct (pt_mean_fraction=0, no haircut, no top-k
+    over-credit), so the two paths now legitimately DIFFER. The new invariant: the
+    ROS-direct pitcher mean tracks the summed ERoto ROS projection -- here two
+    active SP at K=100/IP=90 -> ~200 K / ~180 IP -- with NO mean haircut.)
     """
     rosters = _mixed_rosters()
     actuals = {t: {} for t in rosters}
@@ -534,14 +535,12 @@ def test_pitchers_unchanged_with_effective_rosters():
     with_eff = simulate_remaining_season_batch(
         actuals, flat, 0.4, np.random.default_rng(21), 13, 9, n, effective_rosters=eff
     )
-    without = simulate_remaining_season_batch(
-        actuals, flat, 0.4, np.random.default_rng(21), 13, 9, n, effective_rosters=None
-    )
-    for cat in ("W", "K", "SV"):
-        a = with_eff["Me"][cat]
-        b = without["Me"][cat]
-        np.testing.assert_allclose(a.mean(), b.mean(), rtol=0.08, atol=2.0)
-        np.testing.assert_allclose(a.std(), b.std(), rtol=0.15, atol=2.0)
+    # Me has two active SP, each ROS K=100 / IP=90 -> summed projection 200 / 180.
+    proj_k = sum(p.rest_of_season.k for p in rosters["Me"] if p.player_type == PlayerType.PITCHER)
+    proj_ip = sum(p.rest_of_season.ip for p in rosters["Me"] if p.player_type == PlayerType.PITCHER)
+    assert abs(with_eff["Me"]["K"].mean() - proj_k) / proj_k < 0.06, with_eff["Me"]["K"].mean()
+    assert abs(with_eff["Me"]["ERA"].mean()) > 0  # ERA recombines from ROS-direct volume
+    assert with_eff["Me"]["W"].mean() > 0 and proj_ip > 0
 
 
 def test_whole_context_fallback_to_topk():
@@ -583,3 +582,117 @@ def test_run_ros_monte_carlo_accepts_effective_rosters():
     )
     assert "team_results" in result
     assert np.isfinite(result["team_results"]["Me"]["median_pts"])
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: ROS-direct pitcher integration.
+# ---------------------------------------------------------------------------
+
+from fantasy_baseball.simulation import (  # noqa: E402
+    _simulate_team_pitchers_ros_direct,
+)
+
+
+def _pitcher_custom(name, slot, pid, *, w=8, k=100, sv=0, ip=90, er=35, bb=28, ha=80, g=15):
+    return Player(
+        name=name,
+        player_type=PlayerType.PITCHER,
+        positions=[Position.SP],
+        selected_position=slot,
+        yahoo_id=pid,
+        rest_of_season=PitcherStats.from_dict(
+            {"w": w, "k": k, "sv": sv, "ip": ip, "er": er, "bb": bb, "h_allowed": ha, "g": g}
+        ),
+    )
+
+
+def _solo_eff_pitcher(player, *, factor=1.0):
+    """EffectiveRoster with one active pitcher and an empty bench fill pool."""
+    return EffectiveRoster(active=[_active_body(player, factor=factor)], bench=[])
+
+
+def test_pitcher_helper_samples_active_only_applies_factor():
+    """K positive; a factor<1 active body contributes less than at factor 1.
+
+    Two active pitchers in the EffectiveRoster; healthy bench pitchers are not
+    present in ``EffectiveRoster.active`` so they never contribute. Mechanism:
+    every returned array is populated, K/IP means are positive, and halving a
+    body's displacement factor strictly lowers its contributed K mean.
+    """
+    p = _pitcher_custom("SP1", Position.P, "1", k=150, ip=180)
+    eff_full = _solo_eff_pitcher(p, factor=1.0)
+    eff_disp = _solo_eff_pitcher(p, factor=0.5)
+    out = _simulate_team_pitchers_ros_direct(eff_full, 0.5, np.random.default_rng(0), 500)
+    assert set(out) >= {"W", "K", "SV", "ros_ip", "ros_er", "ros_bb", "ros_ha"}
+    assert out["K"].mean() > 0 and out["ros_ip"].mean() > 0
+
+    disp = _simulate_team_pitchers_ros_direct(eff_disp, 0.5, np.random.default_rng(0), 500)
+    assert disp["K"].mean() < out["K"].mean()
+
+
+def test_pitcher_mean_matches_projection_no_haircut():
+    """CRITICAL regression: pt_mean_fraction=0 => NO playing-time mean haircut.
+
+    With one active SP at factor 1.0 the helper's K/IP means must track the
+    summed ROS projection (== ERoto), NOT mean_scale*projection (~0.8x, which a
+    pt_mean_fraction=1.0 haircut would wrongly produce). Pin to the body's actual
+    ROS projection (read off the constructed Player) and assert within ~6%.
+    """
+    p = _pitcher_custom("Ace", Position.P, "1", k=150, ip=180)
+    eff = _solo_eff_pitcher(p, factor=1.0)
+    proj_k = float(p.rest_of_season.k)
+    proj_ip = float(p.rest_of_season.ip)
+    out = _simulate_team_pitchers_ros_direct(eff, 0.5, np.random.default_rng(0), 4000)
+    assert abs(out["K"].mean() - proj_k) / proj_k < 0.06, out["K"].mean()
+    assert abs(out["ros_ip"].mean() - proj_ip) / proj_ip < 0.06, out["ros_ip"].mean()
+
+
+def test_pitcher_helper_empty_active_returns_zeros():
+    """No active pitchers (hitters-only roster) -> all-zero pitcher arrays."""
+    roster = [_hitter("OnlyBat", Position.OF, "1")]
+    eff = _eff_roster(roster)
+    out = _simulate_team_pitchers_ros_direct(eff, 0.5, np.random.default_rng(0), 100)
+    assert all(
+        (out[c] == 0).all() for c in ("W", "K", "SV", "ros_ip", "ros_er", "ros_bb", "ros_ha")
+    )
+
+
+def test_effective_rosters_routes_pitchers_and_no_fallback_regression():
+    """effective_rosters routes pitcher cats through the ROS-direct helper.
+
+    With effective_rosters supplied the team's W/K/SV = YTD + ROS (no clamp);
+    with None the byte-identical top-k path still holds. Assert the two PATHS
+    differ for a team whose active-slot pitchers != its top-k pitchers (a weak
+    active SP vs a strong benched SP that top-k would seat), and that the
+    effective_rosters=None path is unchanged (covered by the byte-anchor test).
+    """
+    roster = [
+        _pitcher_custom("WeakActive", Position.P, "1", w=2, k=40, sv=0, ip=60),
+        _pitcher_custom("StrongBench", Position.BN, "2", w=14, k=220, sv=0, ip=200),
+    ]
+    flat = {"Me": [p.to_flat_dict_full_season() for p in roster]}
+    actuals = {"Me": {}}
+    n = 4000
+    with_eff = simulate_remaining_season_batch(
+        actuals,
+        flat,
+        0.4,
+        np.random.default_rng(5),
+        13,
+        9,
+        n,
+        effective_rosters={"Me": _eff_roster(roster)},
+    )
+    without = simulate_remaining_season_batch(
+        actuals,
+        flat,
+        0.4,
+        np.random.default_rng(5),
+        13,
+        9,
+        n,
+        effective_rosters=None,
+    )
+    # ROS-direct seats ONLY the weak active SP; top-k seats the strong bench SP.
+    # The K mean must differ materially between the two paths.
+    assert with_eff["Me"]["K"].mean() < without["Me"]["K"].mean()
