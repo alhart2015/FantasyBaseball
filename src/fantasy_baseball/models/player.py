@@ -23,6 +23,7 @@ class HitterStats:
     hr: float = 0
     rbi: float = 0
     sb: float = 0
+    g: float = 0
     avg: float = 0
     sgp: float | None = None
 
@@ -68,6 +69,8 @@ class PitcherStats:
     er: float = 0
     bb: float = 0
     h_allowed: float = 0
+    g: float = 0
+    gs: float = 0
     era: float = 0
     whip: float = 0
     sgp: float | None = None

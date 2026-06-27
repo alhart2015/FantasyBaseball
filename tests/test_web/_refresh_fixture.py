@@ -449,6 +449,7 @@ def patched_refresh_environment(
         user_team_name,
         n_iterations=1000,
         progress_cb=None,
+        effective_rosters=None,
     ):
         return _real_ros_mc(
             team_rosters=team_rosters,
@@ -459,6 +460,7 @@ def patched_refresh_environment(
             user_team_name=user_team_name,
             n_iterations=10,
             progress_cb=progress_cb,
+            effective_rosters=effective_rosters,
         )
 
     # Build a test LeagueConfig so team_name/num_teams match the fixture data.

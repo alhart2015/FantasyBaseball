@@ -5,6 +5,7 @@ scripts/summary.py (in-season weekly projections), and
 the season dashboard (web/season_data.py).
 """
 
+from dataclasses import dataclass
 from typing import Any, cast
 
 import numpy as np
@@ -12,6 +13,8 @@ from scipy.special import _ufuncs as _scu  # Boost-backed nbinom ppf (see _nbino
 from scipy.special import ndtr, pdtr, pdtrik
 
 from fantasy_baseball.distributions import build_distributions
+from fantasy_baseball.mc_fill import ActiveSample, BenchSample, allocate_bench_fill
+from fantasy_baseball.mc_roster import ActiveBody, EffectiveRoster
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
@@ -58,6 +61,39 @@ HITTER_CORR_MATRIX = np.array(HITTER_CORRELATION)
 PITCHER_CORR_MATRIX = np.array(PITCHER_CORRELATION)
 
 _U_EPS = 1e-9
+
+# Phase 4b ROS-direct hitter sampling. When True (default), the hitter
+# effective_rosters path samples the rest_of_season line directly with
+# pt_mean_fraction=1.0 (full mean over the ROS window) + suppress_repl=True (the
+# bench injury-fill owns the backfill). Flip to False to fall back to full-season
+# hitter sampling without touching the displacement/fill wiring -- the one-line
+# escape hatch gated on the Phase 6 SD backtest (NOT asserted in Phase 4).
+_ROS_DIRECT_HITTERS = True
+
+# Phase 5 ROS-direct pitcher sampling. When True (default), the pitcher
+# effective_rosters path samples the rest_of_season line directly with
+# pt_mean_fraction=0 (eff_mean=1 -> NO playing-time mean haircut, so mean ==
+# projection == ERoto, which applies no haircut to pitcher means) +
+# suppress_repl=True (no backfill). There is NO bench injury-fill: pitcher
+# rich-fill is deferred, so applying the hitter haircut (pt_mean_fraction=1.0)
+# without a fill to restore it would deflate pitcher means below ERoto. Flip to
+# False to fall back to full-season top-k pitcher sampling -- the one-line escape
+# hatch gated on the Phase 6 SD backtest (NOT asserted in Phase 5).
+_ROS_DIRECT_PITCHERS = True
+
+
+@dataclass
+class VarianceBatch:
+    """Output of ``_apply_variance_batch``.
+
+    ``counts`` carries the SAME per-(iter, player) counting columns the function
+    returned before this dataclass existed (back-compat); ``frac_missed`` exposes
+    the per-(iter, player) stochastic playing-time shortfall the fill engine
+    consumes (previously computed and discarded).
+    """
+
+    counts: dict[str, np.ndarray]  # {col: (n_iter, n_players)}
+    frac_missed: np.ndarray  # (n_iter, n_players) = max(0, 1 - scales)
 
 
 def _flatten_full_season(p: Any) -> dict[str, Any]:
@@ -359,6 +395,38 @@ def _projected_volume(p: Any, is_hitter: bool) -> float:
     return safe_float(p.get("ip"))
 
 
+def _full_season_pt_volume(player: Any, is_hitter: bool) -> float:
+    """Full-season projected playing time for the ROS-direct PT curve lookup.
+
+    The playing-time curve is calibrated and indexed by FULL-SEASON volume. On
+    the ROS-direct path the flat dict carries ROS volume (~half a season at
+    mid-year), which would misclassify a full-timer as a part-timer (inflated
+    ``cv_pt``). Read the player's ``full_season_projection`` instead: ``pa`` for
+    hitters (fallback ``ab / AB_PER_PA``), ``ip`` for pitchers.
+
+    If ``full_season_projection`` is unset (preseason) OR its volume is <= 0,
+    fall back to the ROS volume (the same ``_projected_volume`` reading on the
+    ROS flat dict) so those players keep working. Numeric guards use
+    ``is not None`` / ``> 0`` -- never ``x or default`` (a real 0 is bad data, but
+    the fallback handles it explicitly rather than via falsy coercion).
+    """
+    fs = player.full_season_projection
+    if fs is not None:
+        if is_hitter:
+            pa = safe_float(getattr(fs, "pa", 0.0))
+            if pa > 0:
+                return pa
+            ab = safe_float(getattr(fs, "ab", 0.0))
+            if ab > 0:
+                return ab / AB_PER_PA
+        else:
+            ip = safe_float(getattr(fs, "ip", 0.0))
+            if ip > 0:
+                return ip
+    # Preseason / missing full-season: mirror _projected_volume on the ROS line.
+    return _projected_volume(player.to_flat_dict(), is_hitter)
+
+
 def _playing_time_scales(
     players: list,
     player_type: str,
@@ -645,15 +713,42 @@ def _apply_variance_batch(
     rng: np.random.Generator,
     fraction_remaining: float,
     n_iter: int,
-) -> dict[str, np.ndarray]:
+    *,
+    pt_mean_fraction: float | None = None,
+    suppress_repl: bool = False,
+    pt_volumes: np.ndarray | None = None,
+) -> VarianceBatch:
     """Vectorized ``_apply_variance`` over ``n_iter`` iterations at once.
 
-    Returns ``{counting_col: ndarray(n_iter, n_players)}`` -- the same per-player,
-    per-stat values the scalar path yields, but with a leading iteration axis.
+    Returns a ``VarianceBatch`` whose ``counts`` is
+    ``{counting_col: ndarray(n_iter, n_players)}`` -- the same per-player,
+    per-stat values the scalar path yields, but with a leading iteration axis --
+    and whose ``frac_missed`` is the per-(iter, player) playing-time shortfall.
     Identical model: per-player playing-time scale (calibrated z-ladder), a
     correlated NegBin/Poisson copula draw, and replacement-level injury backfill.
     Injuries are not reported (the ROS MC discards them); only the stat values
     are needed downstream.
+
+    Keyword-only knobs (both default to legacy behavior, so the default path is
+    byte-for-byte identical to before they existed):
+
+    - ``pt_mean_fraction``: the MEAN-horizon term for the playing-time haircut.
+      When ``None`` it equals ``fraction_remaining`` (today's behavior). When set
+      (e.g. 1.0 for ROS-direct), it drives ONLY the mean haircut; ``eff_sd`` and
+      the ``_negbin_copula_counts`` dispersion KEEP ``fraction_remaining`` (the
+      variance horizon). ``playing_time_moments`` is closed-form (consumes no
+      rng), so splitting its single call into a mean call and an sd call does NOT
+      perturb the rng stream.
+    - ``suppress_repl``: when True the built-in ``repl_contrib`` is identically
+      zero (the new fill engine owns the backfill); default False folds the
+      replacement line in exactly as before.
+    - ``pt_volumes``: per-player volumes (aligned to ``players``) used for the
+      playing-time curve lookup (BOTH ``playing_time_params`` and
+      ``playing_time_shape``) instead of ``_projected_volume(p)``. The ROS-direct
+      helpers pass FULL-SEASON volumes here because the curve is indexed by
+      full-season volume; the flat dict on that path carries ROS volume, which
+      would misclassify a full-timer as a part-timer. ``None`` (default) keeps the
+      legacy per-player ``_projected_volume`` lookup -> byte-identical.
     """
     is_hitter = player_type == PlayerType.HITTER
     counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
@@ -662,7 +757,14 @@ def _apply_variance_batch(
     n_corr = len(idx_map)
     n_players = len(players)
     if n_players == 0:
-        return {col: np.zeros((n_iter, 0)) for col in counting_cols}
+        return VarianceBatch(
+            counts={col: np.zeros((n_iter, 0)) for col in counting_cols},
+            frac_missed=np.zeros((n_iter, 0)),
+        )
+
+    # Mean horizon vs variance horizon. When pt_mean_fraction is None the two
+    # coincide (== fraction_remaining), reproducing today's single-call moments.
+    fr_mean = pt_mean_fraction if pt_mean_fraction is not None else fraction_remaining
 
     # Static per-player playing-time moments and z-ladders (iteration-independent),
     # so the only per-iteration playing-time work is the uniform->z interpolation.
@@ -670,9 +772,13 @@ def _apply_variance_batch(
     eff_sd = np.empty(n_players)
     ladders: list[np.ndarray] = []
     for j, p in enumerate(players):
-        vol = _projected_volume(p, is_hitter)
+        vol = float(pt_volumes[j]) if pt_volumes is not None else _projected_volume(p, is_hitter)
         mean_scale, cv_pt = playing_time_params(player_type, vol)
-        eff_mean[j], eff_sd[j] = playing_time_moments(mean_scale, cv_pt, fraction_remaining)
+        # playing_time_moments consumes no rng (closed-form); splitting the mean
+        # and sd calls keeps the default path's rng stream byte-stable while
+        # letting pt_mean_fraction lift ONLY the mean haircut.
+        eff_mean[j], _ = playing_time_moments(mean_scale, cv_pt, fr_mean)
+        _, eff_sd[j] = playing_time_moments(mean_scale, cv_pt, fraction_remaining)
         ladders.append(np.asarray(playing_time_shape(player_type, vol), dtype=float))
 
     # Playing-time scale per (iteration, player): the vectorized scale_from_uniform.
@@ -702,12 +808,191 @@ def _apply_variance_batch(
     repl_lines = [_replacement_line(p, is_hitter) for p in players]
     out: dict[str, np.ndarray] = {}
     for col in counting_cols:
-        repl_line = np.array([rl.get(col, 0) for rl in repl_lines], dtype=float)
-        repl_contrib = repl_line[None, :] * frac_missed
+        if suppress_repl:
+            repl_contrib: float | np.ndarray = 0.0
+        else:
+            repl_line = np.array([rl.get(col, 0) for rl in repl_lines], dtype=float)
+            repl_contrib = repl_line[None, :] * frac_missed
         if col in idx_map:
             out[col] = counts[:, :, idx_map[col]] + repl_contrib
         else:
             out[col] = base[col][None, :] * scales + repl_contrib
+    return VarianceBatch(counts=out, frac_missed=frac_missed)
+
+
+def _simulate_team_hitters_ros_direct(
+    effective_roster: EffectiveRoster,
+    fraction_remaining: float,
+    rng: np.random.Generator,
+    n_iter: int,
+) -> dict[str, np.ndarray]:
+    """Return the team's ROS-ONLY hitter arrays (each shape ``(n_iter,)``):
+    ``{R, HR, RBI, SB, ros_h, ros_ab}``.
+
+    ROS-direct: samples the effective HITTER bodies' ``rest_of_season`` lines,
+    applies each body's displacement ``factor`` to its sampled counts, runs the
+    bench injury-fill, and returns the summed-ROS counting + the ``ros_h``/
+    ``ros_ab`` AVG components. It does NOT take or use team_YTD: the CALLER owns
+    the YTD blend (``team_total = YTD + ROS``) and the AVG recombine
+    (``(YTD_h + ros_h) / (YTD_ab + ros_ab)``). Keeping YTD in one place avoids a
+    dead param and keeps this helper a pure ROS sampler.
+
+    Mechanism (HITTERS only -- pitchers never enter here):
+
+    - ``active`` is filtered to HITTER bodies (``EffectiveRoster.active`` is
+      ``[*il, *active]``, both player types); their order is the helper's OWN
+      column order, never aligned against any flat sublist (the C2 fix).
+    - The bench fill pool is ``effective_roster.bench`` (already HITTER-only).
+    - Active bodies are sampled via ``_apply_variance_batch`` with
+      ``pt_mean_fraction=1.0`` (the projection IS the remaining mean -- apply the
+      FULL mean haircut over the ROS window, NOT a re-haircut) and
+      ``suppress_repl=True`` (the bench fill replaces the built-in backfill);
+      ``fraction_remaining`` keeps the SD + dispersion (the variance horizon).
+    - Each body's displacement ``factor`` multiplies its SAMPLED ROS counts. This
+      scales BOTH the mean AND the SD of that body's counts by ``factor`` (its
+      variance by ``factor^2``), which is INTENDED: the curve lookup inside
+      ``_apply_variance_batch`` uses ``pt_volumes`` = each body's FULL-SEASON
+      volume (``_full_season_pt_volume``), NOT the ROS volume on the flat dict, so
+      the body is sampled with its FULL-VOLUME CV band; multiplying realized
+      counts by ``factor`` rescales mean and SD together, holding CV fixed --
+      exactly the full-volume band the spec requires (NOT a narrowed, higher-CV
+      curve point).
+    - Bench per-game lines are the clean DETERMINISTIC base ROS projection
+      (``base_ros_total / g_ros_full``), iteration-independent -- built once.
+    """
+    active_h_bodies = [
+        b for b in effective_roster.active if b.player.player_type == PlayerType.HITTER
+    ]
+    bench_h_bodies = effective_roster.bench  # already HITTER-only
+
+    cats = {"R": "r", "HR": "hr", "RBI": "rbi", "SB": "sb"}
+    zeros = np.zeros(n_iter)
+    if not active_h_bodies:
+        out: dict[str, np.ndarray] = {cat: zeros.copy() for cat in cats}
+        out["ros_h"] = zeros.copy()
+        out["ros_ab"] = zeros.copy()
+        return out
+
+    active_flats = [b.player.to_flat_dict() for b in active_h_bodies]
+    pt_volumes = np.array(
+        [_full_season_pt_volume(b.player, is_hitter=True) for b in active_h_bodies]
+    )
+    active_vb = _apply_variance_batch(
+        active_flats,
+        PlayerType.HITTER,
+        rng,
+        fraction_remaining,
+        n_iter,
+        pt_mean_fraction=1.0,
+        suppress_repl=True,
+        pt_volumes=pt_volumes,
+    )
+
+    # Per-active-body realized ROS counts = sampled draw * displacement factor.
+    factors = np.array([b.factor for b in active_h_bodies])  # (n_active,)
+    realized: dict[str, np.ndarray] = {
+        col: active_vb.counts[col] * factors[None, :] for col in HITTING_COUNTING
+    }
+    frac_missed = active_vb.frac_missed  # (n_iter, n_active)
+
+    # Bench per-game counts: clean BASE ROS projection / g_ros_full (deterministic
+    # fill), iteration-independent -- built ONCE.
+    bench_samples: list[BenchSample] = []
+    for bb in bench_h_bodies:
+        base_flat = bb.player.to_flat_dict()
+        gf = bb.g_ros_full
+        per_game = {
+            col: (safe_float(base_flat.get(col)) / gf if gf > 0 else 0.0)
+            for col in HITTING_COUNTING
+        }
+        bench_samples.append(BenchSample(body=bb, per_game_counts=per_game))
+
+    def _repl_for(ab: ActiveBody) -> dict[str, float]:
+        return _replacement_line(ab.player.to_flat_dict(), is_hitter=True)
+
+    # Per-iteration fill allocation (the sanctioned small Python loop: <=12 active,
+    # <=2 bench). Vectorized sampling is done above; only the allocation loops.
+    fill_totals: dict[str, np.ndarray] = {col: np.zeros(n_iter) for col in HITTING_COUNTING}
+    for it in range(n_iter):
+        actives = [
+            ActiveSample(body=body, frac_missed=float(frac_missed[it, idx]))
+            for idx, body in enumerate(active_h_bodies)
+        ]
+        fill = allocate_bench_fill(actives, bench_samples, _repl_for).fill_counts
+        for col in HITTING_COUNTING:
+            fill_totals[col][it] = fill[col]
+
+    out = {}
+    for cat, col in cats.items():
+        out[cat] = realized[col].sum(axis=1) + fill_totals[col]
+    out["ros_h"] = realized["h"].sum(axis=1) + fill_totals["h"]
+    out["ros_ab"] = realized["ab"].sum(axis=1) + fill_totals["ab"]
+    return out
+
+
+def _simulate_team_pitchers_ros_direct(
+    effective_roster: EffectiveRoster,
+    fraction_remaining: float,
+    rng: np.random.Generator,
+    n_iter: int,
+) -> dict[str, np.ndarray]:
+    """Return the team's ROS-ONLY pitcher arrays (each shape ``(n_iter,)``):
+    ``{W, K, SV}`` + ``ros_ip``/``ros_er``/``ros_bb``/``ros_ha`` (for the
+    ERA/WHIP recombine).
+
+    Mirrors ``_simulate_team_hitters_ros_direct`` but with NO mean haircut and NO
+    bench injury-fill (pitcher rich-fill is deferred). Samples the active PITCHER
+    bodies' ``rest_of_season`` lines with ``pt_mean_fraction=0`` (so
+    ``eff_mean = 1 - (1 - mean_scale) * 0 = 1`` -- NO playing-time mean haircut ->
+    mean == projection == ERoto, which applies no haircut to pitcher means; the
+    SD term keeps ``cv_pt * sqrt(fraction_remaining)`` so the variance horizon is
+    intact) and ``suppress_repl=True`` (no built-in backfill). Each body's
+    displacement ``factor`` multiplies its sampled ROS counts, then sums.
+
+    Why no haircut here vs the hitter helper's ``pt_mean_fraction=1.0`` full
+    haircut: apply the haircut ONLY when there is a fill to restore it. Hitters
+    apply it and ``allocate_bench_fill`` restores it; pitchers have NO fill, so a
+    haircut would stay UNRESTORED and deflate the pitcher mean ~15-24% below
+    ERoto -- a standings-corrupting bug. With ``pt_mean_fraction=0`` the pitcher
+    mean matches ERoto by construction (no haircut, no fill, no premium).
+
+    Healthy bench pitchers are absent from ``EffectiveRoster.active`` (dropped by
+    ``build_effective_roster``) so they never contribute. The CALLER owns the YTD
+    blend (``team_total = YTD + ROS``, no clamp; ERA/WHIP recombine).
+    """
+    active_p_bodies = [
+        b for b in effective_roster.active if b.player.player_type == PlayerType.PITCHER
+    ]
+    cats = {"W": "w", "K": "k", "SV": "sv"}
+    zeros = np.zeros(n_iter)
+    if not active_p_bodies:
+        out: dict[str, np.ndarray] = {cat: zeros.copy() for cat in cats}
+        for ros_key in ("ros_ip", "ros_er", "ros_bb", "ros_ha"):
+            out[ros_key] = zeros.copy()
+        return out
+
+    active_flats = [b.player.to_flat_dict() for b in active_p_bodies]
+    pt_volumes = np.array(
+        [_full_season_pt_volume(b.player, is_hitter=False) for b in active_p_bodies]
+    )
+    vb = _apply_variance_batch(
+        active_flats,
+        PlayerType.PITCHER,
+        rng,
+        fraction_remaining,
+        n_iter,
+        pt_mean_fraction=0,  # eff_mean=1: NO haircut -> mean == projection == ERoto
+        suppress_repl=True,
+        pt_volumes=pt_volumes,
+    )
+    factors = np.array([b.factor for b in active_p_bodies])  # (n_active,)
+    realized = {col: vb.counts[col] * factors[None, :] for col in PITCHING_COUNTING}
+
+    out = {cat: realized[col].sum(axis=1) for cat, col in cats.items()}
+    out["ros_ip"] = realized["ip"].sum(axis=1)
+    out["ros_er"] = realized["er"].sum(axis=1)
+    out["ros_bb"] = realized["bb"].sum(axis=1)
+    out["ros_ha"] = realized["h_allowed"].sum(axis=1)
     return out
 
 
@@ -719,6 +1004,8 @@ def simulate_remaining_season_batch(
     h_slots: int,
     p_slots: int,
     n_iter: int,
+    active_cols: dict | None = None,
+    effective_rosters: dict[str, EffectiveRoster] | None = None,
 ) -> dict[str, dict[str, np.ndarray]]:
     """Vectorized ``simulate_remaining_season`` over ``n_iter`` iterations.
 
@@ -727,6 +1014,23 @@ def simulate_remaining_season_batch(
     stacked along a leading iteration axis. Same blend: simulated full season
     minus YTD (clamped >= 0), re-added to actuals; rate stats via recovered YTD
     components. Drives ``run_ros_monte_carlo`` without the Python per-iteration loop.
+
+    ``active_cols`` optionally pins a fixed active roster instead of the
+    per-iteration top-k pick. When ``None`` (default) every team uses top-k.
+    When ``active_cols[team] = {"h": ndarray[int], "p": ndarray[int]}`` is
+    present, that team's hitter/pitcher contributions are summed over exactly
+    those fixed column indices (into the hitter/pitcher sublists in roster
+    order) for every iteration. A team absent from ``active_cols`` falls back to
+    top-k; an empty index array yields a zero contribution.
+
+    ``effective_rosters`` optionally routes a team's HITTERS through the
+    ROS-direct body engine (``_simulate_team_hitters_ros_direct``): a fixed
+    active set with IL displacement + bench injury-fill, blended
+    ``team_total = YTD + ROS`` (ROS >= 0 makes the YTD floor structural, so NO
+    ``max(actual, sim)`` clamp for those hitter cats). When ``None`` or a team is
+    absent, that team's hitters fall back to the flat-dict top-k path UNCHANGED
+    (the byte-identical anchor). PITCHERS ALWAYS use the existing full-season
+    path + its ``max(actual, sim)`` clamp, regardless of ``effective_rosters``.
     """
     cats = [c.value for c in ALL_CATS]
     out: dict[str, dict[str, np.ndarray]] = {}
@@ -743,26 +1047,61 @@ def simulate_remaining_season_batch(
         hitters = [p for p in players if p.get("player_type") == PlayerType.HITTER]
         pitchers = [p for p in players if p.get("player_type") == PlayerType.PITCHER]
 
-        hb = _apply_variance_batch(hitters, PlayerType.HITTER, rng, fraction_remaining, n_iter)
-        pb = _apply_variance_batch(pitchers, PlayerType.PITCHER, rng, fraction_remaining, n_iter)
+        # ROS-direct hitter path: when this team has an EffectiveRoster (and the
+        # flag is on), route its HITTERS through the body engine (fixed active
+        # set + IL displacement + bench injury-fill), bypassing the flat-dict
+        # top-k hitter sampling entirely. Pitchers ALWAYS take the path below.
+        eff = effective_rosters.get(team) if effective_rosters is not None else None
+        use_ros_direct = _ROS_DIRECT_HITTERS and eff is not None
+        use_ros_direct_pitchers = _ROS_DIRECT_PITCHERS and eff is not None
 
-        if hitters:
-            h_idx = _topk_indices(hb["r"] + hb["hr"] + hb["rbi"] + hb["sb"], h_slots)
+        if use_ros_direct:
+            assert eff is not None  # use_ros_direct implies eff is not None
+            ros = _simulate_team_hitters_ros_direct(eff, fraction_remaining, rng, n_iter)
+        else:
+            hb = _apply_variance_batch(
+                hitters, PlayerType.HITTER, rng, fraction_remaining, n_iter
+            ).counts
+
+        team_cols = active_cols.get(team) if active_cols is not None else None
+
+        if not use_ros_direct and hitters:
+            if team_cols is not None:
+                cols = team_cols["h"]
+                h_idx = np.broadcast_to(cols, (n_iter, cols.shape[0]))
+            else:
+                h_idx = _topk_indices(hb["r"] + hb["hr"] + hb["rbi"] + hb["sb"], h_slots)
             sim_r = _gather_sum(hb["r"], h_idx)
             sim_hr = _gather_sum(hb["hr"], h_idx)
             sim_rbi = _gather_sum(hb["rbi"], h_idx)
             sim_sb = _gather_sum(hb["sb"], h_idx)
             sim_h = _gather_sum(hb["h"], h_idx)
             sim_ab = _gather_sum(hb["ab"], h_idx)
-        else:
+        elif not use_ros_direct:
             sim_r = sim_hr = sim_rbi = sim_sb = sim_h = sim_ab = zeros
 
-        if pitchers:
-            # Closers (sv >= threshold) first, then by w+k+sv -- the scalar tuple key.
-            pkey = (pb["sv"] >= CLOSER_SV_THRESHOLD).astype(float) * _CLOSER_RANK_BONUS + (
-                pb["w"] + pb["k"] + pb["sv"]
-            )
-            p_idx = _topk_indices(pkey, p_slots)
+        # ROS-direct pitcher path: route this team's PITCHERS through the body
+        # engine (fixed active-slot + IL set, displacement factors, NO haircut/NO
+        # fill), bypassing the flat-dict top-k pitcher sampling. When off (no
+        # effective_roster), sample pb here exactly as before -- this keeps the
+        # effective_rosters=None rng stream byte-identical (pb drawn after the
+        # hitter hb/ros draw, in the same order).
+        if use_ros_direct_pitchers:
+            assert eff is not None  # use_ros_direct_pitchers implies eff is not None
+            pros = _simulate_team_pitchers_ros_direct(eff, fraction_remaining, rng, n_iter)
+        elif pitchers:
+            pb = _apply_variance_batch(
+                pitchers, PlayerType.PITCHER, rng, fraction_remaining, n_iter
+            ).counts
+            if team_cols is not None:
+                cols = team_cols["p"]
+                p_idx = np.broadcast_to(cols, (n_iter, cols.shape[0]))
+            else:
+                # Closers (sv >= threshold) first, then by w+k+sv -- the scalar tuple key.
+                pkey = (pb["sv"] >= CLOSER_SV_THRESHOLD).astype(float) * _CLOSER_RANK_BONUS + (
+                    pb["w"] + pb["k"] + pb["sv"]
+                )
+                p_idx = _topk_indices(pkey, p_slots)
             sim_w = _gather_sum(pb["w"], p_idx)
             sim_k = _gather_sum(pb["k"], p_idx)
             sim_sv = _gather_sum(pb["sv"], p_idx)
@@ -778,28 +1117,62 @@ def simulate_remaining_season_batch(
         actual_er = actuals.get("ERA", 0) * actual_ip / 9
         actual_h_plus_bb = actuals.get("WHIP", 0) * actual_ip
 
-        total_ab = actual_ab + np.maximum(0.0, sim_ab - actual_ab)
-        total_h = actual_h + np.maximum(0.0, sim_h - actual_h)
-        total_ip = actual_ip + np.maximum(0.0, sim_ip - actual_ip)
-        total_er = actual_er + np.maximum(0.0, sim_er - actual_er)
-        total_h_plus_bb = actual_h_plus_bb + np.maximum(0.0, (sim_bb + sim_ha) - actual_h_plus_bb)
+        if use_ros_direct_pitchers:
+            # ROS-direct pitchers: team_total = YTD + ROS (ROS >= 0 -> structural
+            # YTD floor, NO clamp). ERA/WHIP recombine YTD + ROS volume components.
+            total_ip = actual_ip + pros["ros_ip"]
+            total_er = actual_er + pros["ros_er"]
+            total_h_plus_bb = actual_h_plus_bb + pros["ros_bb"] + pros["ros_ha"]
+            sim_w_out = actuals.get("W", 0) + pros["W"]
+            sim_k_out = actuals.get("K", 0) + pros["K"]
+            sim_sv_out = actuals.get("SV", 0) + pros["SV"]
+        else:
+            # Pitcher rate blend (full-season path, UNCHANGED): actual + clamped
+            # sim remainder == max(actual, sim) for the volume components.
+            total_ip = actual_ip + np.maximum(0.0, sim_ip - actual_ip)
+            total_er = actual_er + np.maximum(0.0, sim_er - actual_er)
+            total_h_plus_bb = actual_h_plus_bb + np.maximum(
+                0.0, (sim_bb + sim_ha) - actual_h_plus_bb
+            )
+            sim_w_out = np.maximum(actuals.get("W", 0), sim_w)
+            sim_k_out = np.maximum(actuals.get("K", 0), sim_k)
+            sim_sv_out = np.maximum(actuals.get("SV", 0), sim_sv)
+
+        if use_ros_direct:
+            # ROS-direct: team_total = YTD + ROS (ROS >= 0 -> structural YTD
+            # floor, NO clamp). AVG recombines YTD + ROS h/ab components.
+            hit_r = actuals.get("R", 0) + ros["R"]
+            hit_hr = actuals.get("HR", 0) + ros["HR"]
+            hit_rbi = actuals.get("RBI", 0) + ros["RBI"]
+            hit_sb = actuals.get("SB", 0) + ros["SB"]
+            total_ab = actual_ab + ros["ros_ab"]
+            total_h = actual_h + ros["ros_h"]
+        else:
+            # Top-k fallback: actual + clamped sim remainder == max(actual, sim).
+            hit_r = np.maximum(actuals.get("R", 0), sim_r)
+            hit_hr = np.maximum(actuals.get("HR", 0), sim_hr)
+            hit_rbi = np.maximum(actuals.get("RBI", 0), sim_rbi)
+            hit_sb = np.maximum(actuals.get("SB", 0), sim_sb)
+            total_ab = actual_ab + np.maximum(0.0, sim_ab - actual_ab)
+            total_h = actual_h + np.maximum(0.0, sim_h - actual_h)
 
         with np.errstate(divide="ignore", invalid="ignore"):
             avg = np.where(total_ab > 0, total_h / total_ab, 0.0)
             era = np.where(total_ip > 0, total_er * 9 / total_ip, ZERO_IP_RATE_SENTINEL)
             whip = np.where(total_ip > 0, total_h_plus_bb / total_ip, ZERO_IP_RATE_SENTINEL)
 
-        # Final counting total = actual + clamped simulated remainder, which is
-        # exactly max(actual, simulated) -- never below what's already banked.
+        # Pitcher counting totals: ROS-direct -> YTD + ROS (no clamp; ROS >= 0
+        # makes the YTD floor structural); top-k fallback -> max(actual, sim),
+        # never below what's already banked. Both resolved into sim_*_out above.
         out[team] = {
-            "R": np.maximum(actuals.get("R", 0), sim_r),
-            "HR": np.maximum(actuals.get("HR", 0), sim_hr),
-            "RBI": np.maximum(actuals.get("RBI", 0), sim_rbi),
-            "SB": np.maximum(actuals.get("SB", 0), sim_sb),
+            "R": hit_r,
+            "HR": hit_hr,
+            "RBI": hit_rbi,
+            "SB": hit_sb,
             "AVG": avg,
-            "W": np.maximum(actuals.get("W", 0), sim_w),
-            "K": np.maximum(actuals.get("K", 0), sim_k),
-            "SV": np.maximum(actuals.get("SV", 0), sim_sv),
+            "W": sim_w_out,
+            "K": sim_k_out,
+            "SV": sim_sv_out,
             "ERA": era,
             "WHIP": whip,
         }
@@ -900,11 +1273,17 @@ def run_ros_monte_carlo(
     n_iterations: int = 1000,
     seed: int = 42,
     progress_cb=None,
+    effective_rosters: dict[str, EffectiveRoster] | None = None,
 ) -> dict:
     """Run a Monte Carlo simulation over the remaining season.
 
     Like run_monte_carlo but uses simulate_remaining_season_batch to blend
     actual YTD stats with simulated ROS projections.
+
+    ``effective_rosters`` (optional) routes each present team's HITTERS through
+    the ROS-direct body engine (fixed active set + IL displacement + bench
+    injury-fill); when ``None`` the batch falls entirely to the top-k path
+    (byte-identical to pre-Phase-4b). Pitchers are unaffected either way.
 
     Args:
         team_rosters: {team_name: [player dicts]} with ROS projections.
@@ -952,7 +1331,14 @@ def run_ros_monte_carlo(
     if progress_cb:
         progress_cb(0)
     batch = simulate_remaining_season_batch(
-        actual_standings, flat_rosters, fraction_remaining, rng, h_slots, p_slots, n_iterations
+        actual_standings,
+        flat_rosters,
+        fraction_remaining,
+        rng,
+        h_slots,
+        p_slots,
+        n_iterations,
+        effective_rosters=effective_rosters,
     )
 
     for i in range(n_iterations):

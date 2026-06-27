@@ -59,9 +59,11 @@ if TYPE_CHECKING:
 
     from fantasy_baseball.config import LeagueConfig
     from fantasy_baseball.lineup.optimizer import HitterAssignment, PitcherStarter
+    from fantasy_baseball.mc_roster import EffectiveRoster
     from fantasy_baseball.models.league import League
     from fantasy_baseball.models.player import Player
     from fantasy_baseball.models.standings import (
+        CategoryStats,
         ProjectedStandings,
         Standings,
         TeamYtdComponents,
@@ -409,6 +411,11 @@ class RefreshRun:
         # projected standings widget consumes.
         self.ytd_standings: Standings | None = None
         self.projected_standings: ProjectedStandings | None = None
+        # Pass-1 end-of-season baseline ({team: CategoryStats}) shared with
+        # ProjectedStandings.from_rosters and (Phase 4) the games-based MC so
+        # the MC builds the same LeagueContext ERoto used -- one shared object,
+        # no divergent recompute. Populated in _build_projected_standings.
+        self.eos_baseline: dict[str, CategoryStats] | None = None
         self.preseason_projected_standings: ProjectedStandings | None = None
         self.team_sds: dict[str, dict[Category, float]] | None = None
         self.preseason_team_sds: dict[str, dict[Category, float]] | None = None
@@ -929,11 +936,17 @@ class RefreshRun:
             ],
         )
 
+        from fantasy_baseball.models.standings import build_eos_baseline
+
+        ytd_by_team = {e.team_name: e.ytd_components() for e in ytd_standings.entries}
+        self.eos_baseline = build_eos_baseline(all_team_rosters, ytd_by_team)
+
         self.projected_standings = ProjectedStandings.from_rosters(
             all_team_rosters,
             effective_date=self.effective_date,
             actual_standings=ytd_standings,
             fraction_remaining=self.fraction_remaining,
+            baseline_stats=self.eos_baseline,
         )
 
         self.team_sds = build_team_sds(all_team_rosters, self.sd_scale)
@@ -1387,6 +1400,51 @@ class RefreshRun:
                     row["AB"] = float(pa) * AB_PER_PA
                 actual_standings_dict[e.team_name] = row
 
+            if os.environ.get("FB_SELECTION_ATTRIBUTION"):  # gated Phase 0 diagnostic
+                from fantasy_baseball.mc_selection import (
+                    format_attribution_table,
+                    format_sd_calibration_table,
+                    run_selection_attribution,
+                )
+
+                assert self.fraction_remaining is not None
+                attr, sd_calib = run_selection_attribution(
+                    rest_of_season_mc_rosters,
+                    actual_standings_dict,
+                    self.fraction_remaining,
+                    h_slots,
+                    p_slots,
+                    n_iter=1000,
+                    seed=42,
+                    eos_baseline=self.eos_baseline,
+                    team_sds=self.team_sds,
+                )
+                header = f"seed=42 n_iter=1000 fraction_remaining={self.fraction_remaining:.4f}\n"
+                with open("phase0_attribution.txt", "w", encoding="ascii", errors="replace") as fh:
+                    fh.write(header)
+                    fh.write(format_attribution_table(attr))
+                    if sd_calib is not None:
+                        fh.write("\n\n=== SD calibration (counting cats only) ===\n")
+                        fh.write(format_sd_calibration_table(sd_calib))
+                self._progress("Selection-attribution diagnostic written")
+
+            # Phase 4b: build each team's EffectiveRoster (fixed active set + IL
+            # displacement + bench fill pool) from the LIVE Player rosters, using
+            # the SAME LeagueContext (baseline, team_sds, fraction_remaining) the
+            # standings build used -- so the MC's IL handling agrees with ERoto by
+            # construction. Routes hitters through the ROS-direct body engine. Only
+            # when the standings context is available; otherwise None -> top-k.
+            effective_rosters: dict[str, EffectiveRoster] | None = None
+            if self.eos_baseline is not None and self.team_sds is not None:
+                from fantasy_baseball.mc_roster import build_effective_rosters
+
+                effective_rosters = build_effective_rosters(
+                    rest_of_season_mc_rosters,
+                    self.eos_baseline,
+                    self.team_sds,
+                    self.fraction_remaining,
+                )
+
             if rest_of_season_mc_rosters:
                 self.rest_of_season_mc = run_ros_monte_carlo(
                     team_rosters=rest_of_season_mc_rosters,
@@ -1397,6 +1455,7 @@ class RefreshRun:
                     user_team_name=self.config.team_name,
                     n_iterations=1000,
                     progress_cb=lambda i: self._progress(f"Current MC: iteration {i}/1000..."),
+                    effective_rosters=effective_rosters,
                 )
                 self._progress("Current Monte Carlo complete")
 

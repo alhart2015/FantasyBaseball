@@ -157,6 +157,7 @@ class TestRefreshShape:
                 {
                     "actual_standings": kwargs.get("actual_standings"),
                     "fraction_remaining": kwargs.get("fraction_remaining", 1.0),
+                    "baseline_stats": kwargs.get("baseline_stats"),
                 }
             )
             return orig(cls, team_rosters, effective_date, **kwargs)
@@ -188,6 +189,13 @@ class TestRefreshShape:
 
         assert all(OpportunityStat.AB in e.extras for e in main_call["actual_standings"].entries), (
             "expected AB in extras for every standings entry"
+        )
+        # The main call must thread the shared pass-1 eos_baseline (populated on
+        # RefreshRun.eos_baseline for the Phase-4 MC); a non-empty dict proves
+        # build_eos_baseline ran once and was passed through, not recomputed.
+        assert main_call["baseline_stats"], (
+            "Main from_rosters call must receive the precomputed eos_baseline "
+            f"(RefreshRun.eos_baseline); got baseline_stats={main_call['baseline_stats']!r}"
         )
         assert preseason_call["actual_standings"] is None, (
             "Preseason from_rosters call must NOT pass actual_standings "

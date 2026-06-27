@@ -265,6 +265,45 @@ class TestSimulateRemainingSeasonBatch:
             )
 
 
+def test_active_cols_override_sums_fixed_columns():
+    """With active_cols pinning a subset of hitters, the batch sums exactly those
+    every iteration. Statistically equivalent to a roster whose only hitters ARE
+    those columns under a top-k that selects all of them -- same seed but different
+    roster shapes, so per-iteration draws are NOT aligned; assert medians within 2.0."""
+    from fantasy_baseball.simulation import simulate_remaining_season_batch
+
+    rosters, actuals = _build_batch_equiv_scenario()  # "Team A": 5 hitters, 4 pitchers
+    team = "Team A"
+    frac, h_slots, p_slots, n = 0.45, 3, 2, 2000
+
+    def _counts(t):
+        nh = sum(1 for p in rosters[t] if p["player_type"] == "hitter")
+        npc = sum(1 for p in rosters[t] if p["player_type"] == "pitcher")
+        return nh, npc
+
+    _, np_a = _counts(team)
+    active = {team: {"h": np.array([0, 2]), "p": np.arange(np_a)}}
+    for t in rosters:
+        if t != team:
+            nh, npc = _counts(t)
+            active[t] = {"h": np.arange(nh), "p": np.arange(npc)}
+
+    rng = np.random.default_rng(7)
+    pinned = simulate_remaining_season_batch(
+        actuals, rosters, frac, rng, h_slots, p_slots, n_iter=n, active_cols=active
+    )
+
+    ref_rosters = dict(rosters)
+    hitters = [p for p in rosters[team] if p["player_type"] == "hitter"]
+    pitchers = [p for p in rosters[team] if p["player_type"] == "pitcher"]
+    ref_rosters[team] = [hitters[0], hitters[2], *pitchers]
+    rng2 = np.random.default_rng(7)
+    ref = simulate_remaining_season_batch(actuals, ref_rosters, frac, rng2, 99, 99, n_iter=n)
+
+    for c in ("R", "HR", "RBI", "SB"):
+        assert abs(np.median(pinned[team][c]) - np.median(ref[team][c])) <= 2.0, c
+
+
 class TestYtdPlayingTime:
     """The YTD blend weight must use real accumulated AB/IP when available,
     not a league-typical full-season constant scaled by elapsed fraction.
