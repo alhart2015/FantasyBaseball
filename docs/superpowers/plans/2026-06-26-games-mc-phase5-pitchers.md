@@ -4,7 +4,23 @@
 
 **Goal:** Bring PITCHERS onto the ROS-direct engine, mirroring the hitter path MINUS the bench injury-fill: sample the `EffectiveRoster`'s active PITCHER bodies (active-slot + IL, already pool-displaced by Phase 2's `_compute_displacement_factors`) directly, apply each body's displacement `factor`, sum, and blend `team_total = YTD + ROS`. Healthy bench pitchers are EXCLUDED (already dropped from `EffectiveRoster`). This fixes the pitcher over-credit (top-k seating deep bullpens) that, left alone, tilts 5x5 standings toward pitching-deep teams. NO bench injury-fill, NO closer-role SV modeling (both deferred).
 
-**Why no fill (the key design point):** `pt_mean_fraction=1.0` already applies the FULL playing-time haircut (`eff_mean = mean_scale`), bringing the pitcher mean to `projection * mean_scale` ~= ERoto's haircut mean. ERoto does NOT fill pitcher injuries (it is an expected-value model). So adding any injury-fill (replacement OR bench) would push pitcher means ABOVE ERoto -- an over-credit. `suppress_repl=True` + no fill makes the MC pitcher means match ERoto by construction. (Hitters DO get a small bench-fill premium above ERoto; pitchers get none -- the accepted, documented asymmetry, since pitcher rich-fill is deferred.)
+**Why no haircut AND no fill (the key design point -- corrected after plan-review).**
+ERoto's pitcher MEAN is `rest_of_season * displacement_factor` with NO playing-time
+haircut (`project_team_stats` / `_apply_displacement`; `playing_time_params` feeds
+ERoto's SDs ONLY, never its means). So to MIRROR ERoto, the MC pitcher mean must be
+`projection * factor` -- i.e. NO mean haircut. Pass **`pt_mean_fraction=0`** ->
+`eff_mean = 1 - (1-mean_scale)*0 = 1` (no haircut, mean == projection == ERoto); the
+SD term keeps `cv_pt * sqrt(fraction_remaining)` (variance horizon intact). Use
+`suppress_repl=True` (no built-in backfill). NOTE the difference from the HITTER
+helper (which uses `pt_mean_fraction=1.0` = FULL haircut, eff_mean=mean_scale): the
+general rule is **apply the haircut ONLY when there is a fill to restore it**.
+Hitters apply the haircut and `allocate_bench_fill` restores it (landing ~= ERoto +
+a small bench premium, as the Phase-4 evidence validated). Pitchers have NO fill, so
+applying the haircut (`pt_mean_fraction=1.0`) would leave it UNRESTORED and deflate
+pitcher means ~15-24% BELOW ERoto (and below the current MC) -- the standings-
+corrupting bug the plan-review caught. With `pt_mean_fraction=0` the pitcher mean
+matches ERoto by construction (no haircut, no fill, no premium -- the accepted
+asymmetry vs hitters, since pitcher bench-fill is deferred).
 
 **Architecture:** A new `_simulate_team_pitchers_ros_direct` helper (a pitcher analog of `_simulate_team_hitters_ros_direct`, minus the bench-fill loop). Independent `_ROS_DIRECT_PITCHERS` flag (Phase-6 fallback granularity, separate from `_ROS_DIRECT_HITTERS`). No pipeline/setup changes: `effective_rosters` is already threaded (Phase 4) and `build_effective_roster` already produces pitcher active bodies (Phase 2).
 
@@ -43,6 +59,20 @@ def test_pitcher_helper_samples_active_only_applies_factor():
     assert out["K"].mean() > 0 and out["ros_ip"].mean() > 0
 
 
+def test_pitcher_mean_matches_projection_no_haircut():
+    # CRITICAL regression: pt_mean_fraction=0 => NO playing-time mean haircut, so
+    # the helper's K/IP means ~= the summed ROS projections (== ERoto), NOT
+    # mean_scale*projection (~0.8x, which pt_mean_fraction=1.0 would wrongly give).
+    import numpy as np
+    from fantasy_baseball.simulation import _simulate_team_pitchers_ros_direct
+    # One active SP, factor 1.0, ROS K=150 / IP=180 (read off the constructed body).
+    eff, proj_k, proj_ip = _one_active_pitcher_factor1(k=150.0, ip=180.0)
+    out = _simulate_team_pitchers_ros_direct(eff, 0.5, np.random.default_rng(0), 4000)
+    # Within ~6% of the projection (NegBin + PT variance noise), and NOT ~20% low.
+    assert abs(out["K"].mean() - proj_k) / proj_k < 0.06, out["K"].mean()
+    assert abs(out["ros_ip"].mean() - proj_ip) / proj_ip < 0.06, out["ros_ip"].mean()
+
+
 def test_pitcher_helper_empty_active_returns_zeros():
     import numpy as np
     from fantasy_baseball.simulation import _simulate_team_pitchers_ros_direct
@@ -74,12 +104,13 @@ def _simulate_team_pitchers_ros_direct(
 ) -> dict[str, np.ndarray]:
     """Return the team's ROS-ONLY pitcher arrays: {W, K, SV} + ros_ip/ros_er/
     ros_bb/ros_ha (for the ERA/WHIP recombine). Mirrors the hitter helper but with
-    NO bench injury-fill (pitcher rich-fill deferred): samples the active PITCHER
-    bodies' rest_of_season lines (pt_mean_fraction=1.0 = full haircut -> mean ~=
-    ERoto; suppress_repl=True -> no built-in backfill, so the haircut mean stands
-    and is NOT pushed above ERoto), applies each body's displacement factor, sums.
-    Healthy bench pitchers are absent from EffectiveRoster.active -> excluded.
-    Caller owns the YTD blend (team_total = YTD + ROS, no clamp; ERA/WHIP recombine).
+    NO mean haircut and NO bench injury-fill (pitcher rich-fill deferred): samples
+    the active PITCHER bodies' rest_of_season lines with pt_mean_fraction=0
+    (eff_mean=1 -> NO playing-time haircut -> mean == projection == ERoto, which
+    applies no haircut to means) and suppress_repl=True (no backfill), applies each
+    body's displacement factor, sums. Healthy bench pitchers are absent from
+    EffectiveRoster.active -> excluded. Caller owns the YTD blend (team_total =
+    YTD + ROS, no clamp; ERA/WHIP recombine).
     """
     active_p_bodies = [
         b for b in effective_roster.active if b.player.player_type == PlayerType.PITCHER
@@ -99,7 +130,7 @@ def _simulate_team_pitchers_ros_direct(
         rng,
         fraction_remaining,
         n_iter,
-        pt_mean_fraction=1.0,
+        pt_mean_fraction=0,  # eff_mean=1: NO haircut -> mean == projection == ERoto
         suppress_repl=True,
     )
     factors = np.array([b.factor for b in active_p_bodies])  # (n_active,)
@@ -129,7 +160,27 @@ Add `_ROS_DIRECT_PITCHERS: bool = True` next to `_ROS_DIRECT_HITTERS`.
 
 IMPORTANT rng-stream note: today `pb = _apply_variance_batch(pitchers, ...)` is sampled UNCONDITIONALLY (line 941-943, before the hitter selection). Moving it inside the `elif` changes when/whether pitchers draw rng. This is fine for the `effective_rosters` path (the new path) but verify the `effective_rosters=None` byte-anchor still holds (None -> use_ros_direct_pitchers False -> the `elif pitchers:` branch samples pb exactly as before, in the same order). Keep the hitter `hb`/`ros` sampling ordering identical for the None path. (The pitcher distributional test already tolerates the shifted stream on the effective_rosters path.)
 
-Then the blend (~982-1029): when `use_ros_direct_pitchers`, W/K/SV = `actuals + pros["W"/"K"/"SV"]` (NO max-clamp, ROS>=0 structural floor), and `total_ip = actual_ip + pros["ros_ip"]`, `total_er = actual_er + pros["ros_er"]`, `total_h_plus_bb = actual_h_plus_bb + pros["ros_bb"] + pros["ros_ha"]`. When NOT use_ros_direct_pitchers, the existing pitcher blend (max-clamp at 989-991, sim_w/k/sv via _gather_sum) stays EXACTLY as-is. Mirror the hitter `if use_ros_direct:` blend branch structure (996-1009) for the W/K/SV + IP/ER components.
+Then the blend (~982-1029). PIN BOTH sites that consume the pitcher results (else NameError when the `sim_*` block is skipped): (1) the `total_ip`/`total_er`/`total_h_plus_bb` rate-component block (~989-991), and (2) the `out[team]` W/K/SV entries (~1024-1026). Move both into a `if use_ros_direct_pitchers: ... else: ...` and assign `total_ip`/`total_er`/`total_h_plus_bb` in BOTH branches (they feed ERA/WHIP at 1013-1014 on every path):
+
+```python
+        if use_ros_direct_pitchers:
+            total_ip = actual_ip + pros["ros_ip"]
+            total_er = actual_er + pros["ros_er"]
+            total_h_plus_bb = actual_h_plus_bb + pros["ros_bb"] + pros["ros_ha"]
+            sim_w_out = actuals.get("W", 0) + pros["W"]   # YTD + ROS, no clamp
+            sim_k_out = actuals.get("K", 0) + pros["K"]
+            sim_sv_out = actuals.get("SV", 0) + pros["SV"]
+        else:
+            # EXISTING pitcher blend, verbatim (max-clamp).
+            total_ip = actual_ip + np.maximum(0.0, sim_ip - actual_ip)
+            total_er = actual_er + np.maximum(0.0, sim_er - actual_er)
+            total_h_plus_bb = actual_h_plus_bb + np.maximum(0.0, (sim_bb + sim_ha) - actual_h_plus_bb)
+            sim_w_out = np.maximum(actuals.get("W", 0), sim_w)
+            sim_k_out = np.maximum(actuals.get("K", 0), sim_k)
+            sim_sv_out = np.maximum(actuals.get("SV", 0), sim_sv)
+```
+
+and the `out[team]` dict reads `"W": sim_w_out, "K": sim_k_out, "SV": sim_sv_out` (replacing the inline `np.maximum(...)` at 1024-1026). The `sim_w/k/sv/ip/er/bb/ha` and `pb` are only assigned in the `elif pitchers:` (non-ros-direct) branch, so they must NOT be referenced in the `use_ros_direct_pitchers` branch. Mirror the hitter `if use_ros_direct:` blend (996-1009).
 
 - [ ] **Step 5: Run, confirm PASS:** `pytest tests/test_mc_integration.py -v`.
 - [ ] **Step 6: No regression:** `pytest tests/test_mc_integration.py tests/test_simulation.py tests/test_mc_selection.py tests/test_web/ -q`. The `effective_rosters=None` byte-anchor and the scalar path MUST still pass.
