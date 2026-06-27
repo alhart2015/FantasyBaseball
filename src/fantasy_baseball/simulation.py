@@ -395,6 +395,38 @@ def _projected_volume(p: Any, is_hitter: bool) -> float:
     return safe_float(p.get("ip"))
 
 
+def _full_season_pt_volume(player: Any, is_hitter: bool) -> float:
+    """Full-season projected playing time for the ROS-direct PT curve lookup.
+
+    The playing-time curve is calibrated and indexed by FULL-SEASON volume. On
+    the ROS-direct path the flat dict carries ROS volume (~half a season at
+    mid-year), which would misclassify a full-timer as a part-timer (inflated
+    ``cv_pt``). Read the player's ``full_season_projection`` instead: ``pa`` for
+    hitters (fallback ``ab / AB_PER_PA``), ``ip`` for pitchers.
+
+    If ``full_season_projection`` is unset (preseason) OR its volume is <= 0,
+    fall back to the ROS volume (the same ``_projected_volume`` reading on the
+    ROS flat dict) so those players keep working. Numeric guards use
+    ``is not None`` / ``> 0`` -- never ``x or default`` (a real 0 is bad data, but
+    the fallback handles it explicitly rather than via falsy coercion).
+    """
+    fs = player.full_season_projection
+    if fs is not None:
+        if is_hitter:
+            pa = safe_float(getattr(fs, "pa", 0.0))
+            if pa > 0:
+                return pa
+            ab = safe_float(getattr(fs, "ab", 0.0))
+            if ab > 0:
+                return ab / AB_PER_PA
+        else:
+            ip = safe_float(getattr(fs, "ip", 0.0))
+            if ip > 0:
+                return ip
+    # Preseason / missing full-season: mirror _projected_volume on the ROS line.
+    return _projected_volume(player.to_flat_dict(), is_hitter)
+
+
 def _playing_time_scales(
     players: list,
     player_type: str,
@@ -684,6 +716,7 @@ def _apply_variance_batch(
     *,
     pt_mean_fraction: float | None = None,
     suppress_repl: bool = False,
+    pt_volumes: np.ndarray | None = None,
 ) -> VarianceBatch:
     """Vectorized ``_apply_variance`` over ``n_iter`` iterations at once.
 
@@ -709,6 +742,13 @@ def _apply_variance_batch(
     - ``suppress_repl``: when True the built-in ``repl_contrib`` is identically
       zero (the new fill engine owns the backfill); default False folds the
       replacement line in exactly as before.
+    - ``pt_volumes``: per-player volumes (aligned to ``players``) used for the
+      playing-time curve lookup (BOTH ``playing_time_params`` and
+      ``playing_time_shape``) instead of ``_projected_volume(p)``. The ROS-direct
+      helpers pass FULL-SEASON volumes here because the curve is indexed by
+      full-season volume; the flat dict on that path carries ROS volume, which
+      would misclassify a full-timer as a part-timer. ``None`` (default) keeps the
+      legacy per-player ``_projected_volume`` lookup -> byte-identical.
     """
     is_hitter = player_type == PlayerType.HITTER
     counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
@@ -732,7 +772,7 @@ def _apply_variance_batch(
     eff_sd = np.empty(n_players)
     ladders: list[np.ndarray] = []
     for j, p in enumerate(players):
-        vol = _projected_volume(p, is_hitter)
+        vol = float(pt_volumes[j]) if pt_volumes is not None else _projected_volume(p, is_hitter)
         mean_scale, cv_pt = playing_time_params(player_type, vol)
         # playing_time_moments consumes no rng (closed-form); splitting the mean
         # and sd calls keeps the default path's rng stream byte-stable while
@@ -810,11 +850,13 @@ def _simulate_team_hitters_ros_direct(
       ``fraction_remaining`` keeps the SD + dispersion (the variance horizon).
     - Each body's displacement ``factor`` multiplies its SAMPLED ROS counts. This
       scales BOTH the mean AND the SD of that body's counts by ``factor`` (its
-      variance by ``factor^2``), which is INTENDED: the ``_projected_volume``
-      curve lookup inside ``_apply_variance_batch`` is UNCHANGED, so the body is
-      sampled with its FULL-VOLUME CV band; multiplying realized counts by
-      ``factor`` rescales mean and SD together, holding CV fixed -- exactly the
-      full-volume band the spec requires (NOT a narrowed, higher-CV curve point).
+      variance by ``factor^2``), which is INTENDED: the curve lookup inside
+      ``_apply_variance_batch`` uses ``pt_volumes`` = each body's FULL-SEASON
+      volume (``_full_season_pt_volume``), NOT the ROS volume on the flat dict, so
+      the body is sampled with its FULL-VOLUME CV band; multiplying realized
+      counts by ``factor`` rescales mean and SD together, holding CV fixed --
+      exactly the full-volume band the spec requires (NOT a narrowed, higher-CV
+      curve point).
     - Bench per-game lines are the clean DETERMINISTIC base ROS projection
       (``base_ros_total / g_ros_full``), iteration-independent -- built once.
     """
@@ -832,6 +874,9 @@ def _simulate_team_hitters_ros_direct(
         return out
 
     active_flats = [b.player.to_flat_dict() for b in active_h_bodies]
+    pt_volumes = np.array(
+        [_full_season_pt_volume(b.player, is_hitter=True) for b in active_h_bodies]
+    )
     active_vb = _apply_variance_batch(
         active_flats,
         PlayerType.HITTER,
@@ -840,6 +885,7 @@ def _simulate_team_hitters_ros_direct(
         n_iter,
         pt_mean_fraction=1.0,
         suppress_repl=True,
+        pt_volumes=pt_volumes,
     )
 
     # Per-active-body realized ROS counts = sampled draw * displacement factor.
@@ -926,6 +972,9 @@ def _simulate_team_pitchers_ros_direct(
         return out
 
     active_flats = [b.player.to_flat_dict() for b in active_p_bodies]
+    pt_volumes = np.array(
+        [_full_season_pt_volume(b.player, is_hitter=False) for b in active_p_bodies]
+    )
     vb = _apply_variance_batch(
         active_flats,
         PlayerType.PITCHER,
@@ -934,6 +983,7 @@ def _simulate_team_pitchers_ros_direct(
         n_iter,
         pt_mean_fraction=0,  # eff_mean=1: NO haircut -> mean == projection == ERoto
         suppress_repl=True,
+        pt_volumes=pt_volumes,
     )
     factors = np.array([b.factor for b in active_p_bodies])  # (n_active,)
     realized = {col: vb.counts[col] * factors[None, :] for col in PITCHING_COUNTING}

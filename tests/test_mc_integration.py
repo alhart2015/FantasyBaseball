@@ -212,6 +212,24 @@ def test_pt_mean_fraction_moves_mean_only_not_sd_dispersion():
         np.testing.assert_allclose(sd0, sd_full, rtol=0, atol=1e-9)
 
 
+def test_apply_variance_batch_pt_volumes_default_is_byte_identical():
+    """pt_volumes=None reproduces the legacy per-player vol == _projected_volume.
+
+    Seed-pinned, additive-param contract (mirror the 4a byte-equality test): the
+    new ``pt_volumes`` knob defaulting to None must NOT perturb the rng stream or
+    the per-player curve lookup. Omitting it and passing None explicitly must be
+    bit-identical across every column (and frac_missed).
+    """
+    omitted = _apply_variance_batch(_players(), "hitter", np.random.default_rng(54321), 0.4, 7)
+    none_passed = _apply_variance_batch(
+        _players(), "hitter", np.random.default_rng(54321), 0.4, 7, pt_volumes=None
+    )
+    assert set(omitted.counts) == set(none_passed.counts)
+    for col in omitted.counts:
+        np.testing.assert_array_equal(omitted.counts[col], none_passed.counts[col])
+    np.testing.assert_array_equal(omitted.frac_missed, none_passed.frac_missed)
+
+
 # ---------------------------------------------------------------------------
 # Phase 4b: ROS-direct hitter integration.
 # ---------------------------------------------------------------------------
@@ -495,6 +513,113 @@ def test_displacement_factor_scales_hitter_mean():
     healthy = vb.frac_missed[:, 0] == 0.0
     assert np.any(healthy)
     np.testing.assert_allclose(disp_out["R"][healthy], 0.5 * full_out["R"][healthy])
+
+
+def _one_full_timer_hitter(*, full_pa=620.0, ros_pa=305.0, ros_r=45.0):
+    """EffectiveRoster with ONE active full-timer hitter, empty bench.
+
+    Unlike ``_hitter`` (which leaves ``full_season_projection=None`` so the
+    ROS-fallback in ``_full_season_pt_volume`` would make the cv_pt test
+    vacuous), this sets BOTH ``full_season_projection.pa`` AND
+    ``rest_of_season.pa`` to DIFFERENT volumes, so the fix (curve lookup at
+    full-season volume, not ROS) is actually exercised. ROS counting is scaled to
+    the ROS window (a real mid-season ROS line, not a full-season line).
+    """
+    scale = ros_pa / full_pa
+    player = Player(
+        name="FullTimer",
+        player_type=PlayerType.HITTER,
+        positions=[Position.OF],
+        selected_position=Position.OF,
+        yahoo_id="1",
+        rest_of_season=HitterStats.from_dict(
+            {
+                "r": ros_r,
+                "hr": 15 * scale,
+                "rbi": 70 * scale,
+                "sb": 5 * scale,
+                "h": 150 * scale,
+                "ab": 0.9 * ros_pa,
+                "pa": ros_pa,
+                "g": 150 * scale,
+            }
+        ),
+        full_season_projection=HitterStats.from_dict(
+            {
+                "r": ros_r / scale,
+                "hr": 15,
+                "rbi": 70,
+                "sb": 5,
+                "h": 150,
+                "ab": 0.9 * full_pa,
+                "pa": full_pa,
+                "g": 150,
+            }
+        ),
+    )
+    return _solo_eff(player)
+
+
+def test_ros_direct_uses_full_season_volume_for_cv_pt():
+    """ROS-direct samples the PT curve at FULL-SEASON volume, not ROS volume.
+
+    A full-timer (full-season PA 620, ROS PA 305) must be sampled with the
+    FULL-SEASON cv_pt band (~0.20), NOT the inflated ROS-volume band (~0.42 at
+    305 PA, where a full-timer is misclassified as a part-timer). Two checks:
+
+    1) Reconstruct the underlying sampler (same seed) with full-season volume
+       (620) vs ROS volume (305). The full-season lookup yields a STRICTLY
+       narrower R SD on the raw active draw -- that separation is the bug. Pin
+       that the helper actually uses the full-season (narrower) band: the helper's
+       realized R SD equals the full-season-volume draw's R SD, NOT the wider
+       ROS-volume draw's.
+    2) Sanity band: the helper R SD sits well below the ~2x-wide ROS-volume PT
+       band (engineering guard against a gross regression).
+    """
+    from fantasy_baseball.utils.playing_time import playing_time_params
+
+    eff = _one_full_timer_hitter(full_pa=620.0, ros_pa=305.0, ros_r=45.0)
+    out = _simulate_team_hitters_ros_direct(eff, 0.49, np.random.default_rng(0), 8000)
+    helper_sd = out["R"].std()
+
+    # Reconstruct the active sampler with the SAME seed, full-season vol vs ROS.
+    body = eff.active[0]
+    flat = [body.player.to_flat_dict()]
+    full_vol = _apply_variance_batch(
+        flat,
+        PlayerType.HITTER,
+        np.random.default_rng(0),
+        0.49,
+        8000,
+        pt_mean_fraction=1.0,
+        suppress_repl=True,
+        pt_volumes=np.array([620.0]),
+    )
+    ros_vol = _apply_variance_batch(
+        flat,
+        PlayerType.HITTER,
+        np.random.default_rng(0),
+        0.49,
+        8000,
+        pt_mean_fraction=1.0,
+        suppress_repl=True,
+        pt_volumes=np.array([305.0]),
+    )
+    sd_full = full_vol.counts["r"][:, 0].std()
+    sd_ros = ros_vol.counts["r"][:, 0].std()
+    # The bug signal: ROS-volume lookup is materially WIDER than full-season.
+    assert sd_ros > sd_full * 1.4, (sd_full, sd_ros)
+    # Empty bench + factor 1.0: on the healthy iters (no fill) the helper's
+    # realized R equals the full-season-volume draw exactly (the helper samples at
+    # full-season vol), and is NOT the ROS-volume draw.
+    healthy = full_vol.frac_missed[:, 0] == 0.0
+    assert np.any(healthy)
+    np.testing.assert_allclose(out["R"][healthy], full_vol.counts["r"][healthy, 0])
+    assert not np.allclose(out["R"][healthy], ros_vol.counts["r"][healthy, 0])
+
+    # Engineering band: well under the ~2x-wide ROS-volume PT scale.
+    cv_ros = playing_time_params(PlayerType.HITTER, 305.0)[1]
+    assert helper_sd < 45.0 * cv_ros * (0.49**0.5) * 0.9, helper_sd
 
 
 def _mixed_rosters():
