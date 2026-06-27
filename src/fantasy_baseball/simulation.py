@@ -5,6 +5,7 @@ scripts/summary.py (in-season weekly projections), and
 the season dashboard (web/season_data.py).
 """
 
+from dataclasses import dataclass
 from typing import Any, cast
 
 import numpy as np
@@ -58,6 +59,20 @@ HITTER_CORR_MATRIX = np.array(HITTER_CORRELATION)
 PITCHER_CORR_MATRIX = np.array(PITCHER_CORRELATION)
 
 _U_EPS = 1e-9
+
+
+@dataclass
+class VarianceBatch:
+    """Output of ``_apply_variance_batch``.
+
+    ``counts`` carries the SAME per-(iter, player) counting columns the function
+    returned before this dataclass existed (back-compat); ``frac_missed`` exposes
+    the per-(iter, player) stochastic playing-time shortfall the fill engine
+    consumes (previously computed and discarded).
+    """
+
+    counts: dict[str, np.ndarray]  # {col: (n_iter, n_players)}
+    frac_missed: np.ndarray  # (n_iter, n_players) = max(0, 1 - scales)
 
 
 def _flatten_full_season(p: Any) -> dict[str, Any]:
@@ -645,15 +660,34 @@ def _apply_variance_batch(
     rng: np.random.Generator,
     fraction_remaining: float,
     n_iter: int,
-) -> dict[str, np.ndarray]:
+    *,
+    pt_mean_fraction: float | None = None,
+    suppress_repl: bool = False,
+) -> VarianceBatch:
     """Vectorized ``_apply_variance`` over ``n_iter`` iterations at once.
 
-    Returns ``{counting_col: ndarray(n_iter, n_players)}`` -- the same per-player,
-    per-stat values the scalar path yields, but with a leading iteration axis.
+    Returns a ``VarianceBatch`` whose ``counts`` is
+    ``{counting_col: ndarray(n_iter, n_players)}`` -- the same per-player,
+    per-stat values the scalar path yields, but with a leading iteration axis --
+    and whose ``frac_missed`` is the per-(iter, player) playing-time shortfall.
     Identical model: per-player playing-time scale (calibrated z-ladder), a
     correlated NegBin/Poisson copula draw, and replacement-level injury backfill.
     Injuries are not reported (the ROS MC discards them); only the stat values
     are needed downstream.
+
+    Keyword-only knobs (both default to legacy behavior, so the default path is
+    byte-for-byte identical to before they existed):
+
+    - ``pt_mean_fraction``: the MEAN-horizon term for the playing-time haircut.
+      When ``None`` it equals ``fraction_remaining`` (today's behavior). When set
+      (e.g. 1.0 for ROS-direct), it drives ONLY the mean haircut; ``eff_sd`` and
+      the ``_negbin_copula_counts`` dispersion KEEP ``fraction_remaining`` (the
+      variance horizon). ``playing_time_moments`` is closed-form (consumes no
+      rng), so splitting its single call into a mean call and an sd call does NOT
+      perturb the rng stream.
+    - ``suppress_repl``: when True the built-in ``repl_contrib`` is identically
+      zero (the new fill engine owns the backfill); default False folds the
+      replacement line in exactly as before.
     """
     is_hitter = player_type == PlayerType.HITTER
     counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
@@ -662,7 +696,14 @@ def _apply_variance_batch(
     n_corr = len(idx_map)
     n_players = len(players)
     if n_players == 0:
-        return {col: np.zeros((n_iter, 0)) for col in counting_cols}
+        return VarianceBatch(
+            counts={col: np.zeros((n_iter, 0)) for col in counting_cols},
+            frac_missed=np.zeros((n_iter, 0)),
+        )
+
+    # Mean horizon vs variance horizon. When pt_mean_fraction is None the two
+    # coincide (== fraction_remaining), reproducing today's single-call moments.
+    fr_mean = pt_mean_fraction if pt_mean_fraction is not None else fraction_remaining
 
     # Static per-player playing-time moments and z-ladders (iteration-independent),
     # so the only per-iteration playing-time work is the uniform->z interpolation.
@@ -672,7 +713,11 @@ def _apply_variance_batch(
     for j, p in enumerate(players):
         vol = _projected_volume(p, is_hitter)
         mean_scale, cv_pt = playing_time_params(player_type, vol)
-        eff_mean[j], eff_sd[j] = playing_time_moments(mean_scale, cv_pt, fraction_remaining)
+        # playing_time_moments consumes no rng (closed-form); splitting the mean
+        # and sd calls keeps the default path's rng stream byte-stable while
+        # letting pt_mean_fraction lift ONLY the mean haircut.
+        eff_mean[j], _ = playing_time_moments(mean_scale, cv_pt, fr_mean)
+        _, eff_sd[j] = playing_time_moments(mean_scale, cv_pt, fraction_remaining)
         ladders.append(np.asarray(playing_time_shape(player_type, vol), dtype=float))
 
     # Playing-time scale per (iteration, player): the vectorized scale_from_uniform.
@@ -702,13 +747,16 @@ def _apply_variance_batch(
     repl_lines = [_replacement_line(p, is_hitter) for p in players]
     out: dict[str, np.ndarray] = {}
     for col in counting_cols:
-        repl_line = np.array([rl.get(col, 0) for rl in repl_lines], dtype=float)
-        repl_contrib = repl_line[None, :] * frac_missed
+        if suppress_repl:
+            repl_contrib: float | np.ndarray = 0.0
+        else:
+            repl_line = np.array([rl.get(col, 0) for rl in repl_lines], dtype=float)
+            repl_contrib = repl_line[None, :] * frac_missed
         if col in idx_map:
             out[col] = counts[:, :, idx_map[col]] + repl_contrib
         else:
             out[col] = base[col][None, :] * scales + repl_contrib
-    return out
+    return VarianceBatch(counts=out, frac_missed=frac_missed)
 
 
 def simulate_remaining_season_batch(
@@ -752,8 +800,12 @@ def simulate_remaining_season_batch(
         hitters = [p for p in players if p.get("player_type") == PlayerType.HITTER]
         pitchers = [p for p in players if p.get("player_type") == PlayerType.PITCHER]
 
-        hb = _apply_variance_batch(hitters, PlayerType.HITTER, rng, fraction_remaining, n_iter)
-        pb = _apply_variance_batch(pitchers, PlayerType.PITCHER, rng, fraction_remaining, n_iter)
+        hb = _apply_variance_batch(
+            hitters, PlayerType.HITTER, rng, fraction_remaining, n_iter
+        ).counts
+        pb = _apply_variance_batch(
+            pitchers, PlayerType.PITCHER, rng, fraction_remaining, n_iter
+        ).counts
 
         team_cols = active_cols.get(team) if active_cols is not None else None
 
