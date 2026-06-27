@@ -140,7 +140,8 @@ def _simulate_n_picks(
                 1
                 for pid in tracker.user_roster_ids
                 if (row := board[board["player_id"] == pid]).empty is False
-                and row.iloc[0].get("sv", 0) >= CLOSER_SV_THRESHOLD
+                and (sv := row.iloc[0].get("sv")) is not None
+                and sv >= CLOSER_SV_THRESHOLD
             )
             ctx = RecommendContext(
                 scoring_mode=scoring_mode,
