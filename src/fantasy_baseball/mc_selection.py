@@ -12,9 +12,9 @@ from collections.abc import Mapping
 
 import numpy as np
 
-from fantasy_baseball.mc_roster import EffectiveRoster, build_effective_roster
+from fantasy_baseball.mc_roster import build_effective_rosters
 from fantasy_baseball.models.player import Player, PlayerType
-from fantasy_baseball.scoring import LeagueContext, _classify_roster
+from fantasy_baseball.scoring import _classify_roster
 from fantasy_baseball.simulation import (
     _CLOSER_RANK_BONUS,
     _flatten_full_season,
@@ -86,31 +86,6 @@ def compute_fixed_topk_cols(
     return {"h": _top(h_keys, h_slots), "p": _top(p_keys, p_slots)}
 
 
-def _build_effective_rosters(
-    team_rosters: dict,
-    eos_baseline: dict,
-    team_sds: dict,
-    fraction_remaining: float,
-) -> dict[str, EffectiveRoster]:
-    """Build each team's EffectiveRoster from the live Player rosters.
-
-    Mirrors the engine's pipeline setup (refresh_pipeline._run_ros_monte_carlo):
-    the SAME LeagueContext (baseline, team_sds, fraction_remaining) the standings
-    build used, so the new-engine arm agrees with ERoto by construction.
-    """
-    out: dict[str, EffectiveRoster] = {}
-    for tname, roster in team_rosters.items():
-        players = [p for p in roster if isinstance(p, Player)]
-        lc = LeagueContext(
-            baseline_other_team_stats={t: s for t, s in eos_baseline.items() if t != tname},
-            team_sds=team_sds,
-            team_name=tname,
-            fraction_remaining=fraction_remaining,
-        )
-        out[tname] = build_effective_roster(players, lc)
-    return out
-
-
 def run_selection_attribution(
     team_rosters: dict,
     actual_standings: dict,
@@ -176,7 +151,7 @@ def run_selection_attribution(
     # EffectiveRosters; absent it, skip the arm (do not crash on slot-less tests).
     sd_calibration: dict[str, dict[str, tuple[float, float, float]]] | None = None
     if eos_baseline is not None and team_sds is not None:
-        effective_rosters = _build_effective_rosters(
+        effective_rosters = build_effective_rosters(
             team_rosters, eos_baseline, team_sds, fraction_remaining
         )
         rng = np.random.default_rng(seed)

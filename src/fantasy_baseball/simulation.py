@@ -1055,7 +1055,8 @@ def simulate_remaining_season_batch(
         use_ros_direct = _ROS_DIRECT_HITTERS and eff is not None
         use_ros_direct_pitchers = _ROS_DIRECT_PITCHERS and eff is not None
 
-        if eff is not None and use_ros_direct:
+        if use_ros_direct:
+            assert eff is not None  # use_ros_direct implies eff is not None
             ros = _simulate_team_hitters_ros_direct(eff, fraction_remaining, rng, n_iter)
         else:
             hb = _apply_variance_batch(
@@ -1085,7 +1086,8 @@ def simulate_remaining_season_batch(
         # effective_roster), sample pb here exactly as before -- this keeps the
         # effective_rosters=None rng stream byte-identical (pb drawn after the
         # hitter hb/ros draw, in the same order).
-        if eff is not None and use_ros_direct_pitchers:
+        if use_ros_direct_pitchers:
+            assert eff is not None  # use_ros_direct_pitchers implies eff is not None
             pros = _simulate_team_pitchers_ros_direct(eff, fraction_remaining, rng, n_iter)
         elif pitchers:
             pb = _apply_variance_batch(

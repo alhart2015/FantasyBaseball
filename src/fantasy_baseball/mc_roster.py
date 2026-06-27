@@ -114,3 +114,28 @@ def build_effective_roster(roster: list[Player], league_context: LeagueContext) 
         )
 
     return EffectiveRoster(active=active_bodies, bench=bench_bodies)
+
+
+def build_effective_rosters(
+    team_rosters: dict[str, list[Player]],
+    eos_baseline: dict,
+    team_sds: dict,
+    fraction_remaining: float,
+) -> dict[str, EffectiveRoster]:
+    """Build each team's EffectiveRoster from the live Player rosters.
+
+    For each team, constructs the SAME LeagueContext (baseline with this team
+    excluded, team_sds, fraction_remaining) the standings build used, so the
+    MC's IL handling agrees with ERoto by construction, then delegates to
+    ``build_effective_roster`` (which classifies and filters the roster).
+    """
+    out: dict[str, EffectiveRoster] = {}
+    for tname, roster in team_rosters.items():
+        lc = LeagueContext(
+            baseline_other_team_stats={t: s for t, s in eos_baseline.items() if t != tname},
+            team_sds=team_sds,
+            team_name=tname,
+            fraction_remaining=fraction_remaining,
+        )
+        out[tname] = build_effective_roster(roster, lc)
+    return out
