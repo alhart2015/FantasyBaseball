@@ -46,7 +46,8 @@ def allocate_bench_fill(
     NEVER g_ros_full). Largest shortfalls first; per shortfall pick the highest
     per_game_value position-eligible bench body with remaining capacity, assign
     min(shortfall, remaining), decrement both; residual -> replacement per-game
-    (replacement total / PA_PER_GAME). One bench body's total assigned games
+    (replacement total / (repl_ab / PA_PER_GAME) -- implied games, NOT
+    / PA_PER_GAME). One bench body's total assigned games
     <= its g_ros_full. Tie-break: higher per_game_value, then player-id ascending.
     """
     fill: dict[str, float] = {col: 0.0 for col in HITTING_COUNTING}
