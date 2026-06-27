@@ -86,10 +86,17 @@ def allocate_bench_fill(
             need -= assign
 
         if need > 0.0:
+            # The replacement line is a FULL-SEASON counting bundle with NO games
+            # field, so convert to per-game by dividing each stat by the line's
+            # IMPLIED games (ab / PA_PER_GAME -- the shared per-game heuristic),
+            # NOT by PA_PER_GAME directly (that would treat a ~65-R full-season
+            # total as a per-game rate, ~30x too high).
             repl = replacement_for(a.body)
+            repl_ab = repl.get("ab", 0.0) or 0.0
+            repl_games = (repl_ab / PA_PER_GAME) if repl_ab > 0 else 0.0
             for col in HITTING_COUNTING:
-                total = repl.get(col, 0.0)
-                per_game = (total / PA_PER_GAME) if total is not None else 0.0
+                total = repl.get(col, 0.0) or 0.0
+                per_game = (total / repl_games) if repl_games > 0 else 0.0
                 fill[col] += per_game * need
 
     return FillResult(fill_counts=fill)

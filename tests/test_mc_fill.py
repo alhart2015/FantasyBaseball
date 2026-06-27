@@ -48,6 +48,12 @@ def _flat_replacement(val):
     return lambda _b: _line(**{c: val for c in HITTING_COUNTING})
 
 
+def _realistic_replacement(_b):
+    # A real full-season replacement line: counting stats << AB (NOT flat), so the
+    # per-game conversion (stat / (ab / PA_PER_GAME)) is meaningful.
+    return _line(r=43.0, hr=12.0, rbi=45.0, sb=4.0, h=120.0, ab=516.0)
+
+
 def test_eligible_bench_gets_nonzero_fill_on_low_availability():
     a = _active("Star", "1", g_ros_adj=80.0)
     b = _bench("Depth", "2", g_ros_full=60.0, per_game_value=2.0)
@@ -74,13 +80,26 @@ def test_position_mismatch_routes_to_replacement_not_bench():
     a = _active("OFstar", "1", g_ros_adj=80.0, pos=Position.OF)
     b = _bench("Catcher", "2", g_ros_full=60.0, per_game_value=2.0, pos=Position.C)
     res = allocate_bench_fill(
-        [ActiveSample(a, frac_missed=0.5)],
+        [ActiveSample(a, frac_missed=0.5)],  # 40 games missed
         [_bench_sample(b, {"r": 99.0})],  # huge bench rate, but wrong position
-        _flat_replacement(0.1),
+        _realistic_replacement,
     )
-    # bench (C) cannot fill an OF shortfall -> all fill is replacement, not the
-    # catcher's 99-per-game line.
-    assert res.fill_counts["r"] < 1.0
+    # bench (C) cannot fill an OF shortfall -> fill is replacement-SCALE
+    # (~43/120 r-per-game * 40 ~ 14 r), NOT the catcher's 99/game (~3960 r).
+    assert 0.0 < res.fill_counts["r"] < 100.0
+
+
+def test_replacement_per_game_not_overscaled():
+    # A full-season replacement line (R=43 over ab=516 ~= 120 games) must convert
+    # to ~0.36 r/game, NOT 43/PA_PER_GAME (~10/game). 30 missed games, no bench.
+    a = _active("OFstar", "1", g_ros_adj=60.0, pos=Position.OF)
+    res = allocate_bench_fill(
+        [ActiveSample(a, frac_missed=0.5)],  # 0.5 * 60 = 30 games missed
+        [],
+        _realistic_replacement,
+    )
+    expected = 43.0 / (516.0 / 4.3) * 30.0  # per-game r * games_missed ~= 10.75
+    assert abs(res.fill_counts["r"] - expected) < 1e-6
 
 
 def test_fill_never_exceeds_bench_g_ros_full_capacity():
