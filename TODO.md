@@ -60,6 +60,7 @@
 - [ ] **Persist per-pick ERoto snapshots** — persist the top-3 at each pick with their deltas to `draft_state_picks_history.json` for post-draft "what would have been" analysis.
 - [ ] **Position-aware replacement selection in `eroto_recs._pick_replacement`** — current v1 picks the candidate's primary position; use `roster_state.get_filled_positions` scarcity logic.
 - [ ] **Performance optimization if measurement warrants** — precompute the pairwise-probability matrix once per pick, apply per-player perturbations analytically. Only if per-pick > 300ms on full board.
+- [ ] **Investigate `test_parity_golden.py::test_recs_match_golden` failure** — pre-existing golden-master mismatch in the deltaRoto `/api/recs` output (fails on `main`, unrelated to the games-MC work). The visible top-level fields (immediate_delta, name, per_category, value_of_picking_now) appear identical, so the drift is subtle — likely float precision or a nested/reordered field. Diff the actual `/api/recs` rows against `tests/test_draft/fixtures/recs_golden.json` to find the differing field, then decide: regenerate the golden (if it's a legitimate, intended output change) or fix the regression (if recs behavior drifted unintentionally). Do NOT blindly re-baseline — that could mask a real recs regression.
 
 # TODO — Postseason / Offseason
 

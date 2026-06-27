@@ -88,7 +88,7 @@ def pitches_to_pa_rows(df: pd.DataFrame) -> list[HitterStatcastPA]:
                 estimated_woba_using_speedangle=_na_to_none(
                     getattr(r, "estimated_woba_using_speedangle", None)
                 ),
-                launch_speed_angle=(None if pd.isna(lsa_raw) else int(lsa_raw)),
+                launch_speed_angle=(None if lsa_raw is None or pd.isna(lsa_raw) else int(lsa_raw)),
                 at_bat_number=(
                     _na_to_none(getattr(r, "at_bat_number", None)) if has_at_bat_number else None
                 ),
