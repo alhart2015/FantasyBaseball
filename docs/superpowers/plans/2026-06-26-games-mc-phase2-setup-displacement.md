@@ -72,7 +72,7 @@ At line 469, replace the unconditional build with:
 (Everything else in `from_rosters` is unchanged -- the Pass-2 loop already reads `baseline_stats`.)
 
 - [ ] **Step 4: Run, confirm PASS.** Also run the full standings suite: `pytest tests/test_models/test_standings.py -q`.
-- [ ] **Step 5: Wire the pipeline.** In `refresh_pipeline.py` `__init__`, add `self.eos_baseline: dict[str, CategoryStats] | None = None` (alongside the other `self.*` projected-standings attrs ~411-423; import `CategoryStats` for the annotation if needed -- or annotate loosely). In `_build_projected_standings`, AFTER `ytd_standings` is built (~line 930) and BEFORE the `from_rosters` call (932), insert:
+- [ ] **Step 5: Wire the pipeline.** In `refresh_pipeline.py` `__init__`, add `self.eos_baseline: dict[str, CategoryStats] | None = None` alongside the other `self.*` projected-standings attrs (~411-423). The instance-attr annotation is NOT runtime-evaluated, so add `CategoryStats` to the existing `TYPE_CHECKING` import block (~64-68, where `ProjectedStandings` etc. are already TYPE_CHECKING-imported) so mypy resolves it -- no runtime import needed. In `_build_projected_standings`, AFTER `ytd_standings` is built (~line 930) and BEFORE the `from_rosters` call (932), insert:
 
 ```python
         from fantasy_baseball.models.standings import build_eos_baseline
@@ -167,21 +167,27 @@ def test_missing_g_derives_from_pa():
     assert abs(eff.bench[0].g_ros_full - 516 / PA_PER_GAME) < 1e-6   # not zeroed
 
 
-def test_il_hitter_in_active_set_with_factor_and_g_ros_adj():
-    # IL hitter activates (in active set) and displaces the worst active match.
+def test_il_hitter_in_active_set_with_partial_factor_and_g_ros_adj():
+    # IL hitter activates and displaces an active match by its expected ROS PT.
+    # IL pa=300 vs active pa=600 -> factor = (600-300)/600 = 0.5 (a PARTIAL factor,
+    # so g_ros_adj = 0.5 * g is non-trivial -- NOT a vacuous 0 == 0).
     roster = [
-        _h("Star", Position.OF, "1", r=100),
-        _h("Weak", Position.OF, "2", r=40),     # likely the displaced target
-        _h("ILbat", Position.IL, "3", r=90),    # IL -> activates, displaces
+        _h("Star", Position.OF, "1", r=100, pa=600),
+        _h("Weak", Position.OF, "2", r=40, pa=600),    # active body, the displaced target
+        _h("ILbat", Position.IL, "3", r=90, pa=300, g=80),  # IL -> activates, displaces by its 300 PA
     ]
     eff = build_effective_roster(roster, _ctx())
     names = {b.player.name for b in eff.active}
-    assert "ILbat" in names                      # IL body in the active set
-    # the displaced active body has factor < 1 and g_ros_adj == factor * g_ros_full
+    assert "ILbat" in names                       # IL body in the active set
+    # exactly one active body should be displaced to a PARTIAL (~0.5) factor.
     displaced = [b for b in eff.active if b.factor < 0.999]
-    assert displaced, "an active body should be displaced by the IL return"
-    for b in displaced:
-        assert abs(b.g_ros_adj - b.factor * b.player.rest_of_season.g) < 1e-6
+    assert len(displaced) == 1, "one active body should be displaced by the IL return"
+    b = displaced[0]
+    assert 0.0 < b.factor < 1.0, f"expected a partial factor, got {b.factor}"
+    assert abs(b.g_ros_adj - b.factor * b.player.rest_of_season.g) < 1e-6
+    # undisplaced bodies (and IL body) keep factor 1.0 -> g_ros_adj == g
+    star = next(x for x in eff.active if x.player.name == "Star")
+    assert star.factor == 1.0 and abs(star.g_ros_adj - star.player.rest_of_season.g) < 1e-6
 
 
 def test_duplicate_name_in_active_set_guarded():
@@ -304,7 +310,7 @@ def build_effective_roster(roster: list[Player], league_context: LeagueContext) 
 (Before finalizing: READ `_compute_displacement_factors` and `_real_positions` to confirm signatures/returns, and confirm `calculate_player_sgp` accepts a `HitterStats`/`PitcherStats` instance. Pin the IL/collision tests to the picker's ACTUAL behavior on the constructed rosters.)
 
 - [ ] **Step 4: Run, confirm PASS:** `pytest tests/test_mc_roster.py -v`.
-- [ ] **Step 5: ruff check/format on `mc_roster.py` + test.** (mypy: `mc_roster.py` is new; add it to `[tool.mypy].files` only if the repo convention is to cover new modules -- check pyproject; if covered, run mypy on it.)
+- [ ] **Step 5: ruff check/format on `mc_roster.py` + test; add to mypy coverage.** Add `"src/fantasy_baseball/mc_roster.py"` to `[tool.mypy].files` in `pyproject.toml` (repo convention is near-exhaustive coverage of `src/fantasy_baseball/`), then `mypy src/fantasy_baseball/mc_roster.py` -- expected clean.
 - [ ] **Step 6: Commit:**
 ```bash
 git add src/fantasy_baseball/mc_roster.py tests/test_mc_roster.py
