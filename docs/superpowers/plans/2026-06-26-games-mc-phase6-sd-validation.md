@@ -1,92 +1,146 @@
-# Games-based MC -- Phase 6 (SD-calibration validation gate) Implementation Plan
+# Games-based MC -- Phase 6 (cv_pt-volume fix + SD-calibration validation gate) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`).
 
-**Goal:** Validate that the ROS-direct engine's SAMPLED per-team category SDs reproduce the calibrated analytic SDs (`project_team_sds`), which `scripts/backtest_sd_calibration.py` already validated against realized 2022-2025 variance. This is the GATE on (a) the `pt_mean_fraction` horizon split -- did keeping `fraction_remaining` for the SD/dispersion term preserve the remaining-season variance, or flatten it? -- and (b) the `f^2` bench-fill variance approximation. If the MC SDs match the analytic SDs (ratio ~ 1), the engine inherits ERoto's realized-calibration and ships. If they are systematically too tight/wide, the `_ROS_DIRECT_HITTERS`/`_ROS_DIRECT_PITCHERS` flags are the one-line fallback.
+**Goal:** (1) FIX a variance bug the Phase-6 plan-review surfaced: the ROS-direct path looks up the playing-time curve at ROS volume, not full-season volume, inflating per-team SDs ~1.5x. (2) Then VALIDATE that the corrected engine's SAMPLED counting-category SDs reproduce the calibrated analytic SDs (`project_team_sds`, validated vs realized 2022-2025 by `scripts/backtest_sd_calibration.py`) -- the GATE on the `pt_mean_fraction` horizon split and the `f^2` bench-fill variance.
 
-**Why this comparison is apples-to-apples (verified):** `project_team_sds` -> `player_category_variance` reads `mu` via `_stat(player, stat_key)`, whose default source is `"rest_of_season"` (scoring.py:82) -- so the analytic SD is the ROS-horizon variance `sum_i [negbin_perf_variance(stat, mu_ROS_i) + mu_ROS_i^2 * cv_pt_i^2]`. The MC samples ROS-direct, so `np.std(batch[t][c])` (batch = YTD + ROS_sampled; the constant YTD does not affect SD) is also the ROS-horizon SD. Both use the SAME `cv_pt` curve lookup at FULL-SEASON volume (`_full_season_volume` in the analytic; `_projected_volume` in `_apply_variance_batch`) by design (scoring.py:1201 "cv_pt band matches the calibration and the MC"). `project_team_sds(displacement=True)` applies the SAME displacement the new engine does, on the active+IL set, EXCLUDING bench -- so it matches the new engine's active set. The new engine ADDS bench-fill (with its `f^2` variance) that the analytic does NOT model, so any MC_SD EXCESS over the analytic is exactly the fill-variance contribution this gate measures.
+**The bug (Task 1).** `_apply_variance_batch` looks up `playing_time_params`/`playing_time_shape` at `vol = _projected_volume(p)` (simulation.py:735), which reads `pa`/`ip` from the player's flat dict. On the ROS-direct path the flat dict is `to_flat_dict()` = `rest_of_season`, so `vol` is ROS PA (~305 mid-season) instead of full-season PA (~620). The playing-time curve is calibrated and INDEXED by full-season volume; at ROS volume a full-timer is misclassified as a part-timer -- `cv_pt` 0.20 -> 0.42 (2.07x), `mean_scale` 0.94 -> 0.75 (measured). The original full-season MC path reads full-season PA (correct); ROS-direct (Phase 4/5) regressed it. Means-only evidence missed it: pitchers use `pt_mean_fraction=0` (eff_mean=1, volume-independent mean) so their means matched ERoto; hitter means were masked by the bench-fill compensating for the over-aggressive 0.75 haircut. SDs were never checked until now.
 
-**Architecture:** Extend the existing gated selection-attribution diagnostic (`mc_selection.py`, run via `FB_SELECTION_ATTRIBUTION` in `_run_ros_monte_carlo`) to ALSO emit a per-category SD-calibration table for the `new_engine` arm: `mc_sd = std(batch[t][c])` vs `analytic_sd = team_sds[t][c]`, and the ratio. Then run ONE auth'd local refresh and adjudicate the gate. No production-path code changes; this is diagnostic + analysis. The means were already validated by the Phase 4/5 before/after evidence; Phase 6 is the SD half.
+**Why the gate is apples-to-apples AFTER the fix (the precise rationale).** For a counting cat, both sides reduce to the same closed form:
+- Analytic (`player_category_variance`, scoring.py:1264): `negbin_perf_variance(stat, mu_ROS) + mu_ROS^2 * cv_pt(FULL_vol)^2`, then `build_team_sds` multiplies the team SD by `sd_scale = sqrt(fraction_remaining)` (scoring.py:1385; refresh_pipeline.py:901/952). `mu_ROS` because `_stat` defaults to `rest_of_season` (scoring.py:82); `cv_pt(FULL_vol)` via `_full_season_volume` (scoring.py:1256/1206).
+- MC (ROS-direct, AFTER Task 1): NegBin mean `mu_ROS` (ROS flat dict), perf term `_negbin_copula_counts` sets `var_target = fraction_remaining * var_full` (simulation.py:559), PT term `eff_sd = cv_pt(FULL_vol) * sqrt(fraction_remaining)` (playing_time.py:104) -- `cv_pt(FULL_vol)` ONLY because Task 1 passes full-season volume.
 
-**Tech Stack:** Python, numpy. Touched: `src/fantasy_baseball/mc_selection.py`; test `tests/test_mc_selection.py`.
+So `mc_var ~= fraction_remaining * [negbin_perf_variance(stat, mu_ROS) + mu_ROS^2 * cv_pt(FULL_vol)^2]` and `analytic_sd^2 = fraction_remaining * [same]`. The `sqrt(fraction_remaining)` appears on BOTH sides (analytic via `sd_scale`, MC via `var_target` + `eff_sd`) and CANCELS in the ratio. **Sanity check for Task 3: a pooled ratio near `sqrt(fraction_remaining)` (~0.7 mid-season), not near 1.0, means one side dropped the damping -- investigate before adjudicating.** Without Task 1, the MC's `cv_pt(ROS_vol)` is ~2x the analytic's `cv_pt(FULL_vol)` and the gate reads ~1.5x "too wide" -- the bug, not the `f^2` term.
+
+**Scope note (counting cats only).** The SD gate covers the 7 COUNTING cats (R/HR/RBI/SB/W/K/SV), where `np.std(team_total) == np.std(ROS)` because team_total = YTD + ROS adds a CONSTANT YTD. The 3 RATE cats (AVG/ERA/WHIP) are EXCLUDED from the SD gate: their `team_total` is a ratio `(YTD+ROS)/(YTD_vol+ROS_vol)`, so `np.std(EOS_rate)` is structurally TIGHTER than the ROS-rate analytic SD (YTD denominator dilution) -- comparing them is apples-to-oranges and would falsely read "too tight." Rate-cat SD calibration is deferred/noted, not gated here.
+
+**Architecture:** Task 1 fixes the sampler + both ROS-direct helpers (additive `pt_volumes` param; default None = byte-identical legacy). Task 2 extends the gated diagnostic (`mc_selection.py`) to emit a counting-cat SD-calibration table via a SEPARATELY-TYPED return channel. Task 3 (controller) runs ONE auth'd refresh and adjudicates means (re-validate; the fix shrinks the hitter premium) AND SDs.
+
+**Tech Stack:** Python, numpy. Touched: `src/fantasy_baseball/simulation.py`, `src/fantasy_baseball/mc_selection.py`; tests `tests/test_mc_integration.py`, `tests/test_mc_selection.py`.
 
 ## Global Constraints
 
-- ASCII-only; numeric defaults via `is not None`; imports at top.
-- Spec: `docs/superpowers/specs/2026-06-26-games-based-availability-mc-design.md` Component 6 + the "Variance note (acknowledged)" (the `f^2` approximation) + the `fraction_remaining` horizon-split GATE language (Component 4).
-- `mc_selection.py` is under `[tool.mypy].files` (added in Phase 4c); run mypy on it.
-- Do NOT change the means arms or the production MC. Diagnostic-only.
-- Calibration threshold (matches the existing backtest, scripts/backtest_sd_calibration.py:155): ratio in [0.8, 1.25] = calibrated; > 1.25 = too wide; < 0.8 = too tight.
+- ASCII-only; numeric defaults via `is not None`/`> 0`, never `x or default`; imports at top.
+- Spec: Component 4 (the `fraction_remaining` horizon-split GATE), Component 6 (validation), the "Variance note (acknowledged)" (`f^2`).
+- `simulation.py` and `mc_selection.py` are under `[tool.mypy].files`; run mypy.
+- Task 1 default path (`pt_volumes=None`) MUST stay byte-identical: the `effective_rosters=None` byte-anchor (`test_whole_context_fallback_to_topk`) and the scalar path must not move.
+- SD-ratio tolerance is an ENGINEERING band [0.8, 1.25] (the same numeric band the realized backtest uses at backtest_sd_calibration.py:155). It is NOT inherited realized-calibration for THIS comparison -- it is a near-1 tolerance for `mc_sd/analytic_sd`; the realized calibration is established only transitively (analytic-vs-realized by the existing backtest + MC-vs-analytic by this gate). Do NOT copy the backtest's verdict expression verbatim: its `SD(z)>1.25 -> TOO TIGHT` measures the INVERSE quantity; here `mc/analytic > 1.25 -> MC too WIDE`, `< 0.8 -> MC too TIGHT`.
 
 ---
 
-### Task 1: SD-calibration computation + table in the diagnostic
+### Task 1: cv_pt-volume fix (full-season volume for the ROS-direct PT curve lookup)
+
+**Files:** Modify `src/fantasy_baseball/simulation.py`; test `tests/test_mc_integration.py`.
+
+**Interfaces:**
+- Produces: `_apply_variance_batch(..., *, pt_mean_fraction=None, suppress_repl=False, pt_volumes: np.ndarray | None = None)`. When `pt_volumes` is given, the per-player curve lookup uses `pt_volumes[j]` for BOTH `playing_time_params` and `playing_time_shape`, instead of `_projected_volume(p)`. The two ROS-direct helpers compute and pass full-season volumes.
+- A module helper `_full_season_pt_volume(player, is_hitter) -> float`: reads `full_season_projection.pa` (hitters) / `.ip` (pitchers); hitter fallback `ab / AB_PER_PA`; if `full_season_projection` is None or volume <= 0, fall back to the ROS volume (`_projected_volume` on the ROS flat dict) so preseason/missing-FS players keep working (the falsy-zero rule: guard `is not None` and `> 0`).
+
+- [ ] **Step 1: Write failing tests** in `tests/test_mc_integration.py`:
+
+```python
+def test_ros_direct_uses_full_season_volume_for_cv_pt():
+    # A full-timer (full-season PA 620, ROS PA 305) must be sampled with the
+    # FULL-SEASON cv_pt band (~0.20), NOT the ROS-volume band (~0.42). Assert the
+    # sampled ROS-R SD is close to the full-vol analytic PT-SD, not ~2x it.
+    import numpy as np
+    from fantasy_baseball.simulation import _simulate_team_hitters_ros_direct
+    eff = _one_full_timer_hitter(full_pa=620.0, ros_pa=305.0, ros_r=45.0)
+    out = _simulate_team_hitters_ros_direct(eff, 0.49, np.random.default_rng(0), 8000)
+    # Full-vol PT-SD of R ~= 45 * cv_pt(620) * sqrt(0.49); ROS-vol would be ~2x.
+    # Assert the realized SD is within ~25% of the full-vol expectation (NOT ~2x).
+    from fantasy_baseball.utils.playing_time import playing_time_params
+    from fantasy_baseball.models.player import PlayerType
+    cv_full = playing_time_params(PlayerType.HITTER, 620.0)[1]
+    cv_ros = playing_time_params(PlayerType.HITTER, 305.0)[1]
+    pt_sd_full = 45.0 * cv_full * (0.49 ** 0.5)
+    sd = out["R"].std()
+    # Must be far below the ROS-vol band; near (perf+PT) full-vol scale.
+    assert sd < 45.0 * cv_ros * (0.49 ** 0.5) * 0.9   # well under the 2x-wide ROS band
+```
+
+```python
+def test_apply_variance_batch_pt_volumes_default_is_byte_identical():
+    # pt_volumes=None reproduces the legacy per-player vol == _projected_volume.
+    # Seed-pinned: counts identical with pt_volumes=None vs omitted.
+    ...  # mirror the existing 4a byte-equality test pattern
+```
+
+- [ ] **Step 2: Run, confirm FAIL** (the helper still uses ROS volume).
+- [ ] **Step 3: Implement.** Add `pt_volumes` kwarg to `_apply_variance_batch`; in the per-player loop (simulation.py:734-742) use `vol = float(pt_volumes[j]) if pt_volumes is not None else _projected_volume(p, is_hitter)` for BOTH `playing_time_params(player_type, vol)` and `playing_time_shape(player_type, vol)`. Add `_full_season_pt_volume`. In `_simulate_team_hitters_ros_direct` and `_simulate_team_pitchers_ros_direct`, build `pt_volumes = np.array([_full_season_pt_volume(b.player, is_hitter) for b in <active bodies>])` and pass it to the `_apply_variance_batch` call. (No change to the `effective_rosters=None` flat-dict path -> byte-anchor safe.)
+- [ ] **Step 4: Run, confirm PASS.**
+- [ ] **Step 5: No regression:** `pytest tests/test_mc_integration.py tests/test_simulation.py tests/test_mc_selection.py tests/test_web/ -q`. The byte-anchor + scalar path MUST pass. The Phase-4/5 mechanism tests are magnitude-tolerant so should pass; if `test_pitcher_mean_matches_projection_no_haircut` shifts, note that pitcher MEAN is volume-INDEPENDENT (pt_mean_fraction=0) so it must NOT change -- if it does, the fix wrongly touched the mean path.
+- [ ] **Step 6: ruff + format --check + `mypy src/fantasy_baseball/simulation.py`** (clean; ignore pre-existing category_odds.py).
+- [ ] **Step 7: Commit:** `fix(sim): ROS-direct PT curve lookup at full-season volume, not ROS (Phase 6 Task 1)`.
+
+---
+
+### Task 2: counting-cat SD-calibration table in the diagnostic
 
 **Files:** Modify `src/fantasy_baseball/mc_selection.py`; test `tests/test_mc_selection.py`.
 
 **Interfaces:**
-- Consumes: the `new_engine` arm's per-team batch distributions (already computed inside `run_selection_attribution` -- the `batch[t][c]` arrays it currently medians at mc_selection.py:177); the analytic `team_sds: Mapping[str, Mapping[Category, float]]` (already a param of `run_selection_attribution` since Phase 4c).
-- Produces: `compute_sd_calibration(new_engine_batch: dict[str, dict[str, np.ndarray]], team_sds) -> dict[str, dict[str, tuple[float, float, float]]]` returning per-team per-category `(mc_sd, analytic_sd, ratio)`; `format_sd_calibration_table(calib) -> str`. `run_selection_attribution` returns the new_engine batch (or the calibration) alongside its existing medians so the hook can render the table.
+- Produces: `compute_sd_calibration(new_engine_batch: dict[str, dict[str, np.ndarray]], team_sds: Mapping[str, Mapping[Category, float]]) -> dict[str, dict[str, tuple[float, float, float]]]` -- per team, per COUNTING cat, `(mc_sd, analytic_sd, ratio)`. `format_sd_calibration_table(calib) -> str`. To avoid breaking the arm-keyed return dict and its mypy type, `run_selection_attribution` returns a 2-tuple `(arm_medians, sd_calibration | None)` (sd_calibration computed INSIDE the function where the raw new_engine `batch` is live, BEFORE it is discarded at mc_selection.py:177) -- NOT a sentinel key inside the arm dict. Update the one call site (the hook) to unpack the tuple.
 
 - [ ] **Step 1: Write failing tests** in `tests/test_mc_selection.py`:
 
 ```python
-def test_sd_calibration_ratio_computed():
+def test_sd_calibration_counting_cats_only_with_enum_keys():
     import numpy as np
     from fantasy_baseball.models.category import Category
     from fantasy_baseball.mc_selection import compute_sd_calibration
-    # One team, R: a batch with known std vs an analytic sd -> ratio = mc/analytic.
     rng = np.random.default_rng(0)
-    batch = {"TeamA": {"R": rng.normal(800, 30, 5000)}}
-    team_sds = {"TeamA": {Category.R: 30.0}}
+    batch = {"T": {"R": rng.normal(800, 30, 5000), "AVG": rng.normal(0.27, 0.01, 5000)}}
+    team_sds = {"T": {Category.R: 30.0}}     # rate cats absent / keyed differently
     calib = compute_sd_calibration(batch, team_sds)
-    mc_sd, analytic_sd, ratio = calib["TeamA"]["R"]
-    assert abs(analytic_sd - 30.0) < 1e-9
-    assert abs(mc_sd - 30.0) < 3.0          # sample std ~= 30
-    assert abs(ratio - mc_sd / analytic_sd) < 1e-9
+    assert "R" in calib["T"] and "AVG" not in calib["T"]   # counting only; rate excluded
+    mc_sd, analytic_sd, ratio = calib["T"]["R"]
+    assert abs(analytic_sd - 30.0) < 1e-9 and abs(ratio - mc_sd / 30.0) < 1e-9
 
-def test_sd_calibration_handles_zero_analytic():
-    # analytic_sd == 0 -> ratio is NaN (not a div-by-zero crash), skipped in pooling.
+def test_sd_calibration_string_to_enum_roundtrip():
+    # The batch keys are bare strings ("R"); team_sds keys are Category enums.
+    # Pin that Category("R") round-trips to the same enum used in team_sds.
+    from fantasy_baseball.models.category import Category
+    assert Category("R") == Category.R   # if this is false, the join silently NaNs
+
+def test_sd_calibration_zero_or_missing_analytic_is_nan():
     import numpy as np
     from fantasy_baseball.models.category import Category
     from fantasy_baseball.mc_selection import compute_sd_calibration
-    calib = compute_sd_calibration({"T": {"SV": np.zeros(10)}}, {"T": {Category.SV: 0.0}})
-    assert calib["T"]["SV"][2] != calib["T"]["SV"][2]  # NaN
+    calib = compute_sd_calibration({"T": {"SV": np.ones(10)}}, {"T": {Category.SV: 0.0}})
+    assert calib["T"]["SV"][2] != calib["T"]["SV"][2]   # ratio NaN, no div-by-zero
 
-def test_format_sd_calibration_table_has_ratio_column():
+def test_format_sd_calibration_table_has_ratio_and_pooled():
     from fantasy_baseball.mc_selection import format_sd_calibration_table
-    calib = {"TeamA": {"R": (31.0, 30.0, 31.0/30.0)}}
-    txt = format_sd_calibration_table(calib)
-    assert "ratio" in txt.lower() and "TeamA" in txt and "R" in txt
+    txt = format_sd_calibration_table({"T": {"R": (31.0, 30.0, 31.0 / 30.0)}})
+    assert "ratio" in txt.lower() and "POOLED" in txt and "T" in txt
 ```
 
 - [ ] **Step 2: Run, confirm FAIL.**
-- [ ] **Step 3: Implement** `compute_sd_calibration` + `format_sd_calibration_table` in `mc_selection.py`. The Category-vs-string key mapping must match how `_CATS` / the batch keys are keyed (the batch uses string cat keys like `"R"`; `team_sds` uses `Category` enum keys -- map via `Category(<str>)` or the existing `_CATS` list; READ how mc_selection.py:158/177 keys the batch and how team_sds is keyed before writing, and handle the AVG/ERA/WHIP rate cats which `team_sds` may key differently -- if a cat is absent from team_sds, emit NaN and skip it, do not crash). `compute_sd_calibration` uses `float(np.std(arr))` for mc_sd and guards `analytic_sd > 0` (else ratio = `float("nan")`, per the falsy-zero rule use `is not None`/`> 0`, never `x or default`). `format_sd_calibration_table`: per team, rows = cats, cols = `mc_sd`, `analytic_sd`, `ratio`, plus a POOLED line (median ratio across all team-cats with a finite ratio) and a verdict (`calibrated` if 0.8 <= pooled <= 1.25, else `too tight`/`too wide`).
-- [ ] **Step 4: Have `run_selection_attribution` retain the new_engine batch** (it currently discards it after medianing at :177). Return it (or the computed calibration) in the result dict under a `"_new_engine_batch"` / `"_sd_calibration"` key so the hook can render the table. Keep the existing arm medians unchanged.
-- [ ] **Step 5: Run, confirm PASS:** `pytest tests/test_mc_selection.py -v`.
-- [ ] **Step 6: Wire into the hook** (`web/refresh_pipeline.py` `_run_ros_monte_carlo`, the `FB_SELECTION_ATTRIBUTION` block): after the means table, compute + write the SD-calibration table (it has `self.team_sds` and the attribution result). Append to the same `phase0_attribution.txt`-style output the means table writes to. (READ the existing hook block first; mirror exactly how it writes the means table.)
-- [ ] **Step 7: No regression:** `pytest tests/test_mc_selection.py tests/test_mc_integration.py -q`; ruff check + format --check + `mypy src/fantasy_baseball/mc_selection.py src/fantasy_baseball/web/refresh_pipeline.py` (clean; ignore pre-existing category_odds.py).
-- [ ] **Step 8: Commit:** `feat(mc): SD-calibration table in selection-attribution diagnostic (Phase 6)`.
+- [ ] **Step 3: Implement.** `compute_sd_calibration`: iterate the 7 COUNTING cats only (define `_COUNTING_CATS = ["R","HR","RBI","SB","W","K","SV"]`; READ how `_CATS` and the batch are keyed at mc_selection.py:23/177 first). For each team-cat: `mc_sd = float(np.std(batch[t][cat_str]))`; `analytic_sd = team_sds[t].get(Category(cat_str))`; if `analytic_sd is None or analytic_sd <= 0`: `ratio = float("nan")` else `ratio = mc_sd / analytic_sd`. Skip a cat absent from the batch. `format_sd_calibration_table`: per-team rows (cat, mc_sd, analytic_sd, ratio), a POOLED line (median of finite ratios across all team-cats), and a verdict (`calibrated` if 0.8 <= pooled <= 1.25 else `MC too tight`/`MC too wide`). Then make `run_selection_attribution` compute the calibration inside itself (it already has `team_sds`) and return `(out, calib)`; update the hook call site to unpack.
+- [ ] **Step 4: Run, confirm PASS:** `pytest tests/test_mc_selection.py -v`.
+- [ ] **Step 5: Wire into the hook** (`web/refresh_pipeline.py` `_run_ros_monte_carlo`, the `FB_SELECTION_ATTRIBUTION` block): unpack the new 2-tuple from `run_selection_attribution`; after the means table, append the SD-calibration table to the same output file. (READ the existing hook block; mirror how it writes + the tuple unpack at the call site.)
+- [ ] **Step 6: No regression:** `pytest tests/test_mc_selection.py tests/test_mc_integration.py -q`; ruff + format --check + `mypy src/fantasy_baseball/mc_selection.py src/fantasy_baseball/web/refresh_pipeline.py`.
+- [ ] **Step 7: Commit:** `feat(mc): counting-cat SD-calibration table in selection diagnostic (Phase 6 Task 2)`.
 
 ---
 
-### Task 2: Run the gate + adjudicate (controller, not a subagent)
+### Task 3: Run the gate + adjudicate (controller, not a subagent)
 
-This is the controller's analysis step, not an implementer task.
-
-- [ ] Run the auth'd local refresh with `FB_SELECTION_ATTRIBUTION=1` (same invocation as Phases 4c/5), producing the SD-calibration table on the live rosters.
-- [ ] Read the POOLED ratio + per-category ratios. ADJUDICATE:
-  - **Pooled ratio in [0.8, 1.25] across counting cats** -> GATE PASSES. The horizon split preserved the dispersion and the `f^2` fill variance is bounded. Document and proceed to PR.
-  - **Systematically too TIGHT (< 0.8)** -> the horizon split flattened the dispersion (likely `fraction_remaining` not reaching the SD/dispersion term as intended). Investigate `_apply_variance_batch`'s SD path under `pt_mean_fraction`; if unresolved, set `_ROS_DIRECT_HITTERS`/`_ROS_DIRECT_PITCHERS = False` (the documented fallback: keep full-season sampling, source only games/displacement/fill from ROS) and re-validate.
-  - **Systematically too WIDE (> 1.25)** -> the bench-fill `f^2` variance (or double-counted PT variance) is inflating; localize to the cats with bench-fill (hitters) vs pitchers (no fill -- pitchers should track the analytic TIGHTLY since they are pure active-set sampling).
-- [ ] Write the evidence note `docs/superpowers/games-mc-phase6-sd-evidence-2026-06-26.md` (+ raw table) with the verdict, and update the ledger.
+- [ ] Run the auth'd local refresh with `FB_SELECTION_ATTRIBUTION=1` (as Phases 4c/5), producing BOTH the means table (re-validate -- the Task-1 fix raises the hitter active mean from 0.75x to 0.94x, so the bench-fill premium SHRINKS; confirm new_engine hitter still ~= ERoto + a SMALLER premium, and pitchers UNCHANGED ~= ERoto) AND the SD-calibration table.
+- [ ] Read the POOLED counting-cat ratio + per-cat ratios. First the sanity check: if the pooled ratio is near `sqrt(fraction_remaining)` (~0.7) rather than ~1.0, a `sqrt(fraction_remaining)` factor was dropped on one side -- fix that before adjudicating. Then:
+  - **Pooled in [0.8, 1.25] (esp. pitchers, the no-fill control, tight)** -> GATE PASSES. The horizon split preserved dispersion and the `f^2` fill term is BOUNDED below the band's resolution (small bench portion -- this BOUNDS, does not prove, the `f^2` approximation; document as such). Proceed to PR.
+  - **MC too WIDE (> 1.25)** -> localize: if HITTERS-only wide but PITCHERS calibrated, it's the `f^2` bench-fill term (hitters have fill, pitchers don't); if BOTH wide, re-check the Task-1 volume fix landed (cv_pt band).
+  - **MC too TIGHT (< 0.8)** -> the variance horizon was flattened. This is NOT cleanly fixable by the `_ROS_DIRECT_*` flag (flipping to full-season top-k changes the clamp/churn and may not widen the SD); first investigate the `fraction_remaining` path in `_apply_variance_batch` (`var_target`, `eff_sd`). The flag is the LAST-RESORT escape (keep full-season sampling) only if ROS-direct cannot be calibrated, not a precision SD lever.
+- [ ] Caveat to note: `project_team_sds(displacement=True)` reaches the displaced set via `_apply_displacement` (possibly binary in/out), while the engine uses graded `factor` (variance scaled by `factor^2`); for IL-heavy teams the analytic reference may differ on displaced bodies -- interpret per-team IL-roster ratios with that caveat; the undisplaced-dominated pooled ratio is the primary verdict.
+- [ ] Write `docs/superpowers/games-mc-phase6-sd-evidence-2026-06-27.md` (+ raw table) with the verdict; update the ledger.
 
 ---
 
 ## Self-Review
 
-**Spec coverage:** Component 6 (validation backtest, means AND SDs) -- means done in Phase 4/5 evidence; this adds the SD half as the GATE on the `pt_mean_fraction` horizon split and the `f^2` fill-variance approximation (spec's "Variance note (acknowledged)" + Component 4 GATE language). Reuses the existing analytic SD (`project_team_sds`, validated vs realized by `scripts/backtest_sd_calibration.py`) rather than re-deriving realized variance.
+**Spec coverage:** Component 4 GATE (the `fraction_remaining` horizon split -- Task 1 corrects the volume term it depends on; Task 3 validates the SD), Component 6 (validation backtest, SDs), the "Variance note" (`f^2`, bounded not proven). Task 1 is the fix the plan-review's Critical-1 demanded; the gate's apples-to-apples rationale (the `sqrt(fraction_remaining)` cancellation + matched full-season cv_pt band) is now stated explicitly, not asserted.
 
-**Placeholder scan:** Concrete functions + tests + threshold (0.8-1.25, matching the existing backtest). Task 2 is explicitly a controller adjudication, not placeholder code.
+**Placeholder scan:** Concrete `pt_volumes` wiring, `compute_sd_calibration` with enum/string-key handling + counting-cat scope + NaN guards, typed 2-tuple return channel (no sentinel key), tolerance-not-inherited-calibration threshold. Tests pin the volume fix, the byte-identical default, the enum round-trip, the rate-cat exclusion, and the NaN guard.
 
-**Type consistency:** `compute_sd_calibration(batch, team_sds) -> per-(team,cat) (mc_sd, analytic_sd, ratio)`; the Category-enum (team_sds) vs string (batch) key mismatch is called out as a must-handle, with NaN for absent/zero-analytic cats (no div-by-zero, `is not None`/`>0` guards).
+**Type consistency:** `pt_volumes: np.ndarray | None` (additive, default None = legacy). `run_selection_attribution -> (arm_medians, sd_calibration | None)` (2-tuple, not a widened dict). `compute_sd_calibration` joins string batch keys to `Category`-enum `team_sds` via `Category(<str>)`, counting cats only.
