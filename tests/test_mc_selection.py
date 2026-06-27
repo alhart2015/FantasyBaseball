@@ -97,7 +97,7 @@ def test_run_selection_attribution_three_arms_and_ordering():
             "WHIP": 0,
         }
     }
-    res = run_selection_attribution(
+    res, _ = run_selection_attribution(
         rosters, actuals, 1.0, h_slots=2, p_slots=1, n_iter=2000, seed=3
     )
     assert set(res) == {"topk_per_iter", "topk_fixed", "active_slot"}
@@ -127,7 +127,7 @@ def test_new_engine_arm_present_and_between_floor_and_ceiling():
     actuals = _zero_actuals(["Deep"])
     eos_baseline, team_sds = _context(["Deep"])
 
-    res = run_selection_attribution(
+    res, _ = run_selection_attribution(
         rosters,
         actuals,
         1.0,
@@ -161,7 +161,7 @@ def test_format_attribution_table_includes_new_engine_column():
     ]
     rosters = {"Deep": deep}
     eos_baseline, team_sds = _context(["Deep"])
-    res = run_selection_attribution(
+    res, _ = run_selection_attribution(
         rosters,
         _zero_actuals(["Deep"]),
         1.0,
@@ -174,3 +174,43 @@ def test_format_attribution_table_includes_new_engine_column():
     )
     table = format_attribution_table(res)
     assert "new_engine" in table
+
+
+def test_sd_calibration_counting_cats_only_with_enum_keys():
+    import numpy as np
+
+    from fantasy_baseball.mc_selection import compute_sd_calibration
+    from fantasy_baseball.utils.constants import Category
+
+    rng = np.random.default_rng(0)
+    batch = {"T": {"R": rng.normal(800, 30, 5000), "AVG": rng.normal(0.27, 0.01, 5000)}}
+    team_sds = {"T": {Category.R: 30.0}}  # rate cats absent / keyed differently
+    calib = compute_sd_calibration(batch, team_sds)
+    assert "R" in calib["T"] and "AVG" not in calib["T"]  # counting only; rate excluded
+    mc_sd, analytic_sd, ratio = calib["T"]["R"]
+    assert abs(analytic_sd - 30.0) < 1e-9 and abs(ratio - mc_sd / 30.0) < 1e-9
+
+
+def test_sd_calibration_string_to_enum_roundtrip():
+    # The batch keys are bare strings ("R"); team_sds keys are Category enums.
+    # Pin that Category("R") round-trips to the same enum used in team_sds.
+    from fantasy_baseball.utils.constants import Category
+
+    assert Category("R") == Category.R  # if this is false, the join silently NaNs
+
+
+def test_sd_calibration_zero_or_missing_analytic_is_nan():
+    import numpy as np
+
+    from fantasy_baseball.mc_selection import compute_sd_calibration
+    from fantasy_baseball.utils.constants import Category
+
+    calib = compute_sd_calibration({"T": {"SV": np.ones(10)}}, {"T": {Category.SV: 0.0}})
+    assert calib["T"]["SV"][2] != calib["T"]["SV"][2]  # ratio NaN, no div-by-zero
+
+
+def test_format_sd_calibration_table_has_ratio_and_pooled():
+    from fantasy_baseball.mc_selection import format_sd_calibration_table
+
+    txt = format_sd_calibration_table({"T": {"R": (31.0, 30.0, 31.0 / 30.0)}})
+    assert "ratio" in txt.lower() and "POOLED" in txt and "T" in txt

@@ -1403,11 +1403,12 @@ class RefreshRun:
             if os.environ.get("FB_SELECTION_ATTRIBUTION"):  # gated Phase 0 diagnostic
                 from fantasy_baseball.mc_selection import (
                     format_attribution_table,
+                    format_sd_calibration_table,
                     run_selection_attribution,
                 )
 
                 assert self.fraction_remaining is not None
-                attr = run_selection_attribution(
+                attr, sd_calib = run_selection_attribution(
                     rest_of_season_mc_rosters,
                     actual_standings_dict,
                     self.fraction_remaining,
@@ -1422,6 +1423,9 @@ class RefreshRun:
                 with open("phase0_attribution.txt", "w", encoding="ascii", errors="replace") as fh:
                     fh.write(header)
                     fh.write(format_attribution_table(attr))
+                    if sd_calib is not None:
+                        fh.write("\n\n=== SD calibration (counting cats only) ===\n")
+                        fh.write(format_sd_calibration_table(sd_calib))
                 self._progress("Selection-attribution diagnostic written")
 
             # Phase 4b: build each team's EffectiveRoster (fixed active set + IL

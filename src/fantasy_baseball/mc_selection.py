@@ -8,6 +8,8 @@ format the comparison. Diagnostic-only: NO games plumbing, NO fill engine.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import numpy as np
 
 from fantasy_baseball.mc_roster import EffectiveRoster, build_effective_roster
@@ -18,9 +20,15 @@ from fantasy_baseball.simulation import (
     _flatten_full_season,
     simulate_remaining_season_batch,
 )
-from fantasy_baseball.utils.constants import ALL_CATEGORIES, CLOSER_SV_THRESHOLD
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, CLOSER_SV_THRESHOLD, Category
 
 _CATS = [c.value for c in ALL_CATEGORIES]
+
+# Counting cats only. The 3 rate cats (AVG/ERA/WHIP) are EXCLUDED from the SD
+# gate: their EOS team_total is a ratio diluted by the YTD denominator, so the
+# sampled EOS-rate SD is structurally tighter than the ROS-rate analytic SD --
+# comparing them is apples-to-oranges and falsely reads "too tight."
+_COUNTING_CATS = ["R", "HR", "RBI", "SB", "W", "K", "SV"]
 
 
 def _is_hitter(p) -> bool:
@@ -113,7 +121,10 @@ def run_selection_attribution(
     seed: int,
     eos_baseline: dict | None = None,
     team_sds: dict | None = None,
-) -> dict[str, dict[str, dict[str, float]]]:
+) -> tuple[
+    dict[str, dict[str, dict[str, float]]],
+    dict[str, dict[str, tuple[float, float, float]]] | None,
+]:
     """Run the MC under up to four selection arms; return per-team category medians.
 
     Arms:
@@ -132,6 +143,10 @@ def run_selection_attribution(
     absent (e.g. a slot-less synthetic test), the ``new_engine`` arm is SKIPPED and
     the result contains only the first three arms -- the diagnostic does not crash.
     All arms share one seed.
+
+    Returns a 2-tuple ``(arm_medians, sd_calibration | None)``. The calibration is
+    computed inside this function from the raw new_engine ``batch`` (before it is
+    medianed away); it is ``None`` when the new_engine arm is skipped.
     """
     flat = {t: [_flatten_full_season(p) for p in players] for t, players in team_rosters.items()}
     active = {t: compute_active_slot_cols(players) for t, players in team_rosters.items()}
@@ -159,6 +174,7 @@ def run_selection_attribution(
 
     # 4th arm: NEW engine (body-direct). Requires the standings context to build
     # EffectiveRosters; absent it, skip the arm (do not crash on slot-less tests).
+    sd_calibration: dict[str, dict[str, tuple[float, float, float]]] | None = None
     if eos_baseline is not None and team_sds is not None:
         effective_rosters = _build_effective_rosters(
             team_rosters, eos_baseline, team_sds, fraction_remaining
@@ -174,8 +190,84 @@ def run_selection_attribution(
             n_iter,
             effective_rosters=effective_rosters,
         )
+        # Compute the SD calibration from the raw batch while it is still live,
+        # before it is medianed away below.
+        sd_calibration = compute_sd_calibration(batch, team_sds)
         out["new_engine"] = {t: {c: float(np.median(batch[t][c])) for c in _CATS} for t in flat}
-    return out
+    return out, sd_calibration
+
+
+def compute_sd_calibration(
+    new_engine_batch: dict[str, dict[str, np.ndarray]],
+    team_sds: Mapping[str, Mapping[Category, float]],
+) -> dict[str, dict[str, tuple[float, float, float]]]:
+    """Per-team COUNTING-cat MC-vs-analytic SD calibration.
+
+    For each team and each of the 7 counting cats present in the batch, returns
+    ``(mc_sd, analytic_sd, ratio)`` where ``mc_sd = np.std(batch[t][cat])`` and
+    ``analytic_sd = team_sds[t][Category(cat)]``. Rate cats (AVG/ERA/WHIP) are
+    excluded -- their EOS team_total is a YTD-diluted ratio, not apples-to-apples
+    with the ROS-rate analytic SD. ``ratio`` is NaN when the analytic SD is
+    missing or non-positive (no div-by-zero). A cat absent from the batch is
+    skipped.
+    """
+    calib: dict[str, dict[str, tuple[float, float, float]]] = {}
+    for team, cats in new_engine_batch.items():
+        team_row: dict[str, tuple[float, float, float]] = {}
+        analytic_row = team_sds.get(team, {})
+        for cat in _COUNTING_CATS:
+            samples = cats.get(cat)
+            if samples is None:
+                continue
+            mc_sd = float(np.std(samples))
+            analytic_sd = analytic_row.get(Category(cat))
+            if analytic_sd is not None and analytic_sd > 0:
+                ratio = mc_sd / analytic_sd
+                analytic_val = float(analytic_sd)
+            else:
+                ratio = float("nan")
+                analytic_val = float(analytic_sd) if analytic_sd is not None else float("nan")
+            team_row[cat] = (mc_sd, analytic_val, ratio)
+        calib[team] = team_row
+    return calib
+
+
+def format_sd_calibration_table(
+    calib: dict[str, dict[str, tuple[float, float, float]]],
+) -> str:
+    """ASCII table: per-team counting-cat (mc_sd, analytic_sd, ratio) + pooled verdict.
+
+    POOLED is the median of finite ratios across all team-cats. Verdict:
+    ``calibrated`` if 0.8 <= pooled <= 1.25, else ``MC too tight`` (< 0.8) /
+    ``MC too wide`` (> 1.25).
+    """
+    lines: list[str] = []
+    all_ratios: list[float] = []
+    for team in sorted(calib):
+        lines.append(f"== {team} ==")
+        lines.append(f"{'cat':<6}{'mc_sd':>12}{'analytic_sd':>14}{'ratio':>10}")
+        for cat in _COUNTING_CATS:
+            entry = calib[team].get(cat)
+            if entry is None:
+                continue
+            mc_sd, analytic_sd, ratio = entry
+            if np.isfinite(ratio):
+                all_ratios.append(ratio)
+            lines.append(f"{cat:<6}{mc_sd:>12.3f}{analytic_sd:>14.3f}{ratio:>10.3f}")
+        lines.append("")
+
+    if all_ratios:
+        pooled = float(np.median(all_ratios))
+        if pooled < 0.8:
+            verdict = "MC too tight"
+        elif pooled > 1.25:
+            verdict = "MC too wide"
+        else:
+            verdict = "calibrated"
+        lines.append(f"POOLED ratio (median of finite team-cats) = {pooled:.3f} -> {verdict}")
+    else:
+        lines.append("POOLED ratio = n/a (no finite ratios)")
+    return "\n".join(lines)
 
 
 def format_attribution_table(res: dict, teams: list[str] | None = None) -> str:
