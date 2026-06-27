@@ -1415,6 +1415,8 @@ class RefreshRun:
                     p_slots,
                     n_iter=1000,
                     seed=42,
+                    eos_baseline=self.eos_baseline,
+                    team_sds=self.team_sds,
                 )
                 header = f"seed=42 n_iter=1000 fraction_remaining={self.fraction_remaining:.4f}\n"
                 with open("phase0_attribution.txt", "w", encoding="ascii", errors="replace") as fh:

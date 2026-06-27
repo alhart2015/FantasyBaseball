@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import numpy as np
 
+from fantasy_baseball.mc_roster import EffectiveRoster, build_effective_roster
 from fantasy_baseball.models.player import Player, PlayerType
-from fantasy_baseball.scoring import _classify_roster
+from fantasy_baseball.scoring import LeagueContext, _classify_roster
 from fantasy_baseball.simulation import (
     _CLOSER_RANK_BONUS,
     _flatten_full_season,
@@ -77,6 +78,31 @@ def compute_fixed_topk_cols(
     return {"h": _top(h_keys, h_slots), "p": _top(p_keys, p_slots)}
 
 
+def _build_effective_rosters(
+    team_rosters: dict,
+    eos_baseline: dict,
+    team_sds: dict,
+    fraction_remaining: float,
+) -> dict[str, EffectiveRoster]:
+    """Build each team's EffectiveRoster from the live Player rosters.
+
+    Mirrors the engine's pipeline setup (refresh_pipeline._run_ros_monte_carlo):
+    the SAME LeagueContext (baseline, team_sds, fraction_remaining) the standings
+    build used, so the new-engine arm agrees with ERoto by construction.
+    """
+    out: dict[str, EffectiveRoster] = {}
+    for tname, roster in team_rosters.items():
+        players = [p for p in roster if isinstance(p, Player)]
+        lc = LeagueContext(
+            baseline_other_team_stats={t: s for t, s in eos_baseline.items() if t != tname},
+            team_sds=team_sds,
+            team_name=tname,
+            fraction_remaining=fraction_remaining,
+        )
+        out[tname] = build_effective_roster(players, lc)
+    return out
+
+
 def run_selection_attribution(
     team_rosters: dict,
     actual_standings: dict,
@@ -85,12 +111,27 @@ def run_selection_attribution(
     p_slots: int,
     n_iter: int,
     seed: int,
+    eos_baseline: dict | None = None,
+    team_sds: dict | None = None,
 ) -> dict[str, dict[str, dict[str, float]]]:
-    """Run the MC under three selection arms; return per-team category medians.
+    """Run the MC under up to four selection arms; return per-team category medians.
 
-    Arms: ``topk_per_iter`` (today), ``topk_fixed`` (top-k fixed once on the mean
-    -> isolates re-selection churn), ``active_slot`` (active slots, bench+IL
-    excluded -> isolates bench seating on top of churn). All arms share one seed.
+    Arms:
+    - ``topk_per_iter`` (today): per-iteration top-k re-selection.
+    - ``topk_fixed``: top-k fixed once on the mean -> isolates re-selection churn.
+    - ``active_slot``: active slots only, bench+IL excluded -> isolates bench
+      seating on top of churn.
+    - ``new_engine``: the ROS-direct body engine -- a fixed active set with IL
+      displacement + bench injury-fill, routed via ``effective_rosters`` through
+      ``_simulate_team_hitters_ros_direct``. Bypasses ``active_cols`` entirely
+      (the body-direct path, mirroring the live engine's dual route).
+
+    The first three arms share the flat-dict ``active_cols`` column mechanism. The
+    ``new_engine`` arm requires the standings context (``eos_baseline`` + ``team_sds``)
+    to build per-team ``LeagueContext`` + ``EffectiveRoster``. When that context is
+    absent (e.g. a slot-less synthetic test), the ``new_engine`` arm is SKIPPED and
+    the result contains only the first three arms -- the diagnostic does not crash.
+    All arms share one seed.
     """
     flat = {t: [_flatten_full_season(p) for p in players] for t, players in team_rosters.items()}
     active = {t: compute_active_slot_cols(players) for t, players in team_rosters.items()}
@@ -115,12 +156,38 @@ def run_selection_attribution(
             active_cols=cols,
         )
         out[arm] = {t: {c: float(np.median(batch[t][c])) for c in _CATS} for t in flat}
+
+    # 4th arm: NEW engine (body-direct). Requires the standings context to build
+    # EffectiveRosters; absent it, skip the arm (do not crash on slot-less tests).
+    if eos_baseline is not None and team_sds is not None:
+        effective_rosters = _build_effective_rosters(
+            team_rosters, eos_baseline, team_sds, fraction_remaining
+        )
+        rng = np.random.default_rng(seed)
+        batch = simulate_remaining_season_batch(
+            actual_standings,
+            flat,
+            fraction_remaining,
+            rng,
+            h_slots,
+            p_slots,
+            n_iter,
+            effective_rosters=effective_rosters,
+        )
+        out["new_engine"] = {t: {c: float(np.median(batch[t][c])) for c in _CATS} for t in flat}
     return out
 
 
 def format_attribution_table(res: dict, teams: list[str] | None = None) -> str:
-    """ASCII table: per team, per category, the three arms' median totals."""
+    """ASCII table: per team, per category, each arm's median totals.
+
+    Includes the ``new_engine`` column when that arm is present in ``res`` (it is
+    skipped when the standings context was unavailable -- see
+    ``run_selection_attribution``).
+    """
     arms = ["topk_per_iter", "topk_fixed", "active_slot"]
+    if "new_engine" in res:
+        arms.append("new_engine")
     if teams is None:
         teams = sorted(next(iter(res.values())).keys())
     lines: list[str] = []
