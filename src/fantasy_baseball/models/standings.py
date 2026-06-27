@@ -402,6 +402,7 @@ class ProjectedStandings:
         *,
         actual_standings: Standings | None = None,
         fraction_remaining: float = 1.0,
+        baseline_stats: dict[str, CategoryStats] | None = None,
     ) -> ProjectedStandings:
         """Build end-of-season projection from rosters and team YTD.
 
@@ -426,6 +427,13 @@ class ProjectedStandings:
         2. Pass 2 -- each team re-displaces against the frozen Pass-1
            baseline of the OTHER teams; the resulting ROS components are
            summed with that team's YTD via ``team_end_of_season``.
+
+        ``baseline_stats`` lets a caller (e.g. the MC, which needs the
+        IDENTICAL pass-1 baseline ERoto uses) supply the precomputed
+        ``build_eos_baseline`` result instead of recomputing it here. When
+        ``None`` (every existing caller), Pass-1 is recomputed exactly as
+        before; the two paths are byte-identical when the supplied object
+        is what ``build_eos_baseline`` would have produced.
 
         Other callers of ``project_team_stats`` (optimizer, draft, trade
         evaluator) keep their ROS-only forward-looking math -- they don't
@@ -466,7 +474,8 @@ class ProjectedStandings:
         # pickers score against the same YTD-inclusive baseline. _ytd_for (with
         # warn-on-miss) is still used for the Pass-2 entries below; a missing
         # team surfaces there.
-        baseline_stats = build_eos_baseline(team_rosters, ytd_by_team)
+        if baseline_stats is None:
+            baseline_stats = build_eos_baseline(team_rosters, ytd_by_team)
 
         team_sds = build_team_sds(
             {tname: list(roster) for tname, roster in team_rosters.items()},

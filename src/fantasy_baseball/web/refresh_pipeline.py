@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     from fantasy_baseball.models.league import League
     from fantasy_baseball.models.player import Player
     from fantasy_baseball.models.standings import (
+        CategoryStats,
         ProjectedStandings,
         Standings,
         TeamYtdComponents,
@@ -409,6 +410,11 @@ class RefreshRun:
         # projected standings widget consumes.
         self.ytd_standings: Standings | None = None
         self.projected_standings: ProjectedStandings | None = None
+        # Pass-1 end-of-season baseline ({team: CategoryStats}) shared with
+        # ProjectedStandings.from_rosters and (Phase 4) the games-based MC so
+        # the MC builds the same LeagueContext ERoto used -- one shared object,
+        # no divergent recompute. Populated in _build_projected_standings.
+        self.eos_baseline: dict[str, CategoryStats] | None = None
         self.preseason_projected_standings: ProjectedStandings | None = None
         self.team_sds: dict[str, dict[Category, float]] | None = None
         self.preseason_team_sds: dict[str, dict[Category, float]] | None = None
@@ -929,11 +935,17 @@ class RefreshRun:
             ],
         )
 
+        from fantasy_baseball.models.standings import build_eos_baseline
+
+        ytd_by_team = {e.team_name: e.ytd_components() for e in ytd_standings.entries}
+        self.eos_baseline = build_eos_baseline(all_team_rosters, ytd_by_team)
+
         self.projected_standings = ProjectedStandings.from_rosters(
             all_team_rosters,
             effective_date=self.effective_date,
             actual_standings=ytd_standings,
             fraction_remaining=self.fraction_remaining,
+            baseline_stats=self.eos_baseline,
         )
 
         self.team_sds = build_team_sds(all_team_rosters, self.sd_scale)

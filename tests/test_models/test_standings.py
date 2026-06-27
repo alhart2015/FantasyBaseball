@@ -966,3 +966,99 @@ class TestFromRostersFallbackLogging:
         assert any("Mismatch" in m for m in msgs), (
             f"Expected a warning naming 'Mismatch'; got: {msgs}"
         )
+
+
+class TestFromRostersPrecomputedBaseline:
+    """The MC (Phase 4) needs the SAME pass-1 eos_baseline ERoto uses.
+    from_rosters accepts an optional precomputed baseline_stats; passing
+    the object build_eos_baseline would produce must yield byte-identical
+    projected stats to letting from_rosters recompute it internally.
+    """
+
+    @staticmethod
+    def _two_team_rosters_and_standings():
+        from fantasy_baseball.models.player import (
+            HitterStats,
+            Player,
+            PlayerType,
+        )
+        from fantasy_baseball.models.positions import Position
+        from fantasy_baseball.models.standings import (
+            CategoryStats,
+            Standings,
+            StandingsEntry,
+        )
+        from fantasy_baseball.utils.constants import OpportunityStat
+
+        def _hitter(name, slot, r):
+            return Player(
+                name=name,
+                player_type=PlayerType.HITTER,
+                positions=[Position.OF],
+                selected_position=slot,
+                rest_of_season=HitterStats.from_dict(
+                    {
+                        "r": r,
+                        "hr": 20,
+                        "rbi": 70,
+                        "sb": 5,
+                        "h": 150,
+                        "ab": 550,
+                        "pa": 600,
+                        "g": 150,
+                    }
+                ),
+            )
+
+        rosters = {
+            "Me": [_hitter("MyStar", Position.OF, 90), _hitter("MySecond", Position.OF, 60)],
+            "Opp": [_hitter("OppStar", Position.OF, 85), _hitter("OppSecond", Position.OF, 55)],
+        }
+        actual = Standings(
+            effective_date=date(2026, 6, 2),
+            entries=[
+                StandingsEntry(
+                    team_name="Me",
+                    team_key="me",
+                    rank=1,
+                    stats=CategoryStats(r=40, hr=10, rbi=35, sb=3, avg=0.270),
+                    extras={OpportunityStat.AB: 300.0},
+                ),
+                StandingsEntry(
+                    team_name="Opp",
+                    team_key="opp",
+                    rank=2,
+                    stats=CategoryStats(r=35, hr=8, rbi=30, sb=2, avg=0.260),
+                    extras={OpportunityStat.AB: 280.0},
+                ),
+            ],
+        )
+        return rosters, actual
+
+    def test_from_rosters_accepts_precomputed_baseline_identical(self):
+        from fantasy_baseball.models.standings import (
+            ProjectedStandings,
+            build_eos_baseline,
+        )
+
+        rosters, actual = self._two_team_rosters_and_standings()
+        eff_date = actual.effective_date
+        ytd_by_team = {e.team_name: e.ytd_components() for e in actual.entries}
+        baseline = build_eos_baseline(rosters, ytd_by_team)
+
+        without = ProjectedStandings.from_rosters(
+            rosters,
+            effective_date=eff_date,
+            actual_standings=actual,
+            fraction_remaining=0.5,
+        )
+        with_ = ProjectedStandings.from_rosters(
+            rosters,
+            effective_date=eff_date,
+            actual_standings=actual,
+            fraction_remaining=0.5,
+            baseline_stats=baseline,
+        )
+        a = {e.team_name: e.stats.to_dict() for e in without.entries}
+        b = {e.team_name: e.stats.to_dict() for e in with_.entries}
+        assert a == b
