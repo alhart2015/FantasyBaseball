@@ -599,3 +599,10 @@ class TestBlendWithNormalizer:
         judge_bump = bumped[bumped["name"] == "Aaron Judge"].iloc[0]["hr"]
         # ZiPS HR went up by 10, weight is 0.5 each → blend goes up by 5
         assert judge_bump == pytest.approx(judge_base + 5, abs=0.1)
+
+
+def test_games_in_counting_cols():
+    from fantasy_baseball.data.projections import HITTING_COUNTING_COLS, PITCHING_COUNTING_COLS
+
+    assert "g" in HITTING_COUNTING_COLS
+    assert "g" in PITCHING_COUNTING_COLS and "gs" in PITCHING_COUNTING_COLS

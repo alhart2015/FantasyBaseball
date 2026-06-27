@@ -139,3 +139,11 @@ class TestLoadProjectionSet:
         hitters, pitchers = load_projection_set(fixtures_dir, "nonexistent")
         assert hitters.empty
         assert pitchers.empty
+
+
+def test_games_columns_mapped():
+    from fantasy_baseball.data.fangraphs import HITTING_COLUMN_MAP, PITCHING_COLUMN_MAP
+
+    assert HITTING_COLUMN_MAP.get("G") == "g"
+    assert PITCHING_COLUMN_MAP.get("G") == "g"
+    assert PITCHING_COLUMN_MAP.get("GS") == "gs"

@@ -578,7 +578,9 @@ class TestPlayerPositionEnum:
 def test_hitter_stats_carries_games():
     from fantasy_baseball.models.player import HitterStats
 
-    h = HitterStats.from_dict({"r": 80, "hr": 25, "rbi": 80, "sb": 10, "h": 150, "ab": 550, "g": 150})
+    h = HitterStats.from_dict(
+        {"r": 80, "hr": 25, "rbi": 80, "sb": 10, "h": 150, "ab": 550, "g": 150}
+    )
     assert h.g == 150
     assert h.to_dict()["g"] == 150
 
@@ -597,6 +599,8 @@ def test_pitcher_stats_carries_games_and_starts():
 def test_missing_games_defaults_zero_not_error():
     from fantasy_baseball.models.player import HitterStats, PitcherStats
 
-    assert HitterStats.from_dict({"r": 80, "hr": 25, "rbi": 80, "sb": 10, "h": 150, "ab": 550}).g == 0
+    assert (
+        HitterStats.from_dict({"r": 80, "hr": 25, "rbi": 80, "sb": 10, "h": 150, "ab": 550}).g == 0
+    )
     p = PitcherStats.from_dict({"w": 10, "k": 180, "ip": 190, "er": 70, "bb": 50, "h_allowed": 160})
     assert p.g == 0 and p.gs == 0
