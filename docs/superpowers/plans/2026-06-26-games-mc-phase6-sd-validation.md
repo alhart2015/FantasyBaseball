@@ -45,6 +45,10 @@ def test_ros_direct_uses_full_season_volume_for_cv_pt():
     # sampled ROS-R SD is close to the full-vol analytic PT-SD, not ~2x it.
     import numpy as np
     from fantasy_baseball.simulation import _simulate_team_hitters_ros_direct
+    # NEW fixture (build it -- the existing _hitter helper sets ONLY rest_of_season,
+    # leaving full_season_projection=None, which would make this test vacuous via the
+    # ROS fallback). _one_full_timer_hitter MUST set full_season_projection.pa=620 AND
+    # rest_of_season.pa=305 so the fix (full-season vol) is actually exercised.
     eff = _one_full_timer_hitter(full_pa=620.0, ros_pa=305.0, ros_r=45.0)
     out = _simulate_team_hitters_ros_direct(eff, 0.49, np.random.default_rng(0), 8000)
     # Full-vol PT-SD of R ~= 45 * cv_pt(620) * sqrt(0.49); ROS-vol would be ~2x.
@@ -80,14 +84,14 @@ def test_apply_variance_batch_pt_volumes_default_is_byte_identical():
 **Files:** Modify `src/fantasy_baseball/mc_selection.py`; test `tests/test_mc_selection.py`.
 
 **Interfaces:**
-- Produces: `compute_sd_calibration(new_engine_batch: dict[str, dict[str, np.ndarray]], team_sds: Mapping[str, Mapping[Category, float]]) -> dict[str, dict[str, tuple[float, float, float]]]` -- per team, per COUNTING cat, `(mc_sd, analytic_sd, ratio)`. `format_sd_calibration_table(calib) -> str`. To avoid breaking the arm-keyed return dict and its mypy type, `run_selection_attribution` returns a 2-tuple `(arm_medians, sd_calibration | None)` (sd_calibration computed INSIDE the function where the raw new_engine `batch` is live, BEFORE it is discarded at mc_selection.py:177) -- NOT a sentinel key inside the arm dict. Update the one call site (the hook) to unpack the tuple.
+- Produces: `compute_sd_calibration(new_engine_batch: dict[str, dict[str, np.ndarray]], team_sds: Mapping[str, Mapping[Category, float]]) -> dict[str, dict[str, tuple[float, float, float]]]` -- per team, per COUNTING cat, `(mc_sd, analytic_sd, ratio)`. `format_sd_calibration_table(calib) -> str`. To avoid breaking the arm-keyed return dict and its mypy type, `run_selection_attribution` returns a 2-tuple `(arm_medians, sd_calibration | None)` (sd_calibration computed INSIDE the function where the raw new_engine `batch` is live, BEFORE it is discarded at mc_selection.py:177) -- NOT a sentinel key inside the arm dict. Update ALL call sites to unpack the tuple: the hook (refresh_pipeline.py ~1410) AND the 3 existing tests that call run_selection_attribution and index the result (tests/test_mc_selection.py:100, 130, 164) -- per the repo 'fix all call sites' rule.
 
 - [ ] **Step 1: Write failing tests** in `tests/test_mc_selection.py`:
 
 ```python
 def test_sd_calibration_counting_cats_only_with_enum_keys():
     import numpy as np
-    from fantasy_baseball.models.category import Category
+    from fantasy_baseball.utils.constants import Category
     from fantasy_baseball.mc_selection import compute_sd_calibration
     rng = np.random.default_rng(0)
     batch = {"T": {"R": rng.normal(800, 30, 5000), "AVG": rng.normal(0.27, 0.01, 5000)}}
@@ -100,12 +104,12 @@ def test_sd_calibration_counting_cats_only_with_enum_keys():
 def test_sd_calibration_string_to_enum_roundtrip():
     # The batch keys are bare strings ("R"); team_sds keys are Category enums.
     # Pin that Category("R") round-trips to the same enum used in team_sds.
-    from fantasy_baseball.models.category import Category
+    from fantasy_baseball.utils.constants import Category
     assert Category("R") == Category.R   # if this is false, the join silently NaNs
 
 def test_sd_calibration_zero_or_missing_analytic_is_nan():
     import numpy as np
-    from fantasy_baseball.models.category import Category
+    from fantasy_baseball.utils.constants import Category
     from fantasy_baseball.mc_selection import compute_sd_calibration
     calib = compute_sd_calibration({"T": {"SV": np.ones(10)}}, {"T": {Category.SV: 0.0}})
     assert calib["T"]["SV"][2] != calib["T"]["SV"][2]   # ratio NaN, no div-by-zero
@@ -117,7 +121,7 @@ def test_format_sd_calibration_table_has_ratio_and_pooled():
 ```
 
 - [ ] **Step 2: Run, confirm FAIL.**
-- [ ] **Step 3: Implement.** `compute_sd_calibration`: iterate the 7 COUNTING cats only (define `_COUNTING_CATS = ["R","HR","RBI","SB","W","K","SV"]`; READ how `_CATS` and the batch are keyed at mc_selection.py:23/177 first). For each team-cat: `mc_sd = float(np.std(batch[t][cat_str]))`; `analytic_sd = team_sds[t].get(Category(cat_str))`; if `analytic_sd is None or analytic_sd <= 0`: `ratio = float("nan")` else `ratio = mc_sd / analytic_sd`. Skip a cat absent from the batch. `format_sd_calibration_table`: per-team rows (cat, mc_sd, analytic_sd, ratio), a POOLED line (median of finite ratios across all team-cats), and a verdict (`calibrated` if 0.8 <= pooled <= 1.25 else `MC too tight`/`MC too wide`). Then make `run_selection_attribution` compute the calibration inside itself (it already has `team_sds`) and return `(out, calib)`; update the hook call site to unpack.
+- [ ] **Step 3: Implement.** `compute_sd_calibration`: iterate the 7 COUNTING cats only (define `_COUNTING_CATS = ["R","HR","RBI","SB","W","K","SV"]`; READ how `_CATS` and the batch are keyed at mc_selection.py:23/177 first). For each team-cat: `mc_sd = float(np.std(batch[t][cat_str]))`; `analytic_sd = team_sds[t].get(Category(cat_str))`; if `analytic_sd is None or analytic_sd <= 0`: `ratio = float("nan")` else `ratio = mc_sd / analytic_sd`. Skip a cat absent from the batch. `format_sd_calibration_table`: per-team rows (cat, mc_sd, analytic_sd, ratio), a POOLED line (median of finite ratios across all team-cats), and a verdict (`calibrated` if 0.8 <= pooled <= 1.25 else `MC too tight`/`MC too wide`). Then make `run_selection_attribution` compute the calibration inside itself (it already has `team_sds`) and return `(out, calib)`; update ALL call sites to unpack: the hook AND the 3 existing tests at tests/test_mc_selection.py:100/130/164 (change `res = run_selection_attribution(...)` to `res, _ = run_selection_attribution(...)`).
 - [ ] **Step 4: Run, confirm PASS:** `pytest tests/test_mc_selection.py -v`.
 - [ ] **Step 5: Wire into the hook** (`web/refresh_pipeline.py` `_run_ros_monte_carlo`, the `FB_SELECTION_ATTRIBUTION` block): unpack the new 2-tuple from `run_selection_attribution`; after the means table, append the SD-calibration table to the same output file. (READ the existing hook block; mirror how it writes + the tuple unpack at the call site.)
 - [ ] **Step 6: No regression:** `pytest tests/test_mc_selection.py tests/test_mc_integration.py -q`; ruff + format --check + `mypy src/fantasy_baseball/mc_selection.py src/fantasy_baseball/web/refresh_pipeline.py`.
