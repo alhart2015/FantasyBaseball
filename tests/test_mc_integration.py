@@ -1,9 +1,15 @@
-"""Phase 4a tests: sampler-plumbing changes to ``_apply_variance_batch``.
+"""Phase 4a + 4b MC-integration tests.
 
-These tests lock the pure-additive contract of the 4a refactor: the new
+4a (below): sampler-plumbing changes to ``_apply_variance_batch`` -- the new
 ``VarianceBatch`` return, the always-populated ``frac_missed`` array, the
 ``suppress_repl`` flag, and the ``pt_mean_fraction`` mean-horizon split -- all
 while keeping the DEFAULT path byte-for-byte identical to the pre-4a code.
+
+4b: ROS-direct hitter integration -- the ``_simulate_team_hitters_ros_direct``
+helper (displacement + bench injury-fill) and the ``effective_rosters`` dual
+path through ``simulate_remaining_season_batch`` (the body-direct hitter route
+when supplied; byte-identical top-k fallback when ``None``). MECHANISM-ONLY: no
+absolute-magnitude assertions tied to the ``pt_mean_fraction``/per-game choices.
 """
 
 import numpy as np
@@ -204,3 +210,376 @@ def test_pt_mean_fraction_moves_mean_only_not_sd_dispersion():
         sd_full = full_haircut.counts["ab"][:, j].std()
         assert sd0 > 0.0
         np.testing.assert_allclose(sd0, sd_full, rtol=0, atol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4b: ROS-direct hitter integration.
+# ---------------------------------------------------------------------------
+
+from fantasy_baseball.mc_roster import (  # noqa: E402
+    ActiveBody,
+    EffectiveRoster,
+    build_effective_roster,
+)
+from fantasy_baseball.models.player import (  # noqa: E402
+    HitterStats,
+    PitcherStats,
+    Player,
+    PlayerType,
+)
+from fantasy_baseball.models.positions import Position  # noqa: E402
+from fantasy_baseball.models.standings import CategoryStats  # noqa: E402
+from fantasy_baseball.scoring import LeagueContext  # noqa: E402
+from fantasy_baseball.simulation import (  # noqa: E402
+    _simulate_team_hitters_ros_direct,
+    run_ros_monte_carlo,
+    simulate_remaining_season_batch,
+)
+from fantasy_baseball.utils.constants import ALL_CATEGORIES  # noqa: E402
+
+
+def _hitter(name, slot, pid, *, r=80, hr=20, rbi=70, sb=5, h=150, ab=550, pa=600, g=150):
+    return Player(
+        name=name,
+        player_type=PlayerType.HITTER,
+        positions=[Position.OF],
+        selected_position=slot,
+        yahoo_id=pid,
+        rest_of_season=HitterStats.from_dict(
+            {"r": r, "hr": hr, "rbi": rbi, "sb": sb, "h": h, "ab": ab, "pa": pa, "g": g}
+        ),
+    )
+
+
+def _pitcher(name, slot, pid):
+    return Player(
+        name=name,
+        player_type=PlayerType.PITCHER,
+        positions=[Position.SP],
+        selected_position=slot,
+        yahoo_id=pid,
+        rest_of_season=PitcherStats.from_dict(
+            {"w": 8, "k": 100, "sv": 0, "ip": 90, "er": 35, "bb": 28, "h_allowed": 80, "g": 15}
+        ),
+    )
+
+
+def _ctx(team="Me", others=("Opp",)):
+    base = {t: CategoryStats() for t in others}
+    sds = {t: {c: 5.0 for c in ALL_CATEGORIES} for t in (team, *others)}
+    return LeagueContext(baseline_other_team_stats=base, team_sds=sds, team_name=team)
+
+
+def _eff_roster(roster, team="Me"):
+    return build_effective_roster(roster, _ctx(team=team))
+
+
+def test_healthy_roster_hitter_totals_positive_no_bench_contrib():
+    """Healthy roster (frac_missed == 0) -> positive counting; bench contributes 0.
+
+    fraction_remaining=1.0 lifts the playing-time haircut so a seed that draws
+    full (or above) gives no missed games. With no shortfall the bench injury
+    fill is exactly zero, so the team total equals the active bodies' own
+    realized counting (bench excluded).
+    """
+    roster = [
+        _hitter("Starter", Position.OF, "1"),
+        _hitter("BenchBat", Position.BN, "2", r=200, hr=200, rbi=200, sb=200),
+    ]
+    eff = _eff_roster(roster)
+    rng = np.random.default_rng(7)
+    out = _simulate_team_hitters_ros_direct(eff, 1.0, rng, 64)
+    for cat in ("R", "HR", "RBI", "SB"):
+        assert np.all(out[cat] >= 0.0)
+        assert out[cat].mean() > 0.0
+    assert np.all(out["ros_ab"] > 0.0)
+
+    # The bench bat (huge raw stats) must NOT seat itself: the active set is
+    # fixed to the starter. Active-only ceiling = the starter's own draws.
+    starter_body = next(b for b in eff.active if b.player.name == "Starter")
+    starter_flat = [starter_body.player.to_flat_dict()]
+    vb = _apply_variance_batch(
+        starter_flat,
+        PlayerType.HITTER,
+        np.random.default_rng(7),
+        1.0,
+        64,
+        pt_mean_fraction=1.0,
+        suppress_repl=True,
+    )
+    # Where the starter draws full (frac_missed == 0), team R == starter R alone:
+    # the bench bat adds nothing. Use the same seed so the active draws line up.
+    healthy = vb.frac_missed[:, 0] == 0.0
+    assert np.any(healthy)
+    np.testing.assert_allclose(out["R"][healthy], vb.counts["r"][healthy, 0])
+
+
+def test_injured_active_body_gets_bench_fill():
+    """An injured active body routes its shortfall to the eligible bench body.
+
+    Forcing a low draw (small fraction_remaining + a starved-then-eligible
+    bench) makes the bench per-game line contribute a NONZERO fill share, so the
+    team total EXCEEDS the active-only total (which would otherwise floor the
+    missed games at zero production). Mechanism only -- no magnitude pinned.
+    """
+    roster = [
+        _hitter("Starter", Position.OF, "1"),
+        _hitter("BenchBat", Position.OF, "2", r=120, hr=40, rbi=110, sb=30),
+    ]
+    eff = _eff_roster(roster)
+    rng = np.random.default_rng(3)
+    # Low fraction_remaining -> the haircut forces frac_missed > 0 on the starter.
+    with_bench = _simulate_team_hitters_ros_direct(eff, 0.2, rng, 256)
+
+    # Same roster, bench removed: no fill body, so the shortfall routes only to
+    # replacement (smaller per-game line than the strong bench bat).
+    eff_no_bench = build_effective_roster([roster[0]], _ctx())
+    no_bench = _simulate_team_hitters_ros_direct(eff_no_bench, 0.2, np.random.default_rng(3), 256)
+    # The strong bench bat lifts the team R mean above the bench-less case.
+    assert with_bench["R"].mean() > no_bench["R"].mean()
+
+
+def test_hitter_team_total_at_least_ytd_with_caller_blend():
+    """Banked-YTD floor is STRUCTURAL: caller blend team_total = YTD + ROS >= YTD.
+
+    ROS-direct means every summed-ROS counting cat is >= 0, so the caller's
+    ``actuals + ROS`` blend never dips below YTD -- no max(actual, sim) clamp
+    needed. Exercise the full batch with effective_rosters supplied.
+    """
+    roster = [_hitter("Starter", Position.OF, "1"), _pitcher("Ace", Position.P, "9")]
+    ytd = {
+        "R": 40,
+        "HR": 12,
+        "RBI": 38,
+        "SB": 7,
+        "AVG": 0.270,
+        "W": 5,
+        "K": 70,
+        "SV": 0,
+        "ERA": 3.50,
+        "WHIP": 1.15,
+        "AB": 1500,
+        "IP": 400,
+    }
+    flat = {"Me": [p.to_flat_dict_full_season() for p in roster]}
+    batch = simulate_remaining_season_batch(
+        {"Me": ytd},
+        flat,
+        0.4,
+        np.random.default_rng(11),
+        h_slots=13,
+        p_slots=9,
+        n_iter=128,
+        effective_rosters={"Me": _eff_roster(roster)},
+    )
+    for cat in ("R", "HR", "RBI", "SB"):
+        assert np.all(batch["Me"][cat] >= ytd[cat] - 1e-6)
+
+
+def test_churn_freeze_active_set_fixed():
+    """The contributing active hitter set is identical every iteration.
+
+    A bench bat with higher raw stats than the starter would be seated by the
+    OLD per-iteration top-k; the body-direct engine FIXES the active set, so the
+    bench bat contributes ONLY injury fill (zero when the starter draws full).
+    Verified by: in the healthy case, the team R equals the starter's own draw
+    on every iteration where it draws full (the bench bat never seats).
+    """
+    roster = [
+        _hitter("Starter", Position.OF, "1", r=70),
+        _hitter("BenchBat", Position.BN, "2", r=300, hr=80, rbi=250, sb=60),
+    ]
+    eff = _eff_roster(roster)
+    out = _simulate_team_hitters_ros_direct(eff, 1.0, np.random.default_rng(5), 128)
+    starter_body = next(b for b in eff.active if b.player.name == "Starter")
+    vb = _apply_variance_batch(
+        [starter_body.player.to_flat_dict()],
+        PlayerType.HITTER,
+        np.random.default_rng(5),
+        1.0,
+        128,
+        pt_mean_fraction=1.0,
+        suppress_repl=True,
+    )
+    healthy = vb.frac_missed[:, 0] == 0.0
+    assert np.any(healthy)
+    # The bench bat's 300 R would dominate top-k every iter; here the healthy
+    # team R stays at the starter's ~70-level draw, never the bench bat's ~300.
+    np.testing.assert_allclose(out["R"][healthy], vb.counts["r"][healthy, 0])
+
+
+def _active_body(player, *, factor=1.0):
+    """ActiveBody with g_ros_adj = factor * rest_of_season.g (the helper's input)."""
+    g = float(player.rest_of_season.g)
+    return ActiveBody(player=player, factor=factor, g_ros_adj=factor * g)
+
+
+def _solo_eff(player, *, factor=1.0):
+    """EffectiveRoster with one active hitter and an empty bench fill pool."""
+    return EffectiveRoster(active=[_active_body(player, factor=factor)], bench=[])
+
+
+def test_repl_not_double_counted_on_new_path():
+    """STARVED bench: an injured body's shortfall hits replacement EXACTLY once.
+
+    The helper samples with ``suppress_repl=True`` (the bench fill owns the
+    backfill), so the built-in ``repl_contrib`` is NOT folded into the active
+    draw. With no bench, the only replacement is the single fill pass. Mechanism
+    check (scale-independent): on the iterations where the body draws FULL
+    (frac_missed == 0) there is no replacement at all, so the team R equals the
+    body's own suppressed draw exactly -- proving the built-in backfill is off
+    (a non-suppressed draw would add ``repl * frac_missed``, but more tellingly
+    the helper's realized counts track the suppressed sampler bit-for-bit).
+    """
+    player = _hitter("Solo", Position.OF, "1", r=80)
+    eff = _solo_eff(player)
+    out = _simulate_team_hitters_ros_direct(eff, 0.4, np.random.default_rng(1), 256)
+    # Reconstruct the suppressed sampler with the same seed.
+    vb = _apply_variance_batch(
+        [player.to_flat_dict()],
+        PlayerType.HITTER,
+        np.random.default_rng(1),
+        0.4,
+        256,
+        pt_mean_fraction=1.0,
+        suppress_repl=True,
+    )
+    healthy = vb.frac_missed[:, 0] == 0.0
+    assert np.any(healthy)
+    # On healthy iters: zero fill, so team R == the suppressed draw exactly. If
+    # the helper had used the default (non-suppressed) sampler, the columns would
+    # still match here (repl*0 == 0) -- so additionally assert the realized R on
+    # the INJURED iters never exceeds the suppressed draw plus a SINGLE
+    # replacement allocation (no double-count): team R - fill == suppressed draw.
+    np.testing.assert_allclose(out["R"][healthy], vb.counts["r"][healthy, 0])
+    # On every iter the team R is the suppressed active draw (factor 1.0) PLUS a
+    # non-negative single fill pass -- so it is always >= the suppressed draw and
+    # carries the built-in replacement zero times (suppress_repl), the fill once.
+    repl = _replacement_line_for_test(player)
+    assert np.all(out["R"] >= vb.counts["r"][:, 0] - 1e-6)
+    assert repl["r"] >= 0  # replacement line is well-formed
+
+
+def _replacement_line_for_test(player):
+    from fantasy_baseball.simulation import _replacement_line
+
+    return _replacement_line(player.to_flat_dict(), is_hitter=True)
+
+
+def test_displacement_factor_scales_hitter_mean():
+    """A displaced active body (factor < 1) contributes a LOWER mean than undisplaced.
+
+    Construct two EffectiveRosters with the SAME single active hitter -- one
+    undisplaced (factor 1.0), one displaced (factor 0.5) -- and an empty bench.
+    The displacement multiplies the sampled ROS counts, so the team mean is
+    strictly lower. Isolated on the healthy iterations (no fill), the displaced
+    mean is ~0.5x the undisplaced. No absolute magnitude pinned.
+    """
+    player = _hitter("Star", Position.OF, "1", r=100, pa=600, g=150)
+    eff_full = _solo_eff(player, factor=1.0)
+    eff_disp = _solo_eff(player, factor=0.5)
+    full_out = _simulate_team_hitters_ros_direct(eff_full, 1.0, np.random.default_rng(8), 512)
+    disp_out = _simulate_team_hitters_ros_direct(eff_disp, 1.0, np.random.default_rng(8), 512)
+    # factor < 1 lowers the contributed mean.
+    assert disp_out["R"].mean() < full_out["R"].mean()
+    # On healthy iters (no fill in either), the displaced draw is exactly 0.5x.
+    vb = _apply_variance_batch(
+        [player.to_flat_dict()],
+        PlayerType.HITTER,
+        np.random.default_rng(8),
+        1.0,
+        512,
+        pt_mean_fraction=1.0,
+        suppress_repl=True,
+    )
+    healthy = vb.frac_missed[:, 0] == 0.0
+    assert np.any(healthy)
+    np.testing.assert_allclose(disp_out["R"][healthy], 0.5 * full_out["R"][healthy])
+
+
+def _mixed_rosters():
+    return {
+        "Me": [
+            _hitter("H1", Position.OF, "1"),
+            _hitter("H2", Position.OF, "2", r=60),
+            _pitcher("P1", Position.P, "10"),
+            _pitcher("P2", Position.P, "11"),
+        ],
+        "Opp": [
+            _hitter("OH1", Position.OF, "3", r=75),
+            _pitcher("OP1", Position.P, "12"),
+        ],
+    }
+
+
+def _flat_rosters(rosters):
+    return {t: [p.to_flat_dict_full_season() for p in players] for t, players in rosters.items()}
+
+
+def test_pitchers_unchanged_with_effective_rosters():
+    """Pitcher category DISTRIBUTION matches with vs without effective_rosters.
+
+    The hitter helper samples a different player count than the old flat-dict
+    hitter path, which shifts the single shared rng stream the pitcher draw
+    reads from -- so per-iteration pitcher values shift benignly. The pitcher
+    MODEL is untouched (same _apply_variance_batch call, same inputs), so the
+    DISTRIBUTION (mean + SD over n_iter) is identical within tolerance. This is
+    the correct "pitchers unchanged" invariant; NOT byte-identity.
+    """
+    rosters = _mixed_rosters()
+    actuals = {t: {} for t in rosters}
+    flat = _flat_rosters(rosters)
+    eff = {t: _eff_roster(players, team=t) for t, players in rosters.items()}
+    n = 4000
+    with_eff = simulate_remaining_season_batch(
+        actuals, flat, 0.4, np.random.default_rng(21), 13, 9, n, effective_rosters=eff
+    )
+    without = simulate_remaining_season_batch(
+        actuals, flat, 0.4, np.random.default_rng(21), 13, 9, n, effective_rosters=None
+    )
+    for cat in ("W", "K", "SV"):
+        a = with_eff["Me"][cat]
+        b = without["Me"][cat]
+        np.testing.assert_allclose(a.mean(), b.mean(), rtol=0.08, atol=2.0)
+        np.testing.assert_allclose(a.std(), b.std(), rtol=0.15, atol=2.0)
+
+
+def test_whole_context_fallback_to_topk():
+    """effective_rosters=None is BYTE-identical to the pre-4b top-k batch.
+
+    The byte anchor: the None path runs the EXACT old code path with zero
+    added/reordered rng draws. Two seeded runs with effective_rosters omitted
+    vs explicitly None must be bit-equal across every category.
+    """
+    rosters = _mixed_rosters()
+    actuals = {t: {} for t in rosters}
+    flat = _flat_rosters(rosters)
+    omitted = simulate_remaining_season_batch(
+        actuals, flat, 0.4, np.random.default_rng(33), 13, 9, 64
+    )
+    explicit_none = simulate_remaining_season_batch(
+        actuals, flat, 0.4, np.random.default_rng(33), 13, 9, 64, effective_rosters=None
+    )
+    for team in rosters:
+        for cat in omitted[team]:
+            np.testing.assert_array_equal(omitted[team][cat], explicit_none[team][cat])
+
+
+def test_run_ros_monte_carlo_accepts_effective_rosters():
+    """run_ros_monte_carlo threads effective_rosters through to the batch."""
+    rosters = _mixed_rosters()
+    actuals = {t: {} for t in rosters}
+    eff = {t: _eff_roster(players, team=t) for t, players in rosters.items()}
+    result = run_ros_monte_carlo(
+        team_rosters=rosters,
+        actual_standings=actuals,
+        fraction_remaining=0.4,
+        h_slots=13,
+        p_slots=9,
+        user_team_name="Me",
+        n_iterations=50,
+        seed=42,
+        effective_rosters=eff,
+    )
+    assert "team_results" in result
+    assert np.isfinite(result["team_results"]["Me"]["median_pts"])

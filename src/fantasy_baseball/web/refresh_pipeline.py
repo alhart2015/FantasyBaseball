@@ -59,6 +59,7 @@ if TYPE_CHECKING:
 
     from fantasy_baseball.config import LeagueConfig
     from fantasy_baseball.lineup.optimizer import HitterAssignment, PitcherStarter
+    from fantasy_baseball.mc_roster import EffectiveRoster
     from fantasy_baseball.models.league import League
     from fantasy_baseball.models.player import Player
     from fantasy_baseball.models.standings import (
@@ -1421,6 +1422,29 @@ class RefreshRun:
                     fh.write(format_attribution_table(attr))
                 self._progress("Selection-attribution diagnostic written")
 
+            # Phase 4b: build each team's EffectiveRoster (fixed active set + IL
+            # displacement + bench fill pool) from the LIVE Player rosters, using
+            # the SAME LeagueContext (baseline, team_sds, fraction_remaining) the
+            # standings build used -- so the MC's IL handling agrees with ERoto by
+            # construction. Routes hitters through the ROS-direct body engine. Only
+            # when the standings context is available; otherwise None -> top-k.
+            effective_rosters: dict[str, EffectiveRoster] | None = None
+            if self.eos_baseline is not None and self.team_sds is not None:
+                from fantasy_baseball.mc_roster import build_effective_roster
+                from fantasy_baseball.scoring import LeagueContext
+
+                effective_rosters = {}
+                for tname, roster in rest_of_season_mc_rosters.items():
+                    lc = LeagueContext(
+                        baseline_other_team_stats={
+                            t: s for t, s in self.eos_baseline.items() if t != tname
+                        },
+                        team_sds=self.team_sds,
+                        team_name=tname,
+                        fraction_remaining=self.fraction_remaining,
+                    )
+                    effective_rosters[tname] = build_effective_roster(roster, lc)
+
             if rest_of_season_mc_rosters:
                 self.rest_of_season_mc = run_ros_monte_carlo(
                     team_rosters=rest_of_season_mc_rosters,
@@ -1431,6 +1455,7 @@ class RefreshRun:
                     user_team_name=self.config.team_name,
                     n_iterations=1000,
                     progress_cb=lambda i: self._progress(f"Current MC: iteration {i}/1000..."),
+                    effective_rosters=effective_rosters,
                 )
                 self._progress("Current Monte Carlo complete")
 
