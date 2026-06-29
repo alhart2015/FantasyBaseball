@@ -14,7 +14,7 @@ from scipy.special import ndtr, pdtr, pdtrik
 
 from fantasy_baseball.distributions import build_distributions
 from fantasy_baseball.mc_fill import ActiveSample, BenchSample, allocate_bench_fill
-from fantasy_baseball.mc_roster import ActiveBody, EffectiveRoster
+from fantasy_baseball.mc_roster import ActiveBody, BenchBody, EffectiveRoster
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
@@ -822,6 +822,34 @@ def _apply_variance_batch(
     return VarianceBatch(counts=out, frac_missed=frac_missed, scales=scales)
 
 
+def _sample_hitter_bodies(
+    bodies: list[ActiveBody] | list[BenchBody],
+    rng: np.random.Generator,
+    fraction_remaining: float,
+    n_iter: int,
+) -> VarianceBatch:
+    """Sample HITTER bodies' rest-of-season lines with the ROS-direct hitter
+    settings: ``pt_mean_fraction=1.0`` (full mean haircut over the ROS window),
+    ``suppress_repl=True`` (the bench fill replaces the built-in backfill), and
+    each body's FULL-SEASON pt volume (``_full_season_pt_volume``) so it samples
+    at its full-volume CV band. Used for BOTH the active draw and the bench
+    injury-fill draw, so the two are sampled identically by construction (only
+    ``.player`` is read, so ``ActiveBody`` and ``BenchBody`` both work).
+    """
+    flats = [b.player.to_flat_dict() for b in bodies]
+    pt_volumes = np.array([_full_season_pt_volume(b.player, is_hitter=True) for b in bodies])
+    return _apply_variance_batch(
+        flats,
+        PlayerType.HITTER,
+        rng,
+        fraction_remaining,
+        n_iter,
+        pt_mean_fraction=1.0,
+        suppress_repl=True,
+        pt_volumes=pt_volumes,
+    )
+
+
 def _simulate_team_hitters_ros_direct(
     effective_roster: EffectiveRoster,
     fraction_remaining: float,
@@ -879,20 +907,7 @@ def _simulate_team_hitters_ros_direct(
         out["ros_ab"] = zeros.copy()
         return out
 
-    active_flats = [b.player.to_flat_dict() for b in active_h_bodies]
-    pt_volumes = np.array(
-        [_full_season_pt_volume(b.player, is_hitter=True) for b in active_h_bodies]
-    )
-    active_vb = _apply_variance_batch(
-        active_flats,
-        PlayerType.HITTER,
-        rng,
-        fraction_remaining,
-        n_iter,
-        pt_mean_fraction=1.0,
-        suppress_repl=True,
-        pt_volumes=pt_volumes,
-    )
+    active_vb = _sample_hitter_bodies(active_h_bodies, rng, fraction_remaining, n_iter)
 
     # Per-active-body realized ROS counts = sampled draw * displacement factor.
     factors = np.array([b.factor for b in active_h_bodies])  # (n_active,)
@@ -907,20 +922,7 @@ def _simulate_team_hitters_ros_direct(
     # so the active stream is unchanged and an EMPTY bench pool no-ops the rng
     # (_apply_variance_batch returns before any draw when n_players == 0). See the
     # sampled-bench-fill spec (2026-06-29).
-    bench_flats = [bb.player.to_flat_dict() for bb in bench_h_bodies]
-    bench_pt_volumes = np.array(
-        [_full_season_pt_volume(bb.player, is_hitter=True) for bb in bench_h_bodies]
-    )
-    bench_vb = _apply_variance_batch(
-        bench_flats,
-        PlayerType.HITTER,
-        rng,
-        fraction_remaining,
-        n_iter,
-        pt_mean_fraction=1.0,
-        suppress_repl=True,
-        pt_volumes=bench_pt_volumes,
-    )
+    bench_vb = _sample_hitter_bodies(bench_h_bodies, rng, fraction_remaining, n_iter)
 
     def _repl_for(ab: ActiveBody) -> dict[str, float]:
         return _replacement_line(ab.player.to_flat_dict(), is_hitter=True)
@@ -948,7 +950,7 @@ def _simulate_team_hitters_ros_direct(
                     col: float(bench_vb.counts[col][it, b_idx]) / games_played
                     for col in HITTING_COUNTING
                 }
-                capacity = float(games_played)
+                capacity = games_played
             else:
                 per_game = {col: 0.0 for col in HITTING_COUNTING}
                 capacity = 0.0
