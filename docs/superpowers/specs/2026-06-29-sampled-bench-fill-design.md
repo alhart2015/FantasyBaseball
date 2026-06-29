@@ -90,9 +90,16 @@ projection — identical to the active path, so no special-casing.
 over-availability case (`scale > 1` all map to `frac_missed = 0`). The rate
 decomposition below needs the unclamped `scale` (the games that actually generated
 `realized`). So add a `scales: np.ndarray` field (shape `(n_iter, n_players)`) to
-`VarianceBatch`, populated from the `scales` array already computed at
-`simulation.py:789`. This is back-compatible: existing consumers (the active path,
-the top-k path) ignore the new field.
+`VarianceBatch`, with **NO default**, and update BOTH of its construction sites:
+the populated return at `simulation.py:820` passes the `scales` array already
+computed at `:789`; the `n_players == 0` early return at `:759-763` (which runs
+BEFORE `scales` is computed) must pass `scales=np.zeros((n_iter, 0))` to stay
+shape-correct. Missing the early-return site is the trap — it is the exact path the
+empty-bench no-op invariant (see Expected fallout) depends on. Existing consumers
+(the active path, the top-k path) read only `counts`/`frac_missed`, so they are
+unaffected. Note `frac_missed = max(0, 1 - scales)` is now derivable from `scales`;
+keeping both is intentional (the active path at `:896` reads `frac_missed`), not an
+oversight — `scales` is the authoritative field, `frac_missed` a convenience view.
 
 So the bench draw yields `bench_vb.counts[col]`, `bench_vb.scales`, each shape
 `(n_iter, n_bench)`. Bench bodies are healthy bench (undisplaced), so no
@@ -133,9 +140,13 @@ per_game_rate[it,b][col] = realized[it,b][col] / games_played_sim[it,b]   if gam
 contributes exactly its sampled line — `capacity * per_game_rate =
 games_played_sim * realized/games_played_sim = realized_total` — and any partial
 slice `assign * per_game_rate <= realized_total` (the allocator decrements
-`remaining` from `capacity`, so `sum(assign) <= capacity`). No division blow-up:
-`realized` and `games_played_sim` shrink together as `scale -> 0`, so the rate
-stays ~`base/g_ros_full` in expectation.
+`remaining` from `capacity`, so `sum(assign) <= capacity`). **No division blow-up
+even for a single absurd draw:** a tiny `games_played_sim` can produce a large
+per-game rate for one iteration (e.g. a NegBin `realized = 1` over `0.15` games),
+but a body's TOTAL contribution is bounded by `capacity * per_game_rate =
+realized_total` regardless of how large the rate is — the capacity cap, not the
+rate magnitude, is what bounds the output. (This is the exact mechanism; do not
+rely on "the rate stays small," which is false for individual draws.)
 
 `EPS` is a small absolute games threshold (e.g. `1e-9`); it guards division, not a
 modeling cutoff.
@@ -146,7 +157,7 @@ modeling cutoff.
   iteration), with **NO default** (force every call site to pass it explicitly;
   a `0.0` default would silently zero-fill a missed site). `BenchSample` is
   `@dataclass(frozen=True)`, so both constructors must be updated: the sampler in
-  `simulation.py` and the `_bench`/`BenchSample` factory in `tests/test_mc_fill.py`.
+  `simulation.py` and the `_bench_sample` factory in `tests/test_mc_fill.py`.
 - **`BenchSample`s are now built PER ITERATION, not once.** Today they are a single
   list of deterministic samples built ONCE outside the `for it in range(n_iter)`
   loop (`simulation.py:900-908`) and reused. The change moves construction INSIDE
@@ -154,7 +165,10 @@ modeling cutoff.
   `bench_vb.counts[col][it, b]`, `bench_vb.scales[it, b]` to compute that
   iteration's `capacity` and `per_game_rate`. (`per_game_counts` stays a scalar
   `dict[str, float]`; what changes is that a fresh `BenchSample` is constructed for
-  each `it`. Resolving adversarial finding #4.)
+  each `it`. Resolving adversarial finding #4.) The indexed values are `np.float64`;
+  wrap `capacity` and each `per_game_rate[col]` in `float(...)` so the
+  `dict[str, float]` / `capacity: float` annotations stay accurate and `mypy`
+  (which covers both files) passes.
 - In `allocate_bench_fill`, initialize remaining capacity from `bs.capacity`
   instead of the static `bs.body.g_ros_full`. Everything else is unchanged:
   - shortfalls largest-first;
@@ -236,18 +250,31 @@ n_iter=1000, and record the per-cat `mc_sd / analytic_sd` table plus hitter mean
 Acceptance requires ALL of (resolving adversarial finding #2 — a falsifiable,
 bounded, mean-aware gate):
 
-1. **R and RBI each land in `[0.85, 1.20]`** (an explicit per-cat band, not a vague
-   "toward 1.0"), up from the ~0.70-0.72 baseline. This is the primary de-bias
-   check. Bounding the TOP of the band guards against over-correction
-   (over-dispersion); the prior gate only bounded the pooled ratio, which can mask
-   a per-cat overshoot.
+1. **R and RBI rise materially toward 1.0** from the ~0.70-0.72 baseline.
+   Pass/fail is two hard bounds plus a directional target, because the exact
+   landing point is not modeled in advance (sampling the bench but not the still
+   -deterministic replacement line — which fires MORE now, see #5 — could hold the
+   ratios short of full calibration):
+   - **HARD FAIL if either ratio exceeds `1.20`** (over-correction / over-dispersion
+     — the prior pooled-only gate could mask this per-cat).
+   - **HARD FAIL if either ratio does not improve by at least `+0.08`** over its
+     baseline (i.e. no real de-bias).
+   - **TARGET `>= 0.85`.** Landing in `[0.78, 0.85)` is a partial success: record it,
+     and decide whether to also sample the replacement line (the #5 follow-up)
+     rather than loosening this target post hoc.
 2. **The pooled ratio stays in `[0.8, 1.25]`** (unchanged gate-wide band).
-3. **Hitter means do NOT materially drift** from the Phase 6 baseline (HITTERS =
-   ERoto + the small bench-fill premium; e.g. Hart RBI within a few of its prior
-   value). Because the rate decomposition is mean-neutral by construction (divide
-   by `g*scale`), the means should be ~unchanged; this check FALSIFIES finding #1's
-   mean-bias concern empirically. A material upward shift means the decomposition
-   regressed and must be fixed before merge.
+3. **Hitter category team-total MEANS stay within tolerance of the Phase 6
+   baseline** (HITTERS = ERoto + the small bench-fill premium). The decomposition's
+   per-game RATE is mean-neutral by construction (divide by `g*scale`), but the
+   TOTAL fill is not perfectly mean-neutral: in the capacity-bound heavy-injury tail
+   the reduced capacity shifts some games to the deterministic replacement line
+   (the intended finding-#5 re-damping), giving a small DOWNWARD pressure. So the
+   tolerance is deliberately asymmetric:
+   - **HARD FAIL on any UPWARD drift `> +1%`** in a hitter cat's team-total mean —
+     that is the finding-#1 mean-bias failure mode and must not occur.
+   - **A DOWNWARD drift up to `~5%` is expected and acceptable** (the #5 effect); a
+     downward drift `> 5%` means replacement firing is over-damping the mean and
+     triggers the sample-the-replacement-line follow-up.
 4. **Replacement-fill share** (fraction of filled games served by the deterministic
    replacement line) is recorded before vs after; a material rise is flagged (see
    the "increased replacement firing" residual above).
@@ -286,8 +313,15 @@ Two things stay byte-identical and MUST be preserved (do not "fix" them):
 
 ## Files
 
-- `src/fantasy_baseball/mc_fill.py` — add `BenchSample.capacity` (no default); use
-  it for remaining-capacity init in `allocate_bench_fill`.
+- `src/fantasy_baseball/mc_fill.py` —
+  - add `BenchSample.capacity` (no default); use it for remaining-capacity init in
+    `allocate_bench_fill`;
+  - fix the now-stale/false docstring + comment: `allocate_bench_fill`'s docstring
+    (`mc_fill.py:43-52`) asserts "One bench body's total assigned games `<=` its
+    `g_ros_full`", which the design DELIBERATELY breaks (capacity = `g_ros_full*scale`
+    can exceed `g_ros_full` when `scale > 1`, the injury-insurance case). Rewrite it
+    to the new `bs.capacity` cap, and update the `remaining = {... g_ros_full ...}`
+    init comment (`:55-56`).
 - `src/fantasy_baseball/simulation.py` —
   - add `scales: np.ndarray` to `VarianceBatch` and populate it from the existing
     `scales` array in `_apply_variance_batch` (back-compatible);
@@ -300,7 +334,14 @@ Two things stay byte-identical and MUST be preserved (do not "fix" them):
     is now false and must describe the sampled per-iteration fill (resolving
     finding #10).
 - `tests/test_mc_fill.py`, `tests/test_mc_integration.py` — new/updated tests per
-  above (including the `_bench`/`BenchSample` factory's new `capacity` arg).
+  above (including the `_bench_sample` factory's new `capacity` arg). **Retarget the
+  named test `test_fill_never_exceeds_bench_g_ros_full_capacity`** (`test_mc_fill.py`,
+  ~line 105): it encodes the old `<= g_ros_full` cap, which the design intentionally
+  replaces with the per-iteration `bs.capacity` cap. Rename/rewrite it to assert
+  `sum(assigned) <= bs.capacity` (which CAN exceed `g_ros_full` when `scale > 1`),
+  not the old static cap — otherwise it fails by design. State the justification in
+  the commit per the "don't silently fix tests" rule (this is a deliberate contract
+  change, not a loosened assertion).
 
 ## Verification checklist (per CLAUDE.md)
 
