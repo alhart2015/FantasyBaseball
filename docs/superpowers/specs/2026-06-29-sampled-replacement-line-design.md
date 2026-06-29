@@ -75,8 +75,8 @@ near-full-time band keeps `scale` away from the moderate-small range (~0.01-0.1)
 that drives the heavy tail, making spikes rare; a low-volume band widens them.
 The dampers below are the explicit controls if the band alone is not enough.
 
-This is the specific mechanism behind an over-correction (gate #1 `> 1.20` HARD
-FAIL). If the gate trips high, the dampers in priority order are: (1) cap the
+This is the specific mechanism behind an over-correction (gate #1 `>= 1.20` HARD
+FAIL, per the authoritative ladder). If the gate trips high, the dampers in priority order are: (1) cap the
 per-iteration replacement per-game rate at a multiple (e.g. 3-5x) of the
 deterministic rate; (2) switch this term to the proper-NegBin-at-need model. Do
 NOT "cap replacement capacity" -- the pool is terminal (nothing cascades below
@@ -247,7 +247,8 @@ fraction_remaining, and confirm ALL of:
 
 1. R and RBI SD ratios: record actual values and classify per the
    PASS/PARTIAL/FAIL ladder below (the merge decision lives there, not here). The
-   target is `[0.85, 1.20)`; neither may exceed `1.20` (over-correction).
+   target is `[0.85, 1.20)`; neither may reach `1.20` (i.e. `>= 1.20` is
+   over-correction, per the ladder).
 2. Pooled ratio stays in `[0.8, 1.25]`.
 3. Hitter category team-total MEANS (the new_engine MC arrays' MEAN, NOT the
    median, and NOT the bench-independent ERoto `standings_breakdown` projection).
@@ -257,7 +258,10 @@ fraction_remaining, and confirm ALL of:
    with the mean exactly preserved (a skew artifact, not real drift). The
    diagnostic currently emits per-cat medians; this gate run must additionally
    compute the per-cat MEAN of the new_engine team totals (before/after) and check
-   it. Criteria: NO upward drift `> +1%` (hard fail -- the only mechanism that
+   it. The per-iter arrays are already in hand where `compute_sd_calibration`
+   reads `np.std(batch[t][cat])`, so this is a trivial `np.mean(...)` add via the
+   same evidence-only instrument-then-revert pattern the gate-#4 share counter
+   used -- not a tooling gap. Criteria: NO upward drift `> +1%` (hard fail -- the only mechanism that
    pushes the mean UP is a capped denominator, forbidden) AND no downward drift
    `> ~5%` (surface/investigate -- a small downward drift is the intended
    re-damping, but a large one signals a damper over-clipping the tail or a bug,
@@ -303,15 +307,17 @@ a function of `mu = base*scale`), so the model should move R/RBI materially. Two
 levers if it lands off-target, recorded so tuning is principled, not flailing:
 
 - **Curve volume (`repl_pa_volume`)** sets the scrub's playing-time `cv_pt` band.
-  Sampling at the replacement line's near-full-time `repl_ab` (~400-516) gives a
-  LOW PT-availability variance -- realistic replacement scrubs (call-ups/demotions)
+  Sampling at the replacement line's near-full-time `repl_ab` (~423-520 for the
+  Core-8 hitter replacement lines) gives a LOW PT-availability variance -- realistic replacement scrubs (call-ups/demotions)
   have more PT volatility. If the result is a PARTIAL (under-injection), a smaller
   effective volume (higher `cv_pt` band) is the lever to widen it; if it
   over-corrects, this same band (with the tail in "Tail behavior") is the first
   suspect. The plan picks the `repl_ab`-derived band as the principled default and
   treats it as the tuning knob.
-- **The `1/scale` tail** (see "Tail behavior") -- the rate/capacity caps named
-  there are the over-correction levers.
+- **The `1/scale` tail** (see "Tail behavior") -- the rate cap (and the
+  proper-NegBin fallback) named there are the over-correction levers. A capacity
+  cap is the named ANTI-PATTERN there (terminal pool), NOT a lever -- do not use
+  it.
 
 ## Reuse (no new sampling math)
 
@@ -337,7 +343,12 @@ levers if it lands off-target, recorded so tuning is principled, not flailing:
 
 - `src/fantasy_baseball/mc_fill.py`: change `replacement_for` to a per-game
   contract; simplify the residual branch (delete the `repl_ab/PA_PER_GAME`
-  conversion at `~100-106`); update docstrings.
+  conversion at `~100-106`). REWRITE the `allocate_bench_fill` docstring
+  (`~44-55`), which currently describes the deleted conversion in detail
+  ("residual -> replacement per-game (replacement total / (repl_ab / PA_PER_GAME)
+  ...)") -- that sentence becomes actively false and misleading after the flip;
+  pin it to the new "caller supplies a per-game replacement line" contract, do not
+  leave a generic "update docstrings".
 - `src/fantasy_baseball/simulation.py`: in `_simulate_team_hitters_ros_direct`,
   add the batched replacement-body draw (after the bench draw) + per-(iter,active)
   per-game rate decomposition; pass the sampled per-game `replacement_for` into
