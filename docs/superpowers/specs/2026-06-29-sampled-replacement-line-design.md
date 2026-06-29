@@ -44,14 +44,43 @@ The residual `need` games (per active body, after the bench cascade) are filled
 at a STOCHASTIC mean-neutral per-game replacement rate instead of the
 deterministic `_replacement_line` per-game rate. A scrub's per-game rate is
 modeled as fixed for the iteration (drawn once), so the contribution variance
-scales ~`need^2` -- identical in form to how bench bodies are already sampled
-(`per_game_rate * assigned_games`). This was chosen over (a) a proper NegBin draw
-at the actual `need` volume (more faithful to the analytic dispersion but the draw
-would have to happen after `need` is known, breaking the pure allocator) and (b)
-an independent per-game stream (least variance, expected insufficient). Rationale:
-consistency with the bench treatment, reuse of existing machinery, a pure
-allocator, and it injects the most variance of the pure options (best chance of
-clearing the +0.08 floor) while remaining mean-neutral.
+scales ~`need^2`. This reuses the bench path's per-game decomposition
+(`per_game_rate * games`); it is identical in form FOR THE MEAN, but NOT for the
+tail (see "Tail behavior" below -- the bench's capacity cap is absent here, so the
+safety bound the bench relies on does not transfer). This was chosen over (a) a
+proper NegBin draw at the actual `need` volume (more faithful to the analytic
+dispersion but the draw would have to happen after `need` is known, breaking the
+pure allocator) and (b) an independent per-game stream (least variance, expected
+insufficient). Rationale: consistency with the bench treatment, reuse of existing
+machinery, a pure allocator, and it injects the most variance of the pure options
+(best chance of clearing the +0.08 floor) while remaining mean-neutral (in
+expectation, conditional on `scale > eps` -- see Mean-neutrality).
+
+## Tail behavior (NOT inherited from the bench cap)
+
+The bench path is tail-safe by construction: a bench body's total contribution is
+`capacity * per_game = (g*scale) * (realized/(g*scale)) = realized_total`, so the
+`1/scale` is CANCELLED by the capacity and even an extreme small-`scale` draw is
+bounded (parent spec's "no division blow-up" invariant). The replacement term has
+NO capacity cap (the pool is inexhaustible; it covers the full `need`), so the
+`1/scale` is NOT cancelled: `fill = (realized / (repl_implied_games * scale)) *
+need`, where `need` is bounded by the ACTIVE's shortfall, independent of the
+scrub's `scale`. Dividing realized by `scale` removes the playing-time MEAN level
+but AMPLIFIES the NegBin count noise by `1/scale` -- it is a noise amplifier, not a
+clean cancellation. As `scale -> 0` a nonzero count produces an inflated
+single-iteration fill spike; the variance contribution scales like `E[1/scale]`,
+finite ONLY because the EPS guard cuts off `scale <= eps`. Its magnitude is
+sensitive to the replacement bodies' `cv_pt` band (the curve volume, below): a
+near-full-time band keeps `scale` away from 0 and the spike rare; a low-volume
+band widens it.
+
+This is the specific mechanism behind an over-correction (gate #1 `> 1.20` HARD
+FAIL). If the gate trips high, the dampers in priority order are: (1) cap the
+per-iteration replacement per-game rate at a multiple (e.g. 3-5x) of the
+deterministic rate; (2) cap replacement "capacity" the way bench is capped
+(restoring the cancellation); (3) switch this term to the proper-NegBin-at-need
+model. The implementer must NOT assume the bench tail-safety transfers and skip a
+clamp -- the plan carries this asymmetry explicitly.
 
 ## Mechanism
 
@@ -62,19 +91,30 @@ active bodies:
    `_replacement_line(active.player.to_flat_dict(), is_hitter=True)`. This is
    already position-routed (a catcher's replacement gives ~0 SB, a middle
    infielder's ~15) and is a FULL-SEASON counting bundle with NO games field.
-2. Compute each replacement body's implied full-season volume from its own line:
-   `repl_implied_games = repl_ab / PA_PER_GAME` (the same implied-games heuristic
-   the current deterministic path uses), and pass `repl_ab` (PA) as the
-   playing-time curve volume.
+2. Derive TWO distinct volumes from each replacement line's `ab` field (which is
+   at-bats, NOT plate appearances):
+   - `repl_implied_games = repl_ab / PA_PER_GAME` -- the implied-games
+     denominator. This is the SAME heuristic the current deterministic allocator
+     uses (`mc_fill.py:102`); keeping it preserves mean-consistency with the old
+     path. (It is an AB/PA-per-game approximation, deliberately inherited verbatim
+     so the mean does not shift relative to today.)
+   - `repl_pa_volume = repl_ab / AB_PER_PA` -- the playing-time CURVE volume,
+     derived the SAME way `_full_season_pt_volume` converts AB to PA
+     (`simulation.py:420-422`), so the scrub is banded consistently with how other
+     bodies are banded. (See Calibration levers: this band choice affects how much
+     PT-scale variance is injected.)
 3. ONE `_apply_variance_batch` draw over all the replacement bodies
    (PlayerType.HITTER, `pt_mean_fraction=1.0`, `suppress_repl=True`,
-   `pt_volumes` = the per-body replacement PA volumes), APPENDED AFTER the bench
-   draw. Yields realized counts + `scale` per (iter, active).
+   `pt_volumes` = the per-body `repl_pa_volume`), APPENDED AFTER the bench draw.
+   Yields realized counts + `scale` per (iter, active).
 4. Decompose to a mean-neutral per-game rate, per (iter, active, col):
    `per_game_repl = realized / (repl_implied_games * scale)` when
-   `repl_implied_games * scale > eps`, else `0.0`. In expectation
-   `E[per_game_repl] = repl_base / repl_implied_games` -- exactly today's
-   deterministic per-game replacement rate.
+   `repl_implied_games * scale > eps`, else `0.0`. Conditional on `scale > eps`,
+   `E[per_game_repl] = repl_base / repl_implied_games` -- today's deterministic
+   per-game replacement rate (the `scale` cancels exactly because the NegBin mean
+   is `base*scale`). The eps-guard mass (`scale <= eps`) zeroes the rate, so the
+   UNCONDITIONAL mean is `(repl_base/repl_implied_games) * P(scale > eps)`,
+   i.e. a tiny DOWNWARD bias only -- never upward (see Mean-neutrality).
 5. In the per-iteration fill loop, the allocator multiplies each active's residual
    `need` by THAT active's sampled per-game replacement line for THAT iteration.
 
@@ -82,9 +122,11 @@ active bodies:
 
 The replacement pool is inexhaustible: it always covers the full residual `need`
 (no availability haircut on the contribution). The replacement body's `scale` is
-sampled (it falls out of `_apply_variance_batch`) only to drive rate noise and is
-DIVIDED BACK OUT in step 4 (the mean-neutral denominator). It is NOT used as a
-capacity cap -- unlike a bench body, a replacement body has no fill ceiling.
+sampled (it falls out of `_apply_variance_batch`); dividing realized by
+`repl_implied_games * scale` removes its playing-time MEAN level (keeping the rate
+mean-neutral) while amplifying the count noise by `1/scale`. It is NOT used as a
+capacity cap -- unlike a bench body, a replacement body has no fill ceiling, so
+the `1/scale` does NOT cancel (see "Tail behavior").
 
 ### Independence
 
@@ -118,13 +160,20 @@ line is full-season) and keeps the rng in the caller.
 
 ## Mean-neutrality (load-bearing -- gate #3)
 
-`E[realized / (repl_implied_games * scale)] = repl_base / repl_implied_games`.
-The denominator MUST be the UNCAPPED `repl_implied_games * scale` (the same
-invariant the bench sampling relies on). A denominator capped at
+`E[realized / (repl_implied_games * scale) | scale > eps] = repl_base /
+repl_implied_games`. The denominator MUST be the UNCAPPED `repl_implied_games *
+scale` (the same invariant the bench sampling relies on). A denominator capped at
 `repl_implied_games` (i.e. dividing by the unscaled volume) would reintroduce an
 upward mean bias proportional to `max(1, scale)` -- the exact bug class the
-parent spec's spec-review caught. The acceptance gate's mean-drift check (no
-upward drift > +1%) is the guard.
+parent spec's spec-review caught.
+
+The neutrality is EXACT only conditional on `scale > eps`; the eps-guarded mass
+(`scale <= eps`, rate forced to 0) makes the unconditional mean a hair LOW, never
+high. That is the load-bearing direction: gate #3 fails ONLY on UPWARD drift, and
+the only mechanism that could push the mean up is a capped denominator (forbidden
+above). A small downward drift is expected and acceptable (it overlaps the
+intended replacement re-damping). The acceptance gate's mean-drift check (no
+upward drift > +1%) is the guard; do not claim bit-exact neutrality.
 
 ## EPS guard
 
@@ -139,21 +188,38 @@ dividing by zero). `eps = 1e-9`, matching the bench path. Never `x or default`.
   consumes rng and SHIFTS the stream for any later per-team draws -- the same
   shared-Generator property the active and bench draws already have. This is
   acceptable (it does not bias distributions) and is the established batch design.
-- The all-empty byte-anchor `test_variance_batch_default_matches_legacy_columns`
-  is UNTOUCHED (it exercises `_apply_variance_batch` directly with the legacy
-  defaults; this change does not alter that path).
-- The active-only "empty-bench" guardrail tests
-  (`test_repl_not_double_counted_on_new_path`,
-  `test_displacement_factor_scales_hitter_mean`,
-  `test_ros_direct_uses_full_season_volume_for_cv_pt`) route their active
-  `need` through the NOW-SAMPLED replacement term. Their MEAN / structural
-  assertions must still hold (mean-neutral); any value pinned to the old
-  deterministic replacement magnitude will be re-captured DELIBERATELY (with the
-  reason recorded), never loosened to pass. A guardrail asserting a true
-  invariant (e.g. replacement not double-counted, displacement scales the mean)
-  that breaks is a real regression, not a golden to re-pin -- STOP and fix.
+- IMPORTANT (retracts a parent-spec invariant): the replacement draw fires for
+  EVERY team with active hitters (`n_active > 0`), regardless of bench depth. So
+  the parent spec's finding-#8 guarantee that "empty-bench ROS-direct teams
+  consume ZERO extra rng / stay byte-identical" is now VOID for empty-bench teams.
+  What REMAINS byte-identical: (a) a team with NO active hitters early-returns
+  before any draw (`simulation.py:876-880`), still zero rng; (b) the direct
+  byte-anchor `test_variance_batch_default_matches_legacy_columns` exercises
+  `_apply_variance_batch` with legacy defaults and is UNTOUCHED (this change adds a
+  new call site, not a change to the function). Do not rely on the parent's
+  empty-bench byte-identical claim.
+- MEAN-INVARIANT guardrails -- must still hold, never loosen:
+  `test_repl_not_double_counted_on_new_path`,
+  `test_displacement_factor_scales_hitter_mean`. These pin values only on HEALTHY
+  iterations (`frac_missed == 0` -> `need == 0` -> no fill fires regardless of
+  sampling) and on mean/structural properties that mean-neutrality preserves. If
+  one breaks, it is a real regression -- STOP and fix the code, do not re-pin.
+- SD-CEILING guardrail -- legitimately moves, re-pin WITH analysis:
+  `test_ros_direct_uses_full_season_volume_for_cv_pt` asserts an ABSOLUTE upper
+  bound on `out["R"].std()` (around `tests/test_mc_integration.py:695`) calibrated
+  for the OLD deterministic fill. This change injects variance into that fill BY
+  DESIGN, so `helper_sd` rises and the ceiling can trip. That is the INTENDED
+  effect, NOT a regression: re-derive the bound with the new fill variance, re-pin
+  it WITH the recorded analysis, and confirm it still reflects a real upper bound
+  (not just "bump it until green"). This test is explicitly NOT in the
+  mean-invariant set above.
 - Our own de-bias SD test and any pinned post-bench-draw team-total goldens will
   shift (new sampling) and are re-pinned with justification, as in PR #146.
+- The synthetic replacement flat-dicts returned by `_replacement_line` are SHARED
+  module-level constants (`REPLACEMENT_BY_POSITION[...]` / `_GENERIC_HITTER_REPL`).
+  `_apply_variance_batch` only READS them (`p.get(col)`), so aliasing is benign --
+  but they must be treated read-only; never mutate a flat-dict on this path or the
+  shared constant corrupts for all consumers.
 
 ## Acceptance gate (re-run Task 5)
 
@@ -161,8 +227,9 @@ Re-run the SD-calibration diagnostic (`FB_SELECTION_ATTRIBUTION=1`) BEFORE
 (current branch HEAD, bench-only) vs AFTER (this change), same seed / n_iter /
 fraction_remaining, and confirm ALL of:
 
-1. R and RBI SD ratios each rise to `>= 0.85` (target band `[0.85, 1.20)`),
-   with neither exceeding `1.20` (no over-correction). Record actual values.
+1. R and RBI SD ratios: record actual values and classify per the
+   PASS/PARTIAL/FAIL ladder below (the merge decision lives there, not here). The
+   target is `[0.85, 1.20)`; neither may exceed `1.20` (over-correction).
 2. Pooled ratio stays in `[0.8, 1.25]`.
 3. Hitter category team-total means (the new_engine MC medians -- the quantity
    the fill actually moves, NOT the bench-independent ERoto `standings_breakdown`
@@ -174,27 +241,61 @@ fraction_remaining, and confirm ALL of:
 
 ### Calibration outcomes (surface, do not paper over)
 
-- If R/RBI land in `[0.85, 1.20)` and gate #3 holds: PASS -> proceed to merge.
-- If R/RBI OVERSHOOT `1.20`: the correlated `need^2` model over-disperses; the
-  plan must surface this (candidate dampers: a partial-correlation factor, or
-  switching this term to the proper-NegBin-at-need model). Do NOT ship an
-  over-correction.
-- If R/RBI rose `>= +0.08` but stall in `[baseline+0.08, 0.85)`: PARTIAL --
-  record it, surface to the user, decide whether a further refinement is
-  warranted before merge.
-- If R/RBI still fail the `+0.08` floor: the model is insufficient; STOP and
-  re-design. Do NOT loosen the floor.
+The four outcomes are mutually exclusive; exactly one applies, and each names its
+own merge disposition (no outcome is left to post-hoc judgment):
 
-There is NO one-line "off switch" required; the bench sampling (PR #146) and this
-replacement sampling share the per-game-rate machinery, so the fallback is a model
-adjustment (above), surfaced through the gate, not a silent revert.
+- **PASS (auto-merge eligible):** both R and RBI land in `[0.85, 1.20)` AND
+  gate #3 holds (no upward mean drift > +1%) AND gate #2 holds. Proceed to merge.
+- **OVER-CORRECTION (blocks merge):** either R or RBI `>= 1.20`. The uncapped
+  `1/scale` tail (see "Tail behavior") over-disperses. Apply a damper in the
+  priority order named there (rate cap -> capacity cap -> proper-NegBin-at-need),
+  re-run the gate. Do NOT ship an over-correction.
+- **PARTIAL (does NOT auto-merge):** both rose `>= +0.08` over baseline but at
+  least one stalls in `[baseline+0.08, 0.85)`, with gates #2/#3 holding. Record
+  it and SURFACE to the user for an explicit go/no-go -- a PARTIAL never merges
+  on the implementer's own judgment.
+- **FAIL (blocks merge):** either R or RBI rose `< +0.08`. The model is
+  insufficient; STOP and re-design. Do NOT loosen the `+0.08` floor (the parent
+  evidence doc explicitly warns against this).
+
+There is NO one-line "off switch"; the bench sampling (PR #146) and this
+replacement sampling share the per-game-rate machinery, so the fallback for an
+over-correction is a model adjustment (above), surfaced through the gate, not a
+silent revert.
+
+### Calibration levers (for PARTIAL/over-correction tuning)
+
+The dominant injected variance is the NegBin count dispersion (`STAT_DISPERSION`,
+a function of `mu = base*scale`), so the model should move R/RBI materially. Two
+levers if it lands off-target, recorded so tuning is principled, not flailing:
+
+- **Curve volume (`repl_pa_volume`)** sets the scrub's playing-time `cv_pt` band.
+  Sampling at the replacement line's near-full-time `repl_ab` (~400-516) gives a
+  LOW PT-availability variance -- realistic replacement scrubs (call-ups/demotions)
+  have more PT volatility. If the result is a PARTIAL (under-injection), a smaller
+  effective volume (higher `cv_pt` band) is the lever to widen it; if it
+  over-corrects, this same band (with the tail in "Tail behavior") is the first
+  suspect. The plan picks the `repl_ab`-derived band as the principled default and
+  treats it as the tuning knob.
+- **The `1/scale` tail** (see "Tail behavior") -- the rate/capacity caps named
+  there are the over-correction levers.
 
 ## Reuse (no new sampling math)
 
 - `_apply_variance_batch` -- the batched NegBin + copula draw (called once more,
-  for the replacement bodies).
-- `_replacement_line` -- position-routed replacement bundle (unchanged).
-- `PA_PER_GAME` -- implied-games conversion constant (unchanged).
+  for the replacement bodies). Feeding it the synthetic `_replacement_line` dicts
+  is correct ONLY because all three of these hold simultaneously: (a) `pt_volumes`
+  is supplied explicitly (so the `:777` per-player volume read is bypassed -- the
+  replacement dict has no volume field of its own); (b) `suppress_repl=True` (so
+  the unconditional `_replacement_line(p, ...)` at `:810`, which would return
+  `_GENERIC_HITTER_REPL` for a positionless synthetic dict, is computed but
+  discarded -- no replacement-of-a-replacement double count); (c) the counting
+  cols are read via `safe_float(p.get(col))`, which the replacement dict carries.
+  The plan must keep all three; dropping any one silently corrupts the draw.
+- `_replacement_line` -- position-routed replacement bundle (unchanged; returns
+  SHARED read-only module constants -- see the no-mutate note in test impact).
+- `PA_PER_GAME` -- implied-games denominator constant (unchanged). `AB_PER_PA` --
+  the AB->PA conversion for the curve volume (matches `_full_season_pt_volume`).
 - The mean-neutral per-game decomposition pattern -- mirrors the bench path in
   `_simulate_team_hitters_ros_direct` exactly (`realized / (vol * scale)`).
 - `HITTER_CORR_MATRIX` / `_negbin_copula_counts` -- the category copula.
@@ -202,14 +303,60 @@ adjustment (above), surfaced through the gate, not a silent revert.
 ## Files (anticipated)
 
 - `src/fantasy_baseball/mc_fill.py`: change `replacement_for` to a per-game
-  contract; simplify the residual branch; update docstrings.
+  contract; simplify the residual branch (delete the `repl_ab/PA_PER_GAME`
+  conversion at `~100-106`); update docstrings.
 - `src/fantasy_baseball/simulation.py`: in `_simulate_team_hitters_ros_direct`,
   add the batched replacement-body draw (after the bench draw) + per-(iter,active)
   per-game rate decomposition; pass the sampled per-game `replacement_for` into
-  `allocate_bench_fill`; update the docstring.
-- `tests/test_mc_fill.py`, `tests/test_mc_integration.py`: per-game `replacement_for`
-  contract update; new replacement-sampling de-bias / mean-neutrality tests;
-  re-pin shifted goldens with justification.
+  `allocate_bench_fill`; update the docstring. The single production caller is
+  `_repl_for` (`~simulation.py:927`); it must flip from full-season to per-game in
+  the SAME change.
+
+### The `replacement_for` contract flip is TYPE-INVISIBLE -- enumerate every consumer
+
+Both the old and new contracts are `dict[str, float]`, so mypy/ruff CANNOT catch a
+half-applied flip: a consumer still returning a full-season line while the
+allocator assumes per-game silently over-fills by ~`repl_ab/PA_PER_GAME` (~120x).
+Every consumer below must flip atomically; the listed tests are the only safety
+net.
+
+- `tests/test_mc_fill.py`:
+  - `_flat_replacement` / `_realistic_replacement` factories (`~51-58`) return
+    FULL-SEASON lines -> convert to per-game (or have the tests pass per-game lines
+    directly) so they match the new contract.
+  - `test_replacement_per_game_not_overscaled` (`~96-106`) exists SOLELY to test
+    the allocator's now-deleted `repl_ab/PA_PER_GAME` conversion. Under the new
+    contract it is vacuous: RETARGET it to the caller (where the conversion now
+    lives) or DELETE it with the reason recorded -- do not leave it asserting a
+    conversion the allocator no longer does.
+  - `test_position_mismatch_routes_to_replacement_not_bench` (`~83-93`) and
+    `test_residual_goes_to_replacement_when_bench_exhausted` (`~172-180`) feed
+    `replacement_for` lambdas and assert on the residual magnitude -> update their
+    lambdas + expected values to the per-game contract. If the lambda stays
+    full-season but the allocator stops converting, they break (~120x too high) --
+    that is the contract flip working, not a regression; fix the test inputs, do
+    NOT loosen the assertion.
+- `tests/test_mc_integration.py`: new replacement-sampling de-bias /
+  mean-neutrality tests; re-pin shifted goldens with justification; handle the
+  SD-ceiling guardrail per "RNG stream and test impact".
+
+### Caller wiring note (avoid an unhashable-key trap)
+
+The allocator calls `replacement_for(a.body)` with the `ActiveBody`. `ActiveBody`
+wraps a `Player` and may not be hashable, so the caller's per-iteration lookup of
+"this body's sampled per-game line" must be keyed on `id(active_body)` (or aligned
+by the active body's index), NOT a `{body: line}` dict. The active bodies are
+already enumerated when building `ActiveSample`s, so the `id()`-keyed map is local.
+
+### AVG components
+
+The residual fill loops ALL `HITTING_COUNTING`, including `h` and `ab`, so sampling
+the replacement term also adds noise to the `ros_h` / `ros_ab` AVG components (as
+the bench fill already does). `ab` stays mean-exact (`out["ab"] = base*scale`, so
+`realized_ab/(repl_implied_games*scale) = base_ab/repl_implied_games = PA_PER_GAME`
+deterministically); `h` carries count noise. This mirrors the active/bench AVG
+asymmetry and needs no special handling -- noted so the AVG impact is not a
+surprise.
 
 ## ASCII-only
 
