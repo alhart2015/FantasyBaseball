@@ -68,29 +68,43 @@ need`, where `need` is bounded by the ACTIVE's shortfall, independent of the
 scrub's `scale`. Dividing realized by `scale` removes the playing-time MEAN level
 but AMPLIFIES the NegBin count noise by `1/scale` -- it is a noise amplifier, not a
 clean cancellation. As `scale -> 0` a nonzero count produces an inflated
-single-iteration fill spike; the variance contribution scales like `E[1/scale]`,
-finite ONLY because the EPS guard cuts off `scale <= eps`. Its magnitude is
-sensitive to the replacement bodies' `cv_pt` band (the curve volume, below): a
-near-full-time band keeps `scale` away from 0 and the spike rare; a low-volume
-band widens it.
+single-iteration fill spike. The eps guard (`scale <= 1e-9`) is ONLY a
+division-by-zero guard -- at 1e-9 it does almost nothing for variance. The actual
+over-dispersion control is the `cv_pt` band (the curve volume, below): a
+near-full-time band keeps `scale` away from the moderate-small range (~0.01-0.1)
+that drives the heavy tail, making spikes rare; a low-volume band widens them.
+The dampers below are the explicit controls if the band alone is not enough.
 
 This is the specific mechanism behind an over-correction (gate #1 `> 1.20` HARD
 FAIL). If the gate trips high, the dampers in priority order are: (1) cap the
 per-iteration replacement per-game rate at a multiple (e.g. 3-5x) of the
-deterministic rate; (2) cap replacement "capacity" the way bench is capped
-(restoring the cancellation); (3) switch this term to the proper-NegBin-at-need
-model. The implementer must NOT assume the bench tail-safety transfers and skip a
-clamp -- the plan carries this asymmetry explicitly.
+deterministic rate; (2) switch this term to the proper-NegBin-at-need model. Do
+NOT "cap replacement capacity" -- the pool is terminal (nothing cascades below
+it), so a capacity cap would leave `need - capacity` UNCOVERED in heavy-injury
+iterations and silently drop production (a downward mean bias, not the clean
+bench cancellation). Both dampers clip the positive tail, so they introduce a
+DOWNWARD mean bias; after applying one, the gate #3 re-check (which bounds
+downward drift, below) is mandatory -- a damper must not be tuned past the point
+where it drags the mean down materially. The implementer must NOT assume the
+bench tail-safety transfers and skip a clamp -- the plan carries this asymmetry
+explicitly.
 
 ## Mechanism
 
 Per call to `_simulate_team_hitters_ros_direct` (HITTERS only), batched across the
 active bodies:
 
-1. Build one synthetic replacement flat-dict per active body:
+1. For each active body, look up its replacement line:
    `_replacement_line(active.player.to_flat_dict(), is_hitter=True)`. This is
    already position-routed (a catcher's replacement gives ~0 SB, a middle
-   infielder's ~15) and is a FULL-SEASON counting bundle with NO games field.
+   infielder's ~15) and is a FULL-SEASON counting bundle with NO games field. NOTE
+   it returns a SHARED read-only module constant (two actives at the same position
+   alias the same object); the list of these forms the synthetic "players" for the
+   draw -- read-only, never mutate (see the no-mutate note in test impact).
+   The sampled replacement line gets NO displacement `factor` (unlike active
+   bodies): replacement is the floor a healthy scrub provides, and the
+   deterministic path it replaces applies no factor (`mc_fill.py:100-106`), so
+   omitting it preserves mean-consistency.
 2. Derive TWO distinct volumes from each replacement line's `ab` field (which is
    at-bats, NOT plate appearances):
    - `repl_implied_games = repl_ab / PA_PER_GAME` -- the implied-games
@@ -193,7 +207,8 @@ dividing by zero). `eps = 1e-9`, matching the bench path. Never `x or default`.
   the parent spec's finding-#8 guarantee that "empty-bench ROS-direct teams
   consume ZERO extra rng / stay byte-identical" is now VOID for empty-bench teams.
   What REMAINS byte-identical: (a) a team with NO active hitters early-returns
-  before any draw (`simulation.py:876-880`), still zero rng; (b) the direct
+  before any draw (the `if not active_h_bodies:` return, ~`simulation.py:904-908`),
+  still zero rng; (b) the direct
   byte-anchor `test_variance_batch_default_matches_legacy_columns` exercises
   `_apply_variance_batch` with legacy defaults and is UNTOUCHED (this change adds a
   new call site, not a change to the function). Do not rely on the parent's
@@ -204,15 +219,18 @@ dividing by zero). `eps = 1e-9`, matching the bench path. Never `x or default`.
   iterations (`frac_missed == 0` -> `need == 0` -> no fill fires regardless of
   sampling) and on mean/structural properties that mean-neutrality preserves. If
   one breaks, it is a real regression -- STOP and fix the code, do not re-pin.
-- SD-CEILING guardrail -- legitimately moves, re-pin WITH analysis:
+- SD-CEILING guardrail -- ONLY the ceiling line moves; re-pin it WITH analysis:
   `test_ros_direct_uses_full_season_volume_for_cv_pt` asserts an ABSOLUTE upper
   bound on `out["R"].std()` (around `tests/test_mc_integration.py:695`) calibrated
   for the OLD deterministic fill. This change injects variance into that fill BY
   DESIGN, so `helper_sd` rises and the ceiling can trip. That is the INTENDED
-  effect, NOT a regression: re-derive the bound with the new fill variance, re-pin
-  it WITH the recorded analysis, and confirm it still reflects a real upper bound
-  (not just "bump it until green"). This test is explicitly NOT in the
-  mean-invariant set above.
+  effect, NOT a regression: re-derive the `:695` bound with the new fill variance,
+  re-pin it WITH the recorded analysis, and confirm it still reflects a real upper
+  bound (not just "bump it until green"). CRITICAL: re-pin ONLY the `:695`
+  ceiling. The healthy-iteration exact-match assertions in the SAME test (around
+  `:690-691`) stay BYTE-IDENTICAL (those iters have `need == 0` -> no fill, and the
+  active draw is unchanged) and must NOT be loosened. This test is explicitly NOT
+  in the mean-invariant set above for the `:695` line only.
 - Our own de-bias SD test and any pinned post-bench-draw team-total goldens will
   shift (new sampling) and are re-pinned with justification, as in PR #146.
 - The synthetic replacement flat-dicts returned by `_replacement_line` are SHARED
@@ -231,32 +249,47 @@ fraction_remaining, and confirm ALL of:
    PASS/PARTIAL/FAIL ladder below (the merge decision lives there, not here). The
    target is `[0.85, 1.20)`; neither may exceed `1.20` (over-correction).
 2. Pooled ratio stays in `[0.8, 1.25]`.
-3. Hitter category team-total means (the new_engine MC medians -- the quantity
-   the fill actually moves, NOT the bench-independent ERoto `standings_breakdown`
-   projection): NO upward drift `> +1%` vs the BEFORE run (hard fail -- the
-   mean-neutral decomposition must hold). A downward drift up to ~5% is acceptable
-   (the intended replacement re-damping).
+3. Hitter category team-total MEANS (the new_engine MC arrays' MEAN, NOT the
+   median, and NOT the bench-independent ERoto `standings_breakdown` projection).
+   Mean-neutrality is a MEAN property, so the gate must check the mean: this change
+   replaces a point-mass deterministic fill with a right-skewed `1/scale` term
+   whose MEDIAN sits below its mean, so the new_engine MEDIAN would drift down even
+   with the mean exactly preserved (a skew artifact, not real drift). The
+   diagnostic currently emits per-cat medians; this gate run must additionally
+   compute the per-cat MEAN of the new_engine team totals (before/after) and check
+   it. Criteria: NO upward drift `> +1%` (hard fail -- the only mechanism that
+   pushes the mean UP is a capped denominator, forbidden) AND no downward drift
+   `> ~5%` (surface/investigate -- a small downward drift is the intended
+   re-damping, but a large one signals a damper over-clipping the tail or a bug,
+   and must be explained before merge, especially on a post-damper re-run).
 4. Replacement-fill share recorded (expected ~unchanged from the ~77% baseline;
    the change samples that term, it does not change how much of it fires).
 
 ### Calibration outcomes (surface, do not paper over)
 
-The four outcomes are mutually exclusive; exactly one applies, and each names its
-own merge disposition (no outcome is left to post-hoc judgment):
+Because R and RBI are scored per-cat and can DIVERGE (one over-shoots while the
+other under-shoots), the outcomes are NOT mutually exclusive on their own.
+Evaluate in this strict PRECEDENCE order and take the FIRST that matches (so a
+divergent run, e.g. R=1.22 / RBI=0.80, has exactly one defined action):
 
-- **PASS (auto-merge eligible):** both R and RBI land in `[0.85, 1.20)` AND
-  gate #3 holds (no upward mean drift > +1%) AND gate #2 holds. Proceed to merge.
-- **OVER-CORRECTION (blocks merge):** either R or RBI `>= 1.20`. The uncapped
-  `1/scale` tail (see "Tail behavior") over-disperses. Apply a damper in the
-  priority order named there (rate cap -> capacity cap -> proper-NegBin-at-need),
-  re-run the gate. Do NOT ship an over-correction.
-- **PARTIAL (does NOT auto-merge):** both rose `>= +0.08` over baseline but at
-  least one stalls in `[baseline+0.08, 0.85)`, with gates #2/#3 holding. Record
-  it and SURFACE to the user for an explicit go/no-go -- a PARTIAL never merges
-  on the implementer's own judgment.
-- **FAIL (blocks merge):** either R or RBI rose `< +0.08`. The model is
-  insufficient; STOP and re-design. Do NOT loosen the `+0.08` floor (the parent
-  evidence doc explicitly warns against this).
+0. **Gate #2 or #3 breach (independent hard fail, checked FIRST):** if pooled
+   leaves `[0.8, 1.25]`, OR mean drift is upward `> +1%`, OR downward `> ~5%`
+   unexplained -> BLOCKS merge regardless of the R/RBI ladder. Mean/pooled
+   calibration is a precondition for any PASS.
+1. **OVER-CORRECTION (blocks merge):** EITHER R or RBI `>= 1.20`. The uncapped
+   `1/scale` tail (see "Tail behavior") over-disperses. Apply a damper in the
+   priority order named there (rate cap -> proper-NegBin-at-need), re-run the
+   gate (including the gate #3 downward-drift re-check). Do NOT ship an
+   over-correction.
+2. **FAIL (blocks merge):** EITHER R or RBI rose `< +0.08` over baseline. The
+   model is insufficient; STOP and re-design. Do NOT loosen the `+0.08` floor
+   (the parent evidence doc explicitly warns against this).
+3. **PARTIAL (does NOT auto-merge):** neither of the above, but at least one of
+   R/RBI stalls in `[baseline+0.08, 0.85)`. Record it and SURFACE to the user for
+   an explicit go/no-go -- a PARTIAL never merges on the implementer's own
+   judgment.
+4. **PASS (auto-merge eligible):** both R and RBI land in `[0.85, 1.20)` (and
+   gates #2/#3 already held at step 0). Proceed to merge.
 
 There is NO one-line "off switch"; the bench sampling (PR #146) and this
 replacement sampling share the per-game-rate machinery, so the fallback for an
@@ -343,10 +376,13 @@ net.
 ### Caller wiring note (avoid an unhashable-key trap)
 
 The allocator calls `replacement_for(a.body)` with the `ActiveBody`. `ActiveBody`
-wraps a `Player` and may not be hashable, so the caller's per-iteration lookup of
-"this body's sampled per-game line" must be keyed on `id(active_body)` (or aligned
-by the active body's index), NOT a `{body: line}` dict. The active bodies are
-already enumerated when building `ActiveSample`s, so the `id()`-keyed map is local.
+wraps a `Player` and may not be hashable, so a `{body: line}` dict is unsafe.
+PREFER index alignment: the replacement draw is built in active-body order, so the
+sampled per-game lines are an `(n_iter, n_active)`-shaped structure indexed by the
+active body's position; the per-iteration `replacement_for` closure resolves the
+active body to its index (the same enumeration used to build `ActiveSample`s) and
+returns that column. `id(active_body)` keying also works (the bodies outlive the
+loop, so no id reuse) but index alignment is strictly safer and is the default.
 
 ### AVG components
 
