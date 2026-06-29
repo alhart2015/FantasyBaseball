@@ -102,6 +102,7 @@ The allocator must cap each bench body at a per-iteration `capacity` instead of 
 
 **Files:**
 - Modify: `src/fantasy_baseball/mc_fill.py` (`BenchSample` ~27-30, `allocate_bench_fill` docstring ~43-52, `remaining` init ~55-56)
+- Modify: `src/fantasy_baseball/simulation.py` (`_simulate_team_hitters_ros_direct` bench construction ~908 — behavior-preserving `capacity=bb.g_ros_full` stopgap so the no-default field does not break the helper before Task 3 replaces the block)
 - Test: `tests/test_mc_fill.py` (`_bench_sample` factory ~39-40, retarget ~105, new tests)
 
 **Interfaces:**
@@ -216,20 +217,30 @@ with:
     then player-id ascending.
 ```
 
-- [ ] **Step 4: Run the full mc_fill suite**
+Because `capacity` has NO default, every existing `BenchSample(...)` construction must now pass it. There is one in production code: the still-deterministic bench block in `_simulate_team_hitters_ros_direct` (`simulation.py:908`). Task 3 rewrites that block, but it does not run until the next task, so patch it NOW with a behavior-preserving stopgap so this task's commit keeps the whole suite green (`capacity=bb.g_ros_full` reproduces the old `remaining = g_ros_full` cap exactly — `allocate_bench_fill` behavior is unchanged):
 
-Run: `pytest tests/test_mc_fill.py -v`
-Expected: all PASS (existing tests unchanged because `_bench_sample` defaults capacity to `g_ros_full`; new cascade tests pass; retargeted cap test passes).
+```python
+        bench_samples.append(
+            BenchSample(body=bb, per_game_counts=per_game, capacity=bb.g_ros_full)
+        )
+```
+
+- [ ] **Step 4: Run the mc_fill suite AND the helper's integration tests (must all stay green)**
+
+Run: `pytest tests/test_mc_fill.py tests/test_mc_integration.py -v`
+Expected: all PASS. `test_mc_fill.py`: existing tests unchanged (`_bench_sample` defaults capacity to `g_ros_full`); new cascade tests pass; retargeted cap test passes. `test_mc_integration.py`: still green because the helper stopgap passes `capacity=bb.g_ros_full`, so `allocate_bench_fill` behaves exactly as before. If any `test_mc_integration.py` test errors with `BenchSample.__init__() missing 1 required positional argument: 'capacity'`, the Step-3 helper stopgap was not applied.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/fantasy_baseball/mc_fill.py tests/test_mc_fill.py
+git add src/fantasy_baseball/mc_fill.py src/fantasy_baseball/simulation.py tests/test_mc_fill.py
 git commit -m "feat(mc): BenchSample.capacity drives allocate_bench_fill cap (sampled-bench-fill task 2)
 
 Retarget test_fill_never_exceeds_bench_g_ros_full_capacity -> _capacity:
 the <= g_ros_full invariant is intentionally replaced by the per-iteration
-capacity cap (capacity = g_ros_full*scale can exceed g_ros_full by design)."
+capacity cap (capacity = g_ros_full*scale can exceed g_ros_full by design).
+Helper passes capacity=bb.g_ros_full as a behavior-preserving stopgap until
+Task 3 replaces the bench block (keeps every commit green)."
 ```
 
 ---
@@ -245,52 +256,101 @@ Replace the once-built deterministic bench line with a per-iteration sampled rat
 **Interfaces:**
 - Consumes: `VarianceBatch.scales` (Task 1), `BenchSample(body, per_game_counts, capacity)` (Task 2), existing `_apply_variance_batch`, `allocate_bench_fill`, `_full_season_pt_volume`, `_replacement_line`, `HITTING_COUNTING`.
 
-- [ ] **Step 1: Write the failing tests**
+> **Why a pinned deterministic baseline (not bench-vs-no-bench):** removing the
+> bench changes the WHOLE fill term (a strong bench bat's high fixed rate vs the
+> low replacement rate), so `with_bench.std() > no_bench.std()` is ALREADY true on
+> the current deterministic code and can never fail-first. The valid red step
+> compares the SAMPLED fill against the pre-change DETERMINISTIC fill on the SAME
+> bench-deep fixture: pin the current deterministic team-total SD, then assert the
+> sampled SD strictly exceeds it. The deterministic helper is reproducible, so the
+> pin is exact; pre-change `std == pinned` (so `> pinned` is False -> FAIL),
+> post-change the added rate noise makes `std > pinned` -> PASS.
 
-In `tests/test_mc_integration.py`, after `test_injured_active_body_gets_bench_fill`:
+- [ ] **Step 1: Add the import, the bench-deep fixture, and the tests (baseline placeholders)**
+
+Add `BenchBody` to the existing `from fantasy_baseball.mc_roster import ...` block in `tests/test_mc_integration.py` (it already imports `EffectiveRoster`, `build_effective_roster`). Then, after `test_injured_active_body_gets_bench_fill`, add:
 
 ```python
-def test_sampled_bench_fill_widens_team_total_variance():
-    """De-bias check: a bench-deep team's R/RBI total SD is STRICTLY LARGER than
-    the same team with the bench removed. Removing the bench routes the shortfall
-    to the zero-rate-variance deterministic replacement line; the sampled bench
-    fill adds its own rate + availability noise, widening the distribution.
-    Actives are drawn first (identical across both runs under the same seed), so
-    the difference is purely the fill term.
-    """
-    roster = [
+# Captured from the CURRENT (deterministic-fill) helper on _bench_deep_roster() at
+# seed 11, fraction_remaining=0.2, n_iter=4000, in Step 2 (paste the printed
+# values). The deterministic fill is reproducible so these are exact; the SAMPLED
+# fill adds independent rate noise -> strictly larger SD. If the default path ever
+# changes, re-capture under git stash (cf. _LEGACY_DEFAULT_COUNTS).
+_DET_R_SD = 0.0    # <- paste in Step 2
+_DET_RBI_SD = 0.0  # <- paste in Step 2
+
+
+def _bench_deep_roster():
+    # BenchBat is slotted to the BENCH (Position.BN) so build_effective_roster seats
+    # it in eff.bench, NOT the active set (an OF-slotted bat seats as ACTIVE and
+    # eff.bench would be empty -- the whole feature path would go untested).
+    # positions=[OF] (set by _hitter) keeps it eligible to fill the OF starter.
+    return [
         _hitter("Starter", Position.OF, "1"),
-        _hitter("BenchBat", Position.OF, "2", r=120, hr=40, rbi=110, sb=30),
+        _hitter("BenchBat", Position.BN, "2", r=120, hr=40, rbi=110, sb=30),
     ]
-    eff = _eff_roster(roster)
-    with_bench = _simulate_team_hitters_ros_direct(eff, 0.2, np.random.default_rng(11), 4000)
-    eff_no_bench = build_effective_roster([roster[0]], _ctx())
-    no_bench = _simulate_team_hitters_ros_direct(eff_no_bench, 0.2, np.random.default_rng(11), 4000)
-    for cat in ("R", "RBI"):
-        assert with_bench[cat].std() > no_bench[cat].std()
+
+
+def test_sampled_bench_fill_widens_team_total_sd_vs_deterministic_baseline():
+    """De-bias: the sampled bench fill carries its own rate noise, so the bench-deep
+    team's R/RBI total SD STRICTLY EXCEEDS the pinned pre-change deterministic-fill
+    SD (same fixture, same seed; only the fill sampling changed)."""
+    eff = _eff_roster(_bench_deep_roster())
+    assert len(eff.bench) == 1  # the fixture really seats a bench fill body
+    out = _simulate_team_hitters_ros_direct(eff, 0.2, np.random.default_rng(11), 4000)
+    assert np.all(np.isfinite(out["R"])) and np.all(np.isfinite(out["RBI"]))
+    assert out["R"].std() > _DET_R_SD
+    assert out["RBI"].std() > _DET_RBI_SD
 
 
 def test_sampled_bench_fill_is_deterministic_under_seed():
-    """Same seed -> identical team totals (the sampled fill is reproducible)."""
-    roster = [
-        _hitter("Starter", Position.OF, "1"),
-        _hitter("BenchBat", Position.OF, "2", r=120, hr=40, rbi=110, sb=30),
-    ]
-    eff = _eff_roster(roster)
+    """Same seed -> identical team totals (regression guard; passes pre and post)."""
+    eff = _eff_roster(_bench_deep_roster())
     a = _simulate_team_hitters_ros_direct(eff, 0.2, np.random.default_rng(5), 128)
     b = _simulate_team_hitters_ros_direct(eff, 0.2, np.random.default_rng(5), 128)
     for cat in ("R", "HR", "RBI", "SB", "ros_h", "ros_ab"):
         np.testing.assert_array_equal(a[cat], b[cat])
+
+
+def test_zero_volume_bench_body_is_finite_and_skipped():
+    """A g_ros_full==0 bench body hits the EPS guard (games_played = 0*scale = 0 ->
+    capacity 0), contributing nothing with NO division-by-zero. Hand-built so the
+    zero-volume body is guaranteed present regardless of classification."""
+    starter = _hitter("Starter", Position.OF, "1")
+    zero_bench = BenchBody(
+        player=_hitter("ZeroVol", Position.BN, "3", r=120, hr=40, rbi=110, sb=30),
+        g_ros_full=0.0,
+        per_game_value=0.0,
+        eligible_positions=frozenset({Position.OF}),
+    )
+    eff = EffectiveRoster(active=[_active_body(starter)], bench=[zero_bench])
+    out = _simulate_team_hitters_ros_direct(eff, 0.2, np.random.default_rng(4), 256)
+    for cat in ("R", "HR", "RBI", "SB", "ros_h", "ros_ab"):
+        assert np.all(np.isfinite(out[cat]))
 ```
 
-- [ ] **Step 2: Run tests to verify they fail / behavior is wrong**
+- [ ] **Step 2: Capture the deterministic baseline on the CURRENT code, paste it in**
 
-Run: `pytest tests/test_mc_integration.py::test_sampled_bench_fill_widens_team_total_variance -v`
-Expected: FAIL — with the current deterministic fill the bench adds no rate variance, so `with_bench.std()` is not reliably greater (the assertion fails or is marginal). (The determinism test will already pass; that is fine — it guards against a regression introduced by the change.)
+The helper is still deterministic at this point (Task 2's stopgap passes `capacity=bb.g_ros_full`). Run:
 
-- [ ] **Step 3: Replace the deterministic bench block with sampled per-iteration fill**
+```bash
+python -c "import numpy as np, sys; sys.path.insert(0,'tests'); \
+from test_mc_integration import _eff_roster, _bench_deep_roster; \
+from fantasy_baseball.simulation import _simulate_team_hitters_ros_direct as h; \
+o=h(_eff_roster(_bench_deep_roster()),0.2,np.random.default_rng(11),4000); \
+print('R', repr(o['R'].std()), 'RBI', repr(o['RBI'].std()))"
+```
 
-In `src/fantasy_baseball/simulation.py`, in `_simulate_team_hitters_ros_direct`, replace the block from the `# Bench per-game counts: clean BASE ROS projection ...` comment through the end of the per-iteration `for it in range(n_iter):` loop (~898-923) with:
+Paste the printed `R` and `RBI` values verbatim into `_DET_R_SD` and `_DET_RBI_SD`.
+
+- [ ] **Step 3: Run tests to verify the de-bias test fails-first**
+
+Run: `pytest tests/test_mc_integration.py::test_sampled_bench_fill_widens_team_total_sd_vs_deterministic_baseline tests/test_mc_integration.py::test_sampled_bench_fill_is_deterministic_under_seed tests/test_mc_integration.py::test_zero_volume_bench_body_is_finite_and_skipped -v`
+Expected: `..._widens_team_total_sd_...` FAILS (current deterministic `std == _DET_*_SD`, so `> _DET_*_SD` is False). The determinism and zero-volume tests PASS already (regression/guard tests — the deterministic helper is reproducible and the zero-volume body is skipped by `allocate_bench_fill`'s `remaining > 0` filter today). That is expected; the de-bias test is the red one.
+
+- [ ] **Step 4: Replace the deterministic bench block with sampled per-iteration fill**
+
+In `src/fantasy_baseball/simulation.py`, in `_simulate_team_hitters_ros_direct`, replace the block from the `# Bench per-game counts: ...` comment (now the Task-2 stopgap construction) through the end of the per-iteration `for it in range(n_iter):` loop (~898-923) with:
 
 ```python
     # Bench bodies are sampled with their OWN variance (rate + availability), the
@@ -370,17 +430,17 @@ with
       no-ops the rng. See the sampled-bench-fill spec (2026-06-29).
 ```
 
-- [ ] **Step 4: Run the new tests + the empty-bench guardrails (must stay byte-identical)**
+- [ ] **Step 5: Run the new tests (de-bias now green) + the empty-bench guardrails (must stay byte-identical)**
 
-Run: `pytest tests/test_mc_integration.py::test_sampled_bench_fill_widens_team_total_variance tests/test_mc_integration.py::test_sampled_bench_fill_is_deterministic_under_seed tests/test_mc_integration.py::test_repl_not_double_counted_on_new_path tests/test_mc_integration.py::test_displacement_factor_scales_hitter_mean tests/test_mc_integration.py::test_ros_direct_uses_full_season_volume_for_cv_pt -v`
-Expected: all PASS. The three guardrail tests use EMPTY-bench `EffectiveRoster`s, so the bench draw no-ops the rng and they stay byte-identical. **If any guardrail test fails, STOP — the empty-bench path is consuming rng (a bug), not a golden to re-pin.**
+Run: `pytest tests/test_mc_integration.py::test_sampled_bench_fill_widens_team_total_sd_vs_deterministic_baseline tests/test_mc_integration.py::test_sampled_bench_fill_is_deterministic_under_seed tests/test_mc_integration.py::test_zero_volume_bench_body_is_finite_and_skipped tests/test_mc_integration.py::test_repl_not_double_counted_on_new_path tests/test_mc_integration.py::test_displacement_factor_scales_hitter_mean tests/test_mc_integration.py::test_ros_direct_uses_full_season_volume_for_cv_pt -v`
+Expected: all PASS. The de-bias test now goes green (sampled SD > pinned deterministic baseline) — if it does NOT clear the baseline, the rate decomposition is wrong (most likely the denominator was capped at `g_ros_full` instead of `g_ros_full*scale`); fix it, do not loosen the assertion. The three guardrail tests use EMPTY-bench `EffectiveRoster`s, so the bench draw no-ops the rng and they stay byte-identical. **If any guardrail test fails, STOP — the empty-bench path is consuming rng (a bug), not a golden to re-pin.**
 
-- [ ] **Step 5: Run the full MC test suite and adjudicate any pinned-value shifts**
+- [ ] **Step 6: Run the full MC test suite and adjudicate any pinned-value shifts**
 
 Run: `pytest tests/test_mc_integration.py tests/test_simulation.py -v`
 Expected: PASS. Most `_simulate_team_hitters_ros_direct` tests assert inequalities / active-only equalities ("Mechanism only -- no magnitude pinned"), so they should hold. For ANY failing test that pins a magnitude on a NON-empty-bench team total (e.g. a `run_ros_monte_carlo` / `simulate_remaining_season_batch` golden), confirm the failure is the intended rng-stream shift from the appended bench draw (a different but still-valid simulated value), then update the pinned literal. Do NOT touch empty-bench guardrails or the `test_variance_batch_default_matches_legacy_columns` snapshot — those must not move.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/fantasy_baseball/simulation.py tests/test_mc_integration.py
@@ -431,34 +491,44 @@ Re-run the SD-calibration diagnostic that measured the original bias and record 
 **Files:**
 - Create: `docs/superpowers/sampled-bench-fill-sd-evidence-2026-06-29.md` (evidence doc)
 
-- [ ] **Step 1: Run the diagnostic**
+- [ ] **Step 1: Add a replacement-fill-share counter (temporary diagnostic)**
 
-The Phase 6 evidence (`docs/superpowers/games-mc-phase6-sd-evidence-2026-06-27.md`) was produced by a local full refresh with `FB_SELECTION_ATTRIBUTION=1`, seed=42, n_iter=1000. Mirror that run. `FB_SELECTION_ATTRIBUTION` is consumed in `src/fantasy_baseball/web/refresh_pipeline.py` (grep it for the exact emission point); run a local refresh with the env var set and `--no-sync` so the Upstash sync does not clobber the local cache:
+The emitted diagnostic does not report the replacement-fill share (gate #4), so add it. Behind the existing `FB_SELECTION_ATTRIBUTION` env check, accumulate, inside the `for it in range(n_iter)` fill loop of `_simulate_team_hitters_ros_direct`, the replacement games vs total filled games. The cleanest seam: have `allocate_bench_fill` also return the replacement-game count (or, lower-touch, log per-team `sum(frac_missed*g_ros_adj) - bench_assigned` once). Record the team-weighted `replacement_games / total_filled_games`. Keep it ASCII; this counter is evidence-only and may be reverted after the run (note it in the evidence doc if reverted).
 
-```bash
-FB_SELECTION_ATTRIBUTION=1 python scripts/run_season_dashboard.py --no-sync
+- [ ] **Step 2: Run the diagnostic on BOTH the pre-change and post-change code**
+
+The "before" baseline must be numeric for the mean-drift check (gate #3), and the SD-calibration table the diagnostic emits does NOT include category means — so capture means from the cache instead. Run a local refresh twice, recording the SD table (written to the attribution file by `refresh_pipeline.py` under `FB_SELECTION_ATTRIBUTION`, NOT stdout — read the file) AND the hitter category team-total means computed from `cache:standings_breakdown` (per team: `team_ytd[col] + sum(player.contribution_stats[col])`, the same computation used to produce the projected standings).
+
+PowerShell (this box is PowerShell-primary; set the env var the PowerShell way, and use `--no-sync` so the Upstash sync does not clobber the local cache):
+
+```powershell
+$env:FB_SELECTION_ATTRIBUTION = '1'
+python scripts/run_season_dashboard.py --no-sync   # triggers the local refresh + diagnostic
 ```
 
-Capture the printed per-counting-cat `mc_sd / analytic_sd` table, the hitter category means, and (if emitted) the replacement-fill share. (If the harness does not already print the replacement-fill share, add a one-line diagnostic log of `replacement_games / total_filled_games` in the fill path for this run, or compute it from the breakdown — record whichever you used.)
+- **Before (pre-change):** record the current branch SHA, then `git checkout <sha-before-task-3>` (the commit before this branch's bench-fill change — i.e. the Task 2 stopgap state, which is byte-identical-deterministic), run the refresh, and capture the SD ratios + hitter cat means + replacement share. (The Phase 6 evidence doc already lists the SD ratios R 0.72 / RBI 0.70 / pooled 0.92 — cross-check against them; the means come from the breakdown.)
+- **After (post-change):** `git checkout mc-sampled-bench-fill`, run the refresh, capture the same three.
 
-- [ ] **Step 2: Check the acceptance gate (from the spec)**
+- [ ] **Step 3: Check the acceptance gate (from the spec)**
 
 Confirm ALL of:
 1. **R and RBI** each rose by at least `+0.08` over their ~0.70-0.72 baseline, with neither exceeding `1.20`. Target `>= 0.85`; record the actual values. If either lands in `[baseline+0.08, 0.85)`, note it as a partial success and flag whether sampling the replacement line (the deferred follow-up) is warranted.
 2. **Pooled ratio** stays in `[0.8, 1.25]`.
-3. **Hitter category team-total means**: no UPWARD drift `> +1%` vs the Phase 6 baseline (a hard fail — the mean-neutral decomposition must hold); a downward drift up to `~5%` is expected (the intended replacement re-damping). Record the deltas.
-4. **Replacement-fill share** before vs after — record it; flag a material rise.
+3. **Hitter category team-total means**: no UPWARD drift `> +1%` vs the pre-change run (a hard fail — the mean-neutral decomposition must hold); a downward drift up to `~5%` is expected (the intended replacement re-damping). Record the deltas.
+4. **Replacement-fill share** pre vs post — record it; flag a material rise.
 
-- [ ] **Step 3: Write the evidence doc**
+- [ ] **Step 4: Write the evidence doc**
 
 Create `docs/superpowers/sampled-bench-fill-sd-evidence-2026-06-29.md` with: the run conditions (seed, n_iter, frac), the before/after SD-ratio table, the mean-drift table, the replacement-fill share, and a PASS/PARTIAL/FAIL verdict against the four gate criteria above. Keep it ASCII-only.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit (and revert the temporary counter if it was not kept)**
 
 ```bash
 git add docs/superpowers/sampled-bench-fill-sd-evidence-2026-06-29.md
 git commit -m "docs(mc): sampled-bench-fill SD-calibration acceptance evidence (sampled-bench-fill task 5)"
 ```
+
+If the Step-1 replacement-share counter was instrumentation-only, revert it in a follow-up commit (or fold a kept, tidy version into the fill path with a one-line comment).
 
 ---
 
