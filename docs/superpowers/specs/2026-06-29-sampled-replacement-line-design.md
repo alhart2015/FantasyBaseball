@@ -82,9 +82,10 @@ deterministic rate; (2) switch this term to the proper-NegBin-at-need model. Do
 NOT "cap replacement capacity" -- the pool is terminal (nothing cascades below
 it), so a capacity cap would leave `need - capacity` UNCOVERED in heavy-injury
 iterations and silently drop production (a downward mean bias, not the clean
-bench cancellation). Both dampers clip the positive tail, so they introduce a
-DOWNWARD mean bias; after applying one, the gate #3 re-check (which bounds
-downward drift, below) is mandatory -- a damper must not be tuned past the point
+bench cancellation). The rate cap clips the positive tail, so it introduces a
+DOWNWARD mean bias (the proper-NegBin fallback is mean-faithful by contrast);
+after applying EITHER damper, the gate #3 re-check (which bounds downward drift,
+below) is mandatory -- a rate cap in particular must not be tuned past the point
 where it drags the mean down materially. The implementer must NOT assume the
 bench tail-safety transfers and skip a clamp -- the plan carries this asymmetry
 explicitly.
