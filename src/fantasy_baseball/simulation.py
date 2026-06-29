@@ -94,6 +94,7 @@ class VarianceBatch:
 
     counts: dict[str, np.ndarray]  # {col: (n_iter, n_players)}
     frac_missed: np.ndarray  # (n_iter, n_players) = max(0, 1 - scales)
+    scales: np.ndarray  # (n_iter, n_players) -- unclamped playing-time scale that drove mu
 
 
 def _flatten_full_season(p: Any) -> dict[str, Any]:
@@ -760,6 +761,7 @@ def _apply_variance_batch(
         return VarianceBatch(
             counts={col: np.zeros((n_iter, 0)) for col in counting_cols},
             frac_missed=np.zeros((n_iter, 0)),
+            scales=np.zeros((n_iter, 0)),
         )
 
     # Mean horizon vs variance horizon. When pt_mean_fraction is None the two
@@ -817,7 +819,7 @@ def _apply_variance_batch(
             out[col] = counts[:, :, idx_map[col]] + repl_contrib
         else:
             out[col] = base[col][None, :] * scales + repl_contrib
-    return VarianceBatch(counts=out, frac_missed=frac_missed)
+    return VarianceBatch(counts=out, frac_missed=frac_missed, scales=scales)
 
 
 def _simulate_team_hitters_ros_direct(

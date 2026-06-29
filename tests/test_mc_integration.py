@@ -140,6 +140,20 @@ def test_frac_missed_exposed_and_in_unit_range():
     assert np.any(result.frac_missed > 0.0)
 
 
+def test_scales_exposed_and_consistent_with_frac_missed():
+    """scales is exposed, shape (n_iter, n_players), and frac_missed == max(0, 1-scales)."""
+    rng = np.random.default_rng(7)
+    result = _apply_variance_batch(_players(), "hitter", rng, 0.4, 6)
+    assert result.scales.shape == (6, 2)
+    np.testing.assert_array_equal(result.frac_missed, np.maximum(0.0, 1.0 - result.scales))
+
+
+def test_scales_empty_player_list_is_shape_correct():
+    """The n_players==0 early return still builds a shape-correct scales array."""
+    result = _apply_variance_batch([], "hitter", np.random.default_rng(1), 0.4, 4)
+    assert result.scales.shape == (4, 0)
+
+
 def test_suppress_repl_removes_replacement_contribution():
     """suppress_repl=True drops the replacement backfill -> strictly lower counts.
 
