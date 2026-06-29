@@ -250,6 +250,7 @@ def test_apply_variance_batch_pt_volumes_default_is_byte_identical():
 
 from fantasy_baseball.mc_roster import (  # noqa: E402
     ActiveBody,
+    BenchBody,
     EffectiveRoster,
     build_effective_roster,
 )
@@ -369,6 +370,64 @@ def test_injured_active_body_gets_bench_fill():
     no_bench = _simulate_team_hitters_ros_direct(eff_no_bench, 0.2, np.random.default_rng(3), 256)
     # The strong bench bat lifts the team R mean above the bench-less case.
     assert with_bench["R"].mean() > no_bench["R"].mean()
+
+
+# Captured from the CURRENT (deterministic-fill) helper on _bench_deep_roster() at
+# seed 11, fraction_remaining=0.2, n_iter=4000, in Step 2 (paste the printed
+# values). The deterministic fill is reproducible so these are exact; the SAMPLED
+# fill adds independent rate noise -> strictly larger SD. If the default path ever
+# changes, re-capture under git stash (cf. _LEGACY_DEFAULT_COUNTS).
+_DET_R_SD = 9.274950767376799  # <- paste in Step 2
+_DET_RBI_SD = 8.677268778148985  # <- paste in Step 2
+
+
+def _bench_deep_roster():
+    # BenchBat is slotted to the BENCH (Position.BN) so build_effective_roster seats
+    # it in eff.bench, NOT the active set (an OF-slotted bat seats as ACTIVE and
+    # eff.bench would be empty -- the whole feature path would go untested).
+    # positions=[OF] (set by _hitter) keeps it eligible to fill the OF starter.
+    return [
+        _hitter("Starter", Position.OF, "1"),
+        _hitter("BenchBat", Position.BN, "2", r=120, hr=40, rbi=110, sb=30),
+    ]
+
+
+def test_sampled_bench_fill_widens_team_total_sd_vs_deterministic_baseline():
+    """De-bias: the sampled bench fill carries its own rate noise, so the bench-deep
+    team's R/RBI total SD STRICTLY EXCEEDS the pinned pre-change deterministic-fill
+    SD (same fixture, same seed; only the fill sampling changed)."""
+    eff = _eff_roster(_bench_deep_roster())
+    assert len(eff.bench) == 1  # the fixture really seats a bench fill body
+    out = _simulate_team_hitters_ros_direct(eff, 0.2, np.random.default_rng(11), 4000)
+    assert np.all(np.isfinite(out["R"])) and np.all(np.isfinite(out["RBI"]))
+    assert out["R"].std() > _DET_R_SD
+    assert out["RBI"].std() > _DET_RBI_SD
+
+
+def test_sampled_bench_fill_is_deterministic_under_seed():
+    """Same seed -> identical team totals (regression guard; passes pre and post)."""
+    eff = _eff_roster(_bench_deep_roster())
+    a = _simulate_team_hitters_ros_direct(eff, 0.2, np.random.default_rng(5), 128)
+    b = _simulate_team_hitters_ros_direct(eff, 0.2, np.random.default_rng(5), 128)
+    for cat in ("R", "HR", "RBI", "SB", "ros_h", "ros_ab"):
+        np.testing.assert_array_equal(a[cat], b[cat])
+
+
+def test_zero_volume_bench_body_is_finite_and_skipped():
+    """A g_ros_full==0 bench body hits the EPS guard (games_played = 0*scale = 0 ->
+    capacity 0), contributing nothing with NO division-by-zero. Hand-built so the
+    zero-volume body is guaranteed present regardless of classification."""
+    starter = _hitter("Starter", Position.OF, "1")
+    zero_bench = BenchBody(
+        player=_hitter("ZeroVol", Position.BN, "3", r=120, hr=40, rbi=110, sb=30),
+        g_ros_full=0.0,
+        per_game_value=0.0,
+        eligible_positions=frozenset({Position.OF}),
+    )
+    eff = EffectiveRoster(active=[_active_body(starter)], bench=[zero_bench])
+    out = _simulate_team_hitters_ros_direct(eff, 0.2, np.random.default_rng(4), 256)
+    for cat in ("R", "HR", "RBI", "SB", "ros_h", "ros_ab"):
+        assert np.all(np.isfinite(out[cat]))
 
 
 def test_hitter_team_total_at_least_ytd_with_caller_blend():

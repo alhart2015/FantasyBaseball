@@ -859,8 +859,12 @@ def _simulate_team_hitters_ros_direct(
       counts by ``factor`` rescales mean and SD together, holding CV fixed --
       exactly the full-volume band the spec requires (NOT a narrowed, higher-CV
       curve point).
-    - Bench per-game lines are the clean DETERMINISTIC base ROS projection
-      (``base_ros_total / g_ros_full``), iteration-independent -- built once.
+    - Bench bodies are SAMPLED per iteration with their own variance: a
+      ``_apply_variance_batch`` draw (appended after the active draw) yields each
+      bench body's realized line and ``scale``; the per-game fill rate is
+      ``realized / (g_ros_full * scale)`` (mean-neutral) and its fill capacity is
+      ``g_ros_full * scale`` (its own sampled availability). An empty bench pool
+      no-ops the rng. See the sampled-bench-fill spec (2026-06-29).
     """
     active_h_bodies = [
         b for b in effective_roster.active if b.player.player_type == PlayerType.HITTER
@@ -897,29 +901,58 @@ def _simulate_team_hitters_ros_direct(
     }
     frac_missed = active_vb.frac_missed  # (n_iter, n_active)
 
-    # Bench per-game counts: clean BASE ROS projection / g_ros_full (deterministic
-    # fill), iteration-independent -- built ONCE.
-    bench_samples: list[BenchSample] = []
-    for bb in bench_h_bodies:
-        base_flat = bb.player.to_flat_dict()
-        gf = bb.g_ros_full
-        per_game = {
-            col: (safe_float(base_flat.get(col)) / gf if gf > 0 else 0.0)
-            for col in HITTING_COUNTING
-        }
-        bench_samples.append(BenchSample(body=bb, per_game_counts=per_game, capacity=bb.g_ros_full))
+    # Bench bodies are sampled with their OWN variance (rate + availability), the
+    # same way actives are -- the de-bias for the hitter-cat under-dispersion. The
+    # draw is APPENDED after the active draw above (actives already consumed rng),
+    # so the active stream is unchanged and an EMPTY bench pool no-ops the rng
+    # (_apply_variance_batch returns before any draw when n_players == 0). See the
+    # sampled-bench-fill spec (2026-06-29).
+    bench_flats = [bb.player.to_flat_dict() for bb in bench_h_bodies]
+    bench_pt_volumes = np.array(
+        [_full_season_pt_volume(bb.player, is_hitter=True) for bb in bench_h_bodies]
+    )
+    bench_vb = _apply_variance_batch(
+        bench_flats,
+        PlayerType.HITTER,
+        rng,
+        fraction_remaining,
+        n_iter,
+        pt_mean_fraction=1.0,
+        suppress_repl=True,
+        pt_volumes=bench_pt_volumes,
+    )
 
     def _repl_for(ab: ActiveBody) -> dict[str, float]:
         return _replacement_line(ab.player.to_flat_dict(), is_hitter=True)
 
     # Per-iteration fill allocation (the sanctioned small Python loop: <=12 active,
-    # <=2 bench). Vectorized sampling is done above; only the allocation loops.
+    # <=2 bench). Sampling (active + bench) is vectorized above; only the cheap
+    # per-iteration BenchSample build and the allocation loop here.
+    eps = 1e-9
     fill_totals: dict[str, np.ndarray] = {col: np.zeros(n_iter) for col in HITTING_COUNTING}
     for it in range(n_iter):
         actives = [
             ActiveSample(body=body, frac_missed=float(frac_missed[it, idx]))
             for idx, body in enumerate(active_h_bodies)
         ]
+        bench_samples: list[BenchSample] = []
+        for b_idx, bb in enumerate(bench_h_bodies):
+            # games that generated this iter's realized line = g_ros_full * scale
+            # (UNCAPPED). Dividing realized by it recovers a MEAN-NEUTRAL per-game
+            # rate (E = base/g_ros_full); capacity is that same games count (how
+            # many of the starter's missed games this body can cover). eps guards
+            # the division and also zeroes a g_ros_full == 0 body.
+            games_played = bb.g_ros_full * float(bench_vb.scales[it, b_idx])
+            if games_played > eps:
+                per_game = {
+                    col: float(bench_vb.counts[col][it, b_idx]) / games_played
+                    for col in HITTING_COUNTING
+                }
+                capacity = float(games_played)
+            else:
+                per_game = {col: 0.0 for col in HITTING_COUNTING}
+                capacity = 0.0
+            bench_samples.append(BenchSample(body=bb, per_game_counts=per_game, capacity=capacity))
         fill = allocate_bench_fill(actives, bench_samples, _repl_for).fill_counts
         for col in HITTING_COUNTING:
             fill_totals[col][it] = fill[col]
