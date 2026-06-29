@@ -907,7 +907,7 @@ def _simulate_team_hitters_ros_direct(
             col: (safe_float(base_flat.get(col)) / gf if gf > 0 else 0.0)
             for col in HITTING_COUNTING
         }
-        bench_samples.append(BenchSample(body=bb, per_game_counts=per_game))
+        bench_samples.append(BenchSample(body=bb, per_game_counts=per_game, capacity=bb.g_ros_full))
 
     def _repl_for(ab: ActiveBody) -> dict[str, float]:
         return _replacement_line(ab.player.to_flat_dict(), is_hitter=True)
