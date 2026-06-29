@@ -61,20 +61,28 @@ def _realistic_replacement(_b):
     return _line(r=0.358, hr=0.10, rbi=0.375, sb=0.033, h=1.0, ab=4.3)
 ```
 
-Replace `test_replacement_per_game_not_overscaled` with a test of the new contract:
+Replace `test_replacement_per_game_not_overscaled` with a DISCRIMINATING test of
+the new contract. CRITICAL: a *valid* per-game line has `ab == PA_PER_GAME` (4.3)
+by construction (per-game AB = full-season AB / implied-games), and on such a line
+the OLD allocator's `repl_ab/PA_PER_GAME` conversion is the IDENTITY -- so a valid
+per-game line CANNOT distinguish the old vs new allocator. To get a fail-first,
+discriminating test, probe with a line whose `ab != PA_PER_GAME` and assert the
+allocator multiplies the line by `need` WITHOUT re-dividing by `ab`:
 
 ```python
-def test_allocator_multiplies_per_game_replacement_by_games_missed():
+def test_allocator_does_not_convert_per_game_replacement_line():
     # New contract: replacement_for returns a PER-GAME line; the allocator
-    # multiplies by games_missed (frac_missed * g_ros_adj) with NO re-conversion.
-    # 30 games missed, no bench -> fill r == 0.358 * 30.
-    a = _active("OFstar", "1", g_ros_adj=60.0, pos=Position.OF)
+    # multiplies by games_missed directly and must IGNORE the line's `ab` field
+    # (no re-division by ab/PA_PER_GAME). Probe with ab=8.6 (!= PA_PER_GAME=4.3)
+    # so old and new diverge: OLD converts -> 1.0/(8.6/4.3)*10 = 5.0; NEW
+    # multiplies -> 1.0*10 = 10.0.
+    a = _active("OFstar", "1", g_ros_adj=20.0, pos=Position.OF)
     res = allocate_bench_fill(
-        [ActiveSample(a, frac_missed=0.5)],  # 0.5 * 60 = 30 games missed
+        [ActiveSample(a, frac_missed=0.5)],  # 0.5 * 20 = 10 games missed
         [],
-        _realistic_replacement,
+        lambda _b: _line(r=1.0, ab=8.6),
     )
-    assert abs(res.fill_counts["r"] - 0.358 * 30.0) < 1e-6
+    assert abs(res.fill_counts["r"] - 10.0) < 1e-9
 ```
 
 Update `test_position_mismatch_routes_to_replacement_not_bench` (the catcher bench can't fill an OF shortfall, so the OF routes to replacement): with the per-game `_realistic_replacement` (0.358 r/game) and 40 games missed, the fill is `0.358 * 40 ~= 14.3`. Change its assertion to:
@@ -94,10 +102,10 @@ Update `test_position_mismatch_routes_to_replacement_not_bench` (the catcher ben
     _flat_replacement(0.5),  # 0.5 r/game (per-game contract)
 ```
 
-- [ ] **Step 2: Run the new/updated tests to verify they FAIL (allocator still converts)**
+- [ ] **Step 2: Run the discriminating test to verify it FAILS-first (allocator still converts)**
 
-Run: `pytest tests/test_mc_fill.py::test_allocator_multiplies_per_game_replacement_by_games_missed tests/test_mc_fill.py::test_position_mismatch_routes_to_replacement_not_bench -v`
-Expected: `test_allocator_multiplies...` FAILS (the allocator still divides by `repl_ab/PA_PER_GAME`, so `fill r` is ~`0.358*4.3*30`, not `0.358*30`). This confirms the test pins the new contract before the code changes.
+Run: `pytest tests/test_mc_fill.py::test_allocator_does_not_convert_per_game_replacement_line -v`
+Expected: FAIL -- the OLD allocator divides by `repl_ab/PA_PER_GAME = 8.6/4.3 = 2.0`, so it returns `fill r = 1.0/2.0 * 10 = 5.0`, not the asserted `10.0`. This is the ONLY retargeted test that discriminates old vs new (the `_realistic_replacement`-based tests use a valid per-game line with `ab=4.3`, on which the conversion is identity, so they pass under both and serve as regression guards, not the red gate).
 
 - [ ] **Step 3: Flip the allocator residual branch in `mc_fill.py`**
 
@@ -226,8 +234,11 @@ Replace the deterministic `_repl_for` with a per-iteration SAMPLED per-game rate
 This mirrors the bench task's fail-first pattern. Add a test that builds a deep roster (actives that shed games + an EMPTY bench, so ALL fill is replacement), runs `_simulate_team_hitters_ros_direct`, and asserts the team-total R SD STRICTLY exceeds a pinned deterministic baseline. Use the existing `_bench_deep_roster` / `_eff_roster` helpers and seeding pattern from the bench de-bias test (`test_sampled_bench_fill_widens_team_total_sd_vs_deterministic_baseline`). The baseline constants start at 0.0 and are captured in Step 2.
 
 ```python
-_DET_REPL_R_SD = 0.0  # captured in Step 2 from the Task-1 (deterministic) code
+# Captured in Step 2 from the Task-1 (deterministic-replacement) code on
+# _empty_bench_shedding_roster() at seed=7, fr=0.2, n_iter=4000.
+_DET_REPL_R_SD = 0.0
 _DET_REPL_RBI_SD = 0.0
+_DET_REPL_R_MEAN = 0.0
 
 
 def test_sampled_replacement_fill_widens_team_total_sd_vs_deterministic_baseline():
@@ -235,25 +246,50 @@ def test_sampled_replacement_fill_widens_team_total_sd_vs_deterministic_baseline
     # Sampling it must STRICTLY widen team-total R/RBI SD vs the deterministic
     # baseline pinned from the pre-change (Task 1) code.
     eff = _empty_bench_shedding_roster()  # defined in Step 1b
-    rng = np.random.default_rng(7)
-    out = _simulate_team_hitters_ros_direct(eff, 0.49, rng, 4000)
+    assert len(eff.bench) == 0 and len(eff.active) == 3  # fixture: all fill -> replacement
+    out = _simulate_team_hitters_ros_direct(eff, 0.2, np.random.default_rng(7), 4000)
+    assert np.all(np.isfinite(out["R"])) and np.all(np.isfinite(out["RBI"]))
     assert out["R"].std() > _DET_REPL_R_SD
     assert out["RBI"].std() > _DET_REPL_RBI_SD
+
+
+def test_sampled_replacement_fill_is_mean_neutral():
+    # Mean-neutrality (gate #3's load-bearing property, at unit scale): sampling
+    # the replacement line must NOT drift the team-total R mean UP vs the
+    # deterministic baseline -- the only upward mechanism is a capped denominator,
+    # which is forbidden. A small downward drift (eps-guard mass) is allowed.
+    eff = _empty_bench_shedding_roster()
+    out = _simulate_team_hitters_ros_direct(eff, 0.2, np.random.default_rng(7), 4000)
+    assert out["R"].mean() <= _DET_REPL_R_MEAN * 1.01  # no upward drift > 1%
+    assert out["R"].mean() >= _DET_REPL_R_MEAN * 0.90  # not grossly under-filled
 ```
 
 - [ ] **Step 1b: Add the `_empty_bench_shedding_roster` fixture**
 
-Build an `EffectiveRoster` with several active hitter bodies whose `factor`/`g_ros_adj` make them shed a meaningful fraction of games (so `need > 0` routes to replacement) and an EMPTY bench list, so every missed game is filled by the replacement line. Reuse the `_active_body`/`_eff_roster` construction the bench tests use; set `eff.bench = []`. Assert `len(eff.bench) == 0` and `len(eff.active) >= 3` at the top of the de-bias test so the fixture intent is pinned. (Mirror the exact `ActiveBody`/`EffectiveRoster` construction in the existing `_bench_deep_roster`; keep volumes full-season so the PT band matches production.)
+Use the existing `_hitter` + `_eff_roster` helpers. All three hitters are OF-SLOTTED (`Position.OF`), so `build_effective_roster` seats them ALL as active and `eff.bench` is empty -- every missed game routes to the replacement line (the sole fill-variance source). Do NOT mutate `eff.bench` (`EffectiveRoster` is `@dataclass(frozen=True)` -- assignment raises `FrozenInstanceError`); the empty bench comes from having no BN-slotted players. `_hitter` defaults `g=150` (so `rest_of_season.g > 0` -> `g_ros_adj > 0`), and at the low `fraction_remaining=0.2` the active playing-time draw sheds a large fraction of games (`frac_missed = max(0, 1-scale)`), guaranteeing `need > 0`. (The replacement bodies' PT band is set by `repl_ab/AB_PER_PA` regardless of the actives' projections, so the fixture needs no `full_season_projection`.)
+
+```python
+def _empty_bench_shedding_roster():
+    # All OF-slotted -> build_effective_roster seats them ALL active, bench empty,
+    # so 100% of injury-fill routes to the (now sampled) replacement line.
+    return _eff_roster(
+        [
+            _hitter("S1", Position.OF, "1"),
+            _hitter("S2", Position.OF, "2"),
+            _hitter("S3", Position.OF, "3"),
+        ]
+    )
+```
 
 - [ ] **Step 2: Capture the deterministic baseline (run against the CURRENT Task-1 code) and paste it in**
 
-Run this snippet (Task-1 code is still the deterministic replacement; this captures its team-total SD):
+Run this snippet (Task-1 code is still the deterministic replacement; this captures its team-total SD and MEAN). Use the SAME seed/fr/n_iter as the tests (seed=7, fr=0.2, 4000):
 
 ```bash
-python -c "import numpy as np; from tests.test_mc_integration import _empty_bench_shedding_roster; from fantasy_baseball.simulation import _simulate_team_hitters_ros_direct; eff=_empty_bench_shedding_roster(); o=_simulate_team_hitters_ros_direct(eff, 0.49, np.random.default_rng(7), 4000); print(repr(o['R'].std()), repr(o['RBI'].std()))"
+python -c "import numpy as np; from tests.test_mc_integration import _empty_bench_shedding_roster; from fantasy_baseball.simulation import _simulate_team_hitters_ros_direct; eff=_empty_bench_shedding_roster(); o=_simulate_team_hitters_ros_direct(eff, 0.2, np.random.default_rng(7), 4000); print(repr(o['R'].std()), repr(o['RBI'].std()), repr(o['R'].mean()))"
 ```
 
-Paste the two printed values into `_DET_REPL_R_SD` / `_DET_REPL_RBI_SD`.
+Paste the three printed values into `_DET_REPL_R_SD` / `_DET_REPL_RBI_SD` / `_DET_REPL_R_MEAN`. (The mean baseline anchors `test_sampled_replacement_fill_is_mean_neutral`.)
 
 - [ ] **Step 3: Run the de-bias test to verify it FAILS-first**
 
@@ -324,7 +360,11 @@ and in the fill loop change the `allocate_bench_fill` call (`~958`) to use the p
         fill = allocate_bench_fill(actives, bench_samples, _repl_for_at(it)).fill_counts
 ```
 
-(`Callable` is already imported in `simulation.py` via `collections.abc`; confirm with grep and add `from collections.abc import Callable` only if absent.)
+REQUIRED IMPORT: `Callable` is NOT currently imported in `simulation.py` (verified -- no `Callable` reference, and no `from __future__ import annotations`, so the return annotation is evaluated at def-time and would raise `NameError`). Add at the top of the module's imports:
+
+```python
+from collections.abc import Callable
+```
 
 - [ ] **Step 6: Update the `_simulate_team_hitters_ros_direct` docstring**
 
@@ -340,10 +380,10 @@ In the docstring bullet list (`~890-895`), add a bullet after the bench-sampling
       guard and the full-time curve band. See the sampled-replacement-line spec.
 ```
 
-- [ ] **Step 7: Run the de-bias test to verify it now PASSES (GREEN)**
+- [ ] **Step 7: Run the de-bias + mean-neutrality tests to verify GREEN**
 
-Run: `pytest tests/test_mc_integration.py::test_sampled_replacement_fill_widens_team_total_sd_vs_deterministic_baseline -v`
-Expected: PASS -- the sampled replacement SD strictly exceeds the pinned baseline. If it does NOT pass, the mean-neutral decomposition is wrong (most likely a capped denominator) -- fix the code, do NOT loosen the assertion.
+Run: `pytest tests/test_mc_integration.py::test_sampled_replacement_fill_widens_team_total_sd_vs_deterministic_baseline tests/test_mc_integration.py::test_sampled_replacement_fill_is_mean_neutral -v`
+Expected: BOTH PASS -- the sampled replacement SD strictly exceeds the pinned baseline AND the team-total R mean shows no upward drift > 1%. If the SD test does NOT pass, the decomposition is not adding variance; if the mean test fails on the UPWARD bound, the denominator is capped (the forbidden bug) -- fix the code, do NOT loosen either assertion. (The mean-neutrality test is a guard, not a red gate -- it also passes under the Task-1 deterministic code, since its baseline was captured there.)
 
 - [ ] **Step 8: Run the full MC integration + simulation suites; adjudicate goldens**
 
@@ -351,8 +391,9 @@ Run: `pytest tests/test_mc_integration.py tests/test_simulation.py -v`
 Adjudicate per the spec's "RNG stream and test impact":
 - MEAN-INVARIANT guardrails `test_repl_not_double_counted_on_new_path`, `test_displacement_factor_scales_hitter_mean` MUST still pass byte-identical (healthy iters fire no fill; active draw is first). If one breaks -> real regression, STOP and fix.
 - SD-CEILING `test_ros_direct_uses_full_season_volume_for_cv_pt`: the `:695` `helper_sd < ...` ceiling rises (variance now injected into the replacement fill there). Re-derive ONLY that bound with the new fill variance and re-pin it WITH the recorded analysis. The `:690-691` healthy-iter exact-matches stay byte-identical -- do NOT touch them.
-- The bench de-bias test and any pinned post-bench team-total goldens shift (the appended replacement draw moves the rng stream); re-capture them with the reason recorded.
-Expected: all PASS after the deliberate re-pins; no mean-invariant assertion loosened.
+- DO NOT re-pin the bench de-bias baselines. `test_sampled_bench_fill_widens_team_total_sd_vs_deterministic_baseline` asserts an INEQUALITY (`out["R"].std() > _DET_R_SD`); the deterministic `_DET_R_SD`/`_DET_RBI_SD` constants (`~test_mc_integration.py:380-381`) are FIXED historical baselines. The appended replacement draw shifts that test's rng stream so its `out["R"].std()` VALUE changes, but it only rises further above the fixed baseline -- the inequality still holds and the test passes UNCHANGED. Do NOT re-capture `_DET_R_SD`/`_DET_RBI_SD`.
+- Only EQUALITY-pinned goldens (if any) shift from the rng-stream move; re-capture those with the reason recorded.
+Expected: all PASS after the deliberate `:695`-only re-pin; no mean-invariant assertion loosened; the bench de-bias baselines untouched.
 
 - [ ] **Step 9: Lint/type the touched files**
 
@@ -411,7 +452,7 @@ Re-run the SD-calibration diagnostic before/after and adjudicate the PASS/PARTIA
 
 - [ ] **Step 1: Add the temporary diagnostics (evidence-only; reverted after)**
 
-Behind `FB_SELECTION_ATTRIBUTION`, add (a) the replacement-fill-share counter (reuse the prior bench-task seam: `FillResult.replacement_games` + a module accumulator summed in the fill loop) AND (b) the per-cat MEAN of the new_engine team totals alongside the existing median in `compute_sd_calibration` (`np.mean(batch[t][cat])` beside the `np.std`). Both are instrument-then-revert, exactly like the gate-#4 share counter in the prior run. Keep ASCII.
+Behind `FB_SELECTION_ATTRIBUTION`, add (a) the replacement-fill-share counter by RE-ADDING the prior bench-task seam (it was instrument-then-reverted, so `FillResult` currently has only `fill_counts` -- re-add `replacement_games` + a module accumulator summed in the fill loop) AND (b) the per-cat MEAN of the new_engine team totals alongside the existing median in `compute_sd_calibration` (`np.mean(batch[t][cat])` beside the `np.std`). Both are instrument-then-revert, exactly like the gate-#4 share counter in the prior run. Keep ASCII.
 
 - [ ] **Step 2: Run the diagnostic BEFORE (deterministic = bench-only) and AFTER (this change)**
 
