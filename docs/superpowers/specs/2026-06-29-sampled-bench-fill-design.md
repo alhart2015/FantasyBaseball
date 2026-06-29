@@ -258,10 +258,12 @@ bounded, mean-aware gate):
    - **HARD FAIL if either ratio exceeds `1.20`** (over-correction / over-dispersion
      — the prior pooled-only gate could mask this per-cat).
    - **HARD FAIL if either ratio does not improve by at least `+0.08`** over its
-     baseline (i.e. no real de-bias).
-   - **TARGET `>= 0.85`.** Landing in `[0.78, 0.85)` is a partial success: record it,
-     and decide whether to also sample the replacement line (the #5 follow-up)
-     rather than loosening this target post hoc.
+     baseline (i.e. no real de-bias). Call this floor `baseline + 0.08`.
+   - **TARGET `>= 0.85`.** Landing at or above the `+0.08` floor but below `0.85`
+     is a partial success: record it, and decide whether to also sample the
+     replacement line (the #5 follow-up) rather than loosening this target post hoc.
+     (The partial-success window is `[baseline+0.08, 0.85)`, so it never overlaps
+     the hard-fail region.)
 2. **The pooled ratio stays in `[0.8, 1.25]`** (unchanged gate-wide band).
 3. **Hitter category team-total MEANS stay within tolerance of the Phase 6
    baseline** (HITTERS = ERoto + the small bench-fill premium). The decomposition's
@@ -303,7 +305,11 @@ Two things stay byte-identical and MUST be preserved (do not "fix" them):
   already advanced the stream.)
 - **Empty-bench ROS-direct teams** — `_apply_variance_batch` returns before any rng
   draw when `n_players == 0` (`simulation.py:759-763`), so a team with no bench
-  hitters consumes ZERO extra rng and stays byte-identical end-to-end. The
+  hitters consumes ZERO extra rng. In the isolated single-team/single-fixture
+  guardrail tests below it therefore stays byte-identical end-to-end. (In the full
+  multi-team batch such a team still shifts if an EARLIER team's non-empty bench
+  already advanced the shared stream — but these guardrail tests run isolated
+  fixtures, so the byte-identical guarantee holds for them.) The
   implementation MUST keep the empty-bench path a true no-op (don't introduce a draw
   that consumes rng for an empty pool), or these guardrail tests
   (`test_repl_not_double_counted_on_new_path`,
