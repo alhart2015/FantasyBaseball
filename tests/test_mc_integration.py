@@ -404,6 +404,93 @@ def test_sampled_bench_fill_widens_team_total_sd_vs_deterministic_baseline():
     assert out["RBI"].std() > _DET_RBI_SD
 
 
+def test_sampled_bench_fill_mean_drift_within_spec_gate():
+    """Mean-drift regression guard for the spec's acceptance gate #3
+    (2026-06-29-sampled-bench-fill-design.md). The per-game RATE is mean-neutral
+    by construction, so the SAMPLED bench fill must NOT inflate a hitter cat's
+    mean above the deterministic-fill baseline -- the finding-#1 UPWARD-bias
+    failure mode the spec HARD-FAILs (> +1%). A modest DOWNWARD drift (the
+    intended capacity-bound re-damping) is expected and allowed (team-total
+    tolerance ~5%).
+
+    The sampled side runs the real production helper. The upward gate is asserted
+    on the bench-FILL component directly (team_total - active_total), so it is NOT
+    diluted by the unchanged ~70-90% active share: an upward rate-inflation
+    regression -- e.g. dividing the FIXED base by the random g*scale,
+    ``base/(g*scale)``, whose ``E[1/scale] > 1`` Jensen amplification inflates the
+    fill -- pushes the fill ratio past 1.01 and FAILS. The deterministic baseline
+    is reconstructed in-test from the SAME active draws (same seed) via the
+    production ``allocate_bench_fill`` -- no captured magic constant, so an
+    unrelated active-draw change moves both sides together.
+
+    Scope note: regressions that DEFLATE the fill (e.g. ``g*max(1, scale)`` or
+    using frac_missed) move the mean DOWNWARD, which the spec explicitly ALLOWS
+    (it hard-fails only upward), so this gate intentionally does not flag them.
+    """
+    from fantasy_baseball.mc_fill import ActiveSample, BenchSample, allocate_bench_fill
+    from fantasy_baseball.simulation import _replacement_line, _sample_hitter_bodies
+    from fantasy_baseball.utils.constants import HITTING_COUNTING, safe_float
+
+    seed, fr, n_iter = 11, 0.2, 6000
+    eff = _eff_roster(_bench_deep_roster())
+    active_bodies = [b for b in eff.active if b.player.player_type == PlayerType.HITTER]
+    bench_bodies = eff.bench
+    assert len(bench_bodies) == 1
+
+    # Production (sampled bench fill).
+    out_sampled = _simulate_team_hitters_ros_direct(eff, fr, np.random.default_rng(seed), n_iter)
+
+    # Deterministic baseline from the SAME active draws: production draws actives
+    # FIRST on the rng, so a fresh rng(seed) reproduces them bit-for-bit. The
+    # deterministic fill is the pre-change behavior (per_game = base/g_ros_full,
+    # capacity = g_ros_full), iteration-independent.
+    active_vb = _sample_hitter_bodies(active_bodies, np.random.default_rng(seed), fr, n_iter)
+    factors = np.array([b.factor for b in active_bodies])
+    realized = {col: active_vb.counts[col] * factors[None, :] for col in HITTING_COUNTING}
+    frac_missed = active_vb.frac_missed
+    bb = bench_bodies[0]
+    base = bb.player.to_flat_dict()
+    det_bs = BenchSample(
+        body=bb,
+        per_game_counts={c: safe_float(base[c]) / bb.g_ros_full for c in HITTING_COUNTING},
+        capacity=bb.g_ros_full,
+    )
+
+    def _repl(ab):
+        return _replacement_line(ab.player.to_flat_dict(), is_hitter=True)
+
+    det_fill = {col: np.zeros(n_iter) for col in HITTING_COUNTING}
+    for it in range(n_iter):
+        actives = [
+            ActiveSample(body=b, frac_missed=float(frac_missed[it, i]))
+            for i, b in enumerate(active_bodies)
+        ]
+        f = allocate_bench_fill(actives, [det_bs], _repl).fill_counts
+        for col in HITTING_COUNTING:
+            det_fill[col][it] = f[col]
+
+    for cat, col in (("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")):
+        active_total = realized[col].sum(axis=1)
+        det_fill_mean = det_fill[col].mean()
+        assert det_fill_mean > 0.0  # fixture sanity: the bench actually fills this cat
+        sampled_fill_mean = (out_sampled[cat] - active_total).mean()
+        det_total_mean = (active_total + det_fill[col]).mean()
+        sampled_total_mean = out_sampled[cat].mean()
+        # HARD FAIL on upward drift > +1% (finding-#1 mean-bias failure mode),
+        # measured on the FILL component so the gate is not diluted by the
+        # unchanged active share.
+        assert sampled_fill_mean <= det_fill_mean * 1.01, (
+            f"{cat}: sampled fill mean {sampled_fill_mean:.3f} exceeds deterministic "
+            f"{det_fill_mean:.3f} by > 1% (finding-#1 upward bias)"
+        )
+        # Team-total downward tolerance (spec gate #3): the intended capacity-bound
+        # re-damping may pull the total down, but not by > 5%.
+        assert sampled_total_mean >= det_total_mean * 0.95, (
+            f"{cat}: sampled total mean {sampled_total_mean:.3f} is > 5% below "
+            f"deterministic {det_total_mean:.3f} (over-damping)"
+        )
+
+
 def test_sampled_bench_fill_is_deterministic_under_seed():
     """Same seed -> identical team totals (regression guard; passes pre and post)."""
     eff = _eff_roster(_bench_deep_roster())

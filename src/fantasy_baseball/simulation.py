@@ -94,7 +94,8 @@ class VarianceBatch:
 
     counts: dict[str, np.ndarray]  # {col: (n_iter, n_players)}
     frac_missed: np.ndarray  # (n_iter, n_players) = max(0, 1 - scales)
-    scales: np.ndarray  # (n_iter, n_players) -- unclamped playing-time scale that drove mu
+    scales: np.ndarray  # (n_iter, n_players) -- playing-time scale that drove mu;
+    # floored at 0 but NOT capped at 1 (can exceed 1: sampled more available than projected)
 
 
 def _flatten_full_season(p: Any) -> dict[str, Any]:
@@ -924,37 +925,46 @@ def _simulate_team_hitters_ros_direct(
     # sampled-bench-fill spec (2026-06-29).
     bench_vb = _sample_hitter_bodies(bench_h_bodies, rng, fraction_remaining, n_iter)
 
+    # Per-iteration bench capacity + mean-neutral per-game rate, vectorized once
+    # (the loop below only assembles samples + allocates). games_played =
+    # g_ros_full * sampled scale (UNCAPPED); dividing the realized line by it
+    # recovers a MEAN-NEUTRAL per-game rate (E = base/g_ros_full), and capacity is
+    # that same games count (how many of a starter's missed games this body can
+    # cover this iter). eps guards the division and zeroes a g_ros_full == 0 (or
+    # scale == 0) body; scales >= 0 so games_played >= 0.
+    eps = 1e-9
+    g_full = np.array([bb.g_ros_full for bb in bench_h_bodies])  # (n_bench,)
+    games_played = g_full[None, :] * bench_vb.scales  # (n_iter, n_bench)
+    bench_valid = games_played > eps
+    safe_games = np.where(bench_valid, games_played, 1.0)
+    bench_capacity = np.where(bench_valid, games_played, 0.0)
+    bench_per_game = {
+        col: np.where(bench_valid, bench_vb.counts[col] / safe_games, 0.0)
+        for col in HITTING_COUNTING
+    }
+
     def _repl_for(ab: ActiveBody) -> dict[str, float]:
         return _replacement_line(ab.player.to_flat_dict(), is_hitter=True)
 
     # Per-iteration fill allocation (the sanctioned small Python loop: <=12 active,
-    # <=2 bench). Sampling (active + bench) is vectorized above; only the cheap
-    # per-iteration BenchSample build and the allocation loop here.
-    eps = 1e-9
+    # <=2 bench). All sampling + rate/capacity math is vectorized above; the loop
+    # only assembles per-iteration samples and runs the greedy allocation.
     fill_totals: dict[str, np.ndarray] = {col: np.zeros(n_iter) for col in HITTING_COUNTING}
     for it in range(n_iter):
         actives = [
             ActiveSample(body=body, frac_missed=float(frac_missed[it, idx]))
             for idx, body in enumerate(active_h_bodies)
         ]
-        bench_samples: list[BenchSample] = []
-        for b_idx, bb in enumerate(bench_h_bodies):
-            # games that generated this iter's realized line = g_ros_full * scale
-            # (UNCAPPED). Dividing realized by it recovers a MEAN-NEUTRAL per-game
-            # rate (E = base/g_ros_full); capacity is that same games count (how
-            # many of the starter's missed games this body can cover). eps guards
-            # the division and also zeroes a g_ros_full == 0 body.
-            games_played = bb.g_ros_full * float(bench_vb.scales[it, b_idx])
-            if games_played > eps:
-                per_game = {
-                    col: float(bench_vb.counts[col][it, b_idx]) / games_played
-                    for col in HITTING_COUNTING
-                }
-                capacity = games_played
-            else:
-                per_game = {col: 0.0 for col in HITTING_COUNTING}
-                capacity = 0.0
-            bench_samples.append(BenchSample(body=bb, per_game_counts=per_game, capacity=capacity))
+        bench_samples = [
+            BenchSample(
+                body=bb,
+                per_game_counts={
+                    col: float(bench_per_game[col][it, b_idx]) for col in HITTING_COUNTING
+                },
+                capacity=float(bench_capacity[it, b_idx]),
+            )
+            for b_idx, bb in enumerate(bench_h_bodies)
+        ]
         fill = allocate_bench_fill(actives, bench_samples, _repl_for).fill_counts
         for col in HITTING_COUNTING:
             fill_totals[col][it] = fill[col]
